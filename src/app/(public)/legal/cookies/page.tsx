@@ -1,5 +1,7 @@
 import type { Metadata } from 'next';
 
+import { LegalBody } from '@/components/marketing/legal-body';
+
 import { ConsentSettingsLink } from '@/features/public/consent-settings-link';
 
 export const metadata: Metadata = {
@@ -73,7 +75,7 @@ const COOKIES = [
 
 export default function CookiePolicyPage() {
   return (
-    <>
+    <LegalBody slug="cookies">
       <h1 className="text-headline font-bold">Cookie-Erklärung</h1>
       <p className="text-sm text-muted-foreground">Stand: 1. Januar 2026</p>
 
@@ -128,6 +130,6 @@ export default function CookiePolicyPage() {
         </a>
         .
       </p>
-    </>
+    </LegalBody>
   );
 }

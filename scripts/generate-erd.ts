@@ -291,7 +291,7 @@ const DOMAINS: Domain[] = [
       'Zeile die Website nicht zerlegt — sie zeigt dann den Auslieferungstext. `SeoMeta` hängt ' +
       'bewusst an einer *Route* und nicht an einem Baustein: `noIndex` ist eine technische ' +
       'Schaltung, die eine Seite aus dem Suchindex wirft.',
-    models: ['ContentBlock', 'SeoMeta', 'CallToAction'],
+    models: ['ContentBlock', 'SeoMeta', 'CallToAction', 'NavigationItem', 'LegalDocument'],
   },
 ];
 

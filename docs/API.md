@@ -5,7 +5,7 @@
 > Quelle, aus der sowohl diese Referenz als auch die Laufzeitvalidierung
 > stammen.
 
-Stand: 183 Endpunkte. Die maschinenlesbare Fassung liegt in
+Stand: 209 Endpunkte. Die maschinenlesbare Fassung liegt in
 [`openapi.yaml`](./openapi.yaml) bzw. [`openapi.json`](./openapi.json).
 
 ## Grundlagen
@@ -51,6 +51,8 @@ Familie.
 - [Katalog](#katalog)
 - [Website](#website)
 - [System](#system)
+- [Betrieb](#betrieb)
+- [Kommunikation](#kommunikation)
 
 ## Authentifizierung
 
@@ -905,6 +907,21 @@ Familie.
 | `blocked` | boolean | – | – |
 | `blockedReason` | string | – | max. 500 Zeichen |
 | `tagIds` | string[] | – | max. 20 Einträge |
+
+### `DELETE /api/tasks/{id}`
+
+**Aufgabe löschen.** Ohne fachliche Sperre — eine Aufgabe ist eine Notiz, kein Beleg. Mitarbeitende dürfen nur eigene löschen.
+
+- **Zugriff:** Erfordert die Berechtigung: `task:delete`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 204
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
 
 ## Nachrichten
 
@@ -2372,6 +2389,36 @@ Familie.
 - **Erfolg:** 200
 - **Mögliche Fehler:** 401, 403, 429, 500
 
+### `PATCH /api/expenses/{id}`
+
+**Ausgabe korrigieren.** Betrag, Satz und Summe hängen zusammen und werden immer gemeinsam neu gerechnet, damit keine Ausgabe mit unstimmiger MWST entsteht.
+
+- **Zugriff:** Erfordert die Berechtigung: `expense:update`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+### `DELETE /api/expenses/{id}`
+
+**Ausgabe löschen.** Nicht möglich, sobald die Ausgabe in einem Buchhaltungsexport enthalten war: die Treuhandstelle hat den Beleg dann bereits verbucht, und ein Loch in der exportierten Reihe fällt erst beim Abschluss auf.
+
+- **Zugriff:** Erfordert die Berechtigung: `expense:delete`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 204
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
 ## Exporte
 
 ### `POST /api/exports/buchhaltung`
@@ -3444,6 +3491,150 @@ Familie.
 | `entity` | string | ja | `faq` \| `gallery` |
 | `ids` | string[] | ja | min. 1 Einträge, max. 200 Einträge |
 
+### `GET /api/navigation`
+
+**Menüpunkte auflisten.** Alle Punkte aller Orte, auch abgeschaltete.
+
+- **Zugriff:** Erfordert die Berechtigung: `navigation:read`.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 401, 403, 429, 500
+
+### `POST /api/navigation`
+
+**Menüpunkt anlegen.** Das Ziel wird gegen dieselbe Positivliste geprüft wie bei einem Handlungsaufruf. Ein Menüpunkt mit javascript:-Ziel stünde auf jeder Seite der Website, nicht nur auf einer.
+
+- **Zugriff:** Erfordert die Berechtigung: `navigation:update`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 201
+- **Mögliche Fehler:** 400, 401, 403, 409, 422, 429, 500
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `location` | string | ja | `HEADER` \| `HEADER_PANEL` \| `FOOTER_SERVICES` \| `FOOTER_COMPANY` \| `FOOTER_LEGAL` |
+| `label` | string | ja | min. 2 Zeichen, max. 40 Zeichen |
+| `href` | string | ja | min. 1 Zeichen, max. 500 Zeichen |
+| `description` | string | – | max. 120 Zeichen |
+| `icon` | string | – | max. 40 Zeichen |
+| `newTab` | boolean | – | Standard `false` |
+| `parentId` | string | – | min. 1 Zeichen |
+| `position` | integer | – | ≥ 0, ≤ 999, Standard `0` |
+| `active` | boolean | – | Standard `true` |
+
+### `PATCH /api/navigation/{id}`
+
+**Menüpunkt ändern.** Teil-Update von Beschriftung, Ziel, Ort und Sichtbarkeit.
+
+- **Zugriff:** Erfordert die Berechtigung: `navigation:update`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `location` | string | – | `HEADER` \| `HEADER_PANEL` \| `FOOTER_SERVICES` \| `FOOTER_COMPANY` \| `FOOTER_LEGAL` |
+| `label` | string | – | min. 2 Zeichen, max. 40 Zeichen |
+| `href` | string | – | min. 1 Zeichen, max. 500 Zeichen |
+| `description` | string | – | max. 120 Zeichen |
+| `icon` | string | – | max. 40 Zeichen |
+| `newTab` | boolean | – | Standard `false` |
+| `parentId` | string | – | min. 1 Zeichen |
+| `position` | integer | – | ≥ 0, ≤ 999, Standard `0` |
+| `active` | boolean | – | Standard `true` |
+
+### `DELETE /api/navigation/{id}`
+
+**Menüpunkt löschen.** Unterpunkte gehen mit — ein Punkt im Aufklappbereich ohne seinen Aufklapper wäre nirgends erreichbar. Die Antwort nennt unter removedChildren, wie viele das betraf.
+
+- **Zugriff:** Erfordert die Berechtigung: `navigation:update`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+### `POST /api/navigation/reorder`
+
+**Reihenfolge im Menü setzen.** Je Ort und je Aufklappbereich getrennt: die Positionen zweier verschiedener Menüs haben nichts miteinander zu tun.
+
+- **Zugriff:** Erfordert die Berechtigung: `navigation:update`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 422, 429, 500
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `location` | string | ja | `HEADER` \| `HEADER_PANEL` \| `FOOTER_SERVICES` \| `FOOTER_COMPANY` \| `FOOTER_LEGAL` |
+| `parentId` | string | – | min. 1 Zeichen |
+| `ids` | string[] | ja | min. 1 Einträge, max. 100 Einträge |
+
+### `GET /api/legal`
+
+**Rechtstexte auflisten.** Noch nicht erfasste erscheinen als leere Platzhalter mit version 0. Sonst sähe die Redaktion eine kurze Liste und wüsste nicht, dass die Datenschutzerklärung fehlt — und genau deren Fehlen ist ein Rechtsmangel.
+
+- **Zugriff:** Erfordert die Berechtigung: `legal:read`.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 401, 403, 429, 500
+
+### `GET /api/legal/{slug}`
+
+**Rechtstext abrufen.** Einer von: impressum, datenschutz, agb, cookies.
+
+- **Zugriff:** Erfordert die Berechtigung: `legal:read`.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 401, 403, 429, 500
+
+### `PUT /api/legal/{slug}`
+
+**Rechtstext setzen.** PUT, weil der Körper den vollständigen Text beschreibt. Ob eine Änderung eine neue Fassung ist, entscheidet die Redaktion über newVersion und nicht ein Zähler: eine korrigierte Kommasetzung ist keine, eine geänderte Aufbewahrungsfrist schon. Die Fassungsnummer ist der Bezugspunkt, wenn jemand fragt, welchen AGB er zugestimmt hat. Löschen gibt es nicht — die vier Adressen sind aus Fusszeile, Cookie-Hinweis und E-Mails verlinkt.
+
+- **Zugriff:** Erfordert die Berechtigung: `legal:update`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 422, 429, 500
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `title` | string | ja | min. 3 Zeichen, max. 140 Zeichen |
+| `body` | string | ja | min. 100 Zeichen, max. 100000 Zeichen |
+| `effectiveFrom` | string | ja | – |
+| `newVersion` | boolean | – | Standard `false` |
+
+### `DELETE /api/reviews/{id}`
+
+**Bewertung löschen.** Eine veröffentlichte Bewertung lässt sich nicht löschen, nur verbergen. Eine Kundschaft hat sie geschrieben und darauf vertraut, dass sie steht; sie spurlos verschwinden zu lassen, wäre unredlich — und die Lesenden bekämen nur noch die guten zu sehen. Verbergen ist im Prüfprotokoll nachvollziehbar.
+
+- **Zugriff:** Erfordert die Berechtigung: `review:delete`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 204
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
 ## System
 
 ### `GET /api/users`
@@ -3618,6 +3809,84 @@ Familie.
 - **Erfolg:** 200
 - **Mögliche Fehler:** 401, 403, 422, 429, 500
 
+### `GET /api/automations`
+
+**Automatisierungen auflisten.** Regeln samt Aktionen und Zahl der bisherigen Läufe.
+
+- **Zugriff:** Erfordert die Berechtigung: `automation:read`.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 401, 403, 429, 500
+
+### `POST /api/automations`
+
+**Automatisierung anlegen.** Mindestens eine Aktion ist Pflicht: eine Regel ohne Aktion löst aus und tut nichts — sie stünde in der Liste und wäre nicht als wirkungslos erkennbar.
+
+- **Zugriff:** Erfordert die Berechtigung: `automation:update`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 201
+- **Mögliche Fehler:** 400, 401, 403, 409, 422, 429, 500
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `name` | string | ja | min. 3 Zeichen, max. 120 Zeichen |
+| `description` | string | – | max. 500 Zeichen |
+| `trigger` | string | ja | `BOOKING_CREATED` \| `BOOKING_CONFIRMED` \| `BOOKING_REMINDER_24H` \| `BOOKING_REMINDER_2H` \| `BOOKING_COMPLETED` \| `BOOKING_CANCELLED` \| `QUOTE_SENT` \| `QUOTE_ACCEPTED` \| `QUOTE_EXPIRING` \| `INVOICE_ISSUED` \| `INVOICE_DUE_SOON` \| `INVOICE_OVERDUE` \| `JOB_ASSIGNED` \| `JOB_COMPLETED` \| `CUSTOMER_BIRTHDAY` \| `REVIEW_REQUEST` \| `LEAD_CREATED` \| `LEAD_IDLE` \| `TASK_DUE` \| `RECURRING_BOOKING_GENERATE` |
+| `conditions` | object | – | Standard `{}` |
+| `delayMinutes` | integer | – | ≥ -43200, ≤ 129600, Standard `0` |
+| `active` | boolean | – | Standard `true` |
+| `actions` | object[] | ja | min. 1 Einträge, max. 10 Einträge |
+| `actions[].type` | string | ja | `SEND_EMAIL` \| `SEND_SMS` \| `CREATE_TASK` \| `CREATE_NOTIFICATION` \| `UPDATE_STATUS` \| `WEBHOOK` \| `AI_GENERATE` |
+| `actions[].config` | object | – | Standard `{}` |
+| `actions[].position` | integer | – | ≥ 0, ≤ 99, Standard `0` |
+
+### `PATCH /api/automations/{id}`
+
+**Automatisierung ändern.** Die Aktionsliste ist der gewünschte Endzustand, kein Zuwachs.
+
+- **Zugriff:** Erfordert die Berechtigung: `automation:update`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `name` | string | – | min. 3 Zeichen, max. 120 Zeichen |
+| `description` | string | – | max. 500 Zeichen |
+| `trigger` | string | – | `BOOKING_CREATED` \| `BOOKING_CONFIRMED` \| `BOOKING_REMINDER_24H` \| `BOOKING_REMINDER_2H` \| `BOOKING_COMPLETED` \| `BOOKING_CANCELLED` \| `QUOTE_SENT` \| `QUOTE_ACCEPTED` \| `QUOTE_EXPIRING` \| `INVOICE_ISSUED` \| `INVOICE_DUE_SOON` \| `INVOICE_OVERDUE` \| `JOB_ASSIGNED` \| `JOB_COMPLETED` \| `CUSTOMER_BIRTHDAY` \| `REVIEW_REQUEST` \| `LEAD_CREATED` \| `LEAD_IDLE` \| `TASK_DUE` \| `RECURRING_BOOKING_GENERATE` |
+| `conditions` | object | – | Standard `{}` |
+| `delayMinutes` | integer | – | ≥ -43200, ≤ 129600, Standard `0` |
+| `active` | boolean | – | Standard `true` |
+| `actions` | object[] | – | min. 1 Einträge, max. 10 Einträge |
+| `actions[].type` | string | ja | `SEND_EMAIL` \| `SEND_SMS` \| `CREATE_TASK` \| `CREATE_NOTIFICATION` \| `UPDATE_STATUS` \| `WEBHOOK` \| `AI_GENERATE` |
+| `actions[].config` | object | – | Standard `{}` |
+| `actions[].position` | integer | – | ≥ 0, ≤ 99, Standard `0` |
+
+### `DELETE /api/automations/{id}`
+
+**Automatisierung löschen.** Nur ohne Laufhistorie. Die Läufe belegen, warum welche Nachricht verschickt wurde; ohne die zugehörige Regel wären sie nicht mehr lesbar. Schalten Sie die Regel stattdessen ab.
+
+- **Zugriff:** Erfordert die Berechtigung: `automation:update`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 204
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
 ### `GET /api/cron/hourly`
 
 **Stündliche Aufgaben.** Terminerinnerungen 24 h und 2 h vorher, fällige Aufgabenerinnerungen. Authentifiziert über `Authorization: Bearer $CRON_SECRET`.
@@ -3641,3 +3910,184 @@ Familie.
 - **Zugriff:** Öffentlich — keine Anmeldung nötig.
 - **Erfolg:** 200
 - **Mögliche Fehler:** 422, 500
+
+## Betrieb
+
+### `GET /api/service-areas`
+
+**Einsatzgebiet auflisten.** Postleitzahlen, Anfahrtszeiten und Pauschalen.
+
+- **Zugriff:** Erfordert die Berechtigung: `serviceArea:read`.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 401, 403, 429, 500
+
+### `POST /api/service-areas`
+
+**Postleitzahl aufnehmen.** Die Anfahrtspauschale fliesst in jeden künftigen Preis; die Änderung wird protokolliert und der Preis-Zwischenspeicher geleert.
+
+- **Zugriff:** Erfordert die Berechtigung: `serviceArea:update`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 201
+- **Mögliche Fehler:** 400, 401, 403, 409, 422, 429, 500
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `postalCode` | string | ja | – |
+| `city` | string | ja | min. 2 Zeichen, max. 80 Zeichen |
+| `canton` | string | – | Standard `"BE"` |
+| `travelFee` | number | – | ≥ 0, ≤ 9999999, Standard `0` |
+| `travelMinutes` | integer | – | ≥ 0, ≤ 240, Standard `0` |
+| `active` | boolean | – | Standard `true` |
+| `lat` | number | – | ≥ -90, ≤ 90 |
+| `lng` | number | – | ≥ -180, ≤ 180 |
+
+### `PATCH /api/service-areas/{id}`
+
+**Einsatzgebiet ändern.** Teil-Update von Ort, Pauschale, Anfahrtszeit und Sichtbarkeit.
+
+- **Zugriff:** Erfordert die Berechtigung: `serviceArea:update`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 409, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `postalCode` | string | – | – |
+| `city` | string | – | min. 2 Zeichen, max. 80 Zeichen |
+| `canton` | string | – | Standard `"BE"` |
+| `travelFee` | number | – | ≥ 0, ≤ 9999999, Standard `0` |
+| `travelMinutes` | integer | – | ≥ 0, ≤ 240, Standard `0` |
+| `active` | boolean | – | Standard `true` |
+| `lat` | number | – | ≥ -90, ≤ 90 |
+| `lng` | number | – | ≥ -180, ≤ 180 |
+
+### `DELETE /api/service-areas/{id}`
+
+**Postleitzahl entfernen.** Nicht möglich, solange dort Einsätze geplant sind — die Preisberechnung für eine Verschiebung schlüge fehl. Setzen Sie das Gebiet stattdessen inaktiv.
+
+- **Zugriff:** Erfordert die Berechtigung: `serviceArea:update`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 204
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+### `POST /api/service-areas/bulk`
+
+**Mehrere Postleitzahlen auf einmal.** Ohne overwrite bleiben bestehende Einträge unangetastet — der Normalfall beim Nachtragen einer Region. Die Antwort nennt, wie viele angelegt, überschrieben und übersprungen wurden.
+
+- **Zugriff:** Erfordert die Berechtigung: `serviceArea:update`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 422, 429, 500
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `areas` | object[] | ja | min. 1 Einträge, max. 500 Einträge |
+| `areas[].postalCode` | string | ja | – |
+| `areas[].city` | string | ja | min. 2 Zeichen, max. 80 Zeichen |
+| `areas[].canton` | string | – | Standard `"BE"` |
+| `areas[].travelFee` | number | – | ≥ 0, ≤ 9999999, Standard `0` |
+| `areas[].travelMinutes` | integer | – | ≥ 0, ≤ 240, Standard `0` |
+| `areas[].active` | boolean | – | Standard `true` |
+| `areas[].lat` | number | – | ≥ -90, ≤ 90 |
+| `areas[].lng` | number | – | ≥ -180, ≤ 180 |
+| `overwrite` | boolean | – | Standard `false` |
+
+## Kommunikation
+
+### `GET /api/newsletter`
+
+**Abonnentenliste.** Ausgetragene erscheinen nicht: sie haben widersprochen, und eine Liste, aus der man sie versehentlich wieder anschreibt, ist genau der Fehler, den das Austragen verhindern soll.
+
+- **Zugriff:** Erfordert die Berechtigung: `newsletter:read`.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 401, 403, 429, 500
+
+### `DELETE /api/newsletter/{id}`
+
+**Abonnement austragen.** Die Zeile bleibt bestehen und wird als ausgetragen markiert — sie ist der Nachweis, dass widersprochen wurde. Ändern gibt es bewusst nicht: die E-Mail-Adresse ist der Identifikator, und sie zu ändern hiesse, jemand anderen anzuschreiben.
+
+- **Zugriff:** Erfordert die Berechtigung: `newsletter:delete`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 204
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+### `GET /api/templates`
+
+**E-Mail- und SMS-Vorlagen.** Anlegen und Löschen gibt es bewusst nicht: der Schlüssel steht im Code, dort wird die Vorlage nachgeschlagen. Eine frei angelegte riefe niemand auf; eine gelöschte liesse eine Bestätigungsmail ausfallen.
+
+- **Zugriff:** Erfordert die Berechtigung: `template:read`.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 401, 403, 429, 500
+
+### `PATCH /api/templates/email/{id}`
+
+**E-Mail-Vorlage ändern.** Platzhalter dürfen wegfallen, aber keine neuen dazukommen: ein Platzhalter, den der Versand nicht füllt, erscheint wörtlich in der E-Mail an die Kundschaft. Die Fehlermeldung nennt die verfügbaren.
+
+- **Zugriff:** Erfordert die Berechtigung: `template:update`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `subject` | string | ja | min. 3 Zeichen, max. 200 Zeichen |
+| `bodyHtml` | string | ja | min. 20 Zeichen, max. 50000 Zeichen |
+| `bodyText` | string | – | max. 20000 Zeichen |
+| `active` | boolean | – | – |
+
+### `PATCH /api/templates/sms/{id}`
+
+**SMS-Vorlage ändern.** Höchstens 480 Zeichen — darüber kostet der Versand mehr als drei SMS je Empfänger.
+
+- **Zugriff:** Erfordert die Berechtigung: `template:update`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `body` | string | ja | min. 10 Zeichen, max. 480 Zeichen |
+| `active` | boolean | – | – |

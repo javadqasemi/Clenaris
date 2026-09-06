@@ -513,6 +513,8 @@ model Organization {
   seoMeta           SeoMeta[]
   accountingExports AccountingExport[]
   callsToAction     CallToAction[]
+  navigationItems   NavigationItem[]
+  legalDocuments    LegalDocument[]
 
   @@map("organizations")
 }
@@ -2839,4 +2841,80 @@ model CallToAction {
   @@unique([organizationId, key])
   @@index([organizationId, slot, active])
   @@map("calls_to_action")
+}
+
+// ---------------------------------------------------------------------------
+//  Navigation und Rechtstexte
+// ---------------------------------------------------------------------------
+
+/// Wo ein Menüpunkt erscheint.
+enum NavLocation {
+  /// Oberste Ebene der Kopfzeile.
+  HEADER
+  /// Aufklappbereich unter einem Kopfzeilen-Eintrag.
+  HEADER_PANEL
+  /// Fusszeile, Spalte „Leistungen".
+  FOOTER_SERVICES
+  /// Fusszeile, Spalte „Unternehmen".
+  FOOTER_COMPANY
+  /// Fusszeile, Zeile mit den Rechtstexten.
+  FOOTER_LEGAL
+}
+
+model NavigationItem {
+  id             String      @id @default(cuid())
+  organizationId String
+  location       NavLocation
+
+  label       String
+  href        String
+  /// Zweite Zeile im Aufklappbereich — erklärt, wohin der Punkt führt.
+  description String?
+  /// Name eines Lucide-Symbols.
+  icon        String?
+  newTab      Boolean @default(false)
+
+  /// Übergeordneter Punkt für Aufklappbereiche. Null = oberste Ebene.
+  parentId String?
+
+  position Int     @default(0)
+  active   Boolean @default(true)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+
+  organization Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  parent       NavigationItem?  @relation("NavChildren", fields: [parentId], references: [id], onDelete: Cascade)
+  children     NavigationItem[] @relation("NavChildren")
+
+  @@index([organizationId, location, active])
+  @@map("navigation_items")
+}
+
+/// Impressum, Datenschutzerklärung, AGB, Cookie-Hinweis.
+///
+/// Eigenes Modell statt Textbaustein: Rechtstexte tragen eine Fassung und ein
+/// Inkrafttreten. Wer wissen will, welchen AGB eine Kundschaft im März
+/// zugestimmt hat, braucht genau diese beiden Angaben — ein überschriebener
+/// Textbaustein kann sie nicht liefern.
+model LegalDocument {
+  id             String @id @default(cuid())
+  organizationId String
+
+  slug  String
+  title String
+  /// Markdown. Wird über denselben Baustein gerendert wie die Blogbeiträge.
+  body  String
+
+  /// Zählt bei jeder inhaltlichen Änderung hoch.
+  version       Int      @default(1)
+  effectiveFrom DateTime @default(now()) @db.Date
+
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, slug])
+  @@map("legal_documents")
 }

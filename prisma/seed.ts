@@ -1814,6 +1814,107 @@ Ein Abzieher nach jedem Duschen reduziert die Kalkbildung um schätzungsweise 80
   console.log(`✓ ${callsToAction.length} Handlungsaufrufe`);
 
   // =========================================================================
+  //  Navigation
+  // =========================================================================
+  //
+  // Die Auslieferungsfassung des Menüs. Sie bildet nach, was vorher im
+  // Quelltext stand — ab hier ist es in der Verwaltung änderbar.
+  //
+  // Die Leistungen stehen bewusst *nicht* darin: sie kommen aus dem Katalog
+  // und würden hier zu einer zweiten, veraltenden Liste.
+  const navHeader = [
+    { label: 'Leistungen', href: '/leistungen' },
+    { label: 'Preise', href: '/preise' },
+    { label: 'Einsatzgebiet', href: '/einsatzgebiet' },
+    { label: 'Einblick', href: '/ueber-uns' },
+    { label: 'Kontakt', href: '/kontakt' },
+  ];
+
+  const navPanel: Record<string, { label: string; href: string; description: string; icon: string }[]> =
+    {
+      Einblick: [
+        { label: 'Über uns', href: '/ueber-uns', description: 'Wer wir sind und wie wir arbeiten', icon: 'Users' },
+        { label: 'Vorher / Nachher', href: '/galerie', description: 'Ergebnisse aus echten Aufträgen', icon: 'Sparkles' },
+        { label: 'Bewertungen', href: '/bewertungen', description: 'Was die Kundschaft sagt', icon: 'Star' },
+        { label: 'Ratgeber', href: '/blog', description: 'Reinigungstipps aus der Praxis', icon: 'FileText' },
+        { label: 'Häufige Fragen', href: '/faq', description: 'Antworten auf das, was oft gefragt wird', icon: 'MessageCircle' },
+        { label: 'Offene Stellen', href: '/karriere', description: 'Arbeiten bei Clenaris', icon: 'Building2' },
+      ],
+    };
+
+  const navFooter: { location: 'FOOTER_COMPANY' | 'FOOTER_LEGAL'; items: { label: string; href: string }[] }[] = [
+    {
+      location: 'FOOTER_COMPANY',
+      items: [
+        { label: 'Über uns', href: '/ueber-uns' },
+        { label: 'Vorher / Nachher', href: '/galerie' },
+        { label: 'Bewertungen', href: '/bewertungen' },
+        { label: 'Offene Stellen', href: '/karriere' },
+        { label: 'Ratgeber', href: '/blog' },
+        { label: 'Häufige Fragen', href: '/faq' },
+        { label: 'Kontakt', href: '/kontakt' },
+      ],
+    },
+    {
+      location: 'FOOTER_LEGAL',
+      items: [
+        { label: 'Impressum', href: '/legal/impressum' },
+        { label: 'Datenschutz', href: '/legal/datenschutz' },
+        { label: 'AGB', href: '/legal/agb' },
+        { label: 'Cookies', href: '/legal/cookies' },
+      ],
+    },
+  ];
+
+  let navCount = 0;
+  if ((await prisma.navigationItem.count({ where: { organizationId: org.id } })) === 0) {
+    for (const [index, entry] of navHeader.entries()) {
+      const parent = await prisma.navigationItem.create({
+        data: {
+          organizationId: org.id,
+          location: 'HEADER',
+          label: entry.label,
+          href: entry.href,
+          position: index,
+        },
+      });
+      navCount++;
+
+      for (const [childIndex, child] of (navPanel[entry.label] ?? []).entries()) {
+        await prisma.navigationItem.create({
+          data: {
+            organizationId: org.id,
+            location: 'HEADER_PANEL',
+            parentId: parent.id,
+            label: child.label,
+            href: child.href,
+            description: child.description,
+            icon: child.icon,
+            position: childIndex,
+          },
+        });
+        navCount++;
+      }
+    }
+
+    for (const group of navFooter) {
+      for (const [index, item] of group.items.entries()) {
+        await prisma.navigationItem.create({
+          data: {
+            organizationId: org.id,
+            location: group.location,
+            label: item.label,
+            href: item.href,
+            position: index,
+          },
+        });
+        navCount++;
+      }
+    }
+  }
+  console.log(`✓ ${navCount} Menüpunkte`);
+
+  // =========================================================================
   //  Abschluss
   // =========================================================================
   console.log('\n✅  Seed abgeschlossen.\n');

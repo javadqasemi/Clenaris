@@ -109,25 +109,44 @@ export type UpdateSeoInput = z.infer<typeof updateSeoSchema>;
 //  Stammdaten und Auftrittskanäle
 // ---------------------------------------------------------------------------
 
-const optionalUrl = z.string().url().max(300).optional().or(z.literal(''));
+/**
+ * Freiwillige Adresse.
+ *
+ * `nullable()` ist hier nicht Bequemlichkeit: die Datenbank speichert leere
+ * Felder als NULL, und `GET /api/company` gibt sie so zurück. Ohne das
+ * scheiterte ein Formular, das die Firmendaten lädt und unverändert
+ * zurückspeichert, an jedem leeren Feld — und niemand hätte etwas falsch
+ * gemacht. Der Dienst wandelt leere Werte anschliessend wieder in NULL.
+ */
+const optionalUrl = z
+  .union([z.string().url().max(300), z.literal(''), z.null()])
+  .optional()
+  .transform((v) => v ?? undefined);
+
+/** Freiwilliges Textfeld — dieselbe Überlegung wie bei `optionalUrl`. */
+const optionalText = (max: number) =>
+  z
+    .union([z.string().trim().max(max), z.literal(''), z.null()])
+    .optional()
+    .transform((v) => v ?? undefined);
 
 export const updateCompanySchema = z.object({
   name: z.string().trim().min(2).max(140),
-  legalName: z.string().trim().max(180).optional().or(z.literal('')),
+  legalName: optionalText(180),
   email: z.string().email().max(200),
-  phone: z.string().trim().max(40).optional().or(z.literal('')),
-  whatsapp: z.string().trim().max(40).optional().or(z.literal('')),
+  phone: optionalText(40),
+  whatsapp: optionalText(40),
   website: optionalUrl,
 
   street: z.string().trim().min(2).max(140),
-  streetNo: z.string().trim().max(20).optional().or(z.literal('')),
+  streetNo: optionalText(20),
   postalCode: z.string().regex(/^[1-9]\d{3}$/, 'Ungültige Postleitzahl.'),
   city: z.string().trim().min(2).max(80),
 
-  vatNumber: z.string().trim().max(40).optional().or(z.literal('')),
-  iban: z.string().trim().max(40).optional().or(z.literal('')),
-  qrIban: z.string().trim().max(40).optional().or(z.literal('')),
-  bankName: z.string().trim().max(120).optional().or(z.literal('')),
+  vatNumber: optionalText(40),
+  iban: optionalText(40),
+  qrIban: optionalText(40),
+  bankName: optionalText(120),
 
   logoUrl: optionalUrl,
   logoDarkUrl: optionalUrl,

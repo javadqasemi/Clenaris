@@ -1,5 +1,7 @@
 import type { Metadata } from 'next';
 
+import { LegalBody } from '@/components/marketing/legal-body';
+
 import { getPublicCompanyInfo } from '@/server/services/organization.service';
 import { ConsentSettingsLink } from '@/features/public/consent-settings-link';
 
@@ -16,7 +18,7 @@ export default async function PrivacyPage() {
   const company = await getPublicCompanyInfo();
 
   return (
-    <>
+    <LegalBody slug="datenschutz">
       <h1 className="text-headline font-bold">Datenschutzerklärung</h1>
       <p className="text-sm text-muted-foreground">Stand: 1. Januar 2026 · Version 1.0</p>
 
@@ -174,6 +176,6 @@ export default async function PrivacyPage() {
         Wir passen diese Erklärung an, wenn sich unsere Bearbeitung ändert. Bei wesentlichen
         Änderungen informieren wir aktiv angemeldete Kundinnen und Kunden per E-Mail.
       </p>
-    </>
+    </LegalBody>
   );
 }

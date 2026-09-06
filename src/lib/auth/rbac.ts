@@ -329,6 +329,7 @@ const PERMISSION_ROUTES: { prefix: string; permission: Permission }[] = [
    */
   { prefix: '/admin/inhalte', permission: 'content:update' },
   { prefix: '/admin/seo', permission: 'seo:update' },
+  { prefix: '/admin/website', permission: 'faq:read' },
   { prefix: '/admin/cta', permission: 'cta:read' },
   { prefix: '/admin/medien', permission: 'media:read' },
   { prefix: '/admin/benutzer', permission: 'user:read' },

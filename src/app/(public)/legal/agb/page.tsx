@@ -1,5 +1,7 @@
 import type { Metadata } from 'next';
 
+import { LegalBody } from '@/components/marketing/legal-body';
+
 import { getPublicCompanyInfo } from '@/server/services/organization.service';
 
 export const metadata: Metadata = {
@@ -15,7 +17,7 @@ export default async function TermsPage() {
   const company = await getPublicCompanyInfo();
 
   return (
-    <>
+    <LegalBody slug="agb">
       <h1 className="text-headline font-bold">Allgemeine Geschäftsbedingungen</h1>
       <p className="text-sm text-muted-foreground">Stand: 1. Januar 2026</p>
 
@@ -156,6 +158,6 @@ export default async function TermsPage() {
         Sollte eine Bestimmung unwirksam sein, bleiben die übrigen wirksam. Die unwirksame
         Bestimmung wird durch eine ersetzt, die dem wirtschaftlichen Zweck am nächsten kommt.
       </p>
-    </>
+    </LegalBody>
   );
 }

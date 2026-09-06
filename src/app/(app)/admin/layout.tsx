@@ -118,6 +118,7 @@ export default async function AdminLayout({ children }: { children: React.ReactN
         // die auch die Middleware setzt. Sonst zeigte das Menü eine Tür, die
         // beim Anklicken zurückweist.
         { href: '/admin/inhalte', label: 'Website-Texte', icon: 'content', permission: 'content:update' },
+        { href: '/admin/website', label: 'Fragen, Galerie, Menü', icon: 'layout', permission: 'faq:read' },
         { href: '/admin/cta', label: 'Handlungsaufrufe', icon: 'cta', permission: 'cta:read' },
         { href: '/admin/medien', label: 'Mediathek', icon: 'media', permission: 'media:read' },
         { href: '/admin/seo', label: 'Suchmaschinen', icon: 'search', permission: 'seo:update' },

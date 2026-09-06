@@ -4,7 +4,7 @@
 > Diagramme sind damit nie älter als das Schema. Prosa und Bereichseinteilung
 > stehen in `scripts/generate-erd.ts`.
 
-**80 Modelle, 41 Aufzählungstypen, 1429 Felder.**
+**82 Modelle, 42 Aufzählungstypen, 1457 Felder.**
 PostgreSQL 16+; alle Zeitstempel als `timestamptz` in UTC, Anzeige in Europe/Zurich.
 
 ## Vier Entscheidungen, die das ganze Schema prägen
@@ -44,7 +44,7 @@ flowchart LR
   finanzen["Finanzen<br/><small>8 Modelle</small>"]
   kommunikation["Kommunikation und Automatisierung<br/><small>10 Modelle</small>"]
   marketing["Marketing und Inhalte<br/><small>12 Modelle</small>"]
-  redaktion["Redaktion<br/><small>3 Modelle</small>"]
+  redaktion["Redaktion<br/><small>5 Modelle</small>"]
   stammdaten --> identitaet
   identitaet --> crm
   crm --> auftrag
@@ -122,7 +122,7 @@ erDiagram
 
 | Modell | Tabelle | Felder | Zweck |
 | --- | --- | --- | --- |
-| `Organization` | `organizations` | 84 | Mandant — Firmendaten, Bankverbindung, Erscheinungsbild. Wurzel fast aller Beziehungen. |
+| `Organization` | `organizations` | 86 | Mandant — Firmendaten, Bankverbindung, Erscheinungsbild. Wurzel fast aller Beziehungen. |
 | `NumberSequence` | `number_sequences` | 6 | Fortlaufende, lückenlose Belegnummern (Schweizer Buchhaltungsanforderung). |
 | `OpeningHours` | `opening_hours` | 7 | Öffnungszeiten je Wochentag; Grundlage der buchbaren Zeitfenster. |
 | `Holiday` | `holidays` | 7 | Feiertage und Betriebsferien. Sperren Termine und zählen nicht als Abwesenheitstage. |
@@ -1048,6 +1048,27 @@ erDiagram
     Boolean newTab
     String icon
   }
+  NavigationItem {
+    String id PK
+    String organizationId
+    NavLocation location
+    String label
+    String href
+    String description
+    String icon
+    Boolean newTab
+  }
+  LegalDocument {
+    String id PK
+    String organizationId
+    String slug
+    String title
+    String body
+    Int version
+    DateTime effectiveFrom
+    DateTime createdAt
+  }
+  NavigationItem |o--o{ NavigationItem : "parent"
 ```
 
 | Modell | Tabelle | Felder | Zweck |
@@ -1055,6 +1076,8 @@ erDiagram
 | `ContentBlock` | `content_blocks` | 9 | Redaktionell pflegbarer Inhaltsbaustein der Website. |
 | `SeoMeta` | `seo_meta` | 13 | Suchmaschinen-Angaben je Seitenpfad. |
 | `CallToAction` | `calls_to_action` | 21 | – |
+| `NavigationItem` | `navigation_items` | 16 | – |
+| `LegalDocument` | `legal_documents` | 10 | Impressum, Datenschutzerklärung, AGB, Cookie-Hinweis. |
 
 ## Aufzählungstypen
 
@@ -1105,6 +1128,7 @@ exakte TypeScript-Typen.
 | `ConsentType` | `MARKETING_EMAIL`, `MARKETING_SMS`, `ANALYTICS`, `TERMS`, `PRIVACY`, `DATA_PROCESSING` |
 | `CtaSlot` | `HEADER`, `HERO_PRIMARY`, `HERO_SECONDARY`, `SECTION_BANNER`, `FOOTER`, `MOBILE_BAR` |
 | `CtaStyle` | `PRIMARY`, `SECONDARY`, `OUTLINE`, `GHOST`, `ACCENT`, `SUCCESS`, `CUSTOM` |
+| `NavLocation` | `HEADER`, `HEADER_PANEL`, `FOOTER_SERVICES`, `FOOTER_COMPANY`, `FOOTER_LEGAL` |
 
 ## Migrationen
 

@@ -1,7 +1,7 @@
 import { defineRoute, idParam } from '@/lib/api/handler';
-import { ok } from '@/lib/api/response';
+import { noContent, ok } from '@/lib/api/response';
 import { prisma } from '@/lib/db';
-import { NotFoundError } from '@/lib/errors';
+import { BusinessRuleError, NotFoundError } from '@/lib/errors';
 import { cache, cacheKeys } from '@/lib/redis';
 import { audit } from '@/lib/audit';
 import { moderateReviewSchema } from '@/lib/validation/content';
@@ -52,5 +52,46 @@ export const PATCH = defineRoute({
     });
 
     return ok({ id: updated.id, status: updated.status, featured: updated.featured });
+  },
+});
+
+/**
+ * DELETE /api/reviews/:id — Bewertung entfernen.
+ *
+ * Eine **veröffentlichte** Bewertung lässt sich nicht löschen, nur verbergen.
+ * Der Unterschied ist kein Formalismus: eine Kundschaft hat sie geschrieben
+ * und darauf vertraut, dass sie steht. Sie spurlos verschwinden zu lassen,
+ * wäre gegenüber dieser Person unredlich — und gegenüber den Lesenden, die nur
+ * die guten Bewertungen zu sehen bekämen. Verbergen ist im Prüfprotokoll
+ * nachvollziehbar, Löschen wäre es nicht.
+ */
+export const DELETE = defineRoute({
+  permissions: ['review:delete'],
+  params: idParam,
+  rateLimit: 'apiWrite',
+  handler: async ({ params, session, ip }) => {
+    const organizationId = await getOrganizationId();
+    const review = await prisma.review.findFirst({ where: { id: params.id, organizationId } });
+    if (!review) throw new NotFoundError('Bewertung');
+
+    if (review.status === 'PUBLISHED') {
+      throw new BusinessRuleError(
+        'Eine veröffentlichte Bewertung lässt sich nicht löschen. Verbergen Sie sie stattdessen — ' +
+          'das ist im Prüfprotokoll nachvollziehbar und gegenüber der schreibenden Person redlich.',
+      );
+    }
+
+    await prisma.review.delete({ where: { id: params.id } });
+
+    await audit.deleted({
+      organizationId,
+      userId: session.id,
+      entity: 'Review',
+      entityId: params.id,
+      summary: `Bewertung von ${review.authorName} gelöscht (Status ${review.status})`,
+      ip,
+    });
+
+    return noContent();
   },
 });

@@ -1,5 +1,7 @@
 import type { Metadata } from 'next';
 
+import { LegalBody } from '@/components/marketing/legal-body';
+
 import { getPublicCompanyInfo } from '@/server/services/organization.service';
 
 export const metadata: Metadata = {
@@ -15,7 +17,7 @@ export default async function ImprintPage() {
   const company = await getPublicCompanyInfo();
 
   return (
-    <>
+    <LegalBody slug="impressum">
       <h1 className="text-headline font-bold">Impressum</h1>
 
       <p>
@@ -77,6 +79,6 @@ export default async function ImprintPage() {
         sich so am schnellsten klären. Gerichtsstand ist {company.address.city}, Schweiz. Es gilt
         ausschliesslich Schweizer Recht.
       </p>
-    </>
+    </LegalBody>
   );
 }

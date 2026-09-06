@@ -13,6 +13,8 @@ import * as cms from '@/lib/validation/cms';
 import * as catalog from '@/lib/validation/catalog';
 import * as cta from '@/lib/validation/cta';
 import * as website from '@/lib/validation/website';
+import * as opsAdmin from '@/lib/validation/operations-admin';
+import * as nav from '@/lib/validation/navigation';
 import * as users from '@/lib/validation/users';
 import * as q from '@/lib/validation/queries';
 
@@ -2289,6 +2291,343 @@ export const ROUTES: RouteDoc[] = [
     rateLimit: 'apiWrite',
     params: q.idParam,
     body: operations.updateEmployeeSchema,
+  },
+
+  // -------------------------------------------------------------------------
+  //  Einsatzgebiet, Newsletter, Automatisierungen, Vorlagen
+  // -------------------------------------------------------------------------
+  {
+    method: 'get',
+    path: '/api/service-areas',
+    tag: 'Betrieb',
+    summary: 'Einsatzgebiet auflisten',
+    description: 'Postleitzahlen, Anfahrtszeiten und Pauschalen.',
+    guard: perm('all', 'serviceArea:read'),
+    rateLimit: 'apiRead',
+  },
+  {
+    method: 'post',
+    path: '/api/service-areas',
+    tag: 'Betrieb',
+    summary: 'Postleitzahl aufnehmen',
+    description:
+      'Die Anfahrtspauschale fliesst in jeden künftigen Preis; die Änderung wird protokolliert ' +
+      'und der Preis-Zwischenspeicher geleert.',
+    guard: perm('all', 'serviceArea:update'),
+    rateLimit: 'apiWrite',
+    body: opsAdmin.createServiceAreaSchema,
+    status: 201,
+    extraErrors: [409],
+  },
+  {
+    method: 'patch',
+    path: '/api/service-areas/{id}',
+    tag: 'Betrieb',
+    summary: 'Einsatzgebiet ändern',
+    description: 'Teil-Update von Ort, Pauschale, Anfahrtszeit und Sichtbarkeit.',
+    guard: perm('all', 'serviceArea:update'),
+    rateLimit: 'apiWrite',
+    params: q.idParam,
+    body: opsAdmin.updateServiceAreaSchema,
+    extraErrors: [409],
+  },
+  {
+    method: 'delete',
+    path: '/api/service-areas/{id}',
+    tag: 'Betrieb',
+    summary: 'Postleitzahl entfernen',
+    description:
+      'Nicht möglich, solange dort Einsätze geplant sind — die Preisberechnung für eine ' +
+      'Verschiebung schlüge fehl. Setzen Sie das Gebiet stattdessen inaktiv.',
+    guard: perm('all', 'serviceArea:update'),
+    rateLimit: 'apiWrite',
+    params: q.idParam,
+    status: 204,
+    extraErrors: [422],
+  },
+  {
+    method: 'post',
+    path: '/api/service-areas/bulk',
+    tag: 'Betrieb',
+    summary: 'Mehrere Postleitzahlen auf einmal',
+    description:
+      'Ohne overwrite bleiben bestehende Einträge unangetastet — der Normalfall beim Nachtragen ' +
+      'einer Region. Die Antwort nennt, wie viele angelegt, überschrieben und übersprungen wurden.',
+    guard: perm('all', 'serviceArea:update'),
+    rateLimit: 'apiWrite',
+    body: opsAdmin.bulkServiceAreaSchema,
+  },
+  {
+    method: 'get',
+    path: '/api/newsletter',
+    tag: 'Kommunikation',
+    summary: 'Abonnentenliste',
+    description:
+      'Ausgetragene erscheinen nicht: sie haben widersprochen, und eine Liste, aus der man sie ' +
+      'versehentlich wieder anschreibt, ist genau der Fehler, den das Austragen verhindern soll.',
+    guard: perm('all', 'newsletter:read'),
+    rateLimit: 'apiRead',
+  },
+  {
+    method: 'delete',
+    path: '/api/newsletter/{id}',
+    tag: 'Kommunikation',
+    summary: 'Abonnement austragen',
+    description:
+      'Die Zeile bleibt bestehen und wird als ausgetragen markiert — sie ist der Nachweis, dass ' +
+      'widersprochen wurde. Ändern gibt es bewusst nicht: die E-Mail-Adresse ist der ' +
+      'Identifikator, und sie zu ändern hiesse, jemand anderen anzuschreiben.',
+    guard: perm('all', 'newsletter:delete'),
+    rateLimit: 'apiWrite',
+    params: q.idParam,
+    status: 204,
+    extraErrors: [422],
+  },
+  {
+    method: 'get',
+    path: '/api/automations',
+    tag: 'System',
+    summary: 'Automatisierungen auflisten',
+    description: 'Regeln samt Aktionen und Zahl der bisherigen Läufe.',
+    guard: perm('all', 'automation:read'),
+    rateLimit: 'apiRead',
+  },
+  {
+    method: 'post',
+    path: '/api/automations',
+    tag: 'System',
+    summary: 'Automatisierung anlegen',
+    description:
+      'Mindestens eine Aktion ist Pflicht: eine Regel ohne Aktion löst aus und tut nichts — sie ' +
+      'stünde in der Liste und wäre nicht als wirkungslos erkennbar.',
+    guard: perm('all', 'automation:update'),
+    rateLimit: 'apiWrite',
+    body: opsAdmin.createAutomationSchema,
+    status: 201,
+  },
+  {
+    method: 'patch',
+    path: '/api/automations/{id}',
+    tag: 'System',
+    summary: 'Automatisierung ändern',
+    description: 'Die Aktionsliste ist der gewünschte Endzustand, kein Zuwachs.',
+    guard: perm('all', 'automation:update'),
+    rateLimit: 'apiWrite',
+    params: q.idParam,
+    body: opsAdmin.updateAutomationSchema,
+  },
+  {
+    method: 'delete',
+    path: '/api/automations/{id}',
+    tag: 'System',
+    summary: 'Automatisierung löschen',
+    description:
+      'Nur ohne Laufhistorie. Die Läufe belegen, warum welche Nachricht verschickt wurde; ohne ' +
+      'die zugehörige Regel wären sie nicht mehr lesbar. Schalten Sie die Regel stattdessen ab.',
+    guard: perm('all', 'automation:update'),
+    rateLimit: 'apiWrite',
+    params: q.idParam,
+    status: 204,
+    extraErrors: [422],
+  },
+  {
+    method: 'get',
+    path: '/api/templates',
+    tag: 'Kommunikation',
+    summary: 'E-Mail- und SMS-Vorlagen',
+    description:
+      'Anlegen und Löschen gibt es bewusst nicht: der Schlüssel steht im Code, dort wird die ' +
+      'Vorlage nachgeschlagen. Eine frei angelegte riefe niemand auf; eine gelöschte liesse eine ' +
+      'Bestätigungsmail ausfallen.',
+    guard: perm('all', 'template:read'),
+    rateLimit: 'apiRead',
+  },
+  {
+    method: 'patch',
+    path: '/api/templates/email/{id}',
+    tag: 'Kommunikation',
+    summary: 'E-Mail-Vorlage ändern',
+    description:
+      'Platzhalter dürfen wegfallen, aber keine neuen dazukommen: ein Platzhalter, den der ' +
+      'Versand nicht füllt, erscheint wörtlich in der E-Mail an die Kundschaft. Die ' +
+      'Fehlermeldung nennt die verfügbaren.',
+    guard: perm('all', 'template:update'),
+    rateLimit: 'apiWrite',
+    params: q.idParam,
+    body: opsAdmin.updateEmailTemplateSchema,
+    extraErrors: [422],
+  },
+  {
+    method: 'patch',
+    path: '/api/templates/sms/{id}',
+    tag: 'Kommunikation',
+    summary: 'SMS-Vorlage ändern',
+    description: 'Höchstens 480 Zeichen — darüber kostet der Versand mehr als drei SMS je Empfänger.',
+    guard: perm('all', 'template:update'),
+    rateLimit: 'apiWrite',
+    params: q.idParam,
+    body: opsAdmin.updateSmsTemplateSchema,
+    extraErrors: [422],
+  },
+
+  // -------------------------------------------------------------------------
+  //  Navigation und Rechtstexte
+  // -------------------------------------------------------------------------
+  {
+    method: 'get',
+    path: '/api/navigation',
+    tag: 'Website',
+    summary: 'Menüpunkte auflisten',
+    description: 'Alle Punkte aller Orte, auch abgeschaltete.',
+    guard: perm('all', 'navigation:read'),
+    rateLimit: 'apiRead',
+  },
+  {
+    method: 'post',
+    path: '/api/navigation',
+    tag: 'Website',
+    summary: 'Menüpunkt anlegen',
+    description:
+      'Das Ziel wird gegen dieselbe Positivliste geprüft wie bei einem Handlungsaufruf. Ein ' +
+      'Menüpunkt mit javascript:-Ziel stünde auf jeder Seite der Website, nicht nur auf einer.',
+    guard: perm('all', 'navigation:update'),
+    rateLimit: 'apiWrite',
+    body: nav.createNavItemSchema,
+    status: 201,
+  },
+  {
+    method: 'patch',
+    path: '/api/navigation/{id}',
+    tag: 'Website',
+    summary: 'Menüpunkt ändern',
+    description: 'Teil-Update von Beschriftung, Ziel, Ort und Sichtbarkeit.',
+    guard: perm('all', 'navigation:update'),
+    rateLimit: 'apiWrite',
+    params: q.idParam,
+    body: nav.updateNavItemSchema,
+    extraErrors: [422],
+  },
+  {
+    method: 'delete',
+    path: '/api/navigation/{id}',
+    tag: 'Website',
+    summary: 'Menüpunkt löschen',
+    description:
+      'Unterpunkte gehen mit — ein Punkt im Aufklappbereich ohne seinen Aufklapper wäre nirgends ' +
+      'erreichbar. Die Antwort nennt unter removedChildren, wie viele das betraf.',
+    guard: perm('all', 'navigation:update'),
+    rateLimit: 'apiWrite',
+    params: q.idParam,
+  },
+  {
+    method: 'post',
+    path: '/api/navigation/reorder',
+    tag: 'Website',
+    summary: 'Reihenfolge im Menü setzen',
+    description:
+      'Je Ort und je Aufklappbereich getrennt: die Positionen zweier verschiedener Menüs haben ' +
+      'nichts miteinander zu tun.',
+    guard: perm('all', 'navigation:update'),
+    rateLimit: 'apiWrite',
+    body: nav.navReorderSchema,
+  },
+  {
+    method: 'get',
+    path: '/api/legal',
+    tag: 'Website',
+    summary: 'Rechtstexte auflisten',
+    description:
+      'Noch nicht erfasste erscheinen als leere Platzhalter mit version 0. Sonst sähe die ' +
+      'Redaktion eine kurze Liste und wüsste nicht, dass die Datenschutzerklärung fehlt — und ' +
+      'genau deren Fehlen ist ein Rechtsmangel.',
+    guard: perm('all', 'legal:read'),
+    rateLimit: 'apiRead',
+  },
+  {
+    method: 'get',
+    path: '/api/legal/{slug}',
+    tag: 'Website',
+    summary: 'Rechtstext abrufen',
+    description: 'Einer von: impressum, datenschutz, agb, cookies.',
+    guard: perm('all', 'legal:read'),
+    rateLimit: 'apiRead',
+  },
+  {
+    method: 'put',
+    path: '/api/legal/{slug}',
+    tag: 'Website',
+    summary: 'Rechtstext setzen',
+    description:
+      'PUT, weil der Körper den vollständigen Text beschreibt. Ob eine Änderung eine neue ' +
+      'Fassung ist, entscheidet die Redaktion über newVersion und nicht ein Zähler: eine ' +
+      'korrigierte Kommasetzung ist keine, eine geänderte Aufbewahrungsfrist schon. Die ' +
+      'Fassungsnummer ist der Bezugspunkt, wenn jemand fragt, welchen AGB er zugestimmt hat. ' +
+      'Löschen gibt es nicht — die vier Adressen sind aus Fusszeile, Cookie-Hinweis und E-Mails ' +
+      'verlinkt.',
+    guard: perm('all', 'legal:update'),
+    rateLimit: 'apiWrite',
+    body: nav.updateLegalSchema,
+  },
+
+  // -------------------------------------------------------------------------
+  //  Ausgaben, Aufgaben, Bewertungen
+  // -------------------------------------------------------------------------
+  {
+    method: 'patch',
+    path: '/api/expenses/{id}',
+    tag: 'Finanzen',
+    summary: 'Ausgabe korrigieren',
+    description:
+      'Betrag, Satz und Summe hängen zusammen und werden immer gemeinsam neu gerechnet, damit ' +
+      'keine Ausgabe mit unstimmiger MWST entsteht.',
+    guard: perm('all', 'expense:update'),
+    rateLimit: 'apiWrite',
+    params: q.idParam,
+  },
+  {
+    method: 'delete',
+    path: '/api/expenses/{id}',
+    tag: 'Finanzen',
+    summary: 'Ausgabe löschen',
+    description:
+      'Nicht möglich, sobald die Ausgabe in einem Buchhaltungsexport enthalten war: die ' +
+      'Treuhandstelle hat den Beleg dann bereits verbucht, und ein Loch in der exportierten ' +
+      'Reihe fällt erst beim Abschluss auf.',
+    guard: perm('all', 'expense:delete'),
+    rateLimit: 'apiWrite',
+    params: q.idParam,
+    status: 204,
+    extraErrors: [422],
+  },
+  {
+    method: 'delete',
+    path: '/api/tasks/{id}',
+    tag: 'CRM',
+    summary: 'Aufgabe löschen',
+    description:
+      'Ohne fachliche Sperre — eine Aufgabe ist eine Notiz, kein Beleg. Mitarbeitende dürfen nur ' +
+      'eigene löschen.',
+    guard: perm('all', 'task:delete'),
+    rateLimit: 'apiWrite',
+    params: q.idParam,
+    status: 204,
+    extraErrors: [403],
+  },
+  {
+    method: 'delete',
+    path: '/api/reviews/{id}',
+    tag: 'Website',
+    summary: 'Bewertung löschen',
+    description:
+      'Eine veröffentlichte Bewertung lässt sich nicht löschen, nur verbergen. Eine Kundschaft ' +
+      'hat sie geschrieben und darauf vertraut, dass sie steht; sie spurlos verschwinden zu ' +
+      'lassen, wäre unredlich — und die Lesenden bekämen nur noch die guten zu sehen. Verbergen ' +
+      'ist im Prüfprotokoll nachvollziehbar.',
+    guard: perm('all', 'review:delete'),
+    rateLimit: 'apiWrite',
+    params: q.idParam,
+    status: 204,
+    extraErrors: [422],
   },
 
   // -------------------------------------------------------------------------
