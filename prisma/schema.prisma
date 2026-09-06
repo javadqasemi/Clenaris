@@ -1,0 +1,2842 @@
+// ===========================================================================
+//  Clenaris — Prisma Schema
+//  PostgreSQL (Supabase). Geldbeträge: Decimal(12,2) in CHF.
+//  Zeitstempel: immer UTC (timestamptz), Formatierung in der UI (Europe/Zurich).
+//
+//  Architekturentscheide:
+//  1) Organization als Mandanten-Wurzel: die Plattform startet single-tenant,
+//     ist aber ohne Migration mandantenfähig. Jede Top-Level-Aggregatwurzel
+//     trägt `organizationId`.
+//  2) Soft-Deletes (`deletedAt`) nur dort, wo Geschäftsdaten revisionssicher
+//     bleiben müssen (Kunden, Rechnungen, Offerten, Jobs). Alles andere wird
+//     hart gelöscht — DSG/DSGVO-Löschbegehren bleiben so umsetzbar.
+//  3) Finanzdokumente (Invoice, Quote, CreditNote) sind append-only: ausgestellte
+//     Dokumente werden nie mutiert, Korrekturen laufen über Gutschriften.
+//  4) Jede sicherheitsrelevante Mutation landet im AuditLog.
+// ===========================================================================
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["fullTextSearchPostgres"]
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ===========================================================================
+//  ENUMS
+// ===========================================================================
+
+enum Locale {
+  DE
+  EN
+  FR
+  IT
+}
+
+enum UserRole {
+  SUPER_ADMIN // Alles, inkl. Rollenvergabe und Prüfprotokoll
+  ADMIN // Vollzugriff auf Betrieb, Inhalte und Einstellungen
+  MANAGER // Operativ + Finanzen, keine Systemeinstellungen
+  EMPLOYEE // Eigene Jobs, Zeiterfassung
+  CUSTOMER // Eigene Buchungen, Rechnungen
+}
+
+enum UserStatus {
+  PENDING
+  ACTIVE
+  SUSPENDED
+  DISABLED
+}
+
+enum CustomerType {
+  PRIVATE
+  BUSINESS
+}
+
+enum LeadStatus {
+  NEW
+  CONTACTED
+  QUALIFIED
+  PROPOSAL
+  WON
+  LOST
+}
+
+enum LeadSource {
+  WEBSITE
+  PHONE
+  EMAIL
+  REFERRAL
+  GOOGLE_ADS
+  META_ADS
+  SEO
+  WALK_IN
+  PARTNER
+  OTHER
+}
+
+enum PropertyKind {
+  APARTMENT
+  HOUSE
+  OFFICE
+  COMMERCIAL
+  INDUSTRIAL
+  CONSTRUCTION_SITE
+  PRACTICE
+  RESTAURANT
+  SCHOOL
+  OTHER
+}
+
+enum ServiceKind {
+  OFFICE_CLEANING
+  MOVE_OUT_CLEANING
+  RESIDENTIAL_CLEANING
+  WINDOW_CLEANING
+  CONSTRUCTION_CLEANING
+  BUILDING_MAINTENANCE
+  SPECIAL
+}
+
+enum PricingModel {
+  PER_HOUR
+  PER_SQM
+  FLAT
+  PER_UNIT
+  ON_REQUEST
+}
+
+enum Frequency {
+  ONCE
+  WEEKLY
+  BIWEEKLY
+  MONTHLY
+  QUARTERLY
+  SEMIANNUAL
+  ANNUAL
+  CUSTOM
+}
+
+enum BookingStatus {
+  DRAFT
+  PENDING // Kunde hat gebucht, wartet auf Bestätigung
+  CONFIRMED
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+  NO_SHOW
+}
+
+enum QuoteStatus {
+  DRAFT
+  SENT
+  VIEWED
+  ACCEPTED
+  REJECTED
+  EXPIRED
+  CONVERTED
+}
+
+enum JobStatus {
+  UNASSIGNED
+  SCHEDULED
+  DISPATCHED
+  EN_ROUTE
+  IN_PROGRESS
+  ON_HOLD
+  COMPLETED
+  VERIFIED
+  CANCELLED
+}
+
+enum JobPhotoType {
+  BEFORE
+  AFTER
+  DAMAGE
+  DOCUMENT
+  OTHER
+}
+
+enum AssignmentRole {
+  LEAD
+  MEMBER
+  TRAINEE
+  SUPERVISOR
+}
+
+enum InvoiceStatus {
+  DRAFT
+  ISSUED
+  SENT
+  PARTIALLY_PAID
+  PAID
+  OVERDUE
+  CANCELLED
+  WRITTEN_OFF
+}
+
+enum PaymentMethod {
+  CARD
+  TWINT
+  BANK_TRANSFER
+  CASH
+  SEPA
+  GIFT_CARD
+  CREDIT_NOTE
+  OTHER
+}
+
+enum PaymentStatus {
+  PENDING
+  PROCESSING
+  SUCCEEDED
+  FAILED
+  REFUNDED
+  PARTIALLY_REFUNDED
+  CANCELLED
+}
+
+enum ExpenseCategory {
+  MATERIAL
+  EQUIPMENT
+  VEHICLE
+  FUEL
+  INSURANCE
+  RENT
+  SALARY
+  SOCIAL_SECURITY
+  MARKETING
+  SOFTWARE
+  TRAINING
+  TAXES
+  OTHER
+}
+
+enum AbsenceType {
+  VACATION
+  SICK
+  ACCIDENT
+  MILITARY
+  MATERNITY
+  PATERNITY
+  UNPAID
+  TRAINING
+  PUBLIC_HOLIDAY
+  OTHER
+}
+
+enum AbsenceStatus {
+  REQUESTED
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
+enum EmploymentType {
+  FULL_TIME
+  PART_TIME
+  HOURLY
+  TEMPORARY
+  APPRENTICE
+  CONTRACTOR
+}
+
+enum ActivityType {
+  NOTE
+  CALL
+  EMAIL
+  SMS
+  MEETING
+  TASK
+  STATUS_CHANGE
+  FILE_UPLOAD
+  SYSTEM
+}
+
+enum TaskPriority {
+  LOW
+  NORMAL
+  HIGH
+  URGENT
+}
+
+enum TaskStatus {
+  OPEN
+  IN_PROGRESS
+  DONE
+  CANCELLED
+}
+
+enum NotificationChannel {
+  IN_APP
+  EMAIL
+  SMS
+  PUSH
+}
+
+enum NotificationStatus {
+  QUEUED
+  SENT
+  DELIVERED
+  FAILED
+  READ
+}
+
+enum MessageAuthorType {
+  CUSTOMER
+  STAFF
+  SYSTEM
+  AI
+}
+
+enum ReviewStatus {
+  PENDING
+  PUBLISHED
+  REJECTED
+}
+
+enum DiscountType {
+  PERCENT
+  FIXED
+}
+
+enum CouponStatus {
+  ACTIVE
+  PAUSED
+  EXPIRED
+  DEPLETED
+}
+
+enum PostStatus {
+  DRAFT
+  SCHEDULED
+  PUBLISHED
+  ARCHIVED
+}
+
+enum ApplicationStatus {
+  RECEIVED
+  SCREENING
+  INTERVIEW
+  OFFER
+  HIRED
+  REJECTED
+  WITHDRAWN
+}
+
+enum AutomationTrigger {
+  BOOKING_CREATED
+  BOOKING_CONFIRMED
+  BOOKING_REMINDER_24H
+  BOOKING_REMINDER_2H
+  BOOKING_COMPLETED
+  BOOKING_CANCELLED
+  QUOTE_SENT
+  QUOTE_ACCEPTED
+  QUOTE_EXPIRING
+  INVOICE_ISSUED
+  INVOICE_DUE_SOON
+  INVOICE_OVERDUE
+  JOB_ASSIGNED
+  JOB_COMPLETED
+  CUSTOMER_BIRTHDAY
+  REVIEW_REQUEST
+  LEAD_CREATED
+  LEAD_IDLE
+  TASK_DUE
+  RECURRING_BOOKING_GENERATE
+}
+
+enum AutomationActionType {
+  SEND_EMAIL
+  SEND_SMS
+  CREATE_TASK
+  CREATE_NOTIFICATION
+  UPDATE_STATUS
+  WEBHOOK
+  AI_GENERATE
+}
+
+enum AutomationRunStatus {
+  PENDING
+  RUNNING
+  SUCCESS
+  FAILED
+  SKIPPED
+}
+
+enum FileScope {
+  BOOKING
+  QUOTE
+  INVOICE
+  JOB
+  CUSTOMER
+  EMPLOYEE
+  PROPERTY
+  BLOG
+  GALLERY
+  APPLICATION
+  EXPENSE
+  MESSAGE
+  OTHER
+}
+
+enum AuditAction {
+  CREATE
+  UPDATE
+  DELETE
+  LOGIN
+  LOGIN_FAILED
+  LOGOUT
+  PASSWORD_RESET
+  PERMISSION_CHANGE
+  EXPORT
+  IMPORT
+  PAYMENT
+  ACCESS_DENIED
+}
+
+enum ConsentType {
+  MARKETING_EMAIL
+  MARKETING_SMS
+  ANALYTICS
+  TERMS
+  PRIVACY
+  DATA_PROCESSING
+}
+
+// ===========================================================================
+//  ORGANISATION & EINSTELLUNGEN
+// ===========================================================================
+
+/// Mandant — Firmendaten, Bankverbindung, Erscheinungsbild. Wurzel fast aller Beziehungen.
+model Organization {
+  id        String  @id @default(cuid())
+  slug      String  @unique
+  name      String
+  legalName String?
+
+  email   String
+  phone   String?
+  website String?
+
+  street     String
+  streetNo   String?
+  postalCode String
+  city       String
+  canton     String  @default("BE")
+  country    String  @default("CH")
+
+  vatNumber   String? // CHE-123.456.789 MWST
+  uid         String? // CHE-123.456.789
+  iban        String?
+  qrIban      String? // Swiss QR-Bill
+  bankName    String?
+  defaultVat  Decimal @default(8.1) @db.Decimal(5, 2)
+  currency    String  @default("CHF")
+  timezone    String  @default("Europe/Zurich")
+  locale      Locale  @default(DE)
+  paymentTerm Int     @default(30) // Zahlungsfrist in Tagen
+
+  // Branding
+  logoUrl        String?
+  logoDarkUrl    String?
+  faviconUrl     String?
+  primaryColor   String  @default("#0B7285")
+  secondaryColor String  @default("#0F172A")
+
+  // Nummernkreise
+  invoiceNumberPrefix String  @default("RE")
+  quoteNumberPrefix   String  @default("OF")
+  bookingNumberPrefix String  @default("BK")
+  jobNumberPrefix     String  @default("JB")
+  creditNumberPrefix  String  @default("GS")
+  numberYearReset     Boolean @default(true)
+
+  // Kontakt- und Auftrittskanäle. Strukturierte Geschäftsdaten gehören hierher
+  // und nicht in `ContentBlock` — sie erscheinen in Impressum, Fusszeile,
+  // strukturierten Daten und auf Belegen, also in mehr als nur „Inhalt".
+  whatsapp     String?
+  mapsUrl      String?
+  facebookUrl  String?
+  instagramUrl String?
+  linkedinUrl  String?
+  tiktokUrl    String?
+  youtubeUrl   String?
+
+  settings Json @default("{}")
+
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+
+  users             User[]
+  customers         Customer[]
+  leads             Lead[]
+  employees         Employee[]
+  services          Service[]
+  serviceCategories ServiceCategory[]
+  serviceExtras     ServiceExtra[]
+  serviceAreas      ServiceArea[]
+  bookings          Booking[]
+  quotes            Quote[]
+  jobs              Job[]
+  invoices          Invoice[]
+  creditNotes       CreditNote[]
+  expenses          Expense[]
+  suppliers         Supplier[]
+  taxRates          TaxRate[]
+  openingHours      OpeningHours[]
+  holidays          Holiday[]
+  emailTemplates    EmailTemplate[]
+  smsTemplates      SmsTemplate[]
+  automations       Automation[]
+  coupons           Coupon[]
+  giftCards         GiftCard[]
+  blogPosts         BlogPost[]
+  blogCategories    BlogCategory[]
+  reviews           Review[]
+  faqs              Faq[]
+  galleryItems      GalleryItem[]
+  jobPostings       JobPosting[]
+  pipelineStages    PipelineStage[]
+  tags              Tag[]
+  auditLogs         AuditLog[]
+  numberSequences   NumberSequence[]
+  files             FileAsset[]
+  newsletter        NewsletterSubscriber[]
+  landingPages      LandingPage[]
+  contentBlocks     ContentBlock[]
+  seoMeta           SeoMeta[]
+  accountingExports AccountingExport[]
+  callsToAction     CallToAction[]
+
+  @@map("organizations")
+}
+
+/// Fortlaufende, lückenlose Belegnummern (Schweizer Buchhaltungsanforderung).
+/// Wird in einer Transaktion mit `SELECT ... FOR UPDATE` hochgezählt.
+model NumberSequence {
+  id             String @id @default(cuid())
+  organizationId String
+  scope          String // "invoice" | "quote" | "booking" | "job" | "credit_note"
+  year           Int
+  current        Int    @default(0)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, scope, year])
+  @@map("number_sequences")
+}
+
+/// Öffnungszeiten je Wochentag; Grundlage der buchbaren Zeitfenster.
+model OpeningHours {
+  id             String  @id @default(cuid())
+  organizationId String
+  weekday        Int // 0 = Sonntag ... 6 = Samstag
+  opensAt        String? // "08:00"
+  closesAt       String? // "17:30"
+  closed         Boolean @default(false)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, weekday])
+  @@map("opening_hours")
+}
+
+/// Feiertage und Betriebsferien. Sperren Termine und zählen nicht als Abwesenheitstage.
+model Holiday {
+  id             String   @id @default(cuid())
+  organizationId String
+  name           String
+  date           DateTime @db.Date
+  recurring      Boolean  @default(false) // jährlich wiederkehrend
+  canton         String?  @default("BE")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, date, name])
+  @@index([organizationId, date])
+  @@map("holidays")
+}
+
+/// Postleitzahlen im Einsatzgebiet, je mit Anfahrtspauschale und Fahrzeit.
+model ServiceArea {
+  id             String  @id @default(cuid())
+  organizationId String
+  postalCode     String
+  city           String
+  canton         String  @default("BE")
+  travelFee      Decimal @default(0) @db.Decimal(12, 2)
+  travelMinutes  Int     @default(0)
+  active         Boolean @default(true)
+  lat            Float?
+  lng            Float?
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, postalCode])
+  @@index([organizationId, active])
+  @@map("service_areas")
+}
+
+// ===========================================================================
+//  AUTHENTIFIZIERUNG & BENUTZER
+// ===========================================================================
+
+/// Benutzerkonto mit Rolle und Anmeldedaten. Passwörter als Argon2id-Hash.
+model User {
+  id             String @id @default(cuid())
+  organizationId String
+
+  email         String    @unique
+  emailVerified DateTime? @db.Timestamptz(6)
+  phone         String?
+  passwordHash  String
+
+  firstName String
+  lastName  String
+  avatarUrl String?
+  locale    Locale     @default(DE)
+  role      UserRole   @default(CUSTOMER)
+  status    UserStatus @default(ACTIVE)
+
+  // Sicherheit
+  twoFactorEnabled   Boolean   @default(false)
+  twoFactorSecret    String?
+  failedLoginCount   Int       @default(0)
+  lockedUntil        DateTime? @db.Timestamptz(6)
+  lastLoginAt        DateTime? @db.Timestamptz(6)
+  lastLoginIp        String?
+  passwordChangedAt  DateTime  @default(now()) @db.Timestamptz(6)
+  mustChangePassword Boolean   @default(false)
+
+  // Präferenzen
+  theme          String  @default("system") // system | light | dark
+  notifyByEmail  Boolean @default(true)
+  notifyBySms    Boolean @default(false)
+  marketingOptIn Boolean @default(false)
+
+  createdAt DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime  @updatedAt @db.Timestamptz(6)
+  deletedAt DateTime? @db.Timestamptz(6)
+
+  organization  Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  customer      Customer?
+  employee      Employee?
+  refreshTokens RefreshToken[]
+  tokens        VerificationToken[]
+  notifications Notification[]
+  auditLogs     AuditLog[]
+  consents      Consent[]
+  activities    Activity[]          @relation("ActivityAuthor")
+  assignedTasks Task[]              @relation("TaskAssignee")
+  createdTasks  Task[]              @relation("TaskCreator")
+  messages      Message[]
+  reviews       Review[]
+  blogPosts     BlogPost[]
+
+  @@index([organizationId, role])
+  @@index([organizationId, status])
+  @@map("users")
+}
+
+/// Rotierender Refresh-Token. Gespeichert wird nur der SHA-256-Hash plus Familien-ID zur Erkennung von Wiederverwendung.
+model RefreshToken {
+  id        String    @id @default(cuid())
+  userId    String
+  /// SHA-256 des Tokens — der Klartext verlässt den Server nie persistent.
+  tokenHash String    @unique
+  family    String // Rotations-Familie: erkennt Token-Reuse
+  userAgent String?
+  ip        String?
+  expiresAt DateTime  @db.Timestamptz(6)
+  revokedAt DateTime? @db.Timestamptz(6)
+  createdAt DateTime  @default(now()) @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([family])
+  @@index([expiresAt])
+  @@map("refresh_tokens")
+}
+
+/// Einmaltoken für E-Mail-Bestätigung, Passwortreset und Einladung.
+model VerificationToken {
+  id        String    @id @default(cuid())
+  userId    String?
+  email     String
+  tokenHash String    @unique
+  purpose   String // EMAIL_VERIFY | PASSWORD_RESET | INVITE | MAGIC_LINK
+  expiresAt DateTime  @db.Timestamptz(6)
+  usedAt    DateTime? @db.Timestamptz(6)
+  createdAt DateTime  @default(now()) @db.Timestamptz(6)
+
+  user User? @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([email, purpose])
+  @@index([expiresAt])
+  @@map("verification_tokens")
+}
+
+/// Nachweis erteilter und widerrufener Einwilligungen mit Zeitpunkt und IP.
+model Consent {
+  id        String      @id @default(cuid())
+  userId    String
+  type      ConsentType
+  granted   Boolean
+  version   String      @default("1.0")
+  ip        String?
+  userAgent String?
+  grantedAt DateTime    @default(now()) @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, type])
+  @@map("consents")
+}
+
+/// Prüfprotokoll aller ändernden Vorgänge — wer, wann, was, vorher/nachher.
+model AuditLog {
+  id             String      @id @default(cuid())
+  organizationId String
+  userId         String?
+  action         AuditAction
+  entity         String // "Invoice", "Customer", ...
+  entityId       String?
+  summary        String?
+  /// Nur geänderte Felder, sensible Werte redigiert.
+  changes        Json?
+  ip             String?
+  userAgent      String?
+  createdAt      DateTime    @default(now()) @db.Timestamptz(6)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User?        @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, createdAt])
+  @@index([entity, entityId])
+  @@index([userId])
+  @@map("audit_logs")
+}
+
+// ===========================================================================
+//  CRM — LEADS, KUNDEN, OBJEKTE
+// ===========================================================================
+
+/// Stufe im Vertriebstrichter, frei benennbar.
+model PipelineStage {
+  id             String  @id @default(cuid())
+  organizationId String
+  name           String
+  key            String // new | contacted | qualified | proposal | won | lost
+  color          String  @default("#64748B")
+  position       Int     @default(0)
+  isWon          Boolean @default(false)
+  isLost         Boolean @default(false)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  leads        Lead[]
+
+  @@unique([organizationId, key])
+  @@map("pipeline_stages")
+}
+
+/// Frei vergebbares Etikett für Kundschaft und Anfragen.
+model Tag {
+  id             String @id @default(cuid())
+  organizationId String
+  name           String
+  color          String @default("#0B7285")
+
+  organization Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  customers    CustomerTag[]
+  leads        LeadTag[]
+
+  @@unique([organizationId, name])
+  @@map("tags")
+}
+
+/// Anfrage vor der Kundenbeziehung, mit Herkunft, Bewertung und Pipeline-Stufe.
+model Lead {
+  id             String @id @default(cuid())
+  organizationId String
+  number         String
+
+  firstName String
+  lastName  String
+  email     String
+  phone     String?
+  company   String?
+
+  street     String?
+  postalCode String?
+  city       String?
+
+  serviceKind    ServiceKind?
+  message        String?
+  estimatedValue Decimal?     @db.Decimal(12, 2)
+
+  status  LeadStatus @default(NEW)
+  source  LeadSource @default(WEBSITE)
+  stageId String?
+
+  utmSource   String?
+  utmMedium   String?
+  utmCampaign String?
+  referrerUrl String?
+  landingPath String?
+
+  score          Int       @default(0) // 0..100, von der KI berechnet
+  nextFollowUpAt DateTime? @db.Timestamptz(6)
+  lostReason     String?
+  convertedAt    DateTime? @db.Timestamptz(6)
+  customerId     String?
+  ownerId        String? // zuständiger Mitarbeiter (Employee.id)
+
+  createdAt DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime  @updatedAt @db.Timestamptz(6)
+  deletedAt DateTime? @db.Timestamptz(6)
+
+  organization Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  stage        PipelineStage? @relation(fields: [stageId], references: [id], onDelete: SetNull)
+  customer     Customer?      @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  owner        Employee?      @relation("LeadOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+  activities   Activity[]
+  tasks        Task[]
+  quotes       Quote[]
+  tags         LeadTag[]
+
+  @@unique([organizationId, number])
+  @@index([organizationId, status])
+  @@index([organizationId, createdAt])
+  /// Die Pipeline sortiert nach Bewertung, nicht nach Eingang.
+  @@index([organizationId, score])
+  @@index([email])
+  @@map("leads")
+}
+
+/// Zuordnung Etikett ↔ Anfrage.
+model LeadTag {
+  leadId String
+  tagId  String
+
+  lead Lead @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  tag  Tag  @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([leadId, tagId])
+  @@map("lead_tags")
+}
+
+/// Kundendatensatz mit Konditionen, Umsatz und Zahlungsverhalten.
+model Customer {
+  id             String  @id @default(cuid())
+  organizationId String
+  number         String // K-2026-00042
+  userId         String? @unique
+
+  type        CustomerType @default(PRIVATE)
+  companyName String?
+  firstName   String
+  lastName    String
+  email       String
+  phone       String?
+  mobile      String?
+
+  vatNumber String?
+  language  Locale  @default(DE)
+
+  birthday      DateTime? @db.Date
+  notes         String?
+  internalNotes String?
+
+  // Konditionen
+  paymentTermDays Int      @default(30)
+  discountPercent Decimal  @default(0) @db.Decimal(5, 2)
+  creditLimit     Decimal? @db.Decimal(12, 2)
+  taxExempt       Boolean  @default(false)
+  blocked         Boolean  @default(false)
+  blockedReason   String?
+
+  // Kennzahlen (denormalisiert, per Job aktualisiert)
+  lifetimeValue Decimal   @default(0) @db.Decimal(12, 2)
+  totalBookings Int       @default(0)
+  averageRating Decimal?  @db.Decimal(3, 2)
+  lastBookingAt DateTime? @db.Timestamptz(6)
+
+  stripeCustomerId String? @unique
+  referralCode     String? @unique
+  referredById     String?
+
+  createdAt DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime  @updatedAt @db.Timestamptz(6)
+  deletedAt DateTime? @db.Timestamptz(6)
+
+  organization   Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user           User?              @relation(fields: [userId], references: [id], onDelete: SetNull)
+  referredBy     Customer?          @relation("CustomerReferral", fields: [referredById], references: [id], onDelete: SetNull)
+  referrals      Customer[]         @relation("CustomerReferral")
+  addresses      Address[]
+  properties     Property[]
+  contacts       Contact[]
+  bookings       Booking[]
+  quotes         Quote[]
+  invoices       Invoice[]
+  creditNotes    CreditNote[]
+  jobs           Job[]
+  activities     Activity[]
+  tasks          Task[]
+  reviews        Review[]
+  files          FileAsset[]
+  threads        MessageThread[]
+  paymentMethods PaymentMethodRef[]
+  leads          Lead[]
+  tags           CustomerTag[]
+  giftCards      GiftCard[]
+  payments       Payment[]
+
+  @@unique([organizationId, number])
+  @@index([organizationId, email])
+  @@index([organizationId, deletedAt])
+  /// Kennzahl „umsatzstärkste Kundschaft" auf der Übersicht.
+  @@index([organizationId, lifetimeValue])
+  @@index([organizationId, type])
+  @@map("customers")
+}
+
+/// Zuordnung Etikett ↔ Kundschaft.
+model CustomerTag {
+  customerId String
+  tagId      String
+
+  customer Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  tag      Tag      @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([customerId, tagId])
+  @@map("customer_tags")
+}
+
+/// Ansprechperson bei Geschäftskundschaft.
+model Contact {
+  id         String  @id @default(cuid())
+  customerId String
+  firstName  String
+  lastName   String
+  position   String?
+  email      String?
+  phone      String?
+  mobile     String?
+  isPrimary  Boolean @default(false)
+  notes      String?
+
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+
+  customer Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@index([customerId])
+  @@map("contacts")
+}
+
+/// Adresse einer Kundschaft — Einsatz-, Rechnungs- oder Standardadresse.
+model Address {
+  id         String  @id @default(cuid())
+  customerId String
+  label      String? // "Zuhause", "Büro Bern"
+  firstName  String?
+  lastName   String?
+  company    String?
+  street     String
+  streetNo   String?
+  addition   String? // c/o, Stockwerk
+  postalCode String
+  city       String
+  canton     String  @default("BE")
+  country    String  @default("CH")
+  lat        Float?
+  lng        Float?
+  placeId    String? // Google Maps Place ID
+  isBilling  Boolean @default(false)
+  isDefault  Boolean @default(false)
+  accessNote String? // Schlüssel, Code, Parkplatz
+
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+
+  customer   Customer   @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  properties Property[]
+  bookings   Booking[]
+  jobs       Job[]
+
+  @@index([customerId])
+  @@index([postalCode])
+  @@map("addresses")
+}
+
+/// Liegenschaft mit mehreren Objekten, etwa eine Überbauung.
+model Building {
+  id           String  @id @default(cuid())
+  name         String
+  street       String
+  postalCode   String
+  city         String
+  canton       String  @default("BE")
+  floors       Int?
+  units        Int?
+  hasElevator  Boolean @default(false)
+  janitorName  String?
+  janitorPhone String?
+  accessNote   String?
+  lat          Float?
+  lng          Float?
+
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+
+  properties Property[]
+
+  @@index([postalCode])
+  @@map("buildings")
+}
+
+/// Konkretes Reinigungsobjekt: Fläche, Zimmer, Zugang, Schlüsseldepot.
+model Property {
+  id         String       @id @default(cuid())
+  customerId String
+  addressId  String?
+  buildingId String?
+  label      String
+  kind       PropertyKind @default(APARTMENT)
+
+  squareMeters Int?
+  rooms        Decimal? @db.Decimal(4, 1) // 3.5 Zimmer
+  bathrooms    Int?
+  windows      Int?
+  floor        Int?
+  hasBalcony   Boolean  @default(false)
+  hasGarden    Boolean  @default(false)
+  hasPets      Boolean  @default(false)
+  hasElevator  Boolean  @default(false)
+  parkingInfo  String?
+  keyLocation  String?
+  alarmCode    String? // verschlüsselt gespeichert (siehe lib/crypto)
+  accessNote   String?
+  notes        String?
+
+  createdAt DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime  @updatedAt @db.Timestamptz(6)
+  deletedAt DateTime? @db.Timestamptz(6)
+
+  customer Customer    @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  address  Address?    @relation(fields: [addressId], references: [id], onDelete: SetNull)
+  building Building?   @relation(fields: [buildingId], references: [id], onDelete: SetNull)
+  bookings Booking[]
+  jobs     Job[]
+  quotes   Quote[]
+  files    FileAsset[]
+
+  @@index([customerId])
+  @@map("properties")
+}
+
+/// Hinterlegtes Zahlungsmittel — nur der Verweis beim Anbieter, nie die Kartendaten.
+model PaymentMethodRef {
+  id         String        @id @default(cuid())
+  customerId String
+  provider   String        @default("stripe")
+  type       PaymentMethod
+  externalId String // Stripe PaymentMethod ID
+  brand      String? // visa, mastercard
+  last4      String?
+  expMonth   Int?
+  expYear    Int?
+  isDefault  Boolean       @default(false)
+  createdAt  DateTime      @default(now()) @db.Timestamptz(6)
+
+  customer Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, externalId])
+  @@index([customerId])
+  @@map("payment_methods")
+}
+
+// ===========================================================================
+//  AKTIVITÄTEN, AUFGABEN, KOMMUNIKATION
+// ===========================================================================
+
+/// Verlaufseintrag: Notiz, Telefonat, E-Mail, Termin, Statuswechsel.
+model Activity {
+  id       String       @id @default(cuid())
+  type     ActivityType
+  subject  String
+  body     String?
+  metadata Json?
+
+  customerId String?
+  leadId     String?
+  jobId      String?
+  bookingId  String?
+  quoteId    String?
+  invoiceId  String?
+  authorId   String?
+
+  durationMinutes Int?
+  occurredAt      DateTime @default(now()) @db.Timestamptz(6)
+  createdAt       DateTime @default(now()) @db.Timestamptz(6)
+
+  customer Customer? @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  lead     Lead?     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  job      Job?      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  booking  Booking?  @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  quote    Quote?    @relation(fields: [quoteId], references: [id], onDelete: Cascade)
+  invoice  Invoice?  @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  author   User?     @relation("ActivityAuthor", fields: [authorId], references: [id], onDelete: SetNull)
+
+  @@index([customerId, occurredAt])
+  @@index([leadId, occurredAt])
+  @@index([type])
+  @@map("activities")
+}
+
+/// Aufgabe mit Fälligkeit, Zuständigkeit und Erinnerung.
+model Task {
+  id           String       @id @default(cuid())
+  title        String
+  description  String?
+  status       TaskStatus   @default(OPEN)
+  priority     TaskPriority @default(NORMAL)
+  dueAt        DateTime?    @db.Timestamptz(6)
+  completedAt  DateTime?    @db.Timestamptz(6)
+  reminderAt   DateTime?    @db.Timestamptz(6)
+  reminderSent Boolean      @default(false)
+
+  assigneeId String?
+  creatorId  String?
+  customerId String?
+  leadId     String?
+  jobId      String?
+
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+
+  assignee User?     @relation("TaskAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
+  creator  User?     @relation("TaskCreator", fields: [creatorId], references: [id], onDelete: SetNull)
+  customer Customer? @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  lead     Lead?     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  job      Job?      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@index([assigneeId, status])
+  @@index([dueAt])
+  @@map("tasks")
+}
+
+/// Nachrichtenverlauf mit der Kundschaft, gebunden an Kundschaft oder Einsatz.
+model MessageThread {
+  id            String   @id @default(cuid())
+  customerId    String?
+  jobId         String?
+  subject       String
+  closed        Boolean  @default(false)
+  lastMessageAt DateTime @default(now()) @db.Timestamptz(6)
+  createdAt     DateTime @default(now()) @db.Timestamptz(6)
+
+  customer Customer? @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  job      Job?      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  messages Message[]
+
+  /// Posteingang des Büros: alle offenen Verläufe, neueste zuerst.
+  @@index([closed, lastMessageAt])
+  @@index([customerId, lastMessageAt])
+  @@map("message_threads")
+}
+
+/// Einzelne Nachricht im Verlauf, mit Lesevermerk und Anhängen.
+model Message {
+  id         String            @id @default(cuid())
+  threadId   String
+  authorId   String?
+  authorType MessageAuthorType @default(STAFF)
+  body       String
+  readAt     DateTime?         @db.Timestamptz(6)
+  createdAt  DateTime          @default(now()) @db.Timestamptz(6)
+
+  thread      MessageThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  author      User?         @relation(fields: [authorId], references: [id], onDelete: SetNull)
+  attachments FileAsset[]
+
+  @@index([threadId, createdAt])
+  @@map("messages")
+}
+
+/// In-App-, E-Mail- oder SMS-Meldung an eine Person, mit Zustellstand.
+model Notification {
+  id      String              @id @default(cuid())
+  userId  String
+  channel NotificationChannel @default(IN_APP)
+  status  NotificationStatus  @default(QUEUED)
+  title   String
+  body    String
+  link    String?
+  meta    Json?
+  readAt  DateTime?           @db.Timestamptz(6)
+  sentAt  DateTime?           @db.Timestamptz(6)
+  error   String?
+
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  /// Die Glocke lädt die neuesten Meldungen einer Person — die Tabelle
+  /// wächst mit jeder Buchung, jedem Einsatz und jeder Nachricht.
+  @@index([userId, createdAt])
+  @@index([userId, readAt])
+  @@index([status])
+  @@map("notifications")
+}
+
+// ===========================================================================
+//  LEISTUNGSKATALOG & PREISE
+// ===========================================================================
+
+/// Gruppierung des Leistungskatalogs für Website und Navigation.
+model ServiceCategory {
+  id             String  @id @default(cuid())
+  organizationId String
+  slug           String
+  name           String
+  nameEn         String?
+  nameFr         String?
+  nameIt         String?
+  description    String?
+  icon           String  @default("Sparkles")
+  position       Int     @default(0)
+  active         Boolean @default(true)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  services     Service[]
+
+  @@unique([organizationId, slug])
+  @@map("service_categories")
+}
+
+/// Angebotene Leistung mit Preismodell, Dauerkennzahlen und SEO-Angaben.
+model Service {
+  id             String  @id @default(cuid())
+  organizationId String
+  categoryId     String?
+
+  slug        String
+  kind        ServiceKind
+  name        String
+  nameEn      String?
+  nameFr      String?
+  nameIt      String?
+  shortDesc   String
+  description String
+  icon        String      @default("Sparkles")
+  heroImage   String?
+  active      Boolean     @default(true)
+  featured    Boolean     @default(false)
+  position    Int         @default(0)
+
+  // Preislogik
+  pricingModel PricingModel @default(PER_HOUR)
+  basePrice    Decimal      @default(0) @db.Decimal(12, 2) // Grundpauschale
+  hourlyRate   Decimal?     @db.Decimal(12, 2)
+  pricePerSqm  Decimal?     @db.Decimal(12, 4)
+  minPrice     Decimal      @default(0) @db.Decimal(12, 2)
+  minHours     Decimal      @default(2) @db.Decimal(4, 2)
+  vatRate      Decimal      @default(8.1) @db.Decimal(5, 2)
+
+  // Kapazitätsplanung
+  defaultDurationMin Int     @default(120)
+  minutesPerSqm      Decimal @default(1.2) @db.Decimal(6, 3)
+  defaultCrewSize    Int     @default(1)
+  bufferMinutes      Int     @default(30)
+
+  // SEO
+  seoTitle       String?
+  seoDescription String?
+  keywords       String[] @default([])
+
+  // Marketing
+  bulletPoints String[] @default([])
+  includes     String[] @default([])
+  excludes     String[] @default([])
+
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+
+  organization Organization            @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  category     ServiceCategory?        @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  extras       ServiceExtraOnService[]
+  priceRules   PriceRule[]
+  bookings     BookingItem[]
+  quoteItems   QuoteItem[]
+  jobs         Job[]
+
+  @@unique([organizationId, slug])
+  @@index([organizationId, active])
+  @@map("services")
+}
+
+/// Zubuchbare Zusatzleistung, etwa Backofen oder Balkon.
+model ServiceExtra {
+  id             String       @id @default(cuid())
+  organizationId String
+  slug           String
+  name           String
+  description    String?
+  icon           String       @default("Plus")
+  price          Decimal      @db.Decimal(12, 2)
+  pricingModel   PricingModel @default(FLAT)
+  durationMin    Int          @default(15)
+  vatRate        Decimal      @default(8.1) @db.Decimal(5, 2)
+  active         Boolean      @default(true)
+  position       Int          @default(0)
+
+  organization Organization            @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  services     ServiceExtraOnService[]
+  bookings     BookingExtra[]
+
+  @@unique([organizationId, slug])
+  @@map("service_extras")
+}
+
+/// Welcher Zusatz ist zu welcher Leistung buchbar.
+model ServiceExtraOnService {
+  serviceId String
+  extraId   String
+
+  service Service      @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+  extra   ServiceExtra @relation(fields: [extraId], references: [id], onDelete: Cascade)
+
+  @@id([serviceId, extraId])
+  @@map("service_extras_on_services")
+}
+
+/// Multiplikatoren und Zuschläge, die die Preis-Engine anwendet.
+/// Beispiele: Wochenendzuschlag, Rabatt bei wöchentlicher Frequenz,
+/// Aufschlag für Haustiere, Anfahrtspauschale nach PLZ.
+model PriceRule {
+  id        String  @id @default(cuid())
+  serviceId String?
+
+  name       String
+  /// JSON-Bedingung, ausgewertet von `lib/pricing/engine.ts`.
+  /// z.B. {"frequency":["WEEKLY"]} oder {"weekday":[0,6]} oder {"minSqm":150}
+  condition  Json
+  /// Multiplikator auf den Zwischentotal (1.0 = neutral)
+  multiplier Decimal @default(1) @db.Decimal(6, 4)
+  /// Fixbetrag, der addiert wird (kann negativ sein = Rabatt)
+  surcharge  Decimal @default(0) @db.Decimal(12, 2)
+  priority   Int     @default(0)
+  active     Boolean @default(true)
+
+  service Service? @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+
+  @@index([serviceId, active])
+  @@map("price_rules")
+}
+
+/// Mehrwertsteuersätze. Seit 2024 gilt in der Schweiz 8.1 % als Normalsatz.
+model TaxRate {
+  id             String  @id @default(cuid())
+  organizationId String
+  name           String // "Normalsatz", "Reduziert", "Befreit"
+  rate           Decimal @db.Decimal(5, 2)
+  isDefault      Boolean @default(false)
+  active         Boolean @default(true)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, name])
+  @@map("tax_rates")
+}
+
+// ===========================================================================
+//  BUCHUNGEN
+// ===========================================================================
+
+/// Wiederholungsmuster einer Serienbuchung.
+model RecurrenceRule {
+  id             String    @id @default(cuid())
+  frequency      Frequency @default(WEEKLY)
+  interval       Int       @default(1) // alle n Perioden
+  /// 0=So..6=Sa; bei WEEKLY/BIWEEKLY
+  weekdays       Int[]     @default([])
+  /// Tag im Monat bei MONTHLY
+  monthDay       Int?
+  startDate      DateTime  @db.Date
+  endDate        DateTime? @db.Date
+  count          Int? // maximale Anzahl Wiederholungen
+  /// Bis wohin Instanzen bereits materialisiert wurden
+  generatedUntil DateTime? @db.Date
+  active         Boolean   @default(true)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+
+  bookings Booking[]
+
+  @@map("recurrence_rules")
+}
+
+/// Vereinbarung mit der Kundschaft: Termin, Objekt, Leistungen und Preis als Momentaufnahme.
+model Booking {
+  id             String @id @default(cuid())
+  organizationId String
+  number         String
+
+  customerId String
+  addressId  String?
+  propertyId String?
+  quoteId    String? @unique
+
+  status BookingStatus @default(PENDING)
+
+  scheduledStart DateTime @db.Timestamptz(6)
+  scheduledEnd   DateTime @db.Timestamptz(6)
+  durationMin    Int
+  crewSize       Int      @default(1)
+
+  // Wiederholung
+  recurrenceRuleId String?
+  parentBookingId  String? // Instanz einer Serie
+  frequency        Frequency @default(ONCE)
+
+  // Objektangaben (Snapshot zum Buchungszeitpunkt)
+  propertyKind PropertyKind @default(APARTMENT)
+  squareMeters Int?
+  rooms        Decimal?     @db.Decimal(4, 1)
+  windows      Int?
+
+  customerNote String?
+  internalNote String?
+  accessNote   String?
+
+  // Preise (Snapshot — Katalogpreise dürfen sich später ändern)
+  subtotal       Decimal @default(0) @db.Decimal(12, 2)
+  extrasTotal    Decimal @default(0) @db.Decimal(12, 2)
+  travelFee      Decimal @default(0) @db.Decimal(12, 2)
+  discountAmount Decimal @default(0) @db.Decimal(12, 2)
+  couponCode     String?
+  netTotal       Decimal @default(0) @db.Decimal(12, 2)
+  vatRate        Decimal @default(8.1) @db.Decimal(5, 2)
+  vatAmount      Decimal @default(0) @db.Decimal(12, 2)
+  grossTotal     Decimal @default(0) @db.Decimal(12, 2)
+  currency       String  @default("CHF")
+  priceBreakdown Json? // vollständige Herleitung der Preis-Engine
+
+  // Kanäle & Herkunft
+  source            LeadSource @default(WEBSITE)
+  bookedByIp        String?
+  confirmationToken String?    @unique // Zugriff ohne Login (Magic Link)
+
+  confirmedAt     DateTime? @db.Timestamptz(6)
+  cancelledAt     DateTime? @db.Timestamptz(6)
+  cancelReason    String?
+  completedAt     DateTime? @db.Timestamptz(6)
+  rescheduledFrom DateTime? @db.Timestamptz(6)
+
+  reminder24hSentAt DateTime? @db.Timestamptz(6)
+  reminder2hSentAt  DateTime? @db.Timestamptz(6)
+
+  createdAt DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime  @updatedAt @db.Timestamptz(6)
+  deletedAt DateTime? @db.Timestamptz(6)
+
+  organization   Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  customer       Customer        @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  address        Address?        @relation(fields: [addressId], references: [id], onDelete: SetNull)
+  property       Property?       @relation(fields: [propertyId], references: [id], onDelete: SetNull)
+  quote          Quote?          @relation(fields: [quoteId], references: [id], onDelete: SetNull)
+  recurrenceRule RecurrenceRule? @relation(fields: [recurrenceRuleId], references: [id], onDelete: SetNull)
+  parentBooking  Booking?        @relation("BookingSeries", fields: [parentBookingId], references: [id], onDelete: SetNull)
+  childBookings  Booking[]       @relation("BookingSeries")
+
+  items      BookingItem[]
+  extras     BookingExtra[]
+  jobs       Job[]
+  invoices   Invoice[]
+  files      FileAsset[]
+  activities Activity[]
+  reviews    Review[]
+
+  @@unique([organizationId, number])
+  @@index([organizationId, status, scheduledStart])
+  @@index([customerId, scheduledStart])
+  @@index([scheduledStart])
+  @@map("bookings")
+}
+
+/// Leistungsposition einer Buchung, mit Preis zum Buchungszeitpunkt.
+model BookingItem {
+  id        String @id @default(cuid())
+  bookingId String
+  serviceId String
+
+  name        String // Snapshot des Servicenamens
+  description String?
+  quantity    Decimal @default(1) @db.Decimal(10, 2)
+  unit        String  @default("Std.")
+  unitPrice   Decimal @db.Decimal(12, 2)
+  vatRate     Decimal @default(8.1) @db.Decimal(5, 2)
+  lineTotal   Decimal @db.Decimal(12, 2)
+  durationMin Int     @default(0)
+  position    Int     @default(0)
+
+  booking Booking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  service Service @relation(fields: [serviceId], references: [id], onDelete: Restrict)
+
+  @@index([bookingId])
+  @@map("booking_items")
+}
+
+/// Gebuchte Zusatzleistung mit Menge und Preis.
+model BookingExtra {
+  id        String @id @default(cuid())
+  bookingId String
+  extraId   String
+
+  name        String
+  quantity    Int     @default(1)
+  unitPrice   Decimal @db.Decimal(12, 2)
+  lineTotal   Decimal @db.Decimal(12, 2)
+  durationMin Int     @default(0)
+
+  booking Booking      @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  extra   ServiceExtra @relation(fields: [extraId], references: [id], onDelete: Restrict)
+
+  @@unique([bookingId, extraId])
+  @@map("booking_extras")
+}
+
+// ===========================================================================
+//  OFFERTEN
+// ===========================================================================
+
+/// Offerte mit Positionen, Gültigkeit, Magic-Link-Token und elektronischer Signatur.
+model Quote {
+  id             String @id @default(cuid())
+  organizationId String
+  number         String
+
+  customerId String?
+  leadId     String?
+  propertyId String?
+
+  title        String
+  status       QuoteStatus @default(DRAFT)
+  validUntil   DateTime    @db.Date
+  introText    String?
+  outroText    String?
+  terms        String?
+  internalNote String?
+
+  subtotal       Decimal       @default(0) @db.Decimal(12, 2)
+  discountType   DiscountType?
+  discountValue  Decimal       @default(0) @db.Decimal(12, 2)
+  discountAmount Decimal       @default(0) @db.Decimal(12, 2)
+  netTotal       Decimal       @default(0) @db.Decimal(12, 2)
+  vatAmount      Decimal       @default(0) @db.Decimal(12, 2)
+  grossTotal     Decimal       @default(0) @db.Decimal(12, 2)
+  currency       String        @default("CHF")
+
+  // Öffentlicher Zugriff ohne Login
+  publicToken String  @unique @default(cuid())
+  pdfUrl      String?
+
+  sentAt       DateTime? @db.Timestamptz(6)
+  viewedAt     DateTime? @db.Timestamptz(6)
+  acceptedAt   DateTime? @db.Timestamptz(6)
+  rejectedAt   DateTime? @db.Timestamptz(6)
+  rejectReason String?
+
+  // Elektronische Signatur
+  signatureDataUrl String? // PNG DataURL der Unterschrift
+  signatureName    String?
+  signatureIp      String?
+  signedAt         DateTime? @db.Timestamptz(6)
+
+  convertedBookingId String?
+  convertedInvoiceId String?
+
+  createdById String?
+  createdAt   DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt   DateTime  @updatedAt @db.Timestamptz(6)
+  deletedAt   DateTime? @db.Timestamptz(6)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  customer     Customer?    @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  lead         Lead?        @relation(fields: [leadId], references: [id], onDelete: SetNull)
+  property     Property?    @relation(fields: [propertyId], references: [id], onDelete: SetNull)
+
+  items      QuoteItem[]
+  booking    Booking?
+  invoices   Invoice[]
+  files      FileAsset[]
+  activities Activity[]
+
+  @@unique([organizationId, number])
+  @@index([organizationId, status])
+  /// Offertenliste im Büro, neueste zuerst.
+  @@index([organizationId, createdAt])
+  @@index([customerId])
+  @@map("quotes")
+}
+
+/// Offertposition; optionale Positionen zählen nicht ins Total.
+model QuoteItem {
+  id        String  @id @default(cuid())
+  quoteId   String
+  serviceId String?
+
+  name        String
+  description String?
+  quantity    Decimal @default(1) @db.Decimal(10, 2)
+  unit        String  @default("Std.")
+  unitPrice   Decimal @db.Decimal(12, 2)
+  discount    Decimal @default(0) @db.Decimal(5, 2) // Prozent
+  vatRate     Decimal @default(8.1) @db.Decimal(5, 2)
+  lineTotal   Decimal @db.Decimal(12, 2)
+  position    Int     @default(0)
+  optional    Boolean @default(false)
+
+  quote   Quote    @relation(fields: [quoteId], references: [id], onDelete: Cascade)
+  service Service? @relation(fields: [serviceId], references: [id], onDelete: SetNull)
+
+  @@index([quoteId])
+  @@map("quote_items")
+}
+
+// ===========================================================================
+//  AUFTRÄGE / EINSÄTZE
+// ===========================================================================
+
+/// Ausführung durch das Team: Termin, Zuteilung, Checkliste, Abschluss, Kosten.
+model Job {
+  id             String @id @default(cuid())
+  organizationId String
+  number         String
+
+  bookingId  String?
+  customerId String
+  addressId  String?
+  propertyId String?
+  serviceId  String?
+
+  title  String
+  status JobStatus @default(UNASSIGNED)
+
+  scheduledStart DateTime  @db.Timestamptz(6)
+  scheduledEnd   DateTime  @db.Timestamptz(6)
+  actualStart    DateTime? @db.Timestamptz(6)
+  actualEnd      DateTime? @db.Timestamptz(6)
+
+  crewSize     Int @default(1)
+  estimatedMin Int @default(120)
+  travelMin    Int @default(0)
+
+  description  String?
+  internalNote String?
+  customerNote String?
+
+  // Abschluss
+  completionNote   String?
+  customerRating   Int?
+  signatureDataUrl String?
+  signatureName    String?
+  signedAt         DateTime? @db.Timestamptz(6)
+
+  // Kostenrechnung
+  laborCost    Decimal @default(0) @db.Decimal(12, 2)
+  materialCost Decimal @default(0) @db.Decimal(12, 2)
+  revenue      Decimal @default(0) @db.Decimal(12, 2)
+
+  color String? // Kalenderfarbe
+
+  createdAt DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime  @updatedAt @db.Timestamptz(6)
+  deletedAt DateTime? @db.Timestamptz(6)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  booking      Booking?     @relation(fields: [bookingId], references: [id], onDelete: SetNull)
+  customer     Customer     @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  address      Address?     @relation(fields: [addressId], references: [id], onDelete: SetNull)
+  property     Property?    @relation(fields: [propertyId], references: [id], onDelete: SetNull)
+  service      Service?     @relation(fields: [serviceId], references: [id], onDelete: SetNull)
+
+  assignments  JobAssignment[]
+  checklist    JobChecklistItem[]
+  photos       JobPhoto[]
+  timeEntries  TimeEntry[]
+  gpsEvents    GpsEvent[]
+  materials    MaterialUsage[]
+  activities   Activity[]
+  tasks        Task[]
+  files        FileAsset[]
+  threads      MessageThread[]
+  invoiceItems InvoiceItem[]
+
+  @@unique([organizationId, number])
+  @@index([organizationId, status, scheduledStart])
+  @@index([scheduledStart])
+  @@index([customerId])
+  @@map("jobs")
+}
+
+/// Zuteilung einer Person zu einem Einsatz, samt Zu- oder Absage.
+model JobAssignment {
+  id            String         @id @default(cuid())
+  jobId         String
+  employeeId    String
+  role          AssignmentRole @default(MEMBER)
+  acceptedAt    DateTime?      @db.Timestamptz(6)
+  declinedAt    DateTime?      @db.Timestamptz(6)
+  declineReason String?
+  notifiedAt    DateTime?      @db.Timestamptz(6)
+  createdAt     DateTime       @default(now()) @db.Timestamptz(6)
+
+  job      Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@unique([jobId, employeeId])
+  @@index([employeeId])
+  @@map("job_assignments")
+}
+
+/// Prüfpunkt des Abnahmeprotokolls, mit Vermerk wer wann abgehakt hat.
+model JobChecklistItem {
+  id       String    @id @default(cuid())
+  jobId    String
+  label    String
+  room     String?
+  required Boolean   @default(true)
+  done     Boolean   @default(false)
+  doneAt   DateTime? @db.Timestamptz(6)
+  doneById String?
+  note     String?
+  position Int       @default(0)
+
+  job Job @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@index([jobId])
+  @@map("job_checklist_items")
+}
+
+/// Vorher-, Nachher- oder Schadensfoto mit Standort und Zeitpunkt.
+model JobPhoto {
+  id           String       @id @default(cuid())
+  jobId        String
+  type         JobPhotoType @default(BEFORE)
+  url          String
+  thumbnailUrl String?
+  caption      String?
+  room         String?
+  lat          Float?
+  lng          Float?
+  takenAt      DateTime     @default(now()) @db.Timestamptz(6)
+  uploadedById String?
+
+  job Job @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@index([jobId, type])
+  @@map("job_photos")
+}
+
+/// Erfasste Arbeitszeit je Einsatz — Grundlage der Lohnverarbeitung.
+model TimeEntry {
+  id           String    @id @default(cuid())
+  jobId        String?
+  employeeId   String
+  startedAt    DateTime  @db.Timestamptz(6)
+  endedAt      DateTime? @db.Timestamptz(6)
+  breakMin     Int       @default(0)
+  minutes      Int       @default(0) // berechnet beim Ausstempeln
+  note         String?
+  manual       Boolean   @default(false) // nachträglich erfasst
+  approved     Boolean   @default(false)
+  approvedById String?
+  hourlyRate   Decimal?  @db.Decimal(12, 2) // Snapshot für Lohnkosten
+
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+
+  job      Job?     @relation(fields: [jobId], references: [id], onDelete: SetNull)
+  employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@index([employeeId, startedAt])
+  @@index([jobId])
+  @@map("time_entries")
+}
+
+/// An- und Abfahrt mit Koordinaten, als Nachweis bei Objekten ohne Ansprechperson.
+model GpsEvent {
+  id         String   @id @default(cuid())
+  jobId      String
+  employeeId String
+  type       String // CHECK_IN | CHECK_OUT
+  lat        Float
+  lng        Float
+  accuracy   Float?
+  /// Distanz zur Job-Adresse in Metern — Plausibilitätsprüfung
+  distanceM  Float?
+  address    String?
+  createdAt  DateTime @default(now()) @db.Timestamptz(6)
+
+  job      Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@index([jobId])
+  @@index([employeeId, createdAt])
+  @@map("gps_events")
+}
+
+/// Verbrauchtes Material je Einsatz — Grundlage der Deckungsbeitragsrechnung.
+model MaterialUsage {
+  id       String  @id @default(cuid())
+  jobId    String
+  name     String
+  sku      String?
+  quantity Decimal @db.Decimal(10, 2)
+  unit     String  @default("Stk.")
+  unitCost Decimal @default(0) @db.Decimal(12, 2)
+  total    Decimal @default(0) @db.Decimal(12, 2)
+  billable Boolean @default(false)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+
+  job Job @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@index([jobId])
+  @@map("material_usages")
+}
+
+// ===========================================================================
+//  MITARBEITENDE
+// ===========================================================================
+
+/// Personalstammdaten inkl. Schweizer Angaben (AHV, Bewilligung, Pensum).
+model Employee {
+  id             String @id @default(cuid())
+  organizationId String
+  userId         String @unique
+  employeeNumber String
+
+  employmentType EmploymentType @default(FULL_TIME)
+  position       String         @default("Reinigungskraft")
+  department     String?
+  hiredAt        DateTime       @db.Date
+  terminatedAt   DateTime?      @db.Date
+
+  hourlyRate          Decimal? @db.Decimal(12, 2)
+  monthlySalary       Decimal? @db.Decimal(12, 2)
+  workloadPct         Int      @default(100)
+  vacationDaysPerYear Decimal  @default(20) @db.Decimal(4, 1)
+
+  // Schweizer Personaldaten
+  ahvNumber        String? // 756.xxxx.xxxx.xx — verschlüsselt
+  iban             String?
+  nationality      String?
+  permitType       String? // B, C, G, L, CH
+  permitValidUntil DateTime? @db.Date
+  emergencyContact String?
+  emergencyPhone   String?
+
+  driverLicense Boolean  @default(false)
+  vehiclePlate  String?
+  languages     Locale[] @default([DE])
+
+  color  String  @default("#0B7285") // Kalenderfarbe
+  active Boolean @default(true)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  assignments  JobAssignment[]
+  timeEntries  TimeEntry[]
+  gpsEvents    GpsEvent[]
+  absences     Absence[]
+  payslips     Payslip[]
+  skills       EmployeeSkill[]
+  availability Availability[]
+  ownedLeads   Lead[]          @relation("LeadOwner")
+  files        FileAsset[]
+
+  @@unique([organizationId, employeeNumber])
+  @@index([organizationId, active])
+  @@map("employees")
+}
+
+/// Qualifikation mit Stufe und Zertifikatsablauf.
+model EmployeeSkill {
+  id             String    @id @default(cuid())
+  employeeId     String
+  name           String // "Fensterreinigung", "Hochdruckreiniger", "Stapler"
+  level          Int       @default(1) // 1..5
+  certifiedUntil DateTime? @db.Date
+
+  employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@unique([employeeId, name])
+  @@map("employee_skills")
+}
+
+/// Regelmässige Verfügbarkeit je Wochentag.
+model Availability {
+  id         String @id @default(cuid())
+  employeeId String
+  weekday    Int // 0..6
+  startTime  String // "07:00"
+  endTime    String // "17:00"
+
+  employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@unique([employeeId, weekday, startTime])
+  @@map("availabilities")
+}
+
+/// Ferien, Krankheit, Militär und weitere Abwesenheiten mit Bewilligungsstand.
+model Absence {
+  id           String        @id @default(cuid())
+  employeeId   String
+  type         AbsenceType   @default(VACATION)
+  status       AbsenceStatus @default(REQUESTED)
+  startDate    DateTime      @db.Date
+  endDate      DateTime      @db.Date
+  halfDay      Boolean       @default(false)
+  days         Decimal       @db.Decimal(4, 1)
+  reason       String?
+  decidedById  String?
+  decidedAt    DateTime?     @db.Timestamptz(6)
+  decisionNote String?
+
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+
+  employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@index([employeeId, startDate])
+  @@index([status])
+  @@map("absences")
+}
+
+/// Lohnabrechnung mit AHV/IV/EO, ALV, BVG und UVG. Erst sichtbar, wenn freigegeben.
+model Payslip {
+  id              String  @id @default(cuid())
+  employeeId      String
+  year            Int
+  month           Int
+  hours           Decimal @default(0) @db.Decimal(8, 2)
+  grossPay        Decimal @default(0) @db.Decimal(12, 2)
+  ahvIv           Decimal @default(0) @db.Decimal(12, 2)
+  alv             Decimal @default(0) @db.Decimal(12, 2)
+  bvg             Decimal @default(0) @db.Decimal(12, 2)
+  uvg             Decimal @default(0) @db.Decimal(12, 2)
+  otherDeductions Decimal @default(0) @db.Decimal(12, 2)
+  netPay          Decimal @default(0) @db.Decimal(12, 2)
+  pdfUrl          String?
+  published       Boolean @default(false)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+
+  employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@unique([employeeId, year, month])
+  @@map("payslips")
+}
+
+// ===========================================================================
+//  FINANZEN
+// ===========================================================================
+
+/// Rechnung mit QR-Referenz und Empfänger-Momentaufnahme. Nach dem Ausstellen unveränderlich.
+model Invoice {
+  id             String @id @default(cuid())
+  organizationId String
+  number         String
+
+  customerId String
+  bookingId  String?
+  quoteId    String?
+
+  status InvoiceStatus @default(DRAFT)
+
+  issueDate  DateTime  @db.Date
+  dueDate    DateTime  @db.Date
+  periodFrom DateTime? @db.Date
+  periodTo   DateTime? @db.Date
+
+  // Empfänger-Snapshot (Rechnungen sind unveränderlich)
+  billToName    String
+  billToCompany String?
+  billToStreet  String
+  billToZip     String
+  billToCity    String
+  billToCountry String  @default("CH")
+  billToEmail   String?
+  billToVat     String?
+
+  introText String?
+  outroText String?
+  notes     String?
+
+  subtotal       Decimal @default(0) @db.Decimal(12, 2)
+  discountAmount Decimal @default(0) @db.Decimal(12, 2)
+  netTotal       Decimal @default(0) @db.Decimal(12, 2)
+  vatAmount      Decimal @default(0) @db.Decimal(12, 2)
+  grossTotal     Decimal @default(0) @db.Decimal(12, 2)
+  paidAmount     Decimal @default(0) @db.Decimal(12, 2)
+  balance        Decimal @default(0) @db.Decimal(12, 2)
+  currency       String  @default("CHF")
+
+  // Schweizer QR-Rechnung
+  qrReference String? // 27-stellige QR-Referenz
+  qrBillUrl   String?
+  pdfUrl      String?
+
+  publicToken String @unique @default(cuid())
+
+  sentAt      DateTime? @db.Timestamptz(6)
+  viewedAt    DateTime? @db.Timestamptz(6)
+  paidAt      DateTime? @db.Timestamptz(6)
+  cancelledAt DateTime? @db.Timestamptz(6)
+
+  reminderLevel  Int       @default(0) // 0 = keine, 1..3 = Mahnstufe
+  lastReminderAt DateTime? @db.Timestamptz(6)
+
+  stripeInvoiceId       String? @unique
+  stripePaymentIntentId String?
+
+  createdById String?
+  createdAt   DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt   DateTime  @updatedAt @db.Timestamptz(6)
+  deletedAt   DateTime? @db.Timestamptz(6)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  customer     Customer     @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  booking      Booking?     @relation(fields: [bookingId], references: [id], onDelete: SetNull)
+  quote        Quote?       @relation(fields: [quoteId], references: [id], onDelete: SetNull)
+
+  items       InvoiceItem[]
+  payments    Payment[]
+  creditNotes CreditNote[]
+  reminders   PaymentReminder[]
+  activities  Activity[]
+  files       FileAsset[]
+
+  @@unique([organizationId, number])
+  @@index([organizationId, status, dueDate])
+  @@index([customerId])
+  @@index([issueDate])
+  @@map("invoices")
+}
+
+/// Rechnungsposition mit Netto-, MWST- und Bruttobetrag.
+model InvoiceItem {
+  id        String  @id @default(cuid())
+  invoiceId String
+  jobId     String?
+
+  name        String
+  description String?
+  quantity    Decimal @default(1) @db.Decimal(10, 2)
+  unit        String  @default("Std.")
+  unitPrice   Decimal @db.Decimal(12, 2)
+  discount    Decimal @default(0) @db.Decimal(5, 2)
+  vatRate     Decimal @default(8.1) @db.Decimal(5, 2)
+  netAmount   Decimal @db.Decimal(12, 2)
+  vatAmount   Decimal @db.Decimal(12, 2)
+  lineTotal   Decimal @db.Decimal(12, 2)
+  position    Int     @default(0)
+
+  invoice Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  job     Job?    @relation(fields: [jobId], references: [id], onDelete: SetNull)
+
+  @@index([invoiceId])
+  @@map("invoice_items")
+}
+
+/// Zahlungseingang. `providerPaymentId` ist eindeutig — daran bleibt der Webhook idempotent.
+model Payment {
+  id         String  @id @default(cuid())
+  invoiceId  String?
+  customerId String?
+
+  amount    Decimal       @db.Decimal(12, 2)
+  currency  String        @default("CHF")
+  method    PaymentMethod @default(BANK_TRANSFER)
+  status    PaymentStatus @default(PENDING)
+  reference String?
+  note      String?
+
+  provider          String? // stripe | datatrans | manual
+  providerPaymentId String?  @unique
+  providerFee       Decimal? @db.Decimal(12, 2)
+  receiptUrl        String?
+
+  paidAt         DateTime? @db.Timestamptz(6)
+  refundedAt     DateTime? @db.Timestamptz(6)
+  refundedAmount Decimal   @default(0) @db.Decimal(12, 2)
+  failureReason  String?
+
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+
+  invoice  Invoice?  @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+  customer Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
+
+  @@index([invoiceId])
+  @@index([status])
+  /// Die Zahlungsliste im Büro sortiert nach Erfassung, nicht nach
+  /// Zahlungsdatum — erfasst wird auch, was noch nicht bezahlt ist.
+  @@index([createdAt])
+  @@index([paidAt])
+  @@map("payments")
+}
+
+/// Mahnstufe mit Versandzeitpunkt und Gebühr.
+model PaymentReminder {
+  id        String              @id @default(cuid())
+  invoiceId String
+  level     Int // 1 = Zahlungserinnerung, 2 = 1. Mahnung, 3 = 2. Mahnung
+  fee       Decimal             @default(0) @db.Decimal(12, 2)
+  sentAt    DateTime            @default(now()) @db.Timestamptz(6)
+  channel   NotificationChannel @default(EMAIL)
+  pdfUrl    String?
+
+  invoice Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@index([invoiceId])
+  @@map("payment_reminders")
+}
+
+/// Gutschrift. Der einzige Weg, eine ausgestellte Rechnung zu korrigieren.
+model CreditNote {
+  id             String  @id @default(cuid())
+  organizationId String
+  number         String
+  invoiceId      String?
+  customerId     String
+
+  reason     String
+  issueDate  DateTime @db.Date
+  netTotal   Decimal  @default(0) @db.Decimal(12, 2)
+  vatAmount  Decimal  @default(0) @db.Decimal(12, 2)
+  grossTotal Decimal  @default(0) @db.Decimal(12, 2)
+  currency   String   @default("CHF")
+  pdfUrl     String?
+  items      Json     @default("[]")
+
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  invoice      Invoice?     @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+  customer     Customer     @relation(fields: [customerId], references: [id], onDelete: Restrict)
+
+  @@unique([organizationId, number])
+  @@map("credit_notes")
+}
+
+/// Lieferant für Material, Fahrzeuge und Dienstleistungen.
+model Supplier {
+  id              String  @id @default(cuid())
+  organizationId  String
+  name            String
+  contactName     String?
+  email           String?
+  phone           String?
+  street          String?
+  postalCode      String?
+  city            String?
+  country         String  @default("CH")
+  vatNumber       String?
+  iban            String?
+  paymentTermDays Int     @default(30)
+  notes           String?
+  active          Boolean @default(true)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  expenses     Expense[]
+
+  @@index([organizationId, active])
+  @@map("suppliers")
+}
+
+/// Ausgabe mit Beleg, Kategorie und Vorsteuerabzug.
+model Expense {
+  id             String  @id @default(cuid())
+  organizationId String
+  supplierId     String?
+
+  category    ExpenseCategory @default(MATERIAL)
+  description String
+  reference   String?
+  expenseDate DateTime        @db.Date
+  netAmount   Decimal         @db.Decimal(12, 2)
+  vatRate     Decimal         @default(8.1) @db.Decimal(5, 2)
+  vatAmount   Decimal         @default(0) @db.Decimal(12, 2)
+  grossAmount Decimal         @db.Decimal(12, 2)
+  currency    String          @default("CHF")
+
+  paid          Boolean   @default(false)
+  paidAt        DateTime? @db.Timestamptz(6)
+  receiptUrl    String?
+  vatDeductible Boolean   @default(true)
+  notes         String?
+
+  createdById String?
+  createdAt   DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt   DateTime @updatedAt @db.Timestamptz(6)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  supplier     Supplier?    @relation(fields: [supplierId], references: [id], onDelete: SetNull)
+  files        FileAsset[]
+
+  @@index([organizationId, expenseDate])
+  @@index([category])
+  @@map("expenses")
+}
+
+/// Protokoll erzeugter Buchhaltungsexporte, damit Perioden nicht doppelt laufen.
+model AccountingExport {
+  id             String   @id @default(cuid())
+  organizationId String
+  format         String // abacus | bexio | banana | csv | datev
+  periodFrom     DateTime @db.Date
+  periodTo       DateTime @db.Date
+  fileUrl        String?
+  rowCount       Int      @default(0)
+  createdById    String?
+  createdAt      DateTime @default(now()) @db.Timestamptz(6)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, createdAt])
+  @@map("accounting_exports")
+}
+
+// ===========================================================================
+//  KOMMUNIKATIONS-TEMPLATES & AUTOMATION
+// ===========================================================================
+
+/// E-Mail-Vorlage je Sprache, mit Platzhaltern.
+model EmailTemplate {
+  id             String  @id @default(cuid())
+  organizationId String
+  key            String // booking_confirmation, invoice_issued, ...
+  locale         Locale  @default(DE)
+  subject        String
+  /// Handlebars-artige Platzhalter: {{customer.firstName}}
+  bodyHtml       String
+  bodyText       String?
+  active         Boolean @default(true)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, key, locale])
+  @@map("email_templates")
+}
+
+/// SMS-Vorlage je Sprache.
+model SmsTemplate {
+  id             String  @id @default(cuid())
+  organizationId String
+  key            String
+  locale         Locale  @default(DE)
+  body           String
+  active         Boolean @default(true)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, key, locale])
+  @@map("sms_templates")
+}
+
+/// Protokoll jedes E-Mail-Versands inkl. Öffnungen und Zustellfehlern.
+model EmailLog {
+  id          String    @id @default(cuid())
+  to          String
+  from        String
+  subject     String
+  templateKey String?
+  providerId  String?
+  status      String    @default("queued")
+  error       String?
+  openedAt    DateTime? @db.Timestamptz(6)
+  clickedAt   DateTime? @db.Timestamptz(6)
+  entity      String?
+  entityId    String?
+  createdAt   DateTime  @default(now()) @db.Timestamptz(6)
+
+  @@index([to])
+  @@index([entity, entityId])
+  @@map("email_logs")
+}
+
+/// Protokoll jedes SMS-Versands inkl. Kosten.
+model SmsLog {
+  id         String   @id @default(cuid())
+  to         String
+  body       String
+  providerId String?
+  status     String   @default("queued")
+  error      String?
+  segments   Int      @default(1)
+  cost       Decimal? @db.Decimal(10, 4)
+  entity     String?
+  entityId   String?
+  createdAt  DateTime @default(now()) @db.Timestamptz(6)
+
+  @@index([to])
+  @@map("sms_logs")
+}
+
+/// Regel aus Auslöser und Aktionen, als Daten statt als Code.
+model Automation {
+  id             String            @id @default(cuid())
+  organizationId String
+  name           String
+  description    String?
+  trigger        AutomationTrigger
+  /// Zusatzbedingungen, z.B. {"customerType":"BUSINESS"}
+  conditions     Json              @default("{}")
+  /// Verzögerung in Minuten nach dem Trigger (negativ = davor)
+  delayMinutes   Int               @default(0)
+  active         Boolean           @default(true)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+
+  organization Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  actions      AutomationAction[]
+  runs         AutomationRun[]
+
+  @@index([organizationId, trigger, active])
+  @@map("automations")
+}
+
+/// Einzelne Aktion einer Regel, mit Verzögerung und Reihenfolge.
+model AutomationAction {
+  id           String               @id @default(cuid())
+  automationId String
+  type         AutomationActionType
+  /// z.B. {"templateKey":"booking_reminder","channel":"EMAIL"}
+  config       Json                 @default("{}")
+  position     Int                  @default(0)
+
+  automation Automation @relation(fields: [automationId], references: [id], onDelete: Cascade)
+
+  @@index([automationId])
+  @@map("automation_actions")
+}
+
+/// Ausführung einer Regel mit Ergebnis — macht Automatisierungen nachvollziehbar.
+model AutomationRun {
+  id           String              @id @default(cuid())
+  automationId String
+  entity       String
+  entityId     String
+  status       AutomationRunStatus @default(PENDING)
+  scheduledFor DateTime            @db.Timestamptz(6)
+  startedAt    DateTime?           @db.Timestamptz(6)
+  finishedAt   DateTime?           @db.Timestamptz(6)
+  result       Json?
+  error        String?
+
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+
+  automation Automation @relation(fields: [automationId], references: [id], onDelete: Cascade)
+
+  @@unique([automationId, entity, entityId])
+  @@index([status, scheduledFor])
+  @@map("automation_runs")
+}
+
+// ===========================================================================
+//  MARKETING & CONTENT
+// ===========================================================================
+
+/// Rabattcode mit Gültigkeit, Einlösegrenze und Mindestbestellwert.
+model Coupon {
+  id               String        @id @default(cuid())
+  organizationId   String
+  code             String
+  description      String?
+  discountType     DiscountType  @default(PERCENT)
+  discountValue    Decimal       @db.Decimal(12, 2)
+  minOrderValue    Decimal       @default(0) @db.Decimal(12, 2)
+  maxDiscount      Decimal?      @db.Decimal(12, 2)
+  status           CouponStatus  @default(ACTIVE)
+  validFrom        DateTime      @db.Date
+  validUntil       DateTime?     @db.Date
+  usageLimit       Int?
+  usageCount       Int           @default(0)
+  perCustomerLimit Int           @default(1)
+  firstOrderOnly   Boolean       @default(false)
+  serviceKinds     ServiceKind[] @default([])
+
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, code])
+  @@index([code])
+  @@map("coupons")
+}
+
+/// Geschenkkarte mit Restguthaben.
+model GiftCard {
+  id             String    @id @default(cuid())
+  organizationId String
+  code           String    @unique
+  initialValue   Decimal   @db.Decimal(12, 2)
+  balance        Decimal   @db.Decimal(12, 2)
+  currency       String    @default("CHF")
+  purchasedById  String?
+  recipientName  String?
+  recipientEmail String?
+  message        String?
+  validUntil     DateTime? @db.Date
+  redeemedAt     DateTime? @db.Timestamptz(6)
+  active         Boolean   @default(true)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  purchasedBy  Customer?    @relation(fields: [purchasedById], references: [id], onDelete: SetNull)
+
+  @@map("gift_cards")
+}
+
+/// Newsletter-Anmeldung mit Double-Opt-in und Abmeldetoken.
+model NewsletterSubscriber {
+  id               String    @id @default(cuid())
+  organizationId   String
+  email            String
+  firstName        String?
+  locale           Locale    @default(DE)
+  confirmed        Boolean   @default(false)
+  confirmToken     String?   @unique
+  unsubscribeToken String    @unique @default(cuid())
+  unsubscribedAt   DateTime? @db.Timestamptz(6)
+  source           String?
+  createdAt        DateTime  @default(now()) @db.Timestamptz(6)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, email])
+  @@map("newsletter_subscribers")
+}
+
+/// Rubrik des Blogs.
+model BlogCategory {
+  id             String  @id @default(cuid())
+  organizationId String
+  slug           String
+  name           String
+  description    String?
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  posts        BlogPost[]
+
+  @@unique([organizationId, slug])
+  @@map("blog_categories")
+}
+
+/// Blogbeitrag mit SEO-Angaben und Veröffentlichungsstand.
+model BlogPost {
+  id             String  @id @default(cuid())
+  organizationId String
+  categoryId     String?
+  authorId       String?
+
+  slug       String
+  locale     Locale     @default(DE)
+  title      String
+  excerpt    String
+  content    String // Markdown
+  coverImage String?
+  status     PostStatus @default(DRAFT)
+
+  seoTitle       String?
+  seoDescription String?
+  keywords       String[] @default([])
+
+  readingMinutes Int       @default(3)
+  viewCount      Int       @default(0)
+  publishedAt    DateTime? @db.Timestamptz(6)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+
+  organization Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  category     BlogCategory? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  author       User?         @relation(fields: [authorId], references: [id], onDelete: SetNull)
+
+  @@unique([organizationId, slug, locale])
+  @@index([status, publishedAt])
+  @@map("blog_posts")
+}
+
+/// Redaktionell pflegbarer Inhaltsbaustein der Website.
+///
+/// Architekturentscheid: ein Schlüssel-Wert-Speicher statt einer Tabelle je
+/// Seite. Welche Schlüssel es gibt, welchen Typ sie haben und welcher Text
+/// gilt, solange nichts gepflegt wurde, steht als Register im Code
+/// (`lib/cms/registry.ts`). Daraus folgt dreierlei: die Redaktionsmaske
+/// erzeugt sich selbst, ein Tippfehler im Schlüssel ist ein Übersetzungs-
+/// fehler statt einer leeren Seite, und eine fehlende Zeile lässt die Website
+/// nicht zusammenbrechen — sie zeigt den hinterlegten Standardtext.
+model ContentBlock {
+  id             String @id @default(cuid())
+  organizationId String
+  /// Stabiler Schlüssel aus dem Register, etwa `home.hero.title`.
+  key            String
+  locale         Locale @default(DE)
+  /// Form je nach Typ: Zeichenkette, Liste oder Objekt.
+  value          Json
+
+  updatedById String?
+  createdAt   DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt   DateTime @updatedAt @db.Timestamptz(6)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, key, locale])
+  @@index([organizationId, locale])
+  @@map("content_blocks")
+}
+
+/// Suchmaschinen-Angaben je Seitenpfad.
+///
+/// Getrennt von `ContentBlock`, weil sie an einer *Route* hängen und nicht an
+/// einem Textbaustein — und weil `noIndex` eine technische Schaltung ist, die
+/// versehentlich gesetzt eine Seite aus dem Index wirft.
+model SeoMeta {
+  id             String @id @default(cuid())
+  organizationId String
+  /// Pfad ohne Domain, etwa `/leistungen` oder `/` für die Startseite.
+  path           String
+  locale         Locale @default(DE)
+
+  title       String?
+  description String?
+  keywords    String[] @default([])
+  ogImageUrl  String?
+  noIndex     Boolean  @default(false)
+
+  updatedById String?
+  createdAt   DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt   DateTime @updatedAt @db.Timestamptz(6)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, path, locale])
+  @@map("seo_meta")
+}
+
+/// Kampagnenseite mit eigenem Inhalt und Nachverfolgung.
+model LandingPage {
+  id             String     @id @default(cuid())
+  organizationId String
+  slug           String
+  locale         Locale     @default(DE)
+  title          String
+  status         PostStatus @default(DRAFT)
+  /// Block-basierter Seiteninhalt (Hero, Features, CTA, ...)
+  blocks         Json       @default("[]")
+  seoTitle       String?
+  seoDescription String?
+  utmCampaign    String?
+
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, slug, locale])
+  @@map("landing_pages")
+}
+
+/// Kundenbewertung mit Moderationsstand und öffentlicher Antwort.
+model Review {
+  id             String  @id @default(cuid())
+  organizationId String
+  customerId     String?
+  bookingId      String?
+  userId         String?
+
+  authorName  String
+  rating      Int // 1..5
+  title       String?
+  body        String
+  serviceKind ServiceKind?
+  status      ReviewStatus @default(PENDING)
+  reply       String?
+  repliedAt   DateTime?    @db.Timestamptz(6)
+  featured    Boolean      @default(false)
+  source      String       @default("internal") // internal | google | local.ch
+
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  customer     Customer?    @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  booking      Booking?     @relation(fields: [bookingId], references: [id], onDelete: SetNull)
+  user         User?        @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, status])
+  /// Öffentliche Bewertungsliste: gefiltert nach Status, sortiert nach
+  /// Hervorhebung und Datum.
+  @@index([organizationId, status, createdAt])
+  @@map("reviews")
+}
+
+/// Häufige Frage samt Antwort, nach Rubrik geordnet.
+model Faq {
+  id             String  @id @default(cuid())
+  organizationId String
+  locale         Locale  @default(DE)
+  category       String  @default("Allgemein")
+  question       String
+  answer         String
+  position       Int     @default(0)
+  active         Boolean @default(true)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, locale, active])
+  @@map("faqs")
+}
+
+/// Galerieeintrag, wahlweise als Vorher-Nachher-Paar.
+model GalleryItem {
+  id             String       @id @default(cuid())
+  organizationId String
+  title          String
+  description    String?
+  serviceKind    ServiceKind?
+  beforeUrl      String
+  afterUrl       String
+  location       String?
+  featured       Boolean      @default(false)
+  position       Int          @default(0)
+  published      Boolean      @default(true)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, published])
+  @@map("gallery_items")
+}
+
+// ===========================================================================
+//  KARRIERE
+// ===========================================================================
+
+/// Stellenausschreibung mit Anforderungen und Pensum.
+model JobPosting {
+  id             String         @id @default(cuid())
+  organizationId String
+  slug           String
+  title          String
+  location       String         @default("Bern")
+  employmentType EmploymentType @default(FULL_TIME)
+  workloadFrom   Int            @default(80)
+  workloadTo     Int            @default(100)
+  description    String
+  requirements   String[]       @default([])
+  benefits       String[]       @default([])
+  salaryFrom     Decimal?       @db.Decimal(12, 2)
+  salaryTo       Decimal?       @db.Decimal(12, 2)
+  status         PostStatus     @default(PUBLISHED)
+  publishedAt    DateTime?      @db.Timestamptz(6)
+  closesAt       DateTime?      @db.Date
+
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+
+  organization Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  applications JobApplication[]
+
+  @@unique([organizationId, slug])
+  @@map("job_postings")
+}
+
+/// Bewerbung mit Lebenslauf und Stand im Verfahren.
+model JobApplication {
+  id            String            @id @default(cuid())
+  postingId     String
+  firstName     String
+  lastName      String
+  email         String
+  phone         String?
+  message       String?
+  cvUrl         String?
+  status        ApplicationStatus @default(RECEIVED)
+  rating        Int?
+  internalNote  String?
+  availableFrom DateTime?         @db.Date
+
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+
+  posting JobPosting  @relation(fields: [postingId], references: [id], onDelete: Cascade)
+  files   FileAsset[]
+
+  @@index([postingId, status])
+  @@map("job_applications")
+}
+
+// ===========================================================================
+//  DATEIEN
+// ===========================================================================
+
+/// Datei in Supabase Storage mit fachlicher Zuordnung und Sichtbarkeit.
+model FileAsset {
+  id             String    @id @default(cuid())
+  organizationId String
+  scope          FileScope @default(OTHER)
+
+  bucket    String  @default("clenaris")
+  path      String // Supabase Storage Pfad
+  url       String
+  filename  String
+  mimeType  String
+  sizeBytes Int
+  checksum  String?
+  /// true = öffentlich lesbar, false = nur via Signed URL
+  isPublic  Boolean @default(false)
+
+  bookingId     String?
+  quoteId       String?
+  invoiceId     String?
+  jobId         String?
+  customerId    String?
+  employeeId    String?
+  propertyId    String?
+  expenseId     String?
+  messageId     String?
+  applicationId String?
+
+  uploadedById String?
+  createdAt    DateTime @default(now()) @db.Timestamptz(6)
+
+  organization Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  booking      Booking?        @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  quote        Quote?          @relation(fields: [quoteId], references: [id], onDelete: Cascade)
+  invoice      Invoice?        @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  job          Job?            @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  customer     Customer?       @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  employee     Employee?       @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  property     Property?       @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  expense      Expense?        @relation(fields: [expenseId], references: [id], onDelete: Cascade)
+  message      Message?        @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  application  JobApplication? @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, scope])
+  @@index([bookingId])
+  @@index([jobId])
+  @@map("file_assets")
+}
+
+// ---------------------------------------------------------------------------
+//  Handlungsaufrufe (Call to Action)
+// ---------------------------------------------------------------------------
+
+/// Wo auf der Website ein Handlungsaufruf erscheint.
+///
+/// Der Platz ist kein freier Text, sondern eine feste Liste: jede Stelle muss
+/// im Layout tatsächlich gerendert werden, und ein Tippfehler wäre sonst eine
+/// Schaltfläche, die gespeichert wird und nie erscheint.
+enum CtaSlot {
+  /// Rechts in der Kopfzeile, neben Anrufen.
+  HEADER
+  /// Hauptschaltfläche im Kopfbereich einer Seite.
+  HERO_PRIMARY
+  /// Zweite, ruhigere Schaltfläche daneben.
+  HERO_SECONDARY
+  /// Abschlussband zwischen zwei Abschnitten.
+  SECTION_BANNER
+  /// In der Fusszeile.
+  FOOTER
+  /// Fest am unteren Rand auf dem Telefon.
+  MOBILE_BAR
+}
+
+/// Erscheinungsbild. Entspricht den Varianten des Schaltflächen-Bausteins;
+/// CUSTOM erlaubt eigene Farben.
+enum CtaStyle {
+  PRIMARY
+  SECONDARY
+  OUTLINE
+  GHOST
+  ACCENT
+  SUCCESS
+  CUSTOM
+}
+
+model CallToAction {
+  id             String @id @default(cuid())
+  organizationId String
+
+  /// Stabiler Kurzname, erscheint nicht öffentlich. Dient dem Wiederfinden
+  /// und der Auswertung („welcher Aufruf wurde wie oft geklickt").
+  key   String
+  /// Beschriftung auf der Schaltfläche.
+  label String
+  /// Interne Notiz — wofür der Aufruf gedacht ist.
+  note  String?
+
+  /// Ziel. Interner Pfad (/offerte), externe Adresse, tel: oder mailto:.
+  href   String
+  /// true = in neuem Tab öffnen. Bei tel: und mailto: ohne Wirkung.
+  newTab Boolean @default(false)
+  /// Name eines Lucide-Symbols, etwa `Phone` oder `MessageCircle`.
+  icon   String?
+
+  slot    CtaSlot
+  style   CtaStyle @default(PRIMARY)
+  /// Eigene Farben, nur bei style = CUSTOM ausgewertet.
+  bgColor String?
+  fgColor String?
+
+  /// Auf welchen Seiten der Aufruf erscheint. Leere Liste = auf allen.
+  /// Pfade wie `/`, `/leistungen`, `/leistungen/*`.
+  pages String[] @default([])
+
+  active   Boolean @default(true)
+  position Int     @default(0)
+
+  /// Zeitsteuerung. Beide leer = sofort und unbefristet.
+  publishFrom  DateTime? @db.Timestamptz(6)
+  publishUntil DateTime? @db.Timestamptz(6)
+
+  createdAt DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime  @updatedAt @db.Timestamptz(6)
+  /// Nicht endgültig gelöscht, sondern in den Papierkorb gelegt.
+  deletedAt DateTime? @db.Timestamptz(6)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, key])
+  @@index([organizationId, slot, active])
+  @@map("calls_to_action")
+}

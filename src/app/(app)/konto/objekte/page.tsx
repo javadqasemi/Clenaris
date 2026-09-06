@@ -1,0 +1,190 @@
+import type { Metadata } from 'next';
+import { Building2, Home, KeyRound, MapPin } from 'lucide-react';
+
+import { prisma, toNumber } from '@/lib/db';
+import { requireCustomerId } from '@/lib/auth/session';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { EmptyState, PageHeader } from '@/components/app/page-parts';
+
+export const metadata: Metadata = {
+  title: 'Meine Objekte',
+  robots: { index: false, follow: false },
+};
+
+export const dynamic = 'force-dynamic';
+
+const KIND_LABELS: Record<string, string> = {
+  APARTMENT: 'Wohnung',
+  HOUSE: 'Haus',
+  OFFICE: 'Büro',
+  COMMERCIAL: 'Ladenlokal',
+  INDUSTRIAL: 'Gewerbe',
+  CONSTRUCTION_SITE: 'Baustelle',
+  PRACTICE: 'Praxis',
+  RESTAURANT: 'Gastronomie',
+  SCHOOL: 'Schule',
+  OTHER: 'Anderes',
+};
+
+/**
+ * Objekte der Kundschaft.
+ *
+ * Gespeicherte Objekte beschleunigen jede weitere Buchung erheblich: Fläche,
+ * Zimmerzahl und Zugangshinweise sind bereits hinterlegt, der Preis steht
+ * nach zwei Klicks.
+ */
+export default async function AccountPropertiesPage() {
+  const { customerId } = await requireCustomerId();
+
+  const [properties, addresses] = await Promise.all([
+    prisma.property.findMany({
+      where: { customerId, deletedAt: null },
+      orderBy: { createdAt: 'asc' },
+      include: {
+        address: true,
+        _count: { select: { bookings: true } },
+      },
+    }),
+    prisma.address.findMany({
+      where: { customerId },
+      orderBy: [{ isDefault: 'desc' }, { createdAt: 'asc' }],
+    }),
+  ]);
+
+  return (
+    <div className="space-y-8">
+      <PageHeader
+        title="Meine Objekte"
+        description="Gespeicherte Angaben zu Ihren Räumen. Damit ist die nächste Buchung in zwei Klicks erledigt."
+        actions={
+          <Button asChild>
+            <a href="/buchen">Termin buchen</a>
+          </Button>
+        }
+      />
+
+      {/* Objekte */}
+      <section className="space-y-4" aria-label="Objekte">
+        <h2 className="font-display text-lg font-semibold tracking-tight">Objekte</h2>
+
+        {properties.length === 0 ? (
+          <EmptyState
+            icon={<Building2 aria-hidden />}
+            title="Noch kein Objekt gespeichert"
+            description="Bei Ihrer ersten Buchung legen wir das Objekt automatisch an. Danach genügen zwei Klicks für einen Folgetermin."
+            action={{ href: '/buchen', label: 'Termin buchen' }}
+          />
+        ) : (
+          <ul className="grid gap-4 sm:grid-cols-2">
+            {properties.map((property) => (
+              <li
+                key={property.id}
+                className="space-y-4 rounded-2xl border border-border bg-card p-5 shadow-soft"
+              >
+                <div className="flex items-start gap-3">
+                  <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-primary/8 text-primary">
+                    <Home className="size-5" aria-hidden />
+                  </span>
+                  <div className="min-w-0 space-y-1">
+                    <p className="truncate font-medium">{property.label}</p>
+                    <Badge variant="neutral" size="sm">
+                      {KIND_LABELS[property.kind] ?? property.kind}
+                    </Badge>
+                  </div>
+                </div>
+
+                <dl className="protocol-list text-sm">
+                  {property.squareMeters ? (
+                    <div className="flex items-baseline justify-between gap-4 py-2">
+                      <dt className="text-muted-foreground">Fläche</dt>
+                      <dd className="tabular-nums">{property.squareMeters} m²</dd>
+                    </div>
+                  ) : null}
+                  {property.rooms ? (
+                    <div className="flex items-baseline justify-between gap-4 py-2">
+                      <dt className="text-muted-foreground">Zimmer</dt>
+                      <dd className="tabular-nums">{toNumber(property.rooms)}</dd>
+                    </div>
+                  ) : null}
+                  {property.bathrooms ? (
+                    <div className="flex items-baseline justify-between gap-4 py-2">
+                      <dt className="text-muted-foreground">Bäder</dt>
+                      <dd className="tabular-nums">{property.bathrooms}</dd>
+                    </div>
+                  ) : null}
+                  {property.windows ? (
+                    <div className="flex items-baseline justify-between gap-4 py-2">
+                      <dt className="text-muted-foreground">Fenster</dt>
+                      <dd className="tabular-nums">{property.windows}</dd>
+                    </div>
+                  ) : null}
+                  <div className="flex items-baseline justify-between gap-4 py-2">
+                    <dt className="text-muted-foreground">Bisherige Buchungen</dt>
+                    <dd className="tabular-nums">{property._count.bookings}</dd>
+                  </div>
+                </dl>
+
+                {property.address ? (
+                  <p className="flex items-start gap-2 border-t border-border pt-3 text-sm text-muted-foreground">
+                    <MapPin className="mt-0.5 size-3.5 shrink-0" aria-hidden />
+                    {property.address.street} {property.address.streetNo},{' '}
+                    {property.address.postalCode} {property.address.city}
+                  </p>
+                ) : null}
+
+                {property.keyLocation ? (
+                  <p className="flex items-start gap-2 text-sm text-muted-foreground">
+                    <KeyRound className="mt-0.5 size-3.5 shrink-0 text-primary" aria-hidden />
+                    Schlüssel hinterlegt
+                  </p>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+
+      {/* Adressen */}
+      {addresses.length > 0 ? (
+        <section className="space-y-4" aria-label="Adressen">
+          <h2 className="font-display text-lg font-semibold tracking-tight">Adressen</h2>
+
+          <ul className="divide-y divide-border overflow-hidden rounded-2xl border border-border bg-card">
+            {addresses.map((address) => (
+              <li
+                key={address.id}
+                className="grid grid-cols-[auto_minmax(0,1fr)] items-center gap-x-3 gap-y-2 p-4 sm:grid-cols-[auto_minmax(0,1fr)_auto] sm:gap-4 sm:px-5"
+              >
+                <MapPin className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+                <div className="min-w-0">
+                  <p className="truncate font-medium">{address.label ?? 'Adresse'}</p>
+                  <p className="truncate text-meta text-muted-foreground">
+                    {address.street} {address.streetNo}, {address.postalCode} {address.city}
+                  </p>
+                </div>
+                <div className="col-start-2 flex flex-wrap gap-2 sm:col-start-auto">
+                  {address.isDefault ? (
+                    <Badge variant="default" size="sm">
+                      Standard
+                    </Badge>
+                  ) : null}
+                  {address.isBilling ? (
+                    <Badge variant="neutral" size="sm">
+                      Rechnungsadresse
+                    </Badge>
+                  ) : null}
+                </div>
+              </li>
+            ))}
+          </ul>
+
+          <p className="text-sm leading-relaxed text-muted-foreground">
+            Adressen ändern? Schreiben Sie uns kurz — wir passen sie an und stellen sicher, dass
+            offene Rechnungen weiterhin stimmen.
+          </p>
+        </section>
+      ) : null}
+    </div>
+  );
+}
