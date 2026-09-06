@@ -5,7 +5,7 @@
 > Quelle, aus der sowohl diese Referenz als auch die Laufzeitvalidierung
 > stammen.
 
-Stand: 157 Endpunkte. Die maschinenlesbare Fassung liegt in
+Stand: 183 Endpunkte. Die maschinenlesbare Fassung liegt in
 [`openapi.yaml`](./openapi.yaml) bzw. [`openapi.json`](./openapi.json).
 
 ## Grundlagen
@@ -851,6 +851,60 @@ Familie.
 | Feld | Typ | Pflicht | Regeln |
 | --- | --- | --- | --- |
 | `id` | string | ja | min. 1 Zeichen |
+
+### `GET /api/customers/{id}`
+
+**Kundenakte abrufen.** Stammdaten, Adressen, Objekte, Buchungen, Rechnungen und Zeitachse.
+
+- **Zugriff:** Erfordert die Berechtigung: `customer:read`.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+### `PATCH /api/customers/{id}`
+
+**Kundenakte ändern.** Stammdaten, Konditionen und interne Notizen.
+
+- **Zugriff:** Erfordert die Berechtigung: `customer:update`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `type` | string | – | `PRIVATE` \| `BUSINESS` |
+| `companyName` | string | – | max. 140 Zeichen |
+| `firstName` | string | – | min. 2 Zeichen, max. 80 Zeichen |
+| `lastName` | string | – | min. 2 Zeichen, max. 80 Zeichen |
+| `email` | string | – | email, min. 1 Zeichen, max. 255 Zeichen |
+| `phone` | union | – | – |
+| `mobile` | union | – | – |
+| `vatNumber` | string | – | max. 40 Zeichen |
+| `language` | string | – | `DE` \| `EN` \| `FR` \| `IT`, Standard `"DE"` |
+| `birthday` | string | – | – |
+| `notes` | string | – | max. 4000 Zeichen |
+| `internalNotes` | string | – | max. 4000 Zeichen |
+| `paymentTermDays` | integer | – | ≥ 0, ≤ 180 |
+| `discountPercent` | number | – | ≥ 0, ≤ 100 |
+| `creditLimit` | number | – | ≥ 0, ≤ 1000000 |
+| `taxExempt` | boolean | – | – |
+| `blocked` | boolean | – | – |
+| `blockedReason` | string | – | max. 500 Zeichen |
+| `tagIds` | string[] | – | max. 20 Einträge |
 
 ## Nachrichten
 
@@ -1865,6 +1919,152 @@ Familie.
 | `rating` | integer | – | ≥ 1, ≤ 5 |
 | `internalNote` | string | – | max. 4000 Zeichen |
 
+### `GET /api/job-postings`
+
+**Stellenangebote auflisten.** Mit der Zahl der eingegangenen Bewerbungen je Angebot.
+
+- **Zugriff:** Erfordert die Berechtigung: `jobPosting:read`.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 401, 403, 429, 500
+
+### `POST /api/job-postings`
+
+**Stellenangebot anlegen.** Das Veröffentlichungsdatum entsteht beim Veröffentlichen, nicht beim Anlegen — ein Entwurf hat keines.
+
+- **Zugriff:** Erfordert die Berechtigung: `jobPosting:create`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 201
+- **Mögliche Fehler:** 400, 401, 403, 409, 422, 429, 500
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `title` | string | ja | min. 5 Zeichen, max. 120 Zeichen |
+| `slug` | string | ja | min. 3 Zeichen, max. 120 Zeichen |
+| `location` | string | – | min. 2 Zeichen, max. 80 Zeichen, Standard `"Bern"` |
+| `employmentType` | string | – | `FULL_TIME` \| `PART_TIME` \| `HOURLY` \| `TEMPORARY` \| `APPRENTICE` \| `CONTRACTOR`, Standard `"FULL_TIME"` |
+| `workloadFrom` | integer | – | ≥ 10, ≤ 100, Standard `80` |
+| `workloadTo` | integer | – | ≥ 10, ≤ 100, Standard `100` |
+| `description` | string | ja | min. 80 Zeichen, max. 8000 Zeichen |
+| `requirements` | string[] | – | max. 20 Einträge, Standard `[]` |
+| `benefits` | string[] | – | max. 20 Einträge, Standard `[]` |
+| `salaryFrom` | number | – | ≥ 0, ≤ 9999999 |
+| `salaryTo` | number | – | ≥ 0, ≤ 9999999 |
+| `status` | string | – | `DRAFT` \| `SCHEDULED` \| `PUBLISHED` \| `ARCHIVED`, Standard `"DRAFT"` |
+| `closesAt` | union | – | – |
+
+### `PATCH /api/job-postings/{id}`
+
+**Stellenangebot ändern.** Das Veröffentlichungsdatum wird beim ersten Veröffentlichen gesetzt und danach nicht mehr geändert — sonst rutschte die Anzeige bei jeder Korrektur in Stellenportalen nach oben, als wäre sie neu.
+
+- **Zugriff:** Erfordert die Berechtigung: `jobPosting:update`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 409, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `title` | string | – | min. 5 Zeichen, max. 120 Zeichen |
+| `slug` | string | – | min. 3 Zeichen, max. 120 Zeichen |
+| `location` | string | – | min. 2 Zeichen, max. 80 Zeichen, Standard `"Bern"` |
+| `employmentType` | string | – | `FULL_TIME` \| `PART_TIME` \| `HOURLY` \| `TEMPORARY` \| `APPRENTICE` \| `CONTRACTOR`, Standard `"FULL_TIME"` |
+| `workloadFrom` | integer | – | ≥ 10, ≤ 100, Standard `80` |
+| `workloadTo` | integer | – | ≥ 10, ≤ 100, Standard `100` |
+| `description` | string | – | min. 80 Zeichen, max. 8000 Zeichen |
+| `requirements` | string[] | – | max. 20 Einträge, Standard `[]` |
+| `benefits` | string[] | – | max. 20 Einträge, Standard `[]` |
+| `salaryFrom` | number | – | ≥ 0, ≤ 9999999 |
+| `salaryTo` | number | – | ≥ 0, ≤ 9999999 |
+| `status` | string | – | `DRAFT` \| `SCHEDULED` \| `PUBLISHED` \| `ARCHIVED`, Standard `"DRAFT"` |
+| `closesAt` | union | – | – |
+
+### `DELETE /api/job-postings/{id}`
+
+**Stellenangebot löschen.** Nur ohne Bewerbungen. Bewerbungen sind Personendaten mit Auskunftsanspruch; ohne die zugehörige Stelle liessen sie sich nicht mehr erklären. Archivieren Sie stattdessen.
+
+- **Zugriff:** Erfordert die Berechtigung: `jobPosting:delete`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 204
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+### `GET /api/employees/{id}`
+
+**Personalakte abrufen.** Lohn, AHV-Nummer und Bankverbindung erscheinen nur mit payslip:create. Die Schwelle ist bewusst nicht das Lesen der Akte: wer Einsätze plant und Ferien bewilligt, braucht die Zahlen nicht. Es sind besonders schützenswerte Personendaten nach DSG.
+
+- **Zugriff:** Erfordert die Berechtigung: `employee:read`.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+### `PATCH /api/employees/{id}`
+
+**Personalakte ändern.** Stammdaten, Pensum, Qualifikationen und Lohnangaben.
+
+- **Zugriff:** Erfordert die Berechtigung: `employee:update`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `firstName` | string | – | min. 2 Zeichen, max. 80 Zeichen |
+| `lastName` | string | – | min. 2 Zeichen, max. 80 Zeichen |
+| `email` | string | – | email |
+| `phone` | string | – | max. 30 Zeichen |
+| `role` | string | – | `ADMIN` \| `MANAGER` \| `EMPLOYEE`, Standard `"EMPLOYEE"` |
+| `employmentType` | string | – | `FULL_TIME` \| `PART_TIME` \| `HOURLY` \| `TEMPORARY` \| `APPRENTICE` \| `CONTRACTOR`, Standard `"FULL_TIME"` |
+| `position` | string | – | max. 80 Zeichen, Standard `"Reinigungskraft"` |
+| `department` | string | – | max. 80 Zeichen |
+| `hiredAt` | string | – | – |
+| `hourlyRate` | number | – | ≥ 0, ≤ 9999999 |
+| `monthlySalary` | number | – | ≥ 0, ≤ 9999999 |
+| `workloadPct` | integer | – | ≥ 10, ≤ 100, Standard `100` |
+| `vacationDaysPerYear` | number | – | ≥ 0, ≤ 60, Standard `20` |
+| `ahvNumber` | string | – | – |
+| `iban` | string | – | max. 40 Zeichen |
+| `nationality` | string | – | max. 60 Zeichen |
+| `permitType` | string | – | `CH` \| `B` \| `C` \| `G` \| `L` \| `F` \| `N` |
+| `permitValidUntil` | string | – | – |
+| `emergencyContact` | string | – | max. 120 Zeichen |
+| `emergencyPhone` | string | – | max. 30 Zeichen |
+| `driverLicense` | boolean | – | Standard `false` |
+| `vehiclePlate` | string | – | max. 20 Zeichen |
+| `languages` | string[] | – | Standard `["DE"]` |
+| `color` | string | – | Standard `"#0B7285"` |
+| `sendInvite` | boolean | – | Standard `true` |
+| `active` | boolean | – | – |
+| `terminatedAt` | string | – | – |
+
 ## Finanzen
 
 ### `GET /api/invoices`
@@ -2097,6 +2297,80 @@ Familie.
 | Feld | Typ | Pflicht | Regeln |
 | --- | --- | --- | --- |
 | `id` | string | ja | min. 1 Zeichen |
+
+### `GET /api/suppliers`
+
+**Lieferanten auflisten.** Mit der Zahl der darauf gebuchten Ausgaben.
+
+- **Zugriff:** Erfordert die Berechtigung: `supplier:read`.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 401, 403, 429, 500
+
+### `POST /api/suppliers`
+
+**Lieferant erfassen.** Ein neu erfasster Lieferant ist aktiv.
+
+- **Zugriff:** Erfordert die Berechtigung: `supplier:create`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 201
+- **Mögliche Fehler:** 400, 401, 403, 409, 422, 429, 500
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `name` | string | ja | min. 2 Zeichen, max. 140 Zeichen |
+| `contactName` | string | – | max. 120 Zeichen |
+| `email` | union | ja | – |
+| `phone` | string | – | max. 30 Zeichen |
+| `street` | string | – | max. 120 Zeichen |
+| `postalCode` | string | – | max. 10 Zeichen |
+| `city` | string | – | max. 80 Zeichen |
+| `country` | string | – | Standard `"CH"` |
+| `vatNumber` | string | – | max. 40 Zeichen |
+| `iban` | string | – | max. 40 Zeichen |
+| `paymentTermDays` | integer | – | ≥ 0, ≤ 180, Standard `30` |
+| `notes` | string | – | max. 2000 Zeichen |
+
+### `PATCH /api/suppliers/{id}`
+
+**Lieferant ändern.** Teil-Update. Mit active=false wird der Lieferant stillgelegt, ohne Belege zu verlieren.
+
+- **Zugriff:** Erfordert die Berechtigung: `supplier:update`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+### `DELETE /api/suppliers/{id}`
+
+**Lieferant löschen.** Nur ohne gebuchte Ausgaben. Eine Ausgabe ohne ihren Lieferanten liesse sich in der Buchhaltung nicht mehr zuordnen — setzen Sie ihn stattdessen auf inaktiv.
+
+- **Zugriff:** Erfordert die Berechtigung: `supplier:delete`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 204
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+### `GET /api/payments`
+
+**Zahlungseingänge auflisten.** Sortiert nach Erfassung, nicht nach Zahlungsdatum — erfasst wird auch, was noch nicht bezahlt ist. Enthält Zahlungen mit und ohne Rechnungsbezug.
+
+- **Zugriff:** Erfordert die Berechtigung: `payment:read`.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 401, 403, 429, 500
 
 ## Exporte
 
@@ -3008,6 +3282,168 @@ Familie.
 | --- | --- | --- | --- |
 | `id` | string | ja | min. 1 Zeichen |
 
+### `GET /api/faq`
+
+**Häufige Fragen auflisten.** Alle Fragen, auch abgeschaltete, gruppiert nach Kategorie.
+
+- **Zugriff:** Erfordert die Berechtigung: `faq:read`.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 401, 403, 429, 500
+
+### `POST /api/faq`
+
+**Frage anlegen.** Erscheint nach dem Speichern auf /faq und auf der Startseite.
+
+- **Zugriff:** Erfordert die Berechtigung: `faq:create`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 201
+- **Mögliche Fehler:** 400, 401, 403, 409, 422, 429, 500
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `question` | string | ja | min. 8 Zeichen, max. 200 Zeichen |
+| `answer` | string | ja | min. 20 Zeichen, max. 2000 Zeichen |
+| `category` | string | – | min. 2 Zeichen, max. 60 Zeichen, Standard `"Allgemein"` |
+| `locale` | string | – | `DE` \| `FR` \| `IT` \| `EN`, Standard `"DE"` |
+| `position` | integer | – | ≥ 0, ≤ 999, Standard `0` |
+| `active` | boolean | – | Standard `true` |
+
+### `PATCH /api/faq/{id}`
+
+**Frage ändern.** Teil-Update von Frage, Antwort, Kategorie und Sichtbarkeit.
+
+- **Zugriff:** Erfordert die Berechtigung: `faq:update`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `question` | string | – | min. 8 Zeichen, max. 200 Zeichen |
+| `answer` | string | – | min. 20 Zeichen, max. 2000 Zeichen |
+| `category` | string | – | min. 2 Zeichen, max. 60 Zeichen, Standard `"Allgemein"` |
+| `locale` | string | – | `DE` \| `FR` \| `IT` \| `EN`, Standard `"DE"` |
+| `position` | integer | – | ≥ 0, ≤ 999, Standard `0` |
+| `active` | boolean | – | Standard `true` |
+
+### `DELETE /api/faq/{id}`
+
+**Frage löschen.** Endgültig — eine Frage ist schnell neu erfasst.
+
+- **Zugriff:** Erfordert die Berechtigung: `faq:delete`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 204
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+### `GET /api/gallery`
+
+**Galerie auflisten.** Alle Vorher-/Nachher-Einträge, auch unveröffentlichte.
+
+- **Zugriff:** Erfordert die Berechtigung: `gallery:read`.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 401, 403, 429, 500
+
+### `POST /api/gallery`
+
+**Galerieeintrag anlegen.** Vorher und Nachher müssen verschiedene Bilder sein — sonst zeigt der Schieberegler auf der Startseite nichts. Beide Adressen müssen über https ausgeliefert werden.
+
+- **Zugriff:** Erfordert die Berechtigung: `gallery:create`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 201
+- **Mögliche Fehler:** 400, 401, 403, 409, 422, 429, 500
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `title` | string | ja | min. 3 Zeichen, max. 120 Zeichen |
+| `description` | string | – | max. 500 Zeichen |
+| `serviceKind` | string | – | `OFFICE_CLEANING` \| `MOVE_OUT_CLEANING` \| `RESIDENTIAL_CLEANING` \| `WINDOW_CLEANING` \| `CONSTRUCTION_CLEANING` \| `BUILDING_MAINTENANCE` \| `SPECIAL` |
+| `beforeUrl` | string | ja | uri, max. 500 Zeichen |
+| `afterUrl` | string | ja | uri, max. 500 Zeichen |
+| `location` | string | – | max. 120 Zeichen |
+| `featured` | boolean | – | Standard `false` |
+| `position` | integer | – | ≥ 0, ≤ 999, Standard `0` |
+| `published` | boolean | – | Standard `true` |
+
+### `PATCH /api/gallery/{id}`
+
+**Galerieeintrag ändern.** Teil-Update. Die Bildgleichheit wird gegen den gespeicherten Stand geprüft, damit sich nicht ein Bild auf das andere setzen lässt.
+
+- **Zugriff:** Erfordert die Berechtigung: `gallery:update`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `title` | string | – | min. 3 Zeichen, max. 120 Zeichen |
+| `description` | string | – | max. 500 Zeichen |
+| `serviceKind` | string | – | `OFFICE_CLEANING` \| `MOVE_OUT_CLEANING` \| `RESIDENTIAL_CLEANING` \| `WINDOW_CLEANING` \| `CONSTRUCTION_CLEANING` \| `BUILDING_MAINTENANCE` \| `SPECIAL` |
+| `beforeUrl` | string | – | uri, max. 500 Zeichen |
+| `afterUrl` | string | – | uri, max. 500 Zeichen |
+| `location` | string | – | max. 120 Zeichen |
+| `featured` | boolean | – | Standard `false` |
+| `position` | integer | – | ≥ 0, ≤ 999, Standard `0` |
+| `published` | boolean | – | Standard `true` |
+
+### `DELETE /api/gallery/{id}`
+
+**Galerieeintrag löschen.** Endgültig. Die Bilddateien liegen in der Mediathek und bleiben bestehen.
+
+- **Zugriff:** Erfordert die Berechtigung: `gallery:delete`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 204
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+### `POST /api/website/reorder`
+
+**Reihenfolge von Fragen oder Galeriebildern setzen.** Übergeben wird die Reihenfolge als Liste von IDs; die Positionen vergibt der Server aus dem Index.
+
+- **Zugriff:** Erfordert eine der Berechtigungen: `faq:update`, `gallery:update`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 422, 429, 500
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `entity` | string | ja | `faq` \| `gallery` |
+| `ids` | string[] | ja | min. 1 Einträge, max. 200 Einträge |
+
 ## System
 
 ### `GET /api/users`
@@ -3117,6 +3553,70 @@ Familie.
 | Feld | Typ | Pflicht | Regeln |
 | --- | --- | --- | --- |
 | `id` | string | ja | min. 1 Zeichen |
+
+### `GET /api/company`
+
+**Firmendaten abrufen.** Stammdaten samt Öffnungszeiten.
+
+- **Zugriff:** Erfordert die Berechtigung: `company:read`.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 401, 403, 429, 500
+
+### `PATCH /api/company`
+
+**Firmendaten ändern.** IBAN und QR-IBAN werden gegen die Prüfziffer nach ISO 13616 geprüft. Eine falsche Nummer fiele sonst erst auf, wenn eine Kundschaft die erste Rechnung nicht bezahlen kann — und stünde dann bereits auf ausgestellten, unveränderlichen Belegen.
+
+- **Zugriff:** Erfordert die Berechtigung: `company:update`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 422, 429, 500
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `name` | string | ja | min. 2 Zeichen, max. 140 Zeichen |
+| `legalName` | union | ja | – |
+| `email` | string | ja | email, max. 200 Zeichen |
+| `phone` | union | ja | – |
+| `whatsapp` | union | ja | – |
+| `website` | union | ja | – |
+| `street` | string | ja | min. 2 Zeichen, max. 140 Zeichen |
+| `streetNo` | union | ja | – |
+| `postalCode` | string | ja | – |
+| `city` | string | ja | min. 2 Zeichen, max. 80 Zeichen |
+| `vatNumber` | union | ja | – |
+| `iban` | union | ja | – |
+| `qrIban` | union | ja | – |
+| `bankName` | union | ja | – |
+| `logoUrl` | union | ja | – |
+| `logoDarkUrl` | union | ja | – |
+| `faviconUrl` | union | ja | – |
+| `mapsUrl` | union | ja | – |
+| `facebookUrl` | union | ja | – |
+| `instagramUrl` | union | ja | – |
+| `linkedinUrl` | union | ja | – |
+| `tiktokUrl` | union | ja | – |
+| `youtubeUrl` | union | ja | – |
+
+### `GET /api/opening-hours`
+
+**Öffnungszeiten abrufen.** Sieben Zeilen, Sonntag bis Samstag.
+
+- **Zugriff:** Erfordert die Berechtigung: `company:read`.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 401, 403, 429, 500
+
+### `PUT /api/opening-hours`
+
+**Öffnungszeiten setzen.** PUT statt PATCH: der Körper beschreibt den vollständigen gewünschten Wochenplan. Einzelne Tage zu pflegen wären sieben Anfragen, von denen jede für sich fehlschlagen könnte.
+
+- **Zugriff:** Erfordert die Berechtigung: `company:update`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 401, 403, 422, 429, 500
 
 ### `GET /api/cron/hourly`
 

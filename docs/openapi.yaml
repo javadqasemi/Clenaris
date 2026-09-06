@@ -11515,6 +11515,221 @@ paths:
             'application/json':
               schema:
                 '$ref': '#/components/schemas/ErrorEnvelope'
+    get:
+      tags:
+        - 'CRM'
+      summary: 'Kundenakte abrufen'
+      description: |-
+          Stammdaten, Adressen, Objekte, Buchungen, Rechnungen und Zeitachse.
+
+          **Zugriff:** Erfordert die Berechtigung: `customer:read`.
+
+          **Rate-Limit-Klasse:** `apiRead`
+      operationId: 'getCustomersById'
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: 'id'
+          in: 'path'
+          required: true
+          schema:
+            type: 'string'
+            minLength: 1
+      responses:
+        '200':
+          description: 'Erfolg'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/SuccessEnvelope'
+        '400':
+          description: 'VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 'UNAUTHORIZED — keine oder abgelaufene Sitzung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 'FORBIDDEN — angemeldet, aber ohne die nötige Berechtigung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: 'NOT_FOUND — nicht vorhanden, oder für diese Sitzung nicht sichtbar.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: 'RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+    patch:
+      tags:
+        - 'CRM'
+      summary: 'Kundenakte ändern'
+      description: |-
+          Stammdaten, Konditionen und interne Notizen.
+
+          **Zugriff:** Erfordert die Berechtigung: `customer:update`.
+
+          **Rate-Limit-Klasse:** `apiWrite`
+      operationId: 'patchCustomersById'
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: 'id'
+          in: 'path'
+          required: true
+          schema:
+            type: 'string'
+            minLength: 1
+      requestBody:
+        required: true
+        content:
+          'application/json':
+            schema:
+              type: 'object'
+              properties:
+                type:
+                  type: 'string'
+                  enum:
+                    - 'PRIVATE'
+                    - 'BUSINESS'
+                companyName:
+                  type: 'string'
+                  maxLength: 140
+                firstName:
+                  type: 'string'
+                  minLength: 2
+                  maxLength: 80
+                lastName:
+                  type: 'string'
+                  minLength: 2
+                  maxLength: 80
+                email:
+                  type: 'string'
+                  minLength: 1
+                  maxLength: 255
+                  format: 'email'
+                phone:
+                  anyOf:
+                    - type: 'string'
+                      pattern: '^(\+|00)?[0-9\s().-]{9,20}$'
+                    - const: ''
+                mobile:
+                  anyOf:
+                    - type: 'string'
+                      pattern: '^(\+|00)?[0-9\s().-]{9,20}$'
+                    - const: ''
+                vatNumber:
+                  type: 'string'
+                  maxLength: 40
+                language:
+                  type: 'string'
+                  enum:
+                    - 'DE'
+                    - 'EN'
+                    - 'FR'
+                    - 'IT'
+                  default: 'DE'
+                birthday:
+                  type: 'string'
+                  pattern: '^\d{4}-\d{2}-\d{2}$'
+                notes:
+                  type: 'string'
+                  maxLength: 4000
+                internalNotes:
+                  type: 'string'
+                  maxLength: 4000
+                paymentTermDays:
+                  type: 'integer'
+                  minimum: 0
+                  maximum: 180
+                discountPercent:
+                  type: 'number'
+                  minimum: 0
+                  maximum: 100
+                creditLimit:
+                  type: 'number'
+                  minimum: 0
+                  maximum: 1000000
+                taxExempt:
+                  type: 'boolean'
+                blocked:
+                  type: 'boolean'
+                blockedReason:
+                  type: 'string'
+                  maxLength: 500
+                tagIds:
+                  type: 'array'
+                  items:
+                    type: 'string'
+                    minLength: 1
+                  maxItems: 20
+      responses:
+        '200':
+          description: 'Erfolg'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/SuccessEnvelope'
+        '400':
+          description: 'VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 'UNAUTHORIZED — keine oder abgelaufene Sitzung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 'FORBIDDEN — angemeldet, aber ohne die nötige Berechtigung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: 'NOT_FOUND — nicht vorhanden, oder für diese Sitzung nicht sichtbar.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: 'BUSINESS_RULE — fachlich nicht zulässig, etwa eine bereits ausgestellte Rechnung ändern.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: 'RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
   '/api/customers/{id}/restore':
     post:
       tags:
@@ -13616,6 +13831,2112 @@ paths:
           schema:
             type: 'string'
             minLength: 1
+      responses:
+        '200':
+          description: 'Erfolg'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/SuccessEnvelope'
+        '400':
+          description: 'VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 'UNAUTHORIZED — keine oder abgelaufene Sitzung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 'FORBIDDEN — angemeldet, aber ohne die nötige Berechtigung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: 'NOT_FOUND — nicht vorhanden, oder für diese Sitzung nicht sichtbar.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: 'BUSINESS_RULE — fachlich nicht zulässig, etwa eine bereits ausgestellte Rechnung ändern.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: 'RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+  '/api/faq':
+    get:
+      tags:
+        - 'Website'
+      summary: 'Häufige Fragen auflisten'
+      description: |-
+          Alle Fragen, auch abgeschaltete, gruppiert nach Kategorie.
+
+          **Zugriff:** Erfordert die Berechtigung: `faq:read`.
+
+          **Rate-Limit-Klasse:** `apiRead`
+      operationId: 'getFaq'
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: 'Erfolg'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/SuccessEnvelope'
+        '401':
+          description: 'UNAUTHORIZED — keine oder abgelaufene Sitzung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 'FORBIDDEN — angemeldet, aber ohne die nötige Berechtigung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: 'RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+    post:
+      tags:
+        - 'Website'
+      summary: 'Frage anlegen'
+      description: |-
+          Erscheint nach dem Speichern auf /faq und auf der Startseite.
+
+          **Zugriff:** Erfordert die Berechtigung: `faq:create`.
+
+          **Rate-Limit-Klasse:** `apiWrite`
+      operationId: 'postFaq'
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          'application/json':
+            schema:
+              type: 'object'
+              properties:
+                question:
+                  type: 'string'
+                  minLength: 8
+                  maxLength: 200
+                answer:
+                  type: 'string'
+                  minLength: 20
+                  maxLength: 2000
+                category:
+                  type: 'string'
+                  minLength: 2
+                  maxLength: 60
+                  default: 'Allgemein'
+                locale:
+                  type: 'string'
+                  enum:
+                    - 'DE'
+                    - 'FR'
+                    - 'IT'
+                    - 'EN'
+                  default: 'DE'
+                position:
+                  type: 'integer'
+                  minimum: 0
+                  maximum: 999
+                  default: 0
+                active:
+                  type: 'boolean'
+                  default: true
+              required:
+                - 'question'
+                - 'answer'
+      responses:
+        '201':
+          description: 'Erfolg'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/SuccessEnvelope'
+        '400':
+          description: 'VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 'UNAUTHORIZED — keine oder abgelaufene Sitzung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 'FORBIDDEN — angemeldet, aber ohne die nötige Berechtigung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '409':
+          description: 'CONFLICT — verstösst gegen eine Eindeutigkeitsregel.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: 'BUSINESS_RULE — fachlich nicht zulässig, etwa eine bereits ausgestellte Rechnung ändern.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: 'RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+  '/api/faq/{id}':
+    patch:
+      tags:
+        - 'Website'
+      summary: 'Frage ändern'
+      description: |-
+          Teil-Update von Frage, Antwort, Kategorie und Sichtbarkeit.
+
+          **Zugriff:** Erfordert die Berechtigung: `faq:update`.
+
+          **Rate-Limit-Klasse:** `apiWrite`
+      operationId: 'patchFaqById'
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: 'id'
+          in: 'path'
+          required: true
+          schema:
+            type: 'string'
+            minLength: 1
+      requestBody:
+        required: true
+        content:
+          'application/json':
+            schema:
+              type: 'object'
+              properties:
+                question:
+                  type: 'string'
+                  minLength: 8
+                  maxLength: 200
+                answer:
+                  type: 'string'
+                  minLength: 20
+                  maxLength: 2000
+                category:
+                  type: 'string'
+                  minLength: 2
+                  maxLength: 60
+                  default: 'Allgemein'
+                locale:
+                  type: 'string'
+                  enum:
+                    - 'DE'
+                    - 'FR'
+                    - 'IT'
+                    - 'EN'
+                  default: 'DE'
+                position:
+                  type: 'integer'
+                  minimum: 0
+                  maximum: 999
+                  default: 0
+                active:
+                  type: 'boolean'
+                  default: true
+      responses:
+        '200':
+          description: 'Erfolg'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/SuccessEnvelope'
+        '400':
+          description: 'VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 'UNAUTHORIZED — keine oder abgelaufene Sitzung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 'FORBIDDEN — angemeldet, aber ohne die nötige Berechtigung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: 'NOT_FOUND — nicht vorhanden, oder für diese Sitzung nicht sichtbar.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: 'BUSINESS_RULE — fachlich nicht zulässig, etwa eine bereits ausgestellte Rechnung ändern.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: 'RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+    delete:
+      tags:
+        - 'Website'
+      summary: 'Frage löschen'
+      description: |-
+          Endgültig — eine Frage ist schnell neu erfasst.
+
+          **Zugriff:** Erfordert die Berechtigung: `faq:delete`.
+
+          **Rate-Limit-Klasse:** `apiWrite`
+      operationId: 'deleteFaqById'
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: 'id'
+          in: 'path'
+          required: true
+          schema:
+            type: 'string'
+            minLength: 1
+      responses:
+        '204':
+          description: 'Erfolg'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/SuccessEnvelope'
+        '400':
+          description: 'VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 'UNAUTHORIZED — keine oder abgelaufene Sitzung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 'FORBIDDEN — angemeldet, aber ohne die nötige Berechtigung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: 'NOT_FOUND — nicht vorhanden, oder für diese Sitzung nicht sichtbar.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: 'BUSINESS_RULE — fachlich nicht zulässig, etwa eine bereits ausgestellte Rechnung ändern.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: 'RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+  '/api/gallery':
+    get:
+      tags:
+        - 'Website'
+      summary: 'Galerie auflisten'
+      description: |-
+          Alle Vorher-/Nachher-Einträge, auch unveröffentlichte.
+
+          **Zugriff:** Erfordert die Berechtigung: `gallery:read`.
+
+          **Rate-Limit-Klasse:** `apiRead`
+      operationId: 'getGallery'
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: 'Erfolg'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/SuccessEnvelope'
+        '401':
+          description: 'UNAUTHORIZED — keine oder abgelaufene Sitzung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 'FORBIDDEN — angemeldet, aber ohne die nötige Berechtigung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: 'RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+    post:
+      tags:
+        - 'Website'
+      summary: 'Galerieeintrag anlegen'
+      description: |-
+          Vorher und Nachher müssen verschiedene Bilder sein — sonst zeigt der Schieberegler auf der Startseite nichts. Beide Adressen müssen über https ausgeliefert werden.
+
+          **Zugriff:** Erfordert die Berechtigung: `gallery:create`.
+
+          **Rate-Limit-Klasse:** `apiWrite`
+      operationId: 'postGallery'
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          'application/json':
+            schema:
+              type: 'object'
+              properties:
+                title:
+                  type: 'string'
+                  minLength: 3
+                  maxLength: 120
+                description:
+                  type: 'string'
+                  maxLength: 500
+                serviceKind:
+                  type: 'string'
+                  enum:
+                    - 'OFFICE_CLEANING'
+                    - 'MOVE_OUT_CLEANING'
+                    - 'RESIDENTIAL_CLEANING'
+                    - 'WINDOW_CLEANING'
+                    - 'CONSTRUCTION_CLEANING'
+                    - 'BUILDING_MAINTENANCE'
+                    - 'SPECIAL'
+                beforeUrl:
+                  type: 'string'
+                  format: 'uri'
+                  maxLength: 500
+                afterUrl:
+                  type: 'string'
+                  format: 'uri'
+                  maxLength: 500
+                location:
+                  type: 'string'
+                  maxLength: 120
+                featured:
+                  type: 'boolean'
+                  default: false
+                position:
+                  type: 'integer'
+                  minimum: 0
+                  maximum: 999
+                  default: 0
+                published:
+                  type: 'boolean'
+                  default: true
+              required:
+                - 'title'
+                - 'beforeUrl'
+                - 'afterUrl'
+      responses:
+        '201':
+          description: 'Erfolg'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/SuccessEnvelope'
+        '400':
+          description: 'VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 'UNAUTHORIZED — keine oder abgelaufene Sitzung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 'FORBIDDEN — angemeldet, aber ohne die nötige Berechtigung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '409':
+          description: 'CONFLICT — verstösst gegen eine Eindeutigkeitsregel.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: 'BUSINESS_RULE — fachlich nicht zulässig, etwa eine bereits ausgestellte Rechnung ändern.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: 'RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+  '/api/gallery/{id}':
+    patch:
+      tags:
+        - 'Website'
+      summary: 'Galerieeintrag ändern'
+      description: |-
+          Teil-Update. Die Bildgleichheit wird gegen den gespeicherten Stand geprüft, damit sich nicht ein Bild auf das andere setzen lässt.
+
+          **Zugriff:** Erfordert die Berechtigung: `gallery:update`.
+
+          **Rate-Limit-Klasse:** `apiWrite`
+      operationId: 'patchGalleryById'
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: 'id'
+          in: 'path'
+          required: true
+          schema:
+            type: 'string'
+            minLength: 1
+      requestBody:
+        required: true
+        content:
+          'application/json':
+            schema:
+              type: 'object'
+              properties:
+                title:
+                  type: 'string'
+                  minLength: 3
+                  maxLength: 120
+                description:
+                  type: 'string'
+                  maxLength: 500
+                serviceKind:
+                  type: 'string'
+                  enum:
+                    - 'OFFICE_CLEANING'
+                    - 'MOVE_OUT_CLEANING'
+                    - 'RESIDENTIAL_CLEANING'
+                    - 'WINDOW_CLEANING'
+                    - 'CONSTRUCTION_CLEANING'
+                    - 'BUILDING_MAINTENANCE'
+                    - 'SPECIAL'
+                beforeUrl:
+                  type: 'string'
+                  format: 'uri'
+                  maxLength: 500
+                afterUrl:
+                  type: 'string'
+                  format: 'uri'
+                  maxLength: 500
+                location:
+                  type: 'string'
+                  maxLength: 120
+                featured:
+                  type: 'boolean'
+                  default: false
+                position:
+                  type: 'integer'
+                  minimum: 0
+                  maximum: 999
+                  default: 0
+                published:
+                  type: 'boolean'
+                  default: true
+      responses:
+        '200':
+          description: 'Erfolg'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/SuccessEnvelope'
+        '400':
+          description: 'VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 'UNAUTHORIZED — keine oder abgelaufene Sitzung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 'FORBIDDEN — angemeldet, aber ohne die nötige Berechtigung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: 'NOT_FOUND — nicht vorhanden, oder für diese Sitzung nicht sichtbar.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: 'BUSINESS_RULE — fachlich nicht zulässig, etwa eine bereits ausgestellte Rechnung ändern.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: 'RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+    delete:
+      tags:
+        - 'Website'
+      summary: 'Galerieeintrag löschen'
+      description: |-
+          Endgültig. Die Bilddateien liegen in der Mediathek und bleiben bestehen.
+
+          **Zugriff:** Erfordert die Berechtigung: `gallery:delete`.
+
+          **Rate-Limit-Klasse:** `apiWrite`
+      operationId: 'deleteGalleryById'
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: 'id'
+          in: 'path'
+          required: true
+          schema:
+            type: 'string'
+            minLength: 1
+      responses:
+        '204':
+          description: 'Erfolg'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/SuccessEnvelope'
+        '400':
+          description: 'VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 'UNAUTHORIZED — keine oder abgelaufene Sitzung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 'FORBIDDEN — angemeldet, aber ohne die nötige Berechtigung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: 'NOT_FOUND — nicht vorhanden, oder für diese Sitzung nicht sichtbar.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: 'BUSINESS_RULE — fachlich nicht zulässig, etwa eine bereits ausgestellte Rechnung ändern.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: 'RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+  '/api/website/reorder':
+    post:
+      tags:
+        - 'Website'
+      summary: 'Reihenfolge von Fragen oder Galeriebildern setzen'
+      description: |-
+          Übergeben wird die Reihenfolge als Liste von IDs; die Positionen vergibt der Server aus dem Index.
+
+          **Zugriff:** Erfordert eine der Berechtigungen: `faq:update`, `gallery:update`.
+
+          **Rate-Limit-Klasse:** `apiWrite`
+      operationId: 'postWebsiteReorder'
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          'application/json':
+            schema:
+              type: 'object'
+              properties:
+                entity:
+                  type: 'string'
+                  enum:
+                    - 'faq'
+                    - 'gallery'
+                ids:
+                  type: 'array'
+                  items:
+                    type: 'string'
+                    minLength: 1
+                  minItems: 1
+                  maxItems: 200
+              required:
+                - 'entity'
+                - 'ids'
+      responses:
+        '200':
+          description: 'Erfolg'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/SuccessEnvelope'
+        '400':
+          description: 'VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 'UNAUTHORIZED — keine oder abgelaufene Sitzung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 'FORBIDDEN — angemeldet, aber ohne die nötige Berechtigung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: 'BUSINESS_RULE — fachlich nicht zulässig, etwa eine bereits ausgestellte Rechnung ändern.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: 'RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+  '/api/job-postings':
+    get:
+      tags:
+        - 'Personal'
+      summary: 'Stellenangebote auflisten'
+      description: |-
+          Mit der Zahl der eingegangenen Bewerbungen je Angebot.
+
+          **Zugriff:** Erfordert die Berechtigung: `jobPosting:read`.
+
+          **Rate-Limit-Klasse:** `apiRead`
+      operationId: 'getJobPostings'
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: 'Erfolg'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/SuccessEnvelope'
+        '401':
+          description: 'UNAUTHORIZED — keine oder abgelaufene Sitzung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 'FORBIDDEN — angemeldet, aber ohne die nötige Berechtigung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: 'RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+    post:
+      tags:
+        - 'Personal'
+      summary: 'Stellenangebot anlegen'
+      description: |-
+          Das Veröffentlichungsdatum entsteht beim Veröffentlichen, nicht beim Anlegen — ein Entwurf hat keines.
+
+          **Zugriff:** Erfordert die Berechtigung: `jobPosting:create`.
+
+          **Rate-Limit-Klasse:** `apiWrite`
+      operationId: 'postJobPostings'
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          'application/json':
+            schema:
+              type: 'object'
+              properties:
+                title:
+                  type: 'string'
+                  minLength: 5
+                  maxLength: 120
+                slug:
+                  type: 'string'
+                  minLength: 3
+                  maxLength: 120
+                  pattern: '^[a-z0-9]+(?:-[a-z0-9]+)*$'
+                location:
+                  type: 'string'
+                  minLength: 2
+                  maxLength: 80
+                  default: 'Bern'
+                employmentType:
+                  type: 'string'
+                  enum:
+                    - 'FULL_TIME'
+                    - 'PART_TIME'
+                    - 'HOURLY'
+                    - 'TEMPORARY'
+                    - 'APPRENTICE'
+                    - 'CONTRACTOR'
+                  default: 'FULL_TIME'
+                workloadFrom:
+                  type: 'integer'
+                  minimum: 10
+                  maximum: 100
+                  default: 80
+                workloadTo:
+                  type: 'integer'
+                  minimum: 10
+                  maximum: 100
+                  default: 100
+                description:
+                  type: 'string'
+                  minLength: 80
+                  maxLength: 8000
+                requirements:
+                  type: 'array'
+                  items:
+                    type: 'string'
+                    minLength: 1
+                    maxLength: 200
+                  maxItems: 20
+                  default: []
+                benefits:
+                  type: 'array'
+                  items:
+                    type: 'string'
+                    minLength: 1
+                    maxLength: 200
+                  maxItems: 20
+                  default: []
+                salaryFrom:
+                  type: 'number'
+                  minimum: 0
+                  maximum: 9999999
+                salaryTo:
+                  type: 'number'
+                  minimum: 0
+                  maximum: 9999999
+                status:
+                  type: 'string'
+                  enum:
+                    - 'DRAFT'
+                    - 'SCHEDULED'
+                    - 'PUBLISHED'
+                    - 'ARCHIVED'
+                  default: 'DRAFT'
+                closesAt:
+                  anyOf:
+                    - type: 'string'
+                      pattern: '^\d{4}-\d{2}-\d{2}$'
+                    - const: ''
+              required:
+                - 'title'
+                - 'slug'
+                - 'description'
+      responses:
+        '201':
+          description: 'Erfolg'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/SuccessEnvelope'
+        '400':
+          description: 'VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 'UNAUTHORIZED — keine oder abgelaufene Sitzung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 'FORBIDDEN — angemeldet, aber ohne die nötige Berechtigung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '409':
+          description: 'CONFLICT — verstösst gegen eine Eindeutigkeitsregel.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: 'BUSINESS_RULE — fachlich nicht zulässig, etwa eine bereits ausgestellte Rechnung ändern.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: 'RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+  '/api/job-postings/{id}':
+    patch:
+      tags:
+        - 'Personal'
+      summary: 'Stellenangebot ändern'
+      description: |-
+          Das Veröffentlichungsdatum wird beim ersten Veröffentlichen gesetzt und danach nicht mehr geändert — sonst rutschte die Anzeige bei jeder Korrektur in Stellenportalen nach oben, als wäre sie neu.
+
+          **Zugriff:** Erfordert die Berechtigung: `jobPosting:update`.
+
+          **Rate-Limit-Klasse:** `apiWrite`
+      operationId: 'patchJobPostingsById'
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: 'id'
+          in: 'path'
+          required: true
+          schema:
+            type: 'string'
+            minLength: 1
+      requestBody:
+        required: true
+        content:
+          'application/json':
+            schema:
+              type: 'object'
+              properties:
+                title:
+                  type: 'string'
+                  minLength: 5
+                  maxLength: 120
+                slug:
+                  type: 'string'
+                  minLength: 3
+                  maxLength: 120
+                  pattern: '^[a-z0-9]+(?:-[a-z0-9]+)*$'
+                location:
+                  type: 'string'
+                  minLength: 2
+                  maxLength: 80
+                  default: 'Bern'
+                employmentType:
+                  type: 'string'
+                  enum:
+                    - 'FULL_TIME'
+                    - 'PART_TIME'
+                    - 'HOURLY'
+                    - 'TEMPORARY'
+                    - 'APPRENTICE'
+                    - 'CONTRACTOR'
+                  default: 'FULL_TIME'
+                workloadFrom:
+                  type: 'integer'
+                  minimum: 10
+                  maximum: 100
+                  default: 80
+                workloadTo:
+                  type: 'integer'
+                  minimum: 10
+                  maximum: 100
+                  default: 100
+                description:
+                  type: 'string'
+                  minLength: 80
+                  maxLength: 8000
+                requirements:
+                  type: 'array'
+                  items:
+                    type: 'string'
+                    minLength: 1
+                    maxLength: 200
+                  maxItems: 20
+                  default: []
+                benefits:
+                  type: 'array'
+                  items:
+                    type: 'string'
+                    minLength: 1
+                    maxLength: 200
+                  maxItems: 20
+                  default: []
+                salaryFrom:
+                  type: 'number'
+                  minimum: 0
+                  maximum: 9999999
+                salaryTo:
+                  type: 'number'
+                  minimum: 0
+                  maximum: 9999999
+                status:
+                  type: 'string'
+                  enum:
+                    - 'DRAFT'
+                    - 'SCHEDULED'
+                    - 'PUBLISHED'
+                    - 'ARCHIVED'
+                  default: 'DRAFT'
+                closesAt:
+                  anyOf:
+                    - type: 'string'
+                      pattern: '^\d{4}-\d{2}-\d{2}$'
+                    - const: ''
+      responses:
+        '200':
+          description: 'Erfolg'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/SuccessEnvelope'
+        '400':
+          description: 'VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 'UNAUTHORIZED — keine oder abgelaufene Sitzung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 'FORBIDDEN — angemeldet, aber ohne die nötige Berechtigung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: 'NOT_FOUND — nicht vorhanden, oder für diese Sitzung nicht sichtbar.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '409':
+          description: 'CONFLICT — verstösst gegen eine Eindeutigkeitsregel.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: 'BUSINESS_RULE — fachlich nicht zulässig, etwa eine bereits ausgestellte Rechnung ändern.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: 'RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+    delete:
+      tags:
+        - 'Personal'
+      summary: 'Stellenangebot löschen'
+      description: |-
+          Nur ohne Bewerbungen. Bewerbungen sind Personendaten mit Auskunftsanspruch; ohne die zugehörige Stelle liessen sie sich nicht mehr erklären. Archivieren Sie stattdessen.
+
+          **Zugriff:** Erfordert die Berechtigung: `jobPosting:delete`.
+
+          **Rate-Limit-Klasse:** `apiWrite`
+      operationId: 'deleteJobPostingsById'
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: 'id'
+          in: 'path'
+          required: true
+          schema:
+            type: 'string'
+            minLength: 1
+      responses:
+        '204':
+          description: 'Erfolg'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/SuccessEnvelope'
+        '400':
+          description: 'VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 'UNAUTHORIZED — keine oder abgelaufene Sitzung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 'FORBIDDEN — angemeldet, aber ohne die nötige Berechtigung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: 'NOT_FOUND — nicht vorhanden, oder für diese Sitzung nicht sichtbar.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: 'BUSINESS_RULE — fachlich nicht zulässig, etwa eine bereits ausgestellte Rechnung ändern.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: 'RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+  '/api/company':
+    get:
+      tags:
+        - 'System'
+      summary: 'Firmendaten abrufen'
+      description: |-
+          Stammdaten samt Öffnungszeiten.
+
+          **Zugriff:** Erfordert die Berechtigung: `company:read`.
+
+          **Rate-Limit-Klasse:** `apiRead`
+      operationId: 'getCompany'
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: 'Erfolg'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/SuccessEnvelope'
+        '401':
+          description: 'UNAUTHORIZED — keine oder abgelaufene Sitzung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 'FORBIDDEN — angemeldet, aber ohne die nötige Berechtigung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: 'RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+    patch:
+      tags:
+        - 'System'
+      summary: 'Firmendaten ändern'
+      description: |-
+          IBAN und QR-IBAN werden gegen die Prüfziffer nach ISO 13616 geprüft. Eine falsche Nummer fiele sonst erst auf, wenn eine Kundschaft die erste Rechnung nicht bezahlen kann — und stünde dann bereits auf ausgestellten, unveränderlichen Belegen.
+
+          **Zugriff:** Erfordert die Berechtigung: `company:update`.
+
+          **Rate-Limit-Klasse:** `apiWrite`
+      operationId: 'patchCompany'
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          'application/json':
+            schema:
+              type: 'object'
+              properties:
+                name:
+                  type: 'string'
+                  minLength: 2
+                  maxLength: 140
+                legalName:
+                  anyOf:
+                    - type: 'string'
+                      maxLength: 180
+                    - const: ''
+                email:
+                  type: 'string'
+                  format: 'email'
+                  maxLength: 200
+                phone:
+                  anyOf:
+                    - type: 'string'
+                      maxLength: 40
+                    - const: ''
+                whatsapp:
+                  anyOf:
+                    - type: 'string'
+                      maxLength: 40
+                    - const: ''
+                website:
+                  anyOf:
+                    - type: 'string'
+                      format: 'uri'
+                      maxLength: 300
+                    - const: ''
+                street:
+                  type: 'string'
+                  minLength: 2
+                  maxLength: 140
+                streetNo:
+                  anyOf:
+                    - type: 'string'
+                      maxLength: 20
+                    - const: ''
+                postalCode:
+                  type: 'string'
+                  pattern: '^[1-9]\d{3}$'
+                city:
+                  type: 'string'
+                  minLength: 2
+                  maxLength: 80
+                vatNumber:
+                  anyOf:
+                    - type: 'string'
+                      maxLength: 40
+                    - const: ''
+                iban:
+                  anyOf:
+                    - type: 'string'
+                      maxLength: 40
+                    - const: ''
+                qrIban:
+                  anyOf:
+                    - type: 'string'
+                      maxLength: 40
+                    - const: ''
+                bankName:
+                  anyOf:
+                    - type: 'string'
+                      maxLength: 120
+                    - const: ''
+                logoUrl:
+                  anyOf:
+                    - type: 'string'
+                      format: 'uri'
+                      maxLength: 300
+                    - const: ''
+                logoDarkUrl:
+                  anyOf:
+                    - type: 'string'
+                      format: 'uri'
+                      maxLength: 300
+                    - const: ''
+                faviconUrl:
+                  anyOf:
+                    - type: 'string'
+                      format: 'uri'
+                      maxLength: 300
+                    - const: ''
+                mapsUrl:
+                  anyOf:
+                    - type: 'string'
+                      format: 'uri'
+                      maxLength: 300
+                    - const: ''
+                facebookUrl:
+                  anyOf:
+                    - type: 'string'
+                      format: 'uri'
+                      maxLength: 300
+                    - const: ''
+                instagramUrl:
+                  anyOf:
+                    - type: 'string'
+                      format: 'uri'
+                      maxLength: 300
+                    - const: ''
+                linkedinUrl:
+                  anyOf:
+                    - type: 'string'
+                      format: 'uri'
+                      maxLength: 300
+                    - const: ''
+                tiktokUrl:
+                  anyOf:
+                    - type: 'string'
+                      format: 'uri'
+                      maxLength: 300
+                    - const: ''
+                youtubeUrl:
+                  anyOf:
+                    - type: 'string'
+                      format: 'uri'
+                      maxLength: 300
+                    - const: ''
+              required:
+                - 'name'
+                - 'legalName'
+                - 'email'
+                - 'phone'
+                - 'whatsapp'
+                - 'website'
+                - 'street'
+                - 'streetNo'
+                - 'postalCode'
+                - 'city'
+                - 'vatNumber'
+                - 'iban'
+                - 'qrIban'
+                - 'bankName'
+                - 'logoUrl'
+                - 'logoDarkUrl'
+                - 'faviconUrl'
+                - 'mapsUrl'
+                - 'facebookUrl'
+                - 'instagramUrl'
+                - 'linkedinUrl'
+                - 'tiktokUrl'
+                - 'youtubeUrl'
+      responses:
+        '200':
+          description: 'Erfolg'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/SuccessEnvelope'
+        '400':
+          description: 'VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 'UNAUTHORIZED — keine oder abgelaufene Sitzung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 'FORBIDDEN — angemeldet, aber ohne die nötige Berechtigung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: 'BUSINESS_RULE — fachlich nicht zulässig, etwa eine bereits ausgestellte Rechnung ändern.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: 'RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+  '/api/opening-hours':
+    get:
+      tags:
+        - 'System'
+      summary: 'Öffnungszeiten abrufen'
+      description: |-
+          Sieben Zeilen, Sonntag bis Samstag.
+
+          **Zugriff:** Erfordert die Berechtigung: `company:read`.
+
+          **Rate-Limit-Klasse:** `apiRead`
+      operationId: 'getOpeningHours'
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: 'Erfolg'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/SuccessEnvelope'
+        '401':
+          description: 'UNAUTHORIZED — keine oder abgelaufene Sitzung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 'FORBIDDEN — angemeldet, aber ohne die nötige Berechtigung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: 'RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+    put:
+      tags:
+        - 'System'
+      summary: 'Öffnungszeiten setzen'
+      description: |-
+          PUT statt PATCH: der Körper beschreibt den vollständigen gewünschten Wochenplan. Einzelne Tage zu pflegen wären sieben Anfragen, von denen jede für sich fehlschlagen könnte.
+
+          **Zugriff:** Erfordert die Berechtigung: `company:update`.
+
+          **Rate-Limit-Klasse:** `apiWrite`
+      operationId: 'putOpeningHours'
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: 'Erfolg'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/SuccessEnvelope'
+        '401':
+          description: 'UNAUTHORIZED — keine oder abgelaufene Sitzung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 'FORBIDDEN — angemeldet, aber ohne die nötige Berechtigung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: 'BUSINESS_RULE — fachlich nicht zulässig, etwa eine bereits ausgestellte Rechnung ändern.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: 'RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+  '/api/suppliers':
+    get:
+      tags:
+        - 'Finanzen'
+      summary: 'Lieferanten auflisten'
+      description: |-
+          Mit der Zahl der darauf gebuchten Ausgaben.
+
+          **Zugriff:** Erfordert die Berechtigung: `supplier:read`.
+
+          **Rate-Limit-Klasse:** `apiRead`
+      operationId: 'getSuppliers'
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: 'Erfolg'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/SuccessEnvelope'
+        '401':
+          description: 'UNAUTHORIZED — keine oder abgelaufene Sitzung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 'FORBIDDEN — angemeldet, aber ohne die nötige Berechtigung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: 'RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+    post:
+      tags:
+        - 'Finanzen'
+      summary: 'Lieferant erfassen'
+      description: |-
+          Ein neu erfasster Lieferant ist aktiv.
+
+          **Zugriff:** Erfordert die Berechtigung: `supplier:create`.
+
+          **Rate-Limit-Klasse:** `apiWrite`
+      operationId: 'postSuppliers'
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          'application/json':
+            schema:
+              type: 'object'
+              properties:
+                name:
+                  type: 'string'
+                  minLength: 2
+                  maxLength: 140
+                contactName:
+                  type: 'string'
+                  maxLength: 120
+                email:
+                  anyOf:
+                    - type: 'string'
+                      format: 'email'
+                    - const: ''
+                phone:
+                  type: 'string'
+                  maxLength: 30
+                street:
+                  type: 'string'
+                  maxLength: 120
+                postalCode:
+                  type: 'string'
+                  maxLength: 10
+                city:
+                  type: 'string'
+                  maxLength: 80
+                country:
+                  type: 'string'
+                  default: 'CH'
+                vatNumber:
+                  type: 'string'
+                  maxLength: 40
+                iban:
+                  type: 'string'
+                  maxLength: 40
+                paymentTermDays:
+                  type: 'integer'
+                  minimum: 0
+                  maximum: 180
+                  default: 30
+                notes:
+                  type: 'string'
+                  maxLength: 2000
+              required:
+                - 'name'
+                - 'email'
+      responses:
+        '201':
+          description: 'Erfolg'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/SuccessEnvelope'
+        '400':
+          description: 'VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 'UNAUTHORIZED — keine oder abgelaufene Sitzung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 'FORBIDDEN — angemeldet, aber ohne die nötige Berechtigung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '409':
+          description: 'CONFLICT — verstösst gegen eine Eindeutigkeitsregel.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: 'BUSINESS_RULE — fachlich nicht zulässig, etwa eine bereits ausgestellte Rechnung ändern.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: 'RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+  '/api/suppliers/{id}':
+    patch:
+      tags:
+        - 'Finanzen'
+      summary: 'Lieferant ändern'
+      description: |-
+          Teil-Update. Mit active=false wird der Lieferant stillgelegt, ohne Belege zu verlieren.
+
+          **Zugriff:** Erfordert die Berechtigung: `supplier:update`.
+
+          **Rate-Limit-Klasse:** `apiWrite`
+      operationId: 'patchSuppliersById'
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: 'id'
+          in: 'path'
+          required: true
+          schema:
+            type: 'string'
+            minLength: 1
+      responses:
+        '200':
+          description: 'Erfolg'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/SuccessEnvelope'
+        '400':
+          description: 'VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 'UNAUTHORIZED — keine oder abgelaufene Sitzung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 'FORBIDDEN — angemeldet, aber ohne die nötige Berechtigung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: 'NOT_FOUND — nicht vorhanden, oder für diese Sitzung nicht sichtbar.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: 'BUSINESS_RULE — fachlich nicht zulässig, etwa eine bereits ausgestellte Rechnung ändern.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: 'RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+    delete:
+      tags:
+        - 'Finanzen'
+      summary: 'Lieferant löschen'
+      description: |-
+          Nur ohne gebuchte Ausgaben. Eine Ausgabe ohne ihren Lieferanten liesse sich in der Buchhaltung nicht mehr zuordnen — setzen Sie ihn stattdessen auf inaktiv.
+
+          **Zugriff:** Erfordert die Berechtigung: `supplier:delete`.
+
+          **Rate-Limit-Klasse:** `apiWrite`
+      operationId: 'deleteSuppliersById'
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: 'id'
+          in: 'path'
+          required: true
+          schema:
+            type: 'string'
+            minLength: 1
+      responses:
+        '204':
+          description: 'Erfolg'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/SuccessEnvelope'
+        '400':
+          description: 'VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 'UNAUTHORIZED — keine oder abgelaufene Sitzung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 'FORBIDDEN — angemeldet, aber ohne die nötige Berechtigung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: 'NOT_FOUND — nicht vorhanden, oder für diese Sitzung nicht sichtbar.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: 'BUSINESS_RULE — fachlich nicht zulässig, etwa eine bereits ausgestellte Rechnung ändern.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: 'RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+  '/api/payments':
+    get:
+      tags:
+        - 'Finanzen'
+      summary: 'Zahlungseingänge auflisten'
+      description: |-
+          Sortiert nach Erfassung, nicht nach Zahlungsdatum — erfasst wird auch, was noch nicht bezahlt ist. Enthält Zahlungen mit und ohne Rechnungsbezug.
+
+          **Zugriff:** Erfordert die Berechtigung: `payment:read`.
+
+          **Rate-Limit-Klasse:** `apiRead`
+      operationId: 'getPayments'
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: 'Erfolg'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/SuccessEnvelope'
+        '401':
+          description: 'UNAUTHORIZED — keine oder abgelaufene Sitzung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 'FORBIDDEN — angemeldet, aber ohne die nötige Berechtigung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: 'RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+  '/api/employees/{id}':
+    get:
+      tags:
+        - 'Personal'
+      summary: 'Personalakte abrufen'
+      description: |-
+          Lohn, AHV-Nummer und Bankverbindung erscheinen nur mit payslip:create. Die Schwelle ist bewusst nicht das Lesen der Akte: wer Einsätze plant und Ferien bewilligt, braucht die Zahlen nicht. Es sind besonders schützenswerte Personendaten nach DSG.
+
+          **Zugriff:** Erfordert die Berechtigung: `employee:read`.
+
+          **Rate-Limit-Klasse:** `apiRead`
+      operationId: 'getEmployeesById'
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: 'id'
+          in: 'path'
+          required: true
+          schema:
+            type: 'string'
+            minLength: 1
+      responses:
+        '200':
+          description: 'Erfolg'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/SuccessEnvelope'
+        '400':
+          description: 'VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 'UNAUTHORIZED — keine oder abgelaufene Sitzung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 'FORBIDDEN — angemeldet, aber ohne die nötige Berechtigung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: 'NOT_FOUND — nicht vorhanden, oder für diese Sitzung nicht sichtbar.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: 'RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+    patch:
+      tags:
+        - 'Personal'
+      summary: 'Personalakte ändern'
+      description: |-
+          Stammdaten, Pensum, Qualifikationen und Lohnangaben.
+
+          **Zugriff:** Erfordert die Berechtigung: `employee:update`.
+
+          **Rate-Limit-Klasse:** `apiWrite`
+      operationId: 'patchEmployeesById'
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: 'id'
+          in: 'path'
+          required: true
+          schema:
+            type: 'string'
+            minLength: 1
+      requestBody:
+        required: true
+        content:
+          'application/json':
+            schema:
+              type: 'object'
+              properties:
+                firstName:
+                  type: 'string'
+                  minLength: 2
+                  maxLength: 80
+                lastName:
+                  type: 'string'
+                  minLength: 2
+                  maxLength: 80
+                email:
+                  type: 'string'
+                  format: 'email'
+                phone:
+                  type: 'string'
+                  maxLength: 30
+                role:
+                  type: 'string'
+                  enum:
+                    - 'ADMIN'
+                    - 'MANAGER'
+                    - 'EMPLOYEE'
+                  default: 'EMPLOYEE'
+                employmentType:
+                  type: 'string'
+                  enum:
+                    - 'FULL_TIME'
+                    - 'PART_TIME'
+                    - 'HOURLY'
+                    - 'TEMPORARY'
+                    - 'APPRENTICE'
+                    - 'CONTRACTOR'
+                  default: 'FULL_TIME'
+                position:
+                  type: 'string'
+                  maxLength: 80
+                  default: 'Reinigungskraft'
+                department:
+                  type: 'string'
+                  maxLength: 80
+                hiredAt:
+                  type: 'string'
+                  pattern: '^\d{4}-\d{2}-\d{2}$'
+                hourlyRate:
+                  type: 'number'
+                  minimum: 0
+                  maximum: 9999999
+                monthlySalary:
+                  type: 'number'
+                  minimum: 0
+                  maximum: 9999999
+                workloadPct:
+                  type: 'integer'
+                  minimum: 10
+                  maximum: 100
+                  default: 100
+                vacationDaysPerYear:
+                  type: 'number'
+                  minimum: 0
+                  maximum: 60
+                  default: 20
+                ahvNumber:
+                  type: 'string'
+                  pattern: '^756\.\d{4}\.\d{4}\.\d{2}$'
+                iban:
+                  type: 'string'
+                  maxLength: 40
+                nationality:
+                  type: 'string'
+                  maxLength: 60
+                permitType:
+                  type: 'string'
+                  enum:
+                    - 'CH'
+                    - 'B'
+                    - 'C'
+                    - 'G'
+                    - 'L'
+                    - 'F'
+                    - 'N'
+                permitValidUntil:
+                  type: 'string'
+                  pattern: '^\d{4}-\d{2}-\d{2}$'
+                emergencyContact:
+                  type: 'string'
+                  maxLength: 120
+                emergencyPhone:
+                  type: 'string'
+                  maxLength: 30
+                driverLicense:
+                  type: 'boolean'
+                  default: false
+                vehiclePlate:
+                  type: 'string'
+                  maxLength: 20
+                languages:
+                  type: 'array'
+                  items:
+                    type: 'string'
+                    enum:
+                      - 'DE'
+                      - 'EN'
+                      - 'FR'
+                      - 'IT'
+                  default:
+                    - 'DE'
+                color:
+                  type: 'string'
+                  pattern: '^#[0-9a-fA-F]{6}$'
+                  default: '#0B7285'
+                sendInvite:
+                  type: 'boolean'
+                  default: true
+                active:
+                  type: 'boolean'
+                terminatedAt:
+                  type: 'string'
+                  pattern: '^\d{4}-\d{2}-\d{2}$'
       responses:
         '200':
           description: 'Erfolg'

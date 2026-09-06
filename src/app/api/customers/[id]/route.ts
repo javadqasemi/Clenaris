@@ -1,5 +1,7 @@
 import { defineRoute, idParam } from '@/lib/api/handler';
-import { noContent } from '@/lib/api/response';
+import { getCustomerDetail, updateCustomer } from '@/server/services/crm.service';
+import { updateCustomerSchema } from '@/lib/validation/crm';
+import { noContent, ok } from '@/lib/api/response';
 import { softDelete } from '@/server/services/trash.service';
 import { getOrganizationId } from '@/server/services/organization.service';
 
@@ -26,5 +28,36 @@ export const DELETE = defineRoute({
       params.id,
     );
     return noContent();
+  },
+});
+
+/** GET /api/customers/:id — vollständige Kundenakte. */
+export const GET = defineRoute({
+  permissions: ['customer:read'],
+  params: idParam,
+  rateLimit: 'apiRead',
+  handler: async ({ params }) =>
+    ok(
+      await getCustomerDetail({
+        organizationId: await getOrganizationId(),
+        customerId: params.id,
+      }),
+    ),
+});
+
+/** PATCH /api/customers/:id — Stammdaten, Konditionen und Notizen ändern. */
+export const PATCH = defineRoute({
+  permissions: ['customer:update'],
+  params: idParam,
+  body: updateCustomerSchema,
+  rateLimit: 'apiWrite',
+  handler: async ({ params, body, session }) => {
+    const customer = await updateCustomer({
+      organizationId: await getOrganizationId(),
+      customerId: params.id,
+      input: body,
+      actorId: session.id,
+    });
+    return ok({ id: customer.id, number: customer.number });
   },
 });

@@ -12,6 +12,7 @@ import * as files from '@/lib/validation/files';
 import * as cms from '@/lib/validation/cms';
 import * as catalog from '@/lib/validation/catalog';
 import * as cta from '@/lib/validation/cta';
+import * as website from '@/lib/validation/website';
 import * as users from '@/lib/validation/users';
 import * as q from '@/lib/validation/queries';
 
@@ -1974,6 +1975,320 @@ export const ROUTES: RouteDoc[] = [
     rateLimit: 'apiWrite',
     params: q.idParam,
     extraErrors: [422],
+  },
+
+  // -------------------------------------------------------------------------
+  //  Website: Fragen, Galerie, Stellen
+  // -------------------------------------------------------------------------
+  {
+    method: 'get',
+    path: '/api/faq',
+    tag: 'Website',
+    summary: 'Häufige Fragen auflisten',
+    description: 'Alle Fragen, auch abgeschaltete, gruppiert nach Kategorie.',
+    guard: perm('all', 'faq:read'),
+    rateLimit: 'apiRead',
+  },
+  {
+    method: 'post',
+    path: '/api/faq',
+    tag: 'Website',
+    summary: 'Frage anlegen',
+    description: 'Erscheint nach dem Speichern auf /faq und auf der Startseite.',
+    guard: perm('all', 'faq:create'),
+    rateLimit: 'apiWrite',
+    body: website.createFaqSchema,
+    status: 201,
+  },
+  {
+    method: 'patch',
+    path: '/api/faq/{id}',
+    tag: 'Website',
+    summary: 'Frage ändern',
+    description: 'Teil-Update von Frage, Antwort, Kategorie und Sichtbarkeit.',
+    guard: perm('all', 'faq:update'),
+    rateLimit: 'apiWrite',
+    params: q.idParam,
+    body: website.updateFaqSchema,
+  },
+  {
+    method: 'delete',
+    path: '/api/faq/{id}',
+    tag: 'Website',
+    summary: 'Frage löschen',
+    description: 'Endgültig — eine Frage ist schnell neu erfasst.',
+    guard: perm('all', 'faq:delete'),
+    rateLimit: 'apiWrite',
+    params: q.idParam,
+    status: 204,
+  },
+  {
+    method: 'get',
+    path: '/api/gallery',
+    tag: 'Website',
+    summary: 'Galerie auflisten',
+    description: 'Alle Vorher-/Nachher-Einträge, auch unveröffentlichte.',
+    guard: perm('all', 'gallery:read'),
+    rateLimit: 'apiRead',
+  },
+  {
+    method: 'post',
+    path: '/api/gallery',
+    tag: 'Website',
+    summary: 'Galerieeintrag anlegen',
+    description:
+      'Vorher und Nachher müssen verschiedene Bilder sein — sonst zeigt der Schieberegler auf ' +
+      'der Startseite nichts. Beide Adressen müssen über https ausgeliefert werden.',
+    guard: perm('all', 'gallery:create'),
+    rateLimit: 'apiWrite',
+    body: website.createGalleryItemSchema,
+    status: 201,
+  },
+  {
+    method: 'patch',
+    path: '/api/gallery/{id}',
+    tag: 'Website',
+    summary: 'Galerieeintrag ändern',
+    description:
+      'Teil-Update. Die Bildgleichheit wird gegen den gespeicherten Stand geprüft, damit sich ' +
+      'nicht ein Bild auf das andere setzen lässt.',
+    guard: perm('all', 'gallery:update'),
+    rateLimit: 'apiWrite',
+    params: q.idParam,
+    body: website.updateGalleryItemSchema,
+    extraErrors: [422],
+  },
+  {
+    method: 'delete',
+    path: '/api/gallery/{id}',
+    tag: 'Website',
+    summary: 'Galerieeintrag löschen',
+    description: 'Endgültig. Die Bilddateien liegen in der Mediathek und bleiben bestehen.',
+    guard: perm('all', 'gallery:delete'),
+    rateLimit: 'apiWrite',
+    params: q.idParam,
+    status: 204,
+  },
+  {
+    method: 'post',
+    path: '/api/website/reorder',
+    tag: 'Website',
+    summary: 'Reihenfolge von Fragen oder Galeriebildern setzen',
+    description:
+      'Übergeben wird die Reihenfolge als Liste von IDs; die Positionen vergibt der Server aus ' +
+      'dem Index.',
+    guard: perm('any', 'faq:update', 'gallery:update'),
+    rateLimit: 'apiWrite',
+    body: website.websiteReorderSchema,
+  },
+  {
+    method: 'get',
+    path: '/api/job-postings',
+    tag: 'Personal',
+    summary: 'Stellenangebote auflisten',
+    description: 'Mit der Zahl der eingegangenen Bewerbungen je Angebot.',
+    guard: perm('all', 'jobPosting:read'),
+    rateLimit: 'apiRead',
+  },
+  {
+    method: 'post',
+    path: '/api/job-postings',
+    tag: 'Personal',
+    summary: 'Stellenangebot anlegen',
+    description:
+      'Das Veröffentlichungsdatum entsteht beim Veröffentlichen, nicht beim Anlegen — ein ' +
+      'Entwurf hat keines.',
+    guard: perm('all', 'jobPosting:create'),
+    rateLimit: 'apiWrite',
+    body: website.createJobPostingSchema,
+    status: 201,
+    extraErrors: [409],
+  },
+  {
+    method: 'patch',
+    path: '/api/job-postings/{id}',
+    tag: 'Personal',
+    summary: 'Stellenangebot ändern',
+    description:
+      'Das Veröffentlichungsdatum wird beim ersten Veröffentlichen gesetzt und danach nicht ' +
+      'mehr geändert — sonst rutschte die Anzeige bei jeder Korrektur in Stellenportalen nach ' +
+      'oben, als wäre sie neu.',
+    guard: perm('all', 'jobPosting:update'),
+    rateLimit: 'apiWrite',
+    params: q.idParam,
+    body: website.updateJobPostingSchema,
+    extraErrors: [409],
+  },
+  {
+    method: 'delete',
+    path: '/api/job-postings/{id}',
+    tag: 'Personal',
+    summary: 'Stellenangebot löschen',
+    description:
+      'Nur ohne Bewerbungen. Bewerbungen sind Personendaten mit Auskunftsanspruch; ohne die ' +
+      'zugehörige Stelle liessen sie sich nicht mehr erklären. Archivieren Sie stattdessen.',
+    guard: perm('all', 'jobPosting:delete'),
+    rateLimit: 'apiWrite',
+    params: q.idParam,
+    status: 204,
+    extraErrors: [422],
+  },
+
+  // -------------------------------------------------------------------------
+  //  Firmendaten und Öffnungszeiten
+  // -------------------------------------------------------------------------
+  {
+    method: 'get',
+    path: '/api/company',
+    tag: 'System',
+    summary: 'Firmendaten abrufen',
+    description: 'Stammdaten samt Öffnungszeiten.',
+    guard: perm('all', 'company:read'),
+    rateLimit: 'apiRead',
+  },
+  {
+    method: 'patch',
+    path: '/api/company',
+    tag: 'System',
+    summary: 'Firmendaten ändern',
+    description:
+      'IBAN und QR-IBAN werden gegen die Prüfziffer nach ISO 13616 geprüft. Eine falsche Nummer ' +
+      'fiele sonst erst auf, wenn eine Kundschaft die erste Rechnung nicht bezahlen kann — und ' +
+      'stünde dann bereits auf ausgestellten, unveränderlichen Belegen.',
+    guard: perm('all', 'company:update'),
+    rateLimit: 'apiWrite',
+    body: cms.updateCompanySchema,
+    extraErrors: [422],
+  },
+  {
+    method: 'get',
+    path: '/api/opening-hours',
+    tag: 'System',
+    summary: 'Öffnungszeiten abrufen',
+    description: 'Sieben Zeilen, Sonntag bis Samstag.',
+    guard: perm('all', 'company:read'),
+    rateLimit: 'apiRead',
+  },
+  {
+    method: 'put',
+    path: '/api/opening-hours',
+    tag: 'System',
+    summary: 'Öffnungszeiten setzen',
+    description:
+      'PUT statt PATCH: der Körper beschreibt den vollständigen gewünschten Wochenplan. Einzelne ' +
+      'Tage zu pflegen wären sieben Anfragen, von denen jede für sich fehlschlagen könnte.',
+    guard: perm('all', 'company:update'),
+    rateLimit: 'apiWrite',
+    extraErrors: [422],
+  },
+
+  // -------------------------------------------------------------------------
+  //  Lieferanten und Zahlungen
+  // -------------------------------------------------------------------------
+  {
+    method: 'get',
+    path: '/api/suppliers',
+    tag: 'Finanzen',
+    summary: 'Lieferanten auflisten',
+    description: 'Mit der Zahl der darauf gebuchten Ausgaben.',
+    guard: perm('all', 'supplier:read'),
+    rateLimit: 'apiRead',
+  },
+  {
+    method: 'post',
+    path: '/api/suppliers',
+    tag: 'Finanzen',
+    summary: 'Lieferant erfassen',
+    description: 'Ein neu erfasster Lieferant ist aktiv.',
+    guard: perm('all', 'supplier:create'),
+    rateLimit: 'apiWrite',
+    body: finance.createSupplierSchema,
+    status: 201,
+  },
+  {
+    method: 'patch',
+    path: '/api/suppliers/{id}',
+    tag: 'Finanzen',
+    summary: 'Lieferant ändern',
+    description:
+      'Teil-Update. Mit active=false wird der Lieferant stillgelegt, ohne Belege zu verlieren.',
+    guard: perm('all', 'supplier:update'),
+    rateLimit: 'apiWrite',
+    params: q.idParam,
+  },
+  {
+    method: 'delete',
+    path: '/api/suppliers/{id}',
+    tag: 'Finanzen',
+    summary: 'Lieferant löschen',
+    description:
+      'Nur ohne gebuchte Ausgaben. Eine Ausgabe ohne ihren Lieferanten liesse sich in der ' +
+      'Buchhaltung nicht mehr zuordnen — setzen Sie ihn stattdessen auf inaktiv.',
+    guard: perm('all', 'supplier:delete'),
+    rateLimit: 'apiWrite',
+    params: q.idParam,
+    status: 204,
+    extraErrors: [422],
+  },
+  {
+    method: 'get',
+    path: '/api/payments',
+    tag: 'Finanzen',
+    summary: 'Zahlungseingänge auflisten',
+    description:
+      'Sortiert nach Erfassung, nicht nach Zahlungsdatum — erfasst wird auch, was noch nicht ' +
+      'bezahlt ist. Enthält Zahlungen mit und ohne Rechnungsbezug.',
+    guard: perm('all', 'payment:read'),
+    rateLimit: 'apiRead',
+  },
+
+  // -------------------------------------------------------------------------
+  //  Kundschaft und Personal: Detail und Änderung
+  // -------------------------------------------------------------------------
+  {
+    method: 'get',
+    path: '/api/customers/{id}',
+    tag: 'CRM',
+    summary: 'Kundenakte abrufen',
+    description: 'Stammdaten, Adressen, Objekte, Buchungen, Rechnungen und Zeitachse.',
+    guard: perm('all', 'customer:read'),
+    rateLimit: 'apiRead',
+    params: q.idParam,
+  },
+  {
+    method: 'patch',
+    path: '/api/customers/{id}',
+    tag: 'CRM',
+    summary: 'Kundenakte ändern',
+    description: 'Stammdaten, Konditionen und interne Notizen.',
+    guard: perm('all', 'customer:update'),
+    rateLimit: 'apiWrite',
+    params: q.idParam,
+    body: crm.updateCustomerSchema,
+  },
+  {
+    method: 'get',
+    path: '/api/employees/{id}',
+    tag: 'Personal',
+    summary: 'Personalakte abrufen',
+    description:
+      'Lohn, AHV-Nummer und Bankverbindung erscheinen nur mit payslip:create. Die Schwelle ist ' +
+      'bewusst nicht das Lesen der Akte: wer Einsätze plant und Ferien bewilligt, braucht die ' +
+      'Zahlen nicht. Es sind besonders schützenswerte Personendaten nach DSG.',
+    guard: perm('all', 'employee:read'),
+    rateLimit: 'apiRead',
+    params: q.idParam,
+  },
+  {
+    method: 'patch',
+    path: '/api/employees/{id}',
+    tag: 'Personal',
+    summary: 'Personalakte ändern',
+    description: 'Stammdaten, Pensum, Qualifikationen und Lohnangaben.',
+    guard: perm('all', 'employee:update'),
+    rateLimit: 'apiWrite',
+    params: q.idParam,
+    body: operations.updateEmployeeSchema,
   },
 
   // -------------------------------------------------------------------------
