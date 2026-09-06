@@ -1,5 +1,7 @@
+import { z } from 'zod';
+
 import { defineRoute } from '@/lib/api/handler';
-import { created } from '@/lib/api/response';
+import { created, ok } from '@/lib/api/response';
 import { prisma } from '@/lib/db';
 import { slugify } from '@/lib/utils';
 import { audit } from '@/lib/audit';
@@ -74,5 +76,49 @@ export const POST = defineRoute({
     });
 
     return created({ id: post.id, slug: post.slug, status: post.status });
+  },
+});
+
+const listQuery = z.object({
+  status: z.enum(['DRAFT', 'SCHEDULED', 'PUBLISHED', 'ARCHIVED']).optional(),
+  q: z.string().trim().max(120).optional(),
+});
+
+/**
+ * GET /api/blog — alle Beiträge, auch Entwürfe.
+ *
+ * Ohne Blätterung: ein Reinigungsbetrieb schreibt keine tausend Artikel, und
+ * die Redaktion sucht meist den einen, an dem sie gerade arbeitet.
+ */
+export const GET = defineRoute({
+  permissions: ['blog:read'],
+  query: listQuery,
+  rateLimit: 'apiRead',
+  handler: async ({ query }) => {
+    const organizationId = await getOrganizationId();
+    return ok(
+      await prisma.blogPost.findMany({
+        where: {
+          organizationId,
+          ...(query.status ? { status: query.status } : {}),
+          ...(query.q ? { title: { contains: query.q, mode: 'insensitive' } } : {}),
+        },
+        orderBy: [{ status: 'asc' }, { publishedAt: 'desc' }, { createdAt: 'desc' }],
+        select: {
+          id: true,
+          slug: true,
+          title: true,
+          excerpt: true,
+          status: true,
+          coverImage: true,
+          readingMinutes: true,
+          viewCount: true,
+          publishedAt: true,
+          updatedAt: true,
+          category: { select: { name: true } },
+          author: { select: { firstName: true, lastName: true } },
+        },
+      }),
+    );
   },
 });

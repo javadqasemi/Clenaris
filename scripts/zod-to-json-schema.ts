@@ -101,6 +101,18 @@ export function zodToJsonSchema(input: ZodTypeAny): JsonSchema {
     case Kind.ZodNullable:
       return zodToJsonSchema(def.innerType);
 
+    /**
+     * `z.null()` als eigenständiger Zweig einer Vereinigung.
+     *
+     * Kommt dort vor, wo ein Feld leer sein darf und die Datenbank NULL
+     * liefert — etwa bei den freiwilligen Firmenangaben. In JSON Schema ist
+     * das schlicht `type: 'null'`; ohne diesen Fall bräche die Erzeugung ab,
+     * was hier Absicht ist: ein stillschweigend ausgelassenes Feld wäre eine
+     * Dokumentation, die lügt.
+     */
+    case Kind.ZodNull:
+      return described({ type: 'null' });
+
     case Kind.ZodDefault:
       return { ...zodToJsonSchema(def.innerType), default: def.defaultValue() };
 

@@ -2631,6 +2631,241 @@ export const ROUTES: RouteDoc[] = [
   },
 
   // -------------------------------------------------------------------------
+  //  Blog, Objekte, Buchungen, Abwesenheiten, Bewerbungen, Einstellungen
+  // -------------------------------------------------------------------------
+  {
+    method: 'get',
+    path: '/api/blog',
+    tag: 'Website',
+    summary: 'Beiträge auflisten',
+    description: 'Alle Beiträge, auch Entwürfe. Ohne Blätterung — ein Reinigungsbetrieb schreibt keine tausend Artikel.',
+    guard: perm('all', 'blog:read'),
+    rateLimit: 'apiRead',
+  },
+  {
+    method: 'get',
+    path: '/api/blog/{id}',
+    tag: 'Website',
+    summary: 'Beitrag abrufen',
+    description: 'Ein Beitrag samt Entwurfsfassung, Kategorie und Autorin.',
+    guard: perm('all', 'blog:read'),
+    rateLimit: 'apiRead',
+    params: q.idParam,
+  },
+  {
+    method: 'patch',
+    path: '/api/blog/{id}',
+    tag: 'Website',
+    summary: 'Beitrag ändern',
+    description:
+      'Der Statuswechsel verlangt zusätzlich blog:publish — wer Texte redigiert, muss nicht auch ' +
+      'veröffentlichen dürfen. Das Veröffentlichungsdatum entsteht beim ersten Veröffentlichen ' +
+      'und ändert sich danach nicht: sonst rutschte ein Beitrag bei jeder Korrektur im Feed und ' +
+      'in Suchmaschinen nach oben, als wäre er neu.',
+    guard: perm('all', 'blog:update'),
+    rateLimit: 'apiWrite',
+    params: q.idParam,
+    extraErrors: [422],
+  },
+  {
+    method: 'delete',
+    path: '/api/blog/{id}',
+    tag: 'Website',
+    summary: 'Beitrag löschen',
+    description:
+      'Ein veröffentlichter Beitrag wird archiviert, nicht gelöscht: seine Adresse ist verlinkt ' +
+      'und möglicherweise indexiert. Entwürfe lassen sich entfernen.',
+    guard: perm('all', 'blog:delete'),
+    rateLimit: 'apiWrite',
+    params: q.idParam,
+    status: 204,
+    extraErrors: [422],
+  },
+  {
+    method: 'get',
+    path: '/api/properties',
+    tag: 'CRM',
+    summary: 'Objekte auflisten',
+    description:
+      'Property trägt kein organizationId — die Zugehörigkeit erbt es von der Kundschaft; der ' +
+      'Mandantenfilter läuft über die Beziehung. Der Alarmcode erscheint nicht in der Liste: er ' +
+      'gehört auf den Einsatzrapport der zugewiesenen Person.',
+    guard: perm('all', 'property:read'),
+    rateLimit: 'apiRead',
+  },
+  {
+    method: 'post',
+    path: '/api/properties',
+    tag: 'CRM',
+    summary: 'Objekt erfassen',
+    description:
+      'Eine bestehende Adresse wird gegen die Kundschaft geprüft — ohne das liesse sich ein ' +
+      'Objekt an eine fremde Adresse hängen, und der Einsatzrapport führte das Team dorthin.',
+    guard: perm('all', 'property:create'),
+    rateLimit: 'apiWrite',
+    status: 201,
+  },
+  {
+    method: 'get',
+    path: '/api/bookings',
+    tag: 'Buchungen',
+    summary: 'Buchungen auflisten',
+    description:
+      'Die Kundensicht auf einen Auftrag. Die Betriebssicht steht unter /api/jobs: eine Buchung ' +
+      'kann mehrere Einsätze erzeugen, und ein Einsatz kann ohne Buchung bestehen.',
+    guard: perm('all', 'booking:read'),
+    rateLimit: 'apiRead',
+  },
+  {
+    method: 'get',
+    path: '/api/absences',
+    tag: 'Personal',
+    summary: 'Abwesenheiten auflisten',
+    description:
+      'Mitarbeitende sehen ausschliesslich die eigenen. Das ist keine Bequemlichkeit: wer wann ' +
+      'in den Ferien war, ist eine Personalangabe und geht die Kolleginnen und Kollegen nichts an.',
+    guard: perm('any', 'absence:read_all', 'absence:request'),
+    rateLimit: 'apiRead',
+  },
+  {
+    method: 'patch',
+    path: '/api/invoices/{id}',
+    tag: 'Finanzen',
+    summary: 'Rechnungsentwurf ändern',
+    description:
+      'Nur Entwürfe. Eine ausgestellte Rechnung ist ein Beleg: Betrag, Datum und Nummer sind ab ' +
+      'dem Ausstellen unveränderlich, weil die Buchhaltung darauf aufbaut und die Kundschaft sie ' +
+      'erhalten hat. Korrigiert wird über eine Gutschrift.',
+    guard: perm('all', 'invoice:update'),
+    rateLimit: 'apiWrite',
+    params: q.idParam,
+    extraErrors: [422],
+  },
+  {
+    method: 'delete',
+    path: '/api/applications/{id}',
+    tag: 'Personal',
+    summary: 'Bewerbung löschen',
+    description:
+      'Bewerbungsunterlagen sind Personendaten. Nach DSG dürfen sie nur so lange aufbewahrt ' +
+      'werden, wie es der Zweck erfordert — nach einer Absage sind das wenige Monate. Das ' +
+      'Löschen ist deshalb ausdrücklich vorgesehen und nicht durch eine Aufbewahrungsregel ' +
+      'gesperrt. Angehängte Dateien gehen über die Kaskade mit.',
+    guard: perm('all', 'application:delete'),
+    rateLimit: 'apiWrite',
+    params: q.idParam,
+    status: 204,
+  },
+  {
+    method: 'get',
+    path: '/api/settings',
+    tag: 'System',
+    summary: 'Betriebseinstellungen',
+    description:
+      'Vorlaufzeiten, Stornofristen, Mahnwesen, Bewertungsanfragen. Fehlende Schlüssel liefern ' +
+      'den Auslieferungswert.',
+    guard: perm('all', 'settings:read'),
+    rateLimit: 'apiRead',
+  },
+  {
+    method: 'patch',
+    path: '/api/settings',
+    tag: 'System',
+    summary: 'Betriebseinstellungen ändern',
+    description:
+      'Teil-Update: gesendet wird nur, was sich ändert. Ein vollständiges Überschreiben würde ' +
+      'bei zwei gleichzeitig geöffneten Masken die Änderung der jeweils anderen still verwerfen. ' +
+      'Das Schema ist streng — ein freies JSON-Feld wäre die Stelle, an der ein Tippfehler im ' +
+      'Schlüssel eine Einstellung wirkungslos macht, ohne dass es jemand bemerkt.',
+    guard: perm('all', 'settings:update'),
+    rateLimit: 'apiWrite',
+  },
+
+  // -------------------------------------------------------------------------
+  //  Zahlungen, Objektdetail, Personalaustritt, Bewerbungsdetail
+  // -------------------------------------------------------------------------
+  {
+    method: 'patch',
+    path: '/api/payments/{id}',
+    tag: 'Finanzen',
+    summary: 'Zahlung korrigieren',
+    description:
+      'Beleg, Notiz und Zahlungsdatum. Der Betrag ist nicht änderbar: er stammt vom ' +
+      'Zahlungsanbieter oder wurde beim Verbuchen gegen den offenen Posten gerechnet. Ihn ' +
+      'nachträglich zu verstellen liesse Rechnungssaldo und Zahlungssumme auseinanderlaufen — ' +
+      'und das fiele erst beim Jahresabschluss auf. Ein falscher Betrag wird storniert und neu ' +
+      'verbucht.',
+    guard: perm('all', 'payment:create'),
+    rateLimit: 'apiWrite',
+    params: q.idParam,
+  },
+  {
+    method: 'delete',
+    path: '/api/payments/{id}',
+    tag: 'Finanzen',
+    summary: 'Zahlung stornieren',
+    description:
+      'Nur von Hand erfasste Zahlungen. Was über Stripe oder Datatrans hereinkam, ist beim ' +
+      'Zahlungsanbieter eine Tatsache; die Zeile zu entfernen hiesse, die eigene Buchhaltung ' +
+      'gegen den Kontoauszug laufen zu lassen. Der offene Posten der Rechnung wird in derselben ' +
+      'Transaktion zurückgesetzt — sonst bliebe sie als bezahlt stehen, obwohl kein Geld da ist.',
+    guard: perm('all', 'payment:delete'),
+    rateLimit: 'apiWrite',
+    params: q.idParam,
+    status: 204,
+    extraErrors: [422],
+  },
+  {
+    method: 'get',
+    path: '/api/properties/{id}',
+    tag: 'CRM',
+    summary: 'Objektakte abrufen',
+    description: 'Objektangaben, Adresse, Kundschaft und die letzten Einsätze.',
+    guard: perm('all', 'property:read'),
+    rateLimit: 'apiRead',
+    params: q.idParam,
+  },
+  {
+    method: 'patch',
+    path: '/api/properties/{id}',
+    tag: 'CRM',
+    summary: 'Objekt ändern',
+    description:
+      'Die Kundschaft lässt sich nicht wechseln: das würde Einsatzhistorie und daran hängende ' +
+      'Rechnungen an die falsche Akte binden. Bei einem Eigentümerwechsel wird ein neues Objekt ' +
+      'erfasst und das alte stillgelegt.',
+    guard: perm('all', 'property:update'),
+    rateLimit: 'apiWrite',
+    params: q.idParam,
+  },
+  {
+    method: 'delete',
+    path: '/api/employees/{id}',
+    tag: 'Personal',
+    summary: 'Mitarbeitende stilllegen',
+    description:
+      'Kein Löschen, sondern inaktiv setzen mit Austrittsdatum; der Zugang wird gesperrt. Eine ' +
+      'Personalakte hängt an Zeiterfassung, Lohnabrechnungen und Einsatzrapporten — sie zu ' +
+      'entfernen risse dort Lücken, die man Jahre später bei einer Lohnprüfung wiederfindet. ' +
+      'Geplante Einsätze müssen vorher umgeteilt werden.',
+    guard: perm('all', 'employee:delete'),
+    rateLimit: 'apiWrite',
+    params: q.idParam,
+    status: 204,
+    extraErrors: [422],
+  },
+  {
+    method: 'get',
+    path: '/api/applications/{id}',
+    tag: 'Personal',
+    summary: 'Bewerbung abrufen',
+    description: 'Angaben zur bewerbenden Person samt hochgeladenen Unterlagen.',
+    guard: perm('all', 'application:read'),
+    rateLimit: 'apiRead',
+    params: q.idParam,
+  },
+
+  // -------------------------------------------------------------------------
   //  System
   // -------------------------------------------------------------------------
   {

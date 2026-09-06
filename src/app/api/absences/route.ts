@@ -1,5 +1,7 @@
 import { defineRoute } from '@/lib/api/handler';
-import { created } from '@/lib/api/response';
+import { prisma } from '@/lib/db';
+import { z } from 'zod';
+import { created, ok } from '@/lib/api/response';
 import { ForbiddenError } from '@/lib/errors';
 import { absenceRequestSchema } from '@/lib/validation/operations';
 import { requestAbsence } from '@/server/services/employee.service';
@@ -32,5 +34,63 @@ export const POST = defineRoute({
     });
 
     return created({ id: absence.id, days: absence.days, status: absence.status });
+  },
+});
+
+const listQuery = z.object({
+  status: z.enum(['REQUESTED', 'APPROVED', 'REJECTED', 'CANCELLED']).optional(),
+  employeeId: z.string().min(1).optional(),
+  from: z.coerce.date().optional(),
+  to: z.coerce.date().optional(),
+});
+
+/**
+ * GET /api/absences — Abwesenheitsgesuche.
+ *
+ * Mitarbeitende sehen ausschliesslich die eigenen. Das ist keine
+ * Bequemlichkeit: wer wann in den Ferien war, ist eine Personalangabe und
+ * geht die Kolleginnen und Kollegen nichts an.
+ */
+export const GET = defineRoute({
+  permissions: ['absence:read_all', 'absence:request'],
+  anyPermission: true,
+  query: listQuery,
+  rateLimit: 'apiRead',
+  handler: async ({ query, session }) => {
+    const { can } = await import('@/lib/auth/rbac');
+    const organizationId = await getOrganizationId();
+    const seesAll = can(session.role, 'absence:read_all');
+
+    return ok(
+      await prisma.absence.findMany({
+        where: {
+          employee: { organizationId },
+          ...(seesAll
+            ? query.employeeId
+              ? { employeeId: query.employeeId }
+              : {}
+            : { employeeId: session.profileId ?? '__keines__' }),
+          ...(query.status ? { status: query.status } : {}),
+          ...(query.from || query.to
+            ? {
+                startDate: {
+                  ...(query.from ? { gte: query.from } : {}),
+                  ...(query.to ? { lte: query.to } : {}),
+                },
+              }
+            : {}),
+        },
+        orderBy: [{ status: 'asc' }, { startDate: 'desc' }],
+        include: {
+          employee: {
+            select: {
+              id: true,
+              employeeNumber: true,
+              user: { select: { firstName: true, lastName: true } },
+            },
+          },
+        },
+      }),
+    );
   },
 });

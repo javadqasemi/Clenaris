@@ -5,7 +5,7 @@
 > Quelle, aus der sowohl diese Referenz als auch die Laufzeitvalidierung
 > stammen.
 
-Stand: 209 Endpunkte. Die maschinenlesbare Fassung liegt in
+Stand: 227 Endpunkte. Die maschinenlesbare Fassung liegt in
 [`openapi.yaml`](./openapi.yaml) bzw. [`openapi.json`](./openapi.json).
 
 ## Grundlagen
@@ -923,6 +923,54 @@ Familie.
 | --- | --- | --- | --- |
 | `id` | string | ja | min. 1 Zeichen |
 
+### `GET /api/properties`
+
+**Objekte auflisten.** Property trägt kein organizationId — die Zugehörigkeit erbt es von der Kundschaft; der Mandantenfilter läuft über die Beziehung. Der Alarmcode erscheint nicht in der Liste: er gehört auf den Einsatzrapport der zugewiesenen Person.
+
+- **Zugriff:** Erfordert die Berechtigung: `property:read`.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 401, 403, 429, 500
+
+### `POST /api/properties`
+
+**Objekt erfassen.** Eine bestehende Adresse wird gegen die Kundschaft geprüft — ohne das liesse sich ein Objekt an eine fremde Adresse hängen, und der Einsatzrapport führte das Team dorthin.
+
+- **Zugriff:** Erfordert die Berechtigung: `property:create`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 201
+- **Mögliche Fehler:** 401, 403, 409, 422, 429, 500
+
+### `GET /api/properties/{id}`
+
+**Objektakte abrufen.** Objektangaben, Adresse, Kundschaft und die letzten Einsätze.
+
+- **Zugriff:** Erfordert die Berechtigung: `property:read`.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+### `PATCH /api/properties/{id}`
+
+**Objekt ändern.** Die Kundschaft lässt sich nicht wechseln: das würde Einsatzhistorie und daran hängende Rechnungen an die falsche Akte binden. Bei einem Eigentümerwechsel wird ein neues Objekt erfasst und das alte stillgelegt.
+
+- **Zugriff:** Erfordert die Berechtigung: `property:update`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
 ## Nachrichten
 
 ### `GET /api/messages`
@@ -1181,6 +1229,15 @@ Familie.
 | Feld | Typ | Pflicht | Regeln |
 | --- | --- | --- | --- |
 | `id` | string | ja | min. 1 Zeichen |
+
+### `GET /api/bookings`
+
+**Buchungen auflisten.** Die Kundensicht auf einen Auftrag. Die Betriebssicht steht unter /api/jobs: eine Buchung kann mehrere Einsätze erzeugen, und ein Einsatz kann ohne Buchung bestehen.
+
+- **Zugriff:** Erfordert die Berechtigung: `booking:read`.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 401, 403, 429, 500
 
 ## Offerten
 
@@ -2082,6 +2139,60 @@ Familie.
 | `active` | boolean | – | – |
 | `terminatedAt` | string | – | – |
 
+### `GET /api/absences`
+
+**Abwesenheiten auflisten.** Mitarbeitende sehen ausschliesslich die eigenen. Das ist keine Bequemlichkeit: wer wann in den Ferien war, ist eine Personalangabe und geht die Kolleginnen und Kollegen nichts an.
+
+- **Zugriff:** Erfordert eine der Berechtigungen: `absence:read_all`, `absence:request`.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 401, 403, 429, 500
+
+### `DELETE /api/applications/{id}`
+
+**Bewerbung löschen.** Bewerbungsunterlagen sind Personendaten. Nach DSG dürfen sie nur so lange aufbewahrt werden, wie es der Zweck erfordert — nach einer Absage sind das wenige Monate. Das Löschen ist deshalb ausdrücklich vorgesehen und nicht durch eine Aufbewahrungsregel gesperrt. Angehängte Dateien gehen über die Kaskade mit.
+
+- **Zugriff:** Erfordert die Berechtigung: `application:delete`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 204
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+### `DELETE /api/employees/{id}`
+
+**Mitarbeitende stilllegen.** Kein Löschen, sondern inaktiv setzen mit Austrittsdatum; der Zugang wird gesperrt. Eine Personalakte hängt an Zeiterfassung, Lohnabrechnungen und Einsatzrapporten — sie zu entfernen risse dort Lücken, die man Jahre später bei einer Lohnprüfung wiederfindet. Geplante Einsätze müssen vorher umgeteilt werden.
+
+- **Zugriff:** Erfordert die Berechtigung: `employee:delete`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 204
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+### `GET /api/applications/{id}`
+
+**Bewerbung abrufen.** Angaben zur bewerbenden Person samt hochgeladenen Unterlagen.
+
+- **Zugriff:** Erfordert die Berechtigung: `application:read`.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
 ## Finanzen
 
 ### `GET /api/invoices`
@@ -2409,6 +2520,51 @@ Familie.
 **Ausgabe löschen.** Nicht möglich, sobald die Ausgabe in einem Buchhaltungsexport enthalten war: die Treuhandstelle hat den Beleg dann bereits verbucht, und ein Loch in der exportierten Reihe fällt erst beim Abschluss auf.
 
 - **Zugriff:** Erfordert die Berechtigung: `expense:delete`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 204
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+### `PATCH /api/invoices/{id}`
+
+**Rechnungsentwurf ändern.** Nur Entwürfe. Eine ausgestellte Rechnung ist ein Beleg: Betrag, Datum und Nummer sind ab dem Ausstellen unveränderlich, weil die Buchhaltung darauf aufbaut und die Kundschaft sie erhalten hat. Korrigiert wird über eine Gutschrift.
+
+- **Zugriff:** Erfordert die Berechtigung: `invoice:update`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+### `PATCH /api/payments/{id}`
+
+**Zahlung korrigieren.** Beleg, Notiz und Zahlungsdatum. Der Betrag ist nicht änderbar: er stammt vom Zahlungsanbieter oder wurde beim Verbuchen gegen den offenen Posten gerechnet. Ihn nachträglich zu verstellen liesse Rechnungssaldo und Zahlungssumme auseinanderlaufen — und das fiele erst beim Jahresabschluss auf. Ein falscher Betrag wird storniert und neu verbucht.
+
+- **Zugriff:** Erfordert die Berechtigung: `payment:create`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+### `DELETE /api/payments/{id}`
+
+**Zahlung stornieren.** Nur von Hand erfasste Zahlungen. Was über Stripe oder Datatrans hereinkam, ist beim Zahlungsanbieter eine Tatsache; die Zeile zu entfernen hiesse, die eigene Buchhaltung gegen den Kontoauszug laufen zu lassen. Der offene Posten der Rechnung wird in derselben Transaktion zurückgesetzt — sonst bliebe sie als bezahlt stehen, obwohl kein Geld da ist.
+
+- **Zugriff:** Erfordert die Berechtigung: `payment:delete`.
 - **Rate-Limit-Klasse:** `apiWrite`
 - **Erfolg:** 204
 - **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
@@ -3635,6 +3791,60 @@ Familie.
 | --- | --- | --- | --- |
 | `id` | string | ja | min. 1 Zeichen |
 
+### `GET /api/blog`
+
+**Beiträge auflisten.** Alle Beiträge, auch Entwürfe. Ohne Blätterung — ein Reinigungsbetrieb schreibt keine tausend Artikel.
+
+- **Zugriff:** Erfordert die Berechtigung: `blog:read`.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 401, 403, 429, 500
+
+### `GET /api/blog/{id}`
+
+**Beitrag abrufen.** Ein Beitrag samt Entwurfsfassung, Kategorie und Autorin.
+
+- **Zugriff:** Erfordert die Berechtigung: `blog:read`.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+### `PATCH /api/blog/{id}`
+
+**Beitrag ändern.** Der Statuswechsel verlangt zusätzlich blog:publish — wer Texte redigiert, muss nicht auch veröffentlichen dürfen. Das Veröffentlichungsdatum entsteht beim ersten Veröffentlichen und ändert sich danach nicht: sonst rutschte ein Beitrag bei jeder Korrektur im Feed und in Suchmaschinen nach oben, als wäre er neu.
+
+- **Zugriff:** Erfordert die Berechtigung: `blog:update`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+### `DELETE /api/blog/{id}`
+
+**Beitrag löschen.** Ein veröffentlichter Beitrag wird archiviert, nicht gelöscht: seine Adresse ist verlinkt und möglicherweise indexiert. Entwürfe lassen sich entfernen.
+
+- **Zugriff:** Erfordert die Berechtigung: `blog:delete`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 204
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
 ## System
 
 ### `GET /api/users`
@@ -3768,28 +3978,28 @@ Familie.
 | Feld | Typ | Pflicht | Regeln |
 | --- | --- | --- | --- |
 | `name` | string | ja | min. 2 Zeichen, max. 140 Zeichen |
-| `legalName` | union | ja | – |
+| `legalName` | union | – | – |
 | `email` | string | ja | email, max. 200 Zeichen |
-| `phone` | union | ja | – |
-| `whatsapp` | union | ja | – |
-| `website` | union | ja | – |
+| `phone` | union | – | – |
+| `whatsapp` | union | – | – |
+| `website` | union | – | – |
 | `street` | string | ja | min. 2 Zeichen, max. 140 Zeichen |
-| `streetNo` | union | ja | – |
+| `streetNo` | union | – | – |
 | `postalCode` | string | ja | – |
 | `city` | string | ja | min. 2 Zeichen, max. 80 Zeichen |
-| `vatNumber` | union | ja | – |
-| `iban` | union | ja | – |
-| `qrIban` | union | ja | – |
-| `bankName` | union | ja | – |
-| `logoUrl` | union | ja | – |
-| `logoDarkUrl` | union | ja | – |
-| `faviconUrl` | union | ja | – |
-| `mapsUrl` | union | ja | – |
-| `facebookUrl` | union | ja | – |
-| `instagramUrl` | union | ja | – |
-| `linkedinUrl` | union | ja | – |
-| `tiktokUrl` | union | ja | – |
-| `youtubeUrl` | union | ja | – |
+| `vatNumber` | union | – | – |
+| `iban` | union | – | – |
+| `qrIban` | union | – | – |
+| `bankName` | union | – | – |
+| `logoUrl` | union | – | – |
+| `logoDarkUrl` | union | – | – |
+| `faviconUrl` | union | – | – |
+| `mapsUrl` | union | – | – |
+| `facebookUrl` | union | – | – |
+| `instagramUrl` | union | – | – |
+| `linkedinUrl` | union | – | – |
+| `tiktokUrl` | union | – | – |
+| `youtubeUrl` | union | – | – |
 
 ### `GET /api/opening-hours`
 
@@ -3886,6 +4096,24 @@ Familie.
 | Feld | Typ | Pflicht | Regeln |
 | --- | --- | --- | --- |
 | `id` | string | ja | min. 1 Zeichen |
+
+### `GET /api/settings`
+
+**Betriebseinstellungen.** Vorlaufzeiten, Stornofristen, Mahnwesen, Bewertungsanfragen. Fehlende Schlüssel liefern den Auslieferungswert.
+
+- **Zugriff:** Erfordert die Berechtigung: `settings:read`.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 401, 403, 429, 500
+
+### `PATCH /api/settings`
+
+**Betriebseinstellungen ändern.** Teil-Update: gesendet wird nur, was sich ändert. Ein vollständiges Überschreiben würde bei zwei gleichzeitig geöffneten Masken die Änderung der jeweils anderen still verwerfen. Das Schema ist streng — ein freies JSON-Feld wäre die Stelle, an der ein Tippfehler im Schlüssel eine Einstellung wirkungslos macht, ohne dass es jemand bemerkt.
+
+- **Zugriff:** Erfordert die Berechtigung: `settings:update`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 401, 403, 422, 429, 500
 
 ### `GET /api/cron/hourly`
 
