@@ -4,7 +4,18 @@ import * as React from 'react';
 import { useRouter } from 'next/navigation';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { Lock, LockOpen, Mail, Pencil, RotateCcw, Send, ShieldCheck, Trash2, UserPlus } from 'lucide-react';
+import {
+  Lock,
+  LockOpen,
+  Mail,
+  Pencil,
+  RotateCcw,
+  Send,
+  ShieldCheck,
+  ShieldOff,
+  Trash2,
+  UserPlus,
+} from 'lucide-react';
 import { toast } from 'sonner';
 
 import { api, ApiError } from '@/lib/api/client';
@@ -98,6 +109,7 @@ export function UserWorkspace({
   const [inviting, setInviting] = React.useState(false);
   const [editing, setEditing] = React.useState<UserRow | null>(null);
   const [deleting, setDeleting] = React.useState<UserRow | null>(null);
+  const [resetting, setResetting] = React.useState<UserRow | null>(null);
   const [busy, setBusy] = React.useState<string | null>(null);
 
   const act = async (id: string, run: () => Promise<unknown>, success: string) => {
@@ -260,6 +272,23 @@ export function UserWorkspace({
                             )
                           ) : null}
 
+                          {/* Der Notausgang, wenn jemand Telefon *und*
+                              Wiederherstellungscodes verloren hat. Nur
+                              sichtbar, wo es etwas zurückzusetzen gibt —
+                              und nur für die Systemverantwortung, die als
+                              Einzige Rollen vergeben darf. */}
+                          {canAssignRole && !self && row.twoFactorEnabled ? (
+                            <Button
+                              variant="ghost"
+                              size="icon-sm"
+                              aria-label={`Zwei-Faktor-Anmeldung von ${row.email} zurücksetzen`}
+                              title="Zwei-Faktor-Anmeldung zurücksetzen"
+                              onClick={() => setResetting(row)}
+                            >
+                              <ShieldOff aria-hidden />
+                            </Button>
+                          ) : null}
+
                           {canUpdate ? (
                             <Button
                               variant="ghost"
@@ -334,7 +363,75 @@ export function UserWorkspace({
       />
       <EditDialog user={editing} onClose={() => setEditing(null)} />
       <DeleteDialog user={deleting} onClose={() => setDeleting(null)} />
+      <ResetTwoFactorDialog user={resetting} onClose={() => setResetting(null)} />
     </>
+  );
+}
+
+/**
+ * Zweiten Faktor eines fremden Kontos zurücksetzen.
+ *
+ * Der Dialog fragt nicht „sind Sie sicher", sondern nennt die beiden Folgen,
+ * die man kennen muss: das Konto steht danach nur noch hinter dem Passwort,
+ * und alle offenen Sitzungen enden. Wurde das Konto tatsächlich übernommen,
+ * ist das Zweite der eigentliche Zweck.
+ */
+function ResetTwoFactorDialog({
+  user,
+  onClose,
+}: {
+  user: UserRow | null;
+  onClose: () => void;
+}) {
+  const router = useRouter();
+  const [busy, setBusy] = React.useState(false);
+  const [error, setError] = React.useState<string | null>(null);
+
+  React.useEffect(() => {
+    if (user) setError(null);
+  }, [user]);
+
+  const confirm = async () => {
+    if (!user) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await api.delete(`/api/users/${user.id}/2fa`);
+      toast.success(`Zwei-Faktor-Anmeldung von ${user.email} zurückgesetzt.`);
+      onClose();
+      router.refresh();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Zurücksetzen fehlgeschlagen.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Dialog open={user !== null} onOpenChange={(open) => !open && onClose()}>
+      <DialogContent size="sm">
+        <DialogHeader>
+          <DialogTitle>Zwei-Faktor-Anmeldung zurücksetzen?</DialogTitle>
+          <DialogDescription>
+            {user?.firstName} {user?.lastName} meldet sich danach nur noch mit dem Passwort an und
+            muss den zweiten Faktor neu einrichten. Alle offenen Sitzungen der Person werden dabei
+            beendet.
+          </DialogDescription>
+        </DialogHeader>
+
+        {error ? <Alert variant="destructive">{error}</Alert> : null}
+
+        <DialogFooter>
+          <Button variant="ghost" onClick={onClose}>
+            Abbrechen
+          </Button>
+          <Button variant="destructive" onClick={confirm} loading={busy}>
+            <ShieldOff aria-hidden />
+            Zurücksetzen
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 

@@ -181,6 +181,7 @@ export async function login(params: { input: LoginInput; ip: string }) {
       organizationId: true,
       deletedAt: true,
       mustChangePassword: true,
+      twoFactorEnabled: true,
     },
   });
 
@@ -248,6 +249,31 @@ export async function login(params: { input: LoginInput; ip: string }) {
   await resetRateLimit('login', params.ip);
   await resetRateLimit('login', email);
 
+  /**
+   * Zweiter Faktor: hier endet der erste Schritt.
+   *
+   * Statt einer Sitzung wird ein kurzlebiger Zwischenschein ausgestellt. Das
+   * ist der entscheidende Punkt: gäbe es an dieser Stelle bereits ein
+   * Zugangstoken, wäre der zweite Faktor eine Anzeige und keine Schranke —
+   * wer das Token abfängt, käme an der Codeabfrage vorbei.
+   */
+  if (user.twoFactorEnabled) {
+    const { issueMfaChallenge } = await import('./two-factor.service');
+    await issueMfaChallenge(user.id);
+
+    await recordAudit({
+      organizationId: user.organizationId,
+      userId: user.id,
+      action: 'LOGIN',
+      entity: 'User',
+      entityId: user.id,
+      summary: 'Passwort bestätigt, zweiter Faktor ausstehend',
+      ip: params.ip,
+    });
+
+    return { user: null, mustChangePassword: false, twoFactorRequired: true as const };
+  }
+
   const session = await createSession({ userId: user.id });
 
   await recordAudit({
@@ -260,7 +286,11 @@ export async function login(params: { input: LoginInput; ip: string }) {
     ip: params.ip,
   });
 
-  return { user: session.user, mustChangePassword: user.mustChangePassword };
+  return {
+    user: session.user,
+    mustChangePassword: user.mustChangePassword,
+    twoFactorRequired: false as const,
+  };
 }
 
 /** Passwort-Reset anfordern — antwortet immer erfolgreich. */

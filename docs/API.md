@@ -5,7 +5,7 @@
 > Quelle, aus der sowohl diese Referenz als auch die Laufzeitvalidierung
 > stammen.
 
-Stand: 227 Endpunkte. Die maschinenlesbare Fassung liegt in
+Stand: 233 Endpunkte. Die maschinenlesbare Fassung liegt in
 [`openapi.yaml`](./openapi.yaml) bzw. [`openapi.json`](./openapi.json).
 
 ## Grundlagen
@@ -36,6 +36,7 @@ Familie.
 ## Inhalt
 
 - [Authentifizierung](#authentifizierung)
+- [Benutzer & Rollen](#benutzer-rollen)
 - [Öffentlich](#öffentlich)
 - [Dateien](#dateien)
 - [CRM](#crm)
@@ -180,6 +181,87 @@ Familie.
 | `notifyByEmail` | boolean | – | – |
 | `notifyBySms` | boolean | – | – |
 | `marketingOptIn` | boolean | – | – |
+
+### `GET /api/auth/2fa`
+
+**Zustand des zweiten Faktors.** Ob die Zwei-Faktor-Anmeldung eingeschaltet ist, seit wann, und wie viele Wiederherstellungscodes noch übrig sind. Weder Geheimnis noch Codes werden je zurückgegeben — die Codes existieren nach der Einrichtung nur noch als Hash.
+
+- **Zugriff:** Erfordert eine angemeldete Sitzung.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 401, 429, 500
+
+### `POST /api/auth/2fa/setup`
+
+**Einrichtung beginnen.** Erzeugt ein TOTP-Geheimnis und liefert es als QR-Code und als Text zum Abtippen. Der Schutz wird dabei **nicht** eingeschaltet: erst der bestätigte Code unter `/api/auth/2fa/confirm` stellt ihn scharf. Ohne diesen zweiten Schritt sperrt sich aus, wer den QR-Code scannt und dann das Telefon zurücksetzt. Ein bereits eingeschalteter Faktor wird nicht überschrieben.
+
+- **Zugriff:** Erfordert eine angemeldete Sitzung.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 401, 422, 429, 500
+
+### `POST /api/auth/2fa/confirm`
+
+**Einrichtung bestätigen.** Prüft den ersten Code und schaltet die Zwei-Faktor-Anmeldung ein. Die Antwort enthält die zehn Wiederherstellungscodes — **einmalig**. Danach existieren sie nur noch als Hash; wer sie nicht notiert, braucht die Systemverantwortung.
+
+- **Zugriff:** Erfordert eine angemeldete Sitzung.
+- **Rate-Limit-Klasse:** `login`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 422, 429, 500
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `token` | string | ja | – |
+
+### `POST /api/auth/2fa/disable`
+
+**Zweiten Faktor ausschalten.** Verlangt Passwort **und** einen gültigen Code — ein Wiederherstellungscode zählt ebenfalls. Nur das Passwort würde genügen, wenn jemand eine offene Sitzung übernimmt, und dann wäre der zweite Faktor genau in dem Moment weg, in dem er gebraucht wird.
+
+- **Zugriff:** Erfordert eine angemeldete Sitzung.
+- **Rate-Limit-Klasse:** `login`
+- **Erfolg:** 204
+- **Mögliche Fehler:** 400, 401, 422, 429, 500
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `token` | string | ja | min. 6 Zeichen, max. 20 Zeichen |
+| `password` | string | ja | min. 1 Zeichen |
+
+### `POST /api/auth/2fa/verify`
+
+**Zweiter Schritt der Anmeldung.** Öffentlich, weil hier noch keine Sitzung besteht: Der Aufrufer weist sich über den kurzlebigen Zwischenschein aus, den `/api/auth/login` gesetzt hat. Dieser Endpunkt erzeugt das Zugangstoken. Sechs Ziffern sind eine Million Möglichkeiten — ohne das Anmelde-Limit wären sie in Minuten durchprobiert.
+
+- **Zugriff:** Öffentlich — keine Anmeldung nötig.
+- **Rate-Limit-Klasse:** `login`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 422, 429, 500
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `token` | string | ja | min. 6 Zeichen, max. 20 Zeichen |
+
+## Benutzer & Rollen
+
+### `DELETE /api/users/{id}/2fa`
+
+**Zweiten Faktor eines Kontos zurücksetzen.** Der Notausgang, wenn jemand Telefon *und* Wiederherstellungscodes verloren hat. Nur die Systemverantwortung darf das — es ist die einzige Handlung, die einen Schutz von aussen entfernt. Alle Sitzungen der Person werden dabei beendet: Ist das Konto tatsächlich übernommen worden, endet der Zugriff in diesem Moment.
+
+- **Zugriff:** Erfordert die Berechtigungen: `user:update`, `role:assign`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 204
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
 
 ## Öffentlich
 

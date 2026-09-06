@@ -591,6 +591,354 @@ paths:
             'application/json':
               schema:
                 '$ref': '#/components/schemas/ErrorEnvelope'
+  '/api/auth/2fa':
+    get:
+      tags:
+        - 'Authentifizierung'
+      summary: 'Zustand des zweiten Faktors'
+      description: |-
+          Ob die Zwei-Faktor-Anmeldung eingeschaltet ist, seit wann, und wie viele Wiederherstellungscodes noch übrig sind. Weder Geheimnis noch Codes werden je zurückgegeben — die Codes existieren nach der Einrichtung nur noch als Hash.
+
+          **Zugriff:** Erfordert eine angemeldete Sitzung.
+
+          **Rate-Limit-Klasse:** `apiRead`
+      operationId: 'getAuth2fa'
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: 'Erfolg'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/SuccessEnvelope'
+        '401':
+          description: 'UNAUTHORIZED — keine oder abgelaufene Sitzung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: 'RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+  '/api/auth/2fa/setup':
+    post:
+      tags:
+        - 'Authentifizierung'
+      summary: 'Einrichtung beginnen'
+      description: |-
+          Erzeugt ein TOTP-Geheimnis und liefert es als QR-Code und als Text zum Abtippen. Der Schutz wird dabei **nicht** eingeschaltet: erst der bestätigte Code unter `/api/auth/2fa/confirm` stellt ihn scharf. Ohne diesen zweiten Schritt sperrt sich aus, wer den QR-Code scannt und dann das Telefon zurücksetzt. Ein bereits eingeschalteter Faktor wird nicht überschrieben.
+
+          **Zugriff:** Erfordert eine angemeldete Sitzung.
+
+          **Rate-Limit-Klasse:** `apiWrite`
+      operationId: 'postAuth2faSetup'
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: 'Erfolg'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/SuccessEnvelope'
+        '401':
+          description: 'UNAUTHORIZED — keine oder abgelaufene Sitzung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: 'BUSINESS_RULE — fachlich nicht zulässig, etwa eine bereits ausgestellte Rechnung ändern.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: 'RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+  '/api/auth/2fa/confirm':
+    post:
+      tags:
+        - 'Authentifizierung'
+      summary: 'Einrichtung bestätigen'
+      description: |-
+          Prüft den ersten Code und schaltet die Zwei-Faktor-Anmeldung ein. Die Antwort enthält die zehn Wiederherstellungscodes — **einmalig**. Danach existieren sie nur noch als Hash; wer sie nicht notiert, braucht die Systemverantwortung.
+
+          **Zugriff:** Erfordert eine angemeldete Sitzung.
+
+          **Rate-Limit-Klasse:** `login`
+      operationId: 'postAuth2faConfirm'
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          'application/json':
+            schema:
+              type: 'object'
+              properties:
+                token:
+                  type: 'string'
+                  pattern: '^\d{6}$'
+              required:
+                - 'token'
+      responses:
+        '200':
+          description: 'Erfolg'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/SuccessEnvelope'
+        '400':
+          description: 'VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 'UNAUTHORIZED — keine oder abgelaufene Sitzung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: 'BUSINESS_RULE — fachlich nicht zulässig, etwa eine bereits ausgestellte Rechnung ändern.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: 'RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+  '/api/auth/2fa/disable':
+    post:
+      tags:
+        - 'Authentifizierung'
+      summary: 'Zweiten Faktor ausschalten'
+      description: |-
+          Verlangt Passwort **und** einen gültigen Code — ein Wiederherstellungscode zählt ebenfalls. Nur das Passwort würde genügen, wenn jemand eine offene Sitzung übernimmt, und dann wäre der zweite Faktor genau in dem Moment weg, in dem er gebraucht wird.
+
+          **Zugriff:** Erfordert eine angemeldete Sitzung.
+
+          **Rate-Limit-Klasse:** `login`
+      operationId: 'postAuth2faDisable'
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          'application/json':
+            schema:
+              type: 'object'
+              properties:
+                token:
+                  type: 'string'
+                  minLength: 6
+                  maxLength: 20
+                password:
+                  type: 'string'
+                  minLength: 1
+              required:
+                - 'token'
+                - 'password'
+      responses:
+        '204':
+          description: 'Erfolg'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/SuccessEnvelope'
+        '400':
+          description: 'VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 'UNAUTHORIZED — keine oder abgelaufene Sitzung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: 'BUSINESS_RULE — fachlich nicht zulässig, etwa eine bereits ausgestellte Rechnung ändern.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: 'RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+  '/api/auth/2fa/verify':
+    post:
+      tags:
+        - 'Authentifizierung'
+      summary: 'Zweiter Schritt der Anmeldung'
+      description: |-
+          Öffentlich, weil hier noch keine Sitzung besteht: Der Aufrufer weist sich über den kurzlebigen Zwischenschein aus, den `/api/auth/login` gesetzt hat. Dieser Endpunkt erzeugt das Zugangstoken. Sechs Ziffern sind eine Million Möglichkeiten — ohne das Anmelde-Limit wären sie in Minuten durchprobiert.
+
+          **Zugriff:** Öffentlich — keine Anmeldung nötig.
+
+          **Rate-Limit-Klasse:** `login`
+      operationId: 'postAuth2faVerify'
+      security: []
+      requestBody:
+        required: true
+        content:
+          'application/json':
+            schema:
+              type: 'object'
+              properties:
+                token:
+                  type: 'string'
+                  minLength: 6
+                  maxLength: 20
+              required:
+                - 'token'
+      responses:
+        '200':
+          description: 'Erfolg'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/SuccessEnvelope'
+        '400':
+          description: 'VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 'UNAUTHORIZED — keine oder abgelaufene Sitzung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: 'BUSINESS_RULE — fachlich nicht zulässig, etwa eine bereits ausgestellte Rechnung ändern.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: 'RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+  '/api/users/{id}/2fa':
+    delete:
+      tags:
+        - 'Benutzer & Rollen'
+      summary: 'Zweiten Faktor eines Kontos zurücksetzen'
+      description: |-
+          Der Notausgang, wenn jemand Telefon *und* Wiederherstellungscodes verloren hat. Nur die Systemverantwortung darf das — es ist die einzige Handlung, die einen Schutz von aussen entfernt. Alle Sitzungen der Person werden dabei beendet: Ist das Konto tatsächlich übernommen worden, endet der Zugriff in diesem Moment.
+
+          **Zugriff:** Erfordert die Berechtigungen: `user:update`, `role:assign`.
+
+          **Rate-Limit-Klasse:** `apiWrite`
+      operationId: 'deleteUsersById2fa'
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: 'id'
+          in: 'path'
+          required: true
+          schema:
+            type: 'string'
+            minLength: 1
+      responses:
+        '204':
+          description: 'Erfolg'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/SuccessEnvelope'
+        '400':
+          description: 'VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 'UNAUTHORIZED — keine oder abgelaufene Sitzung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 'FORBIDDEN — angemeldet, aber ohne die nötige Berechtigung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: 'NOT_FOUND — nicht vorhanden, oder für diese Sitzung nicht sichtbar.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: 'BUSINESS_RULE — fachlich nicht zulässig, etwa eine bereits ausgestellte Rechnung ändern.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: 'RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
   '/api/public/pricing/estimate':
     post:
       tags:

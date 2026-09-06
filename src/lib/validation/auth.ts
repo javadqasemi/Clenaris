@@ -125,3 +125,44 @@ export const passwordActionSchema = z
     }
   });
 export type PasswordActionInput = z.infer<typeof passwordActionSchema>;
+
+/* -------------------------------------------------------------------------
+ *  Zwei-Faktor-Anmeldung
+ * ---------------------------------------------------------------------- */
+
+/**
+ * Der sechsstellige Code aus der App.
+ *
+ * Streng auf sechs Ziffern: hier wird nichts anderes akzeptiert, weil ein
+ * abweichendes Format immer ein Tippfehler ist und die Meldung dann sagen
+ * kann, was fehlt — statt den Versuch gegen das Anmelde-Limit zu zählen.
+ */
+export const twoFactorConfirmSchema = z.object({
+  token: z
+    .string()
+    .trim()
+    .regex(/^\d{6}$/, 'Bitte die sechs Ziffern aus der App eingeben.'),
+});
+export type TwoFactorConfirmInput = z.infer<typeof twoFactorConfirmSchema>;
+
+/**
+ * Code **oder** Wiederherstellungscode.
+ *
+ * Beide Formen teilen sich ein Feld, weil die Person im Ernstfall nicht
+ * zwischen zwei Eingabefeldern wählen soll. Die Unterscheidung trifft der
+ * Dienst anhand der Form.
+ */
+export const twoFactorTokenSchema = z.object({
+  token: z
+    .string()
+    .trim()
+    .min(6, 'Bitte den Code eingeben.')
+    .max(20, 'Der Code ist höchstens 20 Zeichen lang.'),
+});
+export type TwoFactorTokenInput = z.infer<typeof twoFactorTokenSchema>;
+
+/** Ausschalten verlangt Passwort **und** Code. */
+export const twoFactorDisableSchema = twoFactorTokenSchema.extend({
+  password: z.string().min(1, 'Das Passwort ist erforderlich.'),
+});
+export type TwoFactorDisableInput = z.infer<typeof twoFactorDisableSchema>;

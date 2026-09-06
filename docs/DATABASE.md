@@ -4,7 +4,7 @@
 > Diagramme sind damit nie älter als das Schema. Prosa und Bereichseinteilung
 > stehen in `scripts/generate-erd.ts`.
 
-**82 Modelle, 42 Aufzählungstypen, 1457 Felder.**
+**82 Modelle, 42 Aufzählungstypen, 1460 Felder.**
 PostgreSQL 16+; alle Zeitstempel als `timestamptz` in UTC, Anzeige in Europe/Zurich.
 
 ## Vier Entscheidungen, die das ganze Schema prägen
@@ -122,12 +122,12 @@ erDiagram
 
 | Modell | Tabelle | Felder | Zweck |
 | --- | --- | --- | --- |
-| `Organization` | `organizations` | 86 | – |
-| `NumberSequence` | `number_sequences` | 6 | – |
-| `OpeningHours` | `opening_hours` | 7 | – |
-| `Holiday` | `holidays` | 7 | – |
-| `ServiceArea` | `service_areas` | 11 | – |
-| `TaxRate` | `tax_rates` | 7 | – |
+| `Organization` | `organizations` | 86 | Mandant — Firmendaten, Bankverbindung, Erscheinungsbild. Wurzel fast aller Beziehungen. |
+| `NumberSequence` | `number_sequences` | 6 | Fortlaufende, lückenlose Belegnummern (Schweizer Buchhaltungsanforderung). |
+| `OpeningHours` | `opening_hours` | 7 | Öffnungszeiten je Wochentag; Grundlage der buchbaren Zeitfenster. |
+| `Holiday` | `holidays` | 7 | Feiertage und Betriebsferien. Sperren Termine und zählen nicht als Abwesenheitstage. |
+| `ServiceArea` | `service_areas` | 11 | Postleitzahlen im Einsatzgebiet, je mit Anfahrtspauschale und Fahrzeit. |
+| `TaxRate` | `tax_rates` | 7 | Mehrwertsteuersätze. Seit 2024 gilt in der Schweiz 8.1 % als Normalsatz. |
 
 ## Identität und Zugriff
 
@@ -193,11 +193,11 @@ erDiagram
 
 | Modell | Tabelle | Felder | Zweck |
 | --- | --- | --- | --- |
-| `User` | `users` | 41 | – |
-| `RefreshToken` | `refresh_tokens` | 10 | – |
-| `VerificationToken` | `verification_tokens` | 9 | – |
-| `Consent` | `consents` | 9 | – |
-| `AuditLog` | `audit_logs` | 13 | – |
+| `User` | `users` | 44 | Benutzerkonto mit Rolle und Anmeldedaten. Passwörter als Argon2id-Hash. |
+| `RefreshToken` | `refresh_tokens` | 10 | Rotierender Refresh-Token. Gespeichert wird nur der SHA-256-Hash plus Familien-ID zur Erkennung von Wiederverwendung. |
+| `VerificationToken` | `verification_tokens` | 9 | Einmaltoken für E-Mail-Bestätigung, Passwortreset und Einladung. |
+| `Consent` | `consents` | 9 | Nachweis erteilter und widerrufener Einwilligungen mit Zeitpunkt und IP. |
+| `AuditLog` | `audit_logs` | 13 | Prüfprotokoll aller ändernden Vorgänge — wer, wann, was, vorher/nachher. |
 
 ## CRM
 
@@ -340,19 +340,19 @@ erDiagram
 
 | Modell | Tabelle | Felder | Zweck |
 | --- | --- | --- | --- |
-| `Lead` | `leads` | 39 | – |
-| `Customer` | `customers` | 54 | – |
-| `Contact` | `contacts` | 13 | – |
-| `Address` | `addresses` | 25 | – |
-| `Building` | `buildings` | 17 | – |
-| `Property` | `properties` | 30 | – |
-| `PipelineStage` | `pipeline_stages` | 10 | – |
-| `Tag` | `tags` | 7 | – |
-| `LeadTag` | `lead_tags` | 4 | – |
-| `CustomerTag` | `customer_tags` | 4 | – |
-| `Activity` | `activities` | 22 | – |
-| `Task` | `tasks` | 21 | – |
-| `PaymentMethodRef` | `payment_methods` | 12 | – |
+| `Lead` | `leads` | 39 | Anfrage vor der Kundenbeziehung, mit Herkunft, Bewertung und Pipeline-Stufe. |
+| `Customer` | `customers` | 54 | Kundendatensatz mit Konditionen, Umsatz und Zahlungsverhalten. |
+| `Contact` | `contacts` | 13 | Ansprechperson bei Geschäftskundschaft. |
+| `Address` | `addresses` | 25 | Adresse einer Kundschaft — Einsatz-, Rechnungs- oder Standardadresse. |
+| `Building` | `buildings` | 17 | Liegenschaft mit mehreren Objekten, etwa eine Überbauung. |
+| `Property` | `properties` | 30 | Konkretes Reinigungsobjekt: Fläche, Zimmer, Zugang, Schlüsseldepot. |
+| `PipelineStage` | `pipeline_stages` | 10 | Stufe im Vertriebstrichter, frei benennbar. |
+| `Tag` | `tags` | 7 | Frei vergebbares Etikett für Kundschaft und Anfragen. |
+| `LeadTag` | `lead_tags` | 4 | Zuordnung Etikett ↔ Anfrage. |
+| `CustomerTag` | `customer_tags` | 4 | Zuordnung Etikett ↔ Kundschaft. |
+| `Activity` | `activities` | 22 | Verlaufseintrag: Notiz, Telefonat, E-Mail, Termin, Statuswechsel. |
+| `Task` | `tasks` | 21 | Aufgabe mit Fälligkeit, Zuständigkeit und Erinnerung. |
+| `PaymentMethodRef` | `payment_methods` | 12 | Hinterlegtes Zahlungsmittel — nur der Verweis beim Anbieter, nie die Kartendaten. |
 
 ## Leistungskatalog und Preislogik
 
@@ -422,12 +422,12 @@ erDiagram
 
 | Modell | Tabelle | Felder | Zweck |
 | --- | --- | --- | --- |
-| `ServiceCategory` | `service_categories` | 13 | – |
-| `Service` | `services` | 42 | – |
-| `ServiceExtra` | `service_extras` | 15 | – |
-| `ServiceExtraOnService` | `service_extras_on_services` | 4 | – |
-| `PriceRule` | `price_rules` | 9 | – |
-| `RecurrenceRule` | `recurrence_rules` | 13 | – |
+| `ServiceCategory` | `service_categories` | 13 | Gruppierung des Leistungskatalogs für Website und Navigation. |
+| `Service` | `services` | 42 | Angebotene Leistung mit Preismodell, Dauerkennzahlen und SEO-Angaben. |
+| `ServiceExtra` | `service_extras` | 15 | Zubuchbare Zusatzleistung, etwa Backofen oder Balkon. |
+| `ServiceExtraOnService` | `service_extras_on_services` | 4 | Welcher Zusatz ist zu welcher Leistung buchbar. |
+| `PriceRule` | `price_rules` | 9 | Multiplikatoren und Zuschläge, die die Preis-Engine anwendet. |
+| `RecurrenceRule` | `recurrence_rules` | 13 | Wiederholungsmuster einer Serienbuchung. |
 
 ## Buchung, Offerte, Einsatz
 
@@ -550,16 +550,16 @@ erDiagram
 
 | Modell | Tabelle | Felder | Zweck |
 | --- | --- | --- | --- |
-| `Booking` | `bookings` | 61 | – |
-| `BookingItem` | `booking_items` | 14 | – |
-| `BookingExtra` | `booking_extras` | 10 | – |
-| `Quote` | `quotes` | 47 | – |
-| `QuoteItem` | `quote_items` | 15 | – |
-| `Job` | `jobs` | 49 | – |
-| `JobAssignment` | `job_assignments` | 11 | – |
-| `JobChecklistItem` | `job_checklist_items` | 11 | – |
-| `JobPhoto` | `job_photos` | 12 | – |
-| `MaterialUsage` | `material_usages` | 11 | – |
+| `Booking` | `bookings` | 61 | Vereinbarung mit der Kundschaft: Termin, Objekt, Leistungen und Preis als Momentaufnahme. |
+| `BookingItem` | `booking_items` | 14 | Leistungsposition einer Buchung, mit Preis zum Buchungszeitpunkt. |
+| `BookingExtra` | `booking_extras` | 10 | Gebuchte Zusatzleistung mit Menge und Preis. |
+| `Quote` | `quotes` | 47 | Offerte mit Positionen, Gültigkeit, Magic-Link-Token und elektronischer Signatur. |
+| `QuoteItem` | `quote_items` | 15 | Offertposition; optionale Positionen zählen nicht ins Total. |
+| `Job` | `jobs` | 49 | Ausführung durch das Team: Termin, Zuteilung, Checkliste, Abschluss, Kosten. |
+| `JobAssignment` | `job_assignments` | 11 | Zuteilung einer Person zu einem Einsatz, samt Zu- oder Absage. |
+| `JobChecklistItem` | `job_checklist_items` | 11 | Prüfpunkt des Abnahmeprotokolls, mit Vermerk wer wann abgehakt hat. |
+| `JobPhoto` | `job_photos` | 12 | Vorher-, Nachher- oder Schadensfoto mit Standort und Zeitpunkt. |
+| `MaterialUsage` | `material_usages` | 11 | Verbrauchtes Material je Einsatz — Grundlage der Deckungsbeitragsrechnung. |
 
 ## Personal und Zeit
 
@@ -641,13 +641,13 @@ erDiagram
 
 | Modell | Tabelle | Felder | Zweck |
 | --- | --- | --- | --- |
-| `Employee` | `employees` | 38 | – |
-| `EmployeeSkill` | `employee_skills` | 6 | – |
-| `Availability` | `availabilities` | 6 | – |
-| `Absence` | `absences` | 15 | – |
-| `Payslip` | `payslips` | 16 | – |
-| `TimeEntry` | `time_entries` | 16 | – |
-| `GpsEvent` | `gps_events` | 12 | – |
+| `Employee` | `employees` | 38 | Personalstammdaten inkl. Schweizer Angaben (AHV, Bewilligung, Pensum). |
+| `EmployeeSkill` | `employee_skills` | 6 | Qualifikation mit Stufe und Zertifikatsablauf. |
+| `Availability` | `availabilities` | 6 | Regelmässige Verfügbarkeit je Wochentag. |
+| `Absence` | `absences` | 15 | Ferien, Krankheit, Militär und weitere Abwesenheiten mit Bewilligungsstand. |
+| `Payslip` | `payslips` | 16 | Lohnabrechnung mit AHV/IV/EO, ALV, BVG und UVG. Erst sichtbar, wenn freigegeben. |
+| `TimeEntry` | `time_entries` | 16 | Erfasste Arbeitszeit je Einsatz — Grundlage der Lohnverarbeitung. |
+| `GpsEvent` | `gps_events` | 12 | An- und Abfahrt mit Koordinaten, als Nachweis bei Objekten ohne Ansprechperson. |
 
 ## Finanzen
 
@@ -743,14 +743,14 @@ erDiagram
 
 | Modell | Tabelle | Felder | Zweck |
 | --- | --- | --- | --- |
-| `Invoice` | `invoices` | 56 | – |
-| `InvoiceItem` | `invoice_items` | 16 | – |
-| `Payment` | `payments` | 21 | – |
-| `PaymentReminder` | `payment_reminders` | 8 | – |
-| `CreditNote` | `credit_notes` | 17 | – |
-| `Supplier` | `suppliers` | 19 | – |
-| `Expense` | `expenses` | 23 | – |
-| `AccountingExport` | `accounting_exports` | 10 | – |
+| `Invoice` | `invoices` | 56 | Rechnung mit QR-Referenz und Empfänger-Momentaufnahme. Nach dem Ausstellen unveränderlich. |
+| `InvoiceItem` | `invoice_items` | 16 | Rechnungsposition mit Netto-, MWST- und Bruttobetrag. |
+| `Payment` | `payments` | 21 | Zahlungseingang. `providerPaymentId` ist eindeutig — daran bleibt der Webhook idempotent. |
+| `PaymentReminder` | `payment_reminders` | 8 | Mahnstufe mit Versandzeitpunkt und Gebühr. |
+| `CreditNote` | `credit_notes` | 17 | Gutschrift. Der einzige Weg, eine ausgestellte Rechnung zu korrigieren. |
+| `Supplier` | `suppliers` | 19 | Lieferant für Material, Fahrzeuge und Dienstleistungen. |
+| `Expense` | `expenses` | 23 | Ausgabe mit Beleg, Kategorie und Vorsteuerabzug. |
+| `AccountingExport` | `accounting_exports` | 10 | Protokoll erzeugter Buchhaltungsexporte, damit Perioden nicht doppelt laufen. |
 
 ## Kommunikation und Automatisierung
 
@@ -858,16 +858,16 @@ erDiagram
 
 | Modell | Tabelle | Felder | Zweck |
 | --- | --- | --- | --- |
-| `MessageThread` | `message_threads` | 10 | – |
-| `Message` | `messages` | 10 | – |
-| `Notification` | `notifications` | 13 | – |
-| `EmailTemplate` | `email_templates` | 11 | – |
-| `SmsTemplate` | `sms_templates` | 7 | – |
-| `EmailLog` | `email_logs` | 13 | – |
-| `SmsLog` | `sms_logs` | 11 | – |
-| `Automation` | `automations` | 13 | – |
-| `AutomationAction` | `automation_actions` | 6 | – |
-| `AutomationRun` | `automation_runs` | 12 | – |
+| `MessageThread` | `message_threads` | 10 | Nachrichtenverlauf mit der Kundschaft, gebunden an Kundschaft oder Einsatz. |
+| `Message` | `messages` | 10 | Einzelne Nachricht im Verlauf, mit Lesevermerk und Anhängen. |
+| `Notification` | `notifications` | 13 | In-App-, E-Mail- oder SMS-Meldung an eine Person, mit Zustellstand. |
+| `EmailTemplate` | `email_templates` | 11 | E-Mail-Vorlage je Sprache, mit Platzhaltern. |
+| `SmsTemplate` | `sms_templates` | 7 | SMS-Vorlage je Sprache. |
+| `EmailLog` | `email_logs` | 13 | Protokoll jedes E-Mail-Versands inkl. Öffnungen und Zustellfehlern. |
+| `SmsLog` | `sms_logs` | 11 | Protokoll jedes SMS-Versands inkl. Kosten. |
+| `Automation` | `automations` | 13 | Regel aus Auslöser und Aktionen, als Daten statt als Code. |
+| `AutomationAction` | `automation_actions` | 6 | Einzelne Aktion einer Regel, mit Verzögerung und Reihenfolge. |
+| `AutomationRun` | `automation_runs` | 12 | Ausführung einer Regel mit Ergebnis — macht Automatisierungen nachvollziehbar. |
 
 ## Marketing und Inhalte
 
@@ -999,18 +999,18 @@ erDiagram
 
 | Modell | Tabelle | Felder | Zweck |
 | --- | --- | --- | --- |
-| `Coupon` | `coupons` | 19 | – |
-| `GiftCard` | `gift_cards` | 16 | – |
-| `NewsletterSubscriber` | `newsletter_subscribers` | 12 | – |
-| `BlogCategory` | `blog_categories` | 7 | – |
-| `BlogPost` | `blog_posts` | 22 | – |
-| `LandingPage` | `landing_pages` | 13 | – |
-| `Review` | `reviews` | 21 | – |
-| `Faq` | `faqs` | 9 | – |
-| `GalleryItem` | `gallery_items` | 13 | – |
-| `JobPosting` | `job_postings` | 20 | – |
-| `JobApplication` | `job_applications` | 16 | – |
-| `FileAsset` | `file_assets` | 34 | – |
+| `Coupon` | `coupons` | 19 | Rabattcode mit Gültigkeit, Einlösegrenze und Mindestbestellwert. |
+| `GiftCard` | `gift_cards` | 16 | Geschenkkarte mit Restguthaben. |
+| `NewsletterSubscriber` | `newsletter_subscribers` | 12 | Newsletter-Anmeldung mit Double-Opt-in und Abmeldetoken. |
+| `BlogCategory` | `blog_categories` | 7 | Rubrik des Blogs. |
+| `BlogPost` | `blog_posts` | 22 | Blogbeitrag mit SEO-Angaben und Veröffentlichungsstand. |
+| `LandingPage` | `landing_pages` | 13 | Kampagnenseite mit eigenem Inhalt und Nachverfolgung. |
+| `Review` | `reviews` | 21 | Kundenbewertung mit Moderationsstand und öffentlicher Antwort. |
+| `Faq` | `faqs` | 9 | Häufige Frage samt Antwort, nach Rubrik geordnet. |
+| `GalleryItem` | `gallery_items` | 13 | Galerieeintrag, wahlweise als Vorher-Nachher-Paar. |
+| `JobPosting` | `job_postings` | 20 | Stellenausschreibung mit Anforderungen und Pensum. |
+| `JobApplication` | `job_applications` | 16 | Bewerbung mit Lebenslauf und Stand im Verfahren. |
+| `FileAsset` | `file_assets` | 34 | Datei in Supabase Storage mit fachlicher Zuordnung und Sichtbarkeit. |
 
 ## Redaktion
 
@@ -1073,11 +1073,11 @@ erDiagram
 
 | Modell | Tabelle | Felder | Zweck |
 | --- | --- | --- | --- |
-| `ContentBlock` | `content_blocks` | 9 | – |
-| `SeoMeta` | `seo_meta` | 13 | – |
+| `ContentBlock` | `content_blocks` | 9 | Redaktionell pflegbarer Inhaltsbaustein der Website. |
+| `SeoMeta` | `seo_meta` | 13 | Suchmaschinen-Angaben je Seitenpfad. |
 | `CallToAction` | `calls_to_action` | 21 | – |
 | `NavigationItem` | `navigation_items` | 16 | – |
-| `LegalDocument` | `legal_documents` | 10 | – |
+| `LegalDocument` | `legal_documents` | 10 | Impressum, Datenschutzerklärung, AGB, Cookie-Hinweis. |
 
 ## Aufzählungstypen
 
@@ -1088,7 +1088,7 @@ exakte TypeScript-Typen.
 | Typ | Werte |
 | --- | --- |
 | `Locale` | `DE`, `EN`, `FR`, `IT` |
-| `UserRole` |  |
+| `UserRole` | `SUPER_ADMIN`, `ADMIN`, `MANAGER`, `EMPLOYEE`, `CUSTOMER` |
 | `UserStatus` | `PENDING`, `ACTIVE`, `SUSPENDED`, `DISABLED` |
 | `CustomerType` | `PRIVATE`, `BUSINESS` |
 | `LeadStatus` | `NEW`, `CONTACTED`, `QUALIFIED`, `PROPOSAL`, `WON`, `LOST` |
@@ -1097,7 +1097,7 @@ exakte TypeScript-Typen.
 | `ServiceKind` | `OFFICE_CLEANING`, `MOVE_OUT_CLEANING`, `RESIDENTIAL_CLEANING`, `WINDOW_CLEANING`, `CONSTRUCTION_CLEANING`, `BUILDING_MAINTENANCE`, `SPECIAL` |
 | `PricingModel` | `PER_HOUR`, `PER_SQM`, `FLAT`, `PER_UNIT`, `ON_REQUEST` |
 | `Frequency` | `ONCE`, `WEEKLY`, `BIWEEKLY`, `MONTHLY`, `QUARTERLY`, `SEMIANNUAL`, `ANNUAL`, `CUSTOM` |
-| `BookingStatus` | `DRAFT`, `CONFIRMED`, `IN_PROGRESS`, `COMPLETED`, `CANCELLED`, `NO_SHOW` |
+| `BookingStatus` | `DRAFT`, `PENDING`, `CONFIRMED`, `IN_PROGRESS`, `COMPLETED`, `CANCELLED`, `NO_SHOW` |
 | `QuoteStatus` | `DRAFT`, `SENT`, `VIEWED`, `ACCEPTED`, `REJECTED`, `EXPIRED`, `CONVERTED` |
 | `JobStatus` | `UNASSIGNED`, `SCHEDULED`, `DISPATCHED`, `EN_ROUTE`, `IN_PROGRESS`, `ON_HOLD`, `COMPLETED`, `VERIFIED`, `CANCELLED` |
 | `JobPhotoType` | `BEFORE`, `AFTER`, `DAMAGE`, `DOCUMENT`, `OTHER` |

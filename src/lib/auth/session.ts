@@ -39,6 +39,18 @@ export interface SessionUser {
  *
  * `React.cache` dedupliziert den Aufruf innerhalb eines Requests: Layout,
  * Page und mehrere Server Components teilen sich eine einzige Auswertung.
+ *
+ * Die eine Datenbankabfrage hier prüft, ob das Token nach dem letzten Widerruf
+ * ausgestellt wurde — siehe `revokeAllSessions`. Sie kostet einen Zugriff über
+ * den Primärschlüssel pro angemeldetem Request und entfällt für alle nicht
+ * angemeldeten: ohne Cookie kehrt die Funktion schon vorher zurück, die
+ * öffentliche Website rührt sie also nicht an.
+ *
+ * Ein Zwischenspeicher wäre verlockend und wurde verworfen: Redis ist in
+ * diesem Projekt optional und fällt sonst auf einen prozesslokalen Speicher
+ * zurück. Eine zweite Instanz sähe den Widerruf dann bis zum Ablauf der
+ * Zwischenspeicherung nicht — bei einer Sperre ist das die eine Minute, die
+ * nicht passieren darf.
  */
 export const getSession = reactCache(async (): Promise<SessionUser | null> => {
   const store = await cookies();
@@ -47,6 +59,8 @@ export const getSession = reactCache(async (): Promise<SessionUser | null> => {
 
   const claims = await verifyAccessToken(token);
   if (!claims) return null;
+
+  if (await tokenWasRevoked(claims.sub, claims.iat)) return null;
 
   return {
     id: claims.sub,
@@ -78,6 +92,34 @@ export async function getVerifiedSession(): Promise<SessionUser | null> {
 
   // Rolle könnte seit Ausstellung des Tokens geändert worden sein.
   return { ...session, role: user.role, organizationId: user.organizationId };
+}
+
+/**
+ * Wurde dieses Zugangstoken vor dem letzten Widerruf ausgestellt?
+ *
+ * Der Vergleich läuft auf Sekunden, weil `iat` im JWT nur Sekunden kennt und
+ * abgerundet wird. Verglichen wird deshalb streng kleiner: Ein Token, das in
+ * derselben Sekunde wie der Widerruf ausgestellt wurde, überlebt. Das ist
+ * gewollt — beim Passwortwechsel wird zuerst widerrufen und unmittelbar
+ * danach eine neue Sitzung ausgestellt, und die soll nicht sich selbst
+ * aussperren. Der Preis ist ein Fenster von unter einer Sekunde.
+ *
+ * Fehlt `iat`, gilt das Token als widerrufen, sobald es je einen Widerruf gab.
+ * Ein Token ohne Ausstellungszeitpunkt lässt sich nicht einordnen, und im
+ * Zweifel schliesst diese Prüfung.
+ */
+async function tokenWasRevoked(userId: string, issuedAt: number | undefined): Promise<boolean> {
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { sessionsRevokedAt: true },
+  });
+
+  // Konto gelöscht oder nie existent: das Token gehört zu niemandem mehr.
+  if (!user) return true;
+  if (!user.sessionsRevokedAt) return false;
+  if (issuedAt === undefined) return true;
+
+  return issuedAt < Math.floor(user.sessionsRevokedAt.getTime() / 1000);
 }
 
 export async function requireSession(): Promise<SessionUser> {
@@ -231,12 +273,34 @@ export async function destroySession() {
   store.delete(REFRESH_COOKIE);
 }
 
-/** Alle Sessions eines Benutzers beenden (Passwortwechsel, Sperrung). */
+/**
+ * Alle Sessions eines Benutzers beenden (Passwortwechsel, Sperrung,
+ * Rollenwechsel, Zurücksetzen des zweiten Faktors).
+ *
+ * Zwei Schritte, weil es zwei Arten von Token gibt:
+ *
+ *  • Der **Refresh-Token** liegt als Hash in der Datenbank und wird auf
+ *    widerrufen gesetzt. Damit lässt sich keine neue Sitzung mehr erneuern.
+ *
+ *  • Der **Zugangstoken** ist ein signiertes JWT und liegt nirgends — er
+ *    lässt sich nicht löschen. Stattdessen merkt sich das Konto den Zeitpunkt
+ *    des Widerrufs; `getSession` verwirft jedes Token, das davor ausgestellt
+ *    wurde. Ohne diesen zweiten Schritt liefe eine gesperrte Sitzung noch bis
+ *    zu fünfzehn Minuten weiter — genau in der Zeit, in der die Sperre wirken
+ *    soll.
+ */
 export async function revokeAllSessions(userId: string) {
-  await prisma.refreshToken.updateMany({
-    where: { userId, revokedAt: null },
-    data: { revokedAt: new Date() },
-  });
+  const now = new Date();
+  await prisma.$transaction([
+    prisma.refreshToken.updateMany({
+      where: { userId, revokedAt: null },
+      data: { revokedAt: now },
+    }),
+    prisma.user.update({
+      where: { id: userId },
+      data: { sessionsRevokedAt: now },
+    }),
+  ]);
 }
 
 export function clientIpFrom(hdrs: Headers): string | null {

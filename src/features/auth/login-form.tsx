@@ -64,7 +64,24 @@ export function LoginForm() {
   const onSubmit = async (values: LoginInput) => {
     setError(null);
     try {
-      const result = await api.post<{ redirectTo: string }>('/api/auth/login', values);
+      const result = await api.post<{ redirectTo: string; twoFactorRequired?: boolean }>(
+        '/api/auth/login',
+        values,
+      );
+
+      /**
+       * Zweiter Faktor ausstehend: es besteht noch keine Sitzung.
+       *
+       * Das Rücksprungziel wird mitgegeben, damit die Person nach dem Code
+       * dort landet, wo sie hinwollte — `router.refresh()` bleibt aus, weil
+       * es nichts zu erneuern gibt.
+       */
+      if (result.twoFactorRequired) {
+        const next = returnTo ? `?weiter=${encodeURIComponent(returnTo)}` : '';
+        router.replace(`/auth/bestaetigen${next}`);
+        return;
+      }
+
       // `router.refresh()` lädt die Server Components mit der neuen Session neu.
       router.replace(returnTo ?? result.redirectTo);
       router.refresh();

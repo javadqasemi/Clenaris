@@ -9,6 +9,8 @@ import { Badge } from '@/components/ui/badge';
 import { DetailRow, DetailSection, PageHeader } from '@/components/app/page-parts';
 import { ProfileForm } from '@/features/account/profile-form';
 import { PasswordChangeForm } from '@/features/account/password-change-form';
+import { TwoFactorSettings } from '@/features/account/two-factor-settings';
+import { getTwoFactorStatus } from '@/server/services/two-factor.service';
 
 export const metadata: Metadata = {
   title: 'Mein Profil',
@@ -26,6 +28,8 @@ export const dynamic = 'force-dynamic';
  */
 export default async function ProfilePage() {
   const session = await requireSession();
+
+  const twoFactor = await getTwoFactorStatus(session.id);
 
   const user = await prisma.user.findUniqueOrThrow({
     where: { id: session.id },
@@ -81,6 +85,17 @@ export default async function ProfilePage() {
               <PasswordChangeForm />
             </div>
           </DetailSection>
+
+          <TwoFactorSettings
+            status={{
+              enabled: twoFactor.enabled,
+              // Über die Grenze zur Client-Komponente geht eine Zeichenkette,
+              // nicht das Date-Objekt: die Formatierung braucht ohnehin die
+              // Zeitzone Europe/Zurich und nicht die des Servers.
+              confirmedAt: twoFactor.confirmedAt?.toISOString() ?? null,
+              remainingRecoveryCodes: twoFactor.remainingRecoveryCodes,
+            }}
+          />
         </div>
 
         <div className="space-y-6">

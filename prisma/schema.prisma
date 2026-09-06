@@ -607,14 +607,27 @@ model User {
   status    UserStatus @default(ACTIVE)
 
   // Sicherheit
-  twoFactorEnabled   Boolean   @default(false)
-  twoFactorSecret    String?
-  failedLoginCount   Int       @default(0)
-  lockedUntil        DateTime? @db.Timestamptz(6)
-  lastLoginAt        DateTime? @db.Timestamptz(6)
-  lastLoginIp        String?
-  passwordChangedAt  DateTime  @default(now()) @db.Timestamptz(6)
-  mustChangePassword Boolean   @default(false)
+  twoFactorEnabled       Boolean   @default(false)
+  twoFactorSecret        String?
+  /// Gehashte Wiederherstellungscodes. Sie sind der einzige Weg zurueck,
+  /// wenn das Telefon verloren geht — im Klartext gespeichert waeren sie
+  /// zehn Ersatzpasswoerter in derselben Zeile wie der zweite Faktor.
+  twoFactorRecoveryCodes String[]  @default([])
+  twoFactorConfirmedAt   DateTime? @db.Timestamptz(6)
+  /// Zeitpunkt, ab dem alle vorher ausgestellten Zugangstoken ungueltig sind.
+  ///
+  /// Ein Widerruf loescht nur die Refresh-Token in der Datenbank; das
+  /// Zugangstoken ist ein signiertes JWT und laesst sich nicht loeschen. Ohne
+  /// diesen Zeitstempel liefe eine gesperrte, herabgestufte oder uebernommene
+  /// Sitzung noch bis zu fuenfzehn Minuten weiter — also genau in der Zeit, in
+  /// der die Sperre wirken soll.
+  sessionsRevokedAt      DateTime? @db.Timestamptz(6)
+  failedLoginCount       Int       @default(0)
+  lockedUntil            DateTime? @db.Timestamptz(6)
+  lastLoginAt            DateTime? @db.Timestamptz(6)
+  lastLoginIp            String?
+  passwordChangedAt      DateTime  @default(now()) @db.Timestamptz(6)
+  mustChangePassword     Boolean   @default(false)
 
   // Präferenzen
   theme          String  @default("system") // system | light | dark

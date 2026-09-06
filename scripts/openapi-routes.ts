@@ -167,6 +167,94 @@ export const ROUTES: RouteDoc[] = [
     rateLimit: 'apiWrite',
     body: auth.updateProfileSchema,
   },
+  {
+    method: 'get',
+    path: '/api/auth/2fa',
+    tag: 'Authentifizierung',
+    summary: 'Zustand des zweiten Faktors',
+    description:
+      'Ob die Zwei-Faktor-Anmeldung eingeschaltet ist, seit wann, und wie viele ' +
+      'Wiederherstellungscodes noch übrig sind. Weder Geheimnis noch Codes werden je ' +
+      'zurückgegeben — die Codes existieren nach der Einrichtung nur noch als Hash.',
+    guard: { kind: 'session' },
+    rateLimit: 'apiRead',
+  },
+  {
+    method: 'post',
+    path: '/api/auth/2fa/setup',
+    tag: 'Authentifizierung',
+    summary: 'Einrichtung beginnen',
+    description:
+      'Erzeugt ein TOTP-Geheimnis und liefert es als QR-Code und als Text zum Abtippen. ' +
+      'Der Schutz wird dabei **nicht** eingeschaltet: erst der bestätigte Code unter ' +
+      '`/api/auth/2fa/confirm` stellt ihn scharf. Ohne diesen zweiten Schritt sperrt sich ' +
+      'aus, wer den QR-Code scannt und dann das Telefon zurücksetzt. Ein bereits ' +
+      'eingeschalteter Faktor wird nicht überschrieben.',
+    guard: { kind: 'session' },
+    rateLimit: 'apiWrite',
+    extraErrors: [422],
+  },
+  {
+    method: 'post',
+    path: '/api/auth/2fa/confirm',
+    tag: 'Authentifizierung',
+    summary: 'Einrichtung bestätigen',
+    description:
+      'Prüft den ersten Code und schaltet die Zwei-Faktor-Anmeldung ein. Die Antwort ' +
+      'enthält die zehn Wiederherstellungscodes — **einmalig**. Danach existieren sie nur ' +
+      'noch als Hash; wer sie nicht notiert, braucht die Systemverantwortung.',
+    guard: { kind: 'session' },
+    rateLimit: 'login',
+    body: auth.twoFactorConfirmSchema,
+    extraErrors: [401, 422],
+  },
+  {
+    method: 'post',
+    path: '/api/auth/2fa/disable',
+    tag: 'Authentifizierung',
+    summary: 'Zweiten Faktor ausschalten',
+    description:
+      'Verlangt Passwort **und** einen gültigen Code — ein Wiederherstellungscode zählt ' +
+      'ebenfalls. Nur das Passwort würde genügen, wenn jemand eine offene Sitzung ' +
+      'übernimmt, und dann wäre der zweite Faktor genau in dem Moment weg, in dem er ' +
+      'gebraucht wird.',
+    guard: { kind: 'session' },
+    rateLimit: 'login',
+    body: auth.twoFactorDisableSchema,
+    status: 204,
+    extraErrors: [401, 422],
+  },
+  {
+    method: 'post',
+    path: '/api/auth/2fa/verify',
+    tag: 'Authentifizierung',
+    summary: 'Zweiter Schritt der Anmeldung',
+    description:
+      'Öffentlich, weil hier noch keine Sitzung besteht: Der Aufrufer weist sich über den ' +
+      'kurzlebigen Zwischenschein aus, den `/api/auth/login` gesetzt hat. Dieser Endpunkt ' +
+      'erzeugt das Zugangstoken. Sechs Ziffern sind eine Million Möglichkeiten — ohne das ' +
+      'Anmelde-Limit wären sie in Minuten durchprobiert.',
+    guard: { kind: 'public' },
+    rateLimit: 'login',
+    body: auth.twoFactorTokenSchema,
+    extraErrors: [401],
+  },
+  {
+    method: 'delete',
+    path: '/api/users/{id}/2fa',
+    tag: 'Benutzer & Rollen',
+    summary: 'Zweiten Faktor eines Kontos zurücksetzen',
+    description:
+      'Der Notausgang, wenn jemand Telefon *und* Wiederherstellungscodes verloren hat. ' +
+      'Nur die Systemverantwortung darf das — es ist die einzige Handlung, die einen ' +
+      'Schutz von aussen entfernt. Alle Sitzungen der Person werden dabei beendet: Ist ' +
+      'das Konto tatsächlich übernommen worden, endet der Zugriff in diesem Moment.',
+    guard: perm('all', 'user:update', 'role:assign'),
+    rateLimit: 'apiWrite',
+    params: q.idParam,
+    status: 204,
+    extraErrors: [422],
+  },
 
   // -------------------------------------------------------------------------
   //  Öffentlich (Website)
