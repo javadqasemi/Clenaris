@@ -203,7 +203,19 @@ export const cache = {
   },
 };
 
-/** Cache-Schlüssel zentral definieren, damit Invalidierung nachvollziehbar bleibt. */
+/**
+ * Cache-Schlüssel — **alle** an dieser Stelle.
+ *
+ * Nicht aus Ordnungsliebe. Wer einen Schlüssel beim Lesen und beim Löschen je
+ * einmal von Hand schreibt, schreibt ihn irgendwann verschieden, und dann
+ * passiert nichts Sichtbares: Der Löschbefehl trifft einen Schlüssel, den es
+ * nicht gibt, der Eintrag bleibt stehen, und die Änderung erscheint erst nach
+ * Ablauf der Frist. Genau so lagen die Firmendaten fünf Minuten und das
+ * Einsatzgebiet eine Stunde hinter der Wirklichkeit zurück, ohne dass
+ * irgendwo ein Fehler auftauchte.
+ *
+ * Eine Funktion, die beide Seiten bedient, kann nicht auseinanderlaufen.
+ */
 export const cacheKeys = {
   services: (orgId: string) => `org:${orgId}:services`,
   serviceAreas: (orgId: string) => `org:${orgId}:service-areas`,
@@ -213,4 +225,10 @@ export const cacheKeys = {
   blogPost: (slug: string, locale: string) => `blog:${locale}:${slug}`,
   publicFaqs: (orgId: string, locale: string) => `org:${orgId}:faq:${locale}`,
   reviewsSummary: (orgId: string) => `org:${orgId}:reviews:summary`,
+  content: (orgId: string, locale: string) => `content:${orgId}:${locale}`,
+  seo: (orgId: string, path: string, locale: string) => `seo:${orgId}:${path}:${locale}`,
+  navigation: (orgId: string, location: string) => `nav:${orgId}:${location}`,
+  legal: (orgId: string, slug: string) => `legal:${orgId}:${slug}`,
+  ctas: (orgId: string) => `cta:${orgId}`,
+  aiChatContext: (orgId: string) => `ai:chat-context:${orgId}`,
 };

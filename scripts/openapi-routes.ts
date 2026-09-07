@@ -16,6 +16,7 @@ import * as website from '@/lib/validation/website';
 import * as opsAdmin from '@/lib/validation/operations-admin';
 import * as nav from '@/lib/validation/navigation';
 import * as users from '@/lib/validation/users';
+import * as settings from '@/lib/validation/settings';
 import * as q from '@/lib/validation/queries';
 
 /**
@@ -2867,6 +2868,7 @@ export const ROUTES: RouteDoc[] = [
       'Schlüssel eine Einstellung wirkungslos macht, ohne dass es jemand bemerkt.',
     guard: perm('all', 'settings:update'),
     rateLimit: 'apiWrite',
+    body: settings.updateOperationSettingsSchema,
   },
 
   // -------------------------------------------------------------------------

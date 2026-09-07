@@ -28640,6 +28640,52 @@
             "sessionCookie": []
           }
         ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "bookingLeadDays": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 365
+                  },
+                  "bookingMinNoticeHours": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 720
+                  },
+                  "cancellationDeadlineHours": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 720
+                  },
+                  "smsRemindersEnabled": {
+                    "type": "boolean"
+                  },
+                  "autoDunningEnabled": {
+                    "type": "boolean"
+                  },
+                  "firstReminderAfterDays": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 90
+                  },
+                  "reviewRequestAfterDays": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 90
+                  },
+                  "moderateReviews": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "Erfolg",
@@ -28647,6 +28693,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/SuccessEnvelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }

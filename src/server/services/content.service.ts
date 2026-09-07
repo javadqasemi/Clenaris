@@ -4,7 +4,7 @@ import { cache as reactCache } from 'react';
 import { revalidatePath } from 'next/cache';
 
 import { prisma } from '@/lib/db';
-import { cache } from '@/lib/redis';
+import { cache, cacheKeys } from '@/lib/redis';
 import { logger } from '@/lib/logger';
 import {
   CONTENT_DEFINITIONS,
@@ -65,7 +65,7 @@ export const getContent = reactCache(async (organizationId: string): Promise<Con
 
   try {
     const stored = await cache.remember(
-      `content:${organizationId}:DE`,
+      cacheKeys.content(organizationId, 'DE'),
       CACHE_TTL_SECONDS,
       async () => {
         const rows = await prisma.contentBlock.findMany({
@@ -133,7 +133,7 @@ export function contentList(map: ContentMap, key: string): string[] {
  * ständig. Neu gebaut wird ohnehin erst beim nächsten Aufruf.
  */
 export async function invalidateContent(organizationId: string): Promise<void> {
-  await cache.del(`content:${organizationId}:DE`);
+  await cache.del(cacheKeys.content(organizationId, 'DE'));
   revalidatePath('/', 'layout');
 }
 
@@ -167,7 +167,7 @@ export const getPageSeo = reactCache(
     };
 
     try {
-      const row = await cache.remember(`seo:${organizationId}:${path}:DE`, CACHE_TTL_SECONDS, () =>
+      const row = await cache.remember(cacheKeys.seo(organizationId, path, 'DE'), CACHE_TTL_SECONDS, () =>
         prisma.seoMeta.findUnique({
           where: {
             organizationId_path_locale: { organizationId, path, locale: 'DE' },
@@ -199,7 +199,7 @@ export const getPageSeo = reactCache(
 );
 
 export async function invalidateSeo(organizationId: string, path: string): Promise<void> {
-  await cache.del(`seo:${organizationId}:${path}:DE`);
+  await cache.del(cacheKeys.seo(organizationId, path, 'DE'));
   // Der Seitentitel steckt im erzeugten HTML — der Seitencache muss mit.
   revalidatePath(path);
 }

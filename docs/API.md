@@ -4195,7 +4195,20 @@ Familie.
 - **Zugriff:** Erfordert die Berechtigung: `settings:update`.
 - **Rate-Limit-Klasse:** `apiWrite`
 - **Erfolg:** 200
-- **Mögliche Fehler:** 401, 403, 422, 429, 500
+- **Mögliche Fehler:** 400, 401, 403, 422, 429, 500
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `bookingLeadDays` | integer | – | ≥ 0, ≤ 365 |
+| `bookingMinNoticeHours` | integer | – | ≥ 0, ≤ 720 |
+| `cancellationDeadlineHours` | integer | – | ≥ 0, ≤ 720 |
+| `smsRemindersEnabled` | boolean | – | – |
+| `autoDunningEnabled` | boolean | – | – |
+| `firstReminderAfterDays` | integer | – | ≥ 1, ≤ 90 |
+| `reviewRequestAfterDays` | integer | – | ≥ 0, ≤ 90 |
+| `moderateReviews` | boolean | – | – |
 
 ### `GET /api/cron/hourly`
 

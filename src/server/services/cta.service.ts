@@ -5,7 +5,7 @@ import { revalidatePath } from 'next/cache';
 import { Prisma, type CtaSlot } from '@prisma/client';
 
 import { prisma } from '@/lib/db';
-import { cache } from '@/lib/redis';
+import { cache, cacheKeys } from '@/lib/redis';
 import { audit, diff } from '@/lib/audit';
 import { logger } from '@/lib/logger';
 import { BusinessRuleError, ConflictError, NotFoundError } from '@/lib/errors';
@@ -41,7 +41,6 @@ const log = logger('cta');
  */
 
 const CACHE_TTL_SECONDS = 120;
-const CACHE_KEY = (organizationId: string) => `cta:${organizationId}`;
 
 export interface PublicCta {
   id: string;
@@ -65,7 +64,7 @@ export interface PublicCta {
  */
 const loadActive = reactCache(async (organizationId: string) => {
   try {
-    const rows = await cache.remember(CACHE_KEY(organizationId), CACHE_TTL_SECONDS, () =>
+    const rows = await cache.remember(cacheKeys.ctas(organizationId), CACHE_TTL_SECONDS, () =>
       prisma.callToAction.findMany({
         where: { organizationId, active: true, deletedAt: null },
         orderBy: [{ position: 'asc' }, { createdAt: 'asc' }],
@@ -155,7 +154,7 @@ async function invalidate(): Promise<void> {
 }
 
 async function invalidateAll(organizationId: string): Promise<void> {
-  await cache.del(CACHE_KEY(organizationId));
+  await cache.del(cacheKeys.ctas(organizationId));
   await invalidate();
 }
 
