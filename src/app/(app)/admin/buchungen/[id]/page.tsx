@@ -235,7 +235,7 @@ export default async function AdminBookingDetailPage({
         {/* Seitenspalte */}
         <div className="space-y-6">
           <DetailSection title="Kundschaft">
-            <dl className="protocol-list">
+            <dl className="protocol-list protocol-list--tight">
               <DetailRow label="Name">
                 <Link
                   href={`/admin/kunden/${booking.customer.id}`}

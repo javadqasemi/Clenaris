@@ -288,7 +288,7 @@ export default async function AdminJobDetailPage({
         {/* Seitenspalte */}
         <div className="space-y-6">
           <DetailSection title="Kundschaft">
-            <dl className="protocol-list">
+            <dl className="protocol-list protocol-list--tight">
               <DetailRow label="Name">
                 <Link
                   href={`/admin/kunden/${job.customer.id}`}
