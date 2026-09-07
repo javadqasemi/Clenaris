@@ -427,7 +427,7 @@ export default async function AdminCustomerDetailPage({
                 <DetailRow label="Mobil">{formatPhone(customer.mobile)}</DetailRow>
               ) : null}
               {billing ? (
-                <DetailRow label="Rechnungsadresse">
+                <DetailRow label="RE-Adresse">
                   <span className="inline-flex items-start gap-1.5">
                     <MapPin className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" aria-hidden />
                     <span>
