@@ -265,10 +265,33 @@
      Breite ihres Inhalts zu schrumpfen. Eine lange E-Mail-Adresse ohne
      Trennstelle schöbe die Karte sonst auseinander — genau der Überlauf, den
      wir an anderer Stelle schon einmal hatten.
+
+     Der Teilraster (`subgrid`) ist der eigentliche Punkt. Jede Zeile ist für
+     sich ein Raster; mit `auto` mass deshalb jede ihre eigene Beschriftung aus,
+     und die Werte standen ausgefranst untereinander — „E-Mail" ist kürzer als
+     „Telefon", also begann der Wert daneben weiter links. Erst wenn die Liste
+     selbst das Raster aufspannt und die Zeilen sich seine Spalten teilen,
+     richtet sich alles an der *längsten* Beschriftung aus. Genau das ist der
+     Unterschied zwischen „jede Zeile so breit wie sie mag" und „alle so breit
+     wie die längste".
+
+     Ohne `subgrid` fällt die Zeile auf die Regel darüber zurück: ausgefranst,
+     aber vollständig lesbar.
   */
   @media (min-width: 640px) {
     .protocol-list--tight .protocol-row {
       grid-template-columns: auto minmax(0, 1fr);
+    }
+
+    .protocol-list--tight {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr);
+      column-gap: 0.5rem;
+    }
+
+    .protocol-list--tight .protocol-row {
+      grid-column: 1 / -1;
+      grid-template-columns: subgrid;
     }
   }
 
