@@ -219,7 +219,7 @@ export default async function AdminQuoteDetailPage({
         {/* Seitenspalte */}
         <div className="space-y-6">
           <DetailSection title="Empfänger">
-            <dl className="protocol-list">
+            <dl className="protocol-list protocol-list--tight">
               <DetailRow label="Name">
                 {quote.customerId ? (
                   <Link
@@ -247,7 +247,7 @@ export default async function AdminQuoteDetailPage({
           </DetailSection>
 
           <DetailSection title="Verlauf">
-            <dl className="protocol-list">
+            <dl className="protocol-list protocol-list--tight">
               <DetailRow label="Erstellt">{formatDateTime(quote.createdAt)}</DetailRow>
               {quote.sentAt ? (
                 <DetailRow label="Versendet">{formatDateTime(quote.sentAt)}</DetailRow>

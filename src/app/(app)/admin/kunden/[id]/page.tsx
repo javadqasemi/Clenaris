@@ -485,7 +485,7 @@ export default async function AdminCustomerDetailPage({
           </DetailSection>
 
           <DetailSection title="Konditionen">
-            <dl className="protocol-list">
+            <dl className="protocol-list protocol-list--tight">
               <DetailRow label="Zahlungsfrist">{customer.paymentTermDays} Tage</DetailRow>
               <DetailRow label="Rabatt">
                 {toNumber(customer.discountPercent) > 0

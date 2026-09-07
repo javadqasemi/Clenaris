@@ -225,7 +225,7 @@
   }
 
   /*
-     Enge Fassung der Protokollzeile.
+     Enge Fassung der Protokollzeile — für Karten mit kurzen Beschriftungen.
 
      Zwei Abweichungen von der Grundfassung, beide aus demselben Grund:
 
@@ -237,17 +237,24 @@
       • **Die Beschriftungsspalte wächst mit ihrem Text** statt auf mindestens
         144 px zu bestehen. Die feste Untergrenze hält die Spalten über viele
         Zeilen hinweg in einer Flucht; das lohnt sich in einer langen Liste wie
-        den Einstellungen. In einer Karte mit fünf kurzen Beschriftungen steht
-        dagegen nur Leerraum zwischen beiden, und der Wert bekommt zu wenig
-        Platz.
+        den Einstellungen. In einer Seitenkarte mit fünf kurzen Beschriftungen
+        steht dagegen nur Leerraum zwischen beiden, und der Wert — eine
+        Adresse, ein Verweis, eine QR-Referenz — bekommt zu wenig Platz.
+
+     Wann welche? Die Grundfassung bleibt der Normalfall und gilt überall, wo
+     nichts anderes dransteht. Die enge Fassung ist für die schmalen Karten der
+     Seitenspalte gedacht: Kontakt, Konditionen, Empfänger, Verknüpfungen,
+     Zahlungsinformationen, Verlauf. Faustregel: Wenn die längste Beschriftung
+     der Karte deutlich unter 144 px bleibt, verschenkt die Grundfassung dort
+     Breite.
 
      Der Breakpoint bleibt: Unter 640 px stapeln Beschriftung und Wert sich
      ohnehin, und zwei Spalten wären dort falsch.
 
      Bewusst über die Liste gesetzt und nicht über jede Zeile: eine Klasse am
-     `dl` statt fünf an den Zeilen, und die Ausnahme bleibt dort sichtbar, wo
-     sie entschieden wurde. Die höhere Spezifität schlägt die Grundfassung
-     ohne `!important`.
+     `dl` statt einer an jeder Zeile, und die Entscheidung bleibt dort
+     sichtbar, wo sie getroffen wurde. Die höhere Spezifität schlägt die
+     Grundfassung ohne `!important`.
   */
   .protocol-list--tight .protocol-row {
     @apply gap-2;

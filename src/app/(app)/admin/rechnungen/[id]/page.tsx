@@ -253,7 +253,7 @@ export default async function AdminInvoiceDetailPage({
         {/* Seitenspalte */}
         <div className="space-y-6">
           <DetailSection title="Empfänger">
-            <dl className="protocol-list">
+            <dl className="protocol-list protocol-list--tight">
               <DetailRow label="Name">
                 <Link
                   href={`/admin/kunden/${invoice.customer.id}`}
@@ -285,7 +285,7 @@ export default async function AdminInvoiceDetailPage({
           </DetailSection>
 
           <DetailSection title="Zahlungsinformationen">
-            <dl className="protocol-list">
+            <dl className="protocol-list protocol-list--tight">
               {invoice.qrReference ? (
                 <DetailRow label="QR-Referenz">
                   <span className="tabular-nums">{formatQrReference(invoice.qrReference)}</span>
@@ -316,7 +316,7 @@ export default async function AdminInvoiceDetailPage({
 
           {invoice.booking || invoice.quote ? (
             <DetailSection title="Verknüpfungen">
-              <dl className="protocol-list">
+              <dl className="protocol-list protocol-list--tight">
                 {invoice.booking ? (
                   <DetailRow label="Buchung">
                     <Link
