@@ -203,7 +203,7 @@ export default async function LeadDetailPage({
 
         <aside className="space-y-6">
           <DetailSection title="Kontakt">
-            <dl className="protocol-list">
+            <dl className="protocol-list protocol-list--tight">
               <DetailRow label="Name">{name}</DetailRow>
               {lead.company ? <DetailRow label="Firma">{lead.company}</DetailRow> : null}
               <DetailRow label="E-Mail">

@@ -56,6 +56,19 @@ import {
  *    Einblendung.** „An dieser Adresse hängen noch zwei Einsätze" ist die
  *    Information, die weiterhilft, und sie soll stehen bleiben, bis man sie
  *    gelesen hat.
+ *
+ *  • **Die Spaltenzahl richtet sich nach dem Platz, nicht nach der
+ *    Fensterbreite.** Hier stand zuerst `sm:grid-cols-2`, und das war falsch:
+ *    Der Breakpoint misst das Fenster, die Karten stehen aber je nach Ort in
+ *    einer 352 px schmalen Seitenspalte oder über die volle Kontoseite. Auf
+ *    einem grossen Bildschirm zerlegte er die 304 px Innenbreite der
+ *    Seitenspalte in zwei Spalten zu je 146 px — und bei einer einzigen
+ *    Adresse stand die Karte auf halber Breite mit Leerraum daneben.
+ *
+ *    `repeat(auto-fill, minmax(15rem, 1fr))` kennt diesen Fehler nicht: In der
+ *    Seitenspalte entsteht eine Spalte, auf der breiten Seite so viele, wie
+ *    hineinpassen. Ohne Container-Queries, und ohne dass die Komponente wissen
+ *    muss, wo sie steht.
  */
 
 export interface AddressRow {
@@ -117,7 +130,7 @@ export function AddressManager({ customerId, addresses, audience, canEdit }: Pro
           }
         />
       ) : (
-        <ul className="grid gap-3 sm:grid-cols-2">
+        <ul className="grid grid-cols-[repeat(auto-fill,minmax(15rem,1fr))] gap-3">
           {addresses.map((address) => (
             <li
               key={address.id}
