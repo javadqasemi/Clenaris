@@ -16,8 +16,14 @@ zusätzliche Abhängigkeit, keine Konfigurationsdatei.
 
    ```
    npm run db:deploy
-   npm run db:seed
+   npm run db:seed:demo
    ```
+
+   **`db:seed:demo`, nicht `db:seed`.** Der gewöhnliche Seed legt nur die
+   Konfiguration an — Firma, Leistungen, Preise, Einsatzgebiet, Team. Die
+   Prüfungen fahren aber Kundenakten, Rechnungen und Nachrichtenverläufe an;
+   ohne Bestand prüfen sie nichts. Der Demo-Seed schliesst den gewöhnlichen
+   ein, ein getrennter Aufruf ist also nicht nötig.
 
 2. Ein laufender Server:
 
