@@ -224,6 +224,24 @@
     @apply text-sm font-medium text-foreground;
   }
 
+  /*
+     Enge Fassung der Protokollzeile.
+
+     Die 24 px der Grundfassung gliedern lange Werte — eine Adresse über drei
+     Zeilen, eine Aufzählung von Steuersätzen. Wo Beschriftung und Wert beide
+     kurz sind, reissen sie das Paar eher auseinander, als dass sie es
+     zusammenhalten: „E-Mail" und die Adresse gehören zusammen und sollen auch
+     so aussehen.
+
+     Bewusst über die Liste gesetzt und nicht über jede Zeile: eine Klasse am
+     `dl` statt fünf an den Zeilen, und die Ausnahme bleibt dort sichtbar, wo
+     sie entschieden wurde. Die höhere Spezifität schlägt auch das `sm:gap-6`
+     der Grundfassung, ohne `!important`.
+  */
+  .protocol-list--tight .protocol-row {
+    @apply gap-2;
+  }
+
   /* Glas: bewusst nur an zwei Stellen — Kopfzeile und schwebende Leisten. */
   .glass {
     background: hsl(var(--background) / 0.72);

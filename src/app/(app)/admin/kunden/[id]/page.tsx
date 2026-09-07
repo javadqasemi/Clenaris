@@ -400,7 +400,9 @@ export default async function AdminCustomerDetailPage({
         {/* Seitenspalte */}
         <div className="space-y-6">
           <DetailSection title="Kontakt">
-            <dl className="protocol-list">
+            {/* Enge Fassung: Beschriftung und Wert sind hier beide kurz und
+                gehören zusammen — 24 px reissen das Paar eher auseinander. */}
+            <dl className="protocol-list protocol-list--tight">
               <DetailRow label="E-Mail">
                 <a
                   href={`mailto:${customer.email}`}
