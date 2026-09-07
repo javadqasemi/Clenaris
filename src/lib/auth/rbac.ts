@@ -71,6 +71,7 @@ const GUEST_PERMISSIONS: Permission[] = [];
 
 const CUSTOMER_PERMISSIONS: Permission[] = [
   'customer:read_own',
+  'customer:update_own',
   'booking:read_own',
   'booking:write_own',
   'quote:read_own',

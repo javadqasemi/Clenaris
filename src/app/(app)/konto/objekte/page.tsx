@@ -6,6 +6,8 @@ import { requireCustomerId } from '@/lib/auth/session';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { EmptyState, PageHeader } from '@/components/app/page-parts';
+import { AddressManager } from '@/features/shared/address-manager';
+import { listAddresses } from '@/server/services/address.service';
 
 export const metadata: Metadata = {
   title: 'Meine Objekte',
@@ -46,10 +48,7 @@ export default async function AccountPropertiesPage() {
         _count: { select: { bookings: true } },
       },
     }),
-    prisma.address.findMany({
-      where: { customerId },
-      orderBy: [{ isDefault: 'desc' }, { createdAt: 'asc' }],
-    }),
+    listAddresses(customerId),
   ]);
 
   return (
@@ -146,45 +145,36 @@ export default async function AccountPropertiesPage() {
       </section>
 
       {/* Adressen */}
-      {addresses.length > 0 ? (
-        <section className="space-y-4" aria-label="Adressen">
-          <h2 className="font-display text-lg font-semibold tracking-tight">Adressen</h2>
+      <section className="space-y-4" aria-label="Adressen">
+        <h2 className="font-display text-lg font-semibold tracking-tight">Adressen</h2>
 
-          <ul className="divide-y divide-border overflow-hidden rounded-2xl border border-border bg-card">
-            {addresses.map((address) => (
-              <li
-                key={address.id}
-                className="grid grid-cols-[auto_minmax(0,1fr)] items-center gap-x-3 gap-y-2 p-4 sm:grid-cols-[auto_minmax(0,1fr)_auto] sm:gap-4 sm:px-5"
-              >
-                <MapPin className="size-4 shrink-0 text-muted-foreground" aria-hidden />
-                <div className="min-w-0">
-                  <p className="truncate font-medium">{address.label ?? 'Adresse'}</p>
-                  <p className="truncate text-meta text-muted-foreground">
-                    {address.street} {address.streetNo}, {address.postalCode} {address.city}
-                  </p>
-                </div>
-                <div className="col-start-2 flex flex-wrap gap-2 sm:col-start-auto">
-                  {address.isDefault ? (
-                    <Badge variant="default" size="sm">
-                      Standard
-                    </Badge>
-                  ) : null}
-                  {address.isBilling ? (
-                    <Badge variant="neutral" size="sm">
-                      Rechnungsadresse
-                    </Badge>
-                  ) : null}
-                </div>
-              </li>
-            ))}
-          </ul>
+        <AddressManager
+          customerId={customerId}
+          audience="self"
+          canEdit
+          addresses={addresses.map((address) => ({
+            id: address.id,
+            label: address.label,
+            street: address.street,
+            streetNo: address.streetNo,
+            addition: address.addition,
+            postalCode: address.postalCode,
+            city: address.city,
+            canton: address.canton,
+            country: address.country,
+            accessNote: address.accessNote,
+            isDefault: address.isDefault,
+            isBilling: address.isBilling,
+            usage: address._count.properties + address._count.bookings + address._count.jobs,
+          }))}
+        />
 
-          <p className="text-sm leading-relaxed text-muted-foreground">
-            Adressen ändern? Schreiben Sie uns kurz — wir passen sie an und stellen sicher, dass
-            offene Rechnungen weiterhin stimmen.
-          </p>
-        </section>
-      ) : null}
+        <p className="prose-measure text-sm leading-relaxed text-muted-foreground">
+          Änderungen wirken sofort — auf künftige Termine und auf neue Rechnungen. Bereits
+          ausgestellte Rechnungen behalten die Adresse, die zum Zeitpunkt der Ausstellung galt;
+          das schreibt die Buchführung so vor.
+        </p>
+      </section>
     </div>
   );
 }

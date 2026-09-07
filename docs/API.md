@@ -5,7 +5,7 @@
 > Quelle, aus der sowohl diese Referenz als auch die Laufzeitvalidierung
 > stammen.
 
-Stand: 233 Endpunkte. Die maschinenlesbare Fassung liegt in
+Stand: 237 Endpunkte. Die maschinenlesbare Fassung liegt in
 [`openapi.yaml`](./openapi.yaml) bzw. [`openapi.json`](./openapi.json).
 
 ## Grundlagen
@@ -860,6 +860,112 @@ Familie.
 | Feld | Typ | Pflicht | Regeln |
 | --- | --- | --- | --- |
 | `id` | string | ja | min. 1 Zeichen |
+
+### `GET /api/customers/{id}/addresses`
+
+**Adressen einer Kundschaft.** Eine Kundschaft hat mehrere Adressen — Wohnung, Buero, die Treuhand fuer die Rechnungen. Genau eine ist die Standardadresse, hoechstens eine die Rechnungsanschrift. Die Antwort nennt zu jeder, wie viele Objekte, Buchungen und Einsaetze darauf verweisen. Erreichbar fuer das Buero und fuer die Kundschaft im eigenen Konto; wer nur das eigene Recht hat, kommt ausschliesslich an die eigene Akte.
+
+- **Zugriff:** Erfordert eine der Berechtigungen: `customer:read`, `customer:read_own`.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+### `POST /api/customers/{id}/addresses`
+
+**Adresse erfassen.** Die erste Adresse einer Kundschaft wird zwangslaeufig Standard- und Rechnungsanschrift: Eine Kundschaft mit einer Adresse, die fuer nichts gilt, koennte keinen Termin buchen. Wird eine weitere zur Standardadresse erklaert, verliert die bisherige die Markierung — in derselben Transaktion, damit nie zwei gleichzeitig gelten.
+
+- **Zugriff:** Erfordert eine der Berechtigungen: `customer:update`, `customer:update_own`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 201
+- **Mögliche Fehler:** 400, 401, 403, 404, 409, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `label` | string | – | max. 60 Zeichen |
+| `street` | string | ja | min. 2 Zeichen, max. 120 Zeichen |
+| `streetNo` | string | – | max. 20 Zeichen |
+| `addition` | string | – | max. 120 Zeichen |
+| `postalCode` | string | ja | – |
+| `city` | string | ja | min. 2 Zeichen, max. 80 Zeichen |
+| `canton` | string | – | Standard `"BE"` |
+| `country` | string | – | Standard `"CH"` |
+| `lat` | number | – | ≥ -90, ≤ 90 |
+| `lng` | number | – | ≥ -180, ≤ 180 |
+| `placeId` | string | – | max. 200 Zeichen |
+| `accessNote` | string | – | max. 500 Zeichen |
+| `firstName` | string | – | max. 80 Zeichen |
+| `lastName` | string | – | max. 80 Zeichen |
+| `company` | string | – | max. 140 Zeichen |
+| `isBilling` | boolean | – | Standard `false` |
+| `isDefault` | boolean | – | Standard `false` |
+
+### `PATCH /api/customers/{id}/addresses/{addressId}`
+
+**Adresse aendern.** Die Standardmarkierung laesst sich nicht abwaehlen, nur weitergeben — sonst stuende eine Kundschaft ohne Standardadresse da und kaeme im Buchungsformular nicht weiter. Wer eine andere zur Standardadresse macht, nimmt sie dieser automatisch weg.
+
+- **Zugriff:** Erfordert eine der Berechtigungen: `customer:update`, `customer:update_own`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+| `addressId` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `label` | string | – | max. 60 Zeichen |
+| `street` | string | – | min. 2 Zeichen, max. 120 Zeichen |
+| `streetNo` | string | – | max. 20 Zeichen |
+| `addition` | string | – | max. 120 Zeichen |
+| `postalCode` | string | – | – |
+| `city` | string | – | min. 2 Zeichen, max. 80 Zeichen |
+| `canton` | string | – | Standard `"BE"` |
+| `country` | string | – | Standard `"CH"` |
+| `lat` | number | – | ≥ -90, ≤ 90 |
+| `lng` | number | – | ≥ -180, ≤ 180 |
+| `placeId` | string | – | max. 200 Zeichen |
+| `accessNote` | string | – | max. 500 Zeichen |
+| `firstName` | string | – | max. 80 Zeichen |
+| `lastName` | string | – | max. 80 Zeichen |
+| `company` | string | – | max. 140 Zeichen |
+| `isBilling` | boolean | – | Standard `false` |
+| `isDefault` | boolean | – | Standard `false` |
+
+### `DELETE /api/customers/{id}/addresses/{addressId}`
+
+**Adresse entfernen.** Endgueltig, nicht in den Papierkorb: `Address` traegt kein `deletedAt`. Deshalb bleibt jede Adresse stehen, an der Objekte, Buchungen oder Einsaetze haengen — sie belegt, wohin damals gefahren wurde. Und die letzte Adresse bleibt ohnehin, weil ohne sie keine Buchung mehr zustande kaeme. Faellt die Standardadresse weg, rueckt die aelteste verbleibende nach.
+
+- **Zugriff:** Erfordert eine der Berechtigungen: `customer:update`, `customer:update_own`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 204
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+| `addressId` | string | ja | min. 1 Zeichen |
 
 ### `POST /api/customers/{id}/restore`
 

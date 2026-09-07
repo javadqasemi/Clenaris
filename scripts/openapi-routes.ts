@@ -1675,6 +1675,71 @@ export const ROUTES: RouteDoc[] = [
     extraErrors: [422],
   },
   {
+    method: 'get',
+    path: '/api/customers/{id}/addresses',
+    tag: 'CRM',
+    summary: 'Adressen einer Kundschaft',
+    description:
+      'Eine Kundschaft hat mehrere Adressen — Wohnung, Buero, die Treuhand fuer die Rechnungen. ' +
+      'Genau eine ist die Standardadresse, hoechstens eine die Rechnungsanschrift. Die Antwort ' +
+      'nennt zu jeder, wie viele Objekte, Buchungen und Einsaetze darauf verweisen. ' +
+      'Erreichbar fuer das Buero und fuer die Kundschaft im eigenen Konto; wer nur das eigene ' +
+      'Recht hat, kommt ausschliesslich an die eigene Akte.',
+    guard: perm('any', 'customer:read', 'customer:read_own'),
+    rateLimit: 'apiRead',
+    params: q.idParam,
+    extraErrors: [403],
+  },
+  {
+    method: 'post',
+    path: '/api/customers/{id}/addresses',
+    tag: 'CRM',
+    summary: 'Adresse erfassen',
+    description:
+      'Die erste Adresse einer Kundschaft wird zwangslaeufig Standard- und Rechnungsanschrift: ' +
+      'Eine Kundschaft mit einer Adresse, die fuer nichts gilt, koennte keinen Termin buchen. ' +
+      'Wird eine weitere zur Standardadresse erklaert, verliert die bisherige die Markierung — ' +
+      'in derselben Transaktion, damit nie zwei gleichzeitig gelten.',
+    guard: perm('any', 'customer:update', 'customer:update_own'),
+    rateLimit: 'apiWrite',
+    params: q.idParam,
+    body: crm.createAddressSchema,
+    status: 201,
+    extraErrors: [403],
+  },
+  {
+    method: 'patch',
+    path: '/api/customers/{id}/addresses/{addressId}',
+    tag: 'CRM',
+    summary: 'Adresse aendern',
+    description:
+      'Die Standardmarkierung laesst sich nicht abwaehlen, nur weitergeben — sonst stuende eine ' +
+      'Kundschaft ohne Standardadresse da und kaeme im Buchungsformular nicht weiter. Wer eine ' +
+      'andere zur Standardadresse macht, nimmt sie dieser automatisch weg.',
+    guard: perm('any', 'customer:update', 'customer:update_own'),
+    rateLimit: 'apiWrite',
+    params: q.addressParams,
+    body: crm.updateAddressSchema,
+    extraErrors: [403, 422],
+  },
+  {
+    method: 'delete',
+    path: '/api/customers/{id}/addresses/{addressId}',
+    tag: 'CRM',
+    summary: 'Adresse entfernen',
+    description:
+      'Endgueltig, nicht in den Papierkorb: `Address` traegt kein `deletedAt`. Deshalb bleibt ' +
+      'jede Adresse stehen, an der Objekte, Buchungen oder Einsaetze haengen — sie belegt, ' +
+      'wohin damals gefahren wurde. Und die letzte Adresse bleibt ohnehin, weil ohne sie keine ' +
+      'Buchung mehr zustande kaeme. Faellt die Standardadresse weg, rueckt die aelteste ' +
+      'verbleibende nach.',
+    guard: perm('any', 'customer:update', 'customer:update_own'),
+    rateLimit: 'apiWrite',
+    params: q.addressParams,
+    status: 204,
+    extraErrors: [403, 422],
+  },
+  {
     method: 'post',
     path: '/api/customers/{id}/restore',
     tag: 'CRM',

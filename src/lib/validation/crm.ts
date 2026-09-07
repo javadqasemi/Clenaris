@@ -173,6 +173,16 @@ export const createAddressSchema = addressSchema.extend({
 });
 export type CreateAddressInput = z.infer<typeof createAddressSchema>;
 
+/**
+ * Adresse ändern.
+ *
+ * Alles freiwillig, damit eine Maske nur senden muss, was sie angefasst hat.
+ * `.strict()` fängt dafür den Tippfehler ab: Ein unbekanntes Feld wird sonst
+ * still verworfen, die Antwort lautet 200, und die Änderung fehlt.
+ */
+export const updateAddressSchema = createAddressSchema.partial().strict();
+export type UpdateAddressInput = z.infer<typeof updateAddressSchema>;
+
 export const createPropertySchema = z.object({
   label: z.string().trim().min(2, 'Bitte benennen Sie das Objekt.').max(80),
   kind: z.enum([

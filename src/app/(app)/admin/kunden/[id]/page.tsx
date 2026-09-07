@@ -39,6 +39,9 @@ import { KpiTile } from '@/components/app/kpi-tile';
 import { DetailRow, DetailSection, EmptyState, PageHeader } from '@/components/app/page-parts';
 import { DataCell, DataList, DataListHeader, DataRow } from '@/components/app/data-list';
 import { ActivityComposer } from '@/features/admin/activity-composer';
+import { AddressManager } from '@/features/shared/address-manager';
+import { can } from '@/lib/auth/rbac';
+import { listAddresses } from '@/server/services/address.service';
 
 export const metadata: Metadata = {
   title: 'Kunde',
@@ -79,10 +82,12 @@ export default async function AdminCustomerDetailPage({
 }: {
   params: Promise<{ id: string }>;
 }) {
-  await requirePermission('customer:read');
+  const session = await requirePermission('customer:read');
+  const canEdit = can(session.role, 'customer:update');
 
   const { id } = await params;
   const organizationId = await getOrganizationId();
+  const addresses = await listAddresses(id);
 
   const { customer, stats } = await getCustomerDetail({ organizationId, customerId: id }).catch(
     (error) => {
@@ -444,6 +449,39 @@ export default async function AdminCustomerDetailPage({
                   : 'Kein Konto verknüpft'}
               </DetailRow>
             </dl>
+          </DetailSection>
+
+          {/*
+            Adressen stehen als eigener Abschnitt und nicht als Feld in der
+            Kontaktkarte: Eine Kundschaft hat mehrere — Wohnung, Büro, die
+            Treuhand für die Rechnungen —, und genau eine davon ist die
+            Standardadresse. Ein einzelnes Feld könnte das nicht abbilden.
+            Die Kontaktkarte darüber zeigt weiterhin die eine, die zählt.
+          */}
+          <DetailSection title={`Adressen (${addresses.length})`}>
+            <div className="py-4">
+              <AddressManager
+                customerId={customer.id}
+                audience="staff"
+                canEdit={canEdit}
+                addresses={addresses.map((address) => ({
+                  id: address.id,
+                  label: address.label,
+                  street: address.street,
+                  streetNo: address.streetNo,
+                  addition: address.addition,
+                  postalCode: address.postalCode,
+                  city: address.city,
+                  canton: address.canton,
+                  country: address.country,
+                  accessNote: address.accessNote,
+                  isDefault: address.isDefault,
+                  isBilling: address.isBilling,
+                  usage:
+                    address._count.properties + address._count.bookings + address._count.jobs,
+                }))}
+              />
+            </div>
           </DetailSection>
 
           <DetailSection title="Konditionen">

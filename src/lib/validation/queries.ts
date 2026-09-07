@@ -34,6 +34,9 @@ export const dateRangeQuery = z.object({
 
 export const idParam = z.object({ id: z.string().min(1) });
 
+/** Zwei Segmente: die Kundenakte und die Adresse darin. */
+export const addressParams = z.object({ id: z.string().min(1), addressId: z.string().min(1) });
+
 // --- CRM --------------------------------------------------------------------
 
 export const customerListQuery = searchQuery.extend({
