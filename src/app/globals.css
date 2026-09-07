@@ -227,19 +227,49 @@
   /*
      Enge Fassung der Protokollzeile.
 
-     Die 24 px der Grundfassung gliedern lange Werte — eine Adresse über drei
-     Zeilen, eine Aufzählung von Steuersätzen. Wo Beschriftung und Wert beide
-     kurz sind, reissen sie das Paar eher auseinander, als dass sie es
-     zusammenhalten: „E-Mail" und die Adresse gehören zusammen und sollen auch
-     so aussehen.
+     Zwei Abweichungen von der Grundfassung, beide aus demselben Grund:
+
+      • **8 px statt 24 px Abstand.** Die 24 px gliedern lange Werte — eine
+        Adresse über drei Zeilen, eine Aufzählung von Steuersätzen. Wo
+        Beschriftung und Wert beide kurz sind, reissen sie das Paar eher
+        auseinander, als dass sie es zusammenhalten.
+
+      • **Die Beschriftungsspalte wächst mit ihrem Text** statt auf mindestens
+        144 px zu bestehen. Die feste Untergrenze hält die Spalten über viele
+        Zeilen hinweg in einer Flucht; das lohnt sich in einer langen Liste wie
+        den Einstellungen. In einer Karte mit fünf kurzen Beschriftungen steht
+        dagegen nur Leerraum zwischen beiden, und der Wert bekommt zu wenig
+        Platz.
+
+     Der Breakpoint bleibt: Unter 640 px stapeln Beschriftung und Wert sich
+     ohnehin, und zwei Spalten wären dort falsch.
 
      Bewusst über die Liste gesetzt und nicht über jede Zeile: eine Klasse am
      `dl` statt fünf an den Zeilen, und die Ausnahme bleibt dort sichtbar, wo
-     sie entschieden wurde. Die höhere Spezifität schlägt auch das `sm:gap-6`
-     der Grundfassung, ohne `!important`.
+     sie entschieden wurde. Die höhere Spezifität schlägt die Grundfassung
+     ohne `!important`.
   */
   .protocol-list--tight .protocol-row {
     @apply gap-2;
+  }
+
+  /*
+     Die Spaltenaufteilung als reguläre Regel, nicht über `@apply`.
+
+     `@apply sm:grid-cols-[auto_minmax(0,1fr)]` sah richtig aus und landete
+     nicht im gebauten CSS — die Klammern und das Komma in `minmax` überstehen
+     den Weg durch `@apply` nicht. Der Fehler ist stumm: Die Datei baut, die
+     Regel fehlt einfach. Ausgeschrieben kann das nicht passieren.
+
+     `minmax(0,1fr)` statt `1fr`: Eine blosse `fr`-Spur weigert sich, unter die
+     Breite ihres Inhalts zu schrumpfen. Eine lange E-Mail-Adresse ohne
+     Trennstelle schöbe die Karte sonst auseinander — genau der Überlauf, den
+     wir an anderer Stelle schon einmal hatten.
+  */
+  @media (min-width: 640px) {
+    .protocol-list--tight .protocol-row {
+      grid-template-columns: auto minmax(0, 1fr);
+    }
   }
 
   /* Glas: bewusst nur an zwei Stellen — Kopfzeile und schwebende Leisten. */
