@@ -76,10 +76,15 @@ export function TimeClock({
         `/api/time/${direction === 'in' ? 'clock-in' : 'clock-out'}`,
         {
           jobId,
-          // Ohne Standort senden wir 0/0; der Server erkennt das an der fehlenden Genauigkeit.
-          lat: position?.lat ?? 0,
-          lng: position?.lng ?? 0,
-          accuracy: position?.accuracy,
+          /*
+            Ohne Standort werden die Felder weggelassen, nicht auf 0/0 gesetzt.
+            0/0 ist eine gültige Koordinate im Atlantik: Der Server hätte daraus
+            eine Entfernung von tausenden Kilometern zur Einsatzadresse
+            gerechnet und jede Stempelung ohne Empfang als verdächtig markiert.
+          */
+          lat: position?.lat ?? null,
+          lng: position?.lng ?? null,
+          accuracy: position?.accuracy ?? null,
         },
       );
 
@@ -146,7 +151,7 @@ export function TimeClock({
       )}
 
       {warning ? (
-        <Alert variant="warning" title="Standort weicht ab">
+        <Alert variant="warning" title="Hinweis zum Standort">
           {warning}
         </Alert>
       ) : null}

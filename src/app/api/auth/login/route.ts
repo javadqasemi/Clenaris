@@ -1,6 +1,6 @@
 import { definePublicRoute } from '@/lib/api/handler';
 import { ok } from '@/lib/api/response';
-import { homeRouteFor } from '@/lib/auth/rbac';
+import { homeRouteFor, profileRouteFor } from '@/lib/auth/rbac';
 import { loginSchema } from '@/lib/validation/auth';
 import { login } from '@/server/services/auth.service';
 
@@ -9,9 +9,11 @@ export const runtime = 'nodejs';
 /**
  * POST /api/auth/login
  *
- * Das Rate-Limit greift zusätzlich zur IP auch auf die E-Mail-Adresse: sonst
- * könnte ein verteilter Angriff mit vielen IPs ein einzelnes Konto beliebig
- * oft testen.
+ * Zwei Bremsen, die sich ergänzen: Das Rate-Limit hier zählt je IP-Adresse
+ * und stoppt breites Durchprobieren von einem Rechner aus. Gegen einen
+ * verteilten Angriff auf *ein* Konto mit vielen IPs hilft es nicht — dafür
+ * sperrt der Dienst das Konto nach acht Fehlversuchen für eine Viertelstunde
+ * (`MAX_FAILED_LOGINS` in `auth.service.ts`).
  */
 export const POST = definePublicRoute({
   body: loginSchema,
@@ -43,7 +45,7 @@ export const POST = definePublicRoute({
       role: user.role,
       mustChangePassword,
       twoFactorRequired: false,
-      redirectTo: mustChangePassword ? '/auth/passwort-aendern' : homeRouteFor(user.role),
+      redirectTo: mustChangePassword ? profileRouteFor(user.role) : homeRouteFor(user.role),
     });
   },
 });

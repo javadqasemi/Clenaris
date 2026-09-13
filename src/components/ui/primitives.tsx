@@ -38,13 +38,17 @@ Separator.displayName = 'Separator';
 
 const Avatar = React.forwardRef<
   React.ElementRef<typeof AvatarPrimitive.Root>,
-  React.ComponentPropsWithoutRef<typeof AvatarPrimitive.Root> & { size?: 'sm' | 'md' | 'lg' }
+  React.ComponentPropsWithoutRef<typeof AvatarPrimitive.Root> & {
+    size?: 'sm' | 'md' | 'lg' | 'xl';
+  }
 >(({ className, size = 'md', ...props }, ref) => (
   <AvatarPrimitive.Root
     ref={ref}
     className={cn(
       'relative flex shrink-0 overflow-hidden rounded-full',
-      { sm: 'size-8', md: 'size-10', lg: 'size-14' }[size],
+      // `xl` ist die Grösse für die Profilseite: Dort ist das Bild der
+      // Gegenstand der Handlung und nicht die Beigabe zu einem Namen.
+      { sm: 'size-8', md: 'size-10', lg: 'size-14', xl: 'size-24' }[size],
       className,
     )}
     {...props}
@@ -90,7 +94,7 @@ export function PersonAvatar({
   firstName?: string | null;
   lastName?: string | null;
   src?: string | null;
-  size?: 'sm' | 'md' | 'lg';
+  size?: 'sm' | 'md' | 'lg' | 'xl';
   color?: string | null;
   className?: string;
 }) {
@@ -100,7 +104,12 @@ export function PersonAvatar({
   return (
     <Avatar size={size} className={className}>
       {src ? <AvatarImage src={src} alt={name} /> : null}
-      <AvatarFallback style={{ backgroundColor: `${background}1F`, color: background }}>
+      <AvatarFallback
+        style={{ backgroundColor: `${background}1F`, color: background }}
+        // Die Initialen müssen mit dem Kreis wachsen — bei `xl` sähe die
+        // Vorgabegrösse aus wie ein Druckfehler in der Mitte einer Fläche.
+        className={size === 'xl' ? 'text-2xl' : size === 'lg' ? 'text-sm' : undefined}
+      >
         {initials(firstName, lastName)}
       </AvatarFallback>
     </Avatar>

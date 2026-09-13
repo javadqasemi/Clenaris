@@ -206,100 +206,163 @@
 @layer components {
   /* -----------------------------------------------------------------------
      Protokollzeile — das strukturgebende Element der ganzen Applikation.
-     Eine Haarlinie, links eine schmale Beschriftungsspalte, rechts der Wert.
+
+     **Beschriftung über dem Wert, überall.**
+
+     Vorher gab es drei Fassungen: zweispaltig ab 28 rem, eine „enge" Variante
+     ab 18 rem, und gestapelt darunter. Drei Fassungen heissen drei
+     Erscheinungsbilder derselben Sache — je nachdem, wie breit die Karte
+     zufällig war, sah dieselbe Angabe anders aus. Die Seitenkarte im Profil
+     stapelte, die Hauptkarte daneben nicht, und beide standen auf demselben
+     Bildschirm.
+
+     Jetzt gilt eine Form: Beschriftung klein und ruhig darüber, Wert darunter
+     in voller Breite. Das hat drei handfeste Vorteile gegenüber der Spalte:
+
+      • **Der Wert bekommt die ganze Karte.** Eine Adresse über drei Zeilen,
+        eine lange E-Mail ohne Trennstelle, „MA-2026-00000 · Geschäftsführerin"
+        — nichts davon muss sich mehr eine Spalte mit der Beschriftung teilen.
+
+      • **Es gibt keinen Umbruchpunkt mehr, an dem es kippt.** Damit auch keine
+        Klasse von Fehlern mehr, die nur in schmalen Karten auftritt und auf
+        einem grossen Bildschirm unsichtbar bleibt.
+
+      • **Beschriftung und Wert bleiben beieinander.** In der Spaltenfassung
+        trennte sie bei kurzen Werten ein Feld Leerraum von bis zu 14 rem.
+
+     Der Preis ist Höhe: Eine Karte mit sechs Zeilen wird rund 60 px länger.
+     Das ist der richtige Tausch — senkrechter Platz ist das Einzige, wovon
+     eine Web-Oberfläche beliebig viel hat.
      ----------------------------------------------------------------------- */
   .protocol-list {
     @apply divide-y divide-border/70;
   }
 
   .protocol-row {
-    @apply grid gap-3 py-3.5 sm:grid-cols-[minmax(9rem,14rem)_1fr] sm:gap-6;
+    @apply flex flex-col gap-1 py-3.5;
+  }
+
+  /*
+     Kopfzeile der Zeile: Beschriftung links, Handlung rechts.
+
+     Trägt eine Zeile keine Handlung, ist dieser Behälter schlicht die
+     Beschriftung — deshalb steht die Ausrichtung hier und nicht an zwei
+     verschiedenen Stellen.
+  */
+  .protocol-row-head {
+    @apply flex min-h-[1.25rem] items-center justify-between gap-3;
   }
 
   .protocol-label {
-    @apply text-sm text-muted-foreground;
-  }
-
-  .protocol-value {
-    @apply text-sm font-medium text-foreground;
+    @apply text-xs font-medium leading-none text-muted-foreground;
   }
 
   /*
-     Enge Fassung der Protokollzeile — für Karten mit kurzen Beschriftungen.
+     `break-words` ist kein Schönheitsfehler-Schutz, sondern Notwendigkeit:
+     Eine lange E-Mail-Adresse oder eine URL hat keine Trennstelle und schöbe
+     sonst die Karte auseinander.
+  */
+  .protocol-value {
+    @apply break-words text-sm font-medium text-foreground;
+  }
 
-     Zwei Abweichungen von der Grundfassung, beide aus demselben Grund:
+  /*
+     Die enge Fassung bleibt als Klasse bestehen, verändert aber nur noch die
+     Dichte — nicht mehr die Form.
 
-      • **8 px statt 24 px Abstand.** Die 24 px gliedern lange Werte — eine
-        Adresse über drei Zeilen, eine Aufzählung von Steuersätzen. Wo
-        Beschriftung und Wert beide kurz sind, reissen sie das Paar eher
-        auseinander, als dass sie es zusammenhalten.
-
-      • **Die Beschriftungsspalte wächst mit ihrem Text** statt auf mindestens
-        144 px zu bestehen. Die feste Untergrenze hält die Spalten über viele
-        Zeilen hinweg in einer Flucht; das lohnt sich in einer langen Liste wie
-        den Einstellungen. In einer Seitenkarte mit fünf kurzen Beschriftungen
-        steht dagegen nur Leerraum zwischen beiden, und der Wert — eine
-        Adresse, ein Verweis, eine QR-Referenz — bekommt zu wenig Platz.
-
-     Wann welche? Die Grundfassung bleibt der Normalfall und gilt überall, wo
-     nichts anderes dransteht. Die enge Fassung ist für die schmalen Karten der
-     Seitenspalte gedacht: Kontakt, Konditionen, Empfänger, Verknüpfungen,
-     Zahlungsinformationen, Verlauf. Faustregel: Wenn die längste Beschriftung
-     der Karte deutlich unter 144 px bleibt, verschenkt die Grundfassung dort
-     Breite.
-
-     Der Breakpoint bleibt: Unter 640 px stapeln Beschriftung und Wert sich
-     ohnehin, und zwei Spalten wären dort falsch.
-
-     Bewusst über die Liste gesetzt und nicht über jede Zeile: eine Klasse am
-     `dl` statt einer an jeder Zeile, und die Entscheidung bleibt dort
-     sichtbar, wo sie getroffen wurde. Die höhere Spezifität schlägt die
-     Grundfassung ohne `!important`.
+     Sie steht an rund dreissig Stellen im Quelltext. Sie dort überall zu
+     entfernen wäre ein grosser Diff ohne sichtbaren Gewinn; sie hier
+     bedeutungsvoll zu halten ist ehrlicher als sie zu einer Attrappe zu
+     machen. In den schmalen Karten der Seitenspalte stehen kurze Angaben
+     dicht beieinander — dort ist etwas weniger Luft genau richtig.
   */
   .protocol-list--tight .protocol-row {
-    @apply gap-2;
+    @apply gap-0.5 py-3;
   }
 
   /*
-     Die Spaltenaufteilung als reguläre Regel, nicht über `@apply`.
+     Spaltenfassung — Beschriftung links, Wert rechts, wie eine Tabelle.
 
-     `@apply sm:grid-cols-[auto_minmax(0,1fr)]` sah richtig aus und landete
-     nicht im gebauten CSS — die Klammern und das Komma in `minmax` überstehen
-     den Weg durch `@apply` nicht. Der Fehler ist stumm: Die Datei baut, die
-     Regel fehlt einfach. Ausgeschrieben kann das nicht passieren.
+     Ausdrücklich gewünscht für die Profilseite: „E-Mail | admin@…",
+     „Vorname | Javad". Sie ist eine Wahl je Liste (`protocol-list--columns`),
+     keine Rückkehr zur alten Breitenautomatik: Die Form hängt an der Absicht
+     der Seite, nicht an der zufälligen Breite der Karte. Unter `sm` bleibt
+     die gestapelte Form — 9 rem Beschriftungsspalte auf einem Telefon liessen
+     dem Wert nichts übrig.
 
-     `minmax(0,1fr)` statt `1fr`: Eine blosse `fr`-Spur weigert sich, unter die
-     Breite ihres Inhalts zu schrumpfen. Eine lange E-Mail-Adresse ohne
-     Trennstelle schöbe die Karte sonst auseinander — genau der Überlauf, den
-     wir an anderer Stelle schon einmal hatten.
-
-     Der Teilraster (`subgrid`) ist der eigentliche Punkt. Jede Zeile ist für
-     sich ein Raster; mit `auto` mass deshalb jede ihre eigene Beschriftung aus,
-     und die Werte standen ausgefranst untereinander — „E-Mail" ist kürzer als
-     „Telefon", also begann der Wert daneben weiter links. Erst wenn die Liste
-     selbst das Raster aufspannt und die Zeilen sich seine Spalten teilen,
-     richtet sich alles an der *längsten* Beschriftung aus. Genau das ist der
-     Unterschied zwischen „jede Zeile so breit wie sie mag" und „alle so breit
-     wie die längste".
-
-     Ohne `subgrid` fällt die Zeile auf die Regel darüber zurück: ausgefranst,
-     aber vollständig lesbar.
+     Die Kopfzeile wird in dieser Fassung zur linken Spalte; ihre Handlung
+     (der Stift) rückt unter die Beschriftung statt an den rechten Rand, sonst
+     stünde sie mitten zwischen Beschriftung und Wert.
   */
-  @media (min-width: 640px) {
-    .protocol-list--tight .protocol-row {
-      grid-template-columns: auto minmax(0, 1fr);
-    }
+  .protocol-list--columns .protocol-row {
+    @apply sm:grid sm:grid-cols-[7.5rem_minmax(0,1fr)] sm:items-start sm:gap-x-4 sm:gap-y-0;
+  }
+  .protocol-list--columns .protocol-row-head {
+    @apply sm:min-h-0 sm:flex-col sm:items-start sm:justify-start sm:gap-1 sm:pt-0.5;
+  }
+  .protocol-list--columns .protocol-label {
+    @apply sm:text-sm sm:leading-5;
+  }
 
-    .protocol-list--tight {
-      display: grid;
-      grid-template-columns: auto minmax(0, 1fr);
-      column-gap: 0.5rem;
-    }
+  /*
+     Zeile im Bearbeitungszustand.
 
-    .protocol-list--tight .protocol-row {
-      grid-column: 1 / -1;
-      grid-template-columns: subgrid;
-    }
+     Der Rahmen zeigt, wo gerade geschrieben wird — ohne die Zeile zu
+     verschieben. Ein Wechsel der Aussenabstände beim Öffnen liesse die ganze
+     Karte springen, und zwar genau in dem Moment, in dem der Blick am Feld
+     hängt.
+  */
+  .protocol-row--editing {
+    @apply -mx-3 rounded-xl bg-muted/40 px-3;
+  }
+
+  /* -----------------------------------------------------------------------
+     Vorschaumodus — nur sichtbar, solange das Draft-Cookie gesetzt ist.
+
+     Die Regeln hängen alle an `.cms-preview` am Wurzelelement, das die Brücke
+     setzt. Ohne Vorschau existiert keine dieser Auszeichnungen im HTML, und
+     die Regeln greifen ins Leere — die ausgelieferte Seite bleibt unberührt.
+     ----------------------------------------------------------------------- */
+  .cms-preview .cms-editable,
+  .cms-preview [data-cms-key],
+  .cms-preview [data-cms-asset] {
+    cursor: pointer;
+    /*
+       `box-shadow` statt `outline` oder `border`: Beide verändern die
+       Abmessungen oder überdecken benachbarte Zeilen. Ein Schatten liegt
+       ausserhalb des Flusses — die Vorschau bleibt pixelgenau die Seite.
+    */
+    border-radius: 0.25rem;
+    transition: box-shadow 150ms ease;
+  }
+
+  .cms-preview .cms-editable--hover {
+    box-shadow: 0 0 0 2px hsl(var(--primary) / 0.45);
+  }
+
+  .cms-preview .cms-editable--active {
+    box-shadow: 0 0 0 2px hsl(var(--primary));
+  }
+
+  /*
+     Ein Hinweis, dass man sich in der Vorschau befindet — und nicht auf der
+     echten Website. Ohne ihn ist der Unterschied unsichtbar, und genau das
+     führt dazu, dass jemand einen Entwurf für veröffentlicht hält.
+  */
+  .cms-preview body::after {
+    content: 'Vorschau — Entwurfsstand';
+    position: fixed;
+    inset-block-end: 0;
+    inset-inline-start: 0;
+    z-index: 2147483647;
+    padding: 0.25rem 0.75rem;
+    border-start-end-radius: 0.5rem;
+    background: hsl(var(--primary));
+    color: hsl(var(--primary-foreground));
+    font-size: 0.6875rem;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+    pointer-events: none;
   }
 
   /* Glas: bewusst nur an zwei Stellen — Kopfzeile und schwebende Leisten. */
@@ -531,6 +594,105 @@
 
 .fc .fc-highlight {
   background: hsl(var(--primary) / 0.12);
+}
+
+/*
+ * Tages- und Wochenansicht über volle 24 Stunden.
+ *
+ * Der Raster zeigt seit der Umstellung 00:00 bis 24:00 statt 06:00 bis 20:00 —
+ * Treppenhausreinigungen beginnen um fünf, Bürostandorte werden nach
+ * Feierabend gereinigt, und beides fiel vorher schlicht aus dem Bild. Das
+ * kostet aber Höhe: 48 Halbstundenzeilen sind rund das Doppelte. Deshalb
+ * bekommt das Gitter eine feste Höhe mit eigenem Bildlauf (siehe `height` in
+ * der Komponente) und hier eine kompaktere Zeile.
+ */
+.fc .fc-timegrid-slot {
+  height: 2.25rem;
+}
+
+/*
+ * Nur die vollen Stunden tragen eine Beschriftung, und nur sie eine
+ * durchgezogene Linie. Bei 48 Zeilen wird sonst jede Trennlinie gleich laut
+ * und das Raster liest sich wie Millimeterpapier.
+ */
+.fc .fc-timegrid-slot-minor {
+  border-top-style: dotted;
+  border-top-color: hsl(var(--border) / 0.6);
+}
+
+.fc .fc-timegrid-slot-label {
+  vertical-align: middle;
+}
+
+.fc .fc-timegrid-slot-label-cushion {
+  font-size: 0.6875rem;
+  font-variant-numeric: tabular-nums;
+  padding-inline: 0.5rem;
+}
+
+/*
+ * Überschneidungen nebeneinander statt übereinander.
+ *
+ * FullCalendar staffelt gleichzeitige Termine standardmässig mit Überlappung —
+ * der hintere verschwindet dann fast vollständig. In der Disposition ist genau
+ * das die wichtigste Information: zwei Einsätze zur selben Zeit heisst, dass
+ * jemand fehlt. Ein schmaler Abstand trennt die Spalten sichtbar.
+ */
+.fc .fc-timegrid-event-harness + .fc-timegrid-event-harness {
+  margin-left: 1px;
+}
+
+.fc .fc-timegrid-event {
+  border-radius: 0.5rem;
+  box-shadow: 0 0 0 1px hsl(var(--card));
+}
+
+.fc .fc-timegrid-event .fc-event-main {
+  padding: 1px 2px;
+}
+
+/* Der Zeitzeiger muss auch über einem farbigen Einsatz erkennbar bleiben. */
+.fc .fc-timegrid-now-indicator-line {
+  border-width: 2px 0 0;
+}
+
+.fc .fc-timegrid-now-indicator-arrow {
+  border-width: 5px 0 5px 6px;
+}
+
+/*
+ * Werkzeugleiste auf schmalen Bildschirmen.
+ *
+ * Vier Ansichtsschalter, Titel und Blättern passen nebeneinander erst ab
+ * Tablet-Breite. Darunter bricht die Leiste in Zeilen um, statt den Kalender
+ * seitlich zu schieben — ein waagrechter Bildlauf auf der obersten Ebene ist
+ * der sicherste Weg, eine Ansicht unbedienbar zu machen.
+ */
+@media (max-width: 767px) {
+  .fc .fc-toolbar.fc-header-toolbar {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.625rem;
+    margin-bottom: 0.75rem;
+  }
+
+  .fc .fc-toolbar-chunk {
+    display: flex;
+    justify-content: center;
+  }
+
+  .fc .fc-button {
+    padding: 0.35rem 0.55rem;
+    font-size: 0.75rem;
+  }
+
+  .fc .fc-toolbar-title {
+    font-size: 1rem;
+  }
+
+  .fc .fc-timegrid-slot {
+    height: 2rem;
+  }
 }
 
 /* react-day-picker */

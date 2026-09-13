@@ -8,6 +8,7 @@ import { calculatePrice } from '@/lib/pricing/engine';
 import { absoluteUrl, round2 } from '@/lib/utils';
 import { orderByFor, resolveSort, type SortOrder } from '@/lib/sort';
 import { randomToken } from '@/lib/auth/jwt';
+import { can, type ActorRole } from '@/lib/auth/rbac';
 import type { SessionUser } from '@/lib/auth/session';
 import type { CreateBookingInput, UpdateBookingInput } from '@/lib/validation/booking';
 import {
@@ -275,6 +276,7 @@ export async function createBooking(params: {
     title: 'Neue Online-Buchung',
     body: `${customerName} · ${service?.name ?? 'Reinigung'} · ${booking.number}`,
     link: `/admin/buchungen/${booking.id}`,
+    permission: 'booking:read',
     emailContent: newBookingInternalEmail({
       bookingNumber: booking.number,
       customerName,
@@ -546,35 +548,366 @@ export async function rescheduleBooking(params: {
   return updated;
 }
 
+/**
+ * Preisfelder — sie tragen eine kaufmännische, keine betriebliche Entscheidung.
+ *
+ * Die Betriebsleitung (MANAGER) führt das Tagesgeschäft und darf jeden Auftrag
+ * umplanen, umbuchen und ergänzen. Was der Auftrag *kostet*, bleibt der
+ * Verwaltung vorbehalten — dieselbe Trennlinie, die im Katalog zwischen
+ * `pricing:read` und `pricing:update` verläuft. Ein Rabatt auf einen einzelnen
+ * Auftrag ist nichts anderes als eine Preisentscheidung mit kleinerem
+ * Geltungsbereich.
+ */
+const PRICE_FIELDS = ['items', 'extras', 'travelFee', 'discountAmount', 'vatRate'] as const;
+
+/** Feldweise Berechtigungen für die Auftragsbearbeitung. */
+function assertFieldPermissions(input: UpdateBookingInput, role: ActorRole): void {
+  const touchesPrice = PRICE_FIELDS.some((field) => input[field] !== undefined);
+  if (touchesPrice && !can(role, 'pricing:update')) {
+    throw new ForbiddenError(
+      'Positionen und Preise eines Auftrags ändert die Verwaltung. Termin, Team, Adresse und Notizen können Sie bearbeiten.',
+    );
+  }
+
+  // Einen Auftrag einer anderen Kundschaft zuordnen heisst, einen Kundendatensatz
+  // zu verändern — wer das nicht darf, darf es auch nicht auf diesem Umweg.
+  if (input.customerId !== undefined && !can(role, 'customer:update')) {
+    throw new ForbiddenError('Für den Wechsel der Kundschaft fehlt die Berechtigung.');
+  }
+}
+
+/**
+ * Auftrag bearbeiten.
+ *
+ * Architekturentscheide:
+ *
+ *  1. **Statuswechsel laufen durch dieselben Wege wie die Schaltflächen.**
+ *     `CONFIRMED` erzeugt die Einsätze, `CANCELLED` sagt sie ab und
+ *     benachrichtigt die Kundschaft. Würde die Maske den Status einfach
+ *     schreiben, entstünde eine bestätigte Buchung ohne Einsatz — genau das
+ *     Dispositionsloch, das `confirmBooking` verhindert.
+ *
+ *  2. **Preise werden nachgerechnet, nicht übernommen.** Die Maske schickt
+ *     Positionen und Zuschläge; Zwischentotal, MWST und Gesamtbetrag entstehen
+ *     hier. Eine Oberfläche, die Totale mitliefert, ist eine Oberfläche, die
+ *     sie fälschen kann.
+ *
+ *  3. **Jede Änderung hinterlässt eine Spur.** Neben dem Prüfprotokoll wird
+ *     eine Aktivität am Auftrag angelegt: Das Protokoll liest die
+ *     Systemverantwortung, die Aktivität liest das Büro beim nächsten Anruf
+ *     der Kundschaft.
+ */
 export async function updateBooking(params: {
   organizationId: string;
   bookingId: string;
   input: UpdateBookingInput;
   actorId: string;
+  actorRole: ActorRole;
 }): Promise<Booking> {
   const booking = await prisma.booking.findFirst({
     where: { id: params.bookingId, organizationId: params.organizationId, deletedAt: null },
+    include: { items: true, extras: true },
   });
   if (!booking) throw new NotFoundError('Buchung');
 
-  const data: Prisma.BookingUpdateInput = {};
-  if (params.input.status) data.status = params.input.status;
-  if (params.input.crewSize) data.crewSize = params.input.crewSize;
-  if (params.input.internalNote !== undefined) data.internalNote = params.input.internalNote;
-  if (params.input.customerNote !== undefined) data.customerNote = params.input.customerNote;
-  if (params.input.accessNote !== undefined) data.accessNote = params.input.accessNote;
+  const { input } = params;
+  assertFieldPermissions(input, params.actorRole);
 
-  if (params.input.scheduledStart || params.input.durationMin) {
-    const start = params.input.scheduledStart ?? booking.scheduledStart;
-    const duration = params.input.durationMin ?? booking.durationMin;
+  // --- Statuswechsel mit Nebenwirkungen zuerst -------------------------------
+  if (input.status && input.status !== booking.status) {
+    if (input.status === 'CANCELLED') {
+      if (!input.changeReason || input.changeReason.trim().length < 3) {
+        throw new BusinessRuleError(
+          'Bitte begründen Sie den Storno — die Begründung geht an die Kundschaft.',
+        );
+      }
+      await cancelBooking({
+        organizationId: params.organizationId,
+        bookingId: booking.id,
+        reason: input.changeReason,
+        actorId: params.actorId,
+        byStaff: true,
+      });
+    } else if (input.status === 'CONFIRMED') {
+      await confirmBooking({
+        organizationId: params.organizationId,
+        bookingId: booking.id,
+        actorId: params.actorId,
+      });
+    }
+  }
+
+  const data: Prisma.BookingUpdateInput = {};
+  const changes: Record<string, { from: unknown; to: unknown }> = {};
+
+  const track = (field: string, from: unknown, to: unknown) => {
+    if (String(from ?? '') !== String(to ?? '')) changes[field] = { from, to };
+  };
+
+  // --- Einfache Felder -------------------------------------------------------
+  if (input.status && !['CANCELLED', 'CONFIRMED'].includes(input.status)) {
+    track('status', booking.status, input.status);
+    data.status = input.status;
+    // Abgeschlossen ohne Zeitstempel wäre in jeder Auswertung ein Loch.
+    if (input.status === 'COMPLETED' && !booking.completedAt) data.completedAt = new Date();
+  }
+
+  if (input.crewSize !== undefined) {
+    track('crewSize', booking.crewSize, input.crewSize);
+    data.crewSize = input.crewSize;
+  }
+  if (input.internalNote !== undefined) {
+    track('internalNote', booking.internalNote, input.internalNote);
+    data.internalNote = input.internalNote ?? null;
+  }
+  if (input.customerNote !== undefined) {
+    track('customerNote', booking.customerNote, input.customerNote);
+    data.customerNote = input.customerNote ?? null;
+  }
+  if (input.accessNote !== undefined) {
+    track('accessNote', booking.accessNote, input.accessNote);
+    data.accessNote = input.accessNote ?? null;
+  }
+  if (input.propertyKind !== undefined) {
+    track('propertyKind', booking.propertyKind, input.propertyKind);
+    data.propertyKind = input.propertyKind;
+  }
+  if (input.squareMeters !== undefined) {
+    track('squareMeters', booking.squareMeters, input.squareMeters);
+    data.squareMeters = input.squareMeters ?? null;
+  }
+  if (input.rooms !== undefined) {
+    track('rooms', toNumber(booking.rooms), input.rooms);
+    data.rooms = input.rooms ?? null;
+  }
+  if (input.windows !== undefined) {
+    track('windows', booking.windows, input.windows);
+    data.windows = input.windows ?? null;
+  }
+  if (input.frequency !== undefined) {
+    track('frequency', booking.frequency, input.frequency);
+    data.frequency = input.frequency;
+  }
+
+  // --- Kundschaft, Adresse, Objekt ------------------------------------------
+  if (input.customerId && input.customerId !== booking.customerId) {
+    const target = await prisma.customer.findFirst({
+      where: { id: input.customerId, organizationId: params.organizationId, deletedAt: null },
+      select: { id: true },
+    });
+    if (!target) throw new NotFoundError('Kunde');
+    track('customerId', booking.customerId, input.customerId);
+    data.customer = { connect: { id: input.customerId } };
+  }
+
+  const customerIdAfter = input.customerId ?? booking.customerId;
+
+  if (input.addressId && input.addressId !== booking.addressId) {
+    // Eine Adresse eines *anderen* Kunden anzuhängen wäre ein Datenleck über
+    // die Auftragsansicht — deshalb hier und nicht erst im Formular geprüft.
+    const address = await prisma.address.findFirst({
+      where: { id: input.addressId, customerId: customerIdAfter },
+      select: { id: true },
+    });
+    if (!address) throw new NotFoundError('Adresse');
+    track('addressId', booking.addressId, input.addressId);
+    data.address = { connect: { id: input.addressId } };
+  } else if (input.address) {
+    const created = await prisma.address.create({
+      data: {
+        customerId: customerIdAfter,
+        label: input.address.label ?? 'Einsatzadresse',
+        street: input.address.street,
+        streetNo: input.address.streetNo ?? null,
+        addition: input.address.addition ?? null,
+        postalCode: input.address.postalCode,
+        city: input.address.city,
+        canton: input.address.canton,
+        country: input.address.country,
+        lat: input.address.lat ?? null,
+        lng: input.address.lng ?? null,
+        placeId: input.address.placeId ?? null,
+      },
+    });
+    track('addressId', booking.addressId, created.id);
+    data.address = { connect: { id: created.id } };
+  }
+
+  if (input.propertyId !== undefined) {
+    track('propertyId', booking.propertyId, input.propertyId);
+    data.property = input.propertyId
+      ? { connect: { id: input.propertyId } }
+      : { disconnect: true };
+  }
+
+  // --- Termin ---------------------------------------------------------------
+  if (input.scheduledStart || input.durationMin) {
+    const start = input.scheduledStart ?? booking.scheduledStart;
+    const duration = input.durationMin ?? booking.durationMin;
+    track('scheduledStart', booking.scheduledStart, start);
+    track('durationMin', booking.durationMin, duration);
     data.scheduledStart = start;
     data.durationMin = duration;
     data.scheduledEnd = new Date(start.getTime() + duration * 60_000);
+    // Der Erinnerungsversand hängt am Termin — nach einer Verschiebung muss er
+    // erneut greifen, sonst erinnert niemand an den neuen Zeitpunkt.
+    if (input.scheduledStart) {
+      data.rescheduledFrom = booking.scheduledStart;
+      data.reminder24hSentAt = null;
+      data.reminder2hSentAt = null;
+    }
   }
 
-  const updated = await prisma.booking.update({ where: { id: booking.id }, data });
+  // --- Positionen, Zuschläge, Totale ----------------------------------------
+  /**
+   * Katalogbezüge gegen die eigene Organisation prüfen.
+   *
+   * Die IDs kommen aus dem Formular und damit vom Client. Ohne diese Prüfung
+   * liesse sich über eine fremde `serviceId` eine Leistung an den Auftrag
+   * hängen, die im eigenen Katalog gar nicht existiert — und der `Restrict`-
+   * Fremdschlüssel würde das erst als 500 melden, nicht als Fehleingabe.
+   */
+  if (input.items) {
+    await assertCatalogOwnership(
+      params.organizationId,
+      'service',
+      input.items.map((item) => item.serviceId),
+    );
+  }
+  if (input.extras && input.extras.length > 0) {
+    await assertCatalogOwnership(
+      params.organizationId,
+      'serviceExtra',
+      input.extras.map((extra) => extra.extraId),
+    );
+  }
 
-  await invalidateAvailability(params.organizationId, updated.scheduledStart);
+  const pricing = recalculateBookingTotals({
+    items: input.items ?? booking.items.map(bookingItemToInput),
+    extras: input.extras ?? booking.extras.map(bookingExtraToInput),
+    travelFee: input.travelFee ?? toNumber(booking.travelFee),
+    discountAmount: input.discountAmount ?? toNumber(booking.discountAmount),
+    vatRate: input.vatRate ?? toNumber(booking.vatRate),
+  });
+
+  const touchesPricing = PRICE_FIELDS.some((field) => input[field] !== undefined);
+  if (touchesPricing) {
+    track('grossTotal', toNumber(booking.grossTotal), pricing.grossTotal);
+    Object.assign(data, {
+      subtotal: pricing.subtotal,
+      extrasTotal: pricing.extrasTotal,
+      travelFee: pricing.travelFee,
+      discountAmount: pricing.discountAmount,
+      netTotal: pricing.netTotal,
+      vatRate: pricing.vatRate,
+      vatAmount: pricing.vatAmount,
+      grossTotal: pricing.grossTotal,
+      /**
+       * Die Herleitung der Preis-Engine gilt nach einer Bearbeitung von Hand
+       * nicht mehr. Sie stehen zu lassen wäre schlimmer als sie zu ersetzen:
+       * Die Detailansicht zeigt sie als „so kam der Preis zustande", und das
+       * wäre dann nachweislich falsch.
+       */
+      priceBreakdown: {
+        lines: pricing.lines,
+        manual: true,
+        editedAt: new Date().toISOString(),
+      } as unknown as Prisma.InputJsonValue,
+    });
+  }
+
+  const updated = await prisma.$transaction(async (tx) => {
+    if (input.items) {
+      await tx.bookingItem.deleteMany({ where: { bookingId: booking.id } });
+      await tx.bookingItem.createMany({
+        data: input.items.map((item, index) => ({
+          bookingId: booking.id,
+          serviceId: item.serviceId,
+          name: item.name,
+          description: item.description ?? null,
+          quantity: item.quantity,
+          unit: item.unit,
+          unitPrice: item.unitPrice,
+          vatRate: pricing.vatRate,
+          lineTotal: round2(item.quantity * item.unitPrice),
+          durationMin: item.durationMin,
+          position: index,
+        })),
+      });
+    }
+
+    if (input.extras) {
+      await tx.bookingExtra.deleteMany({ where: { bookingId: booking.id } });
+      if (input.extras.length > 0) {
+        await tx.bookingExtra.createMany({
+          data: input.extras.map((extra) => ({
+            bookingId: booking.id,
+            extraId: extra.extraId,
+            name: extra.name,
+            quantity: extra.quantity,
+            unitPrice: extra.unitPrice,
+            lineTotal: round2(extra.quantity * extra.unitPrice),
+          })),
+        });
+      }
+    }
+
+    const result =
+      Object.keys(data).length > 0
+        ? await tx.booking.update({ where: { id: booking.id }, data })
+        : await tx.booking.findUniqueOrThrow({ where: { id: booking.id } });
+
+    // Termin- und Teamänderungen an die noch offenen Einsätze weiterreichen —
+    // ein Einsatz, der auf den alten Termin zeigt, führt das Team an die
+    // falsche Tür.
+    if (data.scheduledStart || data.crewSize) {
+      await tx.job.updateMany({
+        where: {
+          bookingId: booking.id,
+          status: { notIn: ['COMPLETED', 'VERIFIED', 'CANCELLED'] },
+        },
+        data: {
+          ...(data.scheduledStart
+            ? {
+                scheduledStart: result.scheduledStart,
+                scheduledEnd: result.scheduledEnd,
+                estimatedMin: result.durationMin,
+              }
+            : {}),
+          ...(data.crewSize ? { crewSize: result.crewSize } : {}),
+          ...(data.address ? { addressId: result.addressId } : {}),
+        },
+      });
+    }
+
+    return result;
+  });
+
+  const changedFields = Object.keys(changes);
+  if (changedFields.length > 0 || input.changeReason) {
+    await prisma.activity.create({
+      data: {
+        bookingId: booking.id,
+        customerId: updated.customerId,
+        authorId: params.actorId,
+        type: 'STATUS_CHANGE',
+        subject: `Auftrag ${booking.number} bearbeitet`,
+        body: [
+          changedFields.length > 0
+            ? changedFields.map((field) => `${field}: ${format(changes[field]!.from)} → ${format(changes[field]!.to)}`).join('\n')
+            : null,
+          input.changeReason ? `Grund: ${input.changeReason}` : null,
+        ]
+          .filter(Boolean)
+          .join('\n\n'),
+      },
+    });
+  }
+
+  await invalidateAvailability(params.organizationId, booking.scheduledStart);
+  if (data.scheduledStart) {
+    await invalidateAvailability(params.organizationId, updated.scheduledStart);
+  }
 
   await audit.updated({
     organizationId: params.organizationId,
@@ -582,10 +915,127 @@ export async function updateBooking(params: {
     entity: 'Booking',
     entityId: booking.id,
     summary: `Buchung ${booking.number} bearbeitet`,
-    changes: params.input,
+    changes,
   });
 
   return updated;
+}
+
+/** Prüft, dass alle genannten Katalogeinträge zur eigenen Organisation gehören. */
+async function assertCatalogOwnership(
+  organizationId: string,
+  model: 'service' | 'serviceExtra',
+  ids: string[],
+): Promise<void> {
+  const unique = [...new Set(ids)];
+  if (unique.length === 0) return;
+
+  const found =
+    model === 'service'
+      ? await prisma.service.count({ where: { id: { in: unique }, organizationId } })
+      : await prisma.serviceExtra.count({ where: { id: { in: unique }, organizationId } });
+
+  if (found !== unique.length) {
+    throw new NotFoundError(model === 'service' ? 'Leistung' : 'Zusatzleistung');
+  }
+}
+
+function format(value: unknown): string {
+  if (value === null || value === undefined || value === '') return '—';
+  if (value instanceof Date) return value.toLocaleString('de-CH');
+  return String(value);
+}
+
+function bookingItemToInput(item: {
+  serviceId: string | null;
+  name: string;
+  description: string | null;
+  quantity: Prisma.Decimal;
+  unit: string;
+  unitPrice: Prisma.Decimal;
+  durationMin: number;
+}) {
+  return {
+    serviceId: item.serviceId,
+    name: item.name,
+    description: item.description,
+    quantity: toNumber(item.quantity),
+    unit: item.unit,
+    unitPrice: toNumber(item.unitPrice),
+    durationMin: item.durationMin,
+  };
+}
+
+function bookingExtraToInput(extra: {
+  extraId: string | null;
+  name: string;
+  quantity: number;
+  unitPrice: Prisma.Decimal;
+}) {
+  return {
+    extraId: extra.extraId,
+    name: extra.name,
+    quantity: extra.quantity,
+    unitPrice: toNumber(extra.unitPrice),
+  };
+}
+
+/**
+ * Totale eines von Hand bearbeiteten Auftrags.
+ *
+ * Bewusst eine eigene, sehr kurze Rechnung statt eines erneuten Laufs durch die
+ * Preis-Engine: Die Engine leitet den Preis aus Fläche, Turnus und Regeln ab.
+ * Wer die Positionen von Hand angefasst hat, hat genau diese Ableitung
+ * verworfen — sie erneut anzuwenden würde die Eingabe stillschweigend
+ * überschreiben.
+ *
+ * Die MWST liegt auf dem Nettobetrag *nach* Rabatt: In der Schweiz ist ein
+ * gewährter Rabatt eine Entgeltminderung, die Steuer bemisst sich am
+ * tatsächlich vereinnahmten Entgelt.
+ */
+export function recalculateBookingTotals(input: {
+  items: { quantity: number; unitPrice: number }[];
+  extras: { quantity: number; unitPrice: number }[];
+  travelFee: number;
+  discountAmount: number;
+  vatRate: number;
+}) {
+  const lines = [
+    ...input.items.map((item) => ({
+      key: 'item',
+      kind: 'base' as const,
+      amount: round2(item.quantity * item.unitPrice),
+    })),
+    ...input.extras.map((extra) => ({
+      key: 'extra',
+      kind: 'extra' as const,
+      amount: round2(extra.quantity * extra.unitPrice),
+    })),
+  ];
+
+  const subtotal = round2(input.items.reduce((sum, i) => sum + i.quantity * i.unitPrice, 0));
+  const extrasTotal = round2(input.extras.reduce((sum, e) => sum + e.quantity * e.unitPrice, 0));
+  const travelFee = round2(input.travelFee);
+
+  // Der Rabatt kann den Auftrag höchstens auf null bringen, nie darunter.
+  const beforeDiscount = round2(subtotal + extrasTotal + travelFee);
+  const discountAmount = round2(Math.min(input.discountAmount, beforeDiscount));
+
+  const netTotal = round2(beforeDiscount - discountAmount);
+  const vatRate = input.vatRate;
+  const vatAmount = round2(netTotal * (vatRate / 100));
+
+  return {
+    lines,
+    subtotal,
+    extrasTotal,
+    travelFee,
+    discountAmount,
+    netTotal,
+    vatRate,
+    vatAmount,
+    grossTotal: round2(netTotal + vatAmount),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -840,6 +1290,16 @@ export async function getBookingDetail(params: {
       invoices: { select: { id: true, number: true, status: true, grossTotal: true, balance: true } },
       files: true,
       reviews: true,
+      /**
+       * Die Änderungsspur. Sie beantwortet die Frage, die im Büro am
+       * häufigsten gestellt wird, wenn die Kundschaft anruft: „Wer hat das
+       * wann geändert — und warum?"
+       */
+      activities: {
+        orderBy: { occurredAt: 'desc' },
+        take: 30,
+        include: { author: { select: { firstName: true, lastName: true } } },
+      },
     },
   });
 

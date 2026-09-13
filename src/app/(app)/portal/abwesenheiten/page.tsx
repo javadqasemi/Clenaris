@@ -7,6 +7,7 @@ import { formatDate } from '@/lib/utils';
 import { getVacationBalance } from '@/server/services/employee.service';
 import { StatusBadge } from '@/components/ui/badge';
 import { KpiTile } from '@/components/app/kpi-tile';
+import { ActionButton } from '@/components/app/action-button';
 import { EmptyState, ListCard, PageHeader, TableScroll } from '@/components/app/page-parts';
 import { AbsenceRequestDialog } from '@/features/portal/absence-request-dialog';
 
@@ -84,6 +85,9 @@ export default async function AbsencesPage() {
                   </th>
                   <th scope="col">Grund</th>
                   <th scope="col">Status</th>
+                  <th scope="col" className="text-right">
+                    <span className="sr-only">Aktionen</span>
+                  </th>
                 </tr>
               </thead>
               <tbody>
@@ -102,6 +106,27 @@ export default async function AbsencesPage() {
                     </td>
                     <td>
                       <StatusBadge status={absence.status} />
+                    </td>
+                    <td>
+                      {/*
+                        Zurückziehen nur, solange nichts entschieden ist —
+                        ein bewilligter Antrag hat die Disposition bereits
+                        verändert; dafür ist ein Gespräch mit der Leitung
+                        der Weg, kein Klick.
+                      */}
+                      {absence.status === 'REQUESTED' ? (
+                        <div className="flex justify-end">
+                          <ActionButton
+                            endpoint={`/api/absences/${absence.id}/withdraw`}
+                            label="Zurückziehen"
+                            variant="ghost"
+                            size="sm"
+                            confirmTitle="Antrag zurückziehen?"
+                            confirm={`Der Antrag vom ${formatDate(absence.startDate)} bis ${formatDate(absence.endDate)} wird zurückgezogen. Du kannst jederzeit einen neuen stellen.`}
+                            successMessage="Antrag zurückgezogen."
+                          />
+                        </div>
+                      ) : null}
                     </td>
                   </tr>
                 ))}

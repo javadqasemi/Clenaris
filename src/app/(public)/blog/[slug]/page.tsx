@@ -1,4 +1,6 @@
 import type { Metadata } from 'next';
+
+import { jsonLd } from '@/lib/json-ld';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { ArrowLeft, ArrowRight, Clock } from 'lucide-react';
@@ -6,6 +8,9 @@ import { ArrowLeft, ArrowRight, Clock } from 'lucide-react';
 import { prisma } from '@/lib/db';
 import { formatDate } from '@/lib/utils';
 import { getOrganizationId } from '@/server/services/organization.service';
+import { getContent } from '@/server/services/content.service';
+import { createCms } from '@/lib/cms/editable';
+import { isPreview } from '@/lib/cms/preview';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Markdown } from '@/components/markdown';
@@ -71,6 +76,9 @@ export default async function BlogPostPage({ params }: { params: Promise<{ slug:
   });
 
   if (!post || post.status !== 'PUBLISHED') notFound();
+
+  const content = await getContent(organizationId);
+  const cms = createCms(content, await isPreview());
 
   const related = await prisma.blogPost.findMany({
     where: {
@@ -164,8 +172,8 @@ export default async function BlogPostPage({ params }: { params: Promise<{ slug:
         <div className="container max-w-3xl">
           <CallToAction
         ctas={bandCtas}
-            title="Lieber machen lassen?"
-            lead="Wir übernehmen die Arbeit — mit festem Team, festem Preis und Abgabegarantie bei Umzügen."
+            title={cms.text('blog.cta.title')}
+            lead={cms.text('blog.cta.text')}
             primary={{ href: '/buchen', label: 'Termin buchen' }}
             secondary={{ href: '/preise', label: 'Preise ansehen' }}
           />
@@ -176,7 +184,7 @@ export default async function BlogPostPage({ params }: { params: Promise<{ slug:
         type="application/ld+json"
         // eslint-disable-next-line react/no-danger -- serverseitig erzeugter JSON-LD-Block
         dangerouslySetInnerHTML={{
-          __html: JSON.stringify({
+          __html: jsonLd({
             '@context': 'https://schema.org',
             '@type': 'Article',
             headline: post.title,

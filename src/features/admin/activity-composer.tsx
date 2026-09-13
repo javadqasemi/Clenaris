@@ -10,6 +10,7 @@ import { api, ApiError } from '@/lib/api/client';
 import { Button } from '@/components/ui/button';
 import { Input, Textarea } from '@/components/ui/input';
 import { Label } from '@/components/ui/form';
+import { DetailSection } from '@/components/app/page-parts';
 
 /**
  * Verlaufseintrag erfassen.
@@ -71,10 +72,8 @@ export function ActivityComposer({
   };
 
   return (
-    <form
-      onSubmit={submit}
-      className="space-y-4 rounded-2xl border border-border bg-card p-5 shadow-soft"
-    >
+    <DetailSection title="Eintrag erfassen" body="form">
+      <form onSubmit={submit} className="space-y-4">
       <fieldset>
         <legend className="sr-only">Art des Eintrags</legend>
         <div className="flex flex-wrap gap-2">
@@ -124,12 +123,13 @@ export function ActivityComposer({
         />
       </div>
 
-      <div className="flex justify-end">
-        <Button type="submit" loading={saving} disabled={!body.trim()}>
-          <Send aria-hidden />
-          Eintrag speichern
-        </Button>
-      </div>
-    </form>
+        <div className="flex justify-end">
+          <Button type="submit" loading={saving} disabled={!body.trim()}>
+            <Send aria-hidden />
+            Eintrag speichern
+          </Button>
+        </div>
+      </form>
+    </DetailSection>
   );
 }

@@ -4,12 +4,16 @@ import { ExternalLink, FileText } from 'lucide-react';
 
 import { requirePagePermission } from '@/lib/auth/session';
 import { CONTENT_GROUPS, defaultContent } from '@/lib/cms/registry';
-import { getContent, countCuratedContent } from '@/server/services/content.service';
+import {
+  countCuratedContent,
+  getContentStates,
+  getPreviewContent,
+} from '@/server/services/content.service';
 import { getOrganizationId } from '@/server/services/organization.service';
 import { Button } from '@/components/ui/button';
 import { Alert } from '@/components/ui/primitives';
 import { PageHeader } from '@/components/app/page-parts';
-import { ContentEditor } from '@/features/admin/content-editor';
+import { ContentWorkspace } from '@/features/admin/content-workspace';
 
 export const metadata: Metadata = {
   title: 'Website-Texte',
@@ -24,26 +28,38 @@ export const dynamic = 'force-dynamic';
  * Die Seite kennt keine Felder — sie reicht das Register durch. Wächst der
  * Katalog der pflegbaren Bausteine, wächst diese Seite mit, ohne dass hier
  * etwas zu ändern wäre.
+ *
+ * Geladen wird der **Entwurfsstand** (`getPreviewContent`), nicht der
+ * veröffentlichte: Die Maske soll dort weitermachen, wo jemand aufgehört hat.
+ * Was die Website zeigt, steht daneben in der Vorschau.
  */
 export default async function ContentPage() {
   await requirePagePermission('content:update');
 
   const organizationId = await getOrganizationId();
-  const [current, stats] = await Promise.all([
-    getContent(organizationId),
+  const [current, stats, states] = await Promise.all([
+    getPreviewContent(organizationId),
     countCuratedContent(organizationId),
+    getContentStates(organizationId),
   ]);
+
+  // Der jüngste Veröffentlichungszeitpunkt über alle Bausteine — er beantwortet
+  // „seit wann sieht die Kundschaft den aktuellen Stand?".
+  const lastPublishedAt = states
+    .map((state) => state.publishedAt)
+    .filter((date): date is Date => date !== null)
+    .sort((a, b) => b.getTime() - a.getTime())[0];
 
   return (
     <div className="space-y-6">
       <PageHeader
         title="Website-Texte"
-        description="Alle Texte der öffentlichen Website. Änderungen sind nach dem Speichern sofort sichtbar."
+        description="Alle Texte der öffentlichen Website. Änderungen werden als Entwurf gespeichert, in der Vorschau geprüft und dann veröffentlicht."
         actions={
           <Button asChild variant="outline">
             <Link href="/" target="_blank" rel="noreferrer">
               <ExternalLink aria-hidden />
-              Website ansehen
+              Veröffentlichte Website
             </Link>
           </Button>
         }
@@ -55,10 +71,12 @@ export default async function ContentPage() {
         kennen.
       </Alert>
 
-      <ContentEditor
+      <ContentWorkspace
         groups={CONTENT_GROUPS}
         initial={current}
         defaults={defaultContent()}
+        draftCount={stats.drafts}
+        lastPublishedAt={lastPublishedAt?.toISOString() ?? null}
       />
 
       <p className="flex items-start gap-2 text-meta leading-relaxed text-muted-foreground">

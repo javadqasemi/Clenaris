@@ -3,12 +3,10 @@ import { noContent, ok } from '@/lib/api/response';
 import { prisma } from '@/lib/db';
 import { audit, diff } from '@/lib/audit';
 import { BusinessRuleError, NotFoundError } from '@/lib/errors';
-import { createExpenseSchema } from '@/lib/validation/finance';
+import { updateExpenseSchema } from '@/lib/validation/finance';
 import { getOrganizationId } from '@/server/services/organization.service';
 
 export const runtime = 'nodejs';
-
-const updateExpenseSchema = createExpenseSchema.partial();
 
 /** PATCH /api/expenses/:id — Ausgabe korrigieren. */
 export const PATCH = defineRoute({

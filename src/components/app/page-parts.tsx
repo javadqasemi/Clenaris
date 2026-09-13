@@ -214,39 +214,93 @@ export function Pagination({
   );
 }
 
-/** Detailseiten-Abschnitt mit Protokollzeilen. */
+/**
+ * Die Karte der Applikation — Rahmen, abgesetzte Kopfzeile, Inhalt.
+ *
+ * **Warum das jetzt die einzige Kartenform ist.** Es gab zwei Bauarten
+ * nebeneinander: diese hier, mit dem Titel in einer durch eine Haarlinie
+ * abgesetzten Kopfzeile — und in den Eingabemasken eine handgeschriebene
+ * Fassung, bei der die Überschrift einfach als erstes Element im gepolsterten
+ * Rumpf stand. Beide sahen für sich in Ordnung aus, standen aber auf denselben
+ * Seiten untereinander: Die Detailkarte hatte eine Trennlinie unter dem Titel,
+ * die Formularkarte darüber nicht. Das liest sich als Unaufmerksamkeit, nicht
+ * als Absicht.
+ *
+ * **`body` entscheidet nur über die Polsterung des Rumpfs**, nie über den
+ * Rahmen — sonst wäre die Vereinheitlichung sofort wieder aufgeweicht:
+ *
+ *  • `list` (Vorgabe) — Protokollzeilen. Nur seitliche Polsterung; die Zeilen
+ *    bringen ihren eigenen senkrechten Abstand mit, und die Trennlinien sollen
+ *    bis an den Rand des Inhalts laufen.
+ *  • `form` — Eingabefelder. Rundum gepolstert und mit Abstand zwischen den
+ *    Feldern; ein Feld, das an der Trennlinie klebt, wirkt eingeklemmt.
+ *  • `flush` — der Inhalt bestimmt selbst. Für Tabellen, Bilderraster und
+ *    alles, was bis an den Kartenrand laufen soll.
+ */
 export function DetailSection({
   title,
+  description,
   action,
   children,
   className,
+  body = 'list',
 }: {
   title: string;
+  /** Ein Satz unter dem Titel — erklärt den Abschnitt, wo der Titel es nicht kann. */
+  description?: string;
   action?: React.ReactNode;
   children: React.ReactNode;
   className?: string;
+  body?: 'list' | 'form' | 'flush';
 }) {
   return (
     <section className={cn('rounded-2xl border border-border bg-card shadow-soft', className)}>
       <header className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-6 py-4">
-        <h2 className="font-display text-base font-semibold tracking-tight">{title}</h2>
+        <div className="min-w-0 space-y-1">
+          <h2 className="font-display text-base font-semibold tracking-tight">{title}</h2>
+          {description ? (
+            <p className="text-meta leading-relaxed text-muted-foreground">{description}</p>
+          ) : null}
+        </div>
         {action}
       </header>
-      <div className="px-6 py-2">{children}</div>
+
+      <div
+        className={cn(
+          body === 'list' && 'px-6 py-2',
+          body === 'form' && 'space-y-5 p-6',
+        )}
+      >
+        {children}
+      </div>
     </section>
   );
 }
 
+/**
+ * Eine Angabe: Beschriftung oben, Wert darunter.
+ *
+ * `action` nimmt eine Schaltfläche rechts neben der Beschriftung auf — den
+ * Stift zum Bearbeiten. Sie steht bewusst auf Höhe der *Beschriftung* und
+ * nicht neben dem Wert: Der Wert darf beliebig lang werden und über mehrere
+ * Zeilen laufen; eine daran ausgerichtete Schaltfläche wanderte dann mit und
+ * stünde bei jeder Zeile woanders.
+ */
 export function DetailRow({
   label,
+  action,
   children,
 }: {
   label: string;
+  action?: React.ReactNode;
   children: React.ReactNode;
 }) {
   return (
     <div className="protocol-row">
-      <dt className="protocol-label">{label}</dt>
+      <div className="protocol-row-head">
+        <dt className="protocol-label">{label}</dt>
+        {action}
+      </div>
       <dd className="protocol-value">{children}</dd>
     </div>
   );

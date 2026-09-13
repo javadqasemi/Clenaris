@@ -70,6 +70,46 @@ export const OPERATION_SETTINGS_DEFAULTS: OperationSettings = {
   moderateReviews: true,
 };
 
+// ---------------------------------------------------------------------------
+//  Feiertage
+// ---------------------------------------------------------------------------
+
+/**
+ * Feiertage und Betriebsferien.
+ *
+ * Ein Feiertag sperrt den Buchungsassistenten für diesen Tag und zählt bei
+ * Abwesenheiten nicht als Ferientag — er wirkt also auf zwei Stellen, die
+ * beide still falsch rechnen, wenn er fehlt. Bis hierher liess er sich nur
+ * über den Seed pflegen; der Ostermontag des nächsten Jahres brauchte einen
+ * Entwicklungseinsatz.
+ *
+ * Das Datum ist ein Kalendertag ohne Uhrzeit (`JJJJ-MM-TT`): `Holiday.date`
+ * ist eine `@db.Date`-Spalte, und ein Zeitstempel mit Zeitzone würde je nach
+ * Server um einen Tag verrutschen.
+ */
+const holidayFields = {
+  name: z.string().trim().min(2, 'Bitte benennen Sie den Feiertag.').max(80),
+  date: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/, 'Bitte ein Datum im Format JJJJ-MM-TT.')
+    .refine((value) => !Number.isNaN(Date.parse(`${value}T00:00:00Z`)), 'Ungültiges Datum.'),
+  /** true = jedes Jahr am selben Kalendertag (Neujahr, Nationalfeiertag). */
+  recurring: z.boolean().default(false),
+  canton: z
+    .string()
+    .trim()
+    .length(2, 'Zwei Buchstaben, z. B. BE.')
+    .toUpperCase()
+    .optional()
+    .nullable(),
+};
+
+export const createHolidaySchema = z.object(holidayFields);
+export const updateHolidaySchema = z.object(holidayFields).partial();
+
+export type CreateHolidayInput = z.infer<typeof createHolidaySchema>;
+export type UpdateHolidayInput = z.infer<typeof updateHolidaySchema>;
+
 /** Gespeicherten Stand mit den Auslieferungswerten auffüllen. */
 export function withSettingsDefaults(stored: unknown): OperationSettings {
   return {

@@ -20,7 +20,7 @@ import { isVisible } from '@/lib/cta/match';
 import { Button } from '@/components/ui/button';
 import { Logo } from '@/components/marketing/logo';
 import { ThemeToggle } from '@/components/theme-toggle';
-import { AccountButton, LOGIN_LINKS } from '@/components/marketing/account-button';
+import { AccountButton, ACCOUNT_LINKS } from '@/components/marketing/account-button';
 import { ServiceIcon } from '@/components/marketing/service-icon';
 import { CtaButton, CtaSlot, type CtaData } from '@/components/marketing/cta-button';
 import {
@@ -320,14 +320,18 @@ export function SiteHeader({
             {phone}
           </a>
 
-          <ThemeToggle className="hidden md:inline-flex" />
-          <AccountButton className="hidden sm:inline-flex" />
-
           {/*
             Die Schaltflächen der Kopfzeile kommen aus der Verwaltung. Höchstens
             zwei — mehr drängen auf einem Telefon Hörer und Menü aus der Zeile.
+
+            Reihenfolge: erst die Handlung, wegen der jemand hier ist („Termin
+            buchen"), dann Anmelden, ganz rechts das Farbschema. Das Wichtigste
+            steht damit direkt neben dem Buchungsknopf, die Einstellung am Rand.
           */}
           <CtaSlot ctas={ctas} size="sm" max={2} className="gap-1.5" />
+
+          <AccountButton className="hidden sm:inline-flex" />
+          <ThemeToggle className="hidden md:inline-flex" />
 
           {/* Mobil */}
           <Sheet open={mobileOpen} onOpenChange={setMobileOpen}>
@@ -392,12 +396,17 @@ export function SiteHeader({
 
                   <MobileGroup label="Kontakt und Konto" />
                   <MobileLink href="/kontakt" label="Kontakt" pathname={pathname} />
-                  {LOGIN_LINKS.map((link) => (
+                  {ACCOUNT_LINKS.map((link) => (
                     <MobileLink key={link.href} href={link.href} label={link.label} pathname={pathname} />
                   ))}
                 </nav>
 
-                <div className="mt-6 flex justify-center border-t border-border pt-5">
+                {/*
+                  Im Schubfach ist Platz — deshalb steht hier die Beschriftung
+                  neben dem Symbol. In der Kopfzeile trägt das Symbol allein.
+                */}
+                <div className="mt-6 flex items-center justify-between gap-3 border-t border-border pt-5">
+                  <span className="text-sm font-medium text-muted-foreground">Farbschema</span>
                   <ThemeToggle />
                 </div>
               </SheetBody>

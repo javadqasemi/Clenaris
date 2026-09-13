@@ -4,6 +4,7 @@ import { ExternalLink, Newspaper } from 'lucide-react';
 
 import { prisma } from '@/lib/db';
 import { requirePermission } from '@/lib/auth/session';
+import { can } from '@/lib/auth/rbac';
 import { formatDate } from '@/lib/utils';
 import { getOrganizationId } from '@/server/services/organization.service';
 import { Badge } from '@/components/ui/badge';
@@ -15,6 +16,7 @@ import {
   TableScroll,
 } from '@/components/app/page-parts';
 import { BlogDraftDialog } from '@/features/admin/blog-draft-dialog';
+import { BlogPostActions } from '@/features/admin/blog-post-actions';
 
 export const metadata: Metadata = {
   title: 'Blog',
@@ -31,16 +33,21 @@ const STATUS_LABELS: Record<string, { label: string; variant: 'success' | 'neutr
 };
 
 export default async function BlogAdminPage() {
-  await requirePermission('blog:read');
+  const session = await requirePermission('blog:read');
+  const canCreate = can(session.role, 'blog:create');
+  const canEdit = can(session.role, 'blog:update');
+  const canPublish = can(session.role, 'blog:publish');
+  const canDelete = can(session.role, 'blog:delete');
+  const showActions = canEdit || canPublish || canDelete;
 
   const organizationId = await getOrganizationId();
 
-  const [posts, published, drafts, totalViews] = await Promise.all([
+  const [posts, published, drafts, totalViews, categories] = await Promise.all([
     prisma.blogPost.findMany({
       where: { organizationId },
       orderBy: [{ status: 'asc' }, { publishedAt: 'desc' }],
       include: {
-        category: { select: { name: true } },
+        category: { select: { name: true, slug: true } },
         author: { select: { firstName: true, lastName: true } },
       },
     }),
@@ -50,6 +57,11 @@ export default async function BlogAdminPage() {
       where: { organizationId, status: 'PUBLISHED' },
       _sum: { viewCount: true },
     }),
+    prisma.blogCategory.findMany({
+      where: { organizationId },
+      orderBy: { name: 'asc' },
+      select: { slug: true, name: true },
+    }),
   ]);
 
   return (
@@ -57,7 +69,7 @@ export default async function BlogAdminPage() {
       <PageHeader
         title="Blog"
         description="Ratgeberartikel bringen Besucherinnen und Besucher über die Suche — und beantworten Fragen, bevor sie im Telefon landen."
-        actions={<BlogDraftDialog />}
+        actions={canCreate ? <BlogDraftDialog /> : undefined}
       />
 
       <div className="grid gap-4 sm:grid-cols-3">
@@ -90,6 +102,11 @@ export default async function BlogAdminPage() {
                   </th>
                   <th scope="col">Veröffentlicht</th>
                   <th scope="col">Status</th>
+                  {showActions ? (
+                    <th scope="col" className="text-right">
+                      <span className="sr-only">Aktionen</span>
+                    </th>
+                  ) : null}
                 </tr>
               </thead>
               <tbody>
@@ -130,6 +147,27 @@ export default async function BlogAdminPage() {
                           ) : null}
                         </span>
                       </td>
+                      {showActions ? (
+                        <td>
+                          <BlogPostActions
+                            postId={post.id}
+                            status={post.status}
+                            categories={categories}
+                            canEdit={canEdit}
+                            canPublish={canPublish}
+                            canDelete={canDelete}
+                            values={{
+                              title: post.title,
+                              excerpt: post.excerpt,
+                              content: post.content,
+                              categorySlug: post.category?.slug ?? null,
+                              seoTitle: post.seoTitle,
+                              seoDescription: post.seoDescription,
+                              keywords: post.keywords,
+                            }}
+                          />
+                        </td>
+                      ) : null}
                     </tr>
                   );
                 })}

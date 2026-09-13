@@ -1,14 +1,25 @@
 import type { Metadata } from 'next';
-import { Gift, Mail, Ticket, TrendingUp } from 'lucide-react';
+import Link from 'next/link';
+import { Gift, Mail, Settings2, Ticket, TrendingUp } from 'lucide-react';
 
 import { prisma, toNumber } from '@/lib/db';
 import { requirePermission } from '@/lib/auth/session';
+import { can } from '@/lib/auth/rbac';
 import { formatCurrency, formatDate, formatNumber } from '@/lib/utils';
 import { getOrganizationId } from '@/server/services/organization.service';
+import { listNewsletterSubscribers } from '@/server/services/operations-admin.service';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTriggerUnderline } from '@/components/ui/controls';
 import { KpiTile } from '@/components/app/kpi-tile';
-import { EmptyState, ListCard, PageHeader, TableScroll } from '@/components/app/page-parts';
+import {
+  DetailSection,
+  EmptyState,
+  ListCard,
+  PageHeader,
+  TableScroll,
+} from '@/components/app/page-parts';
+import { NewsletterList } from '@/features/admin/newsletter-list';
 
 export const metadata: Metadata = {
   title: 'Marketing',
@@ -31,12 +42,20 @@ const SOURCE_LABELS: Record<string, string> = {
 };
 
 export default async function MarketingPage() {
-  await requirePermission('coupon:read');
+  /**
+   * Die Navigation verlangt `newsletter:read`; die Seite verlangte
+   * `coupon:read`. Beides hat jede Rolle, die hierher kommt — aber zwei
+   * Schwellen für eine Seite sind eine Einladung, eine davon beim nächsten
+   * Umbau zu vergessen. Massgeblich ist die der Navigation.
+   */
+  const session = await requirePermission('newsletter:read');
+  const canUnsubscribe = can(session.role, 'newsletter:delete');
+  const canManageCoupons = can(session.role, 'coupon:update');
 
   const organizationId = await getOrganizationId();
   const yearStart = new Date(new Date().getFullYear(), 0, 1);
 
-  const [coupons, giftCards, subscribers, confirmedSubscribers, leadsBySource, wonLeads, totalLeads] =
+  const [coupons, giftCards, subscribers, confirmedSubscribers, leadsBySource, wonLeads, totalLeads, subscriberList] =
     await Promise.all([
       prisma.coupon.findMany({
         where: { organizationId },
@@ -62,6 +81,7 @@ export default async function MarketingPage() {
       prisma.lead.count({
         where: { organizationId, deletedAt: null, createdAt: { gte: yearStart } },
       }),
+      listNewsletterSubscribers({ organizationId, page: 1, pageSize: 200 }),
     ]);
 
   const conversionRate = totalLeads > 0 ? (wonLeads / totalLeads) * 100 : 0;
@@ -154,7 +174,23 @@ export default async function MarketingPage() {
         </TabsContent>
 
         {/* Gutscheine */}
-        <TabsContent value="gutscheine">
+        <TabsContent value="gutscheine" className="space-y-4">
+          {/*
+            Angelegt und geändert werden Gutscheine im Katalog — dort stehen
+            sie neben Leistungen und Preisregeln, auf die sie wirken. Hier
+            steht nur der Weg dorthin; eine zweite Maske hiesse zwei Wahrheiten
+            für denselben Datensatz.
+          */}
+          {canManageCoupons ? (
+            <div className="flex justify-end">
+              <Button asChild variant="outline">
+                <Link href="/admin/einstellungen/leistungen">
+                  <Settings2 aria-hidden />
+                  Gutscheine im Katalog verwalten
+                </Link>
+              </Button>
+            </div>
+          ) : null}
           {coupons.length === 0 ? (
             <EmptyState
               icon={<Ticket aria-hidden />}
@@ -300,6 +336,25 @@ export default async function MarketingPage() {
               hält die Zustellrate hoch.
             </p>
           </div>
+
+          <DetailSection
+            title={`Abonnenten (${subscriberList.total})`}
+            description="Ausgetragene erscheinen nicht — sie haben widersprochen. Bearbeiten gibt es nicht: Die Adresse ist der Identifikator, die Bestätigung ein Nachweis."
+            className="mt-4"
+          >
+            <NewsletterList
+              canDelete={canUnsubscribe}
+              subscribers={subscriberList.items.map((subscriber) => ({
+                id: subscriber.id,
+                email: subscriber.email,
+                firstName: subscriber.firstName,
+                locale: subscriber.locale,
+                confirmed: subscriber.confirmed,
+                source: subscriber.source,
+                createdAt: subscriber.createdAt.toISOString(),
+              }))}
+            />
+          </DetailSection>
         </TabsContent>
       </Tabs>
     </div>

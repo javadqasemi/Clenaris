@@ -1,7 +1,8 @@
-import { readdirSync, mkdirSync, writeFileSync, readFileSync, statSync } from 'node:fs';
-import { join, relative, sep } from 'node:path';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 import { ROUTES, type Guard, type RouteDoc } from './openapi-routes';
+import { discoverRoutes, guardKey, guardSource } from './openapi-discover';
 import { zodToJsonSchema, zodToParameters, type JsonSchema } from './zod-to-json-schema';
 
 /**
@@ -27,62 +28,47 @@ const OUT_DIR = join(ROOT, 'docs');
 //  Abgleich mit dem Dateibaum
 // ---------------------------------------------------------------------------
 
-interface DiscoveredRoute {
-  path: string;
-  methods: string[];
-}
-
-function discoverRoutes(dir: string): DiscoveredRoute[] {
-  const found: DiscoveredRoute[] = [];
-
-  for (const entry of readdirSync(dir)) {
-    const full = join(dir, entry);
-    if (statSync(full).isDirectory()) {
-      found.push(...discoverRoutes(full));
-      continue;
-    }
-    if (entry !== 'route.ts') continue;
-
-    const source = readFileSync(full, 'utf8');
-    // Beide Schreibweisen: die Fabrik liefert eine Konstante, der Stripe-Webhook
-    // ist eine gewöhnliche Funktion (er braucht den Rohkörper für die Signatur).
-    const methods = [
-      ...source.matchAll(
-        /export (?:const|(?:async )?function) (GET|POST|PATCH|PUT|DELETE)\b/g,
-      ),
-    ].map((match) => match[1].toLowerCase());
-    if (methods.length === 0) continue;
-
-    const segments = relative(API_DIR, dir).split(sep).filter(Boolean);
-    // `[id]` → `{id}`, damit die Schreibweise der OpenAPI-Konvention folgt.
-    const path = `/api/${segments.map((s) => s.replace(/^\[(.+)\]$/, '{$1}')).join('/')}`;
-    found.push({ path, methods });
-  }
-
-  return found;
-}
-
+/**
+ * Drei Prüfungen, alle gegen den Dateibaum:
+ *
+ *  1. Jeder Endpunkt im Baum steht in der Liste.
+ *  2. Jeder Eintrag der Liste hat einen Endpunkt im Baum.
+ *  3. Der dokumentierte Schutz entspricht dem deklarierten — Berechtigungen,
+ *     Modus (`alle`/`eine`), Rollen, öffentlich, Cron. Ohne diese dritte
+ *     Prüfung stand in der Doku jahrelang `job:write`, während der Endpunkt
+ *     `job:update` verlangte: Wer die Doku las, suchte ein Recht, das es nie
+ *     gab.
+ */
 function verifyCoverage(): void {
   const discovered = discoverRoutes(API_DIR);
-  const documented = new Set(ROUTES.map((route) => `${route.method} ${route.path}`));
+  const documented = new Map(ROUTES.map((route) => [`${route.method} ${route.path}`, route]));
 
   const missing: string[] = [];
+  const drifted: string[] = [];
   for (const route of discovered) {
-    for (const method of route.methods) {
+    for (const { method, guard } of route.methods) {
       const key = `${method} ${route.path}`;
-      if (!documented.has(key)) missing.push(key);
+      const doc = documented.get(key);
+      if (!doc) {
+        missing.push(key);
+        continue;
+      }
+      if (guard && guardKey(guard) !== guardKey(doc.guard)) {
+        drifted.push(`${key}\n      Liste:  ${guardSource(doc.guard)}\n      Quelle: ${guardSource(guard)}`);
+      }
     }
   }
 
   const discoveredKeys = new Set(
-    discovered.flatMap((route) => route.methods.map((method) => `${method} ${route.path}`)),
+    discovered.flatMap((route) => route.methods.map(({ method }) => `${method} ${route.path}`)),
   );
-  const stale = [...documented].filter((key) => !discoveredKeys.has(key));
+  const stale = [...documented.keys()].filter((key) => !discoveredKeys.has(key));
 
-  if (missing.length || stale.length) {
+  if (missing.length || stale.length || drifted.length) {
     const report = [
       missing.length ? `Nicht dokumentiert:\n  ${missing.join('\n  ')}` : '',
       stale.length ? `Dokumentiert, aber nicht vorhanden:\n  ${stale.join('\n  ')}` : '',
+      drifted.length ? `Schutz weicht ab:\n  ${drifted.join('\n  ')}` : '',
     ]
       .filter(Boolean)
       .join('\n\n');
@@ -93,7 +79,7 @@ function verifyCoverage(): void {
     );
   }
 
-  console.log(`✓ ${documented.size} Endpunkte — Liste und Routenbaum stimmen überein.`);
+  console.log(`✓ ${documented.size} Endpunkte — Liste, Routenbaum und Schutz stimmen überein.`);
 }
 
 // ---------------------------------------------------------------------------

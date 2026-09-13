@@ -160,6 +160,15 @@ export const updateCustomerSchema = z.object({
 });
 export type UpdateCustomerInput = z.infer<typeof updateCustomerSchema>;
 
+/**
+ * Zusammenführen: der Datensatz, der *aufgeht*. Das Ziel steht im Pfad.
+ *
+ * Die Richtung ist bewusst so herum — der Aufruf kommt von der Seite des
+ * Datensatzes, den man offen hat, und das ist der, den man behalten will.
+ */
+export const mergeCustomerSchema = z.object({ sourceId: cuidSchema });
+export type MergeCustomerInput = z.infer<typeof mergeCustomerSchema>;
+
 // ---------------------------------------------------------------------------
 //  Adressen, Objekte, Kontakte
 // ---------------------------------------------------------------------------

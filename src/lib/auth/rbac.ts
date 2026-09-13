@@ -111,6 +111,15 @@ const EMPLOYEE_PERMISSIONS: Permission[] = [
   'service:read',
   'activity:read',
   'activity:create',
+  // Persönliche Ziele und die eigenen Personaldokumente. Beide Rechte sind
+  // datensatzbezogen — die Einschränkung greift im Dienst, nicht in der
+  // Anzeige. `knowledge:read` ist der Grund, warum die Wissensdatenbank
+  // überhaupt Nutzen hat: Abläufe und Schulungsunterlagen sind für die
+  // Mitarbeitenden geschrieben.
+  'objective:read_own',
+  'objective:checkin',
+  'knowledge:read',
+  'document:read_own',
 ];
 
 /**
@@ -151,6 +160,21 @@ const MANAGER_PERMISSIONS: Permission[] = [
   'expense:read', 'expense:create', 'expense:update', 'expense:delete',
   'supplier:read', 'supplier:create', 'supplier:update',
   'accounting:export',
+
+  // Unternehmensführung: sehen, was für die Steuerung des Tagesgeschäfts
+  // nötig ist — gestalten nichts davon. Budget, Investitionen, Risikoregister
+  // und Dokumentenablage fehlen hier bewusst; das sind
+  // Geschäftsleitungsentscheidungen, dieselbe Linie wie bei Preisen und
+  // Website. `cockpit:financials` fehlt aus demselben Grund, aus dem
+  // `dashboard:financials` vorhanden ist: das operative Cockpit zeigt
+  // Auslastung und Auftragslage, die Marge bleibt der Geschäftsleitung.
+  'cockpit:view',
+  'kpi:read',
+  'objective:read', 'objective:update', 'objective:checkin',
+  'action:read', 'action:create', 'action:update',
+  'control:read',
+  'knowledge:read',
+  'meeting:read', 'meeting:create', 'meeting:update',
 
   'message:read', 'message:create',
   'notification:read_own',
@@ -255,6 +279,18 @@ export function homeRouteFor(role: ActorRole): string {
   }
 }
 
+/**
+ * Die Profilseite der Rolle — dort steht das Passwortformular.
+ *
+ * Gebraucht, wenn ein Konto sein Passwort wechseln *muss*: Die Anmeldung
+ * leitete zuvor auf `/auth/passwort-aendern`, eine Seite, die es nie gab; wer
+ * mit einem Startpasswort kam, landete auf einem 404. Das Passwort ändert man
+ * auf der Profilseite, und die gibt es in jedem Bereich.
+ */
+export function profileRouteFor(role: ActorRole): string {
+  return `${homeRouteFor(role)}/profil`;
+}
+
 /** Welche Rollen dürfen einen Pfad-Präfix betreten? Wird von der Middleware genutzt. */
 export const ROUTE_GUARDS: { prefix: string; roles: UserRole[] }[] = [
   { prefix: '/admin', roles: ['SUPER_ADMIN', 'ADMIN', 'MANAGER'] },
@@ -336,7 +372,27 @@ const PERMISSION_ROUTES: { prefix: string; permission: Permission }[] = [
   { prefix: '/admin/benutzer', permission: 'user:read' },
   { prefix: '/admin/rollen', permission: 'role:read' },
   { prefix: '/admin/protokoll', permission: 'audit:read' },
+  { prefix: '/admin/papierkorb', permission: 'booking:delete' },
   { prefix: '/admin/einstellungen', permission: 'settings:read' },
+  /**
+   * Unternehmensführung. Die spezifischen Bereiche stehen vor dem Präfix
+   * `/admin/fuehrung`, weil der erste Treffer gewinnt — sonst käme die
+   * Betriebsleitung mit `cockpit:view` bis auf die Budgetseite.
+   */
+  { prefix: '/admin/fuehrung/budget', permission: 'budget:read' },
+  { prefix: '/admin/fuehrung/investitionen', permission: 'investment:read' },
+  { prefix: '/admin/fuehrung/szenarien', permission: 'scenario:read' },
+  { prefix: '/admin/fuehrung/risiken', permission: 'risk:read' },
+  { prefix: '/admin/fuehrung/qualitaet', permission: 'control:read' },
+  { prefix: '/admin/fuehrung/massnahmen', permission: 'action:read' },
+  { prefix: '/admin/fuehrung/dokumente', permission: 'document:read' },
+  { prefix: '/admin/fuehrung/wissen', permission: 'knowledge:read' },
+  { prefix: '/admin/fuehrung/markt', permission: 'market:read' },
+  { prefix: '/admin/fuehrung/sitzungen', permission: 'meeting:read' },
+  { prefix: '/admin/fuehrung/berichte', permission: 'bireport:read' },
+  { prefix: '/admin/fuehrung/kennzahlen', permission: 'kpi:read' },
+  { prefix: '/admin/fuehrung/ziele', permission: 'objective:read' },
+  { prefix: '/admin/fuehrung', permission: 'cockpit:view' },
 ];
 
 export function permissionForPath(pathname: string): Permission | null {

@@ -4,7 +4,7 @@
 > Diagramme sind damit nie älter als das Schema. Prosa und Bereichseinteilung
 > stehen in `scripts/generate-erd.ts`.
 
-**82 Modelle, 42 Aufzählungstypen, 1460 Felder.**
+**110 Modelle, 67 Aufzählungstypen, 1973 Felder.**
 PostgreSQL 16+; alle Zeitstempel als `timestamptz` in UTC, Anzeige in Europe/Zurich.
 
 ## Vier Entscheidungen, die das ganze Schema prägen
@@ -43,8 +43,9 @@ flowchart LR
   personal["Personal und Zeit<br/><small>7 Modelle</small>"]
   finanzen["Finanzen<br/><small>8 Modelle</small>"]
   kommunikation["Kommunikation und Automatisierung<br/><small>10 Modelle</small>"]
-  marketing["Marketing und Inhalte<br/><small>12 Modelle</small>"]
-  redaktion["Redaktion<br/><small>5 Modelle</small>"]
+  marketing["Marketing und Inhalte<br/><small>13 Modelle</small>"]
+  redaktion["Redaktion<br/><small>6 Modelle</small>"]
+  fuehrung["Unternehmensführung<br/><small>26 Modelle</small>"]
   stammdaten --> identitaet
   identitaet --> crm
   crm --> auftrag
@@ -122,7 +123,7 @@ erDiagram
 
 | Modell | Tabelle | Felder | Zweck |
 | --- | --- | --- | --- |
-| `Organization` | `organizations` | 86 | – |
+| `Organization` | `organizations` | 107 | – |
 | `NumberSequence` | `number_sequences` | 6 | – |
 | `OpeningHours` | `opening_hours` | 7 | – |
 | `Holiday` | `holidays` | 7 | – |
@@ -193,7 +194,7 @@ erDiagram
 
 | Modell | Tabelle | Felder | Zweck |
 | --- | --- | --- | --- |
-| `User` | `users` | 44 | – |
+| `User` | `users` | 51 | – |
 | `RefreshToken` | `refresh_tokens` | 10 | – |
 | `VerificationToken` | `verification_tokens` | 9 | – |
 | `Consent` | `consents` | 9 | – |
@@ -341,7 +342,7 @@ erDiagram
 | Modell | Tabelle | Felder | Zweck |
 | --- | --- | --- | --- |
 | `Lead` | `leads` | 39 | – |
-| `Customer` | `customers` | 54 | – |
+| `Customer` | `customers` | 56 | – |
 | `Contact` | `contacts` | 13 | – |
 | `Address` | `addresses` | 25 | – |
 | `Building` | `buildings` | 17 | – |
@@ -351,7 +352,7 @@ erDiagram
 | `LeadTag` | `lead_tags` | 4 | – |
 | `CustomerTag` | `customer_tags` | 4 | – |
 | `Activity` | `activities` | 22 | – |
-| `Task` | `tasks` | 21 | – |
+| `Task` | `tasks` | 26 | – |
 | `PaymentMethodRef` | `payment_methods` | 12 | – |
 
 ## Leistungskatalog und Preislogik
@@ -641,7 +642,7 @@ erDiagram
 
 | Modell | Tabelle | Felder | Zweck |
 | --- | --- | --- | --- |
-| `Employee` | `employees` | 38 | – |
+| `Employee` | `employees` | 39 | – |
 | `EmployeeSkill` | `employee_skills` | 6 | – |
 | `Availability` | `availabilities` | 6 | – |
 | `Absence` | `absences` | 15 | – |
@@ -748,7 +749,7 @@ erDiagram
 | `Payment` | `payments` | 21 | – |
 | `PaymentReminder` | `payment_reminders` | 8 | – |
 | `CreditNote` | `credit_notes` | 17 | – |
-| `Supplier` | `suppliers` | 19 | – |
+| `Supplier` | `suppliers` | 21 | – |
 | `Expense` | `expenses` | 23 | – |
 | `AccountingExport` | `accounting_exports` | 10 | – |
 
@@ -922,6 +923,16 @@ erDiagram
     String title
     String excerpt
   }
+  StoredFile {
+    String id PK
+    String organizationId
+    String path
+    String mimeType
+    Int sizeBytes
+    Int maxBytes
+    Bytes data
+    String uploadedById
+  }
   LandingPage {
     String id PK
     String organizationId
@@ -1005,12 +1016,13 @@ erDiagram
 | `BlogCategory` | `blog_categories` | 7 | – |
 | `BlogPost` | `blog_posts` | 22 | – |
 | `LandingPage` | `landing_pages` | 13 | – |
-| `Review` | `reviews` | 21 | – |
+| `Review` | `reviews` | 22 | – |
 | `Faq` | `faqs` | 9 | – |
 | `GalleryItem` | `gallery_items` | 13 | – |
 | `JobPosting` | `job_postings` | 20 | – |
 | `JobApplication` | `job_applications` | 16 | – |
-| `FileAsset` | `file_assets` | 34 | – |
+| `FileAsset` | `file_assets` | 48 | – |
+| `StoredFile` | `stored_files` | 12 | – |
 
 ## Redaktion
 
@@ -1024,9 +1036,19 @@ erDiagram
     String key
     Locale locale
     Json value
+    Json draftValue
+    DateTime publishedAt
     String updatedById
+  }
+  ContentRevision {
+    String id PK
+    String organizationId
+    String blockId
+    String key
+    Locale locale
+    Json value
+    String createdById
     DateTime createdAt
-    DateTime updatedAt
   }
   SeoMeta {
     String id PK
@@ -1068,16 +1090,326 @@ erDiagram
     DateTime effectiveFrom
     DateTime createdAt
   }
+  ContentBlock ||--o{ ContentRevision : "block"
   NavigationItem |o--o{ NavigationItem : "parent"
 ```
 
 | Modell | Tabelle | Felder | Zweck |
 | --- | --- | --- | --- |
-| `ContentBlock` | `content_blocks` | 9 | – |
+| `ContentBlock` | `content_blocks` | 12 | – |
+| `ContentRevision` | `content_revisions` | 10 | – |
 | `SeoMeta` | `seo_meta` | 13 | – |
 | `CallToAction` | `calls_to_action` | 21 | – |
 | `NavigationItem` | `navigation_items` | 16 | – |
 | `LegalDocument` | `legal_documents` | 10 | – |
+
+## Unternehmensführung
+
+Kennzahlen, Ziele, Finanzplanung, Risiko und Qualität, Wissen und Berichte. Der wichtigste Entscheid: `KpiSnapshot` speichert den Verlauf, statt ihn bei jedem Aufruf neu zu rechnen — eine live gerechnete Kurve schreibt die Vergangenheit um, sobald eine Buchung storniert oder eine Gutschrift gebucht wird. Strategie, Ziel und Initiative sind *ein* Modell (`Objective`) mit Selbstbezug; die Roadmap ist nur eine Ansicht davon. Massnahmen (`CorrectiveAction`) und Sitzungspendenzen laufen über `Task`, damit es nur eine Pendenzenliste gibt. `ManagedDocument` trägt die Sichtbarkeit als Spalte, die in der Prisma-Abfrage wirkt — `EMPLOYEE_PRIVATE` heisst Geschäftsleitung und betroffene Person.
+
+```mermaid
+erDiagram
+  KpiDefinition {
+    String id PK
+    String organizationId
+    String key
+    String label
+    String description
+    String group
+    KpiUnit unit
+    KpiDirection direction
+  }
+  KpiTarget {
+    String id PK
+    String definitionId
+    KpiPeriod period
+    DateTime periodStart
+    Decimal targetValue
+    String note
+    DateTime createdAt
+  }
+  KpiSnapshot {
+    String id PK
+    String organizationId
+    String definitionId
+    KpiPeriod period
+    DateTime periodStart
+    DateTime periodEnd
+    Decimal value
+    Decimal targetValue
+  }
+  HealthSnapshot {
+    String id PK
+    String organizationId
+    DateTime takenOn
+    Int score
+    Int scoreDelta
+    Json components
+    String topRisk
+    DateTime createdAt
+  }
+  Objective {
+    String id PK
+    String organizationId
+    ObjectiveHorizon horizon
+    ObjectiveLevel level
+    ObjectiveStatus status
+    String title
+    String description
+    String department
+  }
+  KeyResult {
+    String id PK
+    String objectiveId
+    String title
+    String kpiDefinitionId
+    KpiPeriod kpiPeriod
+    KpiUnit unit
+    KpiDirection direction
+    Decimal startValue
+  }
+  KeyResultCheckin {
+    String id PK
+    String keyResultId
+    Decimal value
+    String comment
+    Boolean automatic
+    String authorId
+    DateTime recordedAt
+  }
+  BudgetPeriod {
+    String id PK
+    String organizationId
+    String name
+    Int fiscalYear
+    DateTime startsOn
+    DateTime endsOn
+    BudgetStatus status
+    DateTime approvedAt
+  }
+  BudgetLine {
+    String id PK
+    String periodId
+    ExpenseCategory category
+    String label
+    Decimal plannedAmount
+    Decimal revisedAmount
+    Decimal_list monthlyPlan
+    String note
+  }
+  Investment {
+    String id PK
+    String organizationId
+    String name
+    ExpenseCategory category
+    InvestmentStatus status
+    String description
+    String supplierId
+    Decimal purchaseAmount
+  }
+  Scenario {
+    String id PK
+    String organizationId
+    String name
+    ScenarioKind kind
+    Int fiscalYear
+    Int horizonMonths
+    String description
+    Decimal openingCash
+  }
+  ScenarioAssumption {
+    String id PK
+    String scenarioId
+    String key
+    String label
+    Decimal value
+    KpiUnit unit
+    Decimal monthlyChangePct
+    String note
+  }
+  RiskEntry {
+    String id PK
+    String organizationId
+    String title
+    String description
+    RiskCategory category
+    RiskStatus status
+    Int probability
+    Int impact
+  }
+  ControlEntry {
+    String id PK
+    String organizationId
+    ControlKind kind
+    ControlStatus status
+    String reference
+    String title
+    String description
+    String evidenceNote
+  }
+  CorrectiveAction {
+    String id PK
+    String organizationId
+    ActionKind kind
+    String title
+    String rootCause
+    String description
+    String riskId
+    String controlId
+  }
+  ManagedDocument {
+    String id PK
+    String organizationId
+    String title
+    DocumentCategory category
+    DocumentVisibility visibility
+    String description
+    String_list tags
+    String subjectEmployeeId
+  }
+  DocumentVersion {
+    String id PK
+    String documentId
+    Int version
+    String fileAssetId
+    String changeNote
+    String uploadedById
+    DateTime createdAt
+  }
+  KnowledgeArticle {
+    String id PK
+    String organizationId
+    String slug
+    String title
+    String summary
+    String body
+    String category
+    String_list tags
+  }
+  Competitor {
+    String id PK
+    String organizationId
+    String name
+    String website
+    String region
+    String_list services
+    Decimal priceFrom
+    Decimal priceTo
+  }
+  MarketInsight {
+    String id PK
+    String organizationId
+    InsightKind kind
+    String title
+    String body
+    String sourceUrl
+    String sourceName
+    DateTime observedOn
+  }
+  AnalysisBoard {
+    String id PK
+    String organizationId
+    AnalysisKind kind
+    String title
+    DateTime preparedOn
+    String summary
+    String supersededById UK
+    Int reviewIntervalDays
+  }
+  AnalysisEntry {
+    String id PK
+    String boardId
+    AnalysisBucket bucket
+    String title
+    String detail
+    Int weight
+    Int sortOrder
+  }
+  Meeting {
+    String id PK
+    String organizationId
+    String title
+    DateTime heldAt
+    String location
+    String agenda
+    String minutes
+    String decisions
+  }
+  MeetingParticipant {
+    String id PK
+    String meetingId
+    String userId
+    Boolean attended
+  }
+  ReportSchedule {
+    String id PK
+    String organizationId
+    String name
+    ReportKind kind
+    ReportCadence cadence
+    ReportFormat format
+    Int runOnDay
+    String_list recipients
+  }
+  ReportRun {
+    String id PK
+    String scheduleId
+    String organizationId
+    ReportKind kind
+    ReportFormat format
+    DateTime periodStart
+    DateTime periodEnd
+    String fileAssetId
+  }
+  KpiDefinition ||--o{ KpiTarget : "definition"
+  KpiDefinition ||--o{ KpiSnapshot : "definition"
+  Objective |o--o{ Objective : "parent"
+  Objective ||--o{ KeyResult : "objective"
+  KpiDefinition |o--o{ KeyResult : "definition"
+  KeyResult ||--o{ KeyResultCheckin : "keyResult"
+  BudgetPeriod ||--o{ BudgetLine : "period"
+  Scenario ||--o{ ScenarioAssumption : "scenario"
+  RiskEntry |o--o{ CorrectiveAction : "risk"
+  ControlEntry |o--o{ CorrectiveAction : "control"
+  DocumentVersion |o--|| ManagedDocument : "currentVersion"
+  ManagedDocument ||--o{ DocumentVersion : "document"
+  ManagedDocument |o--o{ DocumentVersion : "current"
+  AnalysisBoard |o--|| AnalysisBoard : "supersededBy"
+  AnalysisBoard |o--o{ AnalysisBoard : "supersedes"
+  AnalysisBoard ||--o{ AnalysisEntry : "board"
+  Objective |o--o{ Meeting : "objective"
+  Meeting ||--o{ MeetingParticipant : "meeting"
+  ReportSchedule |o--o{ ReportRun : "schedule"
+```
+
+| Modell | Tabelle | Felder | Zweck |
+| --- | --- | --- | --- |
+| `KpiDefinition` | `kpi_definitions` | 21 | – |
+| `KpiTarget` | `kpi_targets` | 8 | – |
+| `KpiSnapshot` | `kpi_snapshots` | 15 | – |
+| `HealthSnapshot` | `health_snapshots` | 9 | – |
+| `Objective` | `objectives` | 33 | – |
+| `KeyResult` | `key_results` | 18 | – |
+| `KeyResultCheckin` | `key_result_checkins` | 9 | – |
+| `BudgetPeriod` | `budget_periods` | 14 | – |
+| `BudgetLine` | `budget_lines` | 12 | – |
+| `Investment` | `investments` | 28 | – |
+| `Scenario` | `scenarios` | 16 | – |
+| `ScenarioAssumption` | `scenario_assumptions` | 10 | – |
+| `RiskEntry` | `risk_entries` | 28 | – |
+| `ControlEntry` | `control_entries` | 20 | – |
+| `CorrectiveAction` | `corrective_actions` | 22 | – |
+| `ManagedDocument` | `managed_documents` | 23 | – |
+| `DocumentVersion` | `document_versions` | 10 | – |
+| `KnowledgeArticle` | `knowledge_articles` | 21 | – |
+| `Competitor` | `competitors` | 22 | – |
+| `MarketInsight` | `market_insights` | 16 | – |
+| `AnalysisBoard` | `analysis_boards` | 16 | – |
+| `AnalysisEntry` | `analysis_entries` | 8 | – |
+| `Meeting` | `meetings` | 19 | – |
+| `MeetingParticipant` | `meeting_participants` | 6 | – |
+| `ReportSchedule` | `report_schedules` | 15 | – |
+| `ReportRun` | `report_runs` | 16 | – |
 
 ## Aufzählungstypen
 
@@ -1123,12 +1455,37 @@ exakte TypeScript-Typen.
 | `AutomationTrigger` | `BOOKING_CREATED`, `BOOKING_CONFIRMED`, `BOOKING_REMINDER_24H`, `BOOKING_REMINDER_2H`, `BOOKING_COMPLETED`, `BOOKING_CANCELLED`, `QUOTE_SENT`, `QUOTE_ACCEPTED`, `QUOTE_EXPIRING`, `INVOICE_ISSUED`, `INVOICE_DUE_SOON`, `INVOICE_OVERDUE`, `JOB_ASSIGNED`, `JOB_COMPLETED`, `CUSTOMER_BIRTHDAY`, `REVIEW_REQUEST`, `LEAD_CREATED`, `LEAD_IDLE`, `TASK_DUE`, `RECURRING_BOOKING_GENERATE` |
 | `AutomationActionType` | `SEND_EMAIL`, `SEND_SMS`, `CREATE_TASK`, `CREATE_NOTIFICATION`, `UPDATE_STATUS`, `WEBHOOK`, `AI_GENERATE` |
 | `AutomationRunStatus` | `PENDING`, `RUNNING`, `SUCCESS`, `FAILED`, `SKIPPED` |
-| `FileScope` | `BOOKING`, `QUOTE`, `INVOICE`, `JOB`, `CUSTOMER`, `EMPLOYEE`, `PROPERTY`, `BLOG`, `GALLERY`, `APPLICATION`, `EXPENSE`, `MESSAGE`, `OTHER` |
+| `FileScope` | `BOOKING`, `QUOTE`, `INVOICE`, `JOB`, `CUSTOMER`, `EMPLOYEE`, `PROPERTY`, `BLOG`, `GALLERY`, `APPLICATION`, `EXPENSE`, `MESSAGE`, `OTHER`, `OBJECTIVE`, `INVESTMENT`, `RISK`, `CONTROL`, `DOCUMENT`, `ARTICLE`, `MEETING`, `REPORT` |
 | `AuditAction` | `CREATE`, `UPDATE`, `DELETE`, `LOGIN`, `LOGIN_FAILED`, `LOGOUT`, `PASSWORD_RESET`, `PERMISSION_CHANGE`, `EXPORT`, `IMPORT`, `PAYMENT`, `ACCESS_DENIED` |
 | `ConsentType` | `MARKETING_EMAIL`, `MARKETING_SMS`, `ANALYTICS`, `TERMS`, `PRIVACY`, `DATA_PROCESSING` |
 | `CtaSlot` | `HEADER`, `HERO_PRIMARY`, `HERO_SECONDARY`, `SECTION_BANNER`, `FOOTER`, `MOBILE_BAR` |
 | `CtaStyle` | `PRIMARY`, `SECONDARY`, `OUTLINE`, `GHOST`, `ACCENT`, `SUCCESS`, `CUSTOM` |
 | `NavLocation` | `HEADER`, `HEADER_PANEL`, `FOOTER_SERVICES`, `FOOTER_COMPANY`, `FOOTER_LEGAL` |
+| `KpiUnit` | `DAYS`, `HOURS` |
+| `KpiDirection` | `UP_IS_GOOD`, `DOWN_IS_GOOD` |
+| `KpiPeriod` | `DAY`, `WEEK`, `MONTH`, `QUARTER`, `YEAR` |
+| `KpiSource` | `DERIVED`, `MANUAL` |
+| `ObjectiveHorizon` |  |
+| `ObjectiveLevel` | `COMPANY`, `DEPARTMENT`, `PERSONAL` |
+| `ObjectiveStatus` | `DRAFT`, `ACTIVE`, `AT_RISK`, `ACHIEVED`, `MISSED`, `CANCELLED` |
+| `BudgetStatus` | `DRAFT`, `APPROVED`, `CLOSED` |
+| `InvestmentStatus` | `PLANNED`, `APPROVED`, `ORDERED`, `ACTIVE`, `DISPOSED`, `CANCELLED` |
+| `DepreciationMethod` | `NONE` |
+| `ScenarioKind` | `BEST`, `EXPECTED`, `WORST` |
+| `RiskCategory` | `FINANCIAL`, `OPERATIONAL`, `PERSONNEL`, `LEGAL`, `DATA_PROTECTION`, `IT_SECURITY`, `REPUTATION`, `MARKET`, `ENVIRONMENT` |
+| `RiskStatus` | `IDENTIFIED`, `ASSESSED`, `MITIGATING`, `ACCEPTED`, `CLOSED` |
+| `ControlKind` |  |
+| `ControlStatus` | `DRAFT`, `ACTIVE`, `DUE`, `NON_COMPLIANT`, `RETIRED` |
+| `ActionKind` |  |
+| `DocumentCategory` | `BUSINESS_PLAN`, `CONTRACT`, `INSURANCE`, `EMPLOYEE`, `CERTIFICATE`, `LICENSE`, `SUPPLIER`, `TAX`, `LEGAL`, `POLICY`, `OTHER` |
+| `DocumentVisibility` |  |
+| `ArticleStatus` | `DRAFT`, `PUBLISHED`, `ARCHIVED` |
+| `InsightKind` | `INDUSTRY`, `CUSTOMER`, `COMPETITOR`, `TECHNOLOGY`, `ECONOMY`, `LEGAL`, `ENVIRONMENT` |
+| `AnalysisKind` | `SWOT`, `PESTEL` |
+| `AnalysisBucket` | `STRENGTH`, `WEAKNESS`, `OPPORTUNITY`, `THREAT`, `POLITICAL`, `ECONOMIC`, `SOCIAL`, `TECHNOLOGICAL`, `ENVIRONMENTAL`, `LEGAL` |
+| `ReportKind` | `BUSINESS_PERFORMANCE`, `FINANCIAL`, `MARKETING`, `SALES`, `EMPLOYEE`, `CUSTOMER`, `QUARTERLY_REVIEW` |
+| `ReportCadence` | `WEEKLY`, `MONTHLY`, `QUARTERLY`, `YEARLY` |
+| `ReportFormat` | `PDF`, `XLSX`, `DOCX` |
 
 ## Migrationen
 

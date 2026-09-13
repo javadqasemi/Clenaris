@@ -21,6 +21,7 @@ import {
   FormLabel,
   FormMessage,
 } from '@/components/ui/form';
+import { DetailSection } from '@/components/app/page-parts';
 
 /**
  * Firmenstammdaten bearbeiten.
@@ -150,19 +151,12 @@ export function CompanyForm({ company }: { company: UpdateCompanyInput }) {
         {error ? <Alert variant="destructive">{error}</Alert> : null}
 
         {GROUPS.map((group) => (
-          <section
+          <DetailSection
             key={group.title}
-            className="rounded-2xl border border-border bg-card shadow-soft"
+            title={group.title}
+            description={group.hint}
+            body="flush"
           >
-            <header className="border-b border-border px-6 py-4">
-              <h2 className="font-display text-base font-semibold tracking-tight">{group.title}</h2>
-              {group.hint ? (
-                <p className="prose-measure mt-1 text-meta leading-relaxed text-muted-foreground">
-                  {group.hint}
-                </p>
-              ) : null}
-            </header>
-
             <div className="grid gap-5 px-6 py-5 sm:grid-cols-2">
               {group.fields.map((spec) => (
                 <FormField
@@ -189,7 +183,7 @@ export function CompanyForm({ company }: { company: UpdateCompanyInput }) {
                 />
               ))}
             </div>
-          </section>
+          </DetailSection>
         ))}
 
         {dirty ? (

@@ -1,7 +1,7 @@
 import { definePublicRoute } from '@/lib/api/handler';
 import { ok } from '@/lib/api/response';
 import { twoFactorTokenSchema } from '@/lib/validation/auth';
-import { homeRouteFor } from '@/lib/auth/rbac';
+import { homeRouteFor, profileRouteFor } from '@/lib/auth/rbac';
 import { prisma } from '@/lib/db';
 import { completeMfaLogin } from '@/server/services/two-factor.service';
 
@@ -47,7 +47,7 @@ export const POST = definePublicRoute({
       // in dem man es erfahren will — nicht erst beim nächsten Gerätewechsel.
       usedRecoveryCode: result.usedRecoveryCode,
       remainingRecoveryCodes: result.remainingCodes,
-      redirectTo: user.mustChangePassword ? '/auth/passwort-aendern' : homeRouteFor(user.role),
+      redirectTo: user.mustChangePassword ? profileRouteFor(user.role) : homeRouteFor(user.role),
     });
   },
 });

@@ -10,6 +10,8 @@ import {
   sendBirthdayGreetings,
   sendTaskReminders,
 } from '@/server/services/automation.service';
+import { runFuehrungNightly } from '@/server/services/fuehrung.service';
+import { purgeExpiredUploads } from '@/lib/storage';
 import { logger } from '@/lib/logger';
 
 const log = logger('cron/daily');
@@ -42,6 +44,14 @@ export const GET = defineCronRoute({
       createFollowUpTasks(organizationId),
       sendTaskReminders(),
       cleanupExpiredTokens(),
+      // Angeforderte, aber nie beschriebene Upload-Adressen. Sie entstehen bei
+      // jedem abgebrochenen Upload und wären sonst Zeilen, die niemand je
+      // wieder anfasst.
+      purgeExpiredUploads(),
+      // Unternehmensführung: Kennzahl-Snapshots, Gesundheitswert, fällige
+      // Prüfungen, ablaufende Dokumente, fällige Berichte — in dieser
+      // Reihenfolge, weil die Berichte die frischen Snapshots brauchen.
+      runFuehrungNightly(organizationId),
     ]);
 
     const labels = [
@@ -53,6 +63,8 @@ export const GET = defineCronRoute({
       'followUpTasks',
       'taskReminders',
       'tokenCleanup',
+      'uploadCleanup',
+      'fuehrung',
     ];
 
     const summary: Record<string, unknown> = {};

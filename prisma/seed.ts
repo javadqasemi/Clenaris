@@ -1209,6 +1209,73 @@ async function main() {
   console.log(`✓ ${navCount} Menüpunkte`);
 
   // =========================================================================
+  //  15) Kennzahlen der Unternehmensführung
+  // =========================================================================
+  /**
+   * Konfiguration, kein Demodatensatz — deshalb hier und nicht in
+   * `seed-demo.ts`. Die Zielwerte bleiben leer: sie sind betriebliche
+   * Entscheidungen, und erfundene Vorgaben („Ziel: 30 % Marge") sähen in der
+   * Oberfläche aus wie eine Absprache, die es nie gab. Das Cockpit fordert
+   * einmal auf, Ziele zu setzen.
+   *
+   * Die Gewichte sind ein Vorschlag für den Gesundheitswert und lassen sich in
+   * der Oberfläche ändern. `update` schreibt nur Beschriftung und Gruppe —
+   * Gewicht, Ziel und Aktivität gehören dem Betrieb, sobald er sie angefasst
+   * hat.
+   */
+  const kpiDefinitions: {
+    key: string;
+    label: string;
+    description: string;
+    group: string;
+    unit: 'CURRENCY' | 'PERCENT' | 'COUNT' | 'DAYS' | 'HOURS' | 'RATIO';
+    direction: 'UP_IS_GOOD' | 'DOWN_IS_GOOD';
+    periods: ('MONTH' | 'QUARTER' | 'YEAR')[];
+    healthWeight: number;
+  }[] = [
+    { key: 'revenue.net', label: 'Umsatz netto', description: 'Ausgestellte Rechnungen nach Ausstellungsdatum, abzüglich Gutschriften.', group: 'Finanzen', unit: 'CURRENCY', direction: 'UP_IS_GOOD', periods: ['MONTH', 'QUARTER', 'YEAR'], healthWeight: 0 },
+    { key: 'revenue.growthYoY', label: 'Umsatzwachstum zum Vorjahr', description: 'Veränderung gegenüber derselben Periode des Vorjahres.', group: 'Finanzen', unit: 'PERCENT', direction: 'UP_IS_GOOD', periods: ['MONTH', 'QUARTER'], healthWeight: 8 },
+    { key: 'revenue.recurringShare', label: 'Anteil wiederkehrender Umsatz', description: 'Umsatz aus Abonnements und Serien im Verhältnis zum Gesamtumsatz.', group: 'Finanzen', unit: 'PERCENT', direction: 'UP_IS_GOOD', periods: ['MONTH'], healthWeight: 7 },
+    { key: 'margin.gross', label: 'Bruttomarge', description: 'Erlös abzüglich Lohn- und Materialkosten über abgeschlossene Einsätze mit Nachkalkulation.', group: 'Finanzen', unit: 'PERCENT', direction: 'UP_IS_GOOD', periods: ['MONTH', 'QUARTER'], healthWeight: 12 },
+    { key: 'profit.operating', label: 'Betriebsergebnis', description: 'Umsatz netto abzüglich aller erfassten Ausgaben.', group: 'Finanzen', unit: 'CURRENCY', direction: 'UP_IS_GOOD', periods: ['MONTH', 'QUARTER', 'YEAR'], healthWeight: 8 },
+    { key: 'invoice.outstanding', label: 'Offene Forderungen', description: 'Ausstehende Beträge versendeter, teilbezahlter und überfälliger Rechnungen.', group: 'Finanzen', unit: 'CURRENCY', direction: 'DOWN_IS_GOOD', periods: ['MONTH'], healthWeight: 0 },
+    { key: 'invoice.overdue', label: 'Überfällige Forderungen', description: 'Ausstehende Beträge überfälliger Rechnungen zum Periodenende.', group: 'Finanzen', unit: 'CURRENCY', direction: 'DOWN_IS_GOOD', periods: ['MONTH'], healthWeight: 10 },
+    { key: 'invoice.dso', label: 'Tage bis Zahlungseingang', description: 'Durchschnitt von Ausstellung bis Zahlung über die in der Periode bezahlten Rechnungen.', group: 'Finanzen', unit: 'DAYS', direction: 'DOWN_IS_GOOD', periods: ['MONTH'], healthWeight: 10 },
+    { key: 'quote.conversion', label: 'Annahmequote Offerten', description: 'Anteil der in der Periode gesendeten Offerten, die angenommen wurden — reift einige Wochen nach.', group: 'Vertrieb', unit: 'PERCENT', direction: 'UP_IS_GOOD', periods: ['MONTH', 'QUARTER'], healthWeight: 8 },
+    { key: 'lead.new', label: 'Neue Anfragen', description: 'Leads mit Erfassung in der Periode.', group: 'Vertrieb', unit: 'COUNT', direction: 'UP_IS_GOOD', periods: ['MONTH'], healthWeight: 0 },
+    { key: 'lead.costPerLead', label: 'Kosten je Anfrage', description: 'Marketingausgaben der Periode geteilt durch neue Anfragen.', group: 'Marketing', unit: 'CURRENCY', direction: 'DOWN_IS_GOOD', periods: ['MONTH'], healthWeight: 0 },
+    { key: 'booking.completed', label: 'Abgeschlossene Buchungen', description: 'Buchungen mit Abschluss in der Periode.', group: 'Auftragslage', unit: 'COUNT', direction: 'UP_IS_GOOD', periods: ['MONTH'], healthWeight: 0 },
+    { key: 'booking.cancellationRate', label: 'Stornoquote', description: 'Stornierte und nicht erschienene Buchungen im Verhältnis zu allen abgeschlossenen und stornierten.', group: 'Auftragslage', unit: 'PERCENT', direction: 'DOWN_IS_GOOD', periods: ['MONTH'], healthWeight: 7 },
+    { key: 'job.backlog', label: 'Auftragsbestand', description: 'Geplante Einsätze nach dem Periodenende, die noch nicht abgeschlossen sind.', group: 'Auftragslage', unit: 'COUNT', direction: 'UP_IS_GOOD', periods: ['MONTH'], healthWeight: 0 },
+    { key: 'customer.active', label: 'Aktive Kundschaft', description: 'Kundschaft mit mindestens einer abgeschlossenen Buchung in den letzten zwölf Monaten.', group: 'Kundschaft', unit: 'COUNT', direction: 'UP_IS_GOOD', periods: ['MONTH'], healthWeight: 0 },
+    { key: 'customer.growth', label: 'Wachstum aktive Kundschaft', description: 'Veränderung der aktiven Kundschaft zum Vorjahr.', group: 'Kundschaft', unit: 'PERCENT', direction: 'UP_IS_GOOD', periods: ['QUARTER'], healthWeight: 7 },
+    { key: 'customer.repeatRate', label: 'Wiederkehrquote', description: 'Anteil der aktiven Kundschaft mit zwei oder mehr abgeschlossenen Buchungen in zwölf Monaten.', group: 'Kundschaft', unit: 'PERCENT', direction: 'UP_IS_GOOD', periods: ['QUARTER'], healthWeight: 8 },
+    { key: 'customer.satisfaction', label: 'Kundenzufriedenheit', description: 'Durchschnitt veröffentlichter Bewertungen, auf 0–100 umgerechnet.', group: 'Kundschaft', unit: 'PERCENT', direction: 'UP_IS_GOOD', periods: ['MONTH', 'QUARTER'], healthWeight: 7 },
+    { key: 'employee.utilization', label: 'Auslastung', description: 'Genehmigte Einsatzminuten im Verhältnis zu den Sollminuten aller aktiven Mitarbeitenden.', group: 'Personal', unit: 'PERCENT', direction: 'UP_IS_GOOD', periods: ['MONTH'], healthWeight: 8 },
+    { key: 'employee.headcountFte', label: 'Vollzeitäquivalente', description: 'Summe der Pensen aktiver Mitarbeitender.', group: 'Personal', unit: 'RATIO', direction: 'UP_IS_GOOD', periods: ['MONTH'], healthWeight: 0 },
+  ];
+  for (const [index, definition] of kpiDefinitions.entries()) {
+    await prisma.kpiDefinition.upsert({
+      where: { organizationId_key: { organizationId: org.id, key: definition.key } },
+      update: { label: definition.label, description: definition.description, group: definition.group },
+      create: {
+        organizationId: org.id,
+        key: definition.key,
+        label: definition.label,
+        description: definition.description,
+        group: definition.group,
+        unit: definition.unit,
+        direction: definition.direction,
+        source: 'DERIVED',
+        periods: definition.periods,
+        healthWeight: definition.healthWeight,
+        sortOrder: index,
+      },
+    });
+  }
+  console.log(`✓ ${kpiDefinitions.length} Kennzahlen (Zielwerte bleiben leer — betriebliche Entscheidung)`);
+
+  // =========================================================================
   //  Abschluss
   // =========================================================================
   console.log('\n✅  Seed abgeschlossen.\n');

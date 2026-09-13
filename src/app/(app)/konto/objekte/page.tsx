@@ -7,6 +7,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { EmptyState, PageHeader } from '@/components/app/page-parts';
 import { AddressManager } from '@/features/shared/address-manager';
+import { PropertyCreateButton, PropertyRowActions } from '@/features/shared/property-dialog';
 import { listAddresses } from '@/server/services/address.service';
 
 export const metadata: Metadata = {
@@ -63,15 +64,31 @@ export default async function AccountPropertiesPage() {
         }
       />
 
-      {/* Objekte */}
+      {/*
+        Objekte: die Kundschaft darf eigene anlegen und ändern
+        (`property:create`, `property:update`), aber nicht löschen — ein
+        Objekt mit Einsatzhistorie gehört zur Akte. Der Endpunkt prüft die
+        Zugehörigkeit; das Formular reicht nur die eigene Kundennummer mit.
+      */}
       <section className="space-y-4" aria-label="Objekte">
-        <h2 className="font-display text-lg font-semibold tracking-tight">Objekte</h2>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <h2 className="font-display text-lg font-semibold tracking-tight">Objekte</h2>
+          {addresses.length > 0 ? (
+            <PropertyCreateButton
+              customerId={customerId}
+              addresses={addresses.map((address) => ({
+                id: address.id,
+                label: `${address.label} · ${address.street} ${address.streetNo ?? ''}, ${address.postalCode} ${address.city}`,
+              }))}
+            />
+          ) : null}
+        </div>
 
         {properties.length === 0 ? (
           <EmptyState
             icon={<Building2 aria-hidden />}
             title="Noch kein Objekt gespeichert"
-            description="Bei Ihrer ersten Buchung legen wir das Objekt automatisch an. Danach genügen zwei Klicks für einen Folgetermin."
+            description="Bei Ihrer ersten Buchung legen wir das Objekt automatisch an — oder Sie erfassen es jetzt. Danach genügen zwei Klicks für einen Folgetermin."
             action={{ href: '/buchen', label: 'Termin buchen' }}
           />
         ) : (
@@ -85,12 +102,34 @@ export default async function AccountPropertiesPage() {
                   <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-primary/8 text-primary">
                     <Home className="size-5" aria-hidden />
                   </span>
-                  <div className="min-w-0 space-y-1">
+                  <div className="min-w-0 flex-1 space-y-1">
                     <p className="truncate font-medium">{property.label}</p>
                     <Badge variant="neutral" size="sm">
                       {KIND_LABELS[property.kind] ?? property.kind}
                     </Badge>
                   </div>
+                  <PropertyRowActions
+                    propertyId={property.id}
+                    canDelete={false}
+                    values={{
+                      label: property.label,
+                      kind: property.kind,
+                      addressId: property.addressId,
+                      squareMeters: property.squareMeters,
+                      rooms: property.rooms ? toNumber(property.rooms) : null,
+                      bathrooms: property.bathrooms,
+                      windows: property.windows,
+                      floor: property.floor,
+                      hasBalcony: property.hasBalcony,
+                      hasGarden: property.hasGarden,
+                      hasPets: property.hasPets,
+                      hasElevator: property.hasElevator,
+                      parkingInfo: property.parkingInfo,
+                      keyLocation: property.keyLocation,
+                      accessNote: property.accessNote,
+                      notes: property.notes,
+                    }}
+                  />
                 </div>
 
                 <dl className="protocol-list text-sm">

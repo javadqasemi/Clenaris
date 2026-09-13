@@ -9,6 +9,7 @@ import { audit } from '@/lib/audit';
 import type {
   AbsenceRequestInput,
   CreateEmployeeInput,
+  UpdateEmployeeInput,
 } from '@/lib/validation/operations';
 
 import { nextNumber } from './numbering.service';
@@ -134,10 +135,18 @@ export async function createEmployee(params: {
   return employee;
 }
 
+/**
+ * Personalakte ändern.
+ *
+ * Die Rolle des Kontos ist hier absichtlich nicht änderbar — sie ist eine
+ * Rechtevergabe und läuft über `assignRole` mit `role:assign`. Vorher konnte
+ * die Betriebsleitung (`employee:update`) über diesen Weg ein Konto zur
+ * Administration befördern.
+ */
 export async function updateEmployee(params: {
   organizationId: string;
   employeeId: string;
-  input: Partial<CreateEmployeeInput> & { active?: boolean; terminatedAt?: Date };
+  input: UpdateEmployeeInput;
   actorId: string;
 }): Promise<Employee> {
   const employee = await prisma.employee.findFirst({
@@ -145,11 +154,10 @@ export async function updateEmployee(params: {
   });
   if (!employee) throw new NotFoundError('Mitarbeitende/r');
 
-  const { firstName, lastName, email, phone, role, sendInvite, ...employeeFields } = params.input;
-  void sendInvite;
+  const { firstName, lastName, email, phone, ...employeeFields } = params.input;
 
   const updated = await prisma.$transaction(async (tx) => {
-    if (firstName || lastName || email || phone || role) {
+    if (firstName || lastName || email || phone !== undefined) {
       await tx.user.update({
         where: { id: employee.userId },
         data: {
@@ -157,7 +165,6 @@ export async function updateEmployee(params: {
           ...(lastName ? { lastName } : {}),
           ...(email ? { email: email.toLowerCase() } : {}),
           ...(phone !== undefined ? { phone } : {}),
-          ...(role ? { role } : {}),
         },
       });
     }
@@ -377,6 +384,7 @@ export async function requestAbsence(params: {
     title: 'Neuer Abwesenheitsantrag',
     body: `${employee.user.firstName} ${employee.user.lastName} · ${days} Tage ab ${params.input.startDate.toLocaleDateString('de-CH')}`,
     link: `/admin/personal/abwesenheiten`,
+    permission: 'absence:read_all',
   });
 
   return absence;
@@ -446,6 +454,63 @@ export async function decideAbsence(params: {
     entity: 'Absence',
     entityId: absence.id,
     summary: `Abwesenheit ${params.status === 'APPROVED' ? 'bewilligt' : 'abgelehnt'}`,
+  });
+
+  return updated;
+}
+
+/**
+ * Eigenen Antrag zurückziehen.
+ *
+ * Nur, solange er noch nicht entschieden ist: Ein bewilligter Antrag hat die
+ * Disposition bereits verändert (die Person ist aus den Einsätzen genommen),
+ * und ihn stillschweigend zurückzunehmen liesse die Planung im falschen
+ * Stand. Wer bewilligte Ferien doch nicht nimmt, meldet sich bei der
+ * Betriebsleitung — das ist ein Gespräch, kein Klick.
+ *
+ * Der Antrag wird nicht gelöscht, sondern auf `CANCELLED` gesetzt: Die
+ * Zeile ist der Beleg dafür, dass beantragt und zurückgezogen wurde, und die
+ * Saldo-Rechnung zählt nur `APPROVED`.
+ *
+ * Die Zugehörigkeit steht in der Abfrage (`employeeId`): Ein fremder Antrag
+ * wird nicht gefunden, und der 404 verrät nicht, ob er existiert.
+ */
+export async function withdrawAbsence(params: {
+  organizationId: string;
+  employeeId: string;
+  absenceId: string;
+  actorId: string;
+  ip?: string | null;
+}): Promise<Absence> {
+  const absence = await prisma.absence.findFirst({
+    where: {
+      id: params.absenceId,
+      employeeId: params.employeeId,
+      employee: { organizationId: params.organizationId },
+    },
+  });
+  if (!absence) throw new NotFoundError('Abwesenheit');
+
+  if (absence.status !== 'REQUESTED') {
+    throw new BusinessRuleError(
+      absence.status === 'CANCELLED'
+        ? 'Dieser Antrag ist bereits zurückgezogen.'
+        : 'Dieser Antrag wurde bereits entschieden. Wenden Sie sich für eine Änderung an die Betriebsleitung.',
+    );
+  }
+
+  const updated = await prisma.absence.update({
+    where: { id: absence.id },
+    data: { status: 'CANCELLED', decidedAt: new Date(), decisionNote: 'Zurückgezogen' },
+  });
+
+  await audit.updated({
+    organizationId: params.organizationId,
+    userId: params.actorId,
+    entity: 'Absence',
+    entityId: absence.id,
+    summary: `Abwesenheitsantrag vom ${absence.startDate.toLocaleDateString('de-CH', { timeZone: 'UTC' })} zurückgezogen`,
+    ip: params.ip,
   });
 
   return updated;

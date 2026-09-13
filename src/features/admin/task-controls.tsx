@@ -17,6 +17,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/controls';
+import { DetailSection } from '@/components/app/page-parts';
 
 /**
  * Aufgabe abhaken.
@@ -110,10 +111,8 @@ export function TaskComposer({ staff }: { staff: { id: string; name: string }[] 
   }
 
   return (
-    <form
-      onSubmit={submit}
-      className="space-y-4 rounded-2xl border border-border bg-card p-5 shadow-soft"
-    >
+    <DetailSection title="Neue Aufgabe" body="form">
+      <form onSubmit={submit} className="space-y-4">
       <div className="space-y-2">
         <Label htmlFor="task-title" required>
           Was ist zu tun?
@@ -182,14 +181,15 @@ export function TaskComposer({ staff }: { staff: { id: string; name: string }[] 
         </div>
       </div>
 
-      <div className="flex justify-end gap-2">
-        <Button type="button" variant="ghost" onClick={() => setOpen(false)}>
-          Abbrechen
-        </Button>
-        <Button type="submit" loading={saving} disabled={title.trim().length < 3}>
-          Aufgabe erstellen
-        </Button>
-      </div>
-    </form>
+        <div className="flex justify-end gap-2">
+          <Button type="button" variant="ghost" onClick={() => setOpen(false)}>
+            Abbrechen
+          </Button>
+          <Button type="submit" loading={saving} disabled={title.trim().length < 3}>
+            Aufgabe erstellen
+          </Button>
+        </div>
+      </form>
+    </DetailSection>
   );
 }

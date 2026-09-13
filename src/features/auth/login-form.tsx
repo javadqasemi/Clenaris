@@ -8,6 +8,7 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { Eye, EyeOff, Lock, Mail } from 'lucide-react';
 
 import { api, ApiError } from '@/lib/api/client';
+import { resolveRedirect, safeReturnPath } from '@/lib/auth/safe-redirect';
 import { loginSchema, type LoginInput } from '@/lib/validation/auth';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -25,36 +26,39 @@ import {
 /**
  * Anmeldeformular.
  *
- * Der Parameter `ziel` steuert nur die Beschriftung („Kundenkonto",
- * „Mitarbeitendenportal") — die tatsächliche Weiterleitung entscheidet die
- * Rolle des Kontos, nicht die Wahl in der Oberfläche. So kann niemand durch
- * Manipulation der URL in einen fremden Bereich gelangen.
+ * **Eine Anmeldung für alle Rollen.** Vorher gab es drei Einstiege
+ * (`?ziel=konto|portal|admin`), die sich allein in der Überschrift
+ * unterschieden — die Weiterleitung entschied ohnehin die Rolle des Kontos.
+ * Die Wahl war also folgenlos und trotzdem eine Hürde: Wer in der Verwaltung
+ * *und* im Personalbereich zu tun hat, musste raten, und wer den falschen
+ * Einstieg erwischte, zweifelte an seinem Passwort statt an der Oberfläche.
+ *
+ * Wohin es nach der Anmeldung geht, sagt der Server (`redirectTo`, abgeleitet
+ * aus der Rolle). Ein Rücksprungziel aus der URL (`weiter`) hat Vorrang, aber
+ * nur wenn es `safeReturnPath` passiert — sonst wäre die Anmeldeseite eine
+ * offene Weiterleitung.
  */
-
-const TARGET_LABELS: Record<string, { title: string; lead: string }> = {
-  konto: {
-    title: 'Willkommen zurück',
-    lead: 'Melden Sie sich an, um Termine, Offerten und Rechnungen zu verwalten.',
-  },
-  portal: {
-    title: 'Mitarbeitendenportal',
-    lead: 'Einsatzplan, Zeiterfassung und Berichte.',
-  },
-  admin: {
-    title: 'Administration',
-    lead: 'Disposition, Finanzen und Auswertungen.',
-  },
-};
-
 export function LoginForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [showPassword, setShowPassword] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
 
-  const target = searchParams.get('ziel') ?? 'konto';
-  const labels = TARGET_LABELS[target] ?? TARGET_LABELS.konto;
-  const returnTo = searchParams.get('weiter');
+  const returnTo = safeReturnPath(searchParams.get('weiter'));
+
+  /**
+   * Warum die Person hier steht, obwohl sie angemeldet war. Der Grund kommt
+   * aus der URL — von der Middleware, dem API-Klienten oder dem
+   * Aktivitätswächter. Ohne diese Zeile sähe eine Abmeldung nach Leerlauf
+   * aus wie ein Fehler der Anwendung.
+   */
+  const reason = searchParams.get('grund');
+  const notice =
+    reason === 'inaktiv'
+      ? 'Sie wurden nach 15 Minuten ohne Aktivität abgemeldet. Nach der Anmeldung geht es dort weiter, wo Sie waren.'
+      : reason === 'abgelaufen'
+        ? 'Ihre Sitzung ist abgelaufen. Bitte melden Sie sich erneut an.'
+        : null;
 
   const form = useForm<LoginInput>({
     resolver: zodResolver(loginSchema),
@@ -83,7 +87,7 @@ export function LoginForm() {
       }
 
       // `router.refresh()` lädt die Server Components mit der neuen Session neu.
-      router.replace(returnTo ?? result.redirectTo);
+      router.replace(resolveRedirect(returnTo, result.redirectTo));
       router.refresh();
     } catch (err) {
       setError(
@@ -97,10 +101,14 @@ export function LoginForm() {
   return (
     <div className="space-y-8">
       <header className="space-y-2">
-        <h1 className="font-display text-3xl font-bold tracking-tight">{labels.title}</h1>
-        <p className="text-body leading-relaxed text-muted-foreground">{labels.lead}</p>
+        <h1 className="font-display text-3xl font-bold tracking-tight">Willkommen zurück</h1>
+        <p className="text-body leading-relaxed text-muted-foreground">
+          Ein Zugang für Kundschaft, Mitarbeitende und Verwaltung. Nach der Anmeldung öffnet sich
+          automatisch der Bereich, der zu Ihrem Konto gehört.
+        </p>
       </header>
 
+      {notice && !error ? <Alert variant="info">{notice}</Alert> : null}
       {error ? <Alert variant="destructive">{error}</Alert> : null}
 
       <Form {...form}>

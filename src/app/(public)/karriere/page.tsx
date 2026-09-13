@@ -6,6 +6,9 @@ import { prisma, toNumber } from '@/lib/db';
 import { formatCurrency } from '@/lib/utils';
 import { pageMetadata } from '@/lib/cms/metadata';
 import { getOrganizationId } from '@/server/services/organization.service';
+import { getContent } from '@/server/services/content.service';
+import { createCms } from '@/lib/cms/editable';
+import { isPreview } from '@/lib/cms/preview';
 import { Badge } from '@/components/ui/badge';
 import { CallToAction, Section, SectionIntro } from '@/components/marketing/sections';
 import { ctasFor } from '@/server/services/cta.service';
@@ -30,6 +33,8 @@ const EMPLOYMENT_LABELS: Record<string, string> = {
 
 export default async function CareerPage() {
   const organizationId = await getOrganizationId();
+  const content = await getContent(organizationId);
+  const cms = createCms(content, await isPreview());
 
   const postings = await prisma.jobPosting.findMany({
     where: { organizationId, status: 'PUBLISHED' },
@@ -60,7 +65,7 @@ export default async function CareerPage() {
       {/* Was wir bieten */}
       <Section>
         <div className="container space-y-10">
-          <SectionIntro title="Was wir bieten" />
+          <SectionIntro title={cms.text('careers.benefits.title')} />
 
           <ul className="grid gap-x-10 gap-y-4 border-t border-border sm:grid-cols-2">
             {[
@@ -89,8 +94,8 @@ export default async function CareerPage() {
       <Section className="bg-surface">
         <div className="container space-y-10">
           <SectionIntro
-            title="Offene Stellen"
-            lead="Nichts Passendes dabei? Senden Sie uns trotzdem eine Spontanbewerbung — wir suchen laufend."
+            title={cms.text('careers.openings.title')}
+            lead={cms.text('careers.openings.lead')}
           />
 
           {postings.length === 0 ? (
@@ -161,8 +166,8 @@ export default async function CareerPage() {
         <div className="container">
           <CallToAction
         ctas={bandCtas}
-            title="Fragen zur Stelle?"
-            lead="Rufen Sie an und sprechen Sie direkt mit der Betriebsleitung — kein Bewerbungsportal, keine Standardantwort."
+            title={cms.text('careers.cta.title')}
+            lead={cms.text('careers.cta.text')}
             primary={{ href: '/kontakt', label: 'Kontakt aufnehmen' }}
             secondary={{ href: '/ueber-uns', label: 'Über uns' }}
           />

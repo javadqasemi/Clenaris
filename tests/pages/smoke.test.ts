@@ -35,6 +35,8 @@ const PAGES: Record<'admin' | 'employee' | 'customer', string[]> = {
     '/admin/rechnungen/neu',
     '/admin/zahlungen',
     '/admin/ausgaben',
+    '/admin/ausgaben?bereich=lieferanten',
+    '/admin/papierkorb',
     '/admin/auswertungen',
     '/admin/personal',
     '/admin/personal/neu',
@@ -52,6 +54,26 @@ const PAGES: Record<'admin' | 'employee' | 'customer', string[]> = {
     '/admin/website',
     '/admin/inhalte',
     '/admin/seo',
+    '/admin/fuehrung',
+    '/admin/fuehrung/kennzahlen',
+    '/admin/fuehrung/ziele',
+    '/admin/fuehrung/ziele?ansicht=kanban',
+    '/admin/fuehrung/ziele/neu',
+    '/admin/fuehrung/ziele/roadmap',
+    '/admin/fuehrung/budget',
+    '/admin/fuehrung/investitionen',
+    '/admin/fuehrung/szenarien',
+    '/admin/fuehrung/risiken',
+    '/admin/fuehrung/qualitaet',
+    '/admin/fuehrung/massnahmen',
+    '/admin/fuehrung/dokumente',
+    '/admin/fuehrung/wissen',
+    '/admin/fuehrung/markt',
+    '/admin/fuehrung/markt/analyse/neu',
+    '/admin/fuehrung/sitzungen',
+    '/admin/fuehrung/sitzungen/neu',
+    '/admin/fuehrung/berichte',
+    '/admin/fuehrung/assistent',
   ],
   employee: [
     '/portal',
@@ -61,6 +83,8 @@ const PAGES: Record<'admin' | 'employee' | 'customer', string[]> = {
     '/portal/abwesenheiten',
     '/portal/lohn',
     '/portal/profil',
+    '/portal/ziele',
+    '/portal/wissen',
   ],
   customer: [
     '/konto',
@@ -122,12 +146,22 @@ describe('Rauchtest', { concurrency: 1 }, async () => {
       return response.payload?.data?.[0]?.id ?? null;
     };
 
-    const [customerId, leadId, invoiceId, quoteId, employeeId] = await Promise.all([
+    const [customerId, leadId, invoiceId, quoteId, employeeId, kpiId, objectiveId, budgetId, investmentId, scenarioId, riskId, controlId, documentId, meetingId, boardId] = await Promise.all([
       firstId('/api/customers'),
       firstId('/api/leads'),
       firstId('/api/invoices'),
       firstId('/api/quotes'),
       firstId('/api/employees'),
+      firstId('/api/bi/kpis'),
+      firstId('/api/bi/objectives'),
+      firstId('/api/bi/budgets'),
+      firstId('/api/bi/investments'),
+      firstId('/api/bi/scenarios'),
+      firstId('/api/bi/risks'),
+      firstId('/api/bi/controls'),
+      firstId('/api/bi/documents'),
+      firstId('/api/bi/meetings'),
+      firstId('/api/bi/analysis'),
     ]);
 
     const targets: [string, string | null][] = [
@@ -136,6 +170,16 @@ describe('Rauchtest', { concurrency: 1 }, async () => {
       ['/admin/rechnungen', invoiceId],
       ['/admin/offerten', quoteId],
       ['/admin/personal', employeeId],
+      ['/admin/fuehrung/kennzahlen', kpiId],
+      ['/admin/fuehrung/ziele', objectiveId],
+      ['/admin/fuehrung/budget', budgetId],
+      ['/admin/fuehrung/investitionen', investmentId],
+      ['/admin/fuehrung/szenarien', scenarioId],
+      ['/admin/fuehrung/risiken', riskId],
+      ['/admin/fuehrung/qualitaet', controlId],
+      ['/admin/fuehrung/dokumente', documentId],
+      ['/admin/fuehrung/sitzungen', meetingId],
+      ['/admin/fuehrung/markt/analyse', boardId],
     ];
 
     for (const [prefix, id] of targets) {

@@ -2,6 +2,7 @@ import { z } from 'zod';
 
 import { defineRoute } from '@/lib/api/handler';
 import { buildPagination, created, paginated } from '@/lib/api/response';
+import { assetUrlSchema } from '@/lib/validation/common';
 import { paginationQuery } from '@/lib/validation/queries';
 import { listMedia, registerMedia } from '@/server/services/media.service';
 import { getOrganizationId } from '@/server/services/organization.service';
@@ -69,7 +70,9 @@ export const POST = defineRoute({
   body: z.object({
     bucket: z.string().trim().min(1).max(64).default('clenaris'),
     path: z.string().trim().min(1).max(500),
-    url: z.string().trim().url(),
+    // Nicht `.url()`: Ohne externen Speicher lautet die Adresse
+    // `/api/files/blob/…`, und die Registrierung schlüge sonst mit 422 fehl.
+    url: assetUrlSchema,
     filename: z.string().trim().min(1).max(255),
     mimeType: z.string().trim().min(1).max(120),
     sizeBytes: z.number().int().min(0).max(50 * 1024 * 1024),

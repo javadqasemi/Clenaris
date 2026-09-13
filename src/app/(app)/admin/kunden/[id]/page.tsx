@@ -39,7 +39,10 @@ import { KpiTile } from '@/components/app/kpi-tile';
 import { DetailRow, DetailSection, EmptyState, PageHeader } from '@/components/app/page-parts';
 import { DataCell, DataList, DataListHeader, DataRow } from '@/components/app/data-list';
 import { ActivityComposer } from '@/features/admin/activity-composer';
+import { CustomerDeleteButton, CustomerEditDialog } from '@/features/admin/customer-actions';
+import { CustomerMerge } from '@/features/admin/customer-merge';
 import { AddressManager } from '@/features/shared/address-manager';
+import { PropertyCreateButton, PropertyRowActions } from '@/features/shared/property-dialog';
 import { can } from '@/lib/auth/rbac';
 import { listAddresses } from '@/server/services/address.service';
 
@@ -84,6 +87,12 @@ export default async function AdminCustomerDetailPage({
 }) {
   const session = await requirePermission('customer:read');
   const canEdit = can(session.role, 'customer:update');
+  const canDelete = can(session.role, 'customer:delete');
+  // Zusammenführen löscht am Ende einen Datensatz — deshalb beide Rechte.
+  const canMerge = canEdit && canDelete;
+  const canCreateProperty = can(session.role, 'property:create');
+  const canEditProperty = can(session.role, 'property:update');
+  const canDeleteProperty = can(session.role, 'property:delete');
 
   const { id } = await params;
   const organizationId = await getOrganizationId();
@@ -113,6 +122,46 @@ export default async function AdminCustomerDetailPage({
         description={`Kunde seit ${formatDate(customer.createdAt)} · ${customer.number}`}
         actions={
           <>
+            {canEdit ? (
+              <CustomerEditDialog
+                customerId={customer.id}
+                values={{
+                  type: customer.type,
+                  companyName: customer.companyName,
+                  firstName: customer.firstName,
+                  lastName: customer.lastName,
+                  email: customer.email,
+                  phone: customer.phone,
+                  mobile: customer.mobile,
+                  vatNumber: customer.vatNumber,
+                  language: customer.language,
+                  paymentTermDays: customer.paymentTermDays,
+                  discountPercent: toNumber(customer.discountPercent),
+                  taxExempt: customer.taxExempt,
+                  blocked: customer.blocked,
+                  blockedReason: customer.blockedReason,
+                  notes: customer.notes,
+                  internalNotes: customer.internalNotes,
+                }}
+              />
+            ) : null}
+            {canDelete ? (
+              <CustomerDeleteButton customerId={customer.id} name={displayName} />
+            ) : null}
+            {/*
+              Zusammenführen steht hier und nicht in der Kundenliste: Der
+              Datensatz, den man offen hat, ist der, den man behalten will —
+              und die Richtung ist bei diesem Vorgang alles.
+            */}
+            {canMerge ? (
+              <CustomerMerge
+                customerId={customer.id}
+                customerNumber={customer.number}
+                customerName={
+                  customer.companyName ?? `${customer.firstName} ${customer.lastName}`
+                }
+              />
+            ) : null}
             <Button asChild variant="outline">
               <Link href={`/admin/offerten/neu?kunde=${customer.id}`}>
                 <FileText aria-hidden />
@@ -358,7 +407,18 @@ export default async function AdminCustomerDetailPage({
           </TabsContent>
 
           {/* Objekte */}
-          <TabsContent value="objekte">
+          <TabsContent value="objekte" className="space-y-4">
+            {canCreateProperty ? (
+              <div className="flex justify-end">
+                <PropertyCreateButton
+                  customerId={customer.id}
+                  addresses={addresses.map((address) => ({
+                    id: address.id,
+                    label: `${address.label} · ${address.street} ${address.streetNo ?? ''}, ${address.postalCode} ${address.city}`,
+                  }))}
+                />
+              </div>
+            ) : null}
             {customer.properties.length === 0 ? (
               <EmptyState
                 icon={<Building2 aria-hidden />}
@@ -376,7 +436,7 @@ export default async function AdminCustomerDetailPage({
                       <span className="flex size-9 items-center justify-center rounded-xl bg-primary/8 text-primary">
                         <Home className="size-4" aria-hidden />
                       </span>
-                      <div className="min-w-0">
+                      <div className="min-w-0 flex-1">
                         <p className="truncate font-medium">{property.label}</p>
                         <p className="text-sm text-muted-foreground">
                           {[
@@ -389,6 +449,30 @@ export default async function AdminCustomerDetailPage({
                             .join(' · ')}
                         </p>
                       </div>
+                      {canEditProperty ? (
+                        <PropertyRowActions
+                          propertyId={property.id}
+                          canDelete={canDeleteProperty}
+                          values={{
+                            label: property.label,
+                            kind: property.kind,
+                            addressId: property.addressId,
+                            squareMeters: property.squareMeters,
+                            rooms: property.rooms ? toNumber(property.rooms) : null,
+                            bathrooms: property.bathrooms,
+                            windows: property.windows,
+                            floor: property.floor,
+                            hasBalcony: property.hasBalcony,
+                            hasGarden: property.hasGarden,
+                            hasPets: property.hasPets,
+                            hasElevator: property.hasElevator,
+                            parkingInfo: property.parkingInfo,
+                            keyLocation: property.keyLocation,
+                            accessNote: property.accessNote,
+                            notes: property.notes,
+                          }}
+                        />
+                      ) : null}
                     </div>
                     {property.accessNote ? (
                       <p className="text-sm leading-relaxed text-muted-foreground">

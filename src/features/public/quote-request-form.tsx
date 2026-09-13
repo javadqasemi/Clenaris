@@ -85,7 +85,12 @@ export function QuoteRequestForm({
   const onSubmit = async (values: QuoteRequestInput) => {
     setError(null);
     try {
-      await api.post('/api/public/contact', values);
+      /*
+        Der Offertendpunkt, nicht der Kontaktendpunkt: Letzterer validiert mit
+        dem Kontaktschema und verwarf dabei Fläche, Turnus, Adresse und
+        Wunschtermin, ohne dass es jemandem auffiel.
+      */
+      await api.post('/api/public/quotes', values);
       trackEvent('quote_requested', { service: values.serviceKind });
       setSent(true);
     } catch (err) {

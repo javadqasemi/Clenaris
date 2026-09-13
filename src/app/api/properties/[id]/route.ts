@@ -6,6 +6,7 @@ import { prisma } from '@/lib/db';
 import { noContent, ok } from '@/lib/api/response';
 import { softDelete } from '@/server/services/trash.service';
 import { getOrganizationId } from '@/server/services/organization.service';
+import { mayManagePropertyOf, propertyVisibilityWhere } from '@/server/services/property.service';
 
 export const runtime = 'nodejs';
 
@@ -33,15 +34,21 @@ export const DELETE = defineRoute({
   },
 });
 
-/** GET /api/properties/:id — Objektakte samt Adresse und Einsatzhistorie. */
+/**
+ * GET /api/properties/:id — Objektakte samt Adresse und Einsatzhistorie.
+ *
+ * Die Sichtbarkeit je Rolle steckt in der Abfrage (`propertyVisibilityWhere`):
+ * Ein fremdes Objekt wird nicht gefunden, und der 404 verrät nicht, ob es
+ * existiert.
+ */
 export const GET = defineRoute({
   permissions: ['property:read'],
   params: idParam,
   rateLimit: 'apiRead',
-  handler: async ({ params }) => {
+  handler: async ({ params, session }) => {
     const organizationId = await getOrganizationId();
     const property = await prisma.property.findFirst({
-      where: { id: params.id, deletedAt: null, customer: { organizationId } },
+      where: { id: params.id, ...propertyVisibilityWhere(session, organizationId) },
       include: {
         address: true,
         customer: {
@@ -67,6 +74,10 @@ export const GET = defineRoute({
  * würde seine Einsatzhistorie und die daran hängenden Rechnungen an die
  * falsche Akte binden. Wechselt tatsächlich der Eigentümer, wird ein neues
  * Objekt erfasst und das alte stillgelegt.
+ *
+ * Die Kundschaft ändert nur die eigenen Objekte; die Prüfung läuft über
+ * dieselbe Sichtbarkeitsregel wie das Lesen, plus `mayManagePropertyOf` für
+ * das Schreiben.
  */
 export const PATCH = defineRoute({
   permissions: ['property:update'],
@@ -76,9 +87,11 @@ export const PATCH = defineRoute({
   handler: async ({ params, body, session, ip }) => {
     const organizationId = await getOrganizationId();
     const before = await prisma.property.findFirst({
-      where: { id: params.id, deletedAt: null, customer: { organizationId } },
+      where: { id: params.id, ...propertyVisibilityWhere(session, organizationId) },
     });
-    if (!before) throw new NotFoundError('Objekt');
+    if (!before || !mayManagePropertyOf(session, before.customerId)) {
+      throw new NotFoundError('Objekt');
+    }
 
     const property = await prisma.property.update({
       where: { id: params.id },

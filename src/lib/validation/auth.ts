@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import {
+  assetUrlSchema,
   consentSchema,
   emailSchema,
   honeypotSchema,
@@ -74,13 +75,20 @@ export const updateProfileSchema = z.object({
   lastName: nameSchema,
   phone: optionalPhoneSchema,
   locale: localeSchema.optional(),
-  avatarUrl: z.string().url().optional().or(z.literal('')),
+  // Nicht `.url()`: Ohne externen Objektspeicher liegt das Bild unter
+  // `/api/files/blob/…` und damit unter einem relativen Pfad.
+  avatarUrl: assetUrlSchema.optional().or(z.literal('')),
   theme: z.enum(['system', 'light', 'dark']).optional(),
   notifyByEmail: z.boolean().optional(),
   notifyBySms: z.boolean().optional(),
   marketingOptIn: z.boolean().optional(),
 });
 export type UpdateProfileInput = z.infer<typeof updateProfileSchema>;
+
+/** Rücksprungziel nach der stillen Sitzungserneuerung; geprüft wird es im Handler. */
+export const refreshRedirectQuery = z.object({
+  weiter: z.string().max(512).optional(),
+});
 
 export const verifyEmailSchema = z.object({
   token: z.string().min(10, 'Ungültiger Bestätigungslink.'),

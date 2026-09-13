@@ -45,3 +45,24 @@ export const CashflowChart = dynamic(
   () => import('./dashboard-charts').then((m) => m.CashflowChart),
   { ssr: false, loading: () => <ChartSkeleton height={300} /> },
 );
+
+// Unternehmensführung
+export const KpiSeriesChart = dynamic(
+  () => import('./fuehrung-charts').then((m) => m.KpiSeriesChart),
+  { ssr: false, loading: () => <ChartSkeleton height={300} /> },
+);
+
+export const HealthHistoryChart = dynamic(
+  () => import('./fuehrung-charts').then((m) => m.HealthHistoryChart),
+  { ssr: false, loading: () => <ChartSkeleton height={220} /> },
+);
+
+export const ScenarioChart = dynamic(
+  () => import('./fuehrung-charts').then((m) => m.ScenarioChart),
+  { ssr: false, loading: () => <ChartSkeleton height={300} /> },
+);
+
+export const BudgetVarianceChart = dynamic(
+  () => import('./fuehrung-charts').then((m) => m.BudgetVarianceChart),
+  { ssr: false, loading: () => <ChartSkeleton height={260} /> },
+);

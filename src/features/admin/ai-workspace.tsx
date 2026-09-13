@@ -3,7 +3,6 @@
 import * as React from 'react';
 import {
   ClipboardCopy,
-  FileText,
   Languages,
   Mail,
   Route,
@@ -17,6 +16,7 @@ import { api, ApiError } from '@/lib/api/client';
 import { Button } from '@/components/ui/button';
 import { Input, Textarea } from '@/components/ui/input';
 import { Label } from '@/components/ui/form';
+import { DetailSection } from '@/components/app/page-parts';
 import { Alert } from '@/components/ui/primitives';
 import {
   Select,
@@ -335,18 +335,16 @@ export function AiWorkspace({ defaultTool }: { defaultTool?: string }) {
         {error ? <Alert variant="destructive">{error}</Alert> : null}
 
         {result ? (
-          <div className="space-y-3 rounded-2xl border border-border bg-card p-6">
-            <div className="flex items-center justify-between gap-4">
-              <h2 className="flex items-center gap-2 font-display text-base font-semibold">
-                <FileText className="size-4 text-primary" aria-hidden />
-                Entwurf
-              </h2>
+          <DetailSection
+            title="Entwurf"
+            body="form"
+            action={
               <Button variant="outline" size="sm" onClick={copy}>
                 <ClipboardCopy aria-hidden />
                 Kopieren
               </Button>
-            </div>
-
+            }
+          >
             <Textarea
               value={result}
               onChange={(event) => setResult(event.target.value)}
@@ -354,7 +352,7 @@ export function AiWorkspace({ defaultTool }: { defaultTool?: string }) {
               aria-label="Erzeugter Entwurf"
               className="font-[inherit]"
             />
-          </div>
+          </DetailSection>
         ) : null}
       </div>
     </div>

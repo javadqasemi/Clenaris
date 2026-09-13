@@ -29,6 +29,7 @@ import {
   FormLabel,
   FormMessage,
 } from '@/components/ui/form';
+import { DetailSection } from '@/components/app/page-parts';
 
 /**
  * Kundendatensatz anlegen.
@@ -90,8 +91,7 @@ export function CustomerForm() {
       >
         {error ? <Alert variant="destructive">{error}</Alert> : null}
 
-        <section className="space-y-5 rounded-2xl border border-border bg-card p-6 shadow-soft">
-          <h2 className="font-display text-base font-semibold tracking-tight">Stammdaten</h2>
+        <DetailSection title="Stammdaten" body="form">
 
           <FormField
             control={form.control}
@@ -242,10 +242,9 @@ export function CustomerForm() {
               )}
             />
           </div>
-        </section>
+        </DetailSection>
 
-        <section className="space-y-5 rounded-2xl border border-border bg-card p-6 shadow-soft">
-          <h2 className="font-display text-base font-semibold tracking-tight">Adresse</h2>
+        <DetailSection title="Adresse" body="form">
 
           <div className="grid gap-4 sm:grid-cols-[minmax(0,1fr)_6rem]">
             <FormField
@@ -310,12 +309,9 @@ export function CustomerForm() {
               )}
             />
           </div>
-        </section>
+        </DetailSection>
 
-        <section className="space-y-5 rounded-2xl border border-border bg-card p-6 shadow-soft">
-          <h2 className="font-display text-base font-semibold tracking-tight">
-            Konditionen und Zugang
-          </h2>
+        <DetailSection title="Konditionen und Zugang" body="form">
 
           <div className="grid gap-4 sm:grid-cols-2">
             <FormField
@@ -398,7 +394,7 @@ export function CustomerForm() {
               </FormItem>
             )}
           />
-        </section>
+        </DetailSection>
 
         <div className="flex flex-wrap gap-3">
           <Button type="submit" loading={form.formState.isSubmitting}>

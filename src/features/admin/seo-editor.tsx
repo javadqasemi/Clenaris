@@ -12,6 +12,7 @@ import { Input, Textarea } from '@/components/ui/input';
 import { Label } from '@/components/ui/form';
 import { Checkbox } from '@/components/ui/controls';
 import { Badge } from '@/components/ui/badge';
+import { DetailSection } from '@/components/app/page-parts';
 
 /**
  * Pflege der Suchmaschinenangaben.
@@ -138,21 +139,17 @@ function SeoForm({ page, siteUrl }: { page: SeoPageState; siteUrl: string }) {
   return (
     <div className="space-y-6">
       {/* Vorschau */}
-      <section
-        className="space-y-3 rounded-2xl border border-border bg-card p-6 shadow-soft"
-        aria-label="Vorschau des Suchergebnisses"
-      >
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <h2 className="font-display text-base font-semibold tracking-tight">
-            So sieht der Treffer aus
-          </h2>
-          {noIndex ? (
+      <DetailSection
+        title="So sieht der Treffer aus"
+        body="form"
+        action={
+          noIndex ? (
             <Badge variant="destructive" size="sm">
               Wird nicht angezeigt
             </Badge>
-          ) : null}
-        </div>
-
+          ) : null
+        }
+      >
         <div className={cn('max-w-2xl space-y-1', noIndex && 'opacity-40')}>
           <p className="truncate text-2xs text-muted-foreground">
             {siteUrl.replace(/^https?:\/\//, '')}
@@ -165,19 +162,21 @@ function SeoForm({ page, siteUrl }: { page: SeoPageState; siteUrl: string }) {
             {truncate(shownDescription, DESCRIPTION_LIMIT)}
           </p>
         </div>
-      </section>
+      </DetailSection>
 
       {/* Felder */}
-      <section className="space-y-5 rounded-2xl border border-border bg-card p-6 shadow-soft">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <h2 className="font-display text-base font-semibold tracking-tight">{page.label}</h2>
-          {page.curated ? (
+      <DetailSection
+        title={page.label}
+        body="form"
+        action={
+          page.curated ? (
             <Button variant="ghost" size="sm" onClick={reset}>
               <RotateCcw aria-hidden />
               Auf Standard
             </Button>
-          ) : null}
-        </div>
+          ) : null
+        }
+      >
 
         <div className="space-y-2">
           <div className="flex items-baseline justify-between gap-3">
@@ -243,7 +242,7 @@ function SeoForm({ page, siteUrl }: { page: SeoPageState; siteUrl: string }) {
             1200 × 630 Pixel.
           </p>
         </div>
-      </section>
+      </DetailSection>
 
       {/* Ausschluss aus dem Index */}
       <section className="rounded-2xl border border-destructive/25 bg-destructive/5 p-5">

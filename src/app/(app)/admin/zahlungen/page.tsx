@@ -4,7 +4,9 @@ import { CreditCard } from 'lucide-react';
 
 import { prisma, toNumber } from '@/lib/db';
 import { requirePermission } from '@/lib/auth/session';
+import { can } from '@/lib/auth/rbac';
 import { formatCurrency, formatDate, toQueryString } from '@/lib/utils';
+import { PaymentRowActions } from '@/features/admin/payment-row-actions';
 import { getOrganizationId } from '@/server/services/organization.service';
 import { StatusBadge } from '@/components/ui/badge';
 import { KpiTile } from '@/components/app/kpi-tile';
@@ -40,7 +42,16 @@ export default async function PaymentsPage({
 }: {
   searchParams: Promise<Record<string, string | undefined>>;
 }) {
-  await requirePermission('invoice:read');
+  /**
+   * `payment:read` und nicht `invoice:read`: Die Seite zeigt Zahlungen, und
+   * genau dafür gibt es die Berechtigung — die Navigation verlangt sie schon.
+   * Mit `invoice:read` sähe eine Rolle, der man Zahlungen entzogen hat, die
+   * Liste trotzdem.
+   */
+  const session = await requirePermission('payment:read');
+  const canEdit = can(session.role, 'payment:create');
+  const canDelete = can(session.role, 'payment:delete');
+  const showActions = canEdit || canDelete;
 
   const params = await searchParams;
   const organizationId = await getOrganizationId();
@@ -152,6 +163,11 @@ export default async function PaymentsPage({
                     Betrag
                   </th>
                   <th scope="col">Status</th>
+                  {showActions ? (
+                    <th scope="col" className="text-right">
+                      <span className="sr-only">Aktionen</span>
+                    </th>
+                  ) : null}
                 </tr>
               </thead>
               <tbody>
@@ -188,6 +204,20 @@ export default async function PaymentsPage({
                     <td>
                       <StatusBadge status={payment.status} />
                     </td>
+                    {showActions ? (
+                      <td>
+                        <PaymentRowActions
+                          paymentId={payment.id}
+                          amountLabel={formatCurrency(toNumber(payment.amount))}
+                          reference={payment.reference}
+                          note={payment.note}
+                          paidAt={payment.paidAt ? payment.paidAt.toISOString() : null}
+                          manual={!payment.provider || payment.provider === 'manual'}
+                          canEdit={canEdit}
+                          canDelete={canDelete}
+                        />
+                      </td>
+                    ) : null}
                   </tr>
                 ))}
               </tbody>

@@ -3,6 +3,7 @@ import { Star } from 'lucide-react';
 
 import { prisma } from '@/lib/db';
 import { requirePermission } from '@/lib/auth/session';
+import { can } from '@/lib/auth/rbac';
 import { formatDate } from '@/lib/utils';
 import { getOrganizationId } from '@/server/services/organization.service';
 import { Badge } from '@/components/ui/badge';
@@ -30,7 +31,9 @@ const SERVICE_LABELS: Record<string, string> = {
 };
 
 export default async function ReviewsAdminPage() {
-  await requirePermission('review:read');
+  const session = await requirePermission('review:read');
+  const canModerate = can(session.role, 'review:moderate');
+  const canDelete = can(session.role, 'review:delete');
 
   const organizationId = await getOrganizationId();
 
@@ -104,6 +107,8 @@ export default async function ReviewsAdminPage() {
                 <li key={review.id}>
                   <ReviewCardAdmin
                     review={review}
+                    canModerate={canModerate}
+                    canDelete={canDelete}
                     serviceLabel={
                       review.serviceKind ? SERVICE_LABELS[review.serviceKind] : undefined
                     }
@@ -127,6 +132,8 @@ export default async function ReviewsAdminPage() {
                 <li key={review.id}>
                   <ReviewCardAdmin
                     review={review}
+                    canModerate={canModerate}
+                    canDelete={canDelete}
                     serviceLabel={
                       review.serviceKind ? SERVICE_LABELS[review.serviceKind] : undefined
                     }
@@ -148,9 +155,13 @@ type ReviewRow = Awaited<
 function ReviewCardAdmin({
   review,
   serviceLabel,
+  canModerate,
+  canDelete,
 }: {
   review: ReviewRow;
   serviceLabel?: string;
+  canModerate: boolean;
+  canDelete: boolean;
 }) {
   return (
     <article className="space-y-4 rounded-2xl border border-border bg-card p-5 shadow-soft">
@@ -199,13 +210,16 @@ function ReviewCardAdmin({
         </div>
       ) : null}
 
-      <ReviewModeration
-        reviewId={review.id}
-        status={review.status}
-        featured={review.featured}
-        hasReply={Boolean(review.reply)}
-        rating={review.rating}
-      />
+      {canModerate || canDelete ? (
+        <ReviewModeration
+          reviewId={review.id}
+          status={review.status}
+          featured={review.featured}
+          hasReply={Boolean(review.reply)}
+          rating={review.rating}
+          canDelete={canDelete}
+        />
+      ) : null}
     </article>
   );
 }

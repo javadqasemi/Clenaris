@@ -1,4 +1,6 @@
 import type { Metadata } from 'next';
+
+import { jsonLd } from '@/lib/json-ld';
 import Link from 'next/link';
 import {
   ArrowRight,
@@ -12,7 +14,9 @@ import {
 import { prisma, toNumber } from '@/lib/db';
 import { pageMetadata } from '@/lib/cms/metadata';
 import { getOrganizationId } from '@/server/services/organization.service';
-import { getContent, contentText, contentList } from '@/server/services/content.service';
+import { getContent } from '@/server/services/content.service';
+import { createCms } from '@/lib/cms/editable';
+import { isPreview } from '@/lib/cms/preview';
 import { ctasFor } from '@/server/services/cta.service';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -59,6 +63,8 @@ export default async function HomePage() {
   const organizationId = await getOrganizationId();
   // Redaktionell gepflegte Texte; fehlt ein Baustein, gilt der Auslieferungstext.
   const content = await getContent(organizationId);
+  // Im Vorschaumodus werden die Texte anklickbar — siehe `createCms`.
+  const cms = createCms(content, await isPreview());
 
   const [services, reviews, ratingAgg, faqs, gallery, areaCount, completedJobs] =
     await Promise.all([
@@ -133,9 +139,13 @@ export default async function HomePage() {
           <div className="grid items-center gap-14 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.05fr)]">
             <div className="space-y-8">
               <div className="flex flex-wrap items-center gap-3">
-                <Badge variant="outline" className="gap-2 border-border bg-card/70 py-1 pl-1.5">
+                <Badge
+                  variant="outline"
+                  className="gap-2 border-border bg-card/70 py-1 pl-1.5"
+                  {...cms.attrs('home.hero.availability')}
+                >
                   <span className="status-dot bg-success" aria-hidden />
-                  Termine ab {nextAvailableLabel()} frei
+                  {cms.raw('home.hero.availability').replace('{datum}', nextAvailableLabel())}
                 </Badge>
                 <span className="inline-flex items-center gap-2 text-sm text-muted-foreground">
                   <Stars rating={averageRating} />
@@ -144,13 +154,13 @@ export default async function HomePage() {
               </div>
 
               <h1 className="text-display font-bold text-balance text-foreground">
-                {contentText(content, 'home.hero.titleLine1')}
+                {cms.text('home.hero.titleLine1')}
                 <br />
-                {contentText(content, 'home.hero.titleLine2')}
+                {cms.text('home.hero.titleLine2')}
               </h1>
 
               <p className="prose-measure text-lg leading-relaxed text-muted-foreground">
-                {contentText(content, 'home.hero.lead')}
+                {cms.text('home.hero.lead')}
               </p>
 
               <QuickEstimate
@@ -162,8 +172,12 @@ export default async function HomePage() {
                 }))}
               />
 
-              <ul className="flex flex-wrap gap-x-6 gap-y-2 text-sm text-muted-foreground">
-                {contentList(content, 'home.hero.bullets').map((item) => (
+              {/* Die Liste wird als Ganzes gepflegt — der Behälter trägt die Markierung. */}
+              <ul
+                className="flex flex-wrap gap-x-6 gap-y-2 text-sm text-muted-foreground"
+                {...cms.attrs('home.hero.bullets')}
+              >
+                {cms.list('home.hero.bullets').map((item) => (
                   <li key={item} className="flex items-center gap-2">
                     <BadgeCheck className="size-4 text-primary" aria-hidden />
                     {item}
@@ -177,6 +191,8 @@ export default async function HomePage() {
             <BeforeAfter
               beforeSrc={gallery?.beforeUrl}
               afterSrc={gallery?.afterUrl}
+              beforeAttrs={cms.asset('galleryItem', gallery?.id, 'beforeUrl')}
+              afterAttrs={cms.asset('galleryItem', gallery?.id, 'afterUrl')}
               caption={
                 gallery
                   ? `${gallery.title}${gallery.location ? ` · ${gallery.location}` : ''} — Regler verschieben`
@@ -191,10 +207,13 @@ export default async function HomePage() {
       <div className="container">
         <StatStrip
           stats={[
-            { value: `${areaCount}`, label: 'Postleitzahlen im Einsatzgebiet' },
-            { value: `${Math.max(completedJobs, 1)}`, label: 'Abgeschlossene Einsätze' },
-            { value: averageRating.toFixed(1), label: 'Durchschnittliche Bewertung' },
-            { value: '24 Std.', label: 'Antwort auf jede Offertanfrage' },
+            { value: `${areaCount}`, label: cms.text('home.stats.areasLabel') },
+            { value: `${Math.max(completedJobs, 1)}`, label: cms.text('home.stats.jobsLabel') },
+            { value: averageRating.toFixed(1), label: cms.text('home.stats.ratingLabel') },
+            {
+              value: cms.text('home.stats.responseValue'),
+              label: cms.text('home.stats.responseLabel'),
+            },
           ]}
         />
       </div>
@@ -203,9 +222,9 @@ export default async function HomePage() {
       <Section>
         <div className="container">
           <SectionIntro
-            title="Was wir für Sie tun"
-            lead="Sechs Leistungen, klar abgegrenzt. Jede mit einem Preis, den Sie vorher kennen."
-            action={{ href: '/leistungen', label: 'Alle Details' }}
+            title={cms.text('home.services.title')}
+            lead={cms.text('home.services.lead')}
+            action={{ href: '/leistungen', label: cms.text('home.services.linkLabel') }}
           />
 
           <div className="border-b border-border">
@@ -231,32 +250,14 @@ export default async function HomePage() {
       <Section className="bg-surface">
         <div className="container">
           <SectionIntro
-            title="So läuft es ab"
-            lead="Vier Schritte vom Klick bis zur sauberen Wohnung. Ohne Rückrufschlaufe, ohne Preisverhandlung."
+            title={cms.text('home.process.title')}
+            lead={cms.text('home.process.lead')}
           />
           <ProcessSteps
-            steps={[
-              {
-                title: 'Preis berechnen',
-                description:
-                  'Leistung, Fläche und Termin eingeben. Der Preis erscheint sofort und ist verbindlich.',
-              },
-              {
-                title: 'Termin wählen',
-                description:
-                  'Sie sehen nur Zeitfenster, in denen wir tatsächlich Kapazität haben. Keine Warteschlaufe.',
-              },
-              {
-                title: 'Wir kommen',
-                description:
-                  'Ein festes Team, das Sie kennenlernen. Material und Reinigungsmittel bringen wir mit.',
-              },
-              {
-                title: 'Bericht und Rechnung',
-                description:
-                  'Nach dem Einsatz erhalten Sie Fotos, die Checkliste und die QR-Rechnung mit 30 Tagen Frist.',
-              },
-            ]}
+            steps={[1, 2, 3, 4].map((step) => ({
+              title: cms.text(`home.process.step${step}.title`),
+              description: cms.text(`home.process.step${step}.text`),
+            }))}
           />
         </div>
       </Section>
@@ -265,38 +266,24 @@ export default async function HomePage() {
       <Section>
         <div className="container space-y-14">
           <SectionIntro
-            title="Warum Sie uns den Schlüssel geben können"
-            lead="Reinigung heisst, Fremde in die eigenen Räume zu lassen. Das nehmen wir ernst."
+            title={cms.text('home.trust.title')}
+            lead={cms.text('home.trust.lead')}
             align="center"
           />
 
+          {/*
+            Die Sinnbilder bleiben im Code. Sie stehen für die Zusage, nicht für
+            den Text — ein Schloss neben „Versichert" ist eine Gestaltungs-,
+            keine Redaktionsentscheidung. Änderbar ist, was zugesagt wird.
+          */}
           <TrustRow
-            items={[
-              {
-                icon: <Users aria-hidden />,
-                title: 'Festangestelltes Team',
-                description:
-                  'Keine Subunternehmen, keine wechselnden Gesichter. Alle Mitarbeitenden sind bei uns angestellt und unfallversichert.',
-              },
-              {
-                icon: <ShieldCheck aria-hidden />,
-                title: 'Versichert bis CHF 5 Mio.',
-                description:
-                  'Betriebshaftpflicht für Sach- und Personenschäden. Schlüssel werden anonymisiert und protokolliert verwahrt.',
-              },
-              {
-                icon: <ClipboardCheck aria-hidden />,
-                title: 'Abgabegarantie',
-                description:
-                  'Beanstandet die Verwaltung etwas bei der Wohnungsübergabe, kommen wir innert 48 Stunden kostenlos zurück.',
-              },
-              {
-                icon: <Clock3 aria-hidden />,
-                title: 'Pünktlich oder Rabatt',
-                description:
-                  'Sind wir mehr als 30 Minuten zu spät, ziehen wir 20 % vom Rechnungsbetrag ab — ohne Nachfragen.',
-              },
-            ]}
+            items={[<Users key="1" aria-hidden />, <ShieldCheck key="2" aria-hidden />, <ClipboardCheck key="3" aria-hidden />, <Clock3 key="4" aria-hidden />].map(
+              (icon, index) => ({
+                icon,
+                title: cms.text(`home.trust.item${index + 1}.title`),
+                description: cms.text(`home.trust.item${index + 1}.text`),
+              }),
+            )}
           />
         </div>
       </Section>
@@ -306,9 +293,9 @@ export default async function HomePage() {
         <Section className="bg-surface">
           <div className="container">
             <SectionIntro
-              title="Was Kundinnen und Kunden sagen"
-              lead="Bewertungen von Personen, die bei uns gebucht haben — ungefiltert."
-              action={{ href: '/bewertungen', label: 'Alle Bewertungen' }}
+              title={cms.text('home.reviews.title')}
+              lead={cms.text('home.reviews.lead')}
+              action={{ href: '/bewertungen', label: cms.text('home.reviews.linkLabel') }}
             />
             <div className="grid gap-6 md:grid-cols-3">
               {reviews.map((review) => (
@@ -331,13 +318,15 @@ export default async function HomePage() {
         <Section>
           <div className="container grid gap-12 lg:grid-cols-[minmax(0,22rem)_1fr]">
             <div className="space-y-5">
-              <h2 className="text-headline font-bold text-balance">Häufige Fragen</h2>
+              <h2 className="text-headline font-bold text-balance">
+                {cms.text('home.faq.title')}
+              </h2>
               <p className="text-lg leading-relaxed text-muted-foreground">
-                Was Sie am häufigsten wissen möchten — kurz beantwortet.
+                {cms.text('home.faq.lead')}
               </p>
               <Button asChild variant="outline">
                 <Link href="/faq">
-                  Alle Fragen
+                  {cms.text('home.faq.linkLabel')}
                   <ArrowRight aria-hidden />
                 </Link>
               </Button>
@@ -359,9 +348,9 @@ export default async function HomePage() {
       <Section className="pb-28">
         <div className="container">
           <CallToAction
-        ctas={bandCtas}
-            title={contentText(content, 'home.cta.title')}
-            lead={contentText(content, 'home.cta.text')}
+            ctas={bandCtas}
+            title={cms.text('home.cta.title')}
+            lead={cms.text('home.cta.text')}
             primary={{ href: '/buchen', label: 'Jetzt buchen' }}
             secondary={{ href: '/offerte', label: 'Offerte anfordern' }}
           />
@@ -374,7 +363,7 @@ export default async function HomePage() {
           type="application/ld+json"
           // eslint-disable-next-line react/no-danger -- serverseitig erzeugter, kontrollierter JSON-LD-Block
           dangerouslySetInnerHTML={{
-            __html: JSON.stringify({
+            __html: jsonLd({
               '@context': 'https://schema.org',
               '@type': 'FAQPage',
               mainEntity: faqs.map((faq) => ({

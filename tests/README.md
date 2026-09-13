@@ -61,6 +61,11 @@ npx tsx --test tests/api/two-factor.test.ts    # eine einzelne Datei
 | `api/cms.test.ts` | Redaktion und Suchmaschinenangaben — ändern, auf der Website nachsehen, zurücksetzen |
 | `api/catalog.test.ts` | Ob eine Katalogänderung die statisch erzeugten Seiten und die Preisberechnung erreicht |
 | `api/website-ops.test.ts` | Fragen, Galerie, Navigation, Rechtstexte, Einsatzgebiet, Stellen, Automatisierungen, Firmendaten |
+| `api/ownership.test.ts` | Mit *wessen* Daten ein Endpunkt antwortet: Objekte je Rolle, Rollenvergabe über die Personalakte, Herkunftsprüfung, Platzhalter im HTML |
+| `api/session-refresh.test.ts` | Stille Sitzungserneuerung: Seitenaufruf ohne Zugangstoken geht zur Erneuerung, nicht zur Anmeldung; neue Cookies und Rücksprung; verbrauchter Token sperrt; kein fremdes Ziel |
+| `api/crud-audit.test.ts` | Feiertage als vollständige Datensatzart (Rechte je Rolle, anlegen, ändern, Doppel, löschen), Zurückziehen eigener Abwesenheitsanträge samt Fremdzugriff, Papierkorb-Seite und Wiederherstellen |
+| `api/bi-fuehrung.test.ts` | Unternehmensführung: Rechtegrenzen je Rolle, Sichtbarkeit von Zielen und Dokumenten, die fachlichen Regeln (Genehmigung friert ein, Wirksamkeit erst nach Abschluss, abgelöste Tafeln bleiben), Berichte in drei Formaten |
+| `api/bi-rechenkerne.test.ts` | Abschreibung, Gesundheitswert, Budgetabweichung, Szenario und Perioden mit festen Zahlen — die einzige Datei, die Anwendungscode direkt importiert, weil die Rechenkerne reine Funktionen sind |
 | `pages/smoke.test.ts` | Antwortet jede Seite und jeder Endpunkt je Rolle? |
 | `pages/tables.test.ts` | Läuft irgendeine Tabelle oder Liste aus ihrem Rahmen? |
 | `pages/sorting.test.ts` | Wirkt die Sortierung — und überlebt sie das Blättern? |

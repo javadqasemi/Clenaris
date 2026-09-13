@@ -27,6 +27,16 @@ export function Section({
   );
 }
 
+/**
+ * Beschriftungen sind durchwegs `ReactNode` und nicht `string`.
+ *
+ * Grund ist die Redaktionsvorschau: Dort kommt jeder gepflegte Text in einer
+ * anklickbaren Hülle daher (`cms.text()`), damit man in der Vorschau auf den
+ * Text zeigen kann, den man ändern will. Ein `string`-Typ zwänge die Seiten,
+ * stattdessen den Rohtext zu setzen — und die Hülle wäre genau dort weg, wo sie
+ * gebraucht wird. Für alle bisherigen Aufrufe ändert sich nichts: Eine
+ * Zeichenkette *ist* ein `ReactNode`.
+ */
 export function SectionIntro({
   title,
   lead,
@@ -34,9 +44,9 @@ export function SectionIntro({
   align = 'left',
   className,
 }: {
-  title: string;
-  lead?: string;
-  action?: { href: string; label: string };
+  title: React.ReactNode;
+  lead?: React.ReactNode;
+  action?: { href: string; label: React.ReactNode };
   align?: 'left' | 'center';
   className?: string;
 }) {
@@ -133,7 +143,7 @@ export function StatStrip({
   stats,
   className,
 }: {
-  stats: { value: string; label: string }[];
+  stats: { value: React.ReactNode; label: React.ReactNode }[];
   className?: string;
 }) {
   return (
@@ -143,8 +153,14 @@ export function StatStrip({
         className,
       )}
     >
-      {stats.map((stat) => (
-        <div key={stat.label} className="bg-card px-6 py-7">
+      {/*
+        Die Position ist hier der richtige Schlüssel: Die Leiste ist eine feste
+        Folge von vier Kennzahlen, die weder umsortiert noch gefiltert wird.
+        Vorher stand die Beschriftung als Schlüssel — die ist nun redaktionell
+        änderbar und taugt nicht mehr als Identität.
+      */}
+      {stats.map((stat, index) => (
+        <div key={index} className="bg-card px-6 py-7">
           <dt className="text-sm text-muted-foreground">{stat.label}</dt>
           <dd className="mt-1.5 font-display text-3xl font-bold tabular-nums tracking-tight text-foreground">
             {stat.value}
@@ -204,12 +220,12 @@ export function ReviewCard({
 export function ProcessSteps({
   steps,
 }: {
-  steps: { title: string; description: string }[];
+  steps: { title: React.ReactNode; description: React.ReactNode }[];
 }) {
   return (
     <ol className="grid gap-px overflow-hidden rounded-2xl border border-border bg-border md:grid-cols-2 lg:grid-cols-4">
       {steps.map((step, index) => (
-        <li key={step.title} className="relative bg-card p-7">
+        <li key={index} className="relative bg-card p-7">
           <span className="font-display text-4xl font-bold tabular-nums leading-none text-primary/25">
             {index + 1}
           </span>
@@ -230,8 +246,8 @@ export function CallToAction({
   secondary,
   ctas,
 }: {
-  title: string;
-  lead: string;
+  title: React.ReactNode;
+  lead: React.ReactNode;
   primary: { href: string; label: string };
   secondary?: { href: string; label: string };
   /**
@@ -278,12 +294,12 @@ export function CallToAction({
 export function TrustRow({
   items,
 }: {
-  items: { icon: React.ReactNode; title: string; description: string }[];
+  items: { icon: React.ReactNode; title: React.ReactNode; description: React.ReactNode }[];
 }) {
   return (
     <ul className="grid gap-8 sm:grid-cols-2 lg:grid-cols-4">
-      {items.map((item) => (
-        <li key={item.title} className="flex gap-4">
+      {items.map((item, index) => (
+        <li key={index} className="flex gap-4">
           <span className="flex size-11 shrink-0 items-center justify-center rounded-xl bg-primary/8 text-primary [&_svg]:size-5">
             {item.icon}
           </span>

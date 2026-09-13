@@ -90,6 +90,56 @@ interface PublicConfig<TBody, TQuery, TParams> extends BaseConfig<TBody, TQuery,
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type NextRouteArgs = { params: Promise<any> };
 
+/**
+ * Herkunftsprüfung für ändernde Anfragen.
+ *
+ * Die Sitzung liegt in einem Cookie mit `SameSite=Lax`. Das genügt gegen
+ * fremd ausgelöste Formulare in allen aktuellen Browsern — aber es ist genau
+ * *eine* Verteidigungslinie, und sie hängt an einem Cookie-Attribut, das eine
+ * spätere Konfiguration (`AUTH_COOKIE_DOMAIN`, ein anderes `sameSite`) still
+ * aufweichen kann. Die zweite Linie steht deshalb hier: Ein Browser schickt
+ * bei jedem `POST`, `PUT`, `PATCH` und `DELETE` den `Origin`-Kopf mit, und
+ * der muss zu dieser Anwendung gehören.
+ *
+ * Fehlt der Kopf, wird nicht geblockt: Nicht-Browser-Klienten (Tests, Cron,
+ * Webhooks, `curl`) senden keinen, und für sie ist CSRF kein Angriffsvektor —
+ * sie tragen kein fremdgesteuertes Cookie. Geprüft wird nur, was ein Browser
+ * behauptet. `null` als Herkunft (Sandbox-Rahmen, Weiterleitungsketten) gilt
+ * als fremd.
+ *
+ * Erlaubt sind der Host der Anfrage selbst und der Host aus
+ * `NEXT_PUBLIC_APP_URL` — letzterer, falls die Anwendung hinter einem Proxy
+ * unter einem anderen Namen antwortet, als der Browser sie aufgerufen hat.
+ */
+const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
+
+function assertTrustedOrigin(request: NextRequest): void {
+  if (SAFE_METHODS.has(request.method)) return;
+
+  const origin = request.headers.get('origin');
+  if (origin === null) return;
+
+  let originHost: string | null = null;
+  try {
+    originHost = new URL(origin).host;
+  } catch {
+    originHost = null;
+  }
+
+  const allowed = new Set<string>();
+  const requestHost = request.headers.get('x-forwarded-host') ?? request.headers.get('host');
+  if (requestHost) allowed.add(requestHost.split(',')[0]!.trim());
+  try {
+    if (process.env.NEXT_PUBLIC_APP_URL) allowed.add(new URL(process.env.NEXT_PUBLIC_APP_URL).host);
+  } catch {
+    /* Eine ungültige App-URL scheitert an anderer Stelle lauter. */
+  }
+
+  if (!originHost || !allowed.has(originHost)) {
+    throw new ForbiddenError('Die Anfrage stammt von einer fremden Herkunft und wurde abgelehnt.');
+  }
+}
+
 async function parseInputs<TBody, TQuery, TParams>(
   request: NextRequest,
   config: BaseConfig<TBody, TQuery, TParams>,
@@ -127,6 +177,8 @@ export function defineRoute<TBody = undefined, TQuery = undefined, TParams = Rec
 ) {
   return async (request: NextRequest, args: NextRouteArgs): Promise<Response> => {
     try {
+      assertTrustedOrigin(request);
+
       const ip = getClientIp(request);
       const session = await getSession();
       if (!session) throw new UnauthorizedError();
@@ -169,6 +221,8 @@ export function definePublicRoute<
 >(config: PublicConfig<TBody, TQuery, TParams>) {
   return async (request: NextRequest, args: NextRouteArgs): Promise<Response> => {
     try {
+      assertTrustedOrigin(request);
+
       const ip = getClientIp(request);
       const session = await getSession();
 

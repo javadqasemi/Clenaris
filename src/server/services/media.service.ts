@@ -6,7 +6,7 @@ import { prisma } from '@/lib/db';
 import { audit } from '@/lib/audit';
 import { logger } from '@/lib/logger';
 import { BusinessRuleError, NotFoundError } from '@/lib/errors';
-import { deleteFile } from '@/lib/storage/supabase';
+import { deleteFile } from '@/lib/storage';
 
 const log = logger('media');
 

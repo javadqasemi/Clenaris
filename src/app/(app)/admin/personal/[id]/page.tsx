@@ -5,7 +5,9 @@ import { ArrowLeft, Mail, Phone } from 'lucide-react';
 
 import { toNumber } from '@/lib/db';
 import { requirePermission } from '@/lib/auth/session';
+import { can } from '@/lib/auth/rbac';
 import { NotFoundError } from '@/lib/errors';
+import { EmployeeDeactivateButton, EmployeeEditDialog } from '@/features/admin/employee-actions';
 import { formatCurrency, formatDate, formatNumber, fullName } from '@/lib/utils';
 import { getOrganizationId } from '@/server/services/organization.service';
 import { getEmployeeDetail, getVacationBalance } from '@/server/services/employee.service';
@@ -62,7 +64,14 @@ export default async function StaffDetailPage({
   const session = await requirePermission('employee:read');
   const { id } = await params;
   const organizationId = await getOrganizationId();
-  const isAdmin = session.role === 'ADMIN';
+  /**
+   * Lohn und Bank sieht, wer Lohnabrechnungen erstellt — dieselbe Schwelle
+   * wie `GET /api/employees/:id`. Zuvor stand hier `role === 'ADMIN'`, womit
+   * die Systemverantwortung die Felder nicht sah, obwohl sie alles darf.
+   */
+  const isAdmin = can(session.role, 'payslip:create');
+  const canEdit = can(session.role, 'employee:update');
+  const canDeactivate = can(session.role, 'employee:delete');
 
   let employee;
   try {
@@ -113,6 +122,47 @@ export default async function StaffDetailPage({
                   Anrufen
                 </a>
               </Button>
+            ) : null}
+            {canEdit ? (
+              <EmployeeEditDialog
+                employeeId={employee.id}
+                sensitive={isAdmin}
+                values={{
+                  position: employee.position,
+                  department: employee.department,
+                  employmentType: employee.employmentType,
+                  hiredAt: employee.hiredAt.toISOString().slice(0, 10),
+                  workloadPct: employee.workloadPct,
+                  vacationDaysPerYear: toNumber(employee.vacationDaysPerYear),
+                  permitType: employee.permitType,
+                  permitValidUntil: employee.permitValidUntil
+                    ? employee.permitValidUntil.toISOString().slice(0, 10)
+                    : null,
+                  emergencyContact: employee.emergencyContact,
+                  emergencyPhone: employee.emergencyPhone,
+                  driverLicense: employee.driverLicense,
+                  vehiclePlate: employee.vehiclePlate,
+                  languages: employee.languages,
+                  color: employee.color,
+                  ...('hourlyRate' in employee
+                    ? {
+                        hourlyRate: employee.hourlyRate ? toNumber(employee.hourlyRate) : null,
+                        monthlySalary: employee.monthlySalary
+                          ? toNumber(employee.monthlySalary)
+                          : null,
+                        ahvNumber: employee.ahvNumber,
+                        iban: employee.iban,
+                      }
+                    : {}),
+                }}
+              />
+            ) : null}
+            {canDeactivate || (!employee.active && canEdit) ? (
+              <EmployeeDeactivateButton
+                employeeId={employee.id}
+                name={name}
+                active={employee.active}
+              />
             ) : null}
           </>
         }

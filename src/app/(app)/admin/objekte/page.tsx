@@ -4,7 +4,9 @@ import { Building2, KeyRound } from 'lucide-react';
 
 import { prisma, toNumber } from '@/lib/db';
 import { requirePermission } from '@/lib/auth/session';
+import { can } from '@/lib/auth/rbac';
 import { formatDate, toQueryString } from '@/lib/utils';
+import { PropertyRowActions } from '@/features/shared/property-dialog';
 import { getOrganizationId } from '@/server/services/organization.service';
 import { Badge } from '@/components/ui/badge';
 import { KpiTile } from '@/components/app/kpi-tile';
@@ -42,7 +44,11 @@ export default async function PropertiesPage({
 }: {
   searchParams: Promise<Record<string, string | undefined>>;
 }) {
-  await requirePermission('property:read');
+  const session = await requirePermission('property:read');
+  // Objekte entstehen an der Kundenakte (dort ist die Adresse bekannt); hier
+  // werden sie korrigiert und aufgeräumt.
+  const canEdit = can(session.role, 'property:update');
+  const canDelete = can(session.role, 'property:delete');
 
   const params = await searchParams;
   const organizationId = await getOrganizationId();
@@ -148,6 +154,11 @@ export default async function PropertiesPage({
                     Einsätze
                   </th>
                   <th scope="col">Erfasst</th>
+                  {canEdit ? (
+                    <th scope="col" className="text-right">
+                      <span className="sr-only">Aktionen</span>
+                    </th>
+                  ) : null}
                 </tr>
               </thead>
               <tbody>
@@ -196,6 +207,34 @@ export default async function PropertiesPage({
                     </td>
                     <td className="num">{property._count.jobs}</td>
                     <td className="text-muted-foreground">{formatDate(property.createdAt)}</td>
+                    {canEdit ? (
+                      <td>
+                        <div className="flex justify-end">
+                          <PropertyRowActions
+                            propertyId={property.id}
+                            canDelete={canDelete}
+                            values={{
+                              label: property.label,
+                              kind: property.kind,
+                              addressId: property.addressId,
+                              squareMeters: property.squareMeters,
+                              rooms: property.rooms ? toNumber(property.rooms) : null,
+                              bathrooms: property.bathrooms,
+                              windows: property.windows,
+                              floor: property.floor,
+                              hasBalcony: property.hasBalcony,
+                              hasGarden: property.hasGarden,
+                              hasPets: property.hasPets,
+                              hasElevator: property.hasElevator,
+                              parkingInfo: property.parkingInfo,
+                              keyLocation: property.keyLocation,
+                              accessNote: property.accessNote,
+                              notes: property.notes,
+                            }}
+                          />
+                        </div>
+                      </td>
+                    ) : null}
                   </tr>
                 ))}
               </tbody>

@@ -5,6 +5,7 @@ import { ArrowLeft, Download, ExternalLink, PenLine } from 'lucide-react';
 
 import { toNumber } from '@/lib/db';
 import { requirePermission } from '@/lib/auth/session';
+import { can } from '@/lib/auth/rbac';
 import { NotFoundError } from '@/lib/errors';
 import { absoluteUrl, formatCurrency, formatDate, formatDateTime } from '@/lib/utils';
 import { getOrganizationId } from '@/server/services/organization.service';
@@ -27,7 +28,7 @@ export default async function AdminQuoteDetailPage({
 }: {
   params: Promise<{ id: string }>;
 }) {
-  await requirePermission('quote:read');
+  const session = await requirePermission('quote:read');
 
   const { id } = await params;
   const organizationId = await getOrganizationId();
@@ -75,6 +76,7 @@ export default async function AdminQuoteDetailPage({
               status={quote.status}
               hasCustomer={Boolean(quote.customerId)}
               email={quote.customer?.email ?? quote.lead?.email ?? ''}
+              canDelete={can(session.role, 'quote:delete')}
             />
           </>
         }

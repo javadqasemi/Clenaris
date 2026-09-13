@@ -4,9 +4,10 @@ import { defineRoute } from '@/lib/api/handler';
 import { created, ok } from '@/lib/api/response';
 import { prisma } from '@/lib/db';
 import { audit } from '@/lib/audit';
-import { NotFoundError } from '@/lib/errors';
+import { ForbiddenError, NotFoundError } from '@/lib/errors';
 import { createPropertySchema } from '@/lib/validation/crm';
 import { getOrganizationId } from '@/server/services/organization.service';
+import { mayManagePropertyOf, propertyVisibilityWhere } from '@/server/services/property.service';
 
 export const runtime = 'nodejs';
 
@@ -25,18 +26,22 @@ const listQuery = z.object({
  * Der Alarmcode ist in der Datenbank verschlüsselt und erscheint nicht in der
  * Liste: er gehört auf den Einsatzrapport der zugewiesenen Person, nicht in
  * eine Übersicht.
+ *
+ * Welche Objekte eine Rolle sieht, entscheidet `propertyVisibilityWhere`:
+ * `property:read` haben auch Kundschaft und Mitarbeitende, und für sie ist die
+ * Liste auf die eigenen bzw. die zugeteilten Objekte begrenzt. Schlüsseldepot
+ * und Zugangshinweis sind genau die Angaben, die nicht in fremde Hände gehören.
  */
 export const GET = defineRoute({
   permissions: ['property:read'],
   query: listQuery,
   rateLimit: 'apiRead',
-  handler: async ({ query }) => {
+  handler: async ({ query, session }) => {
     const organizationId = await getOrganizationId();
     return ok(
       await prisma.property.findMany({
         where: {
-          deletedAt: null,
-          customer: { organizationId },
+          ...propertyVisibilityWhere(session, organizationId),
           ...(query.customerId ? { customerId: query.customerId } : {}),
           ...(query.q ? { label: { contains: query.q, mode: 'insensitive' } } : {}),
         },
@@ -79,13 +84,23 @@ const createPropertyBody = z.intersection(
   z.object({ customerId: z.string().min(1, 'Eine Kundschaft ist erforderlich.') }),
 );
 
-/** POST /api/properties — Objekt erfassen. */
+/**
+ * POST /api/properties — Objekt erfassen.
+ *
+ * Die Kundschaft darf Objekte nur an die eigene Akte hängen. Die Kunden-ID
+ * kommt aus dem Körper und ist damit nicht vertrauenswürdig; ohne diese
+ * Prüfung könnte ein Kundenkonto einer fremden Akte ein Objekt unterschieben.
+ */
 export const POST = defineRoute({
   permissions: ['property:create'],
   body: createPropertyBody,
   rateLimit: 'apiWrite',
   handler: async ({ body, session, ip }) => {
     const organizationId = await getOrganizationId();
+
+    if (!mayManagePropertyOf(session, body.customerId)) {
+      throw new ForbiddenError('Sie können nur Objekte zu Ihrer eigenen Kundenakte erfassen.');
+    }
 
     // Die Kundschaft muss zum eigenen Mandanten gehören — sonst hinge ein
     // Objekt an einer fremden Akte.

@@ -5,8 +5,7 @@ import { renderToBuffer } from '@react-pdf/renderer';
 
 import { prisma, toNumber } from '@/lib/db';
 import { NotFoundError } from '@/lib/errors';
-import { hasIntegration } from '@/lib/env';
-import { uploadBuffer } from '@/lib/storage/supabase';
+import { uploadBuffer } from '@/lib/storage';
 import {
   CreditNoteDocument,
   InvoiceDocument,
@@ -464,14 +463,26 @@ export async function renderCreditNotePdf(creditNoteId: string): Promise<{
 //  Ablage
 // ---------------------------------------------------------------------------
 
+/**
+ * Erzeugtes PDF ablegen und die Adresse zurückgeben.
+ *
+ * Die Abfrage auf einen eingerichteten externen Speicher ist entfallen: Der
+ * Speicher wählt sich jetzt selbst, und ohne externen Dienst greift die
+ * eingebaute Ablage. Vorher gab diese Funktion in genau dem Fall `null`
+ * zurück — das PDF wurde erzeugt, sofort weggeworfen und bei jedem Abruf neu
+ * gerendert.
+ *
+ * Ein Fehlschlag bleibt folgenlos: Das PDF wird ohnehin bei Bedarf erzeugt,
+ * die Ablage ist eine Abkürzung und keine Voraussetzung.
+ */
 async function persist(
   organizationId: string,
   relativePath: string,
   buffer: Buffer,
 ): Promise<string | null> {
-  if (!hasIntegration('supabase')) return null;
   try {
     const { publicUrl } = await uploadBuffer({
+      organizationId,
       path: `${organizationId}/${relativePath}`,
       content: buffer,
       contentType: 'application/pdf',

@@ -1,6 +1,7 @@
 import { redirect } from 'next/navigation';
 
 import { prisma } from '@/lib/db';
+import { serverEnv } from '@/lib/env';
 import { getSession } from '@/lib/auth/session';
 import { guardForPath, homeRouteFor } from '@/lib/auth/rbac';
 import { AppShell, type NavGroup } from '@/components/app/app-shell';
@@ -15,7 +16,7 @@ import { AppShell, type NavGroup } from '@/components/app/app-shell';
  */
 export default async function PortalLayout({ children }: { children: React.ReactNode }) {
   const session = await getSession();
-  if (!session) redirect('/auth/anmelden?ziel=portal');
+  if (!session) redirect('/auth/anmelden');
   // Zugelassene Rollen zentral aus `ROUTE_GUARDS`, nicht hier aufgezählt.
   const guard = guardForPath('/portal')!;
   if (!guard.roles.includes(session.role)) redirect(homeRouteFor(session.role));
@@ -47,6 +48,8 @@ export default async function PortalLayout({ children }: { children: React.React
         { href: '/portal', label: 'Heute', icon: 'home', exact: true, badge: todayJobs },
         { href: '/portal/einsaetze', label: 'Meine Einsätze', icon: 'tasks' },
         { href: '/portal/kalender', label: 'Kalender', icon: 'calendar' },
+        { href: '/portal/ziele', label: 'Meine Ziele', icon: 'target' },
+        { href: '/portal/wissen', label: 'Wissen', icon: 'book' },
       ],
     },
     {
@@ -64,6 +67,7 @@ export default async function PortalLayout({ children }: { children: React.React
       navigation={navigation}
       areaLabel="Mitarbeitendenportal"
       areaHref="/portal"
+      sessionIdleSeconds={serverEnv().SESSION_IDLE_TTL}
       user={{
         id: session.id,
         name: session.name,
@@ -72,6 +76,7 @@ export default async function PortalLayout({ children }: { children: React.React
         email: session.email,
         role: session.role,
         avatarUrl: session.avatarUrl,
+        theme: session.theme,
       }}
     >
       {children}

@@ -11,6 +11,7 @@ import { Input } from '@/components/ui/input';
 import { Alert } from '@/components/ui/primitives';
 import { Switch } from '@/components/ui/controls';
 import type { OperationSettings } from '@/lib/validation/settings';
+import { DetailSection } from '@/components/app/page-parts';
 
 /**
  * Betriebseinstellungen — die Schalter, die den Alltag steuern.
@@ -165,11 +166,7 @@ export function OperationsForm({ settings }: { settings: OperationSettings }) {
       {error ? <Alert variant="destructive">{error}</Alert> : null}
 
       {SECTIONS.map((section) => (
-        <section key={section.title} className="rounded-2xl border border-border bg-card shadow-soft">
-          <header className="border-b border-border px-6 py-4">
-            <h2 className="font-display text-base font-semibold tracking-tight">{section.title}</h2>
-          </header>
-
+        <DetailSection key={section.title} title={section.title} body="flush">
           <div className="divide-y divide-border">
             {section.numbers.map((spec) => (
               <div
@@ -229,7 +226,7 @@ export function OperationsForm({ settings }: { settings: OperationSettings }) {
               </div>
             ))}
           </div>
-        </section>
+        </DetailSection>
       ))}
 
       {changed.length > 0 ? (

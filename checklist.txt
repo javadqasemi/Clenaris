@@ -1,0 +1,36 @@
+Website:
+    Anpassung navigation:
+        Theem Mode button und anmelden button nach dem termin buchen button verschieben, Theem Mode button, setze einen modern icon mit light und darck Mode. das default mothe solte auf system mode sein.
+        Anmedelden Button:
+            Bei der anmelden verwende keine unterschiedliche Anmedeldung portal alle muss in gleichem portal anmelden können, dies muss authetifiziert werden ob der person welche rolle hat z.B. ist er admin oder personal oder kunden.
+
+Dashboard:
+    Top navigation:
+        Theem Icon:
+            Theem Mode button, setze einen modern icon mit light und darck Mode. das default mothe solte auf system mode sein.
+        Notification icon:
+            die Nachrichten und meldungen kommen nicht in Meldung Icon je nach benutzer.
+        Benutzer profile:
+            In mein Profile:
+                in kontendaten section sollte einen Bild für den benutzer hochgeladen und bearbeitet werden.
+                in Konto Karte und Sicherheit Karte, es gibt das gleiche Design issue wie anderen Konto karten und Tabellen.
+            Einstellungen:
+                Die Einstellungen Page in Profile soll nur für den Benutzer Einstellungen sein.
+    Einsatzkalender:
+        Issue: Es gibbt Design issue bei der Tag und Wochen ubersicht, Es zeigt ab 06Uhr bis 20Uhr. Es sollte ab 01:00 Uhr bis 00:00 Uhr anzeigen.
+    Buchungen/Buchungen/ID:
+        Der Aufträg können nicht bearbeitet werden, Es hat keine edite funktionen, inkl. Status ect.
+    Einsätze/Einsatz/ID:
+        Der Aufträg, Checkliste, Nachkalkulation, Team können nicht bearbeitet werden oder eingecheckt werden (erledigen durch zuständige mitarbeiter, bearbeiten duch admin), Es hat keine edite funktionen, inkl. Status ectNachkalkulation.
+        Fotos: der mitarbeiter und admin sollte fotos   hochladen und bearbeiten können.
+    Offerten:
+        Die angefragene offerten von website wird nicht registieriert und in der Offerte page angezeigt, hier gibt es mehrer issues.
+        Offerte duch die Dashboard erstellen kann man nicht neu kunden erstellen in Kundschaft, die Leistungen können nicht in Positionen gelistet werden, die Menge soll jenach leistungen automatisch angepasst werden zum beispeil für Burüreinigung ist Fläche, für Fenster ist Menge ect.
+        Die Berechnungen sollen stimmen, es gibt kalkulation probleme.
+        Bei offerten anfordern soll es keine duplicale leads erstllen alle angefragten offrten aoll zusammen in der selbe leads anzeigen, wichtig email, telefon, vorname, nachname und fall firma überprüfen.
+        leads sollen auch dann manuell als kunden erfassr werden können.
+    Website-Texte > Edite Website.
+        in edite modus soll in dashboard genau das website angezeigt weden und bearbeitet werden können
+
+
+Bitte kontrolliere in dashboard und erstelle edite, delete ect funktionen.

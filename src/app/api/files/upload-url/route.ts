@@ -1,7 +1,7 @@
 import { definePublicRoute } from '@/lib/api/handler';
 import { created } from '@/lib/api/response';
 import { UnauthorizedError } from '@/lib/errors';
-import { createSignedUpload } from '@/lib/storage/supabase';
+import { createSignedUpload } from '@/lib/storage';
 import { uploadUrlSchema } from '@/lib/validation/files';
 import { getOrganizationId } from '@/server/services/organization.service';
 
@@ -40,6 +40,7 @@ export const POST = definePublicRoute({
       mimeType: body.mimeType,
       sizeBytes: body.sizeBytes,
       scopeId: body.scopeId,
+      uploadedById: session?.id ?? null,
     });
 
     return created(target);

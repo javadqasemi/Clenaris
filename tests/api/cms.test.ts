@@ -6,14 +6,20 @@ import { loginAll, ROLE_ORDER, type AccountName } from '../helpers/accounts';
 import { pageTitle } from '../helpers/markup';
 
 /**
- * Die Redaktion: ändern → die Website zeigt es → zurücksetzen.
+ * Die Redaktion: ändern → prüfen → veröffentlichen → zurücksetzen.
  *
  * Der Anspruch an das System lautet, dass die Verwaltung die ganze Website
- * pflegen kann, ohne den Quelltext anzufassen, und dass jede Änderung sofort
- * sichtbar wird. Beides lässt sich nur so prüfen: schreiben, die öffentliche
- * Seite abrufen und nachsehen. Ein Test, der nur den Schreibvorgang bestätigt,
- * übersieht genau den Fehler, der hier zählt — eine Änderung, die in der
- * Datenbank landet und im Zwischenspeicher hängen bleibt.
+ * pflegen kann, ohne den Quelltext anzufassen, und dass eine veröffentlichte
+ * Änderung sofort sichtbar wird. Das lässt sich nur so prüfen: schreiben,
+ * veröffentlichen, die öffentliche Seite abrufen und nachsehen. Ein Test, der
+ * nur den Schreibvorgang bestätigt, übersieht genau den Fehler, der hier zählt
+ * — eine Änderung, die in der Datenbank landet und im Zwischenspeicher hängen
+ * bleibt.
+ *
+ * **Speichern und Veröffentlichen sind seit der Einführung des Entwurfsstands
+ * zwei Schritte.** Die zweite Prüfung unten hält das ausdrücklich fest: Nach
+ * dem Speichern darf der neue Text auf der Website noch *nicht* stehen. Vorher
+ * ging ein halb fertiger Satz mit dem Tastendruck live.
  *
  * Der Ausgangszustand wird am Ende wiederhergestellt: Ein leerer Wert bedeutet
  * „nimm den Auslieferungstext", nicht „zeige nichts".
@@ -26,15 +32,29 @@ let jars: Record<AccountName, string>;
 const patchContent = (jar: string, entries: { key: string; value: unknown }[]) =>
   call('PATCH', '/api/content', { jar, body: { entries } });
 
+const publishContent = (jar: string) =>
+  call('POST', '/api/content', { jar, body: { action: 'publish' } });
+
+/** Speichern *und* freigeben — der Normalfall in den übrigen Prüfungen. */
+const publishEntries = async (jar: string, entries: { key: string; value: unknown }[]) => {
+  const saved = await patchContent(jar, entries);
+  if (saved.status !== 200) return saved;
+  return publishContent(jar);
+};
+
 describe('Inhaltspflege', { concurrency: 1 }, async () => {
   await requireServer();
   jars = await loginAll();
 
   after(async () => {
-    await patchContent(jars.admin, [
+    await publishEntries(jars.admin, [
       { key: 'home.hero.titleLine1', value: '' },
       { key: 'home.hero.bullets', value: [] },
     ]);
+    // Ein zurückgesetzter Baustein hinterlässt einen leeren Entwurf, falls er
+    // zuvor veröffentlicht war — der muss mit weg, sonst startet der nächste
+    // Lauf mit offenen Entwürfen.
+    await call('POST', '/api/content', { jar: jars.admin, body: { action: 'discard' } });
   });
 
   describe('Zugriffsschutz', () => {
@@ -59,7 +79,7 @@ describe('Inhaltspflege', { concurrency: 1 }, async () => {
   });
 
   describe('Änderungen erreichen die Website', () => {
-    it('speichert Überschrift und Liste', async () => {
+    it('speichert Überschrift und Liste als Entwurf', async () => {
       const response = await patchContent(jars.admin, [
         { key: 'home.hero.titleLine1', value: MARKER },
         { key: 'home.hero.bullets', value: ['Erster Punkt', 'Zweiter Punkt'] },
@@ -67,7 +87,17 @@ describe('Inhaltspflege', { concurrency: 1 }, async () => {
       assert.equal(response.status, 200, JSON.stringify(response.payload));
     });
 
-    it('zeigt sie sofort auf der Startseite', async () => {
+    it('zeigt den Entwurf noch nicht auf der Startseite', async () => {
+      // Der Kern der Trennung: Bis zur Freigabe liest die Kundschaft den alten
+      // Stand. Ginge das schief, stünde jeder Zwischenstand sofort öffentlich.
+      const home = await get('/');
+      assert.ok(!home.text.includes(MARKER), 'der Entwurf ist vorzeitig öffentlich');
+    });
+
+    it('zeigt sie nach dem Veröffentlichen', async () => {
+      const published = await publishContent(jars.admin);
+      assert.equal(published.status, 200, JSON.stringify(published.payload));
+
       const home = await get('/');
       assert.ok(home.text.includes(MARKER), 'neue Überschrift fehlt');
       assert.ok(home.text.includes('Erster Punkt'), 'neue Liste fehlt');
@@ -103,7 +133,7 @@ describe('Inhaltspflege', { concurrency: 1 }, async () => {
 
   describe('Zurücksetzen stellt den Auslieferungstext her', () => {
     it('nimmt einen leeren Wert an', async () => {
-      const response = await patchContent(jars.admin, [
+      const response = await publishEntries(jars.admin, [
         { key: 'home.hero.titleLine1', value: '' },
         { key: 'home.hero.bullets', value: [] },
       ]);

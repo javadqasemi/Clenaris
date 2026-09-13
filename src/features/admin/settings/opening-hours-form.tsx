@@ -10,6 +10,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Alert } from '@/components/ui/primitives';
 import { Checkbox } from '@/components/ui/controls';
+import { DetailSection } from '@/components/app/page-parts';
 
 /**
  * Öffnungs- und Einsatzzeiten.
@@ -97,17 +98,16 @@ export function OpeningHoursForm({ hours }: { hours: OpeningHourRow[] }) {
   };
 
   return (
-    <section className="rounded-2xl border border-border bg-card shadow-soft">
-      <header className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-6 py-4">
-        <h2 className="font-display text-base font-semibold tracking-tight">
-          Öffnungs- und Einsatzzeiten
-        </h2>
+    <DetailSection
+      title="Öffnungs- und Einsatzzeiten"
+      body="flush"
+      action={
         <Button variant="outline" size="sm" onClick={copyToAll} type="button">
           <Copy aria-hidden />
           Auf alle offenen Tage übertragen
         </Button>
-      </header>
-
+      }
+    >
       <div className="space-y-3 px-6 py-5">
         {error ? <Alert variant="destructive">{error}</Alert> : null}
 
@@ -176,7 +176,7 @@ export function OpeningHoursForm({ hours }: { hours: OpeningHourRow[] }) {
           </div>
         ) : null}
       </div>
-    </section>
+    </DetailSection>
   );
 }
 

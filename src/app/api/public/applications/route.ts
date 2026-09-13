@@ -64,6 +64,7 @@ export const POST = definePublicRoute({
       title: 'Neue Bewerbung',
       body: `${body.firstName} ${body.lastName} · ${posting.title}`,
       link: '/admin/personal/bewerbungen',
+      permission: 'application:read',
       emailContent: {
         subject: `Neue Bewerbung: ${posting.title}`,
         html: renderEmail(

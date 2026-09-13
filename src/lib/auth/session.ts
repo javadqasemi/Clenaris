@@ -30,6 +30,8 @@ export interface SessionUser {
   role: UserRole;
   avatarUrl: string | null;
   locale: string;
+  /** Farbschema aus dem Konto — Vorgabe für Geräte ohne eigene Wahl. */
+  theme: string | null;
   /** Customer-ID bzw. Employee-ID der Person, falls vorhanden. */
   profileId: string | null;
 }
@@ -72,6 +74,7 @@ export const getSession = reactCache(async (): Promise<SessionUser | null> => {
     role: claims.role,
     avatarUrl: (claims.avatar as string | undefined) ?? null,
     locale: (claims.locale as string | undefined) ?? 'de',
+    theme: (claims.thm as string | undefined) ?? null,
     profileId: claims.pid ?? null,
   };
 });
@@ -216,6 +219,7 @@ export async function createSession({ userId, family }: CreateSessionInput) {
       role: true,
       locale: true,
       avatarUrl: true,
+      theme: true,
       organizationId: true,
       customer: { select: { id: true } },
       employee: { select: { id: true } },
@@ -233,6 +237,7 @@ export async function createSession({ userId, family }: CreateSessionInput) {
     pid: profileId,
     locale: user.locale.toLowerCase(),
     avatar: user.avatarUrl ?? undefined,
+    thm: user.theme ?? undefined,
   } as never);
 
   const jti = randomToken(24);

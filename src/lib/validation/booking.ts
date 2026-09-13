@@ -139,18 +139,110 @@ export const cancelBookingSchema = z.object({
 });
 export type CancelBookingInput = z.infer<typeof cancelBookingSchema>;
 
-/** Interne Bearbeitung durch Admin/Manager. */
-export const updateBookingSchema = z.object({
-  status: z
-    .enum(['DRAFT', 'PENDING', 'CONFIRMED', 'IN_PROGRESS', 'COMPLETED', 'CANCELLED', 'NO_SHOW'])
-    .optional(),
-  scheduledStart: isoDateSchema.optional(),
-  durationMin: z.number().int().min(30).max(1440).optional(),
-  crewSize: z.number().int().min(1).max(20).optional(),
-  internalNote: z.string().trim().max(2000).optional(),
-  customerNote: z.string().trim().max(2000).optional(),
-  accessNote: z.string().trim().max(500).optional(),
+/**
+ * Eine Auftragsposition in der Bearbeitungsmaske.
+ *
+ * `serviceId` ist Pflicht — anders als in der Offerte, wo Freitextpositionen
+ * erwünscht sind. Ein Auftrag wird disponiert, kalkuliert und ausgewertet:
+ * Dauer, Crew-Grösse, Deckungsbeitrag je Leistung und die Umsatzstatistik
+ * hängen alle an der Katalogleistung. Eine Position ohne sie fiele aus jeder
+ * dieser Rechnungen heraus, ohne dass es jemandem auffiele.
+ */
+export const bookingItemInputSchema = z.object({
+  serviceId: cuidSchema,
+  name: z.string().trim().min(2, 'Bitte benennen Sie die Position.').max(160),
+  description: z.string().trim().max(500).nullish(),
+  quantity: z.number().min(0).max(100_000),
+  unit: z.string().trim().min(1).max(20),
+  unitPrice: z.number().min(0).max(1_000_000),
+  /** Nur die erste Position trägt die Einsatzdauer — sie steuert die Planung. */
+  durationMin: z.number().int().min(0).max(10_080).default(0),
 });
+export type BookingItemInput = z.infer<typeof bookingItemInputSchema>;
+
+export const bookingExtraInputSchema = z.object({
+  extraId: cuidSchema,
+  name: z.string().trim().min(2).max(160),
+  quantity: z.number().int().min(1).max(200).default(1),
+  unitPrice: z.number().min(0).max(100_000),
+});
+export type BookingExtraInput = z.infer<typeof bookingExtraInputSchema>;
+
+/**
+ * Interne Bearbeitung durch Verwaltung und Betriebsleitung.
+ *
+ * Alle Felder sind freiwillig, damit eine Maske nur senden muss, was sie
+ * angefasst hat — und damit ein Teilformular (nur Notiz, nur Status) nicht die
+ * ganze Buchung mitschicken muss.
+ *
+ * `.strict()` ist hier wichtiger als anderswo: Diese Maske schreibt Preise. Ein
+ * Tippfehler im Feldnamen würde ohne `.strict()` still verworfen, die Antwort
+ * lautete 200, und die Person hielte einen Rabatt für gespeichert, den niemand
+ * gespeichert hat.
+ *
+ * Welche dieser Felder eine bestimmte Rolle tatsächlich ändern darf, entscheidet
+ * nicht das Schema, sondern `updateBooking` anhand der Rechtematrix — ein Schema
+ * kennt die Rolle nicht.
+ */
+export const updateBookingSchema = z
+  .object({
+    status: z
+      .enum(['DRAFT', 'PENDING', 'CONFIRMED', 'IN_PROGRESS', 'COMPLETED', 'CANCELLED', 'NO_SHOW'])
+      .optional(),
+
+    // Termin und Kapazität
+    scheduledStart: isoDateSchema.optional(),
+    durationMin: z.number().int().min(30).max(1440).optional(),
+    crewSize: z.number().int().min(1).max(20).optional(),
+
+    // Kundschaft, Adresse, Objekt
+    customerId: cuidSchema.optional(),
+    addressId: cuidSchema.optional(),
+    address: addressSchema.optional(),
+    propertyId: cuidSchema.nullish(),
+    propertyKind: propertyKindEnum.optional(),
+    squareMeters: z.number().int().min(5).max(5000).nullish(),
+    rooms: z.number().min(0.5).max(40).nullish(),
+    windows: z.number().int().min(0).max(500).nullish(),
+
+    // Turnus
+    frequency: frequencyEnum.optional(),
+    recurrence: z
+      .object({
+        interval: z.number().int().min(1).max(12).default(1),
+        weekdays: z.array(z.number().int().min(0).max(6)).max(7).default([]),
+        endDate: isoDateSchema.nullish(),
+        count: z.number().int().min(2).max(104).nullish(),
+      })
+      .nullish(),
+
+    // Positionen und Preis
+    items: z.array(bookingItemInputSchema).min(1).max(30).optional(),
+    /**
+     * Je Zusatzleistung höchstens eine Zeile — die Datenbank erzwingt das über
+     * `@@unique([bookingId, extraId])`. Ohne diese Prüfung käme der Verstoss
+     * als 500 zurück statt als Hinweis am richtigen Feld.
+     */
+    extras: z
+      .array(bookingExtraInputSchema)
+      .max(20)
+      .refine((list) => new Set(list.map((extra) => extra.extraId)).size === list.length, {
+        message: 'Jede Zusatzleistung darf nur einmal vorkommen — bitte die Menge erhöhen.',
+      })
+      .optional(),
+    travelFee: z.number().min(0).max(10_000).optional(),
+    discountAmount: z.number().min(0).max(1_000_000).optional(),
+    vatRate: z.number().min(0).max(100).optional(),
+
+    // Notizen
+    internalNote: z.string().trim().max(2000).nullish(),
+    customerNote: z.string().trim().max(2000).nullish(),
+    accessNote: z.string().trim().max(500).nullish(),
+
+    /** Grund der Änderung — landet in der Änderungsspur am Auftrag. */
+    changeReason: z.string().trim().max(500).optional(),
+  })
+  .strict();
 export type UpdateBookingInput = z.infer<typeof updateBookingSchema>;
 
 export const bookingListQuerySchema = z.object({

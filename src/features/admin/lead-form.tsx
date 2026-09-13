@@ -28,6 +28,7 @@ import {
   FormLabel,
   FormMessage,
 } from '@/components/ui/form';
+import { DetailSection } from '@/components/app/page-parts';
 
 /**
  * Anfrage von Hand erfassen.
@@ -100,8 +101,7 @@ export function LeadForm({
       <form onSubmit={form.handleSubmit(onSubmit)} className="max-w-3xl space-y-8" noValidate>
         {error ? <Alert variant="destructive">{error}</Alert> : null}
 
-        <section className="space-y-5 rounded-2xl border border-border bg-card p-6 shadow-soft">
-          <h2 className="font-display text-base font-semibold tracking-tight">Kontakt</h2>
+        <DetailSection title="Kontakt" body="form">
 
           <div className="grid gap-4 sm:grid-cols-2">
             <FormField
@@ -212,10 +212,9 @@ export function LeadForm({
               )}
             />
           </div>
-        </section>
+        </DetailSection>
 
-        <section className="space-y-5 rounded-2xl border border-border bg-card p-6 shadow-soft">
-          <h2 className="font-display text-base font-semibold tracking-tight">Anliegen</h2>
+        <DetailSection title="Anliegen" body="form">
 
           <div className="grid gap-4 sm:grid-cols-2">
             <FormField
@@ -289,10 +288,9 @@ export function LeadForm({
               </FormItem>
             )}
           />
-        </section>
+        </DetailSection>
 
-        <section className="space-y-5 rounded-2xl border border-border bg-card p-6 shadow-soft">
-          <h2 className="font-display text-base font-semibold tracking-tight">Zuordnung</h2>
+        <DetailSection title="Zuordnung" body="form">
 
           <div className="grid gap-4 sm:grid-cols-2">
             <FormField
@@ -404,7 +402,7 @@ export function LeadForm({
               )}
             />
           </div>
-        </section>
+        </DetailSection>
 
         <div className="flex flex-wrap gap-3">
           <Button type="submit" loading={form.formState.isSubmitting}>

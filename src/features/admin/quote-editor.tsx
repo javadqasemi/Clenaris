@@ -4,11 +4,12 @@ import * as React from 'react';
 import { useRouter } from 'next/navigation';
 import { useFieldArray, useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { GripVertical, Plus, Save, Sparkles, Trash2 } from 'lucide-react';
+import { GripVertical, Plus, Save, Sparkles, Trash2, UserPlus } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { cn, formatCurrency, round2 } from '@/lib/utils';
 import { api, ApiError } from '@/lib/api/client';
+import { rateForService, unitForService } from '@/lib/pricing/units';
 import { createQuoteSchema, type CreateQuoteInput } from '@/lib/validation/operations';
 import { Button } from '@/components/ui/button';
 import { Input, Textarea } from '@/components/ui/input';
@@ -21,6 +22,14 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/controls';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/overlays';
 import {
   Form,
   FormControl,
@@ -48,8 +57,12 @@ import {
 export interface QuoteEditorService {
   id: string;
   name: string;
-  hourlyRate: number | null;
+  kind: string;
   pricingModel: string;
+  hourlyRate: number | null;
+  pricePerSqm: number | null;
+  basePrice: number;
+  vatRate: number;
 }
 
 export interface QuoteEditorCustomer {
@@ -74,6 +87,18 @@ export function QuoteEditor({
   const [error, setError] = React.useState<string | null>(null);
   const [aiPending, setAiPending] = React.useState(false);
   const [aiPrompt, setAiPrompt] = React.useState('');
+  const [customerDialog, setCustomerDialog] = React.useState(false);
+  /**
+   * Neu angelegte Kundschaft kommt zur Auswahlliste dazu, ohne die Seite neu
+   * zu laden. `router.refresh()` würde das Formular zwar nicht zurücksetzen,
+   * aber die Liste kommt aus einer Server Component — bis sie nachgeladen ist,
+   * stünde in der Auswahl ein Name, den es scheinbar nicht gibt.
+   */
+  const [addedCustomers, setAddedCustomers] = React.useState<QuoteEditorCustomer[]>([]);
+  const customerOptions = React.useMemo(
+    () => [...addedCustomers, ...customers],
+    [addedCustomers, customers],
+  );
 
   const form = useForm<CreateQuoteInput>({
     resolver: zodResolver(createQuoteSchema),
@@ -110,22 +135,39 @@ export function QuoteEditor({
   /**
    * Position aus dem Leistungskatalog übernehmen.
    *
-   * Übernommen werden Bezeichnung, Stundenansatz und `serviceId`. Die Menge
-   * bleibt bei eins: den Aufwand schätzt die Person, die das Objekt gesehen
-   * hat, nicht der Katalog.
+   * Was sich hier geändert hat und warum:
+   *
+   *  • **Die Einheit folgt dem Preismodell der Leistung**, nicht einer
+   *    Ja/Nein-Abfrage auf `PER_SQM`. Fensterreinigung wird nach Fenstern
+   *    abgerechnet, Bauendreinigung nach Stunden, eine Pauschale gar nicht nach
+   *    Menge — mit „m² oder Std." liess sich das nicht ausdrücken.
+   *
+   *  • **Der Ansatz folgt derselben Einheit.** Vorher wurde durchweg der
+   *    Stundensatz eingesetzt, auch bei Flächenpreisen: Eine Position las sich
+   *    dann „120 m² × CHF 65.00" statt „120 m² × CHF 4.20" — Faktor 15 zu
+   *    hoch, und zwar in einem Dokument, das an die Kundschaft geht.
+   *
+   *  • **Der MWST-Satz kommt aus dem Katalog**, nicht als fest verdrahtete 8.1.
+   *    Für die wenigen Leistungen mit abweichendem Satz war jede Offerte
+   *    falsch.
+   *
+   * Die Menge bleibt eine Vorgabe der Einheit: den Aufwand schätzt die Person,
+   * die das Objekt gesehen hat, nicht der Katalog.
    */
   const addFromCatalogue = (serviceId: string) => {
     const service = services.find((entry) => entry.id === serviceId);
     if (!service) return;
 
+    const unit = unitForService(service.pricingModel, service.kind);
+
     append({
       serviceId: service.id,
       name: service.name,
-      quantity: 1,
-      unit: service.pricingModel === 'PER_SQM' ? 'm²' : 'Std.',
-      unitPrice: service.hourlyRate ?? 0,
+      quantity: unit.defaultQuantity,
+      unit: unit.unit,
+      unitPrice: rateForService(service),
       discount: 0,
-      vatRate: 8.1,
+      vatRate: service.vatRate,
       optional: false,
     } as never);
   };
@@ -144,8 +186,10 @@ export function QuoteEditor({
 
     const billable = computed.filter((item) => !item.optional);
     const subtotal = round2(billable.reduce((sum, item) => sum + item.lineTotal, 0));
-    const discountAmount =
-      discountType === 'PERCENT'
+    // Ohne gewählte Rabattart kein Rabatt — dieselbe Regel wie auf dem Server.
+    const discountAmount = !discountType
+      ? 0
+      : discountType === 'PERCENT'
         ? round2(subtotal * ((Number(discountValue) || 0) / 100))
         : round2(Math.min(Number(discountValue) || 0, subtotal));
     const netTotal = round2(subtotal - discountAmount);
@@ -276,7 +320,27 @@ export function QuoteEditor({
             name="customerId"
             render={({ field }) => (
               <FormItem>
-                <FormLabel required>Kundschaft</FormLabel>
+                <div className="flex items-baseline justify-between gap-4">
+                  <FormLabel required>Kundschaft</FormLabel>
+                  {/*
+                    Neue Kundschaft direkt hier anlegen.
+
+                    Vorher gab es diesen Weg nicht: Wer telefonisch eine Anfrage
+                    von jemandem erhielt, der noch nicht erfasst war, musste die
+                    Offerte verlassen, in der Kundschaft einen Datensatz anlegen
+                    und von vorn beginnen — samt allem, was bis dahin getippt
+                    war. Der Dialog legt den Datensatz im CRM an (er ist danach
+                    dort auffindbar) und wählt ihn hier aus.
+                  */}
+                  <button
+                    type="button"
+                    onClick={() => setCustomerDialog(true)}
+                    className="inline-flex items-center gap-1 text-meta font-medium text-primary underline-offset-4 hover:underline"
+                  >
+                    <UserPlus className="size-3.5" aria-hidden />
+                    Neue Kundschaft
+                  </button>
+                </div>
                 <Select value={field.value ?? ''} onValueChange={field.onChange}>
                   <FormControl>
                     <SelectTrigger>
@@ -284,7 +348,7 @@ export function QuoteEditor({
                     </SelectTrigger>
                   </FormControl>
                   <SelectContent>
-                    {customers.map((customer) => (
+                    {customerOptions.map((customer) => (
                       <SelectItem key={customer.id} value={customer.id}>
                         {customer.label}
                       </SelectItem>
@@ -395,12 +459,28 @@ export function QuoteEditor({
 
           <ul className="space-y-3">
             {fields.map((field, index) => {
-              const isOptional = items?.[index]?.optional;
+              const row = items?.[index];
+              const isOptional = row?.optional;
               const lineTotal = round2(
-                (Number(items?.[index]?.quantity) || 0) *
-                  (Number(items?.[index]?.unitPrice) || 0) *
-                  (1 - (Number(items?.[index]?.discount) || 0) / 100),
+                (Number(row?.quantity) || 0) *
+                  (Number(row?.unitPrice) || 0) *
+                  (1 - (Number(row?.discount) || 0) / 100),
               );
+
+              /**
+               * Das Mengenfeld passt sich der gewählten Leistung an: „Fläche"
+               * mit Schrittweite 1, „Anzahl Fenster" ganzzahlig, „Aufwand" in
+               * Viertelstunden. Ohne Katalogbezug (Freitextposition) bleibt es
+               * bei der neutralen Beschriftung „Menge" — dort weiss niemand,
+               * was gemeint ist, und eine geratene Einheit wäre irreführender
+               * als gar keine.
+               */
+              const service = row?.serviceId
+                ? services.find((entry) => entry.id === row.serviceId)
+                : undefined;
+              const unit = service
+                ? unitForService(service.pricingModel, service.kind)
+                : null;
 
               return (
                 <li
@@ -441,11 +521,16 @@ export function QuoteEditor({
 
                       <div className="sm:col-span-2">
                         <Label htmlFor={`item-qty-${index}`} className="text-xs">
-                          Menge
+                          {unit?.quantityLabel ?? 'Menge'}
                         </Label>
                         <Input
                           id={`item-qty-${index}`}
-                          inputMode="decimal"
+                          inputMode={unit?.integer ? 'numeric' : 'decimal'}
+                          type="number"
+                          step={unit?.step ?? 'any'}
+                          min={unit?.min}
+                          max={unit?.max}
+                          aria-describedby={unit ? `item-qty-hint-${index}` : undefined}
                           {...form.register(`items.${index}.quantity`, { valueAsNumber: true })}
                         />
                       </div>
@@ -501,6 +586,12 @@ export function QuoteEditor({
                       <Trash2 aria-hidden />
                     </Button>
                   </div>
+
+                  {unit ? (
+                    <p id={`item-qty-hint-${index}`} className="ml-7 text-xs text-muted-foreground">
+                      {unit.hint}
+                    </p>
+                  ) : null}
 
                   <label className="ml-7 flex w-fit cursor-pointer items-center gap-2.5 text-sm">
                     <Checkbox
@@ -631,7 +722,260 @@ export function QuoteEditor({
           </Button>
         </div>
       </form>
+
+      <NewCustomerDialog
+        open={customerDialog}
+        onOpenChange={setCustomerDialog}
+        onCreated={(customer) => {
+          setAddedCustomers((current) => [customer, ...current]);
+          form.setValue('customerId', customer.id, { shouldValidate: true });
+          setCustomerDialog(false);
+        }}
+      />
     </Form>
+  );
+}
+
+/**
+ * Neue Kundschaft aus der Offerte heraus anlegen.
+ *
+ * Bewusst schmal: Typ, Name, Firma, E-Mail, Telefon und optional die Adresse.
+ * Zahlungsziel, Rabattsatz und Kreditlimit stehen nicht hier — wer eine
+ * Offerte schreibt, kennt sie in diesem Moment nicht, und ein Formular mit
+ * zwölf Feldern für einen Zwischenschritt bricht den Arbeitsfluss genauso wie
+ * der Seitenwechsel, den es ersetzen soll. Alles Weitere lässt sich in der
+ * Kundenakte nachtragen.
+ */
+function NewCustomerDialog({
+  open,
+  onOpenChange,
+  onCreated,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onCreated: (customer: QuoteEditorCustomer) => void;
+}) {
+  const [type, setType] = React.useState<'PRIVATE' | 'BUSINESS'>('PRIVATE');
+  const [values, setValues] = React.useState({
+    companyName: '',
+    firstName: '',
+    lastName: '',
+    email: '',
+    phone: '',
+    street: '',
+    streetNo: '',
+    postalCode: '',
+    city: '',
+  });
+  const [saving, setSaving] = React.useState(false);
+  const [error, setError] = React.useState<string | null>(null);
+
+  const set = (key: keyof typeof values, value: string) =>
+    setValues((current) => ({ ...current, [key]: value }));
+
+  const submit = async () => {
+    setSaving(true);
+    setError(null);
+    try {
+      const hasAddress = Boolean(values.street.trim() && values.postalCode.trim() && values.city.trim());
+
+      const customer = await api.post<{ id: string; number: string }>('/api/customers', {
+        type,
+        companyName: values.companyName.trim() || undefined,
+        firstName: values.firstName.trim(),
+        lastName: values.lastName.trim(),
+        email: values.email.trim(),
+        phone: values.phone.trim() || undefined,
+        language: 'DE',
+        ...(hasAddress
+          ? {
+              address: {
+                street: values.street.trim(),
+                streetNo: values.streetNo.trim() || undefined,
+                postalCode: values.postalCode.trim(),
+                city: values.city.trim(),
+                canton: 'BE',
+                country: 'CH',
+              },
+            }
+          : {}),
+      });
+
+      const label = `${values.companyName.trim() || `${values.firstName.trim()} ${values.lastName.trim()}`} · ${customer.number}`;
+      toast.success(`Kundschaft ${customer.number} angelegt und im CRM gespeichert.`);
+      onCreated({ id: customer.id, label });
+
+      setValues({
+        companyName: '',
+        firstName: '',
+        lastName: '',
+        email: '',
+        phone: '',
+        street: '',
+        streetNo: '',
+        postalCode: '',
+        city: '',
+      });
+    } catch (err) {
+      const message =
+        err instanceof ApiError ? err.message : 'Die Kundschaft konnte nicht angelegt werden.';
+      setError(message);
+      toast.error(message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const valid =
+    values.firstName.trim().length >= 2 &&
+    values.lastName.trim().length >= 2 &&
+    /.+@.+\..+/.test(values.email) &&
+    (type === 'PRIVATE' || values.companyName.trim().length >= 2);
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent size="lg">
+        <DialogHeader>
+          <DialogTitle>Neue Kundschaft</DialogTitle>
+          <DialogDescription>
+            Der Datensatz wird in der Kundschaft gespeichert und hier direkt ausgewählt.
+            Zahlungsziel, Rabatt und weitere Konditionen lassen sich später in der Kundenakte
+            ergänzen.
+          </DialogDescription>
+        </DialogHeader>
+
+        {error ? <Alert variant="destructive">{error}</Alert> : null}
+
+        <div className="space-y-4">
+          <div className="space-y-1.5">
+            <Label htmlFor="nc-type">Art</Label>
+            <Select value={type} onValueChange={(value) => setType(value as 'PRIVATE' | 'BUSINESS')}>
+              <SelectTrigger id="nc-type" className="w-56">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="PRIVATE">Privatkundschaft</SelectItem>
+                <SelectItem value="BUSINESS">Geschäftskundschaft</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
+          {type === 'BUSINESS' ? (
+            <div className="space-y-1.5">
+              <Label htmlFor="nc-company" required>
+                Firma
+              </Label>
+              <Input
+                id="nc-company"
+                value={values.companyName}
+                onChange={(event) => set('companyName', event.target.value)}
+                autoComplete="organization"
+              />
+            </div>
+          ) : null}
+
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="space-y-1.5">
+              <Label htmlFor="nc-first" required>
+                Vorname
+              </Label>
+              <Input
+                id="nc-first"
+                value={values.firstName}
+                onChange={(event) => set('firstName', event.target.value)}
+                autoComplete="given-name"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="nc-last" required>
+                Nachname
+              </Label>
+              <Input
+                id="nc-last"
+                value={values.lastName}
+                onChange={(event) => set('lastName', event.target.value)}
+                autoComplete="family-name"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="nc-email" required>
+                E-Mail
+              </Label>
+              <Input
+                id="nc-email"
+                type="email"
+                value={values.email}
+                onChange={(event) => set('email', event.target.value)}
+                autoComplete="email"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="nc-phone">Telefon</Label>
+              <Input
+                id="nc-phone"
+                type="tel"
+                value={values.phone}
+                onChange={(event) => set('phone', event.target.value)}
+                autoComplete="tel"
+              />
+            </div>
+          </div>
+
+          <fieldset className="grid gap-4 border-t border-border pt-4 sm:grid-cols-[minmax(0,2fr)_6rem_6rem_minmax(0,1fr)]">
+            <legend className="mb-1 text-sm font-medium text-muted-foreground">
+              Adresse (optional)
+            </legend>
+            <div className="space-y-1.5">
+              <Label htmlFor="nc-street">Strasse</Label>
+              <Input
+                id="nc-street"
+                value={values.street}
+                onChange={(event) => set('street', event.target.value)}
+                autoComplete="address-line1"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="nc-no">Nr.</Label>
+              <Input
+                id="nc-no"
+                value={values.streetNo}
+                onChange={(event) => set('streetNo', event.target.value)}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="nc-zip">PLZ</Label>
+              <Input
+                id="nc-zip"
+                inputMode="numeric"
+                maxLength={4}
+                value={values.postalCode}
+                onChange={(event) => set('postalCode', event.target.value)}
+                autoComplete="postal-code"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="nc-city">Ort</Label>
+              <Input
+                id="nc-city"
+                value={values.city}
+                onChange={(event) => set('city', event.target.value)}
+                autoComplete="address-level2"
+              />
+            </div>
+          </fieldset>
+        </div>
+
+        <DialogFooter>
+          <Button variant="ghost" onClick={() => onOpenChange(false)}>
+            Abbrechen
+          </Button>
+          <Button onClick={submit} loading={saving} disabled={!valid}>
+            <UserPlus aria-hidden />
+            Anlegen und auswählen
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 

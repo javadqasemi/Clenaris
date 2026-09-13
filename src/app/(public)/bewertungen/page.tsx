@@ -1,9 +1,14 @@
 import type { Metadata } from 'next';
 
+import { jsonLd } from '@/lib/json-ld';
+
 import { prisma } from '@/lib/db';
 import { formatDate } from '@/lib/utils';
 import { pageMetadata } from '@/lib/cms/metadata';
 import { getOrganizationId } from '@/server/services/organization.service';
+import { getContent } from '@/server/services/content.service';
+import { createCms } from '@/lib/cms/editable';
+import { isPreview } from '@/lib/cms/preview';
 import { Badge } from '@/components/ui/badge';
 import { CallToAction, Section, StatStrip, Stars } from '@/components/marketing/sections';
 import { ctasFor } from '@/server/services/cta.service';
@@ -29,6 +34,8 @@ const SERVICE_LABELS: Record<string, string> = {
 
 export default async function ReviewsPage() {
   const organizationId = await getOrganizationId();
+  const content = await getContent(organizationId);
+  const cms = createCms(content, await isPreview());
 
   const [reviews, aggregate, distribution] = await Promise.all([
     prisma.review.findMany({
@@ -147,8 +154,8 @@ export default async function ReviewsPage() {
         <div className="container">
           <CallToAction
         ctas={bandCtas}
-            title="Überzeugen Sie sich selbst"
-            lead="Preis berechnen, Termin wählen, Ergebnis bewerten. Wir freuen uns auf Ihre Rückmeldung."
+            title={cms.text('reviews.cta.title')}
+            lead={cms.text('reviews.cta.text')}
             primary={{ href: '/buchen', label: 'Termin buchen' }}
             secondary={{ href: '/galerie', label: 'Vorher / Nachher' }}
           />
@@ -160,7 +167,7 @@ export default async function ReviewsPage() {
           type="application/ld+json"
           // eslint-disable-next-line react/no-danger -- serverseitig erzeugter JSON-LD-Block
           dangerouslySetInnerHTML={{
-            __html: JSON.stringify({
+            __html: jsonLd({
               '@context': 'https://schema.org',
               '@type': 'LocalBusiness',
               name: 'Clenaris Reinigungen GmbH',

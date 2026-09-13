@@ -25,6 +25,16 @@ export interface BeforeAfterProps {
   className?: string;
   /** Startposition des Reglers in Prozent. */
   initial?: number;
+  /**
+   * Markierungen für die Redaktionsvorschau (`cms.asset(…)`).
+   *
+   * Ausserhalb der Vorschau sind beide leer und im HTML nicht vorhanden. Sie
+   * liegen auf den Bildflächen und nicht auf dem ganzen Vergleich, damit klar
+   * bleibt, welches der beiden Bilder man gerade austauscht — beim Regler wäre
+   * das eine Ratefrage.
+   */
+  beforeAttrs?: Record<string, string>;
+  afterAttrs?: Record<string, string>;
 }
 
 export function BeforeAfter({
@@ -35,6 +45,8 @@ export function BeforeAfter({
   caption,
   className,
   initial = 52,
+  beforeAttrs,
+  afterAttrs,
 }: BeforeAfterProps) {
   const [position, setPosition] = React.useState(initial);
   const [dragging, setDragging] = React.useState(false);
@@ -103,7 +115,7 @@ export function BeforeAfter({
         }}
       >
         {/* Nachher — liegt unten, wird vom Vorher-Bild überlagert */}
-        <div className="absolute inset-0">
+        <div className="absolute inset-0" {...afterAttrs}>
           {afterSrc ? (
             // eslint-disable-next-line @next/next/no-img-element
             <img
@@ -121,6 +133,7 @@ export function BeforeAfter({
         <div
           className="absolute inset-0"
           style={{ clipPath: `inset(0 ${100 - position}% 0 0)` }}
+          {...beforeAttrs}
         >
           {beforeSrc ? (
             // eslint-disable-next-line @next/next/no-img-element

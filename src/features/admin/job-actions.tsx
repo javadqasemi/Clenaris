@@ -2,7 +2,7 @@
 
 import * as React from 'react';
 import { useRouter } from 'next/navigation';
-import { BadgeCheck, Ban, MoreHorizontal, Sparkles } from 'lucide-react';
+import { BadgeCheck, Ban, MoreHorizontal, Sparkles, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { api, ApiError } from '@/lib/api/client';
@@ -10,6 +10,13 @@ import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/input';
 import { Label } from '@/components/ui/form';
 import { Alert } from '@/components/ui/primitives';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/controls';
 import {
   Dialog,
   DialogContent,
@@ -31,10 +38,38 @@ import {
  * Team meldet die Ausführung, das Büro bestätigt die Qualitätskontrolle. Erst
  * danach ist der Einsatz abrechnungsreif.
  */
-export function JobActions({ jobId, status }: { jobId: string; status: string }) {
+/**
+ * Zustände, die sich von Hand setzen lassen.
+ *
+ * `COMPLETED` steht bewusst **nicht** darin: Ein Einsatz gilt als abgeschlossen,
+ * wenn das Team ihn rapportiert hat — mit Checkliste, Material und
+ * gegebenenfalls Unterschrift. Ihn hier auf einen Klick abzuschliessen würde
+ * genau diesen Nachweis überspringen und die Nachkalkulation auf leere Werte
+ * setzen. `CANCELLED` und `VERIFIED` haben eigene Wege mit eigenen Folgen.
+ */
+const SETTABLE_STATUS = [
+  { value: 'UNASSIGNED', label: 'Nicht zugeteilt' },
+  { value: 'SCHEDULED', label: 'Geplant' },
+  { value: 'DISPATCHED', label: 'Disponiert' },
+  { value: 'EN_ROUTE', label: 'Auf dem Weg' },
+  { value: 'IN_PROGRESS', label: 'In Arbeit' },
+  { value: 'ON_HOLD', label: 'Angehalten' },
+] as const;
+
+export function JobActions({
+  jobId,
+  status,
+  canEdit = false,
+  canDelete = false,
+}: {
+  jobId: string;
+  status: string;
+  canEdit?: boolean;
+  canDelete?: boolean;
+}) {
   const router = useRouter();
   const [pending, setPending] = React.useState<string | null>(null);
-  const [dialog, setDialog] = React.useState<'cancel' | 'report' | null>(null);
+  const [dialog, setDialog] = React.useState<'cancel' | 'report' | 'delete' | null>(null);
   const [reason, setReason] = React.useState('');
   const [report, setReport] = React.useState('');
   const [error, setError] = React.useState<string | null>(null);
@@ -74,7 +109,37 @@ export function JobActions({ jobId, status }: { jobId: string; status: string })
 
   return (
     <>
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2">
+        {/*
+          Der Status als Auswahlfeld statt als Kette von Knöpfen: Ein Einsatz
+          durchläuft sechs disponierbare Zustände, und zwischen ihnen wird
+          vorwärts *und* rückwärts gewechselt („doch noch nicht unterwegs").
+          Sechs Knöpfe wären eine Werkzeugleiste, ein Feld ist eine Angabe.
+        */}
+        {canEdit && !['COMPLETED', 'VERIFIED', 'CANCELLED'].includes(status) ? (
+          <Select
+            value={status}
+            onValueChange={(next) =>
+              run(
+                'status',
+                () => api.patch(`/api/jobs/${jobId}`, { status: next }),
+                'Status geändert.',
+              )
+            }
+          >
+            <SelectTrigger className="w-44" aria-label="Status des Einsatzes">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {SETTABLE_STATUS.map((entry) => (
+                <SelectItem key={entry.value} value={entry.value}>
+                  {entry.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        ) : null}
+
         {status === 'COMPLETED' ? (
           <Button
             loading={pending === 'verify'}
@@ -103,18 +168,66 @@ export function JobActions({ jobId, status }: { jobId: string; status: string })
               Einsatzbericht mit KI entwerfen
             </DropdownMenuItem>
 
+            {!['CANCELLED', 'COMPLETED', 'VERIFIED'].includes(status) || canDelete ? (
+              <DropdownMenuSeparator />
+            ) : null}
+
             {!['CANCELLED', 'COMPLETED', 'VERIFIED'].includes(status) ? (
-              <>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem destructive onSelect={() => setDialog('cancel')}>
-                  <Ban aria-hidden />
-                  Einsatz absagen
-                </DropdownMenuItem>
-              </>
+              <DropdownMenuItem destructive onSelect={() => setDialog('cancel')}>
+                <Ban aria-hidden />
+                Einsatz absagen
+              </DropdownMenuItem>
+            ) : null}
+
+            {canDelete ? (
+              <DropdownMenuItem destructive onSelect={() => setDialog('delete')}>
+                <Trash2 aria-hidden />
+                In den Papierkorb
+              </DropdownMenuItem>
             ) : null}
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
+
+      {/* Löschen */}
+      <Dialog open={dialog === 'delete'} onOpenChange={(open) => !open && setDialog(null)}>
+        <DialogContent size="sm">
+          <DialogHeader>
+            <DialogTitle>Einsatz in den Papierkorb legen?</DialogTitle>
+            <DialogDescription>
+              Der Einsatz verschwindet aus Kalender und Listen, bleibt aber wiederherstellbar. Das
+              Team wird nicht benachrichtigt — für eine Absage nutzen Sie &bdquo;Einsatz
+              absagen&ldquo;.
+              Abgeschlossene Einsätze und solche mit erfasster Zeit bleiben erhalten.
+            </DialogDescription>
+          </DialogHeader>
+
+          {error ? <Alert variant="destructive">{error}</Alert> : null}
+
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setDialog(null)}>
+              Abbrechen
+            </Button>
+            <Button
+              variant="destructive"
+              loading={pending === 'delete'}
+              onClick={() =>
+                run(
+                  'delete',
+                  async () => {
+                    await api.delete(`/api/jobs/${jobId}`);
+                    router.push('/admin/einsaetze');
+                  },
+                  'Einsatz in den Papierkorb gelegt.',
+                )
+              }
+            >
+              <Trash2 aria-hidden />
+              In den Papierkorb
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Absagen */}
       <Dialog open={dialog === 'cancel'} onOpenChange={(open) => !open && setDialog(null)}>

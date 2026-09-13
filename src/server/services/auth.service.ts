@@ -246,8 +246,9 @@ export async function login(params: { input: LoginInput; ip: string }) {
     },
   });
 
+  // Nur der IP-Zähler wird zurückgesetzt — einen Zähler je Adresse gibt es
+  // nicht, das Konto schützt die Sperre nach acht Fehlversuchen.
   await resetRateLimit('login', params.ip);
-  await resetRateLimit('login', email);
 
   /**
    * Zweiter Faktor: hier endet der erste Schritt.

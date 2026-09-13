@@ -279,6 +279,7 @@ const DOMAINS: Domain[] = [
       'JobPosting',
       'JobApplication',
       'FileAsset',
+      'StoredFile',
     ],
   },
   {
@@ -291,7 +292,48 @@ const DOMAINS: Domain[] = [
       'Zeile die Website nicht zerlegt — sie zeigt dann den Auslieferungstext. `SeoMeta` hängt ' +
       'bewusst an einer *Route* und nicht an einem Baustein: `noIndex` ist eine technische ' +
       'Schaltung, die eine Seite aus dem Suchindex wirft.',
-    models: ['ContentBlock', 'SeoMeta', 'CallToAction', 'NavigationItem', 'LegalDocument'],
+    models: ['ContentBlock', 'ContentRevision', 'SeoMeta', 'CallToAction', 'NavigationItem', 'LegalDocument'],
+  },
+  {
+    key: 'fuehrung',
+    title: 'Unternehmensführung',
+    purpose:
+      'Kennzahlen, Ziele, Finanzplanung, Risiko und Qualität, Wissen und Berichte. Der ' +
+      'wichtigste Entscheid: `KpiSnapshot` speichert den Verlauf, statt ihn bei jedem Aufruf ' +
+      'neu zu rechnen — eine live gerechnete Kurve schreibt die Vergangenheit um, sobald eine ' +
+      'Buchung storniert oder eine Gutschrift gebucht wird. Strategie, Ziel und Initiative ' +
+      'sind *ein* Modell (`Objective`) mit Selbstbezug; die Roadmap ist nur eine Ansicht davon. ' +
+      'Massnahmen (`CorrectiveAction`) und Sitzungspendenzen laufen über `Task`, damit es nur ' +
+      'eine Pendenzenliste gibt. `ManagedDocument` trägt die Sichtbarkeit als Spalte, die in ' +
+      'der Prisma-Abfrage wirkt — `EMPLOYEE_PRIVATE` heisst Geschäftsleitung und betroffene Person.',
+    models: [
+      'KpiDefinition',
+      'KpiTarget',
+      'KpiSnapshot',
+      'HealthSnapshot',
+      'Objective',
+      'KeyResult',
+      'KeyResultCheckin',
+      'BudgetPeriod',
+      'BudgetLine',
+      'Investment',
+      'Scenario',
+      'ScenarioAssumption',
+      'RiskEntry',
+      'ControlEntry',
+      'CorrectiveAction',
+      'ManagedDocument',
+      'DocumentVersion',
+      'KnowledgeArticle',
+      'Competitor',
+      'MarketInsight',
+      'AnalysisBoard',
+      'AnalysisEntry',
+      'Meeting',
+      'MeetingParticipant',
+      'ReportSchedule',
+      'ReportRun',
+    ],
   },
 ];
 

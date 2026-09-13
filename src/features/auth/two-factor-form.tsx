@@ -6,6 +6,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { KeyRound, ShieldCheck } from 'lucide-react';
 
 import { api, ApiError } from '@/lib/api/client';
+import { resolveRedirect, safeReturnPath } from '@/lib/auth/safe-redirect';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Alert } from '@/components/ui/primitives';
@@ -31,7 +32,9 @@ import { Alert } from '@/components/ui/primitives';
 export function TwoFactorForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const returnTo = searchParams.get('weiter');
+  // Dasselbe Ziel wie im Anmeldeformular — und dieselbe Prüfung. Ohne sie
+  // bliebe die offene Weiterleitung über den Umweg des zweiten Faktors offen.
+  const returnTo = safeReturnPath(searchParams.get('weiter'));
 
   const [digits, setDigits] = React.useState<string[]>(Array(6).fill(''));
   const [recoveryMode, setRecoveryMode] = React.useState(false);
@@ -61,7 +64,7 @@ export function TwoFactorForm() {
           );
         }
 
-        router.replace(returnTo ?? result.redirectTo);
+        router.replace(resolveRedirect(returnTo, result.redirectTo));
         router.refresh();
       } catch (err) {
         setError(

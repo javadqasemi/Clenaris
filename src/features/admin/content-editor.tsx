@@ -11,6 +11,8 @@ import type { ContentDefinition, ContentGroup } from '@/lib/cms/registry';
 import { Button } from '@/components/ui/button';
 import { Input, Textarea } from '@/components/ui/input';
 import { Label } from '@/components/ui/form';
+import { DetailSection } from '@/components/app/page-parts';
+import { ImageField } from '@/features/admin/image-field';
 
 /**
  * Redaktionsmaske für die Website-Texte.
@@ -39,12 +41,32 @@ export function ContentEditor({
   groups,
   initial,
   defaults,
+  onSaved,
+  selectedKey,
+  selectionSeq = 0,
+  onFocusField,
 }: {
   groups: ContentGroup[];
   /** Aktueller Stand: gepflegte Werte, sonst Standardtext. */
   initial: Values;
   /** Auslieferungsfassung je Schlüssel — für „Zurücksetzen". */
   defaults: Values;
+  /** Wird nach erfolgreichem Speichern gerufen — die Vorschau lädt dann neu. */
+  onSaved?: () => void;
+  /** In der Vorschau angeklickter Baustein — wird hervorgehoben und fokussiert. */
+  selectedKey?: string | null;
+  /**
+   * Zähler der Auswahlvorgänge.
+   *
+   * Ohne ihn bliebe ein zweiter Klick auf denselben Text folgenlos: Der
+   * Schlüssel ändert sich nicht, React sieht keinen neuen Zustand, der Effekt
+   * läuft nicht. Genau das passiert im Alltag aber ständig — man klickt einen
+   * Text an, scrollt in der Maske weg und klickt ihn erneut an, um
+   * zurückzufinden.
+   */
+  selectionSeq?: number;
+  /** Gegenrichtung: Feld hier angefasst → in der Vorschau zeigen. */
+  onFocusField?: (key: string) => void;
 }) {
   const router = useRouter();
   const [values, setValues] = React.useState<Values>(initial);
@@ -58,6 +80,34 @@ export function ContentEditor({
     () => Object.keys(values).filter((key) => !same(values[key], initial[key])),
     [values, initial],
   );
+
+  /**
+   * Auf die Auswahl aus der Vorschau reagieren: das Feld in den sichtbaren
+   * Bereich holen und den Eingabefokus setzen.
+   *
+   * Verzögert um einen Durchlauf, weil die Gruppe, in der das Feld liegt, im
+   * selben Durchlauf erst aufgeklappt wird — vorher hat das Element keine
+   * Position, und `scrollIntoView` liefe ins Leere.
+   *
+   * `setTimeout` und nicht `requestAnimationFrame`: Der Browser hält
+   * Einzelbilder an, sobald der Tab nicht gezeichnet wird. Der Effekt lief dann
+   * schlicht nie — der Baustein wurde hervorgehoben, der Eingabefokus blieb
+   * aber liegen, und es sah nach einem toten Klick aus. Ein Zeitgeber läuft
+   * unabhängig davon.
+   */
+  React.useEffect(() => {
+    if (!selectedKey) return;
+
+    const id = `content-${selectedKey.replace(/\./g, '-')}`;
+    const timer = window.setTimeout(() => {
+      const element = document.getElementById(id);
+      if (!element) return;
+      element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      (element as HTMLElement).focus({ preventScroll: true });
+    }, 0);
+
+    return () => window.clearTimeout(timer);
+  }, [selectedKey, selectionSeq]);
 
   const setValue = (key: string, value: string | string[]) => {
     setValues((current) => ({ ...current, [key]: value }));
@@ -75,15 +125,19 @@ export function ContentEditor({
     setFieldErrors({});
 
     try {
-      const result = await api.patch<{ updated: number; reset: number }>('/api/content', {
+      const result = await api.patch<{ saved: number; reset: number }>('/api/content', {
         entries: changedKeys.map((key) => ({ key, value: values[key] })),
       });
 
+      // „Als Entwurf" steht ausdrücklich in der Meldung: Speichern und
+      // Veröffentlichen sind seit der Trennung zwei Schritte, und wer das
+      // nicht merkt, wundert sich, warum die Website unverändert aussieht.
       toast.success(
         result.reset > 0
-          ? `${result.updated} gespeichert, ${result.reset} auf Standard zurückgesetzt.`
-          : `${result.updated} Textbaustein${result.updated === 1 ? '' : 'e'} gespeichert.`,
+          ? `${result.saved} als Entwurf gespeichert, ${result.reset} auf Standard zurückgesetzt.`
+          : `${result.saved} Textbaustein${result.saved === 1 ? '' : 'e'} als Entwurf gespeichert.`,
       );
+      onSaved?.();
       router.refresh();
     } catch (error) {
       if (error instanceof ApiError && error.fieldErrors.length > 0) {
@@ -104,23 +158,12 @@ export function ContentEditor({
   return (
     <div className="space-y-8 pb-24">
       {groups.map((group) => (
-        <section
+        <DetailSection
           key={group.id}
-          className="space-y-6 rounded-2xl border border-border bg-card p-6 shadow-soft"
-          aria-labelledby={`group-${group.id}`}
+          title={group.label}
+          description={group.description}
+          body="form"
         >
-          <header className="space-y-1.5">
-            <h2
-              id={`group-${group.id}`}
-              className="font-display text-base font-semibold tracking-tight"
-            >
-              {group.label}
-            </h2>
-            <p className="prose-measure text-meta leading-relaxed text-muted-foreground">
-              {group.description}
-            </p>
-          </header>
-
           <div className="space-y-6">
             {group.items.map((item) => (
               <Field
@@ -130,12 +173,14 @@ export function ContentEditor({
                 defaultValue={defaults[item.key]}
                 error={fieldErrors[item.key]}
                 changed={!same(values[item.key], initial[item.key])}
+                selected={selectedKey === item.key}
                 onChange={(value) => setValue(item.key, value)}
                 onReset={() => setValue(item.key, defaults[item.key])}
+                onFocus={() => onFocusField?.(item.key)}
               />
             ))}
           </div>
-        </section>
+        </DetailSection>
       ))}
 
       {/*
@@ -156,7 +201,7 @@ export function ContentEditor({
               </Button>
               <Button onClick={save} loading={saving}>
                 <Save aria-hidden />
-                Speichern
+                Als Entwurf speichern
               </Button>
             </div>
           </div>
@@ -172,16 +217,21 @@ function Field({
   defaultValue,
   error,
   changed,
+  selected,
   onChange,
   onReset,
+  onFocus,
 }: {
   definition: ContentDefinition;
   value: string | string[];
   defaultValue: string | string[];
   error?: string;
   changed: boolean;
+  /** Aus der Vorschau angeklickt — bekommt einen sichtbaren Rahmen. */
+  selected?: boolean;
   onChange: (value: string | string[]) => void;
   onReset: () => void;
+  onFocus?: () => void;
 }) {
   const id = `content-${definition.key.replace(/\./g, '-')}`;
   const helpId = definition.help ? `${id}-help` : undefined;
@@ -190,7 +240,15 @@ function Field({
   const isDefault = JSON.stringify(value) === JSON.stringify(defaultValue);
 
   return (
-    <div className="space-y-2">
+    <div
+      onFocusCapture={onFocus}
+      className={cn(
+        'space-y-2 rounded-xl transition-colors',
+        // Der Rahmen sitzt aussen, damit das Feld selbst nicht springt, wenn
+        // es aus der Vorschau heraus gewählt wird.
+        selected && '-mx-3 bg-primary/[0.05] px-3 py-3 ring-1 ring-primary/30',
+      )}
+    >
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <Label htmlFor={id} className="flex items-center gap-2">
           {definition.label}
@@ -209,7 +267,15 @@ function Field({
         ) : null}
       </div>
 
-      {definition.kind === 'list' ? (
+      {definition.kind === 'image' ? (
+        <ImageField
+          id={id}
+          value={typeof value === 'string' ? value : ''}
+          onChange={onChange}
+          describedBy={[helpId, errorId].filter(Boolean).join(' ') || undefined}
+          invalid={Boolean(error)}
+        />
+      ) : definition.kind === 'list' ? (
         <ListField
           id={id}
           items={Array.isArray(value) ? value : []}

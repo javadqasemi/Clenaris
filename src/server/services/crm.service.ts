@@ -45,12 +45,204 @@ const log = logger('crm');
 //  Leads
 // ---------------------------------------------------------------------------
 
+/**
+ * Telefonnummern für den Vergleich normalisieren.
+ *
+ * `+41 79 123 45 67`, `079 123 45 67` und `0041791234567` sind dieselbe
+ * Nummer. Ohne Normalisierung erkennt keine Abfrage das, und jede erneute
+ * Anfrage derselben Person erzeugt einen neuen Lead.
+ *
+ * Bewusst grob: Es geht darum, dieselbe Person wiederzuerkennen, nicht darum,
+ * die Nummer zu validieren. Führende Nullen und Ländervorwahlen werden auf die
+ * letzten neun Stellen reduziert — das ist der Teil, der eine Schweizer Nummer
+ * eindeutig macht.
+ */
+function phoneKey(phone: string | null | undefined): string | null {
+  if (!phone) return null;
+  const digits = phone.replace(/\D/g, '');
+  if (digits.length < 7) return null;
+  return digits.slice(-9);
+}
+
+/** Namen und Firmen für den Vergleich vereinheitlichen. */
+function nameKey(value: string | null | undefined): string {
+  return (value ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ');
+}
+
+/**
+ * Einen bereits erfassten Lead derselben Person finden.
+ *
+ * Warum überhaupt: Wer eine Offerte anfragt, fragt oft mehrmals — einmal für
+ * die Wohnung, zwei Tage später für das Büro, dann noch einmal, weil die erste
+ * Anfrage vermeintlich nicht angekommen ist. Drei Leads für eine Person heisst
+ * drei Personen im Trichter, drei Nachfassaufgaben und im schlechtesten Fall
+ * drei Anrufe von drei Personen aus dem Büro.
+ *
+ * Die Regeln, in dieser Reihenfolge:
+ *
+ *  1. **Gleiche E-Mail-Adresse.** Der stärkste Hinweis; sie ist der
+ *     Anmeldeschlüssel und wird selten geteilt.
+ *  2. **Gleiche Telefonnummer.** Bei Geschäftsanfragen wechselt die
+ *     Absenderadresse häufiger als die Durchwahl.
+ *  3. **Gleicher Name in derselben Firma.** Nur *mit* Firma: „Peter Müller"
+ *     allein ist im Kanton Bern kein Erkennungsmerkmal, „Peter Müller,
+ *     Hausverwaltung Bühler AG" schon.
+ *
+ * **Abgeschlossene Leads zählen nicht.** Ein vor einem Jahr gewonnener oder
+ * verlorener Lead ist ein abgeschlossener Vorgang; eine neue Anfrage daran zu
+ * hängen würde ihn wieder aufreissen und die Trichterstatistik verfälschen.
+ * Die Verbindung zur Person bleibt trotzdem bestehen — über `customerId`.
+ */
+export async function findMatchingLead(params: {
+  organizationId: string;
+  email: string;
+  phone?: string | null;
+  firstName: string;
+  lastName: string;
+  company?: string | null;
+}): Promise<Lead | null> {
+  const email = params.email.trim().toLowerCase();
+
+  const byEmail = await prisma.lead.findFirst({
+    where: {
+      organizationId: params.organizationId,
+      deletedAt: null,
+      status: { notIn: ['WON', 'LOST'] },
+      email: { equals: email, mode: 'insensitive' },
+    },
+    orderBy: { createdAt: 'desc' },
+  });
+  if (byEmail) return byEmail;
+
+  /**
+   * Telefon und Name lassen sich nicht sinnvoll in der Datenbank vergleichen —
+   * die Normalisierung passiert in JavaScript. Die Kandidatenmenge wird deshalb
+   * zeitlich begrenzt: Offene Leads aus den letzten sechs Monaten sind eine
+   * kleine, überschaubare Menge, ein voller Tabellenscan wäre es nicht.
+   */
+  const since = new Date(Date.now() - 180 * 86_400_000);
+  const candidates = await prisma.lead.findMany({
+    where: {
+      organizationId: params.organizationId,
+      deletedAt: null,
+      status: { notIn: ['WON', 'LOST'] },
+      createdAt: { gte: since },
+    },
+    orderBy: { createdAt: 'desc' },
+    take: 500,
+  });
+
+  const phone = phoneKey(params.phone);
+  if (phone) {
+    const byPhone = candidates.find((lead) => phoneKey(lead.phone) === phone);
+    if (byPhone) return byPhone;
+  }
+
+  const company = nameKey(params.company);
+  if (company) {
+    const first = nameKey(params.firstName);
+    const last = nameKey(params.lastName);
+    const byName = candidates.find(
+      (lead) =>
+        nameKey(lead.company) === company &&
+        nameKey(lead.firstName) === first &&
+        nameKey(lead.lastName) === last,
+    );
+    if (byName) return byName;
+  }
+
+  return null;
+}
+
+/**
+ * Eine Website-Anfrage erfassen — als neuer Lead oder als Ergänzung eines
+ * bestehenden.
+ *
+ * Der Rückgabewert sagt, was passiert ist: `created` steuert, ob eine
+ * Eingangsbestätigung mit Leadnummer versendet wird und wie die interne
+ * Meldung lautet („Neue Anfrage" gegenüber „Weitere Anfrage").
+ */
 export async function createLeadFromContactForm(params: {
   organizationId: string;
   input: ContactFormInput | QuoteRequestInput;
   ip?: string;
-}): Promise<Lead> {
+  /** Überschreibt den Betreff der Aktivität — „Offertanfrage" statt „Anfrage". */
+  activitySubject?: string;
+}): Promise<Lead & { isNew: boolean }> {
   const input = params.input;
+  const subject = params.activitySubject ?? 'Anfrage über die Website';
+
+  const existing = await findMatchingLead({
+    organizationId: params.organizationId,
+    email: input.email,
+    phone: input.phone,
+    firstName: input.firstName,
+    lastName: input.lastName,
+    company: input.company,
+  });
+
+  if (existing) {
+    /**
+     * Bestehender Lead: Die Anfrage wird angehängt, nicht als neuer Vorgang
+     * gezählt. Ergänzt werden nur *fehlende* Angaben — eine zweite Anfrage
+     * ohne Telefonnummer darf die aus der ersten nicht löschen.
+     */
+    const lead = await prisma.lead.update({
+      where: { id: existing.id },
+      data: {
+        phone: existing.phone ?? input.phone ?? null,
+        company: existing.company ?? input.company ?? null,
+        postalCode: existing.postalCode ?? input.postalCode ?? null,
+        city: existing.city ?? input.city ?? null,
+        street: existing.street ?? ('street' in input ? (input.street ?? null) : null),
+        serviceKind: existing.serviceKind ?? input.serviceKind ?? null,
+        // Eine erneute Anfrage ist ein Lebenszeichen: Sie holt den Vorgang
+        // zurück auf die Nachfassliste, auch wenn er schon liegen geblieben war.
+        nextFollowUpAt: nextBusinessDay(),
+        activities: {
+          create: { type: 'EMAIL', subject, body: input.message },
+        },
+      },
+    });
+
+    await attachRequestFiles(params.organizationId, input);
+
+    await audit.updated({
+      organizationId: params.organizationId,
+      entity: 'Lead',
+      entityId: lead.id,
+      summary: `Weitere Anfrage an bestehenden Lead ${lead.number} angehängt`,
+      ip: params.ip,
+    });
+
+    await sendContactAutoReply(input.email, input.firstName, lead.id);
+
+    /**
+     * Das Büro erfährt ausdrücklich, dass es sich um eine *weitere* Anfrage
+     * derselben Person handelt. Eine Meldung „Neue Anfrage" auf einen Vorgang,
+     * den jemand gestern schon angerufen hat, führt zum zweiten Anruf.
+     */
+    await notifyStaff({
+      organizationId: params.organizationId,
+      title: 'Weitere Anfrage',
+      body: `${input.firstName} ${input.lastName} hat erneut angefragt · ${lead.number}`,
+      link: `/admin/leads/${lead.id}`,
+      permission: 'lead:read',
+      emailContent: newLeadInternalEmail({
+        name: `${input.firstName} ${input.lastName}`,
+        email: input.email,
+        phone: input.phone,
+        serviceKind: input.serviceKind ?? undefined,
+        message: input.message,
+        adminUrl: absoluteUrl(`/admin/leads/${lead.id}`),
+      }),
+    });
+
+    return { ...lead, isNew: false };
+  }
 
   const stage = await prisma.pipelineStage.findFirst({
     where: { organizationId: params.organizationId, key: 'new' },
@@ -91,34 +283,14 @@ export async function createLeadFromContactForm(params: {
         // Erste Nachfassaktion am nächsten Werktag.
         nextFollowUpAt: nextBusinessDay(),
         activities: {
-          create: {
-            type: 'EMAIL',
-            subject: 'Anfrage über die Website',
-            body: input.message,
-          },
+          create: { type: 'EMAIL', subject, body: input.message },
         },
       },
     });
   });
 
-  // Angehängte Dateien zuordnen (nur bei der Offertanfrage).
-  if ('fileIds' in input && input.fileIds.length > 0) {
-    await prisma.fileAsset.updateMany({
-      where: { id: { in: input.fileIds }, organizationId: params.organizationId },
-      data: { scope: 'OTHER' },
-    });
-  }
-
-  // Eingangsbestätigung an die anfragende Person.
-  const autoReply = contactAutoReplyEmail({ firstName: input.firstName });
-  await sendEmail({
-    to: input.email,
-    subject: autoReply.subject,
-    html: autoReply.html,
-    templateKey: 'contact_auto_reply',
-    entity: 'Lead',
-    entityId: lead.id,
-  });
+  await attachRequestFiles(params.organizationId, input);
+  await sendContactAutoReply(input.email, input.firstName, lead.id);
 
   // Interne Benachrichtigung.
   await notifyStaff({
@@ -126,6 +298,7 @@ export async function createLeadFromContactForm(params: {
     title: 'Neue Anfrage',
     body: `${input.firstName} ${input.lastName} · ${input.email}`,
     link: `/admin/leads/${lead.id}`,
+    permission: 'lead:read',
     emailContent: newLeadInternalEmail({
       name: `${input.firstName} ${input.lastName}`,
       email: input.email,
@@ -155,7 +328,42 @@ export async function createLeadFromContactForm(params: {
     ip: params.ip,
   });
 
-  return lead;
+  return { ...lead, isNew: true };
+}
+
+/**
+ * Eingangsbestätigung an die anfragende Person.
+ *
+ * Sie geht auch bei einer *zweiten* Anfrage raus. Das ist Absicht: Wer erneut
+ * schreibt, tut das meistens, weil er nicht sicher ist, ob die erste Anfrage
+ * angekommen ist — schweigen wäre die schlechteste aller Antworten.
+ */
+async function sendContactAutoReply(
+  email: string,
+  firstName: string,
+  leadId: string,
+): Promise<void> {
+  const autoReply = contactAutoReplyEmail({ firstName });
+  await sendEmail({
+    to: email,
+    subject: autoReply.subject,
+    html: autoReply.html,
+    templateKey: 'contact_auto_reply',
+    entity: 'Lead',
+    entityId: leadId,
+  });
+}
+
+/** Mit der Anfrage hochgeladene Dateien der Organisation zuordnen. */
+async function attachRequestFiles(
+  organizationId: string,
+  input: ContactFormInput | QuoteRequestInput,
+): Promise<void> {
+  if (!('fileIds' in input) || input.fileIds.length === 0) return;
+  await prisma.fileAsset.updateMany({
+    where: { id: { in: input.fileIds }, organizationId },
+    data: { scope: 'OTHER' },
+  });
 }
 
 async function scoreLeadInBackground(
@@ -585,6 +793,204 @@ export async function updateCustomer(params: {
   });
 
   return updated;
+}
+
+/**
+ * Zwei Kundendatensätze zusammenführen.
+ *
+ * **Warum das nötig ist.** Doppelte Kundendatensätze entstehen unvermeidlich:
+ * Jemand bucht einmal als `peter.mueller@…` und einmal als `p.mueller@…`, oder
+ * eine telefonische Erfassung trifft auf eine Online-Buchung. Die Folge sind
+ * zwei Umsatzhistorien, zwei Rabattsätze und zwei Mahnläufe für dieselbe
+ * Person.
+ *
+ * **Wie zusammengeführt wird.** Alles Bewegliche — Buchungen, Einsätze,
+ * Offerten, Rechnungen, Zahlungen, Objekte, Adressen, Aktivitäten, Anfragen,
+ * Bewertungen, Aufgaben, Dateien, Nachrichten — wird auf den *Zieldatensatz*
+ * umgehängt. Der Quelldatensatz wird anschliessend weich gelöscht, nicht
+ * entfernt: Seine Nummer steht auf ausgedruckten Rechnungen, und eine Nummer,
+ * die ins Leere zeigt, ist im Streitfall ein Problem.
+ *
+ * **Was *nicht* zusammengeführt wird: die Stammdaten.** Name, Adresse,
+ * Zahlungsziel und Rabatt des Ziels bleiben, wie sie sind. Ein automatisches
+ * „das vollständigere gewinnt" wäre eine Vermutung über etwas, das nur die
+ * Person am Telefon weiss — und im Zweifel überschriebe es die geprüfte
+ * Angabe mit der ungeprüften. Was fehlt, ergänzt man danach von Hand.
+ *
+ * Der Vorgang ist **nicht umkehrbar**. Deshalb läuft er in einer Transaktion
+ * und verlangt zwei verschiedene, existierende Datensätze.
+ */
+export async function mergeCustomers(params: {
+  organizationId: string;
+  /** Bleibt bestehen und übernimmt alles. */
+  targetId: string;
+  /** Wird geleert und weich gelöscht. */
+  sourceId: string;
+  actorId: string;
+}): Promise<Customer> {
+  if (params.targetId === params.sourceId) {
+    throw new ConflictError('Bitte wählen Sie zwei verschiedene Kundendatensätze.');
+  }
+
+  const [target, source] = await Promise.all([
+    prisma.customer.findFirst({
+      where: { id: params.targetId, organizationId: params.organizationId, deletedAt: null },
+    }),
+    prisma.customer.findFirst({
+      where: { id: params.sourceId, organizationId: params.organizationId, deletedAt: null },
+    }),
+  ]);
+
+  if (!target || !source) throw new NotFoundError('Kunde');
+
+  const merged = await prisma.$transaction(async (tx) => {
+    const move = { customerId: params.targetId };
+    const where = { customerId: params.sourceId };
+
+    /**
+     * Reihenfolge egal, Vollständigkeit nicht: Eine hier vergessene Beziehung
+     * bliebe am gelöschten Datensatz hängen und wäre danach unsichtbar. Die
+     * Liste folgt den `customerId`-Fremdschlüsseln im Schema.
+     */
+    await Promise.all([
+      tx.address.updateMany({ where, data: move }),
+      tx.property.updateMany({ where, data: move }),
+      tx.contact.updateMany({ where, data: move }),
+      tx.booking.updateMany({ where, data: move }),
+      tx.job.updateMany({ where, data: move }),
+      tx.quote.updateMany({ where, data: move }),
+      tx.invoice.updateMany({ where, data: move }),
+      tx.activity.updateMany({ where, data: move }),
+      tx.task.updateMany({ where, data: move }),
+      tx.lead.updateMany({ where, data: move }),
+      tx.review.updateMany({ where, data: move }),
+      tx.fileAsset.updateMany({ where, data: move }),
+      tx.messageThread.updateMany({ where, data: move }),
+      tx.paymentMethodRef.updateMany({ where, data: move }),
+    ]);
+
+    /**
+     * Etiketten zusammenlegen — ohne die bereits am Ziel vorhandenen, sonst
+     * verletzt der zusammengesetzte Primärschlüssel.
+     */
+    const [sourceTags, targetTags] = await Promise.all([
+      tx.customerTag.findMany({ where: { customerId: params.sourceId } }),
+      tx.customerTag.findMany({ where: { customerId: params.targetId } }),
+    ]);
+    const existingTagIds = new Set(targetTags.map((tag) => tag.tagId));
+    const newTags = sourceTags.filter((tag) => !existingTagIds.has(tag.tagId));
+    if (newTags.length > 0) {
+      await tx.customerTag.createMany({
+        data: newTags.map((tag) => ({ customerId: params.targetId, tagId: tag.tagId })),
+      });
+    }
+    await tx.customerTag.deleteMany({ where: { customerId: params.sourceId } });
+
+    // Kennzahlen neu aus den nun zusammengeführten Buchungen ableiten statt
+    // zu addieren: Addieren würde jeden bestehenden Zählfehler verdoppeln.
+    const [bookingCount, lastBooking, revenue] = await Promise.all([
+      tx.booking.count({
+        where: { customerId: params.targetId, deletedAt: null, status: { not: 'CANCELLED' } },
+      }),
+      tx.booking.findFirst({
+        where: { customerId: params.targetId, deletedAt: null },
+        orderBy: { scheduledStart: 'desc' },
+        select: { scheduledStart: true },
+      }),
+      tx.invoice.aggregate({
+        where: { customerId: params.targetId, deletedAt: null, status: 'PAID' },
+        _sum: { grossTotal: true },
+      }),
+    ]);
+
+    await tx.customer.update({
+      where: { id: params.sourceId },
+      data: {
+        deletedAt: new Date(),
+        internalNotes: [
+          source.internalNotes,
+          `Zusammengeführt mit ${target.number} am ${new Date().toLocaleDateString('de-CH')}.`,
+        ]
+          .filter(Boolean)
+          .join('\n'),
+      },
+    });
+
+    return tx.customer.update({
+      where: { id: params.targetId },
+      data: {
+        totalBookings: bookingCount,
+        lastBookingAt: lastBooking?.scheduledStart ?? null,
+        lifetimeValue: revenue._sum.grossTotal ?? 0,
+        internalNotes: [
+          target.internalNotes,
+          `Kundendatensatz ${source.number} (${source.email}) wurde hier eingegliedert.`,
+        ]
+          .filter(Boolean)
+          .join('\n'),
+      },
+    });
+  });
+
+  await audit.updated({
+    organizationId: params.organizationId,
+    userId: params.actorId,
+    entity: 'Customer',
+    entityId: params.targetId,
+    summary: `Kunde ${source.number} in ${target.number} zusammengeführt`,
+    changes: {
+      mergedFrom: { from: source.number, to: target.number },
+      mergedEmail: { from: source.email, to: target.email },
+    },
+  });
+
+  return merged;
+}
+
+/**
+ * Mögliche Doppelerfassungen finden.
+ *
+ * Dieselben Kriterien wie bei der Leaderkennung — E-Mail, Telefonnummer, Name
+ * plus Firma. Bewusst als *Vorschlag*: Zusammenführen ist nicht umkehrbar, das
+ * entscheidet eine Person und keine Heuristik.
+ */
+export async function findDuplicateCustomers(params: {
+  organizationId: string;
+  customerId: string;
+}): Promise<Customer[]> {
+  const customer = await prisma.customer.findFirst({
+    where: { id: params.customerId, organizationId: params.organizationId, deletedAt: null },
+  });
+  if (!customer) throw new NotFoundError('Kunde');
+
+  const others = await prisma.customer.findMany({
+    where: {
+      organizationId: params.organizationId,
+      deletedAt: null,
+      id: { not: customer.id },
+    },
+    take: 1000,
+  });
+
+  const phone = phoneKey(customer.phone ?? customer.mobile);
+  const company = nameKey(customer.companyName);
+  const first = nameKey(customer.firstName);
+  const last = nameKey(customer.lastName);
+  const email = customer.email.trim().toLowerCase();
+
+  return others.filter((other) => {
+    if (other.email.trim().toLowerCase() === email) return true;
+    if (phone && phoneKey(other.phone ?? other.mobile) === phone) return true;
+    if (
+      company &&
+      nameKey(other.companyName) === company &&
+      nameKey(other.firstName) === first &&
+      nameKey(other.lastName) === last
+    ) {
+      return true;
+    }
+    return false;
+  });
 }
 
 /**

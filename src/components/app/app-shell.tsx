@@ -4,18 +4,26 @@ import * as React from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import {
+  Activity,
   BarChart3,
   Bell,
+  BookOpen,
   Briefcase,
   Building2,
   CalendarDays,
   ChevronDown,
   ClipboardList,
+  Compass,
   Contact,
   CreditCard,
+  FileBarChart,
   FileText,
+  FolderOpen,
   Gauge,
+  GitFork,
   Home,
+  Landmark,
+  ListChecks,
   LogOut,
   Megaphone,
   Image as ImageIcon,
@@ -26,19 +34,26 @@ import {
   MousePointerClick,
   Newspaper,
   PenLine,
+  PiggyBank,
+  Presentation,
   Receipt,
   ScrollText,
   Search,
   Settings,
+  ShieldAlert,
   ShieldCheck,
   ShoppingBag,
   Sparkles,
   Star,
+  Target,
   Timer,
+  Trash2,
+  TrendingUp,
   Truck,
   UserRound,
   Users,
   Wallet,
+  Wrench,
 } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import type { UserRole } from '@prisma/client';
@@ -63,6 +78,8 @@ import {
   SheetTrigger,
 } from '@/components/ui/overlays';
 import { NotificationPanel } from '@/components/app/notification-panel';
+import { ThemeSync } from '@/features/account/appearance-form';
+import { SessionKeepalive } from '@/features/account/session-keepalive';
 
 /**
  * Applikations-Rahmen für Administration, Mitarbeitendenportal und
@@ -116,8 +133,24 @@ const NAV_ICONS = {
   staff: Briefcase,
   tasks: ClipboardList,
   time: Timer,
+  trash: Trash2,
   user: UserRound,
   users: KeyRound,
+  // Unternehmensführung
+  actions: Wrench,
+  book: BookOpen,
+  budget: PiggyBank,
+  checklist: ListChecks,
+  cockpit: Activity,
+  compass: Compass,
+  documents: FolderOpen,
+  investment: Landmark,
+  kpi: TrendingUp,
+  meeting: Presentation,
+  reports: FileBarChart,
+  scenario: GitFork,
+  shield: ShieldAlert,
+  target: Target,
 } satisfies Record<string, React.ComponentType<{ className?: string }>>;
 
 export type NavIcon = keyof typeof NAV_ICONS;
@@ -144,6 +177,8 @@ export interface AppShellUser {
   email: string;
   role: UserRole;
   avatarUrl: string | null;
+  /** Farbschema aus dem Konto — greift auf Geräten ohne eigene Wahl. */
+  theme?: string | null;
 }
 
 // Die Beschriftungen kommen aus der Rollendefinition — sonst laufen Oberfläche
@@ -156,6 +191,7 @@ export function AppShell({
   areaLabel,
   areaHref,
   settingsHref,
+  sessionIdleSeconds = 900,
   children,
 }: {
   navigation: NavGroup[];
@@ -163,6 +199,8 @@ export function AppShell({
   areaLabel: string;
   areaHref: string;
   settingsHref?: string;
+  /** Sekunden ohne Aktivität bis zur Abmeldung — aus `SESSION_IDLE_TTL`. */
+  sessionIdleSeconds?: number;
   children: React.ReactNode;
 }) {
   const pathname = usePathname();
@@ -171,12 +209,24 @@ export function AppShell({
 
   React.useEffect(() => setMobileOpen(false), [pathname]);
 
+  /**
+   * Der Zähler der Glocke.
+   *
+   * `refetchOnWindowFocus` hebt hier die anwendungsweite Vorgabe auf: Für
+   * Listen ist Nachladen beim Tab-Wechsel eine Nachladewelle, für diese eine
+   * Zahl ist es der Moment, in dem sie am ehesten falsch ist. Wer nach einer
+   * halben Stunde zurückkommt, soll nicht bis zum nächsten Intervall auf eine
+   * veraltete Null schauen.
+   */
   const unread = useQuery({
     queryKey: queryKeys.notifications(),
     queryFn: () => api.get<{ unread: number }>('/api/notifications/count'),
-    refetchInterval: 60_000,
-    staleTime: 30_000,
+    refetchInterval: 30_000,
+    refetchOnWindowFocus: true,
+    staleTime: 10_000,
   });
+
+  const unreadCount = unread.data?.unread ?? 0;
 
   const logout = async () => {
     await api.post('/api/auth/logout').catch(() => undefined);
@@ -257,6 +307,17 @@ export function AppShell({
 
   return (
     <div className="flex min-h-dvh bg-surface">
+      {/*
+        Rendert nichts — überträgt nur die Kontoeinstellung auf ein Gerät, das
+        noch keine eigene getroffen hat.
+      */}
+      {user.theme ? <ThemeSync preference={user.theme} /> : null}
+      {/*
+        Ebenfalls unsichtbar: hält die Sitzung am Leben, solange gearbeitet
+        wird, und beendet sie nach Leerlauf — siehe `session-keepalive.tsx`.
+      */}
+      <SessionKeepalive idleSeconds={sessionIdleSeconds} />
+
       {/* Seitenleiste (Desktop) */}
       <aside className="sticky top-0 hidden h-dvh w-64 shrink-0 border-r border-border bg-card lg:block">
         {sidebar}
@@ -284,13 +345,37 @@ export function AppShell({
           </div>
 
           <div className="flex items-center gap-1.5">
-            <ThemeToggle className="hidden sm:inline-flex" />
+            {/*
+              Früher ab `sm` ausgeblendet, weil das Dreiersegment auf einem
+              Telefon die Zeile sprengte. Als Symbolknopf passt es überall —
+              und gerade unterwegs wechselt man das Farbschema am ehesten.
+            */}
+            <ThemeToggle />
 
-            <NotificationPanel unreadCount={unread.data?.unread ?? 0}>
-              <Button variant="ghost" size="icon" aria-label="Benachrichtigungen" className="relative">
+            <NotificationPanel unreadCount={unreadCount}>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="relative"
+                aria-label={
+                  unreadCount > 0
+                    ? `Benachrichtigungen: ${unreadCount} ungelesen`
+                    : 'Benachrichtigungen'
+                }
+              >
                 <Bell aria-hidden />
-                {(unread.data?.unread ?? 0) > 0 ? (
-                  <span className="absolute right-1.5 top-1.5 flex size-2 rounded-full bg-destructive ring-2 ring-background" />
+                {/*
+                  Die Zahl, nicht nur ein Punkt. Ein Punkt sagt „irgendetwas
+                  ist da" — und beantwortet damit die einzige Frage nicht, die
+                  darüber entscheidet, ob man jetzt hinschaut oder später.
+                */}
+                {unreadCount > 0 ? (
+                  <span
+                    className="absolute -right-0.5 -top-0.5 flex h-[1.125rem] min-w-[1.125rem] items-center justify-center rounded-full bg-destructive px-1 text-[0.625rem] font-bold leading-none tabular-nums text-destructive-foreground ring-2 ring-background"
+                    aria-hidden
+                  >
+                    {unreadCount > 99 ? '99+' : unreadCount}
+                  </span>
                 ) : null}
               </Button>
             </NotificationPanel>

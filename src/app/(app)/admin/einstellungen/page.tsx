@@ -10,7 +10,6 @@ import {
   Plug,
   Sparkles,
   Users,
-  Zap,
 } from 'lucide-react';
 
 import { prisma, toNumber } from '@/lib/db';
@@ -25,9 +24,16 @@ import { Tabs, TabsContent, TabsList, TabsTriggerUnderline } from '@/components/
 import { Alert } from '@/components/ui/primitives';
 import { DetailRow, DetailSection, PageHeader } from '@/components/app/page-parts';
 import { withSettingsDefaults } from '@/lib/validation/settings';
+import { listTemplates } from '@/server/services/operations-admin.service';
 import { CompanyForm } from '@/features/admin/settings/company-form';
 import { OpeningHoursForm } from '@/features/admin/settings/opening-hours-form';
 import { OperationsForm } from '@/features/admin/settings/operations-form';
+import { HolidayCreateButton, HolidayList } from '@/features/admin/settings/holiday-manager';
+import {
+  AutomationCreateButton,
+  AutomationList,
+} from '@/features/admin/settings/automation-manager';
+import { TemplateList } from '@/features/admin/settings/template-manager';
 
 export const metadata: Metadata = {
   title: 'Einstellungen',
@@ -72,8 +78,18 @@ export default async function SettingsPage({
   const activeTab = bereich && TABS.includes(bereich) ? bereich : 'firma';
   const canEditCompany = can(session.role, 'company:update');
   const canEditSettings = can(session.role, 'settings:update');
+  const canEditAutomations = can(session.role, 'automation:update');
+  const canEditTemplates = can(session.role, 'template:update');
 
   const organizationId = await getOrganizationId();
+
+  /**
+   * Feiertage ab dem Jahresanfang des Vorjahres: Was älter ist, braucht
+   * niemand mehr in der Maske, und die Liste bliebe sonst nach ein paar
+   * Jahren unlesbar lang. Die Ferienrechnung liest die Tabelle ohnehin
+   * selbst.
+   */
+  const holidaysFrom = new Date(Date.UTC(new Date().getUTCFullYear() - 1, 0, 1));
 
   const [org, hours, holidays, taxRates, services, extras, areas, automations, templates] =
     await Promise.all([
@@ -83,9 +99,8 @@ export default async function SettingsPage({
         orderBy: { weekday: 'asc' },
       }),
       prisma.holiday.findMany({
-        where: { organizationId },
+        where: { organizationId, date: { gte: holidaysFrom } },
         orderBy: { date: 'asc' },
-        take: 20,
       }),
       prisma.taxRate.findMany({ where: { organizationId, active: true } }),
       prisma.service.count({ where: { organizationId, active: true } }),
@@ -93,10 +108,13 @@ export default async function SettingsPage({
       prisma.serviceArea.count({ where: { organizationId, active: true } }),
       prisma.automation.findMany({
         where: { organizationId },
-        include: { _count: { select: { actions: true } } },
-        orderBy: { name: 'asc' },
+        include: {
+          actions: { orderBy: { position: 'asc' } },
+          _count: { select: { actions: true, runs: true } },
+        },
+        orderBy: [{ active: 'desc' }, { name: 'asc' }],
       }),
-      prisma.emailTemplate.count({ where: { organizationId } }),
+      listTemplates(organizationId),
     ]);
 
   const settings = withSettingsDefaults(
@@ -284,31 +302,21 @@ export default async function SettingsPage({
             </DetailSection>
           )}
 
-          <DetailSection title={`Feiertage (${holidays.length})`}>
-            <dl className="protocol-list">
-              {holidays.map((holiday) => (
-                <div key={holiday.id} className="protocol-row">
-                  <dt className="protocol-label tabular-nums">
-                    {new Intl.DateTimeFormat('de-CH', {
-                      timeZone: 'UTC',
-                      day: '2-digit',
-                      month: '2-digit',
-                      year: 'numeric',
-                    }).format(holiday.date)}
-                  </dt>
-                  <dd className="protocol-value">
-                    {holiday.name}
-                    {holiday.recurring ? (
-                      <span className="ml-2 text-xs text-muted-foreground">jährlich</span>
-                    ) : null}
-                  </dd>
-                </div>
-              ))}
-            </dl>
-            <p className="py-4 text-sm leading-relaxed text-muted-foreground">
-              An diesen Tagen sind keine Online-Buchungen möglich, und bewilligte Abwesenheiten
-              zählen nicht als Ferientage.
-            </p>
+          <DetailSection
+            title={`Feiertage (${holidays.length})`}
+            description="An diesen Tagen sind keine Online-Buchungen möglich, und bewilligte Abwesenheiten zählen nicht als Ferientage."
+            action={canEditCompany ? <HolidayCreateButton /> : undefined}
+          >
+            <HolidayList
+              canEdit={canEditCompany}
+              holidays={holidays.map((holiday) => ({
+                id: holiday.id,
+                name: holiday.name,
+                date: holiday.date.toISOString().slice(0, 10),
+                recurring: holiday.recurring,
+                canton: holiday.canton,
+              }))}
+            />
           </DetailSection>
         </TabsContent>
 
@@ -453,31 +461,27 @@ export default async function SettingsPage({
 
         {/* Automationen */}
         <TabsContent value="automation" className="space-y-6">
-          <DetailSection title={`Automationen (${automations.length})`}>
-            <dl className="protocol-list">
-              {automations.map((automation) => (
-                <div key={automation.id} className="protocol-row">
-                  <dt className="protocol-label">
-                    <span className="flex items-center gap-2">
-                      <Zap className="size-3.5 text-primary" aria-hidden />
-                      {automation.name}
-                    </span>
-                  </dt>
-                  <dd className="protocol-value flex flex-wrap items-center gap-2 font-normal">
-                    <Badge variant={automation.active ? 'success' : 'neutral'} size="sm">
-                      {automation.active ? 'Aktiv' : 'Pausiert'}
-                    </Badge>
-                    <span className="text-sm text-muted-foreground">
-                      {automation._count.actions}{' '}
-                      {automation._count.actions === 1 ? 'Aktion' : 'Aktionen'}
-                      {automation.delayMinutes > 0
-                        ? ` · ${Math.round(automation.delayMinutes / 60)} Std. Verzögerung`
-                        : ''}
-                    </span>
-                  </dd>
-                </div>
-              ))}
-            </dl>
+          <DetailSection
+            title={`Automationen (${automations.length})`}
+            description="Regeln, die auf Ereignisse reagieren. Pausierte Regeln bleiben erhalten und laufen nicht."
+            action={canEditAutomations ? <AutomationCreateButton /> : undefined}
+          >
+            <AutomationList
+              canEdit={canEditAutomations}
+              automations={automations.map((automation) => ({
+                id: automation.id,
+                name: automation.name,
+                description: automation.description,
+                trigger: automation.trigger,
+                delayMinutes: automation.delayMinutes,
+                active: automation.active,
+                runs: automation._count.runs,
+                actions: automation.actions.map((action) => ({
+                  type: action.type,
+                  config: (action.config ?? {}) as Record<string, unknown>,
+                })),
+              }))}
+            />
           </DetailSection>
 
           <DetailSection title="Zeitgesteuerte Läufe">
@@ -494,11 +498,29 @@ export default async function SettingsPage({
             </dl>
           </DetailSection>
 
-          <DetailSection title={`E-Mail-Vorlagen (${templates})`}>
-            <p className="py-4 text-sm leading-relaxed text-muted-foreground">
-              Die Transaktions-E-Mails sind im Code hinterlegt und folgen dem Erscheinungsbild der
-              Website. Datenbankvorlagen überschreiben sie pro Sprache, sofern angelegt.
-            </p>
+          <DetailSection
+            title={`Vorlagen (${templates.email.length + templates.sms.length})`}
+            description="Die Transaktions-E-Mails sind im Code hinterlegt und folgen dem Erscheinungsbild der Website. Datenbankvorlagen überschreiben sie je Sprache."
+          >
+            <TemplateList
+              canEdit={canEditTemplates}
+              email={templates.email.map((template) => ({
+                id: template.id,
+                key: template.key,
+                locale: template.locale,
+                subject: template.subject,
+                bodyHtml: template.bodyHtml,
+                bodyText: template.bodyText,
+                active: template.active,
+              }))}
+              sms={templates.sms.map((template) => ({
+                id: template.id,
+                key: template.key,
+                locale: template.locale,
+                body: template.body,
+                active: template.active,
+              }))}
+            />
           </DetailSection>
         </TabsContent>
 
