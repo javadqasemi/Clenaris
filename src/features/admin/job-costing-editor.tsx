@@ -5,8 +5,9 @@ import { useRouter } from 'next/navigation';
 import { BadgeCheck, RefreshCw, Save } from 'lucide-react';
 import { toast } from 'sonner';
 
-import { cn, formatCurrency, round2 } from '@/lib/utils';
+import { cn, formatCurrency, formatDuration, round2 } from '@/lib/utils';
 import { api, ApiError } from '@/lib/api/client';
+import type { JobCostBreakdown } from '@/lib/costing/job';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/form';
@@ -20,6 +21,19 @@ import { Alert } from '@/components/ui/primitives';
  *  • **Der Deckungsbeitrag steht gross und rechnet mit.** Er ist die einzige
  *    Zahl, wegen der jemand diese Karte öffnet; Umsatz, Lohn und Material sind
  *    die Stellschrauben dazu.
+ *
+ *  • **Die Herleitung steht daneben, Zeile für Zeile.** Wer eingeteilt ist,
+ *    mit wie vielen Stunden (erfasst oder geplant) und was das Material
+ *    kostet — dieselbe Rechnung, die der Server bei „neu berechnen" anstellt
+ *    (`lib/costing/job.ts`). Ohne sie war die Lohnzahl ein Orakel: Man sah
+ *    „CHF 186.–" und musste raten, ob das zwei Personen à drei Stunden oder
+ *    eine Person à sechs war. Weicht ein Feld von der Herleitung ab, steht
+ *    das darunter, mit einem Handgriff zum Übernehmen.
+ *
+ *  • **Ansätze je Person nur mit Lohneinblick.** Die Betriebsleitung sieht
+ *    die Marge, aber nicht, was eine bestimmte Person verdient — dieselbe
+ *    Schwelle wie in der Personalakte (`payslip:create`). Stunden und Quelle
+ *    sieht sie trotzdem, denn die braucht sie zum Disponieren.
  *
  *  • **„Neu berechnen" und „Speichern" sind zwei Knöpfe, keiner davon
  *    automatisch.** Neu berechnen verwirft die Werte von Hand — das darf nie
@@ -36,6 +50,8 @@ export function JobCostingEditor({
   materialCost: initialMaterial,
   status,
   trackedMinutes,
+  breakdown,
+  showWages,
 }: {
   jobId: string;
   revenue: number;
@@ -44,6 +60,10 @@ export function JobCostingEditor({
   status: string;
   /** Erfasste Arbeitszeit — als Plausibilitätsanker neben den Lohnkosten. */
   trackedMinutes: number;
+  /** Herleitung aus Team, Zeiterfassung, Material und Auftrag — serverseitig gerechnet. */
+  breakdown: JobCostBreakdown;
+  /** Stundenansätze je Person anzeigen — nur mit Lohneinblick. */
+  showWages: boolean;
 }) {
   const router = useRouter();
   const [revenue, setRevenue] = React.useState(String(initialRevenue));
@@ -116,6 +136,12 @@ export function JobCostingEditor({
             value={revenue}
             onChange={(event) => setRevenue(event.target.value)}
           />
+          <DerivedHint
+            derived={breakdown.revenue}
+            current={numbers.revenue}
+            label="Auftrag netto"
+            onApply={(value) => setRevenue(String(value))}
+          />
         </div>
         <div className="space-y-1.5">
           <Label htmlFor="costing-labor">Lohnkosten</Label>
@@ -131,8 +157,14 @@ export function JobCostingEditor({
               {(trackedMinutes / 60).toFixed(2)} Stunden erfasst
             </p>
           ) : (
-            <p className="text-xs text-warning">Keine Zeit erfasst</p>
+            <p className="text-xs text-warning">Keine Zeit erfasst — Herleitung nach Plan</p>
           )}
+          <DerivedHint
+            derived={breakdown.laborCost}
+            current={numbers.laborCost}
+            label="Herleitung"
+            onApply={(value) => setLaborCost(String(value))}
+          />
         </div>
         <div className="space-y-1.5">
           <Label htmlFor="costing-material">Material</Label>
@@ -143,7 +175,74 @@ export function JobCostingEditor({
             value={materialCost}
             onChange={(event) => setMaterialCost(event.target.value)}
           />
+          <DerivedHint
+            derived={breakdown.materialCost}
+            current={numbers.materialCost}
+            label="Erfasster Verbrauch"
+            onApply={(value) => setMaterialCost(String(value))}
+          />
         </div>
+      </div>
+
+      {/* Herleitung */}
+      <div className="space-y-2 rounded-xl border border-border bg-muted/30 p-4">
+        <p className="text-meta font-medium">Herleitung</p>
+
+        {breakdown.labor.length === 0 ? (
+          <p className="text-xs text-warning">
+            Niemand eingeteilt — ohne Team gibt es keine Lohnkosten herzuleiten.
+          </p>
+        ) : (
+          <ul className="divide-y divide-border">
+            {breakdown.labor.map((line) => (
+              <li
+                key={line.employeeId}
+                className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5 py-1.5 text-sm"
+              >
+                <span className="min-w-0 flex-1 truncate">{line.name}</span>
+                <span className="text-xs text-muted-foreground tabular-nums">
+                  {formatDuration(line.minutes)}{' '}
+                  <span className={line.source === 'planned' ? 'text-warning' : undefined}>
+                    {line.source === 'tracked' ? 'erfasst' : 'geplant'}
+                  </span>
+                  {showWages ? (
+                    <>
+                      {' '}
+                      · {formatCurrency(line.hourlyRate)}/h
+                    </>
+                  ) : null}
+                </span>
+                {showWages ? (
+                  <span className="w-24 text-right tabular-nums">{formatCurrency(line.cost)}</span>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        )}
+
+        <dl className="grid grid-cols-[1fr_auto] gap-x-3 gap-y-1 border-t border-border pt-2 text-sm">
+          <dt className="text-muted-foreground">Lohn gemäss Herleitung</dt>
+          <dd className="text-right tabular-nums">{formatCurrency(breakdown.laborCost)}</dd>
+          <dt className="text-muted-foreground">
+            Material ({breakdown.materials.length}{' '}
+            {breakdown.materials.length === 1 ? 'Position' : 'Positionen'})
+          </dt>
+          <dd className="text-right tabular-nums">{formatCurrency(breakdown.materialCost)}</dd>
+          <dt className="text-muted-foreground">Umsatz gemäss Auftrag</dt>
+          <dd className="text-right tabular-nums">
+            {breakdown.revenue === null ? (
+              <span className="text-muted-foreground">kein Auftrag</span>
+            ) : (
+              formatCurrency(breakdown.revenue)
+            )}
+          </dd>
+        </dl>
+
+        {showWages ? null : (
+          <p className="text-2xs text-muted-foreground">
+            Stundenansätze je Person sind der Geschäftsleitung vorbehalten.
+          </p>
+        )}
       </div>
 
       <div className="flex flex-wrap items-baseline justify-between gap-3 rounded-xl border border-border bg-muted/40 p-4">
@@ -165,7 +264,8 @@ export function JobCostingEditor({
         <Alert variant="warning" title="Werte neu herleiten?">
           <span className="space-y-3">
             <span className="block">
-              Lohnkosten aus der erfassten Zeit, Material aus dem erfassten Verbrauch, Umsatz aus
+              Lohnkosten aus der erfassten Zeit — für Personen ohne Zeiterfassung aus der
+              geplanten Dauer und ihrem Ansatz —, Material aus dem erfassten Verbrauch, Umsatz aus
               dem Auftrag. Von Hand gesetzte Werte gehen dabei verloren.
             </span>
             <span className="flex flex-wrap gap-2">
@@ -237,5 +337,41 @@ export function JobCostingEditor({
         </p>
       ) : null}
     </div>
+  );
+}
+
+/**
+ * Hinweis unter einem Feld, wenn der Wert von der Herleitung abweicht.
+ *
+ * Ein Klick übernimmt nur *dieses* Feld — und nur lokal; gespeichert wird
+ * weiterhin mit „Speichern". So lässt sich etwa der Lohn aus der Herleitung
+ * nehmen und der Umsatz trotzdem von Hand lassen, ohne den Umweg über „neu
+ * berechnen", das alle drei Werte auf einmal setzt.
+ */
+function DerivedHint({
+  derived,
+  current,
+  label,
+  onApply,
+}: {
+  derived: number | null;
+  current: number;
+  label: string;
+  onApply: (value: number) => void;
+}) {
+  if (derived === null || Math.abs(derived - current) < 0.005) return null;
+  return (
+    <p className="flex flex-wrap items-baseline gap-x-2 text-xs text-muted-foreground">
+      <span>
+        {label}: <span className="tabular-nums">{formatCurrency(derived)}</span>
+      </span>
+      <button
+        type="button"
+        onClick={() => onApply(derived)}
+        className="font-medium text-primary underline-offset-4 hover:underline"
+      >
+        übernehmen
+      </button>
+    </p>
   );
 }

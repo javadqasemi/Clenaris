@@ -6,6 +6,7 @@ import { prisma } from '@/lib/db';
 import { pageMetadata } from '@/lib/cms/metadata';
 import { getOrganizationId, getPublicCompanyInfo } from '@/server/services/organization.service';
 import { getContent } from '@/server/services/content.service';
+import { activeStaffWhere } from '@/server/services/profile.service';
 import { createCms } from '@/lib/cms/editable';
 import { isPreview } from '@/lib/cms/preview';
 import { PersonAvatar } from '@/components/ui/primitives';
@@ -34,8 +35,10 @@ export default async function AboutPage() {
 
   const [company, team, stats] = await Promise.all([
     getPublicCompanyInfo(),
+    // Nur aktives Personal auf die Website — wessen Konto auf Kundschaft
+    // steht, gehört nicht mehr ins Team, auch wenn die Akte noch da ist.
     prisma.employee.findMany({
-      where: { organizationId, active: true },
+      where: activeStaffWhere(organizationId),
       orderBy: { hiredAt: 'asc' },
       select: {
         id: true,
@@ -50,7 +53,7 @@ export default async function AboutPage() {
     Promise.all([
       prisma.job.count({ where: { organizationId, status: { in: ['COMPLETED', 'VERIFIED'] } } }),
       prisma.customer.count({ where: { organizationId, deletedAt: null } }),
-      prisma.employee.count({ where: { organizationId, active: true } }),
+      prisma.employee.count({ where: activeStaffWhere(organizationId) }),
       prisma.serviceArea.count({ where: { organizationId, active: true } }),
     ]),
   ]);

@@ -135,7 +135,7 @@ export default async function ServiceAreaSettingsPage() {
           {Array.from(groups.entries()).map(([prefix, entries]) => (
             <ListCard key={prefix} title={`Region ${prefix.slice(0, 2)}xx`}>
               <TableScroll>
-                <table className="data-table data-table--sticky">
+                <table className="data-table">
                   <caption className="sr-only">Postleitzahlen der Region {prefix}</caption>
                   <thead>
                     <tr>

@@ -1,6 +1,8 @@
 import 'server-only';
 
 import { prisma, toNumber } from '@/lib/db';
+
+import { activeStaffWhere } from './profile.service';
 import { cache, cacheKeys } from '@/lib/redis';
 import { growthPercent, round2 } from '@/lib/utils';
 
@@ -275,7 +277,7 @@ export async function getDashboardKpis(
         where: { organizationId, deletedAt: null, status: { notIn: ['WON', 'LOST'] } },
         _sum: { estimatedValue: true },
       }),
-      prisma.employee.count({ where: { organizationId, active: true } }),
+      prisma.employee.count({ where: activeStaffWhere(organizationId) }),
       prisma.timeEntry.count({
         where: { endedAt: null, employee: { organizationId } },
       }),

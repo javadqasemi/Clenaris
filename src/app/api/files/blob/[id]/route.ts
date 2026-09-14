@@ -3,6 +3,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { toErrorResponse } from '@/lib/api/response';
 import { NotFoundError, ValidationError } from '@/lib/errors';
 import { LOCAL_MAX_BYTES, readLocalFile, receiveLocalUpload } from '@/lib/storage';
+import { describeUploadLimit } from '@/lib/validation/files';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -34,13 +35,13 @@ export async function PUT(
 
     /**
      * Die angekündigte Länge zuerst prüfen, bevor der Körper gelesen wird:
-     * Sonst zöge die Anwendung erst fünfzig Megabyte in den Speicher, um sie
-     * anschliessend abzulehnen.
+     * Sonst zöge die Anwendung erst einen halben Gigabyte in den Speicher, um
+     * ihn anschliessend abzulehnen.
      */
     const declared = Number(request.headers.get('content-length') ?? '0');
     if (declared > LOCAL_MAX_BYTES) {
       throw new ValidationError(
-        `Die Datei ist zu gross (max. ${Math.round(LOCAL_MAX_BYTES / 1024 / 1024)} MB ohne eingerichteten Dateispeicher).`,
+        `Die Datei ist zu gross (max. ${describeUploadLimit(LOCAL_MAX_BYTES)} ohne eingerichteten Dateispeicher).`,
       );
     }
 

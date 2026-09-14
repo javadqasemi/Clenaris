@@ -1927,6 +1927,16 @@ model Employee {
   emergencyContact String?
   emergencyPhone   String?
 
+  /// Geburtsdatum und Wohnadresse gehören in die Akte: Die Lohnabrechnung
+  /// braucht die Adresse, die Quellensteuer das Alter, und die Geburtstagsliste
+  /// im Personal-Cockpit das Datum.
+  birthday   DateTime? @db.Date
+  street     String?
+  postalCode String?
+  city       String?
+  /// Interne Notizen der Personalverwaltung — nie für die Person sichtbar.
+  notes      String?
+
   driverLicense Boolean  @default(false)
   vehiclePlate  String?
   languages     Locale[] @default([DE])
@@ -1948,12 +1958,35 @@ model Employee {
   skills       EmployeeSkill[]
   availability Availability[]
   ownedLeads   Lead[]          @relation("LeadOwner")
-  files        FileAsset[]
-  documents    ManagedDocument[]
+  files         FileAsset[]
+  documents     ManagedDocument[]
+  salaryHistory SalaryRecord[]
 
   @@unique([organizationId, employeeNumber])
   @@index([organizationId, active])
   @@map("employees")
+}
+
+/// Lohnhistorie: jede Änderung von Ansatz, Monatslohn oder Pensum als eigene
+/// Zeile mit Gültigkeitsbeginn. Die Akte trägt nur den aktuellen Stand; ohne
+/// diese Tabelle liesse sich eine Lohnerhöhung vom Frühjahr nicht mehr
+/// belegen — und die Nachkalkulation alter Einsätze rechnete mit dem heutigen
+/// Lohn.
+model SalaryRecord {
+  id            String   @id @default(cuid())
+  employeeId    String
+  validFrom     DateTime @db.Date
+  hourlyRate    Decimal? @db.Decimal(12, 2)
+  monthlySalary Decimal? @db.Decimal(12, 2)
+  workloadPct   Int      @default(100)
+  reason        String?
+  changedById   String?
+  createdAt     DateTime @default(now()) @db.Timestamptz(6)
+
+  employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@index([employeeId, validFrom])
+  @@map("salary_records")
 }
 
 /// Qualifikation mit Stufe und Zertifikatsablauf.

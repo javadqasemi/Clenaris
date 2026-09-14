@@ -7,6 +7,7 @@ import { toast } from 'sonner';
 
 import { cn } from '@/lib/utils';
 import { api, ApiError } from '@/lib/api/client';
+import { MAX_UPLOAD_BYTES, describeUploadLimit } from '@/lib/validation/files';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/form';
@@ -62,7 +63,7 @@ const TYPES = [
   { value: 'OTHER', label: 'Weitere' },
 ] as const;
 
-const MAX_BYTES = 15 * 1024 * 1024;
+const MAX_BYTES = MAX_UPLOAD_BYTES;
 
 export function JobPhotos({
   jobId,
@@ -96,7 +97,9 @@ export function JobPhotos({
 
     const tooBig = list.find((file) => file.size > MAX_BYTES);
     if (tooBig) {
-      setError(`„${tooBig.name}" ist grösser als 15 MB und wurde nicht hochgeladen.`);
+      setError(
+        `„${tooBig.name}" ist grösser als ${describeUploadLimit(MAX_BYTES)} und wurde nicht hochgeladen.`,
+      );
       return;
     }
 
@@ -313,7 +316,8 @@ export function JobPhotos({
                   Fotos hierher ziehen oder klicken zum Auswählen
                 </span>
                 <span className="text-xs text-muted-foreground">
-                  JPEG, PNG oder WebP · bis 15 MB je Bild · mehrere gleichzeitig möglich
+                  JPEG, PNG oder WebP · bis {describeUploadLimit(MAX_BYTES)} je Bild · mehrere
+                  gleichzeitig möglich
                 </span>
               </>
             )}

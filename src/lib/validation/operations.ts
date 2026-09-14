@@ -147,7 +147,13 @@ export const updateJobSchema = z.object({
   internalNote: z.string().trim().max(4000).optional(),
   customerNote: z.string().trim().max(4000).optional(),
   color: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional(),
-});
+})
+  // Nur prüfbar, wenn beide Zeiten mitkommen; wer nur den Beginn verschiebt,
+  // verschiebt ihn im Kalender, und `moveJobSchema` prüft dort das Paar.
+  .refine((d) => !d.scheduledStart || !d.scheduledEnd || d.scheduledEnd > d.scheduledStart, {
+    message: 'Das Ende muss nach dem Beginn liegen.',
+    path: ['scheduledEnd'],
+  });
 export type UpdateJobInput = z.infer<typeof updateJobSchema>;
 
 /** Drag & Drop im Kalender. */
@@ -397,6 +403,11 @@ export const createEmployeeSchema = z.object({
   permitValidUntil: dateOnlySchema.optional(),
   emergencyContact: z.string().trim().max(120).optional(),
   emergencyPhone: z.string().trim().max(30).optional(),
+  birthday: dateOnlySchema.optional(),
+  street: z.string().trim().max(120).optional(),
+  postalCode: z.string().trim().max(10).optional(),
+  city: z.string().trim().max(80).optional(),
+  notes: z.string().trim().max(4000).optional(),
   driverLicense: z.boolean().default(false),
   vehiclePlate: z.string().trim().max(20).optional(),
   languages: z.array(z.enum(['DE', 'EN', 'FR', 'IT'])).default(['DE']),
@@ -404,6 +415,10 @@ export const createEmployeeSchema = z.object({
   sendInvite: z.boolean().default(true),
 });
 export type CreateEmployeeInput = z.infer<typeof createEmployeeSchema>;
+
+const AHV_NUMBER = z
+  .string()
+  .regex(/^756\.\d{4}\.\d{4}\.\d{2}$/, 'Die AHV-Nummer hat das Format 756.1234.5678.90.');
 
 /**
  * Ändern: alle Felder freiwillig — **ohne** `role`.
@@ -413,14 +428,64 @@ export type CreateEmployeeInput = z.infer<typeof createEmployeeSchema>;
  * damit über die Personalakte ein Konto zur Administration hätte machen
  * können, ohne je `role:assign` zu besitzen. Rollen wechselt ausschliesslich
  * `PATCH /api/users/:id/role`.
+ *
+ * **Warum ausgeschrieben und nicht `createEmployeeSchema.partial()`.** Das
+ * Bearbeitungsformular schickt für ein geleertes Feld `null` — so
+ * unterscheidet der Endpunkt „nicht angefasst" von „ausdrücklich gelöscht".
+ * `.partial()` macht aus `.optional()` aber kein `.nullish()`: Ein
+ * Mitarbeitender ohne Bewilligung liess sich gar nicht mehr speichern, weil
+ * `permitType: null` mit 422 abgewiesen wurde — egal, was man sonst
+ * änderte. Hier steht deshalb je Feld, ob es leerbar ist (in der Datenbank
+ * `NULL` erlaubt) oder nur änderbar (Pflichtfeld).
  */
-export const updateEmployeeSchema = createEmployeeSchema
-  .omit({ role: true, sendInvite: true })
-  .partial()
-  .extend({
-    active: z.boolean().optional(),
-    terminatedAt: dateOnlySchema.optional(),
-  });
+export const updateEmployeeSchema = z.object({
+  // Konto
+  firstName: z.string().trim().min(2).max(80).optional(),
+  lastName: z.string().trim().min(2).max(80).optional(),
+  email: z.string().email().optional(),
+  phone: z.string().trim().max(30).nullish(),
+  // Anstellung
+  employeeNumber: z
+    .string()
+    .trim()
+    .min(3)
+    .max(30)
+    .regex(/^[A-Za-z0-9._-]+$/, 'Nur Buchstaben, Ziffern, Punkt, Bindestrich und Unterstrich.')
+    .optional(),
+  employmentType: z
+    .enum(['FULL_TIME', 'PART_TIME', 'HOURLY', 'TEMPORARY', 'APPRENTICE', 'CONTRACTOR'])
+    .optional(),
+  position: z.string().trim().min(1).max(80).optional(),
+  department: z.string().trim().max(80).nullish(),
+  hiredAt: dateOnlySchema.optional(),
+  terminatedAt: dateOnlySchema.nullish(),
+  workloadPct: z.number().int().min(10).max(100).optional(),
+  vacationDaysPerYear: z.number().min(0).max(60).optional(),
+  active: z.boolean().optional(),
+  // Lohn — jede Änderung landet in der Lohnhistorie
+  hourlyRate: moneySchema.nullish(),
+  monthlySalary: moneySchema.nullish(),
+  /** Ab wann der neue Lohn gilt; ohne Angabe ab heute. */
+  salaryValidFrom: dateOnlySchema.optional(),
+  salaryReason: z.string().trim().max(200).optional(),
+  // Personaldaten
+  ahvNumber: AHV_NUMBER.nullish(),
+  iban: z.string().trim().max(40).nullish(),
+  nationality: z.string().trim().max(60).nullish(),
+  permitType: z.enum(['CH', 'B', 'C', 'G', 'L', 'F', 'N']).nullish(),
+  permitValidUntil: dateOnlySchema.nullish(),
+  emergencyContact: z.string().trim().max(120).nullish(),
+  emergencyPhone: z.string().trim().max(30).nullish(),
+  birthday: dateOnlySchema.nullish(),
+  street: z.string().trim().max(120).nullish(),
+  postalCode: z.string().trim().max(10).nullish(),
+  city: z.string().trim().max(80).nullish(),
+  notes: z.string().trim().max(4000).nullish(),
+  driverLicense: z.boolean().optional(),
+  vehiclePlate: z.string().trim().max(20).nullish(),
+  languages: z.array(z.enum(['DE', 'EN', 'FR', 'IT'])).min(1).optional(),
+  color: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional(),
+});
 export type UpdateEmployeeInput = z.infer<typeof updateEmployeeSchema>;
 
 export const absenceRequestSchema = z.object({

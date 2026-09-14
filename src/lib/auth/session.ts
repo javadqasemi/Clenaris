@@ -226,7 +226,13 @@ export async function createSession({ userId, family }: CreateSessionInput) {
     },
   });
 
-  const profileId = user.customer?.id ?? user.employee?.id ?? undefined;
+  // Das Profil folgt der Rolle, nicht der Reihenfolge „Kundschaft, sonst
+  // Personal": Eine Person kann beides haben (privat gebucht *und*
+  // angestellt). Mit der alten Regel war sie als Mitarbeitende mit einer
+  // Kunden-ID unterwegs — und die Zeiterfassung hätte auf einen Datensatz
+  // gebucht, den es in der Personaltabelle nicht gibt.
+  const profileId =
+    user.role === 'CUSTOMER' ? (user.customer?.id ?? undefined) : (user.employee?.id ?? undefined);
 
   const accessToken = await signAccessToken({
     sub: user.id,

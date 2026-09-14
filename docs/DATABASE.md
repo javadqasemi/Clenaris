@@ -4,7 +4,7 @@
 > Diagramme sind damit nie älter als das Schema. Prosa und Bereichseinteilung
 > stehen in `scripts/generate-erd.ts`.
 
-**110 Modelle, 67 Aufzählungstypen, 1973 Felder.**
+**111 Modelle, 67 Aufzählungstypen, 1989 Felder.**
 PostgreSQL 16+; alle Zeitstempel als `timestamptz` in UTC, Anzeige in Europe/Zurich.
 
 ## Vier Entscheidungen, die das ganze Schema prägen
@@ -40,7 +40,7 @@ flowchart LR
   crm["CRM<br/><small>13 Modelle</small>"]
   katalog["Leistungskatalog und Preislogik<br/><small>6 Modelle</small>"]
   auftrag["Buchung, Offerte, Einsatz<br/><small>10 Modelle</small>"]
-  personal["Personal und Zeit<br/><small>7 Modelle</small>"]
+  personal["Personal und Zeit<br/><small>8 Modelle</small>"]
   finanzen["Finanzen<br/><small>8 Modelle</small>"]
   kommunikation["Kommunikation und Automatisierung<br/><small>10 Modelle</small>"]
   marketing["Marketing und Inhalte<br/><small>13 Modelle</small>"]
@@ -598,6 +598,16 @@ erDiagram
     String department
     DateTime hiredAt
   }
+  SalaryRecord {
+    String id PK
+    String employeeId
+    DateTime validFrom
+    Decimal hourlyRate
+    Decimal monthlySalary
+    Int workloadPct
+    String reason
+    String changedById
+  }
   EmployeeSkill {
     String id PK
     String employeeId
@@ -634,6 +644,7 @@ erDiagram
   }
   Employee ||--o{ TimeEntry : "employee"
   Employee ||--o{ GpsEvent : "employee"
+  Employee ||--o{ SalaryRecord : "employee"
   Employee ||--o{ EmployeeSkill : "employee"
   Employee ||--o{ Availability : "employee"
   Employee ||--o{ Absence : "employee"
@@ -642,8 +653,9 @@ erDiagram
 
 | Modell | Tabelle | Felder | Zweck |
 | --- | --- | --- | --- |
-| `Employee` | `employees` | 39 | – |
+| `Employee` | `employees` | 45 | – |
 | `EmployeeSkill` | `employee_skills` | 6 | – |
+| `SalaryRecord` | `salary_records` | 10 | – |
 | `Availability` | `availabilities` | 6 | – |
 | `Absence` | `absences` | 15 | – |
 | `Payslip` | `payslips` | 16 | – |

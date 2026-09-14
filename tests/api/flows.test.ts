@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { get, post, requireServer } from '../helpers/client';
+import { call, get, post, requireServer } from '../helpers/client';
 import { loginAs } from '../helpers/accounts';
 
 /**
@@ -18,6 +18,109 @@ import { loginAs } from '../helpers/accounts';
 const inDays = (days: number) => new Date(Date.now() + days * 864e5);
 const dateOnly = (date: Date) => date.toISOString().slice(0, 10);
 const unique = (prefix: string) => `${prefix}.${Date.now()}@example.ch`;
+
+/**
+ * Der nächste buchbare Termin für die Umzugsreinigung — ab in einer Woche,
+ * am ersten Tag mit einem freien Zeitfenster. Wochenenden und Feiertage
+ * liefern keine Fenster; deshalb wird über mehrere Tage gesucht.
+ */
+async function nextBookableSlot(): Promise<{ serviceId: string; scheduledStart: string }> {
+  const estimate = await post<{ data: { service: { id: string } } }>(
+    '/api/public/pricing/estimate',
+    {
+      serviceSlug: 'umzugsreinigung',
+      propertyKind: 'APARTMENT',
+      squareMeters: 85,
+      rooms: 3.5,
+      frequency: 'ONCE',
+      postalCode: '3011',
+      extras: [],
+    },
+  );
+  const serviceId = estimate.payload.data.service.id;
+
+  for (let offset = 7; offset < 21; offset += 1) {
+    const day = await get<{ data: { slots: { start: string; available: boolean }[] } }>(
+      `/api/public/availability?serviceId=${serviceId}&date=${dateOnly(inDays(offset))}` +
+        '&durationMin=240&crewSize=2',
+    );
+    const slot = day.payload.data?.slots?.find((entry) => entry.available);
+    if (slot) return { serviceId, scheduledStart: slot.start };
+  }
+  throw new Error('kein buchbares Zeitfenster in den nächsten drei Wochen — Öffnungszeiten befüllt?');
+}
+
+const bookingPayload = (serviceId: string, scheduledStart: string) => ({
+  serviceId,
+  extras: [],
+  frequency: 'ONCE',
+  scheduledStart,
+  propertyKind: 'APARTMENT',
+  squareMeters: 85,
+  rooms: 3.5,
+  bathrooms: 1,
+  hasPets: false,
+  address: { street: 'Bundesgasse', streetNo: '1', postalCode: '3011', city: 'Bern', canton: 'BE', country: 'CH' },
+  acceptTerms: true,
+  website: '',
+});
+
+describe('Buchung über die Website', { concurrency: 1 }, async () => {
+  await requireServer();
+
+  /**
+   * Der Fehler, den diese Fälle festhalten: Für jede angemeldete Sitzung
+   * blendete der Assistent die Kontaktfelder aus, der Dienst löste die
+   * Kundschaft aber nur für ein Kundenkonto mit Profil auf. Wer als Personal
+   * buchte, bekam „Bitte geben Sie Vorname, Nachname …" ohne ein Feld dafür.
+   */
+  it('verlangt von Personal ohne Kontaktangaben die Kundschaft — und nimmt sie mit an', async () => {
+    const admin = await loginAs('admin');
+    const { serviceId, scheduledStart } = await nextBookableSlot();
+
+    const missing = await post<{ error: { message: string } }>(
+      '/api/public/bookings',
+      bookingPayload(serviceId, scheduledStart),
+      { jar: admin },
+    );
+    assert.equal(missing.status, 422, missing.text);
+    assert.match(missing.payload.error.message, /Vorname/);
+
+    const created = await post<{ data: { id: string; number: string; isNewCustomer: boolean } }>(
+      '/api/public/bookings',
+      {
+        ...bookingPayload(serviceId, scheduledStart),
+        firstName: 'Prüf',
+        lastName: 'Buchung',
+        email: unique('buchung'),
+        phone: '+41 79 123 45 67',
+      },
+      { jar: admin },
+    );
+    assert.equal(created.status, 201, created.text);
+    assert.equal(created.payload.data.isNewCustomer, true);
+
+    const removed = await call('DELETE', `/api/bookings/${created.payload.data.id}`, { jar: admin });
+    assert.ok(removed.status === 204 || removed.status === 200, `Aufräumen: HTTP ${removed.status}`);
+  });
+
+  it('bucht für ein Kundenkonto ohne Kontaktfelder auf das eigene Profil', async () => {
+    const customer = await loginAs('customer');
+    const admin = await loginAs('admin');
+    const { serviceId, scheduledStart } = await nextBookableSlot();
+
+    const created = await post<{ data: { id: string; isNewCustomer: boolean } }>(
+      '/api/public/bookings',
+      bookingPayload(serviceId, scheduledStart),
+      { jar: customer },
+    );
+    assert.equal(created.status, 201, created.text);
+    assert.equal(created.payload.data.isNewCustomer, false, 'bestehendes Profil, kein neuer Datensatz');
+
+    const removed = await call('DELETE', `/api/bookings/${created.payload.data.id}`, { jar: admin });
+    assert.ok(removed.status === 204 || removed.status === 200, `Aufräumen: HTTP ${removed.status}`);
+  });
+});
 
 describe('Öffentliche Endpunkte', { concurrency: 1 }, async () => {
   await requireServer();

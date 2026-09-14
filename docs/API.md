@@ -5,7 +5,7 @@
 > Quelle, aus der sowohl diese Referenz als auch die Laufzeitvalidierung
 > stammen.
 
-Stand: 368 Endpunkte. Die maschinenlesbare Fassung liegt in
+Stand: 369 Endpunkte. Die maschinenlesbare Fassung liegt in
 [`openapi.yaml`](./openapi.yaml) bzw. [`openapi.json`](./openapi.json).
 
 ## Grundlagen
@@ -277,6 +277,21 @@ Familie.
 - **Zugriff:** Erfordert die Berechtigungen: `user:update`, `role:assign`.
 - **Rate-Limit-Klasse:** `apiWrite`
 - **Erfolg:** 204
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+### `POST /api/users/{id}/password-reset`
+
+**Zugangslink versenden.** Für ein eingeladenes, nie aktiviertes Konto eine neue Einladung; für ein aktives Konto der Link zum Setzen eines neuen Passworts. Die Verwaltung setzt nie selbst ein Passwort. Gesperrte und deaktivierte Konten erhalten keinen Link (422).
+
+- **Zugriff:** Erfordert die Berechtigung: `user:update`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
 - **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
 
 **Pfadparameter**
@@ -632,12 +647,12 @@ Familie.
 | `profile` | string | ja | `jobPhoto` \| `bookingPhoto` \| `avatar` \| `document` \| `receipt` \| `cv` \| `gallery` \| `invoice` \| `quote` |
 | `filename` | string | ja | min. 1 Zeichen, max. 255 Zeichen |
 | `mimeType` | string | ja | min. 3 Zeichen, max. 120 Zeichen |
-| `sizeBytes` | integer | ja | ≥ 1, ≤ 52428800 |
+| `sizeBytes` | integer | ja | ≥ 1, ≤ 1073741824 |
 | `scopeId` | string | – | max. 60 Zeichen |
 
 ### `PUT /api/files/blob/{id}`
 
-**Datei an die Upload-Adresse schreiben.** Gegenstück zur signierten Adresse von Supabase, wenn kein externer Speicher eingerichtet ist. Der Körper sind die rohen Bytes; die Adresse ist die Berechtigung — sie entsteht in `/api/files/upload-url`, ist nicht erratbar, genau einmal und nur zwei Stunden lang beschreibbar. Höchstens 5 MB.
+**Datei an die Upload-Adresse schreiben.** Gegenstück zur signierten Adresse von Supabase, wenn kein externer Speicher eingerichtet ist. Der Körper sind die rohen Bytes; die Adresse ist die Berechtigung — sie entsteht in `/api/files/upload-url`, ist nicht erratbar, genau einmal und nur zwei Stunden lang beschreibbar. Höchstens 256 MB — die allgemeine Grenze von 1 GB gilt für den externen Speicher; die Datenbank-Rückfallebene trägt nicht mehr.
 
 - **Zugriff:** Öffentlich — keine Anmeldung nötig.
 - **Erfolg:** 200
@@ -2498,6 +2513,11 @@ Familie.
 | `permitValidUntil` | string | – | – |
 | `emergencyContact` | string | – | max. 120 Zeichen |
 | `emergencyPhone` | string | – | max. 30 Zeichen |
+| `birthday` | string | – | – |
+| `street` | string | – | max. 120 Zeichen |
+| `postalCode` | string | – | max. 10 Zeichen |
+| `city` | string | – | max. 80 Zeichen |
+| `notes` | string | – | max. 4000 Zeichen |
 | `driverLicense` | boolean | – | Standard `false` |
 | `vehiclePlate` | string | – | max. 20 Zeichen |
 | `languages` | string[] | – | Standard `["DE"]` |
@@ -2690,14 +2710,19 @@ Familie.
 | `lastName` | string | – | min. 2 Zeichen, max. 80 Zeichen |
 | `email` | string | – | email |
 | `phone` | string | – | max. 30 Zeichen |
-| `employmentType` | string | – | `FULL_TIME` \| `PART_TIME` \| `HOURLY` \| `TEMPORARY` \| `APPRENTICE` \| `CONTRACTOR`, Standard `"FULL_TIME"` |
-| `position` | string | – | max. 80 Zeichen, Standard `"Reinigungskraft"` |
+| `employeeNumber` | string | – | min. 3 Zeichen, max. 30 Zeichen |
+| `employmentType` | string | – | `FULL_TIME` \| `PART_TIME` \| `HOURLY` \| `TEMPORARY` \| `APPRENTICE` \| `CONTRACTOR` |
+| `position` | string | – | min. 1 Zeichen, max. 80 Zeichen |
 | `department` | string | – | max. 80 Zeichen |
 | `hiredAt` | string | – | – |
+| `terminatedAt` | string | – | – |
+| `workloadPct` | integer | – | ≥ 10, ≤ 100 |
+| `vacationDaysPerYear` | number | – | ≥ 0, ≤ 60 |
+| `active` | boolean | – | – |
 | `hourlyRate` | number | – | ≥ 0, ≤ 9999999 |
 | `monthlySalary` | number | – | ≥ 0, ≤ 9999999 |
-| `workloadPct` | integer | – | ≥ 10, ≤ 100, Standard `100` |
-| `vacationDaysPerYear` | number | – | ≥ 0, ≤ 60, Standard `20` |
+| `salaryValidFrom` | string | – | – |
+| `salaryReason` | string | – | max. 200 Zeichen |
 | `ahvNumber` | string | – | – |
 | `iban` | string | – | max. 40 Zeichen |
 | `nationality` | string | – | max. 60 Zeichen |
@@ -2705,12 +2730,15 @@ Familie.
 | `permitValidUntil` | string | – | – |
 | `emergencyContact` | string | – | max. 120 Zeichen |
 | `emergencyPhone` | string | – | max. 30 Zeichen |
-| `driverLicense` | boolean | – | Standard `false` |
+| `birthday` | string | – | – |
+| `street` | string | – | max. 120 Zeichen |
+| `postalCode` | string | – | max. 10 Zeichen |
+| `city` | string | – | max. 80 Zeichen |
+| `notes` | string | – | max. 4000 Zeichen |
+| `driverLicense` | boolean | – | – |
 | `vehiclePlate` | string | – | max. 20 Zeichen |
-| `languages` | string[] | – | Standard `["DE"]` |
-| `color` | string | – | Standard `"#0B7285"` |
-| `active` | boolean | – | – |
-| `terminatedAt` | string | – | – |
+| `languages` | string[] | – | min. 1 Einträge |
+| `color` | string | – | – |
 
 ### `GET /api/absences`
 
@@ -4592,6 +4620,8 @@ Familie.
 | `status` | string | – | `ACTIVE` \| `SUSPENDED` \| `DISABLED` |
 | `notifyByEmail` | boolean | – | – |
 | `notifyBySms` | boolean | – | – |
+| `avatarUrl` | union | – | – |
+| `mustChangePassword` | boolean | – | – |
 
 ### `PATCH /api/users/{id}/role`
 
@@ -6532,7 +6562,7 @@ Familie.
 | `file.url` | string | ja | max. 2000 Zeichen |
 | `file.filename` | string | ja | min. 1 Zeichen, max. 255 Zeichen |
 | `file.mimeType` | string | ja | min. 1 Zeichen, max. 120 Zeichen |
-| `file.sizeBytes` | integer | ja | ≥ 0, ≤ 52428800 |
+| `file.sizeBytes` | integer | ja | ≥ 0, ≤ 1073741824 |
 | `changeNote` | string | – | max. 500 Zeichen |
 
 ### `GET /api/bi/documents/{id}`
@@ -6619,7 +6649,7 @@ Familie.
 | `file.url` | string | ja | max. 2000 Zeichen |
 | `file.filename` | string | ja | min. 1 Zeichen, max. 255 Zeichen |
 | `file.mimeType` | string | ja | min. 1 Zeichen, max. 120 Zeichen |
-| `file.sizeBytes` | integer | ja | ≥ 0, ≤ 52428800 |
+| `file.sizeBytes` | integer | ja | ≥ 0, ≤ 1073741824 |
 | `changeNote` | string | – | max. 500 Zeichen |
 
 ### `GET /api/bi/documents/{id}/download`

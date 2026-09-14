@@ -598,9 +598,13 @@ export function StepSchedule() {
 
 export function StepContact({
   isAuthenticated,
+  staffBooking = false,
   savedAddresses,
 }: {
+  /** Buchung auf das eigene Kundenprofil — Kontaktfelder entfallen. */
   isAuthenticated: boolean;
+  /** Angemeldet ohne Kundenprofil (Personal): Kontaktfelder gelten der Kundschaft. */
+  staffBooking?: boolean;
   savedAddresses: SavedAddressDto[];
 }) {
   const state = useBookingStore();
@@ -610,10 +614,18 @@ export function StepContact({
 
   return (
     <div className="space-y-10">
+      {staffBooking ? (
+        <Alert variant="info" title="Sie sind als Personal angemeldet">
+          Die Buchung wird für die hier angegebene Kundschaft angelegt. Gibt es unter der
+          E-Mail-Adresse bereits einen Kundendatensatz, wird er verwendet — sonst entsteht ein
+          neuer.
+        </Alert>
+      ) : null}
+
       {!isAuthenticated ? (
         <fieldset className="space-y-6">
           <legend className="mb-1 font-display text-lg font-semibold tracking-tight">
-            Wie erreichen wir Sie?
+            {staffBooking ? 'Für wen buchen Sie?' : 'Wie erreichen wir Sie?'}
           </legend>
 
           <div className="grid gap-5 sm:grid-cols-2">

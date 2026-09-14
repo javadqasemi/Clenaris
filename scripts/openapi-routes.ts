@@ -279,6 +279,20 @@ export const ROUTES: RouteDoc[] = [
     status: 204,
     extraErrors: [422],
   },
+  {
+    method: 'post',
+    path: '/api/users/{id}/password-reset',
+    tag: 'Benutzer & Rollen',
+    summary: 'Zugangslink versenden',
+    description:
+      'Für ein eingeladenes, nie aktiviertes Konto eine neue Einladung; für ein aktives Konto ' +
+      'der Link zum Setzen eines neuen Passworts. Die Verwaltung setzt nie selbst ein Passwort. ' +
+      'Gesperrte und deaktivierte Konten erhalten keinen Link (422).',
+    guard: perm('all', 'user:update'),
+    rateLimit: 'apiWrite',
+    params: q.idParam,
+    extraErrors: [422],
+  },
 
   // -------------------------------------------------------------------------
   //  Öffentlich (Website)
@@ -3284,7 +3298,8 @@ export const ROUTES: RouteDoc[] = [
       'Gegenstück zur signierten Adresse von Supabase, wenn kein externer Speicher ' +
       'eingerichtet ist. Der Körper sind die rohen Bytes; die Adresse ist die Berechtigung — ' +
       'sie entsteht in `/api/files/upload-url`, ist nicht erratbar, genau einmal und nur zwei ' +
-      'Stunden lang beschreibbar. Höchstens 5 MB.',
+      'Stunden lang beschreibbar. Höchstens 256 MB — die allgemeine Grenze von 1 GB gilt ' +
+      'für den externen Speicher; die Datenbank-Rückfallebene trägt nicht mehr.',
     guard: { kind: 'public' },
     params: q.idParam,
     extraErrors: [400, 404],

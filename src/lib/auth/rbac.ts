@@ -370,6 +370,10 @@ const PERMISSION_ROUTES: { prefix: string; permission: Permission }[] = [
   { prefix: '/admin/cta', permission: 'cta:read' },
   { prefix: '/admin/medien', permission: 'media:read' },
   { prefix: '/admin/benutzer', permission: 'user:read' },
+  // Reine Eingabemaske: Personal anlegen dürfen nur Administration und
+  // Systemverantwortung. Die Seite streamt mit `force-dynamic`, bevor ihr
+  // eigener Guard greift — der Statuscode wäre dann 200 mit Fehlerseite.
+  { prefix: '/admin/personal/neu', permission: 'employee:create' },
   { prefix: '/admin/rollen', permission: 'role:read' },
   { prefix: '/admin/protokoll', permission: 'audit:read' },
   { prefix: '/admin/papierkorb', permission: 'booking:delete' },

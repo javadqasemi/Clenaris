@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import { assetUrlSchema, cuidSchema, dateOnlySchema, emailSchema, moneySchema } from './common';
+import { MAX_UPLOAD_BYTES } from './files';
 import { searchQuery } from './queries';
 import { TASK_PRIORITIES } from './bi-objectives';
 
@@ -69,7 +70,7 @@ export const uploadedFileSchema = z.object({
   url: assetUrlSchema,
   filename: z.string().trim().min(1).max(255),
   mimeType: z.string().trim().min(1).max(120),
-  sizeBytes: z.number().int().min(0).max(50 * 1024 * 1024),
+  sizeBytes: z.number().int().min(0).max(MAX_UPLOAD_BYTES),
 });
 export type UploadedFileInput = z.infer<typeof uploadedFileSchema>;
 

@@ -480,6 +480,34 @@ describe('Selbstschutz der Rechteverwaltung', { concurrency: 1 }, () => {
     });
     assert.equal(response.status, 403);
   });
+
+  it('verweigert die Rolle Kundschaft, solange eine Personalakte aktiv ist', async () => {
+    // Sonst stünde die Person mit Kundenkonto weiter in Teamauswahl,
+    // Kalender und Kennzahlen — der Weg heraus ist das Stilllegen der Akte.
+    const users = await get<{ data: { id: string; email: string; role: string }[] }>(
+      '/api/users',
+      { jar: jars.super },
+    );
+    const employee = users.payload.data.find((u) => u.email === 'anna.keller@clenaris.ch');
+    assert.ok(employee, 'Demo-Mitarbeitende nicht gefunden');
+
+    const response = await call<{ error: { message: string } }>(
+      'PATCH',
+      `/api/users/${employee.id}/role`,
+      { jar: jars.super, body: { role: 'CUSTOMER' } },
+    );
+    assert.equal(response.status, 422, response.text);
+    assert.match(response.payload.error.message, /Personalakte/);
+
+    const after = await get<{ data: { id: string; role: string }[] }>('/api/users', {
+      jar: jars.super,
+    });
+    assert.equal(
+      after.payload.data.find((u) => u.id === employee.id)?.role,
+      'EMPLOYEE',
+      'Rolle blieb unverändert',
+    );
+  });
 });
 
 // ---------------------------------------------------------------------------

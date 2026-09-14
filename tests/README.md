@@ -57,12 +57,14 @@ npx tsx --test tests/api/two-factor.test.ts    # eine einzelne Datei
 |---|---|
 | `api/rbac.test.ts` | Die Rechtematrix über alle fünf Rollen, der Rundlauf eines Handlungsaufrufs, die Fachregeln des Papierkorbs, der Selbstschutz der Rechteverwaltung |
 | `api/two-factor.test.ts` | Einrichtung, zweistufige Anmeldung, Wiederherstellungscodes, Ausschalten, Zurücksetzen von aussen, sofort wirksamer Sitzungswiderruf |
-| `api/flows.test.ts` | Die Wege, die Geld erzeugen: Anfrage → Kundschaft → Offerte → Rechnung → Dokument; dazu der Nachrichtenverlauf und der Zugriffsschutz |
+| `api/flows.test.ts` | Die Wege, die Geld erzeugen: Anfrage → Kundschaft → Offerte → Rechnung → Dokument; dazu der Nachrichtenverlauf, der Zugriffsschutz und die Online-Buchung (Personal muss die Kundschaft angeben, ein Kundenkonto bucht auf das eigene Profil) |
 | `api/cms.test.ts` | Redaktion und Suchmaschinenangaben — ändern, auf der Website nachsehen, zurücksetzen |
 | `api/catalog.test.ts` | Ob eine Katalogänderung die statisch erzeugten Seiten und die Preisberechnung erreicht |
 | `api/website-ops.test.ts` | Fragen, Galerie, Navigation, Rechtstexte, Einsatzgebiet, Stellen, Automatisierungen, Firmendaten |
 | `api/ownership.test.ts` | Mit *wessen* Daten ein Endpunkt antwortet: Objekte je Rolle, Rollenvergabe über die Personalakte, Herkunftsprüfung, Platzhalter im HTML |
 | `api/session-refresh.test.ts` | Stille Sitzungserneuerung: Seitenaufruf ohne Zugangstoken geht zur Erneuerung, nicht zur Anmeldung; neue Cookies und Rücksprung; verbrauchter Token sperrt; kein fremdes Ziel |
+| `api/employees.test.ts` | Personal: Rechte je Rolle, Anlegen (Datum als JJJJ-MM-TT, Doppel), Bearbeiten aller Felder samt `null` für geleerte, Eindeutigkeit von E-Mail und Personalnummer, Lohnhistorie, Konto-Handlungen (Zugangslink, Passwortzwang, Sperre, Foto), Stilllegen |
+| `api/jobs.test.ts` | Einsätze: bearbeiten (Rechte, Termin, Notiz leeren, Ende vor Beginn), Team mit mehreren Personen und Rollen, Materialverbrauch als Materialaufwand, Herleitung der Lohnkosten aus Team und Plan |
 | `api/crud-audit.test.ts` | Feiertage als vollständige Datensatzart (Rechte je Rolle, anlegen, ändern, Doppel, löschen), Zurückziehen eigener Abwesenheitsanträge samt Fremdzugriff, Papierkorb-Seite und Wiederherstellen |
 | `api/bi-fuehrung.test.ts` | Unternehmensführung: Rechtegrenzen je Rolle, Sichtbarkeit von Zielen und Dokumenten, die fachlichen Regeln (Genehmigung friert ein, Wirksamkeit erst nach Abschluss, abgelöste Tafeln bleiben), Berichte in drei Formaten |
 | `api/bi-rechenkerne.test.ts` | Abschreibung, Gesundheitswert, Budgetabweichung, Szenario und Perioden mit festen Zahlen — die einzige Datei, die Anwendungscode direkt importiert, weil die Rechenkerne reine Funktionen sind |

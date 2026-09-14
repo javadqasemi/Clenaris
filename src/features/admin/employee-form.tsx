@@ -62,6 +62,11 @@ const LANGUAGES = [
 /** Kalenderfarben — aus der Dispositionspalette, nicht frei wählbar. */
 const COLORS = ['#0B7285', '#B08900', '#7048E8', '#C0392B', '#2B8A3E', '#1864AB'];
 
+/** Ein Datum als JJJJ-MM-TT — egal, ob das Formular einen `Date` oder Text hält. */
+function dateOnly(value: unknown): string {
+  return value instanceof Date ? value.toISOString().slice(0, 10) : String(value ?? '').slice(0, 10);
+}
+
 export function EmployeeForm() {
   const router = useRouter();
   const [error, setError] = React.useState<string | null>(null);
@@ -91,10 +96,16 @@ export function EmployeeForm() {
   const onSubmit = async (values: CreateEmployeeInput) => {
     setError(null);
     try {
-      const result = await api.post<{ id: string; employeeNumber: string }>(
-        '/api/employees',
-        values,
-      );
+      const result = await api.post<{ id: string; employeeNumber: string }>('/api/employees', {
+        ...values,
+        // Der Zod-Resolver liefert die *transformierten* Werte: `hiredAt` ist
+        // hier bereits ein `Date`, das als ISO-Zeitstempel über die Leitung
+        // ginge — und der Server verlangt JJJJ-MM-TT. Genau daran scheiterte
+        // jedes Anlegen mit 422 „gültiges Datum", ohne dass ein Feld rot wurde.
+        hiredAt: dateOnly(values.hiredAt),
+        ...(values.permitValidUntil ? { permitValidUntil: dateOnly(values.permitValidUntil) } : {}),
+        ...(values.birthday ? { birthday: dateOnly(values.birthday) } : {}),
+      });
       toast.success(`Personalnummer ${result.employeeNumber} angelegt. Einladung versendet.`);
       router.push(`/admin/personal/${result.id}`);
     } catch (err) {

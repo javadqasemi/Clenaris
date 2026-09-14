@@ -158,7 +158,7 @@ export default async function ReportsPage({
       {/* Wichtigste Kundschaft */}
       <DetailSection title="Umsatzstärkste Kundschaft">
         <div className="overflow-x-auto py-2">
-          <table className="data-table data-table--sticky">
+          <table className="data-table">
             <caption className="sr-only">Offene Posten nach Kundschaft</caption>
             <thead>
               <tr>

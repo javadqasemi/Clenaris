@@ -201,7 +201,7 @@ export default async function AuditLogPage({
           footer={<Pagination page={page} totalPages={totalPages} total={total} baseHref={baseHref} />}
         >
           <TableScroll minWidth="58rem">
-            <table className="data-table data-table--sticky">
+            <table className="data-table">
               <caption className="sr-only">Prüfprotokoll. {total} Einträge.</caption>
               <thead>
                 <tr>

@@ -44,12 +44,16 @@ import type {
 export function BookingWizard({
   services,
   isAuthenticated,
+  staffBooking = false,
   savedAddresses,
   savedProperties,
   prefill,
 }: {
   services: BookingService[];
+  /** Buchung auf das eigene Kundenprofil — Kontaktfelder entfallen. */
   isAuthenticated: boolean;
+  /** Angemeldet, aber ohne Kundenprofil (Personal): bucht für eine Kundschaft. */
+  staffBooking?: boolean;
   savedAddresses: SavedAddressDto[];
   savedProperties: SavedPropertyDto[];
   prefill?: { serviceSlug?: string; squareMeters?: number; postalCode?: string };
@@ -92,6 +96,13 @@ export function BookingWizard({
   React.useEffect(() => {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }, [step]);
+
+  // Der Store weiss nichts von der Sitzung; er muss aber wissen, ob der
+  // Kontaktschritt die vier Pflichtangaben verlangt — sonst liesse „Weiter"
+  // eine Buchung durch, die der Server mit 422 zurückweist.
+  React.useEffect(() => {
+    patch({ requiresContact: !isAuthenticated });
+  }, [isAuthenticated, patch]);
 
   const submit = async () => {
     const state = useBookingStore.getState();
@@ -226,7 +237,11 @@ export function BookingWizard({
           {step === 'extras' ? <StepExtras services={services} /> : null}
           {step === 'termin' ? <StepSchedule /> : null}
           {step === 'kontakt' ? (
-            <StepContact isAuthenticated={isAuthenticated} savedAddresses={savedAddresses} />
+            <StepContact
+              isAuthenticated={isAuthenticated}
+              staffBooking={staffBooking}
+              savedAddresses={savedAddresses}
+            />
           ) : null}
           {step === 'uebersicht' ? <StepSummary services={services} /> : null}
         </div>

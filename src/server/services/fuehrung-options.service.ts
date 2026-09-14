@@ -2,6 +2,8 @@ import 'server-only';
 
 import { prisma } from '@/lib/db';
 
+import { activeStaffWhere } from './profile.service';
+
 /**
  * Auswahllisten für die Masken der Unternehmensführung.
  *
@@ -21,7 +23,7 @@ export async function listStaffOptions(organizationId: string) {
 
 export async function listEmployeeOptions(organizationId: string) {
   const employees = await prisma.employee.findMany({
-    where: { organizationId, active: true },
+    where: activeStaffWhere(organizationId),
     select: { id: true, user: { select: { firstName: true, lastName: true } } },
     orderBy: { user: { lastName: 'asc' } },
   });

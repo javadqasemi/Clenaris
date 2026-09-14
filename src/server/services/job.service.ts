@@ -10,6 +10,11 @@ import { haversineMeters } from '@/lib/maps/google';
 import { jobAssignedEmail } from '@/lib/email/templates';
 import { smsTemplates } from '@/lib/sms/client';
 import { audit } from '@/lib/audit';
+import {
+  deriveJobCosts,
+  effectiveHourlyRate,
+  type JobCostBreakdown,
+} from '@/lib/costing/job';
 import type {
   ClockInput,
   CompleteJobInput,
@@ -25,6 +30,7 @@ import type {
 import { nextNumber } from './numbering.service';
 import { notify } from './notification.service';
 import { invalidateAvailability } from './availability.service';
+import { activeStaffWhere } from './profile.service';
 
 /**
  * Einsatzsteuerung (Disposition, Zeiterfassung, Abschluss).
@@ -40,7 +46,12 @@ import { invalidateAvailability } from './availability.service';
  *     Tiefgaragen — ein harter Block würde die Lohnabrechnung blockieren.
  *  3. Lohnkosten werden beim Ausstempeln als Snapshot gespeichert, damit
  *     spätere Lohnerhöhungen die Nachkalkulation abgeschlossener Jobs nicht
- *     rückwirkend verändern.
+ *     rückwirkend verändern. Der Ansatz ist der *wirksame* Stundenansatz
+ *     (`effectiveHourlyRate`): Stundenlohn, sonst der auf Sollstunden
+ *     umgelegte Monatslohn — sonst kosteten Festangestellte nichts.
+ *  4. Die Herleitung der Nachkalkulation (`breakdownForJob`) ist eine reine
+ *     Funktion in `lib/costing/job.ts`. Die Detailseite zeigt sie, „neu
+ *     berechnen" übernimmt sie — beide sehen dieselben Zahlen.
  */
 
 const GPS_TOLERANCE_METERS = 500;
@@ -197,6 +208,8 @@ export async function createJob(params: {
 }): Promise<Job> {
   const { organizationId, input } = params;
 
+  await assertActiveStaff(organizationId, input.employeeIds);
+
   const job = await prisma.$transaction(async (tx) => {
     const { number } = await nextNumber(tx, organizationId, 'job');
 
@@ -277,9 +290,19 @@ export async function updateJob(params: {
       ...(params.input.crewSize !== undefined ? { crewSize: params.input.crewSize } : {}),
       ...(params.input.estimatedMin !== undefined ? { estimatedMin: params.input.estimatedMin } : {}),
       ...(params.input.travelMin !== undefined ? { travelMin: params.input.travelMin } : {}),
-      ...(params.input.description !== undefined ? { description: params.input.description } : {}),
-      ...(params.input.internalNote !== undefined ? { internalNote: params.input.internalNote } : {}),
-      ...(params.input.customerNote !== undefined ? { customerNote: params.input.customerNote } : {}),
+      // Leere Zeichenkette heisst „Feld leeren": Das Bearbeitungsformular
+      // schickt sie, wenn jemand eine Notiz löscht. `null` in der Datenbank
+      // statt `''`, damit die Anzeige-Bedingungen (`job.internalNote ?`) und
+      // die Berichte nicht zwischen zwei Arten von „nichts" unterscheiden müssen.
+      ...(params.input.description !== undefined
+        ? { description: params.input.description || null }
+        : {}),
+      ...(params.input.internalNote !== undefined
+        ? { internalNote: params.input.internalNote || null }
+        : {}),
+      ...(params.input.customerNote !== undefined
+        ? { customerNote: params.input.customerNote || null }
+        : {}),
       ...(params.input.color !== undefined ? { color: params.input.color } : {}),
     },
   });
@@ -367,6 +390,24 @@ export async function moveJob(params: {
 //  Zuteilung
 // ---------------------------------------------------------------------------
 
+/**
+ * Nur aktives Personal lässt sich einteilen — Personalakte aktiv *und*
+ * Kontorolle ist Personal. Eine Person, deren Konto auf Kundschaft steht,
+ * gehört nicht ins Team, auch wenn ihre Akte noch nicht stillgelegt ist; und
+ * eine erfundene ID darf nicht erst als Fremdschlüsselfehler auffallen.
+ */
+async function assertActiveStaff(organizationId: string, employeeIds: string[]): Promise<void> {
+  if (employeeIds.length === 0) return;
+  const known = await prisma.employee.count({
+    where: { id: { in: employeeIds }, ...activeStaffWhere(organizationId) },
+  });
+  if (known !== new Set(employeeIds).size) {
+    throw new BusinessRuleError(
+      'Mindestens eine der gewählten Personen gehört nicht zum aktiven Personal.',
+    );
+  }
+}
+
 export async function assignJob(params: {
   organizationId: string;
   jobId: string;
@@ -379,6 +420,8 @@ export async function assignJob(params: {
     where: { id: params.jobId, organizationId: params.organizationId, deletedAt: null },
   });
   if (!job) throw new NotFoundError('Einsatz');
+
+  await assertActiveStaff(params.organizationId, params.employeeIds);
 
   // Doppelverplanung erkennen: überlappende Einsätze derselben Person.
   const conflicts = await prisma.jobAssignment.findMany({
@@ -548,7 +591,15 @@ export async function clockIn(params: {
 
   const employee = await prisma.employee.findUniqueOrThrow({
     where: { id: params.employeeId },
-    select: { hourlyRate: true },
+    select: { hourlyRate: true, monthlySalary: true },
+  });
+  // Snapshot des wirksamen Ansatzes — auch für Monatslöhner, deren
+  // `hourlyRate` leer ist. Null bleibt null: „kein Ansatz hinterlegt" darf
+  // nicht als „kostet nichts" in die Marge fliessen, sondern fällt beim
+  // Neuberechnen auf den dann gültigen Ansatz zurück.
+  const snapshotRate = effectiveHourlyRate({
+    hourlyRate: employee.hourlyRate === null ? null : toNumber(employee.hourlyRate),
+    monthlySalary: employee.monthlySalary === null ? null : toNumber(employee.monthlySalary),
   });
 
   const entry = await prisma.$transaction(async (tx) => {
@@ -558,7 +609,7 @@ export async function clockIn(params: {
         employeeId: params.employeeId,
         startedAt: new Date(),
         note: params.input.note ?? null,
-        hourlyRate: employee.hourlyRate,
+        hourlyRate: snapshotRate > 0 ? snapshotRate : null,
       },
     });
 
@@ -962,10 +1013,7 @@ export async function setJobTeam(params: {
   const employeeIds = params.input.members.map((member) => member.employeeId);
 
   if (employeeIds.length > 0) {
-    const known = await prisma.employee.count({
-      where: { id: { in: employeeIds }, organizationId: params.organizationId, active: true },
-    });
-    if (known !== employeeIds.length) throw new NotFoundError('Mitarbeitende');
+    await assertActiveStaff(params.organizationId, employeeIds);
 
     // Doppelverplanung erkennen — dieselbe Prüfung wie im Kalender.
     const conflicts = await prisma.jobAssignment.findMany({
@@ -1046,14 +1094,86 @@ export async function setJobTeam(params: {
   });
 }
 
+/** Was `breakdownForJob` von einem Einsatz braucht — Detailseite und Dienst laden es beide. */
+export interface JobForCosting {
+  estimatedMin: number;
+  travelMin: number;
+  assignments: {
+    employeeId: string;
+    employee: {
+      hourlyRate: Prisma.Decimal | null;
+      monthlySalary: Prisma.Decimal | null;
+      user: { firstName: string; lastName: string };
+    };
+  }[];
+  timeEntries: {
+    employeeId: string;
+    endedAt: Date | null;
+    minutes: number;
+    hourlyRate: Prisma.Decimal | null;
+    employee: { user: { firstName: string; lastName: string } };
+  }[];
+  materials: {
+    name: string;
+    quantity: Prisma.Decimal;
+    unit: string;
+    unitCost: Prisma.Decimal;
+    billable: boolean;
+  }[];
+  booking: { netTotal: Prisma.Decimal } | null;
+}
+
+/**
+ * Herleitung der Nachkalkulation aus Team, Zeiterfassung, Material und
+ * Auftrag. Rechnet nicht selbst — das tut `deriveJobCosts` — sondern
+ * übersetzt nur die Datensätze in Zahlen, damit die Rechnung ohne Prisma
+ * prüfbar bleibt.
+ */
+export function breakdownForJob(job: JobForCosting): JobCostBreakdown {
+  const decimalOrNull = (value: Prisma.Decimal | null) =>
+    value === null ? null : toNumber(value);
+
+  return deriveJobCosts({
+    estimatedMin: job.estimatedMin,
+    travelMin: job.travelMin,
+    assignments: job.assignments.map((assignment) => ({
+      employeeId: assignment.employeeId,
+      name: `${assignment.employee.user.firstName} ${assignment.employee.user.lastName}`,
+      rate: {
+        hourlyRate: decimalOrNull(assignment.employee.hourlyRate),
+        monthlySalary: decimalOrNull(assignment.employee.monthlySalary),
+      },
+    })),
+    timeEntries: job.timeEntries
+      .filter((entry) => entry.endedAt !== null)
+      .map((entry) => ({
+        employeeId: entry.employeeId,
+        name: `${entry.employee.user.firstName} ${entry.employee.user.lastName}`,
+        minutes: entry.minutes,
+        hourlyRate: decimalOrNull(entry.hourlyRate),
+      })),
+    materials: job.materials.map((item) => ({
+      name: item.name,
+      quantity: toNumber(item.quantity),
+      unit: item.unit,
+      unitCost: toNumber(item.unitCost),
+      billable: item.billable,
+    })),
+    bookingNet: job.booking ? toNumber(job.booking.netTotal) : null,
+  });
+}
+
 /**
  * Nachkalkulation eines Einsatzes.
  *
- * `recalculate` leitet die Zahlen wieder aus den Quellen ab:
+ * `recalculate` leitet die Zahlen wieder aus den Quellen ab (`breakdownForJob`):
  *
  *  • **Lohnkosten** aus den erfassten Zeiten mal dem *gespeicherten* Ansatz der
  *    Zeitbuchung, nicht dem heutigen Ansatz der Person. Eine Lohnerhöhung darf
  *    die Marge eines Einsatzes vom letzten Jahr nicht rückwirkend verschlechtern.
+ *    Für eingeteilte Personen ohne erfasste Zeit zählt die geplante Dauer mal
+ *    ihrem heutigen Ansatz — sonst hätte ein Einsatz vor der Ausführung
+ *    Lohnkosten null und eine Marge von hundert Prozent.
  *  • **Material** aus dem erfassten Verbrauch.
  *  • **Umsatz** aus dem Nettobetrag des Auftrags; hängt kein Auftrag daran,
  *    bleibt der bisherige Wert stehen — eine Null wäre dort eine Behauptung,
@@ -1068,7 +1188,21 @@ export async function updateJobCosting(params: {
   const job = await prisma.job.findFirst({
     where: { id: params.jobId, organizationId: params.organizationId, deletedAt: null },
     include: {
-      timeEntries: { where: { endedAt: { not: null } } },
+      assignments: {
+        include: {
+          employee: {
+            select: {
+              hourlyRate: true,
+              monthlySalary: true,
+              user: { select: { firstName: true, lastName: true } },
+            },
+          },
+        },
+      },
+      timeEntries: {
+        where: { endedAt: { not: null } },
+        include: { employee: { select: { user: { select: { firstName: true, lastName: true } } } } },
+      },
       materials: true,
       booking: { select: { netTotal: true } },
     },
@@ -1080,14 +1214,10 @@ export async function updateJobCosting(params: {
   let materialCost = toNumber(job.materialCost);
 
   if (params.input.recalculate) {
-    laborCost = round2(
-      job.timeEntries.reduce(
-        (sum, entry) => sum + (entry.minutes / 60) * toNumber(entry.hourlyRate),
-        0,
-      ),
-    );
-    materialCost = round2(job.materials.reduce((sum, item) => sum + toNumber(item.total), 0));
-    if (job.booking) revenue = toNumber(job.booking.netTotal);
+    const breakdown = breakdownForJob(job);
+    laborCost = breakdown.laborCost;
+    materialCost = breakdown.materialCost;
+    if (breakdown.revenue !== null) revenue = breakdown.revenue;
   } else {
     if (params.input.revenue !== undefined) revenue = params.input.revenue;
     if (params.input.laborCost !== undefined) laborCost = params.input.laborCost;
@@ -1332,7 +1462,8 @@ export async function getJobDetail(params: {
       address: true,
       property: true,
       service: true,
-      booking: { select: { id: true, number: true, customerNote: true } },
+      // `netTotal` für die Herleitung der Nachkalkulation (`breakdownForJob`).
+      booking: { select: { id: true, number: true, customerNote: true, netTotal: true } },
       checklist: { orderBy: { position: 'asc' } },
       photos: { orderBy: { takenAt: 'desc' } },
       materials: true,

@@ -1,23 +1,13 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
-import {
-  ArrowLeft,
-  Check,
-  Clock,
-  Download,
-  MapPin,
-  Navigation,
-  Package,
-  X,
-} from 'lucide-react';
+import { ArrowLeft, Check, Clock, Download, MapPin, Navigation, X } from 'lucide-react';
 
 import { prisma, toNumber } from '@/lib/db';
 import { requirePermission } from '@/lib/auth/session';
 import { can } from '@/lib/auth/rbac';
 import { NotFoundError } from '@/lib/errors';
 import {
-  formatCurrency,
   formatDateLong,
   formatDateTime,
   formatDuration,
@@ -26,15 +16,18 @@ import {
 } from '@/lib/utils';
 import { navigationUrl } from '@/lib/maps/google';
 import { getOrganizationId } from '@/server/services/organization.service';
-import { getJobDetail } from '@/server/services/job.service';
+import { breakdownForJob, getJobDetail } from '@/server/services/job.service';
+import { activeStaffWhere } from '@/server/services/profile.service';
 import { StatusBadge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/primitives';
 import { DetailRow, DetailSection, PageHeader } from '@/components/app/page-parts';
 import { JobActions } from '@/features/admin/job-actions';
 import { JobChecklistEditor } from '@/features/admin/job-checklist-editor';
+import { JobEditDialog } from '@/features/admin/job-edit-dialog';
 import { JobTeamEditor } from '@/features/admin/job-team-editor';
 import { JobCostingEditor } from '@/features/admin/job-costing-editor';
+import { JobMaterialsEditor } from '@/features/admin/job-materials-editor';
 import { JobPhotos } from '@/features/admin/job-photos';
 
 export const metadata: Metadata = {
@@ -70,12 +63,17 @@ export default async function AdminJobDetailPage({
   const canEdit = can(session.role, 'job:update');
   const canAssign = can(session.role, 'job:assign');
   const canSeeFinancials = can(session.role, 'dashboard:financials');
+  // Dieselbe Schwelle wie für Lohn in der Personalakte: Wer Lohnabrechnungen
+  // erstellt, darf Ansätze je Person sehen; die Betriebsleitung sieht die
+  // Marge, aber nicht, was eine bestimmte Person verdient.
+  const canSeeWages = can(session.role, 'payslip:create');
   const closed = ['COMPLETED', 'VERIFIED', 'CANCELLED'].includes(job.status);
 
-  // Für die Teamzuteilung: alle aktiven Mitarbeitenden zur Auswahl.
-  const employees = canAssign
+  // Für die Teamzuteilung: das aktive Personal zur Auswahl — Personalakte
+  // aktiv *und* Kontorolle ist Personal (`activeStaffWhere`).
+  const staff = canAssign
     ? await prisma.employee.findMany({
-        where: { organizationId, active: true },
+        where: activeStaffWhere(organizationId),
         orderBy: { user: { lastName: 'asc' } },
         select: {
           id: true,
@@ -83,6 +81,28 @@ export default async function AdminJobDetailPage({
           user: { select: { firstName: true, lastName: true, avatarUrl: true } },
         },
       })
+    : [];
+
+  // Wer bereits eingeteilt ist, aber nicht mehr zum aktiven Personal gehört
+  // (Konto auf Kundschaft gestellt, Akte stillgelegt), bleibt sichtbar —
+  // sonst zählte das Team eine unsichtbare Person, die niemand entfernen kann.
+  // Neu wählen lässt sich so jemand nicht: nach dem Entfernen ist die Person
+  // aus der Auswahl verschwunden.
+  const employees = canAssign
+    ? [
+        ...staff,
+        ...job.assignments
+          .filter((assignment) => !staff.some((entry) => entry.id === assignment.employeeId))
+          .map((assignment) => ({
+            id: assignment.employeeId,
+            color: assignment.employee.color,
+            user: {
+              firstName: assignment.employee.user.firstName,
+              lastName: assignment.employee.user.lastName,
+              avatarUrl: assignment.employee.user.avatarUrl,
+            },
+          })),
+      ]
     : [];
 
   const address = job.address
@@ -95,7 +115,7 @@ export default async function AdminJobDetailPage({
   const doneCount = job.checklist.filter((item) => item.done).length;
   const progress = job.checklist.length > 0 ? (doneCount / job.checklist.length) * 100 : 0;
   const workedMinutes = job.timeEntries.reduce((sum, entry) => sum + entry.minutes, 0);
-
+  const breakdown = canSeeFinancials ? breakdownForJob(job) : null;
 
   return (
     <div className="space-y-6">
@@ -112,6 +132,27 @@ export default async function AdminJobDetailPage({
         actions={
           <>
             <StatusBadge status={job.status} className="self-center" />
+            {/*
+              Bearbeiten nur, solange der Einsatz offen ist: Termin und Dauer
+              eines abgeschlossenen Einsatzes sind Grundlage der Lohnabrechnung
+              und des Rapports — dieselbe Grenze wie beim Team.
+            */}
+            {canEdit && !closed ? (
+              <JobEditDialog
+                jobId={job.id}
+                values={{
+                  title: job.title,
+                  scheduledStart: job.scheduledStart.toISOString(),
+                  scheduledEnd: job.scheduledEnd.toISOString(),
+                  crewSize: job.crewSize,
+                  estimatedMin: job.estimatedMin,
+                  travelMin: job.travelMin,
+                  description: job.description,
+                  customerNote: job.customerNote,
+                  internalNote: job.internalNote,
+                }}
+              />
+            ) : null}
             <Button asChild variant="outline">
               <a href={`/api/jobs/${job.id}/report`} download>
                 <Download aria-hidden />
@@ -265,26 +306,32 @@ export default async function AdminJobDetailPage({
             />
           </DetailSection>
 
-          {/* Material */}
-          {job.materials.length > 0 ? (
-            <DetailSection title="Verwendetes Material">
-              <ul className="protocol-list">
-                {job.materials.map((material) => (
-                  <li key={material.id} className="flex items-center justify-between gap-4 py-3">
-                    <span className="flex items-center gap-2 text-sm">
-                      <Package className="size-4 text-muted-foreground" aria-hidden />
-                      {material.name}
-                      {material.billable ? (
-                        <span className="text-xs text-primary">verrechenbar</span>
-                      ) : null}
-                    </span>
-                    <span className="text-sm tabular-nums">
-                      {toNumber(material.quantity)} {material.unit} ·{' '}
-                      {formatCurrency(toNumber(material.total))}
-                    </span>
-                  </li>
-                ))}
-              </ul>
+          {/*
+            Material: Wer den Einsatz bearbeiten darf, sieht die Tabelle auch
+            leer — sonst gäbe es keinen Weg, die erste Position zu erfassen.
+            Für alle anderen erscheint der Abschnitt nur mit Inhalt.
+          */}
+          {canEdit || job.materials.length > 0 ? (
+            <DetailSection
+              title="Verwendetes Material"
+              description={
+                canEdit
+                  ? 'Menge mal Stückpreis ergibt den Materialaufwand der Nachkalkulation.'
+                  : undefined
+              }
+            >
+              <JobMaterialsEditor
+                jobId={job.id}
+                readOnly={!canEdit}
+                materials={job.materials.map((material) => ({
+                  name: material.name,
+                  sku: material.sku,
+                  quantity: toNumber(material.quantity),
+                  unit: material.unit,
+                  unitCost: toNumber(material.unitCost),
+                  billable: material.billable,
+                }))}
+              />
             </DetailSection>
           ) : null}
         </div>
@@ -385,7 +432,7 @@ export default async function AdminJobDetailPage({
             eine Zahl, die man sieht, aber nicht ändern darf, provoziert genau
             die Rückfrage, die sie ersparen sollte.
           */}
-          {canSeeFinancials ? (
+          {breakdown ? (
             <DetailSection title="Nachkalkulation">
               <JobCostingEditor
                 jobId={job.id}
@@ -394,6 +441,8 @@ export default async function AdminJobDetailPage({
                 laborCost={toNumber(job.laborCost)}
                 materialCost={toNumber(job.materialCost)}
                 trackedMinutes={workedMinutes}
+                breakdown={breakdown}
+                showWages={canSeeWages}
               />
             </DetailSection>
           ) : null}

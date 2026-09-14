@@ -74,6 +74,13 @@ export interface BookingState {
   urgent: boolean;
 
   // Kontakt & Adresse
+  /**
+   * Verlangt der Kontaktschritt die vier Pflichtangaben? Setzt der Assistent
+   * aus der Sitzung: nein für ein Kundenkonto mit Profil, sonst ja. Der
+   * Server prüft dasselbe — hier geht es darum, dass „Weiter" nicht in eine
+   * 422 führt.
+   */
+  requiresContact: boolean;
   firstName: string;
   lastName: string;
   email: string;
@@ -118,6 +125,7 @@ const INITIAL = {
   extras: {} as Record<string, number>,
   scheduledStart: null,
   urgent: false,
+  requiresContact: true,
   firstName: '',
   lastName: '',
   email: '',
@@ -178,13 +186,20 @@ export const useBookingStore = create<BookingState>()(
             return true;
           case 'termin':
             return Boolean(state.scheduledStart);
-          case 'kontakt':
-            return (
+          case 'kontakt': {
+            const contactComplete =
+              !state.requiresContact ||
+              (state.firstName.trim().length > 1 &&
+                state.lastName.trim().length > 1 &&
+                /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(state.email.trim()) &&
+                state.phone.trim().length >= 7);
+            const addressComplete =
               Boolean(state.addressId) ||
               (state.street.trim().length > 1 &&
                 /^[1-9]\d{3}$/.test(state.postalCode) &&
-                state.city.trim().length > 1)
-            );
+                state.city.trim().length > 1);
+            return contactComplete && addressComplete;
+          }
           case 'uebersicht':
             return state.acceptTerms;
           default:

@@ -27,6 +27,17 @@ export default async function BookingPage({
   const organizationId = await getOrganizationId();
   const session = await getSession();
 
+  /**
+   * „Angemeldet" heisst für den Assistenten: Die Buchung läuft auf das
+   * eigene Kundenprofil, Kontaktfelder entfallen. Das gilt nur für ein
+   * Kundenkonto mit verknüpftem Profil. Vorher zählte jede Sitzung — auch
+   * die Administration, die die Website testet, oder Personal, das für eine
+   * Kundschaft bucht: Die Felder verschwanden, der Dienst verlangte sie
+   * trotzdem, und die Buchung scheiterte mit „Bitte geben Sie Vorname …".
+   */
+  const bookingForOwnProfile = session?.role === 'CUSTOMER' && Boolean(session.profileId);
+  const staffBooking = Boolean(session) && !bookingForOwnProfile;
+
   const services = await prisma.service.findMany({
     where: { organizationId, active: true },
     orderBy: { position: 'asc' },
@@ -112,7 +123,8 @@ export default async function BookingPage({
       <Suspense fallback={<WizardSkeleton />}>
         <BookingWizard
           services={bookingServices}
-          isAuthenticated={Boolean(session)}
+          isAuthenticated={bookingForOwnProfile}
+          staffBooking={staffBooking}
           savedAddresses={savedAddresses}
           savedProperties={savedProperties}
           prefill={{

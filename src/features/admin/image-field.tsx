@@ -6,6 +6,7 @@ import { toast } from 'sonner';
 
 import { cn } from '@/lib/utils';
 import { api, ApiError } from '@/lib/api/client';
+import type { UploadProfileName } from '@/lib/validation/files';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Alert, Skeleton } from '@/components/ui/primitives';
@@ -44,7 +45,50 @@ interface MediaItem {
   mimeType: string;
 }
 
-const ACCEPTED = ['image/jpeg', 'image/png', 'image/webp', 'image/avif'];
+export const ACCEPTED_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/avif'];
+const ACCEPTED = ACCEPTED_IMAGE_TYPES;
+
+/**
+ * Ein Bild hochladen und die gespeicherte Adresse zurückgeben.
+ *
+ * Ausgelagert, weil der Galerieeintrag denselben Weg braucht: signierte
+ * Adresse holen, Datei per PUT dorthin schieben, öffentliche Adresse
+ * übernehmen. Zwei Kopien dieser Sequenz würden auseinanderlaufen — etwa wenn
+ * der Speicher einmal einen anderen Header verlangt. Fehler werden als
+ * `Error` mit deutscher, anzeigbarer Meldung geworfen; der Aufrufer
+ * entscheidet, ob Toast, Alert oder beides.
+ */
+export async function uploadImage(
+  file: File,
+  profile: UploadProfileName = 'gallery',
+): Promise<string> {
+  if (!ACCEPTED.includes(file.type)) {
+    throw new Error('Bitte ein Bild im Format JPEG, PNG, WebP oder AVIF wählen.');
+  }
+
+  let target: { signedUrl: string; publicUrl: string };
+  try {
+    target = await api.post<{ signedUrl: string; publicUrl: string }>('/api/files/upload-url', {
+      profile,
+      filename: file.name,
+      mimeType: file.type,
+      sizeBytes: file.size,
+    });
+  } catch (err) {
+    throw new Error(
+      err instanceof ApiError ? err.message : 'Das Bild konnte nicht hochgeladen werden.',
+    );
+  }
+
+  const response = await fetch(target.signedUrl, {
+    method: 'PUT',
+    headers: { 'Content-Type': file.type, 'x-upsert': 'true' },
+    body: file,
+  });
+  if (!response.ok) throw new Error('Der Upload wurde vom Speicher abgelehnt.');
+
+  return target.publicUrl;
+}
 
 export function ImageField({
   id,
@@ -68,35 +112,13 @@ export function ImageField({
     if (!file) return;
     setError(null);
 
-    if (!ACCEPTED.includes(file.type)) {
-      setError('Bitte ein Bild im Format JPEG, PNG, WebP oder AVIF wählen.');
-      return;
-    }
-
     setBusy(true);
     try {
-      const target = await api.post<{ signedUrl: string; publicUrl: string }>(
-        '/api/files/upload-url',
-        {
-          profile: 'gallery',
-          filename: file.name,
-          mimeType: file.type,
-          sizeBytes: file.size,
-        },
-      );
-
-      const response = await fetch(target.signedUrl, {
-        method: 'PUT',
-        headers: { 'Content-Type': file.type, 'x-upsert': 'true' },
-        body: file,
-      });
-      if (!response.ok) throw new Error('Der Upload wurde vom Speicher abgelehnt.');
-
-      onChange(target.publicUrl);
+      onChange(await uploadImage(file));
       toast.success('Bild hochgeladen.');
     } catch (err) {
       const message =
-        err instanceof ApiError ? err.message : 'Das Bild konnte nicht hochgeladen werden.';
+        err instanceof Error ? err.message : 'Das Bild konnte nicht hochgeladen werden.';
       setError(message);
       toast.error(message);
     } finally {
@@ -206,8 +228,8 @@ export function ImageField({
   );
 }
 
-/** Bildauswahl aus der Mediathek. */
-function MediaPicker({
+/** Bildauswahl aus der Mediathek. Exportiert, weil auch die Galerie sie öffnet. */
+export function MediaPicker({
   open,
   onClose,
   onPick,

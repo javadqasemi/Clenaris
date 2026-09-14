@@ -65,6 +65,13 @@ import { EmptyState, ListCard, TableScroll } from '@/components/app/page-parts';
  *    Systemverantwortung.** Für alle anderen steht dort schlicht die Rolle.
  *    Ein ausgegrautes Auswahlfeld würde suggerieren, es fehle nur ein Klick.
  *
+ *  • **Ein Rollenwechsel fragt nach.** Das Auswahlfeld schreibt nicht sofort,
+ *    sondern öffnet eine Rückfrage mit Name, alter und neuer Rolle. Ein
+ *    Rollenwechsel ist keine Stammdatenänderung: Er vergibt oder entzieht
+ *    Rechte und beendet alle Sitzungen der Person. Vorher genügte ein
+ *    Fehlgriff im Auswahlfeld, und die Administration war Mitarbeitende —
+ *    das Prüfprotokoll vom 14. September 2026 zeigt genau diese Kette.
+ *
  *  • **Das eigene Konto ist erkennbar und nicht bearbeitbar.** Die Sperren
  *    dafür liegen im Dienst; hier fehlen die Schaltflächen, damit niemand
  *    gegen eine Wand läuft.
@@ -110,6 +117,7 @@ export function UserWorkspace({
   const [editing, setEditing] = React.useState<UserRow | null>(null);
   const [deleting, setDeleting] = React.useState<UserRow | null>(null);
   const [resetting, setResetting] = React.useState<UserRow | null>(null);
+  const [roleChange, setRoleChange] = React.useState<{ row: UserRow; role: string } | null>(null);
   const [busy, setBusy] = React.useState<string | null>(null);
 
   const act = async (id: string, run: () => Promise<unknown>, success: string) => {
@@ -134,12 +142,16 @@ export function UserWorkspace({
         : `${row.firstName} ${row.lastName} ist gesperrt — alle Sitzungen wurden beendet.`,
     );
 
-  const changeRole = (row: UserRow, role: string) =>
-    act(
+  const changeRole = async () => {
+    if (!roleChange) return;
+    const { row, role } = roleChange;
+    await act(
       row.id,
       () => api.patch(`/api/users/${row.id}/role`, { role }),
       `${row.firstName} ${row.lastName} ist jetzt ${ROLE_LABELS[role as keyof typeof ROLE_LABELS]}.`,
     );
+    setRoleChange(null);
+  };
 
   const restore = (row: UserRow) =>
     act(
@@ -171,7 +183,7 @@ export function UserWorkspace({
       ) : (
         <ListCard>
           <TableScroll minWidth="58rem">
-            <table className="data-table data-table--sticky">
+            <table className="data-table">
               <caption className="sr-only">Benutzerkonten der Organisation.</caption>
               <thead>
                 <tr>
@@ -212,7 +224,9 @@ export function UserWorkspace({
                         {canAssignRole && !self ? (
                           <Select
                             value={row.role}
-                            onValueChange={(value) => changeRole(row, value)}
+                            onValueChange={(value) => {
+                              if (value !== row.role) setRoleChange({ row, role: value });
+                            }}
                             disabled={busy !== null}
                           >
                             <SelectTrigger
@@ -364,6 +378,41 @@ export function UserWorkspace({
       <EditDialog user={editing} onClose={() => setEditing(null)} />
       <DeleteDialog user={deleting} onClose={() => setDeleting(null)} />
       <ResetTwoFactorDialog user={resetting} onClose={() => setResetting(null)} />
+
+      {/* Rückfrage vor dem Rollenwechsel */}
+      <Dialog open={roleChange !== null} onOpenChange={(open) => !open && setRoleChange(null)}>
+        <DialogContent size="sm">
+          <DialogHeader>
+            <DialogTitle>Rolle ändern?</DialogTitle>
+            <DialogDescription>
+              {roleChange ? (
+                <>
+                  {roleChange.row.firstName} {roleChange.row.lastName} wechselt von{' '}
+                  <strong>
+                    {ROLE_LABELS[roleChange.row.role as keyof typeof ROLE_LABELS] ??
+                      roleChange.row.role}
+                  </strong>{' '}
+                  zu{' '}
+                  <strong>
+                    {ROLE_LABELS[roleChange.role as keyof typeof ROLE_LABELS] ?? roleChange.role}
+                  </strong>
+                  . Die Rechte gelten sofort; alle offenen Sitzungen der Person werden beendet.
+                </>
+              ) : (
+                ''
+              )}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setRoleChange(null)}>
+              Abbrechen
+            </Button>
+            <Button onClick={changeRole} loading={busy !== null}>
+              Rolle ändern
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </>
   );
 }

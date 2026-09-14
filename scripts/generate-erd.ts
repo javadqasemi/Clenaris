@@ -213,6 +213,7 @@ const DOMAINS: Domain[] = [
     models: [
       'Employee',
       'EmployeeSkill',
+      'SalaryRecord',
       'Availability',
       'Absence',
       'Payslip',

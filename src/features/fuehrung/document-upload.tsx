@@ -6,6 +6,7 @@ import { Upload } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { api, ApiError } from '@/lib/api/client';
+import { MAX_UPLOAD_BYTES, describeUploadLimit } from '@/lib/validation/files';
 import { DOCUMENT_CATEGORY_LABELS, DOCUMENT_VISIBILITY_LABELS, optionsOf } from '@/lib/bi/labels';
 import { Button } from '@/components/ui/button';
 import { Input, Textarea } from '@/components/ui/input';
@@ -27,7 +28,7 @@ import {
  *
  * Derselbe Weg wie bei Einsatzfotos: signierte Adresse holen, direkt zum
  * Speicher, dann registrieren. Die Datei läuft nie durch die Anwendung. Das
- * Profil `document` erlaubt PDF, Office und Bilder bis 25 MB.
+ * Profil `document` erlaubt PDF, Office und Bilder bis `MAX_UPLOAD_BYTES`.
  */
 
 interface Uploaded {
@@ -205,7 +206,9 @@ export function DocumentUploadDialog({
           <div className="space-y-2">
             <Label htmlFor="doc-file" required={mode === 'version'}>Datei {mode === 'create' ? '(optional)' : ''}</Label>
             <Input id="doc-file" type="file" accept=".pdf,.doc,.docx,.xls,.xlsx,.txt,.csv,image/*" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
-            <p className="text-meta text-muted-foreground">PDF, Word, Excel, Text oder Bild, bis 25 MB.</p>
+            <p className="text-meta text-muted-foreground">
+              PDF, Word, Excel, Text oder Bild, bis {describeUploadLimit(MAX_UPLOAD_BYTES)}.
+            </p>
           </div>
           <div className="space-y-2">
             <Label htmlFor="doc-note">Änderungsnotiz</Label>

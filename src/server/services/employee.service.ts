@@ -15,6 +15,7 @@ import type {
 import { nextNumber } from './numbering.service';
 import { inviteUser } from './auth.service';
 import { notify, notifyStaff } from './notification.service';
+import { activeStaffWhere } from './profile.service';
 
 /**
  * Personalverwaltung.
@@ -39,6 +40,8 @@ const PUBLIC_EMPLOYEE_SELECT = {
   employmentType: true,
   workloadPct: true,
   hiredAt: true,
+  terminatedAt: true,
+  birthday: true,
   active: true,
   color: true,
   languages: true,
@@ -108,6 +111,11 @@ export async function createEmployee(params: {
         permitValidUntil: params.input.permitValidUntil ?? null,
         emergencyContact: params.input.emergencyContact ?? null,
         emergencyPhone: params.input.emergencyPhone ?? null,
+        birthday: params.input.birthday ?? null,
+        street: params.input.street ?? null,
+        postalCode: params.input.postalCode ?? null,
+        city: params.input.city ?? null,
+        notes: params.input.notes ?? null,
         driverLicense: params.input.driverLicense,
         vehiclePlate: params.input.vehiclePlate ?? null,
         languages: params.input.languages,
@@ -120,6 +128,23 @@ export async function createEmployee(params: {
             endTime: '17:00',
           })),
         },
+        // Der erste Eintrag der Lohnhistorie: ab Eintritt, mit dem
+        // Anstellungslohn. Ohne ihn begänne die Historie erst bei der ersten
+        // Änderung, und der Ausgangswert wäre nirgends belegt.
+        ...(params.input.hourlyRate !== undefined || params.input.monthlySalary !== undefined
+          ? {
+              salaryHistory: {
+                create: {
+                  validFrom: params.input.hiredAt,
+                  hourlyRate: params.input.hourlyRate ?? null,
+                  monthlySalary: params.input.monthlySalary ?? null,
+                  workloadPct: params.input.workloadPct,
+                  reason: 'Anstellung',
+                  changedById: params.actorId,
+                },
+              },
+            }
+          : {}),
       },
     });
   });
@@ -151,31 +176,125 @@ export async function updateEmployee(params: {
 }): Promise<Employee> {
   const employee = await prisma.employee.findFirst({
     where: { id: params.employeeId, organizationId: params.organizationId },
+    include: { user: { select: { id: true, email: true } } },
   });
   if (!employee) throw new NotFoundError('Mitarbeitende/r');
 
-  const { firstName, lastName, email, phone, ...employeeFields } = params.input;
+  const input = params.input;
+
+  // Konto: Name, Adresse, Telefon. Die E-Mail ist zugleich der Login und
+  // eindeutig — vorher lief ein Doppel als nackter Datenbankfehler (500)
+  // durch, jetzt als 409 mit Satz.
+  const userData: Prisma.UserUpdateInput = {};
+  if (input.firstName !== undefined) userData.firstName = input.firstName;
+  if (input.lastName !== undefined) userData.lastName = input.lastName;
+  if (input.phone !== undefined) userData.phone = input.phone ?? null;
+  if (input.email !== undefined) {
+    const email = input.email.toLowerCase();
+    if (email !== employee.user.email) {
+      const taken = await prisma.user.findUnique({ where: { email }, select: { id: true } });
+      if (taken) throw new ConflictError('Diese E-Mail-Adresse ist bereits vergeben.');
+      userData.email = email;
+    }
+  }
+
+  // Personalnummer: je Organisation eindeutig; ein Doppel wäre in der
+  // Lohnabrechnung nicht mehr auseinanderzuhalten.
+  if (input.employeeNumber !== undefined && input.employeeNumber !== employee.employeeNumber) {
+    const taken = await prisma.employee.findFirst({
+      where: { organizationId: params.organizationId, employeeNumber: input.employeeNumber },
+      select: { id: true },
+    });
+    if (taken) {
+      throw new ConflictError(`Die Personalnummer ${input.employeeNumber} ist bereits vergeben.`);
+    }
+  }
+
+  // Lohn: Was sich ändert, wird zur Zeile in der Lohnhistorie — Ansatz,
+  // Monatslohn oder Pensum. Verglichen wird mit dem gespeicherten Stand,
+  // damit ein unverändert mitgeschicktes Feld keine leere Zeile erzeugt.
+  const decimalOrNull = (value: Prisma.Decimal | null) => (value === null ? null : toNumber(value));
+  const currentHourly = decimalOrNull(employee.hourlyRate);
+  const currentMonthly = decimalOrNull(employee.monthlySalary);
+  const nextHourly = input.hourlyRate === undefined ? currentHourly : (input.hourlyRate ?? null);
+  const nextMonthly =
+    input.monthlySalary === undefined ? currentMonthly : (input.monthlySalary ?? null);
+  const nextWorkload = input.workloadPct ?? employee.workloadPct;
+  const salaryChanged =
+    nextHourly !== currentHourly ||
+    nextMonthly !== currentMonthly ||
+    nextWorkload !== employee.workloadPct;
+
+  // Austritt und Rückkehr. Ein gesetztes Austrittsdatum oder `active: false`
+  // legt still; `active: true` holt zurück und löscht das Austrittsdatum,
+  // sofern nicht ausdrücklich ein neues mitkommt.
+  const leaving =
+    input.active === false || (input.terminatedAt !== undefined && input.terminatedAt !== null);
+  const returning = input.active === true;
+
+  const employeeData: Prisma.EmployeeUpdateInput = {
+    ...(input.employeeNumber !== undefined ? { employeeNumber: input.employeeNumber } : {}),
+    ...(input.employmentType !== undefined ? { employmentType: input.employmentType } : {}),
+    ...(input.position !== undefined ? { position: input.position } : {}),
+    ...(input.department !== undefined ? { department: input.department ?? null } : {}),
+    ...(input.hiredAt !== undefined ? { hiredAt: input.hiredAt } : {}),
+    ...(input.terminatedAt !== undefined ? { terminatedAt: input.terminatedAt ?? null } : {}),
+    ...(returning && input.terminatedAt === undefined ? { terminatedAt: null } : {}),
+    ...(leaving && input.terminatedAt === undefined && !employee.terminatedAt
+      ? { terminatedAt: new Date() }
+      : {}),
+    ...(input.active !== undefined ? { active: input.active } : leaving ? { active: false } : {}),
+    ...(input.workloadPct !== undefined ? { workloadPct: input.workloadPct } : {}),
+    ...(input.vacationDaysPerYear !== undefined
+      ? { vacationDaysPerYear: input.vacationDaysPerYear }
+      : {}),
+    ...(input.hourlyRate !== undefined ? { hourlyRate: input.hourlyRate ?? null } : {}),
+    ...(input.monthlySalary !== undefined ? { monthlySalary: input.monthlySalary ?? null } : {}),
+    ...(input.ahvNumber !== undefined ? { ahvNumber: input.ahvNumber ?? null } : {}),
+    ...(input.iban !== undefined ? { iban: input.iban ?? null } : {}),
+    ...(input.nationality !== undefined ? { nationality: input.nationality ?? null } : {}),
+    ...(input.permitType !== undefined ? { permitType: input.permitType ?? null } : {}),
+    ...(input.permitValidUntil !== undefined
+      ? { permitValidUntil: input.permitValidUntil ?? null }
+      : {}),
+    ...(input.emergencyContact !== undefined
+      ? { emergencyContact: input.emergencyContact ?? null }
+      : {}),
+    ...(input.emergencyPhone !== undefined ? { emergencyPhone: input.emergencyPhone ?? null } : {}),
+    ...(input.birthday !== undefined ? { birthday: input.birthday ?? null } : {}),
+    ...(input.street !== undefined ? { street: input.street ?? null } : {}),
+    ...(input.postalCode !== undefined ? { postalCode: input.postalCode ?? null } : {}),
+    ...(input.city !== undefined ? { city: input.city ?? null } : {}),
+    ...(input.notes !== undefined ? { notes: input.notes ?? null } : {}),
+    ...(input.driverLicense !== undefined ? { driverLicense: input.driverLicense } : {}),
+    ...(input.vehiclePlate !== undefined ? { vehiclePlate: input.vehiclePlate ?? null } : {}),
+    ...(input.languages !== undefined ? { languages: input.languages } : {}),
+    ...(input.color !== undefined ? { color: input.color } : {}),
+    ...(salaryChanged
+      ? {
+          salaryHistory: {
+            create: {
+              validFrom: input.salaryValidFrom ?? new Date(),
+              hourlyRate: nextHourly,
+              monthlySalary: nextMonthly,
+              workloadPct: nextWorkload,
+              reason: input.salaryReason ?? null,
+              changedById: params.actorId,
+            },
+          },
+        }
+      : {}),
+  };
 
   const updated = await prisma.$transaction(async (tx) => {
-    if (firstName || lastName || email || phone !== undefined) {
-      await tx.user.update({
-        where: { id: employee.userId },
-        data: {
-          ...(firstName ? { firstName } : {}),
-          ...(lastName ? { lastName } : {}),
-          ...(email ? { email: email.toLowerCase() } : {}),
-          ...(phone !== undefined ? { phone } : {}),
-        },
-      });
+    if (Object.keys(userData).length > 0) {
+      await tx.user.update({ where: { id: employee.userId }, data: userData });
     }
 
-    const result = await tx.employee.update({
-      where: { id: employee.id },
-      data: employeeFields as Prisma.EmployeeUpdateInput,
-    });
+    const result = await tx.employee.update({ where: { id: employee.id }, data: employeeData });
 
     // Austritt: Konto deaktivieren und laufende Sessions beenden.
-    if (params.input.active === false || params.input.terminatedAt) {
+    if (leaving) {
       await tx.user.update({
         where: { id: employee.userId },
         data: { status: 'DISABLED' },
@@ -208,8 +327,13 @@ export async function listEmployees(params: {
 }) {
   return prisma.employee.findMany({
     where: {
-      organizationId: params.organizationId,
-      ...(params.includeInactive ? {} : { active: true }),
+      // Mit `includeInactive` (Personalverwaltung) erscheinen alle Akten,
+      // auch die mit einem Konto, das keine Personalrolle mehr hat — dort
+      // muss man sie sehen, um sie zu bereinigen. Überall sonst (Kalender,
+      // Auswahlfelder, Schnittstelle) zählt nur aktives Personal.
+      ...(params.includeInactive
+        ? { organizationId: params.organizationId }
+        : activeStaffWhere(params.organizationId)),
       ...(params.q
         ? {
             OR: [
@@ -248,6 +372,9 @@ export async function getEmployeeDetail(params: {
           status: true,
           lastLoginAt: true,
           locale: true,
+          twoFactorEnabled: true,
+          mustChangePassword: true,
+          createdAt: true,
         },
       },
       skills: true,
@@ -269,7 +396,12 @@ export async function getEmployeeDetail(params: {
           },
         },
       },
-      ...(params.includeSensitive ? { payslips: { orderBy: [{ year: 'desc' }, { month: 'desc' }], take: 12 } } : {}),
+      ...(params.includeSensitive
+        ? {
+            payslips: { orderBy: [{ year: 'desc' }, { month: 'desc' }], take: 12 },
+            salaryHistory: { orderBy: [{ validFrom: 'desc' }, { createdAt: 'desc' }] },
+          }
+        : {}),
     },
   });
 

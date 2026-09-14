@@ -3,6 +3,8 @@ import 'server-only';
 import type { KpiPeriod, Prisma } from '@prisma/client';
 
 import { prisma, toNumber } from '@/lib/db';
+
+import { activeStaffWhere } from './profile.service';
 import { BusinessRuleError, NotFoundError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
 import {
@@ -129,7 +131,7 @@ async function targetMinutes(ctx: KpiContext): Promise<{ minutes: number; headco
       select: { weeklyHours: true },
     }),
     prisma.employee.findMany({
-      where: { organizationId: ctx.organizationId, active: true },
+      where: activeStaffWhere(ctx.organizationId),
       select: {
         id: true,
         workloadPct: true,
@@ -561,7 +563,7 @@ export const KPI_CALCULATORS: Record<string, KpiCalculator> = {
       prisma.absence.aggregate({
         where: {
           status: 'APPROVED',
-          employee: { organizationId: ctx.organizationId, active: true },
+          employee: activeStaffWhere(ctx.organizationId),
           startDate: { lte: ctx.bounds.periodEnd },
           endDate: { gte: ctx.bounds.periodStart },
         },
@@ -571,7 +573,7 @@ export const KPI_CALCULATORS: Record<string, KpiCalculator> = {
         where: { organizationId: ctx.organizationId, date: { gte: ctx.bounds.periodStart, lte: ctx.bounds.periodEnd } },
         select: { date: true },
       }),
-      prisma.employee.count({ where: { organizationId: ctx.organizationId, active: true } }),
+      prisma.employee.count({ where: activeStaffWhere(ctx.organizationId) }),
     ]);
     const targetDays = workingDays(ctx.bounds.periodStart, ctx.bounds.periodEnd, holidays.map((h) => h.date)) * employees;
     const absent = toNumber(absences._sum.days);

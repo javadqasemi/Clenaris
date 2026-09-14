@@ -5,6 +5,7 @@ import { nanoid } from 'nanoid';
 import { prisma } from '@/lib/db';
 import { NotFoundError, ValidationError } from '@/lib/errors';
 import { absoluteUrl } from '@/lib/utils';
+import { describeUploadLimit } from '@/lib/validation/files';
 
 import {
   sanitizeFilename,
@@ -39,21 +40,31 @@ import {
  */
 
 /**
- * Obergrenze der Rückfallebene.
+ * Obergrenze der Rückfallebene: 256 MiB.
  *
- * Bewusst deutlich niedriger als die Profilgrenzen (Einsatzfotos erlauben
- * 15 MB). Zwei Gründe, beide unabhängig ausschlaggebend:
+ * Die allgemeine Grenze liegt bei 1 GiB (`MAX_UPLOAD_BYTES`); die gilt für
+ * den externen Objektspeicher. Die Rückfallebene kann sie nicht tragen, und
+ * zwar aus der Technik heraus, nicht aus Vorsicht: Prisma überträgt `Bytes`
+ * base64-kodiert als *eine* Zeichenkette an die Query-Engine, und V8 begrenzt
+ * eine Zeichenkette auf rund 537 Millionen Zeichen. Base64 braucht vier
+ * Zeichen je drei Byte — rechnerisch ist bei etwa 400 MB Schluss, und der
+ * JSON-Rahmen darum herum kostet auch noch. Gemessen am 14. September 2026
+ * gegen die laufende Anwendung: 256 MB werden angenommen und vollständig
+ * zurückgelesen, 384 MB scheitern mit einem internen Fehler. Deshalb 256 —
+ * die letzte Zweierpotenz, die nachweislich geht, mit Luft nach oben.
+ *
+ * Zwei weitere Gründe, die Grenze nicht auszureizen:
  *
  *  • **Serverlose Plattformen begrenzen den Anfragekörper**, bei Vercel auf
- *    4.5 MB. Eine grössere Datei käme dort nie an — und zwar mit einem
- *    Plattformfehler, den diese Anwendung nicht abfangen kann. Lieber vorher
- *    mit einem klaren Satz ablehnen.
+ *    4.5 MB. Dort kommt eine grosse Datei ohnehin nicht an, sondern scheitert
+ *    mit einem Plattformfehler, den diese Anwendung nicht abfangen kann. Wer
+ *    dort betreibt, richtet den externen Speicher ein.
  *
  *  • **Binärdaten liegen in den Sicherungen der Datenbank.** Ein paar
  *    Profilbilder fallen nicht auf, zweihundert Baustellenfotos zu je zwölf
- *    Megabyte schon.
+ *    Megabyte schon — und ein einziges 256-MB-Video erst recht.
  */
-export const LOCAL_MAX_BYTES = 5 * 1024 * 1024;
+export const LOCAL_MAX_BYTES = 256 * 1024 * 1024;
 
 /** Wie lange eine angeforderte Upload-Adresse gültig bleibt. */
 const UPLOAD_WINDOW_MS = 2 * 60 * 60 * 1000;
@@ -83,7 +94,7 @@ export async function createLocalUpload(params: {
     throw new ValidationError(
       `Die Datei ist ${(params.sizeBytes / 1024 / 1024).toFixed(1)} MB gross. ` +
         `Ohne eingerichteten Dateispeicher nimmt die Anwendung höchstens ` +
-        `${Math.round(LOCAL_MAX_BYTES / 1024 / 1024)} MB je Datei an. ` +
+        `${describeUploadLimit(LOCAL_MAX_BYTES)} je Datei an. ` +
         'Verkleinern Sie die Datei — oder richten Sie Supabase Storage ein, dann gelten wieder die vollen Grenzen.',
     );
   }
@@ -131,9 +142,9 @@ export async function putLocalBuffer(params: {
 
   if (data.byteLength > LOCAL_MAX_BYTES) {
     throw new ValidationError(
-      `Die erzeugte Datei ist zu gross für den eingebauten Speicher (max. ${Math.round(
-        LOCAL_MAX_BYTES / 1024 / 1024,
-      )} MB).`,
+      `Die erzeugte Datei ist zu gross für den eingebauten Speicher (max. ${describeUploadLimit(
+        LOCAL_MAX_BYTES,
+      )}).`,
     );
   }
 
@@ -208,7 +219,7 @@ export async function receiveLocalUpload(params: {
 
   if (params.data.byteLength > record.maxBytes) {
     throw new ValidationError(
-      `Die Datei überschreitet die zulässige Grösse von ${Math.round(record.maxBytes / 1024 / 1024)} MB.`,
+      `Die Datei überschreitet die zulässige Grösse von ${describeUploadLimit(record.maxBytes)}.`,
     );
   }
 

@@ -753,9 +753,40 @@ async function main() {
     });
 
     const employeeNumber = `MA-${year}-${String(employeeCounter).padStart(5, '0')}`;
+
+    /**
+     * Wurde die Login-Adresse eines Demo-Kontos in der Anwendung geändert,
+     * findet der Seed unter der alten Adresse kein Konto, legt ein neues an
+     * und liefe hier in die bereits vergebene Personalnummer. Die Akte
+     * gehört dann der umbenannten Person; sie bleibt, wo sie ist, und der
+     * Seed geht weiter — sonst entstünden die Demo-Kundschaft und die
+     * Prüfkonten nie.
+     */
+    const taken = await prisma.employee.findUnique({
+      where: { organizationId_employeeNumber: { organizationId: org.id, employeeNumber } },
+      select: { id: true, userId: true },
+    });
+    if (taken && taken.userId !== user.id) {
+      console.warn(
+        `   Hinweis: ${employeeNumber} gehört einem anderen Konto — Akte bleibt unverändert.`,
+      );
+      employeeIds[member.email] = taken.id;
+      employeeCounter++;
+      continue;
+    }
+
     const employee = await prisma.employee.upsert({
       where: { userId: user.id },
-      update: { position: member.position, hourlyRate: member.hourlyRate, color: member.color },
+      // `active` und `terminatedAt` gehören zur Reparatur: Ein Testlauf oder
+      // ein Klick auf „Stilllegen" darf das Demo-Team nicht dauerhaft aus
+      // Disposition und Prüfungen nehmen.
+      update: {
+        position: member.position,
+        hourlyRate: member.hourlyRate,
+        color: member.color,
+        active: true,
+        terminatedAt: null,
+      },
       create: {
         organizationId: org.id,
         userId: user.id,
@@ -802,8 +833,15 @@ async function main() {
     employeeCounter++;
   }
 
-  // Auch die Administratorin erhält ein Mitarbeitendenprofil.
-  await prisma.employee.upsert({
+  // Auch die Administratorin erhält ein Mitarbeitendenprofil — sofern die
+  // Nummer nicht schon einem umbenannten Konto gehört (siehe oben).
+  const adminAkte = await prisma.employee.findUnique({
+    where: { organizationId_employeeNumber: { organizationId: org.id, employeeNumber: `MA-${year}-00000` } },
+    select: { userId: true },
+  });
+  if (adminAkte && adminAkte.userId !== admin.id) {
+    console.warn(`   Hinweis: MA-${year}-00000 gehört einem anderen Konto — Akte bleibt unverändert.`);
+  } else await prisma.employee.upsert({
     where: { userId: admin.id },
     update: {},
     create: {

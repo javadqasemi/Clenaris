@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { defineRoute } from '@/lib/api/handler';
 import { buildPagination, created, paginated } from '@/lib/api/response';
 import { assetUrlSchema } from '@/lib/validation/common';
+import { MAX_UPLOAD_BYTES } from '@/lib/validation/files';
 import { paginationQuery } from '@/lib/validation/queries';
 import { listMedia, registerMedia } from '@/server/services/media.service';
 import { getOrganizationId } from '@/server/services/organization.service';
@@ -75,7 +76,7 @@ export const POST = defineRoute({
     url: assetUrlSchema,
     filename: z.string().trim().min(1).max(255),
     mimeType: z.string().trim().min(1).max(120),
-    sizeBytes: z.number().int().min(0).max(50 * 1024 * 1024),
+    sizeBytes: z.number().int().min(0).max(MAX_UPLOAD_BYTES),
     scope: z.enum(FILE_SCOPES).default('OTHER'),
     isPublic: z.boolean().default(true),
   }),

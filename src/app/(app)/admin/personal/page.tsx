@@ -4,6 +4,7 @@ import { Download, UserPlus } from 'lucide-react';
 
 import { prisma, toNumber } from '@/lib/db';
 import { requirePermission } from '@/lib/auth/session';
+import { can, ROLE_LABELS } from '@/lib/auth/rbac';
 import { formatDate, formatDuration } from '@/lib/utils';
 import { getOrganizationId } from '@/server/services/organization.service';
 import { listEmployees, getVacationBalance } from '@/server/services/employee.service';
@@ -13,7 +14,9 @@ import { PersonAvatar } from '@/components/ui/primitives';
 import { Tabs, TabsContent, TabsList, TabsTriggerUnderline } from '@/components/ui/controls';
 import { KpiTile } from '@/components/app/kpi-tile';
 import { EmptyState, ListCard, PageHeader, TableScroll } from '@/components/app/page-parts';
+import { FilterBar } from '@/components/app/filter-bar';
 import { AbsenceDecision } from '@/features/admin/absence-decision';
+import { EMPLOYMENT_OPTIONS } from '@/features/admin/employee-labels';
 
 export const metadata: Metadata = {
   title: 'Mitarbeitende',
@@ -35,16 +38,25 @@ const ABSENCE_LABELS: Record<string, string> = {
   OTHER: 'Anderes',
 };
 
-export default async function StaffPage() {
+export default async function StaffPage({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | undefined>>;
+}) {
   const session = await requirePermission('employee:read');
-  const isAdmin = session.role === 'ADMIN';
+  const filter = await searchParams;
+  // Nach Berechtigung, nicht nach Rolle: `role === 'ADMIN'` nahm der
+  // Systemverantwortung den Knopf, obwohl sie anlegen darf.
+  const isAdmin = can(session.role, 'employee:create');
 
   const organizationId = await getOrganizationId();
   const now = new Date();
   const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
 
-  const [employees, pendingAbsences, monthTime, workingNow] = await Promise.all([
-    listEmployees({ organizationId, includeInactive: true }),
+  const today = new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()));
+
+  const [employees, pendingAbsences, monthTime, workingNow, absentToday] = await Promise.all([
+    listEmployees({ organizationId, includeInactive: true, q: filter.q }),
     prisma.absence.findMany({
       where: { status: 'REQUESTED', employee: { organizationId } },
       orderBy: { startDate: 'asc' },
@@ -67,9 +79,48 @@ export default async function StaffPage() {
       _sum: { minutes: true },
     }),
     prisma.timeEntry.count({ where: { endedAt: null, employee: { organizationId } } }),
+    prisma.absence.findMany({
+      where: {
+        status: 'APPROVED',
+        startDate: { lte: today },
+        endDate: { gte: today },
+        employee: { organizationId, active: true },
+      },
+      select: { employeeId: true },
+    }),
   ]);
 
   const active = employees.filter((employee) => employee.active);
+
+  /**
+   * Cockpit-Zahlen aus der geladenen Liste — keine zweite Abfrage, die
+   * Liste ist ohnehin vollständig da. Geburtstage in den nächsten 30 Tagen
+   * über den Jahreswechsel hinweg; neu im Team heisst Eintritt in den
+   * letzten 90 Tagen.
+   */
+  const absentIds = new Set(absentToday.map((entry) => entry.employeeId));
+  const inDays = (date: Date, days: number) => {
+    const next = new Date(now.getFullYear(), date.getUTCMonth(), date.getUTCDate());
+    if (next.getTime() < now.getTime() - 864e5) next.setFullYear(next.getFullYear() + 1);
+    return (next.getTime() - now.getTime()) / 864e5 <= days;
+  };
+  const upcomingBirthdays = active.filter((e) => e.birthday && inDays(e.birthday, 30));
+  const recentHires = active.filter(
+    (e) => now.getTime() - e.hiredAt.getTime() <= 90 * 864e5,
+  );
+
+  // Filter aus der URL — Status, Abteilung, Anstellungsart. Die Suche (`q`)
+  // erledigt der Dienst; der Rest greift auf die geladene Liste.
+  const departments = Array.from(
+    new Set(employees.map((e) => e.department).filter((d): d is string => Boolean(d))),
+  ).sort();
+  const filtered = employees.filter((employee) => {
+    if (filter.status === 'aktiv' && !employee.active) return false;
+    if (filter.status === 'ausgetreten' && employee.active) return false;
+    if (filter.abteilung && employee.department !== filter.abteilung) return false;
+    if (filter.anstellung && employee.employmentType !== filter.anstellung) return false;
+    return true;
+  });
 
   // Feriensaldi parallel laden — sie kommen aus derselben Tabelle wie die Anträge.
   const balances = await Promise.all(
@@ -123,6 +174,41 @@ export default async function StaffPage() {
         />
       </div>
 
+      <div className="grid gap-4 sm:grid-cols-3">
+        <KpiTile
+          label="Heute abwesend"
+          value={String(absentIds.size)}
+          hint={
+            absentIds.size > 0
+              ? active
+                  .filter((e) => absentIds.has(e.id))
+                  .map((e) => `${e.user.firstName} ${e.user.lastName}`)
+                  .join(', ')
+              : 'Alle verfügbar'
+          }
+        />
+        <KpiTile
+          label="Geburtstage (30 Tage)"
+          value={String(upcomingBirthdays.length)}
+          hint={
+            upcomingBirthdays.length > 0
+              ? upcomingBirthdays
+                  .map((e) => `${e.user.firstName} ${e.user.lastName} (${formatDate(e.birthday!).slice(0, 6)})`)
+                  .join(', ')
+              : 'Keine in den nächsten 30 Tagen'
+          }
+        />
+        <KpiTile
+          label="Neu im Team (90 Tage)"
+          value={String(recentHires.length)}
+          hint={
+            recentHires.length > 0
+              ? recentHires.map((e) => `${e.user.firstName} ${e.user.lastName}`).join(', ')
+              : 'Keine Eintritte'
+          }
+        />
+      </div>
+
       <Tabs defaultValue="team">
         <TabsList variant="underline">
           <TabsTriggerUnderline value="team">Team ({employees.length})</TabsTriggerUnderline>
@@ -132,12 +218,45 @@ export default async function StaffPage() {
         </TabsList>
 
         {/* Team */}
-        <TabsContent value="team">
-          {employees.length === 0 ? (
+        <TabsContent value="team" className="space-y-4">
+          <FilterBar
+            searchPlaceholder="Name, E-Mail, Funktion oder Personalnummer …"
+            filters={[
+              {
+                param: 'status',
+                label: 'Status',
+                options: [
+                  { value: 'aktiv', label: 'Aktiv' },
+                  { value: 'ausgetreten', label: 'Ausgetreten' },
+                ],
+              },
+              {
+                param: 'anstellung',
+                label: 'Anstellung',
+                options: EMPLOYMENT_OPTIONS,
+              },
+              ...(departments.length > 0
+                ? [
+                    {
+                      param: 'abteilung',
+                      label: 'Abteilung',
+                      options: departments.map((d) => ({ value: d, label: d })),
+                    },
+                  ]
+                : []),
+            ]}
+          />
+
+          {employees.length === 0 && !filter.q ? (
             <EmptyState
               title="Noch keine Mitarbeitenden erfasst"
               description="Erfassen Sie Ihr Team, damit Sie Einsätze zuteilen und Arbeitszeiten erfassen können."
               action={{ href: '/admin/personal/neu', label: 'Person erfassen' }}
+            />
+          ) : filtered.length === 0 ? (
+            <EmptyState
+              title="Keine Treffer"
+              description="Kein Eintrag passt zu Suche und Filtern."
             />
           ) : (
             <ListCard>
@@ -160,7 +279,7 @@ export default async function StaffPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {employees.map((employee) => {
+                    {filtered.map((employee) => {
                       const balance = balanceById.get(employee.id);
                       return (
                         <tr key={employee.id}>
@@ -191,9 +310,21 @@ export default async function StaffPage() {
                           </td>
                           <td>
                             <span className="block">{employee.position}</span>
-                            {employee.user.role !== 'EMPLOYEE' ? (
+                            {/*
+                              Eine Akte, deren Konto auf Kundschaft steht, ist
+                              ein Widerspruch: Die Person erscheint nirgends
+                              mehr als Personal, die Akte ist aber noch aktiv.
+                              Hier muss das auffallen — die Rollenvergabe
+                              lässt den Zustand seit dem 14. September 2026
+                              nicht mehr entstehen, Altdaten können ihn haben.
+                            */}
+                            {employee.user.role === 'CUSTOMER' ? (
+                              <Badge variant="warning" size="sm">
+                                Konto ist Kundschaft — Akte stilllegen
+                              </Badge>
+                            ) : employee.user.role !== 'EMPLOYEE' ? (
                               <Badge variant="neutral" size="sm">
-                                {employee.user.role === 'ADMIN' ? 'Administration' : 'Leitung'}
+                                {ROLE_LABELS[employee.user.role]}
                               </Badge>
                             ) : null}
                           </td>

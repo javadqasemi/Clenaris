@@ -199,6 +199,12 @@ async function main() {
 
     const customer = await prisma.customer.upsert({
       where: { organizationId_number: { organizationId: org.id, number } },
+      // `userId` gehört auch in den Update-Zweig: Wurde die Nummer vor dem
+      // Seed von Hand vergeben (frische Datenbank, erst eine Kundschaft
+      // erfasst, dann geseedet), fand der Seed den Datensatz, übernahm
+      // Adresse und Telefon — und liess die Kontoverknüpfung leer. Das
+      // Demokonto hatte dann kein Profil: Buchung, Nachrichten und Objekte
+      // antworteten mit „kein Kundenprofil verknüpft".
       update: { email: data.email, phone: data.phone },
       create: {
         organizationId: org.id,
@@ -216,6 +222,14 @@ async function main() {
         language: 'DE',
       },
     });
+
+    if (userId && customer.userId !== userId) {
+      // Ein Konto hängt an höchstens einem Datensatz. Hängt es noch an einem
+      // anderen (alter Lauf, umnummeriert), wird dort gelöst und hier
+      // verknüpft — der Datensatz mit der Demo-Nummer ist der massgebende.
+      await prisma.customer.updateMany({ where: { userId }, data: { userId: null } });
+      await prisma.customer.update({ where: { id: customer.id }, data: { userId } });
+    }
 
     customerIds[data.email] = customer.id;
 
@@ -569,12 +583,27 @@ async function main() {
    * Deshalb wird der höhere der beiden Werte gesetzt: der Seed hebt den
    * Zähler an, senkt ihn aber nie.
    */
-  const raiseSequence = async (scope: 'booking' | 'job' | 'invoice', seeded: number) => {
+  const raiseSequence = async (
+    scope: 'booking' | 'job' | 'invoice' | 'customer',
+    seeded: number,
+  ) => {
     // Nicht nur der eigene Endstand zählt, sondern die höchste Nummer, die
     // tatsächlich in der Tabelle steht — Prüfläufe und Handeingaben vergeben
     // Nummern, die der Seed nicht kennt. Ein Zähler unter der höchsten
     // vergebenen Nummer liesse den nächsten Beleg in einen Konflikt laufen.
-    const table = scope === 'booking' ? prisma.booking : scope === 'job' ? prisma.job : prisma.invoice;
+    //
+    // `customer` gehört dazu: Die Demo-Kundschaft wird mit festen Nummern
+    // K-…-00001 ff. angelegt. Blieb der Zähler dahinter zurück (frische
+    // Datenbank, danach geseedet), lief die nächste Online-Buchung eines
+    // Gasts oder ein neuer Kundendatensatz in K-…-00002 — und in 409.
+    const table =
+      scope === 'booking'
+        ? prisma.booking
+        : scope === 'job'
+          ? prisma.job
+          : scope === 'invoice'
+            ? prisma.invoice
+            : prisma.customer;
     const rows = await (table as typeof prisma.booking).findMany({
       where: { organizationId: org.id, number: { contains: `-${year}-` } },
       select: { number: true },
@@ -596,6 +625,7 @@ async function main() {
   await raiseSequence('booking', bookingCounter - 1);
   await raiseSequence('job', jobCounter - 1);
   await raiseSequence('invoice', invoiceCounter - 1);
+  await raiseSequence('customer', customerCounter - 1);
 
   console.log(`✓ ${bookingSeeds.length} Buchungen, ${jobCounter - 1} Einsätze, ${invoiceCounter - 1} Rechnungen`);
 

@@ -511,10 +511,23 @@
    * `h-16` und selbst `sticky top-0`. Ohne den Versatz verschwände die
    * Tabellenkopfzeile darunter, und man scrollte an unbeschrifteten Spalten
    * entlang — schlimmer als gar keine klebende Kopfzeile.
+   *
+   * **Nur ohne Scrollrahmen.** `position: sticky` klebt am nächsten
+   * scrollenden Vorfahren, und `TableScroll` (`overflow-x: auto`) *ist* einer
+   * — auch wenn er nie senkrecht scrollt. Die Kopfzeile klebt dann nicht an
+   * der Seite, sondern wird innerhalb der Tabelle um die 4 rem nach unten
+   * gedrückt und liegt über den ersten Zeilen. Genau so sah die Benutzerliste
+   * am 14. September 2026 aus. Waagrechtes Scrollen und klebende Kopfzeile
+   * schliessen sich deshalb aus; die Regel darunter macht das verbindlich,
+   * damit die Kombination nicht wieder unbemerkt entsteht.
    */
   .data-table--sticky thead th {
     @apply sticky top-16 z-10 bg-card;
     box-shadow: inset 0 -1px 0 0 hsl(var(--border));
+  }
+  .table-scroll .data-table--sticky thead th {
+    @apply static;
+    box-shadow: none;
   }
   .data-table tbody tr:last-child {
     @apply border-b-0;

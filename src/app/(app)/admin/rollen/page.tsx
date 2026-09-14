@@ -109,7 +109,7 @@ export default async function RolesPage() {
       {groups.map(({ group, permissions }) => (
         <ListCard key={group} title={`${group} (${permissions.length})`}>
           <TableScroll minWidth="58rem" label={`Rechtematrix ${group}, waagrecht scrollbar`}>
-            <table className="data-table data-table--sticky">
+            <table className="data-table">
               <caption className="sr-only">
                 Welche Rolle welche Berechtigung im Bereich {group} hat.
               </caption>

@@ -1,7 +1,11 @@
 import 'server-only';
 
 import { ValidationError } from '@/lib/errors';
-import type { UploadProfileName } from '@/lib/validation/files';
+import {
+  MAX_UPLOAD_BYTES,
+  describeUploadLimit,
+  type UploadProfileName,
+} from '@/lib/validation/files';
 
 /**
  * Was hochgeladen werden darf — unabhängig davon, *wohin*.
@@ -26,16 +30,23 @@ const DOCUMENT_TYPES = [
   'text/csv',
 ];
 
+/**
+ * Alle Profile teilen sich die eine Obergrenze von 1 GiB (`MAX_UPLOAD_BYTES`).
+ * Früher hatte jedes Profil eine eigene (4 bis 25 MB); die Staffelung kam
+ * aus der Zeit, als Uploads durch die Anwendung liefen und Bilder in der
+ * Datenbank landeten. Mit dem direkten Upload zum Objektspeicher bleibt nur
+ * der Dateityp eine fachliche Frage — die Grösse begrenzt der Speicher.
+ */
 export const UPLOAD_PROFILES = {
-  jobPhoto: { types: IMAGE_TYPES, maxBytes: 15 * 1024 * 1024, folder: 'jobs' },
-  bookingPhoto: { types: IMAGE_TYPES, maxBytes: 15 * 1024 * 1024, folder: 'bookings' },
-  avatar: { types: IMAGE_TYPES, maxBytes: 4 * 1024 * 1024, folder: 'avatars' },
-  document: { types: [...DOCUMENT_TYPES, ...IMAGE_TYPES], maxBytes: 25 * 1024 * 1024, folder: 'documents' },
-  receipt: { types: [...DOCUMENT_TYPES, ...IMAGE_TYPES], maxBytes: 15 * 1024 * 1024, folder: 'receipts' },
-  cv: { types: DOCUMENT_TYPES, maxBytes: 15 * 1024 * 1024, folder: 'applications' },
-  gallery: { types: IMAGE_TYPES, maxBytes: 20 * 1024 * 1024, folder: 'gallery' },
-  invoice: { types: ['application/pdf'], maxBytes: 10 * 1024 * 1024, folder: 'invoices' },
-  quote: { types: ['application/pdf'], maxBytes: 10 * 1024 * 1024, folder: 'quotes' },
+  jobPhoto: { types: IMAGE_TYPES, maxBytes: MAX_UPLOAD_BYTES, folder: 'jobs' },
+  bookingPhoto: { types: IMAGE_TYPES, maxBytes: MAX_UPLOAD_BYTES, folder: 'bookings' },
+  avatar: { types: IMAGE_TYPES, maxBytes: MAX_UPLOAD_BYTES, folder: 'avatars' },
+  document: { types: [...DOCUMENT_TYPES, ...IMAGE_TYPES], maxBytes: MAX_UPLOAD_BYTES, folder: 'documents' },
+  receipt: { types: [...DOCUMENT_TYPES, ...IMAGE_TYPES], maxBytes: MAX_UPLOAD_BYTES, folder: 'receipts' },
+  cv: { types: DOCUMENT_TYPES, maxBytes: MAX_UPLOAD_BYTES, folder: 'applications' },
+  gallery: { types: IMAGE_TYPES, maxBytes: MAX_UPLOAD_BYTES, folder: 'gallery' },
+  invoice: { types: ['application/pdf'], maxBytes: MAX_UPLOAD_BYTES, folder: 'invoices' },
+  quote: { types: ['application/pdf'], maxBytes: MAX_UPLOAD_BYTES, folder: 'quotes' },
 } as const;
 
 export type UploadProfile = keyof typeof UPLOAD_PROFILES;
@@ -73,7 +84,7 @@ export function validateUpload(profile: UploadProfile, mimeType: string, sizeByt
   }
   if (sizeBytes > config.maxBytes) {
     throw new ValidationError(
-      `Die Datei ist zu gross (max. ${Math.round(config.maxBytes / 1024 / 1024)} MB).`,
+      `Die Datei ist zu gross (max. ${describeUploadLimit(config.maxBytes)}).`,
     );
   }
   return config;

@@ -145,7 +145,11 @@ export function TableScroll({
   return (
     <div className="px-5 pb-2">
       <div
-        className="-mx-1 overflow-x-auto px-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        // `table-scroll` neutralisiert eine klebende Kopfzeile darin — siehe
+        // `.data-table--sticky` in globals.css: Innerhalb eines Scrollrahmens
+        // klebt sie nicht an der Seite, sondern schiebt sich über die ersten
+        // Zeilen.
+        className="table-scroll -mx-1 overflow-x-auto px-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         tabIndex={0}
         role="region"
         aria-label={label}
