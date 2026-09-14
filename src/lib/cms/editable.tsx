@@ -2,6 +2,7 @@ import 'server-only';
 
 import * as React from 'react';
 
+import { definitionFor } from '@/lib/cms/registry';
 import { contentList, contentText, type ContentMap } from '@/server/services/content.service';
 
 /**
@@ -13,9 +14,12 @@ import { contentList, contentText, type ContentMap } from '@/server/services/con
  * Bausteinen geht das noch, bei jedem weiteren wird es zum Suchspiel.
  *
  * **Die Lösung.** Im Vorschaumodus bekommt jeder gepflegte Text eine
- * Markierung mit seinem Schlüssel. Die Redaktionsmaske hört auf Klicks in der
- * Vorschau und öffnet genau das zugehörige Feld. Man zeigt auf den Text, den
- * man ändern will — statt ihn in einer Liste zu suchen.
+ * Markierung mit seinem Schlüssel und seiner Art. Die Brücke in der Vorschau
+ * (`components/cms/preview-bridge.tsx`) macht einfache Texte beim Klick
+ * direkt in der Seite beschreibbar; Listen und Bausteine mit Platzhalter
+ * meldet sie an den Arbeitsplatz, der dafür eine kleine Maske öffnet. Man
+ * schreibt in den Text, den man ändern will — statt ihn in einer Liste zu
+ * suchen.
  *
  * **Warum das die ausgelieferte Seite nicht anfasst.** Ohne Vorschaumodus gibt
  * `text()` die blosse Zeichenkette zurück, exakt wie vorher. Kein zusätzliches
@@ -96,9 +100,14 @@ export function createCms(content: ContentMap, preview: boolean): Cms {
        * Absätzen und Aufzählungen. Ein Element auf Blockebene würde dort das
        * Layout verändern — und eine Vorschau, die anders aussieht als die
        * Seite, ist keine.
+       *
+       * Die Art reist mit, weil die Brücke sie nicht nachschlagen kann: Sie
+       * läuft im Browser und kennt das Register nicht. Sie braucht die Art
+       * aber, um zu entscheiden, ob Enter einen Zeilenumbruch einfügt (Text)
+       * oder die Eingabe abschliesst (einzeilige Überschrift).
        */
       return (
-        <span data-cms-key={key} className="cms-editable">
+        <span data-cms-key={key} data-cms-kind={definitionFor(key)?.kind ?? 'text'} className="cms-editable">
           {value}
         </span>
       );

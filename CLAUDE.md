@@ -17,13 +17,15 @@ npm run dev            # Dev server (Turbopack)
 npm run build          # prisma generate + next build
 npm run start:built    # Serve an existing build (no rebuild)
 npm run typecheck      # tsc --noEmit
-npm run lint           # ESLint
+npm run lint           # ESLint (whole project); npx eslint <file> for one file
 npm run format         # Prettier
 
 npm run db:migrate     # Create + apply a migration (dev)
 npm run db:deploy      # Apply migrations (prod)
+npm run db:seed        # Config only: company, services, prices, area, team
 npm run db:seed:demo   # Config seed + demo records — what tests need
 npm run db:studio
+npm run docs           # openapi + erd; fails if a route or model is undocumented
 npm run erd            # Regenerate docs/DATABASE.md
 npm run openapi        # Regenerate OpenAPI + docs/API.md
 ```
@@ -48,13 +50,17 @@ npx tsx --test tests/api/two-factor.test.ts  # single file
 
 `TEST_BASE_URL` overrides the target. Tests run with `--test-concurrency=1` — they share one database and the same five demo accounts, so parallelism produces false failures, not speed. A 429 mid-run is expected (the login rate limit works); the client in `tests/helpers/client.ts` waits it out. Don't run an ad-hoc HTTP check script while `npm test` is running: `two-factor.test.ts` temporarily changes the manager's role.
 
-Test conventions worth knowing before writing one: `loginAll()` from `tests/helpers/accounts.ts` returns a cookie jar per role; `data(response)` unwraps the `{ data }` envelope; every test cleans up *before* and after itself (a 409 from a previous aborted run is not a product bug). Zod failures come back as **422**, not 400, and a manager hitting a resource without any permission gets **403**, not 404. `tests/pages/smoke.test.ts` lists every page per role — add new pages there. `db:seed:demo` is idempotent and also repairs the demo customer account if an aborted test run disabled it.
+Test conventions worth knowing before writing one: `loginAll()` from `tests/helpers/accounts.ts` returns a cookie jar per role; `data(response)` unwraps the `{ data }` envelope; every test cleans up *before* and after itself (a 409 from a previous aborted run is not a product bug). Zod failures come back as **422**, not 400, and a manager hitting a resource without any permission gets **403**, not 404. `tests/pages/smoke.test.ts` lists every page per role — add new list pages to the path arrays and new detail/edit pages to the `Detailseiten und Dokumente` block, which fetches a sample id via `firstId('/api/…')`. `db:seed:demo` is idempotent and also repairs the demo customer account if an aborted test run disabled it. The table in `tests/README.md` says which file covers which feature; extend the matching file rather than starting a new one.
+
+Ad-hoc HTTP checks against the running server are cheap and reliable: a `tsx` script in the scratchpad that imports `tests/helpers/client` and `tests/helpers/accounts` by absolute path, logs in with `loginAll()`, and hits the page or endpoint. Prefer that over screenshots — the Chrome extension is not connected in this environment.
 
 ### Running the app locally
 
 `npm run start` rebuilds first. To iterate, use `npm run build` then `npm run start:built` — and remember **a production server does not pick up code changes until you rebuild.** If edits seem to have no effect, check whether you're on `next start` with a stale `.next`.
 
 **Stop the server before `npm run build`.** The build runs `prisma generate`, which replaces the Prisma query-engine DLL; a running `next start` holds that file open on Windows and the build fails with `EPERM … rename query_engine-windows.dll.node`. It looks like a Prisma error but is only a file lock.
+
+A second Windows-only failure: right after force-killing `next start`, the build compiles and type-checks fine but ends with `PageNotFoundError: Cannot find module for page: /_error` (ENOENT). That is a stale, half-locked `.next` directory, not a code error — `Remove-Item -Recurse -Force .next` and build again.
 
 Starting the server as a tracked background task risks it being killed under memory pressure. Detached survives:
 
@@ -84,6 +90,8 @@ tests/api, tests/pages    HTTP tests against the running server
 A page file under `src/app` may export only `default`, `metadata`, `dynamic` and the other Next segment config — an extra exported constant breaks the build. Put field specs and helpers in `src/features/…`.
 
 How a request reaches a page: `src/middleware.ts` checks the token signature and `ROUTE_GUARDS` (area by role), then `PERMISSION_ROUTES` in `rbac.ts` (first matching prefix wins, so specific paths go before their parent); the layout builds the navigation and filters it with `filterNavigation`; the page calls `requirePermission()` and decides with `can()` which buttons to render. All four layers must agree when you add a page.
+
+`PERMISSION_ROUTES` deliberately lists only edit-only pages (`/admin/inhalte`, `/admin/seo`) and the Führung prefixes; most admin pages, including `/admin/leads/…` and `/admin/kunden/…`, are guarded solely by the page itself. Two guards exist for pages: `requirePermission()` throws (the area's error boundary shows it) and is right for pages that have a read mode; `requirePagePermission()` answers 404 and is for pages that are nothing but an edit mask, so their existence stays hidden from roles that cannot use them.
 
 ## Architecture
 
@@ -126,7 +134,7 @@ How a request reaches a page: `src/middleware.ts` checks the token signature and
 
 ### CMS / website content
 
-Editorial text is registry-driven: `src/lib/cms/registry.ts` declares every editable block (key, kind, label, default). The default **is** the shipping text, so adding a block changes nothing until someone edits it. Pages render via `createCms(content, preview)` from `src/lib/cms/editable.tsx`:
+Editorial text is registry-driven: `src/lib/cms/registry.ts` declares every editable block (key, kind, label, default). The default **is** the shipping text, so adding a block changes nothing until someone edits it. A block only reaches the site once a page renders it through `cms.text`/`cms.attrs` — the groups `contact`, `footer` and `legal` currently have no consumer and are reachable only through the block picker in `/admin/inhalte`. Pages render via `createCms(content, preview)` from `src/lib/cms/editable.tsx`:
 
 - `cms.text(key)` — returns a `ReactNode`; in preview it wraps the text in a clickable span carrying `data-cms-key`.
 - `cms.raw(key)` — plain string, for attributes.
@@ -135,7 +143,7 @@ Editorial text is registry-driven: `src/lib/cms/registry.ts` declares every edit
 
 Marketing components take `ReactNode` (not `string`) for labels precisely so these wrappers survive. **Outside preview mode none of these markers exist in the HTML** — visitors get byte-identical output. Verify that when touching this layer.
 
-Editing happens in `/admin/inhalte`: the real site runs in an iframe in draft mode, clicking text focuses the matching field. Text follows draft → publish → revision history. **Images do not** — they belong to records (`GalleryItem`, `Service`, `BlogPost`), are written straight through `PATCH /api/content/asset`, and are guarded by the allowlist in `src/lib/cms/assets.ts`. Never let an entity/field pair from a request reach Prisma without passing that allowlist.
+Editing happens in `/admin/inhalte`: the real site runs in an iframe in draft mode and is edited **in place**. Plain text blocks (`cms.text`) become `contentEditable` on click; the bridge in `src/components/cms/preview-bridge.tsx` posts the final wording to the workspace, which saves it as a draft (Enter/blur saves, Esc reverts). Blocks marked via `cms.attrs` (lists, placeholder texts) and blocks that appear on no page open a one-field dialog instead; there is no separate form column. Text follows draft → publish → revision history. **Images do not** — they belong to records (`GalleryItem`, `Service`, `BlogPost`), are written straight through `PATCH /api/content/asset`, and are guarded by the allowlist in `src/lib/cms/assets.ts`. Never let an entity/field pair from a request reach Prisma without passing that allowlist.
 
 Note: the iframe must point at the page path directly. Pointing it at the preview endpoint and letting it follow the redirect fails — Chrome aborts redirected navigations inside frames and lands on a cross-origin error page. Draft mode is armed separately via `GET /api/content/preview?nur=1` (204).
 
@@ -154,6 +162,10 @@ The app runs fully without Supabase, Redis, Stripe, Resend, Twilio or Anthropic 
 **`git` is not on PATH in this environment.** Don't assume commits are possible.
 
 **Ownership lives in the query, and `tests/api/ownership.test.ts` proves it.** `property:read`, `message:read_own` and similar scoped permissions are held by customers and employees too; the route must narrow the `where` clause per role (see `src/server/services/property.service.ts`). A smoke test that only checks the status code will not catch a leak — add a case to the ownership suite when touching role-scoped data.
+
+**Edit pages reuse the create form.** Full-page editing lives at `/admin/<resource>/[id]/bearbeiten` (bookings, quotes, leads). The page loads the record, maps `null` to `undefined` for the Zod schema, and passes it to the same form component used by `/neu` via an optional target prop; the form switches to `PATCH` and a "Änderungen speichern" label on submit. Don't write a second form with the same fields. Send fields the service replaces wholesale (like `tagIds`) with their current values, or an empty array will wipe them.
+
+**UI vocabulary.** The header comment of `src/app/globals.css` describes the visual language (Aare teal, Bern sandstone, Bricolage Grotesque for display, Archivo for text, tabular numerals everywhere) and `tailwind.config.ts` adds the type scale (`text-2xs`, `text-meta`, `text-body`, `text-title`) and shadows (`shadow-soft`, `shadow-card`). The structural element is the *Protokollzeile* (`.protocol-list` / `.protocol-row`, label above value); pages compose `PageHeader`, `KpiTile`, `FilterBar`, `DetailSection` (`body="list" | "form" | "flush"`), `DetailRow`, `StatusBadge` and `PersonAvatar`. Status → colour lives once in `STATUS_MAP` in `src/components/ui/badge.tsx`. Icons are lucide-react, never emoji.
 
 **CRUD in the UI goes through two shared building blocks.** `src/components/app/resource-form.tsx` (`ResourceForm`/`FormDialog` driven by a `FieldSpec[]`, server-side Zod errors land on the field) and `src/components/app/action-button.tsx` (`ActionButton` for POST/PATCH/DELETE with confirmation dialog). Every list or detail page decides with `can()` on the server whether to render them, and the endpoint checks again. Soft-deleted records of the seven recyclable models are restored from `/admin/papierkorb` (`trash.service.ts`); there is no per-list "deleted" filter. Before adding a form, check whether an endpoint already exists — the 2026-09-13 audit found more than a dozen endpoints without any UI.
 

@@ -31,12 +31,24 @@ import {
 import { DetailSection } from '@/components/app/page-parts';
 
 /**
- * Anfrage von Hand erfassen.
+ * Anfrage von Hand erfassen — oder eine bestehende bearbeiten.
  *
  * Der häufigste Fall: jemand ruft an. Deshalb sind nur Name, E-Mail und die
  * Nachricht Pflicht — alles andere lässt sich später ergänzen. Ein Formular,
  * das am Telefon zwölf Felder verlangt, wird nach dem Gespräch ausgefüllt
  * oder gar nicht.
+ *
+ * **Warum dasselbe Formular auch bearbeitet.** Bis zur Einführung von `lead`
+ * liess sich eine Anfrage nur anlegen und im Status verschieben; ein
+ * Tippfehler in der E-Mail oder eine falsche Postleitzahl blieb bis zur
+ * Übernahme in die Kundschaft stehen. `PATCH /api/leads/:id` bestand dafür
+ * längst. Ein zweites Formular mit denselben zwölf Feldern wäre nach der
+ * nächsten Feldänderung stillschweigend auseinandergelaufen — deshalb kennt
+ * dieses eine Formular beide Fälle und unterscheidet sie nur beim Absenden.
+ *
+ * Beim Bearbeiten reisen die bestehenden `tagIds` unverändert mit: Der
+ * Dienst ersetzt die Schlagwörter, sobald das Feld gesendet wird, und ein
+ * leeres Feld hiesse „alle entfernen".
  */
 const SOURCES = [
   { value: 'PHONE', label: 'Telefon' },
@@ -60,37 +72,60 @@ const SERVICES = [
   { value: 'SPECIAL', label: 'Spezialreinigung' },
 ] as const;
 
+/** Die bestehende Anfrage, wenn das Formular bearbeitet statt anlegt. */
+export interface LeadFormTarget {
+  id: string;
+  number: string;
+  values: Partial<CreateLeadInput>;
+}
+
 export function LeadForm({
   stages,
   employees,
+  lead,
 }: {
   stages: { id: string; name: string }[];
   employees: { id: string; name: string }[];
+  lead?: LeadFormTarget;
 }) {
   const router = useRouter();
   const [error, setError] = React.useState<string | null>(null);
 
   const form = useForm<CreateLeadInput>({
     resolver: zodResolver(createLeadSchema),
-    defaultValues: {
-      firstName: '',
-      lastName: '',
-      email: '',
-      source: 'PHONE',
-      stageId: stages[0]?.id,
-      tagIds: [],
-    } as never,
+    defaultValues: (lead
+      ? { tagIds: [], ...lead.values }
+      : {
+          firstName: '',
+          lastName: '',
+          email: '',
+          source: 'PHONE',
+          stageId: stages[0]?.id,
+          tagIds: [],
+        }) as never,
   });
 
   const onSubmit = async (values: CreateLeadInput) => {
     setError(null);
     try {
+      if (lead) {
+        await api.patch(`/api/leads/${lead.id}`, values);
+        toast.success(`Anfrage ${lead.number} gespeichert.`);
+        router.push(`/admin/leads/${lead.id}`);
+        router.refresh();
+        return;
+      }
+
       const result = await api.post<{ id: string; number: string }>('/api/leads', values);
       toast.success(`Anfrage ${result.number} erfasst.`);
       router.push(`/admin/leads/${result.id}`);
     } catch (err) {
       const message =
-        err instanceof ApiError ? err.message : 'Die Anfrage konnte nicht erfasst werden.';
+        err instanceof ApiError
+          ? err.message
+          : lead
+            ? 'Die Änderungen konnten nicht gespeichert werden.'
+            : 'Die Anfrage konnte nicht erfasst werden.';
       setError(message);
       toast.error(message);
     }
@@ -407,7 +442,7 @@ export function LeadForm({
         <div className="flex flex-wrap gap-3">
           <Button type="submit" loading={form.formState.isSubmitting}>
             <Save aria-hidden />
-            Anfrage erfassen
+            {lead ? 'Änderungen speichern' : 'Anfrage erfassen'}
           </Button>
           <Button type="button" variant="outline" onClick={() => router.back()}>
             Abbrechen

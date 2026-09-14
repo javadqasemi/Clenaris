@@ -345,6 +345,29 @@
   }
 
   /*
+     Text, in dem gerade getippt wird.
+
+     Der Textcursor ersetzt den Zeiger, der doppelte Ring zeigt „hier wird
+     geschrieben" deutlicher als der Auswahlring. `pre-wrap`, damit ein mit
+     Umschalt+Enter eingefügter Umbruch sichtbar bleibt — die Seite selbst
+     zeigt ihn beim nächsten Laden ohnehin so. Kein `outline`: Der Browser
+     zeichnet um beschreibbare Elemente sonst seinen eigenen Rahmen.
+  */
+  .cms-preview .cms-editable--editing {
+    cursor: text;
+    outline: none;
+    white-space: pre-wrap;
+    box-shadow:
+      0 0 0 2px hsl(var(--primary)),
+      0 0 0 6px hsl(var(--primary) / 0.15);
+  }
+
+  /* Geändert, aber noch nicht vom Arbeitsplatz bestätigt. */
+  .cms-preview .cms-editable--pending {
+    opacity: 0.55;
+  }
+
+  /*
      Ein Hinweis, dass man sich in der Vorschau befindet — und nicht auf der
      echten Website. Ohne ihn ist der Unterschied unsichtbar, und genau das
      führt dazu, dass jemand einen Entwurf für veröffentlicht hält.

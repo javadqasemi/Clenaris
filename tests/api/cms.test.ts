@@ -148,11 +148,15 @@ describe('Inhaltspflege', { concurrency: 1 }, async () => {
     });
   });
 
-  describe('Die Redaktionsmaske selbst', () => {
+  describe('Der Redaktionsarbeitsplatz selbst', () => {
     /**
-     * `/admin/inhalte` ist eine reine Bearbeitungsmaske ohne Lesemodus. Sie
+     * `/admin/inhalte` ist ein reiner Bearbeitungsplatz ohne Lesemodus. Er
      * hängt deshalb an `content:update`, nicht an einem Leserecht — wer nichts
      * ändern darf, hat dort nichts zu sehen.
+     *
+     * Erkannt wird die Seite an der Seitenauswahl über der Vorschau: Die
+     * Felder selbst stehen nicht mehr im HTML, seit direkt in der Vorschau
+     * geschrieben wird.
      */
     const ALLOWED: Record<AccountName, boolean> = {
       super: true,
@@ -165,7 +169,7 @@ describe('Inhaltspflege', { concurrency: 1 }, async () => {
     for (const role of ROLE_ORDER) {
       it(`${role}: ${ALLOWED[role] ? 'sieht die Maske' : 'wird abgewiesen'}`, async () => {
         const response = await get('/admin/inhalte', { jar: jars[role] });
-        const visible = response.status === 200 && response.text.includes('Überschrift, erste Zeile');
+        const visible = response.status === 200 && response.text.includes('Seite in der Vorschau');
 
         if (ALLOWED[role]) {
           assert.ok(visible, `HTTP ${response.status}, Maske nicht im HTML`);

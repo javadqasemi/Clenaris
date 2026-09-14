@@ -196,6 +196,13 @@ describe('Rauchtest', { concurrency: 1 }, async () => {
       assert.ok(response.status >= 200 && response.status < 400, `HTTP ${response.status}`);
     });
 
+    it('/admin/leads/:id/bearbeiten', async () => {
+      assert.ok(leadId);
+      const response = await get(`/admin/leads/${leadId}/bearbeiten`, { jar: jars.admin });
+      assert.ok(response.status >= 200 && response.status < 400, `HTTP ${response.status}`);
+      assert.ok(response.text.includes('Änderungen speichern'), 'Bearbeitungsmaske fehlt');
+    });
+
     // Die PDF-Erzeugung ist der Weg, der am ehesten stillschweigend bricht:
     // Sie läuft in einem eigenen Pfad, den keine Seite berührt.
     it('erzeugt ein Offerten-PDF', async () => {

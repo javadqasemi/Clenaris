@@ -1,7 +1,7 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
-import { ArrowLeft, FileText, Mail, MapPin, Phone, UserCheck } from 'lucide-react';
+import { ArrowLeft, FileText, Mail, MapPin, PenLine, Phone, UserCheck } from 'lucide-react';
 
 import { prisma, toNumber } from '@/lib/db';
 import { requirePermission } from '@/lib/auth/session';
@@ -129,6 +129,14 @@ export default async function LeadDetailPage({
                 <Link href={`/admin/kunden/${lead.customer.id}`}>
                   <UserCheck aria-hidden />
                   Kundenakte
+                </Link>
+              </Button>
+            ) : null}
+            {can(session.role, 'lead:update') ? (
+              <Button asChild variant="outline">
+                <Link href={`/admin/leads/${lead.id}/bearbeiten`}>
+                  <PenLine aria-hidden />
+                  Bearbeiten
                 </Link>
               </Button>
             ) : null}
