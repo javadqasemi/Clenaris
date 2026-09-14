@@ -2,7 +2,7 @@ import 'server-only';
 
 import { cache as reactCache } from 'react';
 import { revalidatePath } from 'next/cache';
-import { draftMode } from 'next/headers';
+import { isPreview } from '@/lib/cms/preview';
 
 import { prisma, Prisma } from '@/lib/db';
 import { cache, cacheKeys } from '@/lib/redis';
@@ -68,25 +68,20 @@ export const getContent = reactCache(async (organizationId: string): Promise<Con
   const defaults = defaultContent();
 
   /**
-   * Im Vorschaumodus gilt der Entwurfsstand.
+   * Im Redaktionsrahmen gilt der Entwurfsstand.
    *
-   * `draftMode()` ist hier bewusst *innerhalb* von `getContent` abgefragt und
+   * Die Frage ist hier bewusst *innerhalb* von `getContent` gestellt und
    * nicht an jeder der rund dreissig Aufrufstellen: Eine vergessene Stelle
    * zeigte in der Vorschau den veröffentlichten Text und sähe damit aus wie
    * ein nicht gespeicherter Entwurf.
    *
-   * Der Aufruf ist gegen einen Fehler abgesichert, weil `draftMode()` nur im
-   * Request-Kontext verfügbar ist — bei der statischen Erzeugung zur Bauzeit
-   * gibt es keinen, und dort ist die Antwort ohnehin „nein".
+   * Dieselbe Prüfung wie für die Bearbeitungsmarken (`isPreview`): Cookie,
+   * Berechtigung *und* Rahmen. Vorher genügte das Cookie — und ein Browser,
+   * in dem die Maske einmal offen war, zeigte auf der echten Website
+   * unveröffentlichte Texte, darunter womöglich Preise, die noch nicht
+   * gelten.
    */
-  let previewing = false;
-  try {
-    previewing = (await draftMode()).isEnabled;
-  } catch {
-    previewing = false;
-  }
-
-  if (previewing) return getPreviewContent(organizationId);
+  if (await isPreview()) return getPreviewContent(organizationId);
 
   try {
     const stored = await cache.remember(

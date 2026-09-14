@@ -51,6 +51,11 @@ export async function GET(request: NextRequest) {
 
   if (request.nextUrl.searchParams.get('aus') === '1') {
     draft.disable();
+    // `nur=1` auch beim Ausschalten: Die Maske ruft das beim Verlassen per
+    // `fetch` mit `keepalive` auf — eine Weiterleitung wäre dort sinnlos.
+    if (request.nextUrl.searchParams.get('nur') === '1') {
+      return new NextResponse(null, { status: 204, headers: { 'Cache-Control': 'no-store' } });
+    }
     return NextResponse.redirect(new URL('/admin/inhalte', request.url));
   }
 

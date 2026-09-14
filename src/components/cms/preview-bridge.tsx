@@ -94,6 +94,17 @@ export function CmsPreviewBridge() {
   React.useEffect(() => {
     const inFrame = window.parent !== window;
 
+    /**
+     * Ausserhalb eines Rahmens tut die Brücke nichts — keine Klasse am
+     * Wurzelelement, keine Klick- und Hover-Behandlung. Der Server liefert
+     * Marken ohnehin nur in den Rahmen der Maske (`isPreview`); dies ist die
+     * zweite Sperre für den Fall, dass doch einmal welche im HTML stehen.
+     * Vorher hob die Brücke jede Marke auch in einem gewöhnlichen Tab hervor
+     * und fing Klicks ab — die Website sah bearbeitbar aus, war es aber
+     * nicht, weil niemand da war, der gespeichert hätte.
+     */
+    if (!inFrame) return undefined;
+
     const post = (payload: Record<string, unknown>) => {
       if (!inFrame) return;
       // Zielursprung ausdrücklich: `'*'` würde die Nachricht an jede Seite

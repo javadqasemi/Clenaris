@@ -206,6 +206,28 @@ export function ContentWorkspace({
   }, [nonce]);
 
   /**
+   * Beim Verlassen der Maske den Vorschaumodus wieder ausschalten.
+   *
+   * Das Cookie ist nach dem Umbau von `isPreview` zwar ausserhalb des
+   * Rahmens wirkungslos — es gilt nur mit Sitzung und nur im Rahmen. Es
+   * trotzdem zu räumen hält den Browser sauber: Wer die Maske schliesst,
+   * soll kein Cookie behalten, das unveröffentlichte Inhalte freischaltet.
+   * `pagehide` statt `beforeunload`: zuverlässiger beim Schliessen des Tabs,
+   * und `keepalive` lässt die Anfrage den Seitenwechsel überleben.
+   */
+  React.useEffect(() => {
+    const disarm = () => {
+      void fetch('/api/content/preview?aus=1&nur=1', {
+        credentials: 'same-origin',
+        cache: 'no-store',
+        keepalive: true,
+      }).catch(() => undefined);
+    };
+    window.addEventListener('pagehide', disarm);
+    return () => window.removeEventListener('pagehide', disarm);
+  }, []);
+
+  /**
    * Einen Baustein als Entwurf speichern.
    *
    * Ein Aufruf je Änderung: Wer in der Seite tippt, ändert einen Text und

@@ -148,6 +148,57 @@ describe('Inhaltspflege', { concurrency: 1 }, async () => {
     });
   });
 
+  describe('Vorschaumodus bleibt im Redaktionsrahmen', () => {
+    /**
+     * Der Fehler, den diese Fälle festhalten: Nach einem Besuch der Maske
+     * blieb das Vorschau-Cookie im Browser, und jede öffentliche Seite im
+     * selben Browser trug Bearbeitungsmarken — Rahmen beim Überfahren, Text
+     * beim Klick beschreibbar. Marken gibt es jetzt nur mit Cookie *und*
+     * Schreibrecht *und* im Rahmen der Maske (`Sec-Fetch-Dest: iframe`).
+     */
+    const FRAME = { 'sec-fetch-dest': 'iframe' };
+    const MARK = 'data-cms-key';
+
+    it('einschalten darf nur, wer Inhalte ändert', async () => {
+      for (const role of ROLE_ORDER) {
+        const response = await get('/api/content/preview?nur=1', { jar: jars[role] });
+        const allowed = role === 'super' || role === 'admin';
+        assert.equal(response.status, allowed ? 204 : 403, `${role}: HTTP ${response.status}`);
+      }
+      const guest = await get('/api/content/preview?nur=1');
+      assert.equal(guest.status, 403);
+    });
+
+    it('zeigt Marken nur im Rahmen, nur mit Schreibrecht, und nicht mehr nach dem Ausschalten', async () => {
+      const armed = await get('/api/content/preview?nur=1', { jar: jars.admin });
+      assert.equal(armed.status, 204);
+      assert.ok(armed.cookies.length > 0, 'Vorschau-Cookie gesetzt');
+      const adminWithCookie = `${jars.admin}; ${armed.cookies}`;
+
+      const plain = await get('/', { jar: adminWithCookie });
+      assert.equal(plain.status, 200);
+      assert.ok(!plain.text.includes(MARK), 'ausserhalb des Rahmens keine Marken — auch für die Administration');
+
+      const framed = await get('/', { jar: adminWithCookie, headers: FRAME });
+      assert.equal(framed.status, 200);
+      assert.ok(framed.text.includes(MARK), 'im Rahmen der Maske Marken');
+
+      const guest = await get('/', { jar: armed.cookies, headers: FRAME });
+      assert.ok(!guest.text.includes(MARK), 'Cookie ohne Sitzung: keine Marken');
+
+      const customer = await get('/', { jar: `${jars.customer}; ${armed.cookies}`, headers: FRAME });
+      assert.ok(!customer.text.includes(MARK), 'Cookie mit Kundensitzung: keine Marken');
+
+      const employee = await get('/', { jar: `${jars.employee}; ${armed.cookies}`, headers: FRAME });
+      assert.ok(!employee.text.includes(MARK), 'Cookie mit Mitarbeitendensitzung: keine Marken');
+
+      const off = await get('/api/content/preview?aus=1&nur=1', { jar: adminWithCookie });
+      assert.equal(off.status, 204);
+      const after = await get('/', { jar: `${jars.admin}; ${off.cookies}`, headers: FRAME });
+      assert.ok(!after.text.includes(MARK), 'nach dem Ausschalten keine Marken, auch im Rahmen');
+    });
+  });
+
   describe('Der Redaktionsarbeitsplatz selbst', () => {
     /**
      * `/admin/inhalte` ist ein reiner Bearbeitungsplatz ohne Lesemodus. Er

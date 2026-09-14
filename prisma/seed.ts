@@ -683,7 +683,18 @@ async function main() {
 
   const admin = await prisma.user.upsert({
     where: { email: process.env.SEED_ADMIN_EMAIL ?? 'admin@clenaris.ch' },
-    update: { passwordHash: adminPassword, role: 'ADMIN', status: 'ACTIVE' },
+    // Auch Papierkorb, Sperre und Fehlversuche zurücksetzen — ein Klick in
+    // der Benutzerverwaltung oder ein abgebrochener Prüflauf darf das
+    // Demo-Konto nicht dauerhaft aus den Prüfungen nehmen.
+    update: {
+      passwordHash: adminPassword,
+      role: 'ADMIN',
+      status: 'ACTIVE',
+      deletedAt: null,
+      lockedUntil: null,
+      failedLoginCount: 0,
+      mustChangePassword: false,
+    },
     create: {
       organizationId: org.id,
       email: process.env.SEED_ADMIN_EMAIL ?? 'admin@clenaris.ch',
@@ -706,7 +717,14 @@ async function main() {
    */
   await prisma.user.upsert({
     where: { email: process.env.SEED_SUPERADMIN_EMAIL ?? 'system@clenaris.ch' },
-    update: { role: 'SUPER_ADMIN', status: 'ACTIVE' },
+    update: {
+      role: 'SUPER_ADMIN',
+      status: 'ACTIVE',
+      deletedAt: null,
+      lockedUntil: null,
+      failedLoginCount: 0,
+      mustChangePassword: false,
+    },
     create: {
       organizationId: org.id,
       email: process.env.SEED_SUPERADMIN_EMAIL ?? 'system@clenaris.ch',
@@ -738,7 +756,15 @@ async function main() {
   for (const member of teamMembers) {
     const user = await prisma.user.upsert({
       where: { email: member.email },
-      update: { passwordHash: demoPassword, role: member.role, status: 'ACTIVE' },
+      update: {
+        passwordHash: demoPassword,
+        role: member.role,
+        status: 'ACTIVE',
+        deletedAt: null,
+        lockedUntil: null,
+        failedLoginCount: 0,
+        mustChangePassword: false,
+      },
       create: {
         organizationId: org.id,
         email: member.email,

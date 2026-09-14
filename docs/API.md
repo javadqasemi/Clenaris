@@ -3437,7 +3437,7 @@ Familie.
 
 ### `GET /api/content/preview`
 
-**Vorschaumodus schalten.** Setzt das Draft-Mode-Cookie von Next.js. Mit `nur=1` antwortet der Endpunkt mit 204 statt weiterzuleiten (nötig im `iframe` der Redaktionsmaske), mit `aus=1` schaltet er den Modus ab. `pfad` ist ein geprüftes Rücksprungziel auf dieser Domain.
+**Vorschaumodus schalten.** Setzt das Draft-Mode-Cookie von Next.js. Mit `nur=1` antwortet der Endpunkt mit 204 statt weiterzuleiten (nötig im `iframe` der Redaktionsmaske), mit `aus=1` schaltet er den Modus ab (`aus=1&nur=1` ebenfalls mit 204). `pfad` ist ein geprüftes Rücksprungziel auf dieser Domain. Das Cookie wirkt nur zusammen mit einer Sitzung mit `content:update` und nur im Rahmen der Maske (`Sec-Fetch-Dest: iframe`); ausserhalb liefert die Website den veröffentlichten Stand ohne Bearbeitungsmarken.
 
 - **Zugriff:** Erfordert die Berechtigung: `content:update`.
 - **Erfolg:** 200
