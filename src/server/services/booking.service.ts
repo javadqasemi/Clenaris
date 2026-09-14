@@ -20,6 +20,8 @@ import {
 } from '@/lib/email/templates';
 import { smsTemplates } from '@/lib/sms/client';
 import { audit } from '@/lib/audit';
+import { logger } from '@/lib/logger';
+import { renderBookingConfirmationPdf } from '@/lib/pdf/render';
 
 import { nextNumber } from './numbering.service';
 import { invalidateAvailability, isSlotBookable } from './availability.service';
@@ -68,7 +70,7 @@ export async function createBooking(params: {
   // --- 2) Preis serverseitig berechnen -------------------------------------
   const customer = await prisma.customer.findUniqueOrThrow({
     where: { id: customerId },
-    select: { discountPercent: true, blocked: true, blockedReason: true },
+    select: { discountPercent: true, blocked: true, blockedReason: true, totalBookings: true },
   });
 
   if (customer.blocked) {
@@ -99,6 +101,7 @@ export async function createBooking(params: {
       hasPets: input.hasPets,
       manualHours: input.manualHours,
       couponCode: input.couponCode ?? null,
+      customer: { id: customerId, totalBookings: customer.totalBookings },
       customerDiscountPercent: toNumber(customer.discountPercent),
       urgent: input.urgent,
     },
@@ -109,6 +112,14 @@ export async function createBooking(params: {
     throw new BusinessRuleError(
       'Für diese Dienstleistung erstellen wir eine individuelle Offerte. Bitte nutzen Sie das Offertformular.',
     );
+  }
+
+  // Ein eingegebener, aber nicht anwendbarer Gutschein ist ein Abbruchgrund,
+  // kein Schönheitsfehler: Früher wurde still zum vollen Preis gebucht, und
+  // die Kundschaft erfuhr erst auf der Rechnung, dass der Code nicht griff.
+  // 422 mit der Begründung — die Kundschaft korrigiert oder leert das Feld.
+  if (breakdown.coupon && breakdown.coupon.status !== 'APPLIED') {
+    throw new BusinessRuleError(breakdown.coupon.message);
   }
 
   // --- 3) Kapazität prüfen --------------------------------------------------
@@ -249,6 +260,7 @@ export async function createBooking(params: {
 
   const addressLabel = await formatBookingAddress(booking.addressId);
   const confirmationUrl = absoluteUrl(`/buchung/${booking.confirmationToken}`);
+  const confirmationPdf = await bookingPdfAttachment(booking.id);
 
   await notify({
     userId,
@@ -266,7 +278,9 @@ export async function createBooking(params: {
       address: addressLabel,
       grossTotal: toNumber(booking.grossTotal),
       manageUrl: confirmationUrl,
+      pdfAttached: Boolean(confirmationPdf),
     }),
+    emailAttachments: confirmationPdf,
     entity: 'Booking',
     entityId: booking.id,
   });
@@ -337,6 +351,9 @@ export async function confirmBooking(params: {
 
   const serviceName = booking.items[0]?.service.name ?? 'Reinigung';
   const addressLabel = await formatBookingAddress(booking.addressId);
+  // Nach dem Statuswechsel rendern — das Dokument soll „Terminbestätigung"
+  // heissen, nicht „Buchungsbestätigung (wird geprüft)".
+  const confirmationPdf = await bookingPdfAttachment(booking.id);
 
   await notify({
     userId: booking.customer.user?.id ?? null,
@@ -346,7 +363,9 @@ export async function confirmBooking(params: {
     title: 'Termin bestätigt',
     body: `Ihr Termin am ${booking.scheduledStart.toLocaleDateString('de-CH')} ist bestätigt.`,
     link: `/konto/buchungen/${booking.id}`,
+    emailAttachments: confirmationPdf,
     emailContent: bookingConfirmedEmail({
+      pdfAttached: Boolean(confirmationPdf),
       firstName: booking.customer.firstName,
       bookingNumber: booking.number,
       serviceName,
@@ -1325,6 +1344,28 @@ export async function getBookingByToken(token: string) {
 // ---------------------------------------------------------------------------
 //  Hilfsfunktionen
 // ---------------------------------------------------------------------------
+
+const log = logger('booking');
+
+/**
+ * Die Buchungsbestätigung als Mail-Anhang — oder nichts.
+ *
+ * Ein Fehler beim Rendern darf die Buchung nicht zu Fall bringen: Die Buchung
+ * ist zu diesem Zeitpunkt längst gespeichert, und eine E-Mail ohne Anhang ist
+ * besser als gar keine. Die Vorlage sagt dann auch nicht „liegt bei", sondern
+ * verweist auf den Download im Verwaltungslink.
+ */
+async function bookingPdfAttachment(
+  bookingId: string,
+): Promise<{ filename: string; content: Buffer }[] | undefined> {
+  try {
+    const pdf = await renderBookingConfirmationPdf(bookingId);
+    return [{ filename: pdf.filename, content: pdf.buffer }];
+  } catch (error) {
+    log.error('Buchungsbestätigung konnte nicht gerendert werden', { bookingId, error });
+    return undefined;
+  }
+}
 
 async function resolveCustomer(params: {
   organizationId: string;

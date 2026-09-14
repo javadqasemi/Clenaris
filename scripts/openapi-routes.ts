@@ -18,6 +18,7 @@ import * as opsAdmin from '@/lib/validation/operations-admin';
 import * as nav from '@/lib/validation/navigation';
 import * as users from '@/lib/validation/users';
 import * as settings from '@/lib/validation/settings';
+import * as system from '@/lib/validation/system';
 import * as q from '@/lib/validation/queries';
 import { BI_ROUTES } from './openapi-routes-bi';
 
@@ -311,6 +312,19 @@ export const ROUTES: RouteDoc[] = [
   },
   {
     method: 'get',
+    path: '/api/health',
+    tag: 'Öffentlich',
+    summary: 'Betriebsbereitschaft',
+    description:
+      'Für Auslieferung, Überwachung und Load Balancer. Prüft die Datenbankverbindung und meldet ' +
+      'die Zahl der angewandten Migrationen, den ausgelieferten Stand und die Laufzeit. Antwortet ' +
+      'mit 503, wenn die Datenbank nicht erreichbar ist — die Aussage steht im Statuscode, nicht im Rumpf.',
+    guard: { kind: 'public' },
+    extraErrors: [503],
+    rateLimit: 'apiRead',
+  },
+  {
+    method: 'get',
     path: '/api/public/availability',
     tag: 'Öffentlich',
     summary: 'Freie Zeitfenster eines Tages',
@@ -405,6 +419,20 @@ export const ROUTES: RouteDoc[] = [
     tag: 'Öffentlich',
     summary: 'Offerte als PDF',
     description: 'Zugriff über den Magic-Link-Token aus der Offerten-E-Mail, ohne Anmeldung.',
+    guard: { kind: 'public' },
+    extraErrors: [404],
+    rateLimit: 'apiRead',
+    params: q.publicTokenParams,
+    produces: 'application/pdf',
+  },
+  {
+    method: 'get',
+    path: '/api/public/bookings/{token}/pdf',
+    tag: 'Öffentlich',
+    summary: 'Buchungsbestätigung als PDF',
+    description:
+      'Zugriff über den Verwaltungslink aus der Buchungs-E-Mail, ohne Anmeldung. Wird bei jedem ' +
+      'Abruf frisch gerendert, damit der Status (eingegangen, bestätigt, storniert) stimmt.',
     guard: { kind: 'public' },
     extraErrors: [404],
     rateLimit: 'apiRead',
@@ -2159,6 +2187,31 @@ export const ROUTES: RouteDoc[] = [
     extraErrors: [422],
   },
   {
+    method: 'get',
+    path: '/api/system/purge',
+    tag: 'System',
+    summary: 'Datenbereinigung — Vorschau',
+    description:
+      'Je Bereich die Zahl der Hauptdatensätze, die ein Lauf endgültig löschen würde. ' +
+      'Nur die Systemverantwortung.',
+    guard: perm('all', 'data:purge'),
+    rateLimit: 'apiRead',
+  },
+  {
+    method: 'post',
+    path: '/api/system/purge',
+    tag: 'System',
+    summary: 'Datenbereinigung — Bereiche endgültig löschen',
+    description:
+      'Unumkehrbar. Verlangt den Bestätigungssatz «ALLES LÖSCHEN» im Körper, läuft in einer ' +
+      'Transaktion und schreibt je Bereich einen Eintrag ins Prüfprotokoll — im selben Commit. ' +
+      'Kundschaft lässt sich nur zusammen mit den Finanzen löschen (Rechnungen halten sie fest).',
+    guard: perm('all', 'data:purge'),
+    rateLimit: 'apiWrite',
+    body: system.purgeSchema,
+    extraErrors: [422],
+  },
+  {
     method: 'delete',
     path: '/api/users/{id}',
     tag: 'System',
@@ -3175,6 +3228,20 @@ export const ROUTES: RouteDoc[] = [
     guard: perm('any', 'booking:read', 'booking:read_own'),
     rateLimit: 'apiRead',
     params: q.idParam,
+  },
+  {
+    method: 'get',
+    path: '/api/bookings/{id}/pdf',
+    tag: 'Buchungen',
+    summary: 'Buchungsbestätigung als PDF',
+    description:
+      'Kundschaft erhält nur die eigene Buchung; die Einschränkung steht als `customerId` in der ' +
+      'Abfrage. Wird bei jedem Abruf frisch gerendert, damit der Status stimmt.',
+    guard: perm('any', 'booking:read', 'booking:read_own'),
+    extraErrors: [404],
+    rateLimit: 'apiRead',
+    params: q.idParam,
+    produces: 'application/pdf',
   },
   {
     method: 'patch',

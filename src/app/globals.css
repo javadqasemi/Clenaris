@@ -678,6 +678,60 @@
   margin-left: 1px;
 }
 
+/* ===========================================================================
+ * Druck
+ * ===========================================================================
+ *
+ * Eine Seite, die eine `.print-area` enthält, druckt *nur* diesen Bereich:
+ * Kopfzeile, Navigation, Schaltflächen und Fusszeile bleiben weg. Gelöst
+ * über `visibility` statt `display`, weil ein ausgeblendeter Vorfahr seine
+ * Kinder mitnimmt — mit `visibility` bleibt der Bereich sichtbar, obwohl
+ * alles um ihn herum unsichtbar ist. Der Bereich wird dann an den Blattanfang
+ * gesetzt, sonst druckt der Browser die leere Höhe der versteckten Teile als
+ * weisse Seiten davor.
+ *
+ * `.print-hidden` nimmt einzelne Elemente *innerhalb* der Fläche aus dem
+ * Druck (Schaltflächen, Hinweise, die nur am Bildschirm Sinn haben).
+ */
+@media print {
+  body:has(.print-area) * {
+    visibility: hidden;
+  }
+
+  body:has(.print-area) .print-area,
+  body:has(.print-area) .print-area * {
+    visibility: visible;
+  }
+
+  body:has(.print-area) .print-area {
+    position: absolute;
+    inset: 0 auto auto 0;
+    width: 100%;
+    margin: 0;
+    padding: 0;
+    box-shadow: none;
+  }
+
+  .print-hidden,
+  .print-hidden * {
+    display: none !important;
+  }
+
+  .print-area {
+    color: #000;
+    background: #fff;
+  }
+
+  .print-area a {
+    text-decoration: none;
+    color: inherit;
+  }
+
+  @page {
+    margin: 16mm;
+  }
+}
+
 .fc .fc-timegrid-event {
   border-radius: 0.5rem;
   box-shadow: 0 0 0 1px hsl(var(--card));

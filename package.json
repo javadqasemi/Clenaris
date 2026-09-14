@@ -12,7 +12,7 @@
     "build": "prisma generate && next build",
     "start": "next build && next start",
     "start:built": "next start",
-    "lint": "next lint",
+    "lint": "next lint --dir src --dir scripts --dir tests --dir prisma",
     "typecheck": "tsc --noEmit",
     "test": "tsx --test --test-concurrency=1 \"tests/**/*.test.ts\"",
     "test:api": "tsx --test --test-concurrency=1 \"tests/api/*.test.ts\"",

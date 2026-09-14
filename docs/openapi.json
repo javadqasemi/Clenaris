@@ -1724,6 +1724,58 @@
         }
       }
     },
+    "/api/health": {
+      "get": {
+        "tags": [
+          "Öffentlich"
+        ],
+        "summary": "Betriebsbereitschaft",
+        "description": "Für Auslieferung, Überwachung und Load Balancer. Prüft die Datenbankverbindung und meldet die Zahl der angewandten Migrationen, den ausgelieferten Stand und die Laufzeit. Antwortet mit 503, wenn die Datenbank nicht erreichbar ist — die Aussage steht im Statuscode, nicht im Rumpf.\n\n**Zugriff:** Öffentlich — keine Anmeldung nötig.\n\n**Rate-Limit-Klasse:** `apiRead`",
+        "operationId": "getHealth",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Erfolg",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SuccessEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/public/availability": {
       "get": {
         "tags": [
@@ -2823,6 +2875,81 @@
         "summary": "Offerte als PDF",
         "description": "Zugriff über den Magic-Link-Token aus der Offerten-E-Mail, ohne Anmeldung.\n\n**Zugriff:** Öffentlich — keine Anmeldung nötig.\n\n**Rate-Limit-Klasse:** `apiRead`",
         "operationId": "getPublicQuotesByTokenPdf",
+        "security": [],
+        "parameters": [
+          {
+            "name": "token",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 10
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "PDF-Dokument",
+            "content": {
+              "application/pdf": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NOT_FOUND — nicht vorhanden, oder für diese Sitzung nicht sichtbar.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/public/bookings/{token}/pdf": {
+      "get": {
+        "tags": [
+          "Öffentlich"
+        ],
+        "summary": "Buchungsbestätigung als PDF",
+        "description": "Zugriff über den Verwaltungslink aus der Buchungs-E-Mail, ohne Anmeldung. Wird bei jedem Abruf frisch gerendert, damit der Status (eingegangen, bestätigt, storniert) stimmt.\n\n**Zugriff:** Öffentlich — keine Anmeldung nötig.\n\n**Rate-Limit-Klasse:** `apiRead`",
+        "operationId": "getPublicBookingsByTokenPdf",
         "security": [],
         "parameters": [
           {
@@ -23411,6 +23538,197 @@
         }
       }
     },
+    "/api/system/purge": {
+      "get": {
+        "tags": [
+          "System"
+        ],
+        "summary": "Datenbereinigung — Vorschau",
+        "description": "Je Bereich die Zahl der Hauptdatensätze, die ein Lauf endgültig löschen würde. Nur die Systemverantwortung.\n\n**Zugriff:** Erfordert die Berechtigung: `data:purge`.\n\n**Rate-Limit-Klasse:** `apiRead`",
+        "operationId": "getSystemPurge",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Erfolg",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SuccessEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHORIZED — keine oder abgelaufene Sitzung.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN — angemeldet, aber ohne die nötige Berechtigung.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "System"
+        ],
+        "summary": "Datenbereinigung — Bereiche endgültig löschen",
+        "description": "Unumkehrbar. Verlangt den Bestätigungssatz «ALLES LÖSCHEN» im Körper, läuft in einer Transaktion und schreibt je Bereich einen Eintrag ins Prüfprotokoll — im selben Commit. Kundschaft lässt sich nur zusammen mit den Finanzen löschen (Rechnungen halten sie fest).\n\n**Zugriff:** Erfordert die Berechtigung: `data:purge`.\n\n**Rate-Limit-Klasse:** `apiWrite`",
+        "operationId": "postSystemPurge",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "bereiche": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "finanzen",
+                        "auftraege",
+                        "crm",
+                        "kommunikation",
+                        "website",
+                        "fuehrung",
+                        "personal"
+                      ]
+                    },
+                    "minItems": 1
+                  },
+                  "bestaetigung": {
+                    "type": "string"
+                  },
+                  "nummernkreiseZuruecksetzen": {
+                    "type": "boolean",
+                    "default": false
+                  }
+                },
+                "required": [
+                  "bereiche",
+                  "bestaetigung"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Erfolg",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SuccessEnvelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHORIZED — keine oder abgelaufene Sitzung.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN — angemeldet, aber ohne die nötige Berechtigung.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "BUSINESS_RULE — fachlich nicht zulässig, etwa eine bereits ausgestellte Rechnung ändern.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/users/{id}/restore": {
       "post": {
         "tags": [
@@ -31322,6 +31640,105 @@
           },
           "422": {
             "description": "BUSINESS_RULE — fachlich nicht zulässig, etwa eine bereits ausgestellte Rechnung ändern.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/bookings/{id}/pdf": {
+      "get": {
+        "tags": [
+          "Buchungen"
+        ],
+        "summary": "Buchungsbestätigung als PDF",
+        "description": "Kundschaft erhält nur die eigene Buchung; die Einschränkung steht als `customerId` in der Abfrage. Wird bei jedem Abruf frisch gerendert, damit der Status stimmt.\n\n**Zugriff:** Erfordert eine der Berechtigungen: `booking:read`, `booking:read_own`.\n\n**Rate-Limit-Klasse:** `apiRead`",
+        "operationId": "getBookingsByIdPdf",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "PDF-Dokument",
+            "content": {
+              "application/pdf": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHORIZED — keine oder abgelaufene Sitzung.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN — angemeldet, aber ohne die nötige Berechtigung.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NOT_FOUND — nicht vorhanden, oder für diese Sitzung nicht sichtbar.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.",
             "content": {
               "application/json": {
                 "schema": {

@@ -66,7 +66,12 @@ export function BookingWizard({
   const next = useBookingStore((s) => s.next);
   const back = useBookingStore((s) => s.back);
   const setStep = useBookingStore((s) => s.setStep);
-  const canProceed = useBookingStore((s) => s.canProceed);
+  // Der Selektor ruft `canProceed()` *auf* und liefert den Wahrheitswert —
+  // nicht die Funktion. Die Funktionsreferenz ändert sich nie, also löste
+  // ein Tippen in Vorname, E-Mail oder Ort kein Neurendern des Assistenten
+  // aus, und „Weiter" blieb gesperrt, bis zufällig etwas anderes (PLZ,
+  // Gutscheincode) die Preisabfrage und damit ein Neurendern anstiess.
+  const ready = useBookingStore((s) => s.canProceed());
   const reset = useBookingStore((s) => s.reset);
 
   const [submitting, setSubmitting] = React.useState(false);
@@ -75,6 +80,13 @@ export function BookingWizard({
   const price = useLivePrice();
   const stepIndex = BOOKING_STEPS.findIndex((s) => s.key === step);
   const current = BOOKING_STEPS[stepIndex];
+
+  // Ein eingegebener Code sperrt den Abschluss, bis der Server ihn bestätigt
+  // hat. Der Server lehnt eine Buchung mit ungültigem Code ohnehin mit 422 ab;
+  // die Sperre hier erspart der Kundschaft den Umweg über die Fehlermeldung.
+  const couponCode = useBookingStore((s) => s.couponCode.trim());
+  const couponBlocks =
+    couponCode.length > 0 && (price.isFetching || price.data?.coupon?.status !== 'APPLIED');
 
   // Vorbelegung aus dem Hero-Rechner übernehmen.
   React.useEffect(() => {
@@ -163,7 +175,13 @@ export function BookingWizard({
       });
 
       reset();
-      router.push(`/buchen/bestaetigt?nr=${encodeURIComponent(result.number)}`);
+      // Der Verwaltungs-Token steckt im letzten Pfadsegment des Bestätigungslinks.
+      // Die Abschlussseite zeigt damit die vollständige Bestätigung samt Druck
+      // und PDF — ohne ihn nur Nummer und nächste Schritte.
+      const token = result.confirmationUrl.split('/').pop() ?? '';
+      router.push(
+        `/buchen/bestaetigt?nr=${encodeURIComponent(result.number)}${token ? `&t=${encodeURIComponent(token)}` : ''}`,
+      );
     } catch (err) {
       const message =
         err instanceof ApiError
@@ -243,7 +261,13 @@ export function BookingWizard({
               savedAddresses={savedAddresses}
             />
           ) : null}
-          {step === 'uebersicht' ? <StepSummary services={services} /> : null}
+          {step === 'uebersicht' ? (
+            <StepSummary
+              services={services}
+              coupon={price.data?.coupon ?? null}
+              couponChecking={price.isFetching}
+            />
+          ) : null}
         </div>
 
         {/* Navigation (Desktop) */}
@@ -254,11 +278,16 @@ export function BookingWizard({
           </Button>
 
           {step === 'uebersicht' ? (
-            <Button size="lg" onClick={submit} loading={submitting} disabled={!canProceed()}>
+            <Button
+              size="lg"
+              onClick={submit}
+              loading={submitting}
+              disabled={!ready || couponBlocks}
+            >
               Kostenpflichtig buchen
             </Button>
           ) : (
-            <Button size="lg" onClick={next} disabled={!canProceed()}>
+            <Button size="lg" onClick={next} disabled={!ready}>
               Weiter
               <ArrowRight aria-hidden />
             </Button>
@@ -299,12 +328,12 @@ export function BookingWizard({
               width="full"
               onClick={submit}
               loading={submitting}
-              disabled={!canProceed()}
+              disabled={!ready || couponBlocks}
             >
               Kostenpflichtig buchen
             </Button>
           ) : (
-            <Button size="lg" width="full" onClick={next} disabled={!canProceed()}>
+            <Button size="lg" width="full" onClick={next} disabled={!ready}>
               Weiter
               <ArrowRight aria-hidden />
             </Button>

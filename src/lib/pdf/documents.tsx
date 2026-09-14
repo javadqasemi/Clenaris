@@ -8,7 +8,7 @@ import {
   View,
 } from '@react-pdf/renderer';
 
-import { formatDate, formatIban } from '@/lib/utils';
+import { formatDate, formatDateLong, formatIban, formatTime } from '@/lib/utils';
 import { formatQrReference } from './swiss-qr';
 
 /**
@@ -252,10 +252,17 @@ function Header({ company }: { company: PdfCompany }) {
   );
 }
 
-function RecipientBlock({ recipient }: { recipient: PdfRecipient }) {
+function RecipientBlock({
+  recipient,
+  label = 'RECHNUNGSEMPFÄNGER',
+}: {
+  recipient: PdfRecipient;
+  /** Überschrift des Blocks — eine Buchungsbestätigung hat keinen Rechnungsempfänger. */
+  label?: string;
+}) {
   return (
     <View style={styles.addressBlock}>
-      <Text style={styles.recipientLabel}>RECHNUNGSEMPFÄNGER</Text>
+      <Text style={styles.recipientLabel}>{label}</Text>
       {recipient.company ? <Text style={styles.recipientLine}>{recipient.company}</Text> : null}
       <Text style={styles.recipientLine}>{recipient.name}</Text>
       <Text style={styles.recipientLine}>{recipient.street}</Text>
@@ -830,6 +837,170 @@ export function JobReportDocument(props: JobReportPdfProps) {
         </View>
 
         <Footer company={company} label={`Einsatzbericht ${props.jobNumber}`} />
+      </Page>
+    </Document>
+  );
+}
+
+// ---------------------------------------------------------------------------
+//  Buchungsbestätigung
+// ---------------------------------------------------------------------------
+
+export interface BookingConfirmationPdfProps {
+  company: PdfCompany;
+  recipient: PdfRecipient;
+  number: string;
+  /** Prisma-Status — entscheidet über Titel und Hinweistext. */
+  status: string;
+  statusLabel: string;
+  createdAt: Date;
+  serviceName: string;
+  frequencyLabel: string;
+  scheduledStart: Date;
+  scheduledEnd: Date;
+  durationMinutes: number;
+  crewSize: number;
+  address: string;
+  propertyLabel: string;
+  extras: { name: string; quantity: number; lineTotal: number }[];
+  /** Die Herleitung aus `priceBreakdown` — jede Zeile so, wie die Kundschaft sie im Assistenten sah. */
+  lines: { label: string; amount: number; kind: string }[];
+  netTotal: number;
+  vatRate: number;
+  vatAmount: number;
+  grossTotal: number;
+  customerNote?: string | null;
+  accessNote?: string | null;
+  /** Öffentlicher Verwaltungslink — steht im Dokument, damit der Ausdruck allein genügt. */
+  manageUrl: string;
+}
+
+/**
+ * Buchungsbestätigung.
+ *
+ * Kein Rechnungsdokument: keine Positionsnummern, kein Zahlteil, keine
+ * Nummernfolge nach Art. 957a OR. Es ist der Beleg, den die Kundschaft nach
+ * dem Abschluss ausdruckt oder ablegt — Termin, Ort, Umfang, Preis und der
+ * Weg zurück zur Verwaltung. Solange der Termin noch nicht bestätigt ist,
+ * sagt das Dokument das ausdrücklich; sonst liest sich der Ausdruck wie eine
+ * feste Zusage, die das Büro noch gar nicht gegeben hat.
+ */
+export function BookingConfirmationDocument(props: BookingConfirmationPdfProps) {
+  const { company, recipient } = props;
+  const confirmed = props.status === 'CONFIRMED';
+  const cancelled = props.status === 'CANCELLED';
+  const title = cancelled
+    ? 'Stornierte Buchung'
+    : confirmed
+      ? 'Terminbestätigung'
+      : 'Buchungsbestätigung';
+  const timeRange = `${formatTime(props.scheduledStart)} – ${formatTime(props.scheduledEnd)} Uhr`;
+  const hours = Math.floor(props.durationMinutes / 60);
+  const minutes = props.durationMinutes % 60;
+  const duration = minutes > 0 ? `${hours} h ${minutes} min` : `${hours} h`;
+
+  const details: { label: string; value: string }[] = [
+    { label: 'Leistung', value: props.serviceName },
+    { label: 'Turnus', value: props.frequencyLabel },
+    { label: 'Datum', value: formatDateLong(props.scheduledStart) },
+    {
+      label: 'Zeitfenster',
+      value: `${timeRange} · ca. ${duration}${props.crewSize > 1 ? ` · ${props.crewSize} Personen` : ''}`,
+    },
+    { label: 'Einsatzort', value: props.address },
+    { label: 'Objekt', value: props.propertyLabel },
+  ];
+  if (props.extras.length > 0) {
+    details.push({
+      label: 'Zusatzleistungen',
+      value: props.extras.map((extra) => `${extra.quantity}× ${extra.name}`).join(', '),
+    });
+  }
+  if (props.customerNote) details.push({ label: 'Ihre Anmerkung', value: props.customerNote });
+  if (props.accessNote) details.push({ label: 'Zugang', value: props.accessNote });
+
+  return (
+    <Document title={`${title} ${props.number}`} author={company.name} creator="Clenaris">
+      <Page size="A4" style={styles.page}>
+        <Header company={company} />
+
+        <View style={styles.addressRow}>
+          <RecipientBlock recipient={recipient} label="KUNDSCHAFT" />
+          <MetaBlock
+            rows={[
+              { label: 'Buchungsnummer', value: props.number },
+              { label: 'Eingegangen am', value: formatDate(props.createdAt) },
+              { label: 'Status', value: props.statusLabel },
+            ]}
+          />
+        </View>
+
+        <Text style={styles.title}>{title}</Text>
+        <Text style={styles.subtitle}>
+          {props.serviceName} · {formatDateLong(props.scheduledStart)} · {timeRange}
+        </Text>
+
+        <Text style={styles.paragraph}>
+          {cancelled
+            ? 'Diese Buchung wurde storniert. Die Angaben unten dienen nur noch als Beleg.'
+            : confirmed
+              ? 'Ihr Termin ist fix reserviert. Unser Team ist zum vereinbarten Zeitpunkt vor Ort — bitte sorgen Sie dafür, dass wir ins Gebäude kommen.'
+              : 'Vielen Dank für Ihre Buchung. Wir prüfen den Termin und bestätigen ihn in der Regel innerhalb von zwei Stunden per E-Mail. Bis dahin gilt er als reserviert, aber noch nicht als fix.'}
+        </Text>
+
+        <Text style={[styles.th, { marginTop: 10, marginBottom: 4 }]}>IHRE BUCHUNG</Text>
+        {details.map((row) => (
+          <View key={row.label} style={styles.tableRow} wrap={false}>
+            <Text style={[styles.td, { width: '30%', color: COLORS.muted }]}>{row.label}</Text>
+            <Text style={[styles.td, { width: '70%', color: COLORS.ink }]}>{row.value}</Text>
+          </View>
+        ))}
+
+        <Text style={[styles.th, { marginTop: 18, marginBottom: 4 }]}>PREIS</Text>
+        {props.lines.map((line, index) => (
+          <View key={`${line.label}-${index}`} style={styles.tableRow} wrap={false}>
+            <Text
+              style={[
+                styles.td,
+                { width: '70%', color: line.kind === 'discount' ? COLORS.brand : COLORS.body },
+              ]}
+            >
+              {line.label}
+            </Text>
+            <Text style={[styles.td, { width: '30%', textAlign: 'right' }]}>
+              {line.amount < 0 ? `− CHF ${chf(Math.abs(line.amount))}` : `CHF ${chf(line.amount)}`}
+            </Text>
+          </View>
+        ))}
+        <View style={styles.totalsWrap}>
+          <View style={styles.totals}>
+            <View style={styles.totalRow}>
+              <Text style={styles.totalLabel}>Total netto</Text>
+              <Text style={styles.totalValue}>CHF {chf(props.netTotal)}</Text>
+            </View>
+            <View style={styles.totalRow}>
+              <Text style={styles.totalLabel}>MWST {props.vatRate.toFixed(1)} %</Text>
+              <Text style={styles.totalValue}>CHF {chf(props.vatAmount)}</Text>
+            </View>
+            <View style={styles.grandRow}>
+              <Text style={styles.grandLabel}>Gesamtbetrag</Text>
+              <Text style={styles.grandValue}>CHF {chf(props.grossTotal)}</Text>
+            </View>
+          </View>
+        </View>
+
+        <View style={styles.note} wrap={false}>
+          <Text style={{ fontFamily: 'Helvetica-Bold', color: COLORS.ink, marginBottom: 3 }}>
+            Gut zu wissen
+          </Text>
+          <Text>
+            Bezahlt wird erst nach dem Einsatz — per QR-Rechnung mit 30 Tagen Frist oder online.
+            Bis 24 Stunden vor dem Termin verschieben oder stornieren Sie kostenlos.
+          </Text>
+          <Text style={{ marginTop: 4 }}>Buchung verwalten: {props.manageUrl}</Text>
+        </View>
+
+        <Footer company={company} label={`${title} ${props.number}`} />
       </Page>
     </Document>
   );

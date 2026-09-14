@@ -19,9 +19,40 @@ export interface PriceInput {
   /** Vom Kunden gewünschte Dauer (überschreibt die Schätzung). */
   manualHours?: number | null;
   couponCode?: string | null;
+  /**
+   * Die Kundschaft, für die gerechnet wird — falls bekannt. Nur damit lassen
+   * sich `firstOrderOnly` und `perCustomerLimit` eines Gutscheins prüfen; ohne
+   * Kundschaft (anonyme Sofortschätzung) gelten diese beiden Regeln als
+   * erfüllt und werden spätestens beim Buchungsabschluss nachgeholt.
+   */
+  customer?: { id: string; totalBookings: number } | null;
   /** Kundenspezifischer Dauerrabatt in Prozent. */
   customerDiscountPercent?: number;
   urgent?: boolean;
+}
+
+/**
+ * Warum ein Gutschein greift oder nicht. `APPLIED` ist der einzige Zustand,
+ * in dem eine Rabattzeile entsteht; jeder andere trägt eine Begründung, die
+ * das Formular direkt neben dem Feld anzeigt und die der Buchungsabschluss
+ * als 422 zurückgibt.
+ */
+export type CouponCheckStatus =
+  | 'APPLIED'
+  | 'INVALID'
+  | 'EXHAUSTED'
+  | 'MIN_ORDER'
+  | 'NOT_APPLICABLE'
+  | 'FIRST_ORDER_ONLY'
+  | 'PER_CUSTOMER_LIMIT';
+
+export interface CouponCheck {
+  code: string;
+  status: CouponCheckStatus;
+  /** Begründung in Kundensprache; bei `APPLIED` die Kurzbeschreibung. */
+  message: string;
+  /** Gewährter Rabatt als positiver Betrag, 0 wenn nicht angewandt. */
+  amount: number;
 }
 
 export interface PriceLine {
@@ -64,6 +95,13 @@ export interface PriceBreakdown {
 
   /** true, wenn kein verbindlicher Preis berechnet werden kann. */
   onRequest: boolean;
+  /**
+   * Ergebnis der Gutscheinprüfung — `null`, wenn kein Code eingegeben wurde.
+   * Steht bewusst getrennt von `notes`: das Formular muss den Zustand
+   * maschinell auswerten (Abschluss sperren, Badge einfärben), nicht nur
+   * einen Hinweistext durchreichen.
+   */
+  coupon: CouponCheck | null;
   notes: string[];
   /** Angewandte Preisregeln — für Transparenz gegenüber dem Kunden. */
   appliedRules: { name: string; multiplier: number; surcharge: number }[];

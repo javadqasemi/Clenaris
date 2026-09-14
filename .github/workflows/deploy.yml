@@ -1,0 +1,349 @@
+# ===========================================================================
+#  Clenaris — Prüfung und Auslieferung
+# ===========================================================================
+#
+# Ein Push auf `main` durchläuft zwei Aufträge:
+#
+#   qualitaet      Linter, Typen, Dokumentation, Build, vollständige Testreihe
+#   auslieferung   SSH auf den Produktionsserver, `scripts/deploy.sh`, Health Check
+#
+# Der zweite läuft nur, wenn der erste vollständig grün ist. Es gibt keinen
+# Weg, die Prüfung zu überspringen — das ist der Zweck der Trennung.
+#
+# Warum die Testreihe hier so aufwendig ist: Die Prüfungen dieses Projekts
+# fahren die **laufende Anwendung über echtes HTTP** an (siehe `tests/README.md`).
+# Unit-Tests der Dienste gibt es bewusst nicht. Also braucht der Auftrag eine
+# echte PostgreSQL-Datenbank, ein vollständiges Schema, Demodaten und einen
+# gestarteten Produktionsbuild. Ein Workflow, der nur `npm test` aufruft,
+# scheitert sofort mit «Kein Server erreichbar» — und wer daraufhin die Tests
+# aus der Pipeline nimmt, hat die Pipeline abgeschafft, nicht repariert.
+
+name: Auslieferung
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      seed:
+        description: 'Konfigurations-Seed auf dem Server ausführen (Firma, Leistungen, Preise)'
+        type: boolean
+        default: false
+      skip_rollback:
+        description: 'Bei Fehlschlag NICHT zurückspringen (nur zur Fehlersuche)'
+        type: boolean
+        default: false
+
+# Zwei Auslieferungen gleichzeitig zögen sich auf dem Server den Arbeitsbaum
+# gegenseitig weg. `cancel-in-progress: false`, weil ein *abgebrochener* Lauf
+# den Server in einem halben Zustand zurückliesse — der zweite wartet.
+concurrency:
+  group: auslieferung-${{ github.ref }}
+  cancel-in-progress: false
+
+# Nur lesen. Der Workflow schreibt nichts ins Repository zurück.
+permissions:
+  contents: read
+
+jobs:
+  # =========================================================================
+  #  1) Qualitätstor
+  # =========================================================================
+  qualitaet:
+    name: Prüfung
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: clenaris
+          POSTGRES_PASSWORD: clenaris
+          POSTGRES_DB: clenaris_test
+        ports:
+          - 5432:5432
+        # Ohne diese Prüfung starten die ersten Schritte, während Postgres noch
+        # hochfährt — das Ergebnis ist ein sporadisch roter Lauf ohne Ursache
+        # im Code, und genau die zerstören das Vertrauen in eine Pipeline.
+        options: >-
+          --health-cmd "pg_isready -U clenaris -d clenaris_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    env:
+      DATABASE_URL: postgresql://clenaris:clenaris@localhost:5432/clenaris_test
+      # Das Schema deklariert `directUrl`. Ohne gesetzten Wert bricht jeder
+      # Prisma-Aufruf ab — in CI gibt es keinen Pooler, also zeigt beides
+      # auf dieselbe Datenbank.
+      DIRECT_URL: postgresql://clenaris:clenaris@localhost:5432/clenaris_test
+      # Wegwerfwert, nur für diesen Lauf. Mindestens 32 Zeichen, sonst weist
+      # die Konfigurationsprüfung in `src/lib/env.ts` ihn zurück.
+      JWT_SECRET: ci-nur-fuer-den-testlauf-mindestens-32-zeichen
+      # Muss im Server *und* im Testprozess gleich sein: `flows.test.ts` ruft
+      # `/api/cron/daily` mit genau diesem Wert auf.
+      CRON_SECRET: ci-cron-secret
+      NEXT_PUBLIC_APP_URL: http://localhost:3000
+      # Bewusst `development` für den Auftrag, nicht `production`: Der Seed
+      # verweigert in der Produktion den Dienst, solange kein eigenes
+      # Startpasswort gesetzt ist (siehe `prisma/seed.ts`) — richtig auf einem
+      # echten System, hinderlich für Demodaten in einer Wegwerf-Datenbank.
+      # Der Build und der gestartete Server setzen `production` selbst, dort
+      # wo es zählt.
+      NODE_ENV: development
+      NEXT_TELEMETRY_DISABLED: '1'
+
+    steps:
+      - name: Repository auschecken
+        uses: actions/checkout@v4
+
+      - name: Node einrichten
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          # Zwischenspeicher für `~/.npm`, geschlüsselt über package-lock.json.
+          cache: npm
+
+      - name: Abhängigkeiten installieren
+        # `npm ci` statt `npm install`: nur die Sperrdatei zählt, der Baum wird
+        # vorher gelöscht. Ein Lauf, der eine andere Fassung zieht als die
+        # Auslieferung, prüft nicht das, was ausgeliefert wird.
+        run: npm ci --no-audit --no-fund
+
+      # -- Statische Prüfungen zuerst: Sie brauchen keine Datenbank und
+      #    scheitern in Sekunden statt in Minuten. -------------------------
+      - name: Linter
+        run: npm run lint
+
+      - name: TypeScript
+        run: npm run typecheck
+
+      - name: Keine Geheimnisse im Repository
+        run: bash scripts/ci-secret-scan.sh
+
+      - name: Dokumentation ist aktuell
+        # `npm run docs` erzeugt OpenAPI und ERD neu und bricht ab, wenn eine
+        # Route oder ein Modell undokumentiert ist. Der anschliessende Vergleich
+        # fängt den anderen Fall: Route dokumentiert, erzeugte Datei aber nicht
+        # mitgeliefert. Beides ist ein Fehler, nur der zweite fällt sonst nie auf.
+        run: |
+          npm run docs
+          if ! git diff --quiet -- docs/; then
+            echo "::error::docs/ ist nicht aktuell. Bitte 'npm run docs' ausführen und das Ergebnis mitliefern."
+            git diff --stat -- docs/
+            exit 1
+          fi
+
+      # -- Ab hier mit Datenbank ----------------------------------------
+      - name: Datenbankschema anwenden
+        run: npx prisma migrate deploy
+
+      - name: Demodaten einspielen
+        # Die Prüfungen erwarten die fünf Demokonten und einen Datenbestand.
+        # `db:seed:demo` ist idempotent und enthält den Konfigurations-Seed.
+        run: npm run db:seed:demo
+
+      - name: Build-Zwischenspeicher wiederherstellen
+        uses: actions/cache@v4
+        with:
+          path: .next/cache
+          key: next-${{ runner.os }}-${{ hashFiles('package-lock.json') }}-${{ hashFiles('src/**/*.ts', 'src/**/*.tsx') }}
+          restore-keys: |
+            next-${{ runner.os }}-${{ hashFiles('package-lock.json') }}-
+            next-${{ runner.os }}-
+
+      - name: Build
+        # Ein einziger Build für Oberfläche und Schnittstelle: Die Anwendung ist
+        # eine Next-Anwendung mit App Router, Server Components und Route
+        # Handlers im selben Baum. Ein getrennter «Backend-Build» existiert
+        # nicht und liesse sich nur künstlich herstellen.
+        run: npm run build
+
+      - name: Anwendung starten
+        run: |
+          NODE_ENV=production npx next start > server.log 2>&1 &
+          echo $! > server.pid
+          for i in $(seq 1 60); do
+            code=$(curl -fsS -o /dev/null -w '%{http_code}' http://localhost:3000/api/health || echo 000)
+            if [ "$code" = "200" ]; then
+              echo "Anwendung antwortet nach ${i}s."
+              curl -fsS http://localhost:3000/api/health
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::Die Anwendung ist nicht hochgekommen."
+          cat server.log
+          exit 1
+
+      - name: Testreihe
+        # Serialisiert, weil sich alle Dateien eine Datenbank und dieselben
+        # fünf Demokonten teilen. Parallelität erzeugt hier Fehlschläge, keine
+        # Geschwindigkeit.
+        run: npm test
+        env:
+          TEST_BASE_URL: http://localhost:3000
+
+      - name: Anwendung beenden
+        if: always()
+        run: '[ -f server.pid ] && kill "$(cat server.pid)" || true'
+
+      - name: Server-Protokoll sichern
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: server-log
+          path: server.log
+          retention-days: 7
+
+  # =========================================================================
+  #  2) Auslieferung
+  # =========================================================================
+  auslieferung:
+    name: Auslieferung
+    needs: qualitaet
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    # Bindet den Auftrag an die GitHub-Umgebung «production». Dort liegen die
+    # Secrets, und dort lässt sich bei Bedarf eine Freigabe durch eine zweite
+    # Person einschalten, ohne den Workflow zu ändern.
+    environment:
+      name: production
+      url: ${{ secrets.API_URL }}
+
+    steps:
+      - name: SSH vorbereiten
+        env:
+          SSH_KEY: ${{ secrets.SERVER_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.SERVER_SSH_KNOWN_HOSTS }}
+          HOST: ${{ secrets.SERVER_HOST }}
+          PORT: ${{ secrets.SERVER_PORT }}
+        run: |
+          set -euo pipefail
+          test -n "$SSH_KEY"  || { echo "::error::Secret SERVER_SSH_KEY fehlt."; exit 1; }
+          test -n "$HOST"     || { echo "::error::Secret SERVER_HOST fehlt."; exit 1; }
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_deploy
+          chmod 600 ~/.ssh/id_deploy
+
+          # Der Wirtsschlüssel gehört gepinnt. Ohne ihn ist die erste
+          # Verbindung ein Vertrauensvorschuss, den ein Angreifer im Netzweg
+          # einlösen kann — und in einer Pipeline ist *jede* Verbindung die
+          # erste, weil der Läufer bei null anfängt.
+          if [ -n "${KNOWN_HOSTS:-}" ]; then
+            printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+            echo "Wirtsschlüssel aus dem Secret übernommen."
+          else
+            echo "::warning::Secret SERVER_SSH_KNOWN_HOSTS fehlt — der Wirtsschlüssel wird ungeprüft übernommen. Bitte nachtragen (siehe docs/deployment.md)."
+            ssh-keyscan -p "${PORT:-22}" -H "$HOST" > ~/.ssh/known_hosts 2>/dev/null
+          fi
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Secrets auf den Server übertragen
+        env:
+          HOST: ${{ secrets.SERVER_HOST }}
+          PORT: ${{ secrets.SERVER_PORT }}
+          USER_NAME: ${{ secrets.SERVER_USER }}
+          APP_DIRECTORY: ${{ secrets.APP_DIRECTORY }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DIRECT_URL: ${{ secrets.DIRECT_URL }}
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+          API_URL: ${{ secrets.API_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          set -euo pipefail
+          test -n "$APP_DIRECTORY" || { echo "::error::Secret APP_DIRECTORY fehlt."; exit 1; }
+          test -n "$DATABASE_URL"  || { echo "::error::Secret DATABASE_URL fehlt."; exit 1; }
+          test -n "$JWT_SECRET"    || { echo "::error::Secret JWT_SECRET fehlt."; exit 1; }
+
+          # Nur die von GitHub verwalteten Schlüssel. `scripts/deploy.sh` führt
+          # sie in die `.env` des Servers ein, statt sie zu ersetzen — alles
+          # andere (Stripe, Resend, Twilio, Supabase, Firmenangaben) bleibt
+          # dort, wo es hingehört: auf dem Server.
+          #
+          # Über die Standardeingabe statt als Datei: So liegt kein Secret auf
+          # der Platte des Läufers, und `umask 077` sorgt dafür, dass die Datei
+          # auf dem Server von der ersten Sekunde an nur dem Dienstbenutzer
+          # gehört.
+          {
+            echo "DATABASE_URL=${DATABASE_URL}"
+            [ -n "${DIRECT_URL:-}" ] && echo "DIRECT_URL=${DIRECT_URL}"
+            echo "JWT_SECRET=${JWT_SECRET}"
+            [ -n "${API_URL:-}" ]    && echo "NEXT_PUBLIC_APP_URL=${API_URL}"
+            [ -n "${CRON_SECRET:-}" ] && echo "CRON_SECRET=${CRON_SECRET}"
+            echo "NODE_ENV=production"
+          } | ssh -i ~/.ssh/id_deploy -p "${PORT:-22}" \
+                  -o BatchMode=yes -o ConnectTimeout=20 \
+                  "${USER_NAME}@${HOST}" \
+                  "umask 077 && cat > '${APP_DIRECTORY}/.env.incoming'"
+          echo "Secrets übertragen."
+
+      - name: Auslieferung ausführen
+        env:
+          HOST: ${{ secrets.SERVER_HOST }}
+          PORT: ${{ secrets.SERVER_PORT }}
+          USER_NAME: ${{ secrets.SERVER_USER }}
+          APP_DIRECTORY: ${{ secrets.APP_DIRECTORY }}
+          RUN_SEED: ${{ inputs.seed && 'true' || 'false' }}
+          SKIP_ROLLBACK: ${{ inputs.skip_rollback && 'true' || 'false' }}
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/id_deploy -p "${PORT:-22}" \
+              -o BatchMode=yes -o ConnectTimeout=20 -o ServerAliveInterval=30 \
+              "${USER_NAME}@${HOST}" \
+              "cd '${APP_DIRECTORY}' \
+               && DEPLOY_BRANCH=main \
+                  DEPLOY_RUN_SEED='${RUN_SEED}' \
+                  DEPLOY_SKIP_ROLLBACK='${SKIP_ROLLBACK}' \
+                  bash scripts/deploy.sh"
+
+      - name: Health Check von aussen
+        env:
+          API_URL: ${{ secrets.API_URL }}
+          ERWARTET: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [ -z "${API_URL:-}" ]; then
+            echo "::warning::Secret API_URL fehlt — die Prüfung von aussen entfällt."
+            exit 0
+          fi
+
+          # Zwei Fragen, nicht eine. Erstens: antwortet die öffentliche Adresse
+          # überhaupt? Das prüft die ganze Kette samt Reverse Proxy und TLS,
+          # die der Health Check auf dem Server selbst nie berührt. Zweitens:
+          # antwortet der *neue* Stand? Ein Reload, der still fehlschlägt,
+          # liefert eine gesunde alte Fassung aus — grün, und trotzdem ist
+          # nichts ausgeliefert worden.
+          for i in $(seq 1 10); do
+            antwort="$(curl -fsS --max-time 15 "${API_URL%/}/api/health" || true)"
+            if [ -n "$antwort" ]; then
+              echo "$antwort" | jq .
+              version="$(echo "$antwort" | jq -r '.data.version // empty')"
+              status="$(echo "$antwort" | jq -r '.data.status // empty')"
+              if [ "$status" = "ok" ] && [ "$version" = "$ERWARTET" ]; then
+                echo "Ausgelieferter Stand bestätigt: $version"
+                exit 0
+              fi
+              echo "Versuch $i: status=$status version=$version erwartet=$ERWARTET"
+            else
+              echo "Versuch $i: keine Antwort."
+            fi
+            sleep 6
+          done
+          echo "::error::Der Health Check von aussen bestätigt den neuen Stand nicht."
+          exit 1
+
+      - name: Zusammenfassung
+        if: always()
+        run: |
+          {
+            echo "## Auslieferung ${{ job.status }}"
+            echo ""
+            echo "| Feld | Wert |"
+            echo "|---|---|"
+            echo "| Stand | \`${{ github.sha }}\` |"
+            echo "| Auslöser | ${{ github.event_name }} |"
+            echo "| Von | ${{ github.actor }} |"
+            echo "| Ziel | ${{ secrets.API_URL }} |"
+          } >> "$GITHUB_STEP_SUMMARY"

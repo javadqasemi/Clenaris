@@ -31,20 +31,42 @@ const prisma = new PrismaClient();
 const ORG_SLUG = 'clenaris';
 const ARGON_OPTIONS = { memoryCost: 19_456, timeCost: 2, parallelism: 1 } as const;
 
-function daysFromNow(days: number, hour = 8, minute = 0): Date {
-  const date = new Date();
-  date.setDate(date.getDate() + days);
-  date.setHours(hour, minute, 0, 0);
-  return date;
-}
+// Hinweis: `daysFromNow` und `randomCode` standen hier, bis die Demodaten nach
+// `seed-demo.ts` gezogen sind. Beide werden nur dort gebraucht und stehen dort;
+// hier blieben sie als toter Code zurück.
 
-function randomCode(length = 6): string {
-  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-  return Array.from({ length }, () => alphabet[Math.floor(Math.random() * alphabet.length)]).join('');
+/**
+ * Startpasswörter im Produktionsbetrieb erzwingen.
+ *
+ * Die Rückfallwerte weiter unten (`Admin#2026Clenaris`, `System#2026Clenaris`)
+ * stehen in `.env.example` und damit in einem öffentlichen Repository. Für die
+ * Entwicklung ist das richtig — ein Seed, der ohne Konfiguration nicht läuft,
+ * kostet jeden Neueinstieg eine halbe Stunde. Auf einem erreichbaren System
+ * wäre derselbe Rückfallwert ein bekanntgegebenes Administratorkonto.
+ *
+ * Deshalb: In der Produktion muss das Passwort gesetzt sein, sonst bricht der
+ * Seed ab. Ein lauter Abbruch beim Einrichten ist unendlich viel billiger als
+ * ein stilles Standardkonto im Betrieb.
+ */
+function pruefeStartpasswoerter(): void {
+  if (process.env.NODE_ENV !== 'production') return;
+
+  const fehlend = (['SEED_ADMIN_PASSWORD', 'SEED_SUPERADMIN_PASSWORD'] as const).filter(
+    (name) => !process.env[name] || process.env[name]!.length < 12,
+  );
+
+  if (fehlend.length > 0) {
+    throw new Error(
+      `Im Produktionsbetrieb müssen ${fehlend.join(' und ')} gesetzt sein (mindestens 12 Zeichen).\n` +
+        'Ohne sie legte der Seed Konten mit den Passwörtern aus .env.example an — die stehen im Repository.\n' +
+        'Erzeugen: openssl rand -base64 24',
+    );
+  }
 }
 
 async function main() {
   console.log('🌱  Seed startet …\n');
+  pruefeStartpasswoerter();
 
   // =========================================================================
   //  1) Organisation
@@ -906,7 +928,9 @@ async function main() {
   // =========================================================================
   //  12) Ausgaben & Lieferanten
   // =========================================================================
-  const supplier = await prisma.supplier.upsert({
+  // Feste `id`, damit der Seed mehrfach laufen kann; der Rückgabewert wird
+  // nicht gebraucht, weil die Ausgaben unten über dieselbe Kennung verweisen.
+  await prisma.supplier.upsert({
     where: { id: 'seed-supplier-hygiene' },
     update: {},
     create: {

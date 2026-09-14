@@ -93,6 +93,19 @@ export interface BookingEmailData {
   address: string;
   grossTotal: number;
   manageUrl: string;
+  /**
+   * Liegt die Buchungsbestätigung als PDF bei? Die Vorlage darf nur dann
+   * darauf verweisen — ein „siehe Anhang" ohne Anhang wirkt wie ein Fehler
+   * beim Versand und erzeugt Rückfragen im Büro.
+   */
+  pdfAttached?: boolean;
+}
+
+/** Satz zum PDF — je nachdem, ob es beiliegt oder nur zum Download bereitsteht. */
+function pdfHint(data: BookingEmailData): string {
+  return data.pdfAttached
+    ? '<p style="color:#64748B;font-size:14px;">Ihre Buchungsbestätigung liegt dieser E-Mail als PDF bei — zum Ablegen oder Ausdrucken.</p>'
+    : '<p style="color:#64748B;font-size:14px;">Über den Link unten laden Sie die Buchungsbestätigung jederzeit als PDF herunter.</p>';
 }
 
 export function bookingReceivedEmail(data: BookingEmailData): EmailContent {
@@ -110,6 +123,7 @@ export function bookingReceivedEmail(data: BookingEmailData): EmailContent {
       { label: 'Adresse', value: escapeHtml(data.address) },
       { label: 'Betrag inkl. MwSt.', value: formatCurrency(data.grossTotal) },
     ])}
+    ${pdfHint(data)}
     ${button('Buchung verwalten', data.manageUrl)}`;
 
   return {
@@ -135,6 +149,7 @@ export function bookingConfirmedEmail(data: BookingEmailData): EmailContent {
       { label: 'Adresse', value: escapeHtml(data.address) },
       { label: 'Betrag inkl. MwSt.', value: formatCurrency(data.grossTotal) },
     ])}
+    ${pdfHint(data)}
     ${button('Termin ansehen', data.manageUrl)}
     ${callout('Kostenlose Umbuchung oder Stornierung bis 24 Stunden vor dem Termin.', 'info')}`;
 

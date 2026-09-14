@@ -212,7 +212,18 @@ const MANAGER_PERMISSIONS: Permission[] = [
  * höherstufen), **das Prüfprotokoll lesen** (wer überwacht wird, soll die
  * Überwachung nicht einsehen) und **sich als jemand anderes anmelden**.
  */
-const SUPER_ADMIN_ONLY: Permission[] = ['role:assign', 'audit:read', 'user:impersonate'];
+/**
+ * `data:purge` kommt als viertes dazu: ganze Datenbereiche endgültig löschen.
+ * Aus demselben Grund hier und nicht bei der Administration — die Handlung
+ * ist unumkehrbar, und wer sie ausführt, soll im Protokoll stehen, das nur
+ * diese Rolle liest.
+ */
+const SUPER_ADMIN_ONLY: Permission[] = [
+  'role:assign',
+  'audit:read',
+  'user:impersonate',
+  'data:purge',
+];
 
 const ADMIN_PERMISSIONS: Permission[] = PERMISSIONS.filter(
   (permission) => !SUPER_ADMIN_ONLY.includes(permission),
@@ -311,7 +322,7 @@ export const ROLE_LABELS: Record<ActorRole, string> = {
 /** Ein Satz je Rolle — steht in der Rechtematrix über der Spalte. */
 export const ROLE_DESCRIPTIONS: Record<ActorRole, string> = {
   SUPER_ADMIN:
-    'Alles, plus Rollenvergabe, Prüfprotokoll und Kontoübernahme. Für genau eine oder zwei Personen gedacht.',
+    'Alles, plus Rollenvergabe, Prüfprotokoll, Kontoübernahme und Datenbereinigung. Für genau eine oder zwei Personen gedacht.',
   ADMIN:
     'Führt den Betrieb vollständig und gestaltet Website, Katalog und Preise. Vergibt keine Rollen und sieht das Prüfprotokoll nicht.',
   MANAGER:
@@ -376,6 +387,9 @@ const PERMISSION_ROUTES: { prefix: string; permission: Permission }[] = [
   { prefix: '/admin/personal/neu', permission: 'employee:create' },
   { prefix: '/admin/rollen', permission: 'role:read' },
   { prefix: '/admin/protokoll', permission: 'audit:read' },
+  // Reine Handlungsmaske ohne Lesemodus: wer nicht löschen darf, soll die
+  // Seite gar nicht sehen — sie antwortet mit 404, nicht mit 403.
+  { prefix: '/admin/datenbereinigung', permission: 'data:purge' },
   { prefix: '/admin/papierkorb', permission: 'booking:delete' },
   { prefix: '/admin/einstellungen', permission: 'settings:read' },
   /**

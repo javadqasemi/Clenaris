@@ -109,21 +109,168 @@ describe('Buchung über die Website', { concurrency: 1 }, async () => {
     const admin = await loginAs('admin');
     const { serviceId, scheduledStart } = await nextBookableSlot();
 
-    const created = await post<{ data: { id: string; isNewCustomer: boolean } }>(
-      '/api/public/bookings',
-      bookingPayload(serviceId, scheduledStart),
-      { jar: customer },
-    );
+    const created = await post<{
+      data: { id: string; number: string; confirmationUrl: string; isNewCustomer: boolean };
+    }>('/api/public/bookings', bookingPayload(serviceId, scheduledStart), { jar: customer });
     assert.equal(created.status, 201, created.text);
     assert.equal(created.payload.data.isNewCustomer, false, 'bestehendes Profil, kein neuer Datensatz');
 
     const removed = await call('DELETE', `/api/bookings/${created.payload.data.id}`, { jar: admin });
     assert.ok(removed.status === 204 || removed.status === 200, `Aufräumen: HTTP ${removed.status}`);
   });
+
+  /**
+   * Die Bestätigung muss die Kundschaft ausdrucken, herunterladen und aus
+   * der E-Mail heraus öffnen können — über den Token ohne Konto, über die
+   * Sitzung mit Konto. Eine leere Seite wäre auch 200; die Grösse ist der
+   * Beleg, dass tatsächlich ein Dokument gerendert wurde.
+   */
+  it('liefert die Buchungsbestätigung als PDF und als druckbare Seite', async () => {
+    const customer = await loginAs('customer');
+    const admin = await loginAs('admin');
+    const { serviceId, scheduledStart } = await nextBookableSlot();
+
+    const created = await post<{
+      data: { id: string; number: string; confirmationUrl: string };
+    }>('/api/public/bookings', bookingPayload(serviceId, scheduledStart), { jar: customer });
+    assert.equal(created.status, 201, created.text);
+    const { id, number, confirmationUrl } = created.payload.data;
+    const token = confirmationUrl.split('/').pop() ?? '';
+    assert.ok(token.length >= 10, `kein Token im Bestätigungslink: ${confirmationUrl}`);
+
+    try {
+      const viaToken = await get(`/api/public/bookings/${token}/pdf`);
+      assert.equal(viaToken.status, 200, viaToken.text.slice(0, 200));
+      assert.ok(viaToken.text.length > 3000, `nur ${viaToken.text.length} Bytes`);
+
+      const viaSession = await get(`/api/bookings/${id}/pdf`, { jar: customer });
+      assert.equal(viaSession.status, 200, viaSession.text.slice(0, 200));
+      assert.ok(viaSession.text.length > 3000, `nur ${viaSession.text.length} Bytes`);
+
+      // Ohne Sitzung gibt es das Dokument nur über den Token.
+      assert.equal((await get(`/api/bookings/${id}/pdf`)).status, 401);
+      assert.equal((await get('/api/public/bookings/gibt-es-nicht-1234/pdf')).status, 404);
+
+      const page = await get(
+        `/buchen/bestaetigt?nr=${encodeURIComponent(number)}&t=${encodeURIComponent(token)}`,
+      );
+      assert.equal(page.status, 200);
+      assert.ok(page.text.includes(number), 'Buchungsnummer fehlt auf der Abschlussseite');
+      assert.ok(page.text.includes('PDF herunterladen'), 'Download-Schaltfläche fehlt');
+      assert.ok(page.text.includes(`/api/public/bookings/${token}/pdf`), 'Download-Link fehlt');
+
+      const guestPage = await get(`/buchung/${token}`);
+      assert.equal(guestPage.status, 200);
+      assert.ok(guestPage.text.includes(`/api/public/bookings/${token}/pdf`));
+    } finally {
+      const removed = await call('DELETE', `/api/bookings/${id}`, { jar: admin });
+      assert.ok(removed.status === 204 || removed.status === 200, `Aufräumen: HTTP ${removed.status}`);
+    }
+  });
+
+  /**
+   * Der Fehler dahinter: Ein ungültiger Gutscheincode landete nur als
+   * Hinweistext in der Herleitung, und die Buchung ging still zum vollen
+   * Preis durch. Die Kundschaft erfuhr erst auf der Rechnung, dass der Code
+   * nicht griff. Ein eingegebener Code muss entweder gelten oder die Buchung
+   * mit Begründung abweisen — das Feld selbst bleibt freiwillig.
+   */
+  it('weist eine Buchung mit ungültigem Gutscheincode ab', async () => {
+    const customer = await loginAs('customer');
+    const { serviceId, scheduledStart } = await nextBookableSlot();
+
+    const response = await post<{ error: { message: string } }>(
+      '/api/public/bookings',
+      { ...bookingPayload(serviceId, scheduledStart), couponCode: 'GIBTSNICHT' },
+      { jar: customer },
+    );
+    assert.equal(response.status, 422, response.text);
+    assert.match(response.payload.error.message, /Gutscheincode/);
+  });
 });
 
 describe('Öffentliche Endpunkte', { concurrency: 1 }, async () => {
   await requireServer();
+
+  const estimateWith = (couponCode?: string) =>
+    post<{
+      data: {
+        grossTotal: number;
+        lines: { key: string; amount: number }[];
+        coupon: { code: string; status: string; message: string; amount: number } | null;
+      };
+    }>('/api/public/pricing/estimate', {
+      serviceSlug: 'umzugsreinigung',
+      propertyKind: 'APARTMENT',
+      squareMeters: 85,
+      rooms: 3.5,
+      frequency: 'ONCE',
+      postalCode: '3011',
+      extras: [],
+      ...(couponCode ? { couponCode } : {}),
+    });
+
+  it('rechnet ohne Gutscheincode und meldet keinen Prüfstand', async () => {
+    const response = await estimateWith();
+    assert.equal(response.status, 200, response.text);
+    assert.equal(response.payload.data.coupon, null);
+    assert.ok(!response.payload.data.lines.some((line) => line.key === 'coupon'));
+  });
+
+  it('meldet einen unbekannten Gutscheincode als ungültig — ohne den Preis zu ändern', async () => {
+    const plain = await estimateWith();
+    const response = await estimateWith('GIBTSNICHT');
+    assert.equal(response.status, 200, response.text);
+    assert.equal(response.payload.data.coupon?.status, 'INVALID');
+    assert.match(response.payload.data.coupon?.message ?? '', /ungültig/);
+    assert.ok(!response.payload.data.lines.some((line) => line.key === 'coupon'));
+    assert.equal(response.payload.data.grossTotal, plain.payload.data.grossTotal);
+  });
+
+  it('löst einen gültigen Gutscheincode ein und zieht ihn ab', async () => {
+    // EMPFEHLUNG25 aus dem Seed: CHF 25 fest, ab CHF 150 Auftragswert — die
+    // Umzugsreinigung einer 85-m²-Wohnung liegt sicher darüber.
+    const response = await estimateWith('empfehlung25');
+    assert.equal(response.status, 200, response.text);
+    assert.equal(response.payload.data.coupon?.status, 'APPLIED');
+    assert.equal(response.payload.data.coupon?.code, 'EMPFEHLUNG25', 'Code wird normalisiert');
+    assert.equal(response.payload.data.coupon?.amount, 25);
+
+    const line = response.payload.data.lines.find((entry) => entry.key === 'coupon');
+    assert.ok(line, 'keine Gutscheinzeile in der Herleitung');
+    assert.equal(line.amount, -25);
+  });
+
+  /**
+   * Der Health Check trägt die Auslieferung: Erst wenn er 200 meldet, gilt sie
+   * als erfolgreich, und bleibt er aus, springt sie zurück. Ein Endpunkt mit
+   * dieser Aufgabe darf nicht stillschweigend kaputtgehen — ein falsch
+   * geschriebener Tabellenname etwa würde ihn dauerhaft auf 503 stellen und
+   * damit jede Auslieferung blockieren.
+   */
+  it('meldet Betriebsbereitschaft samt Datenbank und Migrationen', async () => {
+    const response = await get<{
+      data: {
+        status: string;
+        datenbank: string;
+        migrationen: number | null;
+        version: string | null;
+        laufzeitSekunden: number;
+      };
+    }>('/api/health');
+
+    assert.equal(response.status, 200, response.text);
+    assert.equal(response.headers.get('cache-control'), 'no-store, max-age=0');
+
+    const daten = response.payload.data;
+    assert.equal(daten.status, 'ok');
+    assert.equal(daten.datenbank, 'ok');
+    assert.ok(
+      typeof daten.migrationen === 'number' && daten.migrationen > 0,
+      `keine angewandten Migrationen gezählt: ${daten.migrationen}`,
+    );
+    assert.ok(daten.laufzeitSekunden >= 0);
+  });
 
   it('erkennt eine Postleitzahl im Einsatzgebiet', async () => {
     const response = await get<{ data: { covered: boolean } }>(

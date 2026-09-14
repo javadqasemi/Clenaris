@@ -1,7 +1,7 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
-import { ArrowLeft, FileText, MapPin, Receipt, Truck, User } from 'lucide-react';
+import { ArrowLeft, FileDown, FileText, MapPin, Receipt, Truck, User } from 'lucide-react';
 
 import { toNumber } from '@/lib/db';
 import { requirePermission } from '@/lib/auth/session';
@@ -72,6 +72,12 @@ export default async function AdminBookingDetailPage({
         actions={
           <>
             <StatusBadge status={booking.status} className="self-center" />
+            <Button asChild variant="outline" size="sm">
+              <a href={`/api/bookings/${booking.id}/pdf`}>
+                <FileDown aria-hidden />
+                Bestätigung als PDF
+              </a>
+            </Button>
             <BookingActions
               bookingId={booking.id}
               status={booking.status}

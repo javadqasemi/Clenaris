@@ -7,6 +7,7 @@ import { prisma, toNumber } from '@/lib/db';
 import { NotFoundError } from '@/lib/errors';
 import { uploadBuffer } from '@/lib/storage';
 import {
+  BookingConfirmationDocument,
   CreditNoteDocument,
   InvoiceDocument,
   JobReportDocument,
@@ -17,6 +18,9 @@ import {
   type QrSlipData,
 } from './documents';
 import { isQrIban, renderQrCode, splitStreet } from './swiss-qr';
+import { FREQUENCY_LABEL } from '@/lib/pricing/engine';
+import { absoluteUrl } from '@/lib/utils';
+import { STATUS_MAP } from '@/components/ui/badge';
 import { logger } from '@/lib/logger';
 
 const log = logger('pdf');
@@ -457,6 +461,97 @@ export async function renderCreditNotePdf(creditNoteId: string): Promise<{
   }
 
   return { buffer, filename, url };
+}
+
+// ---------------------------------------------------------------------------
+//  Buchungsbestätigung
+// ---------------------------------------------------------------------------
+
+/**
+ * Buchungsbestätigung als PDF.
+ *
+ * Wird *nicht* abgelegt: Die Bestätigung ändert sich mit jedem Statuswechsel
+ * (eingegangen → bestätigt → storniert), und ein gespeichertes PDF wäre nach
+ * dem ersten Wechsel falsch. Rendern dauert Millisekunden; die Ablage wäre
+ * hier keine Abkürzung, sondern eine Quelle veralteter Belege.
+ */
+export async function renderBookingConfirmationPdf(
+  bookingId: string,
+): Promise<{ buffer: Buffer; filename: string }> {
+  const booking = await prisma.booking.findFirst({
+    where: { id: bookingId, deletedAt: null },
+    include: {
+      customer: true,
+      address: true,
+      items: { include: { service: { select: { name: true } } }, orderBy: { position: 'asc' } },
+      extras: true,
+    },
+  });
+  if (!booking) throw new NotFoundError('Buchung');
+
+  const company = await loadCompany(booking.organizationId);
+
+  const address = booking.address
+    ? `${booking.address.street} ${booking.address.streetNo ?? ''}, ${booking.address.postalCode} ${booking.address.city}`.replace(
+        /\s+/g,
+        ' ',
+      )
+    : '—';
+
+  const propertyParts = [
+    booking.squareMeters ? `${booking.squareMeters} m²` : null,
+    booking.rooms ? `${toNumber(booking.rooms)} Zimmer` : null,
+    booking.windows ? `${booking.windows} Fenster` : null,
+  ].filter(Boolean);
+
+  // Die gespeicherte Herleitung ist die Wahrheit über den Preis — sie ist
+  // genau das, was die Kundschaft im Assistenten gesehen und gebucht hat.
+  const breakdown = booking.priceBreakdown as {
+    lines?: { label: string; amount: number; kind: string }[];
+  } | null;
+
+  const buffer = await renderToBuffer(
+    React.createElement(BookingConfirmationDocument, {
+      company,
+      recipient: {
+        name: `${booking.customer.firstName} ${booking.customer.lastName}`,
+        company: booking.customer.companyName,
+        street: booking.address
+          ? [booking.address.street, booking.address.streetNo].filter(Boolean).join(' ')
+          : '—',
+        postalCode: booking.address?.postalCode ?? '',
+        city: booking.address?.city ?? '',
+        country: booking.address?.country ?? 'CH',
+      },
+      number: booking.number,
+      status: booking.status,
+      statusLabel: STATUS_MAP[booking.status]?.label ?? booking.status,
+      createdAt: booking.createdAt,
+      serviceName: booking.items[0]?.service?.name ?? booking.items[0]?.name ?? 'Reinigung',
+      frequencyLabel: FREQUENCY_LABEL[booking.frequency] ?? 'Einmalig',
+      scheduledStart: booking.scheduledStart,
+      scheduledEnd: booking.scheduledEnd,
+      durationMinutes: booking.durationMin,
+      crewSize: booking.crewSize,
+      address,
+      propertyLabel: propertyParts.join(' · ') || '—',
+      extras: booking.extras.map((extra) => ({
+        name: extra.name,
+        quantity: extra.quantity,
+        lineTotal: toNumber(extra.lineTotal),
+      })),
+      lines: breakdown?.lines ?? [],
+      netTotal: toNumber(booking.netTotal),
+      vatRate: toNumber(booking.vatRate),
+      vatAmount: toNumber(booking.vatAmount),
+      grossTotal: toNumber(booking.grossTotal),
+      customerNote: booking.customerNote,
+      accessNote: booking.accessNote,
+      manageUrl: absoluteUrl(`/buchung/${booking.confirmationToken}`),
+    }) as never,
+  );
+
+  return { buffer, filename: `Buchungsbestaetigung-${booking.number}.pdf` };
 }
 
 // ---------------------------------------------------------------------------

@@ -584,7 +584,7 @@ async function main() {
    * Zähler an, senkt ihn aber nie.
    */
   const raiseSequence = async (
-    scope: 'booking' | 'job' | 'invoice' | 'customer',
+    scope: 'booking' | 'job' | 'invoice' | 'customer' | 'lead' | 'quote',
     seeded: number,
   ) => {
     // Nicht nur der eigene Endstand zählt, sondern die höchste Nummer, die
@@ -603,7 +603,11 @@ async function main() {
           ? prisma.job
           : scope === 'invoice'
             ? prisma.invoice
-            : prisma.customer;
+            : scope === 'lead'
+              ? prisma.lead
+              : scope === 'quote'
+                ? prisma.quote
+                : prisma.customer;
     const rows = await (table as typeof prisma.booking).findMany({
       where: { organizationId: org.id, number: { contains: `-${year}-` } },
       select: { number: true },
@@ -629,6 +633,181 @@ async function main() {
 
   console.log(`✓ ${bookingSeeds.length} Buchungen, ${jobCounter - 1} Einsätze, ${invoiceCounter - 1} Rechnungen`);
 
+  // =========================================================================
+  //  Anfragen und Offerten
+  // =========================================================================
+  //
+  // Warum das hier steht: Ohne diese Datensätze sind `/admin/leads` und
+  // `/admin/offerten` auf einer frischen Datenbank leer. Zwei Seiten, die die
+  // Demo nicht zeigen kann — und, weniger offensichtlich und teurer, zwei
+  // Listen, gegen die `tests/pages/sorting.test.ts` nichts prüfen kann: Der
+  // Fall trat nie auf, weil die Entwicklungsdatenbank Anfragen und Offerten
+  // aus früheren Läufen von `flows.test.ts` enthielt. Damit hing eine Prüfung
+  // an den Resten einer anderen — auf einem frischen Aufbau, wie ihn die
+  // Pipeline jedes Mal hochzieht, fiel sie um.
+  //
+  // Die Datensätze decken den Trichter ab: neu, kontaktiert, Offerte draussen,
+  // gewonnen, verloren. Die Beträge sind bewusst verschieden, damit sich eine
+  // Sortierung überhaupt auswirken kann.
+  const leadSeeds = [
+    { firstName: 'Beat', lastName: 'Aebischer', email: 'beat.aebischer@example.ch', phone: '+41 31 311 22 33', company: null, city: 'Bern', postalCode: '3011', serviceKind: 'RESIDENTIAL_CLEANING' as const, status: 'NEW' as const, source: 'WEBSITE' as const, estimatedValue: 320, score: 45, message: 'Wir suchen eine Unterhaltsreinigung alle zwei Wochen für eine 3.5-Zimmer-Wohnung.', days: -2 },
+    { firstName: 'Carmen', lastName: 'Zürcher', email: 'c.zuercher@example.ch', phone: '+41 31 922 14 08', company: 'Zürcher Physiotherapie', city: 'Ostermundigen', postalCode: '3072', serviceKind: 'OFFICE_CLEANING' as const, status: 'CONTACTED' as const, source: 'GOOGLE_ADS' as const, estimatedValue: 1180, score: 68, message: 'Praxisreinigung nach Feierabend, dreimal wöchentlich. Hygienestandards sind uns wichtig.', days: -6 },
+    { firstName: 'Ruedi', lastName: 'Hofmann', email: 'ruedi.hofmann@example.ch', phone: '+41 79 445 12 90', company: 'Hofmann Bau GmbH', city: 'Köniz', postalCode: '3098', serviceKind: 'CONSTRUCTION_CLEANING' as const, status: 'PROPOSAL' as const, source: 'REFERRAL' as const, estimatedValue: 4200, score: 82, message: 'Bauendreinigung für sechs Wohnungen, Übergabe in vier Wochen.', days: -11 },
+    { firstName: 'Silvia', lastName: 'Marti', email: 'silvia.marti@example.ch', phone: '+41 31 302 77 41', company: null, city: 'Bümpliz', postalCode: '3018', serviceKind: 'MOVE_OUT_CLEANING' as const, status: 'WON' as const, source: 'SEO' as const, estimatedValue: 890, score: 95, message: 'Umzugsreinigung mit Abgabegarantie, 4.5 Zimmer.', days: -18 },
+    { firstName: 'Jonas', lastName: 'Frei', email: 'jonas.frei@example.ch', phone: '+41 76 218 33 07', company: 'Frei Treuhand', city: 'Muri b. Bern', postalCode: '3074', serviceKind: 'WINDOW_CLEANING' as const, status: 'LOST' as const, source: 'PHONE' as const, estimatedValue: 460, score: 30, message: 'Fensterreinigung Büro, zweimal jährlich.', days: -25, lostReason: 'Hat sich für einen günstigeren Anbieter entschieden.' },
+  ];
+
+  const leadIds: Record<string, string> = {};
+  let leadCounter = 1;
+
+  for (const seed of leadSeeds) {
+    const number = `L-${year}-${String(leadCounter).padStart(5, '0')}`;
+    const vorhanden = await prisma.lead.findUnique({
+      where: { organizationId_number: { organizationId: org.id, number } },
+      select: { id: true },
+    });
+
+    if (vorhanden) {
+      leadIds[seed.email] = vorhanden.id;
+    } else {
+      const lead = await prisma.lead.create({
+        data: {
+          organizationId: org.id,
+          number,
+          firstName: seed.firstName,
+          lastName: seed.lastName,
+          email: seed.email,
+          phone: seed.phone,
+          company: seed.company,
+          city: seed.city,
+          postalCode: seed.postalCode,
+          serviceKind: seed.serviceKind,
+          message: seed.message,
+          estimatedValue: seed.estimatedValue,
+          status: seed.status,
+          source: seed.source,
+          score: seed.score,
+          lostReason: seed.lostReason ?? null,
+          createdAt: daysFromNow(seed.days),
+          nextFollowUpAt: ['NEW', 'CONTACTED', 'PROPOSAL'].includes(seed.status)
+            ? daysFromNow(seed.days + 7)
+            : null,
+        },
+      });
+      leadIds[seed.email] = lead.id;
+    }
+    leadCounter++;
+  }
+
+  // Ausgeschrieben, weil TypeScript sonst über die drei Einträge eine
+  // Vereinigung bildet, in der `optional` mal da ist und mal nicht — und der
+  // Zugriff darauf wäre dann ein Fehler.
+  interface OffertPosition {
+    name: string;
+    quantity: number;
+    unit: string;
+    unitPrice: number;
+    optional?: boolean;
+  }
+  interface OffertSaat {
+    leadEmail?: string;
+    customerEmail?: string;
+    title: string;
+    status: 'DRAFT' | 'SENT' | 'ACCEPTED';
+    days: number;
+    validInDays: number;
+    items: OffertPosition[];
+  }
+
+  const quoteSeeds: OffertSaat[] = [
+    {
+      leadEmail: 'ruedi.hofmann@example.ch',
+      title: 'Bauendreinigung Überbauung Sonnhalde',
+      status: 'SENT',
+      days: -9,
+      validInDays: 21,
+      items: [
+        { name: 'Bauendreinigung Wohnungen', quantity: 48, unit: 'Std.', unitPrice: 68 },
+        { name: 'Fensterreinigung inkl. Rahmen', quantity: 12, unit: 'Std.', unitPrice: 72 },
+        { name: 'Tiefgarage maschinell', quantity: 6, unit: 'Std.', unitPrice: 85, optional: true },
+      ],
+    },
+    {
+      customerEmail: 'p.roth@aareblick.example.ch',
+      title: 'Unterhaltsreinigung Liegenschaften 2026',
+      status: 'ACCEPTED' as const,
+      days: -30,
+      validInDays: -2,
+      items: [
+        { name: 'Treppenhausreinigung wöchentlich', quantity: 104, unit: 'Std.', unitPrice: 62 },
+        { name: 'Umgebungsreinigung', quantity: 24, unit: 'Std.', unitPrice: 58 },
+      ],
+    },
+    {
+      customerEmail: 'nicole.wyss@example.ch',
+      title: 'Frühjahrsputz inkl. Fenster',
+      status: 'DRAFT' as const,
+      days: -3,
+      validInDays: 30,
+      items: [{ name: 'Grundreinigung Wohnung', quantity: 7, unit: 'Std.', unitPrice: 65 }],
+    },
+  ];
+
+  let quoteCounter = 1;
+
+  for (const seed of quoteSeeds) {
+    const number = `OF-${year}-${String(quoteCounter).padStart(5, '0')}`;
+    const vorhanden = await prisma.quote.findUnique({
+      where: { organizationId_number: { organizationId: org.id, number } },
+      select: { id: true },
+    });
+
+    if (!vorhanden) {
+      const positionen = seed.items.map((item, index) => ({
+        name: item.name,
+        quantity: item.quantity,
+        unit: item.unit,
+        unitPrice: item.unitPrice,
+        vatRate: 8.1,
+        lineTotal: Math.round(item.quantity * item.unitPrice * 100) / 100,
+        position: index,
+        optional: item.optional ?? false,
+      }));
+
+      // Optionale Positionen zählen nicht ins Total — dieselbe Regel wie im
+      // Dienst und im PDF.
+      const netto = positionen
+        .filter((position) => !position.optional)
+        .reduce((summe, position) => summe + position.lineTotal, 0);
+      const mwst = Math.round(netto * 0.081 * 100) / 100;
+
+      await prisma.quote.create({
+        data: {
+          organizationId: org.id,
+          number,
+          customerId: seed.customerEmail ? (customerIds[seed.customerEmail] ?? null) : null,
+          leadId: seed.leadEmail ? (leadIds[seed.leadEmail] ?? null) : null,
+          title: seed.title,
+          status: seed.status,
+          validUntil: daysFromNow(seed.days + seed.validInDays),
+          subtotal: Math.round(netto * 100) / 100,
+          netTotal: Math.round(netto * 100) / 100,
+          vatAmount: mwst,
+          grossTotal: Math.round((netto + mwst) * 100) / 100,
+          createdAt: daysFromNow(seed.days),
+          sentAt: seed.status === 'DRAFT' ? null : daysFromNow(seed.days + 1),
+          acceptedAt: seed.status === 'ACCEPTED' ? daysFromNow(seed.days + 4) : null,
+          items: { create: positionen },
+        },
+      });
+    }
+    quoteCounter++;
+  }
+
+  await raiseSequence('lead', leadCounter - 1);
+  await raiseSequence('quote', quoteCounter - 1);
+
+  console.log(`✓ ${leadSeeds.length} Anfragen, ${quoteSeeds.length} Offerten`);
 
   // ---- Ausgaben ----
   const expenses = [

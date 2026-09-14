@@ -25,8 +25,20 @@ export const runtime = 'nodejs';
 export const POST = definePublicRoute({
   body: publicEstimateSchema,
   rateLimit: 'priceEstimate',
-  handler: async ({ body }) => {
+  handler: async ({ body, session }) => {
     const organizationId = await getOrganizationId();
+
+    // Ein angemeldetes Kundenkonto bekommt die kundenbezogenen Gutschein-
+    // regeln (nur erste Buchung, Einlösungen pro Kundschaft) schon in der
+    // Schätzung zu sehen — sonst zeigte die Übersicht „eingelöst" und der
+    // Abschluss antwortete mit 422. Personal und Gäste rechnen anonym.
+    const customer =
+      session?.role === 'CUSTOMER' && session.profileId
+        ? await prisma.customer.findFirst({
+            where: { id: session.profileId, organizationId },
+            select: { id: true, totalBookings: true },
+          })
+        : null;
 
     let serviceId = body.serviceId;
     if (!serviceId && body.serviceSlug) {
@@ -53,6 +65,7 @@ export const POST = definePublicRoute({
         hasPets: body.hasPets,
         manualHours: body.manualHours,
         couponCode: body.couponCode,
+        customer,
         urgent: body.urgent,
       },
       organizationId,

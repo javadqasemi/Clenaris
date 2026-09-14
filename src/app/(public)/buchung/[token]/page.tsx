@@ -1,7 +1,7 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
-import { CalendarCheck, Clock, MapPin, UserPlus } from 'lucide-react';
+import { CalendarCheck, Clock, FileDown, MapPin, UserPlus } from 'lucide-react';
 
 import { toNumber } from '@/lib/db';
 import { NotFoundError } from '@/lib/errors';
@@ -10,6 +10,7 @@ import { getBookingByToken } from '@/server/services/booking.service';
 import { StatusBadge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Alert } from '@/components/ui/primitives';
+import { PrintButton } from '@/features/booking/print-button';
 
 export const metadata: Metadata = {
   title: 'Ihre Buchung',
@@ -50,12 +51,25 @@ export default async function GuestBookingPage({
 
   return (
     <div className="container max-w-2xl py-12 sm:py-16">
-      <header className="mb-8 space-y-3">
-        <p className="text-sm text-muted-foreground">Buchung {booking.number}</p>
-        <h1 className="text-headline font-bold text-balance">
-          {booking.items[0]?.service.name ?? 'Ihre Reinigung'}
-        </h1>
-        <StatusBadge status={booking.status} />
+      {/* Kopf und Angaben bilden die Druckfläche; Schaltflächen und Konto-Angebot bleiben weg. */}
+      <div className="print-area">
+      <header className="mb-8 flex flex-wrap items-end justify-between gap-4">
+        <div className="space-y-3">
+          <p className="text-sm text-muted-foreground">Buchung {booking.number}</p>
+          <h1 className="text-headline font-bold text-balance">
+            {booking.items[0]?.service.name ?? 'Ihre Reinigung'}
+          </h1>
+          <StatusBadge status={booking.status} />
+        </div>
+        <div className="print-hidden flex flex-wrap gap-2">
+          <PrintButton variant="outline" size="sm" />
+          <Button asChild variant="outline" size="sm">
+            <a href={`/api/public/bookings/${token}/pdf`}>
+              <FileDown aria-hidden />
+              PDF
+            </a>
+          </Button>
+        </div>
       </header>
 
       {booking.status === 'PENDING' ? (
@@ -131,6 +145,7 @@ export default async function GuestBookingPage({
           </div>
         ) : null}
       </dl>
+      </div>
 
       {canModify ? (
         <Alert variant="info" className="mt-6">

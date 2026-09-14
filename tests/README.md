@@ -67,6 +67,7 @@ npx tsx --test tests/api/two-factor.test.ts    # eine einzelne Datei
 | `api/jobs.test.ts` | Einsätze: bearbeiten (Rechte, Termin, Notiz leeren, Ende vor Beginn), Team mit mehreren Personen und Rollen, Materialverbrauch als Materialaufwand, Herleitung der Lohnkosten aus Team und Plan |
 | `api/crud-audit.test.ts` | Feiertage als vollständige Datensatzart (Rechte je Rolle, anlegen, ändern, Doppel, löschen), Zurückziehen eigener Abwesenheitsanträge samt Fremdzugriff, Papierkorb-Seite und Wiederherstellen |
 | `api/bi-fuehrung.test.ts` | Unternehmensführung: Rechtegrenzen je Rolle, Sichtbarkeit von Zielen und Dokumenten, die fachlichen Regeln (Genehmigung friert ein, Wirksamkeit erst nach Abschluss, abgelöste Tafeln bleiben), Berichte in drei Formaten |
+| `api/purge.test.ts` | Datenbereinigung: Seite und Endpunkt nur für die Systemverantwortung, Vorschau je Bereich, Bestätigungssatz, unbekannte Bereiche, Kundschaft nur zusammen mit den Finanzen — die Sperren, nicht das Löschen selbst |
 | `api/bi-rechenkerne.test.ts` | Abschreibung, Gesundheitswert, Budgetabweichung, Szenario und Perioden mit festen Zahlen — die einzige Datei, die Anwendungscode direkt importiert, weil die Rechenkerne reine Funktionen sind |
 | `pages/smoke.test.ts` | Antwortet jede Seite und jeder Endpunkt je Rolle? |
 | `pages/tables.test.ts` | Läuft irgendeine Tabelle oder Liste aus ihrem Rahmen? |

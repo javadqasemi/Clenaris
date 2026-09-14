@@ -177,6 +177,9 @@ export default async function AdminLayout({ children }: { children: React.ReactN
         // Wer löschen darf, darf wiederherstellen — dieselbe Schwelle wie die
         // Seite selbst (`booking:delete` haben Leitung und Administration).
         { href: '/admin/papierkorb', label: 'Papierkorb', icon: 'trash', permission: 'booking:delete' },
+        // Endgültiges Löschen ganzer Bereiche: nur die Systemverantwortung,
+        // jeder Lauf steht im Prüfprotokoll darüber.
+        { href: '/admin/datenbereinigung', label: 'Datenbereinigung', icon: 'eraser', permission: 'data:purge' },
       ],
     },
   ];

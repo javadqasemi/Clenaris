@@ -5,7 +5,7 @@
 > Quelle, aus der sowohl diese Referenz als auch die Laufzeitvalidierung
 > stammen.
 
-Stand: 369 Endpunkte. Die maschinenlesbare Fassung liegt in
+Stand: 374 Endpunkte. Die maschinenlesbare Fassung liegt in
 [`openapi.yaml`](./openapi.yaml) bzw. [`openapi.json`](./openapi.json).
 
 ## Grundlagen
@@ -333,6 +333,15 @@ Familie.
 | `serviceId` | string | – | min. 1 Zeichen |
 | `serviceSlug` | string | – | min. 1 Zeichen |
 
+### `GET /api/health`
+
+**Betriebsbereitschaft.** Für Auslieferung, Überwachung und Load Balancer. Prüft die Datenbankverbindung und meldet die Zahl der angewandten Migrationen, den ausgelieferten Stand und die Laufzeit. Antwortet mit 503, wenn die Datenbank nicht erreichbar ist — die Aussage steht im Statuscode, nicht im Rumpf.
+
+- **Zugriff:** Öffentlich — keine Anmeldung nötig.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 429, 500, 503
+
 ### `GET /api/public/availability`
 
 **Freie Zeitfenster eines Tages.** Berücksichtigt Öffnungszeiten, Feiertage, bestehende Einsätze, Abwesenheiten und die benötigte Teamgrösse. Ein Fenster erscheint nur, wenn genügend Personal frei ist.
@@ -521,6 +530,21 @@ Familie.
 ### `GET /api/public/quotes/{token}/pdf`
 
 **Offerte als PDF.** Zugriff über den Magic-Link-Token aus der Offerten-E-Mail, ohne Anmeldung.
+
+- **Zugriff:** Öffentlich — keine Anmeldung nötig.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200 (`application/pdf`)
+- **Mögliche Fehler:** 400, 404, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `token` | string | ja | min. 10 Zeichen |
+
+### `GET /api/public/bookings/{token}/pdf`
+
+**Buchungsbestätigung als PDF.** Zugriff über den Verwaltungslink aus der Buchungs-E-Mail, ohne Anmeldung. Wird bei jedem Abruf frisch gerendert, damit der Status (eingegangen, bestätigt, storniert) stimmt.
 
 - **Zugriff:** Öffentlich — keine Anmeldung nötig.
 - **Rate-Limit-Klasse:** `apiRead`
@@ -1571,6 +1595,21 @@ Familie.
 - **Zugriff:** Erfordert eine der Berechtigungen: `booking:read`, `booking:read_own`.
 - **Rate-Limit-Klasse:** `apiRead`
 - **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+### `GET /api/bookings/{id}/pdf`
+
+**Buchungsbestätigung als PDF.** Kundschaft erhält nur die eigene Buchung; die Einschränkung steht als `customerId` in der Abfrage. Wird bei jedem Abruf frisch gerendert, damit der Status stimmt.
+
+- **Zugriff:** Erfordert eine der Berechtigungen: `booking:read`, `booking:read_own`.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200 (`application/pdf`)
 - **Mögliche Fehler:** 400, 401, 403, 404, 429, 500
 
 **Pfadparameter**
@@ -4643,6 +4682,32 @@ Familie.
 | Feld | Typ | Pflicht | Regeln |
 | --- | --- | --- | --- |
 | `role` | string | ja | `CUSTOMER` \| `EMPLOYEE` \| `MANAGER` \| `ADMIN` \| `SUPER_ADMIN` |
+
+### `GET /api/system/purge`
+
+**Datenbereinigung — Vorschau.** Je Bereich die Zahl der Hauptdatensätze, die ein Lauf endgültig löschen würde. Nur die Systemverantwortung.
+
+- **Zugriff:** Erfordert die Berechtigung: `data:purge`.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 401, 403, 429, 500
+
+### `POST /api/system/purge`
+
+**Datenbereinigung — Bereiche endgültig löschen.** Unumkehrbar. Verlangt den Bestätigungssatz «ALLES LÖSCHEN» im Körper, läuft in einer Transaktion und schreibt je Bereich einen Eintrag ins Prüfprotokoll — im selben Commit. Kundschaft lässt sich nur zusammen mit den Finanzen löschen (Rechnungen halten sie fest).
+
+- **Zugriff:** Erfordert die Berechtigung: `data:purge`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 422, 429, 500
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `bereiche` | string[] | ja | min. 1 Einträge |
+| `bestaetigung` | string | ja | – |
+| `nummernkreiseZuruecksetzen` | boolean | – | Standard `false` |
 
 ### `DELETE /api/users/{id}`
 

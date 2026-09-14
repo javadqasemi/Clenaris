@@ -1,0 +1,53 @@
+# ===========================================================================
+#  Zeilenenden
+# ===========================================================================
+#
+# Entwickelt wird unter Windows, ausgeliefert auf Linux. Ohne diese Datei
+# entscheidet die lokale Einstellung `core.autocrlf` jedes einzelnen
+# Arbeitsplatzes darüber, was im Repository landet — und die ist bei jedem
+# anders.
+#
+# Zwei Dinge hängen konkret daran:
+#
+#  1. **Shell-Skripte.** Ein `deploy.sh` mit CRLF scheitert auf dem Server mit
+#     `bad interpreter: /usr/bin/env bash^M`. Die Meldung nennt weder Datei
+#     noch Ursache verständlich, und gesucht wird sie erfahrungsgemäss
+#     stundenlang im Skript statt in den Zeilenenden.
+#
+#  2. **Erzeugte Dokumentation.** Das Qualitätstor erzeugt `docs/` neu und
+#     vergleicht das Ergebnis mit dem eingecheckten Stand. Stünde dort CRLF
+#     und der Linux-Läufer schriebe LF, meldete der Vergleich *jede* Zeile als
+#     geändert — die Prüfung schlüge dauerhaft fehl, ohne dass je etwas
+#     wirklich abweicht.
+#
+# Deshalb: im Repository grundsätzlich LF. Windows-Editoren kommen damit seit
+# Jahren zurecht.
+
+* text=auto eol=lf
+
+# Ausführbares, bei dem CRLF ein Laufzeitfehler wäre.
+*.sh   text eol=lf
+*.bash text eol=lf
+
+# Von Werkzeugen gelesen, die keine Wagenrückläufe erwarten.
+*.yml  text eol=lf
+*.yaml text eol=lf
+.nvmrc text eol=lf
+.env.example text eol=lf
+
+# Binärdateien nie anfassen.
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.webp binary
+*.avif binary
+*.gif  binary
+*.ico  binary
+*.pdf  binary
+*.woff binary
+*.woff2 binary
+*.ttf  binary
+
+# Die Sperrdatei wird erzeugt, nicht gelesen — Konflikte darin löst man durch
+# Neuerzeugen, nicht durch Zeilenvergleich.
+package-lock.json -diff linguist-generated=true
