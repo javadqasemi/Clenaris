@@ -5,7 +5,13 @@ import type { Frequency, PriceRule, Service, ServiceExtra } from '@prisma/client
 import { prisma, toNumber } from '@/lib/db';
 import { BusinessRuleError, NotFoundError } from '@/lib/errors';
 import { round2 } from '@/lib/utils';
-import type { PriceBreakdown, PriceInput, PriceLine, PriceRuleCondition } from './types';
+import type {
+  CouponCheck,
+  PriceBreakdown,
+  PriceInput,
+  PriceLine,
+  PriceRuleCondition,
+} from './types';
 
 /**
  * Preis-Engine.
@@ -281,6 +287,7 @@ export async function calculatePrice(
         grossTotal: 0,
         currency: 'CHF',
         onRequest: true,
+        coupon: null,
         notes: [
           'Diese Dienstleistung wird individuell offeriert. Wir melden uns innerhalb von 24 Stunden mit einem verbindlichen Angebot.',
         ],
@@ -427,50 +434,34 @@ export async function calculatePrice(
     discountTotal += amount;
   }
 
-  if (input.couponCode) {
-    const coupon = await prisma.coupon.findFirst({
-      where: {
+  // Das Ergebnis der Prüfung wandert als eigenes Feld in die Herleitung, nicht
+  // als Hinweistext: Früher stand „ungültig" nur in `notes`, das Formular
+  // zeigte daneben dauerhaft „Wird geprüft" und der Abschluss buchte still
+  // zum vollen Preis. Wer einen Code eingibt, muss wissen, ob er gilt — und
+  // eine Buchung mit ungültigem Code darf nicht durchgehen.
+  const couponCheck = input.couponCode
+    ? await checkCoupon({
         organizationId,
-        code: input.couponCode.toUpperCase().trim(),
-        status: 'ACTIVE',
-        validFrom: { lte: new Date() },
-        OR: [{ validUntil: null }, { validUntil: { gte: new Date() } }],
-      },
+        code: input.couponCode,
+        serviceKind: service.kind,
+        orderValue: workingBase + surchargeTotal,
+        beforeCoupon: workingBase + surchargeTotal + discountTotal,
+        customer: input.customer ?? null,
+      })
+    : null;
+
+  if (couponCheck?.status === 'APPLIED') {
+    lines.push({
+      key: 'coupon',
+      label: `Gutschein ${couponCheck.code}`,
+      quantity: 1,
+      unit: 'Pauschal',
+      unitPrice: -couponCheck.amount,
+      amount: -couponCheck.amount,
+      kind: 'discount',
+      meta: { couponId: couponCheck.couponId },
     });
-
-    if (!coupon) {
-      notes.push('Der eingegebene Gutscheincode ist ungültig oder abgelaufen.');
-    } else if (coupon.usageLimit !== null && coupon.usageCount >= coupon.usageLimit) {
-      notes.push('Dieser Gutscheincode wurde bereits vollständig eingelöst.');
-    } else if (workingBase + surchargeTotal < toNumber(coupon.minOrderValue)) {
-      notes.push(
-        `Der Gutschein gilt ab einem Auftragswert von CHF ${toNumber(coupon.minOrderValue).toFixed(2)}.`,
-      );
-    } else if (coupon.serviceKinds.length > 0 && !coupon.serviceKinds.includes(service.kind)) {
-      notes.push('Dieser Gutschein gilt nicht für die gewählte Dienstleistung.');
-    } else {
-      const beforeCoupon = workingBase + surchargeTotal + discountTotal;
-      let amount =
-        coupon.discountType === 'PERCENT'
-          ? round2(beforeCoupon * (toNumber(coupon.discountValue) / 100))
-          : toNumber(coupon.discountValue);
-
-      const maxDiscount = coupon.maxDiscount ? toNumber(coupon.maxDiscount) : null;
-      if (maxDiscount !== null) amount = Math.min(amount, maxDiscount);
-      amount = Math.min(amount, beforeCoupon);
-
-      lines.push({
-        key: 'coupon',
-        label: `Gutschein ${coupon.code}`,
-        quantity: 1,
-        unit: 'Pauschal',
-        unitPrice: -amount,
-        amount: -amount,
-        kind: 'discount',
-        meta: { couponId: coupon.id },
-      });
-      discountTotal -= amount;
-    }
+    discountTotal -= couponCheck.amount;
   }
 
   // --- 7) Totale, Mindestpreis, MwSt. --------------------------------------
@@ -524,8 +515,112 @@ export async function calculatePrice(
     grossTotal,
     currency: 'CHF',
     onRequest: false,
+    coupon: couponCheck
+      ? {
+          code: couponCheck.code,
+          status: couponCheck.status,
+          message: couponCheck.message,
+          amount: couponCheck.amount,
+        }
+      : null,
     notes,
     appliedRules,
+  };
+}
+
+/**
+ * Prüft einen Gutscheincode gegen alle Bedingungen des Datensatzes.
+ *
+ * Reihenfolge der Prüfungen ist die der Wahrscheinlichkeit einer Ablehnung:
+ * Tippfehler zuerst, dann Kontingent, dann Auftragsbedingungen, zuletzt die
+ * kundenbezogenen Regeln. So sieht die Kundschaft die *nächstliegende*
+ * Begründung, nicht die zufällig erste.
+ *
+ * `firstOrderOnly` und `perCustomerLimit` lassen sich nur mit bekannter
+ * Kundschaft prüfen. Bei der anonymen Sofortschätzung gelten sie als erfüllt;
+ * der Buchungsabschluss kennt die Kundschaft immer und holt die Prüfung nach.
+ */
+async function checkCoupon(params: {
+  organizationId: string;
+  code: string;
+  serviceKind: Service['kind'];
+  orderValue: number;
+  beforeCoupon: number;
+  customer: { id: string; totalBookings: number } | null;
+}): Promise<CouponCheck & { couponId: string | null }> {
+  const code = params.code.toUpperCase().trim();
+  const reject = (status: CouponCheck['status'], message: string) => ({
+    code,
+    status,
+    message,
+    amount: 0,
+    couponId: null,
+  });
+
+  const coupon = await prisma.coupon.findFirst({
+    where: {
+      organizationId: params.organizationId,
+      code,
+      status: 'ACTIVE',
+      validFrom: { lte: new Date() },
+      OR: [{ validUntil: null }, { validUntil: { gte: new Date() } }],
+    },
+  });
+
+  if (!coupon) {
+    return reject('INVALID', 'Dieser Gutscheincode ist ungültig oder abgelaufen.');
+  }
+  if (coupon.usageLimit !== null && coupon.usageCount >= coupon.usageLimit) {
+    return reject('EXHAUSTED', 'Dieser Gutscheincode wurde bereits vollständig eingelöst.');
+  }
+  if (params.orderValue < toNumber(coupon.minOrderValue)) {
+    return reject(
+      'MIN_ORDER',
+      `Der Gutschein gilt ab einem Auftragswert von CHF ${toNumber(coupon.minOrderValue).toFixed(2)}.`,
+    );
+  }
+  if (coupon.serviceKinds.length > 0 && !coupon.serviceKinds.includes(params.serviceKind)) {
+    return reject('NOT_APPLICABLE', 'Dieser Gutschein gilt nicht für die gewählte Dienstleistung.');
+  }
+  if (params.customer) {
+    if (coupon.firstOrderOnly && params.customer.totalBookings > 0) {
+      return reject('FIRST_ORDER_ONLY', 'Dieser Gutschein gilt nur für die erste Buchung.');
+    }
+    // Stornierte Buchungen zählen nicht: Wer storniert, hat den Rabatt nicht
+    // erhalten und darf ihn beim zweiten Anlauf wieder einsetzen.
+    const redeemed = await prisma.booking.count({
+      where: {
+        organizationId: params.organizationId,
+        customerId: params.customer.id,
+        couponCode: code,
+        status: { not: 'CANCELLED' },
+      },
+    });
+    if (redeemed >= coupon.perCustomerLimit) {
+      return reject(
+        'PER_CUSTOMER_LIMIT',
+        coupon.perCustomerLimit === 1
+          ? 'Sie haben diesen Gutschein bereits eingelöst.'
+          : `Dieser Gutschein lässt sich höchstens ${coupon.perCustomerLimit}× pro Kundschaft einlösen.`,
+      );
+    }
+  }
+
+  let amount =
+    coupon.discountType === 'PERCENT'
+      ? round2(params.beforeCoupon * (toNumber(coupon.discountValue) / 100))
+      : toNumber(coupon.discountValue);
+
+  const maxDiscount = coupon.maxDiscount ? toNumber(coupon.maxDiscount) : null;
+  if (maxDiscount !== null) amount = Math.min(amount, maxDiscount);
+  amount = round2(Math.min(amount, params.beforeCoupon));
+
+  return {
+    code,
+    status: 'APPLIED',
+    message: coupon.description ?? `Gutschein ${code} eingelöst.`,
+    amount,
+    couponId: coupon.id,
   };
 }
 

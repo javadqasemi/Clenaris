@@ -2,15 +2,20 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 import { ArrowLeft, Download, Mail, Phone, Users } from 'lucide-react';
 
-import { prisma } from '@/lib/db';
+import { prisma, toNumber } from '@/lib/db';
 import { requirePermission } from '@/lib/auth/session';
+import { can } from '@/lib/auth/rbac';
 import { formatDate, formatPhone, fullName } from '@/lib/utils';
 import { getOrganizationId } from '@/server/services/organization.service';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { KpiTile } from '@/components/app/kpi-tile';
-import { EmptyState, PageHeader } from '@/components/app/page-parts';
-import { ApplicationStatusSelect } from '@/features/admin/application-actions';
+import { DetailSection, EmptyState, PageHeader } from '@/components/app/page-parts';
+import {
+  ApplicationDeleteButton,
+  ApplicationStatusSelect,
+} from '@/features/admin/application-actions';
+import { JobPostingCreateButton, JobPostingList } from '@/features/admin/job-posting-manager';
 
 export const metadata: Metadata = {
   title: 'Bewerbungen',
@@ -40,7 +45,12 @@ const STATUS_META: Record<
  * Offene Bewerbungen stehen zuoberst, erledigte darunter.
  */
 export default async function ApplicationsPage() {
-  await requirePermission('application:read');
+  const session = await requirePermission('application:read');
+  const canEditApplication = can(session.role, 'application:update');
+  const canDeleteApplication = can(session.role, 'application:delete');
+  const canCreatePosting = can(session.role, 'jobPosting:create');
+  const canEditPosting = can(session.role, 'jobPosting:update');
+  const canDeletePosting = can(session.role, 'jobPosting:delete');
   const organizationId = await getOrganizationId();
 
   const postings = await prisma.jobPosting.findMany({
@@ -84,6 +94,42 @@ export default async function ApplicationsPage() {
           value={String(postings.filter((posting) => posting.status === 'PUBLISHED').length)}
         />
       </div>
+
+      {/*
+        Die Stellen stehen über den Bewerbungen, weil sie deren Rahmen sind:
+        ohne veröffentlichte Stelle gibt es kein Formular auf der Karriereseite
+        und damit keinen Eingang. Wer die Liste unten leer sieht, findet hier
+        den Grund.
+      */}
+      {can(session.role, 'jobPosting:read') ? (
+        <DetailSection
+          title={`Stellenangebote (${postings.length})`}
+          description="Veröffentlichte Stellen erscheinen auf der Karriereseite mit Bewerbungsformular."
+          action={canCreatePosting ? <JobPostingCreateButton /> : undefined}
+        >
+          <JobPostingList
+            canEdit={canEditPosting}
+            canDelete={canDeletePosting}
+            postings={postings.map((posting) => ({
+              id: posting.id,
+              title: posting.title,
+              slug: posting.slug,
+              location: posting.location,
+              employmentType: posting.employmentType,
+              workloadFrom: posting.workloadFrom,
+              workloadTo: posting.workloadTo,
+              description: posting.description,
+              requirements: posting.requirements,
+              benefits: posting.benefits,
+              salaryFrom: posting.salaryFrom ? toNumber(posting.salaryFrom) : null,
+              salaryTo: posting.salaryTo ? toNumber(posting.salaryTo) : null,
+              status: posting.status,
+              closesAt: posting.closesAt ? posting.closesAt.toISOString().slice(0, 10) : null,
+              applications: posting.applications.length,
+            }))}
+          />
+        </DetailSection>
+      ) : null}
 
       {all.length === 0 ? (
         <EmptyState
@@ -136,10 +182,18 @@ export default async function ApplicationsPage() {
                             <Badge variant={meta.variant} size="sm">
                               {meta.label}
                             </Badge>
-                            <ApplicationStatusSelect
-                              applicationId={application.id}
-                              status={application.status}
-                            />
+                            {canEditApplication ? (
+                              <ApplicationStatusSelect
+                                applicationId={application.id}
+                                status={application.status}
+                              />
+                            ) : null}
+                            {canDeleteApplication ? (
+                              <ApplicationDeleteButton
+                                applicationId={application.id}
+                                name={fullName(application.firstName, application.lastName)}
+                              />
+                            ) : null}
                           </div>
                         </div>
 

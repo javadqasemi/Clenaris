@@ -10,16 +10,27 @@ import { haversineMeters } from '@/lib/maps/google';
 import { jobAssignedEmail } from '@/lib/email/templates';
 import { smsTemplates } from '@/lib/sms/client';
 import { audit } from '@/lib/audit';
+import {
+  deriveJobCosts,
+  effectiveHourlyRate,
+  type JobCostBreakdown,
+} from '@/lib/costing/job';
 import type {
   ClockInput,
   CompleteJobInput,
   CreateJobInput,
+  JobChecklistInput,
+  JobChecklistTemplateInput,
+  JobCostingInput,
+  JobMaterialsInput,
+  JobTeamInput,
   UpdateJobInput,
 } from '@/lib/validation/operations';
 
 import { nextNumber } from './numbering.service';
 import { notify } from './notification.service';
 import { invalidateAvailability } from './availability.service';
+import { activeStaffWhere } from './profile.service';
 
 /**
  * Einsatzsteuerung (Disposition, Zeiterfassung, Abschluss).
@@ -35,10 +46,42 @@ import { invalidateAvailability } from './availability.service';
  *     Tiefgaragen — ein harter Block würde die Lohnabrechnung blockieren.
  *  3. Lohnkosten werden beim Ausstempeln als Snapshot gespeichert, damit
  *     spätere Lohnerhöhungen die Nachkalkulation abgeschlossener Jobs nicht
- *     rückwirkend verändern.
+ *     rückwirkend verändern. Der Ansatz ist der *wirksame* Stundenansatz
+ *     (`effectiveHourlyRate`): Stundenlohn, sonst der auf Sollstunden
+ *     umgelegte Monatslohn — sonst kosteten Festangestellte nichts.
+ *  4. Die Herleitung der Nachkalkulation (`breakdownForJob`) ist eine reine
+ *     Funktion in `lib/costing/job.ts`. Die Detailseite zeigt sie, „neu
+ *     berechnen" übernimmt sie — beide sehen dieselben Zahlen.
  */
 
 const GPS_TOLERANCE_METERS = 500;
+
+/**
+ * Den gemeldeten Standort auswerten — oder ehrlich `null` liefern.
+ *
+ * `0/0` wird ausdrücklich verworfen: Es ist keine Position, sondern das, was
+ * ein Client schickt, der keine hat. Der Punkt liegt im Golf von Guinea; als
+ * Standort einer Reinigungskraft im Kanton Bern ist er nie eine Messung,
+ * sondern immer eine fehlende.
+ */
+function resolvePosition(input: {
+  lat?: number | null;
+  lng?: number | null;
+}): { lat: number; lng: number } | null {
+  const { lat, lng } = input;
+  if (lat === null || lat === undefined || lng === null || lng === undefined) return null;
+  if (lat === 0 && lng === 0) return null;
+  return { lat, lng };
+}
+
+/** Entfernung zur Einsatzadresse — `null`, wenn eine der beiden Seiten fehlt. */
+function distanceToJob(
+  position: { lat: number; lng: number } | null,
+  address: { lat: number | null; lng: number | null } | null,
+): number | null {
+  if (!position || !address?.lat || !address?.lng) return null;
+  return haversineMeters(position, { lat: address.lat, lng: address.lng });
+}
 
 /** Standard-Checklisten je Leistungsart — als Startpunkt, jederzeit editierbar. */
 const CHECKLIST_TEMPLATES: Record<ServiceKind, { label: string; room?: string }[]> = {
@@ -165,6 +208,8 @@ export async function createJob(params: {
 }): Promise<Job> {
   const { organizationId, input } = params;
 
+  await assertActiveStaff(organizationId, input.employeeIds);
+
   const job = await prisma.$transaction(async (tx) => {
     const { number } = await nextNumber(tx, organizationId, 'job');
 
@@ -245,9 +290,19 @@ export async function updateJob(params: {
       ...(params.input.crewSize !== undefined ? { crewSize: params.input.crewSize } : {}),
       ...(params.input.estimatedMin !== undefined ? { estimatedMin: params.input.estimatedMin } : {}),
       ...(params.input.travelMin !== undefined ? { travelMin: params.input.travelMin } : {}),
-      ...(params.input.description !== undefined ? { description: params.input.description } : {}),
-      ...(params.input.internalNote !== undefined ? { internalNote: params.input.internalNote } : {}),
-      ...(params.input.customerNote !== undefined ? { customerNote: params.input.customerNote } : {}),
+      // Leere Zeichenkette heisst „Feld leeren": Das Bearbeitungsformular
+      // schickt sie, wenn jemand eine Notiz löscht. `null` in der Datenbank
+      // statt `''`, damit die Anzeige-Bedingungen (`job.internalNote ?`) und
+      // die Berichte nicht zwischen zwei Arten von „nichts" unterscheiden müssen.
+      ...(params.input.description !== undefined
+        ? { description: params.input.description || null }
+        : {}),
+      ...(params.input.internalNote !== undefined
+        ? { internalNote: params.input.internalNote || null }
+        : {}),
+      ...(params.input.customerNote !== undefined
+        ? { customerNote: params.input.customerNote || null }
+        : {}),
       ...(params.input.color !== undefined ? { color: params.input.color } : {}),
     },
   });
@@ -335,6 +390,24 @@ export async function moveJob(params: {
 //  Zuteilung
 // ---------------------------------------------------------------------------
 
+/**
+ * Nur aktives Personal lässt sich einteilen — Personalakte aktiv *und*
+ * Kontorolle ist Personal. Eine Person, deren Konto auf Kundschaft steht,
+ * gehört nicht ins Team, auch wenn ihre Akte noch nicht stillgelegt ist; und
+ * eine erfundene ID darf nicht erst als Fremdschlüsselfehler auffallen.
+ */
+async function assertActiveStaff(organizationId: string, employeeIds: string[]): Promise<void> {
+  if (employeeIds.length === 0) return;
+  const known = await prisma.employee.count({
+    where: { id: { in: employeeIds }, ...activeStaffWhere(organizationId) },
+  });
+  if (known !== new Set(employeeIds).size) {
+    throw new BusinessRuleError(
+      'Mindestens eine der gewählten Personen gehört nicht zum aktiven Personal.',
+    );
+  }
+}
+
 export async function assignJob(params: {
   organizationId: string;
   jobId: string;
@@ -347,6 +420,8 @@ export async function assignJob(params: {
     where: { id: params.jobId, organizationId: params.organizationId, deletedAt: null },
   });
   if (!job) throw new NotFoundError('Einsatz');
+
+  await assertActiveStaff(params.organizationId, params.employeeIds);
 
   // Doppelverplanung erkennen: überlappende Einsätze derselben Person.
   const conflicts = await prisma.jobAssignment.findMany({
@@ -499,24 +574,32 @@ export async function clockIn(params: {
 
   const open = await prisma.timeEntry.findFirst({
     where: { employeeId: params.employeeId, endedAt: null },
+    include: { job: { select: { number: true, title: true } } },
   });
   if (open) {
+    // Mit Nummer statt ohne: „Es läuft bereits eine Zeiterfassung" schickt die
+    // Person suchen, „…auf E-2041" sagt ihr, wo sie ausstempeln muss.
     throw new BusinessRuleError(
-      'Es läuft bereits eine Zeiterfassung. Bitte stempeln Sie zuerst aus.',
+      open.job
+        ? `Es läuft bereits eine Zeiterfassung auf ${open.job.number} (${open.job.title}). Bitte stempeln Sie dort zuerst aus.`
+        : 'Es läuft bereits eine Zeiterfassung. Bitte stempeln Sie zuerst aus.',
     );
   }
 
-  const distanceMeters =
-    job.address?.lat && job.address?.lng
-      ? haversineMeters(
-          { lat: params.input.lat, lng: params.input.lng },
-          { lat: job.address.lat, lng: job.address.lng },
-        )
-      : null;
+  const position = resolvePosition(params.input);
+  const distanceMeters = distanceToJob(position, job.address);
 
   const employee = await prisma.employee.findUniqueOrThrow({
     where: { id: params.employeeId },
-    select: { hourlyRate: true },
+    select: { hourlyRate: true, monthlySalary: true },
+  });
+  // Snapshot des wirksamen Ansatzes — auch für Monatslöhner, deren
+  // `hourlyRate` leer ist. Null bleibt null: „kein Ansatz hinterlegt" darf
+  // nicht als „kostet nichts" in die Marge fliessen, sondern fällt beim
+  // Neuberechnen auf den dann gültigen Ansatz zurück.
+  const snapshotRate = effectiveHourlyRate({
+    hourlyRate: employee.hourlyRate === null ? null : toNumber(employee.hourlyRate),
+    monthlySalary: employee.monthlySalary === null ? null : toNumber(employee.monthlySalary),
   });
 
   const entry = await prisma.$transaction(async (tx) => {
@@ -526,23 +609,27 @@ export async function clockIn(params: {
         employeeId: params.employeeId,
         startedAt: new Date(),
         note: params.input.note ?? null,
-        hourlyRate: employee.hourlyRate,
+        hourlyRate: snapshotRate > 0 ? snapshotRate : null,
       },
     });
 
-    await tx.gpsEvent.create({
-      data: {
-        jobId: job.id,
-        employeeId: params.employeeId,
-        type: 'CHECK_IN',
-        lat: params.input.lat,
-        lng: params.input.lng,
-        accuracy: params.input.accuracy ?? null,
-        distanceM: distanceMeters,
-      },
-    });
+    // Ohne Position kein Standortnachweis. Ein Eintrag mit erfundenen
+    // Koordinaten wäre schlimmer als gar keiner: Er sieht aus wie ein Beleg.
+    if (position) {
+      await tx.gpsEvent.create({
+        data: {
+          jobId: job.id,
+          employeeId: params.employeeId,
+          type: 'CHECK_IN',
+          lat: position.lat,
+          lng: position.lng,
+          accuracy: params.input.accuracy ?? null,
+          distanceM: distanceMeters,
+        },
+      });
+    }
 
-    if (['SCHEDULED', 'DISPATCHED', 'EN_ROUTE', 'UNASSIGNED'].includes(job.status)) {
+    if (['SCHEDULED', 'DISPATCHED', 'EN_ROUTE', 'UNASSIGNED', 'ON_HOLD'].includes(job.status)) {
       await tx.job.update({
         where: { id: job.id },
         data: { status: 'IN_PROGRESS', actualStart: job.actualStart ?? new Date() },
@@ -561,7 +648,9 @@ export async function clockIn(params: {
   const warning =
     distanceMeters !== null && distanceMeters > GPS_TOLERANCE_METERS
       ? `Ihr Standort liegt ${Math.round(distanceMeters)} m von der Einsatzadresse entfernt. Die Zeit wurde erfasst und zur Prüfung markiert.`
-      : undefined;
+      : !position
+        ? 'Ohne Standort erfasst — vermutlich kein GPS-Empfang. Die Zeit zählt normal, das Büro sieht den fehlenden Nachweis.'
+        : undefined;
 
   return { timeEntryId: entry.id, distanceMeters, warning };
 }
@@ -587,13 +676,8 @@ export async function clockOut(params: {
     Math.round((endedAt.getTime() - entry.startedAt.getTime()) / 60_000) - entry.breakMin,
   );
 
-  const distanceMeters =
-    job.address?.lat && job.address?.lng
-      ? haversineMeters(
-          { lat: params.input.lat, lng: params.input.lng },
-          { lat: job.address.lat, lng: job.address.lng },
-        )
-      : null;
+  const position = resolvePosition(params.input);
+  const distanceMeters = distanceToJob(position, job.address);
 
   await prisma.$transaction(async (tx) => {
     await tx.timeEntry.update({
@@ -601,17 +685,19 @@ export async function clockOut(params: {
       data: { endedAt, minutes, note: params.input.note ?? entry.note },
     });
 
-    await tx.gpsEvent.create({
-      data: {
-        jobId: job.id,
-        employeeId: params.employeeId,
-        type: 'CHECK_OUT',
-        lat: params.input.lat,
-        lng: params.input.lng,
-        accuracy: params.input.accuracy ?? null,
-        distanceM: distanceMeters,
-      },
-    });
+    if (position) {
+      await tx.gpsEvent.create({
+        data: {
+          jobId: job.id,
+          employeeId: params.employeeId,
+          type: 'CHECK_OUT',
+          lat: position.lat,
+          lng: position.lng,
+          accuracy: params.input.accuracy ?? null,
+          distanceM: distanceMeters,
+        },
+      });
+    }
 
     // Lohnkosten des Einsatzes fortschreiben.
     const rate = toNumber(entry.hourlyRate);
@@ -752,15 +838,524 @@ export async function toggleChecklistItem(params: {
     throw new ForbiddenError('Sie sind diesem Einsatz nicht zugeteilt.');
   }
 
+  /**
+   * Ein abgeschlossener Einsatz ist rapportiert; seine Checkliste ist der
+   * Nachweis dessen, was ausgeführt wurde. Nachträglich einen Haken zu setzen
+   * hiesse, den Nachweis zu ändern, ohne dass es auffällt.
+   */
+  if (['COMPLETED', 'VERIFIED', 'CANCELLED'].includes(item.job.status)) {
+    throw new BusinessRuleError(
+      'Die Checkliste eines abgeschlossenen Einsatzes lässt sich nicht mehr ändern.',
+    );
+  }
+
   await prisma.jobChecklistItem.update({
     where: { id: item.id },
     data: {
       done: params.done,
       doneAt: params.done ? new Date() : null,
       doneById: params.done ? (params.employeeId ?? null) : null,
-      note: params.note ?? item.note,
+      // `?? item.note` hätte das Löschen einer Notiz unmöglich gemacht: Ein
+      // leerer String ist eine Eingabe, `undefined` ist „nicht mitgeschickt".
+      ...(params.note !== undefined ? { note: params.note || null } : {}),
     },
   });
+}
+
+/**
+ * Checkliste eines Einsatzes setzen (Verwaltung).
+ *
+ * Punkte mit `id` werden aktualisiert, Punkte ohne `id` neu angelegt, nicht
+ * genannte Punkte entfernt. Der Erledigt-Zustand hängt an der `id` und überlebt
+ * damit eine Umbenennung — würde die Liste stur gelöscht und neu geschrieben,
+ * verlöre ein Team mitten im Einsatz seinen Fortschritt, weil das Büro einen
+ * Tippfehler korrigiert hat.
+ */
+export async function replaceChecklist(params: {
+  organizationId: string;
+  jobId: string;
+  input: JobChecklistInput;
+  actorId: string;
+}): Promise<void> {
+  const job = await prisma.job.findFirst({
+    where: { id: params.jobId, organizationId: params.organizationId, deletedAt: null },
+    include: { checklist: true },
+  });
+  if (!job) throw new NotFoundError('Einsatz');
+
+  const keptIds = params.input.items
+    .map((item) => item.id)
+    .filter((id): id is string => Boolean(id));
+
+  // Eine `id`, die nicht zu diesem Einsatz gehört, ist ein Zugriff auf einen
+  // fremden Datensatz — nicht bloss eine Fehleingabe.
+  const ownIds = new Set(job.checklist.map((item) => item.id));
+  if (keptIds.some((id) => !ownIds.has(id))) {
+    throw new NotFoundError('Checklistenpunkt');
+  }
+
+  await prisma.$transaction(async (tx) => {
+    await tx.jobChecklistItem.deleteMany({
+      where: { jobId: job.id, id: { notIn: keptIds.length > 0 ? keptIds : ['—'] } },
+    });
+
+    for (const [index, item] of params.input.items.entries()) {
+      if (item.id) {
+        await tx.jobChecklistItem.update({
+          where: { id: item.id },
+          data: {
+            label: item.label,
+            room: item.room ?? null,
+            required: item.required,
+            position: index,
+            ...(params.input.keepProgress
+              ? {}
+              : { done: false, doneAt: null, doneById: null, note: null }),
+          },
+        });
+      } else {
+        await tx.jobChecklistItem.create({
+          data: {
+            jobId: job.id,
+            label: item.label,
+            room: item.room ?? null,
+            required: item.required,
+            position: index,
+          },
+        });
+      }
+    }
+  });
+
+  await audit.updated({
+    organizationId: params.organizationId,
+    userId: params.actorId,
+    entity: 'Job',
+    entityId: job.id,
+    summary: `Checkliste von Einsatz ${job.number} bearbeitet (${params.input.items.length} Punkte)`,
+  });
+}
+
+/** Eine Standardcheckliste übernehmen — anhängen oder ersetzen. */
+export async function applyChecklistTemplate(params: {
+  organizationId: string;
+  jobId: string;
+  input: JobChecklistTemplateInput;
+  actorId: string;
+}): Promise<number> {
+  const job = await prisma.job.findFirst({
+    where: { id: params.jobId, organizationId: params.organizationId, deletedAt: null },
+    select: { id: true, number: true },
+  });
+  if (!job) throw new NotFoundError('Einsatz');
+
+  const template = CHECKLIST_TEMPLATES[params.input.kind];
+
+  const created = await prisma.$transaction(async (tx) => {
+    if (params.input.replace) {
+      await tx.jobChecklistItem.deleteMany({ where: { jobId: job.id } });
+    }
+
+    const offset = params.input.replace
+      ? 0
+      : await tx.jobChecklistItem.count({ where: { jobId: job.id } });
+
+    await tx.jobChecklistItem.createMany({
+      data: template.map((item, index) => ({
+        jobId: job.id,
+        label: item.label,
+        room: item.room ?? null,
+        required: true,
+        position: offset + index,
+      })),
+    });
+
+    return template.length;
+  });
+
+  await audit.updated({
+    organizationId: params.organizationId,
+    userId: params.actorId,
+    entity: 'Job',
+    entityId: job.id,
+    summary: `Standardcheckliste auf Einsatz ${job.number} angewendet (${created} Punkte)`,
+  });
+
+  return created;
+}
+
+/**
+ * Team eines Einsatzes setzen — mit Rollen je Person.
+ *
+ * Benachrichtigt werden nur die *neu* hinzugekommenen Personen. Wer schon
+ * eingeteilt war und bleibt, bekommt keine zweite „Neuer Einsatz zugeteilt"-
+ * Meldung, nur weil jemand anders dazukam; genau daran gewöhnt man sich ab,
+ * die Meldungen zu lesen.
+ */
+export async function setJobTeam(params: {
+  organizationId: string;
+  jobId: string;
+  input: JobTeamInput;
+  actorId: string;
+}): Promise<void> {
+  const job = await prisma.job.findFirst({
+    where: { id: params.jobId, organizationId: params.organizationId, deletedAt: null },
+    include: { assignments: true },
+  });
+  if (!job) throw new NotFoundError('Einsatz');
+
+  if (['COMPLETED', 'VERIFIED'].includes(job.status)) {
+    throw new BusinessRuleError(
+      'Das Team eines abgeschlossenen Einsatzes lässt sich nicht mehr ändern — daran hängt die Lohnabrechnung.',
+    );
+  }
+
+  const employeeIds = params.input.members.map((member) => member.employeeId);
+
+  if (employeeIds.length > 0) {
+    await assertActiveStaff(params.organizationId, employeeIds);
+
+    // Doppelverplanung erkennen — dieselbe Prüfung wie im Kalender.
+    const conflicts = await prisma.jobAssignment.findMany({
+      where: {
+        employeeId: { in: employeeIds },
+        jobId: { not: job.id },
+        job: {
+          deletedAt: null,
+          status: { notIn: ['CANCELLED', 'COMPLETED', 'VERIFIED'] },
+          scheduledStart: { lt: job.scheduledEnd },
+          scheduledEnd: { gt: job.scheduledStart },
+        },
+      },
+      include: {
+        employee: { include: { user: { select: { firstName: true, lastName: true } } } },
+        job: { select: { number: true } },
+      },
+    });
+
+    if (conflicts.length > 0) {
+      throw new BusinessRuleError(
+        `Terminkonflikt: ${conflicts
+          .map(
+            (conflict) =>
+              `${conflict.employee.user.firstName} ${conflict.employee.user.lastName} ist bereits für ${conflict.job.number} eingeteilt`,
+          )
+          .join('; ')}.`,
+      );
+    }
+  }
+
+  const before = new Set(job.assignments.map((assignment) => assignment.employeeId));
+  const added = employeeIds.filter((id) => !before.has(id));
+
+  await prisma.$transaction(async (tx) => {
+    await tx.jobAssignment.deleteMany({
+      where: { jobId: job.id, employeeId: { notIn: employeeIds.length > 0 ? employeeIds : ['—'] } },
+    });
+
+    for (const member of params.input.members) {
+      await tx.jobAssignment.upsert({
+        where: { jobId_employeeId: { jobId: job.id, employeeId: member.employeeId } },
+        // Die Zusage bleibt beim reinen Rollenwechsel bestehen — sie erneut
+        // einzuholen wäre eine unnötige Rückfrage an das Team.
+        update: { role: member.role },
+        create: {
+          jobId: job.id,
+          employeeId: member.employeeId,
+          role: member.role,
+          notifiedAt: params.input.notify ? new Date() : null,
+        },
+      });
+    }
+
+    await tx.job.update({
+      where: { id: job.id },
+      data: {
+        status:
+          employeeIds.length === 0
+            ? 'UNASSIGNED'
+            : job.status === 'UNASSIGNED'
+              ? 'SCHEDULED'
+              : job.status,
+      },
+    });
+  });
+
+  if (params.input.notify && added.length > 0) {
+    await notifyAssignees(job.id, added);
+  }
+
+  await audit.updated({
+    organizationId: params.organizationId,
+    userId: params.actorId,
+    entity: 'Job',
+    entityId: job.id,
+    summary: `Team von Einsatz ${job.number} gesetzt (${employeeIds.length} Person(en))`,
+  });
+}
+
+/** Was `breakdownForJob` von einem Einsatz braucht — Detailseite und Dienst laden es beide. */
+export interface JobForCosting {
+  estimatedMin: number;
+  travelMin: number;
+  assignments: {
+    employeeId: string;
+    employee: {
+      hourlyRate: Prisma.Decimal | null;
+      monthlySalary: Prisma.Decimal | null;
+      user: { firstName: string; lastName: string };
+    };
+  }[];
+  timeEntries: {
+    employeeId: string;
+    endedAt: Date | null;
+    minutes: number;
+    hourlyRate: Prisma.Decimal | null;
+    employee: { user: { firstName: string; lastName: string } };
+  }[];
+  materials: {
+    name: string;
+    quantity: Prisma.Decimal;
+    unit: string;
+    unitCost: Prisma.Decimal;
+    billable: boolean;
+  }[];
+  booking: { netTotal: Prisma.Decimal } | null;
+}
+
+/**
+ * Herleitung der Nachkalkulation aus Team, Zeiterfassung, Material und
+ * Auftrag. Rechnet nicht selbst — das tut `deriveJobCosts` — sondern
+ * übersetzt nur die Datensätze in Zahlen, damit die Rechnung ohne Prisma
+ * prüfbar bleibt.
+ */
+export function breakdownForJob(job: JobForCosting): JobCostBreakdown {
+  const decimalOrNull = (value: Prisma.Decimal | null) =>
+    value === null ? null : toNumber(value);
+
+  return deriveJobCosts({
+    estimatedMin: job.estimatedMin,
+    travelMin: job.travelMin,
+    assignments: job.assignments.map((assignment) => ({
+      employeeId: assignment.employeeId,
+      name: `${assignment.employee.user.firstName} ${assignment.employee.user.lastName}`,
+      rate: {
+        hourlyRate: decimalOrNull(assignment.employee.hourlyRate),
+        monthlySalary: decimalOrNull(assignment.employee.monthlySalary),
+      },
+    })),
+    timeEntries: job.timeEntries
+      .filter((entry) => entry.endedAt !== null)
+      .map((entry) => ({
+        employeeId: entry.employeeId,
+        name: `${entry.employee.user.firstName} ${entry.employee.user.lastName}`,
+        minutes: entry.minutes,
+        hourlyRate: decimalOrNull(entry.hourlyRate),
+      })),
+    materials: job.materials.map((item) => ({
+      name: item.name,
+      quantity: toNumber(item.quantity),
+      unit: item.unit,
+      unitCost: toNumber(item.unitCost),
+      billable: item.billable,
+    })),
+    bookingNet: job.booking ? toNumber(job.booking.netTotal) : null,
+  });
+}
+
+/**
+ * Nachkalkulation eines Einsatzes.
+ *
+ * `recalculate` leitet die Zahlen wieder aus den Quellen ab (`breakdownForJob`):
+ *
+ *  • **Lohnkosten** aus den erfassten Zeiten mal dem *gespeicherten* Ansatz der
+ *    Zeitbuchung, nicht dem heutigen Ansatz der Person. Eine Lohnerhöhung darf
+ *    die Marge eines Einsatzes vom letzten Jahr nicht rückwirkend verschlechtern.
+ *    Für eingeteilte Personen ohne erfasste Zeit zählt die geplante Dauer mal
+ *    ihrem heutigen Ansatz — sonst hätte ein Einsatz vor der Ausführung
+ *    Lohnkosten null und eine Marge von hundert Prozent.
+ *  • **Material** aus dem erfassten Verbrauch.
+ *  • **Umsatz** aus dem Nettobetrag des Auftrags; hängt kein Auftrag daran,
+ *    bleibt der bisherige Wert stehen — eine Null wäre dort eine Behauptung,
+ *    keine Rechnung.
+ */
+export async function updateJobCosting(params: {
+  organizationId: string;
+  jobId: string;
+  input: JobCostingInput;
+  actorId: string;
+}): Promise<{ revenue: number; laborCost: number; materialCost: number; margin: number }> {
+  const job = await prisma.job.findFirst({
+    where: { id: params.jobId, organizationId: params.organizationId, deletedAt: null },
+    include: {
+      assignments: {
+        include: {
+          employee: {
+            select: {
+              hourlyRate: true,
+              monthlySalary: true,
+              user: { select: { firstName: true, lastName: true } },
+            },
+          },
+        },
+      },
+      timeEntries: {
+        where: { endedAt: { not: null } },
+        include: { employee: { select: { user: { select: { firstName: true, lastName: true } } } } },
+      },
+      materials: true,
+      booking: { select: { netTotal: true } },
+    },
+  });
+  if (!job) throw new NotFoundError('Einsatz');
+
+  let revenue = toNumber(job.revenue);
+  let laborCost = toNumber(job.laborCost);
+  let materialCost = toNumber(job.materialCost);
+
+  if (params.input.recalculate) {
+    const breakdown = breakdownForJob(job);
+    laborCost = breakdown.laborCost;
+    materialCost = breakdown.materialCost;
+    if (breakdown.revenue !== null) revenue = breakdown.revenue;
+  } else {
+    if (params.input.revenue !== undefined) revenue = params.input.revenue;
+    if (params.input.laborCost !== undefined) laborCost = params.input.laborCost;
+    if (params.input.materialCost !== undefined) materialCost = params.input.materialCost;
+  }
+
+  if (params.input.approve && !['COMPLETED', 'VERIFIED'].includes(job.status)) {
+    throw new BusinessRuleError(
+      'Erst abschliessen, dann abnehmen: Eine Nachkalkulation über einen laufenden Einsatz wäre eine Momentaufnahme.',
+    );
+  }
+
+  await prisma.$transaction(async (tx) => {
+    await tx.job.update({
+      where: { id: job.id },
+      data: {
+        revenue,
+        laborCost,
+        materialCost,
+        ...(params.input.approve ? { status: 'VERIFIED' } : {}),
+        ...(params.input.note !== undefined ? { internalNote: params.input.note } : {}),
+      },
+    });
+
+    await tx.activity.create({
+      data: {
+        jobId: job.id,
+        customerId: job.customerId,
+        authorId: params.actorId,
+        type: 'SYSTEM',
+        subject: params.input.approve
+          ? `Nachkalkulation ${job.number} abgenommen`
+          : `Nachkalkulation ${job.number} ${params.input.recalculate ? 'neu berechnet' : 'bearbeitet'}`,
+        body: `Umsatz ${revenue.toFixed(2)} · Lohn ${laborCost.toFixed(2)} · Material ${materialCost.toFixed(2)} · Deckungsbeitrag ${round2(revenue - laborCost - materialCost).toFixed(2)}`,
+      },
+    });
+  });
+
+  await audit.updated({
+    organizationId: params.organizationId,
+    userId: params.actorId,
+    entity: 'Job',
+    entityId: job.id,
+    summary: params.input.approve
+      ? `Nachkalkulation von Einsatz ${job.number} abgenommen`
+      : `Nachkalkulation von Einsatz ${job.number} bearbeitet`,
+    changes: {
+      revenue: { from: toNumber(job.revenue), to: revenue },
+      laborCost: { from: toNumber(job.laborCost), to: laborCost },
+      materialCost: { from: toNumber(job.materialCost), to: materialCost },
+    },
+  });
+
+  return { revenue, laborCost, materialCost, margin: round2(revenue - laborCost - materialCost) };
+}
+
+/** Materialverbrauch eines Einsatzes vollständig setzen. */
+export async function replaceJobMaterials(params: {
+  organizationId: string;
+  jobId: string;
+  input: JobMaterialsInput;
+  actorId: string;
+}): Promise<number> {
+  const job = await prisma.job.findFirst({
+    where: { id: params.jobId, organizationId: params.organizationId, deletedAt: null },
+    select: { id: true, number: true },
+  });
+  if (!job) throw new NotFoundError('Einsatz');
+
+  const materialCost = round2(
+    params.input.materials.reduce((sum, item) => sum + item.quantity * item.unitCost, 0),
+  );
+
+  await prisma.$transaction(async (tx) => {
+    await tx.materialUsage.deleteMany({ where: { jobId: job.id } });
+    if (params.input.materials.length > 0) {
+      await tx.materialUsage.createMany({
+        data: params.input.materials.map((item) => ({
+          jobId: job.id,
+          name: item.name,
+          sku: item.sku ?? null,
+          quantity: item.quantity,
+          unit: item.unit,
+          unitCost: item.unitCost,
+          total: round2(item.quantity * item.unitCost),
+          billable: item.billable,
+        })),
+      });
+    }
+
+    // Der Materialaufwand in der Nachkalkulation ist die Summe des Verbrauchs —
+    // sie hier *nicht* nachzuführen hiesse, dass die Marge nach jeder Korrektur
+    // falsch bleibt, bis jemand „neu berechnen" drückt.
+    await tx.job.update({ where: { id: job.id }, data: { materialCost } });
+  });
+
+  await audit.updated({
+    organizationId: params.organizationId,
+    userId: params.actorId,
+    entity: 'Job',
+    entityId: job.id,
+    summary: `Material von Einsatz ${job.number} erfasst (${params.input.materials.length} Positionen)`,
+  });
+
+  return materialCost;
+}
+
+/**
+ * Foto eines Einsatzes ändern oder entfernen.
+ *
+ * Mitarbeitende dürfen die Fotos *ihres* Einsatzes anfassen, solange er läuft;
+ * nach dem Abschluss sind die Bilder Teil des Rapports. Die Verwaltung darf
+ * jederzeit — sie muss ein versehentlich hochgeladenes Bild auch dann noch
+ * entfernen können, wenn es Personen zeigt, die nicht darauf gehören.
+ */
+export async function assertPhotoAccess(params: {
+  organizationId: string;
+  photoId: string;
+  employeeId?: string;
+}) {
+  const photo = await prisma.jobPhoto.findFirst({
+    where: { id: params.photoId, job: { organizationId: params.organizationId, deletedAt: null } },
+    include: { job: { select: { id: true, number: true, status: true, assignments: true } } },
+  });
+  if (!photo) throw new NotFoundError('Foto');
+
+  if (params.employeeId) {
+    if (!photo.job.assignments.some((a) => a.employeeId === params.employeeId)) {
+      throw new ForbiddenError('Sie sind diesem Einsatz nicht zugeteilt.');
+    }
+    if (['COMPLETED', 'VERIFIED', 'CANCELLED'].includes(photo.job.status)) {
+      throw new BusinessRuleError(
+        'Die Fotos eines abgeschlossenen Einsatzes gehören zum Rapport und bleiben unverändert.',
+      );
+    }
+  }
+
+  return photo;
 }
 
 // ---------------------------------------------------------------------------
@@ -867,7 +1462,8 @@ export async function getJobDetail(params: {
       address: true,
       property: true,
       service: true,
-      booking: { select: { id: true, number: true, customerNote: true } },
+      // `netTotal` für die Herleitung der Nachkalkulation (`breakdownForJob`).
+      booking: { select: { id: true, number: true, customerNote: true, netTotal: true } },
       checklist: { orderBy: { position: 'asc' } },
       photos: { orderBy: { takenAt: 'desc' } },
       materials: true,

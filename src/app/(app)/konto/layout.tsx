@@ -1,6 +1,7 @@
 import { redirect } from 'next/navigation';
 
 import { prisma } from '@/lib/db';
+import { serverEnv } from '@/lib/env';
 import { getSession } from '@/lib/auth/session';
 import { AppShell, type NavGroup } from '@/components/app/app-shell';
 
@@ -13,7 +14,7 @@ import { AppShell, type NavGroup } from '@/components/app/app-shell';
  */
 export default async function AccountLayout({ children }: { children: React.ReactNode }) {
   const session = await getSession();
-  if (!session) redirect('/auth/anmelden?ziel=konto');
+  if (!session) redirect('/auth/anmelden');
 
   const customerId = session.role === 'CUSTOMER' ? session.profileId : null;
 
@@ -70,6 +71,7 @@ export default async function AccountLayout({ children }: { children: React.Reac
       areaLabel="Kundenbereich"
       areaHref="/konto"
       settingsHref="/konto/profil"
+      sessionIdleSeconds={serverEnv().SESSION_IDLE_TTL}
       user={{
         id: session.id,
         name: session.name,
@@ -78,6 +80,7 @@ export default async function AccountLayout({ children }: { children: React.Reac
         email: session.email,
         role: session.role,
         avatarUrl: session.avatarUrl,
+        theme: session.theme,
       }}
     >
       {children}

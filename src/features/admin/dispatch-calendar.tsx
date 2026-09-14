@@ -210,7 +210,18 @@ export function DispatchCalendar({ employees }: { employees: CalendarEmployee[] 
           initialView="timeGridWeek"
           locale={deLocale}
           firstDay={1}
-          height="auto"
+          /**
+           * Feste Höhe mit eigenem Bildlauf statt `height="auto"`.
+           *
+           * Über 24 Stunden wäre das Gitter bei „auto" rund 1700 px hoch: Die
+           * Werkzeugleiste und der Team-Filter wären beim Scrollen längst weg,
+           * und die Wochenspalten hätten keine gemeinsame Sichtachse mehr.
+           * Mit einer festen Höhe bleibt der Rahmen stehen und nur die
+           * Stundenachse wandert.
+           */
+          height="min(72vh, 46rem)"
+          stickyHeaderDates
+          expandRows
           headerToolbar={{
             left: 'prev,next today',
             center: 'title',
@@ -223,13 +234,30 @@ export function DispatchCalendar({ employees }: { employees: CalendarEmployee[] 
             day: 'Tag',
             list: 'Liste',
           }}
-          slotMinTime="06:00:00"
-          slotMaxTime="21:00:00"
+          /**
+           * Der ganze Tag, nicht nur die Bürozeit.
+           *
+           * Treppenhäuser werden vor sechs gereinigt, Büros nach achtzehn Uhr —
+           * mit dem alten Fenster 06:00–21:00 fielen genau diese Einsätze aus
+           * dem Bild, ohne Hinweis darauf, dass etwas fehlt. `scrollTime` setzt
+           * den Ausschnitt beim Öffnen trotzdem auf den Arbeitsbeginn: sichtbar
+           * ist zuerst, was die meisten Tage füllt, erreichbar ist alles.
+           */
+          slotMinTime="00:00:00"
+          slotMaxTime="24:00:00"
           slotDuration="00:30:00"
+          slotLabelInterval="01:00:00"
+          scrollTime="07:00:00"
+          scrollTimeReset={false}
           nowIndicator
           weekNumbers
           weekNumberFormat={{ week: 'short' }}
           allDaySlot={false}
+          // Gleichzeitige Einsätze nebeneinander: eine Doppelbelegung ist die
+          // wichtigste Information im Kalender und darf nicht verdeckt werden.
+          slotEventOverlap={false}
+          eventMaxStack={4}
+          dayMaxEvents={4}
           editable
           eventDurationEditable
           eventResizableFromStart

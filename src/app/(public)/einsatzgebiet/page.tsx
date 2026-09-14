@@ -6,6 +6,9 @@ import { toNumber } from '@/lib/db';
 import { formatCurrency, slugify } from '@/lib/utils';
 import { pageMetadata } from '@/lib/cms/metadata';
 import { getOrganizationId, getServiceAreas } from '@/server/services/organization.service';
+import { getContent } from '@/server/services/content.service';
+import { createCms } from '@/lib/cms/editable';
+import { isPreview } from '@/lib/cms/preview';
 import { Button } from '@/components/ui/button';
 import { PostalCodeCheck } from '@/features/public/postal-code-check';
 import { CallToAction, Section, SectionIntro } from '@/components/marketing/sections';
@@ -46,6 +49,8 @@ export default async function ServiceAreaPage() {
 
 
   const organizationId = await getOrganizationId();
+  const content = await getContent(organizationId);
+  const cms = createCms(content, await isPreview());
   // Verwaltete Handlungsaufrufe für das Abschlussband dieser Seite. Sie
   // ersetzen die eingebauten Schaltflächen, sobald welche gepflegt sind.
   const bandCtas = await ctasFor(organizationId, 'SECTION_BANNER', '/einsatzgebiet');
@@ -75,8 +80,8 @@ export default async function ServiceAreaPage() {
       <Section>
         <div className="container space-y-8">
           <SectionIntro
-            title="Alle Orte im Überblick"
-            lead="Ihr Ort fehlt? Melden Sie sich trotzdem — bei grösseren Aufträgen fahren wir auch weiter."
+            title={cms.text('area.list.title')}
+            lead={cms.text('area.list.lead')}
           />
 
           <div className="overflow-x-auto">
@@ -152,8 +157,8 @@ export default async function ServiceAreaPage() {
         <div className="container">
           <CallToAction
         ctas={bandCtas}
-            title="Kommen wir zu Ihnen?"
-            lead="Postleitzahl eingeben, Preis sehen, Termin buchen — alles in einem Durchgang."
+            title={cms.text('area.cta.title')}
+            lead={cms.text('area.cta.text')}
             primary={{ href: '/buchen', label: 'Termin buchen' }}
             secondary={{ href: '/kontakt', label: 'Nachfragen' }}
           />

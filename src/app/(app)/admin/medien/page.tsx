@@ -31,6 +31,14 @@ const SCOPE_LABELS: Record<FileScope, string> = {
   EXPENSE: 'Ausgabe',
   MESSAGE: 'Nachricht',
   OTHER: 'Übriges',
+  OBJECTIVE: 'Ziel',
+  INVESTMENT: 'Investition',
+  RISK: 'Risiko',
+  CONTROL: 'Kontrolle',
+  DOCUMENT: 'Dokument',
+  ARTICLE: 'Wissensartikel',
+  MEETING: 'Sitzung',
+  REPORT: 'Bericht',
 };
 
 /**

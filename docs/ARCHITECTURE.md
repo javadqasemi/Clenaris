@@ -98,7 +98,24 @@ gestohlen: die gesamte Familie wird verworfen und alle Geräte fliegen raus.
 Das ist unbequem — und genau richtig, denn der Alternativfall ist ein
 Angreifer, der beliebig lange weiterarbeitet.
 
+**Erneuert wird still, beendet wird nach Leerlauf.** Der Zugangstoken läuft
+nach fünfzehn Minuten ab; erneuert wird er auf drei Wegen: die Middleware
+schickt einen Seitenaufruf mit abgelaufenem Token über `GET /api/auth/refresh`
+und zurück, der API-Klient wiederholt einen 401 nach einer Erneuerung, und ein
+Aktivitätswächter im Rahmen der Anwendung erneuert vorbeugend, solange
+gearbeitet wird. Der Refresh-Token lässt sich aber nur einlösen, wenn er
+jünger ist als `SESSION_IDLE_TTL` (fünfzehn Minuten) — das Fenster wandert
+mit jeder Erneuerung. Wer eine Viertelstunde nichts tut, wird abgemeldet und
+sieht auf der Anmeldeseite den Grund; die dreissig Tage des Refresh-Tokens
+sind nur noch die absolute Obergrenze.
+
 Passwörter mit Argon2id über `@node-rs/argon2` (19 MiB, t=2, p=1, OWASP 2024).
+
+Gegen fremd ausgelöste Anfragen (CSRF) stehen zwei Linien: `SameSite=Lax` auf
+beiden Cookies, und in der Endpunkt-Fabrik eine Herkunftsprüfung — bei `POST`,
+`PUT`, `PATCH` und `DELETE` muss ein mitgeschickter `Origin`-Kopf zu dieser
+Anwendung gehören. Ohne Kopf (Tests, Cron, Webhooks) wird nicht geblockt; für
+diese Klienten ist CSRF kein Vektor, sie tragen kein fremdgesteuertes Cookie.
 
 ### 5. Preise entstehen ausschliesslich auf dem Server
 
@@ -250,6 +267,35 @@ mit Vorher-Nachher-Vergleich der geänderten Felder. Das verlangt das Schweizer
 DSG bei Personendaten, und es ist das Erste, wonach man greift, wenn eine
 Kundin fragt, warum ihr Termin verschoben wurde.
 
+### Unternehmensführung
+
+Das Führungsmodul (`/admin/fuehrung`, Dienste `kpi`, `health`, `insight`,
+`objective`, `budget`, `investment`, `scenario`, `governance`, `document`,
+`knowledge`, `meeting`, `bi-report`, `bi-assistant`) folgt den Bauplänen in
+`docs/bi/`. Vier Entscheide tragen es:
+
+- **Der Kennzahlverlauf wird gespeichert, nicht gerechnet.** `KpiSnapshot`
+  hält je Periode einen festgeschriebenen Wert samt Herleitung; die laufende
+  Periode ist `provisional`. Eine live gerechnete Kurve schriebe die
+  Vergangenheit um, sobald eine Buchung storniert wird. Die Rechner stehen in
+  `KPI_CALCULATORS`, der Nachtlauf schreibt, die Seiten lesen nur.
+- **Strategie, Ziel und Initiative sind ein Modell.** `Objective` mit
+  Selbstbezug; die Roadmap ist eine Ansicht. Der Fortschritt kommt aus den
+  Schlüsselergebnissen, bei denen ein Bezug auf eine Kennzahl die
+  Selbsteinschätzung ersetzt.
+- **Die Sichtbarkeit der Ablage steht in der `where`-Klausel.**
+  `documentVisibilityWhere()` — `EMPLOYEE_PRIVATE` heisst Geschäftsleitung
+  und betroffene Person, nie „alle Mitarbeitenden". Jeder Download landet im
+  Prüfprotokoll.
+- **Die KI liefert Entwürfe mit Begründung, Datenquelle und Vertrauensgrad.**
+  Jede Antwort des Assistenten trägt die drei Felder; übernommen wird über
+  die gewöhnlichen Endpunkte. Personendaten werden nicht übermittelt.
+
+Die reinen Rechenkerne (Gesundheitswert, Abschreibung, Budgetabweichung,
+Szenario, Perioden in Europe/Zurich) liegen in `src/lib/bi/` ohne
+Datenbankzugriff und sind die eine Stelle, an der die Prüfungen Code direkt
+importieren.
+
 ---
 
 ## Gestaltung
@@ -284,10 +330,12 @@ dort, wo sie eine Handlung beantwortet — keine Einblendanimation pro Abschnitt
 
 Ehrlich benannt, statt stillschweigend übergangen:
 
-- **Automatisierte Tests.** Es gibt keine Unit- oder Integrationstests. Die
-  Prüfung erfolgte bisher über `tsc`, einen Produktionsbuild und Rauchtests
-  gegen den laufenden Server. Die ersten Tests gehören in die Preis-Engine, die
-  QR-Referenz-Prüfziffer und die Token-Rotation.
+- **Unit-Tests.** Es gibt bewusst keine — geprüft wird die laufende Anwendung
+  über echtes HTTP (`tests/`, rund 470 Prüfungen zu Rechtematrix, Abläufen,
+  Eigentümerschaft, Redaktion und ausgelieferten Seiten; siehe
+  `tests/README.md`). Was dabei ungeprüft bleibt, sind die reinen Rechenkerne:
+  Preis-Engine, QR-Referenz-Prüfziffer und Token-Rotation verdienen gezielte
+  Tests mit festen Erwartungswerten.
 - **Mehrsprachigkeit.** Datenmodell und Endpunkte kennen DE/FR/IT/EN, die
   Oberfläche ist ausschliesslich deutsch. Die Texte liegen noch inline, nicht
   in Wörterbüchern.

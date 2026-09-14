@@ -1,10 +1,11 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
-import { ArrowLeft, FileText, Mail, MapPin, Phone, UserCheck } from 'lucide-react';
+import { ArrowLeft, FileText, Mail, MapPin, PenLine, Phone, UserCheck } from 'lucide-react';
 
 import { prisma, toNumber } from '@/lib/db';
 import { requirePermission } from '@/lib/auth/session';
+import { can } from '@/lib/auth/rbac';
 import { formatCurrency, formatDate, formatDateTime, formatPhone, fullName } from '@/lib/utils';
 import { getOrganizationId } from '@/server/services/organization.service';
 import { Badge, StatusBadge } from '@/components/ui/badge';
@@ -12,6 +13,7 @@ import { Button } from '@/components/ui/button';
 import { KpiTile } from '@/components/app/kpi-tile';
 import { DetailRow, DetailSection, PageHeader } from '@/components/app/page-parts';
 import { ActivityComposer } from '@/features/admin/activity-composer';
+import { LeadActions } from '@/features/admin/lead-actions';
 
 export const metadata: Metadata = {
   title: 'Lead',
@@ -68,7 +70,7 @@ export default async function LeadDetailPage({
 }: {
   params: Promise<{ id: string }>;
 }) {
-  await requirePermission('lead:read');
+  const session = await requirePermission('lead:read');
 
   const { id } = await params;
   const organizationId = await getOrganizationId();
@@ -130,6 +132,23 @@ export default async function LeadDetailPage({
                 </Link>
               </Button>
             ) : null}
+            {can(session.role, 'lead:update') ? (
+              <Button asChild variant="outline">
+                <Link href={`/admin/leads/${lead.id}/bearbeiten`}>
+                  <PenLine aria-hidden />
+                  Bearbeiten
+                </Link>
+              </Button>
+            ) : null}
+
+            <LeadActions
+              leadId={lead.id}
+              status={lead.status}
+              hasCustomer={Boolean(lead.customer)}
+              canConvert={can(session.role, 'customer:create')}
+              canUpdate={can(session.role, 'lead:update')}
+              canDelete={can(session.role, 'lead:delete')}
+            />
           </>
         }
       />
@@ -203,7 +222,7 @@ export default async function LeadDetailPage({
 
         <aside className="space-y-6">
           <DetailSection title="Kontakt">
-            <dl className="protocol-list">
+            <dl className="protocol-list protocol-list--tight">
               <DetailRow label="Name">{name}</DetailRow>
               {lead.company ? <DetailRow label="Firma">{lead.company}</DetailRow> : null}
               <DetailRow label="E-Mail">

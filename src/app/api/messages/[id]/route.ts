@@ -8,12 +8,23 @@ import { getOrganizationId } from '@/server/services/organization.service';
 
 export const runtime = 'nodejs';
 
-/** Ermittelt den Thread und prüft die Zugehörigkeit in einem Schritt. */
-async function loadThread(threadId: string, session: { id: string; role: string }) {
+/**
+ * Ermittelt den Thread und prüft die Zugehörigkeit in einem Schritt.
+ *
+ * Drei Sichten: Das Büro sieht alles, die Kundschaft die eigenen Verläufe,
+ * Mitarbeitende die Verläufe zu ihren zugeteilten Einsätzen. Die dritte fehlte
+ * lange — die Rolle hat `message:read_own`, und ohne eigene Regel hiess „own"
+ * für sie stillschweigend „alle".
+ */
+async function loadThread(
+  threadId: string,
+  session: { id: string; role: string; profileId: string | null },
+) {
   const thread = await prisma.messageThread.findUnique({
     where: { id: threadId },
     include: {
       customer: { select: { id: true, userId: true, firstName: true, lastName: true, companyName: true } },
+      job: { select: { assignments: { select: { employeeId: true } } } },
     },
   });
   if (!thread) throw new NotFoundError('Nachrichtenverlauf');
@@ -21,6 +32,13 @@ async function loadThread(threadId: string, session: { id: string; role: string 
   if (session.role === 'CUSTOMER' && thread.customer?.userId !== session.id) {
     // Bewusst 404-nah formuliert: die Existenz fremder Threads ist nichts,
     // was ein fremdes Konto bestätigt bekommen soll.
+    throw new ForbiddenError('Kein Zugriff auf diesen Nachrichtenverlauf.');
+  }
+
+  if (
+    session.role === 'EMPLOYEE' &&
+    !thread.job?.assignments.some((assignment) => assignment.employeeId === session.profileId)
+  ) {
     throw new ForbiddenError('Kein Zugriff auf diesen Nachrichtenverlauf.');
   }
 
@@ -132,6 +150,7 @@ export const POST = defineRoute({
         title: `Antwort: ${thread.subject}`,
         body: `${senderName}: ${preview}`,
         link: `/admin/nachrichten?verlauf=${thread.id}`,
+        permission: 'message:read',
       });
     } else if (thread.customer?.userId) {
       await notify({

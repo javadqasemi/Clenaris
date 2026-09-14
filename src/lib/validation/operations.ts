@@ -1,5 +1,12 @@
 import { z } from 'zod';
-import { cuidSchema, dateOnlySchema, moneySchema, percentSchema, timeSchema } from './common';
+import {
+  assetUrlSchema,
+  cuidSchema,
+  dateOnlySchema,
+  moneySchema,
+  percentSchema,
+  timeSchema,
+} from './common';
 
 // ---------------------------------------------------------------------------
 //  Offerten
@@ -140,7 +147,13 @@ export const updateJobSchema = z.object({
   internalNote: z.string().trim().max(4000).optional(),
   customerNote: z.string().trim().max(4000).optional(),
   color: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional(),
-});
+})
+  // Nur prüfbar, wenn beide Zeiten mitkommen; wer nur den Beginn verschiebt,
+  // verschiebt ihn im Kalender, und `moveJobSchema` prüft dort das Paar.
+  .refine((d) => !d.scheduledStart || !d.scheduledEnd || d.scheduledEnd > d.scheduledStart, {
+    message: 'Das Ende muss nach dem Beginn liegen.',
+    path: ['scheduledEnd'],
+  });
 export type UpdateJobInput = z.infer<typeof updateJobSchema>;
 
 /** Drag & Drop im Kalender. */
@@ -188,12 +201,152 @@ export const checklistToggleSchema = z.object({
   note: z.string().trim().max(500).optional(),
 });
 
-/** GPS-Ein-/Ausstempeln aus dem Mitarbeiterportal. */
+/**
+ * Checkliste eines Einsatzes vollständig setzen.
+ *
+ * Bewusst „ersetzen" statt „einzelne Punkte anlegen/ändern/löschen": Eine
+ * Checkliste wird als Ganzes bearbeitet — Punkte werden umsortiert, umbenannt,
+ * zusammengelegt. Drei Endpunkte dafür hiessen drei Netzrunden für eine
+ * Bearbeitung und ein Zwischenzustand, in dem die Liste weder alt noch neu ist.
+ *
+ * `id` bleibt erhalten, wo sie mitgeschickt wird — nur so überlebt der
+ * Erledigt-Haken eines Punktes, den jemand nur umbenannt hat.
+ */
+export const jobChecklistSchema = z.object({
+  items: z
+    .array(
+      z.object({
+        id: cuidSchema.optional(),
+        label: z.string().trim().min(2, 'Bitte benennen Sie den Punkt.').max(200),
+        room: z.string().trim().max(80).nullish(),
+        required: z.boolean().default(true),
+      }),
+    )
+    .max(200),
+  /** Bestehende Erledigt-Haken übernehmen (Standard) oder zurücksetzen. */
+  keepProgress: z.boolean().default(true),
+});
+export type JobChecklistInput = z.infer<typeof jobChecklistSchema>;
+
+/** Eine der hinterlegten Standardchecklisten übernehmen. */
+export const jobChecklistTemplateSchema = z.object({
+  kind: z.enum([
+    'RESIDENTIAL_CLEANING',
+    'MOVE_OUT_CLEANING',
+    'OFFICE_CLEANING',
+    'WINDOW_CLEANING',
+    'CONSTRUCTION_CLEANING',
+    'BUILDING_MAINTENANCE',
+    'SPECIAL',
+  ]),
+  /** true = bestehende Punkte ersetzen, false = anhängen. */
+  replace: z.boolean().default(false),
+});
+export type JobChecklistTemplateInput = z.infer<typeof jobChecklistTemplateSchema>;
+
+/**
+ * Team eines Einsatzes.
+ *
+ * Anders als `assignJobSchema` (Kalender: „diese Leute, erste ist Leitung")
+ * trägt hier jede Person ihre eigene Rolle. Im Kalender ist die Zuteilung eine
+ * schnelle Geste, auf der Einsatzseite eine bewusste Aufstellung — Lernende
+ * und Aufsicht lassen sich nur hier unterscheiden.
+ */
+export const jobTeamSchema = z.object({
+  members: z
+    .array(
+      z.object({
+        employeeId: cuidSchema,
+        role: z.enum(['LEAD', 'MEMBER', 'TRAINEE', 'SUPERVISOR']).default('MEMBER'),
+      }),
+    )
+    .max(20)
+    .refine(
+      (list) => new Set(list.map((member) => member.employeeId)).size === list.length,
+      { message: 'Jede Person darf nur einmal im Team stehen.' },
+    ),
+  /** Nur neu hinzugekommene Personen werden benachrichtigt. */
+  notify: z.boolean().default(true),
+});
+export type JobTeamInput = z.infer<typeof jobTeamSchema>;
+
+/**
+ * Nachkalkulation.
+ *
+ * `recalculate` und die Zahlenfelder schliessen sich aus: Entweder man lässt
+ * die Werte aus Zeiterfassung, Material und Auftrag neu herleiten, oder man
+ * setzt sie von Hand. Beides in einem Aufruf wäre eine Rechnung, deren
+ * Ergebnis von der Reihenfolge abhinge.
+ */
+export const jobCostingSchema = z
+  .object({
+    revenue: moneySchema.optional(),
+    laborCost: moneySchema.optional(),
+    materialCost: moneySchema.optional(),
+    /** Aus Zeiterfassung, Materialverbrauch und Auftragswert neu herleiten. */
+    recalculate: z.boolean().default(false),
+    /** Abnahme der Nachkalkulation — setzt den Einsatz auf „kontrolliert". */
+    approve: z.boolean().default(false),
+    note: z.string().trim().max(2000).optional(),
+  })
+  .refine(
+    (data) =>
+      !data.recalculate ||
+      (data.revenue === undefined &&
+        data.laborCost === undefined &&
+        data.materialCost === undefined),
+    {
+      message: 'Neu berechnen und Werte von Hand setzen schliessen sich aus.',
+      path: ['recalculate'],
+    },
+  );
+export type JobCostingInput = z.infer<typeof jobCostingSchema>;
+
+/** Foto nachträglich einordnen — Art, Raum, Bildlegende. */
+export const updateJobPhotoSchema = z
+  .object({
+    type: z.enum(['BEFORE', 'AFTER', 'DAMAGE', 'DOCUMENT', 'OTHER']).optional(),
+    caption: z.string().trim().max(300).nullish(),
+    room: z.string().trim().max(80).nullish(),
+  })
+  .strict();
+export type UpdateJobPhotoInput = z.infer<typeof updateJobPhotoSchema>;
+
+/** Verwendetes Material eines Einsatzes vollständig setzen. */
+export const jobMaterialsSchema = z.object({
+  materials: z
+    .array(
+      z.object({
+        name: z.string().trim().min(2).max(120),
+        sku: z.string().trim().max(60).nullish(),
+        quantity: z.number().min(0.01).max(10000),
+        unit: z.string().trim().max(20).default('Stk.'),
+        unitCost: moneySchema.default(0),
+        billable: z.boolean().default(false),
+      }),
+    )
+    .max(50),
+});
+export type JobMaterialsInput = z.infer<typeof jobMaterialsSchema>;
+
+/**
+ * Ein- und Ausstempeln aus dem Mitarbeitendenportal.
+ *
+ * `lat` und `lng` sind **freiwillig**, und das ist die ganze Pointe: In
+ * Tiefgaragen, Kellern und Treppenhäusern gibt es kein GPS. Zuvor verlangte
+ * das Schema beide Werte, worauf das Portal in diesem Fall `0/0` schickte —
+ * Koordinaten mitten im Atlantik. Der Server rechnete daraus pflichtbewusst
+ * eine Entfernung von einigen tausend Kilometern zur Einsatzadresse aus,
+ * markierte jede Stempelung ohne Empfang als verdächtig und legte einen
+ * Standortnachweis an, der schlicht erfunden war.
+ *
+ * „Kein Standort" muss darstellbar sein, sonst wird er erfunden.
+ */
 export const clockSchema = z.object({
   jobId: cuidSchema,
-  lat: z.number().min(-90).max(90),
-  lng: z.number().min(-180).max(180),
-  accuracy: z.number().min(0).max(10000).optional(),
+  lat: z.number().min(-90).max(90).nullish(),
+  lng: z.number().min(-180).max(180).nullish(),
+  accuracy: z.number().min(0).max(100_000).nullish(),
   note: z.string().trim().max(500).optional(),
 });
 export type ClockInput = z.infer<typeof clockSchema>;
@@ -212,8 +365,8 @@ export const manualTimeEntrySchema = z.object({
 
 export const jobPhotoSchema = z.object({
   type: z.enum(['BEFORE', 'AFTER', 'DAMAGE', 'DOCUMENT', 'OTHER']).default('BEFORE'),
-  url: z.string().url('Ungültige Bild-URL.'),
-  thumbnailUrl: z.string().url().optional(),
+  url: assetUrlSchema,
+  thumbnailUrl: assetUrlSchema.optional(),
   caption: z.string().trim().max(300).optional(),
   room: z.string().trim().max(80).optional(),
   lat: z.number().min(-90).max(90).optional(),
@@ -250,6 +403,11 @@ export const createEmployeeSchema = z.object({
   permitValidUntil: dateOnlySchema.optional(),
   emergencyContact: z.string().trim().max(120).optional(),
   emergencyPhone: z.string().trim().max(30).optional(),
+  birthday: dateOnlySchema.optional(),
+  street: z.string().trim().max(120).optional(),
+  postalCode: z.string().trim().max(10).optional(),
+  city: z.string().trim().max(80).optional(),
+  notes: z.string().trim().max(4000).optional(),
   driverLicense: z.boolean().default(false),
   vehiclePlate: z.string().trim().max(20).optional(),
   languages: z.array(z.enum(['DE', 'EN', 'FR', 'IT'])).default(['DE']),
@@ -258,10 +416,77 @@ export const createEmployeeSchema = z.object({
 });
 export type CreateEmployeeInput = z.infer<typeof createEmployeeSchema>;
 
-export const updateEmployeeSchema = createEmployeeSchema.partial().extend({
+const AHV_NUMBER = z
+  .string()
+  .regex(/^756\.\d{4}\.\d{4}\.\d{2}$/, 'Die AHV-Nummer hat das Format 756.1234.5678.90.');
+
+/**
+ * Ändern: alle Felder freiwillig — **ohne** `role`.
+ *
+ * Die Rolle ist keine Personalangabe, sondern eine Rechtevergabe. Sie stand
+ * hier drin, und `employee:update` besitzt auch die Betriebsleitung — die
+ * damit über die Personalakte ein Konto zur Administration hätte machen
+ * können, ohne je `role:assign` zu besitzen. Rollen wechselt ausschliesslich
+ * `PATCH /api/users/:id/role`.
+ *
+ * **Warum ausgeschrieben und nicht `createEmployeeSchema.partial()`.** Das
+ * Bearbeitungsformular schickt für ein geleertes Feld `null` — so
+ * unterscheidet der Endpunkt „nicht angefasst" von „ausdrücklich gelöscht".
+ * `.partial()` macht aus `.optional()` aber kein `.nullish()`: Ein
+ * Mitarbeitender ohne Bewilligung liess sich gar nicht mehr speichern, weil
+ * `permitType: null` mit 422 abgewiesen wurde — egal, was man sonst
+ * änderte. Hier steht deshalb je Feld, ob es leerbar ist (in der Datenbank
+ * `NULL` erlaubt) oder nur änderbar (Pflichtfeld).
+ */
+export const updateEmployeeSchema = z.object({
+  // Konto
+  firstName: z.string().trim().min(2).max(80).optional(),
+  lastName: z.string().trim().min(2).max(80).optional(),
+  email: z.string().email().optional(),
+  phone: z.string().trim().max(30).nullish(),
+  // Anstellung
+  employeeNumber: z
+    .string()
+    .trim()
+    .min(3)
+    .max(30)
+    .regex(/^[A-Za-z0-9._-]+$/, 'Nur Buchstaben, Ziffern, Punkt, Bindestrich und Unterstrich.')
+    .optional(),
+  employmentType: z
+    .enum(['FULL_TIME', 'PART_TIME', 'HOURLY', 'TEMPORARY', 'APPRENTICE', 'CONTRACTOR'])
+    .optional(),
+  position: z.string().trim().min(1).max(80).optional(),
+  department: z.string().trim().max(80).nullish(),
+  hiredAt: dateOnlySchema.optional(),
+  terminatedAt: dateOnlySchema.nullish(),
+  workloadPct: z.number().int().min(10).max(100).optional(),
+  vacationDaysPerYear: z.number().min(0).max(60).optional(),
   active: z.boolean().optional(),
-  terminatedAt: dateOnlySchema.optional(),
+  // Lohn — jede Änderung landet in der Lohnhistorie
+  hourlyRate: moneySchema.nullish(),
+  monthlySalary: moneySchema.nullish(),
+  /** Ab wann der neue Lohn gilt; ohne Angabe ab heute. */
+  salaryValidFrom: dateOnlySchema.optional(),
+  salaryReason: z.string().trim().max(200).optional(),
+  // Personaldaten
+  ahvNumber: AHV_NUMBER.nullish(),
+  iban: z.string().trim().max(40).nullish(),
+  nationality: z.string().trim().max(60).nullish(),
+  permitType: z.enum(['CH', 'B', 'C', 'G', 'L', 'F', 'N']).nullish(),
+  permitValidUntil: dateOnlySchema.nullish(),
+  emergencyContact: z.string().trim().max(120).nullish(),
+  emergencyPhone: z.string().trim().max(30).nullish(),
+  birthday: dateOnlySchema.nullish(),
+  street: z.string().trim().max(120).nullish(),
+  postalCode: z.string().trim().max(10).nullish(),
+  city: z.string().trim().max(80).nullish(),
+  notes: z.string().trim().max(4000).nullish(),
+  driverLicense: z.boolean().optional(),
+  vehiclePlate: z.string().trim().max(20).nullish(),
+  languages: z.array(z.enum(['DE', 'EN', 'FR', 'IT'])).min(1).optional(),
+  color: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional(),
 });
+export type UpdateEmployeeInput = z.infer<typeof updateEmployeeSchema>;
 
 export const absenceRequestSchema = z.object({
   type: z

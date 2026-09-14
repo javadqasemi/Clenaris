@@ -10,18 +10,30 @@ import {
   Plug,
   Sparkles,
   Users,
-  Zap,
 } from 'lucide-react';
 
 import { prisma, toNumber } from '@/lib/db';
 import { requirePermission } from '@/lib/auth/session';
+import { can } from '@/lib/auth/rbac';
 import { hasIntegration } from '@/lib/env';
 import { formatCurrency, formatIban } from '@/lib/utils';
 import { getOrganization, getOrganizationId } from '@/server/services/organization.service';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTriggerUnderline } from '@/components/ui/controls';
+import { Alert } from '@/components/ui/primitives';
 import { DetailRow, DetailSection, PageHeader } from '@/components/app/page-parts';
+import { withSettingsDefaults } from '@/lib/validation/settings';
+import { listTemplates } from '@/server/services/operations-admin.service';
+import { CompanyForm } from '@/features/admin/settings/company-form';
+import { OpeningHoursForm } from '@/features/admin/settings/opening-hours-form';
+import { OperationsForm } from '@/features/admin/settings/operations-form';
+import { HolidayCreateButton, HolidayList } from '@/features/admin/settings/holiday-manager';
+import {
+  AutomationCreateButton,
+  AutomationList,
+} from '@/features/admin/settings/automation-manager';
+import { TemplateList } from '@/features/admin/settings/template-manager';
 
 export const metadata: Metadata = {
   title: 'Einstellungen',
@@ -35,15 +47,49 @@ const WEEKDAYS = ['Sonntag', 'Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Fr
 /**
  * Einstellungen.
  *
- * Gestaltungsentscheid: die Seite zeigt den *aktuellen Stand* als Protokoll
- * und verlinkt für Änderungen in die jeweiligen Bereiche. Ein einziges
- * Riesenformular mit sechzig Feldern wird selten korrekt ausgefüllt — und
- * Stammdaten ändern sich ohnehin selten.
+ * Gestaltungsentscheide:
+ *
+ *  • **Bearbeitbar, wo es einen Endpunkt gibt; lesend, wo nicht.** Firmendaten,
+ *    Arbeitszeiten und Betriebsschalter lassen sich hier ändern. Nummernkreise,
+ *    Preislogik und Belegprinzip stehen weiterhin nur da — sie sind im Code
+ *    verankert, und eine Maske, die etwas verspricht, was der Server nicht
+ *    annimmt, wäre schlimmer als gar keine. Wo das so ist, steht es dabei.
+ *
+ *  • **Wer nur lesen darf, sieht das Protokoll und keine ausgegrauten Felder.**
+ *    Ein deaktiviertes Eingabefeld suggeriert, es fehle nur ein Klick.
  */
-export default async function SettingsPage() {
-  await requirePermission('settings:read');
+/**
+ * Die Register sind über die Adresszeile erreichbar (`?bereich=zeiten`).
+ *
+ * Zwei Gründe: Ein Verweis auf „die Arbeitszeiten" lässt sich weitergeben,
+ * und der Zurück-Knopf landet dort, wo man war. Unbekannte Werte fallen still
+ * auf das erste Register zurück — ein manipulierter Link soll die Seite nicht
+ * leer lassen.
+ */
+const TABS = ['firma', 'zeiten', 'katalog', 'finanzen', 'betrieb', 'automation', 'integrationen'];
+
+export default async function SettingsPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ bereich?: string }>;
+}) {
+  const session = await requirePermission('settings:read');
+  const { bereich } = await searchParams;
+  const activeTab = bereich && TABS.includes(bereich) ? bereich : 'firma';
+  const canEditCompany = can(session.role, 'company:update');
+  const canEditSettings = can(session.role, 'settings:update');
+  const canEditAutomations = can(session.role, 'automation:update');
+  const canEditTemplates = can(session.role, 'template:update');
 
   const organizationId = await getOrganizationId();
+
+  /**
+   * Feiertage ab dem Jahresanfang des Vorjahres: Was älter ist, braucht
+   * niemand mehr in der Maske, und die Liste bliebe sonst nach ein paar
+   * Jahren unlesbar lang. Die Ferienrechnung liest die Tabelle ohnehin
+   * selbst.
+   */
+  const holidaysFrom = new Date(Date.UTC(new Date().getUTCFullYear() - 1, 0, 1));
 
   const [org, hours, holidays, taxRates, services, extras, areas, automations, templates] =
     await Promise.all([
@@ -53,9 +99,8 @@ export default async function SettingsPage() {
         orderBy: { weekday: 'asc' },
       }),
       prisma.holiday.findMany({
-        where: { organizationId },
+        where: { organizationId, date: { gte: holidaysFrom } },
         orderBy: { date: 'asc' },
-        take: 20,
       }),
       prisma.taxRate.findMany({ where: { organizationId, active: true } }),
       prisma.service.count({ where: { organizationId, active: true } }),
@@ -63,11 +108,23 @@ export default async function SettingsPage() {
       prisma.serviceArea.count({ where: { organizationId, active: true } }),
       prisma.automation.findMany({
         where: { organizationId },
-        include: { _count: { select: { actions: true } } },
-        orderBy: { name: 'asc' },
+        include: {
+          actions: { orderBy: { position: 'asc' } },
+          _count: { select: { actions: true, runs: true } },
+        },
+        orderBy: [{ active: 'desc' }, { name: 'asc' }],
       }),
-      prisma.emailTemplate.count({ where: { organizationId } }),
+      listTemplates(organizationId),
     ]);
+
+  const settings = withSettingsDefaults(
+    (
+      await prisma.organization.findUniqueOrThrow({
+        where: { id: organizationId },
+        select: { settings: true },
+      })
+    ).settings,
+  );
 
   const integrations = [
     { key: 'supabase' as const, label: 'Supabase Storage', purpose: 'Fotos, PDFs und Dokumente' },
@@ -86,57 +143,90 @@ export default async function SettingsPage() {
         description="Stammdaten, Arbeitszeiten, Preise und Integrationen. Änderungen wirken sofort auf Website und Buchungsassistent."
       />
 
-      <Tabs defaultValue="firma">
+      <Tabs defaultValue={activeTab}>
         <TabsList variant="underline" className="w-full justify-start overflow-x-auto">
           <TabsTriggerUnderline value="firma">Firma</TabsTriggerUnderline>
           <TabsTriggerUnderline value="zeiten">Arbeitszeiten</TabsTriggerUnderline>
           <TabsTriggerUnderline value="katalog">Katalog</TabsTriggerUnderline>
           <TabsTriggerUnderline value="finanzen">Finanzen</TabsTriggerUnderline>
+          <TabsTriggerUnderline value="betrieb">Betrieb</TabsTriggerUnderline>
           <TabsTriggerUnderline value="automation">Automationen</TabsTriggerUnderline>
           <TabsTriggerUnderline value="integrationen">Integrationen</TabsTriggerUnderline>
         </TabsList>
 
         {/* Firma */}
         <TabsContent value="firma" className="space-y-6">
-          <DetailSection title="Firmenangaben">
-            <dl className="protocol-list">
-              <DetailRow label="Name">{org.name}</DetailRow>
-              <DetailRow label="Firma (rechtlich)">{org.legalName ?? '—'}</DetailRow>
-              <DetailRow label="Adresse">
-                {org.street} {org.streetNo}
-                <br />
-                {org.postalCode} {org.city}, Kanton {org.canton}
-              </DetailRow>
-              <DetailRow label="E-Mail">{org.email}</DetailRow>
-              <DetailRow label="Telefon">{org.phone ?? '—'}</DetailRow>
-              <DetailRow label="Website">{org.website ?? '—'}</DetailRow>
-              <DetailRow label="MWST-Nummer">{org.vatNumber ?? '—'}</DetailRow>
-              <DetailRow label="UID">{org.uid ?? '—'}</DetailRow>
-            </dl>
-          </DetailSection>
+          {canEditCompany ? (
+            <CompanyForm
+              company={{
+                name: org.name,
+                legalName: org.legalName ?? '',
+                email: org.email,
+                phone: org.phone ?? '',
+                whatsapp: org.whatsapp ?? '',
+                website: org.website ?? '',
+                street: org.street,
+                streetNo: org.streetNo ?? '',
+                postalCode: org.postalCode,
+                city: org.city,
+                vatNumber: org.vatNumber ?? '',
+                iban: org.iban ?? '',
+                qrIban: org.qrIban ?? '',
+                bankName: org.bankName ?? '',
+                logoUrl: org.logoUrl ?? '',
+                logoDarkUrl: org.logoDarkUrl ?? '',
+                faviconUrl: org.faviconUrl ?? '',
+                mapsUrl: org.mapsUrl ?? '',
+                facebookUrl: org.facebookUrl ?? '',
+                instagramUrl: org.instagramUrl ?? '',
+                linkedinUrl: org.linkedinUrl ?? '',
+                tiktokUrl: org.tiktokUrl ?? '',
+                youtubeUrl: org.youtubeUrl ?? '',
+              }}
+            />
+          ) : (
+            <>
+              <DetailSection title="Firmenangaben">
+                <dl className="protocol-list">
+                  <DetailRow label="Name">{org.name}</DetailRow>
+                  <DetailRow label="Firma (rechtlich)">{org.legalName ?? '—'}</DetailRow>
+                  <DetailRow label="Adresse">
+                    {org.street} {org.streetNo}
+                    <br />
+                    {org.postalCode} {org.city}, Kanton {org.canton}
+                  </DetailRow>
+                  <DetailRow label="E-Mail">{org.email}</DetailRow>
+                  <DetailRow label="Telefon">{org.phone ?? '—'}</DetailRow>
+                  <DetailRow label="Website">{org.website ?? '—'}</DetailRow>
+                  <DetailRow label="MWST-Nummer">{org.vatNumber ?? '—'}</DetailRow>
+                </dl>
+              </DetailSection>
 
-          <DetailSection title="Bankverbindung">
-            <dl className="protocol-list">
-              <DetailRow label="Bank">{org.bankName ?? '—'}</DetailRow>
-              <DetailRow label="IBAN">{org.iban ? formatIban(org.iban) : '—'}</DetailRow>
-              <DetailRow label="QR-IBAN">
-                {org.qrIban ? (
-                  <>
-                    {formatIban(org.qrIban)}
-                    <Badge variant="success" size="sm" className="ml-2">
-                      QR-Rechnung aktiv
-                    </Badge>
-                  </>
-                ) : (
-                  <span className="text-warning">
-                    Nicht hinterlegt — Rechnungen tragen dann keine QR-Referenz
-                  </span>
-                )}
-              </DetailRow>
-            </dl>
-          </DetailSection>
+              <DetailSection title="Bankverbindung">
+                <dl className="protocol-list">
+                  <DetailRow label="Bank">{org.bankName ?? '—'}</DetailRow>
+                  <DetailRow label="IBAN">{org.iban ? formatIban(org.iban) : '—'}</DetailRow>
+                  <DetailRow label="QR-IBAN">
+                    {org.qrIban ? (
+                      <>
+                        {formatIban(org.qrIban)}
+                        <Badge variant="success" size="sm" className="ml-2">
+                          QR-Rechnung aktiv
+                        </Badge>
+                      </>
+                    ) : (
+                      <span className="text-warning">
+                        Nicht hinterlegt — Rechnungen tragen dann keine QR-Referenz
+                      </span>
+                    )}
+                  </DetailRow>
+                </dl>
+              </DetailSection>
+            </>
+          )}
 
-          <DetailSection title="Erscheinungsbild">
+          {/* Immer nur lesend: für diese Werte gibt es keinen Endpunkt. */}
+          <DetailSection title="Erscheinungsbild und Kennungen">
             <dl className="protocol-list">
               <DetailRow label="Primärfarbe">
                 <span className="inline-flex items-center gap-2">
@@ -148,10 +238,16 @@ export default async function SettingsPage() {
                   {org.primaryColor}
                 </span>
               </DetailRow>
-              <DetailRow label="Logo">{org.logoUrl ? 'Hinterlegt' : 'Wortmarke wird verwendet'}</DetailRow>
+              <DetailRow label="UID">{org.uid ?? '—'}</DetailRow>
+              <DetailRow label="Kanton">{org.canton}</DetailRow>
               <DetailRow label="Sprache">{org.locale}</DetailRow>
               <DetailRow label="Zeitzone">{org.timezone}</DetailRow>
             </dl>
+            <p className="prose-measure py-4 text-sm leading-relaxed text-muted-foreground">
+              Diese Werte sind im Erscheinungsbild und in den Berechnungen verankert und lassen sich
+              nicht über die Oberfläche ändern. Eine Maske dafür wäre ein Versprechen, das der
+              Server nicht einlöst.
+            </p>
           </DetailSection>
 
           <DetailSection title="Nummernkreise">
@@ -167,55 +263,60 @@ export default async function SettingsPage() {
                   : 'Zähler läuft durch'}
               </DetailRow>
             </dl>
+            <p className="prose-measure py-4 text-sm leading-relaxed text-muted-foreground">
+              Bewusst nicht änderbar: Ein Wechsel des Kürzels mitten im Jahr risse eine Lücke in
+              eine Nummernfolge, die nach Art. 957a OR lückenlos sein muss.
+            </p>
           </DetailSection>
         </TabsContent>
 
         {/* Arbeitszeiten */}
         <TabsContent value="zeiten" className="space-y-6">
-          <DetailSection title="Öffnungs- und Einsatzzeiten">
-            <dl className="protocol-list">
-              {hours.map((hour) => (
-                <div key={hour.id} className="protocol-row">
-                  <dt className="protocol-label">{WEEKDAYS[hour.weekday]}</dt>
-                  <dd className="protocol-value tabular-nums">
-                    {hour.closed || !hour.opensAt
-                      ? 'geschlossen'
-                      : `${hour.opensAt} – ${hour.closesAt} Uhr`}
-                  </dd>
-                </div>
-              ))}
-            </dl>
-            <p className="py-4 text-sm leading-relaxed text-muted-foreground">
-              Der Buchungsassistent bietet nur Zeitfenster innerhalb dieser Zeiten an. Ausserhalb
-                buchen kann das Büro jederzeit manuell.
-            </p>
-          </DetailSection>
+          {canEditCompany ? (
+            <OpeningHoursForm
+              hours={hours.map((hour) => ({
+                weekday: hour.weekday,
+                opensAt: hour.opensAt,
+                closesAt: hour.closesAt,
+                closed: hour.closed,
+              }))}
+            />
+          ) : (
+            <DetailSection title="Öffnungs- und Einsatzzeiten">
+              <dl className="protocol-list">
+                {hours.map((hour) => (
+                  <div key={hour.id} className="protocol-row">
+                    <dt className="protocol-label">{WEEKDAYS[hour.weekday]}</dt>
+                    <dd className="protocol-value tabular-nums">
+                      {hour.closed || !hour.opensAt
+                        ? 'geschlossen'
+                        : `${hour.opensAt} – ${hour.closesAt} Uhr`}
+                    </dd>
+                  </div>
+                ))}
+              </dl>
+              <p className="py-4 text-sm leading-relaxed text-muted-foreground">
+                Der Buchungsassistent bietet nur Zeitfenster innerhalb dieser Zeiten an. Ausserhalb
+                buchen kann das Büro jederzeit von Hand.
+              </p>
+            </DetailSection>
+          )}
 
-          <DetailSection title={`Feiertage (${holidays.length})`}>
-            <dl className="protocol-list">
-              {holidays.map((holiday) => (
-                <div key={holiday.id} className="protocol-row">
-                  <dt className="protocol-label tabular-nums">
-                    {new Intl.DateTimeFormat('de-CH', {
-                      timeZone: 'UTC',
-                      day: '2-digit',
-                      month: '2-digit',
-                      year: 'numeric',
-                    }).format(holiday.date)}
-                  </dt>
-                  <dd className="protocol-value">
-                    {holiday.name}
-                    {holiday.recurring ? (
-                      <span className="ml-2 text-xs text-muted-foreground">jährlich</span>
-                    ) : null}
-                  </dd>
-                </div>
-              ))}
-            </dl>
-            <p className="py-4 text-sm leading-relaxed text-muted-foreground">
-              An diesen Tagen sind keine Online-Buchungen möglich, und bewilligte Abwesenheiten
-              zählen nicht als Ferientage.
-            </p>
+          <DetailSection
+            title={`Feiertage (${holidays.length})`}
+            description="An diesen Tagen sind keine Online-Buchungen möglich, und bewilligte Abwesenheiten zählen nicht als Ferientage."
+            action={canEditCompany ? <HolidayCreateButton /> : undefined}
+          >
+            <HolidayList
+              canEdit={canEditCompany}
+              holidays={holidays.map((holiday) => ({
+                id: holiday.id,
+                name: holiday.name,
+                date: holiday.date.toISOString().slice(0, 10),
+                recurring: holiday.recurring,
+                canton: holiday.canton,
+              }))}
+            />
           </DetailSection>
         </TabsContent>
 
@@ -314,33 +415,73 @@ export default async function SettingsPage() {
           </DetailSection>
         </TabsContent>
 
+        {/* Betrieb */}
+        <TabsContent value="betrieb" className="space-y-6">
+          {canEditSettings ? (
+            <OperationsForm settings={settings} />
+          ) : (
+            <>
+              <Alert variant="info">
+                Diese Schalter darf nur die Administration ändern. Sie greifen sofort — in den
+                Buchungsassistenten, ins Mahnwesen und in die Bewertungsanfragen.
+              </Alert>
+              <DetailSection title="Buchung">
+                <dl className="protocol-list">
+                  <DetailRow label="Buchbar im Voraus">{settings.bookingLeadDays} Tage</DetailRow>
+                  <DetailRow label="Kürzeste Vorlaufzeit">
+                    {settings.bookingMinNoticeHours} Stunden
+                  </DetailRow>
+                  <DetailRow label="Kostenlose Stornierung bis">
+                    {settings.cancellationDeadlineHours} Stunden vorher
+                  </DetailRow>
+                  <DetailRow label="SMS-Erinnerung">
+                    {settings.smsRemindersEnabled ? 'eingeschaltet' : 'ausgeschaltet'}
+                  </DetailRow>
+                </dl>
+              </DetailSection>
+              <DetailSection title="Rechnungen und Bewertungen">
+                <dl className="protocol-list">
+                  <DetailRow label="Mahnläufe">
+                    {settings.autoDunningEnabled ? 'automatisch' : 'von Hand'}
+                  </DetailRow>
+                  <DetailRow label="Erste Mahnung nach">
+                    {settings.firstReminderAfterDays} Tagen Verzug
+                  </DetailRow>
+                  <DetailRow label="Bewertung anfragen nach">
+                    {settings.reviewRequestAfterDays} Tagen
+                  </DetailRow>
+                  <DetailRow label="Bewertungen">
+                    {settings.moderateReviews ? 'erst nach Freigabe sichtbar' : 'sofort sichtbar'}
+                  </DetailRow>
+                </dl>
+              </DetailSection>
+            </>
+          )}
+        </TabsContent>
+
         {/* Automationen */}
         <TabsContent value="automation" className="space-y-6">
-          <DetailSection title={`Automationen (${automations.length})`}>
-            <dl className="protocol-list">
-              {automations.map((automation) => (
-                <div key={automation.id} className="protocol-row">
-                  <dt className="protocol-label">
-                    <span className="flex items-center gap-2">
-                      <Zap className="size-3.5 text-primary" aria-hidden />
-                      {automation.name}
-                    </span>
-                  </dt>
-                  <dd className="protocol-value flex flex-wrap items-center gap-2 font-normal">
-                    <Badge variant={automation.active ? 'success' : 'neutral'} size="sm">
-                      {automation.active ? 'Aktiv' : 'Pausiert'}
-                    </Badge>
-                    <span className="text-sm text-muted-foreground">
-                      {automation._count.actions}{' '}
-                      {automation._count.actions === 1 ? 'Aktion' : 'Aktionen'}
-                      {automation.delayMinutes > 0
-                        ? ` · ${Math.round(automation.delayMinutes / 60)} Std. Verzögerung`
-                        : ''}
-                    </span>
-                  </dd>
-                </div>
-              ))}
-            </dl>
+          <DetailSection
+            title={`Automationen (${automations.length})`}
+            description="Regeln, die auf Ereignisse reagieren. Pausierte Regeln bleiben erhalten und laufen nicht."
+            action={canEditAutomations ? <AutomationCreateButton /> : undefined}
+          >
+            <AutomationList
+              canEdit={canEditAutomations}
+              automations={automations.map((automation) => ({
+                id: automation.id,
+                name: automation.name,
+                description: automation.description,
+                trigger: automation.trigger,
+                delayMinutes: automation.delayMinutes,
+                active: automation.active,
+                runs: automation._count.runs,
+                actions: automation.actions.map((action) => ({
+                  type: action.type,
+                  config: (action.config ?? {}) as Record<string, unknown>,
+                })),
+              }))}
+            />
           </DetailSection>
 
           <DetailSection title="Zeitgesteuerte Läufe">
@@ -357,11 +498,29 @@ export default async function SettingsPage() {
             </dl>
           </DetailSection>
 
-          <DetailSection title={`E-Mail-Vorlagen (${templates})`}>
-            <p className="py-4 text-sm leading-relaxed text-muted-foreground">
-              Die Transaktions-E-Mails sind im Code hinterlegt und folgen dem Erscheinungsbild der
-              Website. Datenbankvorlagen überschreiben sie pro Sprache, sofern angelegt.
-            </p>
+          <DetailSection
+            title={`Vorlagen (${templates.email.length + templates.sms.length})`}
+            description="Die Transaktions-E-Mails sind im Code hinterlegt und folgen dem Erscheinungsbild der Website. Datenbankvorlagen überschreiben sie je Sprache."
+          >
+            <TemplateList
+              canEdit={canEditTemplates}
+              email={templates.email.map((template) => ({
+                id: template.id,
+                key: template.key,
+                locale: template.locale,
+                subject: template.subject,
+                bodyHtml: template.bodyHtml,
+                bodyText: template.bodyText,
+                active: template.active,
+              }))}
+              sms={templates.sms.map((template) => ({
+                id: template.id,
+                key: template.key,
+                locale: template.locale,
+                body: template.body,
+                active: template.active,
+              }))}
+            />
           </DetailSection>
         </TabsContent>
 

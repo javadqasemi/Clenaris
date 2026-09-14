@@ -1,5 +1,6 @@
 import { z } from 'zod';
 
+import { assetUrlSchema } from './common';
 import { jobApplicationSchema } from './crm';
 
 /**
@@ -18,6 +19,16 @@ export const createBlogPostSchema = z.object({
   categorySlug: z.string().trim().max(80).optional(),
 });
 export type CreateBlogPostInput = z.infer<typeof createBlogPostSchema>;
+
+/**
+ * Ändern: alle Felder freiwillig, plus der Status. Ob die anfragende Rolle den
+ * Status wechseln darf (`blog:publish`), entscheidet der Endpunkt — ein Schema
+ * kennt die Rolle nicht.
+ */
+export const updateBlogPostSchema = createBlogPostSchema.partial().extend({
+  status: z.enum(['DRAFT', 'SCHEDULED', 'PUBLISHED', 'ARCHIVED']).optional(),
+});
+export type UpdateBlogPostInput = z.infer<typeof updateBlogPostSchema>;
 
 /**
  * Moderation einer Bewertung.
@@ -43,6 +54,6 @@ export type UpdateApplicationInput = z.infer<typeof updateApplicationSchema>;
 
 /** Öffentliche Bewerbung: wie intern, plus die bereits hochgeladene CV-URL. */
 export const publicApplicationSchema = jobApplicationSchema.extend({
-  cvUrl: z.string().url().optional(),
+  cvUrl: assetUrlSchema.optional(),
 });
 export type PublicApplicationInput = z.infer<typeof publicApplicationSchema>;

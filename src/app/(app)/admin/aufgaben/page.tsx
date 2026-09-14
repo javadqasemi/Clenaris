@@ -4,7 +4,9 @@ import { ClipboardList } from 'lucide-react';
 
 import { prisma } from '@/lib/db';
 import { requirePermission } from '@/lib/auth/session';
+import { can } from '@/lib/auth/rbac';
 import { cn, formatDate, formatRelative } from '@/lib/utils';
+import { TaskRowActions } from '@/features/admin/task-row-actions';
 import { getOrganizationId } from '@/server/services/organization.service';
 import { Badge } from '@/components/ui/badge';
 import { PersonAvatar } from '@/components/ui/primitives';
@@ -67,6 +69,9 @@ export default async function TasksPage() {
   ]);
 
   const mine = tasks.filter((task) => task.assigneeId === session.id);
+  const staffOptions = staff.map((user) => ({ id: user.id, name: `${user.firstName} ${user.lastName}` }));
+  const canEdit = can(session.role, 'task:update');
+  const canDelete = can(session.role, 'task:delete');
 
   return (
     <div className="space-y-6">
@@ -86,7 +91,7 @@ export default async function TasksPage() {
         <KpiTile label="Mir zugewiesen" value={String(mine.length)} />
       </div>
 
-      <TaskComposer staff={staff.map((user) => ({ id: user.id, name: `${user.firstName} ${user.lastName}` }))} />
+      {can(session.role, 'task:create') ? <TaskComposer staff={staffOptions} /> : null}
 
       {tasks.length === 0 ? (
         <EmptyState
@@ -169,6 +174,22 @@ export default async function TasksPage() {
                     Niemand
                   </Badge>
                 )}
+
+                {canEdit || canDelete ? (
+                  <TaskRowActions
+                    taskId={task.id}
+                    staff={staffOptions}
+                    canEdit={canEdit}
+                    canDelete={canDelete}
+                    values={{
+                      title: task.title,
+                      description: task.description,
+                      priority: task.priority,
+                      dueAt: task.dueAt ? task.dueAt.toISOString() : null,
+                      assigneeId: task.assigneeId,
+                    }}
+                  />
+                ) : null}
               </li>
             );
           })}

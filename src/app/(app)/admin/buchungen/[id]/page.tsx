@@ -1,10 +1,11 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
-import { ArrowLeft, FileText, MapPin, Receipt, Truck, User } from 'lucide-react';
+import { ArrowLeft, FileDown, FileText, MapPin, Receipt, Truck, User } from 'lucide-react';
 
 import { toNumber } from '@/lib/db';
 import { requirePermission } from '@/lib/auth/session';
+import { can } from '@/lib/auth/rbac';
 import { NotFoundError } from '@/lib/errors';
 import {
   formatCurrency,
@@ -35,7 +36,7 @@ export default async function AdminBookingDetailPage({
 }: {
   params: Promise<{ id: string }>;
 }) {
-  await requirePermission('booking:read');
+  const session = await requirePermission('booking:read');
 
   const { id } = await params;
   const organizationId = await getOrganizationId();
@@ -71,11 +72,19 @@ export default async function AdminBookingDetailPage({
         actions={
           <>
             <StatusBadge status={booking.status} className="self-center" />
+            <Button asChild variant="outline" size="sm">
+              <a href={`/api/bookings/${booking.id}/pdf`}>
+                <FileDown aria-hidden />
+                Bestätigung als PDF
+              </a>
+            </Button>
             <BookingActions
               bookingId={booking.id}
               status={booking.status}
               scheduledStart={booking.scheduledStart.toISOString()}
               hasInvoice={booking.invoices.length > 0}
+              canEdit={can(session.role, 'booking:update')}
+              canDelete={can(session.role, 'booking:delete')}
             />
           </>
         }
@@ -204,6 +213,31 @@ export default async function AdminBookingDetailPage({
             )}
           </DetailSection>
 
+          {booking.activities.length > 0 ? (
+            <DetailSection title="Änderungsspur">
+              <ol className="protocol-list">
+                {booking.activities.map((activity) => (
+                  <li key={activity.id} className="space-y-1 py-4">
+                    <div className="flex flex-wrap items-baseline justify-between gap-2">
+                      <p className="text-sm font-medium">{activity.subject}</p>
+                      <p className="text-xs text-muted-foreground">
+                        {formatDateTime(activity.occurredAt)}
+                        {activity.author
+                          ? ` · ${activity.author.firstName} ${activity.author.lastName}`
+                          : ' · System'}
+                      </p>
+                    </div>
+                    {activity.body ? (
+                      <p className="whitespace-pre-line text-meta leading-relaxed text-muted-foreground">
+                        {activity.body}
+                      </p>
+                    ) : null}
+                  </li>
+                ))}
+              </ol>
+            </DetailSection>
+          ) : null}
+
           {booking.invoices.length > 0 ? (
             <DetailSection title="Rechnungen">
               <ul className="protocol-list">
@@ -235,7 +269,7 @@ export default async function AdminBookingDetailPage({
         {/* Seitenspalte */}
         <div className="space-y-6">
           <DetailSection title="Kundschaft">
-            <dl className="protocol-list">
+            <dl className="protocol-list protocol-list--tight">
               <DetailRow label="Name">
                 <Link
                   href={`/admin/kunden/${booking.customer.id}`}

@@ -17,6 +17,8 @@ export type ErrorCode =
   | 'PAYMENT_REQUIRED'
   | 'PAYMENT_FAILED'
   | 'INTEGRATION_ERROR'
+  /** Ein Dienst ist nicht eingerichtet — vom Ausfall zu unterscheiden. */
+  | 'NOT_CONFIGURED'
   | 'BUSINESS_RULE'
   | 'INTERNAL_ERROR';
 
@@ -109,6 +111,37 @@ export class IntegrationError extends AppError {
   readonly provider: string;
   constructor(provider: string, message: string, cause?: unknown) {
     super('INTEGRATION_ERROR', `${provider}: ${message}`, 502, { cause, expose: false });
+    this.provider = provider;
+  }
+}
+
+/**
+ * Ein Dienst ist gar nicht eingerichtet — kein Ausfall, sondern eine Lücke in
+ * der Konfiguration.
+ *
+ * **Warum das nicht dasselbe ist wie ein `IntegrationError`.** Dessen Wortlaut
+ * wird bewusst verschluckt (`expose: false`) und durch „Ein externer Dienst ist
+ * derzeit nicht erreichbar. Bitte später erneut versuchen." ersetzt — richtig
+ * bei einem Ausfall, denn Anbieterfehler gehören nicht ins Fenster der
+ * Kundschaft, und später erneut versuchen hilft tatsächlich.
+ *
+ * Bei einer fehlenden Konfiguration ist beides falsch. Der Dienst ist nicht
+ * „derzeit" weg, sondern nie da gewesen; späteres Erneutversuchen hilft nie.
+ * Genau daran ist beim Profilbild eine halbe Stunde Fehlersuche
+ * verlorengegangen: Die Meldung legte einen vorübergehenden Netzfehler nahe,
+ * während in Wahrheit zwei Umgebungsvariablen fehlten.
+ *
+ * Deshalb 503 statt 502 (der Dienst ist nicht verfügbar, nicht das
+ * dahinterliegende System fehlerhaft) und `expose: true` — der Wortlaut nennt
+ * die fehlenden Variablen. Das ist keine Preisgabe eines Geheimnisses: Die
+ * *Namen* der Variablen stehen in `.env.example` und in der Dokumentation, die
+ * Werte niemals hier.
+ */
+export class ConfigurationError extends AppError {
+  readonly provider: string;
+
+  constructor(provider: string, message: string) {
+    super('NOT_CONFIGURED', message, 503, { expose: true });
     this.provider = provider;
   }
 }

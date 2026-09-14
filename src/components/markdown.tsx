@@ -30,6 +30,24 @@ function escapeHtml(value: string): string {
     .replace(/"/g, '&quot;');
 }
 
+/**
+ * Nur Ziele, die ein Browser als Adresse behandelt — nie als Programm.
+ *
+ * `[Text](javascript:…)` wäre nach dem Escapen weiterhin ein gültiges
+ * `href`, und `escapeHtml` schützt nur vor Markup, nicht vor Protokollen. Die
+ * Texte hier schreibt die Redaktion, aber `blog:update` besitzt auch die
+ * Betriebsleitung — und ein Link, der auf jeder Besucherseite Skript ausführt,
+ * ist zu viel Vertrauen in ein einzelnes Konto. Erlaubt sind Web-, Mail- und
+ * Telefonadressen sowie Pfade dieser Anwendung; alles andere wird zu `#`.
+ */
+function safeHref(target: string): string {
+  const value = target.trim();
+  if (/^(https?:|mailto:|tel:)/i.test(value)) return value;
+  if (value.startsWith('/') && !value.startsWith('//')) return value;
+  if (value.startsWith('#')) return value;
+  return '#';
+}
+
 /** Fett, kursiv, Code und Links — in dieser Reihenfolge. */
 function inline(text: string): string {
   return escapeHtml(text)
@@ -38,7 +56,8 @@ function inline(text: string): string {
     .replace(/(?<!\*)\*([^*]+)\*(?!\*)/g, '<em>$1</em>')
     .replace(
       /\[([^\]]+)\]\(([^)\s]+)\)/g,
-      '<a href="$2" class="font-medium text-primary underline underline-offset-4">$1</a>',
+      (_match, label: string, target: string) =>
+        `<a href="${safeHref(target)}" rel="noopener" class="font-medium text-primary underline underline-offset-4">${label}</a>`,
     );
 }
 

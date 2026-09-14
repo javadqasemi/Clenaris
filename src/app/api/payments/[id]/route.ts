@@ -1,10 +1,9 @@
-import { z } from 'zod';
-
 import { defineRoute, idParam } from '@/lib/api/handler';
 import { noContent, ok } from '@/lib/api/response';
 import { prisma, toNumber } from '@/lib/db';
 import { audit, diff } from '@/lib/audit';
 import { BusinessRuleError, NotFoundError } from '@/lib/errors';
+import { updatePaymentSchema } from '@/lib/validation/finance';
 import { getOrganizationId } from '@/server/services/organization.service';
 
 export const runtime = 'nodejs';
@@ -22,11 +21,7 @@ const scope = (organizationId: string) => ({
 export const PATCH = defineRoute({
   permissions: ['payment:create'],
   params: idParam,
-  body: z.object({
-    reference: z.string().trim().max(120).optional(),
-    note: z.string().trim().max(1000).optional(),
-    paidAt: z.coerce.date().optional(),
-  }),
+  body: updatePaymentSchema,
   rateLimit: 'apiWrite',
   handler: async ({ params, body, session, ip }) => {
     const organizationId = await getOrganizationId();

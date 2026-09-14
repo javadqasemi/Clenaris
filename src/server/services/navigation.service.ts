@@ -5,7 +5,7 @@ import { revalidatePath } from 'next/cache';
 import type { NavLocation } from '@prisma/client';
 
 import { prisma } from '@/lib/db';
-import { cache } from '@/lib/redis';
+import { cache, cacheKeys } from '@/lib/redis';
 import { audit, diff } from '@/lib/audit';
 import { logger } from '@/lib/logger';
 import { BusinessRuleError, NotFoundError } from '@/lib/errors';
@@ -57,7 +57,7 @@ export const getNavigation = reactCache(
   async (organizationId: string, location: NavLocation): Promise<PublicNavItem[]> => {
     try {
       const rows = await cache.remember(
-        `nav:${organizationId}:${location}`,
+        cacheKeys.navigation(organizationId, location),
         CACHE_TTL_SECONDS,
         () =>
           prisma.navigationItem.findMany({
@@ -98,7 +98,7 @@ export const getNavigation = reactCache(
 async function invalidateNav(organizationId: string): Promise<void> {
   await Promise.all(
     (['HEADER', 'HEADER_PANEL', 'FOOTER_SERVICES', 'FOOTER_COMPANY', 'FOOTER_LEGAL'] as NavLocation[]).map(
-      (location) => cache.del(`nav:${organizationId}:${location}`),
+      (location) => cache.del(cacheKeys.navigation(organizationId, location)),
     ),
   );
   // Das Menü steht auf jeder Seite.
@@ -376,7 +376,7 @@ export async function upsertLegalDocument({
     ip,
   });
 
-  await cache.del(`legal:${organizationId}:${slug}`);
+  await cache.del(cacheKeys.legal(organizationId, slug));
   revalidatePath(`/legal/${slug}`);
   return document;
 }

@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type { EmploymentType, PostStatus } from '@prisma/client';
 
+import { assetUrlSchema } from './common';
 import { SERVICE_KINDS, slugify } from './catalog';
 
 /**
@@ -18,12 +19,21 @@ import { SERVICE_KINDS, slugify } from './catalog';
  * fertigen Seite sieht.
  */
 
-const imageUrl = z
-  .string()
-  .trim()
-  .url('Bitte eine vollständige Bildadresse angeben.')
-  .startsWith('https://', 'Bilder müssen über https ausgeliefert werden.')
-  .max(500);
+/**
+ * Bildadresse für die öffentliche Website.
+ *
+ * Weiterhin streng gegenüber *fremden* Adressen — ein `http`-Bild liefe in
+ * einer `https`-Seite in die Mixed-Content-Sperre des Browsers. Ein Pfad
+ * dieser Anwendung (`/api/files/blob/…`, wenn kein externer Objektspeicher
+ * eingerichtet ist) ist davon nicht betroffen: Er erbt das Protokoll der
+ * Seite und kann gar nicht unsicher ausgeliefert werden.
+ */
+const imageUrl = assetUrlSchema
+  .refine(
+    (value) => value.startsWith('/') || value.startsWith('https://'),
+    'Bilder müssen über https ausgeliefert werden.',
+  )
+  .refine((value) => value.length <= 500, 'Die Adresse ist zu lang (max. 500 Zeichen).');
 
 const optionalText = (max: number) =>
   z

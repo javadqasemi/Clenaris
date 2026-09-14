@@ -9,6 +9,7 @@ import { toast } from 'sonner';
 import { cn, formatBytes } from '@/lib/utils';
 import { api, ApiError } from '@/lib/api/client';
 import { jobApplicationSchema, type JobApplicationInput } from '@/lib/validation/crm';
+import { MAX_UPLOAD_BYTES, describeUploadLimit } from '@/lib/validation/files';
 import { Button } from '@/components/ui/button';
 import { Input, Textarea } from '@/components/ui/input';
 import { Alert } from '@/components/ui/primitives';
@@ -255,7 +256,10 @@ export function ApplicationForm({
                 />
               </label>
             )}
-            <FormDescription>Maximal 15 MB. Ohne Lebenslauf melden wir uns trotzdem.</FormDescription>
+            <FormDescription>
+              Maximal {describeUploadLimit(MAX_UPLOAD_BYTES)}. Ohne Lebenslauf melden wir uns
+              trotzdem.
+            </FormDescription>
           </div>
 
           {/* Honigfalle */}

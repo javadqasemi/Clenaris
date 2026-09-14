@@ -13,6 +13,8 @@ import {
   quoteSentEmail,
 } from '@/lib/email/templates';
 import { renderQuotePdf } from '@/lib/pdf/render';
+import { clampQuantity, rateForService, unitForService } from '@/lib/pricing/units';
+import type { QuoteRequestInput } from '@/lib/validation/crm';
 import type {
   CreateQuoteInput,
   QuoteItemInput,
@@ -63,8 +65,18 @@ export function computeQuoteTotals(
   const billable = computed.filter((item) => !item.optional);
   const subtotal = round2(billable.reduce((sum, item) => sum + item.lineTotal, 0));
 
-  const discountAmount =
-    discountType === 'PERCENT'
+  /**
+   * Ohne gewählte Rabattart gibt es keinen Rabatt.
+   *
+   * Zuvor fiel der Fall „keine Art gewählt" in den Fixbetrag-Zweig. Wer im
+   * Editor „Prozentual, 10" einstellte und dann auf „Kein Rabatt" zurückging,
+   * behielt die 10 im Wertfeld — und bekam beim Speichern still 10 Franken
+   * Rabatt statt keinen. Der Fehler war unsichtbar, weil das Wertfeld in
+   * diesem Zustand ausgegraut ist.
+   */
+  const discountAmount = !discountType
+    ? 0
+    : discountType === 'PERCENT'
       ? round2(subtotal * (discountValue / 100))
       : round2(Math.min(discountValue, subtotal));
 
@@ -165,6 +177,213 @@ export async function createQuote(params: {
   });
 
   return quote;
+}
+
+/**
+ * Aus einer Website-Offertanfrage einen Offertentwurf machen.
+ *
+ * **Das Problem, das diese Funktion löst.** Bisher landete eine Offertanfrage
+ * von der Website ausschliesslich im Formular für *Kontaktanfragen*. Die
+ * offertspezifischen Angaben — Fläche, Turnus, Strasse, Wunschtermin,
+ * angehängte Dateien — wurden dabei von der Validierung stillschweigend
+ * verworfen, weil das Kontaktschema sie nicht kennt. In der Offertenübersicht
+ * erschien nichts, und im Büro entstand der Eindruck, das Formular sei kaputt.
+ * Es war schlimmer: Es funktionierte, nur landete das Ergebnis am falschen Ort
+ * und ohne die Hälfte der Angaben.
+ *
+ * **Warum ein Entwurf und nicht nur ein Lead.** Eine Anfrage, die als Lead
+ * endet, muss jemand von Hand in eine Offerte übertragen — und tippt dabei
+ * Fläche und Leistung ein zweites Mal ab. Der Entwurf trägt diese Angaben
+ * bereits als Position, mit der richtigen Einheit und dem Katalogansatz. Er
+ * ist ausdrücklich ein *Entwurf*: Der Preis ist eine Ableitung aus dem
+ * Katalog, kein Angebot. Verschickt wird er erst, wenn ihn eine Person
+ * geprüft hat.
+ *
+ * **Warum die Position auch ohne passende Katalogleistung entsteht.** Findet
+ * sich keine Leistung zur angefragten Art, wird eine Position mit Menge und
+ * Einheit, aber ohne Preis angelegt. Eine leere Offerte würde die Angabe
+ * verlieren, um die es geht.
+ */
+export async function createQuoteFromRequest(params: {
+  organizationId: string;
+  leadId: string;
+  input: QuoteRequestInput;
+}): Promise<Quote> {
+  const { input } = params;
+
+  const service = await prisma.service.findFirst({
+    where: { organizationId: params.organizationId, kind: input.serviceKind, active: true },
+    orderBy: { position: 'asc' },
+  });
+
+  const unit = unitForService(service?.pricingModel ?? 'PER_HOUR', input.serviceKind);
+  const unitPrice = service
+    ? rateForService({
+        pricingModel: service.pricingModel,
+        hourlyRate: service.hourlyRate ? toNumber(service.hourlyRate) : null,
+        pricePerSqm: service.pricePerSqm ? toNumber(service.pricePerSqm) : null,
+        basePrice: toNumber(service.basePrice),
+      })
+    : 0;
+
+  /**
+   * Die angefragte Menge in die Einheit der Leistung übersetzen.
+   *
+   * Die Website fragt Fläche ab; abgerechnet wird je nach Leistung nach
+   * Fläche, Stunden oder Stück. Für Stundenmodelle wird die Fläche über den
+   * hinterlegten Minutenansatz in Stunden umgerechnet — dieselbe Kennzahl, die
+   * auch die Einsatzplanung verwendet. Fehlt die Fläche, bleibt die Vorgabe
+   * der Einheit stehen; sie ist als Platzhalter erkennbar und wird beim
+   * Prüfen ohnehin angefasst.
+   */
+  const quantity = deriveQuantity(input, service, unit);
+
+  const vatRate = service ? toNumber(service.vatRate) : 8.1;
+
+  const title = [
+    service?.name ?? SERVICE_KIND_LABEL[input.serviceKind] ?? 'Reinigung',
+    input.city ?? input.postalCode ?? null,
+  ]
+    .filter(Boolean)
+    .join(' · ');
+
+  const quote = await prisma.$transaction(async (tx) => {
+    const { number } = await nextNumber(tx, params.organizationId, 'quote');
+
+    return tx.quote.create({
+      data: {
+        organizationId: params.organizationId,
+        number,
+        leadId: params.leadId,
+        title,
+        status: 'DRAFT',
+        validUntil: new Date(Date.now() + 30 * 86_400_000),
+        introText: buildIntroText(input),
+        // Der Wortlaut der Anfrage bleibt intern erhalten — die Einleitung ist
+        // eine Zusammenfassung, das Original ist der Beleg.
+        internalNote: [
+          'Automatisch aus der Offertanfrage auf der Website erstellt.',
+          input.preferredDate
+            ? `Wunschtermin: ${new Date(input.preferredDate).toLocaleDateString('de-CH')}`
+            : null,
+          '',
+          input.message,
+        ]
+          .filter((line) => line !== null)
+          .join('\n'),
+        terms: defaultTerms(),
+        subtotal: round2(quantity * unitPrice),
+        netTotal: round2(quantity * unitPrice),
+        vatAmount: round2(quantity * unitPrice * (vatRate / 100)),
+        grossTotal: round2(quantity * unitPrice * (1 + vatRate / 100)),
+        items: {
+          create: [
+            {
+              serviceId: service?.id ?? null,
+              name: service?.name ?? SERVICE_KIND_LABEL[input.serviceKind] ?? 'Reinigung',
+              description: describeRequest(input),
+              quantity,
+              unit: unit.unit,
+              unitPrice,
+              discount: 0,
+              vatRate,
+              lineTotal: round2(quantity * unitPrice),
+              position: 0,
+              optional: false,
+            },
+          ],
+        },
+      },
+    });
+  });
+
+  // Der Lead steht ab jetzt in der Angebotsphase — dort erwartet ihn die
+  // Nachfassliste.
+  await prisma.lead.update({
+    where: { id: params.leadId },
+    data: { status: 'PROPOSAL' },
+  });
+
+  await audit.created({
+    organizationId: params.organizationId,
+    entity: 'Quote',
+    entityId: quote.id,
+    summary: `Offertentwurf ${quote.number} aus Website-Anfrage erstellt`,
+  });
+
+  return quote;
+}
+
+const SERVICE_KIND_LABEL: Record<string, string> = {
+  OFFICE_CLEANING: 'Büroreinigung',
+  MOVE_OUT_CLEANING: 'Umzugsreinigung',
+  RESIDENTIAL_CLEANING: 'Wohnungsreinigung',
+  WINDOW_CLEANING: 'Fensterreinigung',
+  CONSTRUCTION_CLEANING: 'Bauendreinigung',
+  BUILDING_MAINTENANCE: 'Liegenschaftsunterhalt',
+  SPECIAL: 'Sonderreinigung',
+};
+
+const FREQUENCY_LABEL: Record<string, string> = {
+  ONCE: 'einmalig',
+  WEEKLY: 'wöchentlich',
+  BIWEEKLY: 'alle zwei Wochen',
+  MONTHLY: 'monatlich',
+  QUARTERLY: 'vierteljährlich',
+  SEMIANNUAL: 'halbjährlich',
+  ANNUAL: 'jährlich',
+  CUSTOM: 'nach Absprache',
+};
+
+/** Angefragte Fläche in die Abrechnungseinheit der Leistung übersetzen. */
+function deriveQuantity(
+  input: QuoteRequestInput,
+  service: { minutesPerSqm: Prisma.Decimal; defaultDurationMin: number; pricingModel: string } | null,
+  unit: ReturnType<typeof unitForService>,
+): number {
+  const sqm = input.squareMeters ?? null;
+
+  if (unit.unit === 'm²') {
+    return sqm ? clampQuantity(sqm, unit) : unit.defaultQuantity;
+  }
+
+  if (unit.unit === 'Std.') {
+    if (!sqm || !service) return unit.defaultQuantity;
+    const minutesPerSqm = toNumber(service.minutesPerSqm);
+    const minutes = minutesPerSqm > 0 ? sqm * minutesPerSqm : service.defaultDurationMin;
+    return clampQuantity(minutes / 60, unit);
+  }
+
+  return unit.defaultQuantity;
+}
+
+/** Kurzbeschreibung der Position aus den Angaben der Anfrage. */
+function describeRequest(input: QuoteRequestInput): string {
+  return [
+    input.squareMeters ? `${input.squareMeters} m²` : null,
+    input.rooms ? `${input.rooms} Zimmer` : null,
+    FREQUENCY_LABEL[input.frequency] ?? null,
+    [input.street, [input.postalCode, input.city].filter(Boolean).join(' ')]
+      .filter(Boolean)
+      .join(', ') || null,
+  ]
+    .filter(Boolean)
+    .join(' · ');
+}
+
+/** Einleitungstext des Entwurfs — vom Büro vor dem Versand zu prüfen. */
+function buildIntroText(input: QuoteRequestInput): string {
+  return [
+    `Guten Tag ${input.firstName} ${input.lastName}`,
+    '',
+    'Vielen Dank für Ihre Anfrage. Gerne unterbreiten wir Ihnen folgendes Angebot',
+    `für die ${SERVICE_KIND_LABEL[input.serviceKind] ?? 'Reinigung'}`,
+    input.frequency !== 'ONCE' ? `(${FREQUENCY_LABEL[input.frequency]})` : '',
+    '.',
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .replace(' .', '.');
 }
 
 export async function updateQuote(params: {
@@ -470,6 +689,7 @@ export async function respondToQuote(params: {
     title: accepted ? 'Offerte angenommen' : 'Offerte abgelehnt',
     body: `${quote.number} · ${customerName} · CHF ${toNumber(quote.grossTotal).toFixed(2)}`,
     link: `/admin/offerten/${quote.id}`,
+    permission: 'quote:read',
     emailContent: accepted
       ? quoteAcceptedInternalEmail({
           quoteNumber: quote.number,

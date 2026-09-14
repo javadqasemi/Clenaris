@@ -1,4 +1,6 @@
 import type { Metadata } from 'next';
+
+import { jsonLd } from '@/lib/json-ld';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { ArrowRight, Check, X } from 'lucide-react';
@@ -6,6 +8,9 @@ import { ArrowRight, Check, X } from 'lucide-react';
 import { prisma, toNumber } from '@/lib/db';
 import { formatCurrency } from '@/lib/utils';
 import { getOrganizationId } from '@/server/services/organization.service';
+import { getContent } from '@/server/services/content.service';
+import { createCms } from '@/lib/cms/editable';
+import { isPreview } from '@/lib/cms/preview';
 import { ctasFor } from '@/server/services/cta.service';
 import { Button } from '@/components/ui/button';
 import {
@@ -77,6 +82,9 @@ export default async function ServiceDetailPage({
   });
 
   if (!service || !service.active) notFound();
+
+  const content = await getContent(organizationId);
+  const cms = createCms(content, await isPreview());
 
   const [reviews, gallery, faqs] = await Promise.all([
     prisma.review.findMany({
@@ -164,6 +172,8 @@ export default async function ServiceDetailPage({
               beforeSrc={gallery?.beforeUrl}
               afterSrc={gallery?.afterUrl}
               caption={gallery ? `${gallery.title} — Regler verschieben` : undefined}
+              beforeAttrs={cms.asset('galleryItem', gallery?.id, 'beforeUrl')}
+              afterAttrs={cms.asset('galleryItem', gallery?.id, 'afterUrl')}
             />
           </div>
         </div>
@@ -207,8 +217,8 @@ export default async function ServiceDetailPage({
         <Section className="bg-surface">
           <div className="container">
             <SectionIntro
-              title="Zusatzleistungen"
-              lead="Alles optional und einzeln buchbar. Die Preise sehen Sie im Buchungsassistenten sofort."
+              title={cms.text('services.detail.extrasTitle')}
+              lead={cms.text('services.detail.extrasLead')}
             />
             <dl className="protocol-list border-t border-border">
               {service.extras
@@ -242,7 +252,7 @@ export default async function ServiceDetailPage({
           <div className="container">
             <SectionIntro
               title={`Erfahrungen mit ${service.name}`}
-              lead="Rückmeldungen von Kundinnen und Kunden, die genau diese Leistung gebucht haben."
+              lead={cms.text('services.detail.reviewsLead')}
             />
             <div className="grid gap-6 md:grid-cols-3">
               {reviews.map((review) => (
@@ -281,7 +291,7 @@ export default async function ServiceDetailPage({
           <CallToAction
         ctas={bandCtas}
             title={`${service.name} jetzt buchen`}
-            lead="Preis in einer Minute berechnen, freies Zeitfenster wählen, fertig."
+            lead={cms.text('services.detail.ctaText')}
             primary={{ href: `/buchen?leistung=${service.slug}`, label: 'Termin buchen' }}
             secondary={{ href: '/kontakt', label: 'Frage stellen' }}
           />
@@ -293,7 +303,7 @@ export default async function ServiceDetailPage({
         type="application/ld+json"
         // eslint-disable-next-line react/no-danger -- serverseitig erzeugter JSON-LD-Block
         dangerouslySetInnerHTML={{
-          __html: JSON.stringify({
+          __html: jsonLd({
             '@context': 'https://schema.org',
             '@type': 'Service',
             name: service.name,

@@ -5,7 +5,10 @@ import { Building2, HeartHandshake, Leaf, ShieldCheck, Users } from 'lucide-reac
 import { prisma } from '@/lib/db';
 import { pageMetadata } from '@/lib/cms/metadata';
 import { getOrganizationId, getPublicCompanyInfo } from '@/server/services/organization.service';
-import { getContent, contentText, contentList } from '@/server/services/content.service';
+import { getContent } from '@/server/services/content.service';
+import { activeStaffWhere } from '@/server/services/profile.service';
+import { createCms } from '@/lib/cms/editable';
+import { isPreview } from '@/lib/cms/preview';
 import { PersonAvatar } from '@/components/ui/primitives';
 import { Button } from '@/components/ui/button';
 import {
@@ -27,11 +30,15 @@ export const revalidate = 3600;
 export default async function AboutPage() {
   const organizationId = await getOrganizationId();
   const content = await getContent(organizationId);
+  // Im Vorschaumodus werden die Texte anklickbar — siehe createCms.
+  const cms = createCms(content, await isPreview());
 
   const [company, team, stats] = await Promise.all([
     getPublicCompanyInfo(),
+    // Nur aktives Personal auf die Website — wessen Konto auf Kundschaft
+    // steht, gehört nicht mehr ins Team, auch wenn die Akte noch da ist.
     prisma.employee.findMany({
-      where: { organizationId, active: true },
+      where: activeStaffWhere(organizationId),
       orderBy: { hiredAt: 'asc' },
       select: {
         id: true,
@@ -46,7 +53,7 @@ export default async function AboutPage() {
     Promise.all([
       prisma.job.count({ where: { organizationId, status: { in: ['COMPLETED', 'VERIFIED'] } } }),
       prisma.customer.count({ where: { organizationId, deletedAt: null } }),
-      prisma.employee.count({ where: { organizationId, active: true } }),
+      prisma.employee.count({ where: activeStaffWhere(organizationId) }),
       prisma.serviceArea.count({ where: { organizationId, active: true } }),
     ]),
   ]);
@@ -64,7 +71,7 @@ export default async function AboutPage() {
               Reinigung ist Handwerk. Kein Preisvergleich.
             </h1>
             <p className="prose-measure text-lg leading-relaxed text-muted-foreground">
-              {contentText(content, 'about.intro')}
+              {cms.text('about.intro')}
             </p>
           </div>
         </div>
@@ -88,21 +95,25 @@ export default async function AboutPage() {
             <div className="space-y-3">
               <h2 className="font-display text-title font-bold tracking-tight">Unser Auftrag</h2>
               <p className="prose-measure leading-relaxed text-muted-foreground">
-                {contentText(content, 'about.mission')}
+                {cms.text('about.mission')}
               </p>
             </div>
             <div className="space-y-3">
               <h2 className="font-display text-title font-bold tracking-tight">Unser Anspruch</h2>
               <p className="prose-measure leading-relaxed text-muted-foreground">
-                {contentText(content, 'about.vision')}
+                {cms.text('about.vision')}
               </p>
             </div>
           </div>
 
           {/* Die Grundsätze als Protokollzeilen — dasselbe Strukturelement wie
               im Abnahmeprotokoll, weil es hier genauso um Zusagen geht. */}
-          <ol className="protocol-list pt-12">
-            {contentList(content, 'about.values').map((value, index) => (
+          {/*
+            Die Liste wird als Ganzes bearbeitet, nicht je Eintrag — deshalb
+            trägt der Behälter die Markierung und nicht die einzelne Zeile.
+          */}
+          <ol className="protocol-list pt-12" {...cms.attrs('about.values')}>
+            {cms.list('about.values').map((value, index) => (
               <li key={value} className="protocol-row">
                 <span className="protocol-label tabular-nums">
                   Grundsatz {String(index + 1).padStart(2, '0')}
@@ -118,8 +129,8 @@ export default async function AboutPage() {
       <Section>
         <div className="container space-y-14">
           <SectionIntro
-            title="Wofür wir stehen"
-            lead="Vier Zusagen, die wir tatsächlich einhalten können — und an denen Sie uns messen dürfen."
+            title={cms.text('about.values.title')}
+            lead={cms.text('about.values.lead')}
             align="center"
           />
 
@@ -159,8 +170,8 @@ export default async function AboutPage() {
         <Section className="bg-surface">
           <div className="container space-y-12">
             <SectionIntro
-              title="Das Team"
-              lead="Die Personen, die tatsächlich zu Ihnen kommen. Wir stellen sie vor, weil Sie ihnen Ihren Schlüssel anvertrauen."
+              title={cms.text('about.team.title')}
+              lead={cms.text('about.team.lead')}
             />
 
             <ul className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
@@ -254,8 +265,8 @@ export default async function AboutPage() {
       <Section className="pb-28">
         <div className="container">
           <CallToAction
-            title="Lernen wir uns kennen"
-            lead="Buchen Sie einen ersten Einsatz — ohne Vertrag, ohne Mindestlaufzeit. Überzeugt es Sie, sprechen wir über einen Rhythmus."
+            title={cms.text('about.cta.title')}
+            lead={cms.text('about.cta.text')}
             primary={{ href: '/buchen', label: 'Termin buchen' }}
             secondary={{ href: '/kontakt', label: 'Kontakt aufnehmen' }}
           />

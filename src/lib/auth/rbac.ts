@@ -71,6 +71,7 @@ const GUEST_PERMISSIONS: Permission[] = [];
 
 const CUSTOMER_PERMISSIONS: Permission[] = [
   'customer:read_own',
+  'customer:update_own',
   'booking:read_own',
   'booking:write_own',
   'quote:read_own',
@@ -110,6 +111,15 @@ const EMPLOYEE_PERMISSIONS: Permission[] = [
   'service:read',
   'activity:read',
   'activity:create',
+  // Persönliche Ziele und die eigenen Personaldokumente. Beide Rechte sind
+  // datensatzbezogen — die Einschränkung greift im Dienst, nicht in der
+  // Anzeige. `knowledge:read` ist der Grund, warum die Wissensdatenbank
+  // überhaupt Nutzen hat: Abläufe und Schulungsunterlagen sind für die
+  // Mitarbeitenden geschrieben.
+  'objective:read_own',
+  'objective:checkin',
+  'knowledge:read',
+  'document:read_own',
 ];
 
 /**
@@ -151,6 +161,21 @@ const MANAGER_PERMISSIONS: Permission[] = [
   'supplier:read', 'supplier:create', 'supplier:update',
   'accounting:export',
 
+  // Unternehmensführung: sehen, was für die Steuerung des Tagesgeschäfts
+  // nötig ist — gestalten nichts davon. Budget, Investitionen, Risikoregister
+  // und Dokumentenablage fehlen hier bewusst; das sind
+  // Geschäftsleitungsentscheidungen, dieselbe Linie wie bei Preisen und
+  // Website. `cockpit:financials` fehlt aus demselben Grund, aus dem
+  // `dashboard:financials` vorhanden ist: das operative Cockpit zeigt
+  // Auslastung und Auftragslage, die Marge bleibt der Geschäftsleitung.
+  'cockpit:view',
+  'kpi:read',
+  'objective:read', 'objective:update', 'objective:checkin',
+  'action:read', 'action:create', 'action:update',
+  'control:read',
+  'knowledge:read',
+  'meeting:read', 'meeting:create', 'meeting:update',
+
   'message:read', 'message:create',
   'notification:read_own',
   'template:read',
@@ -187,7 +212,18 @@ const MANAGER_PERMISSIONS: Permission[] = [
  * höherstufen), **das Prüfprotokoll lesen** (wer überwacht wird, soll die
  * Überwachung nicht einsehen) und **sich als jemand anderes anmelden**.
  */
-const SUPER_ADMIN_ONLY: Permission[] = ['role:assign', 'audit:read', 'user:impersonate'];
+/**
+ * `data:purge` kommt als viertes dazu: ganze Datenbereiche endgültig löschen.
+ * Aus demselben Grund hier und nicht bei der Administration — die Handlung
+ * ist unumkehrbar, und wer sie ausführt, soll im Protokoll stehen, das nur
+ * diese Rolle liest.
+ */
+const SUPER_ADMIN_ONLY: Permission[] = [
+  'role:assign',
+  'audit:read',
+  'user:impersonate',
+  'data:purge',
+];
 
 const ADMIN_PERMISSIONS: Permission[] = PERMISSIONS.filter(
   (permission) => !SUPER_ADMIN_ONLY.includes(permission),
@@ -254,6 +290,18 @@ export function homeRouteFor(role: ActorRole): string {
   }
 }
 
+/**
+ * Die Profilseite der Rolle — dort steht das Passwortformular.
+ *
+ * Gebraucht, wenn ein Konto sein Passwort wechseln *muss*: Die Anmeldung
+ * leitete zuvor auf `/auth/passwort-aendern`, eine Seite, die es nie gab; wer
+ * mit einem Startpasswort kam, landete auf einem 404. Das Passwort ändert man
+ * auf der Profilseite, und die gibt es in jedem Bereich.
+ */
+export function profileRouteFor(role: ActorRole): string {
+  return `${homeRouteFor(role)}/profil`;
+}
+
 /** Welche Rollen dürfen einen Pfad-Präfix betreten? Wird von der Middleware genutzt. */
 export const ROUTE_GUARDS: { prefix: string; roles: UserRole[] }[] = [
   { prefix: '/admin', roles: ['SUPER_ADMIN', 'ADMIN', 'MANAGER'] },
@@ -274,7 +322,7 @@ export const ROLE_LABELS: Record<ActorRole, string> = {
 /** Ein Satz je Rolle — steht in der Rechtematrix über der Spalte. */
 export const ROLE_DESCRIPTIONS: Record<ActorRole, string> = {
   SUPER_ADMIN:
-    'Alles, plus Rollenvergabe, Prüfprotokoll und Kontoübernahme. Für genau eine oder zwei Personen gedacht.',
+    'Alles, plus Rollenvergabe, Prüfprotokoll, Kontoübernahme und Datenbereinigung. Für genau eine oder zwei Personen gedacht.',
   ADMIN:
     'Führt den Betrieb vollständig und gestaltet Website, Katalog und Preise. Vergibt keine Rollen und sieht das Prüfprotokoll nicht.',
   MANAGER:
@@ -333,9 +381,36 @@ const PERMISSION_ROUTES: { prefix: string; permission: Permission }[] = [
   { prefix: '/admin/cta', permission: 'cta:read' },
   { prefix: '/admin/medien', permission: 'media:read' },
   { prefix: '/admin/benutzer', permission: 'user:read' },
+  // Reine Eingabemaske: Personal anlegen dürfen nur Administration und
+  // Systemverantwortung. Die Seite streamt mit `force-dynamic`, bevor ihr
+  // eigener Guard greift — der Statuscode wäre dann 200 mit Fehlerseite.
+  { prefix: '/admin/personal/neu', permission: 'employee:create' },
   { prefix: '/admin/rollen', permission: 'role:read' },
   { prefix: '/admin/protokoll', permission: 'audit:read' },
+  // Reine Handlungsmaske ohne Lesemodus: wer nicht löschen darf, soll die
+  // Seite gar nicht sehen — sie antwortet mit 404, nicht mit 403.
+  { prefix: '/admin/datenbereinigung', permission: 'data:purge' },
+  { prefix: '/admin/papierkorb', permission: 'booking:delete' },
   { prefix: '/admin/einstellungen', permission: 'settings:read' },
+  /**
+   * Unternehmensführung. Die spezifischen Bereiche stehen vor dem Präfix
+   * `/admin/fuehrung`, weil der erste Treffer gewinnt — sonst käme die
+   * Betriebsleitung mit `cockpit:view` bis auf die Budgetseite.
+   */
+  { prefix: '/admin/fuehrung/budget', permission: 'budget:read' },
+  { prefix: '/admin/fuehrung/investitionen', permission: 'investment:read' },
+  { prefix: '/admin/fuehrung/szenarien', permission: 'scenario:read' },
+  { prefix: '/admin/fuehrung/risiken', permission: 'risk:read' },
+  { prefix: '/admin/fuehrung/qualitaet', permission: 'control:read' },
+  { prefix: '/admin/fuehrung/massnahmen', permission: 'action:read' },
+  { prefix: '/admin/fuehrung/dokumente', permission: 'document:read' },
+  { prefix: '/admin/fuehrung/wissen', permission: 'knowledge:read' },
+  { prefix: '/admin/fuehrung/markt', permission: 'market:read' },
+  { prefix: '/admin/fuehrung/sitzungen', permission: 'meeting:read' },
+  { prefix: '/admin/fuehrung/berichte', permission: 'bireport:read' },
+  { prefix: '/admin/fuehrung/kennzahlen', permission: 'kpi:read' },
+  { prefix: '/admin/fuehrung/ziele', permission: 'objective:read' },
+  { prefix: '/admin/fuehrung', permission: 'cockpit:view' },
 ];
 
 export function permissionForPath(pathname: string): Permission | null {

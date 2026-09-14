@@ -10,6 +10,8 @@ import type { UpdateUserInput } from '@/lib/validation/users';
 
 import { revokeAllSessions } from '@/lib/auth/session';
 
+import { ensureCustomerProfile } from './profile.service';
+
 /**
  * Benutzerkonten.
  *
@@ -61,7 +63,13 @@ export async function listUsers(filter: UserListFilter) {
 
   return prisma.user.findMany({
     where,
-    orderBy: [{ role: 'desc' }, { lastName: 'asc' }],
+    // Nach Name, nicht nach Rolle. Die Liste war nach Rolle gruppiert, und
+    // das hatte eine tückische Folge: Ein Rollenwechsel verschob die Zeile an
+    // eine andere Stelle, alle anderen rückten nach — und die Tabelle sah
+    // aus, als hätte *jedes* Konto die Rolle gewechselt. Wer danach „die
+    // Zeile" korrigieren wollte, traf eine andere Person. Ein Name bleibt, wo
+    // er ist; die Rolle steht in der Spalte daneben.
+    orderBy: [{ lastName: 'asc' }, { firstName: 'asc' }],
     select: {
       id: true,
       email: true,
@@ -127,11 +135,18 @@ export async function updateUser({
         ...(input.status !== undefined ? { status: input.status } : {}),
         ...(input.notifyByEmail !== undefined ? { notifyByEmail: input.notifyByEmail } : {}),
         ...(input.notifyBySms !== undefined ? { notifyBySms: input.notifyBySms } : {}),
+        ...(input.avatarUrl !== undefined ? { avatarUrl: input.avatarUrl || null } : {}),
+        ...(input.mustChangePassword !== undefined
+          ? { mustChangePassword: input.mustChangePassword }
+          : {}),
       },
     });
 
     // Eine Sperre muss sofort wirken, nicht erst nach Ablauf des Zugangstokens.
-    if (input.status && input.status !== 'ACTIVE') {
+    // Dasselbe gilt für den erzwungenen Passwortwechsel: Er greift bei der
+    // nächsten Anmeldung — die es ohne Sitzungsende erst in einer Viertelstunde
+    // gäbe.
+    if ((input.status && input.status !== 'ACTIVE') || input.mustChangePassword === true) {
       await revokeAllSessions(userId);
     }
 
@@ -165,6 +180,14 @@ export async function updateUser({
  *  1. Nur bis zur eigenen Stufe (`assignableRoles`).
  *  2. Nicht die eigene Rolle.
  *  3. Nicht die letzte aktive Systemverantwortung herabstufen.
+ *
+ * Und eine vierte mit anderem Zweck — Konto und Profil zusammenhalten:
+ *  4. **Nicht auf Kundschaft, solange die Personalakte aktiv ist.** Die Rolle
+ *     allein nimmt die Person nicht aus dem Plan; dafür gibt es das
+ *     Stilllegen der Akte, das geplante Einsätze prüft und den Zugang
+ *     entzieht. Wer die Reihenfolge umgeht, hätte Kundschaft im Team.
+ *     Umgekehrt bekommt ein Konto, das Kundschaft wird, einen Kundendatensatz
+ *     — sonst stünde es im Kundenbereich vor einer leeren Tür.
  */
 export async function assignRole({
   organizationId,
@@ -198,7 +221,28 @@ export async function assignRole({
     await assertNotLastSuperAdmin(organizationId, target.id, target.role);
   }
 
-  const user = await prisma.user.update({ where: { id: userId }, data: { role } });
+  if (role === 'CUSTOMER') {
+    const activeEmployee = await prisma.employee.findFirst({
+      where: { userId, active: true },
+      select: { employeeNumber: true },
+    });
+    if (activeEmployee) {
+      throw new BusinessRuleError(
+        `Dieses Konto hat eine aktive Personalakte (${activeEmployee.employeeNumber}). ` +
+          'Solange sie aktiv ist, stünde die Person weiterhin in Einsatzplanung und Team. ' +
+          'Legen Sie die Personalakte zuerst still (Mitarbeitende → Akte → Stilllegen), ' +
+          'dann lässt sich die Rolle auf Kundschaft setzen.',
+      );
+    }
+  }
+
+  const user = await prisma.$transaction(async (tx) => {
+    const updated = await tx.user.update({ where: { id: userId }, data: { role } });
+    if (role === 'CUSTOMER') {
+      await ensureCustomerProfile(tx, { organizationId, userId });
+    }
+    return updated;
+  });
 
   // Die Rolle steckt im Zugangstoken. Ohne Widerruf behielte die Person ihre
   // alten Rechte bis zu fünfzehn Minuten — bei einer Herabstufung genau die

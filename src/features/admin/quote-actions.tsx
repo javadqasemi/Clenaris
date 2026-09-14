@@ -2,7 +2,7 @@
 
 import * as React from 'react';
 import { useRouter } from 'next/navigation';
-import { CalendarPlus, Copy, MoreHorizontal, Receipt, Send } from 'lucide-react';
+import { CalendarPlus, Copy, MoreHorizontal, Receipt, Send, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { api, ApiError } from '@/lib/api/client';
@@ -37,15 +37,18 @@ export function QuoteActions({
   status,
   hasCustomer,
   email,
+  canDelete = false,
 }: {
   quoteId: string;
   status: string;
   hasCustomer: boolean;
   email: string;
+  /** `quote:delete` — die Seite reicht das Recht durch, der Endpunkt prüft es erneut. */
+  canDelete?: boolean;
 }) {
   const router = useRouter();
   const [pending, setPending] = React.useState<string | null>(null);
-  const [dialog, setDialog] = React.useState<'send' | 'booking' | null>(null);
+  const [dialog, setDialog] = React.useState<'send' | 'booking' | 'delete' | null>(null);
   const [error, setError] = React.useState<string | null>(null);
 
   const [message, setMessage] = React.useState('');
@@ -71,6 +74,9 @@ export function QuoteActions({
 
   const canSend = ['DRAFT', 'SENT', 'VIEWED'].includes(status);
   const canConvert = status === 'ACCEPTED';
+  // Eine angenommene Offerte ist eine vertragliche Zusage — der Papierkorb
+  // verweigert sie (siehe `trash.service`), also wird sie gar nicht angeboten.
+  const mayTrash = canDelete && !['ACCEPTED', 'CONVERTED'].includes(status);
 
   return (
     <>
@@ -135,9 +141,58 @@ export function QuoteActions({
                 </DropdownMenuItem>
               </>
             ) : null}
+
+            {mayTrash ? (
+              <>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem destructive onSelect={() => setDialog('delete')}>
+                  <Trash2 aria-hidden />
+                  In den Papierkorb
+                </DropdownMenuItem>
+              </>
+            ) : null}
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
+
+      {/* Papierkorb */}
+      <Dialog open={dialog === 'delete'} onOpenChange={(open) => !open && setDialog(null)}>
+        <DialogContent size="sm">
+          <DialogHeader>
+            <DialogTitle>Offerte in den Papierkorb legen?</DialogTitle>
+            <DialogDescription>
+              Die Offerte verschwindet aus den Listen, bleibt aber unter &bdquo;Papierkorb&ldquo;
+              wiederherstellbar. Die Kundschaft wird nicht benachrichtigt; ein versendeter Link
+              bleibt bis zum Ablauf gültig.
+            </DialogDescription>
+          </DialogHeader>
+
+          {error ? <Alert variant="destructive">{error}</Alert> : null}
+
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setDialog(null)}>
+              Abbrechen
+            </Button>
+            <Button
+              variant="destructive"
+              loading={pending === 'delete'}
+              onClick={() =>
+                run(
+                  'delete',
+                  async () => {
+                    await api.delete(`/api/quotes/${quoteId}`);
+                    router.push('/admin/offerten');
+                  },
+                  'Offerte in den Papierkorb gelegt.',
+                )
+              }
+            >
+              <Trash2 aria-hidden />
+              In den Papierkorb
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Versenden */}
       <Dialog open={dialog === 'send'} onOpenChange={(open) => !open && setDialog(null)}>

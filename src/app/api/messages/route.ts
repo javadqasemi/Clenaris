@@ -35,6 +35,19 @@ export const GET = defineRoute({
       where.customerId = customer.id;
     }
 
+    /**
+     * Mitarbeitende haben `message:read_own`, nicht `message:read`: Sie sehen
+     * die Verläufe zu den *eigenen* Einsätzen, nicht die Korrespondenz des
+     * ganzen Kundenstamms. Ohne diese Bedingung fiel diese Rolle durch — der
+     * Filter kannte nur die Kundschaft, und wer weder Kundschaft noch Büro
+     * war, bekam alles.
+     */
+    if (session.role === 'EMPLOYEE') {
+      where.job = {
+        assignments: { some: { employeeId: session.profileId ?? '__keines__' } },
+      };
+    }
+
     const threads = await prisma.messageThread.findMany({
       where,
       orderBy: { lastMessageAt: 'desc' },
@@ -90,6 +103,20 @@ export const POST = defineRoute({
       );
     }
 
+    // …und nur zu einem, dem sie zugeteilt sind. Die Einsatz-ID kommt aus dem
+    // Körper; ohne Prüfung liesse sich an jeden Einsatz des Betriebs schreiben.
+    if (body.jobId && session.role === 'EMPLOYEE') {
+      const assigned = await prisma.job.count({
+        where: {
+          id: body.jobId,
+          organizationId,
+          deletedAt: null,
+          assignments: { some: { employeeId: session.profileId ?? '__keines__' } },
+        },
+      });
+      if (!assigned) throw new NotFoundError('Einsatz');
+    }
+
     if (body.bookingId) {
       const booking = await prisma.booking.findFirst({
         where: {
@@ -128,6 +155,7 @@ export const POST = defineRoute({
         title: 'Neue Nachricht von der Kundschaft',
         body: `${senderName}: ${thread.subject}`,
         link: `/admin/nachrichten?verlauf=${thread.id}`,
+        permission: 'message:read',
       });
     }
 

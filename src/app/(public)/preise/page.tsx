@@ -6,6 +6,9 @@ import { prisma, toNumber } from '@/lib/db';
 import { formatCurrency } from '@/lib/utils';
 import { pageMetadata } from '@/lib/cms/metadata';
 import { getOrganizationId } from '@/server/services/organization.service';
+import { getContent } from '@/server/services/content.service';
+import { createCms } from '@/lib/cms/editable';
+import { isPreview } from '@/lib/cms/preview';
 import { Button } from '@/components/ui/button';
 import { Alert } from '@/components/ui/primitives';
 import {
@@ -35,6 +38,8 @@ export const revalidate = 3600;
  */
 export default async function PricingPage() {
   const organizationId = await getOrganizationId();
+  const content = await getContent(organizationId);
+  const cms = createCms(content, await isPreview());
 
   const [services, extras, areas] = await Promise.all([
     prisma.service.findMany({
@@ -65,14 +70,15 @@ export default async function PricingPage() {
         <div className="aare-wash pointer-events-none absolute inset-0" aria-hidden />
         <div className="container relative py-16 sm:py-20">
           <div className="max-w-2xl space-y-5">
-            <h1 className="text-display font-bold text-balance">Preise ohne Kleingedrucktes</h1>
+            <h1 className="text-display font-bold text-balance">
+              {cms.text('prices.hero.title')}
+            </h1>
             <p className="text-lg leading-relaxed text-muted-foreground">
-              Alle Ansätze stehen hier. Was Ihr Einsatz konkret kostet, rechnet der Konfigurator in
-              einer Minute aus — und dieser Preis gilt dann auch.
+              {cms.text('prices.hero.lead')}
             </p>
             <Button asChild size="lg">
               <Link href="/buchen">
-                Meinen Preis berechnen
+                {cms.text('prices.hero.buttonLabel')}
                 <ArrowRight aria-hidden />
               </Link>
             </Button>
@@ -84,8 +90,8 @@ export default async function PricingPage() {
       <Section>
         <div className="container space-y-8">
           <SectionIntro
-            title="Grundpreise"
-            lead="Alle Beträge in Schweizer Franken, exklusive 8.1 % Mehrwertsteuer. Material und Reinigungsmittel sind inbegriffen."
+            title={cms.text('prices.base.title')}
+            lead={cms.text('prices.base.lead')}
           />
 
           <div className="overflow-x-auto">
@@ -164,8 +170,8 @@ export default async function PricingPage() {
       <Section className="bg-surface">
         <div className="container space-y-8">
           <SectionIntro
-            title="Zusatzleistungen"
-            lead="Einzeln buchbar, jederzeit kombinierbar. Im Buchungsassistenten sehen Sie den Effekt sofort im Total."
+            title={cms.text('prices.extras.title')}
+            lead={cms.text('prices.extras.lead')}
           />
 
           <dl className="grid gap-x-12 border-t border-border sm:grid-cols-2">
@@ -193,8 +199,8 @@ export default async function PricingPage() {
       <Section>
         <div className="container space-y-8">
           <SectionIntro
-            title="Was den Preis beeinflusst"
-            lead="Damit Sie den berechneten Betrag nachvollziehen können, hier alle Faktoren."
+            title={cms.text('prices.factors.title')}
+            lead={cms.text('prices.factors.lead')}
           />
 
           <dl className="protocol-list border-t border-border">
@@ -244,8 +250,8 @@ export default async function PricingPage() {
         <Section className="bg-surface">
           <div className="container space-y-8">
             <SectionIntro
-              title="Anfahrtspauschalen"
-              lead="Einmal pro Einsatz, unabhängig von der Dauer. In der Stadt Bern entfällt sie."
+              title={cms.text('prices.travel.title')}
+              lead={cms.text('prices.travel.lead')}
             />
             <dl className="protocol-list border-t border-border">
               {travelBands.map((band) => (
@@ -259,7 +265,7 @@ export default async function PricingPage() {
             </dl>
             <Button asChild variant="outline">
               <Link href="/einsatzgebiet">
-                Vollständiges Einsatzgebiet
+                {cms.text('prices.travel.linkLabel')}
                 <ArrowRight aria-hidden />
               </Link>
             </Button>
@@ -270,7 +276,7 @@ export default async function PricingPage() {
       {/* Zahlung */}
       <Section>
         <div className="container grid gap-12 lg:grid-cols-[minmax(0,22rem)_1fr]">
-          <h2 className="text-headline font-bold">Zahlung und Konditionen</h2>
+          <h2 className="text-headline font-bold">{cms.text('prices.payment.title')}</h2>
 
           <Accordion type="single" collapsible className="border-t border-border">
             {[
@@ -311,9 +317,9 @@ export default async function PricingPage() {
       <Section className="pb-28">
         <div className="container">
           <CallToAction
-        ctas={bandCtas}
-            title="Ihren Preis in einer Minute"
-            lead="Leistung wählen, Fläche eingeben, Termin aussuchen. Der Betrag steht sofort — verbindlich."
+            ctas={bandCtas}
+            title={cms.text('prices.cta.title')}
+            lead={cms.text('prices.cta.text')}
             primary={{ href: '/buchen', label: 'Preis berechnen' }}
             secondary={{ href: '/offerte', label: 'Individuelle Offerte' }}
           />

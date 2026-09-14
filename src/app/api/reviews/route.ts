@@ -2,6 +2,7 @@ import type { ServiceKind } from '@prisma/client';
 
 import { defineRoute } from '@/lib/api/handler';
 import { created, ok } from '@/lib/api/response';
+import { can } from '@/lib/auth/rbac';
 import { prisma } from '@/lib/db';
 import { BusinessRuleError, ForbiddenError, NotFoundError } from '@/lib/errors';
 import { createReviewSchema } from '@/lib/validation/crm';
@@ -10,7 +11,14 @@ import { notifyStaff } from '@/server/services/notification.service';
 
 export const runtime = 'nodejs';
 
-/** GET /api/reviews — eigene Bewertungen der angemeldeten Kundschaft. */
+/**
+ * GET /api/reviews — Bewertungen.
+ *
+ * Für die Kundschaft die eigenen; für das Büro (`review:read`) alle des
+ * Mandanten, neueste zuerst. Vorher verlangte der Endpunkt auch vom Büro ein
+ * Kundenkonto und antwortete der Verwaltung mit 403 — eine Berechtigung, die
+ * in der Liste steht und trotzdem nie greift, ist eine falsche Zusage.
+ */
 export const GET = defineRoute({
   permissions: ['review:write_own', 'review:read'],
   anyPermission: true,
@@ -22,10 +30,12 @@ export const GET = defineRoute({
       where: { userId: session.id },
       select: { id: true },
     });
-    if (!customer) throw new ForbiddenError('Kein Kundenkonto verknüpft.');
+
+    const seesAll = can(session.role, 'review:read');
+    if (!customer && !seesAll) throw new ForbiddenError('Kein Kundenkonto verknüpft.');
 
     const reviews = await prisma.review.findMany({
-      where: { organizationId, customerId: customer.id },
+      where: { organizationId, ...(seesAll ? {} : { customerId: customer!.id }) },
       orderBy: { createdAt: 'desc' },
       select: {
         id: true,
@@ -130,6 +140,7 @@ export const POST = defineRoute({
       title: `Neue Bewertung: ${review.rating} von 5`,
       body: body.title ?? body.body.slice(0, 140),
       link: '/admin/bewertungen',
+      permission: 'review:moderate',
     });
 
     return created(review);

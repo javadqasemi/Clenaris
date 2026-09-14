@@ -4,7 +4,7 @@ import { revalidatePath } from 'next/cache';
 import { Prisma } from '@prisma/client';
 
 import { prisma } from '@/lib/db';
-import { cache } from '@/lib/redis';
+import { cache, cacheKeys } from '@/lib/redis';
 import { audit, diff } from '@/lib/audit';
 import { BusinessRuleError, ConflictError, NotFoundError } from '@/lib/errors';
 import type {
@@ -47,13 +47,19 @@ export async function listServiceAreas(organizationId: string) {
 /**
  * Das Einsatzgebiet steckt im Preis und in der Verfügbarkeitsprüfung.
  *
- * Beide lesen über einen Zwischenspeicher; ohne dessen Leerung nimmt der
- * Buchungsassistent bis zu fünf Minuten lang noch die alte Anfahrtspauschale.
- * Die öffentliche Gebietsseite ist zusätzlich statisch erzeugt.
+ * Beide lesen über einen Zwischenspeicher, der eine Stunde hält; ohne dessen
+ * Leerung nimmt der Buchungsassistent so lange noch die alte
+ * Anfahrtspauschale. Die öffentliche Gebietsseite ist zusätzlich statisch
+ * erzeugt.
+ *
+ * Der Schlüssel kommt aus `cacheKeys` und wird hier nicht noch einmal
+ * geschrieben: Zwei von Hand getippte Fassungen liefen auseinander, der
+ * Löschbefehl traf einen Schlüssel, den es nicht gab, und eine neue
+ * Postleitzahl blieb eine Stunde lang wirkungslos.
  */
 async function invalidateAreas(organizationId: string): Promise<void> {
-  await cache.del(`areas:${organizationId}`);
-  await cache.del(`service-areas:${organizationId}`);
+  await cache.del(cacheKeys.serviceAreas(organizationId));
+  await cache.del(cacheKeys.aiChatContext(organizationId));
   revalidatePath('/einsatzgebiet');
   revalidatePath('/');
 }

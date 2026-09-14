@@ -100,11 +100,308 @@ export const CONTENT_GROUPS: ContentGroup[] = [
         maxLength: 80,
       },
       {
+        key: 'home.hero.availability',
+        kind: 'line',
+        label: 'Verfügbarkeits-Hinweis',
+        help: '`{datum}` wird durch den nächsten freien Termin ersetzt. Ohne den Platzhalter steht der Text unverändert da.',
+        default: 'Termine ab {datum} frei',
+        maxLength: 60,
+      },
+      {
         key: 'home.cta.text',
         kind: 'text',
         label: 'Abschluss-Aufruf, Text',
         default:
           'Preis in einer Minute berechnen, Termin wählen, fertig. Ohne Anmeldung, ohne Rückruf-Warteschlaufe.',
+        maxLength: 300,
+      },
+    ],
+  },
+
+  // -------------------------------------------------------------------------
+  {
+    id: 'home-stats',
+    label: 'Startseite — Kennzahlen',
+    description:
+      'Das Zahlenband unter dem Kopfbereich. Die Zahlen selbst rechnet das System aus dem Betrieb aus; hier stehen nur ihre Beschriftungen.',
+    items: [
+      {
+        key: 'home.stats.areasLabel',
+        kind: 'line',
+        label: 'Beschriftung — Einsatzgebiet',
+        default: 'Postleitzahlen im Einsatzgebiet',
+        maxLength: 60,
+      },
+      {
+        key: 'home.stats.jobsLabel',
+        kind: 'line',
+        label: 'Beschriftung — Einsätze',
+        default: 'Abgeschlossene Einsätze',
+        maxLength: 60,
+      },
+      {
+        key: 'home.stats.ratingLabel',
+        kind: 'line',
+        label: 'Beschriftung — Bewertung',
+        default: 'Durchschnittliche Bewertung',
+        maxLength: 60,
+      },
+      {
+        key: 'home.stats.responseValue',
+        kind: 'line',
+        label: 'Antwortzeit — Zahl',
+        help: 'Die einzige Kennzahl, die nicht gerechnet wird. Sie ist ein Versprechen — ändern Sie sie nur, wenn es auch gilt.',
+        default: '24 Std.',
+        maxLength: 20,
+      },
+      {
+        key: 'home.stats.responseLabel',
+        kind: 'line',
+        label: 'Antwortzeit — Beschriftung',
+        default: 'Antwort auf jede Offertanfrage',
+        maxLength: 60,
+      },
+    ],
+  },
+
+  // -------------------------------------------------------------------------
+  {
+    id: 'home-sections',
+    label: 'Startseite — Abschnitte',
+    description:
+      'Überschrift und Einleitung der Abschnitte auf der Startseite. Die Inhalte darunter — Leistungen, Bewertungen, Fragen — stammen aus den jeweiligen Bereichen der Verwaltung.',
+    items: [
+      {
+        key: 'home.services.title',
+        kind: 'line',
+        label: 'Leistungen — Überschrift',
+        default: 'Was wir für Sie tun',
+        maxLength: 80,
+      },
+      {
+        key: 'home.services.lead',
+        kind: 'text',
+        label: 'Leistungen — Einleitung',
+        default: 'Sechs Leistungen, klar abgegrenzt. Jede mit einem Preis, den Sie vorher kennen.',
+        maxLength: 300,
+      },
+      {
+        key: 'home.services.linkLabel',
+        kind: 'line',
+        label: 'Leistungen — Verweis',
+        default: 'Alle Details',
+        maxLength: 40,
+      },
+      {
+        key: 'home.process.title',
+        kind: 'line',
+        label: 'Ablauf — Überschrift',
+        default: 'So läuft es ab',
+        maxLength: 80,
+      },
+      {
+        key: 'home.process.lead',
+        kind: 'text',
+        label: 'Ablauf — Einleitung',
+        default:
+          'Vier Schritte vom Klick bis zur sauberen Wohnung. Ohne Rückrufschlaufe, ohne Preisverhandlung.',
+        maxLength: 300,
+      },
+      {
+        key: 'home.trust.title',
+        kind: 'line',
+        label: 'Vertrauen — Überschrift',
+        default: 'Warum Sie uns den Schlüssel geben können',
+        maxLength: 80,
+      },
+      {
+        key: 'home.trust.lead',
+        kind: 'text',
+        label: 'Vertrauen — Einleitung',
+        default:
+          'Reinigung heisst, Fremde in die eigenen Räume zu lassen. Das nehmen wir ernst.',
+        maxLength: 300,
+      },
+      {
+        key: 'home.reviews.title',
+        kind: 'line',
+        label: 'Bewertungen — Überschrift',
+        default: 'Was Kundinnen und Kunden sagen',
+        maxLength: 80,
+      },
+      {
+        key: 'home.reviews.lead',
+        kind: 'text',
+        label: 'Bewertungen — Einleitung',
+        default: 'Bewertungen von Personen, die bei uns gebucht haben — ungefiltert.',
+        maxLength: 300,
+      },
+      {
+        key: 'home.reviews.linkLabel',
+        kind: 'line',
+        label: 'Bewertungen — Verweis',
+        default: 'Alle Bewertungen',
+        maxLength: 40,
+      },
+      {
+        key: 'home.faq.title',
+        kind: 'line',
+        label: 'Fragen — Überschrift',
+        default: 'Häufige Fragen',
+        maxLength: 80,
+      },
+      {
+        key: 'home.faq.lead',
+        kind: 'text',
+        label: 'Fragen — Einleitung',
+        default: 'Was Sie am häufigsten wissen möchten — kurz beantwortet.',
+        maxLength: 300,
+      },
+      {
+        key: 'home.faq.linkLabel',
+        kind: 'line',
+        label: 'Fragen — Verweis',
+        default: 'Alle Fragen',
+        maxLength: 40,
+      },
+    ],
+  },
+
+  // -------------------------------------------------------------------------
+  {
+    id: 'home-process',
+    label: 'Startseite — Die vier Schritte',
+    description:
+      'Der Ablauf vom Klick bis zur Rechnung. Vier Schritte sind gesetzt — die Nummerierung erzeugt die Website selbst.',
+    items: [
+      {
+        key: 'home.process.step1.title',
+        kind: 'line',
+        label: 'Schritt 1 — Titel',
+        default: 'Preis berechnen',
+        maxLength: 60,
+      },
+      {
+        key: 'home.process.step1.text',
+        kind: 'text',
+        label: 'Schritt 1 — Beschreibung',
+        default:
+          'Leistung, Fläche und Termin eingeben. Der Preis erscheint sofort und ist verbindlich.',
+        maxLength: 300,
+      },
+      {
+        key: 'home.process.step2.title',
+        kind: 'line',
+        label: 'Schritt 2 — Titel',
+        default: 'Termin wählen',
+        maxLength: 60,
+      },
+      {
+        key: 'home.process.step2.text',
+        kind: 'text',
+        label: 'Schritt 2 — Beschreibung',
+        default:
+          'Sie sehen nur Zeitfenster, in denen wir tatsächlich Kapazität haben. Keine Warteschlaufe.',
+        maxLength: 300,
+      },
+      {
+        key: 'home.process.step3.title',
+        kind: 'line',
+        label: 'Schritt 3 — Titel',
+        default: 'Wir kommen',
+        maxLength: 60,
+      },
+      {
+        key: 'home.process.step3.text',
+        kind: 'text',
+        label: 'Schritt 3 — Beschreibung',
+        default:
+          'Ein festes Team, das Sie kennenlernen. Material und Reinigungsmittel bringen wir mit.',
+        maxLength: 300,
+      },
+      {
+        key: 'home.process.step4.title',
+        kind: 'line',
+        label: 'Schritt 4 — Titel',
+        default: 'Bericht und Rechnung',
+        maxLength: 60,
+      },
+      {
+        key: 'home.process.step4.text',
+        kind: 'text',
+        label: 'Schritt 4 — Beschreibung',
+        default:
+          'Nach dem Einsatz erhalten Sie Fotos, die Checkliste und die QR-Rechnung mit 30 Tagen Frist.',
+        maxLength: 300,
+      },
+    ],
+  },
+
+  // -------------------------------------------------------------------------
+  {
+    id: 'home-trust',
+    label: 'Startseite — Vertrauensargumente',
+    description:
+      'Die vier Zusagen, die erklären, warum man Fremde in die eigenen Räume lässt. Jede davon ist ein Versprechen — bitte nur ändern, was der Betrieb auch hält.',
+    items: [
+      {
+        key: 'home.trust.item1.title',
+        kind: 'line',
+        label: 'Argument 1 — Titel',
+        default: 'Festangestelltes Team',
+        maxLength: 60,
+      },
+      {
+        key: 'home.trust.item1.text',
+        kind: 'text',
+        label: 'Argument 1 — Beschreibung',
+        default:
+          'Keine Subunternehmen, keine wechselnden Gesichter. Alle Mitarbeitenden sind bei uns angestellt und unfallversichert.',
+        maxLength: 300,
+      },
+      {
+        key: 'home.trust.item2.title',
+        kind: 'line',
+        label: 'Argument 2 — Titel',
+        default: 'Versichert bis CHF 5 Mio.',
+        maxLength: 60,
+      },
+      {
+        key: 'home.trust.item2.text',
+        kind: 'text',
+        label: 'Argument 2 — Beschreibung',
+        default:
+          'Betriebshaftpflicht für Sach- und Personenschäden. Schlüssel werden anonymisiert und protokolliert verwahrt.',
+        maxLength: 300,
+      },
+      {
+        key: 'home.trust.item3.title',
+        kind: 'line',
+        label: 'Argument 3 — Titel',
+        default: 'Abgabegarantie',
+        maxLength: 60,
+      },
+      {
+        key: 'home.trust.item3.text',
+        kind: 'text',
+        label: 'Argument 3 — Beschreibung',
+        default:
+          'Beanstandet die Verwaltung etwas bei der Wohnungsübergabe, kommen wir innert 48 Stunden kostenlos zurück.',
+        maxLength: 300,
+      },
+      {
+        key: 'home.trust.item4.title',
+        kind: 'line',
+        label: 'Argument 4 — Titel',
+        default: 'Pünktlich oder Rabatt',
+        maxLength: 60,
+      },
+      {
+        key: 'home.trust.item4.text',
+        kind: 'text',
+        label: 'Argument 4 — Beschreibung',
+        default:
+          'Sind wir mehr als 30 Minuten zu spät, ziehen wir 20 % vom Rechnungsbetrag ab — ohne Nachfragen.',
         maxLength: 300,
       },
     ],
@@ -156,6 +453,171 @@ export const CONTENT_GROUPS: ContentGroup[] = [
         maxItems: 6,
         maxLength: 160,
       },
+      {
+        key: 'about.values.title',
+        kind: 'line',
+        label: 'Grundsätze — Überschrift',
+        default: 'Wofür wir stehen',
+        maxLength: 80,
+      },
+      {
+        key: 'about.values.lead',
+        kind: 'text',
+        label: 'Grundsätze — Einleitung',
+        default:
+          'Vier Zusagen, die wir tatsächlich einhalten können — und an denen Sie uns messen dürfen.',
+        maxLength: 300,
+      },
+      {
+        key: 'about.team.title',
+        kind: 'line',
+        label: 'Team — Überschrift',
+        default: 'Das Team',
+        maxLength: 80,
+      },
+      {
+        key: 'about.team.lead',
+        kind: 'text',
+        label: 'Team — Einleitung',
+        default:
+          'Die Personen, die tatsächlich zu Ihnen kommen. Wir stellen sie vor, weil Sie ihnen Ihren Schlüssel anvertrauen.',
+        maxLength: 300,
+      },
+      {
+        key: 'about.cta.title',
+        kind: 'line',
+        label: 'Abschluss-Aufruf, Überschrift',
+        default: 'Lernen wir uns kennen',
+        maxLength: 80,
+      },
+      {
+        key: 'about.cta.text',
+        kind: 'text',
+        label: 'Abschluss-Aufruf, Text',
+        default:
+          'Buchen Sie einen ersten Einsatz — ohne Vertrag, ohne Mindestlaufzeit. Überzeugt es Sie, sprechen wir über einen Rhythmus.',
+        maxLength: 300,
+      },
+    ],
+  },
+
+  // -------------------------------------------------------------------------
+  {
+    id: 'prices',
+    label: 'Preise',
+    description:
+      'Die Texte der Preisseite. Die Beträge selbst stammen aus dem Leistungskatalog — was hier steht, erklärt sie.',
+    items: [
+      {
+        key: 'prices.hero.title',
+        kind: 'line',
+        label: 'Überschrift',
+        default: 'Preise ohne Kleingedrucktes',
+        maxLength: 60,
+      },
+      {
+        key: 'prices.hero.lead',
+        kind: 'text',
+        label: 'Einleitung',
+        default:
+          'Alle Ansätze stehen hier. Was Ihr Einsatz konkret kostet, rechnet der Konfigurator in einer Minute aus — und dieser Preis gilt dann auch.',
+        maxLength: 400,
+      },
+      {
+        key: 'prices.hero.buttonLabel',
+        kind: 'line',
+        label: 'Schaltfläche im Kopfbereich',
+        default: 'Meinen Preis berechnen',
+        maxLength: 40,
+      },
+      {
+        key: 'prices.base.title',
+        kind: 'line',
+        label: 'Grundpreise — Überschrift',
+        default: 'Grundpreise',
+        maxLength: 80,
+      },
+      {
+        key: 'prices.base.lead',
+        kind: 'text',
+        label: 'Grundpreise — Einleitung',
+        help: 'Enthält den Mehrwertsteuersatz. Bitte mit den Angaben unter Stammdaten abgleichen.',
+        default:
+          'Alle Beträge in Schweizer Franken, exklusive 8.1 % Mehrwertsteuer. Material und Reinigungsmittel sind inbegriffen.',
+        maxLength: 300,
+      },
+      {
+        key: 'prices.extras.title',
+        kind: 'line',
+        label: 'Zusatzleistungen — Überschrift',
+        default: 'Zusatzleistungen',
+        maxLength: 80,
+      },
+      {
+        key: 'prices.extras.lead',
+        kind: 'text',
+        label: 'Zusatzleistungen — Einleitung',
+        default:
+          'Einzeln buchbar, jederzeit kombinierbar. Im Buchungsassistenten sehen Sie den Effekt sofort im Total.',
+        maxLength: 300,
+      },
+      {
+        key: 'prices.factors.title',
+        kind: 'line',
+        label: 'Preisfaktoren — Überschrift',
+        default: 'Was den Preis beeinflusst',
+        maxLength: 80,
+      },
+      {
+        key: 'prices.factors.lead',
+        kind: 'text',
+        label: 'Preisfaktoren — Einleitung',
+        default: 'Damit Sie den berechneten Betrag nachvollziehen können, hier alle Faktoren.',
+        maxLength: 300,
+      },
+      {
+        key: 'prices.travel.title',
+        kind: 'line',
+        label: 'Anfahrt — Überschrift',
+        default: 'Anfahrtspauschalen',
+        maxLength: 80,
+      },
+      {
+        key: 'prices.travel.lead',
+        kind: 'text',
+        label: 'Anfahrt — Einleitung',
+        default: 'Einmal pro Einsatz, unabhängig von der Dauer. In der Stadt Bern entfällt sie.',
+        maxLength: 300,
+      },
+      {
+        key: 'prices.travel.linkLabel',
+        kind: 'line',
+        label: 'Anfahrt — Verweis',
+        default: 'Vollständiges Einsatzgebiet',
+        maxLength: 40,
+      },
+      {
+        key: 'prices.payment.title',
+        kind: 'line',
+        label: 'Zahlung — Überschrift',
+        default: 'Zahlung und Konditionen',
+        maxLength: 80,
+      },
+      {
+        key: 'prices.cta.title',
+        kind: 'line',
+        label: 'Abschluss-Aufruf, Überschrift',
+        default: 'Ihren Preis in einer Minute',
+        maxLength: 80,
+      },
+      {
+        key: 'prices.cta.text',
+        kind: 'text',
+        label: 'Abschluss-Aufruf, Text',
+        default:
+          'Leistung wählen, Fläche eingeben, Termin aussuchen. Der Betrag steht sofort — verbindlich.',
+        maxLength: 300,
+      },
     ],
   },
 
@@ -187,6 +649,218 @@ export const CONTENT_GROUPS: ContentGroup[] = [
         label: 'Erreichbarkeit in Kurzform',
         default: 'Werktags 07–18 Uhr',
         maxLength: 60,
+      },
+    ],
+  },
+
+  // -------------------------------------------------------------------------
+  {
+    id: 'services',
+    label: 'Leistungen',
+    description:
+      'Rahmentexte der Leistungsseiten. Die Leistungen selbst — Name, Beschreibung, Preis — stehen im Leistungskatalog.',
+    items: [
+      {
+        key: 'services.cta.title',
+        kind: 'line',
+        label: 'Übersicht — Abschluss-Überschrift',
+        default: 'Nicht sicher, was Sie brauchen?',
+        maxLength: 80,
+      },
+      {
+        key: 'services.cta.text',
+        kind: 'text',
+        label: 'Übersicht — Abschluss-Text',
+        default:
+          'Beschreiben Sie kurz Ihre Situation — wir melden uns innerhalb von 24 Stunden mit einem Vorschlag.',
+        maxLength: 300,
+      },
+      {
+        key: 'services.detail.extrasTitle',
+        kind: 'line',
+        label: 'Detailseite — Zusatzleistungen, Überschrift',
+        default: 'Zusatzleistungen',
+        maxLength: 80,
+      },
+      {
+        key: 'services.detail.extrasLead',
+        kind: 'text',
+        label: 'Detailseite — Zusatzleistungen, Einleitung',
+        default:
+          'Alles optional und einzeln buchbar. Die Preise sehen Sie im Buchungsassistenten sofort.',
+        maxLength: 300,
+      },
+      {
+        key: 'services.detail.reviewsLead',
+        kind: 'text',
+        label: 'Detailseite — Bewertungen, Einleitung',
+        default:
+          'Rückmeldungen von Kundinnen und Kunden, die genau diese Leistung gebucht haben.',
+        maxLength: 300,
+      },
+      {
+        key: 'services.detail.ctaText',
+        kind: 'text',
+        label: 'Detailseite — Abschluss-Text',
+        default: 'Preis in einer Minute berechnen, freies Zeitfenster wählen, fertig.',
+        maxLength: 300,
+      },
+    ],
+  },
+
+  // -------------------------------------------------------------------------
+  {
+    id: 'area',
+    label: 'Einsatzgebiet',
+    description: 'Die Ortsliste kommt aus den Stammdaten; hier stehen die Texte darum herum.',
+    items: [
+      {
+        key: 'area.list.title',
+        kind: 'line',
+        label: 'Ortsliste — Überschrift',
+        default: 'Alle Orte im Überblick',
+        maxLength: 80,
+      },
+      {
+        key: 'area.list.lead',
+        kind: 'text',
+        label: 'Ortsliste — Einleitung',
+        default:
+          'Ihr Ort fehlt? Melden Sie sich trotzdem — bei grösseren Aufträgen fahren wir auch weiter.',
+        maxLength: 300,
+      },
+      {
+        key: 'area.cta.title',
+        kind: 'line',
+        label: 'Abschluss-Aufruf, Überschrift',
+        default: 'Kommen wir zu Ihnen?',
+        maxLength: 80,
+      },
+      {
+        key: 'area.cta.text',
+        kind: 'text',
+        label: 'Abschluss-Aufruf, Text',
+        default: 'Postleitzahl eingeben, Preis sehen, Termin buchen — alles in einem Durchgang.',
+        maxLength: 300,
+      },
+    ],
+  },
+
+  // -------------------------------------------------------------------------
+  {
+    id: 'gallery',
+    label: 'Galerie',
+    description:
+      'Die Bilder selbst pflegen Sie direkt in der Vorschau — anklicken genügt. Hier stehen die Texte der Seite.',
+    items: [
+      {
+        key: 'gallery.cta.title',
+        kind: 'line',
+        label: 'Abschluss-Aufruf, Überschrift',
+        default: 'Solche Ergebnisse — bei Ihnen',
+        maxLength: 80,
+      },
+      {
+        key: 'gallery.cta.text',
+        kind: 'text',
+        label: 'Abschluss-Aufruf, Text',
+        default:
+          'Berechnen Sie den Preis für Ihr Objekt und wählen Sie einen Termin. Nach dem Einsatz erhalten Sie Ihre eigenen Vorher-/Nachher-Fotos.',
+        maxLength: 300,
+      },
+    ],
+  },
+
+  // -------------------------------------------------------------------------
+  {
+    id: 'reviews',
+    label: 'Bewertungen',
+    description: 'Die Bewertungen selbst werden unter Bewertungen freigegeben.',
+    items: [
+      {
+        key: 'reviews.cta.title',
+        kind: 'line',
+        label: 'Abschluss-Aufruf, Überschrift',
+        default: 'Überzeugen Sie sich selbst',
+        maxLength: 80,
+      },
+      {
+        key: 'reviews.cta.text',
+        kind: 'text',
+        label: 'Abschluss-Aufruf, Text',
+        default:
+          'Preis berechnen, Termin wählen, Ergebnis bewerten. Wir freuen uns auf Ihre Rückmeldung.',
+        maxLength: 300,
+      },
+    ],
+  },
+
+  // -------------------------------------------------------------------------
+  {
+    id: 'careers',
+    label: 'Karriere',
+    description: 'Die Stellen selbst werden unter Stellen gepflegt.',
+    items: [
+      {
+        key: 'careers.benefits.title',
+        kind: 'line',
+        label: 'Angebot — Überschrift',
+        default: 'Was wir bieten',
+        maxLength: 80,
+      },
+      {
+        key: 'careers.openings.title',
+        kind: 'line',
+        label: 'Stellen — Überschrift',
+        default: 'Offene Stellen',
+        maxLength: 80,
+      },
+      {
+        key: 'careers.openings.lead',
+        kind: 'text',
+        label: 'Stellen — Einleitung',
+        default:
+          'Nichts Passendes dabei? Senden Sie uns trotzdem eine Spontanbewerbung — wir suchen laufend.',
+        maxLength: 300,
+      },
+      {
+        key: 'careers.cta.title',
+        kind: 'line',
+        label: 'Abschluss-Aufruf, Überschrift',
+        default: 'Fragen zur Stelle?',
+        maxLength: 80,
+      },
+      {
+        key: 'careers.cta.text',
+        kind: 'text',
+        label: 'Abschluss-Aufruf, Text',
+        default:
+          'Rufen Sie an und sprechen Sie direkt mit der Betriebsleitung — kein Bewerbungsportal, keine Standardantwort.',
+        maxLength: 300,
+      },
+    ],
+  },
+
+  // -------------------------------------------------------------------------
+  {
+    id: 'blog',
+    label: 'Ratgeber',
+    description: 'Rahmentexte der Beitragsseiten. Die Beiträge selbst stehen unter Ratgeber.',
+    items: [
+      {
+        key: 'blog.cta.title',
+        kind: 'line',
+        label: 'Beitrag — Abschluss-Überschrift',
+        default: 'Lieber machen lassen?',
+        maxLength: 80,
+      },
+      {
+        key: 'blog.cta.text',
+        kind: 'text',
+        label: 'Beitrag — Abschluss-Text',
+        default:
+          'Wir übernehmen die Arbeit — mit festem Team, festem Preis und Abgabegarantie bei Umzügen.',
+        maxLength: 300,
       },
     ],
   },

@@ -3,6 +3,8 @@ import 'server-only';
 import { prisma } from '@/lib/db';
 import { cache, cacheKeys } from '@/lib/redis';
 
+import { activeStaffWhere } from './profile.service';
+
 /**
  * Terminverfügbarkeit.
  *
@@ -82,9 +84,7 @@ export async function getAvailableSlots(params: AvailabilityParams): Promise<{
           date: new Date(`${params.date}T00:00:00.000Z`),
         },
       }),
-      prisma.employee.count({
-        where: { organizationId: params.organizationId, active: true },
-      }),
+      prisma.employee.count({ where: activeStaffWhere(params.organizationId) }),
     ]);
 
     if (holiday) {
@@ -113,7 +113,7 @@ export async function getAvailableSlots(params: AvailabilityParams): Promise<{
     const absences = await prisma.absence.count({
       where: {
         status: 'APPROVED',
-        employee: { organizationId: params.organizationId, active: true },
+        employee: activeStaffWhere(params.organizationId),
         startDate: { lte: new Date(`${params.date}T23:59:59.999Z`) },
         endDate: { gte: new Date(`${params.date}T00:00:00.000Z`) },
       },
@@ -198,11 +198,11 @@ export async function isSlotBookable(params: {
   if (!hours || hours.closed) return { ok: false, reason: 'An diesem Wochentag arbeiten wir nicht.' };
 
   const [activeEmployees, absences, overlappingCrew] = await Promise.all([
-    prisma.employee.count({ where: { organizationId: params.organizationId, active: true } }),
+    prisma.employee.count({ where: activeStaffWhere(params.organizationId) }),
     prisma.absence.count({
       where: {
         status: 'APPROVED',
-        employee: { organizationId: params.organizationId, active: true },
+        employee: activeStaffWhere(params.organizationId),
         startDate: { lte: end },
         endDate: { gte: params.start },
       },

@@ -2,7 +2,7 @@
 
 import * as React from 'react';
 import { useRouter } from 'next/navigation';
-import { Ban, Banknote, FileCheck2, MoreHorizontal, Send } from 'lucide-react';
+import { Ban, Banknote, FileCheck2, MoreHorizontal, Send, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { api, ApiError } from '@/lib/api/client';
@@ -53,15 +53,22 @@ export function InvoiceActions({
   status,
   balance,
   email,
+  canDelete = false,
 }: {
   invoiceId: string;
   status: string;
   balance: number;
   email: string;
+  /**
+   * `invoice:delete` — gilt nur für Entwürfe. Eine ausgestellte Rechnung
+   * trägt eine Nummer aus einer lückenlosen Folge (Art. 957a OR) und lässt
+   * sich nur stornieren; der Papierkorb verweigert sie ohnehin.
+   */
+  canDelete?: boolean;
 }) {
   const router = useRouter();
   const [pending, setPending] = React.useState<string | null>(null);
-  const [dialog, setDialog] = React.useState<'payment' | 'cancel' | null>(null);
+  const [dialog, setDialog] = React.useState<'payment' | 'cancel' | 'delete' | null>(null);
   const [error, setError] = React.useState<string | null>(null);
 
   const [amount, setAmount] = React.useState(balance.toFixed(2));
@@ -163,9 +170,57 @@ export function InvoiceActions({
                 </DropdownMenuItem>
               </>
             ) : null}
+
+            {isDraft && canDelete ? (
+              <>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem destructive onSelect={() => setDialog('delete')}>
+                  <Trash2 aria-hidden />
+                  Entwurf in den Papierkorb
+                </DropdownMenuItem>
+              </>
+            ) : null}
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
+
+      {/* Entwurf löschen */}
+      <Dialog open={dialog === 'delete'} onOpenChange={(open) => !open && setDialog(null)}>
+        <DialogContent size="sm">
+          <DialogHeader>
+            <DialogTitle>Entwurf in den Papierkorb legen?</DialogTitle>
+            <DialogDescription>
+              Der Entwurf hat noch keine Nummer und hinterlässt keine Lücke. Er bleibt unter
+              &bdquo;Papierkorb&ldquo; wiederherstellbar.
+            </DialogDescription>
+          </DialogHeader>
+
+          {error ? <Alert variant="destructive">{error}</Alert> : null}
+
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setDialog(null)}>
+              Abbrechen
+            </Button>
+            <Button
+              variant="destructive"
+              loading={pending === 'delete'}
+              onClick={() =>
+                run(
+                  'delete',
+                  async () => {
+                    await api.delete(`/api/invoices/${invoiceId}`);
+                    router.push('/admin/rechnungen');
+                  },
+                  'Entwurf in den Papierkorb gelegt.',
+                )
+              }
+            >
+              <Trash2 aria-hidden />
+              In den Papierkorb
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Zahlung erfassen */}
       <Dialog open={dialog === 'payment'} onOpenChange={(open) => !open && setDialog(null)}>

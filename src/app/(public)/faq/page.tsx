@@ -1,4 +1,6 @@
 import type { Metadata } from 'next';
+
+import { jsonLd } from '@/lib/json-ld';
 import Link from 'next/link';
 import { Mail, Phone } from 'lucide-react';
 
@@ -108,7 +110,7 @@ export default async function FaqPage() {
           type="application/ld+json"
           // eslint-disable-next-line react/no-danger -- serverseitig erzeugter JSON-LD-Block
           dangerouslySetInnerHTML={{
-            __html: JSON.stringify({
+            __html: jsonLd({
               '@context': 'https://schema.org',
               '@type': 'FAQPage',
               mainEntity: faqs.map((faq) => ({

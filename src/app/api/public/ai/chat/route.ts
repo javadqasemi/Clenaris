@@ -1,7 +1,7 @@
 import { definePublicRoute } from '@/lib/api/handler';
 import { prisma, toNumber } from '@/lib/db';
 import { hasIntegration } from '@/lib/env';
-import { cache } from '@/lib/redis';
+import { cache, cacheKeys } from '@/lib/redis';
 import { formatCurrency } from '@/lib/utils';
 import { streamText } from '@/lib/ai/client';
 import { chatSystemPrompt } from '@/lib/ai/features';
@@ -41,7 +41,7 @@ export const POST = definePublicRoute({
     const organizationId = await getOrganizationId();
 
     // Kontext ist für alle Besucher identisch → eine Stunde cachen.
-    const context = await cache.remember(`ai:chat-context:${organizationId}`, 3600, async () => {
+    const context = await cache.remember(cacheKeys.aiChatContext(organizationId), 3600, async () => {
       const [company, services, areas] = await Promise.all([
         getPublicCompanyInfo(),
         prisma.service.findMany({

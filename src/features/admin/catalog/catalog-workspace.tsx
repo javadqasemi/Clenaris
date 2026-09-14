@@ -198,7 +198,7 @@ export function CatalogWorkspace({
               </div>
             ) : (
               <TableScroll minWidth="52rem">
-                <table className="data-table data-table--sticky">
+                <table className="data-table">
                   <caption className="sr-only">Leistungskatalog mit Preislogik</caption>
                   <thead>
                     <tr>
@@ -319,7 +319,7 @@ export function CatalogWorkspace({
               </div>
             ) : (
               <TableScroll minWidth="46rem">
-                <table className="data-table data-table--sticky">
+                <table className="data-table">
                   <caption className="sr-only">Buchbare Zusatzleistungen</caption>
                   <thead>
                     <tr>
@@ -430,7 +430,7 @@ export function CatalogWorkspace({
               </div>
             ) : (
               <TableScroll minWidth="46rem">
-                <table className="data-table data-table--sticky">
+                <table className="data-table">
                   <caption className="sr-only">Zuschläge und Abschläge</caption>
                   <thead>
                     <tr>
@@ -688,7 +688,7 @@ export function CatalogWorkspace({
               </div>
             ) : (
               <TableScroll minWidth="46rem">
-                <table className="data-table data-table--sticky">
+                <table className="data-table">
                   <caption className="sr-only">Gutscheincodes</caption>
                   <thead>
                     <tr>

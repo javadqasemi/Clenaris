@@ -1,19 +1,15 @@
-import { z } from 'zod';
+import { revalidatePath } from 'next/cache';
 
 import { defineRoute, idParam } from '@/lib/api/handler';
 import { noContent, ok } from '@/lib/api/response';
+import { can } from '@/lib/auth/rbac';
 import { prisma } from '@/lib/db';
 import { audit, diff } from '@/lib/audit';
-import { BusinessRuleError, NotFoundError } from '@/lib/errors';
-import { createBlogPostSchema } from '@/lib/validation/content';
+import { BusinessRuleError, ForbiddenError, NotFoundError } from '@/lib/errors';
+import { updateBlogPostSchema } from '@/lib/validation/content';
 import { getOrganizationId } from '@/server/services/organization.service';
-import { revalidatePath } from 'next/cache';
 
 export const runtime = 'nodejs';
-
-const updateBlogPostSchema = createBlogPostSchema.partial().extend({
-  status: z.enum(['DRAFT', 'SCHEDULED', 'PUBLISHED', 'ARCHIVED']).optional(),
-});
 
 /** GET /api/blog/:id — ein Beitrag samt Entwurfsfassung. */
 export const GET = defineRoute({
@@ -55,13 +51,13 @@ export const PATCH = defineRoute({
     });
     if (!before) throw new NotFoundError('Beitrag');
 
-    if (body.status && body.status !== before.status) {
-      const { can } = await import('@/lib/auth/rbac');
-      if (!can(session.role, 'blog:publish')) {
-        throw new BusinessRuleError(
-          'Für das Veröffentlichen oder Zurückziehen fehlt Ihnen die Berechtigung. Speichern können Sie trotzdem.',
-        );
-      }
+    // 403, nicht 422: Es fehlt ein Recht, nicht eine fachliche Voraussetzung.
+    // Ein 422 liesse die Maske „später erneut versuchen" anbieten — das hilft
+    // hier nie.
+    if (body.status && body.status !== before.status && !can(session.role, 'blog:publish')) {
+      throw new ForbiddenError(
+        'Für das Veröffentlichen oder Zurückziehen fehlt Ihnen die Berechtigung. Speichern können Sie trotzdem.',
+      );
     }
 
     const publishing = body.status === 'PUBLISHED' && before.status !== 'PUBLISHED';

@@ -21,7 +21,20 @@ const cspDirectives = [
   "object-src 'none'",
   "base-uri 'self'",
   "form-action 'self'",
-  "frame-ancestors 'none'",
+  /**
+   * `'self'` statt `'none'`.
+   *
+   * Die Redaktionsmaske zeigt die echte Website in einem Rahmen, damit eine
+   * Änderung dort geprüft werden kann, wo sie erscheint. Mit `'none'` wäre das
+   * unmöglich — und eine nachgebaute Vorschau wäre schlechter als keine, weil
+   * sie bei jeder Layoutänderung still falsch würde.
+   *
+   * Der Schutz bleibt vollständig: Gegen Clickjacking hilft, dass *fremde*
+   * Seiten diese Anwendung nicht einbetten dürfen, und genau das sagt
+   * `'self'` weiterhin. Eine Seite, die sich selbst einbettet, kann ihre
+   * eigenen Besucher nicht täuschen.
+   */
+  "frame-ancestors 'self'",
   'upgrade-insecure-requests',
 ].join('; ');
 
@@ -60,7 +73,10 @@ const nextConfig: NextConfig = {
         headers: [
           { key: 'Content-Security-Policy', value: cspDirectives },
           { key: 'X-Content-Type-Options', value: 'nosniff' },
-          { key: 'X-Frame-Options', value: 'DENY' },
+          // Muss zu `frame-ancestors` passen — ältere Browser kennen nur
+          // diesen Kopf, und zwei widersprüchliche Angaben führen je nach
+          // Browser zu unterschiedlichem Verhalten.
+          { key: 'X-Frame-Options', value: 'SAMEORIGIN' },
           { key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' },
           { key: 'X-DNS-Prefetch-Control', value: 'on' },
           {

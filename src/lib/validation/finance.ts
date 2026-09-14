@@ -60,6 +60,18 @@ export const recordPaymentSchema = z.object({
 });
 export type RecordPaymentInput = z.infer<typeof recordPaymentSchema>;
 
+/**
+ * Korrektur einer verbuchten Zahlung: Beleg, Notiz, Datum — nie der Betrag.
+ * Ein falscher Betrag wird storniert und neu verbucht, sonst liefen
+ * Rechnungssaldo und Zahlungssumme auseinander.
+ */
+export const updatePaymentSchema = z.object({
+  reference: z.string().trim().max(120).optional(),
+  note: z.string().trim().max(1000).optional(),
+  paidAt: z.coerce.date().optional(),
+});
+export type UpdatePaymentInput = z.infer<typeof updatePaymentSchema>;
+
 export const createCreditNoteSchema = z.object({
   invoiceId: cuidSchema.optional(),
   customerId: cuidSchema,
@@ -98,6 +110,9 @@ export const createExpenseSchema = z.object({
   fileIds: z.array(cuidSchema).max(10).default([]),
 });
 export type CreateExpenseInput = z.infer<typeof createExpenseSchema>;
+
+export const updateExpenseSchema = createExpenseSchema.partial();
+export type UpdateExpenseInput = z.infer<typeof updateExpenseSchema>;
 
 export const createSupplierSchema = z.object({
   name: z.string().trim().min(2, 'Name ist erforderlich.').max(140),

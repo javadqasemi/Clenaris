@@ -55,7 +55,16 @@ export default async function EditQuotePage({
     prisma.service.findMany({
       where: { organizationId, active: true },
       orderBy: { position: 'asc' },
-      select: { id: true, name: true, hourlyRate: true, pricingModel: true },
+      select: {
+        id: true,
+        name: true,
+        kind: true,
+        pricingModel: true,
+        hourlyRate: true,
+        pricePerSqm: true,
+        basePrice: true,
+        vatRate: true,
+      },
     }),
   ]);
 
@@ -89,8 +98,12 @@ export default async function EditQuotePage({
           services={services.map((service) => ({
             id: service.id,
             name: service.name,
-            hourlyRate: service.hourlyRate ? toNumber(service.hourlyRate) : null,
+            kind: service.kind,
             pricingModel: service.pricingModel,
+            hourlyRate: service.hourlyRate ? toNumber(service.hourlyRate) : null,
+            pricePerSqm: service.pricePerSqm ? toNumber(service.pricePerSqm) : null,
+            basePrice: toNumber(service.basePrice),
+            vatRate: toNumber(service.vatRate),
           }))}
           initial={{
             customerId: quote.customerId ?? undefined,

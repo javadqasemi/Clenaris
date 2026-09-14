@@ -1,4 +1,6 @@
 import type { Metadata } from 'next';
+
+import { jsonLd } from '@/lib/json-ld';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { ArrowLeft, Check, MapPin } from 'lucide-react';
@@ -161,7 +163,7 @@ export default async function JobPostingPage({ params }: { params: Promise<{ slu
         type="application/ld+json"
         // eslint-disable-next-line react/no-danger -- serverseitig erzeugter JSON-LD-Block
         dangerouslySetInnerHTML={{
-          __html: JSON.stringify({
+          __html: jsonLd({
             '@context': 'https://schema.org',
             '@type': 'JobPosting',
             title: posting.title,

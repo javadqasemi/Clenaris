@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-import { emailSchema, nameSchema, optionalPhoneSchema } from './common';
+import { assetUrlSchema, emailSchema, nameSchema, optionalPhoneSchema } from './common';
 
 /**
  * Benutzerkonten.
@@ -45,6 +45,19 @@ export const updateUserSchema = z.object({
   status: z.enum(['ACTIVE', 'SUSPENDED', 'DISABLED']).optional(),
   notifyByEmail: z.boolean().optional(),
   notifyBySms: z.boolean().optional(),
+  /**
+   * Profilbild — leerer String entfernt es. Die Person pflegt ihr Bild selbst
+   * über `/api/account/profile`; die Personalverwaltung braucht denselben
+   * Weg, wenn sie das Bild aus dem Bewerbungsdossier oder ein einheitliches
+   * Teamfoto hinterlegt.
+   */
+  avatarUrl: assetUrlSchema.or(z.literal('')).optional(),
+  /**
+   * Passwortwechsel bei der nächsten Anmeldung erzwingen. Beendet alle
+   * Sitzungen, damit der Zwang sofort greift und nicht erst nach Ablauf des
+   * Zugangstokens.
+   */
+  mustChangePassword: z.boolean().optional(),
 });
 
 /** Rollenwechsel — eigene Handlung, eigene Berechtigung. */

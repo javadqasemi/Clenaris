@@ -7,7 +7,7 @@ import { prisma } from '@/lib/db';
 import { hashPassword, verifyPassword } from '@/lib/auth/password';
 import { hashToken, randomToken } from '@/lib/auth/jwt';
 import { clientIpFrom, createSession, revokeAllSessions } from '@/lib/auth/session';
-import { BusinessRuleError, ConflictError, UnauthorizedError } from '@/lib/errors';
+import { BusinessRuleError, ConflictError, NotFoundError, UnauthorizedError } from '@/lib/errors';
 import { absoluteUrl } from '@/lib/utils';
 import { audit, recordAudit } from '@/lib/audit';
 import { sendEmail } from '@/lib/email/client';
@@ -21,6 +21,7 @@ import { checkRateLimit, resetRateLimit } from '@/lib/rate-limit';
 import type { LoginInput, RegisterInput } from '@/lib/validation/auth';
 
 import { nextNumber } from './numbering.service';
+import { ensureCustomerProfile } from './profile.service';
 import { logger } from '@/lib/logger';
 import { ROLE_LABELS } from '@/lib/auth/rbac';
 
@@ -181,6 +182,7 @@ export async function login(params: { input: LoginInput; ip: string }) {
       organizationId: true,
       deletedAt: true,
       mustChangePassword: true,
+      twoFactorEnabled: true,
     },
   });
 
@@ -245,8 +247,34 @@ export async function login(params: { input: LoginInput; ip: string }) {
     },
   });
 
+  // Nur der IP-Zähler wird zurückgesetzt — einen Zähler je Adresse gibt es
+  // nicht, das Konto schützt die Sperre nach acht Fehlversuchen.
   await resetRateLimit('login', params.ip);
-  await resetRateLimit('login', email);
+
+  /**
+   * Zweiter Faktor: hier endet der erste Schritt.
+   *
+   * Statt einer Sitzung wird ein kurzlebiger Zwischenschein ausgestellt. Das
+   * ist der entscheidende Punkt: gäbe es an dieser Stelle bereits ein
+   * Zugangstoken, wäre der zweite Faktor eine Anzeige und keine Schranke —
+   * wer das Token abfängt, käme an der Codeabfrage vorbei.
+   */
+  if (user.twoFactorEnabled) {
+    const { issueMfaChallenge } = await import('./two-factor.service');
+    await issueMfaChallenge(user.id);
+
+    await recordAudit({
+      organizationId: user.organizationId,
+      userId: user.id,
+      action: 'LOGIN',
+      entity: 'User',
+      entityId: user.id,
+      summary: 'Passwort bestätigt, zweiter Faktor ausstehend',
+      ip: params.ip,
+    });
+
+    return { user: null, mustChangePassword: false, twoFactorRequired: true as const };
+  }
 
   const session = await createSession({ userId: user.id });
 
@@ -260,7 +288,11 @@ export async function login(params: { input: LoginInput; ip: string }) {
     ip: params.ip,
   });
 
-  return { user: session.user, mustChangePassword: user.mustChangePassword };
+  return {
+    user: session.user,
+    mustChangePassword: user.mustChangePassword,
+    twoFactorRequired: false as const,
+  };
 }
 
 /** Passwort-Reset anfordern — antwortet immer erfolgreich. */
@@ -436,6 +468,115 @@ export async function verifyEmail(token: string): Promise<void> {
   ]);
 }
 
+/**
+ * Zugangslink durch die Verwaltung auslösen.
+ *
+ * Zwei Fälle, ein Knopf in der Personalakte:
+ *
+ *  • Konto **eingeladen, aber nie aktiviert** (`PENDING`): Die Einladung war
+ *    im Spam, ist abgelaufen oder die Adresse wurde korrigiert — eine neue
+ *    Einladung mit frischem Link.
+ *  • Konto **aktiv**: Die Person hat ihr Passwort vergessen und ruft an,
+ *    statt „Passwort vergessen" zu benutzen. Derselbe Link, den die Person
+ *    selbst anfordern könnte — die Verwaltung erfährt das Passwort nie.
+ *
+ * Gesperrte und deaktivierte Konten bekommen keinen Link: Ein Passwort
+ * nützt nichts, wenn die Anmeldung ohnehin abgewiesen wird, und die Sperre
+ * soll nicht durch die Hintertür fallen. Kein Rate-Limit je Adresse wie beim
+ * Selbstbedienungsweg — der Aufruf ist bereits durch `user:update` und das
+ * Schreib-Limit geschützt und wird protokolliert.
+ */
+export async function sendAccessLinkFor(params: {
+  organizationId: string;
+  actorId: string;
+  userId: string;
+  ip?: string | null;
+}): Promise<{ kind: 'invite' | 'reset'; email: string }> {
+  const user = await prisma.user.findFirst({
+    where: { id: params.userId, organizationId: params.organizationId, deletedAt: null },
+    select: { id: true, email: true, firstName: true, status: true, role: true },
+  });
+  if (!user) throw new NotFoundError('Benutzerkonto');
+
+  if (user.status === 'SUSPENDED' || user.status === 'DISABLED') {
+    throw new BusinessRuleError(
+      'Das Konto ist gesperrt oder deaktiviert. Geben Sie es zuerst frei — ein Zugangslink nützt sonst nichts.',
+    );
+  }
+
+  const token = randomToken(32);
+  const kind = user.status === 'PENDING' ? 'invite' : 'reset';
+
+  if (kind === 'invite') {
+    await prisma.verificationToken.updateMany({
+      where: { email: user.email, purpose: 'INVITE', usedAt: null },
+      data: { usedAt: new Date() },
+    });
+    await prisma.verificationToken.create({
+      data: {
+        userId: user.id,
+        email: user.email,
+        tokenHash: await hashToken(token),
+        purpose: 'INVITE',
+        expiresAt: new Date(Date.now() + INVITE_TOKEN_TTL_DAYS * 86_400_000),
+      },
+    });
+    const content = staffInviteEmail({
+      firstName: user.firstName,
+      inviteUrl: absoluteUrl(`/auth/einladung?token=${token}`),
+      role: ROLE_LABELS[user.role],
+    });
+    await sendEmail({
+      to: user.email,
+      subject: content.subject,
+      html: content.html,
+      templateKey: 'staff_invite',
+      entity: 'User',
+      entityId: user.id,
+    });
+  } else {
+    await prisma.verificationToken.updateMany({
+      where: { email: user.email, purpose: 'PASSWORD_RESET', usedAt: null },
+      data: { usedAt: new Date() },
+    });
+    await prisma.verificationToken.create({
+      data: {
+        userId: user.id,
+        email: user.email,
+        tokenHash: await hashToken(token),
+        purpose: 'PASSWORD_RESET',
+        expiresAt: new Date(Date.now() + RESET_TOKEN_TTL_MINUTES * 60_000),
+      },
+    });
+    const content = passwordResetEmail({
+      firstName: user.firstName,
+      resetUrl: absoluteUrl(`/auth/passwort-neu?token=${token}`),
+    });
+    await sendEmail({
+      to: user.email,
+      subject: content.subject,
+      html: content.html,
+      templateKey: 'password_reset',
+      entity: 'User',
+      entityId: user.id,
+    });
+  }
+
+  await audit.updated({
+    organizationId: params.organizationId,
+    userId: params.actorId,
+    entity: 'User',
+    entityId: user.id,
+    summary:
+      kind === 'invite'
+        ? `Einladung an ${user.email} erneut versendet`
+        : `Passwort-Link an ${user.email} versendet`,
+    ip: params.ip,
+  });
+
+  return { kind, email: user.email };
+}
+
 /** Mitarbeitenden- oder Kundenkonto einladen (Passwort wird selbst gesetzt). */
 export async function inviteUser(params: {
   organizationId: string;
@@ -467,6 +608,15 @@ export async function inviteUser(params: {
       mustChangePassword: true,
     },
   });
+
+  // Eine eingeladene Kundschaft braucht einen Kundendatensatz, sonst steht
+  // sie nach der Anmeldung vor „kein Kundenprofil verknüpft". Personal
+  // bekommt seine Akte über `createEmployee`, das diese Funktion aufruft.
+  if (params.role === 'CUSTOMER') {
+    await prisma.$transaction((tx) =>
+      ensureCustomerProfile(tx, { organizationId: params.organizationId, userId: user.id }),
+    );
+  }
 
   const token = randomToken(32);
   await prisma.verificationToken.create({

@@ -4,6 +4,8 @@ import * as React from 'react';
 import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
 
+import { Trash2 } from 'lucide-react';
+
 import { api, ApiError } from '@/lib/api/client';
 import {
   Select,
@@ -12,6 +14,39 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/controls';
+import { ActionButton } from '@/components/app/action-button';
+
+/**
+ * Bewerbung löschen.
+ *
+ * Anders als sonst in dieser Anwendung ist das Löschen ausdrücklich
+ * vorgesehen: Bewerbungsunterlagen sind besonders schützenswerte
+ * Personendaten und dürfen nach abgeschlossenem Verfahren nur wenige Monate
+ * aufbewahrt werden. Der Endpunkt gab es; die Seite bot ihn nicht an.
+ */
+export function ApplicationDeleteButton({
+  applicationId,
+  name,
+}: {
+  applicationId: string;
+  name: string;
+}) {
+  return (
+    <ActionButton
+      endpoint={`/api/applications/${applicationId}`}
+      method="DELETE"
+      label="Löschen"
+      aria-label={`Bewerbung von ${name} löschen`}
+      variant="ghost"
+      size="icon"
+      confirmTitle="Bewerbung löschen?"
+      confirm={`Die Bewerbung von ${name} wird samt Unterlagen endgültig entfernt. Das ist nach Abschluss des Verfahrens der vorgesehene Weg — Bewerbungsunterlagen werden nicht auf Vorrat aufbewahrt.`}
+      successMessage="Bewerbung gelöscht."
+    >
+      <Trash2 aria-hidden />
+    </ActionButton>
+  );
+}
 
 /**
  * Status einer Bewerbung ändern.

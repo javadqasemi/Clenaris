@@ -33,6 +33,7 @@ import { useBookingStore, type Frequency, type PropertyKind } from './store';
 import type {
   AvailabilityDto,
   BookingService,
+  CouponCheckDto,
   SavedAddressDto,
   SavedPropertyDto,
 } from './types';
@@ -598,9 +599,13 @@ export function StepSchedule() {
 
 export function StepContact({
   isAuthenticated,
+  staffBooking = false,
   savedAddresses,
 }: {
+  /** Buchung auf das eigene Kundenprofil — Kontaktfelder entfallen. */
   isAuthenticated: boolean;
+  /** Angemeldet ohne Kundenprofil (Personal): Kontaktfelder gelten der Kundschaft. */
+  staffBooking?: boolean;
   savedAddresses: SavedAddressDto[];
 }) {
   const state = useBookingStore();
@@ -610,10 +615,18 @@ export function StepContact({
 
   return (
     <div className="space-y-10">
+      {staffBooking ? (
+        <Alert variant="info" title="Sie sind als Personal angemeldet">
+          Die Buchung wird für die hier angegebene Kundschaft angelegt. Gibt es unter der
+          E-Mail-Adresse bereits einen Kundendatensatz, wird er verwendet — sonst entsteht ein
+          neuer.
+        </Alert>
+      ) : null}
+
       {!isAuthenticated ? (
         <fieldset className="space-y-6">
           <legend className="mb-1 font-display text-lg font-semibold tracking-tight">
-            Wie erreichen wir Sie?
+            {staffBooking ? 'Für wen buchen Sie?' : 'Wie erreichen wir Sie?'}
           </legend>
 
           <div className="grid gap-5 sm:grid-cols-2">
@@ -787,10 +800,28 @@ export function StepContact({
 //  6) Übersicht
 // ---------------------------------------------------------------------------
 
-export function StepSummary({ services }: { services: BookingService[] }) {
+export function StepSummary({
+  services,
+  coupon,
+  couponChecking,
+}: {
+  services: BookingService[];
+  /** Prüfergebnis des Servers zum eingegebenen Code — `null`, solange keiner eingegeben ist. */
+  coupon: CouponCheckDto | null;
+  /** Läuft gerade eine Preisabfrage? Dann ist `coupon` womöglich noch der alte Stand. */
+  couponChecking: boolean;
+}) {
   const state = useBookingStore();
   const patch = useBookingStore((s) => s.patch);
   const service = services.find((item) => item.id === state.serviceId);
+
+  // Der Gutschein ist freiwillig: ohne Eingabe gibt es weder Badge noch
+  // Hinweis. Mit Eingabe zeigt das Feld genau den Zustand, den der Server
+  // gemeldet hat — die Antwort gehört zum eingegebenen Code, sonst wäre sie
+  // während des Nachladens der Stand des vorherigen Codes.
+  const enteredCode = state.couponCode.trim();
+  const verdict = enteredCode && coupon?.code === enteredCode ? coupon : null;
+  const pending = enteredCode.length > 0 && (couponChecking || !verdict);
 
   const address = state.addressId
     ? 'Gespeicherte Adresse'
@@ -860,17 +891,47 @@ export function StepSummary({ services }: { services: BookingService[] }) {
       </dl>
 
       <div className="space-y-2">
-        <Label htmlFor="coupon">Gutscheincode</Label>
-        <div className="flex gap-2">
+        <Label htmlFor="coupon">Gutscheincode (optional)</Label>
+        <div className="flex flex-wrap items-center gap-2">
           <Input
             id="coupon"
             value={state.couponCode}
             onChange={(event) => patch({ couponCode: event.target.value.toUpperCase() })}
             placeholder="z. B. WILLKOMMEN20"
             className="max-w-xs"
+            aria-describedby={enteredCode ? 'coupon-status' : undefined}
+            aria-invalid={verdict ? verdict.status !== 'APPLIED' : undefined}
           />
-          {state.couponCode ? <Badge variant="success">Wird geprüft</Badge> : null}
+          {pending ? (
+            <Badge variant="neutral">
+              <Loader2 className="size-3 animate-spin" aria-hidden />
+              Wird geprüft
+            </Badge>
+          ) : verdict?.status === 'APPLIED' ? (
+            <Badge variant="success">
+              <Check className="size-3" strokeWidth={3} aria-hidden />
+              Eingelöst · −{formatCurrency(verdict.amount)}
+            </Badge>
+          ) : verdict ? (
+            <Badge variant="destructive">Nicht anwendbar</Badge>
+          ) : null}
         </div>
+        {enteredCode ? (
+          <p
+            id="coupon-status"
+            role="status"
+            className={cn(
+              'text-meta',
+              verdict && verdict.status !== 'APPLIED' ? 'text-destructive' : 'text-muted-foreground',
+            )}
+          >
+            {pending
+              ? 'Der Code wird mit Ihrer Buchung abgeglichen.'
+              : verdict?.status === 'APPLIED'
+                ? verdict.message
+                : `${verdict?.message ?? ''} Korrigieren Sie den Code oder leeren Sie das Feld.`}
+          </p>
+        ) : null}
       </div>
 
       <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-border bg-card p-4">

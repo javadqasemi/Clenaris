@@ -105,6 +105,16 @@ Teilzahlungen, Ausgaben, Lieferanten und Buchhaltungsexport.
 **Auswertungen** zu Umsatz, Kosten, Deckungsbeitrag, Auslastung und
 Cashflow-Prognose, als Excel und PDF exportierbar.
 
+**Unternehmensführung** — Führungscockpit mit Gesundheitswert, Kennzahlen mit
+festgeschriebenem Verlauf, Strategie und Quartalsziele mit Schlüsselergebnissen
+(OKR) und Roadmap, Budget mit Abweichung zum Ist, Anlagenverzeichnis mit
+Abschreibung, Szenarien (bester, erwarteter, schlechtester Fall), Risikoregister
+mit Matrix, Qualitäts- und Compliance-Kontrollen mit Massnahmen (CAPA),
+Dokumentenablage mit Fassungen und Fristen, Wissensdatenbank, Wettbewerbs- und
+Marktbeobachtung mit SWOT/PESTEL, Sitzungsprotokolle mit Pendenzen, Berichte
+als PDF, Excel und Word nach Zeitplan — und ein Assistent, der Entwürfe mit
+Begründung, Datenquelle und Vertrauensgrad liefert.
+
 **Automatisierungen** über zwei Cron-Läufe: Terminerinnerungen (24 h und 2 h),
 Mahnungen, ablaufende Offerten, Serienbuchungen, Bewertungsanfragen,
 Geburtstagsgrüsse.

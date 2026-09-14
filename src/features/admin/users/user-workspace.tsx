@@ -4,7 +4,18 @@ import * as React from 'react';
 import { useRouter } from 'next/navigation';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { Lock, LockOpen, Mail, Pencil, RotateCcw, Send, ShieldCheck, Trash2, UserPlus } from 'lucide-react';
+import {
+  Lock,
+  LockOpen,
+  Mail,
+  Pencil,
+  RotateCcw,
+  Send,
+  ShieldCheck,
+  ShieldOff,
+  Trash2,
+  UserPlus,
+} from 'lucide-react';
 import { toast } from 'sonner';
 
 import { api, ApiError } from '@/lib/api/client';
@@ -54,6 +65,13 @@ import { EmptyState, ListCard, TableScroll } from '@/components/app/page-parts';
  *    Systemverantwortung.** Für alle anderen steht dort schlicht die Rolle.
  *    Ein ausgegrautes Auswahlfeld würde suggerieren, es fehle nur ein Klick.
  *
+ *  • **Ein Rollenwechsel fragt nach.** Das Auswahlfeld schreibt nicht sofort,
+ *    sondern öffnet eine Rückfrage mit Name, alter und neuer Rolle. Ein
+ *    Rollenwechsel ist keine Stammdatenänderung: Er vergibt oder entzieht
+ *    Rechte und beendet alle Sitzungen der Person. Vorher genügte ein
+ *    Fehlgriff im Auswahlfeld, und die Administration war Mitarbeitende —
+ *    das Prüfprotokoll vom 14. September 2026 zeigt genau diese Kette.
+ *
  *  • **Das eigene Konto ist erkennbar und nicht bearbeitbar.** Die Sperren
  *    dafür liegen im Dienst; hier fehlen die Schaltflächen, damit niemand
  *    gegen eine Wand läuft.
@@ -98,6 +116,8 @@ export function UserWorkspace({
   const [inviting, setInviting] = React.useState(false);
   const [editing, setEditing] = React.useState<UserRow | null>(null);
   const [deleting, setDeleting] = React.useState<UserRow | null>(null);
+  const [resetting, setResetting] = React.useState<UserRow | null>(null);
+  const [roleChange, setRoleChange] = React.useState<{ row: UserRow; role: string } | null>(null);
   const [busy, setBusy] = React.useState<string | null>(null);
 
   const act = async (id: string, run: () => Promise<unknown>, success: string) => {
@@ -122,12 +142,16 @@ export function UserWorkspace({
         : `${row.firstName} ${row.lastName} ist gesperrt — alle Sitzungen wurden beendet.`,
     );
 
-  const changeRole = (row: UserRow, role: string) =>
-    act(
+  const changeRole = async () => {
+    if (!roleChange) return;
+    const { row, role } = roleChange;
+    await act(
       row.id,
       () => api.patch(`/api/users/${row.id}/role`, { role }),
       `${row.firstName} ${row.lastName} ist jetzt ${ROLE_LABELS[role as keyof typeof ROLE_LABELS]}.`,
     );
+    setRoleChange(null);
+  };
 
   const restore = (row: UserRow) =>
     act(
@@ -159,7 +183,7 @@ export function UserWorkspace({
       ) : (
         <ListCard>
           <TableScroll minWidth="58rem">
-            <table className="data-table data-table--sticky">
+            <table className="data-table">
               <caption className="sr-only">Benutzerkonten der Organisation.</caption>
               <thead>
                 <tr>
@@ -200,7 +224,9 @@ export function UserWorkspace({
                         {canAssignRole && !self ? (
                           <Select
                             value={row.role}
-                            onValueChange={(value) => changeRole(row, value)}
+                            onValueChange={(value) => {
+                              if (value !== row.role) setRoleChange({ row, role: value });
+                            }}
                             disabled={busy !== null}
                           >
                             <SelectTrigger
@@ -258,6 +284,23 @@ export function UserWorkspace({
                                 Freigeben
                               </Button>
                             )
+                          ) : null}
+
+                          {/* Der Notausgang, wenn jemand Telefon *und*
+                              Wiederherstellungscodes verloren hat. Nur
+                              sichtbar, wo es etwas zurückzusetzen gibt —
+                              und nur für die Systemverantwortung, die als
+                              Einzige Rollen vergeben darf. */}
+                          {canAssignRole && !self && row.twoFactorEnabled ? (
+                            <Button
+                              variant="ghost"
+                              size="icon-sm"
+                              aria-label={`Zwei-Faktor-Anmeldung von ${row.email} zurücksetzen`}
+                              title="Zwei-Faktor-Anmeldung zurücksetzen"
+                              onClick={() => setResetting(row)}
+                            >
+                              <ShieldOff aria-hidden />
+                            </Button>
                           ) : null}
 
                           {canUpdate ? (
@@ -334,7 +377,110 @@ export function UserWorkspace({
       />
       <EditDialog user={editing} onClose={() => setEditing(null)} />
       <DeleteDialog user={deleting} onClose={() => setDeleting(null)} />
+      <ResetTwoFactorDialog user={resetting} onClose={() => setResetting(null)} />
+
+      {/* Rückfrage vor dem Rollenwechsel */}
+      <Dialog open={roleChange !== null} onOpenChange={(open) => !open && setRoleChange(null)}>
+        <DialogContent size="sm">
+          <DialogHeader>
+            <DialogTitle>Rolle ändern?</DialogTitle>
+            <DialogDescription>
+              {roleChange ? (
+                <>
+                  {roleChange.row.firstName} {roleChange.row.lastName} wechselt von{' '}
+                  <strong>
+                    {ROLE_LABELS[roleChange.row.role as keyof typeof ROLE_LABELS] ??
+                      roleChange.row.role}
+                  </strong>{' '}
+                  zu{' '}
+                  <strong>
+                    {ROLE_LABELS[roleChange.role as keyof typeof ROLE_LABELS] ?? roleChange.role}
+                  </strong>
+                  . Die Rechte gelten sofort; alle offenen Sitzungen der Person werden beendet.
+                </>
+              ) : (
+                ''
+              )}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setRoleChange(null)}>
+              Abbrechen
+            </Button>
+            <Button onClick={changeRole} loading={busy !== null}>
+              Rolle ändern
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </>
+  );
+}
+
+/**
+ * Zweiten Faktor eines fremden Kontos zurücksetzen.
+ *
+ * Der Dialog fragt nicht „sind Sie sicher", sondern nennt die beiden Folgen,
+ * die man kennen muss: das Konto steht danach nur noch hinter dem Passwort,
+ * und alle offenen Sitzungen enden. Wurde das Konto tatsächlich übernommen,
+ * ist das Zweite der eigentliche Zweck.
+ */
+function ResetTwoFactorDialog({
+  user,
+  onClose,
+}: {
+  user: UserRow | null;
+  onClose: () => void;
+}) {
+  const router = useRouter();
+  const [busy, setBusy] = React.useState(false);
+  const [error, setError] = React.useState<string | null>(null);
+
+  React.useEffect(() => {
+    if (user) setError(null);
+  }, [user]);
+
+  const confirm = async () => {
+    if (!user) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await api.delete(`/api/users/${user.id}/2fa`);
+      toast.success(`Zwei-Faktor-Anmeldung von ${user.email} zurückgesetzt.`);
+      onClose();
+      router.refresh();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Zurücksetzen fehlgeschlagen.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Dialog open={user !== null} onOpenChange={(open) => !open && onClose()}>
+      <DialogContent size="sm">
+        <DialogHeader>
+          <DialogTitle>Zwei-Faktor-Anmeldung zurücksetzen?</DialogTitle>
+          <DialogDescription>
+            {user?.firstName} {user?.lastName} meldet sich danach nur noch mit dem Passwort an und
+            muss den zweiten Faktor neu einrichten. Alle offenen Sitzungen der Person werden dabei
+            beendet.
+          </DialogDescription>
+        </DialogHeader>
+
+        {error ? <Alert variant="destructive">{error}</Alert> : null}
+
+        <DialogFooter>
+          <Button variant="ghost" onClick={onClose}>
+            Abbrechen
+          </Button>
+          <Button variant="destructive" onClick={confirm} loading={busy}>
+            <ShieldOff aria-hidden />
+            Zurücksetzen
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 

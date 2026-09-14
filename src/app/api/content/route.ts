@@ -1,32 +1,41 @@
 import { defineRoute } from '@/lib/api/handler';
 import { ok } from '@/lib/api/response';
-import { prisma } from '@/lib/db';
 import { ValidationError } from '@/lib/errors';
-import { audit } from '@/lib/audit';
-import { definitionFor } from '@/lib/cms/registry';
-import { updateContentSchema, validateEntries } from '@/lib/validation/cms';
+import {
+  contentActionSchema,
+  updateContentSchema,
+  validateEntries,
+} from '@/lib/validation/cms';
 import { getOrganizationId } from '@/server/services/organization.service';
-import { invalidateContent } from '@/server/services/content.service';
+import {
+  discardContentDrafts,
+  publishContent,
+  saveContentDraft,
+  unpublishContent,
+} from '@/server/services/content.service';
 
 export const runtime = 'nodejs';
 
 /**
- * PATCH /api/content — Website-Texte pflegen.
+ * PATCH /api/content — Website-Texte als **Entwurf** speichern.
  *
  * Architekturentscheide:
+ *
+ *  • **Speichern veröffentlicht nicht.** Vorher waren beide dasselbe: Ein
+ *    Tastendruck, und ein halb fertiger Satz stand auf der Website. Wer eine
+ *    Seite überarbeitet, braucht mehrere Anläufe — und in der Zwischenzeit
+ *    liest Kundschaft mit. Die Freigabe ist jetzt ein eigener, bewusster
+ *    Schritt (`POST` mit `action: 'publish'`).
  *
  *  • **Ein Aufruf für alle Änderungen eines Formulars.** Die Redaktion ändert
  *    selten ein einzelnes Feld; eine Sammelübergabe erspart zwanzig Anfragen
  *    und lässt das Prüfprotokoll einen Vorgang statt zwanzig zeigen.
  *
- *  • **Leeren heisst zurücksetzen.** Wird ein Feld geleert, wird die Zeile
- *    gelöscht statt eine leere gespeichert — die Website zeigt dann wieder den
- *    Auslieferungstext. So kommt man immer zurück, ohne den ursprünglichen
- *    Wortlaut nachschlagen zu müssen.
- *
- *  • **Der Cache wird sofort geleert.** Sonst zeigt die Website bis zu fünf
- *    Minuten den alten Text, und die Redaktion glaubt, das Speichern habe
- *    nicht funktioniert.
+ *  • **Leeren heisst zurücksetzen.** Ein geleertes Feld führt zurück zum
+ *    Auslieferungstext — der einzige Weg zurück, ohne den ursprünglichen
+ *    Wortlaut nachschlagen zu müssen. Bei einem bereits veröffentlichten
+ *    Baustein wird daraus ein *leerer Entwurf*, damit der Text nicht ohne
+ *    Freigabe von der Website verschwindet.
  */
 export const PATCH = defineRoute({
   permissions: ['content:update'],
@@ -40,77 +49,47 @@ export const PATCH = defineRoute({
       throw new ValidationError('Bitte prüfen Sie die markierten Felder.', errors);
     }
 
-    const toDelete: string[] = [];
-    const toUpsert: { key: string; value: string | string[] }[] = [];
-
-    for (const entry of body.entries) {
-      const definition = definitionFor(entry.key)!;
-      const isEmpty =
-        definition.kind === 'list'
-          ? !Array.isArray(entry.value) || entry.value.filter((v) => v.trim()).length === 0
-          : typeof entry.value !== 'string' || entry.value.trim() === '';
-
-      if (isEmpty) toDelete.push(entry.key);
-      else {
-        toUpsert.push({
-          key: entry.key,
-          value:
-            definition.kind === 'list'
-              ? (entry.value as string[]).map((v) => v.trim()).filter(Boolean)
-              : (entry.value as string).trim(),
-        });
-      }
-    }
-
-    await prisma.$transaction([
-      ...(toDelete.length
-        ? [
-            prisma.contentBlock.deleteMany({
-              where: { organizationId, locale: 'DE', key: { in: toDelete } },
-            }),
-          ]
-        : []),
-      ...toUpsert.map((entry) =>
-        prisma.contentBlock.upsert({
-          where: {
-            organizationId_key_locale: { organizationId, key: entry.key, locale: 'DE' },
-          },
-          create: {
-            organizationId,
-            key: entry.key,
-            locale: 'DE',
-            value: entry.value,
-            updatedById: session.id,
-          },
-          update: { value: entry.value, updatedById: session.id },
-        }),
-      ),
-    ]);
-
-    await invalidateContent(organizationId);
-
-    await audit.updated({
+    const result = await saveContentDraft({
       organizationId,
-      userId: session.id,
-      entity: 'ContentBlock',
-      entityId: 'website',
-      summary:
-        `Website-Inhalte geändert: ${toUpsert.length} gepflegt` +
-        (toDelete.length ? `, ${toDelete.length} auf Standard zurückgesetzt` : ''),
-      // Der geänderte Wortlaut gehört ins Protokoll: bei einer Reklamation
-      // muss belegbar sein, was zum Zeitpunkt der Buchung auf der Website
-      // stand und wer es geändert hat.
-      changes: Object.fromEntries(
-        body.entries.map((entry) => [
-          entry.key,
-          {
-            from: null,
-            to: Array.isArray(entry.value) ? entry.value.join(' · ') : entry.value,
-          },
-        ]),
-      ),
+      values: Object.fromEntries(body.entries.map((entry) => [entry.key, entry.value])),
+      actorId: session.id,
     });
 
-    return ok({ updated: toUpsert.length, reset: toDelete.length });
+    return ok({ saved: result.saved, reset: result.removed });
+  },
+});
+
+/**
+ * POST /api/content — Entwürfe freigeben, verwerfen oder einen Baustein
+ * zurückziehen.
+ *
+ * Alle drei in einem Endpunkt, weil sie denselben Gegenstand betreffen und
+ * dieselbe Berechtigung verlangen; die Handlung steht ausdrücklich im Körper
+ * statt implizit im Pfad. Das Schema liegt wie alle anderen in
+ * `lib/validation/cms.ts`, damit die OpenAPI-Erzeugung es kennt.
+ */
+export const POST = defineRoute({
+  permissions: ['content:update'],
+  body: contentActionSchema,
+  rateLimit: 'apiWrite',
+  handler: async ({ body, session }) => {
+    const organizationId = await getOrganizationId();
+
+    if (body.action === 'publish') {
+      const count = await publishContent({ organizationId, keys: body.keys, actorId: session.id });
+      return ok({ published: count });
+    }
+
+    if (body.action === 'discard') {
+      const count = await discardContentDrafts({
+        organizationId,
+        keys: body.keys,
+        actorId: session.id,
+      });
+      return ok({ discarded: count });
+    }
+
+    await unpublishContent({ organizationId, key: body.key, actorId: session.id });
+    return ok({ unpublished: body.key });
   },
 });

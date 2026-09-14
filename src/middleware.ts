@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from 'next/server';
 
-import { ACCESS_COOKIE, verifyAccessToken } from '@/lib/auth/jwt';
+import { ACCESS_COOKIE, REFRESH_COOKIE, verifyAccessToken } from '@/lib/auth/jwt';
 import { can, guardForPath, homeRouteFor, permissionForPath } from '@/lib/auth/rbac';
 
 /**
@@ -28,6 +28,23 @@ export async function middleware(request: NextRequest) {
 
   const token = request.cookies.get(ACCESS_COOKIE)?.value;
   const claims = token ? await verifyAccessToken(token) : null;
+
+  /**
+   * Zugangstoken abgelaufen, Refresh-Token vorhanden → stille Erneuerung.
+   *
+   * Der Zugangstoken lebt fünfzehn Minuten. Vorher stand danach die
+   * Anmeldemaske, obwohl ein gültiger Refresh-Token im Browser lag — die
+   * Middleware kann ihn nur nicht selbst einlösen, weil sie auf der Edge ohne
+   * Prisma läuft. Also schickt sie den Browser zur Erneuerungsroute, die den
+   * Token rotiert und an dieselbe Adresse zurückleitet. Ob die Sitzung noch
+   * innerhalb des Leerlauffensters liegt, entscheidet die Route; scheitert
+   * sie, landet die Person bei der Anmeldung — mit Rücksprungziel.
+   */
+  if (!claims && request.cookies.get(REFRESH_COOKIE)?.value) {
+    const refreshUrl = new URL('/api/auth/refresh', request.url);
+    refreshUrl.searchParams.set('weiter', `${pathname}${search}`);
+    return NextResponse.redirect(refreshUrl);
+  }
 
   // Nicht angemeldet → zur Anmeldung, mit Rücksprungziel.
   if (!claims) {

@@ -1,4 +1,5 @@
 import { prisma } from '@/lib/db';
+import { jsonLd } from '@/lib/json-ld';
 import {
   getOrganizationId,
   getPublicCompanyInfo,
@@ -10,6 +11,8 @@ import { SiteFooter } from '@/components/marketing/site-footer';
 import { AnalyticsScripts } from '@/components/marketing/analytics';
 import { CookieBanner } from '@/components/marketing/cookie-banner';
 import { ChatWidget } from '@/components/marketing/chat-widget';
+import { CmsPreviewBridge } from '@/components/cms/preview-bridge';
+import { isPreview } from '@/lib/cms/preview';
 
 /**
  * Rahmen der öffentlichen Website.
@@ -40,6 +43,8 @@ export default async function PublicLayout({ children }: { children: React.React
    * fällt deshalb im Browser (`CtaSlot`), nach derselben Regel wie auf dem
    * Server. Es sind eine Handvoll Zeilen; das kostet nichts.
    */
+  const preview = await isPreview();
+
   const [company, services, areas, ctas] = await Promise.all([
     getPublicCompanyInfo(),
     prisma.service.findMany({
@@ -75,12 +80,19 @@ export default async function PublicLayout({ children }: { children: React.React
       <ChatWidget />
       <AnalyticsScripts />
 
+      {/*
+        Nur im Vorschaumodus: macht die gepflegten Texte anklickbar und meldet
+        die Auswahl an die Redaktionsmaske. Für Besucherinnen und Besucher wird
+        hier nichts gerendert — kein Skript, kein Attribut.
+      */}
+      {preview ? <CmsPreviewBridge /> : null}
+
       {/* Strukturierte Daten für lokale Suchergebnisse. */}
       <script
         type="application/ld+json"
         // eslint-disable-next-line react/no-danger -- kontrollierter, serverseitig erzeugter JSON-LD-Block
         dangerouslySetInnerHTML={{
-          __html: JSON.stringify({
+          __html: jsonLd({
             '@context': 'https://schema.org',
             '@type': 'HomeAndConstructionBusiness',
             '@id': `${process.env.NEXT_PUBLIC_APP_URL}#organisation`,

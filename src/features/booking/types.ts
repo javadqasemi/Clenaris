@@ -54,7 +54,23 @@ export interface PriceBreakdownDto {
   grossTotal: number;
   currency: string;
   onRequest: boolean;
+  /** Prüfergebnis zum eingegebenen Gutscheincode; `null` ohne Code. */
+  coupon: CouponCheckDto | null;
   notes: string[];
+}
+
+export interface CouponCheckDto {
+  code: string;
+  status:
+    | 'APPLIED'
+    | 'INVALID'
+    | 'EXHAUSTED'
+    | 'MIN_ORDER'
+    | 'NOT_APPLICABLE'
+    | 'FIRST_ORDER_ONLY'
+    | 'PER_CUSTOMER_LIMIT';
+  message: string;
+  amount: number;
 }
 
 export interface TimeSlotDto {

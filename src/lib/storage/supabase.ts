@@ -4,8 +4,14 @@ import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { nanoid } from 'nanoid';
 
 import { hasIntegration, serverEnv } from '@/lib/env';
-import { IntegrationError, ValidationError } from '@/lib/errors';
-import type { UploadProfileName } from '@/lib/validation/files';
+import { ConfigurationError, IntegrationError } from '@/lib/errors';
+
+import {
+  sanitizeFilename,
+  validateUpload,
+  type SignedUploadTarget,
+  type UploadProfile,
+} from './profiles';
 
 /**
  * Datei-Ablage über Supabase Storage.
@@ -18,46 +24,23 @@ import type { UploadProfileName } from '@/lib/validation/files';
  * erlaubte MIME-Typen und legt erst nach dem Upload den `FileAsset`-Datensatz an.
  */
 
-const IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/avif', 'image/heic'];
-const DOCUMENT_TYPES = [
-  'application/pdf',
-  'application/msword',
-  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-  'application/vnd.ms-excel',
-  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-  'text/plain',
-  'text/csv',
-];
-
-export const UPLOAD_PROFILES = {
-  jobPhoto: { types: IMAGE_TYPES, maxBytes: 15 * 1024 * 1024, folder: 'jobs' },
-  bookingPhoto: { types: IMAGE_TYPES, maxBytes: 15 * 1024 * 1024, folder: 'bookings' },
-  avatar: { types: IMAGE_TYPES, maxBytes: 4 * 1024 * 1024, folder: 'avatars' },
-  document: { types: [...DOCUMENT_TYPES, ...IMAGE_TYPES], maxBytes: 25 * 1024 * 1024, folder: 'documents' },
-  receipt: { types: [...DOCUMENT_TYPES, ...IMAGE_TYPES], maxBytes: 15 * 1024 * 1024, folder: 'receipts' },
-  cv: { types: DOCUMENT_TYPES, maxBytes: 15 * 1024 * 1024, folder: 'applications' },
-  gallery: { types: IMAGE_TYPES, maxBytes: 20 * 1024 * 1024, folder: 'gallery' },
-  invoice: { types: ['application/pdf'], maxBytes: 10 * 1024 * 1024, folder: 'invoices' },
-  quote: { types: ['application/pdf'], maxBytes: 10 * 1024 * 1024, folder: 'quotes' },
-} as const;
-
-export type UploadProfile = keyof typeof UPLOAD_PROFILES;
-
-/**
- * Die Zod-Schicht führt dieselbe Liste eigenständig (sie darf `server-only`
- * nicht importieren). Diese beiden Zuweisungen sind der Beweis, dass beide
- * Listen deckungsgleich sind — läuft eine auseinander, schlägt `tsc` fehl.
- */
-const _profilesCoverSchema: UploadProfileName = '' as unknown as UploadProfile;
-const _schemaCoversProfiles: UploadProfile = '' as unknown as UploadProfileName;
-void _profilesCoverSchema;
-void _schemaCoversProfiles;
-
 let admin: SupabaseClient | null = null;
 
 function supabaseAdmin(): SupabaseClient {
   if (!hasIntegration('supabase')) {
-    throw new IntegrationError('Supabase', 'Storage ist nicht konfiguriert.');
+    // Nennt beim Namen, was fehlt. Die vorherige Meldung („Ein externer Dienst
+    // ist derzeit nicht erreichbar") schickte auf die Suche nach einem
+    // Netzproblem, das es nie gab.
+    const missing = [
+      process.env.NEXT_PUBLIC_SUPABASE_URL ? null : 'NEXT_PUBLIC_SUPABASE_URL',
+      process.env.SUPABASE_SERVICE_ROLE_KEY ? null : 'SUPABASE_SERVICE_ROLE_KEY',
+    ].filter(Boolean);
+
+    throw new ConfigurationError(
+      'Supabase',
+      `Der Dateispeicher ist nicht eingerichtet — ${missing.join(' und ')} fehlt in der Umgebung. ` +
+        'Ohne ihn lassen sich keine Bilder und Dokumente hochladen.',
+    );
   }
   admin ??= createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -69,43 +52,6 @@ function supabaseAdmin(): SupabaseClient {
 
 function bucket(): string {
   return serverEnv().SUPABASE_STORAGE_BUCKET;
-}
-
-/** Dateinamen entschärfen: Pfad-Traversal und Sonderzeichen entfernen. */
-export function sanitizeFilename(filename: string): string {
-  const base = filename.split(/[/\\]/).pop() ?? 'datei';
-  const cleaned = base
-    .normalize('NFD')
-    .replace(/[̀-ͯ]/g, '')
-    .replace(/[^a-zA-Z0-9._-]/g, '-')
-    .replace(/-{2,}/g, '-')
-    .slice(0, 120);
-  return cleaned || 'datei';
-}
-
-export function validateUpload(profile: UploadProfile, mimeType: string, sizeBytes: number) {
-  const config = UPLOAD_PROFILES[profile];
-  if (!config.types.includes(mimeType as never)) {
-    throw new ValidationError(
-      `Dieser Dateityp wird nicht unterstützt. Erlaubt sind: ${config.types
-        .map((t) => t.split('/')[1].toUpperCase())
-        .join(', ')}.`,
-    );
-  }
-  if (sizeBytes > config.maxBytes) {
-    throw new ValidationError(
-      `Die Datei ist zu gross (max. ${Math.round(config.maxBytes / 1024 / 1024)} MB).`,
-    );
-  }
-  return config;
-}
-
-export interface SignedUploadTarget {
-  path: string;
-  token: string;
-  signedUrl: string;
-  publicUrl: string;
-  expiresIn: number;
 }
 
 /** Erzeugt eine signierte Upload-URL für einen Direkt-Upload aus dem Browser. */

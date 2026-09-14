@@ -2,6 +2,8 @@ import { z } from 'zod';
 
 import { CONTENT_KEYS, SEO_PAGES, definitionFor } from '@/lib/cms/registry';
 
+import { assetUrlSchema } from './common';
+
 /**
  * Prüfregeln für die Inhaltspflege.
  *
@@ -83,6 +85,67 @@ export function validateEntries(
 
 /** Die Schlüssel als Aufzählung — nutzbar für strengere Teilschemata. */
 export const contentKeyEnum = z.enum(CONTENT_KEYS as [string, ...string[]]);
+
+/**
+ * Freigeben, verwerfen, zurückziehen — die Handlung steht im Körper.
+ *
+ * Drei Handlungen in einem Endpunkt, weil sie denselben Gegenstand betreffen
+ * und dieselbe Berechtigung verlangen. Ein `POST /api/content/publish` neben
+ * `/api/content/discard` hätte drei fast gleiche Dateien ergeben.
+ */
+export const contentActionSchema = z.discriminatedUnion('action', [
+  z.object({
+    action: z.literal('publish'),
+    /** Ohne Angabe: alle offenen Entwürfe. */
+    keys: z.array(z.string().max(120)).max(500).optional(),
+  }),
+  z.object({
+    action: z.literal('discard'),
+    keys: z.array(z.string().max(120)).max(500).optional(),
+  }),
+  z.object({
+    action: z.literal('unpublish'),
+    key: z.string().min(1).max(120),
+  }),
+]);
+export type ContentActionInput = z.infer<typeof contentActionSchema>;
+
+/** Fassungsverlauf eines Bausteins abfragen. */
+export const contentRevisionsQuery = z.object({ key: z.string().min(1).max(120) });
+
+/** Eine frühere Fassung als Entwurf zurückholen. */
+export const restoreRevisionSchema = z.object({ revisionId: z.string().min(1) });
+
+/**
+ * Vorschaumodus ein- oder ausschalten.
+ *
+ * `pfad` ist ein Rücksprungziel und wird im Endpunkt zusätzlich durch
+ * `safeReturnPath` geprüft — das Schema begrenzt nur die Länge.
+ */
+export const previewQuery = z.object({
+  pfad: z.string().max(512).optional(),
+  aus: z.enum(['1']).optional(),
+  nur: z.enum(['1']).optional(),
+});
+
+/**
+ * Ein Bild an seinem Datensatz austauschen (aus der Website-Vorschau).
+ *
+ * `entity` und `field` sind absichtlich freie Zeichenketten: Welche Paare
+ * erlaubt sind, entscheidet die Erlaubnisliste in `lib/cms/assets.ts` auf dem
+ * Server. Ein Enum hier wäre eine zweite Kopie derselben Liste.
+ *
+ * `url: null` entfernt das Bild. Das ist bewusst möglich: Ein falsches Bild
+ * ist schlimmer als gar keines, und die Seite kommt mit einem Platzhalter
+ * zurecht.
+ */
+export const assetFieldSchema = z.object({
+  entity: z.string().min(1).max(40),
+  id: z.string().min(1).max(60),
+  field: z.string().min(1).max(40),
+  url: assetUrlSchema.nullable(),
+});
+export type AssetFieldInput = z.infer<typeof assetFieldSchema>;
 
 // ---------------------------------------------------------------------------
 //  Suchmaschinen-Angaben

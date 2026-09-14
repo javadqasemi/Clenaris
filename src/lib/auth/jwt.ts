@@ -24,6 +24,17 @@ export interface AccessTokenClaims extends JWTPayload {
   name: string;
   /** Employee- oder Customer-ID, je nach Rolle — spart Joins im Hot Path. */
   pid?: string;
+  /**
+   * Farbschema aus dem Konto.
+   *
+   * Im Token statt in einer Abfrage: Es wird auf *jeder* Seite des
+   * Applikationsrahmens gebraucht, und dafür eine Datenbankabfrage aufzuwenden
+   * wäre unverhältnismässig. Dass der Wert bis zur nächsten Erneuerung des
+   * Tokens (höchstens 15 Minuten) veraltet sein kann, ist folgenlos: Er wirkt
+   * ohnehin nur auf Geräten, die noch keine eigene Wahl getroffen haben, und
+   * das Gerät, auf dem gerade umgestellt wurde, gehört nicht dazu.
+   */
+  thm?: string;
   typ: 'access';
 }
 

@@ -6,6 +6,7 @@ import { prisma } from '@/lib/db';
 import { requirePermission } from '@/lib/auth/session';
 import { fullName } from '@/lib/utils';
 import { getOrganizationId } from '@/server/services/organization.service';
+import { activeStaffWhere } from '@/server/services/profile.service';
 import { Button } from '@/components/ui/button';
 import { PageHeader } from '@/components/app/page-parts';
 import { LeadForm } from '@/features/admin/lead-form';
@@ -28,7 +29,7 @@ export default async function NewLeadPage() {
       select: { id: true, name: true },
     }),
     prisma.employee.findMany({
-      where: { organizationId, active: true },
+      where: activeStaffWhere(organizationId),
       orderBy: { employeeNumber: 'asc' },
       select: { id: true, user: { select: { firstName: true, lastName: true } } },
     }),

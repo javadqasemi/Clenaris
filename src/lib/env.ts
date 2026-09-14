@@ -24,6 +24,13 @@ const serverSchema = z.object({
   JWT_SECRET: z.string().min(32, 'JWT_SECRET muss mindestens 32 Zeichen lang sein'),
   JWT_ACCESS_TTL: z.coerce.number().int().positive().default(900),
   JWT_REFRESH_TTL: z.coerce.number().int().positive().default(2_592_000),
+  /**
+   * Wie lange eine Sitzung ohne Aktivität lebt. Der Refresh-Token darf nur
+   * erneuert werden, solange seine letzte Erneuerung innerhalb dieses Fensters
+   * liegt; der Browser meldet sich nach derselben Frist von selbst ab.
+   * `JWT_REFRESH_TTL` bleibt die absolute Obergrenze.
+   */
+  SESSION_IDLE_TTL: z.coerce.number().int().positive().default(900),
   AUTH_COOKIE_DOMAIN: z.string().optional(),
 
   SUPABASE_SERVICE_ROLE_KEY: z.string().optional(),

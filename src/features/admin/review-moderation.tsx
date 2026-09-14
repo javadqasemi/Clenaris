@@ -2,11 +2,12 @@
 
 import * as React from 'react';
 import { useRouter } from 'next/navigation';
-import { Check, MessageSquare, Sparkles, Star, X } from 'lucide-react';
+import { Check, MessageSquare, Sparkles, Star, Trash2, X } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { api, ApiError } from '@/lib/api/client';
 import { Button } from '@/components/ui/button';
+import { ActionButton } from '@/components/app/action-button';
 import { Textarea } from '@/components/ui/input';
 import { Label } from '@/components/ui/form';
 import { Alert } from '@/components/ui/primitives';
@@ -32,12 +33,19 @@ export function ReviewModeration({
   featured,
   hasReply,
   rating,
+  canDelete = false,
 }: {
   reviewId: string;
   status: string;
   featured: boolean;
   hasReply: boolean;
   rating: number;
+  /**
+   * Löschen ist von Moderieren getrennt (`review:delete`): Ablehnen nimmt
+   * eine Bewertung von der Website, Löschen tilgt sie — auch aus der
+   * Statistik. Das zweite ist für Spam gedacht, das erste für alles andere.
+   */
+  canDelete?: boolean;
 }) {
   const router = useRouter();
   const [pending, setPending] = React.useState<string | null>(null);
@@ -138,6 +146,24 @@ export function ReviewModeration({
             <Sparkles aria-hidden />
             Antwort entwerfen
           </Button>
+        ) : null}
+
+        {canDelete ? (
+          <ActionButton
+            endpoint={`/api/reviews/${reviewId}`}
+            method="DELETE"
+            label="Löschen"
+            variant="ghost"
+            size="sm"
+            className="ml-auto text-muted-foreground"
+            confirmTitle="Bewertung löschen?"
+            confirm={
+              'Die Bewertung wird endgültig entfernt und zählt nicht mehr in den Durchschnitt. Für eine schlechte, aber echte Bewertung ist „Ablehnen" der richtige Weg — Löschen ist für Spam und Beleidigungen.'
+            }
+            successMessage="Bewertung gelöscht."
+          >
+            <Trash2 aria-hidden />
+          </ActionButton>
         ) : null}
       </div>
 

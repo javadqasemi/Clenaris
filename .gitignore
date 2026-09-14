@@ -49,3 +49,15 @@ coverage/
 # generated
 public/sitemap*.xml
 public/robots.txt
+
+# deployment
+# Protokolle der Auslieferung und von PM2 entstehen auf dem Server bei jedem
+# Lauf. Sie gehören zum Betrieb, nicht zum Quelltext — und ein Protokoll im
+# Repository wäre beim nächsten `git reset --hard` ohnehin weg.
+logs/
+# Gesicherte Builds und die Sperrdatei der Auslieferung.
+.deploy/
+# Zwischenstufen der Secret-Übertragung. Sie werden nach dem Zusammenführen
+# gelöscht; stehen sie hier, können sie nie versehentlich verfolgt werden.
+.env.incoming
+.env.tmp.*

@@ -6,6 +6,9 @@ import { prisma, toNumber } from '@/lib/db';
 import { formatCurrency } from '@/lib/utils';
 import { pageMetadata } from '@/lib/cms/metadata';
 import { getOrganizationId } from '@/server/services/organization.service';
+import { getContent } from '@/server/services/content.service';
+import { createCms } from '@/lib/cms/editable';
+import { isPreview } from '@/lib/cms/preview';
 import { Button } from '@/components/ui/button';
 import { CallToAction, Section, SectionIntro } from '@/components/marketing/sections';
 
@@ -19,6 +22,8 @@ export const revalidate = 3600;
 
 export default async function ServicesPage() {
   const organizationId = await getOrganizationId();
+  const content = await getContent(organizationId);
+  const cms = createCms(content, await isPreview());
 
   const categories = await prisma.serviceCategory.findMany({
     where: { organizationId, active: true },
@@ -172,8 +177,8 @@ export default async function ServicesPage() {
       <Section className="pb-28">
         <div className="container">
           <CallToAction
-            title="Nicht sicher, was Sie brauchen?"
-            lead="Beschreiben Sie kurz Ihre Situation — wir melden uns innerhalb von 24 Stunden mit einem Vorschlag."
+            title={cms.text('services.cta.title')}
+            lead={cms.text('services.cta.text')}
             primary={{ href: '/offerte', label: 'Offerte anfordern' }}
             secondary={{ href: '/kontakt', label: 'Kontakt aufnehmen' }}
           />

@@ -5,6 +5,7 @@ import { ArrowLeft, Download, Mail } from 'lucide-react';
 
 import { toNumber } from '@/lib/db';
 import { requirePermission } from '@/lib/auth/session';
+import { can } from '@/lib/auth/rbac';
 import { NotFoundError } from '@/lib/errors';
 import { formatCurrency, formatDate, formatDateTime } from '@/lib/utils';
 import { formatQrReference } from '@/lib/pdf/swiss-qr';
@@ -39,7 +40,7 @@ export default async function AdminInvoiceDetailPage({
 }: {
   params: Promise<{ id: string }>;
 }) {
-  await requirePermission('invoice:read');
+  const session = await requirePermission('invoice:read');
 
   const { id } = await params;
   const organizationId = await getOrganizationId();
@@ -88,6 +89,7 @@ export default async function AdminInvoiceDetailPage({
               status={invoice.status}
               balance={balance}
               email={invoice.billToEmail ?? invoice.customer.email}
+              canDelete={can(session.role, 'invoice:delete')}
             />
           </>
         }
@@ -253,7 +255,7 @@ export default async function AdminInvoiceDetailPage({
         {/* Seitenspalte */}
         <div className="space-y-6">
           <DetailSection title="Empfänger">
-            <dl className="protocol-list">
+            <dl className="protocol-list protocol-list--tight">
               <DetailRow label="Name">
                 <Link
                   href={`/admin/kunden/${invoice.customer.id}`}
@@ -285,7 +287,7 @@ export default async function AdminInvoiceDetailPage({
           </DetailSection>
 
           <DetailSection title="Zahlungsinformationen">
-            <dl className="protocol-list">
+            <dl className="protocol-list protocol-list--tight">
               {invoice.qrReference ? (
                 <DetailRow label="QR-Referenz">
                   <span className="tabular-nums">{formatQrReference(invoice.qrReference)}</span>
@@ -316,7 +318,7 @@ export default async function AdminInvoiceDetailPage({
 
           {invoice.booking || invoice.quote ? (
             <DetailSection title="Verknüpfungen">
-              <dl className="protocol-list">
+              <dl className="protocol-list protocol-list--tight">
                 {invoice.booking ? (
                   <DetailRow label="Buchung">
                     <Link

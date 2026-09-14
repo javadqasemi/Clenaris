@@ -1,5 +1,6 @@
 import type { ZodTypeAny } from 'zod';
 
+import type { Permission } from '@/lib/auth/permissions';
 import * as auth from '@/lib/validation/auth';
 import * as crm from '@/lib/validation/crm';
 import * as booking from '@/lib/validation/booking';
@@ -16,7 +17,10 @@ import * as website from '@/lib/validation/website';
 import * as opsAdmin from '@/lib/validation/operations-admin';
 import * as nav from '@/lib/validation/navigation';
 import * as users from '@/lib/validation/users';
+import * as settings from '@/lib/validation/settings';
+import * as system from '@/lib/validation/system';
 import * as q from '@/lib/validation/queries';
+import { BI_ROUTES } from './openapi-routes-bi';
 
 /**
  * Registrierung aller REST-Endpunkte.
@@ -58,7 +62,12 @@ export interface RouteDoc {
   extraErrors?: number[];
 }
 
-const perm = (mode: 'all' | 'any', ...permissions: string[]): Guard => ({
+/**
+ * `Permission` statt `string`: Ein Recht, das es im Katalog nicht gibt, bricht
+ * damit schon den Typcheck — nicht erst den Doku-Lauf. Genau so standen hier
+ * lange `job:write` und `lead:write`, die kein Endpunkt je verlangt hat.
+ */
+const perm = (mode: 'all' | 'any', ...permissions: Permission[]): Guard => ({
   kind: 'permissions',
   permissions,
   mode,
@@ -115,7 +124,23 @@ export const ROUTES: RouteDoc[] = [
       'erkennung: Wird ein bereits verbrauchter Token erneut vorgelegt, gilt die ganze ' +
       'Token-Familie als kompromittiert und wird verworfen.',
     guard: { kind: 'public' },
+    rateLimit: 'apiWrite',
     extraErrors: [401],
+  },
+  {
+    method: 'get',
+    path: '/api/auth/refresh',
+    tag: 'Authentifizierung',
+    summary: 'Sitzung erneuern und weiterleiten',
+    description:
+      'Der Weg für Seitenaufrufe mit abgelaufenem Zugangstoken: Die Middleware schickt den ' +
+      'Browser hierher, die Route rotiert den Refresh-Token, setzt die Cookies und leitet mit ' +
+      '303 an `weiter` zurück. Scheitert die Erneuerung — auch nach 15 Minuten ohne ' +
+      'Aktivität —, geht es zur Anmeldung mit demselben Rücksprungziel.',
+    guard: { kind: 'public' },
+    rateLimit: 'apiWrite',
+    query: auth.refreshRedirectQuery,
+    produces: 'text/html',
   },
   {
     method: 'get',
@@ -167,6 +192,108 @@ export const ROUTES: RouteDoc[] = [
     rateLimit: 'apiWrite',
     body: auth.updateProfileSchema,
   },
+  {
+    method: 'get',
+    path: '/api/auth/2fa',
+    tag: 'Authentifizierung',
+    summary: 'Zustand des zweiten Faktors',
+    description:
+      'Ob die Zwei-Faktor-Anmeldung eingeschaltet ist, seit wann, und wie viele ' +
+      'Wiederherstellungscodes noch übrig sind. Weder Geheimnis noch Codes werden je ' +
+      'zurückgegeben — die Codes existieren nach der Einrichtung nur noch als Hash.',
+    guard: { kind: 'session' },
+    rateLimit: 'apiRead',
+  },
+  {
+    method: 'post',
+    path: '/api/auth/2fa/setup',
+    tag: 'Authentifizierung',
+    summary: 'Einrichtung beginnen',
+    description:
+      'Erzeugt ein TOTP-Geheimnis und liefert es als QR-Code und als Text zum Abtippen. ' +
+      'Der Schutz wird dabei **nicht** eingeschaltet: erst der bestätigte Code unter ' +
+      '`/api/auth/2fa/confirm` stellt ihn scharf. Ohne diesen zweiten Schritt sperrt sich ' +
+      'aus, wer den QR-Code scannt und dann das Telefon zurücksetzt. Ein bereits ' +
+      'eingeschalteter Faktor wird nicht überschrieben.',
+    guard: { kind: 'session' },
+    rateLimit: 'apiWrite',
+    extraErrors: [422],
+  },
+  {
+    method: 'post',
+    path: '/api/auth/2fa/confirm',
+    tag: 'Authentifizierung',
+    summary: 'Einrichtung bestätigen',
+    description:
+      'Prüft den ersten Code und schaltet die Zwei-Faktor-Anmeldung ein. Die Antwort ' +
+      'enthält die zehn Wiederherstellungscodes — **einmalig**. Danach existieren sie nur ' +
+      'noch als Hash; wer sie nicht notiert, braucht die Systemverantwortung.',
+    guard: { kind: 'session' },
+    rateLimit: 'login',
+    body: auth.twoFactorConfirmSchema,
+    extraErrors: [401, 422],
+  },
+  {
+    method: 'post',
+    path: '/api/auth/2fa/disable',
+    tag: 'Authentifizierung',
+    summary: 'Zweiten Faktor ausschalten',
+    description:
+      'Verlangt Passwort **und** einen gültigen Code — ein Wiederherstellungscode zählt ' +
+      'ebenfalls. Nur das Passwort würde genügen, wenn jemand eine offene Sitzung ' +
+      'übernimmt, und dann wäre der zweite Faktor genau in dem Moment weg, in dem er ' +
+      'gebraucht wird.',
+    guard: { kind: 'session' },
+    rateLimit: 'login',
+    body: auth.twoFactorDisableSchema,
+    status: 204,
+    extraErrors: [401, 422],
+  },
+  {
+    method: 'post',
+    path: '/api/auth/2fa/verify',
+    tag: 'Authentifizierung',
+    summary: 'Zweiter Schritt der Anmeldung',
+    description:
+      'Öffentlich, weil hier noch keine Sitzung besteht: Der Aufrufer weist sich über den ' +
+      'kurzlebigen Zwischenschein aus, den `/api/auth/login` gesetzt hat. Dieser Endpunkt ' +
+      'erzeugt das Zugangstoken. Sechs Ziffern sind eine Million Möglichkeiten — ohne das ' +
+      'Anmelde-Limit wären sie in Minuten durchprobiert.',
+    guard: { kind: 'public' },
+    rateLimit: 'login',
+    body: auth.twoFactorTokenSchema,
+    extraErrors: [401],
+  },
+  {
+    method: 'delete',
+    path: '/api/users/{id}/2fa',
+    tag: 'Benutzer & Rollen',
+    summary: 'Zweiten Faktor eines Kontos zurücksetzen',
+    description:
+      'Der Notausgang, wenn jemand Telefon *und* Wiederherstellungscodes verloren hat. ' +
+      'Nur die Systemverantwortung darf das — es ist die einzige Handlung, die einen ' +
+      'Schutz von aussen entfernt. Alle Sitzungen der Person werden dabei beendet: Ist ' +
+      'das Konto tatsächlich übernommen worden, endet der Zugriff in diesem Moment.',
+    guard: perm('all', 'user:update', 'role:assign'),
+    rateLimit: 'apiWrite',
+    params: q.idParam,
+    status: 204,
+    extraErrors: [422],
+  },
+  {
+    method: 'post',
+    path: '/api/users/{id}/password-reset',
+    tag: 'Benutzer & Rollen',
+    summary: 'Zugangslink versenden',
+    description:
+      'Für ein eingeladenes, nie aktiviertes Konto eine neue Einladung; für ein aktives Konto ' +
+      'der Link zum Setzen eines neuen Passworts. Die Verwaltung setzt nie selbst ein Passwort. ' +
+      'Gesperrte und deaktivierte Konten erhalten keinen Link (422).',
+    guard: perm('all', 'user:update'),
+    rateLimit: 'apiWrite',
+    params: q.idParam,
+    extraErrors: [422],
+  },
 
   // -------------------------------------------------------------------------
   //  Öffentlich (Website)
@@ -182,6 +309,19 @@ export const ROUTES: RouteDoc[] = [
     guard: { kind: 'public' },
     rateLimit: 'priceEstimate',
     body: booking.publicEstimateSchema,
+  },
+  {
+    method: 'get',
+    path: '/api/health',
+    tag: 'Öffentlich',
+    summary: 'Betriebsbereitschaft',
+    description:
+      'Für Auslieferung, Überwachung und Load Balancer. Prüft die Datenbankverbindung und meldet ' +
+      'die Zahl der angewandten Migrationen, den ausgelieferten Stand und die Laufzeit. Antwortet ' +
+      'mit 503, wenn die Datenbank nicht erreichbar ist — die Aussage steht im Statuscode, nicht im Rumpf.',
+    guard: { kind: 'public' },
+    extraErrors: [503],
+    rateLimit: 'apiRead',
   },
   {
     method: 'get',
@@ -286,6 +426,20 @@ export const ROUTES: RouteDoc[] = [
     produces: 'application/pdf',
   },
   {
+    method: 'get',
+    path: '/api/public/bookings/{token}/pdf',
+    tag: 'Öffentlich',
+    summary: 'Buchungsbestätigung als PDF',
+    description:
+      'Zugriff über den Verwaltungslink aus der Buchungs-E-Mail, ohne Anmeldung. Wird bei jedem ' +
+      'Abruf frisch gerendert, damit der Status (eingegangen, bestätigt, storniert) stimmt.',
+    guard: { kind: 'public' },
+    extraErrors: [404],
+    rateLimit: 'apiRead',
+    params: q.publicTokenParams,
+    produces: 'application/pdf',
+  },
+  {
     method: 'post',
     path: '/api/public/quotes/{token}/respond',
     tag: 'Öffentlich',
@@ -362,7 +516,7 @@ export const ROUTES: RouteDoc[] = [
     description:
       'Für Anrufe und Laufkundschaft. Anfragen über die Website laufen über ' +
       '`/api/public/contact` und durchlaufen dort Honeypot und strengeres Rate-Limiting.',
-    guard: perm('all', 'lead:write'),
+    guard: perm('all', 'lead:create'),
     rateLimit: 'apiWrite',
     body: crm.createLeadSchema,
     status: 201,
@@ -373,7 +527,7 @@ export const ROUTES: RouteDoc[] = [
     tag: 'CRM',
     summary: 'Anfrage ändern',
     description: 'Status, Zuständigkeit, Pipeline-Stufe, Bewertung, Nachfassdatum, Etiketten.',
-    guard: perm('all', 'lead:write'),
+    guard: perm('all', 'lead:update'),
     rateLimit: 'apiWrite',
     params: q.idParam,
     body: crm.updateLeadSchema,
@@ -386,7 +540,7 @@ export const ROUTES: RouteDoc[] = [
     description:
       'Übernimmt Stammdaten und Verlauf und markiert den Lead als gewonnen. Bestehende ' +
       'Offerten werden mit übertragen.',
-    guard: perm('all', 'customer:write'),
+    guard: perm('all', 'customer:create'),
     rateLimit: 'apiWrite',
     params: q.idParam,
     status: 201,
@@ -409,7 +563,7 @@ export const ROUTES: RouteDoc[] = [
     description:
       'Legt auf Wunsch gleich das Kundenkonto an und versendet die Einladung. Doppelte ' +
       'E-Mail-Adressen werden mit 409 abgewiesen.',
-    guard: perm('all', 'customer:write'),
+    guard: perm('all', 'customer:create'),
     rateLimit: 'apiWrite',
     body: crm.createCustomerSchema,
     status: 201,
@@ -420,7 +574,7 @@ export const ROUTES: RouteDoc[] = [
     tag: 'CRM',
     summary: 'Verlaufseintrag erfassen',
     description: 'Notiz, Telefonat, E-Mail, Termin oder SMS an Kundschaft, Lead oder Einsatz.',
-    guard: perm('all', 'activity:write'),
+    guard: perm('all', 'activity:create'),
     rateLimit: 'apiWrite',
     body: crm.createActivitySchema,
     status: 201,
@@ -443,7 +597,7 @@ export const ROUTES: RouteDoc[] = [
     tag: 'CRM',
     summary: 'Aufgabe anlegen',
     description: 'Wer eine Aufgabe zugewiesen bekommt, wird sofort benachrichtigt.',
-    guard: perm('all', 'task:write'),
+    guard: perm('all', 'task:create'),
     rateLimit: 'apiWrite',
     body: crm.createTaskSchema,
     status: 201,
@@ -454,7 +608,7 @@ export const ROUTES: RouteDoc[] = [
     tag: 'CRM',
     summary: 'Aufgabe ändern',
     description: 'Status, Fälligkeit, Zuständigkeit und Beschreibung.',
-    guard: perm('all', 'task:write'),
+    guard: perm('all', 'task:update'),
     rateLimit: 'apiWrite',
     params: q.idParam,
     body: crm.updateTaskSchema,
@@ -481,7 +635,7 @@ export const ROUTES: RouteDoc[] = [
     tag: 'Nachrichten',
     summary: 'Verlauf eröffnen',
     description: 'Der Verlauf wird immer an einen Kundendatensatz gebunden.',
-    guard: perm('any', 'message:write', 'message:write_own'),
+    guard: perm('any', 'message:create', 'message:write_own'),
     rateLimit: 'apiWrite',
     body: messaging.createThreadSchema,
     status: 201,
@@ -505,7 +659,7 @@ export const ROUTES: RouteDoc[] = [
     description:
       'Ein abgeschlossener Verlauf nimmt keine Antworten mehr an. Nur Mitarbeitende dürfen ' +
       'mit `close` abschliessen.',
-    guard: perm('any', 'message:write', 'message:write_own'),
+    guard: perm('any', 'message:create', 'message:write_own'),
     rateLimit: 'apiWrite',
     params: q.idParam,
     body: messaging.replyMessageSchema,
@@ -556,7 +710,7 @@ export const ROUTES: RouteDoc[] = [
     description:
       'Bestätigt den Termin, erzeugt den Einsatz und versendet die Bestätigung an die ' +
       'Kundschaft.',
-    guard: perm('all', 'booking:write'),
+    guard: perm('all', 'booking:update'),
     rateLimit: 'apiWrite',
     params: q.idParam,
   },
@@ -566,7 +720,7 @@ export const ROUTES: RouteDoc[] = [
     tag: 'Buchungen',
     summary: 'Termin verschieben',
     description: 'Prüft die Verfügbarkeit erneut und verschiebt den zugehörigen Einsatz mit.',
-    guard: perm('all', 'booking:write'),
+    guard: perm('all', 'booking:update'),
     rateLimit: 'apiWrite',
     params: q.idParam,
     body: booking.rescheduleBookingSchema,
@@ -579,7 +733,7 @@ export const ROUTES: RouteDoc[] = [
     description:
       'Storniert Buchung und Einsatz. Ab 24 Stunden vor Beginn fällt gemäss AGB eine ' +
       'Ausfallentschädigung an; der Endpunkt berechnet sie, verrechnet sie aber nicht selbst.',
-    guard: perm('all', 'booking:write'),
+    guard: perm('all', 'booking:update'),
     rateLimit: 'apiWrite',
     params: q.idParam,
     body: booking.cancelBookingSchema,
@@ -590,7 +744,7 @@ export const ROUTES: RouteDoc[] = [
     tag: 'Buchungen',
     summary: 'Rechnung zur Buchung erstellen',
     description: 'Übernimmt die Positionen der Buchung als Rechnungsentwurf.',
-    guard: perm('all', 'invoice:write'),
+    guard: perm('all', 'invoice:create'),
     rateLimit: 'apiWrite',
     params: q.idParam,
     status: 201,
@@ -640,7 +794,7 @@ export const ROUTES: RouteDoc[] = [
     summary: 'Offerte erstellen',
     description:
       'Die Summen werden serverseitig berechnet; optionale Positionen zählen nicht ins Total.',
-    guard: perm('all', 'quote:write'),
+    guard: perm('all', 'quote:create'),
     rateLimit: 'apiWrite',
     body: operations.createQuoteSchema,
     status: 201,
@@ -663,7 +817,7 @@ export const ROUTES: RouteDoc[] = [
     description:
       'Nur Entwürfe und versendete Offerten. Eine angenommene Offerte ist Vertragsgrundlage ' +
       'und wird nicht mehr verändert, sondern dupliziert.',
-    guard: perm('all', 'quote:write'),
+    guard: perm('all', 'quote:update'),
     rateLimit: 'apiWrite',
     params: q.idParam,
     body: operations.updateQuoteSchema,
@@ -689,7 +843,7 @@ export const ROUTES: RouteDoc[] = [
     description:
       'Der übliche Weg, eine bereits beantwortete Offerte anzupassen: die alte bleibt als ' +
       'Beleg bestehen.',
-    guard: perm('all', 'quote:write'),
+    guard: perm('all', 'quote:create'),
     rateLimit: 'apiWrite',
     params: q.idParam,
     status: 201,
@@ -749,7 +903,7 @@ export const ROUTES: RouteDoc[] = [
     tag: 'Einsätze',
     summary: 'Einsatz ändern',
     description: 'Titel, Beschreibung, Notizen, Status und geplante Dauer.',
-    guard: perm('all', 'job:write'),
+    guard: perm('all', 'job:update'),
     rateLimit: 'apiWrite',
     params: q.idParam,
     body: operations.updateJobSchema,
@@ -772,7 +926,7 @@ export const ROUTES: RouteDoc[] = [
     tag: 'Einsätze',
     summary: 'Einsatz verschieben',
     description: 'Gegenstück zum Ziehen im Dispositionskalender.',
-    guard: perm('all', 'job:write'),
+    guard: perm('all', 'job:update'),
     rateLimit: 'apiWrite',
     params: q.idParam,
     body: operations.moveJobSchema,
@@ -785,7 +939,7 @@ export const ROUTES: RouteDoc[] = [
     description:
       'Erfasst Abschlussbericht, Materialverbrauch und die Unterschrift der Kundschaft und ' +
       'stoppt laufende Zeiterfassungen.',
-    guard: perm('any', 'job:complete_assigned', 'job:write'),
+    guard: perm('any', 'job:complete_assigned', 'job:update'),
     rateLimit: 'apiWrite',
     params: q.idParam,
     body: operations.completeJobSchema,
@@ -798,7 +952,7 @@ export const ROUTES: RouteDoc[] = [
     description:
       'Registriert ein bereits zu Supabase geladenes Bild als Vorher-, Nachher- oder ' +
       'Schadensfoto.',
-    guard: perm('any', 'job:complete_assigned', 'job:write'),
+    guard: perm('any', 'job:complete_assigned', 'job:update'),
     rateLimit: 'fileUpload',
     params: q.idParam,
     body: operations.jobPhotoSchema,
@@ -810,7 +964,7 @@ export const ROUTES: RouteDoc[] = [
     tag: 'Einsätze',
     summary: 'Checklistenpunkt abhaken',
     description: 'Hält fest, wer wann abgehakt hat.',
-    guard: perm('any', 'job:complete_assigned', 'job:write'),
+    guard: perm('any', 'job:complete_assigned', 'job:update'),
     rateLimit: 'apiWrite',
     params: q.idParam,
     body: operations.checklistToggleSchema,
@@ -834,7 +988,7 @@ export const ROUTES: RouteDoc[] = [
     description:
       'Formuliert aus Checkliste, Zeiten und Notizen einen Berichtstext. Der Entwurf wird ' +
       'nicht gespeichert — er landet im Formular und wird vor dem Abschluss geprüft.',
-    guard: perm('all', 'ai:use', 'job:write'),
+    guard: perm('all', 'ai:use', 'job:update'),
     rateLimit: 'aiGenerate',
     params: q.idParam,
   },
@@ -866,6 +1020,20 @@ export const ROUTES: RouteDoc[] = [
   //  Personal
   // -------------------------------------------------------------------------
   {
+    method: 'post',
+    path: '/api/absences/{id}/withdraw',
+    tag: 'Personal',
+    summary: 'Eigenen Abwesenheitsantrag zurückziehen',
+    description:
+      'Nur solange der Antrag noch nicht entschieden ist. Der Antrag wird nicht gelöscht, sondern ' +
+      'auf CANCELLED gesetzt — die Zeile belegt, dass beantragt und zurückgezogen wurde. Welchen ' +
+      'Antrag jemand zurückziehen darf, entscheidet die Abfrage über die eigene Personalnummer.',
+    guard: perm('all', 'absence:request'),
+    rateLimit: 'apiWrite',
+    params: q.idParam,
+    extraErrors: [422],
+  },
+  {
     method: 'get',
     path: '/api/employees',
     tag: 'Personal',
@@ -884,7 +1052,7 @@ export const ROUTES: RouteDoc[] = [
     description:
       'Legt zugleich das Portalkonto an und versendet die Einladung. Ausschliesslich für die ' +
       'Rolle ADMIN: mit dem Datensatz entstehen Lohnfelder, AHV-Nummer und IBAN.',
-    guard: { kind: 'role', roles: ['ADMIN'] },
+    guard: { kind: 'role', roles: ['ADMIN', 'SUPER_ADMIN'] },
     rateLimit: 'apiWrite',
     body: operations.createEmployeeSchema,
     status: 201,
@@ -921,7 +1089,7 @@ export const ROUTES: RouteDoc[] = [
     description:
       'Status, Bewertung und interne Notiz. Bewusst ohne automatische Absage-E-Mail — eine ' +
       'Absage schreibt man selbst.',
-    guard: perm('all', 'career:write'),
+    guard: perm('all', 'application:update'),
     rateLimit: 'apiWrite',
     params: q.idParam,
     body: content.updateApplicationSchema,
@@ -949,7 +1117,7 @@ export const ROUTES: RouteDoc[] = [
     description:
       'Standardmässig als Entwurf. Erst das Ausstellen vergibt die Nummer — eine vergebene, ' +
       'nie benutzte Nummer reisst eine Lücke in die Folge (Art. 957a OR).',
-    guard: perm('all', 'invoice:write'),
+    guard: perm('all', 'invoice:create'),
     rateLimit: 'apiWrite',
     body: finance.createInvoiceSchema,
     status: 201,
@@ -962,7 +1130,7 @@ export const ROUTES: RouteDoc[] = [
     description:
       'Vergibt die lückenlose Rechnungsnummer und die QR-Referenz innerhalb der Transaktion. ' +
       'Ab hier ist die Rechnung unveränderlich; Korrekturen laufen über eine Gutschrift.',
-    guard: perm('all', 'invoice:write'),
+    guard: perm('all', 'invoice:send'),
     rateLimit: 'apiWrite',
     params: q.idParam,
   },
@@ -985,7 +1153,7 @@ export const ROUTES: RouteDoc[] = [
     description:
       'Für Banküberweisungen und Bargeld. Aktualisiert Saldo und Status; eine Überzahlung ' +
       'wird abgewiesen statt still verbucht.',
-    guard: perm('all', 'invoice:write'),
+    guard: perm('all', 'payment:create'),
     rateLimit: 'apiWrite',
     params: q.idParam,
     body: finance.recordPaymentSchema,
@@ -999,7 +1167,7 @@ export const ROUTES: RouteDoc[] = [
     description:
       'Erzeugt eine Gutschrift über den vollen Betrag. Die Rechnung selbst wird nicht ' +
       'gelöscht — die Buchführung muss den Vorgang später erklären können.',
-    guard: perm('all', 'invoice:write'),
+    guard: perm('all', 'invoice:update'),
     rateLimit: 'apiWrite',
     params: q.idParam,
     body: finance.cancelInvoiceSchema,
@@ -1033,7 +1201,7 @@ export const ROUTES: RouteDoc[] = [
     tag: 'Finanzen',
     summary: 'Ausgabe erfassen',
     description: 'Eingegeben wird netto; MWST und Brutto rechnet der Server.',
-    guard: perm('all', 'expense:write'),
+    guard: perm('all', 'expense:create'),
     rateLimit: 'apiWrite',
     body: finance.createExpenseSchema,
     status: 201,
@@ -1097,7 +1265,7 @@ export const ROUTES: RouteDoc[] = [
     tag: 'Inhalte',
     summary: 'Blogbeitrag anlegen',
     description: 'Erstellt einen Entwurf; der Slug wird aus dem Titel abgeleitet.',
-    guard: perm('all', 'blog:write'),
+    guard: perm('all', 'blog:create'),
     rateLimit: 'apiWrite',
     body: content.createBlogPostSchema,
     status: 201,
@@ -1162,7 +1330,7 @@ export const ROUTES: RouteDoc[] = [
     description:
       'Der Stundenansatz kommt aus dem Leistungskatalog, nicht aus dem Modell: es verteilt ' +
       'den Aufwand auf Positionen, es erfindet keine Tarife.',
-    guard: perm('all', 'ai:use', 'quote:write'),
+    guard: perm('all', 'ai:use', 'quote:create'),
     rateLimit: 'aiGenerate',
     body: ai.quoteDraftSchema,
   },
@@ -1203,7 +1371,7 @@ export const ROUTES: RouteDoc[] = [
     tag: 'Künstliche Intelligenz',
     summary: 'Blogbeitrag entwerfen',
     description: 'Liefert Titel, Anriss, Fliesstext und SEO-Angaben als Entwurf.',
-    guard: perm('all', 'ai:use', 'blog:write'),
+    guard: perm('all', 'ai:use', 'blog:create'),
     rateLimit: 'aiGenerate',
     body: ai.blogDraftSchema,
   },
@@ -1233,7 +1401,7 @@ export const ROUTES: RouteDoc[] = [
       'einzelnes Feld. Ein geleertes Feld löscht die Zeile; die Website zeigt dann wieder den ' +
       'Auslieferungstext aus dem Register. Leert anschliessend Inhalts- und Seitencache, damit ' +
       'die Änderung sofort sichtbar wird.',
-    guard: perm('all', 'content:write'),
+    guard: perm('all', 'content:update'),
     rateLimit: 'apiWrite',
     body: cms.updateContentSchema,
   },
@@ -1246,7 +1414,7 @@ export const ROUTES: RouteDoc[] = [
       'Titel, Beschreibung, Schlüsselwörter und Vorschaubild einer Seite. Leere Felder setzen ' +
       'auf den Registerwert zurück. `noIndex` nimmt die Seite aus dem Index und wird im ' +
       'Prüfprotokoll gesondert vermerkt.',
-    guard: perm('all', 'seo:write'),
+    guard: perm('all', 'seo:update'),
     rateLimit: 'apiWrite',
     body: cms.updateSeoSchema,
   },
@@ -1275,7 +1443,7 @@ export const ROUTES: RouteDoc[] = [
       'Der Kurzname wird zur öffentlichen Adresse `/leistungen/{slug}` und muss eindeutig sein. ' +
       'Das Preismodell bestimmt, welcher Ansatz verlangt wird: PER_HOUR braucht `hourlyRate`, ' +
       'PER_SQM braucht `pricePerSqm`, FLAT braucht `basePrice`.',
-    guard: perm('all', 'service:write'),
+    guard: perm('all', 'service:create'),
     rateLimit: 'apiWrite',
     body: catalog.createServiceSchema,
     status: 201,
@@ -1300,7 +1468,7 @@ export const ROUTES: RouteDoc[] = [
       'des Preismodells ohne passenden Ansatz wird mit 422 abgelehnt, weil die Preis-Engine ' +
       'sonst still mit 0 rechnen würde. Bestehende Buchungen und Rechnungen bleiben unberührt — ' +
       'sie tragen Preis und Steuersatz als eigene Werte.',
-    guard: perm('all', 'service:write'),
+    guard: perm('all', 'service:update'),
     rateLimit: 'apiWrite',
     params: q.idParam,
     body: catalog.updateServiceSchema,
@@ -1315,7 +1483,7 @@ export const ROUTES: RouteDoc[] = [
       'Nur möglich, solange die Leistung in keiner Buchung, Offerte oder keinem Einsatz ' +
       'vorkommt. Andernfalls 422 mit der Zahl der Vorgänge und dem Hinweis, sie stattdessen ' +
       'auf inaktiv zu setzen.',
-    guard: perm('all', 'service:write'),
+    guard: perm('all', 'service:delete'),
     rateLimit: 'apiWrite',
     params: q.idParam,
     status: 204,
@@ -1336,7 +1504,7 @@ export const ROUTES: RouteDoc[] = [
     tag: 'Katalog',
     summary: 'Kategorie anlegen',
     description: 'Der Kurzname muss innerhalb der Organisation eindeutig sein.',
-    guard: perm('all', 'service:write'),
+    guard: perm('all', 'service:create'),
     rateLimit: 'apiWrite',
     body: catalog.createCategorySchema,
     status: 201,
@@ -1347,7 +1515,7 @@ export const ROUTES: RouteDoc[] = [
     tag: 'Katalog',
     summary: 'Kategorie ändern',
     description: 'Teil-Update der Gruppenangaben.',
-    guard: perm('all', 'service:write'),
+    guard: perm('all', 'service:update'),
     rateLimit: 'apiWrite',
     params: q.idParam,
     body: catalog.updateCategorySchema,
@@ -1360,7 +1528,7 @@ export const ROUTES: RouteDoc[] = [
     description:
       'Die Leistungen darin bleiben bestehen und stehen anschliessend ohne Kategorie da. Die ' +
       'Antwort nennt unter `unassigned`, wie viele das betrifft.',
-    guard: perm('all', 'service:write'),
+    guard: perm('all', 'service:delete'),
     rateLimit: 'apiWrite',
     params: q.idParam,
   },
@@ -1381,7 +1549,7 @@ export const ROUTES: RouteDoc[] = [
     description:
       'Eine leere `serviceIds`-Liste bedeutet: bei allen Leistungen anbieten. Fremde IDs ' +
       'werden verworfen.',
-    guard: perm('all', 'service:write'),
+    guard: perm('all', 'service:create'),
     rateLimit: 'apiWrite',
     body: catalog.createExtraSchema,
     status: 201,
@@ -1394,7 +1562,7 @@ export const ROUTES: RouteDoc[] = [
     description:
       '`serviceIds` ist der gewünschte Endzustand der Zuordnung, kein Zuwachs. Fehlt das Feld, ' +
       'bleibt die Zuordnung unangetastet.',
-    guard: perm('all', 'service:write'),
+    guard: perm('all', 'service:update'),
     rateLimit: 'apiWrite',
     params: q.idParam,
     body: catalog.updateExtraSchema,
@@ -1405,7 +1573,7 @@ export const ROUTES: RouteDoc[] = [
     tag: 'Katalog',
     summary: 'Zusatzleistung löschen',
     description: 'Nur möglich, solange keine Buchung sie enthält; andernfalls 422.',
-    guard: perm('all', 'service:write'),
+    guard: perm('all', 'service:delete'),
     rateLimit: 'apiWrite',
     params: q.idParam,
     status: 204,
@@ -1418,7 +1586,7 @@ export const ROUTES: RouteDoc[] = [
     summary: 'Preisregeln auflisten',
     description:
       'Aufsteigend nach `priority` — dieselbe Reihenfolge, in der die Preis-Engine sie anwendet.',
-    guard: perm('all', 'service:read'),
+    guard: perm('all', 'pricing:read'),
     rateLimit: 'apiRead',
   },
   {
@@ -1430,7 +1598,7 @@ export const ROUTES: RouteDoc[] = [
       'Die Bedingung ist streng validiert: ein unbekannter Schlüssel wird abgelehnt, statt ' +
       'stillschweigend zu einer leeren Bedingung zu werden — die auf jeden Auftrag passt. Eine ' +
       'Regel ohne Wirkung (Faktor 1 und Betrag 0) wird ebenfalls abgelehnt.',
-    guard: perm('all', 'service:write'),
+    guard: perm('all', 'pricing:update'),
     rateLimit: 'apiWrite',
     body: catalog.createPriceRuleSchema,
     status: 201,
@@ -1441,7 +1609,7 @@ export const ROUTES: RouteDoc[] = [
     tag: 'Katalog',
     summary: 'Preisregel ändern',
     description: 'Teil-Update. Die Bedingung wird als Ganzes ersetzt, nicht zusammengeführt.',
-    guard: perm('all', 'service:write'),
+    guard: perm('all', 'pricing:update'),
     rateLimit: 'apiWrite',
     params: q.idParam,
     body: catalog.updatePriceRuleSchema,
@@ -1454,7 +1622,7 @@ export const ROUTES: RouteDoc[] = [
     description:
       'Ohne Rückfrage möglich: bestehende Belege führen den Zuschlag als eigene Position mit ' +
       'eigenem Betrag und verlieren nichts.',
-    guard: perm('all', 'service:write'),
+    guard: perm('all', 'pricing:update'),
     rateLimit: 'apiWrite',
     params: q.idParam,
     status: 204,
@@ -1468,7 +1636,7 @@ export const ROUTES: RouteDoc[] = [
       'Übergeben wird die vollständige Reihenfolge als Liste von IDs; die Positionen vergibt ' +
       'der Server aus dem Index. So kann kein Zustand entstehen, in dem zwei Einträge dieselbe ' +
       'Position tragen. Alles läuft in einer Transaktion.',
-    guard: perm('all', 'service:write'),
+    guard: perm('all', 'service:update'),
     rateLimit: 'apiWrite',
     body: catalog.reorderSchema,
   },
@@ -1478,7 +1646,7 @@ export const ROUTES: RouteDoc[] = [
     tag: 'Katalog',
     summary: 'Steuersätze auflisten',
     description: 'Hinterlegte Mehrwertsteuersätze, absteigend nach Satz.',
-    guard: perm('all', 'service:read'),
+    guard: perm('all', 'pricing:read'),
     rateLimit: 'apiRead',
   },
   {
@@ -1490,7 +1658,7 @@ export const ROUTES: RouteDoc[] = [
       'Wird der neue Satz als Standard markiert, verliert der bisherige diese Markierung in ' +
       'derselben Transaktion — zwei Standardsätze wären ein Zustand, in dem die Sortierung ' +
       'entscheidet.',
-    guard: perm('all', 'settings:write'),
+    guard: perm('all', 'pricing:update'),
     rateLimit: 'apiWrite',
     body: catalog.createTaxRateSchema,
     status: 201,
@@ -1501,7 +1669,7 @@ export const ROUTES: RouteDoc[] = [
     tag: 'Katalog',
     summary: 'Steuersatz ändern',
     description: 'Teil-Update.',
-    guard: perm('all', 'settings:write'),
+    guard: perm('all', 'pricing:update'),
     rateLimit: 'apiWrite',
     params: q.idParam,
     body: catalog.updateTaxRateSchema,
@@ -1514,7 +1682,7 @@ export const ROUTES: RouteDoc[] = [
     description:
       'Der Standardsatz ist geschützt: bestimmen Sie zuerst einen anderen als Standard. ' +
       'Bestehende Rechnungen behalten ihren Satz — er steht als eigene Spalte auf jeder Position.',
-    guard: perm('all', 'settings:write'),
+    guard: perm('all', 'pricing:update'),
     rateLimit: 'apiWrite',
     params: q.idParam,
     status: 204,
@@ -1535,7 +1703,7 @@ export const ROUTES: RouteDoc[] = [
     tag: 'Katalog',
     summary: 'Gutschein ausgeben',
     description: 'Der Code wird in Grossbuchstaben normalisiert und muss eindeutig sein.',
-    guard: perm('all', 'coupon:write'),
+    guard: perm('all', 'coupon:create'),
     rateLimit: 'apiWrite',
     body: catalog.createCouponSchema,
     status: 201,
@@ -1548,7 +1716,7 @@ export const ROUTES: RouteDoc[] = [
     description:
       'Der Einlösezähler lässt sich nicht setzen: er hält eine Tatsache fest, keine Absicht. ' +
       'Wäre er beschreibbar, liesse sich jedes Nutzungslimit beliebig oft aufheben.',
-    guard: perm('all', 'coupon:write'),
+    guard: perm('all', 'coupon:update'),
     rateLimit: 'apiWrite',
     params: q.idParam,
     body: catalog.updateCouponSchema,
@@ -1561,7 +1729,7 @@ export const ROUTES: RouteDoc[] = [
     description:
       'Nur möglich, solange der Code nie eingelöst wurde; andernfalls 422 mit dem Hinweis, ihn ' +
       'auf „pausiert" zu setzen.',
-    guard: perm('all', 'coupon:write'),
+    guard: perm('all', 'coupon:delete'),
     rateLimit: 'apiWrite',
     params: q.idParam,
     status: 204,
@@ -1584,6 +1752,71 @@ export const ROUTES: RouteDoc[] = [
     params: q.idParam,
     status: 204,
     extraErrors: [422],
+  },
+  {
+    method: 'get',
+    path: '/api/customers/{id}/addresses',
+    tag: 'CRM',
+    summary: 'Adressen einer Kundschaft',
+    description:
+      'Eine Kundschaft hat mehrere Adressen — Wohnung, Buero, die Treuhand fuer die Rechnungen. ' +
+      'Genau eine ist die Standardadresse, hoechstens eine die Rechnungsanschrift. Die Antwort ' +
+      'nennt zu jeder, wie viele Objekte, Buchungen und Einsaetze darauf verweisen. ' +
+      'Erreichbar fuer das Buero und fuer die Kundschaft im eigenen Konto; wer nur das eigene ' +
+      'Recht hat, kommt ausschliesslich an die eigene Akte.',
+    guard: perm('any', 'customer:read', 'customer:read_own'),
+    rateLimit: 'apiRead',
+    params: q.idParam,
+    extraErrors: [403],
+  },
+  {
+    method: 'post',
+    path: '/api/customers/{id}/addresses',
+    tag: 'CRM',
+    summary: 'Adresse erfassen',
+    description:
+      'Die erste Adresse einer Kundschaft wird zwangslaeufig Standard- und Rechnungsanschrift: ' +
+      'Eine Kundschaft mit einer Adresse, die fuer nichts gilt, koennte keinen Termin buchen. ' +
+      'Wird eine weitere zur Standardadresse erklaert, verliert die bisherige die Markierung — ' +
+      'in derselben Transaktion, damit nie zwei gleichzeitig gelten.',
+    guard: perm('any', 'customer:update', 'customer:update_own'),
+    rateLimit: 'apiWrite',
+    params: q.idParam,
+    body: crm.createAddressSchema,
+    status: 201,
+    extraErrors: [403],
+  },
+  {
+    method: 'patch',
+    path: '/api/customers/{id}/addresses/{addressId}',
+    tag: 'CRM',
+    summary: 'Adresse aendern',
+    description:
+      'Die Standardmarkierung laesst sich nicht abwaehlen, nur weitergeben — sonst stuende eine ' +
+      'Kundschaft ohne Standardadresse da und kaeme im Buchungsformular nicht weiter. Wer eine ' +
+      'andere zur Standardadresse macht, nimmt sie dieser automatisch weg.',
+    guard: perm('any', 'customer:update', 'customer:update_own'),
+    rateLimit: 'apiWrite',
+    params: q.addressParams,
+    body: crm.updateAddressSchema,
+    extraErrors: [403, 422],
+  },
+  {
+    method: 'delete',
+    path: '/api/customers/{id}/addresses/{addressId}',
+    tag: 'CRM',
+    summary: 'Adresse entfernen',
+    description:
+      'Endgueltig, nicht in den Papierkorb: `Address` traegt kein `deletedAt`. Deshalb bleibt ' +
+      'jede Adresse stehen, an der Objekte, Buchungen oder Einsaetze haengen — sie belegt, ' +
+      'wohin damals gefahren wurde. Und die letzte Adresse bleibt ohnehin, weil ohne sie keine ' +
+      'Buchung mehr zustande kaeme. Faellt die Standardadresse weg, rueckt die aelteste ' +
+      'verbleibende nach.',
+    guard: perm('any', 'customer:update', 'customer:update_own'),
+    rateLimit: 'apiWrite',
+    params: q.addressParams,
+    status: 204,
+    extraErrors: [403, 422],
   },
   {
     method: 'post',
@@ -1954,6 +2187,31 @@ export const ROUTES: RouteDoc[] = [
     extraErrors: [422],
   },
   {
+    method: 'get',
+    path: '/api/system/purge',
+    tag: 'System',
+    summary: 'Datenbereinigung — Vorschau',
+    description:
+      'Je Bereich die Zahl der Hauptdatensätze, die ein Lauf endgültig löschen würde. ' +
+      'Nur die Systemverantwortung.',
+    guard: perm('all', 'data:purge'),
+    rateLimit: 'apiRead',
+  },
+  {
+    method: 'post',
+    path: '/api/system/purge',
+    tag: 'System',
+    summary: 'Datenbereinigung — Bereiche endgültig löschen',
+    description:
+      'Unumkehrbar. Verlangt den Bestätigungssatz «ALLES LÖSCHEN» im Körper, läuft in einer ' +
+      'Transaktion und schreibt je Bereich einen Eintrag ins Prüfprotokoll — im selben Commit. ' +
+      'Kundschaft lässt sich nur zusammen mit den Finanzen löschen (Rechnungen halten sie fest).',
+    guard: perm('all', 'data:purge'),
+    rateLimit: 'apiWrite',
+    body: system.purgeSchema,
+    extraErrors: [422],
+  },
+  {
     method: 'delete',
     path: '/api/users/{id}',
     tag: 'System',
@@ -2181,6 +2439,58 @@ export const ROUTES: RouteDoc[] = [
       'Tage zu pflegen wären sieben Anfragen, von denen jede für sich fehlschlagen könnte.',
     guard: perm('all', 'company:update'),
     rateLimit: 'apiWrite',
+    extraErrors: [422],
+  },
+
+  {
+    method: 'get',
+    path: '/api/holidays',
+    tag: 'System',
+    summary: 'Feiertage auflisten',
+    description:
+      'Feiertage und Betriebsferien. Dieselbe Berechtigung wie die Öffnungszeiten: beides ' +
+      'beschreibt, wann der Betrieb arbeitet.',
+    guard: perm('all', 'company:read'),
+    rateLimit: 'apiRead',
+  },
+  {
+    method: 'post',
+    path: '/api/holidays',
+    tag: 'System',
+    summary: 'Feiertag erfassen',
+    description:
+      'Der Tag wird im Buchungsassistenten gesperrt und zählt bei Abwesenheiten nicht als ' +
+      'Ferientag. Das Datum ist ein Kalendertag (JJJJ-MM-TT), kein Zeitstempel.',
+    guard: perm('all', 'company:update'),
+    rateLimit: 'apiWrite',
+    body: settings.createHolidaySchema,
+    status: 201,
+    extraErrors: [409],
+  },
+  {
+    method: 'patch',
+    path: '/api/holidays/{id}',
+    tag: 'System',
+    summary: 'Feiertag ändern',
+    description: 'Name, Datum, Kanton oder jährliche Wiederholung.',
+    guard: perm('all', 'company:update'),
+    rateLimit: 'apiWrite',
+    params: q.idParam,
+    body: settings.updateHolidaySchema,
+    extraErrors: [409],
+  },
+  {
+    method: 'delete',
+    path: '/api/holidays/{id}',
+    tag: 'System',
+    summary: 'Feiertag entfernen',
+    description:
+      'Nur künftige Tage. Ein vergangener Feiertag ist Grundlage der Ferienabrechnung des ' +
+      'Jahres und bleibt stehen.',
+    guard: perm('all', 'company:update'),
+    rateLimit: 'apiWrite',
+    params: q.idParam,
+    status: 204,
     extraErrors: [422],
   },
 
@@ -2583,6 +2893,7 @@ export const ROUTES: RouteDoc[] = [
     guard: perm('all', 'expense:update'),
     rateLimit: 'apiWrite',
     params: q.idParam,
+    body: finance.updateExpenseSchema,
   },
   {
     method: 'delete',
@@ -2665,6 +2976,7 @@ export const ROUTES: RouteDoc[] = [
     guard: perm('all', 'blog:update'),
     rateLimit: 'apiWrite',
     params: q.idParam,
+    body: content.updateBlogPostSchema,
     extraErrors: [422],
   },
   {
@@ -2779,6 +3091,7 @@ export const ROUTES: RouteDoc[] = [
       'Schlüssel eine Einstellung wirkungslos macht, ohne dass es jemand bemerkt.',
     guard: perm('all', 'settings:update'),
     rateLimit: 'apiWrite',
+    body: settings.updateOperationSettingsSchema,
   },
 
   // -------------------------------------------------------------------------
@@ -2797,6 +3110,7 @@ export const ROUTES: RouteDoc[] = [
       'verbucht.',
     guard: perm('all', 'payment:create'),
     rateLimit: 'apiWrite',
+    body: finance.updatePaymentSchema,
     params: q.idParam,
   },
   {
@@ -2899,4 +3213,299 @@ export const ROUTES: RouteDoc[] = [
       'damit Stripe erneut zustellt — eine stille 200 würde die Zahlung verlieren.',
     guard: { kind: 'public' },
   },
+
+  // -------------------------------------------------------------------------
+  //  Aufträge: Detail und Bearbeitung
+  // -------------------------------------------------------------------------
+  {
+    method: 'get',
+    path: '/api/bookings/{id}',
+    tag: 'Buchungen',
+    summary: 'Auftrag abrufen',
+    description:
+      'Kundschaft erhält nur den eigenen Auftrag; die Einschränkung setzt der Dienst über ' +
+      'den `customerId`-Filter, nicht der Handler.',
+    guard: perm('any', 'booking:read', 'booking:read_own'),
+    rateLimit: 'apiRead',
+    params: q.idParam,
+  },
+  {
+    method: 'get',
+    path: '/api/bookings/{id}/pdf',
+    tag: 'Buchungen',
+    summary: 'Buchungsbestätigung als PDF',
+    description:
+      'Kundschaft erhält nur die eigene Buchung; die Einschränkung steht als `customerId` in der ' +
+      'Abfrage. Wird bei jedem Abruf frisch gerendert, damit der Status stimmt.',
+    guard: perm('any', 'booking:read', 'booking:read_own'),
+    extraErrors: [404],
+    rateLimit: 'apiRead',
+    params: q.idParam,
+    produces: 'application/pdf',
+  },
+  {
+    method: 'patch',
+    path: '/api/bookings/{id}',
+    tag: 'Buchungen',
+    summary: 'Auftrag bearbeiten',
+    description:
+      'Termin, Kundschaft, Adresse, Positionen, Preis, Turnus, Notizen und Status in einem ' +
+      'Endpunkt. Preisfelder ändert nur, wer `pricing:update` besitzt; Statuswechsel laufen ' +
+      'durch dieselben Wege wie die Schaltflächen (bestätigen erzeugt Einsätze, stornieren ' +
+      'benachrichtigt die Kundschaft).',
+    guard: perm('all', 'booking:update'),
+    rateLimit: 'apiWrite',
+    params: q.idParam,
+    body: booking.updateBookingSchema,
+    extraErrors: [422],
+  },
+
+  // -------------------------------------------------------------------------
+  //  Inhalte: Freigabe, Historie, Bilder, Vorschau
+  // -------------------------------------------------------------------------
+  {
+    method: 'post',
+    path: '/api/content',
+    tag: 'Inhalte',
+    summary: 'Entwürfe freigeben, verwerfen oder zurückziehen',
+    description:
+      'Die Handlung steht im Körper (`publish`, `discard`, `unpublish`). Veröffentlichen ' +
+      'sichert die abgelöste Fassung in der Historie und leert Inhalts- und Seitencache.',
+    guard: perm('all', 'content:update'),
+    rateLimit: 'apiWrite',
+    body: cms.contentActionSchema,
+  },
+  {
+    method: 'get',
+    path: '/api/content/revisions',
+    tag: 'Inhalte',
+    summary: 'Fassungsverlauf eines Bausteins',
+    description:
+      'Nur Stände, die tatsächlich einmal öffentlich waren — Zwischenstände eines Entwurfs ' +
+      'werden nicht archiviert.',
+    guard: perm('any', 'content:read', 'content:update'),
+    rateLimit: 'apiRead',
+    query: cms.contentRevisionsQuery,
+  },
+  {
+    method: 'post',
+    path: '/api/content/revisions',
+    tag: 'Inhalte',
+    summary: 'Frühere Fassung zurückholen',
+    description: 'Landet als Entwurf, nicht auf der Website — erst prüfen, dann freigeben.',
+    guard: perm('all', 'content:update'),
+    rateLimit: 'apiWrite',
+    body: cms.restoreRevisionSchema,
+  },
+  {
+    method: 'patch',
+    path: '/api/content/asset',
+    tag: 'Inhalte',
+    summary: 'Bild an einem Datensatz austauschen',
+    description:
+      'Aus der Website-Vorschau heraus. Wohin geschrieben wird, entscheidet die ' +
+      'Erlaubnisliste in `lib/cms/assets.ts`; ein nicht gelistetes Feld antwortet mit 404. ' +
+      'Wirkt sofort, ohne Entwurfsstand — Bilder gehören Datensätzen, nicht der Redaktion.',
+    guard: perm('all', 'content:update'),
+    rateLimit: 'apiWrite',
+    body: cms.assetFieldSchema,
+  },
+  {
+    method: 'get',
+    path: '/api/content/preview',
+    tag: 'Inhalte',
+    summary: 'Vorschaumodus schalten',
+    description:
+      'Setzt das Draft-Mode-Cookie von Next.js. Mit `nur=1` antwortet der Endpunkt mit 204 ' +
+      'statt weiterzuleiten (nötig im `iframe` der Redaktionsmaske), mit `aus=1` schaltet er ' +
+      'den Modus ab (`aus=1&nur=1` ebenfalls mit 204). `pfad` ist ein geprüftes Rücksprungziel ' +
+      'auf dieser Domain. Das Cookie wirkt nur zusammen mit einer Sitzung mit `content:update` ' +
+      'und nur im Rahmen der Maske (`Sec-Fetch-Dest: iframe`); ausserhalb liefert die Website ' +
+      'den veröffentlichten Stand ohne Bearbeitungsmarken.',
+    guard: perm('all', 'content:update'),
+    query: cms.previewQuery,
+  },
+
+  // -------------------------------------------------------------------------
+  //  Kundschaft: Zusammenführen
+  // -------------------------------------------------------------------------
+  {
+    method: 'get',
+    path: '/api/customers/{id}/merge',
+    tag: 'CRM',
+    summary: 'Doppelerfassungen vorschlagen',
+    description:
+      'Gleiche E-Mail, gleiche Telefonnummer oder gleicher Name in derselben Firma. Bewusst ' +
+      'ein Vorschlag — zusammenführen entscheidet eine Person.',
+    guard: perm('all', 'customer:update'),
+    rateLimit: 'apiRead',
+    params: q.idParam,
+  },
+  {
+    method: 'post',
+    path: '/api/customers/{id}/merge',
+    tag: 'CRM',
+    summary: 'Kundendatensatz eingliedern',
+    description:
+      '`{id}` bleibt bestehen und übernimmt alles Bewegliche; `sourceId` wird geleert und ' +
+      'weich gelöscht. Nicht umkehrbar — deshalb `customer:delete` zusätzlich.',
+    guard: perm('all', 'customer:update', 'customer:delete'),
+    rateLimit: 'apiWrite',
+    params: q.idParam,
+    body: crm.mergeCustomerSchema,
+    extraErrors: [409],
+  },
+
+  // -------------------------------------------------------------------------
+  //  Eingebauter Dateispeicher
+  // -------------------------------------------------------------------------
+  {
+    method: 'put',
+    path: '/api/files/blob/{id}',
+    tag: 'Dateien',
+    summary: 'Datei an die Upload-Adresse schreiben',
+    description:
+      'Gegenstück zur signierten Adresse von Supabase, wenn kein externer Speicher ' +
+      'eingerichtet ist. Der Körper sind die rohen Bytes; die Adresse ist die Berechtigung — ' +
+      'sie entsteht in `/api/files/upload-url`, ist nicht erratbar, genau einmal und nur zwei ' +
+      'Stunden lang beschreibbar. Höchstens 256 MB — die allgemeine Grenze von 1 GB gilt ' +
+      'für den externen Speicher; die Datenbank-Rückfallebene trägt nicht mehr.',
+    guard: { kind: 'public' },
+    params: q.idParam,
+    extraErrors: [400, 404],
+  },
+  {
+    method: 'get',
+    path: '/api/files/blob/{id}',
+    tag: 'Dateien',
+    summary: 'Datei ausliefern',
+    description:
+      'Öffentlich lesbar wie ein öffentlicher Bucket: Profilbilder und Einsatzfotos erscheinen ' +
+      'in E-Mails und PDF-Berichten ohne Sitzung. Der Schutz ist die nicht erratbare Adresse.',
+    guard: { kind: 'public' },
+    params: q.idParam,
+    produces: 'application/octet-stream',
+  },
+
+  // -------------------------------------------------------------------------
+  //  Einsätze: Checkliste, Team, Nachkalkulation, Fotos
+  // -------------------------------------------------------------------------
+  {
+    method: 'put',
+    path: '/api/jobs/{id}/checklist',
+    tag: 'Einsätze',
+    summary: 'Checkliste setzen',
+    description:
+      'Ersetzt die Liste als Ganzes. Punkte mit `id` behalten ihren Erledigt-Haken, sofern ' +
+      '`keepProgress` nicht ausgeschaltet ist; nicht genannte Punkte werden entfernt.',
+    guard: perm('all', 'job:update'),
+    rateLimit: 'apiWrite',
+    params: q.idParam,
+    body: operations.jobChecklistSchema,
+  },
+  {
+    method: 'post',
+    path: '/api/jobs/{id}/checklist',
+    tag: 'Einsätze',
+    summary: 'Standardcheckliste übernehmen',
+    description: 'Hängt die Vorlage der Leistungsart an oder ersetzt die bestehende Liste.',
+    guard: perm('all', 'job:update'),
+    rateLimit: 'apiWrite',
+    params: q.idParam,
+    body: operations.jobChecklistTemplateSchema,
+  },
+  {
+    method: 'put',
+    path: '/api/jobs/{id}/team',
+    tag: 'Einsätze',
+    summary: 'Team mit Rollen setzen',
+    description:
+      'Anders als `/assign` trägt hier jede Person ihre Rolle (Leitung, Mitglied, Lernende, ' +
+      'Aufsicht). Ein leeres Team setzt den Einsatz auf „nicht zugeteilt" zurück. Nur neu ' +
+      'hinzugekommene Personen werden benachrichtigt.',
+    guard: perm('all', 'job:assign'),
+    rateLimit: 'apiWrite',
+    params: q.idParam,
+    body: operations.jobTeamSchema,
+    extraErrors: [422],
+  },
+  {
+    method: 'patch',
+    path: '/api/jobs/{id}/costing',
+    tag: 'Einsätze',
+    summary: 'Nachkalkulation bearbeiten oder abnehmen',
+    description:
+      'Umsatz, Lohn- und Materialkosten von Hand setzen oder aus Zeiterfassung, Verbrauch ' +
+      'und Auftragswert neu herleiten. Hinter `dashboard:financials`, nicht `job:update`: ' +
+      'Deckungsbeitrag je Auftrag gehört zu den Finanzen.',
+    guard: perm('all', 'dashboard:financials'),
+    rateLimit: 'apiWrite',
+    params: q.idParam,
+    body: operations.jobCostingSchema,
+    extraErrors: [422],
+  },
+  {
+    method: 'put',
+    path: '/api/jobs/{id}/costing',
+    tag: 'Einsätze',
+    summary: 'Materialverbrauch setzen',
+    description:
+      'Material erfasst das Team, nicht die Buchhaltung. Der Materialaufwand fliesst ' +
+      'automatisch in die Nachkalkulation.',
+    guard: perm('all', 'job:update'),
+    rateLimit: 'apiWrite',
+    params: q.idParam,
+    body: operations.jobMaterialsSchema,
+  },
+  {
+    method: 'patch',
+    path: '/api/jobs/{id}/photos/{photoId}',
+    tag: 'Einsätze',
+    summary: 'Foto einordnen',
+    description:
+      'Art, Raum und Bildlegende nachträglich setzen. Mitarbeitende nur an eigenen, noch ' +
+      'laufenden Einsätzen — nach dem Abschluss gehören die Bilder zum Rapport.',
+    guard: perm('any', 'job:complete_assigned', 'job:update'),
+    rateLimit: 'apiWrite',
+    params: q.photoParams,
+    body: operations.updateJobPhotoSchema,
+    extraErrors: [422],
+  },
+  {
+    method: 'delete',
+    path: '/api/jobs/{id}/photos/{photoId}',
+    tag: 'Einsätze',
+    summary: 'Foto löschen',
+    description:
+      'Hart, nicht in den Papierkorb: Ein Foto ist oft genau deshalb zu entfernen, weil es ' +
+      'etwas zeigt, das nicht aufbewahrt werden darf. Der Vorgang steht im Prüfprotokoll.',
+    guard: perm('any', 'job:complete_assigned', 'job:update'),
+    rateLimit: 'apiWrite',
+    params: q.photoParams,
+    status: 204,
+    extraErrors: [422],
+  },
+
+  // -------------------------------------------------------------------------
+  //  Öffentlich: Offertanfrage
+  // -------------------------------------------------------------------------
+  {
+    method: 'post',
+    path: '/api/public/quotes',
+    tag: 'Öffentlich',
+    summary: 'Offertanfrage',
+    description:
+      'Legt einen Lead an (oder ergänzt einen bestehenden derselben Person) und erzeugt einen ' +
+      'Offertentwurf mit Position, Menge in der Einheit der Leistung und Katalogansatz. ' +
+      'Scheitert der Entwurf, bleibt der Lead trotzdem stehen.',
+    guard: { kind: 'public' },
+    rateLimit: 'quoteRequest',
+    body: crm.quoteRequestSchema,
+    status: 201,
+  },
+
+  // -------------------------------------------------------------------------
+  //  Unternehmensführung — eigene Datei, weil es über neunzig Operationen sind
+  // -------------------------------------------------------------------------
+  ...BI_ROUTES,
 ];

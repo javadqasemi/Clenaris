@@ -3,6 +3,9 @@ import type { Metadata } from 'next';
 import { prisma } from '@/lib/db';
 import { pageMetadata } from '@/lib/cms/metadata';
 import { getOrganizationId } from '@/server/services/organization.service';
+import { getContent } from '@/server/services/content.service';
+import { createCms } from '@/lib/cms/editable';
+import { isPreview } from '@/lib/cms/preview';
 import { BeforeAfter } from '@/components/marketing/before-after';
 import { Badge } from '@/components/ui/badge';
 import { CallToAction, Section } from '@/components/marketing/sections';
@@ -35,6 +38,8 @@ const SERVICE_LABELS: Record<string, string> = {
  */
 export default async function GalleryPage() {
   const organizationId = await getOrganizationId();
+  const content = await getContent(organizationId);
+  const cms = createCms(content, await isPreview());
 
   const items = await prisma.galleryItem.findMany({
     where: { organizationId, published: true },
@@ -72,6 +77,8 @@ export default async function GalleryPage() {
                     beforeSrc={item.beforeUrl}
                     afterSrc={item.afterUrl}
                     caption="Regler verschieben"
+                    beforeAttrs={cms.asset('galleryItem', item.id, 'beforeUrl')}
+                    afterAttrs={cms.asset('galleryItem', item.id, 'afterUrl')}
                   />
 
                   <div className="space-y-4 lg:pt-4">
@@ -96,8 +103,8 @@ export default async function GalleryPage() {
       <Section className="pb-28">
         <div className="container">
           <CallToAction
-            title="Solche Ergebnisse — bei Ihnen"
-            lead="Berechnen Sie den Preis für Ihr Objekt und wählen Sie einen Termin. Nach dem Einsatz erhalten Sie Ihre eigenen Vorher-/Nachher-Fotos."
+            title={cms.text('gallery.cta.title')}
+            lead={cms.text('gallery.cta.text')}
             primary={{ href: '/buchen', label: 'Termin buchen' }}
             secondary={{ href: '/bewertungen', label: 'Bewertungen lesen' }}
           />

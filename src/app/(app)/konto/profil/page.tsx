@@ -7,8 +7,16 @@ import { formatDate, formatPhone, formatRelative } from '@/lib/utils';
 import { ROLE_LABELS } from '@/lib/auth/rbac';
 import { Badge } from '@/components/ui/badge';
 import { DetailRow, DetailSection, PageHeader } from '@/components/app/page-parts';
-import { ProfileForm } from '@/features/account/profile-form';
+import { AppearanceSection } from '@/features/account/appearance-form';
+import { AvatarUploader } from '@/features/account/avatar-uploader';
+import {
+  NotificationSwitches,
+  ProfileContactRows,
+} from '@/features/account/profile-details';
 import { PasswordChangeForm } from '@/features/account/password-change-form';
+import { ProfileEditDialog } from '@/features/account/profile-edit-dialog';
+import { TwoFactorSettings } from '@/features/account/two-factor-settings';
+import { getTwoFactorStatus } from '@/server/services/two-factor.service';
 
 export const metadata: Metadata = {
   title: 'Mein Profil',
@@ -27,6 +35,8 @@ export const dynamic = 'force-dynamic';
 export default async function ProfilePage() {
   const session = await requireSession();
 
+  const twoFactor = await getTwoFactorStatus(session.id);
+
   const user = await prisma.user.findUniqueOrThrow({
     where: { id: session.id },
     select: {
@@ -38,6 +48,7 @@ export default async function ProfilePage() {
       phone: true,
       locale: true,
       role: true,
+      avatarUrl: true,
       theme: true,
       notifyByEmail: true,
       notifyBySms: true,
@@ -60,20 +71,69 @@ export default async function ProfilePage() {
 
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_20rem] lg:items-start">
         <div className="space-y-6">
-          <DetailSection title="Kontaktdaten">
-            <div className="py-4">
-              <ProfileForm
-                defaults={{
+          {/*
+            Profilbild und Kontaktdaten in einer Karte: Das ist die Person —
+            wie sie aussieht und wie man sie erreicht. Das Bild steht oben,
+            weil es das Einzige auf dieser Seite ist, das andere sehen (in der
+            Zuteilung, im Einsatzbericht, in der Nachrichtenspalte); darunter
+            die Angaben in Tabellenform, Beschriftung links, Wert rechts.
+
+            Ein Weg zum Ändern: der Knopf „Bearbeiten" in der Kopfzeile öffnet
+            alle vier Angaben in einem Dialog. Die Stifte je Zeile sind hier
+            bewusst aus — ein zweiter Weg für dieselben Angaben war nicht
+            gewünscht.
+          */}
+          <DetailSection
+            title="Profil"
+            description="Profilbild und Kontaktdaten."
+            action={
+              <ProfileEditDialog
+                values={{
                   firstName: user.firstName,
                   lastName: user.lastName,
                   phone: user.phone ?? '',
                   locale: user.locale,
-                  notifyByEmail: user.notifyByEmail,
-                  notifyBySms: user.notifyBySms,
-                  marketingOptIn: user.marketingOptIn,
                 }}
               />
+            }
+          >
+            <div className="border-b border-border/70">
+              <AvatarUploader
+                firstName={user.firstName}
+                lastName={user.lastName}
+                avatarUrl={user.avatarUrl}
+              />
             </div>
+            <ProfileContactRows
+              columns
+              readOnly
+              values={{
+                firstName: user.firstName,
+                lastName: user.lastName,
+                phone: user.phone ?? '',
+                locale: user.locale,
+              }}
+            />
+          </DetailSection>
+
+          <DetailSection title="Benachrichtigungen">
+            <NotificationSwitches
+              values={{
+                firstName: user.firstName,
+                lastName: user.lastName,
+                notifyByEmail: user.notifyByEmail,
+                notifyBySms: user.notifyBySms,
+                marketingOptIn: user.marketingOptIn,
+              }}
+            />
+          </DetailSection>
+
+          <DetailSection title="Darstellung">
+            <AppearanceSection
+              preference={user.theme}
+              firstName={user.firstName}
+              lastName={user.lastName}
+            />
           </DetailSection>
 
           <DetailSection title="Passwort ändern">
@@ -81,12 +141,42 @@ export default async function ProfilePage() {
               <PasswordChangeForm />
             </div>
           </DetailSection>
+
+          <TwoFactorSettings
+            status={{
+              enabled: twoFactor.enabled,
+              // Über die Grenze zur Client-Komponente geht eine Zeichenkette,
+              // nicht das Date-Objekt: die Formatierung braucht ohnehin die
+              // Zeitzone Europe/Zurich und nicht die des Servers.
+              confirmedAt: twoFactor.confirmedAt?.toISOString() ?? null,
+              remainingRecoveryCodes: twoFactor.remainingRecoveryCodes,
+            }}
+          />
         </div>
 
         <div className="space-y-6">
+          {/*
+            Konto steht in der Seitenspalte, so breit wie Sicherheit und
+            Datenschutz darunter — die drei Karten, die man liest und nicht
+            bearbeitet, gehören zusammen an den Rand.
+          */}
           <DetailSection title="Konto">
-            <dl className="protocol-list">
-              <DetailRow label="E-Mail">
+            <dl className="protocol-list protocol-list--columns">
+              {/*
+                Die E-Mail-Adresse ist bewusst nicht hier änderbar: Ein Wechsel
+                muss über einen Bestätigungslink an die *neue* Adresse laufen,
+                sonst liesse sich ein Konto durch blosse Adressänderung
+                übernehmen. Ein Stift an dieser Zeile würde etwas versprechen,
+                das der Endpunkt zu Recht verweigert.
+              */}
+              <DetailRow
+                label="E-Mail"
+                action={
+                  <span className="text-2xs text-muted-foreground">
+                    Nur mit Bestätigung
+                  </span>
+                }
+              >
                 <span className="flex flex-wrap items-center gap-2">
                   {user.email}
                   {user.emailVerified ? (

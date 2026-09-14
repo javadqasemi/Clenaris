@@ -206,22 +206,186 @@
 @layer components {
   /* -----------------------------------------------------------------------
      Protokollzeile — das strukturgebende Element der ganzen Applikation.
-     Eine Haarlinie, links eine schmale Beschriftungsspalte, rechts der Wert.
+
+     **Beschriftung über dem Wert, überall.**
+
+     Vorher gab es drei Fassungen: zweispaltig ab 28 rem, eine „enge" Variante
+     ab 18 rem, und gestapelt darunter. Drei Fassungen heissen drei
+     Erscheinungsbilder derselben Sache — je nachdem, wie breit die Karte
+     zufällig war, sah dieselbe Angabe anders aus. Die Seitenkarte im Profil
+     stapelte, die Hauptkarte daneben nicht, und beide standen auf demselben
+     Bildschirm.
+
+     Jetzt gilt eine Form: Beschriftung klein und ruhig darüber, Wert darunter
+     in voller Breite. Das hat drei handfeste Vorteile gegenüber der Spalte:
+
+      • **Der Wert bekommt die ganze Karte.** Eine Adresse über drei Zeilen,
+        eine lange E-Mail ohne Trennstelle, „MA-2026-00000 · Geschäftsführerin"
+        — nichts davon muss sich mehr eine Spalte mit der Beschriftung teilen.
+
+      • **Es gibt keinen Umbruchpunkt mehr, an dem es kippt.** Damit auch keine
+        Klasse von Fehlern mehr, die nur in schmalen Karten auftritt und auf
+        einem grossen Bildschirm unsichtbar bleibt.
+
+      • **Beschriftung und Wert bleiben beieinander.** In der Spaltenfassung
+        trennte sie bei kurzen Werten ein Feld Leerraum von bis zu 14 rem.
+
+     Der Preis ist Höhe: Eine Karte mit sechs Zeilen wird rund 60 px länger.
+     Das ist der richtige Tausch — senkrechter Platz ist das Einzige, wovon
+     eine Web-Oberfläche beliebig viel hat.
      ----------------------------------------------------------------------- */
   .protocol-list {
     @apply divide-y divide-border/70;
   }
 
   .protocol-row {
-    @apply grid gap-3 py-3.5 sm:grid-cols-[minmax(9rem,14rem)_1fr] sm:gap-6;
+    @apply flex flex-col gap-1 py-3.5;
+  }
+
+  /*
+     Kopfzeile der Zeile: Beschriftung links, Handlung rechts.
+
+     Trägt eine Zeile keine Handlung, ist dieser Behälter schlicht die
+     Beschriftung — deshalb steht die Ausrichtung hier und nicht an zwei
+     verschiedenen Stellen.
+  */
+  .protocol-row-head {
+    @apply flex min-h-[1.25rem] items-center justify-between gap-3;
   }
 
   .protocol-label {
-    @apply text-sm text-muted-foreground;
+    @apply text-xs font-medium leading-none text-muted-foreground;
   }
 
+  /*
+     `break-words` ist kein Schönheitsfehler-Schutz, sondern Notwendigkeit:
+     Eine lange E-Mail-Adresse oder eine URL hat keine Trennstelle und schöbe
+     sonst die Karte auseinander.
+  */
   .protocol-value {
-    @apply text-sm font-medium text-foreground;
+    @apply break-words text-sm font-medium text-foreground;
+  }
+
+  /*
+     Die enge Fassung bleibt als Klasse bestehen, verändert aber nur noch die
+     Dichte — nicht mehr die Form.
+
+     Sie steht an rund dreissig Stellen im Quelltext. Sie dort überall zu
+     entfernen wäre ein grosser Diff ohne sichtbaren Gewinn; sie hier
+     bedeutungsvoll zu halten ist ehrlicher als sie zu einer Attrappe zu
+     machen. In den schmalen Karten der Seitenspalte stehen kurze Angaben
+     dicht beieinander — dort ist etwas weniger Luft genau richtig.
+  */
+  .protocol-list--tight .protocol-row {
+    @apply gap-0.5 py-3;
+  }
+
+  /*
+     Spaltenfassung — Beschriftung links, Wert rechts, wie eine Tabelle.
+
+     Ausdrücklich gewünscht für die Profilseite: „E-Mail | admin@…",
+     „Vorname | Javad". Sie ist eine Wahl je Liste (`protocol-list--columns`),
+     keine Rückkehr zur alten Breitenautomatik: Die Form hängt an der Absicht
+     der Seite, nicht an der zufälligen Breite der Karte. Unter `sm` bleibt
+     die gestapelte Form — 9 rem Beschriftungsspalte auf einem Telefon liessen
+     dem Wert nichts übrig.
+
+     Die Kopfzeile wird in dieser Fassung zur linken Spalte; ihre Handlung
+     (der Stift) rückt unter die Beschriftung statt an den rechten Rand, sonst
+     stünde sie mitten zwischen Beschriftung und Wert.
+  */
+  .protocol-list--columns .protocol-row {
+    @apply sm:grid sm:grid-cols-[7.5rem_minmax(0,1fr)] sm:items-start sm:gap-x-4 sm:gap-y-0;
+  }
+  .protocol-list--columns .protocol-row-head {
+    @apply sm:min-h-0 sm:flex-col sm:items-start sm:justify-start sm:gap-1 sm:pt-0.5;
+  }
+  .protocol-list--columns .protocol-label {
+    @apply sm:text-sm sm:leading-5;
+  }
+
+  /*
+     Zeile im Bearbeitungszustand.
+
+     Der Rahmen zeigt, wo gerade geschrieben wird — ohne die Zeile zu
+     verschieben. Ein Wechsel der Aussenabstände beim Öffnen liesse die ganze
+     Karte springen, und zwar genau in dem Moment, in dem der Blick am Feld
+     hängt.
+  */
+  .protocol-row--editing {
+    @apply -mx-3 rounded-xl bg-muted/40 px-3;
+  }
+
+  /* -----------------------------------------------------------------------
+     Vorschaumodus — nur sichtbar, solange das Draft-Cookie gesetzt ist.
+
+     Die Regeln hängen alle an `.cms-preview` am Wurzelelement, das die Brücke
+     setzt. Ohne Vorschau existiert keine dieser Auszeichnungen im HTML, und
+     die Regeln greifen ins Leere — die ausgelieferte Seite bleibt unberührt.
+     ----------------------------------------------------------------------- */
+  .cms-preview .cms-editable,
+  .cms-preview [data-cms-key],
+  .cms-preview [data-cms-asset] {
+    cursor: pointer;
+    /*
+       `box-shadow` statt `outline` oder `border`: Beide verändern die
+       Abmessungen oder überdecken benachbarte Zeilen. Ein Schatten liegt
+       ausserhalb des Flusses — die Vorschau bleibt pixelgenau die Seite.
+    */
+    border-radius: 0.25rem;
+    transition: box-shadow 150ms ease;
+  }
+
+  .cms-preview .cms-editable--hover {
+    box-shadow: 0 0 0 2px hsl(var(--primary) / 0.45);
+  }
+
+  .cms-preview .cms-editable--active {
+    box-shadow: 0 0 0 2px hsl(var(--primary));
+  }
+
+  /*
+     Text, in dem gerade getippt wird.
+
+     Der Textcursor ersetzt den Zeiger, der doppelte Ring zeigt „hier wird
+     geschrieben" deutlicher als der Auswahlring. `pre-wrap`, damit ein mit
+     Umschalt+Enter eingefügter Umbruch sichtbar bleibt — die Seite selbst
+     zeigt ihn beim nächsten Laden ohnehin so. Kein `outline`: Der Browser
+     zeichnet um beschreibbare Elemente sonst seinen eigenen Rahmen.
+  */
+  .cms-preview .cms-editable--editing {
+    cursor: text;
+    outline: none;
+    white-space: pre-wrap;
+    box-shadow:
+      0 0 0 2px hsl(var(--primary)),
+      0 0 0 6px hsl(var(--primary) / 0.15);
+  }
+
+  /* Geändert, aber noch nicht vom Arbeitsplatz bestätigt. */
+  .cms-preview .cms-editable--pending {
+    opacity: 0.55;
+  }
+
+  /*
+     Ein Hinweis, dass man sich in der Vorschau befindet — und nicht auf der
+     echten Website. Ohne ihn ist der Unterschied unsichtbar, und genau das
+     führt dazu, dass jemand einen Entwurf für veröffentlicht hält.
+  */
+  .cms-preview body::after {
+    content: 'Vorschau — Entwurfsstand';
+    position: fixed;
+    inset-block-end: 0;
+    inset-inline-start: 0;
+    z-index: 2147483647;
+    padding: 0.25rem 0.75rem;
+    border-start-end-radius: 0.5rem;
+    background: hsl(var(--primary));
+    color: hsl(var(--primary-foreground));
+    font-size: 0.6875rem;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+    pointer-events: none;
   }
 
   /* Glas: bewusst nur an zwei Stellen — Kopfzeile und schwebende Leisten. */
@@ -347,10 +511,23 @@
    * `h-16` und selbst `sticky top-0`. Ohne den Versatz verschwände die
    * Tabellenkopfzeile darunter, und man scrollte an unbeschrifteten Spalten
    * entlang — schlimmer als gar keine klebende Kopfzeile.
+   *
+   * **Nur ohne Scrollrahmen.** `position: sticky` klebt am nächsten
+   * scrollenden Vorfahren, und `TableScroll` (`overflow-x: auto`) *ist* einer
+   * — auch wenn er nie senkrecht scrollt. Die Kopfzeile klebt dann nicht an
+   * der Seite, sondern wird innerhalb der Tabelle um die 4 rem nach unten
+   * gedrückt und liegt über den ersten Zeilen. Genau so sah die Benutzerliste
+   * am 14. September 2026 aus. Waagrechtes Scrollen und klebende Kopfzeile
+   * schliessen sich deshalb aus; die Regel darunter macht das verbindlich,
+   * damit die Kombination nicht wieder unbemerkt entsteht.
    */
   .data-table--sticky thead th {
     @apply sticky top-16 z-10 bg-card;
     box-shadow: inset 0 -1px 0 0 hsl(var(--border));
+  }
+  .table-scroll .data-table--sticky thead th {
+    @apply static;
+    box-shadow: none;
   }
   .data-table tbody tr:last-child {
     @apply border-b-0;
@@ -453,6 +630,159 @@
 
 .fc .fc-highlight {
   background: hsl(var(--primary) / 0.12);
+}
+
+/*
+ * Tages- und Wochenansicht über volle 24 Stunden.
+ *
+ * Der Raster zeigt seit der Umstellung 00:00 bis 24:00 statt 06:00 bis 20:00 —
+ * Treppenhausreinigungen beginnen um fünf, Bürostandorte werden nach
+ * Feierabend gereinigt, und beides fiel vorher schlicht aus dem Bild. Das
+ * kostet aber Höhe: 48 Halbstundenzeilen sind rund das Doppelte. Deshalb
+ * bekommt das Gitter eine feste Höhe mit eigenem Bildlauf (siehe `height` in
+ * der Komponente) und hier eine kompaktere Zeile.
+ */
+.fc .fc-timegrid-slot {
+  height: 2.25rem;
+}
+
+/*
+ * Nur die vollen Stunden tragen eine Beschriftung, und nur sie eine
+ * durchgezogene Linie. Bei 48 Zeilen wird sonst jede Trennlinie gleich laut
+ * und das Raster liest sich wie Millimeterpapier.
+ */
+.fc .fc-timegrid-slot-minor {
+  border-top-style: dotted;
+  border-top-color: hsl(var(--border) / 0.6);
+}
+
+.fc .fc-timegrid-slot-label {
+  vertical-align: middle;
+}
+
+.fc .fc-timegrid-slot-label-cushion {
+  font-size: 0.6875rem;
+  font-variant-numeric: tabular-nums;
+  padding-inline: 0.5rem;
+}
+
+/*
+ * Überschneidungen nebeneinander statt übereinander.
+ *
+ * FullCalendar staffelt gleichzeitige Termine standardmässig mit Überlappung —
+ * der hintere verschwindet dann fast vollständig. In der Disposition ist genau
+ * das die wichtigste Information: zwei Einsätze zur selben Zeit heisst, dass
+ * jemand fehlt. Ein schmaler Abstand trennt die Spalten sichtbar.
+ */
+.fc .fc-timegrid-event-harness + .fc-timegrid-event-harness {
+  margin-left: 1px;
+}
+
+/* ===========================================================================
+ * Druck
+ * ===========================================================================
+ *
+ * Eine Seite, die eine `.print-area` enthält, druckt *nur* diesen Bereich:
+ * Kopfzeile, Navigation, Schaltflächen und Fusszeile bleiben weg. Gelöst
+ * über `visibility` statt `display`, weil ein ausgeblendeter Vorfahr seine
+ * Kinder mitnimmt — mit `visibility` bleibt der Bereich sichtbar, obwohl
+ * alles um ihn herum unsichtbar ist. Der Bereich wird dann an den Blattanfang
+ * gesetzt, sonst druckt der Browser die leere Höhe der versteckten Teile als
+ * weisse Seiten davor.
+ *
+ * `.print-hidden` nimmt einzelne Elemente *innerhalb* der Fläche aus dem
+ * Druck (Schaltflächen, Hinweise, die nur am Bildschirm Sinn haben).
+ */
+@media print {
+  body:has(.print-area) * {
+    visibility: hidden;
+  }
+
+  body:has(.print-area) .print-area,
+  body:has(.print-area) .print-area * {
+    visibility: visible;
+  }
+
+  body:has(.print-area) .print-area {
+    position: absolute;
+    inset: 0 auto auto 0;
+    width: 100%;
+    margin: 0;
+    padding: 0;
+    box-shadow: none;
+  }
+
+  .print-hidden,
+  .print-hidden * {
+    display: none !important;
+  }
+
+  .print-area {
+    color: #000;
+    background: #fff;
+  }
+
+  .print-area a {
+    text-decoration: none;
+    color: inherit;
+  }
+
+  @page {
+    margin: 16mm;
+  }
+}
+
+.fc .fc-timegrid-event {
+  border-radius: 0.5rem;
+  box-shadow: 0 0 0 1px hsl(var(--card));
+}
+
+.fc .fc-timegrid-event .fc-event-main {
+  padding: 1px 2px;
+}
+
+/* Der Zeitzeiger muss auch über einem farbigen Einsatz erkennbar bleiben. */
+.fc .fc-timegrid-now-indicator-line {
+  border-width: 2px 0 0;
+}
+
+.fc .fc-timegrid-now-indicator-arrow {
+  border-width: 5px 0 5px 6px;
+}
+
+/*
+ * Werkzeugleiste auf schmalen Bildschirmen.
+ *
+ * Vier Ansichtsschalter, Titel und Blättern passen nebeneinander erst ab
+ * Tablet-Breite. Darunter bricht die Leiste in Zeilen um, statt den Kalender
+ * seitlich zu schieben — ein waagrechter Bildlauf auf der obersten Ebene ist
+ * der sicherste Weg, eine Ansicht unbedienbar zu machen.
+ */
+@media (max-width: 767px) {
+  .fc .fc-toolbar.fc-header-toolbar {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.625rem;
+    margin-bottom: 0.75rem;
+  }
+
+  .fc .fc-toolbar-chunk {
+    display: flex;
+    justify-content: center;
+  }
+
+  .fc .fc-button {
+    padding: 0.35rem 0.55rem;
+    font-size: 0.75rem;
+  }
+
+  .fc .fc-toolbar-title {
+    font-size: 1rem;
+  }
+
+  .fc .fc-timegrid-slot {
+    height: 2rem;
+  }
 }
 
 /* react-day-picker */

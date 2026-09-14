@@ -1,8 +1,9 @@
 'use client';
 
 import * as React from 'react';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { Ban, CalendarClock, Check, MoreHorizontal, Receipt } from 'lucide-react';
+import { Ban, CalendarClock, Check, MoreHorizontal, PenLine, Receipt, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { api, ApiError } from '@/lib/api/client';
@@ -36,15 +37,19 @@ export function BookingActions({
   status,
   scheduledStart,
   hasInvoice,
+  canEdit = false,
+  canDelete = false,
 }: {
   bookingId: string;
   status: string;
   scheduledStart: string;
   hasInvoice: boolean;
+  canEdit?: boolean;
+  canDelete?: boolean;
 }) {
   const router = useRouter();
   const [pending, setPending] = React.useState<string | null>(null);
-  const [dialog, setDialog] = React.useState<'cancel' | 'reschedule' | null>(null);
+  const [dialog, setDialog] = React.useState<'cancel' | 'reschedule' | 'delete' | null>(null);
   const [reason, setReason] = React.useState('');
   const [newStart, setNewStart] = React.useState(() => toLocalInput(scheduledStart));
   const [error, setError] = React.useState<string | null>(null);
@@ -68,9 +73,10 @@ export function BookingActions({
     }
   };
 
+  const isFinal = ['CANCELLED', 'COMPLETED'].includes(status);
   const canConfirm = status === 'PENDING' || status === 'DRAFT';
-  const canCancel = !['CANCELLED', 'COMPLETED'].includes(status);
-  const canReschedule = !['CANCELLED', 'COMPLETED', 'IN_PROGRESS'].includes(status);
+  const canCancel = !isFinal;
+  const canReschedule = !isFinal && status !== 'IN_PROGRESS';
   const canInvoice = status === 'COMPLETED' && !hasInvoice;
 
   return (
@@ -89,6 +95,20 @@ export function BookingActions({
           >
             <Check aria-hidden />
             Bestätigen
+          </Button>
+        ) : null}
+
+        {/*
+          Bearbeiten steht als eigener Knopf, nicht im Menü: Es ist die
+          häufigste Handlung auf dieser Seite und gehört nicht hinter drei
+          Punkte versteckt.
+        */}
+        {canEdit && !isFinal ? (
+          <Button asChild variant="outline">
+            <Link href={`/admin/buchungen/${bookingId}/bearbeiten`}>
+              <PenLine aria-hidden />
+              Bearbeiten
+            </Link>
           </Button>
         ) : null}
 
@@ -121,18 +141,70 @@ export function BookingActions({
               </DropdownMenuItem>
             ) : null}
 
+            {canCancel || canDelete ? <DropdownMenuSeparator /> : null}
+
             {canCancel ? (
-              <>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem destructive onSelect={() => setDialog('cancel')}>
-                  <Ban aria-hidden />
-                  Buchung stornieren
-                </DropdownMenuItem>
-              </>
+              <DropdownMenuItem destructive onSelect={() => setDialog('cancel')}>
+                <Ban aria-hidden />
+                Buchung stornieren
+              </DropdownMenuItem>
+            ) : null}
+
+            {/*
+              Stornieren und Löschen sind nicht dasselbe, und die Verwechslung
+              ist teuer: Ein Storno ist ein *Geschäftsvorfall* — die Kundschaft
+              wird informiert, der Auftrag bleibt in der Statistik. Löschen
+              heisst „das hätte nie erfasst werden dürfen" und legt den
+              Datensatz in den Papierkorb, ohne jemanden zu benachrichtigen.
+            */}
+            {canDelete ? (
+              <DropdownMenuItem destructive onSelect={() => setDialog('delete')}>
+                <Trash2 aria-hidden />
+                In den Papierkorb
+              </DropdownMenuItem>
             ) : null}
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
+
+      {/* Löschen */}
+      <Dialog open={dialog === 'delete'} onOpenChange={(open) => !open && setDialog(null)}>
+        <DialogContent size="sm">
+          <DialogHeader>
+            <DialogTitle>Buchung in den Papierkorb legen?</DialogTitle>
+            <DialogDescription>
+              Die Buchung verschwindet aus allen Listen und Auswertungen, bleibt aber
+              wiederherstellbar. Die Kundschaft wird <strong>nicht</strong> benachrichtigt — für
+              eine Absage nutzen Sie &bdquo;Buchung stornieren&ldquo;.
+            </DialogDescription>
+          </DialogHeader>
+
+          {error ? <Alert variant="destructive">{error}</Alert> : null}
+
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setDialog(null)}>
+              Abbrechen
+            </Button>
+            <Button
+              variant="destructive"
+              loading={pending === 'delete'}
+              onClick={() =>
+                run(
+                  'delete',
+                  async () => {
+                    await api.delete(`/api/bookings/${bookingId}`);
+                    router.push('/admin/buchungen');
+                  },
+                  'Buchung in den Papierkorb gelegt.',
+                )
+              }
+            >
+              <Trash2 aria-hidden />
+              In den Papierkorb
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Stornieren */}
       <Dialog open={dialog === 'cancel'} onOpenChange={(open) => !open && setDialog(null)}>

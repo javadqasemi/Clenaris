@@ -3,7 +3,7 @@ import 'server-only';
 import { revalidatePath } from 'next/cache';
 
 import { prisma } from '@/lib/db';
-import { cache } from '@/lib/redis';
+import { cache, cacheKeys } from '@/lib/redis';
 import { audit, diff } from '@/lib/audit';
 import { BusinessRuleError, NotFoundError } from '@/lib/errors';
 import type { UpdateCompanyInput } from '@/lib/validation/cms';
@@ -215,11 +215,17 @@ export async function updateOpeningHours({
  * Zwei Zwischenspeicher, beide nötig.
  *
  * Firmendaten stecken in Kopf- und Fusszeile jeder öffentlichen Seite sowie in
- * den strukturierten Daten — deshalb der ganze Baum. Der Redis-Eintrag hält
- * zusätzlich die Abfrage zurück.
+ * den strukturierten Daten — deshalb der ganze Seitenbaum. Der Redis-Eintrag
+ * hält zusätzlich die Abfrage zurück.
+ *
+ * Der Schlüssel kommt aus `organization.service` und wird hier nicht noch
+ * einmal geschrieben: Er hängt am Slug, nicht an der Kennung, und genau diese
+ * Verwechslung liess Änderungen an den Firmendaten fünf Minuten lang
+ * unsichtbar bleiben — ohne dass irgendwo ein Fehler auftauchte.
  */
 async function invalidateCompany(organizationId: string): Promise<void> {
-  await cache.del(`company:${organizationId}`);
-  await cache.del(`org:${organizationId}`);
+  const { invalidateOrganizationCache } = await import('./organization.service');
+  await invalidateOrganizationCache();
+  await cache.del(cacheKeys.aiChatContext(organizationId));
   revalidatePath('/', 'layout');
 }

@@ -50,6 +50,33 @@ export const nameSchema = z
 
 export const cuidSchema = z.string().min(1, 'Ungültige ID.');
 
+/**
+ * Adresse einer abgelegten Datei — Bild, PDF, Bewerbungsunterlage.
+ *
+ * **Warum nicht einfach `.url()`.** Eine hochgeladene Datei liegt entweder bei
+ * einem externen Objektspeicher (`https://…supabase.co/…`) oder in der
+ * eingebauten Ablage dieser Anwendung. Im zweiten Fall lautet die Adresse
+ * `/api/files/blob/…` — ein wurzelrelativer Pfad, den `.url()` ablehnt.
+ *
+ * Der relative Pfad ist dabei nicht die schlechtere Wahl, sondern die
+ * robustere: Eine absolute Adresse trüge den Hostnamen in die Datenbank, und
+ * jeder Umzug auf eine andere Domain machte sämtliche gespeicherten Bilder
+ * ungültig.
+ *
+ * Erlaubt sind deshalb genau zwei Formen, und `//host/pfad` gehört
+ * ausdrücklich nicht dazu: Das ist für den Browser eine absolute Adresse auf
+ * einen fremden Host und sähe hier nur wie ein Pfad aus.
+ */
+export const assetUrlSchema = z
+  .string()
+  .trim()
+  .max(2000, 'Die Adresse ist zu lang.')
+  .refine(
+    (value) =>
+      /^https?:\/\/[^/]/.test(value) || (value.startsWith('/') && !value.startsWith('//')),
+    'Bitte eine vollständige Adresse oder einen Pfad dieser Anwendung angeben.',
+  );
+
 export const moneySchema = z
   .number()
   .min(0, 'Der Betrag darf nicht negativ sein.')

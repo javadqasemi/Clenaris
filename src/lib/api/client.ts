@@ -40,7 +40,45 @@ interface RequestOptions extends Omit<RequestInit, 'body'> {
   params?: Record<string, unknown>;
 }
 
-async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
+/**
+ * Stille Sitzungserneuerung bei einem 401.
+ *
+ * Der Zugangstoken lebt fünfzehn Minuten. Läuft er ab, während eine Seite
+ * offen ist, antwortet der nächste Aufruf mit 401 — und bis hierher hiess
+ * das: Fehlermeldung, dann Anmeldemaske, mitten in der Arbeit. Jetzt wird
+ * einmal erneuert und der Aufruf wiederholt. Mehrere gleichzeitige 401er
+ * teilen sich eine Erneuerung (`refreshing`): sonst rotierten sie den
+ * Refresh-Token um die Wette, und die zweite Rotation gälte als
+ * Wiederverwendung — genau der Fall, der die ganze Sitzung sperrt.
+ *
+ * Endpunkte unter `/api/auth/` sind ausgenommen: Ein 401 bei der Anmeldung
+ * ist eine Antwort, kein abgelaufenes Token.
+ */
+let refreshing: Promise<boolean> | null = null;
+
+async function tryRefresh(): Promise<boolean> {
+  if (!refreshing) {
+    refreshing = fetch('/api/auth/refresh', { method: 'POST', credentials: 'same-origin' })
+      .then((r) => r.ok)
+      .catch(() => false)
+      .finally(() => {
+        refreshing = null;
+      });
+  }
+  return refreshing;
+}
+
+function isAuthEndpoint(path: string): boolean {
+  return path.startsWith('/api/auth/');
+}
+
+/** Zur Anmeldung, mit dem aktuellen Ort als Rücksprungziel. */
+function goToLogin(): void {
+  const here = `${window.location.pathname}${window.location.search}`;
+  window.location.assign(`/auth/anmelden?weiter=${encodeURIComponent(here)}&grund=abgelaufen`);
+}
+
+async function request<T>(path: string, options: RequestOptions = {}, retried = false): Promise<T> {
   const { body, params, headers, ...rest } = options;
 
   const url = new URL(path, window.location.origin);
@@ -61,6 +99,11 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
     body: body !== undefined ? JSON.stringify(body) : undefined,
     credentials: 'same-origin',
   });
+
+  if (response.status === 401 && !retried && !isAuthEndpoint(path)) {
+    if (await tryRefresh()) return request<T>(path, options, true);
+    goToLogin();
+  }
 
   if (response.status === 204) return undefined as T;
 
@@ -94,6 +137,7 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
 async function requestWithMeta<T, M = unknown>(
   path: string,
   options: RequestOptions = {},
+  retried = false,
 ): Promise<{ data: T; meta: M }> {
   const { body, params, headers, ...rest } = options;
 
@@ -115,6 +159,11 @@ async function requestWithMeta<T, M = unknown>(
     body: body !== undefined ? JSON.stringify(body) : undefined,
     credentials: 'same-origin',
   });
+
+  if (response.status === 401 && !retried && !isAuthEndpoint(path)) {
+    if (await tryRefresh()) return requestWithMeta<T, M>(path, options, true);
+    goToLogin();
+  }
 
   const payload = (await response.json()) as {
     data?: T;

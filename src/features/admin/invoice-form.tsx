@@ -30,6 +30,7 @@ import {
   FormLabel,
   FormMessage,
 } from '@/components/ui/form';
+import { DetailSection } from '@/components/app/page-parts';
 
 /**
  * Rechnung erstellen.
@@ -156,8 +157,7 @@ export function InvoiceForm({
 
         <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_18rem]">
           <div className="space-y-6">
-            <section className="space-y-5 rounded-2xl border border-border bg-card p-6 shadow-soft">
-              <h2 className="font-display text-base font-semibold tracking-tight">Empfänger</h2>
+            <DetailSection title="Empfänger" body="form">
 
               <FormField
                 control={form.control}
@@ -223,11 +223,12 @@ export function InvoiceForm({
                   )}
                 />
               </div>
-            </section>
+            </DetailSection>
 
-            <section className="space-y-4 rounded-2xl border border-border bg-card p-6 shadow-soft">
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <h2 className="font-display text-base font-semibold tracking-tight">Positionen</h2>
+            <DetailSection
+              title="Positionen"
+              body="form"
+              action={
                 <Button
                   type="button"
                   variant="outline"
@@ -246,7 +247,8 @@ export function InvoiceForm({
                   <Plus aria-hidden />
                   Position
                 </Button>
-              </div>
+              }
+            >
 
               <ol className="space-y-4">
                 {fields.map((entry, index) => (
@@ -382,10 +384,9 @@ export function InvoiceForm({
                   </ul>
                 </div>
               ) : null}
-            </section>
+            </DetailSection>
 
-            <section className="space-y-5 rounded-2xl border border-border bg-card p-6 shadow-soft">
-              <h2 className="font-display text-base font-semibold tracking-tight">Texte</h2>
+            <DetailSection title="Texte" body="form">
 
               <FormField
                 control={form.control}
@@ -413,7 +414,7 @@ export function InvoiceForm({
                   </FormItem>
                 )}
               />
-            </section>
+            </DetailSection>
           </div>
 
           {/* Summenspalte */}
