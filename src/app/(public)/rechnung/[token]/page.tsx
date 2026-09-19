@@ -125,7 +125,7 @@ export default async function PublicInvoicePage({
       {/* Bezahlen */}
       {balance > 0 ? (
         <div className="space-y-6">
-          <PayInvoice token={token} amount={balance} />
+          <PayInvoice endpoint={`/api/public/invoices/${token}/pay`} amount={balance} />
 
           {iban ? (
             <section className="rounded-2xl border border-border bg-surface p-6">

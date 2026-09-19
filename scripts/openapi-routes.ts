@@ -888,6 +888,22 @@ export const ROUTES: RouteDoc[] = [
     params: q.idParam,
     produces: 'application/pdf',
   },
+  {
+    method: 'post',
+    path: '/api/quotes/{id}/respond',
+    tag: 'Offerten',
+    summary: 'Offerte im Kundenkonto annehmen oder ablehnen',
+    description:
+      'Der angemeldete Weg neben dem öffentlichen Link. Wer eine Sitzung hat und die Offerte ' +
+      'besitzt, braucht keine Capability. Die Eigentümerprüfung steht in der where-Klausel, die ' +
+      'Geschäftsoperation ist dieselbe atomare Transition wie beim öffentlichen Weg — eine ' +
+      'gleichzeitige Annahme über den Link und Ablehnung hier ergeben genau einen Übergang.',
+    guard: perm('all', 'quote:respond_own'),
+    rateLimit: 'apiWrite',
+    params: q.idParam,
+    body: operations.respondQuoteSchema,
+    extraErrors: [403, 422],
+  },
 
   // -------------------------------------------------------------------------
   //  Einsätze
@@ -1230,6 +1246,22 @@ export const ROUTES: RouteDoc[] = [
     rateLimit: 'apiRead',
     params: q.idParam,
     produces: 'application/pdf',
+  },
+  {
+    method: 'post',
+    path: '/api/invoices/{id}/pay',
+    tag: 'Finanzen',
+    summary: 'Zahlung aus dem Kundenkonto starten',
+    description:
+      'Der angemeldete Weg neben dem öffentlichen Zahllink. Vorher verwendete der ' +
+      'Kundenbereich invoice.publicToken — eine angemeldete Person brauchte also eine ' +
+      'Capability, um ihre eigene Rechnung zu bezahlen. Der Betrag stammt ausschliesslich aus ' +
+      'der Datenbank; gebucht wird über den Webhook, nicht über die Rückkehr-URL.',
+    guard: perm('all', 'invoice:pay_own'),
+    rateLimit: 'apiWrite',
+    params: q.idParam,
+    body: finance.payInvoiceSchema,
+    extraErrors: [403, 422],
   },
   {
     method: 'get',

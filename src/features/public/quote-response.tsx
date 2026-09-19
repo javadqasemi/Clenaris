@@ -1,4 +1,4 @@
-'use client';
+﻿'use client';
 
 import * as React from 'react';
 import { useRouter } from 'next/navigation';
@@ -32,7 +32,20 @@ import { SignaturePad } from '@/features/portal/signature-pad';
  * Die Ablehnung ist bewusst genauso leicht erreichbar. Eine versteckte
  * Ablehnung erzeugt keine Zusagen, nur unbeantwortete Offerten.
  */
-export function QuoteResponse({ token, grossTotal }: { token: string; grossTotal: number }) {
+export interface QuoteResponseProps {
+  grossTotal: number;
+  /**
+   * Wohin die Antwort geht. Der öffentliche Weg zeigt auf die Route mit
+   * Capability, der Kundenbereich auf die angemeldete — dieselbe Maske, zwei
+   * Eingänge. Die Adresse wird vom Server gesetzt, nicht hier gebaut: Diese
+   * Komponente soll nicht wissen, welche Berechtigung dahintersteht.
+   */
+  endpoint: string;
+  /** Abrufadresse des PDF, passend zum selben Eingang. */
+  pdfUrl: string;
+}
+
+export function QuoteResponse({ grossTotal, endpoint, pdfUrl }: QuoteResponseProps) {
   const router = useRouter();
   const [dialog, setDialog] = React.useState<'accept' | 'reject' | null>(null);
   const [pending, setPending] = React.useState(false);
@@ -46,7 +59,7 @@ export function QuoteResponse({ token, grossTotal }: { token: string; grossTotal
     setPending(true);
     setError(null);
     try {
-      await api.post(`/api/public/quotes/${token}/respond`, {
+      await api.post(endpoint, {
         decision,
         signatureDataUrl: decision === 'ACCEPT' ? signature : undefined,
         signatureName: decision === 'ACCEPT' ? name : undefined,
@@ -92,7 +105,7 @@ export function QuoteResponse({ token, grossTotal }: { token: string; grossTotal
             Ablehnen
           </Button>
           <Button asChild size="lg" variant="ghost">
-            <a href={`/api/public/quotes/${token}/pdf`} download>
+            <a href={pdfUrl} download>
               <Download aria-hidden />
               PDF
             </a>

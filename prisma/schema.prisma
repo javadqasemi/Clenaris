@@ -820,10 +820,22 @@ model PublicAccessToken {
 /// Ansehen und Handeln sind getrennt, auch wenn beide zur selben Offerte
 /// gehoeren: Ein Link, der nur das Dokument zeigt, soll nicht zugleich die
 /// Annahme ausloesen koennen.
+///
+/// Die staerkere Stufe schliesst die schwaechere ein — `QUOTE_RESPOND` kann
+/// ansehen, `INVOICE_PAY` kann ansehen. Die Umkehrung gilt nie. Wo diese
+/// Implikation steht: `PURPOSE_IMPLIES` in `access-token.service.ts`, an
+/// genau einer Stelle und nicht je Route.
 enum PublicTokenPurpose {
   QUOTE_VIEW
   QUOTE_RESPOND
   INVOICE_VIEW
+  /// Ansehen *und* eine Zahlung starten.
+  ///
+  /// Vorher gab es fuer Rechnungen nur eine Stufe, und die Zahlroute nahm
+  /// deshalb denselben Token wie die Ansicht. Damit konnte ein Link, der zum
+  /// blossen Ansehen weitergegeben wurde — etwa an die Buchhaltung der
+  /// Kundschaft —, eine Zahlung ausloesen.
+  INVOICE_PAY
   BOOKING_MANAGE
   DOCUMENT_VIEW
   SIGNATURE_ACCESS

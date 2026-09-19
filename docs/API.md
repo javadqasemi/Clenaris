@@ -5,7 +5,7 @@
 > Quelle, aus der sowohl diese Referenz als auch die Laufzeitvalidierung
 > stammen.
 
-Stand: 378 Endpunkte. Die maschinenlesbare Fassung liegt in
+Stand: 380 Endpunkte. Die maschinenlesbare Fassung liegt in
 [`openapi.yaml`](./openapi.yaml) bzw. [`openapi.json`](./openapi.json).
 
 ## Grundlagen
@@ -1955,6 +1955,30 @@ Familie.
 | --- | --- | --- | --- |
 | `id` | string | ja | min. 1 Zeichen |
 
+### `POST /api/quotes/{id}/respond`
+
+**Offerte im Kundenkonto annehmen oder ablehnen.** Der angemeldete Weg neben dem öffentlichen Link. Wer eine Sitzung hat und die Offerte besitzt, braucht keine Capability. Die Eigentümerprüfung steht in der where-Klausel, die Geschäftsoperation ist dieselbe atomare Transition wie beim öffentlichen Weg — eine gleichzeitige Annahme über den Link und Ablehnung hier ergeben genau einen Übergang.
+
+- **Zugriff:** Erfordert die Berechtigung: `quote:respond_own`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `decision` | string | ja | `ACCEPT` \| `REJECT` |
+| `signatureDataUrl` | string | – | max. 500000 Zeichen |
+| `signatureName` | string | – | max. 120 Zeichen |
+| `reason` | string | – | max. 1000 Zeichen |
+
 ### `DELETE /api/quotes/{id}`
 
 **Offerte in den Papierkorb legen.** Eine angenommene Offerte ist eine vertragliche Zusage und bleibt erhalten. Weich gelöscht: der Datensatz verschwindet aus allen Listen, bleibt aber wiederherstellbar. Verknüpfte Datensätze werden nicht mitgelöscht.
@@ -3108,6 +3132,27 @@ Familie.
 | Feld | Typ | Pflicht | Regeln |
 | --- | --- | --- | --- |
 | `id` | string | ja | min. 1 Zeichen |
+
+### `POST /api/invoices/{id}/pay`
+
+**Zahlung aus dem Kundenkonto starten.** Der angemeldete Weg neben dem öffentlichen Zahllink. Vorher verwendete der Kundenbereich invoice.publicToken — eine angemeldete Person brauchte also eine Capability, um ihre eigene Rechnung zu bezahlen. Der Betrag stammt ausschliesslich aus der Datenbank; gebucht wird über den Webhook, nicht über die Rückkehr-URL.
+
+- **Zugriff:** Erfordert die Berechtigung: `invoice:pay_own`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `method` | string | – | `CARD` \| `TWINT`, Standard `"CARD"` |
 
 ### `GET /api/expenses`
 

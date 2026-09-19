@@ -647,10 +647,38 @@ export async function sendQuote(params: {
   return updated;
 }
 
-/** Öffentlicher Zugriff über den Token; markiert die Offerte als angesehen. */
+/**
+ * Öffentlicher Zugriff über den Token; markiert die Offerte als angesehen.
+ *
+ * **Die Lücke, die hier war.** `sendQuote` stellte seit Gate 1 einen sicheren
+ * Token aus und verschickte `/offerte/<64 Hexzeichen>`. Diese Funktion suchte
+ * aber weiter in `Quote.publicToken`, einer Spalte mit 25-Zeichen-cuids. Ein
+ * Hexwert dieser Länge kann dort nicht treffen — jede seit Gate 1 versendete
+ * Offerte führte auf eine „nicht gefunden"-Seite. Umgestellt wurde damals nur
+ * die Antwortroute, und die erreicht man erst über diese Seite.
+ *
+ * Der Fehler war nicht das Übersehen einer Zeile, sondern eine fehlende
+ * Prüfung: Die Gate-1-Reihe testete alte Links und den Rennzustand beim
+ * Annehmen — nie den frisch ausgestellten Link von Anfang bis Ende. Genau das
+ * tut jetzt `oeffentliche-links.test.ts`.
+ *
+ * Akzeptiert werden `QUOTE_VIEW` **und** `QUOTE_RESPOND`: Wer antworten darf,
+ * darf ansehen. Die Umkehrung gilt nicht, dafür sorgt `purposesSatisfying`.
+ */
 export async function getQuoteByToken(token: string) {
-  const quote = await prisma.quote.findUnique({
-    where: { publicToken: token },
+  const aufgeloest = await resolveWithLegacy({
+    raw: token,
+    purpose: 'QUOTE_VIEW',
+    legacyLookup: async (raw) =>
+      prisma.quote.findUnique({
+        where: { publicToken: raw },
+        select: { id: true, organizationId: true },
+      }),
+  });
+  if (!aufgeloest.ok) throw tokenRejectionError(aufgeloest.reason, 'Offerte');
+
+  const quote = await prisma.quote.findFirst({
+    where: { id: aufgeloest.resourceId, organizationId: aufgeloest.organizationId },
     include: {
       items: { orderBy: { position: 'asc' } },
       customer: { select: { firstName: true, lastName: true, companyName: true, email: true } },
@@ -675,36 +703,36 @@ export async function getQuoteByToken(token: string) {
 /** Zustände, aus denen heraus eine Offerte noch beantwortet werden kann. */
 const BEANTWORTBAR = ['DRAFT', 'SENT', 'VIEWED', 'EXPIRED'] as const;
 
-export async function respondToQuote(params: {
-  token: string;
+/** Wer geantwortet hat — für das Prüfprotokoll. */
+export type AntwortHerkunft =
+  /** Über einen Link ohne Anmeldung. */
+  | { art: 'LINK'; tokenId?: string }
+  /** Angemeldet im Kundenbereich. */
+  | { art: 'KUNDENKONTO'; userId: string };
+
+/**
+ * Die eigentliche Antwort auf eine Offerte — unabhängig davon, woher sie kommt.
+ *
+ * **Warum das herausgelöst ist.** Es gibt jetzt zwei Eingänge: den
+ * öffentlichen Link und die angemeldete Ansicht im Kundenbereich. Die
+ * Berechtigung unterscheidet sich (Capability gegen Sitzung plus
+ * Eigentümerschaft), die Geschäftsoperation nicht. Sie ein zweites Mal zu
+ * schreiben hiesse, den Rennzustand, den Gate 1 behoben hat, an der zweiten
+ * Stelle neu einzubauen — und zwar unbemerkt, weil die erste weiterhin
+ * korrekt wäre.
+ *
+ * Der Aufrufer hat die Berechtigung bereits geprüft. Diese Funktion prüft
+ * den *Zustand*: Frist, Übergang, Folgeaktionen.
+ */
+async function respondToQuoteCore(params: {
+  quoteId: string;
+  organizationId: string;
   input: RespondQuoteInput;
+  herkunft: AntwortHerkunft;
   ip?: string;
 }): Promise<Quote> {
-  /**
-   * Der Link wird über die zentrale Tokeninfrastruktur aufgelöst
-   * (`access-token.service.ts`), mit Rückfall auf das alte `publicToken`.
-   *
-   * Der Rückfall ist kein Versehen, sondern der Übergang: In Postfächern
-   * liegen bereits versendete Links, und sie von einem Tag auf den anderen
-   * abzuschalten stellte Kundschaft vor eine Fehlerseite, ohne dass sie etwas
-   * falsch gemacht hätte. `LEGACY_PUBLIC_TOKENS=aus` schaltet ihn ab — das
-   * ist der erste Schritt des geplanten Rollouts.
-   */
-  const aufgeloest = await resolveWithLegacy({
-    raw: params.token,
-    purpose: 'QUOTE_RESPOND',
-    legacyLookup: async (raw) => {
-      const treffer = await prisma.quote.findUnique({
-        where: { publicToken: raw },
-        select: { id: true, organizationId: true },
-      });
-      return treffer;
-    },
-  });
-  if (!aufgeloest.ok) throw tokenRejectionError(aufgeloest.reason, 'Offerte');
-
   const quote = await prisma.quote.findFirst({
-    where: { id: aufgeloest.resourceId, organizationId: aufgeloest.organizationId },
+    where: { id: params.quoteId, organizationId: params.organizationId },
     include: { customer: true, lead: true },
   });
   if (!quote || quote.deletedAt) throw new NotFoundError('Offerte');
@@ -719,17 +747,18 @@ export async function respondToQuote(params: {
 
   /**
    * Der Statusübergang ist die Stelle, an der die Einmaligkeit hängt — nicht
-   * der Link.
+   * der Link und nicht die Sitzung.
    *
    * Vorher wurde gelesen, geprüft und danach geschrieben. Zwei gleichzeitige
    * Annahmen sahen beide `SENT`, beide schrieben, beide lösten die
    * Folgeaktionen aus: zwei Meldungen ans Büro, zwei Lead-Übergänge, zwei
-   * neu gerenderte PDF. Die Bedingung steht deshalb jetzt in der
-   * `where`-Klausel derselben Anweisung: `updateMany` trifft entweder eine
-   * Zeile oder keine, und PostgreSQL entscheidet das, nicht die Anwendung.
+   * neu gerenderte PDF. Die Bedingung steht deshalb in der `where`-Klausel
+   * derselben Anweisung: `updateMany` trifft entweder eine Zeile oder keine,
+   * und PostgreSQL entscheidet das, nicht die Anwendung.
    *
-   * Wer die Nachzügler-Anfrage stellt, bekommt dieselbe Meldung wie vorher —
-   * nur eben verlässlich und ohne Nebenwirkungen.
+   * Dass beide Eingänge hier durchlaufen, ist der Grund für die Auslagerung:
+   * Eine Annahme über den Link und eine Ablehnung im Kundenkonto,
+   * gleichzeitig abgeschickt, ergeben genau einen Übergang.
    */
   const uebergang = await prisma.quote.updateMany({
     where: { id: quote.id, status: { in: [...BEANTWORTBAR] }, deletedAt: null },
@@ -757,8 +786,8 @@ export async function respondToQuote(params: {
 
   // Ab hier läuft nur noch, wer den Übergang gewonnen hat — die
   // Folgeaktionen können also nicht doppelt auslösen.
-  if (aufgeloest.tokenId) {
-    await noteTokenUse(aufgeloest.tokenId).catch(() => undefined);
+  if (params.herkunft.art === 'LINK' && params.herkunft.tokenId) {
+    await noteTokenUse(params.herkunft.tokenId).catch(() => undefined);
   }
 
   if (quote.leadId) {
@@ -790,11 +819,23 @@ export async function respondToQuote(params: {
       : undefined,
   });
 
+  /**
+   * Das Protokoll unterscheidet die beiden Wege.
+   *
+   * Eine Antwort über einen Link ohne Anmeldung ist etwas anderes als eine
+   * aus einem angemeldeten Konto: Im einen Fall weiss man, dass jemand den
+   * Link hatte, im anderen, wer es war. Beides als dasselbe zu verbuchen
+   * machte die Spur später unbrauchbar — gerade dort, wo sie zählt.
+   */
   await audit.updated({
     organizationId: quote.organizationId,
+    userId: params.herkunft.art === 'KUNDENKONTO' ? params.herkunft.userId : undefined,
     entity: 'Quote',
     entityId: quote.id,
-    summary: `Offerte ${quote.number} durch Kundschaft ${accepted ? 'angenommen' : 'abgelehnt'}`,
+    summary:
+      params.herkunft.art === 'KUNDENKONTO'
+        ? `Offerte ${quote.number} im Kundenkonto ${accepted ? 'angenommen' : 'abgelehnt'}`
+        : `Offerte ${quote.number} über den Link ${accepted ? 'angenommen' : 'abgelehnt'}`,
     ip: params.ip,
   });
 
@@ -804,6 +845,117 @@ export async function respondToQuote(params: {
   }
 
   return updated;
+}
+
+/**
+ * Antwort über den öffentlichen Link.
+ *
+ * Prüft die Capability und reicht danach an `respondToQuoteCore` weiter.
+ */
+export async function respondToQuote(params: {
+  token: string;
+  input: RespondQuoteInput;
+  ip?: string;
+}): Promise<Quote> {
+  const aufgeloest = await resolveWithLegacy({
+    raw: params.token,
+    purpose: 'QUOTE_RESPOND',
+    /**
+     * Kein Rückfall auf den alten Weg — hier nicht, unabhängig von der
+     * Umgebungseinstellung. Annehmen und Ablehnen ändern den Zustand der
+     * Offerte, lösen Meldungen aus und lassen sich nicht zurücknehmen. Wer
+     * nur einen alten cuid-Link hat, sieht die Offerte weiterhin und bekommt
+     * für die Antwort einen neuen Link.
+     */
+    allowLegacy: false,
+    legacyLookup: async (raw) => {
+      const treffer = await prisma.quote.findUnique({
+        where: { publicToken: raw },
+        select: { id: true, organizationId: true },
+      });
+      return treffer;
+    },
+  });
+  if (!aufgeloest.ok) throw tokenRejectionError(aufgeloest.reason, 'Offerte');
+
+  return respondToQuoteCore({
+    quoteId: aufgeloest.resourceId,
+    organizationId: aufgeloest.organizationId,
+    input: params.input,
+    herkunft: { art: 'LINK', tokenId: aufgeloest.tokenId },
+    ip: params.ip,
+  });
+}
+
+/**
+ * Antwort aus dem angemeldeten Kundenbereich.
+ *
+ * **Kein öffentlicher Token im Spiel.** Wer angemeldet ist und die Offerte
+ * besitzt, braucht keine Capability — die wäre ein Umweg über einen Weg für
+ * Aussenstehende und ein Geheimnis, das ohne Not entsteht.
+ *
+ * Die Eigentümerprüfung steht in der `where`-Klausel, nicht in einem `if`:
+ * Eine fremde Offerte wird nicht gefunden, statt gefunden und abgelehnt zu
+ * werden. Das schliesst auch die Organisation mit ein.
+ */
+export async function respondToQuoteAsCustomer(params: {
+  quoteId: string;
+  organizationId: string;
+  customerId: string;
+  userId: string;
+  input: RespondQuoteInput;
+  ip?: string;
+}): Promise<Quote> {
+  const eigene = await prisma.quote.findFirst({
+    where: {
+      id: params.quoteId,
+      organizationId: params.organizationId,
+      customerId: params.customerId,
+      deletedAt: null,
+    },
+    select: { id: true },
+  });
+  if (!eigene) throw new NotFoundError('Offerte');
+
+  return respondToQuoteCore({
+    quoteId: eigene.id,
+    organizationId: params.organizationId,
+    input: params.input,
+    herkunft: { art: 'KUNDENKONTO', userId: params.userId },
+    ip: params.ip,
+  });
+}
+
+/**
+ * Eine Offerte für die angemeldete Kundschaft laden.
+ *
+ * Gegenstück zu `getQuoteByToken` für den Fall, dass eine Sitzung vorliegt.
+ * Dieselbe Darstellung, andere Berechtigung — und deshalb eine eigene
+ * Funktion statt eines Schalters in der bestehenden.
+ */
+export async function getQuoteForCustomer(params: {
+  quoteId: string;
+  organizationId: string;
+  customerId: string;
+}) {
+  const quote = await prisma.quote.findFirst({
+    where: {
+      id: params.quoteId,
+      organizationId: params.organizationId,
+      customerId: params.customerId,
+      deletedAt: null,
+    },
+    include: {
+      items: { orderBy: { position: 'asc' } },
+      customer: { select: { firstName: true, lastName: true, companyName: true, email: true } },
+      lead: { select: { firstName: true, lastName: true, company: true, email: true } },
+      organization: {
+        select: { name: true, email: true, phone: true, logoUrl: true, primaryColor: true },
+      },
+    },
+  });
+  if (!quote) throw new NotFoundError('Offerte');
+  return quote;
 }
 
 // ---------------------------------------------------------------------------

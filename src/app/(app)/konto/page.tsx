@@ -1,4 +1,4 @@
-import type { Metadata } from 'next';
+﻿import type { Metadata } from 'next';
 import Link from 'next/link';
 import {
   ArrowRight,
@@ -234,7 +234,7 @@ export default async function AccountHomePage() {
             {openQuotes.map((quote) => (
               <li key={quote.id}>
                 <Link
-                  href={`/offerte/${quote.publicToken}`}
+                  href={`/konto/offerten/${quote.id}`}
                   className="flex flex-wrap items-center gap-4 rounded-2xl border border-primary/25 bg-primary/[0.04] p-5 transition-colors hover:bg-primary/[0.08]"
                 >
                   <FileText className="size-5 shrink-0 text-primary" aria-hidden />

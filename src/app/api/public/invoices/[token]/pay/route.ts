@@ -1,12 +1,17 @@
-import { definePublicRoute } from '@/lib/api/handler';
+﻿import { definePublicRoute } from '@/lib/api/handler';
 import { ok } from '@/lib/api/response';
 import { prisma, toNumber } from '@/lib/db';
 import { BusinessRuleError, NotFoundError } from '@/lib/errors';
 import { absoluteUrl } from '@/lib/utils';
-import { createCheckoutSession, ensureStripeCustomer } from '@/lib/payments/stripe';
+import {
+  CHECKOUT_RETURN_PATHS,
+  createCheckoutSession,
+  ensureStripeCustomer,
+} from '@/lib/payments/stripe';
 import { payInvoiceSchema } from '@/lib/validation/finance';
 import { publicTokenParams } from '@/lib/validation/queries';
 import { sha256Hex } from '@/lib/crypto';
+import { resolveWithLegacy, tokenRejectionError } from '@/server/services/access-token.service';
 
 export const runtime = 'nodejs';
 
@@ -30,8 +35,28 @@ export const POST = definePublicRoute({
   rateLimitKey: ({ request }) =>
     sha256Hex(request.nextUrl.pathname.split('/').at(-2) ?? 'unbekannt'),
   handler: async ({ params, body }) => {
-    const invoice = await prisma.invoice.findUnique({
-      where: { publicToken: params.token },
+    /**
+     * `INVOICE_PAY`, nicht `INVOICE_VIEW` — und kein Rückfall auf alte
+     * Links, unabhängig von `LEGACY_PUBLIC_TOKENS`.
+     *
+     * Eine Zahlung ist eine abschliessende Handlung mit Kosten. Ein Link,
+     * der zum Ansehen weitergegeben wurde, darf sie nicht auslösen, und eine
+     * cuid aus der Zeit vor der Tokeninfrastruktur erst recht nicht.
+     */
+    const aufgeloest = await resolveWithLegacy({
+      raw: params.token,
+      purpose: 'INVOICE_PAY',
+      allowLegacy: false,
+      legacyLookup: async (raw) =>
+        prisma.invoice.findUnique({
+          where: { publicToken: raw },
+          select: { id: true, organizationId: true },
+        }),
+    });
+    if (!aufgeloest.ok) throw tokenRejectionError(aufgeloest.reason, 'Rechnung');
+
+    const invoice = await prisma.invoice.findFirst({
+      where: { id: aufgeloest.resourceId, organizationId: aufgeloest.organizationId },
       include: {
         customer: {
           select: { id: true, email: true, firstName: true, lastName: true, companyName: true, phone: true, stripeCustomerId: true },
@@ -71,13 +96,31 @@ export const POST = definePublicRoute({
     const session = await createCheckoutSession({
       invoiceId: invoice.id,
       invoiceNumber: invoice.number,
+      organizationId: aufgeloest.organizationId,
       amount: balance,
       currency: invoice.currency,
       customerEmail: invoice.customer.email,
       stripeCustomerId,
       method: body.method,
-      successUrl: absoluteUrl(`/rechnung/${params.token}/danke`),
-      cancelUrl: absoluteUrl(`/rechnung/${params.token}`),
+      /**
+       * **Hier stand der Token.** Die beiden Adressen lauteten
+       * `/rechnung/${params.token}/danke` und `/rechnung/${params.token}` —
+       * der rohe Capability-Token wanderte damit in die Checkout-Session bei
+       * Stripe und von dort in Dashboard, API-Antworten und Webhook-Nutzlast.
+       * Ein Geheimnis, das eine Rechnung öffnet und eine Zahlung auslöst,
+       * gehört nicht in die Datenhaltung eines Dritten.
+       *
+       * Zurück kommt jetzt nur Stripes eigene Sitzungskennung. Der
+       * Rückkehrweg löst sie serverseitig auf und stellt danach einen
+       * frischen, kurzlebigen Ansichtstoken aus.
+       *
+       * Der Abbruchweg bekommt gar keine Kennung: Für `cancel_url` ist die
+       * Ersetzung von `{CHECKOUT_SESSION_ID}` nicht in derselben Weise
+       * zugesichert wie für `success_url`, und eine Abbruchseite braucht
+       * keine Rechnungsdaten.
+       */
+      successUrl: absoluteUrl(CHECKOUT_RETURN_PATHS.success),
+      cancelUrl: absoluteUrl(CHECKOUT_RETURN_PATHS.cancel),
       description: `Reinigungsdienstleistungen · Rechnung ${invoice.number}`,
     });
 

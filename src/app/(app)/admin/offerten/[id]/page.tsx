@@ -1,13 +1,13 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
-import { ArrowLeft, Download, ExternalLink, PenLine } from 'lucide-react';
+import { ArrowLeft, Download, PenLine } from 'lucide-react';
 
 import { toNumber } from '@/lib/db';
 import { requirePermission } from '@/lib/auth/session';
 import { can } from '@/lib/auth/rbac';
 import { NotFoundError } from '@/lib/errors';
-import { absoluteUrl, formatCurrency, formatDate, formatDateTime } from '@/lib/utils';
+import { formatCurrency, formatDate, formatDateTime } from '@/lib/utils';
 import { getOrganizationId } from '@/server/services/organization.service';
 import { getQuoteDetail } from '@/server/services/quote.service';
 import { StatusBadge } from '@/components/ui/badge';
@@ -46,7 +46,6 @@ export default async function AdminQuoteDetailPage({
         ? `${quote.lead.firstName} ${quote.lead.lastName}`
         : '—');
 
-  const publicUrl = absoluteUrl(`/offerte/${quote.publicToken}`);
   const billable = quote.items.filter((item) => !item.optional);
   const optional = quote.items.filter((item) => item.optional);
 
@@ -263,16 +262,26 @@ export default async function AdminQuoteDetailPage({
               {quote.rejectedAt ? (
                 <DetailRow label="Abgelehnt">{formatDateTime(quote.rejectedAt)}</DetailRow>
               ) : null}
-              <DetailRow label="Öffentlicher Link">
-                <a
-                  href={publicUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="inline-flex items-center gap-1.5 break-all text-primary underline-offset-4 hover:underline"
-                >
-                  <ExternalLink className="size-3.5 shrink-0" aria-hidden />
-                  Ansicht der Kundschaft
-                </a>
+              {/*
+                Hier stand „Öffentlicher Link" mit `/offerte/{quote.publicToken}`.
+                Zwei Gründe, warum das weg ist:
+
+                Erstens brauchte diese Seite ihn nicht — die Verwaltung hat
+                eine Sitzung und sieht die Offerte hier. Ein Capability-Link
+                als Navigationshilfe ist ein Geheimnis ohne Anlass.
+
+                Zweitens liesse er sich gar nicht mehr anzeigen: Von einem
+                sicheren Token liegt nur der SHA-256-Hash in der Datenbank.
+                Das ist der Sinn der Sache, und es ist nichts, was man mit
+                einem zusätzlichen Feld „reparieren" sollte. Ein verlorener
+                Link wird neu versendet, nicht nachgeschlagen.
+              */}
+              <DetailRow label="Versandter Link">
+                <span className="text-muted-foreground">
+                  {quote.sentAt
+                    ? 'Beim Versand ausgestellt und nur in der E-Mail enthalten. Für einen neuen Link die Offerte erneut senden.'
+                    : 'Noch nicht versendet.'}
+                </span>
               </DetailRow>
             </dl>
           </DetailSection>

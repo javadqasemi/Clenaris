@@ -5670,6 +5670,100 @@ paths:
             'application/json':
               schema:
                 '$ref': '#/components/schemas/ErrorEnvelope'
+  '/api/quotes/{id}/respond':
+    post:
+      tags:
+        - 'Offerten'
+      summary: 'Offerte im Kundenkonto annehmen oder ablehnen'
+      description: |-
+          Der angemeldete Weg neben dem öffentlichen Link. Wer eine Sitzung hat und die Offerte besitzt, braucht keine Capability. Die Eigentümerprüfung steht in der where-Klausel, die Geschäftsoperation ist dieselbe atomare Transition wie beim öffentlichen Weg — eine gleichzeitige Annahme über den Link und Ablehnung hier ergeben genau einen Übergang.
+
+          **Zugriff:** Erfordert die Berechtigung: `quote:respond_own`.
+
+          **Rate-Limit-Klasse:** `apiWrite`
+      operationId: 'postQuotesByIdRespond'
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: 'id'
+          in: 'path'
+          required: true
+          schema:
+            type: 'string'
+            minLength: 1
+      requestBody:
+        required: true
+        content:
+          'application/json':
+            schema:
+              type: 'object'
+              properties:
+                decision:
+                  type: 'string'
+                  enum:
+                    - 'ACCEPT'
+                    - 'REJECT'
+                signatureDataUrl:
+                  type: 'string'
+                  maxLength: 500000
+                  pattern: '^data:image\/(png|jpeg);base64,'
+                signatureName:
+                  type: 'string'
+                  maxLength: 120
+                reason:
+                  type: 'string'
+                  maxLength: 1000
+              required:
+                - 'decision'
+      responses:
+        '200':
+          description: 'Erfolg'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/SuccessEnvelope'
+        '400':
+          description: 'VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 'UNAUTHORIZED — keine oder abgelaufene Sitzung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 'FORBIDDEN — angemeldet, aber ohne die nötige Berechtigung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: 'NOT_FOUND — nicht vorhanden, oder für diese Sitzung nicht sichtbar.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: 'BUSINESS_RULE — fachlich nicht zulässig, etwa eine bereits ausgestellte Rechnung ändern.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: 'RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
   '/api/jobs':
     get:
       tags:
@@ -8465,6 +8559,89 @@ paths:
                 '$ref': '#/components/schemas/ErrorEnvelope'
         '404':
           description: 'NOT_FOUND — nicht vorhanden, oder für diese Sitzung nicht sichtbar.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: 'RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+  '/api/invoices/{id}/pay':
+    post:
+      tags:
+        - 'Finanzen'
+      summary: 'Zahlung aus dem Kundenkonto starten'
+      description: |-
+          Der angemeldete Weg neben dem öffentlichen Zahllink. Vorher verwendete der Kundenbereich invoice.publicToken — eine angemeldete Person brauchte also eine Capability, um ihre eigene Rechnung zu bezahlen. Der Betrag stammt ausschliesslich aus der Datenbank; gebucht wird über den Webhook, nicht über die Rückkehr-URL.
+
+          **Zugriff:** Erfordert die Berechtigung: `invoice:pay_own`.
+
+          **Rate-Limit-Klasse:** `apiWrite`
+      operationId: 'postInvoicesByIdPay'
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: 'id'
+          in: 'path'
+          required: true
+          schema:
+            type: 'string'
+            minLength: 1
+      requestBody:
+        required: true
+        content:
+          'application/json':
+            schema:
+              type: 'object'
+              properties:
+                method:
+                  type: 'string'
+                  enum:
+                    - 'CARD'
+                    - 'TWINT'
+                  default: 'CARD'
+      responses:
+        '200':
+          description: 'Erfolg'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/SuccessEnvelope'
+        '400':
+          description: 'VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 'UNAUTHORIZED — keine oder abgelaufene Sitzung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 'FORBIDDEN — angemeldet, aber ohne die nötige Berechtigung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: 'NOT_FOUND — nicht vorhanden, oder für diese Sitzung nicht sichtbar.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: 'BUSINESS_RULE — fachlich nicht zulässig, etwa eine bereits ausgestellte Rechnung ändern.'
           content:
             'application/json':
               schema:

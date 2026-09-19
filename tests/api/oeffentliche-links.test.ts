@@ -1,8 +1,10 @@
 import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { createHash, randomBytes } from 'node:crypto';
 
 import { data, del, get, post, requireServer } from '../helpers/client';
 import { loginAll, type AccountName } from '../helpers/accounts';
+import { testDb, testDbGrund, testDbSchliessen } from '../helpers/testdb';
 
 /**
  * Links, die ohne Anmeldung funktionieren — Verhalten über HTTP.
@@ -16,6 +18,13 @@ import { loginAll, type AccountName } from '../helpers/accounts';
  * Der Rennzustand ist der Grund, aus dem es diese Datei gibt: `respondToQuote`
  * las den Status, prüfte ihn und schrieb danach. Zwei gleichzeitige Annahmen
  * sahen beide `SENT` — und lösten beide die Folgeaktionen aus.
+ *
+ * **Umgestellt in Gate 2.5.** Diese Reihe fuhr bis dahin mit
+ * `quote.publicToken`, also mit dem alten cuid. Das ging, weil der Rückfall
+ * auf alte Links galt, solange ihn niemand abschaltete. Genau diese
+ * Voreinstellung war falsch herum: Eine vergessene Umgebungsvariable liess
+ * den schwachen Weg offen. Sie ist jetzt fail-closed, und die Prüfungen
+ * fahren mit echten Capability-Tokens — denselben, die der Versand ausstellt.
  */
 
 type Jars = Record<AccountName, string>;
@@ -47,9 +56,41 @@ function inTagen(tage: number): string {
   return d.toISOString().slice(0, 10);
 }
 
+const db = testDb();
+const ohneDb = { skip: db ? false : `Keine Testdatenbank: ${testDbGrund()}` };
+
+/**
+ * Einen Capability-Token mit bekanntem Rohwert anlegen.
+ *
+ * Die Anwendung gibt den Rohwert zu Recht nie heraus — in der Datenbank
+ * liegt nur sein SHA-256-Hash. Für eine Prüfung, die den Link *benutzen*
+ * muss, bleibt deshalb nur, ihn mit demselben Verfahren selbst anzulegen.
+ * Dass der Versand seinerseits den richtigen Zweck ausstellt, prüft
+ * `oeffentlicher-zugang.test.ts` gesondert.
+ */
+async function capability(params: {
+  organizationId: string;
+  purpose: 'QUOTE_VIEW' | 'QUOTE_RESPOND' | 'INVOICE_VIEW' | 'INVOICE_PAY';
+  resourceId: string;
+}): Promise<string> {
+  if (!db) throw new Error('keine Testdatenbank');
+  const raw = randomBytes(32).toString('hex');
+  await db.publicAccessToken.create({
+    data: {
+      organizationId: params.organizationId,
+      tokenHash: createHash('sha256').update(raw).digest('hex'),
+      purpose: params.purpose as never,
+      resourceId: params.resourceId,
+      expiresAt: new Date(Date.now() + 86_400_000),
+    },
+  });
+  return raw;
+}
+
 describe('Öffentliche Links — Bindung, Rennen, Altbestand', () => {
   let jars: Jars;
   let customerId = '';
+  let organizationId = '';
   const angelegteOfferten: string[] = [];
 
   /** Eine frische Offerte im Zustand DRAFT, mit ihrem Alt-Token. */
@@ -84,12 +125,18 @@ describe('Öffentliche Links — Bindung, Rennen, Altbestand', () => {
     );
     assert.ok(objekte.length > 0, 'Der Demobestand enthält Objekte');
     customerId = objekte[0]!.customer.id;
+
+    if (db) {
+      const org = await db.organization.findFirst({ select: { id: true } });
+      organizationId = org?.id ?? '';
+    }
   });
 
   after(async () => {
     for (const id of angelegteOfferten) {
       await del(`/api/quotes/${id}`, { jar: jars.admin });
     }
+    await testDbSchliessen();
   });
 
   // =========================================================================
@@ -135,13 +182,18 @@ describe('Öffentliche Links — Bindung, Rennen, Altbestand', () => {
     assert.equal(antworten[0], 404);
   });
 
-  it('nimmt ein Offert-Token nicht an der Rechnungsroute an', async () => {
+  it('nimmt ein Offert-Token nicht an der Rechnungsroute an', ohneDb, async () => {
     const offerte = await offerteAnlegen(`Zweckbindung ${RUN}`);
+    const token = await capability({
+      organizationId,
+      purpose: 'QUOTE_VIEW',
+      resourceId: offerte.id,
+    });
 
-    const fremd = await get(`/api/public/invoices/${offerte.publicToken}/pdf`);
+    const fremd = await get(`/api/public/invoices/${token}/pdf`);
     assert.equal(fremd.status, 404, 'ein Offert-Token öffnet keine Rechnung');
 
-    const eigen = await get(`/api/public/quotes/${offerte.publicToken}/pdf`);
+    const eigen = await get(`/api/public/quotes/${token}/pdf`);
     assert.equal(eigen.status, 200, `an der eigenen Route gilt er: ${eigen.status}`);
   });
 
@@ -149,8 +201,13 @@ describe('Öffentliche Links — Bindung, Rennen, Altbestand', () => {
   //  Der Rennzustand
   // =========================================================================
 
-  it('beantwortet eine Offerte auch bei gleichzeitigen Anfragen genau einmal', async () => {
+  it('beantwortet eine Offerte auch bei gleichzeitigen Anfragen genau einmal', ohneDb, async () => {
     const offerte = await offerteAnlegen(`Rennen ${RUN}`);
+    const token = await capability({
+      organizationId,
+      purpose: 'QUOTE_RESPOND',
+      resourceId: offerte.id,
+    });
 
     /**
      * Vier gleichzeitige Annahmen. Vor der Korrektur lasen alle denselben
@@ -166,7 +223,7 @@ describe('Öffentliche Links — Bindung, Rennen, Altbestand', () => {
      */
     const antworten = await Promise.all(
       Array.from({ length: 4 }, () =>
-        post(`/api/public/quotes/${offerte.publicToken}/respond`, ANNAHME, { retries: 0 }),
+        post(`/api/public/quotes/${token}/respond`, ANNAHME, { retries: 0 }),
       ),
     );
 
@@ -185,18 +242,21 @@ describe('Öffentliche Links — Bindung, Rennen, Altbestand', () => {
     assert.equal(data(danach).status, 'ACCEPTED', 'der Zustand ist eindeutig');
   });
 
-  it('lässt eine bereits beantwortete Offerte nicht nachträglich ablehnen', async () => {
+  it('lässt eine bereits beantwortete Offerte nicht nachträglich ablehnen', ohneDb, async () => {
     const offerte = await offerteAnlegen(`Nachzuegler ${RUN}`);
+    const token = await capability({
+      organizationId,
+      purpose: 'QUOTE_RESPOND',
+      resourceId: offerte.id,
+    });
 
-    const ersteAntwort = await post(
-      `/api/public/quotes/${offerte.publicToken}/respond`,
-      ANNAHME,
-      { retries: 0 },
-    );
+    const ersteAntwort = await post(`/api/public/quotes/${token}/respond`, ANNAHME, {
+      retries: 0,
+    });
     assert.equal(ersteAntwort.status, 200, ersteAntwort.text);
 
     const zweiteAntwort = await post(
-      `/api/public/quotes/${offerte.publicToken}/respond`,
+      `/api/public/quotes/${token}/respond`,
       { decision: 'REJECT', reason: 'Doch nicht' },
       { retries: 0 },
     );
@@ -206,17 +266,18 @@ describe('Öffentliche Links — Bindung, Rennen, Altbestand', () => {
     assert.equal(data(danach).status, 'ACCEPTED', 'die Annahme bleibt stehen');
   });
 
-  it('zeigt die beantwortete Offerte über denselben Link weiter an', async () => {
+  it('zeigt die beantwortete Offerte über denselben Link weiter an', ohneDb, async () => {
     // Die Einmaligkeit liegt im Geschäftszustand, nicht im Link: Wer
     // unterschrieben hat, soll die Bestätigung wieder aufrufen können.
-    const offerte = angelegteOfferten.length > 0 ? angelegteOfferten : [];
-    assert.ok(offerte.length > 0);
+    assert.ok(angelegteOfferten.length > 0);
+    const letzteId = angelegteOfferten[angelegteOfferten.length - 1]!;
+    const token = await capability({
+      organizationId,
+      purpose: 'QUOTE_VIEW',
+      resourceId: letzteId,
+    });
 
-    const letzte = await get<{ data: QuoteDetail }>(
-      `/api/quotes/${angelegteOfferten[angelegteOfferten.length - 1]}`,
-      { jar: jars.admin },
-    );
-    const pdf = await get(`/api/public/quotes/${data(letzte).publicToken}/pdf`);
+    const pdf = await get(`/api/public/quotes/${token}/pdf`);
     assert.equal(pdf.status, 200, 'das Dokument bleibt erreichbar');
   });
 
@@ -253,21 +314,32 @@ describe('Öffentliche Links — Bindung, Rennen, Altbestand', () => {
     );
     assert.equal(data(danach).status, 'SENT', 'der Zustand wechselt auf versendet');
     assert.ok(data(danach).sentAt, 'der Versandzeitpunkt ist gesetzt');
-
-    // Der alte Link bleibt während des Übergangs gültig — sonst brächen
-    // bereits versendete Nachrichten (siehe `legacyTokensAllowed`).
-    const alt = await get(`/api/public/quotes/${offerte.publicToken}/pdf`);
-    assert.equal(alt.status, 200, 'der Altbestandslink funktioniert weiter');
   });
 
   // =========================================================================
-  //  Altbestand (§29)
+  //  Altbestand — jetzt fail-closed
   // =========================================================================
 
-  it('lässt bestehende Offert- und Rechnungslinks weiter funktionieren', async () => {
+  it('lässt alte cuid-Links ohne ausdrückliche Freigabe nicht mehr gelten', async () => {
+    /**
+     * **Diese Prüfung stand vorher auf dem Kopf.** Sie hiess „lässt
+     * bestehende Offert- und Rechnungslinks weiter funktionieren" und
+     * erwartete `200` — weil `legacyTokensAllowed()` galt, solange niemand
+     * die Umgebungsvariable auf `aus` setzte.
+     *
+     * Die Voreinstellung war damit falsch herum: Eine neue Instanz, ein
+     * neuer Server, eine verlorene Umgebungsdatei — überall stand der
+     * schwache Weg offen, ohne dass es jemandem auffiel. Eine vergessene
+     * Einstellung muss zur sicheren Seite fallen.
+     *
+     * Der Übergang ist damit nicht abgeschafft, nur ausdrücklich: Wer alte
+     * Links während des Rollouts weiter bedienen will, setzt
+     * `LEGACY_PUBLIC_TOKENS=true`. Der Prüfserver läuft ohne, also gilt hier
+     * die sichere Seite.
+     */
     const offerte = await offerteAnlegen(`Altbestand ${RUN}`);
     const alt = await get(`/api/public/quotes/${offerte.publicToken}/pdf`);
-    assert.equal(alt.status, 200, 'alter Offertlink');
+    assert.equal(alt.status, 404, 'ein cuid öffnete das Offert-PDF');
 
     const rechnungen = data(
       await get<{ data: { publicToken: string }[] }>('/api/invoices?pageSize=1', {
@@ -276,7 +348,7 @@ describe('Öffentliche Links — Bindung, Rennen, Altbestand', () => {
     );
     if (rechnungen.length > 0 && rechnungen[0]!.publicToken) {
       const r = await get(`/api/public/invoices/${rechnungen[0]!.publicToken}/pdf`);
-      assert.equal(r.status, 200, `alter Rechnungslink: ${r.status}`);
+      assert.equal(r.status, 404, 'ein cuid öffnete das Rechnungs-PDF');
     }
   });
 });

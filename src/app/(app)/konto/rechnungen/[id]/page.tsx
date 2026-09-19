@@ -218,7 +218,8 @@ export default async function AccountInvoiceDetailPage({
 
         <aside className="space-y-6">
           {balance > 0 && invoice.status !== 'CANCELLED' ? (
-            <PayInvoice token={invoice.publicToken} amount={balance} />
+            /* Angemeldeter Weg: Sitzung und Eigentümerschaft statt Capability. */
+            <PayInvoice endpoint={`/api/invoices/${invoice.id}/pay`} amount={balance} />
           ) : null}
 
           <DetailSection title="Rechnungsempfänger">

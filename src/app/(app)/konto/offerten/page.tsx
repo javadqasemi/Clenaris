@@ -1,4 +1,4 @@
-import type { Metadata } from 'next';
+﻿import type { Metadata } from 'next';
 import Link from 'next/link';
 import { ArrowRight, Download, FileText } from 'lucide-react';
 
@@ -91,7 +91,7 @@ export default async function AccountQuotesPage() {
                     </Button>
                     {isOpen ? (
                       <Button asChild size="sm">
-                        <Link href={`/offerte/${quote.publicToken}`}>
+                        <Link href={`/konto/offerten/${quote.id}`}>
                           Ansehen und antworten
                           <ArrowRight aria-hidden />
                         </Link>

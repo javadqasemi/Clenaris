@@ -5,6 +5,7 @@ import type { PublicAccessToken, PublicTokenPurpose } from '@prisma/client';
 import { prisma, type Tx } from '@/lib/db';
 import { NotFoundError } from '@/lib/errors';
 import { randomToken } from '@/lib/auth/jwt';
+import { legacyTokensAllowed, purposesSatisfying } from '@/lib/auth/public-token-policy';
 import { sha256Hex } from '@/lib/crypto';
 
 /**
@@ -85,11 +86,20 @@ export const PURPOSE_RESOURCE: Record<PublicTokenPurpose, string> = {
   QUOTE_VIEW: 'Quote',
   QUOTE_RESPOND: 'Quote',
   INVOICE_VIEW: 'Invoice',
+  INVOICE_PAY: 'Invoice',
   BOOKING_MANAGE: 'Booking',
   DOCUMENT_VIEW: 'ManagedDocument',
   SIGNATURE_ACCESS: 'SignatureRequest',
   SIGNATURE_OTP: 'SignatureRequest',
 };
+
+/**
+ * Die Hierarchie und der Legacy-Schalter stehen in
+ * `lib/auth/public-token-policy.ts` — reine Rechnung, ohne `server-only` und
+ * ohne Datenbank, damit beide ohne laufende Anwendung prüfbar sind. Hier nur
+ * weitergereicht, damit Aufrufer eine Anlaufstelle haben.
+ */
+export { legacyTokensAllowed, purposesSatisfying } from '@/lib/auth/public-token-policy';
 
 export interface IssuedToken {
   /** Nur hier und im Link — danach nie wieder erreichbar. */
@@ -158,6 +168,12 @@ export interface ResolvedToken {
  */
 export async function resolvePublicToken(params: {
   raw: string;
+  /**
+   * Der *mindestens* nötige Zweck. Stärkere Zwecke werden über
+   * `purposesSatisfying` automatisch mit akzeptiert — ein `QUOTE_RESPOND`
+   * öffnet also auch die Ansicht, ein `QUOTE_VIEW` löst aber keine Annahme
+   * aus.
+   */
   purpose: PublicTokenPurpose;
 }): Promise<{ ok: true; token: ResolvedToken } | { ok: false; reason: TokenRejection }> {
   // Ein offensichtlich falsch geformter Wert wird gar nicht erst gesucht.
@@ -167,10 +183,11 @@ export async function resolvePublicToken(params: {
     where: { tokenHash: sha256Hex(params.raw) },
   });
 
-  // Zweck und Token werden gemeinsam gesucht, nicht nacheinander geprüft:
-  // Ein Rechnungstoken, den jemand an der Offertroute vorlegt, ist hier
-  // schlicht unbekannt.
-  if (!record || record.purpose !== params.purpose) return { ok: false, reason: 'UNKNOWN' };
+  // Zweck und Token werden gemeinsam geprüft, nicht nacheinander: Ein
+  // Rechnungstoken, den jemand an der Offertroute vorlegt, ist hier schlicht
+  // unbekannt — die Antwort verrät nicht, dass es ihn gibt.
+  const erlaubt = purposesSatisfying(params.purpose);
+  if (!record || !erlaubt.includes(record.purpose)) return { ok: false, reason: 'UNKNOWN' };
 
   if (record.revokedAt) return { ok: false, reason: 'REVOKED' };
   if (record.expiresAt.getTime() <= Date.now()) return { ok: false, reason: 'EXPIRED' };
@@ -235,28 +252,6 @@ export async function revokeTokensFor(params: {
 }
 
 /**
- * Darf ein alter `publicToken` aus der cuid-Zeit noch verwendet werden?
- *
- * **Warum es diesen Schalter gibt.** Auf dem Produktivsystem liegen bereits
- * versendete Links in E-Mail-Postfächern. Sie von einem Tag auf den anderen
- * abzuschalten hiesse, Kundschaft vor eine Fehlerseite zu stellen, ohne dass
- * sie etwas falsch gemacht hätte. Der Übergang gehört deshalb geplant:
- * sichere Links für die noch offenen Vorgänge ausstellen, neu versenden, dann
- * abschalten.
- *
- * **Warum er trotzdem eng ist.** Unterschieden wird zwischen Ansehen und
- * Handeln. Ein alter Link darf ein Dokument zeigen; eine Offerte *annehmen*
- * darf er nicht mehr, sobald `LEGACY_PUBLIC_TOKENS` auf `aus` steht — und
- * genau das ist der Schritt, der beim Produktionsrollout zuerst kommt.
- *
- * Vorgabe ist `an`, damit diese Änderung für sich genommen nichts bricht.
- * Der Rollout steht in `docs/DEPLOYMENT.md`.
- */
-export function legacyTokensAllowed(): boolean {
-  return process.env.LEGACY_PUBLIC_TOKENS !== 'aus';
-}
-
-/**
  * Eine Ressource über den neuen *oder* den alten Weg auflösen.
  *
  * Der Rückgabewert sagt, welcher Weg es war. Aufrufer, die eine abschliessende
@@ -268,6 +263,18 @@ export async function resolveWithLegacy(params: {
   purpose: PublicTokenPurpose;
   /** Sucht die Ressource über das alte Klartextfeld. */
   legacyLookup: (raw: string) => Promise<{ id: string; organizationId: string } | null>;
+  /**
+   * Darf für *diesen* Aufruf überhaupt auf den alten Weg zurückgefallen
+   * werden?
+   *
+   * Abschliessende Handlungen — Offerte annehmen oder ablehnen, Zahlung
+   * starten — setzen `false` und verlangen damit einen echten Token,
+   * unabhängig davon, wie die Umgebungseinstellung steht. Ansehen darf
+   * zurückfallen, Handeln nicht: Das eine ist eine Unbequemlichkeit für die
+   * Kundschaft, das andere eine Zustandsänderung, die sich nicht
+   * zurücknehmen lässt.
+   */
+  allowLegacy?: boolean;
 }): Promise<
   | { ok: true; resourceId: string; organizationId: string; legacy: boolean; tokenId?: string }
   | { ok: false; reason: TokenRejection }
@@ -287,6 +294,7 @@ export async function resolveWithLegacy(params: {
   // Link darf einen bewusst entwerteten neuen nicht wiederbeleben.
   if (neu.reason !== 'UNKNOWN') return neu;
 
+  if (params.allowLegacy === false) return { ok: false, reason: 'UNKNOWN' };
   if (!legacyTokensAllowed()) return { ok: false, reason: 'UNKNOWN' };
 
   const alt = await params.legacyLookup(params.raw);

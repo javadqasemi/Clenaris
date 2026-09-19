@@ -303,15 +303,21 @@ export default async function AdminInvoiceDetailPage({
               {invoice.paidAt ? (
                 <DetailRow label="Bezahlt am">{formatDate(invoice.paidAt)}</DetailRow>
               ) : null}
+              {/*
+                Hier stand der Zahlungslink mit `invoice.publicToken` — einer
+                cuid, die als Geheimnis gedacht war und keines ist. Der
+                sichere Link entsteht jetzt beim Versand und liegt nur als
+                Hash in der Datenbank; anzeigen lässt er sich nicht, und ein
+                zweites Feld dafür wäre genau die Abkürzung, die das Verfahren
+                entwertet. Die Verwaltung braucht ihn auch nicht: Sie sieht
+                die Rechnung hier.
+              */}
               <DetailRow label="Zahlungslink">
-                <a
-                  href={`/rechnung/${invoice.publicToken}`}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="break-all text-primary underline-offset-4 hover:underline"
-                >
-                  /rechnung/{invoice.publicToken.slice(0, 12)}…
-                </a>
+                <span className="text-muted-foreground">
+                  {invoice.sentAt
+                    ? 'Beim Versand ausgestellt und nur in der E-Mail enthalten. Für einen neuen Link die Rechnung erneut senden.'
+                    : 'Noch nicht versendet.'}
+                </span>
               </DetailRow>
             </dl>
           </DetailSection>

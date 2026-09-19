@@ -21,6 +21,12 @@ import type {
   RecordPaymentInput,
 } from '@/lib/validation/finance';
 
+import {
+  issuePublicToken,
+  resolveWithLegacy,
+  revokeTokensFor,
+  tokenRejectionError,
+} from './access-token.service';
 import { nextNumber } from './numbering.service';
 import { notify } from './notification.service';
 import { logger } from '@/lib/logger';
@@ -395,6 +401,38 @@ export async function sendInvoice(params: {
   const pdf = await renderInvoicePdf(invoice.id);
   const recipient = params.email ?? invoice.billToEmail ?? invoice.customer.email;
 
+  /**
+   * Für jeden Versand ein frischer, sicherer Link — dieselbe Regel wie bei
+   * der Offerte, die hier bis Gate 2.5 fehlte: Verschickt wurde
+   * `invoice.publicToken`, eine cuid im Klartext, ohne Ablauf und ohne
+   * Widerruf.
+   *
+   * **Warum `INVOICE_PAY` und nicht `INVOICE_VIEW`.** Die Rechnungs-E-Mail
+   * enthält eine Zahlschaltfläche; der Empfänger soll damit bezahlen können.
+   * Über die Capability-Hierarchie deckt dieser eine Token Ansicht, PDF und
+   * Zahlung ab — ein zweiter Link in derselben E-Mail wäre ein zweites
+   * Geheimnis ohne zusätzlichen Nutzen.
+   *
+   * **Warum die alten zuerst widerrufen werden.** Eine zweite Zustellung
+   * — korrigierter Betrag, neue Adresse — soll den ersten Link entwerten.
+   * Sonst lägen zwei gültige Schlüssel zu demselben Vorgang in zwei
+   * Postfächern.
+   */
+  await revokeTokensFor({
+    purpose: 'INVOICE_PAY',
+    resourceId: invoice.id,
+    revokedById: params.actorId,
+  });
+  const link = await issuePublicToken({
+    organizationId: params.organizationId,
+    purpose: 'INVOICE_PAY',
+    resourceId: invoice.id,
+    createdById: params.actorId,
+    // Eine Rechnung bleibt nach Fälligkeit zahlbar; Mahnungen laufen
+    // weiter. Der Link muss deshalb länger gelten als die Frist selbst.
+    expiresAt: new Date(invoice.dueDate.getTime() + 180 * 24 * 60 * 60 * 1000),
+  });
+
   await notify({
     userId: invoice.customer.user?.id ?? null,
     email: recipient,
@@ -407,8 +445,8 @@ export async function sendInvoice(params: {
       invoiceNumber: invoice.number,
       grossTotal: toNumber(invoice.grossTotal),
       dueDate: invoice.dueDate,
-      invoiceUrl: absoluteUrl(`/rechnung/${invoice.publicToken}`),
-      payUrl: absoluteUrl(`/rechnung/${invoice.publicToken}/bezahlen`),
+      invoiceUrl: absoluteUrl(`/rechnung/${link.raw}`),
+      payUrl: absoluteUrl(`/rechnung/${link.raw}/bezahlen`),
     }),
     emailAttachments: [{ filename: pdf.filename, content: pdf.buffer }],
     entity: 'Invoice',
@@ -578,6 +616,20 @@ export async function processOverdueInvoices(organizationId: string): Promise<{
     const level = invoice.reminderLevel + 1;
     const fee = REMINDER_FEES[level] ?? 0;
 
+    /**
+     * Auch die Mahnung bekommt einen frischen Link statt der alten cuid.
+     *
+     * Hier wird bewusst **nicht** widerrufen: Die Rechnungs-E-Mail liegt noch
+     * im Postfach, und wer daraus bezahlen will, soll das können. Eine
+     * Mahnung fügt einen Weg hinzu, sie nimmt keinen weg.
+     */
+    const link = await issuePublicToken({
+      organizationId,
+      purpose: 'INVOICE_PAY',
+      resourceId: invoice.id,
+      expiresAt: new Date(now.getTime() + 180 * 24 * 60 * 60 * 1000),
+    });
+
     await notify({
       userId: invoice.customer.user?.id ?? null,
       email: invoice.billToEmail ?? invoice.customer.email,
@@ -593,7 +645,7 @@ export async function processOverdueInvoices(organizationId: string): Promise<{
         balance: toNumber(invoice.balance),
         dueDate: invoice.dueDate,
         level,
-        payUrl: absoluteUrl(`/rechnung/${invoice.publicToken}/bezahlen`),
+        payUrl: absoluteUrl(`/rechnung/${link.raw}/bezahlen`),
         fee: fee > 0 ? fee : undefined,
       }),
       smsBody: smsTemplates.invoiceOverdue({
@@ -819,9 +871,32 @@ export async function getInvoiceDetail(params: {
   return invoice;
 }
 
+/**
+ * Öffentlicher Zugriff auf eine Rechnung über den Link aus der E-Mail.
+ *
+ * Verlangt `INVOICE_VIEW`; ein `INVOICE_PAY` erfüllt das über die
+ * Capability-Hierarchie mit. Der umgekehrte Weg gilt nicht — die Zahlroute
+ * prüft eigens auf `INVOICE_PAY`.
+ *
+ * Hier stand bis Gate 2.5 `findUnique({ where: { publicToken } })`: die
+ * cuid-Spalte als Sicherheitsmerkmal. Für das reine Ansehen bleibt der
+ * Rückfall auf alte Links möglich, solange `LEGACY_PUBLIC_TOKENS`
+ * ausdrücklich eingeschaltet ist.
+ */
 export async function getInvoiceByToken(token: string) {
-  const invoice = await prisma.invoice.findUnique({
-    where: { publicToken: token },
+  const aufgeloest = await resolveWithLegacy({
+    raw: token,
+    purpose: 'INVOICE_VIEW',
+    legacyLookup: async (raw) =>
+      prisma.invoice.findUnique({
+        where: { publicToken: raw },
+        select: { id: true, organizationId: true },
+      }),
+  });
+  if (!aufgeloest.ok) throw tokenRejectionError(aufgeloest.reason, 'Rechnung');
+
+  const invoice = await prisma.invoice.findFirst({
+    where: { id: aufgeloest.resourceId, organizationId: aufgeloest.organizationId },
     include: {
       items: { orderBy: { position: 'asc' } },
       payments: { where: { status: 'SUCCEEDED' }, orderBy: { paidAt: 'desc' } },

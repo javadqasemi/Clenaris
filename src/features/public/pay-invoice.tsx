@@ -1,4 +1,4 @@
-'use client';
+﻿'use client';
 
 import * as React from 'react';
 import { CreditCard, Smartphone } from 'lucide-react';
@@ -32,7 +32,18 @@ const METHODS = [
   },
 ];
 
-export function PayInvoice({ token, amount }: { token: string; amount: number }) {
+export interface PayInvoiceProps {
+  amount: number;
+  /**
+   * Wohin die Zahlung angestossen wird. Der Link aus der E-Mail zeigt auf
+   * die Route mit Capability, der Kundenbereich auf die angemeldete. Die
+   * Adresse setzt der Server — diese Komponente soll nicht wissen, welche
+   * Berechtigung dahintersteht.
+   */
+  endpoint: string;
+}
+
+export function PayInvoice({ amount, endpoint }: PayInvoiceProps) {
   const [method, setMethod] = React.useState<'TWINT' | 'CARD'>('TWINT');
   const [pending, setPending] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
@@ -41,7 +52,7 @@ export function PayInvoice({ token, amount }: { token: string; amount: number })
     setPending(true);
     setError(null);
     try {
-      const result = await api.post<{ url: string }>(`/api/public/invoices/${token}/pay`, {
+      const result = await api.post<{ url: string }>(endpoint, {
         method,
       });
       // Weiterleitung zu Stripe Checkout.
