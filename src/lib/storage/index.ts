@@ -141,4 +141,4 @@ export async function deleteFiles(paths: string[]): Promise<void> {
   await Promise.all(paths.map((path) => local.deleteLocalFile(path)));
 }
 
-export { purgeExpiredUploads, readLocalFile, receiveLocalUpload } from './local';
+export { purgeExpiredUploads, readLocalBytes, readLocalFile, receiveLocalUpload } from './local';

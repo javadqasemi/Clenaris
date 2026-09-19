@@ -49,6 +49,8 @@ coverage/
 # generated
 public/sitemap*.xml
 public/robots.txt
+# PDF.js-Laufzeitdateien — Ableitung aus node_modules, siehe scripts/copy-pdfjs-assets.ts
+public/pdfjs/
 
 # deployment
 # Protokolle der Auslieferung und von PM2 entstehen auf dem Server bei jedem

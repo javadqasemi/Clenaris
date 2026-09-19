@@ -425,10 +425,28 @@ describe('Disposition — Buchung, Einsatz, Zuteilung', () => {
       return data(antwort).id;
     };
 
+    /**
+     * Ein Kalendertag als `JJJJ-MM-TT` — **aus der lokalen Zeit**, nicht aus
+     * UTC.
+     *
+     * Hier stand `toISOString().slice(0, 10)`. Das liefert das UTC-Datum,
+     * während `tag()` und `fensterFestlegen` mit `setDate`/`getDay` lokal
+     * rechnen. Zwischen Mitternacht und zwei Uhr Zürcher Sommerzeit ist UTC
+     * noch der Vortag — und genau dann rutschte das Abwesenheitsfenster um
+     * einen Tag nach vorn, auf den Einsatz vom Dienstag, den die
+     * Zuteilungsprüfung davor angelegt hatte. Die Bewilligung scheiterte mit
+     * „noch 1 Einsätze zugeteilt", obwohl am Produkt nichts falsch war.
+     *
+     * Aufgefallen am 20.09.2026 bei einem Lauf kurz nach Mitternacht; an
+     * jeder anderen Tageszeit war der Fehler unsichtbar.
+     */
     const tagOhneZeit = (offsetTage: number) => {
       const date = new Date();
       date.setDate(date.getDate() + offsetTage);
-      return date.toISOString().slice(0, 10);
+      const jjjj = date.getFullYear();
+      const mm = String(date.getMonth() + 1).padStart(2, '0');
+      const tt = String(date.getDate()).padStart(2, '0');
+      return `${jjjj}-${mm}-${tt}`;
     };
 
     before(async () => {

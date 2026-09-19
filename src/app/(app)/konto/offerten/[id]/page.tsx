@@ -8,6 +8,7 @@ import { getQuoteForCustomer } from '@/server/services/quote.service';
 import { getOrganizationId } from '@/server/services/organization.service';
 import { QuoteView } from '@/features/shared/quote-view';
 import { QuoteResponse } from '@/features/public/quote-response';
+import { PdfViewer } from '@/components/app/pdf-viewer';
 
 export const metadata: Metadata = {
   title: 'Offerte',
@@ -66,6 +67,12 @@ export default async function KontoOffertePage({
     <QuoteView
       quote={quote}
       pdfUrl={`/api/quotes/${quote.id}/pdf`}
+      preview={
+        <PdfViewer
+          source={`/api/quotes/${quote.id}/pdf`}
+          fileName={`Offerte-${quote.number}.pdf`}
+        />
+      }
       responsePanel={
         canRespond ? (
           <QuoteResponse

@@ -11,6 +11,7 @@ import { Button } from '@/components/ui/button';
 import { Alert } from '@/components/ui/primitives';
 import { StatusBadge } from '@/components/ui/badge';
 import { PayInvoice } from '@/features/public/pay-invoice';
+import { PdfViewer } from '@/components/app/pdf-viewer';
 
 export const metadata: Metadata = {
   title: 'Ihre Rechnung',
@@ -70,6 +71,19 @@ export default async function PublicInvoicePage({
       ) : null}
 
       {/* Positionen */}
+      {/*
+        Der Viewer holt das PDF über dieselbe tokenbehaftete Adresse wie der
+        Download. Auch dieser zweite Abruf ist damit autorisiert — nicht über
+        eine Ablagekennung, sondern über die Capability im Pfad.
+      */}
+      <section className="mb-8" aria-label="Rechnung als Dokument">
+        <h2 className="mb-4 font-display text-lg font-semibold tracking-tight">Dokument</h2>
+        <PdfViewer
+          source={`/api/public/invoices/${token}/pdf`}
+          fileName={`Rechnung-${invoice.number}.pdf`}
+        />
+      </section>
+
       <section className="mb-8" aria-label="Rechnungspositionen">
         <dl className="protocol-list rounded-2xl border border-border bg-card px-6">
           {invoice.items.map((item) => (

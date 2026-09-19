@@ -10,6 +10,7 @@ import { NotFoundError } from '@/lib/errors';
 import { formatCurrency, formatDate, formatDateTime } from '@/lib/utils';
 import { getOrganizationId } from '@/server/services/organization.service';
 import { getQuoteDetail } from '@/server/services/quote.service';
+import { PdfViewer } from '@/components/app/pdf-viewer';
 import { StatusBadge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Alert } from '@/components/ui/primitives';
@@ -96,6 +97,19 @@ export default async function AdminQuoteDetailPage({
 
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_22rem] lg:items-start">
         <div className="space-y-6">
+          <DetailSection
+            title="Dokument"
+            description="So sieht die Offerte bei der Kundschaft aus."
+            body="flush"
+          >
+            <div className="p-3">
+              <PdfViewer
+                source={`/api/quotes/${quote.id}/pdf`}
+                fileName={`Offerte-${quote.number}.pdf`}
+              />
+            </div>
+          </DetailSection>
+
           {quote.introText ? (
             <DetailSection title="Einleitung">
               <p className="whitespace-pre-line py-4 text-sm leading-relaxed">{quote.introText}</p>

@@ -7,10 +7,11 @@
     "node": ">=20.11.0"
   },
   "scripts": {
-    "dev": "next dev --turbo",
+    "dev": "tsx scripts/copy-pdfjs-assets.ts && next dev --turbo",
+    "pdfjs:assets": "tsx scripts/copy-pdfjs-assets.ts",
     "dev:webpack": "next dev",
-    "build": "prisma generate && next build",
-    "start": "next build && next start",
+    "build": "prisma generate && tsx scripts/copy-pdfjs-assets.ts && next build",
+    "start": "tsx scripts/copy-pdfjs-assets.ts && next build && next start",
     "start:built": "next start",
     "lint": "eslint src scripts tests prisma --ext .ts,.tsx",
     "typecheck": "tsc --noEmit",
@@ -80,6 +81,7 @@
     "react": "19.0.0",
     "react-dom": "19.0.0",
     "react-hook-form": "^7.54.2",
+    "react-pdf": "11.0.0",
     "recharts": "^2.15.0",
     "resend": "^4.0.1",
     "sonner": "^1.7.1",

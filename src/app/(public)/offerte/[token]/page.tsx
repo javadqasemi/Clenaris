@@ -6,6 +6,7 @@ import { NotFoundError } from '@/lib/errors';
 import { getQuoteByToken } from '@/server/services/quote.service';
 import { QuoteView } from '@/features/shared/quote-view';
 import { QuoteResponse } from '@/features/public/quote-response';
+import { PdfViewer } from '@/components/app/pdf-viewer';
 
 export const metadata: Metadata = {
   title: 'Ihre Offerte',
@@ -43,6 +44,18 @@ export default async function PublicQuotePage({
     <QuoteView
       quote={quote}
       pdfUrl={`/api/public/quotes/${token}/pdf`}
+      /**
+       * Der Viewer holt das PDF über dieselbe Adresse, die auch der
+       * Download nutzt — mit dem Token im Pfad. Damit ist auch dieser
+       * zweite Abruf autorisiert; eine Ablageadresse, die allein an einer
+       * Kennung hängt, gibt es hier nicht.
+       */
+      preview={
+        <PdfViewer
+          source={`/api/public/quotes/${token}/pdf`}
+          fileName={`Offerte-${quote.number}.pdf`}
+        />
+      }
       responsePanel={
         canRespond ? (
           <QuoteResponse

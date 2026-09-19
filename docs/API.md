@@ -5,7 +5,7 @@
 > Quelle, aus der sowohl diese Referenz als auch die Laufzeitvalidierung
 > stammen.
 
-Stand: 380 Endpunkte. Die maschinenlesbare Fassung liegt in
+Stand: 381 Endpunkte. Die maschinenlesbare Fassung liegt in
 [`openapi.yaml`](./openapi.yaml) bzw. [`openapi.json`](./openapi.json).
 
 ## Grundlagen
@@ -6884,6 +6884,27 @@ Familie.
 - **Zugriff:** Erfordert eine der Berechtigungen: `document:read`, `document:read_own`.
 - **Rate-Limit-Klasse:** `apiRead`
 - **Erfolg:** 200 (`application/octet-stream`)
+- **Mögliche Fehler:** 400, 401, 403, 404, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+**Query-Parameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `version` | integer | – | ≥ 1, ≤ 10000 |
+
+### `GET /api/bi/documents/{id}/content`
+
+**Fassung anzeigen.** Die Bytes einer Fassung für den PDF-Viewer — dieselbe Sichtbarkeitsprüfung wie der Download, aber die Datei selbst statt einer Weiterleitung, damit der Viewer 403, 404 und ein unlesbares PDF unterscheiden kann. `X-Document-Version` nennt die ausgelieferte Fassung; PDF `inline`, alles andere `attachment`; nie zwischengespeichert. Protokolliert wie ein Download.
+
+- **Zugriff:** Erfordert eine der Berechtigungen: `document:read`, `document:read_own`.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200 (`application/pdf`)
 - **Mögliche Fehler:** 400, 401, 403, 404, 429, 500
 
 **Pfadparameter**

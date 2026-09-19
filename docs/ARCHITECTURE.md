@@ -235,6 +235,46 @@ Extern geteilte Dateien sind keine dritte Speicherklasse, sondern ein
 Zugriffsweg: Die Datei bleibt privat, und der `PublicAccessToken` aus Gate 1
 autorisiert an der Fachroute. Eine zweite, schwächere Tür daneben gibt es nicht.
 
+### 10b. PDFs werden im Browser gezeigt — die Berechtigung bleibt auf dem Server
+
+Eine Komponente (`src/components/app/pdf-viewer.tsx`) für jede Stelle, an der
+ein PDF erscheint: Rechnung und Offerte in Verwaltung und Kundenkonto, die
+öffentlichen Seiten mit Capability-Link, die Dokumentfassungen der
+Unternehmensführung. Sie bekommt eine bereits autorisierte Adresse und lädt
+von dort; ob dahinter eine Sitzung, eine Eigentümerprüfung oder ein
+`PublicAccessToken` steht, weiss sie nicht und darf es nicht wissen.
+`canDownload` und `canPrint` blenden Schaltflächen aus — sie sind Bedienung,
+keine Sperre. Wer die Bytes hat, kann sie kopieren; ein Viewer, der etwas
+anderes verspräche, löge.
+
+**Warum der Viewer die Bytes selbst holt** statt PDF.js die Adresse zu geben:
+Erst so lässt sich unterscheiden, *warum* nichts erscheint. 403 ist etwas
+anderes als 404, und beides ist etwas anderes als eine Datei, die PDF.js
+nicht lesen kann. Eine gültige Signatur (Gate 2) heisst nicht, dass das
+Dokument lesbar ist — was hier scheitert, wird als beschädigt gemeldet, nicht
+als unbedenklich durchgereicht.
+
+**PDF.js kommt aus dem eigenen Ursprung.** Worker, WebAssembly-Decoder,
+CJK-Zeichensätze und Standardschriften liegen unter `/pdfjs/<Version>/`,
+kopiert aus dem installierten Paket (`scripts/copy-pdfjs-assets.ts`, vor
+`dev` und `build`). Kein CDN: Die Version muss exakt passen, die CSP bleibt
+bei `'self'`, und kein Dritter erfährt, welche Dokumente hier angesehen
+werden. `react-pdf` pinnt `pdfjs-dist` fest, deshalb gibt es keine zweite
+Versionsangabe, die auseinanderlaufen könnte.
+
+**Was ein hochgeladenes PDF hier nicht kann.** `enableScripting: false` —
+eingebettetes JavaScript wird nicht ausgeführt; das ist die PDF.js-Vorgabe,
+ausdrücklich gesetzt, damit sie niemand versehentlich kippt.
+`isEvalSupported: false` — auch für PostScript-Funktionen in
+Schriftprogrammen kein `eval`. Verknüpfungen aus dem Dokument öffnen mit
+`noopener noreferrer nofollow` in einem neuen Fenster; Launch-Actions und
+automatische Navigation setzt PDF.js nicht um.
+
+**Die Fassung steht in der Adresse.** `?fassung=N` bei Dokumenten; der
+Content-Endpunkt antwortet mit `X-Document-Version`. Gate 4 wird eine
+Signatur an genau eine Fassung binden — ein Viewer, der stillschweigend „die
+aktuelle" zeigt, wäre dafür die falsche Grundlage.
+
 ### 11. Zahlungen werden über den Webhook gebucht, nicht über die Rückkehr-URL
 
 Wer den Tab nach der Zahlung schliesst, sieht die Rückkehrseite nie. Gebucht

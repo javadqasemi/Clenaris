@@ -296,6 +296,64 @@ ist — das hält die Spezifikation ehrlich.
 - [ ] Impressum, Datenschutzerklärung und AGB juristisch geprüft
 - [ ] Wiederherstellung aus einer Sicherung einmal durchgespielt
 
+### 11.1 Offene Prüfungen vor dem Produktivgang
+
+Diese Punkte sind **weder** als Fehler **noch** als in Ordnung bewertet. Sie
+liessen sich in der Entwicklung nicht abschliessend prüfen und brauchen den
+Produktivbetrieb bzw. einen autorisierten Zugriff darauf.
+
+**Sucuri SiteCheck: `403 Forbidden` — Ursache noch nicht ermittelt.**
+Status: `PRE-PRODUCTION VERIFICATION REQUIRED`. Kein Malware-Befund: Der
+externe Scanner erreicht die vorgeschaltete Infrastruktur und bekommt 403,
+mehr sagt der Befund nicht. Zu klären ist, **welche Schicht** antwortet:
+
+```
+Internet → DNS/CDN/WAF → Host-Firewall → Reverse Proxy (Nginx) → Next.js → Middleware → Clenaris
+```
+
+Vorgehen, ausschliesslich lesend und erst mit autorisiertem Zugriff:
+
+1. Von mindestens zwei externen Netzen `curl -I https://clenaris.qasemi.ch/`
+   und `curl -v … -o /dev/null`. Erwartung für eine öffentliche Startseite:
+   200 oder eine Weiterleitung auf 200 — nicht 401/403.
+2. Browser, gewöhnlicher `curl`-User-Agent und ein bot-ähnlicher Request
+   vergleichen. Bekommen nur automatisierte Clients 403, liegt die Ursache in
+   Bot-, WAF- oder Proxy-Regeln.
+3. Den Zeitpunkt des Scans notieren und ihn in Nginx-Access- und Error-Log,
+   Firewall/WAF-Log, Anwendungs- und Rate-Limit-Log suchen. Die Frage ist,
+   ob die Anfrage Next.js überhaupt erreicht.
+
+Entscheidungsbaum: Erscheint der Scan im Nginx-Log mit 403 → Nginx/App
+untersuchen. Erscheint er nicht, blockiert aber die Firewall/WAF →
+Perimeter-Regel. Leitet Nginx weiter und Next.js liefert 403 → Middleware,
+API oder Anwendungsregeln. Wird nur Sucuri blockiert, andere Bots nicht →
+die konkrete Regel benennen und erst dann entscheiden, ob überhaupt etwas zu
+ändern ist.
+
+**Nicht tun:** keine Sucuri-Adresse freischalten, nur damit der Scanner grün
+wird — und schon gar keine aus Blogbeiträgen oder Foren übernommene. Ein
+Scanner bekommt keinen Zugriff auf `/admin`, `/portal`, `/konto`, private
+APIs oder private Dateien, weil er ein Scanner ist. Ein grünes
+Sucuri-Ergebnis ist ein Signal unter zwölf, kein Sicherheitsnachweis: nach
+dem Rollout getrennt prüfen — HTTP/TLS, Security-Header, öffentliche
+Angriffsfläche, Reputation, DNS, CSP, Cookies, Auth-Endpunkte, Rate-Limits,
+Dateizugriff, `PublicAccessToken`-Flüsse, Informationspreisgabe.
+
+**Supabase-Rücklauf beim Datei-Abschluss** (`downloadObject` in
+`src/lib/storage/supabase.ts`): implementiert und typgeprüft, aber nie gegen
+einen echten Objektspeicher gefahren. Status:
+`PRE-PRODUCTION VERIFICATION REQUIRED`.
+
+**Stripe-Rückkehr:** Die Rückkehradressen sind nachweislich frei von
+Clenaris-Tokens (`tests/api/stripe-rueckkehr.test.ts`). Ein vollständiger
+Durchlauf gegen einen Stripe-Doppelgänger — unbekannte Sitzung, falscher
+Zweck, fremde Rechnung, API-Fehler — steht aus, weil Stripe in der
+Entwicklung nicht eingerichtet ist.
+
+**Legacy-Links (`LEGACY_PUBLIC_TOKENS`):** Vor dem Rollout offene Vorgänge
+inventarisieren, sichere Links ausstellen, neu versenden, dann den Schalter
+auf der sicheren Seite lassen. Ohne gesetzte Variable ist er aus.
+
 ---
 
 # Teil II — Automatische Auslieferung auf einen eigenen Server

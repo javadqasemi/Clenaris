@@ -190,6 +190,21 @@ describe('Rauchtest', { concurrency: 1 }, async () => {
       });
     }
 
+    /**
+     * Die interne Offertansicht der Kundschaft (Gate 2.5) — mit einer
+     * *eigenen* Offerte, nicht mit der ersten aus der Verwaltungssicht: Die
+     * Seite ist auf Eigentümerschaft gebaut, und die erste Offerte der
+     * Verwaltung gehört nicht zwingend dem Demokundenkonto.
+     */
+    it('/konto/offerten/:id', async () => {
+      const eigene = await get<{ data: { id: string }[] }>('/api/quotes?pageSize=1', { jar: jars.customer });
+      const id = eigene.payload?.data?.[0]?.id ?? null;
+      if (!id) return;
+      const response = await get(`/konto/offerten/${id}`, { jar: jars.customer });
+      assert.ok(response.status >= 200 && response.status < 400, `HTTP ${response.status}`);
+      assert.ok(response.text.includes('data-pdf-viewer-mount'), 'Dokumentansicht fehlt');
+    });
+
     it('/admin/offerten/:id/bearbeiten', async () => {
       assert.ok(quoteId);
       const response = await get(`/admin/offerten/${quoteId}/bearbeiten`, { jar: jars.admin });

@@ -45072,6 +45072,115 @@
         }
       }
     },
+    "/api/bi/documents/{id}/content": {
+      "get": {
+        "tags": [
+          "Führung: Wissen und Markt"
+        ],
+        "summary": "Fassung anzeigen",
+        "description": "Die Bytes einer Fassung für den PDF-Viewer — dieselbe Sichtbarkeitsprüfung wie der Download, aber die Datei selbst statt einer Weiterleitung, damit der Viewer 403, 404 und ein unlesbares PDF unterscheiden kann. `X-Document-Version` nennt die ausgelieferte Fassung; PDF `inline`, alles andere `attachment`; nie zwischengespeichert. Protokolliert wie ein Download.\n\n**Zugriff:** Erfordert eine der Berechtigungen: `document:read`, `document:read_own`.\n\n**Rate-Limit-Klasse:** `apiRead`",
+        "operationId": "getBiDocumentsByIdContent",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "name": "version",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 10000
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "PDF-Dokument",
+            "content": {
+              "application/pdf": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHORIZED — keine oder abgelaufene Sitzung.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN — angemeldet, aber ohne die nötige Berechtigung.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NOT_FOUND — nicht vorhanden, oder für diese Sitzung nicht sichtbar.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/bi/knowledge": {
       "get": {
         "tags": [

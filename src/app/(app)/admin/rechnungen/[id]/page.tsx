@@ -15,6 +15,7 @@ import { StatusBadge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Alert } from '@/components/ui/primitives';
 import { DetailRow, DetailSection, PageHeader } from '@/components/app/page-parts';
+import { PdfViewer } from '@/components/app/pdf-viewer';
 import { InvoiceActions } from '@/features/admin/invoice-actions';
 
 export const metadata: Metadata = {
@@ -108,6 +109,21 @@ export default async function AdminInvoiceDetailPage({
 
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_22rem] lg:items-start">
         <div className="space-y-6">
+          {!isDraft ? (
+            <DetailSection
+              title="Dokument"
+              description="So sieht die Rechnung bei der Kundschaft aus — mit QR-Zahlteil."
+              body="flush"
+            >
+              <div className="p-3">
+                <PdfViewer
+                  source={`/api/invoices/${invoice.id}/pdf`}
+                  fileName={`Rechnung-${invoice.number}.pdf`}
+                />
+              </div>
+            </DetailSection>
+          ) : null}
+
           <DetailSection title="Positionen">
             <div className="overflow-x-auto py-2">
               <table className="data-table">

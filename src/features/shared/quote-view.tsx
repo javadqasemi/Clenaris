@@ -68,13 +68,18 @@ export interface QuoteViewProps {
    * Aufrufer entscheidet, welche Maske zu seinem Eingang gehört.
    */
   responsePanel?: ReactNode;
+  /**
+   * Die Dokumentansicht (PDF-Viewer). Auch sie bringt der Aufrufer mit,
+   * weil ihre Adresse vom Eingang abhängt — Capability-Link oder Sitzung.
+   */
+  preview?: ReactNode;
 }
 
 function daysLeft(validUntil: Date): number {
   return Math.max(0, Math.ceil((validUntil.getTime() - Date.now()) / 86_400_000));
 }
 
-export function QuoteView({ quote, pdfUrl, responsePanel }: QuoteViewProps) {
+export function QuoteView({ quote, pdfUrl, responsePanel, preview }: QuoteViewProps) {
   const recipient =
     quote.customer?.companyName ??
     (quote.customer
@@ -209,6 +214,13 @@ export function QuoteView({ quote, pdfUrl, responsePanel }: QuoteViewProps) {
 
       {quote.outroText ? (
         <p className="prose-measure mb-8 whitespace-pre-line leading-relaxed">{quote.outroText}</p>
+      ) : null}
+
+      {preview ? (
+        <section className="mb-10" aria-label="Offerte als Dokument">
+          <h2 className="mb-4 font-display text-lg font-semibold tracking-tight">Dokument</h2>
+          {preview}
+        </section>
       ) : null}
 
       {responsePanel ?? (

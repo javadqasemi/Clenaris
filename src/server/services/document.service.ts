@@ -7,7 +7,7 @@ import { audit } from '@/lib/audit';
 import { can } from '@/lib/auth/rbac';
 import type { SessionUser } from '@/lib/auth/session';
 import { BusinessRuleError, NotFoundError } from '@/lib/errors';
-import { createSignedDownloadUrl } from '@/lib/storage';
+import { createSignedDownloadUrl, readLocalBytes, readStoredBytes } from '@/lib/storage';
 import { addDays, today } from '@/lib/bi/periods';
 import type { AddDocumentVersionInput, CreateDocumentInput, UpdateDocumentInput } from '@/lib/validation/bi-knowledge';
 import { notify } from './notification.service';
@@ -256,6 +256,82 @@ export async function resolveDocumentDownload(session: SessionUser, organization
     ip,
   });
   return { url, filename: target.file.filename, mimeType: target.file.mimeType };
+}
+
+/**
+ * Die Bytes einer Dokumentfassung für die Anzeige — mit derselben
+ * Sichtbarkeitsprüfung wie alles andere in diesem Dienst.
+ *
+ * **Warum nicht die Download-Route wiederverwendet wird.** Sie leitet auf
+ * eine Speicheradresse weiter. Für den Viewer taugt das nicht: Er lädt die
+ * Bytes selbst, um Zugriff, „nicht gefunden" und Beschädigung
+ * auseinanderzuhalten, und eine Weiterleitung nimmt ihm diese Auskunft.
+ * Vor allem aber prüft die Speicheradresse (`/api/files/blob/…`) die
+ * Berechtigung gröber als dieses Modul: Sie kennt `document:read`, nicht
+ * `EMPLOYEE_PRIVATE` und die betroffene Person. `documentVisibilityWhere`
+ * ist die Quelle, und sie steht hier in der `where`-Klausel.
+ *
+ * **Welche Fassung.** Immer eine ausdrücklich benannte oder die geltende —
+ * und die Antwort sagt, welche es war. Gate 4 wird eine Signatur an genau
+ * eine Fassung binden; ein Viewer, der stillschweigend „die aktuelle" zeigt,
+ * wäre dafür die falsche Grundlage.
+ *
+ * Angesehen wird protokolliert wie heruntergeladen: Ein Personaldokument zu
+ * öffnen ist ein Zugriff, egal ob der Browser es speichert oder zeigt.
+ */
+export async function resolveDocumentContent(
+  session: SessionUser,
+  organizationId: string,
+  id: string,
+  version?: number,
+  ip?: string | null,
+): Promise<{ bytes: Buffer; filename: string; mimeType: string; version: number }> {
+  const document = await prisma.managedDocument.findFirst({
+    where: { ...documentVisibilityWhere(session, organizationId), id },
+    include: { currentVersion: { include: { file: { include: { storedFile: true } } } } },
+  });
+  if (!document) throw new NotFoundError('Dokument');
+
+  const target = version
+    ? await prisma.documentVersion.findFirst({
+        where: { documentId: id, version },
+        include: { file: { include: { storedFile: true } } },
+      })
+    : document.currentVersion;
+  if (!target) throw new NotFoundError('Fassung');
+
+  const file = target.file;
+  let bytes: Buffer | null = null;
+
+  if (file.storedFile) {
+    bytes = await readStoredBytes({
+      id: file.storedFile.id,
+      path: file.storedFile.path,
+      driver: file.storedFile.driver,
+    });
+  } else {
+    /**
+     * Altbestand vor Gate 2: kein Fremdschlüssel zur Ablage, nur die
+     * gespeicherte Adresse. Der kontrollierte Legacy-Weg — exakt diese eine
+     * Adressform, nichts erraten. Passt sie nicht, gibt es die Datei über
+     * diesen Weg nicht.
+     */
+    const treffer = /^\/api\/files\/blob\/([A-Za-z0-9_-]+)$/.exec(file.url);
+    if (treffer) bytes = await readLocalBytes(treffer[1]!);
+  }
+
+  if (!bytes) throw new NotFoundError('Datei');
+
+  await audit.exported({
+    organizationId,
+    userId: session.id,
+    entity: 'ManagedDocument',
+    entityId: id,
+    summary: `Dokument „${document.title}" (Fassung ${target.version}) angesehen`,
+    ip,
+  });
+
+  return { bytes, filename: file.filename, mimeType: file.mimeType, version: target.version };
 }
 
 /** Nachtlauf: ablaufende Dokumente einmal melden. */
