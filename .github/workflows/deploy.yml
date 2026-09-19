@@ -245,18 +245,41 @@ jobs:
           printf '%s\n' "$SSH_KEY" > ~/.ssh/id_deploy
           chmod 600 ~/.ssh/id_deploy
 
-          # Der Wirtsschlüssel gehört gepinnt. Ohne ihn ist die erste
-          # Verbindung ein Vertrauensvorschuss, den ein Angreifer im Netzweg
-          # einlösen kann — und in einer Pipeline ist *jede* Verbindung die
-          # erste, weil der Läufer bei null anfängt.
-          if [ -n "${KNOWN_HOSTS:-}" ]; then
-            printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
-            echo "Wirtsschlüssel aus dem Secret übernommen."
-          else
-            echo "::warning::Secret SERVER_SSH_KNOWN_HOSTS fehlt — der Wirtsschlüssel wird ungeprüft übernommen. Bitte nachtragen (siehe docs/deployment.md)."
-            ssh-keyscan -p "${PORT:-22}" -H "$HOST" > ~/.ssh/known_hosts 2>/dev/null
-          fi
+          # Der Wirtsschlüssel gehört gepinnt — und zwar zwingend.
+          #
+          # Hier stand ein Rückfall auf `ssh-keyscan`: Fehlte das Secret, nahm
+          # der Lauf den Schlüssel entgegen, den der Gegenüber gerade
+          # anbietet, und vertraute ihm. Das ist Vertrauen beim ersten
+          # Kontakt — sinnvoll an einem Arbeitsplatz, der sich den Schlüssel
+          # merkt, sinnlos in einer Pipeline: Der Läufer fängt jedes Mal bei
+          # null an, also ist *jede* Verbindung die erste, und die Prüfung
+          # findet nie statt. Wer sich zwischen Läufer und Server stellt,
+          # bekommt den privaten Auslieferungsschlüssel — und damit den
+          # Server.
+          #
+          # Deshalb: kein Rückfall. Fehlt das Secret, bricht die Auslieferung
+          # ab. Eine Warnung hätte denselben Text und dieselbe Wirkung wie
+          # vorher, nämlich keine.
+          test -n "${KNOWN_HOSTS:-}" || {
+            echo "::error::Secret SERVER_SSH_KNOWN_HOSTS fehlt. Ohne gepinnten Wirtsschlüssel wird nicht ausgeliefert — erzeugen mit 'ssh-keyscan -H <host>' auf einem vertrauenswürdigen Weg und den Fingerabdruck beim Anbieter gegenprüfen."
+            exit 1
+          }
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
           chmod 600 ~/.ssh/known_hosts
+
+          # Enthält die Datei überhaupt einen Schlüssel für diesen Wirt? Ein
+          # Secret mit dem Inhalt «x» wäre sonst genauso «gesetzt» wie ein
+          # echter Eintrag, und der Abbruch käme erst beim Verbinden — mit
+          # einer Meldung, die auf das Netz zeigt statt auf die Konfiguration.
+          #
+          # Bei einem abweichenden Port trägt der Eintrag die Form
+          # `[host]:port`; `ssh-keygen -F` erwartet ihn genauso.
+          if [ "${PORT:-22}" = "22" ]; then suchname="$HOST"; else suchname="[$HOST]:${PORT}"; fi
+          ssh-keygen -F "$suchname" -f ~/.ssh/known_hosts >/dev/null 2>&1 || {
+            echo "::error::SERVER_SSH_KNOWN_HOSTS enthält keinen Eintrag für ${suchname}. Bei einem Port ungleich 22 muss der Eintrag die Form [host]:port haben."
+            exit 1
+          }
+          echo "Wirtsschlüssel für ${suchname} aus dem Secret übernommen und vorhanden."
 
       - name: Secrets auf den Server übertragen
         env:
@@ -316,6 +339,7 @@ jobs:
             echo "NODE_ENV=production"
           } | ssh -i ~/.ssh/id_deploy -p "${PORT:-22}" \
                   -o BatchMode=yes -o ConnectTimeout=20 \
+                  -o StrictHostKeyChecking=yes \
                   "${USER_NAME}@${HOST}" \
                   "umask 077 && cat > '${APP_DIRECTORY}/.env.incoming'"
           echo "Secrets übertragen."
@@ -330,8 +354,13 @@ jobs:
           SKIP_ROLLBACK: ${{ inputs.skip_rollback && 'true' || 'false' }}
         run: |
           set -euo pipefail
+          # `StrictHostKeyChecking=yes` ausdrücklich: Die Vorgabe ist `ask`,
+          # und was `ask` unter `BatchMode` tut, hängt an der OpenSSH-Fassung
+          # des Läufers. Eine Sicherheitseigenschaft, die vom Abbild des
+          # Läufers abhängt, ist keine.
           ssh -i ~/.ssh/id_deploy -p "${PORT:-22}" \
               -o BatchMode=yes -o ConnectTimeout=20 -o ServerAliveInterval=30 \
+              -o StrictHostKeyChecking=yes \
               "${USER_NAME}@${HOST}" \
               "cd '${APP_DIRECTORY}' \
                && DEPLOY_BRANCH=main \
