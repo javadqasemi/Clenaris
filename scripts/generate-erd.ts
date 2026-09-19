@@ -138,8 +138,17 @@ const DOMAINS: Domain[] = [
       'die erst später ein Login erhalten. `RefreshToken` speichert nur den SHA-256-Hash und ' +
       'eine Familien-ID — daran erkennt die Rotation die Wiederverwendung eines bereits ' +
       'verbrauchten Tokens. `AuditLog` und `Consent` sind die Nachweisschicht für das ' +
-      'Schweizer DSG und die DSGVO.',
-    models: ['User', 'RefreshToken', 'VerificationToken', 'Consent', 'AuditLog'],
+      'Schweizer DSG und die DSGVO. `PublicAccessToken` ist die eine Stelle für Links, die ' +
+      'ohne Anmeldung funktionieren — Offerte, Rechnung, später Signatur: nur der SHA-256-Hash ' +
+      'liegt in der Datenbank, dazu Zweck, Ressource, Ablauf und Widerruf.',
+    models: [
+      'User',
+      'RefreshToken',
+      'VerificationToken',
+      'PublicAccessToken',
+      'Consent',
+      'AuditLog',
+    ],
   },
   {
     key: 'crm',

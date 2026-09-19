@@ -6,6 +6,7 @@ import { absoluteUrl } from '@/lib/utils';
 import { createCheckoutSession, ensureStripeCustomer } from '@/lib/payments/stripe';
 import { payInvoiceSchema } from '@/lib/validation/finance';
 import { publicTokenParams } from '@/lib/validation/queries';
+import { sha256Hex } from '@/lib/crypto';
 
 export const runtime = 'nodejs';
 
@@ -22,7 +23,12 @@ export const runtime = 'nodejs';
 export const POST = definePublicRoute({
   params: publicTokenParams,
   body: payInvoiceSchema,
-  rateLimit: 'apiWrite',
+  // Zahlung ist eine abschliessende Handlung über einen Link ohne Anmeldung —
+  // engeres Kontingent als `apiWrite`, und gezählt je Rechnung statt je
+  // Absender (Begründung in `rate-limit.ts`).
+  rateLimit: 'publicTokenAction',
+  rateLimitKey: ({ request }) =>
+    sha256Hex(request.nextUrl.pathname.split('/').at(-2) ?? 'unbekannt'),
   handler: async ({ params, body }) => {
     const invoice = await prisma.invoice.findUnique({
       where: { publicToken: params.token },

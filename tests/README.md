@@ -114,6 +114,8 @@ npx tsx --test tests/api/two-factor.test.ts    # eine einzelne Datei
 | `api/purge.test.ts` | Datenbereinigung: Seite und Endpunkt nur für die Systemverantwortung, Vorschau je Bereich, Bestätigungssatz, unbekannte Bereiche, Kundschaft nur zusammen mit den Finanzen — die Sperren, nicht das Löschen selbst |
 | `api/bi-rechenkerne.test.ts` | Abschreibung, Gesundheitswert, Budgetabweichung, Szenario und Perioden mit festen Zahlen — importiert Anwendungscode direkt, weil die Rechenkerne reine Funktionen sind |
 | `api/verschluesselung.test.ts` | Feldverschlüsselung (AES-256-GCM): Rundlauf, frischer Initialisierungsvektor je Aufruf, Bindung ans Feld, erkannte Manipulation, Klartext-Altbestand bleibt lesbar — importiert ebenfalls direkt, aus demselben Grund |
+| `api/zugriffstokens.test.ts` | Öffentliche Zugriffstokens, die reine Rechnung: 256 Bit aus dem CSPRNG, **kein gemeinsamer Präfix** (der Unterschied zu cuid, gemessen über 200 Werte), keine Wiederholungen, stabiles Einweg-Hashing — importiert direkt, weil sich Unerratbarkeit von aussen nicht beobachten lässt |
+| `api/oeffentliche-links.test.ts` | Dieselben Links über HTTP: geratene und missgebildete Werte bekommen dieselbe nichtssagende Antwort, ein Offert-Token öffnet keine Rechnung, **vier gleichzeitige Annahmen ergeben genau eine** (der behobene Rennzustand), keine nachträgliche Ablehnung, Versand stellt einen Link aus, Altbestandslinks funktionieren weiter |
 | `pages/smoke.test.ts` | Antwortet jede Seite und jeder Endpunkt je Rolle? |
 | `pages/tables.test.ts` | Läuft irgendeine Tabelle oder Liste aus ihrem Rahmen? |
 | `pages/sorting.test.ts` | Wirkt die Sortierung — und überlebt sie das Blättern? |

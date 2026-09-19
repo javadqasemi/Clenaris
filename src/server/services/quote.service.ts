@@ -1,4 +1,4 @@
-import 'server-only';
+﻿import 'server-only';
 
 import type { Prisma, Quote } from '@prisma/client';
 
@@ -25,6 +25,13 @@ import type {
 import { nextNumber } from './numbering.service';
 import { notify, notifyStaff } from './notification.service';
 import { createInvoiceFromQuote } from './invoice.service';
+import {
+  issuePublicToken,
+  noteTokenUse,
+  resolveWithLegacy,
+  revokeTokensFor,
+  tokenRejectionError,
+} from './access-token.service';
 
 /**
  * Offertenverwaltung.
@@ -559,7 +566,41 @@ export async function sendQuote(params: {
   }
 
   const firstName = quote.customer?.firstName ?? quote.lead?.firstName ?? 'Kundin/Kunde';
-  const publicUrl = absoluteUrl(`/offerte/${quote.publicToken}`);
+
+  /**
+   * Für jeden Versand ein frischer, sicherer Link.
+   *
+   * Vorher stand hier `quote.publicToken` — ein cuid, das als Geheimnis
+   * gedacht war und keines ist. Neue Versände bekommen jetzt einen Token aus
+   * 32 Zufallsbytes, von dem in der Datenbank nur der SHA-256-Hash liegt.
+   *
+   * **Warum die alten zuerst widerrufen werden.** Wird eine Offerte ein
+   * zweites Mal versendet — korrigierter Betrag, neue Adresse —, soll der
+   * erste Link nicht weiter gelten. Sonst lägen zwei gültige Schlüssel zu
+   * demselben Vorgang in zwei Postfächern, und der ältere zeigte auf einen
+   * Stand, den niemand mehr meint.
+   *
+   * **Warum der Link nirgends gespeichert wird.** Er lässt sich aus dem Hash
+   * nicht zurückrechnen — das ist der Sinn der Sache. Die Verwaltung kann
+   * einen verlorenen Link deshalb nicht anzeigen, sondern nur neu versenden.
+   * Genau so verhält sich auch die Passwortzurücksetzung.
+   */
+  await revokeTokensFor({
+    purpose: 'QUOTE_RESPOND',
+    resourceId: quote.id,
+    revokedById: params.actorId,
+  });
+  const link = await issuePublicToken({
+    organizationId: quote.organizationId,
+    purpose: 'QUOTE_RESPOND',
+    resourceId: quote.id,
+    createdById: params.actorId,
+    // Nach Ablauf der Offerte hat der Link keinen Zweck mehr. Zwei Wochen
+    // Nachlauf, damit eine kurz nach Fristende eintreffende Antwort nicht an
+    // einer toten Adresse landet, sondern die Meldung „abgelaufen" bekommt.
+    expiresAt: new Date(quote.validUntil.getTime() + 14 * 24 * 60 * 60 * 1000),
+  });
+  const publicUrl = absoluteUrl(`/offerte/${link.raw}`);
 
   let attachments: { filename: string; content: Buffer }[] | undefined;
   if (params.attachPdf !== false) {
@@ -631,20 +672,43 @@ export async function getQuoteByToken(token: string) {
   return quote;
 }
 
+/** Zustände, aus denen heraus eine Offerte noch beantwortet werden kann. */
+const BEANTWORTBAR = ['DRAFT', 'SENT', 'VIEWED', 'EXPIRED'] as const;
+
 export async function respondToQuote(params: {
   token: string;
   input: RespondQuoteInput;
   ip?: string;
 }): Promise<Quote> {
-  const quote = await prisma.quote.findUnique({
-    where: { publicToken: params.token },
+  /**
+   * Der Link wird über die zentrale Tokeninfrastruktur aufgelöst
+   * (`access-token.service.ts`), mit Rückfall auf das alte `publicToken`.
+   *
+   * Der Rückfall ist kein Versehen, sondern der Übergang: In Postfächern
+   * liegen bereits versendete Links, und sie von einem Tag auf den anderen
+   * abzuschalten stellte Kundschaft vor eine Fehlerseite, ohne dass sie etwas
+   * falsch gemacht hätte. `LEGACY_PUBLIC_TOKENS=aus` schaltet ihn ab — das
+   * ist der erste Schritt des geplanten Rollouts.
+   */
+  const aufgeloest = await resolveWithLegacy({
+    raw: params.token,
+    purpose: 'QUOTE_RESPOND',
+    legacyLookup: async (raw) => {
+      const treffer = await prisma.quote.findUnique({
+        where: { publicToken: raw },
+        select: { id: true, organizationId: true },
+      });
+      return treffer;
+    },
+  });
+  if (!aufgeloest.ok) throw tokenRejectionError(aufgeloest.reason, 'Offerte');
+
+  const quote = await prisma.quote.findFirst({
+    where: { id: aufgeloest.resourceId, organizationId: aufgeloest.organizationId },
     include: { customer: true, lead: true },
   });
   if (!quote || quote.deletedAt) throw new NotFoundError('Offerte');
 
-  if (['ACCEPTED', 'REJECTED', 'CONVERTED'].includes(quote.status)) {
-    throw new BusinessRuleError('Diese Offerte wurde bereits beantwortet.');
-  }
   if (quote.validUntil < new Date()) {
     throw new BusinessRuleError(
       'Diese Offerte ist abgelaufen. Wir erstellen Ihnen gerne ein aktualisiertes Angebot.',
@@ -653,8 +717,22 @@ export async function respondToQuote(params: {
 
   const accepted = params.input.decision === 'ACCEPT';
 
-  const updated = await prisma.quote.update({
-    where: { id: quote.id },
+  /**
+   * Der Statusübergang ist die Stelle, an der die Einmaligkeit hängt — nicht
+   * der Link.
+   *
+   * Vorher wurde gelesen, geprüft und danach geschrieben. Zwei gleichzeitige
+   * Annahmen sahen beide `SENT`, beide schrieben, beide lösten die
+   * Folgeaktionen aus: zwei Meldungen ans Büro, zwei Lead-Übergänge, zwei
+   * neu gerenderte PDF. Die Bedingung steht deshalb jetzt in der
+   * `where`-Klausel derselben Anweisung: `updateMany` trifft entweder eine
+   * Zeile oder keine, und PostgreSQL entscheidet das, nicht die Anwendung.
+   *
+   * Wer die Nachzügler-Anfrage stellt, bekommt dieselbe Meldung wie vorher —
+   * nur eben verlässlich und ohne Nebenwirkungen.
+   */
+  const uebergang = await prisma.quote.updateMany({
+    where: { id: quote.id, status: { in: [...BEANTWORTBAR] }, deletedAt: null },
     data: accepted
       ? {
           status: 'ACCEPTED',
@@ -670,6 +748,18 @@ export async function respondToQuote(params: {
           rejectReason: params.input.reason ?? null,
         },
   });
+
+  if (uebergang.count === 0) {
+    throw new BusinessRuleError('Diese Offerte wurde bereits beantwortet.');
+  }
+
+  const updated = await prisma.quote.findUniqueOrThrow({ where: { id: quote.id } });
+
+  // Ab hier läuft nur noch, wer den Übergang gewonnen hat — die
+  // Folgeaktionen können also nicht doppelt auslösen.
+  if (aufgeloest.tokenId) {
+    await noteTokenUse(aufgeloest.tokenId).catch(() => undefined);
+  }
 
   if (quote.leadId) {
     await prisma.lead.update({
@@ -1004,3 +1094,4 @@ function defaultTerms(): string {
     'Es gelten unsere Allgemeinen Geschäftsbedingungen.',
   ].join(' ');
 }
+

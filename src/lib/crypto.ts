@@ -1,4 +1,10 @@
-import { createCipheriv, createDecipheriv, hkdfSync, randomBytes } from 'node:crypto';
+import {
+  createCipheriv,
+  createDecipheriv,
+  createHash,
+  hkdfSync,
+  randomBytes,
+} from 'node:crypto';
 
 import { serverEnv } from '@/lib/env';
 
@@ -179,6 +185,24 @@ export function decryptNullable(value: string | null | undefined, context: strin
  * Verwendungsstelle: Ein Tippfehler im Kontext macht ein Chiffrat unlesbar,
  * und zwar erst beim Entschlüsseln — also Wochen später.
  */
+/**
+ * SHA-256 als Hexzeichenkette.
+ *
+ * Für zwei Dinge gedacht, die beide *keine* Passwörter sind: das Ablegen von
+ * Zugriffstokens (`PublicAccessToken.tokenHash`) und der Integritätsnachweis
+ * über Dateibytes.
+ *
+ * **Warum hier kein Argon2.** Ein Passwort ist kurz und von Menschen
+ * gewählt — dagegen hilft nur ein absichtlich langsames Verfahren mit Salz.
+ * Ein Token aus 32 Zufallsbytes hat 256 Bit Entropie; es lässt sich nicht
+ * erraten, auch nicht mit einer Regenbogentabelle, und ein Salz brächte
+ * nichts ausser dass die Suche über den Hash nicht mehr in einem Index läge.
+ * Genau dieselbe Überlegung steht hinter `RefreshToken.tokenHash`.
+ */
+export function sha256Hex(input: string | Buffer): string {
+  return createHash('sha256').update(input).digest('hex');
+}
+
 export const CRYPTO_CONTEXT = {
   twoFactorSecret: 'user.twoFactorSecret',
   ahvNumber: 'employee.ahvNumber',

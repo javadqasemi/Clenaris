@@ -17,7 +17,8 @@ export const maxDuration = 60;
  */
 export const GET = definePublicRoute({
   params: publicTokenParams,
-  rateLimit: 'apiRead',
+  // Engeres Kontingent als `apiRead` — siehe `rate-limit.ts`.
+  rateLimit: 'publicTokenRead',
   handler: async ({ params }) => {
     const booking = await prisma.booking.findUnique({
       where: { confirmationToken: params.token },

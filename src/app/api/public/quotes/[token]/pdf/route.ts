@@ -15,7 +15,9 @@ export const maxDuration = 60;
  */
 export const GET = definePublicRoute({
   params: publicTokenParams,
-  rateLimit: 'apiRead',
+  // Engeres Kontingent als `apiRead`: Bei einem Link ohne Anmeldung ist das
+  // Limit die zweite Verteidigungslinie hinter der Entropie des Tokens.
+  rateLimit: 'publicTokenRead',
   handler: async ({ params }) => {
     const quote = await prisma.quote.findUnique({
       where: { publicToken: params.token },

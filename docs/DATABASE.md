@@ -4,7 +4,7 @@
 > Diagramme sind damit nie älter als das Schema. Prosa und Bereichseinteilung
 > stehen in `scripts/generate-erd.ts`.
 
-**111 Modelle, 67 Aufzählungstypen, 1989 Felder.**
+**112 Modelle, 68 Aufzählungstypen, 2005 Felder.**
 PostgreSQL 16+; alle Zeitstempel als `timestamptz` in UTC, Anzeige in Europe/Zurich.
 
 ## Vier Entscheidungen, die das ganze Schema prägen
@@ -36,7 +36,7 @@ Beleg so lesbar, wie er ausgestellt wurde.
 ```mermaid
 flowchart LR
   stammdaten["Mandant und Stammdaten<br/><small>6 Modelle</small>"]
-  identitaet["Identität und Zugriff<br/><small>5 Modelle</small>"]
+  identitaet["Identität und Zugriff<br/><small>6 Modelle</small>"]
   crm["CRM<br/><small>13 Modelle</small>"]
   katalog["Leistungskatalog und Preislogik<br/><small>6 Modelle</small>"]
   auftrag["Buchung, Offerte, Einsatz<br/><small>10 Modelle</small>"]
@@ -123,7 +123,7 @@ erDiagram
 
 | Modell | Tabelle | Felder | Zweck |
 | --- | --- | --- | --- |
-| `Organization` | `organizations` | 107 | – |
+| `Organization` | `organizations` | 108 | – |
 | `NumberSequence` | `number_sequences` | 6 | – |
 | `OpeningHours` | `opening_hours` | 7 | – |
 | `Holiday` | `holidays` | 7 | – |
@@ -132,7 +132,7 @@ erDiagram
 
 ## Identität und Zugriff
 
-`User` trägt Anmeldung und Rolle; `Customer` und `Employee` sind die fachlichen Profile daneben. Diese Trennung erlaubt Gastbuchungen ohne Konto und Kundendatensätze, die erst später ein Login erhalten. `RefreshToken` speichert nur den SHA-256-Hash und eine Familien-ID — daran erkennt die Rotation die Wiederverwendung eines bereits verbrauchten Tokens. `AuditLog` und `Consent` sind die Nachweisschicht für das Schweizer DSG und die DSGVO.
+`User` trägt Anmeldung und Rolle; `Customer` und `Employee` sind die fachlichen Profile daneben. Diese Trennung erlaubt Gastbuchungen ohne Konto und Kundendatensätze, die erst später ein Login erhalten. `RefreshToken` speichert nur den SHA-256-Hash und eine Familien-ID — daran erkennt die Rotation die Wiederverwendung eines bereits verbrauchten Tokens. `AuditLog` und `Consent` sind die Nachweisschicht für das Schweizer DSG und die DSGVO. `PublicAccessToken` ist die eine Stelle für Links, die ohne Anmeldung funktionieren — Offerte, Rechnung, später Signatur: nur der SHA-256-Hash liegt in der Datenbank, dazu Zweck, Ressource, Ablauf und Widerruf.
 
 ```mermaid
 erDiagram
@@ -166,6 +166,16 @@ erDiagram
     DateTime usedAt
     DateTime createdAt
   }
+  PublicAccessToken {
+    String id PK
+    String organizationId
+    String tokenHash UK
+    PublicTokenPurpose purpose
+    String resourceId
+    String createdById
+    DateTime createdAt
+    DateTime expiresAt
+  }
   Consent {
     String id PK
     String userId
@@ -197,6 +207,7 @@ erDiagram
 | `User` | `users` | 51 | – |
 | `RefreshToken` | `refresh_tokens` | 10 | – |
 | `VerificationToken` | `verification_tokens` | 9 | – |
+| `PublicAccessToken` | `public_access_tokens` | 15 | – |
 | `Consent` | `consents` | 9 | – |
 | `AuditLog` | `audit_logs` | 13 | – |
 
@@ -1470,6 +1481,7 @@ exakte TypeScript-Typen.
 | `FileScope` | `BOOKING`, `QUOTE`, `INVOICE`, `JOB`, `CUSTOMER`, `EMPLOYEE`, `PROPERTY`, `BLOG`, `GALLERY`, `APPLICATION`, `EXPENSE`, `MESSAGE`, `OTHER`, `OBJECTIVE`, `INVESTMENT`, `RISK`, `CONTROL`, `DOCUMENT`, `ARTICLE`, `MEETING`, `REPORT` |
 | `AuditAction` | `CREATE`, `UPDATE`, `DELETE`, `LOGIN`, `LOGIN_FAILED`, `LOGOUT`, `PASSWORD_RESET`, `PERMISSION_CHANGE`, `EXPORT`, `IMPORT`, `PAYMENT`, `ACCESS_DENIED` |
 | `ConsentType` | `MARKETING_EMAIL`, `MARKETING_SMS`, `ANALYTICS`, `TERMS`, `PRIVACY`, `DATA_PROCESSING` |
+| `PublicTokenPurpose` | `QUOTE_VIEW`, `QUOTE_RESPOND`, `INVOICE_VIEW`, `BOOKING_MANAGE`, `DOCUMENT_VIEW`, `SIGNATURE_ACCESS`, `SIGNATURE_OTP` |
 | `CtaSlot` | `HEADER`, `HERO_PRIMARY`, `HERO_SECONDARY`, `SECTION_BANNER`, `FOOTER`, `MOBILE_BAR` |
 | `CtaStyle` | `PRIMARY`, `SECONDARY`, `OUTLINE`, `GHOST`, `ACCENT`, `SUCCESS`, `CUSTOM` |
 | `NavLocation` | `HEADER`, `HEADER_PANEL`, `FOOTER_SERVICES`, `FOOTER_COMPANY`, `FOOTER_LEGAL` |

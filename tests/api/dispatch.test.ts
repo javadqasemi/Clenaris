@@ -40,40 +40,6 @@ interface Fehler {
 const RUN = Date.now();
 const TITEL = `Prüfeinsatz ${RUN}`;
 
-/**
- * Jeder Lauf bekommt sein eigenes Kalenderfenster, weit in der Zukunft.
- *
- * Der Grund ist eine bewilligte Abwesenheit: Sie lässt sich über die
- * Schnittstelle **nicht** wieder entfernen — `withdrawAbsence` nimmt nur
- * beantragte Gesuche zurück, und das ist richtig so (eine Bewilligung, die
- * sich zurücknehmen liesse, wäre keine). Ein abgebrochener Lauf hinterlässt
- * also eine Ferienwoche, die dem nächsten Lauf im Weg steht — sichtbar als
- * „Für diesen Zeitraum besteht bereits ein Abwesenheitseintrag."
- *
- * Statt aufzuräumen, was sich nicht aufräumen lässt, weicht jeder Lauf aus.
- * Über ein Jahr gestreut ist eine Kollision zweier Läufe praktisch
- * ausgeschlossen, und die Einträge liegen so weit vorn, dass sie keiner
- * Planung und keiner anderen Prüfung in die Quere kommen.
- */
-const TAG0 = (() => {
-  /**
-   * Der Anker ist ein **Dienstag**, und das ist keine Kosmetik.
-   *
-   * `requestAbsence` zählt die effektiven Arbeitstage und weist einen Antrag
-   * ab, der keinen enthält („Der gewählte Zeitraum enthält keine
-   * Arbeitstage."). Ein zufällig auf ein Wochenende gefallenes Fenster liesse
-   * die Prüfung also scheitern, ohne dass am Produkt etwas falsch wäre.
-   *
-   * Von einem Dienstag aus liegen alle hier verwendeten Abstände (+1, +3,
-   * +30, +31) auf Werktagen — nachgerechnet, nicht gehofft.
-   */
-  const roh = 300 + (RUN % 365);
-  const date = new Date();
-  date.setDate(date.getDate() + roh);
-  // 0 = Sonntag … 2 = Dienstag
-  return roh + ((2 - date.getDay() + 7) % 7);
-})();
-
 function tag(offsetTage: number, stunde: number): string {
   const date = new Date();
   date.setDate(date.getDate() + offsetTage);
@@ -81,14 +47,62 @@ function tag(offsetTage: number, stunde: number): string {
   return date.toISOString();
 }
 
-const T_START = tag(TAG0, 8);
-const T_ENDE = tag(TAG0, 11);
-/** Überlappt T_START–T_ENDE um eine halbe Stunde. */
-const T_UEBERLAPPEND_START = tag(TAG0, 10);
-const T_UEBERLAPPEND_ENDE = tag(TAG0, 13);
-/** Anderer Tag, damit die Abwesenheitsprüfung isoliert bleibt. */
-const T_FREI_START = tag(TAG0 + 2, 8);
-const T_FREI_ENDE = tag(TAG0 + 2, 11);
+/**
+ * Das Kalenderfenster dieses Laufs — erst im `before` bestimmt, nicht geraten.
+ *
+ * **Warum es nicht einfach ein Zufallswert sein kann.** Der Lauf bewilligt
+ * eine Abwesenheit, und eine bewilligte Abwesenheit lässt sich über die
+ * Schnittstelle nicht mehr entfernen: `withdrawAbsence` nimmt nur beantragte
+ * Gesuche zurück, und das ist richtig so — eine Bewilligung, die sich
+ * zurücknehmen liesse, wäre keine. In `clenaris_test` sammeln sich diese
+ * Einträge also an, Lauf für Lauf.
+ *
+ * Der erste Versuch war ein über ein Jahr gestreuter Zufallswert. Das
+ * verschiebt das Problem nur: Jeder Lauf belegt eine gute Woche, und
+ * irgendwann trifft ein neues Fenster ein altes. Genau das ist passiert —
+ * „Anna Keller ist vom 28.06.–30.06. abwesend (Ferien, bewilligt)", mitten in
+ * einer Prüfung, die mit Abwesenheiten nichts zu tun hatte.
+ *
+ * Jetzt fragt der Lauf nach, statt zu hoffen: Er liest die vorhandenen
+ * Abwesenheiten und legt sein Fenster dahinter. Das ist auch die ehrlichere
+ * Prüfung — sie hängt nicht mehr davon ab, wie oft sie schon gelaufen ist.
+ */
+let TAG0 = 0;
+let T_START = '';
+let T_ENDE = '';
+let T_UEBERLAPPEND_START = '';
+let T_UEBERLAPPEND_ENDE = '';
+let T_FREI_START = '';
+let T_FREI_ENDE = '';
+
+/** Setzt `TAG0` auf den ersten freien Dienstag hinter allem Bestehenden. */
+function fensterFestlegen(belegtBisTage: number): void {
+  /**
+   * Der Anker ist ein **Dienstag**, und das ist keine Kosmetik.
+   *
+   * `requestAbsence` zählt die effektiven Arbeitstage und weist einen Antrag
+   * ab, der keinen enthält („Der gewählte Zeitraum enthält keine
+   * Arbeitstage."). Ein auf ein Wochenende gefallenes Fenster liesse die
+   * Prüfung scheitern, ohne dass am Produkt etwas falsch wäre.
+   *
+   * Von einem Dienstag aus liegen alle hier verwendeten Abstände (+1, +3,
+   * +30, +31) auf Werktagen — nachgerechnet, nicht gehofft.
+   */
+  const roh = Math.max(300, belegtBisTage + 14);
+  const date = new Date();
+  date.setDate(date.getDate() + roh);
+  // 0 = Sonntag … 2 = Dienstag
+  TAG0 = roh + ((2 - date.getDay() + 7) % 7);
+
+  T_START = tag(TAG0, 8);
+  T_ENDE = tag(TAG0, 11);
+  // Überlappt T_START–T_ENDE um eine halbe Stunde.
+  T_UEBERLAPPEND_START = tag(TAG0, 10);
+  T_UEBERLAPPEND_ENDE = tag(TAG0, 13);
+  // Anderer Tag, damit die Abwesenheitsprüfung isoliert bleibt.
+  T_FREI_START = tag(TAG0 + 2, 8);
+  T_FREI_ENDE = tag(TAG0 + 2, 11);
+}
 
 describe('Disposition — Buchung, Einsatz, Zuteilung', () => {
   let jars: Jars;
@@ -143,6 +157,23 @@ describe('Disposition — Buchung, Einsatz, Zuteilung', () => {
     annaId = personal.find((person) => person.user.email === 'anna.keller@clenaris.ch')!.id;
     zweiteKraftId = personal.find((person) => person.id !== annaId)!.id;
     assert.ok(annaId && zweiteKraftId, 'zwei Mitarbeitende im Demobestand');
+
+    /**
+     * Das Fenster hinter alles legen, was Anna schon an Abwesenheiten hat —
+     * bewilligte lassen sich nicht mehr entfernen und blieben sonst als
+     * Minen früherer Läufe liegen.
+     */
+    const abwesenheiten = data(
+      await get<{ data: { endDate: string; status: string }[] }>(
+        `/api/absences?employeeId=${annaId}`,
+        { jar: jars.admin },
+      ),
+    );
+    const heute = Date.now();
+    const spaetestesEnde = abwesenheiten
+      .filter((a) => a.status === 'APPROVED' || a.status === 'REQUESTED')
+      .reduce((max, a) => Math.max(max, new Date(a.endDate).getTime()), heute);
+    fensterFestlegen(Math.ceil((spaetestesEnde - heute) / 86_400_000));
   });
 
   after(async () => {

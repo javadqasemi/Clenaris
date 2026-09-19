@@ -34,6 +34,59 @@ export const RATE_LIMITS = {
   apiRead: { limit: 300, windowSeconds: 60 },
   apiWrite: { limit: 90, windowSeconds: 60 },
   webhook: { limit: 600, windowSeconds: 60 },
+
+  /**
+   * Links ohne Anmeldung — enger als `apiRead`/`apiWrite`.
+   *
+   * **Warum eigene Kontingente.** Bei einem angemeldeten Endpunkt schützt das
+   * Limit vor Überlast; der Zugang selbst hängt an der Sitzung. Bei einem
+   * Capability-Link ist das Limit die *zweite* Verteidigungslinie hinter der
+   * Entropie des Tokens — und die einzige, die greift, während jemand rät.
+   *
+   * `apiRead` mit 300/min und `apiWrite` mit 90/min ergeben zusammen 390
+   * Versuche pro Minute, also 23 400 pro Stunde und IP. Gegen 256 Bit Entropie
+   * ist das bedeutungslos; gegen die alten cuid-Tokens mit vorhersagbarem
+   * Kopf war es zu viel. Da alte Links während des Übergangs weiterhin
+   * akzeptiert werden, gelten hier die engeren Zahlen — sie kosten legitime
+   * Nutzung nichts: Wer eine Offerte ansieht, lädt sie wenige Male, nicht
+   * sechzigmal pro Minute.
+   */
+  publicTokenRead: { limit: 60, windowSeconds: 60 },
+  /**
+   * Abschliessende Handlungen: Offerte annehmen oder ablehnen, Rechnung
+   * bezahlen, später eine Unterschrift finalisieren.
+   *
+   * **Gezählt wird pro Token, nicht pro IP** — siehe `rateLimitKey` an den
+   * betroffenen Routen. Das ist der eigentliche Punkt dieses Kontingents, und
+   * er wurde erst beim zweiten Anlauf richtig:
+   *
+   * Wogegen es schützt, ist nicht das Erraten eines Tokens — dafür ist die
+   * Leseroute der billigere Weg, und gegen 256 Bit Entropie hilft ohnehin
+   * kein Kontingent. Es schützt gegen die *Kosten*, die ein gültiger Link
+   * auslösen kann: Eine Annahme rendert ein PDF neu und verschickt zwei
+   * Nachrichten. Diese Kosten hängen an der Ressource, nicht am Absender.
+   *
+   * Pro IP zu zählen war deshalb doppelt falsch. Es traf die Falschen —
+   * hinter einer Adresse kann ein ganzes Unternehmen stehen, und die eigene
+   * Prüfreihe lief prompt hinein — und es traf den Richtigen nicht: Wer eine
+   * einzelne Offerte hämmern will, wechselt die Adresse.
+   *
+   * Zehn Versuche in zehn Minuten **je Link** sind grosszügig für einen
+   * Menschen, der einmal zusagt und vielleicht einmal neu lädt, und hart für
+   * alles andere.
+   */
+  publicTokenAction: { limit: 10, windowSeconds: 600 },
+  /**
+   * Einmalkennwort anfordern. Eng, weil jede Anforderung eine E-Mail oder
+   * eine kostenpflichtige SMS auslöst — das Limit schützt hier auch die
+   * Rechnung, nicht nur das Verfahren.
+   */
+  otpRequest: { limit: 5, windowSeconds: 900 },
+  /**
+   * Einmalkennwort prüfen. Sechs Ziffern sind eine Million Möglichkeiten;
+   * ohne Bremse wären sie in Minuten durchprobiert.
+   */
+  otpVerify: { limit: 8, windowSeconds: 900 },
 } as const satisfies Record<string, RateLimitRule>;
 
 export type RateLimitName = keyof typeof RATE_LIMITS;

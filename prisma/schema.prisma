@@ -528,6 +528,7 @@ model Organization {
   contentBlocks     ContentBlock[]
   contentRevisions  ContentRevision[]
   storedFiles       StoredFile[]
+  publicTokens      PublicAccessToken[]
   seoMeta           SeoMeta[]
   accountingExports AccountingExport[]
   callsToAction     CallToAction[]
@@ -746,6 +747,87 @@ model VerificationToken {
   @@index([email, purpose])
   @@index([expiresAt])
   @@map("verification_tokens")
+}
+
+/// Ein Schluessel fuer genau eine Sache, ohne Anmeldung.
+///
+/// Der Anlass: `Quote.publicToken` und `Invoice.publicToken` waren
+/// `@default(cuid())`. Die Route dazu behauptete, der Token sei „unerratbar
+/// (cuid)" — cuid v1 ist aber ausdruecklich kein kryptografisches Geheimnis:
+/// Es besteht aus Zeitstempel, Zaehler, Maschinenkennung und einem kurzen
+/// Zufallsblock. Nachgemessen teilten sich die Tokens der Testdatenbank einen
+/// festen Praefix, waehrend die per CSPRNG erzeugten Buchungstokens kein
+/// einziges Zeichen gemeinsam hatten. Dazu kamen: Klartext in der Datenbank,
+/// kein Ablauf, kein Widerruf.
+///
+/// Statt das an drei Stellen einzeln zu flicken, gibt es jetzt **eine**
+/// Infrastruktur. Wer kuenftig einen oeffentlichen Link braucht, nimmt sie —
+/// und muss ueber Entropie, Hashing und Ablauf nicht mehr nachdenken.
+///
+/// **Was hier absichtlich fehlt: ein `resourceType`.** Der Zweck bestimmt die
+/// Art der Ressource eindeutig (`QUOTE_RESPOND` gehoert zu einer Offerte, nie
+/// zu etwas anderem). Eine zweite Spalte, die dasselbe noch einmal sagt,
+/// muesste synchron gehalten werden — und genau solche Paare laufen
+/// auseinander. Die Zuordnung steht einmal in
+/// `access-token.service.ts` und wird dort erzwungen.
+model PublicAccessToken {
+  id             String @id @default(cuid())
+  organizationId String
+
+  /// SHA-256 des rohen Tokens, hexadezimal. Der rohe Wert existiert nur bei
+  /// der Erzeugung und im versendeten Link — nie in der Datenbank, nie im
+  /// Protokoll.
+  tokenHash String             @unique
+  purpose   PublicTokenPurpose
+  /// Die eine Ressource, die dieser Token freigibt. Nie eine andere.
+  resourceId String
+
+  createdById String?
+  createdAt   DateTime  @default(now()) @db.Timestamptz(6)
+  expiresAt   DateTime  @db.Timestamptz(6)
+  revokedAt   DateTime? @db.Timestamptz(6)
+  revokedById String?
+
+  lastUsedAt DateTime? @db.Timestamptz(6)
+  useCount   Int       @default(0)
+
+  /// `null` = beliebig oft verwendbar, solange nicht abgelaufen oder
+  /// widerrufen. Das ist der Normalfall: Eine Rechnung darf man zweimal
+  /// ansehen, und ein Signaturlink muss bis zum Abschluss wieder aufrufbar
+  /// sein.
+  ///
+  /// Eine Zahl steht nur dort, wo die Einmaligkeit im **Token** liegt — beim
+  /// Einmalkennwort. Bei einer Offertannahme liegt sie dagegen im
+  /// Geschaeftszustand: Der Statusuebergang findet einmal statt, und der
+  /// Link darf danach weiter die angenommene Offerte zeigen.
+  maxUses Int?
+
+  /// Zeitpunkt der abschliessenden Handlung, falls es eine gibt. Reine
+  /// Nachweisangabe — die Sperre selbst kommt aus `maxUses` oder aus dem
+  /// Geschaeftszustand.
+  actionCompletedAt DateTime? @db.Timestamptz(6)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([purpose, resourceId])
+  @@index([organizationId, purpose])
+  @@index([expiresAt])
+  @@map("public_access_tokens")
+}
+
+/// Wofuer ein oeffentlicher Token gilt — und nur dafuer.
+///
+/// Ansehen und Handeln sind getrennt, auch wenn beide zur selben Offerte
+/// gehoeren: Ein Link, der nur das Dokument zeigt, soll nicht zugleich die
+/// Annahme ausloesen koennen.
+enum PublicTokenPurpose {
+  QUOTE_VIEW
+  QUOTE_RESPOND
+  INVOICE_VIEW
+  BOOKING_MANAGE
+  DOCUMENT_VIEW
+  SIGNATURE_ACCESS
+  SIGNATURE_OTP
 }
 
 /// Nachweis erteilter und widerrufener Einwilligungen mit Zeitpunkt und IP.
