@@ -14,6 +14,13 @@
 > 2FA-Geheimnis (S2), zeitkonstanter Cron-Vergleich (S5), Rollenprüfung im
 > Kundenbereich.
 >
+> Durch **Phase 2** zusätzlich überholt: F4 („Kein authentifiziertes
+> `POST /api/bookings`") und F5 („`GET`/`POST /api/jobs` fehlen") sind erledigt;
+> die Aussage in Abschnitt 3.3, Einsätze entstünden „nur aus Buchungen", stimmt
+> nicht mehr. Die Zeile „Disposition ✅" in Abschnitt 2.3 war zu freundlich: Das
+> Ziehen im Kalender prüfte weder Abwesenheit noch Überschneidung. Endpunktzahl
+> jetzt 377.
+>
 > Als **Feature-für-Feature-Landkarte** ist es weiterhin gültig und
 > detaillierter als das Audit; es bleibt deshalb stehen.
 

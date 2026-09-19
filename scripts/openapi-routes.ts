@@ -877,6 +877,35 @@ export const ROUTES: RouteDoc[] = [
   // -------------------------------------------------------------------------
   {
     method: 'get',
+    path: '/api/jobs',
+    tag: 'Einsätze',
+    summary: 'Einsätze auflisten',
+    description:
+      'Filter nach Status, Zeitraum, Kundschaft und zugeteilter Person, dazu Sortierung und ' +
+      'Blätterung. Wer nur `job:read_assigned` hat, bekommt ausschliesslich die eigenen ' +
+      'Einsätze — die Einschränkung steht in der where-Klausel, nicht in der Darstellung. ' +
+      'Objektangaben wie Schlüsseldepot und Alarmcode sind nicht Teil der Liste; sie gehören ' +
+      'auf den Rapport des einzelnen Einsatzes.',
+    guard: perm('any', 'job:read', 'job:read_assigned'),
+    rateLimit: 'apiRead',
+  },
+  {
+    method: 'post',
+    path: '/api/jobs',
+    tag: 'Einsätze',
+    summary: 'Einsatz anlegen',
+    description:
+      'Für Einsätze ohne vorangehende Buchung — Nachbesserung, Sonderauftrag, Hauswartung auf ' +
+      'Zuruf. Kundschaft, Adresse, Objekt, Leistung und Buchung werden gegen den Mandanten ' +
+      'und gegen die Kundschaft geprüft. Ein Team mitzugeben verlangt zusätzlich `job:assign`; ' +
+      'ob es zur geplanten Zeit kann, entscheidet dieselbe Regel wie beim Zuteilen.',
+    guard: perm('all', 'job:create'),
+    rateLimit: 'apiWrite',
+    body: operations.createJobSchema,
+    status: 201,
+  },
+  {
+    method: 'get',
     path: '/api/jobs/calendar',
     tag: 'Einsätze',
     summary: 'Einsätze im Zeitraum',
@@ -3027,6 +3056,24 @@ export const ROUTES: RouteDoc[] = [
       'kann mehrere Einsätze erzeugen, und ein Einsatz kann ohne Buchung bestehen.',
     guard: perm('all', 'booking:read'),
     rateLimit: 'apiRead',
+  },
+  {
+    method: 'post',
+    path: '/api/bookings',
+    tag: 'Buchungen',
+    summary: 'Buchung im Büro erfassen',
+    description:
+      'Telefonisch, am Schalter oder aus einer E-Mail. Derselbe Dienst wie die öffentliche ' +
+      'Buchung — Preis, Dauer, Mannschaft und Mehrwertsteuer rechnet ausschliesslich der ' +
+      'Server. Unterschiede: die Kundschaft kommt als customerId statt über die Adresse, die ' +
+      'Herkunft ist wählbar (eine telefonische Buchung als „Website" zu verbuchen verfälscht ' +
+      'jede Auswertung), eine interne Notiz ist möglich, und die Kapazitätsprüfung lässt sich ' +
+      'ausdrücklich übergehen — protokolliert. Die Meldung „Neue Online-Buchung" ans Büro ' +
+      'entfällt, die Bestätigung an die Kundschaft nicht.',
+    guard: perm('all', 'booking:create'),
+    rateLimit: 'apiWrite',
+    body: booking.staffBookingSchema,
+    status: 201,
   },
   {
     method: 'get',

@@ -1,4 +1,4 @@
-import 'server-only';
+﻿import 'server-only';
 
 import type { Booking, Frequency, Prisma } from '@prisma/client';
 
@@ -10,7 +10,7 @@ import { orderByFor, resolveSort, type SortOrder } from '@/lib/sort';
 import { randomToken } from '@/lib/auth/jwt';
 import { can, type ActorRole } from '@/lib/auth/rbac';
 import type { SessionUser } from '@/lib/auth/session';
-import type { CreateBookingInput, UpdateBookingInput } from '@/lib/validation/booking';
+import type { BookingCoreInput, UpdateBookingInput } from '@/lib/validation/booking';
 import {
   bookingCancelledEmail,
   bookingConfirmedEmail,
@@ -53,19 +53,46 @@ export interface CreateBookingResult {
 }
 
 /**
- * Legt eine Buchung an — funktioniert für eingeloggte Kunden und Gäste.
+ * Zusatzangaben, wenn die Buchung im Büro entsteht statt auf der Website.
+ *
+ * Gemeinsamer Dienst, zwei Wege hinein: Preisberechnung, Serienanlage,
+ * Adresslogik, Gutscheinzähler und Kundenstatistik sind in beiden Fällen
+ * dieselben, und ein zweiter Buchungsweg wäre ein zweiter Ort, an dem der
+ * Preis entstehen kann. Was sich unterscheidet, steht hier — und nur hier.
+ */
+export interface OfficeBookingContext {
+  /** Für wen gebucht wird. Im Büro bekannt, wird nicht aus der Adresse erraten. */
+  customerId: string;
+  source: Booking['source'];
+  internalNote?: string;
+  /**
+   * Kapazitätsprüfung übergehen.
+   *
+   * Keine eigene Berechtigung: Wer im Büro buchen darf, darf auch entscheiden,
+   * dass ein dringender Auftrag trotz voller Tagesplanung angenommen wird —
+   * das ist dieselbe Entscheidung, nicht eine weiterreichende. Der
+   * Protokolleintrag hält sie fest.
+   */
+  overrideCapacity: boolean;
+}
+
+/**
+ * Legt eine Buchung an — für eingeloggte Kunden, Gäste und das Büro.
  */
 export async function createBooking(params: {
   organizationId: string;
-  input: CreateBookingInput;
+  input: BookingCoreInput;
   session: SessionUser | null;
   ip?: string;
+  /** Gesetzt = Erfassung im Büro über `POST /api/bookings`. */
+  office?: OfficeBookingContext;
 }): Promise<CreateBookingResult> {
-  const { organizationId, input, session } = params;
+  const { organizationId, input, session, office } = params;
 
   // --- 1) Kunde auflösen oder anlegen --------------------------------------
-  const { customerId, isNewCustomer, customerEmail, customerName, userId } =
-    await resolveCustomer({ organizationId, input, session });
+  const { customerId, isNewCustomer, customerEmail, customerName, userId } = office
+    ? await resolveOfficeCustomer({ organizationId, customerId: office.customerId })
+    : await resolveCustomer({ organizationId, input, session });
 
   // --- 2) Preis serverseitig berechnen -------------------------------------
   const customer = await prisma.customer.findUniqueOrThrow({
@@ -123,13 +150,22 @@ export async function createBooking(params: {
   }
 
   // --- 3) Kapazität prüfen --------------------------------------------------
-  const slotCheck = await isSlotBookable({
-    organizationId,
-    start: input.scheduledStart,
-    durationMin: breakdown.durationMinutes,
-    crewSize: breakdown.crewSize,
-  });
-  if (!slotCheck.ok) throw new BusinessRuleError(slotCheck.reason!);
+  /**
+   * Die Kapazitätsprüfung hält den öffentlichen Buchungstrichter davon ab,
+   * mehr zuzusagen, als das Team schafft. Im Büro ist sie eine Empfehlung:
+   * Wer anruft, weil es brennt, bekommt einen Termin, und die Disposition
+   * löst es. Deshalb übergehbar — aber nur ausdrücklich, und der
+   * Protokolleintrag unten hält fest, dass es geschehen ist.
+   */
+  if (!office?.overrideCapacity) {
+    const slotCheck = await isSlotBookable({
+      organizationId,
+      start: input.scheduledStart,
+      durationMin: breakdown.durationMinutes,
+      crewSize: breakdown.crewSize,
+    });
+    if (!slotCheck.ok) throw new BusinessRuleError(slotCheck.reason!);
+  }
 
   // --- 4) Buchung + Job in einer Transaktion -------------------------------
   const scheduledEnd = new Date(
@@ -178,6 +214,7 @@ export async function createBooking(params: {
         rooms: input.rooms ?? null,
         windows: input.windows ?? null,
         customerNote: input.customerNote ?? null,
+        internalNote: office?.internalNote ?? null,
         accessNote: input.accessNote ?? null,
         subtotal: breakdown.subtotal,
         extrasTotal: breakdown.extrasTotal,
@@ -189,7 +226,9 @@ export async function createBooking(params: {
         vatAmount: breakdown.vatAmount,
         grossTotal: breakdown.grossTotal,
         priceBreakdown: breakdown as unknown as Prisma.InputJsonValue,
-        source: 'WEBSITE',
+        // Eine telefonische Buchung als „Website" zu verbuchen, verfälscht
+        // jede Auswertung darüber, woher die Aufträge kommen.
+        source: office?.source ?? 'WEBSITE',
         bookedByIp: params.ip ?? null,
         confirmationToken: randomToken(24),
         items: {
@@ -285,28 +324,43 @@ export async function createBooking(params: {
     entityId: booking.id,
   });
 
-  await notifyStaff({
-    organizationId,
-    title: 'Neue Online-Buchung',
-    body: `${customerName} · ${service?.name ?? 'Reinigung'} · ${booking.number}`,
-    link: `/admin/buchungen/${booking.id}`,
-    permission: 'booking:read',
-    emailContent: newBookingInternalEmail({
-      bookingNumber: booking.number,
-      customerName,
-      serviceName: service?.name ?? 'Reinigung',
-      scheduledStart: booking.scheduledStart,
-      grossTotal: toNumber(booking.grossTotal),
-      adminUrl: absoluteUrl(`/admin/buchungen/${booking.id}`),
-    }),
-  });
+  /**
+   * Die Meldung ans Büro entfällt bei einer Erfassung im Büro.
+   *
+   * „Neue Online-Buchung" an alle mit `booking:read` zu schicken, während eine
+   * dieser Personen sie gerade selbst eingetippt hat, ist kein Hinweis,
+   * sondern Lärm — und Lärm ist der Grund, warum Abzeichen und Meldungen nach
+   * zwei Tagen ignoriert werden. Die Bestätigung an die Kundschaft geht
+   * dagegen weiter hinaus: Sie hat die Buchung nicht selbst erfasst und
+   * braucht den Beleg samt Verwaltungslink.
+   */
+  if (!office) {
+    await notifyStaff({
+      organizationId,
+      title: 'Neue Online-Buchung',
+      body: `${customerName} · ${service?.name ?? 'Reinigung'} · ${booking.number}`,
+      link: `/admin/buchungen/${booking.id}`,
+      permission: 'booking:read',
+      emailContent: newBookingInternalEmail({
+        bookingNumber: booking.number,
+        customerName,
+        serviceName: service?.name ?? 'Reinigung',
+        scheduledStart: booking.scheduledStart,
+        grossTotal: toNumber(booking.grossTotal),
+        adminUrl: absoluteUrl(`/admin/buchungen/${booking.id}`),
+      }),
+    });
+  }
 
   await audit.created({
     organizationId,
     userId: session?.id ?? null,
     entity: 'Booking',
     entityId: booking.id,
-    summary: `Buchung ${booking.number} über die Website erstellt`,
+    summary: office
+      ? `Buchung ${booking.number} im Büro erfasst (${office.source})` +
+        (office.overrideCapacity ? ' — Kapazitätsprüfung übergangen' : '')
+      : `Buchung ${booking.number} über die Website erstellt`,
     ip: params.ip,
   });
 
@@ -1367,9 +1421,42 @@ async function bookingPdfAttachment(
   }
 }
 
+/**
+ * Kundschaft für eine Erfassung im Büro — aus der ID, nicht aus der Adresse.
+ *
+ * Der Mandantenfilter steht in der `where`-Klausel, nicht in einer Prüfung
+ * danach: Eine fremde Kundennummer wird schlicht nicht gefunden und ist von
+ * einer erfundenen nicht zu unterscheiden. Eine gesperrte Kundschaft läuft
+ * weiter unten in dieselbe Regel wie im öffentlichen Weg.
+ */
+async function resolveOfficeCustomer(params: {
+  organizationId: string;
+  customerId: string;
+}): Promise<{
+  customerId: string;
+  isNewCustomer: boolean;
+  customerEmail: string;
+  customerName: string;
+  userId: string | null;
+}> {
+  const customer = await prisma.customer.findFirst({
+    where: { id: params.customerId, organizationId: params.organizationId, deletedAt: null },
+    select: { id: true, email: true, firstName: true, lastName: true, companyName: true, userId: true },
+  });
+  if (!customer) throw new NotFoundError('Kundschaft');
+
+  return {
+    customerId: customer.id,
+    isNewCustomer: false,
+    customerEmail: customer.email,
+    customerName: customer.companyName ?? `${customer.firstName} ${customer.lastName}`,
+    userId: customer.userId,
+  };
+}
+
 async function resolveCustomer(params: {
   organizationId: string;
-  input: CreateBookingInput;
+  input: BookingCoreInput;
   session: SessionUser | null;
 }): Promise<{
   customerId: string;
@@ -1460,7 +1547,7 @@ async function resolveCustomer(params: {
   };
 }
 
-async function createAddress(tx: Tx, customerId: string, input: CreateBookingInput): Promise<string> {
+async function createAddress(tx: Tx, customerId: string, input: BookingCoreInput): Promise<string> {
   const address = input.address!;
   const created = await tx.address.create({
     data: {
@@ -1507,3 +1594,4 @@ export async function assertBookingOwnership(bookingId: string, customerId: stri
 }
 
 export { round2 };
+

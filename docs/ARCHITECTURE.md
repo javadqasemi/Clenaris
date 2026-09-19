@@ -32,7 +32,7 @@ Components lesen direkt — schreiben aber nie.
 
 ---
 
-## Die zwölf Entscheide
+## Die vierzehn Entscheide
 
 ### 1. Server Components zum Lesen, Route Handler zum Schreiben
 
@@ -211,6 +211,65 @@ mitgegeben: das Modell verteilt Aufwand auf Positionen, es erfindet keine
 Tarife. Verwendet werden `claude-opus-5` für anspruchsvolle Aufgaben und
 `claude-haiku-4-5` für schnelle, mit adaptivem Denken statt fester Budgets.
 Der Website-Chat streamt über Server-Sent-Events.
+
+### 13. Eine Regel entscheidet, wer eingeteilt werden darf
+
+Ob eine Person zu einer bestimmten Zeit auf einen Einsatz darf, beantwortet
+ausschliesslich `src/server/services/assignment.service.ts`.
+
+Vorher gab es die Frage an fünf Stellen und vier verschiedene Antworten:
+`assignJob` und `setJobTeam` prüften Doppelbelegung mit zwei wortgleichen
+Kopien, `createJob` prüfte nur, ob die Person zum aktiven Personal gehört,
+`moveJob` und `updateJob` prüften **gar nichts** — obwohl beide den Termin
+unter einem bereits eingeteilten Team wegschieben können. **Abwesenheiten
+prüfte keine der fünf Stellen**, und die Routendokumentation versprach genau
+das seit jeher.
+
+Die Regel unterscheidet zwei Schweregrade, weil nicht jeder Befund gleich
+schwer wiegt:
+
+| Befund | Verhalten |
+|---|---|
+| Person unbekannt oder nicht im aktiven Personal | blockiert |
+| Bewilligte Abwesenheit | blockiert |
+| Überschneidender Einsatz | blockiert |
+| Beantragte, noch nicht entschiedene Abwesenheit | warnt |
+| Ausserhalb der hinterlegten Arbeitszeit | warnt |
+
+Gewarnt statt blockiert wird dort, wo die Sperre mehr kaputt machte als sie
+verhindert: Ein unbeantwortetes Ferienbegehren darf die Planung nicht
+aufhalten, und `Availability` ist eine Planungshilfe, keine Zusage — ein
+Samstagseinsatz nach Absprache ist normal, und ihn zu verbieten hiesse, das
+Büro zu zwingen, zuerst ein Stammdatum zu ändern.
+
+Die Prüfung läuft **innerhalb der Transaktion**, in der auch geschrieben wird.
+Vorher lag sie davor: lesen, entscheiden, später schreiben — zwei gleichzeitige
+Zuteilungen sahen beide eine freie Person. Vollständig dicht wäre nur eine
+Ausschlussbedingung in der Datenbank (`EXCLUDE USING gist`); der Fensterschluss
+hier deckt den Fall ab, der in der Praxis auftritt: zweimal klicken.
+
+Geworfen wird ein `BusinessRuleError` (422) mit maschinenlesbaren Kennungen in
+`details.conflicts` — `EMPLOYEE_ABSENT`, `ASSIGNMENT_OVERLAP`,
+`EMPLOYEE_NOT_ACTIVE`, `EMPLOYEE_NOT_FOUND`, `OUTSIDE_AVAILABILITY`,
+`ABSENCE_REQUESTED` — und einem fertigen deutschen Satz als Meldung. Die
+Gegenrichtung gilt ebenso: `decideAbsence` verweigert die Bewilligung, solange
+im Zeitraum Einsätze zugeteilt sind. Erst umplanen, dann bewilligen.
+
+### 14. Zugangsgeheimnisse verlassen den Dienst nur auf Anforderung
+
+Der Alarmcode eines Objekts liegt verschlüsselt in der Spalte
+(`src/lib/crypto.ts`). Entschlüsselt wird er an genau einer Stelle:
+`getJobDetail` liefert ihn nur mit `includeAccessSecrets`, und die einzige
+Seite, die das setzt, ist der Einsatzrapport im Mitarbeitendenportal — dort
+steht die Person vor der Tür. Für Mitarbeitende hat dieselbe Funktion den
+Einsatz zuvor bereits auf die eigenen Zuteilungen eingegrenzt; die
+Entschlüsselung erbt die Schranke, statt sie ein zweites Mal zu formulieren.
+
+Die Einsatzliste enthält das Feld gar nicht, und das Einsatzdetail der
+Schnittstelle liefert es nicht mit. Vorher zog ein `property: true` die ganze
+Objektzeile samt Chiffrat in jede Antwort — unlesbar zwar, aber in einer
+Nutzlast, die es nicht braucht, hat es nichts verloren. Ins Prüfprotokoll
+gelangt der Code nie; `src/lib/audit.ts` redigiert das Feld ohnehin.
 
 ---
 

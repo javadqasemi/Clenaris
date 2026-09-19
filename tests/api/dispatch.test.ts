@@ -1,0 +1,668 @@
+﻿import { after, before, describe, it } from 'node:test';
+import assert from 'node:assert/strict';
+
+import { data, del, get, patch, post, put, requireServer } from '../helpers/client';
+import { loginAll, type AccountName } from '../helpers/accounts';
+
+/**
+ * Buchung → Einsatz → Zuteilung: der Weg, auf dem ein Auftrag zu Arbeit wird.
+ *
+ * Diese Datei hält die Lücken fest, die Phase 2 geschlossen hat:
+ *
+ *  • Eine Buchung liess sich nur über die **öffentliche** Route anlegen. Das
+ *    Büro musste den Umweg über eine bestehende Adresse nehmen, jede
+ *    telefonische Buchung zählte in den Auswertungen als „Website", und das
+ *    Rate-Limit des Buchungstrichters galt auch für die Sachbearbeitung.
+ *  • `GET`/`POST /api/jobs` gab es nicht. Ein Einsatz ohne vorangehende
+ *    Buchung — Nachbesserung, Sonderauftrag — war nicht erfassbar, obwohl der
+ *    Dienst dafür fertig war.
+ *  • **Abwesenheiten wurden bei der Zuteilung nirgends geprüft.** Wer in den
+ *    bewilligten Ferien war, liess sich widerspruchslos einteilen. Die
+ *    Routenregistrierung versprach die Prüfung sogar ausdrücklich.
+ *
+ * Aufgeräumt wird vollständig: Alles, was hier entsteht, trägt `RUN` im Titel
+ * und wandert am Ende in den Papierkorb. Ausgestellte Belege entstehen keine.
+ */
+
+type Jars = Record<AccountName, string>;
+
+interface JobSummary {
+  id: string;
+  number: string;
+  status: string;
+  title: string;
+}
+
+interface Fehler {
+  error: { code: string; message: string; details?: { conflicts?: { code: string }[] } };
+}
+
+const RUN = Date.now();
+const TITEL = `Prüfeinsatz ${RUN}`;
+
+/**
+ * Jeder Lauf bekommt sein eigenes Kalenderfenster, weit in der Zukunft.
+ *
+ * Der Grund ist eine bewilligte Abwesenheit: Sie lässt sich über die
+ * Schnittstelle **nicht** wieder entfernen — `withdrawAbsence` nimmt nur
+ * beantragte Gesuche zurück, und das ist richtig so (eine Bewilligung, die
+ * sich zurücknehmen liesse, wäre keine). Ein abgebrochener Lauf hinterlässt
+ * also eine Ferienwoche, die dem nächsten Lauf im Weg steht — sichtbar als
+ * „Für diesen Zeitraum besteht bereits ein Abwesenheitseintrag."
+ *
+ * Statt aufzuräumen, was sich nicht aufräumen lässt, weicht jeder Lauf aus.
+ * Über ein Jahr gestreut ist eine Kollision zweier Läufe praktisch
+ * ausgeschlossen, und die Einträge liegen so weit vorn, dass sie keiner
+ * Planung und keiner anderen Prüfung in die Quere kommen.
+ */
+const TAG0 = (() => {
+  /**
+   * Der Anker ist ein **Dienstag**, und das ist keine Kosmetik.
+   *
+   * `requestAbsence` zählt die effektiven Arbeitstage und weist einen Antrag
+   * ab, der keinen enthält („Der gewählte Zeitraum enthält keine
+   * Arbeitstage."). Ein zufällig auf ein Wochenende gefallenes Fenster liesse
+   * die Prüfung also scheitern, ohne dass am Produkt etwas falsch wäre.
+   *
+   * Von einem Dienstag aus liegen alle hier verwendeten Abstände (+1, +3,
+   * +30, +31) auf Werktagen — nachgerechnet, nicht gehofft.
+   */
+  const roh = 300 + (RUN % 365);
+  const date = new Date();
+  date.setDate(date.getDate() + roh);
+  // 0 = Sonntag … 2 = Dienstag
+  return roh + ((2 - date.getDay() + 7) % 7);
+})();
+
+function tag(offsetTage: number, stunde: number): string {
+  const date = new Date();
+  date.setDate(date.getDate() + offsetTage);
+  date.setHours(stunde, 0, 0, 0);
+  return date.toISOString();
+}
+
+const T_START = tag(TAG0, 8);
+const T_ENDE = tag(TAG0, 11);
+/** Überlappt T_START–T_ENDE um eine halbe Stunde. */
+const T_UEBERLAPPEND_START = tag(TAG0, 10);
+const T_UEBERLAPPEND_ENDE = tag(TAG0, 13);
+/** Anderer Tag, damit die Abwesenheitsprüfung isoliert bleibt. */
+const T_FREI_START = tag(TAG0 + 2, 8);
+const T_FREI_ENDE = tag(TAG0 + 2, 11);
+
+describe('Disposition — Buchung, Einsatz, Zuteilung', () => {
+  let jars: Jars;
+  let customerId = '';
+  let addressId = '';
+  let propertyId = '';
+  let serviceId = '';
+  let annaId = '';
+  let zweiteKraftId = '';
+
+  const angelegteJobs: string[] = [];
+  const angelegteBuchungen: string[] = [];
+
+  const jobAnlegen = async (body: Record<string, unknown>, jar = jars.admin) =>
+    post<{ data: { id: string; number: string } }>('/api/jobs', body, { jar });
+
+  before(async () => {
+    await requireServer();
+    jars = await loginAll();
+
+    /**
+     * Ausgangspunkt ist das **Objekt**, nicht die Kundschaft.
+     *
+     * Der Grund ist eine Falle, in die diese Datei einmal gelaufen ist: Die
+     * Kundenliste kommt mit der neuesten zuerst, und die neueste ist nach
+     * einem vorangegangenen Lauf von `flows.test.ts` eine Prüfkundschaft ohne
+     * Objekt und ohne Adresse. „Die erste Kundschaft" ist also nicht stabil.
+     * Ein Objekt mit Adresse dagegen stammt sicher aus dem Demo-Seed, und die
+     * zugehörige Kundschaft steht gleich daneben.
+     */
+    const objekte = data(
+      await get<{
+        data: { id: string; address: { id: string } | null; customer: { id: string } }[];
+      }>('/api/properties', { jar: jars.admin }),
+    );
+    const mitAdresse = objekte.find((objekt) => objekt.address !== null);
+    assert.ok(mitAdresse, 'Der Demobestand enthält ein Objekt mit Adresse');
+    propertyId = mitAdresse.id;
+    addressId = mitAdresse.address!.id;
+    customerId = mitAdresse.customer.id;
+
+    const leistungen = data(
+      await get<{ data: { id: string }[] }>('/api/services', { jar: jars.admin }),
+    );
+    serviceId = leistungen[0]!.id;
+
+    const personal = data(
+      await get<{ data: { id: string; user: { email: string } }[] }>('/api/employees', {
+        jar: jars.admin,
+      }),
+    );
+    annaId = personal.find((person) => person.user.email === 'anna.keller@clenaris.ch')!.id;
+    zweiteKraftId = personal.find((person) => person.id !== annaId)!.id;
+    assert.ok(annaId && zweiteKraftId, 'zwei Mitarbeitende im Demobestand');
+  });
+
+  after(async () => {
+    for (const jobId of angelegteJobs) {
+      await del(`/api/jobs/${jobId}`, { jar: jars.admin });
+    }
+    for (const bookingId of angelegteBuchungen) {
+      await del(`/api/bookings/${bookingId}`, { jar: jars.admin });
+    }
+  });
+
+  // =========================================================================
+  //  Buchung im Büro
+  // =========================================================================
+
+  it('POST /api/bookings: nur mit booking:create — Team und Kundschaft abgewiesen', async () => {
+    for (const rolle of ['employee', 'customer'] as const) {
+      const abgewiesen = await post(
+        '/api/bookings',
+        { customerId, serviceId, scheduledStart: T_FREI_START, addressId },
+        { jar: jars[rolle] },
+      );
+      assert.equal(abgewiesen.status, 403, `${rolle} erfasst keine Buchung`);
+    }
+  });
+
+  it('POST /api/bookings: erfasst im Büro, mit eigener Herkunft und serverseitigem Preis', async () => {
+    const antwort = await post<{
+      data: { id: string; number: string; status: string; grossTotal: string | number };
+    }>(
+      '/api/bookings',
+      {
+        customerId,
+        serviceId,
+        addressId,
+        scheduledStart: T_FREI_START,
+        squareMeters: 80,
+        source: 'PHONE',
+        internalNote: `Telefonisch, Prüflauf ${RUN}`,
+        // Ein mitgeschickter Preis darf nichts bewirken: Der Server rechnet
+        // selbst, und Zod wirft unbekannte Felder weg. Käme dieser Betrag je
+        // in der Antwort an, wäre der Preis vom Klienten bestimmbar.
+        grossTotal: 1,
+        netTotal: 1,
+      },
+      { jar: jars.admin },
+    );
+
+    assert.equal(antwort.status, 201, antwort.text);
+    const buchung = data(antwort);
+    angelegteBuchungen.push(buchung.id);
+
+    assert.ok(buchung.number.length > 0, 'Belegnummer vergeben');
+    assert.equal(buchung.status, 'PENDING');
+    assert.ok(
+      Number(buchung.grossTotal) > 1,
+      `Preis kommt vom Server, nicht aus der Anfrage (${buchung.grossTotal})`,
+    );
+  });
+
+  it('POST /api/bookings: fremde oder erfundene Kundschaft ergibt 404', async () => {
+    const antwort = await post(
+      '/api/bookings',
+      { customerId: 'clxxxxxxxxxxxxxxxxxxxxxxx', serviceId, addressId, scheduledStart: T_FREI_START },
+      { jar: jars.admin },
+    );
+    assert.equal(antwort.status, 404, antwort.text);
+  });
+
+  it('POST /api/bookings: ohne Adresse 422', async () => {
+    const antwort = await post(
+      '/api/bookings',
+      { customerId, serviceId, scheduledStart: T_FREI_START },
+      { jar: jars.admin },
+    );
+    assert.equal(antwort.status, 422, antwort.text);
+  });
+
+  // =========================================================================
+  //  Einsätze
+  // =========================================================================
+
+  it('GET /api/jobs: Verwaltung sieht alle, Kundschaft gar nichts', async () => {
+    const alle = await get<{
+      data: JobSummary[];
+      meta: { page: number; pageSize: number; total: number; totalPages: number };
+    }>('/api/jobs?pageSize=5', { jar: jars.admin });
+    assert.equal(alle.status, 200, alle.text);
+    assert.ok(Array.isArray(data(alle)), 'Liste');
+    assert.equal(alle.payload.meta?.pageSize, 5, 'mit Blätterangaben');
+    assert.ok(typeof alle.payload.meta?.total === 'number', 'mit Gesamtzahl');
+    assert.ok(data(alle).length <= 5, 'Seitengrösse wird eingehalten');
+
+    const kundschaft = await get('/api/jobs', { jar: jars.customer });
+    assert.equal(kundschaft.status, 403, 'Kundschaft hat keine Betriebssicht');
+  });
+
+  it('GET /api/jobs: Mitarbeitende sehen nur die eigenen — auch mit fremdem Filter', async () => {
+    const eigene = await get<{ data: { assignments: { employeeId: string }[] }[] }>(
+      `/api/jobs?employeeId=${zweiteKraftId}&pageSize=50`,
+      { jar: jars.employee },
+    );
+    assert.equal(eigene.status, 200, eigene.text);
+
+    // Der mitgeschickte fremde Filter wird vom eigenen überschrieben. Jeder
+    // gelieferte Einsatz muss eine Zuteilung auf Anna tragen.
+    for (const job of data(eigene)) {
+      assert.ok(
+        job.assignments.some((zuteilung) => zuteilung.employeeId === annaId),
+        'nur eigene Einsätze',
+      );
+    }
+  });
+
+  it('POST /api/jobs: legt einen Einsatz ohne Buchung an', async () => {
+    const antwort = await jobAnlegen({
+      customerId,
+      addressId,
+      propertyId,
+      serviceId,
+      title: TITEL,
+      scheduledStart: T_START,
+      scheduledEnd: T_ENDE,
+      estimatedMin: 180,
+    });
+
+    assert.equal(antwort.status, 201, antwort.text);
+    const job = data(antwort);
+    angelegteJobs.push(job.id);
+    assert.ok(job.number.length > 0, 'Einsatznummer vergeben');
+
+    const gelesen = await get<{ data: JobSummary }>(`/api/jobs/${job.id}`, { jar: jars.admin });
+    assert.equal(gelesen.status, 200);
+    assert.equal(data(gelesen).status, 'UNASSIGNED', 'ohne Team unbesetzt');
+  });
+
+  it('POST /api/jobs: Adresse einer fremden Kundschaft wird abgewiesen', async () => {
+    const objekte = data(
+      await get<{ data: { customer: { id: string } }[] }>('/api/properties', { jar: jars.admin }),
+    );
+    const zweiteKundschaft = objekte.find((objekt) => objekt.customer.id !== customerId)?.customer;
+    assert.ok(zweiteKundschaft, 'zweite Kundschaft im Demobestand');
+
+    const antwort = await jobAnlegen({
+      customerId: zweiteKundschaft.id,
+      addressId, // gehört der ersten Kundschaft
+      title: `${TITEL} fremd`,
+      scheduledStart: T_START,
+      scheduledEnd: T_ENDE,
+    });
+    assert.equal(antwort.status, 404, antwort.text);
+  });
+
+  it('POST /api/jobs: Kundschaft und Mitarbeitende dürfen nicht anlegen', async () => {
+    for (const rolle of ['employee', 'customer'] as const) {
+      const antwort = await jobAnlegen(
+        { customerId, title: `${TITEL} verboten`, scheduledStart: T_START, scheduledEnd: T_ENDE },
+        jars[rolle],
+      );
+      assert.equal(antwort.status, 403, `${rolle} legt keinen Einsatz an`);
+    }
+  });
+
+  // =========================================================================
+  //  Zuteilung
+  // =========================================================================
+
+  it('teilt aktives Personal zu', async () => {
+    const jobId = angelegteJobs[0]!;
+    const antwort = await post(
+      `/api/jobs/${jobId}/assign`,
+      { employeeIds: [annaId], notify: false },
+      { jar: jars.admin },
+    );
+    assert.equal(antwort.status, 200, antwort.text);
+
+    const job = await get<{ data: { status: string; assignments: { employeeId: string }[] } }>(
+      `/api/jobs/${jobId}`,
+      { jar: jars.admin },
+    );
+    assert.equal(data(job).status, 'SCHEDULED');
+    assert.deepEqual(
+      data(job).assignments.map((zuteilung) => zuteilung.employeeId),
+      [annaId],
+    );
+  });
+
+  it('erkennt die Überschneidung: 08–11 und 10:30–13 gehen nicht zusammen', async () => {
+    const zweiter = await jobAnlegen({
+      customerId,
+      addressId,
+      title: `${TITEL} überlappend`,
+      scheduledStart: T_UEBERLAPPEND_START,
+      scheduledEnd: T_UEBERLAPPEND_ENDE,
+    });
+    assert.equal(zweiter.status, 201, zweiter.text);
+    angelegteJobs.push(data(zweiter).id);
+
+    const antwort = await post<Fehler>(
+      `/api/jobs/${data(zweiter).id}/assign`,
+      { employeeIds: [annaId], notify: false },
+      { jar: jars.admin },
+    );
+
+    assert.equal(antwort.status, 422, antwort.text);
+    assert.equal(
+      antwort.payload.error.details?.conflicts?.[0]?.code,
+      'ASSIGNMENT_OVERLAP',
+      antwort.text,
+    );
+  });
+
+  it('weist eine erfundene Personal-ID ab, ohne ihre Existenz zu verraten', async () => {
+    const antwort = await post<Fehler>(
+      `/api/jobs/${angelegteJobs[0]}/assign`,
+      { employeeIds: ['clxxxxxxxxxxxxxxxxxxxxxxx'], notify: false },
+      { jar: jars.admin },
+    );
+    assert.equal(antwort.status, 422, antwort.text);
+    assert.equal(antwort.payload.error.details?.conflicts?.[0]?.code, 'EMPLOYEE_NOT_FOUND');
+  });
+
+  it('Kundschaft und Mitarbeitende teilen niemanden zu', async () => {
+    for (const rolle of ['employee', 'customer'] as const) {
+      const antwort = await post(
+        `/api/jobs/${angelegteJobs[0]}/assign`,
+        { employeeIds: [annaId], notify: false },
+        { jar: jars[rolle] },
+      );
+      assert.equal(antwort.status, 403, `${rolle} teilt nicht zu`);
+    }
+  });
+
+  // =========================================================================
+  //  Abwesenheit — der Kern von Phase 2
+  // =========================================================================
+
+  describe('Abwesenheit', () => {
+    let gesuchId = '';
+    let freierJobId = '';
+
+    const gesuchStellen = async (von: string, bis: string) => {
+      const antwort = await post<{ data: { id: string } }>(
+        '/api/absences',
+        { type: 'VACATION', startDate: von, endDate: bis, reason: `Prüflauf ${RUN}` },
+        { jar: jars.employee },
+      );
+      assert.equal(antwort.status, 201, antwort.text);
+      return data(antwort).id;
+    };
+
+    const tagOhneZeit = (offsetTage: number) => {
+      const date = new Date();
+      date.setDate(date.getDate() + offsetTage);
+      return date.toISOString().slice(0, 10);
+    };
+
+    before(async () => {
+      const job = await jobAnlegen({
+        customerId,
+        addressId,
+        title: `${TITEL} Abwesenheit`,
+        scheduledStart: T_FREI_START,
+        scheduledEnd: T_FREI_ENDE,
+      });
+      assert.equal(job.status, 201, job.text);
+      freierJobId = data(job).id;
+      angelegteJobs.push(freierJobId);
+    });
+
+    after(async () => {
+      if (gesuchId) await post(`/api/absences/${gesuchId}/withdraw`, undefined, { jar: jars.employee });
+    });
+
+    it('ein beantragtes Gesuch blockiert noch nicht', async () => {
+      gesuchId = await gesuchStellen(tagOhneZeit(TAG0 + 1), tagOhneZeit(TAG0 + 3));
+
+      const antwort = await post(
+        `/api/jobs/${freierJobId}/assign`,
+        { employeeIds: [annaId], notify: false },
+        { jar: jars.admin },
+      );
+      assert.equal(antwort.status, 200, `beantragt, nicht entschieden — ${antwort.text}`);
+
+      /**
+       * Für die nächste Prüfung wieder freiräumen — und zwar mit `PUT`, denn
+       * `/team` *setzt* das Team, es fügt nichts hinzu.
+       *
+       * Der Grund fürs Freiräumen ist die Gegenrichtung derselben Regel:
+       * `decideAbsence` verweigert die Bewilligung, solange im Zeitraum
+       * Einsätze zugeteilt sind („erst umplanen, dann bewilligen"). Die beiden
+       * Regeln greifen also ineinander — genau das soll so sein.
+       */
+      const geleert = await put(
+        `/api/jobs/${freierJobId}/team`,
+        { members: [], notify: false },
+        { jar: jars.admin },
+      );
+      assert.equal(geleert.status, 200, geleert.text);
+    });
+
+    it('ein bewilligtes Gesuch blockiert die Zuteilung', async () => {
+      const bewilligt = await post(
+        `/api/absences/${gesuchId}/decide`,
+        { status: 'APPROVED', decisionNote: 'Prüflauf' },
+        { jar: jars.admin },
+      );
+      assert.equal(bewilligt.status, 200, bewilligt.text);
+
+      const antwort = await post<Fehler>(
+        `/api/jobs/${freierJobId}/assign`,
+        { employeeIds: [annaId], notify: false },
+        { jar: jars.admin },
+      );
+
+      assert.equal(antwort.status, 422, antwort.text);
+      assert.equal(antwort.payload.error.details?.conflicts?.[0]?.code, 'EMPLOYEE_ABSENT');
+      assert.match(antwort.payload.error.message, /abwesend/i);
+    });
+
+    it('auch das Verschieben in die Ferien hinein wird abgewiesen', async () => {
+      // Der Einsatz bekommt zuerst ein Team an einem freien Tag …
+      const frei = await jobAnlegen({
+        customerId,
+        addressId,
+        title: `${TITEL} verschieben`,
+        scheduledStart: tag(TAG0 + 5, 8),
+        scheduledEnd: tag(TAG0 + 5, 11),
+      });
+      assert.equal(frei.status, 201, frei.text);
+      const jobId = data(frei).id;
+      angelegteJobs.push(jobId);
+
+      const zugeteilt = await post(
+        `/api/jobs/${jobId}/assign`,
+        { employeeIds: [annaId], notify: false },
+        { jar: jars.admin },
+      );
+      assert.equal(zugeteilt.status, 200, zugeteilt.text);
+
+      // … und wird dann in den bewilligten Ferienzeitraum gezogen.
+      const verschoben = await post<Fehler>(
+        `/api/jobs/${jobId}/move`,
+        { scheduledStart: T_FREI_START, scheduledEnd: T_FREI_ENDE },
+        { jar: jars.admin },
+      );
+      assert.equal(verschoben.status, 422, verschoben.text);
+      assert.equal(verschoben.payload.error.details?.conflicts?.[0]?.code, 'EMPLOYEE_ABSENT');
+    });
+
+    it('ein abgelehntes Gesuch blockiert nicht', async () => {
+      /**
+       * Ein **zweites** Gesuch, kein umentschiedenes erstes: `decideAbsence`
+       * lässt jeden Antrag genau einmal entscheiden („Dieser Antrag wurde
+       * bereits entschieden."), und das ist richtig so — eine Bewilligung, die
+       * sich zurücknehmen liesse, wäre keine.
+       */
+      const zweitesGesuch = await gesuchStellen(tagOhneZeit(TAG0 + 30), tagOhneZeit(TAG0 + 31));
+      const abgelehnt = await post(
+        `/api/absences/${zweitesGesuch}/decide`,
+        { status: 'REJECTED', decisionNote: 'Prüflauf' },
+        { jar: jars.admin },
+      );
+      assert.equal(abgelehnt.status, 200, abgelehnt.text);
+
+      const job = await jobAnlegen({
+        customerId,
+        addressId,
+        title: `${TITEL} trotz Absage`,
+        scheduledStart: tag(TAG0 + 30, 8),
+        scheduledEnd: tag(TAG0 + 30, 11),
+      });
+      assert.equal(job.status, 201, job.text);
+      angelegteJobs.push(data(job).id);
+
+      const antwort = await post(
+        `/api/jobs/${data(job).id}/assign`,
+        { employeeIds: [annaId], notify: false },
+        { jar: jars.admin },
+      );
+      assert.equal(antwort.status, 200, `abgelehnt heisst anwesend — ${antwort.text}`);
+    });
+  });
+
+  // =========================================================================
+  //  Zugangsdaten
+  // =========================================================================
+
+  describe('Zugangsdaten am Objekt', () => {
+    const CODE = `9${RUN % 1000}#`;
+    let jobId = '';
+    let jobNummer = '';
+
+    before(async () => {
+      const gesetzt = await patch(
+        `/api/properties/${propertyId}`,
+        { alarmCode: CODE },
+        { jar: jars.admin },
+      );
+      assert.equal(gesetzt.status, 200, gesetzt.text);
+
+      const job = await jobAnlegen({
+        customerId,
+        addressId,
+        propertyId,
+        title: `${TITEL} Zugang`,
+        scheduledStart: tag(TAG0 + 10, 8),
+        scheduledEnd: tag(TAG0 + 10, 11),
+      });
+      assert.equal(job.status, 201, job.text);
+      jobId = data(job).id;
+      jobNummer = data(job).number;
+      angelegteJobs.push(jobId);
+
+      const zugeteilt = await post(
+        `/api/jobs/${jobId}/assign`,
+        { employeeIds: [annaId], notify: false },
+        { jar: jars.admin },
+      );
+      assert.equal(zugeteilt.status, 200, zugeteilt.text);
+    });
+
+    it('erscheint weder im Klartext noch als Chiffrat in der Einsatzliste', async () => {
+      const liste = await get('/api/jobs?pageSize=50', { jar: jars.admin });
+      assert.equal(liste.status, 200);
+      assert.ok(!liste.text.includes(CODE), 'kein Klartext in der Liste');
+      assert.ok(!liste.text.includes('enc:v1:'), 'kein Chiffrat in der Liste');
+      assert.ok(!liste.text.includes('alarmCode'), 'das Feld ist gar nicht Teil der Liste');
+    });
+
+    it('erscheint auch im Einsatzdetail der Schnittstelle nicht', async () => {
+      // Die Schnittstelle liefert den Einsatz ohne Zugangsgeheimnisse; den
+      // Code bekommt nur der Rapport im Portal, der ihn wirklich braucht.
+      const detail = await get(`/api/jobs/${jobId}`, { jar: jars.admin });
+      assert.equal(detail.status, 200, detail.text);
+      assert.ok(!detail.text.includes(CODE), 'kein Klartext');
+      assert.ok(!detail.text.includes('enc:v1:'), 'kein Chiffrat');
+    });
+
+    it('steht auf dem Rapport der zugeteilten Person', async () => {
+      const seite = await get(`/portal/einsaetze/${jobId}`, { jar: jars.employee });
+      assert.equal(seite.status, 200, `Rapport erreichbar (${seite.status})`);
+      assert.ok(seite.text.includes(CODE), 'die zugeteilte Person sieht den Alarmcode');
+    });
+
+    it('bleibt für nicht zugeteilte Mitarbeitende unerreichbar', async () => {
+      // Anna abziehen, zweite Kraft einteilen — Anna darf danach weder den
+      // Einsatz noch den Code zu sehen bekommen.
+      const umgeteilt = await post(
+        `/api/jobs/${jobId}/assign`,
+        { employeeIds: [zweiteKraftId], notify: false },
+        { jar: jars.admin },
+      );
+      assert.equal(umgeteilt.status, 200, umgeteilt.text);
+
+      const seite = await get(`/portal/einsaetze/${jobId}`, { jar: jars.employee });
+
+      /**
+       * Geprüft wird der **Inhalt**, nicht der Statuscode — und das ist kein
+       * nachgiebiger Test, sondern der genauere.
+       *
+       * Die Seite hat ein `loading.tsx`. Next liefert deshalb sofort die
+       * Hülle mit 200 aus und schiebt den fertigen Inhalt im selben Strom
+       * nach. Wenn die Server Component danach `notFound()` wirft, ist der
+       * Statuscode längst abgeschickt und lässt sich nicht mehr ändern; die
+       * Nicht-gefunden-Darstellung kommt als Nachtrag im Strom. Das gilt für
+       * jede gestreamte Seite dieser Anwendung und ist keine Eigenheit dieses
+       * Einsatzes.
+       *
+       * Die Sicherheitsaussage hängt daran nicht: Entscheidend ist, dass von
+       * dem Einsatz nichts durchkommt — weder Nummer noch Alarmcode. Genau das
+       * steht hier.
+       */
+      assert.ok(!seite.text.includes(CODE), 'kein Alarmcode für eine fremde Person');
+      assert.ok(!seite.text.includes(jobNummer), 'und auch sonst nichts von diesem Einsatz');
+    });
+  });
+
+  // =========================================================================
+  //  Doppelte Einsätze aus einer Buchung
+  // =========================================================================
+
+  it('zweimaliges Bestätigen einer Buchung erzeugt keinen zweiten Einsatz', async () => {
+    const angelegt = await post<{ data: { id: string; number: string } }>(
+      '/api/bookings',
+      {
+        customerId,
+        serviceId,
+        addressId,
+        scheduledStart: tag(TAG0 + 20, 9),
+        squareMeters: 60,
+        source: 'PHONE',
+      },
+      { jar: jars.admin },
+    );
+    assert.equal(angelegt.status, 201, angelegt.text);
+    const bookingId = data(angelegt).id;
+    angelegteBuchungen.push(bookingId);
+
+    const zaehleEinsaetze = async () => {
+      const liste = await get<{ data: { bookingId: string | null }[] }>(
+        '/api/jobs?pageSize=100&from=' + encodeURIComponent(tag(TAG0 + 19, 0)) + '&to=' + encodeURIComponent(tag(TAG0 + 21, 0)),
+        { jar: jars.admin },
+      );
+      return data(liste).filter((job) => job.bookingId === bookingId).length;
+    };
+
+    const ersteBestaetigung = await post(`/api/bookings/${bookingId}/confirm`, undefined, {
+      jar: jars.admin,
+    });
+    assert.equal(ersteBestaetigung.status, 200, ersteBestaetigung.text);
+    assert.equal(await zaehleEinsaetze(), 1, 'ein Einsatz nach der ersten Bestätigung');
+
+    // Wiederholung — ob sie mit 200 oder 422 endet, entscheidet die
+    // Statusregel; entscheidend ist, dass kein zweiter Einsatz entsteht.
+    const zweiteBestaetigung = await post(`/api/bookings/${bookingId}/confirm`, undefined, {
+      jar: jars.admin,
+    });
+    assert.ok(zweiteBestaetigung.status < 500, zweiteBestaetigung.text);
+    assert.equal(await zaehleEinsaetze(), 1, 'auch nach der zweiten Bestätigung nur einer');
+  });
+});
+

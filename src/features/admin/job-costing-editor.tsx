@@ -220,7 +220,16 @@ export function JobCostingEditor({
           </ul>
         )}
 
-        <dl className="grid grid-cols-[1fr_auto] gap-x-3 gap-y-1 border-t border-border pt-2 text-sm">
+        {/*
+          `minmax(0,1fr)` statt `1fr`: Eine Grid-Spur hat als Mindestbreite
+          `auto`, also die Breite ihres längsten unteilbaren Inhalts. Ein
+          langer Materialname ohne Trennmöglichkeit drückt die Spalte damit
+          über den Rahmen hinaus, statt umzubrechen. `tables.test.ts` prüft
+          genau das — und hat es hier gefunden, sobald ein Einsatz **ohne
+          Buchung** existierte: Erst dann rendert diese Herleitung den Zweig
+          „kein Auftrag", und die Seite geriet überhaupt in die Stichprobe.
+        */}
+        <dl className="grid grid-cols-[minmax(0,1fr)_auto] gap-x-3 gap-y-1 border-t border-border pt-2 text-sm">
           <dt className="text-muted-foreground">Lohn gemäss Herleitung</dt>
           <dd className="text-right tabular-nums">{formatCurrency(breakdown.laborCost)}</dd>
           <dt className="text-muted-foreground">

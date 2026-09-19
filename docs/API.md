@@ -5,7 +5,7 @@
 > Quelle, aus der sowohl diese Referenz als auch die Laufzeitvalidierung
 > stammen.
 
-Stand: 374 Endpunkte. Die maschinenlesbare Fassung liegt in
+Stand: 377 Endpunkte. Die maschinenlesbare Fassung liegt in
 [`openapi.yaml`](./openapi.yaml) bzw. [`openapi.json`](./openapi.json).
 
 ## Grundlagen
@@ -1588,6 +1588,67 @@ Familie.
 - **Erfolg:** 200
 - **Mögliche Fehler:** 401, 403, 429, 500
 
+### `POST /api/bookings`
+
+**Buchung im Büro erfassen.** Telefonisch, am Schalter oder aus einer E-Mail. Derselbe Dienst wie die öffentliche Buchung — Preis, Dauer, Mannschaft und Mehrwertsteuer rechnet ausschliesslich der Server. Unterschiede: die Kundschaft kommt als customerId statt über die Adresse, die Herkunft ist wählbar (eine telefonische Buchung als „Website" zu verbuchen verfälscht jede Auswertung), eine interne Notiz ist möglich, und die Kapazitätsprüfung lässt sich ausdrücklich übergehen — protokolliert. Die Meldung „Neue Online-Buchung" ans Büro entfällt, die Bestätigung an die Kundschaft nicht.
+
+- **Zugriff:** Erfordert die Berechtigung: `booking:create`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 201
+- **Mögliche Fehler:** 400, 401, 403, 409, 422, 429, 500
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `serviceId` | string | ja | min. 1 Zeichen |
+| `extras` | object[] | – | max. 20 Einträge, Standard `[]` |
+| `extras[].extraId` | string | ja | min. 1 Zeichen |
+| `extras[].quantity` | integer | – | ≥ 1, ≤ 50, Standard `1` |
+| `frequency` | string | – | `ONCE` \| `WEEKLY` \| `BIWEEKLY` \| `MONTHLY` \| `QUARTERLY` \| `SEMIANNUAL` \| `ANNUAL` \| `CUSTOM`, Standard `"ONCE"` |
+| `scheduledStart` | union | ja | – |
+| `manualHours` | number | – | ≥ 0.5, ≤ 80 |
+| `urgent` | boolean | – | Standard `false` |
+| `propertyKind` | string | – | `APARTMENT` \| `HOUSE` \| `OFFICE` \| `COMMERCIAL` \| `INDUSTRIAL` \| `CONSTRUCTION_SITE` \| `PRACTICE` \| `RESTAURANT` \| `SCHOOL` \| `OTHER`, Standard `"APARTMENT"` |
+| `squareMeters` | integer | – | ≥ 5, ≤ 5000 |
+| `rooms` | number | – | ≥ 0.5, ≤ 40 |
+| `bathrooms` | integer | – | ≥ 0, ≤ 20 |
+| `windows` | integer | – | ≥ 0, ≤ 500 |
+| `hasPets` | boolean | – | Standard `false` |
+| `propertyId` | string | – | min. 1 Zeichen |
+| `firstName` | string | – | min. 2 Zeichen, max. 80 Zeichen |
+| `lastName` | string | – | min. 2 Zeichen, max. 80 Zeichen |
+| `email` | string | – | email, min. 1 Zeichen, max. 255 Zeichen |
+| `phone` | string | – | – |
+| `companyName` | string | – | max. 120 Zeichen |
+| `addressId` | string | – | min. 1 Zeichen |
+| `address` | object | – | – |
+| `address.label` | string | – | max. 60 Zeichen |
+| `address.street` | string | ja | min. 2 Zeichen, max. 120 Zeichen |
+| `address.streetNo` | string | – | max. 20 Zeichen |
+| `address.addition` | string | – | max. 120 Zeichen |
+| `address.postalCode` | string | ja | – |
+| `address.city` | string | ja | min. 2 Zeichen, max. 80 Zeichen |
+| `address.canton` | string | – | Standard `"BE"` |
+| `address.country` | string | – | Standard `"CH"` |
+| `address.lat` | number | – | ≥ -90, ≤ 90 |
+| `address.lng` | number | – | ≥ -180, ≤ 180 |
+| `address.placeId` | string | – | max. 200 Zeichen |
+| `address.accessNote` | string | – | max. 500 Zeichen |
+| `customerNote` | string | – | max. 2000 Zeichen |
+| `accessNote` | string | – | max. 500 Zeichen |
+| `couponCode` | string | – | max. 40 Zeichen |
+| `fileIds` | string[] | – | max. 10 Einträge, Standard `[]` |
+| `recurrence` | object | – | – |
+| `recurrence.interval` | integer | – | ≥ 1, ≤ 12, Standard `1` |
+| `recurrence.weekdays` | integer[] | – | max. 7 Einträge, Standard `[]` |
+| `recurrence.endDate` | union | – | – |
+| `recurrence.count` | integer | – | ≥ 2, ≤ 104 |
+| `customerId` | string | ja | min. 1 Zeichen |
+| `source` | string | – | `PHONE` \| `EMAIL` \| `WALK_IN` \| `REFERRAL` \| `PARTNER` \| `WEBSITE` \| `OTHER`, Standard `"PHONE"` |
+| `internalNote` | string | – | max. 4000 Zeichen |
+| `overrideCapacity` | boolean | – | Standard `false` |
+
 ### `GET /api/bookings/{id}`
 
 **Auftrag abrufen.** Kundschaft erhält nur den eigenen Auftrag; die Einschränkung setzt der Dienst über den `customerId`-Filter, nicht der Handler.
@@ -1910,6 +1971,48 @@ Familie.
 | `id` | string | ja | min. 1 Zeichen |
 
 ## Einsätze
+
+### `GET /api/jobs`
+
+**Einsätze auflisten.** Filter nach Status, Zeitraum, Kundschaft und zugeteilter Person, dazu Sortierung und Blätterung. Wer nur `job:read_assigned` hat, bekommt ausschliesslich die eigenen Einsätze — die Einschränkung steht in der where-Klausel, nicht in der Darstellung. Objektangaben wie Schlüsseldepot und Alarmcode sind nicht Teil der Liste; sie gehören auf den Rapport des einzelnen Einsatzes.
+
+- **Zugriff:** Erfordert eine der Berechtigungen: `job:read`, `job:read_assigned`.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 401, 403, 429, 500
+
+### `POST /api/jobs`
+
+**Einsatz anlegen.** Für Einsätze ohne vorangehende Buchung — Nachbesserung, Sonderauftrag, Hauswartung auf Zuruf. Kundschaft, Adresse, Objekt, Leistung und Buchung werden gegen den Mandanten und gegen die Kundschaft geprüft. Ein Team mitzugeben verlangt zusätzlich `job:assign`; ob es zur geplanten Zeit kann, entscheidet dieselbe Regel wie beim Zuteilen.
+
+- **Zugriff:** Erfordert die Berechtigung: `job:create`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 201
+- **Mögliche Fehler:** 400, 401, 403, 409, 422, 429, 500
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `bookingId` | string | – | min. 1 Zeichen |
+| `customerId` | string | ja | min. 1 Zeichen |
+| `addressId` | string | – | min. 1 Zeichen |
+| `propertyId` | string | – | min. 1 Zeichen |
+| `serviceId` | string | – | min. 1 Zeichen |
+| `title` | string | ja | min. 3 Zeichen, max. 200 Zeichen |
+| `scheduledStart` | string | ja | date-time |
+| `scheduledEnd` | string | ja | date-time |
+| `crewSize` | integer | – | ≥ 1, ≤ 20, Standard `1` |
+| `estimatedMin` | integer | – | ≥ 15, ≤ 1440, Standard `120` |
+| `travelMin` | integer | – | ≥ 0, ≤ 480, Standard `0` |
+| `description` | string | – | max. 4000 Zeichen |
+| `internalNote` | string | – | max. 4000 Zeichen |
+| `customerNote` | string | – | max. 4000 Zeichen |
+| `employeeIds` | string[] | – | max. 20 Einträge, Standard `[]` |
+| `checklist` | object[] | – | max. 100 Einträge, Standard `[]` |
+| `checklist[].label` | string | ja | min. 2 Zeichen, max. 200 Zeichen |
+| `checklist[].room` | string | – | max. 80 Zeichen |
+| `checklist[].required` | boolean | – | Standard `true` |
 
 ### `GET /api/jobs/calendar`
 

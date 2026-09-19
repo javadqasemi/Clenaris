@@ -5,7 +5,6 @@ import { ArrowLeft, KeyRound, MapPin, Navigation, Phone, ShieldAlert, StickyNote
 
 import { requireEmployeeId } from '@/lib/auth/session';
 import { NotFoundError } from '@/lib/errors';
-import { CRYPTO_CONTEXT, decryptNullable } from '@/lib/crypto';
 import { formatDateLong, formatDuration, formatPhone, timeRangeLabel } from '@/lib/utils';
 import { navigationUrl } from '@/lib/maps/google';
 import { getOrganizationId } from '@/server/services/organization.service';
@@ -35,22 +34,20 @@ export default async function PortalJobPage({ params }: { params: Promise<{ id: 
     organizationId,
     jobId: id,
     employeeId: session.role === 'EMPLOYEE' ? employeeId : undefined,
+    /**
+     * Der Rapport ist die Stelle, an der der Alarmcode gebraucht wird: Hier
+     * steht die Person vor der Tür. Für Mitarbeitende hat `getJobDetail` den
+     * Einsatz oben bereits auf die eigenen Zuteilungen eingegrenzt — die
+     * Entschlüsselung erbt damit dieselbe Schranke, ohne sie ein zweites Mal
+     * zu formulieren. Disponierende sehen ihn, weil sie ihn pflegen.
+     */
+    includeAccessSecrets: true,
   }).catch((error) => {
     if (error instanceof NotFoundError) notFound();
     throw error;
   });
 
-  /**
-   * Der Alarmcode liegt verschlüsselt in der Spalte (`src/lib/crypto.ts`) und
-   * wird genau hier zurückgewandelt: auf dem Rapport der Person, die vor der
-   * Tür steht. `getJobDetail` hat den Einsatz für Mitarbeitende bereits auf
-   * die eigenen Zuteilungen eingegrenzt — die Entschlüsselung erbt damit
-   * dieselbe Schranke, ohne sie ein zweites Mal zu formulieren.
-   *
-   * Die Umwandlung geschieht in der Server Component; über die Leitung geht
-   * nur der gerenderte Text, und auch der nur, wenn ein Code hinterlegt ist.
-   */
-  const alarmCode = decryptNullable(job.property?.alarmCode ?? null, CRYPTO_CONTEXT.alarmCode);
+  const alarmCode = job.alarmCode;
 
   const address = job.address
     ? `${job.address.street} ${job.address.streetNo ?? ''}, ${job.address.postalCode} ${job.address.city}`.replace(

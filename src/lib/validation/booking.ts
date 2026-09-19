@@ -60,6 +60,86 @@ export const priceEstimateSchema = z.object({
 export type PriceEstimateInput = z.infer<typeof priceEstimateSchema>;
 
 /**
+ * Die Felder, aus denen eine Buchung fachlich besteht.
+ *
+ * Bewusst ohne `acceptTerms` und `website`: Beides sind Anliegen des
+ * öffentlichen Formulars — eine Einwilligung, die der Browser erklärt, und
+ * ein Honigtopf gegen Roboter. Der Dienst greift auf keines von beiden zu
+ * (nachprüfbar: `booking.service.ts` erwähnt sie nirgends). Sie gehören
+ * deshalb an das Schema der öffentlichen Route, nicht an den gemeinsamen Kern.
+ *
+ * Aus diesem Kern entstehen zwei Schemas — die öffentliche Online-Buchung und
+ * die Erfassung im Büro. Sie unterscheiden sich in Authentifizierung,
+ * Pflichtfeldern und Herkunft, nicht im Gegenstand; deshalb eine Quelle und
+ * nicht zwei Listen, die auseinanderlaufen.
+ */
+const bookingCoreShape = {
+  // Leistung
+  serviceId: cuidSchema,
+  extras: z.array(extraSelectionSchema).max(20).default([]),
+  frequency: frequencyEnum.default('ONCE'),
+
+  // Termin
+  scheduledStart: isoDateSchema,
+  manualHours: z.number().min(0.5).max(80).nullish(),
+  urgent: z.boolean().default(false),
+
+  // Objekt
+  propertyKind: propertyKindEnum.default('APARTMENT'),
+  squareMeters: z.number().int().min(5).max(5000).nullish(),
+  rooms: z.number().min(0.5).max(40).nullish(),
+  bathrooms: z.number().int().min(0).max(20).nullish(),
+  windows: z.number().int().min(0).max(500).nullish(),
+  hasPets: z.boolean().default(false),
+  propertyId: cuidSchema.nullish(),
+
+  // Kontakt (bei Gastbuchung erforderlich)
+  firstName: nameSchema.optional(),
+  lastName: nameSchema.optional(),
+  email: emailSchema.optional(),
+  phone: phoneSchema.optional(),
+  companyName: z.string().trim().max(120).optional(),
+
+  // Adresse
+  addressId: cuidSchema.nullish(),
+  address: addressSchema.optional(),
+
+  // Sonstiges
+  customerNote: z.string().trim().max(2000).optional(),
+  accessNote: z.string().trim().max(500).optional(),
+  couponCode: z.string().trim().max(40).optional(),
+  fileIds: z.array(cuidSchema).max(10).default([]),
+
+  // Wiederholung
+  recurrence: z
+    .object({
+      interval: z.number().int().min(1).max(12).default(1),
+      weekdays: z.array(z.number().int().min(0).max(6)).max(7).default([]),
+      endDate: isoDateSchema.nullish(),
+      count: z.number().int().min(2).max(104).nullish(),
+    })
+    .optional(),
+} as const;
+
+/** Der Dienst nimmt genau diesen Kern entgegen — beide Wege reichen ihn durch. */
+export const bookingCoreSchema = z.object(bookingCoreShape);
+export type BookingCoreInput = z.infer<typeof bookingCoreSchema>;
+
+/**
+ * Ohne `as const`: Zod erwartet einen veränderlichen `path`, und ein
+ * `readonly`-Feld passt nicht auf `(string | number)[]`.
+ */
+const ADRESSE_PFLICHT = {
+  message: 'Bitte geben Sie die Einsatzadresse an.',
+  path: ['address'],
+};
+
+const RHYTHMUS_PFLICHT = {
+  message: 'Bitte legen Sie den Wiederholungsrhythmus fest.',
+  path: ['recurrence'],
+};
+
+/**
  * Öffentliche Online-Buchung.
  *
  * Die Buchung funktioniert mit *und* ohne Login: liegt keine Session vor,
@@ -69,64 +149,50 @@ export type PriceEstimateInput = z.infer<typeof priceEstimateSchema>;
  */
 export const createBookingSchema = z
   .object({
-    // Leistung
-    serviceId: cuidSchema,
-    extras: z.array(extraSelectionSchema).max(20).default([]),
-    frequency: frequencyEnum.default('ONCE'),
-
-    // Termin
-    scheduledStart: isoDateSchema,
-    manualHours: z.number().min(0.5).max(80).nullish(),
-    urgent: z.boolean().default(false),
-
-    // Objekt
-    propertyKind: propertyKindEnum.default('APARTMENT'),
-    squareMeters: z.number().int().min(5).max(5000).nullish(),
-    rooms: z.number().min(0.5).max(40).nullish(),
-    bathrooms: z.number().int().min(0).max(20).nullish(),
-    windows: z.number().int().min(0).max(500).nullish(),
-    hasPets: z.boolean().default(false),
-    propertyId: cuidSchema.nullish(),
-
-    // Kontakt (bei Gastbuchung erforderlich)
-    firstName: nameSchema.optional(),
-    lastName: nameSchema.optional(),
-    email: emailSchema.optional(),
-    phone: phoneSchema.optional(),
-    companyName: z.string().trim().max(120).optional(),
-
-    // Adresse
-    addressId: cuidSchema.nullish(),
-    address: addressSchema.optional(),
-
-    // Sonstiges
-    customerNote: z.string().trim().max(2000).optional(),
-    accessNote: z.string().trim().max(500).optional(),
-    couponCode: z.string().trim().max(40).optional(),
-    fileIds: z.array(cuidSchema).max(10).default([]),
-
-    // Wiederholung
-    recurrence: z
-      .object({
-        interval: z.number().int().min(1).max(12).default(1),
-        weekdays: z.array(z.number().int().min(0).max(6)).max(7).default([]),
-        endDate: isoDateSchema.nullish(),
-        count: z.number().int().min(2).max(104).nullish(),
-      })
-      .optional(),
-
+    ...bookingCoreShape,
     acceptTerms: consentSchema,
     website: honeypotSchema,
   })
-  .refine((data) => Boolean(data.addressId) || Boolean(data.address), {
-    message: 'Bitte geben Sie die Einsatzadresse an.',
-    path: ['address'],
-  })
-  .refine((data) => data.frequency === 'ONCE' || Boolean(data.recurrence), {
-    message: 'Bitte legen Sie den Wiederholungsrhythmus fest.',
-    path: ['recurrence'],
-  });
+  .refine((data) => Boolean(data.addressId) || Boolean(data.address), ADRESSE_PFLICHT)
+  .refine((data) => data.frequency === 'ONCE' || Boolean(data.recurrence), RHYTHMUS_PFLICHT);
 export type CreateBookingInput = z.infer<typeof createBookingSchema>;
+
+/**
+ * Buchung im Büro erfassen — telefonisch, am Schalter, aus einer E-Mail.
+ *
+ * Drei Unterschiede zur öffentlichen Buchung, und jeder hat einen Grund:
+ *
+ *  • **`customerId` ist Pflicht.** Bis hierher musste das Büro den Umweg über
+ *    `addressId` nehmen, aus der der Dienst die Kundschaft ableitete — ein
+ *    Kunde ohne erfasste Adresse liess sich gar nicht buchen. Wer im Büro
+ *    bucht, weiss, für wen.
+ *  • **`source` ist wählbar.** Die öffentliche Route schreibt fest `WEBSITE`.
+ *    Eine telefonische Buchung als „Website" zu verbuchen, verfälscht jede
+ *    Auswertung darüber, woher die Aufträge kommen.
+ *  • **`overrideCapacity`.** Die Kapazitätsprüfung schützt den Buchungstrichter
+ *    davor, mehr zuzusagen, als das Team schafft. Im Büro ist das Gegenteil
+ *    nötig: Wer anruft und dringend etwas braucht, bekommt einen Termin, und
+ *    die Disposition löst es. Die Übersteuerung ist ausdrücklich und wird
+ *    protokolliert — nicht stillschweigend.
+ *
+ * Keine Einwilligungs-Ankreuzbox und kein Honigtopf: Die Einwilligung gibt die
+ * Kundschaft am Telefon, und ein Roboter ruft nicht über eine angemeldete
+ * Sitzung mit `booking:create` an.
+ */
+export const staffBookingSchema = z
+  .object({
+    ...bookingCoreShape,
+    customerId: cuidSchema,
+    source: z
+      .enum(['PHONE', 'EMAIL', 'WALK_IN', 'REFERRAL', 'PARTNER', 'WEBSITE', 'OTHER'])
+      .default('PHONE'),
+    /** Nur intern sichtbar — die Kundschaft sieht diese Zeile nie. */
+    internalNote: z.string().trim().max(4000).optional(),
+    overrideCapacity: z.boolean().default(false),
+  })
+  .refine((data) => Boolean(data.addressId) || Boolean(data.address), ADRESSE_PFLICHT)
+  .refine((data) => data.frequency === 'ONCE' || Boolean(data.recurrence), RHYTHMUS_PFLICHT);
+export type StaffBookingInput = z.infer<typeof staffBookingSchema>;
 
 export const rescheduleBookingSchema = z.object({
   scheduledStart: isoDateSchema,

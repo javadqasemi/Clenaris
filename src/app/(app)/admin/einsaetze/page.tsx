@@ -3,9 +3,12 @@ import Link from 'next/link';
 import { CalendarDays, Truck } from 'lucide-react';
 
 import { requirePermission } from '@/lib/auth/session';
+import { can } from '@/lib/auth/rbac';
+import { prisma } from '@/lib/db';
 import { formatDate, formatDuration, formatTime, toQueryString } from '@/lib/utils';
 import { getOrganizationId } from '@/server/services/organization.service';
 import { listJobs } from '@/server/services/job.service';
+import { JobCreateButton } from '@/features/admin/job-create-dialog';
 import { StatusBadge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { PersonAvatar } from '@/components/ui/primitives';
@@ -47,10 +50,37 @@ export default async function AdminJobsPage({
 }: {
   searchParams: Promise<Record<string, string | undefined>>;
 }) {
-  await requirePermission('job:read');
+  const session = await requirePermission('job:read');
 
   const params = await searchParams;
   const organizationId = await getOrganizationId();
+
+  /**
+   * Auswahllisten für das Anlegeformular — nur geladen, wenn die Rolle den
+   * Einsatz überhaupt anlegen darf. Sonst zahlte jede Listenansicht zwei
+   * Abfragen für ein Formular, das sie nie zu sehen bekommt.
+   *
+   * Gedeckelt auf 200 Kundschaften: Ein Auswahlfeld mit mehr Einträgen ist
+   * ohnehin unbedienbar. Wächst der Bestand darüber hinaus, braucht das Feld
+   * eine Suche — und die gehört dann in die Kundenauswahl insgesamt, nicht
+   * nur hierher.
+   */
+  const darfAnlegen = can(session.role, 'job:create');
+  const [kundschaft, leistungen] = darfAnlegen
+    ? await Promise.all([
+        prisma.customer.findMany({
+          where: { organizationId, deletedAt: null },
+          select: { id: true, number: true, firstName: true, lastName: true, companyName: true },
+          orderBy: [{ companyName: 'asc' }, { lastName: 'asc' }],
+          take: 200,
+        }),
+        prisma.service.findMany({
+          where: { organizationId, active: true },
+          select: { id: true, name: true },
+          orderBy: { name: 'asc' },
+        }),
+      ])
+    : [[], []];
 
   const page = Math.max(1, Number(params.seite) || 1);
   const pageSize = 25;
@@ -85,12 +115,23 @@ export default async function AdminJobsPage({
         title="Einsätze"
         description="Die Betriebssicht auf jeden Auftrag: wer, wann, wo, mit welcher Checkliste. Zum Disponieren nutzen Sie den Kalender."
         actions={
-          <Button asChild variant="outline">
-            <Link href="/admin/kalender">
-              <CalendarDays aria-hidden />
-              Kalender
-            </Link>
-          </Button>
+          <>
+            <Button asChild variant="outline">
+              <Link href="/admin/kalender">
+                <CalendarDays aria-hidden />
+                Kalender
+              </Link>
+            </Button>
+            {darfAnlegen ? (
+              <JobCreateButton
+                customers={kundschaft.map((kunde) => ({
+                  id: kunde.id,
+                  label: `${kunde.companyName ?? `${kunde.firstName} ${kunde.lastName}`} · ${kunde.number}`,
+                }))}
+                services={leistungen}
+              />
+            ) : null}
+          </>
         }
       >
         <FilterBar

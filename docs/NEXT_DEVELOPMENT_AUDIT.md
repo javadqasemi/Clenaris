@@ -379,7 +379,9 @@ Legende: **✅** vollständig · **🟡** vorhanden mit Lücken · **❌** fehlt
 | S-01 | `PATCH /api/employees/[id]` erlaubt `MANAGER` das Schreiben von Lohn, AHV und IBAN; `GET` verbirgt dieselben Felder vor derselben Rolle | `employees/[id]/route.ts:46` vs. `:33` | **hoch** |
 | S-02 | Schemakommentare behaupten Verschlüsselung für `alarmCode` und `ahvNumber`; `src/lib/crypto` existiert nicht. `twoFactorSecret` im Klartext | `schema.prisma`, `two-factor.service.ts:89` | **hoch** |
 | B-01 | `alarmCode` wird validiert, aber von keiner Route gespeichert — stiller Datenverlust | `properties/route.ts:148`, `[id]/route.ts:111` | mittel |
-| O-01 | Einteilung und Verschieben prüfen keine bewilligte Abwesenheit | `job.service.ts:411`, `:1019` | **hoch** |
+| O-01 | Einteilung und Verschieben prüfen keine bewilligte Abwesenheit *(behoben in Phase 2 — `assignment.service.ts`)* | `job.service.ts:411`, `:1019` | **hoch** |
+| O-02 | `moveJob` prüfte beim Ziehen im Kalender weder Abwesenheit noch Überschneidung noch aktives Personal und legte beim Spaltenwechsel eine ungeprüfte Zuteilung an *(behoben in Phase 2)* | `job.service.ts moveJob` | **hoch** |
+| O-03 | Die Routendokumentation versprach eine Abwesenheitsprüfung, die es nicht gab *(behoben in Phase 2)* | `scripts/openapi-routes.ts` | mittel |
 | S-03 | `konto/layout.tsx` ohne eigene Rollenprüfung | `(app)/konto/layout.tsx:17` | mittel |
 | B-02 | `alternates.languages` zeigt auf nicht existierende Routen `/en`, `/fr`, `/it` | `src/app/layout.tsx:76` | niedrig |
 | B-03 | Gast-Buchungsseite kündigt Aktionen an, die es nicht gibt | `(public)/buchung/[token]/page.tsx:135` | niedrig |
@@ -397,14 +399,24 @@ Legende: **✅** vollständig · **🟡** vorhanden mit Lücken · **❌** fehlt
 
 Der billigste Fortschritt im Projekt: Dienst geschrieben, Endpunkt fehlt.
 
-| Dienst | Ort | Fehlt |
-|---|---|---|
-| `createCreditNote` | `invoice.service.ts:665` | `POST /api/invoices/[id]/credit-note` + Schaltfläche |
-| `generatePayslip` | `employee.service.ts:766` | `POST /api/employees/[id]/payslips` + Oberfläche |
-| `anonymizeCustomer` | `crm.service.ts:1001` | `POST /api/customers/[id]/anonymize` + Bestätigungsdialog |
-| `createJob` / `listJobs` | `job.service.ts:204`, `:1374` | `POST /api/jobs`, `GET /api/jobs` |
-| `createBooking` (authentifiziert) | `booking.service.ts:58` | `POST /api/bookings` |
-| Zeitkorrektur/Freigabe | Felder in `TimeEntry` vorhanden | Dienst **und** Endpunkt **und** Oberfläche |
+Stand nach Phase 2 — nachgeprüft am Code, nicht aus der Liste fortgeschrieben:
+
+| Dienst | Aktuelle API | Fehlende API | Berechtigung | Nötige Prüfungen |
+|---|---|---|---|---|
+| `createJob` / `listJobs` | ✅ `POST`/`GET /api/jobs` | — | `job:create` / `job:read`, `job:read_assigned` | ✅ `dispatch.test.ts` |
+| `createBooking` (Büro) | ✅ `POST /api/bookings` | — | `booking:create` | ✅ `dispatch.test.ts` |
+| `createCreditNote` | keine | `POST /api/invoices/[id]/credit-note` + Schaltfläche | `invoice:create` (vorhanden) | Summen, Bezug zur Ursprungsrechnung, Nummernfolge, keine Gutschrift auf Entwurf |
+| `generatePayslip` | keine | `POST /api/employees/[id]/payslips` + Oberfläche | `payslip:create` (vorhanden) | Abzüge gegen feste Erwartungswerte, Doppelerzeugung je Monat, Sichtbarkeit |
+| `anonymizeCustomer` | keine | `POST /api/customers/[id]/anonymize` + Bestätigung | `customer:delete` (vorhanden) | Belege bleiben, Personendaten verschwinden, Unumkehrbarkeit |
+| Zeitkorrektur / Freigabe | nur `clock-in`/`clock-out` | Dienst **und** Endpunkt **und** Oberfläche | `timetracking:approve` (vorhanden, ohne Konsument) | alter/neuer Wert, Grund, Person, Zeitpunkt |
+| `createInvoiceFromJobs` | ✅ `POST /api/bookings/[id]/invoice` | — | `invoice:create` | teilweise (`flows.test.ts`) |
+| `createInvoiceFromQuote` | ✅ über `quote.service.ts:840` | — | `quote:convert` | teilweise |
+
+Die vier offenen Punkte haben je einen fertigen Dienst und brauchen eine dünne
+Route. Sie gehören trotzdem nicht in eine Phase über Disposition: Gutschrift
+und Lohnabrechnung sind geldnahe Vorgänge mit eigener Prüfstrategie, die
+Anonymisierung ist unumkehrbar und braucht eine eigene Bestätigungsführung,
+und die Zeitkorrektur ist die Grundlage der Lohnrechnung.
 
 ---
 
@@ -417,6 +429,7 @@ Nach Phase geordnet. Alle vorwärts, keine destruktiven Schritte
 | Phase | Änderung | Grund |
 |---|---|---|
 | 1 | keine | Die Sicherheitsphase kommt ohne Schemaänderung aus; die Verschlüsselung nutzt dieselben `String`-Spalten mit Präfix `enc:v1:` |
+| 2 | **keine** | Alles Nötige stand schon im Schema: `Absence` mit `status`, `Availability` je Wochentag, `JobAssignment` mit `@@unique([jobId, employeeId])`, `Job.bookingId`, `Booking.source`, `Booking.internalNote`. Die Lücke war nirgends ein fehlendes Feld, sondern eine fehlende Abfrage — deshalb keine Migration. Eine Ausschlussbedingung gegen überschneidende Zuteilungen (`EXCLUDE USING gist` über Person und Zeitraum) wäre die einzige echte Schemaverbesserung; sie verlangt `btree_gist` und eine materialisierte Zeitspalte am `JobAssignment` und bekommt eine eigene Migration mit eigener Begründung |
 | 2 | `CleaningPlan`, `CleaningPlanArea`, `CleaningPlanTask`; `Property.cleaningPlanId`; `JobChecklistItem.planTaskId`, `.photoRequired`, `.estimatedMin` | 4.4 |
 | 2 | `Property`: `timeWindowFrom`, `timeWindowTo`, `hazards`, `onSiteEquipment`, `contactName`, `contactPhone` | 4.2 |
 | 2 | `QualityInspection`, `Defect` (Verortung auf Objekt/Raum/Planaufgabe, Frist, Nachbesserungs-Einsatz, Abnahme) | 4.8 |
@@ -475,13 +488,66 @@ abgewiesener Ansatz in der Historie landet.
 **Die Entwicklungsdatenbank `clenaris` wurde nicht verändert** — vorher wie
 nachher 3 Konten, 1 037 Protokollzeilen, `invoice = 9`, `lead = 1`.
 
-### Phase 2 — Betriebsablauf schliessen (P1)
+### Phase 2 — Buchung → Einsatz → Zuteilung · **umgesetzt am 2026-09-19**
 
-`POST /api/bookings` · `GET`/`POST /api/jobs` · O-01 (Abwesenheiten bei der
-Einteilung) · Gutschrift (Endpunkt + Schaltfläche) · Lohnabrechnung erzeugen +
-Kennzeichnung „betriebliche Lohnbasis" · Kundenanonymisierung · Zeitkorrektur
-und Freigabe mit vollständigem Änderungsnachweis · deterministische Tests für
-Preis-Engine, QR-Referenz, Rechnungssummen, Gutschrift, Zahlung, Webhook.
+Der Ausschnitt, den diese Phase geschlossen hat, ist der Übergang vom Auftrag
+zur Arbeit. Statusmatrix vor der Phase:
+
+| Bereich | Stand vorher | Gemacht |
+|---|---|---|
+| `POST /api/bookings` (authentifiziert) | **fehlte** | angelegt; das Büro musste zuvor die öffentliche Route benutzen |
+| `GET /api/jobs` | **fehlte** (Dienst fertig) | angelegt, mit Eigentümergrenze für Mitarbeitende |
+| `POST /api/jobs` | **fehlte** (Dienst fertig) | angelegt, mit Fremdschlüsselprüfung gegen Mandant *und* Kundschaft |
+| Abwesenheit bei der Zuteilung | **fehlte ganz** | zentrale Regel, blockiert bewilligte Abwesenheiten |
+| Überschneidungsprüfung | doppelt vorhanden, 2 von 5 Stellen | eine Regel, alle 5 Stellen |
+| `moveJob` (Ziehen im Kalender) | **prüfte nichts** | prüft das Team gegen die neue Zeit |
+| `updateJob` (Termin im Formular) | prüfte nichts | ebenso |
+| Buchung → Einsatz, Idempotenz | Zählung ohne Sperre | Zeilensperre `FOR UPDATE` |
+| Alarmcode im Einsatz | Chiffrat in jeder Antwort | nur auf Anforderung, nur auf dem Rapport |
+| Einsatz anlegen in der Oberfläche | fehlte | Dialog auf `/admin/einsaetze` |
+
+**Gefunden und behoben, ohne dass es auf der Liste stand:**
+
+- **`moveJob` war die grösste Lücke der Disposition.** Ein Einsatz liess sich
+  per Ziehen auf einen Tag legen, an dem das eingeteilte Team in den Ferien
+  war oder bereits woanders stand — und die Zuteilung blieb bestehen. Weder
+  Abwesenheit noch Überschneidung noch aktives Personal wurden geprüft; beim
+  Wechsel der Ressourcenspalte entstand sogar eine völlig ungeprüfte neue
+  Zuteilung.
+- **Die Routendokumentation war unwahr.** `scripts/openapi-routes.ts`
+  versprach bei `POST /api/jobs/{id}/assign` ausdrücklich „Prüft
+  Überschneidungen und **Abwesenheiten**". Die Abwesenheitsprüfung gab es
+  nicht. Das ist derselbe Fehlertyp wie das Schemafeld, das seine
+  Verschlüsselung behauptete, ohne dass es das Modul dazu gab (S-02).
+- **Eine Grid-Spur ohne `minmax(0,…)`** in der Nachkalkulation
+  (`job-costing-editor.tsx`). Gefunden von `tables.test.ts`, sobald es
+  Einsätze **ohne Buchung** gab: Erst dann rendert die Herleitung den Zweig
+  „kein Auftrag", und die Seite geriet überhaupt in die Stichprobe.
+
+**Was bewusst offen blieb** (gehört in eine spätere Phase, nicht hierher):
+Gutschrift, Lohnabrechnung erzeugen, Kundenanonymisierung, Zeitkorrektur und
+Freigabe. Alle vier haben einen fertigen Dienst und brauchen eine dünne
+Route — aber jede hängt an einem eigenen Arbeitsablauf mit eigener
+Prüfstrategie (Geld, Lohn, DSG-Löschbegehren, Lohnbasis), und die gehören
+nicht in eine Phase über Disposition. Abschnitt 6 führt sie weiter.
+
+**Werkzeuglauf nach Phase 2** (gegen `clenaris_test`, Port 3001):
+`npm run typecheck` → 0 · `npm run lint` → 0 · `npm run docs` → **377
+Endpunkte**, Schutz stimmt überein · `npm run build` → erfolgreich ·
+`npm test` → **631 Prüfungen, 627 bestanden, 0 fehlgeschlagen, 4
+übersprungen**. `clenaris` unverändert: 3 Konten, 0 Geschäftsdaten,
+Nummernfolge weiterhin `invoice = 9`, `lead = 1`.
+
+**Ein Befund, der als Befund stehen bleibt** (nicht behoben, weil die
+Behebung teurer wäre als der Nutzen): Eine Seite mit `loading.tsx` schickt die
+Hülle mit **HTTP 200** ab, bevor die Server Component fertig ist. Wirft diese
+danach `notFound()`, kommt die Nicht-gefunden-Darstellung als Nachtrag im
+Strom — der Statuscode bleibt 200. Das betrifft jede gestreamte Seite der
+Anwendung, nicht nur den Einsatzrapport. **Preisgegeben wird dabei nichts**:
+nachgemessen enthält die Antwort weder Einsatznummer noch Alarmcode. Wer den
+Statuscode korrigieren wollte, müsste das Streaming aufgeben und damit die
+wahrgenommene Ladezeit jeder Detailseite verschlechtern. `dispatch.test.ts`
+prüft deshalb den Inhalt statt des Codes und sagt im Kommentar warum.
 
 ### Phase 3 — Reinigungsbetrieb (P2)
 

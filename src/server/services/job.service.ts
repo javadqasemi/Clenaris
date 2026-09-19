@@ -7,6 +7,7 @@ import { BusinessRuleError, ForbiddenError, NotFoundError } from '@/lib/errors';
 import { absoluteUrl, round2 } from '@/lib/utils';
 import { orderByFor, resolveSort, type SortOrder } from '@/lib/sort';
 import { haversineMeters } from '@/lib/maps/google';
+import { CRYPTO_CONTEXT, decryptNullable } from '@/lib/crypto';
 import { jobAssignedEmail } from '@/lib/email/templates';
 import { smsTemplates } from '@/lib/sms/client';
 import { audit } from '@/lib/audit';
@@ -30,7 +31,7 @@ import type {
 import { nextNumber } from './numbering.service';
 import { notify } from './notification.service';
 import { invalidateAvailability } from './availability.service';
-import { activeStaffWhere } from './profile.service';
+import { assertAssignable } from './assignment.service';
 
 /**
  * Einsatzsteuerung (Disposition, Zeiterfassung, Abschluss).
@@ -153,6 +154,25 @@ const CHECKLIST_TEMPLATES: Record<ServiceKind, { label: string; room?: string }[
  * Läuft innerhalb der Transaktion des Aufrufers.
  */
 export async function createJobsForBooking(tx: Tx, bookingId: string): Promise<Job[]> {
+  /**
+   * Zeilensperre auf der Buchung, bevor gezählt wird.
+   *
+   * Die Doppelklick-Falle: Zwei gleichzeitige Bestätigungen derselben Buchung
+   * lasen beide `count === 0` und legten beide einen Einsatz an. Die
+   * Nummernfolge rettete nichts — sie serialisiert erst *nach* der Zählung
+   * und vergibt der zweiten Transaktion brav eine eigene Nummer. Herausgekommen
+   * wären zwei Einsätze für einen Auftrag, zwei Teams und zwei Rapporte.
+   *
+   * `FOR UPDATE` sperrt die Buchungszeile bis zum Commit. Die zweite
+   * Transaktion wartet, sieht danach `count === 1` und gibt eine leere Liste
+   * zurück — dieselbe Antwort, die ein wiederholter Aufruf immer schon
+   * bekommen hat. Das ist billiger als eine Eindeutigkeitsbedingung auf
+   * `bookingId`, die es verböte, einer Buchung je einen zweiten Einsatz zu
+   * geben (Nachbesserung, geteilter Auftrag) — und genau das soll möglich
+   * bleiben.
+   */
+  await tx.$queryRaw`SELECT id FROM bookings WHERE id = ${bookingId} FOR UPDATE`;
+
   const booking = await tx.booking.findUniqueOrThrow({
     where: { id: bookingId },
     include: {
@@ -208,9 +228,21 @@ export async function createJob(params: {
 }): Promise<Job> {
   const { organizationId, input } = params;
 
-  await assertActiveStaff(organizationId, input.employeeIds);
-
   const job = await prisma.$transaction(async (tx) => {
+    /**
+     * Die Eignungsprüfung steht innerhalb der Transaktion und vor dem
+     * Schreiben. Vorher stand hier nur `assertActiveStaff` — ein Einsatz liess
+     * sich also mit einem Team anlegen, dessen Mitglieder in den Ferien oder
+     * zur selben Zeit anderswo eingeteilt waren. Über den Kalender war das
+     * verboten, über das Formular nicht.
+     */
+    await assertAssignable(tx, {
+      organizationId,
+      employeeIds: input.employeeIds,
+      scheduledStart: input.scheduledStart,
+      scheduledEnd: input.scheduledEnd,
+    });
+
     const { number } = await nextNumber(tx, organizationId, 'job');
 
     const created = await tx.job.create({
@@ -277,8 +309,34 @@ export async function updateJob(params: {
 }): Promise<Job> {
   const job = await prisma.job.findFirst({
     where: { id: params.jobId, organizationId: params.organizationId, deletedAt: null },
+    include: { assignments: { select: { employeeId: true } } },
   });
   if (!job) throw new NotFoundError('Einsatz');
+
+  /**
+   * Das Bearbeitungsformular kann den Termin verschieben — dann gilt
+   * dieselbe Frage wie im Kalender: Kann das eingeteilte Team zur neuen Zeit?
+   * Ohne diese Prüfung wäre das Formular der Umweg um die Regel, die der
+   * Kalender durchsetzt.
+   *
+   * Nur wenn sich eine der beiden Zeiten wirklich ändert; sonst kostet jede
+   * Notizänderung zwei überflüssige Abfragen.
+   */
+  const neuerStart = params.input.scheduledStart ?? job.scheduledStart;
+  const neuesEnde = params.input.scheduledEnd ?? job.scheduledEnd;
+  const terminVerschoben =
+    neuerStart.getTime() !== job.scheduledStart.getTime() ||
+    neuesEnde.getTime() !== job.scheduledEnd.getTime();
+
+  if (terminVerschoben && job.assignments.length > 0) {
+    await assertAssignable(prisma, {
+      organizationId: params.organizationId,
+      employeeIds: job.assignments.map((assignment) => assignment.employeeId),
+      scheduledStart: neuerStart,
+      scheduledEnd: neuesEnde,
+      ignoreJobId: job.id,
+    });
+  }
 
   const updated = await prisma.job.update({
     where: { id: job.id },
@@ -341,6 +399,32 @@ export async function moveJob(params: {
   }
 
   const updated = await prisma.$transaction(async (tx) => {
+    /**
+     * Wer nach dem Verschieben vor der Tür steht, muss zur **neuen** Zeit
+     * können.
+     *
+     * Diese Prüfung fehlte hier vollständig — und das war die grösste Lücke
+     * der Disposition: Ein Einsatz liess sich per Ziehen auf einen Tag legen,
+     * an dem das eingeteilte Team in den Ferien war oder bereits woanders
+     * stand. Die Zuteilung blieb bestehen, niemand widersprach, und der
+     * Ausfall fiel am Einsatztag auf.
+     *
+     * Geprüft wird das Team, das der Einsatz *nachher* hat: entweder die neu
+     * gezogene Person allein (die Ressourcenspalte ersetzt das Team) oder das
+     * bisherige.
+     */
+    const teamNachher = params.employeeId
+      ? [params.employeeId]
+      : job.assignments.map((assignment) => assignment.employeeId);
+
+    await assertAssignable(tx, {
+      organizationId: params.organizationId,
+      employeeIds: teamNachher,
+      scheduledStart: params.scheduledStart,
+      scheduledEnd: params.scheduledEnd,
+      ignoreJobId: job.id,
+    });
+
     const result = await tx.job.update({
       where: { id: job.id },
       data: { scheduledStart: params.scheduledStart, scheduledEnd: params.scheduledEnd },
@@ -391,23 +475,12 @@ export async function moveJob(params: {
 // ---------------------------------------------------------------------------
 
 /**
- * Nur aktives Personal lässt sich einteilen — Personalakte aktiv *und*
- * Kontorolle ist Personal. Eine Person, deren Konto auf Kundschaft steht,
- * gehört nicht ins Team, auch wenn ihre Akte noch nicht stillgelegt ist; und
- * eine erfundene ID darf nicht erst als Fremdschlüsselfehler auffallen.
+ * Ob eine Person eingeteilt werden darf, beantwortet seit Phase 2
+ * ausschliesslich `assignment.service.ts` — aktives Personal, bewilligte
+ * Abwesenheiten, Überschneidungen und hinterlegte Arbeitszeit in einer Regel.
+ * Das frühere `assertActiveStaff` prüfte nur den ersten Punkt und stand
+ * ausserdem vor der Transaktion, also im Rennen mit dem eigenen Schreibvorgang.
  */
-async function assertActiveStaff(organizationId: string, employeeIds: string[]): Promise<void> {
-  if (employeeIds.length === 0) return;
-  const known = await prisma.employee.count({
-    where: { id: { in: employeeIds }, ...activeStaffWhere(organizationId) },
-  });
-  if (known !== new Set(employeeIds).size) {
-    throw new BusinessRuleError(
-      'Mindestens eine der gewählten Personen gehört nicht zum aktiven Personal.',
-    );
-  }
-}
-
 export async function assignJob(params: {
   organizationId: string;
   jobId: string;
@@ -421,35 +494,18 @@ export async function assignJob(params: {
   });
   if (!job) throw new NotFoundError('Einsatz');
 
-  await assertActiveStaff(params.organizationId, params.employeeIds);
-
-  // Doppelverplanung erkennen: überlappende Einsätze derselben Person.
-  const conflicts = await prisma.jobAssignment.findMany({
-    where: {
-      employeeId: { in: params.employeeIds },
-      jobId: { not: job.id },
-      job: {
-        deletedAt: null,
-        status: { notIn: ['CANCELLED', 'COMPLETED', 'VERIFIED'] },
-        scheduledStart: { lt: job.scheduledEnd },
-        scheduledEnd: { gt: job.scheduledStart },
-      },
-    },
-    include: {
-      employee: { include: { user: { select: { firstName: true, lastName: true } } } },
-      job: { select: { number: true } },
-    },
-  });
-
-  if (conflicts.length > 0) {
-    throw new BusinessRuleError(
-      `Terminkonflikt: ${conflicts
-        .map((c) => `${c.employee.user.firstName} ${c.employee.user.lastName} ist bereits für ${c.job.number} eingeteilt`)
-        .join('; ')}.`,
-    );
-  }
-
   await prisma.$transaction(async (tx) => {
+    // Eine Regel für alle fünf Stellen, die ein Team setzen — siehe
+    // `assignment.service.ts`. Innerhalb der Transaktion, damit zwischen
+    // Prüfen und Schreiben nichts dazwischenkommt.
+    await assertAssignable(tx, {
+      organizationId: params.organizationId,
+      employeeIds: params.employeeIds,
+      scheduledStart: job.scheduledStart,
+      scheduledEnd: job.scheduledEnd,
+      ignoreJobId: job.id,
+    });
+
     await tx.jobAssignment.deleteMany({ where: { jobId: job.id } });
     await tx.jobAssignment.createMany({
       data: params.employeeIds.map((employeeId, index) => ({
@@ -1012,43 +1068,20 @@ export async function setJobTeam(params: {
 
   const employeeIds = params.input.members.map((member) => member.employeeId);
 
-  if (employeeIds.length > 0) {
-    await assertActiveStaff(params.organizationId, employeeIds);
-
-    // Doppelverplanung erkennen — dieselbe Prüfung wie im Kalender.
-    const conflicts = await prisma.jobAssignment.findMany({
-      where: {
-        employeeId: { in: employeeIds },
-        jobId: { not: job.id },
-        job: {
-          deletedAt: null,
-          status: { notIn: ['CANCELLED', 'COMPLETED', 'VERIFIED'] },
-          scheduledStart: { lt: job.scheduledEnd },
-          scheduledEnd: { gt: job.scheduledStart },
-        },
-      },
-      include: {
-        employee: { include: { user: { select: { firstName: true, lastName: true } } } },
-        job: { select: { number: true } },
-      },
-    });
-
-    if (conflicts.length > 0) {
-      throw new BusinessRuleError(
-        `Terminkonflikt: ${conflicts
-          .map(
-            (conflict) =>
-              `${conflict.employee.user.firstName} ${conflict.employee.user.lastName} ist bereits für ${conflict.job.number} eingeteilt`,
-          )
-          .join('; ')}.`,
-      );
-    }
-  }
-
   const before = new Set(job.assignments.map((assignment) => assignment.employeeId));
   const added = employeeIds.filter((id) => !before.has(id));
 
   await prisma.$transaction(async (tx) => {
+    // Dieselbe Regel wie in `assignJob` — bis hierher stand hier eine
+    // wortgleiche zweite Kopie, die Abwesenheiten ebenso wenig kannte.
+    await assertAssignable(tx, {
+      organizationId: params.organizationId,
+      employeeIds,
+      scheduledStart: job.scheduledStart,
+      scheduledEnd: job.scheduledEnd,
+      ignoreJobId: job.id,
+    });
+
     await tx.jobAssignment.deleteMany({
       where: { jobId: job.id, employeeId: { notIn: employeeIds.length > 0 ? employeeIds : ['—'] } },
     });
@@ -1444,11 +1477,31 @@ export async function listJobs(filter: {
   return { items, total };
 }
 
+/**
+ * Ein Einsatz mit allem, was seine Detailseite braucht.
+ *
+ * **Der Alarmcode ist der Sonderfall.** Er liegt verschlüsselt in der Spalte
+ * (`src/lib/crypto.ts`) und wird hier entschlüsselt — aber nur, wenn der
+ * Aufrufer ihn ausdrücklich anfordert. Das ist Absicht: Vorher zog
+ * `property: true` die ganze Zeile samt Chiffrat in jede Antwort, auch dorthin,
+ * wo sie nie gebraucht wurde. Ein Chiffrat ist zwar unlesbar, aber es hat in
+ * einer Nutzlast nichts verloren, die es nicht braucht — und die
+ * Entschlüsselung gehört an eine Stelle, die sie begründen kann, nicht in jede
+ * Seite, die sie vergessen könnte.
+ *
+ * Wer ihn bekommt, entscheidet der Aufrufer über `includeAccessSecrets`; die
+ * Zuteilungsschranke steckt bereits in `employeeId`.
+ */
 export async function getJobDetail(params: {
   organizationId: string;
   jobId: string;
   /** Bei Mitarbeitendenzugriff: erzwingt die Zuteilungsprüfung. */
   employeeId?: string;
+  /**
+   * Alarmcode entschlüsselt mitliefern. Nur für die Personen setzen, die vor
+   * der Tür stehen, und für die Disposition, die ihn pflegt.
+   */
+  includeAccessSecrets?: boolean;
 }) {
   const job = await prisma.job.findFirst({
     where: {
@@ -1460,7 +1513,31 @@ export async function getJobDetail(params: {
     include: {
       customer: true,
       address: true,
-      property: true,
+      /**
+       * Feldweise statt `true`: Der Alarmcode kommt unten getrennt dazu,
+       * damit kein künftiges Feld dieser Tabelle unbemerkt in jede Antwort
+       * rutscht.
+       */
+      property: {
+        select: {
+          id: true,
+          label: true,
+          kind: true,
+          squareMeters: true,
+          rooms: true,
+          bathrooms: true,
+          windows: true,
+          floor: true,
+          hasBalcony: true,
+          hasGarden: true,
+          hasPets: true,
+          hasElevator: true,
+          parkingInfo: true,
+          keyLocation: true,
+          accessNote: true,
+          notes: true,
+        },
+      },
       service: true,
       // `netTotal` für die Herleitung der Nachkalkulation (`breakdownForJob`).
       booking: { select: { id: true, number: true, customerNote: true, netTotal: true } },
@@ -1488,7 +1565,27 @@ export async function getJobDetail(params: {
   });
 
   if (!job) throw new NotFoundError('Einsatz');
-  return job;
+
+  /**
+   * Der Alarmcode wird in einer zweiten, engen Abfrage geholt und sofort
+   * entschlüsselt. Getrennt, damit der Klartext nur entsteht, wenn er
+   * angefordert wurde — und nie im selben Objekt landet, das ohne Anforderung
+   * herausgeht.
+   *
+   * Er wird bewusst **nicht** protokolliert: Ein Prüfprotokoll, das
+   * Zugangsdaten mitschreibt, ist ein zweites Versteck für dieselben
+   * Geheimnisse. `src/lib/audit.ts` redigiert das Feld deshalb ohnehin.
+   */
+  let alarmCode: string | null = null;
+  if (params.includeAccessSecrets && job.propertyId) {
+    const row = await prisma.property.findUnique({
+      where: { id: job.propertyId },
+      select: { alarmCode: true },
+    });
+    alarmCode = decryptNullable(row?.alarmCode ?? null, CRYPTO_CONTEXT.alarmCode);
+  }
+
+  return { ...job, alarmCode };
 }
 
 /** Kalenderereignisse für FullCalendar. */

@@ -5605,6 +5605,200 @@ paths:
             'application/json':
               schema:
                 '$ref': '#/components/schemas/ErrorEnvelope'
+  '/api/jobs':
+    get:
+      tags:
+        - 'Einsätze'
+      summary: 'Einsätze auflisten'
+      description: |-
+          Filter nach Status, Zeitraum, Kundschaft und zugeteilter Person, dazu Sortierung und Blätterung. Wer nur `job:read_assigned` hat, bekommt ausschliesslich die eigenen Einsätze — die Einschränkung steht in der where-Klausel, nicht in der Darstellung. Objektangaben wie Schlüsseldepot und Alarmcode sind nicht Teil der Liste; sie gehören auf den Rapport des einzelnen Einsatzes.
+
+          **Zugriff:** Erfordert eine der Berechtigungen: `job:read`, `job:read_assigned`.
+
+          **Rate-Limit-Klasse:** `apiRead`
+      operationId: 'getJobs'
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: 'Erfolg'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/SuccessEnvelope'
+        '401':
+          description: 'UNAUTHORIZED — keine oder abgelaufene Sitzung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 'FORBIDDEN — angemeldet, aber ohne die nötige Berechtigung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: 'RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+    post:
+      tags:
+        - 'Einsätze'
+      summary: 'Einsatz anlegen'
+      description: |-
+          Für Einsätze ohne vorangehende Buchung — Nachbesserung, Sonderauftrag, Hauswartung auf Zuruf. Kundschaft, Adresse, Objekt, Leistung und Buchung werden gegen den Mandanten und gegen die Kundschaft geprüft. Ein Team mitzugeben verlangt zusätzlich `job:assign`; ob es zur geplanten Zeit kann, entscheidet dieselbe Regel wie beim Zuteilen.
+
+          **Zugriff:** Erfordert die Berechtigung: `job:create`.
+
+          **Rate-Limit-Klasse:** `apiWrite`
+      operationId: 'postJobs'
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          'application/json':
+            schema:
+              type: 'object'
+              properties:
+                bookingId:
+                  type: 'string'
+                  minLength: 1
+                customerId:
+                  type: 'string'
+                  minLength: 1
+                addressId:
+                  type: 'string'
+                  minLength: 1
+                propertyId:
+                  type: 'string'
+                  minLength: 1
+                serviceId:
+                  type: 'string'
+                  minLength: 1
+                title:
+                  type: 'string'
+                  minLength: 3
+                  maxLength: 200
+                scheduledStart:
+                  type: 'string'
+                  format: 'date-time'
+                scheduledEnd:
+                  type: 'string'
+                  format: 'date-time'
+                crewSize:
+                  type: 'integer'
+                  minimum: 1
+                  maximum: 20
+                  default: 1
+                estimatedMin:
+                  type: 'integer'
+                  minimum: 15
+                  maximum: 1440
+                  default: 120
+                travelMin:
+                  type: 'integer'
+                  minimum: 0
+                  maximum: 480
+                  default: 0
+                description:
+                  type: 'string'
+                  maxLength: 4000
+                internalNote:
+                  type: 'string'
+                  maxLength: 4000
+                customerNote:
+                  type: 'string'
+                  maxLength: 4000
+                employeeIds:
+                  type: 'array'
+                  items:
+                    type: 'string'
+                    minLength: 1
+                  maxItems: 20
+                  default: []
+                checklist:
+                  type: 'array'
+                  items:
+                    type: 'object'
+                    properties:
+                      label:
+                        type: 'string'
+                        minLength: 2
+                        maxLength: 200
+                      room:
+                        type: 'string'
+                        maxLength: 80
+                      required:
+                        type: 'boolean'
+                        default: true
+                    required:
+                      - 'label'
+                  maxItems: 100
+                  default: []
+              required:
+                - 'customerId'
+                - 'title'
+                - 'scheduledStart'
+                - 'scheduledEnd'
+      responses:
+        '201':
+          description: 'Erfolg'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/SuccessEnvelope'
+        '400':
+          description: 'VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 'UNAUTHORIZED — keine oder abgelaufene Sitzung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 'FORBIDDEN — angemeldet, aber ohne die nötige Berechtigung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '409':
+          description: 'CONFLICT — verstösst gegen eine Eindeutigkeitsregel.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: 'BUSINESS_RULE — fachlich nicht zulässig, etwa eine bereits ausgestellte Rechnung ändern.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: 'RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
   '/api/jobs/calendar':
     get:
       tags:
@@ -20931,6 +21125,291 @@ paths:
                 '$ref': '#/components/schemas/ErrorEnvelope'
         '403':
           description: 'FORBIDDEN — angemeldet, aber ohne die nötige Berechtigung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: 'RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+    post:
+      tags:
+        - 'Buchungen'
+      summary: 'Buchung im Büro erfassen'
+      description: |-
+          Telefonisch, am Schalter oder aus einer E-Mail. Derselbe Dienst wie die öffentliche Buchung — Preis, Dauer, Mannschaft und Mehrwertsteuer rechnet ausschliesslich der Server. Unterschiede: die Kundschaft kommt als customerId statt über die Adresse, die Herkunft ist wählbar (eine telefonische Buchung als „Website" zu verbuchen verfälscht jede Auswertung), eine interne Notiz ist möglich, und die Kapazitätsprüfung lässt sich ausdrücklich übergehen — protokolliert. Die Meldung „Neue Online-Buchung" ans Büro entfällt, die Bestätigung an die Kundschaft nicht.
+
+          **Zugriff:** Erfordert die Berechtigung: `booking:create`.
+
+          **Rate-Limit-Klasse:** `apiWrite`
+      operationId: 'postBookings'
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          'application/json':
+            schema:
+              type: 'object'
+              properties:
+                serviceId:
+                  type: 'string'
+                  minLength: 1
+                extras:
+                  type: 'array'
+                  items:
+                    type: 'object'
+                    properties:
+                      extraId:
+                        type: 'string'
+                        minLength: 1
+                      quantity:
+                        type: 'integer'
+                        minimum: 1
+                        maximum: 50
+                        default: 1
+                    required:
+                      - 'extraId'
+                  maxItems: 20
+                  default: []
+                frequency:
+                  type: 'string'
+                  enum:
+                    - 'ONCE'
+                    - 'WEEKLY'
+                    - 'BIWEEKLY'
+                    - 'MONTHLY'
+                    - 'QUARTERLY'
+                    - 'SEMIANNUAL'
+                    - 'ANNUAL'
+                    - 'CUSTOM'
+                  default: 'ONCE'
+                scheduledStart:
+                  anyOf:
+                    - type: 'string'
+                      format: 'date-time'
+                    - type: 'string'
+                      pattern: '^\d{4}-\d{2}-\d{2}$'
+                manualHours:
+                  type: 'number'
+                  minimum: 0.5
+                  maximum: 80
+                urgent:
+                  type: 'boolean'
+                  default: false
+                propertyKind:
+                  type: 'string'
+                  enum:
+                    - 'APARTMENT'
+                    - 'HOUSE'
+                    - 'OFFICE'
+                    - 'COMMERCIAL'
+                    - 'INDUSTRIAL'
+                    - 'CONSTRUCTION_SITE'
+                    - 'PRACTICE'
+                    - 'RESTAURANT'
+                    - 'SCHOOL'
+                    - 'OTHER'
+                  default: 'APARTMENT'
+                squareMeters:
+                  type: 'integer'
+                  minimum: 5
+                  maximum: 5000
+                rooms:
+                  type: 'number'
+                  minimum: 0.5
+                  maximum: 40
+                bathrooms:
+                  type: 'integer'
+                  minimum: 0
+                  maximum: 20
+                windows:
+                  type: 'integer'
+                  minimum: 0
+                  maximum: 500
+                hasPets:
+                  type: 'boolean'
+                  default: false
+                propertyId:
+                  type: 'string'
+                  minLength: 1
+                firstName:
+                  type: 'string'
+                  minLength: 2
+                  maxLength: 80
+                lastName:
+                  type: 'string'
+                  minLength: 2
+                  maxLength: 80
+                email:
+                  type: 'string'
+                  minLength: 1
+                  maxLength: 255
+                  format: 'email'
+                phone:
+                  type: 'string'
+                  pattern: '^(\+|00)?[0-9\s().-]{9,20}$'
+                companyName:
+                  type: 'string'
+                  maxLength: 120
+                addressId:
+                  type: 'string'
+                  minLength: 1
+                address:
+                  type: 'object'
+                  properties:
+                    label:
+                      type: 'string'
+                      maxLength: 60
+                    street:
+                      type: 'string'
+                      minLength: 2
+                      maxLength: 120
+                    streetNo:
+                      type: 'string'
+                      maxLength: 20
+                    addition:
+                      type: 'string'
+                      maxLength: 120
+                    postalCode:
+                      type: 'string'
+                      pattern: '^[1-9]\d{3}$'
+                    city:
+                      type: 'string'
+                      minLength: 2
+                      maxLength: 80
+                    canton:
+                      type: 'string'
+                      default: 'BE'
+                    country:
+                      type: 'string'
+                      default: 'CH'
+                    lat:
+                      type: 'number'
+                      minimum: -90
+                      maximum: 90
+                    lng:
+                      type: 'number'
+                      minimum: -180
+                      maximum: 180
+                    placeId:
+                      type: 'string'
+                      maxLength: 200
+                    accessNote:
+                      type: 'string'
+                      maxLength: 500
+                  required:
+                    - 'street'
+                    - 'postalCode'
+                    - 'city'
+                customerNote:
+                  type: 'string'
+                  maxLength: 2000
+                accessNote:
+                  type: 'string'
+                  maxLength: 500
+                couponCode:
+                  type: 'string'
+                  maxLength: 40
+                fileIds:
+                  type: 'array'
+                  items:
+                    type: 'string'
+                    minLength: 1
+                  maxItems: 10
+                  default: []
+                recurrence:
+                  type: 'object'
+                  properties:
+                    interval:
+                      type: 'integer'
+                      minimum: 1
+                      maximum: 12
+                      default: 1
+                    weekdays:
+                      type: 'array'
+                      items:
+                        type: 'integer'
+                        minimum: 0
+                        maximum: 6
+                      maxItems: 7
+                      default: []
+                    endDate:
+                      anyOf:
+                        - type: 'string'
+                          format: 'date-time'
+                        - type: 'string'
+                          pattern: '^\d{4}-\d{2}-\d{2}$'
+                    count:
+                      type: 'integer'
+                      minimum: 2
+                      maximum: 104
+                customerId:
+                  type: 'string'
+                  minLength: 1
+                source:
+                  type: 'string'
+                  enum:
+                    - 'PHONE'
+                    - 'EMAIL'
+                    - 'WALK_IN'
+                    - 'REFERRAL'
+                    - 'PARTNER'
+                    - 'WEBSITE'
+                    - 'OTHER'
+                  default: 'PHONE'
+                internalNote:
+                  type: 'string'
+                  maxLength: 4000
+                overrideCapacity:
+                  type: 'boolean'
+                  default: false
+              required:
+                - 'serviceId'
+                - 'scheduledStart'
+                - 'customerId'
+      responses:
+        '201':
+          description: 'Erfolg'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/SuccessEnvelope'
+        '400':
+          description: 'VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 'UNAUTHORIZED — keine oder abgelaufene Sitzung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 'FORBIDDEN — angemeldet, aber ohne die nötige Berechtigung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '409':
+          description: 'CONFLICT — verstösst gegen eine Eindeutigkeitsregel.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: 'BUSINESS_RULE — fachlich nicht zulässig, etwa eine bereits ausgestellte Rechnung ändern.'
           content:
             'application/json':
               schema:
