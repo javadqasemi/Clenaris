@@ -261,8 +261,20 @@ function buildSpec() {
       contact: { name: 'Clenaris', url: 'https://clenaris.ch' },
       license: { name: 'Proprietär', identifier: 'LicenseRef-Proprietary' },
     },
+    /**
+     * Die Adressen, gegen die ein Klient tatsächlich spricht.
+     *
+     * Hier stand `https://clenaris.ch` — eine Adresse, die im DNS nicht
+     * existiert. Für eine Spezifikation ist das schlimmer als eine fehlende
+     * Angabe: Wer sie in einen Klientengenerator gibt, bekommt Code, der
+     * nirgends ankommt, und sucht den Fehler bei sich.
+     *
+     * `clenaris.ch` bleibt der Markenname des Betriebs und steht deshalb
+     * weiter im `contact`-Block und in den Firmenangaben. Was hier steht, ist
+     * etwas anderes: der Ort, an dem die Schnittstelle antwortet.
+     */
     servers: [
-      { url: 'https://clenaris.ch', description: 'Produktion' },
+      { url: 'https://clenaris.qasemi.ch', description: 'Produktion' },
       { url: 'http://localhost:3000', description: 'Lokale Entwicklung' },
     ],
     tags: [

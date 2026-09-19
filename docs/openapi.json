@@ -15,7 +15,7 @@
   },
   "servers": [
     {
-      "url": "https://clenaris.ch",
+      "url": "https://clenaris.qasemi.ch",
       "description": "Produktion"
     },
     {
