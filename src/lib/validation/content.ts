@@ -1,6 +1,5 @@
 import { z } from 'zod';
 
-import { assetUrlSchema } from './common';
 import { jobApplicationSchema } from './crm';
 
 /**
@@ -52,8 +51,14 @@ export const updateApplicationSchema = z.object({
 });
 export type UpdateApplicationInput = z.infer<typeof updateApplicationSchema>;
 
-/** Öffentliche Bewerbung: wie intern, plus die bereits hochgeladene CV-URL. */
-export const publicApplicationSchema = jobApplicationSchema.extend({
-  cvUrl: assetUrlSchema.optional(),
-});
+/**
+ * Öffentliche Bewerbung.
+ *
+ * `cvUrl` ist entfallen: Die Adresse der Unterlage kam bisher aus dem
+ * Formular und wurde ungeprüft an der Bewerbung gespeichert. Ein
+ * Lebenslauf ist die heikelste Datei, die diese Anwendung entgegennimmt —
+ * die Adresse dafür stellt jetzt der Server, aus dem geprüften `FileAsset`
+ * (`cvFileId` in `jobApplicationSchema`).
+ */
+export const publicApplicationSchema = jobApplicationSchema;
 export type PublicApplicationInput = z.infer<typeof publicApplicationSchema>;

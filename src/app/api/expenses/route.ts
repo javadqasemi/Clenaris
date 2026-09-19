@@ -73,8 +73,11 @@ export const POST = defineRoute({
     });
 
     if (body.fileIds.length > 0) {
+      // Nur geprüfte Dateien: `checksum: { not: null }` heisst, der
+      // Abschluss hat die Bytes gesehen. Ohne die Bedingung liesse sich ein
+      // nicht geprüftes Asset als Beleg anhängen.
       await prisma.fileAsset.updateMany({
-        where: { id: { in: body.fileIds }, organizationId },
+        where: { id: { in: body.fileIds }, organizationId, checksum: { not: null } },
         data: { expenseId: expense.id, scope: 'EXPENSE' },
       });
     }

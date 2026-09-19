@@ -7,6 +7,7 @@ import { toast } from 'sonner';
 
 import { cn } from '@/lib/utils';
 import { api, ApiError } from '@/lib/api/client';
+import { uploadFile } from '@/lib/upload';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/form';
 import { Alert, PersonAvatar } from '@/components/ui/primitives';
@@ -112,27 +113,18 @@ export function AvatarUploader({
     setBusy(true);
     setError(null);
     try {
-      const target = await api.post<{ signedUrl: string; publicUrl: string }>(
-        '/api/files/upload-url',
-        {
-          profile: 'avatar',
-          filename: 'profilbild.webp',
-          mimeType: blob.type,
-          sizeBytes: blob.size,
-        },
-      );
-
-      const response = await fetch(target.signedUrl, {
-        method: 'PUT',
-        headers: { 'Content-Type': blob.type, 'x-upsert': 'true' },
-        body: blob,
+      // Die Adresse stammt aus dem Abschluss, nicht aus dem Upload-Ziel: Erst
+      // dort hat der Server die Bytes gesehen.
+      const datei = await uploadFile({
+        file: blob,
+        profile: 'avatar',
+        filename: 'profilbild.webp',
       });
-      if (!response.ok) throw new Error('Der Upload wurde vom Speicher abgelehnt.');
 
       await api.patch('/api/account/profile', {
         firstName,
         lastName,
-        avatarUrl: target.publicUrl,
+        avatarUrl: datei.url,
       });
 
       await refreshSession();

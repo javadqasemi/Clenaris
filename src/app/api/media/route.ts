@@ -2,10 +2,10 @@ import { z } from 'zod';
 
 import { defineRoute } from '@/lib/api/handler';
 import { buildPagination, created, paginated } from '@/lib/api/response';
-import { assetUrlSchema } from '@/lib/validation/common';
-import { MAX_UPLOAD_BYTES } from '@/lib/validation/files';
+import { finalizeUploadSchema } from '@/lib/validation/files';
 import { paginationQuery } from '@/lib/validation/queries';
-import { listMedia, registerMedia } from '@/server/services/media.service';
+import { finalizeUpload } from '@/server/services/file.service';
+import { listMedia } from '@/server/services/media.service';
 import { getOrganizationId } from '@/server/services/organization.service';
 
 export const runtime = 'nodejs';
@@ -62,32 +62,30 @@ export const GET = defineRoute({
 /**
  * POST /api/media — hochgeladene Datei registrieren.
  *
- * Der eigentliche Upload läuft direkt zu Supabase (siehe
- * `/api/files/upload-url`). Dieser Endpunkt hält nur fest, was dort gelandet
- * ist — sonst gäbe es Dateien im Speicher, die in keiner Liste erscheinen.
+ * **Was dieser Endpunkt früher annahm.** Der Körper enthielt `path`, `url`,
+ * `mimeType`, `sizeBytes`, `scope` und `isPublic` — alles vom Client, alles
+ * ungeprüft übernommen, `isPublic` sogar mit `true` als Vorgabe. Damit liess
+ * sich eine beliebige Adresse als vertrauenswürdige Datei der Organisation
+ * eintragen, mit einem frei gewählten Typ und öffentlich lesbar. Ein Abgleich
+ * mit dem, was tatsächlich im Speicher lag, fand nirgends statt.
+ *
+ * Übrig bleibt die Kennung des serverseitig ausgestellten Tickets. Pfad,
+ * Typ, Grösse, Bereich und Sichtbarkeit schlägt der Abschluss selbst nach
+ * bzw. leitet sie aus dem Upload-Profil ab — der Client kann keines davon
+ * mehr behaupten.
  */
 export const POST = defineRoute({
   permissions: ['media:upload'],
-  body: z.object({
-    bucket: z.string().trim().min(1).max(64).default('clenaris'),
-    path: z.string().trim().min(1).max(500),
-    // Nicht `.url()`: Ohne externen Speicher lautet die Adresse
-    // `/api/files/blob/…`, und die Registrierung schlüge sonst mit 422 fehl.
-    url: assetUrlSchema,
-    filename: z.string().trim().min(1).max(255),
-    mimeType: z.string().trim().min(1).max(120),
-    sizeBytes: z.number().int().min(0).max(MAX_UPLOAD_BYTES),
-    scope: z.enum(FILE_SCOPES).default('OTHER'),
-    isPublic: z.boolean().default(true),
-  }),
+  body: finalizeUploadSchema,
   rateLimit: 'apiWrite',
   handler: async ({ body, session, ip }) => {
-    const file = await registerMedia({
+    const ergebnis = await finalizeUpload({
+      ticketId: body.ticketId,
       organizationId: await getOrganizationId(),
-      actorId: session.id,
+      session,
+      filename: body.filename,
       ip,
-      input: body,
     });
-    return created({ id: file.id, url: file.url });
+    return created({ id: ergebnis.fileAssetId, url: ergebnis.url });
   },
 });

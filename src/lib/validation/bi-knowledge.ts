@@ -1,7 +1,6 @@
-import { z } from 'zod';
+﻿import { z } from 'zod';
 
-import { assetUrlSchema, cuidSchema, dateOnlySchema, emailSchema, moneySchema } from './common';
-import { MAX_UPLOAD_BYTES } from './files';
+import { cuidSchema, dateOnlySchema, emailSchema, moneySchema } from './common';
 import { searchQuery } from './queries';
 import { TASK_PRIORITIES } from './bi-objectives';
 
@@ -62,17 +61,19 @@ export const PESTEL_BUCKETS = [
 const tags = z.array(z.string().trim().min(1).max(40)).max(20).default([]);
 
 /**
- * Eine bereits hochgeladene Datei — der Browser hat sie über
- * `/api/files/upload-url` abgelegt und meldet hier, was dort liegt.
+ * Eine bereits geprüfte Datei — die Kennung des `FileAsset`.
+ *
+ * **Was hier stand und warum es weg musste.** Vorher meldete der Browser
+ * `path`, `url`, `filename`, `mimeType` und `sizeBytes`, und der Dienst legte
+ * daraus ein `FileAsset` an. Keiner dieser Werte wurde je gegen den Speicher
+ * gehalten — und das ausgerechnet für Personal-, Vertrags- und
+ * Steuerunterlagen, also für die Dokumente mit der strengsten Sichtbarkeit
+ * im ganzen System.
+ *
+ * Die Datei entsteht jetzt in `POST /api/files/finalize`, das die Bytes
+ * liest und prüft. Hierher kommt nur noch die Kennung des Ergebnisses.
  */
-export const uploadedFileSchema = z.object({
-  path: z.string().trim().min(1).max(500),
-  url: assetUrlSchema,
-  filename: z.string().trim().min(1).max(255),
-  mimeType: z.string().trim().min(1).max(120),
-  sizeBytes: z.number().int().min(0).max(MAX_UPLOAD_BYTES),
-});
-export type UploadedFileInput = z.infer<typeof uploadedFileSchema>;
+export const uploadedFileIdSchema = z.string().trim().min(1).max(60);
 
 // ---------------------------------------------------------------------------
 //  Dokumente
@@ -95,19 +96,19 @@ export const createDocumentSchema = z.object({
   expiresOn: dateOnlySchema.nullish(),
   reminderDaysBefore: z.number().int().min(0).max(365).default(30),
   /** Erste Fassung — freiwillig, damit eine Akte auch vor der Datei existiert. */
-  file: uploadedFileSchema.optional(),
+  fileId: uploadedFileIdSchema.optional(),
   changeNote: z.string().trim().max(500).optional(),
 });
 export type CreateDocumentInput = z.infer<typeof createDocumentSchema>;
 
 export const updateDocumentSchema = createDocumentSchema
-  .omit({ file: true, changeNote: true })
+  .omit({ fileId: true, changeNote: true })
   .partial()
   .strict();
 export type UpdateDocumentInput = z.infer<typeof updateDocumentSchema>;
 
 export const addDocumentVersionSchema = z.object({
-  file: uploadedFileSchema,
+  fileId: uploadedFileIdSchema,
   changeNote: z.string().trim().max(500).optional(),
 });
 export type AddDocumentVersionInput = z.infer<typeof addDocumentVersionSchema>;

@@ -177,15 +177,63 @@ ist ein reines JavaScript-Paket, kaltstartfähig und in derselben Sprache
 geschrieben wie der Rest. Der Preis: kein volles CSS. Für Offerten, Rechnungen
 und Einsatzberichte reicht das Flexbox-Modell.
 
-### 10. Dateien laufen am Server vorbei
+### 10. Dateien laufen am Server vorbei — geprüft werden sie trotzdem
 
-Der Server erstellt eine signierte Upload-Adresse, der Browser lädt direkt zu
-Supabase Storage. Das umgeht das 4.5-MB-Limit für Function-Bodies, spart
-Bandbreite und hält den Upload auch bei zwölf Baustellenfotos schnell.
+Der Server stellt ein Upload-Ticket aus, der Browser lädt direkt zu Supabase
+Storage. Das umgeht das 4.5-MB-Limit für Function-Bodies, spart Bandbreite und
+hält den Upload auch bei zwölf Baustellenfotos schnell. Ohne Anmeldung sind nur
+die Profile des Buchungs- und Bewerbungsformulars erlaubt.
 
-Die Kontrolle bleibt beim Server: er bestimmt Profil, Pfad, Grössen- und
-Typgrenze und legt den `FileAsset`-Datensatz erst *nach* dem Upload an. Ohne
-Anmeldung sind nur die Profile des Buchungs- und Bewerbungsformulars erlaubt.
+**Der Preis dieses Entscheids war lange unbezahlt.** Wenn die Datei nie durch
+die Anwendung läuft, sieht der Server sie nie — und bis Gate 2 sah er sie
+tatsächlich nicht. `mimeType` und `sizeBytes` kamen aus dem Formular, `path`,
+`url`, `scope` und `isPublic` standen frei im Körper von `POST /api/media`, und
+alles davon wurde übernommen, wie es kam. Eine beliebige Datei als PDF
+anzumelden kostete nichts.
+
+Der fehlende Schritt heisst **Abschluss** (`POST /api/files/finalize`). Der
+Upload-Weg bleibt wie er war; danach liest der Server das *gespeicherte* Objekt
+einmal zurück, prüft die tatsächliche Grösse, die Signatur der ersten Bytes und
+den angemeldeten Typ gegen das Profil des Tickets, bildet den SHA-256 und legt
+erst dann das `FileAsset` an. Vorher existiert die Datei fachlich nicht: kein
+Asset, keine Verknüpfung, kein Abruf.
+
+Die Prüfung sagt nur, dass die Datei ist, was sie zu sein behauptet.
+`Signatur gültig` ist nicht `Datei sicher` — ein PDF kann JavaScript und
+eingebettete Dateien enthalten, und davon sieht man in den ersten acht Bytes
+nichts.
+
+### 10a. Zwei Dateiebenen, zwei Aufgaben
+
+`StoredFile` ist die **physische** Ebene: Treiber (`LOCAL` oder `SUPABASE`),
+Pfad, Bytes oder Speicherverweis, tatsächliche Grösse, Prüfsumme, Upload-Profil,
+Ablauf. Es ist zugleich das Ticket — die Zeile entsteht beim Anfordern der
+Adresse und ist die Aufzeichnung, gegen die der Abschluss prüfen kann, ob dieser
+Pfad je genehmigt wurde. `FileAsset` ist die **fachliche** Ebene: Organisation,
+Bereich, Beziehung zum Geschäftsobjekt, Dateiname, öffentlich oder nicht.
+
+Die Trennung ist nicht historisch gewachsen, sie trägt: Die Berechtigung
+entsteht ausschliesslich fachlich, über die Kette
+
+```
+StoredFile → FileAsset → FileScope/Fachobjekt → Rolle
+```
+
+`FileAsset.isPublic` ist die einzige Quelle der Public/Private-Entscheidung;
+`StoredFile` trägt sie bewusst nicht, weil zwei Kopien derselben Aussage
+auseinanderlaufen können. `FileAsset.checksum` ist eine Momentaufnahme von
+`StoredFile.checksum` — beim Anlegen identisch, danach nie unabhängig geändert.
+
+**Eine Kennung ist keine Berechtigung.** `GET /api/files/blob/:id` gab bis
+Gate 2 jede Datei heraus, deren `cuid` jemand nannte, mit der Begründung, die
+sei „nicht erratbar". Sie ist es nicht: Von 25 Zeichen sind acht der
+Erstellungszeitpunkt, vier ein Zähler, vier ein pro Prozess konstanter
+Fingerabdruck. Heute liefert die Route nur aus, was ein `FileAsset` hat — und
+nur an den, der laut Fachbeziehung darf.
+
+Extern geteilte Dateien sind keine dritte Speicherklasse, sondern ein
+Zugriffsweg: Die Datei bleibt privat, und der `PublicAccessToken` aus Gate 1
+autorisiert an der Fachroute. Eine zweite, schwächere Tür daneben gibt es nicht.
 
 ### 11. Zahlungen werden über den Webhook gebucht, nicht über die Rückkehr-URL
 

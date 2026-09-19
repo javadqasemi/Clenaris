@@ -2675,10 +2675,6 @@
                         "const": ""
                       }
                     ]
-                  },
-                  "cvUrl": {
-                    "type": "string",
-                    "maxLength": 2000
                   }
                 },
                 "required": [
@@ -3370,6 +3366,105 @@
                   "filename",
                   "mimeType",
                   "sizeBytes"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Erfolg",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SuccessEnvelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "CONFLICT — verstösst gegen eine Eindeutigkeitsregel.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "BUSINESS_RULE — fachlich nicht zulässig, etwa eine bereits ausgestellte Rechnung ändern.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/files/finalize": {
+      "post": {
+        "tags": [
+          "Dateien"
+        ],
+        "summary": "Upload abschliessen und prüfen",
+        "description": "Erst dieser Aufruf macht aus abgelegten Bytes eine Datei, mit der die Anwendung arbeitet. Der Server liest das gespeicherte Objekt zurück, prüft die tatsächliche Grösse, die Signatur der ersten Bytes und den angemeldeten Typ gegen das Upload-Profil des Tickets, bildet den SHA-256 und legt danach das FileAsset an. Ohne diesen Schritt trägt die Ablage keine Prüfsumme und lässt sich weder abrufen noch verknüpfen. Wiederholbar: Ein zweiter Aufruf liefert dasselbe Asset, nicht ein zweites.\n\n**Zugriff:** Öffentlich — keine Anmeldung nötig.\n\n**Rate-Limit-Klasse:** `fileTransfer`",
+        "operationId": "postFilesFinalize",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "ticketId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 60
+                  },
+                  "filename": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 255
+                  }
+                },
+                "required": [
+                  "ticketId",
+                  "filename"
                 ]
               }
             }
@@ -9491,9 +9586,9 @@
                     ],
                     "default": "BEFORE"
                   },
-                  "url": {
+                  "fileId": {
                     "type": "string",
-                    "maxLength": 2000
+                    "minLength": 1
                   },
                   "thumbnailUrl": {
                     "type": "string",
@@ -9519,7 +9614,7 @@
                   }
                 },
                 "required": [
-                  "url"
+                  "fileId"
                 ]
               }
             }
@@ -22861,13 +22956,39 @@
           "Website"
         ],
         "summary": "Hochgeladene Datei registrieren",
-        "description": "Der Upload selbst läuft direkt zu Supabase (/api/files/upload-url). Dieser Endpunkt hält nur fest, was dort gelandet ist — sonst gäbe es Dateien, die in keiner Liste erscheinen.\n\n**Zugriff:** Erfordert die Berechtigung: `media:upload`.\n\n**Rate-Limit-Klasse:** `apiWrite`",
+        "description": "Wie /api/files/finalize, aber mit der Berechtigung media:upload. Der Körper enthält nur die Kennung des serverseitig ausgestellten Upload-Tickets; Pfad, Adresse, Typ, Grösse, Bereich und Sichtbarkeit bestimmt der Server. Vorher kamen all diese Werte aus dem Client und wurden ungeprüft übernommen.\n\n**Zugriff:** Erfordert die Berechtigung: `media:upload`.\n\n**Rate-Limit-Klasse:** `apiWrite`",
         "operationId": "postMedia",
         "security": [
           {
             "sessionCookie": []
           }
         ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "ticketId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 60
+                  },
+                  "filename": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 255
+                  }
+                },
+                "required": [
+                  "ticketId",
+                  "filename"
+                ]
+              }
+            }
+          }
+        },
         "responses": {
           "201": {
             "description": "Erfolg",
@@ -22875,6 +22996,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/SuccessEnvelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -33085,7 +33216,7 @@
           "Dateien"
         ],
         "summary": "Datei an die Upload-Adresse schreiben",
-        "description": "Gegenstück zur signierten Adresse von Supabase, wenn kein externer Speicher eingerichtet ist. Der Körper sind die rohen Bytes; die Adresse ist die Berechtigung — sie entsteht in `/api/files/upload-url`, ist nicht erratbar, genau einmal und nur zwei Stunden lang beschreibbar. Höchstens 256 MB — die allgemeine Grenze von 1 GB gilt für den externen Speicher; die Datenbank-Rückfallebene trägt nicht mehr.\n\n**Zugriff:** Öffentlich — keine Anmeldung nötig.",
+        "description": "Gegenstück zur signierten Adresse von Supabase, wenn kein externer Speicher eingerichtet ist. Der Körper sind die rohen Bytes. Die Schreibberechtigung ist das Upload-Ticket aus /api/files/upload-url: serverseitig für genau einen Pfad ausgestellt, genau einmal und nur zwei Stunden lang beschreibbar. Die Bytes werden schon hier gegen das Profil des Tickets geprüft; angenommen ist die Datei damit noch nicht — das entscheidet /api/files/finalize. Höchstens 256 MB: Die allgemeine Grenze von 1 GB gilt für den externen Speicher, die Datenbank-Rückfallebene trägt nicht mehr.\n\n**Zugriff:** Öffentlich — keine Anmeldung nötig.",
         "operationId": "putFilesBlobById",
         "security": [],
         "parameters": [
@@ -33157,7 +33288,7 @@
           "Dateien"
         ],
         "summary": "Datei ausliefern",
-        "description": "Öffentlich lesbar wie ein öffentlicher Bucket: Profilbilder und Einsatzfotos erscheinen in E-Mails und PDF-Berichten ohne Sitzung. Der Schutz ist die nicht erratbare Adresse.\n\n**Zugriff:** Öffentlich — keine Anmeldung nötig.",
+        "description": "Die Kennung allein öffnet nichts. Ausgeliefert wird nur, was ein FileAsset hat: ist es öffentlich (Teambild, Galerie, Kopfbild), ohne Anmeldung und mit langem Zwischenspeicher; sonst nur mit Sitzung, gleicher Organisation, passender Rolle und tatsächlicher Beziehung zum Geschäftsobjekt, und ohne öffentliche Cachebarkeit. Alles andere ist 404 — auch eine vorhandene Datei, die dieser Person nicht gehört. Extern geteilte Dokumente laufen nicht über diesen Weg, sondern über ihre Fachroute mit PublicAccessToken.\n\n**Zugriff:** Öffentlich — keine Anmeldung nötig.",
         "operationId": "getFilesBlobById",
         "security": [],
         "parameters": [
@@ -43929,41 +44060,10 @@
                     "maximum": 365,
                     "default": 30
                   },
-                  "file": {
-                    "type": "object",
-                    "properties": {
-                      "path": {
-                        "type": "string",
-                        "minLength": 1,
-                        "maxLength": 500
-                      },
-                      "url": {
-                        "type": "string",
-                        "maxLength": 2000
-                      },
-                      "filename": {
-                        "type": "string",
-                        "minLength": 1,
-                        "maxLength": 255
-                      },
-                      "mimeType": {
-                        "type": "string",
-                        "minLength": 1,
-                        "maxLength": 120
-                      },
-                      "sizeBytes": {
-                        "type": "integer",
-                        "minimum": 0,
-                        "maximum": 1073741824
-                      }
-                    },
-                    "required": [
-                      "path",
-                      "url",
-                      "filename",
-                      "mimeType",
-                      "sizeBytes"
-                    ]
+                  "fileId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 60
                   },
                   "changeNote": {
                     "type": "string",
@@ -44481,41 +44581,10 @@
               "schema": {
                 "type": "object",
                 "properties": {
-                  "file": {
-                    "type": "object",
-                    "properties": {
-                      "path": {
-                        "type": "string",
-                        "minLength": 1,
-                        "maxLength": 500
-                      },
-                      "url": {
-                        "type": "string",
-                        "maxLength": 2000
-                      },
-                      "filename": {
-                        "type": "string",
-                        "minLength": 1,
-                        "maxLength": 255
-                      },
-                      "mimeType": {
-                        "type": "string",
-                        "minLength": 1,
-                        "maxLength": 120
-                      },
-                      "sizeBytes": {
-                        "type": "integer",
-                        "minimum": 0,
-                        "maximum": 1073741824
-                      }
-                    },
-                    "required": [
-                      "path",
-                      "url",
-                      "filename",
-                      "mimeType",
-                      "sizeBytes"
-                    ]
+                  "fileId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 60
                   },
                   "changeNote": {
                     "type": "string",
@@ -44523,7 +44592,7 @@
                   }
                 },
                 "required": [
-                  "file"
+                  "fileId"
                 ]
               }
             }

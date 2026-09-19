@@ -4,7 +4,7 @@
 > Diagramme sind damit nie älter als das Schema. Prosa und Bereichseinteilung
 > stehen in `scripts/generate-erd.ts`.
 
-**112 Modelle, 68 Aufzählungstypen, 2005 Felder.**
+**112 Modelle, 69 Aufzählungstypen, 2011 Felder.**
 PostgreSQL 16+; alle Zeitstempel als `timestamptz` in UTC, Anzeige in Europe/Zurich.
 
 ## Vier Entscheidungen, die das ganze Schema prägen
@@ -954,7 +954,7 @@ erDiagram
     Int sizeBytes
     Int maxBytes
     Bytes data
-    String uploadedById
+    StorageDriver driver
   }
   LandingPage {
     String id PK
@@ -1027,7 +1027,9 @@ erDiagram
     String mimeType
   }
   BlogCategory |o--o{ BlogPost : "category"
+  FileAsset |o--o{ StoredFile : "asset"
   JobPosting ||--o{ JobApplication : "posting"
+  StoredFile |o--|| FileAsset : "storedFile"
   JobApplication |o--o{ FileAsset : "application"
 ```
 
@@ -1044,8 +1046,8 @@ erDiagram
 | `GalleryItem` | `gallery_items` | 13 | – |
 | `JobPosting` | `job_postings` | 20 | – |
 | `JobApplication` | `job_applications` | 16 | – |
-| `FileAsset` | `file_assets` | 48 | – |
-| `StoredFile` | `stored_files` | 12 | – |
+| `FileAsset` | `file_assets` | 50 | – |
+| `StoredFile` | `stored_files` | 16 | – |
 
 ## Redaktion
 
@@ -1482,6 +1484,7 @@ exakte TypeScript-Typen.
 | `AuditAction` | `CREATE`, `UPDATE`, `DELETE`, `LOGIN`, `LOGIN_FAILED`, `LOGOUT`, `PASSWORD_RESET`, `PERMISSION_CHANGE`, `EXPORT`, `IMPORT`, `PAYMENT`, `ACCESS_DENIED` |
 | `ConsentType` | `MARKETING_EMAIL`, `MARKETING_SMS`, `ANALYTICS`, `TERMS`, `PRIVACY`, `DATA_PROCESSING` |
 | `PublicTokenPurpose` | `QUOTE_VIEW`, `QUOTE_RESPOND`, `INVOICE_VIEW`, `BOOKING_MANAGE`, `DOCUMENT_VIEW`, `SIGNATURE_ACCESS`, `SIGNATURE_OTP` |
+| `StorageDriver` | `LOCAL`, `SUPABASE` |
 | `CtaSlot` | `HEADER`, `HERO_PRIMARY`, `HERO_SECONDARY`, `SECTION_BANNER`, `FOOTER`, `MOBILE_BAR` |
 | `CtaStyle` | `PRIMARY`, `SECONDARY`, `OUTLINE`, `GHOST`, `ACCENT`, `SUCCESS`, `CUSTOM` |
 | `NavLocation` | `HEADER`, `HEADER_PANEL`, `FOOTER_SERVICES`, `FOOTER_COMPANY`, `FOOTER_LEGAL` |

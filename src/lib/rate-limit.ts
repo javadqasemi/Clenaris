@@ -30,7 +30,44 @@ export const RATE_LIMITS = {
   newsletter: { limit: 5, windowSeconds: 3600 },
   aiGenerate: { limit: 30, windowSeconds: 3600 },
   aiChat: { limit: 60, windowSeconds: 3600 },
+  /**
+   * Ein Upload-Ticket anfordern.
+   *
+   * **Hier und nur hier wird die Zahl der Uploads begrenzt.** Ein Ticket ist
+   * die Erlaubnis, genau eine Datei abzulegen; ohne Ticket geht weder das
+   * Schreiben der Bytes noch der Abschluss. Wer 60 Dateien in zehn Minuten
+   * hochladen will, holt 60 Tickets, und dabei greift dieses Kontingent.
+   */
   fileUpload: { limit: 60, windowSeconds: 600 },
+  /**
+   * Bytes schreiben und Upload abschliessen.
+   *
+   * **Warum eigene, deutlich weitere Zahlen.** Beide Schritte lagen zuerst
+   * ebenfalls auf `fileUpload`. Das klang sparsam und war falsch: Ein
+   * einziger Upload besteht seit Gate 2 aus drei Aufrufen — Ticket, Bytes,
+   * Abschluss. Auf demselben Zähler hätte das die tatsächliche Obergrenze
+   * von sechzig Dateien auf zwanzig gedrittelt, ohne dass irgendwo stünde,
+   * dass sie zwanzig ist. Die eigene Prüfreihe lief prompt hinein; im
+   * Betrieb wäre es eine Person gewesen, die nach dem zwanzigsten
+   * Baustellenfoto nicht mehr weiterkommt.
+   *
+   * Ein Kontingent braucht es hier trotzdem: Der Schreibschritt nimmt einen
+   * grossen Körper entgegen, der Abschluss löst beim externen Speicher einen
+   * serverseitigen Download aus. Beide setzen aber ein Ticket voraus, das
+   * bereits gezählt wurde — sie begrenzen also nicht die Menge, sondern das
+   * Tempo.
+   */
+  fileTransfer: { limit: 240, windowSeconds: 600 },
+  /**
+   * Dateien ausliefern.
+   *
+   * Zweitrangig hinter der eigentlichen Prüfung — das Kontingent ersetzt
+   * weder Sitzung noch Berechtigung, es begrenzt nur, wie schnell jemand
+   * Kennungen durchprobieren kann, und schützt die Datenbank davor, grosse
+   * Binärdaten am Stück auszuliefern. Eine Seite mit vielen Bildern lädt
+   * leicht dreissig Dateien auf einmal; deshalb grosszügig.
+   */
+  fileDownload: { limit: 300, windowSeconds: 60 },
   apiRead: { limit: 300, windowSeconds: 60 },
   apiWrite: { limit: 90, windowSeconds: 60 },
   webhook: { limit: 600, windowSeconds: 60 },

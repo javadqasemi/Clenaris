@@ -7,6 +7,7 @@ import { toast } from 'sonner';
 
 import { cn } from '@/lib/utils';
 import { api, ApiError } from '@/lib/api/client';
+import { uploadFile } from '@/lib/upload';
 import { MAX_UPLOAD_BYTES, describeUploadLimit } from '@/lib/validation/files';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -108,31 +109,20 @@ export function JobPhotos({
 
     try {
       for (const file of list) {
-        // 1) Signierte Adresse holen — der Server bestimmt Pfad und Grenzen.
-        const target = await api.post<{ signedUrl: string; publicUrl: string }>(
-          '/api/files/upload-url',
-          {
-            profile: 'jobPhoto',
-            filename: file.name,
-            mimeType: file.type,
-            sizeBytes: file.size,
-            scopeId: jobId,
-          },
-        );
-
-        // 2) Direkt zum Speicher — nicht durch die Applikation, sonst scheitern
-        //    Baustellenfotos am Body-Limit.
-        const response = await fetch(target.signedUrl, {
-          method: 'PUT',
-          headers: { 'Content-Type': file.type, 'x-upsert': 'true' },
-          body: file,
+        // Ticket holen, direkt zum Speicher laden, abschliessen. Der Abschluss
+        // ist der Schritt, der die Bytes prüft; erst danach gibt es eine
+        // Adresse, die sich an den Einsatz hängen lässt.
+        const datei = await uploadFile({
+          file,
+          profile: 'jobPhoto',
+          filename: file.name,
+          scopeId: jobId,
         });
-        if (!response.ok) throw new Error('Der Upload wurde vom Speicher abgelehnt.');
 
-        // 3) Am Einsatz registrieren.
         const photo = await api.post<JobPhoto>(`/api/jobs/${jobId}/photos`, {
           type: uploadType,
-          url: target.publicUrl,
+          url: datei.url,
+          fileId: datei.id,
         });
 
         setPhotos((current) => [photo, ...current]);

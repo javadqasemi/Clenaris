@@ -1,7 +1,7 @@
 import { defineRoute, idParam } from '@/lib/api/handler';
 import { created } from '@/lib/api/response';
 import { prisma } from '@/lib/db';
-import { ForbiddenError, NotFoundError } from '@/lib/errors';
+import { BusinessRuleError, ForbiddenError, NotFoundError } from '@/lib/errors';
 import { jobPhotoSchema } from '@/lib/validation/operations';
 import { getOrganizationId } from '@/server/services/organization.service';
 
@@ -36,11 +36,32 @@ export const POST = defineRoute({
       throw new ForbiddenError('Sie sind diesem Einsatz nicht zugeteilt.');
     }
 
+    /**
+     * Nur eine abgeschlossene, noch nicht zugeordnete Datei dieser
+     * Organisation wird zum Einsatzfoto. `checksum: { not: null }` ist die
+     * Prüfung: Ohne sie hat niemand die Bytes gesehen.
+     */
+    const datei = await prisma.fileAsset.findFirst({
+      where: {
+        id: body.fileId,
+        organizationId,
+        scope: 'JOB',
+        checksum: { not: null },
+        jobId: null,
+      },
+      select: { id: true, url: true },
+    });
+    if (!datei) {
+      throw new BusinessRuleError('Diese Datei steht nicht zur Verfügung. Bitte erneut hochladen.');
+    }
+
+    await prisma.fileAsset.update({ where: { id: datei.id }, data: { jobId: job.id } });
+
     const photo = await prisma.jobPhoto.create({
       data: {
         jobId: job.id,
         type: body.type,
-        url: body.url,
+        url: datei.url,
         thumbnailUrl: body.thumbnailUrl ?? null,
         caption: body.caption ?? null,
         room: body.room ?? null,

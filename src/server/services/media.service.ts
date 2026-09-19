@@ -216,50 +216,18 @@ export async function updateMedia({
   return file;
 }
 
-/** Datei nach dem Upload registrieren. */
-export async function registerMedia({
-  organizationId,
-  actorId,
-  ip,
-  input,
-}: {
-  organizationId: string;
-  actorId: string;
-  ip?: string | null;
-  input: {
-    bucket: string;
-    path: string;
-    url: string;
-    filename: string;
-    mimeType: string;
-    sizeBytes: number;
-    scope: FileScope;
-    isPublic: boolean;
-  };
-}) {
-  const file = await prisma.fileAsset.create({
-    data: {
-      organizationId,
-      bucket: input.bucket,
-      path: input.path,
-      url: input.url,
-      filename: input.filename,
-      mimeType: input.mimeType,
-      sizeBytes: input.sizeBytes,
-      scope: input.scope,
-      isPublic: input.isPublic,
-      uploadedById: actorId,
-    },
-  });
-
-  await audit.created({
-    organizationId,
-    userId: actorId,
-    entity: 'FileAsset',
-    entityId: file.id,
-    summary: `Datei „${file.filename}" hochgeladen (${Math.round(file.sizeBytes / 1024)} kB)`,
-    ip,
-  });
-
-  return file;
-}
+/**
+ * `registerMedia` ist entfallen.
+ *
+ * Die Funktion legte ein `FileAsset` aus dem an, was der Client meldete:
+ * Pfad, Adresse, Typ, Grösse, Bereich und Sichtbarkeit. Keiner dieser Werte
+ * wurde gegen den Speicher geprüft, und niemand hatte die Datei je gesehen.
+ *
+ * Es gibt jetzt genau einen Weg, auf dem eine Benutzerdatei entsteht:
+ * `finalizeUpload` in `file.service.ts`. Er liest die tatsächlich
+ * gespeicherten Bytes zurück, prüft sie und leitet Bereich und Sichtbarkeit
+ * aus dem Upload-Profil ab. Eine zweite Eintrittsstelle daneben wäre eine
+ * zweite, schwächere Tür — und sie stehenzulassen, nur weil kein Aufrufer
+ * mehr da ist, verschöbe das Problem auf die nächste Person, die eine
+ * praktische Funktion sucht.
+ */

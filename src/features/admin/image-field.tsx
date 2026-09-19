@@ -6,6 +6,7 @@ import { toast } from 'sonner';
 
 import { cn } from '@/lib/utils';
 import { api, ApiError } from '@/lib/api/client';
+import { uploadFile } from '@/lib/upload';
 import type { UploadProfileName } from '@/lib/validation/files';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -66,28 +67,21 @@ export async function uploadImage(
     throw new Error('Bitte ein Bild im Format JPEG, PNG, WebP oder AVIF wählen.');
   }
 
-  let target: { signedUrl: string; publicUrl: string };
   try {
-    target = await api.post<{ signedUrl: string; publicUrl: string }>('/api/files/upload-url', {
-      profile,
-      filename: file.name,
-      mimeType: file.type,
-      sizeBytes: file.size,
-    });
+    // Die zurückgegebene Adresse stammt aus dem Abschluss. Vorher gab diese
+    // Funktion die Adresse des Upload-Ziels zurück — eine Adresse, hinter der
+    // zu diesem Zeitpunkt nichts Geprüftes lag.
+    const datei = await uploadFile({ file, profile, filename: file.name });
+    return datei.url;
   } catch (err) {
     throw new Error(
-      err instanceof ApiError ? err.message : 'Das Bild konnte nicht hochgeladen werden.',
+      err instanceof ApiError
+        ? err.message
+        : err instanceof Error
+          ? err.message
+          : 'Das Bild konnte nicht hochgeladen werden.',
     );
   }
-
-  const response = await fetch(target.signedUrl, {
-    method: 'PUT',
-    headers: { 'Content-Type': file.type, 'x-upsert': 'true' },
-    body: file,
-  });
-  if (!response.ok) throw new Error('Der Upload wurde vom Speicher abgelehnt.');
-
-  return target.publicUrl;
 }
 
 export function ImageField({

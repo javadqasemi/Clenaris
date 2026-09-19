@@ -1,17 +1,12 @@
 import 'server-only';
 
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
-import { nanoid } from 'nanoid';
 
 import { hasIntegration, serverEnv } from '@/lib/env';
 import { ConfigurationError, IntegrationError } from '@/lib/errors';
 
-import {
-  sanitizeFilename,
-  validateUpload,
-  type SignedUploadTarget,
-  type UploadProfile,
-} from './profiles';
+import { validateUpload, type SignedUploadTarget, type UploadProfile } from './profiles';
+import { buildStoragePath, createTicket } from './tickets';
 
 /**
  * Datei-Ablage über Supabase Storage.
@@ -54,7 +49,16 @@ function bucket(): string {
   return serverEnv().SUPABASE_STORAGE_BUCKET;
 }
 
-/** Erzeugt eine signierte Upload-URL für einen Direkt-Upload aus dem Browser. */
+/**
+ * Erzeugt eine signierte Upload-URL für einen Direkt-Upload aus dem Browser.
+ *
+ * **Neu seit Gate 2: Es entsteht dabei ein Ticket.** Vorher schrieb diese
+ * Funktion keine Zeile — der Server bat Supabase um eine Adresse und vergass
+ * sie. Beim Abschluss liess sich deshalb nicht mehr feststellen, ob ein
+ * gemeldeter Pfad je genehmigt worden war, für welches Profil und für wen.
+ * Die Kennung des Tickets ist jetzt das, was der Client zurückmeldet; den
+ * Pfad bestimmt allein der Server.
+ */
 export async function createSignedUpload(params: {
   profile: UploadProfile;
   organizationId: string;
@@ -63,17 +67,15 @@ export async function createSignedUpload(params: {
   sizeBytes: number;
   /** Optionaler Unterordner, z. B. die Job-ID. */
   scopeId?: string;
+  uploadedById?: string | null;
 }): Promise<SignedUploadTarget> {
   const config = validateUpload(params.profile, params.mimeType, params.sizeBytes);
-  const safeName = sanitizeFilename(params.filename);
-  const path = [
-    params.organizationId,
-    config.folder,
-    params.scopeId,
-    `${Date.now()}-${nanoid(10)}-${safeName}`,
-  ]
-    .filter(Boolean)
-    .join('/');
+  const path = buildStoragePath({
+    organizationId: params.organizationId,
+    profile: params.profile,
+    filename: params.filename,
+    scopeId: params.scopeId,
+  });
 
   const { data, error } = await supabaseAdmin()
     .storage.from(bucket())
@@ -83,13 +85,45 @@ export async function createSignedUpload(params: {
     throw new IntegrationError('Supabase', error?.message ?? 'Upload-URL konnte nicht erstellt werden.');
   }
 
+  const ticket = await createTicket({
+    organizationId: params.organizationId,
+    profile: params.profile,
+    path,
+    mimeType: params.mimeType,
+    maxBytes: config.maxBytes,
+    driver: 'SUPABASE',
+    uploadedById: params.uploadedById,
+  });
+
   return {
     path,
+    ticketId: ticket.id,
     token: data.token,
     signedUrl: data.signedUrl,
     publicUrl: getPublicUrl(path),
     expiresIn: 7200,
   };
+}
+
+/**
+ * Ein gespeichertes Objekt serverseitig zurücklesen.
+ *
+ * Der Abschluss braucht die *tatsächlich abgelegten* Bytes: Grösse, Signatur
+ * und Prüfsumme sollen die Datei beschreiben, die später ausgeliefert wird,
+ * nicht die, die der Browser zu schicken behauptete. Den Metadaten von
+ * Supabase wird dafür nicht geglaubt — `content-type` und `size` stammen dort
+ * aus demselben Upload, den wir gerade prüfen wollen.
+ *
+ * Gelesen wird genau einmal je Abschluss.
+ */
+export async function downloadObject(path: string): Promise<Buffer | null> {
+  const { data, error } = await supabaseAdmin().storage.from(bucket()).download(path);
+
+  // Ein fehlendes Objekt ist kein Integrationsfehler, sondern der häufigste
+  // ehrliche Fall: Der Abschluss kam, der Upload aber nie an.
+  if (error || !data) return null;
+
+  return Buffer.from(await data.arrayBuffer());
 }
 
 /** Serverseitiger Upload (PDFs, generierte Exporte). */

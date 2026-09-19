@@ -121,8 +121,15 @@ export const POST = defineRoute({
       });
 
       if (body.fileIds?.length) {
+        // Wie bei Buchung und Beleg: nur eine abgeschlossene, also geprüfte
+        // Datei hängt sich an eine Nachricht.
         await tx.fileAsset.updateMany({
-          where: { id: { in: body.fileIds }, organizationId, uploadedById: session.id },
+          where: {
+            id: { in: body.fileIds },
+            organizationId,
+            uploadedById: session.id,
+            checksum: { not: null },
+          },
           data: { messageId: createdMessage.id },
         });
       }

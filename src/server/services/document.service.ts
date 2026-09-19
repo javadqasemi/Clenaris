@@ -100,6 +100,43 @@ function defaultVisibility(input: { category: string; visibility?: string }): Do
   return input.category === 'EMPLOYEE' ? 'EMPLOYEE_PRIVATE' : 'MANAGEMENT';
 }
 
+/**
+ * Eine bereits geprüfte Datei für dieses Dokument beanspruchen.
+ *
+ * **Warum das Dokument keine Datei mehr anlegt.** Vorher kamen `path`, `url`,
+ * `mimeType` und `sizeBytes` aus dem Formular und wurden unbesehen zu einem
+ * `FileAsset` — eine zweite Stelle neben `POST /api/media`, an der der Client
+ * eine Datei erfinden konnte, und ausgerechnet für Personal- und
+ * Vertragsdokumente.
+ *
+ * Jetzt wird nur beansprucht, was der Abschluss bereits geprüft hat. Die
+ * Bedingungen in der Abfrage sind die Prüfung: richtige Organisation,
+ * Prüfsumme vorhanden (also abgeschlossen) und noch keiner Fassung
+ * zugeordnet. Trifft eine davon nicht zu, gibt es keine Fassung.
+ */
+async function beanspruchteDatei(
+  tx: Prisma.TransactionClient,
+  organizationId: string,
+  fileId: string,
+) {
+  const file = await tx.fileAsset.findFirst({
+    where: {
+      id: fileId,
+      organizationId,
+      checksum: { not: null },
+      scope: 'DOCUMENT',
+      versions: { none: {} },
+    },
+    select: { id: true },
+  });
+  if (!file) {
+    throw new BusinessRuleError(
+      'Diese Datei steht nicht zur Verfügung. Bitte erneut hochladen.',
+    );
+  }
+  return file;
+}
+
 export async function createDocument(session: SessionUser, organizationId: string, input: CreateDocumentInput) {
   const visibility = defaultVisibility(input);
   if (visibility === 'EMPLOYEE_PRIVATE' && !input.subjectEmployeeId) {
@@ -126,10 +163,8 @@ export async function createDocument(session: SessionUser, organizationId: strin
         createdById: session.id,
       },
     });
-    if (input.file) {
-      const file = await tx.fileAsset.create({
-        data: { organizationId, path: input.file.path, url: input.file.url, filename: input.file.filename, mimeType: input.file.mimeType, sizeBytes: input.file.sizeBytes, scope: 'DOCUMENT', isPublic: false, uploadedById: session.id },
-      });
+    if (input.fileId) {
+      const file = await beanspruchteDatei(tx, organizationId, input.fileId);
       const version = await tx.documentVersion.create({
         data: { documentId: doc.id, version: 1, fileAssetId: file.id, changeNote: input.changeNote ?? null, uploadedById: session.id },
       });
@@ -176,9 +211,7 @@ export async function addDocumentVersion(session: SessionUser, organizationId: s
   if (!document) throw new NotFoundError('Dokument');
   const nextVersion = (document.versions[0]?.version ?? 0) + 1;
   const version = await prisma.$transaction(async (tx) => {
-    const file = await tx.fileAsset.create({
-      data: { organizationId, path: input.file.path, url: input.file.url, filename: input.file.filename, mimeType: input.file.mimeType, sizeBytes: input.file.sizeBytes, scope: 'DOCUMENT', isPublic: false, uploadedById: session.id },
-    });
+    const file = await beanspruchteDatei(tx, organizationId, input.fileId);
     const created = await tx.documentVersion.create({
       data: { documentId: id, version: nextVersion, fileAssetId: file.id, changeNote: input.changeNote ?? null, uploadedById: session.id },
     });

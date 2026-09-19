@@ -494,6 +494,23 @@ export const ROUTES: RouteDoc[] = [
     body: files.uploadUrlSchema,
     status: 201,
   },
+  {
+    method: 'post',
+    path: '/api/files/finalize',
+    tag: 'Dateien',
+    summary: 'Upload abschliessen und prüfen',
+    description:
+      'Erst dieser Aufruf macht aus abgelegten Bytes eine Datei, mit der die Anwendung ' +
+      'arbeitet. Der Server liest das gespeicherte Objekt zurück, prüft die tatsächliche ' +
+      'Grösse, die Signatur der ersten Bytes und den angemeldeten Typ gegen das Upload-Profil ' +
+      'des Tickets, bildet den SHA-256 und legt danach das FileAsset an. Ohne diesen Schritt ' +
+      'trägt die Ablage keine Prüfsumme und lässt sich weder abrufen noch verknüpfen. ' +
+      'Wiederholbar: Ein zweiter Aufruf liefert dasselbe Asset, nicht ein zweites.',
+    guard: { kind: 'public' },
+    rateLimit: 'fileTransfer',
+    body: files.finalizeUploadSchema,
+    status: 201,
+  },
 
   // -------------------------------------------------------------------------
   //  CRM
@@ -2127,10 +2144,13 @@ export const ROUTES: RouteDoc[] = [
     tag: 'Website',
     summary: 'Hochgeladene Datei registrieren',
     description:
-      'Der Upload selbst läuft direkt zu Supabase (/api/files/upload-url). Dieser Endpunkt hält ' +
-      'nur fest, was dort gelandet ist — sonst gäbe es Dateien, die in keiner Liste erscheinen.',
+      'Wie /api/files/finalize, aber mit der Berechtigung media:upload. Der Körper enthält nur ' +
+      'die Kennung des serverseitig ausgestellten Upload-Tickets; Pfad, Adresse, Typ, Grösse, ' +
+      'Bereich und Sichtbarkeit bestimmt der Server. Vorher kamen all diese Werte aus dem ' +
+      'Client und wurden ungeprüft übernommen.',
     guard: perm('all', 'media:upload'),
     rateLimit: 'apiWrite',
+    body: files.finalizeUploadSchema,
     status: 201,
   },
   {
@@ -3413,10 +3433,12 @@ export const ROUTES: RouteDoc[] = [
     summary: 'Datei an die Upload-Adresse schreiben',
     description:
       'Gegenstück zur signierten Adresse von Supabase, wenn kein externer Speicher ' +
-      'eingerichtet ist. Der Körper sind die rohen Bytes; die Adresse ist die Berechtigung — ' +
-      'sie entsteht in `/api/files/upload-url`, ist nicht erratbar, genau einmal und nur zwei ' +
-      'Stunden lang beschreibbar. Höchstens 256 MB — die allgemeine Grenze von 1 GB gilt ' +
-      'für den externen Speicher; die Datenbank-Rückfallebene trägt nicht mehr.',
+      'eingerichtet ist. Der Körper sind die rohen Bytes. Die Schreibberechtigung ist das ' +
+      'Upload-Ticket aus /api/files/upload-url: serverseitig für genau einen Pfad ' +
+      'ausgestellt, genau einmal und nur zwei Stunden lang beschreibbar. Die Bytes werden ' +
+      'schon hier gegen das Profil des Tickets geprüft; angenommen ist die Datei damit noch ' +
+      'nicht — das entscheidet /api/files/finalize. Höchstens 256 MB: Die allgemeine Grenze ' +
+      'von 1 GB gilt für den externen Speicher, die Datenbank-Rückfallebene trägt nicht mehr.',
     guard: { kind: 'public' },
     params: q.idParam,
     extraErrors: [400, 404],
@@ -3427,8 +3449,12 @@ export const ROUTES: RouteDoc[] = [
     tag: 'Dateien',
     summary: 'Datei ausliefern',
     description:
-      'Öffentlich lesbar wie ein öffentlicher Bucket: Profilbilder und Einsatzfotos erscheinen ' +
-      'in E-Mails und PDF-Berichten ohne Sitzung. Der Schutz ist die nicht erratbare Adresse.',
+      'Die Kennung allein öffnet nichts. Ausgeliefert wird nur, was ein FileAsset hat: ist es ' +
+      'öffentlich (Teambild, Galerie, Kopfbild), ohne Anmeldung und mit langem Zwischenspeicher; ' +
+      'sonst nur mit Sitzung, gleicher Organisation, passender Rolle und tatsächlicher Beziehung ' +
+      'zum Geschäftsobjekt, und ohne öffentliche Cachebarkeit. Alles andere ist 404 — auch eine ' +
+      'vorhandene Datei, die dieser Person nicht gehört. Extern geteilte Dokumente laufen nicht ' +
+      'über diesen Weg, sondern über ihre Fachroute mit PublicAccessToken.',
     guard: { kind: 'public' },
     params: q.idParam,
     produces: 'application/octet-stream',

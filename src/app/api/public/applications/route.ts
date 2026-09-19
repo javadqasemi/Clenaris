@@ -30,6 +30,29 @@ export const POST = definePublicRoute({
     });
     if (!posting) throw new NotFoundError('Stelleninserat');
 
+    /**
+     * Die Adresse der Unterlage kommt aus dem geprüften `FileAsset`, nicht
+     * aus dem Formular. Vorher schickte der Browser `cvUrl` mit, und sie
+     * wurde so übernommen — es liess sich also jede beliebige Adresse als
+     * Lebenslauf einer Bewerbung eintragen.
+     *
+     * Die Bedingung `checksum: { not: null }` ist dabei die eigentliche
+     * Prüfung: Ohne Prüfsumme ist der Upload nicht abgeschlossen, und eine
+     * nicht abgeschlossene Datei hängt sich hier nicht an.
+     */
+    const lebenslauf = body.cvFileId
+      ? await prisma.fileAsset.findFirst({
+          where: {
+            id: body.cvFileId,
+            organizationId,
+            scope: 'APPLICATION',
+            checksum: { not: null },
+            applicationId: null,
+          },
+          select: { id: true, url: true },
+        })
+      : null;
+
     const application = await prisma.jobApplication.create({
       data: {
         postingId: posting.id,
@@ -38,10 +61,17 @@ export const POST = definePublicRoute({
         email: body.email,
         phone: body.phone,
         message: body.message ?? null,
-        cvUrl: body.cvUrl ?? null,
+        cvUrl: lebenslauf?.url ?? null,
         availableFrom: body.availableFrom ?? null,
       },
     });
+
+    if (lebenslauf) {
+      await prisma.fileAsset.update({
+        where: { id: lebenslauf.id },
+        data: { applicationId: application.id },
+      });
+    }
 
     // Eingangsbestätigung an die bewerbende Person.
     await sendEmail({

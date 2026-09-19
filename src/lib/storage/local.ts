@@ -1,19 +1,19 @@
 import 'server-only';
 
-import { nanoid } from 'nanoid';
-
+import { sha256Hex } from '@/lib/crypto';
 import { prisma } from '@/lib/db';
 import { NotFoundError, ValidationError } from '@/lib/errors';
 import { absoluteUrl } from '@/lib/utils';
 import { describeUploadLimit } from '@/lib/validation/files';
 
 import {
-  sanitizeFilename,
   UPLOAD_PROFILES,
   validateUpload,
+  verifyBytes,
   type SignedUploadTarget,
   type UploadProfile,
 } from './profiles';
+import { buildStoragePath, createTicket, UPLOAD_WINDOW_MS } from './tickets';
 
 /**
  * Eingebauter Dateispeicher — die Rückfallebene ohne externen Dienst.
@@ -31,12 +31,26 @@ import {
  * einzige Zeile — und der Wechsel zum externen Speicher ist später eine
  * Umgebungsvariable, kein Umbau.
  *
- * **Die Platzhalter-Zeile ist die Berechtigung.** `createSignedUpload` legt
- * eine Zeile ohne Inhalt an; ihre ID ist eine nicht erratbare `cuid` und
- * zugleich die Adresse. Wer sie nicht hat, kann nicht hochladen; wer sie hat,
- * darf es genau einmal und nur bis `expiresAt`. Damit braucht die
- * Upload-Route keine eigene Sitzungsprüfung — die Prüfung ist beim Anfordern
- * der Adresse bereits passiert.
+ * **Korrektur einer früheren Zusage an dieser Stelle.** Hier stand: „Die
+ * Platzhalter-Zeile ist die Berechtigung … ihre ID ist eine nicht erratbare
+ * `cuid` und zugleich die Adresse." Das war zweimal falsch.
+ *
+ * Erstens ist eine cuid kein Geheimnis. Nachgemessen an den Kennungen dieser
+ * Datenbank: Von 25 Zeichen sind acht der auf die Millisekunde genaue
+ * Erstellungszeitpunkt, vier ein laufender Zähler und vier ein pro Prozess
+ * konstanter Fingerabdruck — über 36 Zeilen kamen genau zwei verschiedene
+ * Werte vor. Zufällig sind die letzten acht Zeichen, rund 41 Bit. Das ist
+ * eine Kennung, keine Berechtigung.
+ *
+ * Zweitens deckte die Aussage nur das *Schreiben* ab, wurde aber auch für das
+ * *Lesen* in Anspruch genommen: Die Ausgaberoute gab jede Datei heraus, deren
+ * Kennung jemand nannte — ohne Sitzung, ohne Kontingent, mit
+ * `Cache-Control: public, immutable`. Darunter Lebensläufe und
+ * Personaldokumente.
+ *
+ * Seit Gate 2 gilt: Die Kennung ist eine Kennung. Wer schreiben darf,
+ * entscheidet das Ticket (`tickets.ts`); wer lesen darf, entscheidet das
+ * zugehörige `FileAsset` und dessen Fachbeziehung (`file.service.ts`).
  */
 
 /**
@@ -65,9 +79,6 @@ import {
  *    Megabyte schon — und ein einziges 256-MB-Video erst recht.
  */
 export const LOCAL_MAX_BYTES = 256 * 1024 * 1024;
-
-/** Wie lange eine angeforderte Upload-Adresse gültig bleibt. */
-const UPLOAD_WINDOW_MS = 2 * 60 * 60 * 1000;
 
 export function localUploadUrl(id: string): string {
   return `/api/files/blob/${id}`;
@@ -99,31 +110,28 @@ export async function createLocalUpload(params: {
     );
   }
 
-  const path = [
-    params.organizationId,
-    config.folder,
-    params.scopeId,
-    `${Date.now()}-${nanoid(10)}-${sanitizeFilename(params.filename)}`,
-  ]
-    .filter(Boolean)
-    .join('/');
+  const path = buildStoragePath({
+    organizationId: params.organizationId,
+    profile: params.profile,
+    filename: params.filename,
+    scopeId: params.scopeId,
+  });
 
-  const record = await prisma.storedFile.create({
-    data: {
-      organizationId: params.organizationId,
-      path,
-      mimeType: params.mimeType,
-      // Die angekündigte Grösse ist eine Behauptung des Clients; verbindlich
-      // geprüft wird beim Empfang gegen `maxBytes`.
-      maxBytes: Math.min(config.maxBytes, LOCAL_MAX_BYTES),
-      uploadedById: params.uploadedById ?? null,
-      expiresAt: new Date(Date.now() + UPLOAD_WINDOW_MS),
-    },
-    select: { id: true },
+  const record = await createTicket({
+    organizationId: params.organizationId,
+    profile: params.profile,
+    path,
+    mimeType: params.mimeType,
+    // Die angekündigte Grösse ist eine Behauptung des Clients; verbindlich
+    // geprüft wird beim Empfang gegen `maxBytes`.
+    maxBytes: Math.min(config.maxBytes, LOCAL_MAX_BYTES),
+    driver: 'LOCAL',
+    uploadedById: params.uploadedById,
   });
 
   return {
     path,
+    ticketId: record.id,
     token: record.id,
     signedUrl: absoluteUrl(localUploadUrl(record.id)),
     publicUrl: localUploadUrl(record.id),
@@ -157,6 +165,15 @@ export async function putLocalBuffer(params: {
     select: { id: true },
   });
 
+  /**
+   * Servererzeugte Dateien bekommen ihre Prüfsumme sofort. Es gibt hier
+   * nichts zu verifizieren — die Bytes stammen aus dem eigenen Renderer, kein
+   * Client war beteiligt —, aber der Integritätsnachweis soll für *jede*
+   * gespeicherte Datei gelten, nicht nur für hochgeladene. Ohne ihn hätte
+   * `verifyFileIntegrity` bei einem Rechnungs-PDF nichts zu vergleichen.
+   */
+  const checksum = sha256Hex(data);
+
   const record = existing
     ? await prisma.storedFile.update({
         where: { id: existing.id },
@@ -164,6 +181,7 @@ export async function putLocalBuffer(params: {
           data,
           sizeBytes: data.byteLength,
           mimeType: params.contentType,
+          checksum,
           uploadedAt: new Date(),
         },
         select: { id: true },
@@ -176,6 +194,10 @@ export async function putLocalBuffer(params: {
           maxBytes: LOCAL_MAX_BYTES,
           data,
           sizeBytes: data.byteLength,
+          checksum,
+          driver: 'LOCAL',
+          // Kein Upload-Profil: Diese Datei kam nicht durch ein Ticket.
+          profile: null,
           uploadedAt: new Date(),
           expiresAt: new Date(Date.now() + UPLOAD_WINDOW_MS),
         },
@@ -189,9 +211,16 @@ export async function putLocalBuffer(params: {
  * Hochgeladene Daten entgegennehmen.
  *
  * Die Prüfungen in dieser Reihenfolge, und jede aus einem eigenen Grund:
- * unbekannte ID (die Adresse ist die Berechtigung), bereits beschrieben
- * (einmal und nicht öfter), abgelaufen (eine alte Adresse taugt nicht als
- * dauerhafter Schreibzugang), zu gross (die angekündigte Grösse war gelogen).
+ * unbekanntes Ticket, bereits beschrieben (einmal und nicht öfter),
+ * abgelaufen (ein altes Ticket taugt nicht als dauerhafter Schreibzugang),
+ * zu gross (die angekündigte Grösse war gelogen).
+ *
+ * **Dass hier schon die Bytes geprüft werden, ist nicht die Sicherheitsgrenze.**
+ * Die liegt im Abschluss (`file.service.ts`), und zwar für beide Treiber
+ * gleich — sonst hätte der lokale Weg andere Regeln als der externe, und
+ * zwei Regelwerke laufen auseinander. Die Prüfung steht *zusätzlich* hier,
+ * damit gar nicht erst 256 MB fremder Daten in der Datenbank landen, die
+ * ohnehin abgelehnt würden. Beide Stellen rufen dieselbe Funktion.
  */
 export async function receiveLocalUpload(params: {
   id: string;
@@ -200,10 +229,22 @@ export async function receiveLocalUpload(params: {
 }): Promise<{ url: string }> {
   const record = await prisma.storedFile.findUnique({
     where: { id: params.id },
-    select: { id: true, data: true, maxBytes: true, expiresAt: true, mimeType: true },
+    select: {
+      id: true,
+      data: true,
+      maxBytes: true,
+      expiresAt: true,
+      mimeType: true,
+      profile: true,
+      driver: true,
+    },
   });
 
   if (!record) throw new NotFoundError('Upload-Adresse');
+
+  if (record.driver !== 'LOCAL') {
+    throw new ValidationError('Dieses Upload-Ticket gehört zu einem anderen Speicher.');
+  }
 
   if (record.data !== null) {
     throw new ValidationError('Diese Upload-Adresse wurde bereits verwendet.');
@@ -213,15 +254,26 @@ export async function receiveLocalUpload(params: {
     throw new ValidationError('Diese Upload-Adresse ist abgelaufen. Bitte erneut versuchen.');
   }
 
-  if (params.data.byteLength === 0) {
-    throw new ValidationError('Die übertragene Datei ist leer.');
-  }
-
   if (params.data.byteLength > record.maxBytes) {
     throw new ValidationError(
       `Die Datei überschreitet die zulässige Grösse von ${describeUploadLimit(record.maxBytes)}.`,
     );
   }
+
+  /**
+   * Ohne hinterlegtes Profil lässt sich nicht sagen, welche Dateitypen dieses
+   * Ticket erlaubt. Solche Zeilen stammen aus der Zeit vor Gate 2 oder von
+   * `putLocalBuffer`; in beiden Fällen ist ein Upload dagegen nicht
+   * vorgesehen. Fail closed statt „irgendetwas annehmen".
+   */
+  if (!record.profile) {
+    throw new ValidationError('Dieses Upload-Ticket ist nicht mehr gültig.');
+  }
+
+  // Wirft bei leerer Datei, falschem Typ oder nicht passender Signatur. Der
+  // beim Anfordern gemeldete Typ ist massgebend, nicht der Kopf der
+  // Übertragung: Jener wurde gegen das Profil geprüft, dieser nicht.
+  verifyBytes(record.profile as UploadProfile, record.mimeType, params.data);
 
   await prisma.storedFile.update({
     where: { id: record.id },
@@ -231,13 +283,23 @@ export async function receiveLocalUpload(params: {
       // Speicher zulässt — den Prisma nicht annimmt.
       data: new Uint8Array(params.data),
       sizeBytes: params.data.byteLength,
-      // Der beim Anfordern gemeldete Typ bleibt massgebend: Er wurde gegen das
-      // Upload-Profil geprüft, der Kopf der Übertragung nicht.
       uploadedAt: new Date(),
+      // Bewusst *keine* Prüfsumme: Die schreibt allein der Abschluss. Solange
+      // sie fehlt, ist die Datei kein gültiges Fachobjekt — auch wenn die
+      // Bytes hier bereits in Ordnung waren.
     },
   });
 
   return { url: localUploadUrl(record.id) };
+}
+
+/** Die rohen Bytes einer lokal gespeicherten Datei — für den Abschluss. */
+export async function readLocalBytes(id: string): Promise<Buffer | null> {
+  const record = await prisma.storedFile.findUnique({
+    where: { id },
+    select: { data: true },
+  });
+  return record?.data ? Buffer.from(record.data) : null;
 }
 
 /** Datei ausliefern. */
@@ -258,10 +320,29 @@ export async function deleteLocalFile(pathOrId: string): Promise<void> {
   });
 }
 
-/** Nie beschriebene Platzhalter aufräumen — vom täglichen Lauf aufgerufen. */
+/**
+ * Abgelaufene, nie abgeschlossene Tickets aufräumen — vom täglichen Lauf.
+ *
+ * **Die Bedingung `checksum: null` ist die wichtige.** Vorher genügte
+ * `data: null`, weil eine Zeile ohne Bytes zwangsläufig ein unbenutzter
+ * Platzhalter war. Seit der externe Treiber ebenfalls Tickets ausstellt,
+ * stimmt das nicht mehr: Bei `SUPABASE` liegen die Bytes im Objektspeicher
+ * und `data` bleibt dauerhaft leer. Ohne diese Bedingung hätte der Nachtlauf
+ * jede abgeschlossene externe Datei zwei Stunden nach dem Upload gelöscht.
+ *
+ * `checksum: null` heisst dagegen genau das Richtige: nie abgeschlossen, von
+ * keinem `FileAsset` beansprucht, fachlich nicht existent.
+ */
 export async function purgeExpiredUploads(): Promise<number> {
   const result = await prisma.storedFile.deleteMany({
-    where: { data: null, expiresAt: { lt: new Date() } },
+    where: {
+      checksum: null,
+      expiresAt: { lt: new Date() },
+      // Doppelt gesichert: Eine Zeile, an der ein Asset hängt, wird nie
+      // aufgeräumt — auch dann nicht, wenn die Prüfsumme aus irgendeinem
+      // Grund fehlt. Löschen ist nicht umkehrbar, die Bedingung ist billig.
+      asset: null,
+    },
   });
   return result.count;
 }

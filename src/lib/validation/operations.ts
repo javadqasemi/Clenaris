@@ -365,7 +365,12 @@ export const manualTimeEntrySchema = z.object({
 
 export const jobPhotoSchema = z.object({
   type: z.enum(['BEFORE', 'AFTER', 'DAMAGE', 'DOCUMENT', 'OTHER']).default('BEFORE'),
-  url: assetUrlSchema,
+  /**
+   * Die Kennung des geprüften `FileAsset`. Die Adresse setzt der Endpunkt
+   * daraus — vorher kam sie als `url` aus dem Browser und wurde übernommen,
+   * womit sich jede beliebige Adresse als Einsatzfoto eintragen liess.
+   */
+  fileId: cuidSchema,
   thumbnailUrl: assetUrlSchema.optional(),
   caption: z.string().trim().max(300).optional(),
   room: z.string().trim().max(80).optional(),

@@ -7,6 +7,7 @@ import { toast } from 'sonner';
 
 import { cn, formatCurrency } from '@/lib/utils';
 import { api, ApiError } from '@/lib/api/client';
+import { uploadFile } from '@/lib/upload';
 import { Button } from '@/components/ui/button';
 import { Input, Textarea } from '@/components/ui/input';
 import { Label } from '@/components/ui/form';
@@ -99,30 +100,19 @@ export function JobWorkspace({
   const uploadPhoto = async (file: File, type: 'BEFORE' | 'AFTER') => {
     setUploading(type);
     try {
-      // 1) Signierte Upload-Adresse vom Server holen.
-      const target = await api.post<{ path: string; signedUrl: string; publicUrl: string; token: string }>(
-        '/api/files/upload-url',
-        {
-          profile: 'jobPhoto',
-          filename: file.name,
-          mimeType: file.type,
-          sizeBytes: file.size,
-          scopeId: jobId,
-        },
-      );
-
-      // 2) Direkt zu Supabase hochladen.
-      const upload = await fetch(target.signedUrl, {
-        method: 'PUT',
-        headers: { 'Content-Type': file.type, 'x-upsert': 'true' },
-        body: file,
+      // Ticket, Direkt-Upload, Abschluss — die Prüfung der Bytes passiert im
+      // dritten Schritt, und erst der liefert eine verwendbare Adresse.
+      const datei = await uploadFile({
+        file,
+        profile: 'jobPhoto',
+        filename: file.name,
+        scopeId: jobId,
       });
-      if (!upload.ok) throw new Error('Upload fehlgeschlagen');
 
-      // 3) Foto am Einsatz registrieren.
       const photo = await api.post<JobPhotoDto>(`/api/jobs/${jobId}/photos`, {
         type,
-        url: target.publicUrl,
+        url: datei.url,
+        fileId: datei.id,
       });
 
       setPhotos((current) => [photo, ...current]);

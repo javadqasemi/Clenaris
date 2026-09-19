@@ -8,6 +8,7 @@ import { toast } from 'sonner';
 
 import { cn, formatBytes } from '@/lib/utils';
 import { api, ApiError } from '@/lib/api/client';
+import { uploadFile } from '@/lib/upload';
 import { jobApplicationSchema, type JobApplicationInput } from '@/lib/validation/crm';
 import { MAX_UPLOAD_BYTES, describeUploadLimit } from '@/lib/validation/files';
 import { Button } from '@/components/ui/button';
@@ -45,7 +46,13 @@ export function ApplicationForm({
   const [sent, setSent] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const [uploading, setUploading] = React.useState(false);
-  const [file, setFile] = React.useState<{ name: string; size: number; url: string } | null>(null);
+  const [file, setFile] = React.useState<{
+    name: string;
+    size: number;
+    url: string;
+    /** Kennung des geprüften `FileAsset` — sie verknüpft die Bewerbung. */
+    id: string;
+  } | null>(null);
 
   const form = useForm<JobApplicationInput>({
     resolver: zodResolver(jobApplicationSchema),
@@ -64,25 +71,14 @@ export function ApplicationForm({
   const uploadCv = async (selected: File) => {
     setUploading(true);
     try {
-      const target = await api.post<{ signedUrl: string; publicUrl: string }>(
-        '/api/files/upload-url',
-        {
-          profile: 'cv',
-          filename: selected.name,
-          mimeType: selected.type,
-          sizeBytes: selected.size,
-          scopeId: postingId,
-        },
-      );
-
-      const upload = await fetch(target.signedUrl, {
-        method: 'PUT',
-        headers: { 'Content-Type': selected.type, 'x-upsert': 'true' },
-        body: selected,
+      const datei = await uploadFile({
+        file: selected,
+        profile: 'cv',
+        filename: selected.name,
+        scopeId: postingId,
       });
-      if (!upload.ok) throw new Error('Upload fehlgeschlagen');
 
-      setFile({ name: selected.name, size: selected.size, url: target.publicUrl });
+      setFile({ name: selected.name, size: selected.size, url: datei.url, id: datei.id });
       toast.success('Lebenslauf hochgeladen.');
     } catch (err) {
       toast.error(
@@ -96,7 +92,8 @@ export function ApplicationForm({
   const onSubmit = async (values: JobApplicationInput) => {
     setError(null);
     try {
-      await api.post('/api/public/applications', { ...values, cvUrl: file?.url });
+      // Nur die Kennung — die Adresse setzt der Server aus dem geprüften Asset.
+      await api.post('/api/public/applications', { ...values, cvFileId: file?.id });
       setSent(true);
     } catch (err) {
       const message =

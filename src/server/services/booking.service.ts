@@ -264,10 +264,18 @@ export async function createBooking(params: {
       include: { customer: true, address: true },
     });
 
-    // Hochgeladene Fotos der Buchung zuordnen.
+    /**
+     * Hochgeladene Fotos der Buchung zuordnen — aber nur geprüfte.
+     *
+     * `checksum: { not: null }` ist die Bedingung, die zählt: Sie steht für
+     * „der Abschluss hat die Bytes gesehen". Ohne sie liesse sich hier eine
+     * Datei anhängen, die nie durch die Prüfung ging. Derzeit hat das
+     * Buchungsformular keinen Bildupload und `fileIds` bleibt leer — die
+     * Bedingung steht trotzdem, damit sie schon da ist, wenn er kommt.
+     */
     if (input.fileIds.length > 0) {
       await tx.fileAsset.updateMany({
-        where: { id: { in: input.fileIds }, organizationId },
+        where: { id: { in: input.fileIds }, organizationId, checksum: { not: null } },
         data: { bookingId: created.id, scope: 'BOOKING' },
       });
     }

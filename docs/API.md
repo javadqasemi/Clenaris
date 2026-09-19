@@ -5,7 +5,7 @@
 > Quelle, aus der sowohl diese Referenz als auch die Laufzeitvalidierung
 > stammen.
 
-Stand: 377 Endpunkte. Die maschinenlesbare Fassung liegt in
+Stand: 378 Endpunkte. Die maschinenlesbare Fassung liegt in
 [`openapi.yaml`](./openapi.yaml) bzw. [`openapi.json`](./openapi.json).
 
 ## Grundlagen
@@ -507,7 +507,6 @@ Familie.
 | `availableFrom` | string | – | – |
 | `acceptPrivacy` | object | ja | – |
 | `website` | union | ja | – |
-| `cvUrl` | string | – | max. 2000 Zeichen |
 
 ### `POST /api/public/ai/chat`
 
@@ -674,9 +673,25 @@ Familie.
 | `sizeBytes` | integer | ja | ≥ 1, ≤ 1073741824 |
 | `scopeId` | string | – | max. 60 Zeichen |
 
+### `POST /api/files/finalize`
+
+**Upload abschliessen und prüfen.** Erst dieser Aufruf macht aus abgelegten Bytes eine Datei, mit der die Anwendung arbeitet. Der Server liest das gespeicherte Objekt zurück, prüft die tatsächliche Grösse, die Signatur der ersten Bytes und den angemeldeten Typ gegen das Upload-Profil des Tickets, bildet den SHA-256 und legt danach das FileAsset an. Ohne diesen Schritt trägt die Ablage keine Prüfsumme und lässt sich weder abrufen noch verknüpfen. Wiederholbar: Ein zweiter Aufruf liefert dasselbe Asset, nicht ein zweites.
+
+- **Zugriff:** Öffentlich — keine Anmeldung nötig.
+- **Rate-Limit-Klasse:** `fileTransfer`
+- **Erfolg:** 201
+- **Mögliche Fehler:** 400, 409, 422, 429, 500
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `ticketId` | string | ja | min. 1 Zeichen, max. 60 Zeichen |
+| `filename` | string | ja | min. 1 Zeichen, max. 255 Zeichen |
+
 ### `PUT /api/files/blob/{id}`
 
-**Datei an die Upload-Adresse schreiben.** Gegenstück zur signierten Adresse von Supabase, wenn kein externer Speicher eingerichtet ist. Der Körper sind die rohen Bytes; die Adresse ist die Berechtigung — sie entsteht in `/api/files/upload-url`, ist nicht erratbar, genau einmal und nur zwei Stunden lang beschreibbar. Höchstens 256 MB — die allgemeine Grenze von 1 GB gilt für den externen Speicher; die Datenbank-Rückfallebene trägt nicht mehr.
+**Datei an die Upload-Adresse schreiben.** Gegenstück zur signierten Adresse von Supabase, wenn kein externer Speicher eingerichtet ist. Der Körper sind die rohen Bytes. Die Schreibberechtigung ist das Upload-Ticket aus /api/files/upload-url: serverseitig für genau einen Pfad ausgestellt, genau einmal und nur zwei Stunden lang beschreibbar. Die Bytes werden schon hier gegen das Profil des Tickets geprüft; angenommen ist die Datei damit noch nicht — das entscheidet /api/files/finalize. Höchstens 256 MB: Die allgemeine Grenze von 1 GB gilt für den externen Speicher, die Datenbank-Rückfallebene trägt nicht mehr.
 
 - **Zugriff:** Öffentlich — keine Anmeldung nötig.
 - **Erfolg:** 200
@@ -690,7 +705,7 @@ Familie.
 
 ### `GET /api/files/blob/{id}`
 
-**Datei ausliefern.** Öffentlich lesbar wie ein öffentlicher Bucket: Profilbilder und Einsatzfotos erscheinen in E-Mails und PDF-Berichten ohne Sitzung. Der Schutz ist die nicht erratbare Adresse.
+**Datei ausliefern.** Die Kennung allein öffnet nichts. Ausgeliefert wird nur, was ein FileAsset hat: ist es öffentlich (Teambild, Galerie, Kopfbild), ohne Anmeldung und mit langem Zwischenspeicher; sonst nur mit Sitzung, gleicher Organisation, passender Rolle und tatsächlicher Beziehung zum Geschäftsobjekt, und ohne öffentliche Cachebarkeit. Alles andere ist 404 — auch eine vorhandene Datei, die dieser Person nicht gehört. Extern geteilte Dokumente laufen nicht über diesen Weg, sondern über ihre Fachroute mit PublicAccessToken.
 
 - **Zugriff:** Öffentlich — keine Anmeldung nötig.
 - **Erfolg:** 200 (`application/octet-stream`)
@@ -2173,7 +2188,7 @@ Familie.
 | Feld | Typ | Pflicht | Regeln |
 | --- | --- | --- | --- |
 | `type` | string | – | `BEFORE` \| `AFTER` \| `DAMAGE` \| `DOCUMENT` \| `OTHER`, Standard `"BEFORE"` |
-| `url` | string | ja | max. 2000 Zeichen |
+| `fileId` | string | ja | min. 1 Zeichen |
 | `thumbnailUrl` | string | – | max. 2000 Zeichen |
 | `caption` | string | – | max. 300 Zeichen |
 | `room` | string | – | max. 80 Zeichen |
@@ -4294,12 +4309,19 @@ Familie.
 
 ### `POST /api/media`
 
-**Hochgeladene Datei registrieren.** Der Upload selbst läuft direkt zu Supabase (/api/files/upload-url). Dieser Endpunkt hält nur fest, was dort gelandet ist — sonst gäbe es Dateien, die in keiner Liste erscheinen.
+**Hochgeladene Datei registrieren.** Wie /api/files/finalize, aber mit der Berechtigung media:upload. Der Körper enthält nur die Kennung des serverseitig ausgestellten Upload-Tickets; Pfad, Adresse, Typ, Grösse, Bereich und Sichtbarkeit bestimmt der Server. Vorher kamen all diese Werte aus dem Client und wurden ungeprüft übernommen.
 
 - **Zugriff:** Erfordert die Berechtigung: `media:upload`.
 - **Rate-Limit-Klasse:** `apiWrite`
 - **Erfolg:** 201
-- **Mögliche Fehler:** 401, 403, 409, 422, 429, 500
+- **Mögliche Fehler:** 400, 401, 403, 409, 422, 429, 500
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `ticketId` | string | ja | min. 1 Zeichen, max. 60 Zeichen |
+| `filename` | string | ja | min. 1 Zeichen, max. 255 Zeichen |
 
 ### `PATCH /api/media/{id}`
 
@@ -6725,12 +6747,7 @@ Familie.
 | `validFrom` | string | – | – |
 | `expiresOn` | string | – | – |
 | `reminderDaysBefore` | integer | – | ≥ 0, ≤ 365, Standard `30` |
-| `file` | object | – | – |
-| `file.path` | string | ja | min. 1 Zeichen, max. 500 Zeichen |
-| `file.url` | string | ja | max. 2000 Zeichen |
-| `file.filename` | string | ja | min. 1 Zeichen, max. 255 Zeichen |
-| `file.mimeType` | string | ja | min. 1 Zeichen, max. 120 Zeichen |
-| `file.sizeBytes` | integer | ja | ≥ 0, ≤ 1073741824 |
+| `fileId` | string | – | min. 1 Zeichen, max. 60 Zeichen |
 | `changeNote` | string | – | max. 500 Zeichen |
 
 ### `GET /api/bi/documents/{id}`
@@ -6812,12 +6829,7 @@ Familie.
 
 | Feld | Typ | Pflicht | Regeln |
 | --- | --- | --- | --- |
-| `file` | object | ja | – |
-| `file.path` | string | ja | min. 1 Zeichen, max. 500 Zeichen |
-| `file.url` | string | ja | max. 2000 Zeichen |
-| `file.filename` | string | ja | min. 1 Zeichen, max. 255 Zeichen |
-| `file.mimeType` | string | ja | min. 1 Zeichen, max. 120 Zeichen |
-| `file.sizeBytes` | integer | ja | ≥ 0, ≤ 1073741824 |
+| `fileId` | string | ja | min. 1 Zeichen, max. 60 Zeichen |
 | `changeNote` | string | – | max. 500 Zeichen |
 
 ### `GET /api/bi/documents/{id}/download`

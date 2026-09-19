@@ -2742,6 +2742,23 @@ model ContentBlock {
   @@map("content_blocks")
 }
 
+/// Welcher Speicher die Bytes tatsächlich hält.
+///
+/// Die Zeile entsteht bei beiden Treibern, weil sie zwei Aufgaben hat: Sie ist
+/// die *Upload-Berechtigung* (ein serverseitig ausgestelltes Ticket mit Pfad,
+/// Profil und Ablauf) und danach der *Integritätsnachweis* (`checksum`). Bei
+/// `LOCAL` liegen die Bytes zusätzlich in `data`; bei `SUPABASE` bleibt `data`
+/// dauerhaft `null` und der Pfad zeigt in den Objektspeicher.
+///
+/// Vor dieser Unterscheidung stellte der externe Weg überhaupt kein Ticket
+/// aus: `createSignedUpload` schrieb keine Zeile. Damit liess sich beim
+/// Abschluss nicht mehr feststellen, ob der gemeldete Pfad je vom Server
+/// genehmigt worden war — der Client konnte einen beliebigen behaupten.
+enum StorageDriver {
+  LOCAL
+  SUPABASE
+}
+
 /// Eingebauter Dateispeicher — die Rückfallebene, wenn kein externer
 /// Objektspeicher eingerichtet ist.
 ///
@@ -2774,8 +2791,38 @@ model StoredFile {
   /// Obergrenze aus dem Upload-Profil, beim Anlegen festgehalten.
   maxBytes  Int
 
-  /// `null`, solange der Upload noch aussteht.
+  /// `null` bei `driver = SUPABASE` (die Bytes liegen dort) und solange ein
+  /// lokaler Upload noch aussteht.
   data Bytes?
+
+  /// Wo die Bytes liegen. Bestimmt, ob `data` je gefüllt wird.
+  driver StorageDriver @default(LOCAL)
+
+  /// Welches Upload-Profil diese Anforderung genehmigt hat.
+  ///
+  /// Beim Abschluss wird gegen genau diese Erlaubnisliste geprüft — sonst
+  /// liesse sich ein für `avatar` ausgestelltes Ticket mit einem PDF
+  /// abschliessen. `null` bei Zeilen aus der Zeit vor Gate 2.
+  ///
+  /// **Das Profil ist eine Dateiregel, keine Berechtigung.** Dass eine Datei
+  /// als `jobPhoto` hochgeladen wurde, sagt nichts darüber, wer den Einsatz
+  /// sehen darf. Der Zugriff hängt am `FileAsset` und dessen Fachbeziehung.
+  profile String?
+
+  /// SHA-256 der tatsächlich gespeicherten Bytes, hexadezimal in Kleinschrift.
+  ///
+  /// **Dieses Feld ist zugleich der Abschlussvermerk.** Es wird ausschliesslich
+  /// geschrieben, nachdem der Server die Bytes gelesen, die Signatur geprüft
+  /// und den deklarierten Typ bestätigt hat. Damit gilt die Invariante:
+  ///
+  ///   `checksum = null` ⇒ die Datei ist **nicht** abgeschlossen und darf
+  ///   nirgends als gültiges Fachobjekt auftauchen.
+  ///
+  /// Ein zusätzliches `verifiedAt` wäre ein zweiter Zustand für dieselbe
+  /// Aussage — und damit die Möglichkeit, dass beide auseinanderlaufen.
+  /// Zeilen aus der Zeit vor Gate 2 tragen `null` und gelten als ungeprüft;
+  /// sie werden nicht stillschweigend für in Ordnung erklärt.
+  checksum String?
 
   uploadedById String?
   uploadedAt   DateTime? @db.Timestamptz(6)
@@ -2785,6 +2832,11 @@ model StoredFile {
   createdAt DateTime @default(now()) @db.Timestamptz(6)
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  /// Die fachliche Seite derselben Datei. `null`, solange der Upload nicht
+  /// abgeschlossen ist — und bei servererzeugten Dateien, die bewusst keine
+  /// fachliche Registrierung haben (siehe `FileAsset.storedFileId`).
+  asset FileAsset?
 
   @@index([organizationId, createdAt])
   /// Für das Aufräumen nie beschriebener Platzhalter.
@@ -3026,9 +3078,38 @@ model FileAsset {
   filename  String
   mimeType  String
   sizeBytes Int
+  /// Beim Abschluss aus `StoredFile.checksum` übernommen.
+  ///
+  /// Die physische Ebene ist die Quelle; dies ist die Momentaufnahme für die
+  /// fachliche. Beide sind beim Anlegen identisch und werden danach nie
+  /// unabhängig voneinander geändert — weicht später eines ab, ist das der
+  /// Befund, nicht ein zu behebender Schönheitsfehler. `null` heisst
+  /// ungeprüft, nicht unversehrt.
   checksum  String?
   /// true = öffentlich lesbar, false = nur via Signed URL
+  ///
+  /// **Die einzige fachliche Quelle der Zugriffsentscheidung.** Bewusst nicht
+  /// zusätzlich am `StoredFile`: zwei Kopien derselben Aussage könnten
+  /// auseinanderlaufen, und dann wäre unklar, welche gilt. Gesetzt wird sie
+  /// ausschliesslich serverseitig aus dem Verwendungszweck — ein Client kann
+  /// sie nicht behaupten.
   isPublic  Boolean @default(false)
+
+  /// Die physische Datei hinter diesem Asset.
+  ///
+  /// **Warum explizit und nicht über die URL.** Die Berechtigung wird von der
+  /// Datei aus rückwärts aufgelöst: `StoredFile` → `FileAsset` → Fachobjekt →
+  /// Rolle. Ohne Fremdschlüssel bliebe nur, die gespeicherte URL nach einer
+  /// `cuid` zu durchsuchen und zu hoffen, das richtige Fachobjekt zu treffen —
+  /// eine Zeichenkettensuche als Autorisierungsgrundlage.
+  ///
+  /// `@unique` ist hier die Absicherung gegen doppelte Registrierung: Zwei
+  /// gleichzeitige Abschlüsse desselben Tickets ergeben dann nicht zwei
+  /// Assets, sondern einen Konflikt, den PostgreSQL entscheidet.
+  ///
+  /// `null` bei Assets aus der Zeit vor Gate 2 und bei Dateien im externen
+  /// Speicher ohne Ticket.
+  storedFileId String? @unique
 
   bookingId     String?
   quoteId       String?
@@ -3052,6 +3133,10 @@ model FileAsset {
   createdAt    DateTime @default(now()) @db.Timestamptz(6)
 
   organization Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  /// `SetNull`, nicht `Cascade`: Wird die physische Zeile aufgeräumt, soll der
+  /// fachliche Datensatz mit seiner Historie bestehen bleiben und als „Datei
+  /// fehlt" sichtbar sein — nicht spurlos verschwinden.
+  storedFile   StoredFile?     @relation(fields: [storedFileId], references: [id], onDelete: SetNull)
   booking      Booking?        @relation(fields: [bookingId], references: [id], onDelete: Cascade)
   quote        Quote?          @relation(fields: [quoteId], references: [id], onDelete: Cascade)
   invoice      Invoice?        @relation(fields: [invoiceId], references: [id], onDelete: Cascade)

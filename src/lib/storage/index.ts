@@ -33,9 +33,14 @@ export {
   UPLOAD_PROFILES,
   sanitizeFilename,
   validateUpload,
+  verifyBytes,
+  type ByteBefund,
   type SignedUploadTarget,
   type UploadProfile,
 } from './profiles';
+
+export { erkenneFormat, pruefeSignatur, type ErkanntesFormat } from './signatures';
+export { istAbgeschlossen, loadTicket, type Ticket } from './tickets';
 
 export { LOCAL_MAX_BYTES } from './local';
 
@@ -90,14 +95,39 @@ export function getPublicUrl(path: string): string {
 /**
  * Zeitlich begrenzter Zugriff auf nicht-öffentliche Dateien.
  *
- * Die Rückfallebene kennt keine ablaufenden Verweise: Die Adresse ist eine
- * nicht erratbare `cuid` und damit selbst das Geheimnis. Das ist schwächer als
- * ein befristeter Verweis und wird hier ausdrücklich in Kauf genommen — sie
- * ist die Notlösung, nicht die Zielarchitektur.
+ * **Korrektur einer früheren Zusage.** Hier stand, die Rückfallebene brauche
+ * keine ablaufenden Verweise, weil „die Adresse eine nicht erratbare `cuid`
+ * und damit selbst das Geheimnis" sei. Das war dieselbe falsche Zusicherung
+ * wie an zwei weiteren Stellen: Eine cuid ist eine Kennung, kein Geheimnis
+ * (die Herleitung steht in `local.ts`).
+ *
+ * Die Rückfallebene braucht trotzdem keinen befristeten Verweis — aber aus
+ * einem anderen Grund als dem angegebenen: Ihre Ausgaberoute prüft seit
+ * Gate 2 bei jedem Abruf die Sitzung und die Fachbeziehung. Der Schutz liegt
+ * in der Prüfung, nicht in der Adresse.
  */
 export async function createSignedDownloadUrl(path: string, expiresIn = 3600): Promise<string> {
   if (usesRemoteStorage()) return remote.createSignedDownloadUrl(path, expiresIn);
   return path;
+}
+
+/**
+ * Die tatsächlich gespeicherten Bytes einer Datei lesen — treiberunabhängig.
+ *
+ * Das ist die eine Stelle, an der der Abschluss erfährt, was wirklich abgelegt
+ * wurde. Bei `SUPABASE` ein Download, bei `LOCAL` ein Lesen aus der
+ * Datenbankzeile; in beiden Fällen genau einmal je Abschluss.
+ *
+ * `null` heisst: Es liegt nichts da. Der häufigste ehrliche Fall ist ein
+ * Abschluss, dessen Upload nie ankam.
+ */
+export async function readStoredBytes(ticket: {
+  id: string;
+  path: string;
+  driver: 'LOCAL' | 'SUPABASE';
+}): Promise<Buffer | null> {
+  if (ticket.driver === 'SUPABASE') return remote.downloadObject(ticket.path);
+  return local.readLocalBytes(ticket.id);
 }
 
 export async function deleteFile(path: string): Promise<void> {
