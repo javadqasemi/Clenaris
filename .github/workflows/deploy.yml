@@ -208,9 +208,27 @@ jobs:
     # Bindet den Auftrag an die GitHub-Umgebung «production». Dort liegen die
     # Secrets, und dort lässt sich bei Bedarf eine Freigabe durch eine zweite
     # Person einschalten, ohne den Workflow zu ändern.
+    #
+    # **Ohne `url:`** — und das ist keine Auslassung, sondern der Grund, warum
+    # dieser Workflow vom 14. bis zum 19. September 2026 kein einziges Mal
+    # gelaufen ist.
+    #
+    # Hier stand `url: ${{ secrets.API_URL }}`. Der `secrets`-Kontext ist in
+    # `jobs.<id>.environment.url` nicht verfügbar; erlaubt sind dort nur
+    # `github`, `needs`, `strategy`, `matrix`, `job`, `runner`, `env`, `vars`,
+    # `steps` und `inputs`. Eine unzulässige Kontextreferenz verwirft GitHub
+    # beim Parsen — der Lauf scheitert in derselben Sekunde, in der er
+    # entsteht, mit null Jobs, ohne Protokoll und ohne Annotation. Von aussen
+    # sah das aus wie ein fehlgeschlagener Test; tatsächlich hat der Workflow
+    # nie begonnen.
+    #
+    # `url:` liefert nur den anklickbaren Verweis in der Oberfläche. Dafür
+    # eine Repository-Variable einzuführen, wäre mehr Konfiguration als der
+    # Nutzen wert; die Auslieferungsadresse steht ohnehin in der
+    # Zusammenfassung am Ende des Laufs. In den Schritten unten bleibt
+    # `secrets.API_URL` unverändert — dort ist der Kontext zulässig.
     environment:
       name: production
-      url: ${{ secrets.API_URL }}
 
     steps:
       - name: SSH vorbereiten
