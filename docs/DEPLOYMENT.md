@@ -44,6 +44,30 @@ Vor dem Seed in Produktion `SEED_ADMIN_EMAIL` und `SEED_ADMIN_PASSWORD` setzen
 — sonst entsteht ein Administrationskonto mit den Demo-Zugangsdaten aus dem
 Repository. Der Seed bricht in der Produktion ab, wenn sie fehlen.
 
+> ### Offen: Datenbanksicherung vor Schemaänderungen
+>
+> **P1: Production PostgreSQL backup before schema migrations.**
+>
+> `scripts/deploy.sh` sichert vor jeder Auslieferung den Build (`.next`) und
+> die Umgebungsdatei (`.env`) und stellt beides beim Rücksprung wieder her.
+> Die **Datenbank sichert es nicht** — und der Rücksprung kann eine bereits
+> angewandte Migration auch nicht zurücknehmen. Das ist keine Nachlässigkeit,
+> sondern eine Grenze: Migrationen sind vorwärtsgerichtet, ein Rückweg müsste
+> fachlich formuliert werden und lässt sich nicht allgemein erzeugen.
+>
+> Solange eine Auslieferung keine Migration mitbringt, ist der Rücksprung
+> vollständig. Vor der **ersten** Auslieferung mit echter Schemaänderung
+> braucht die Pipeline deshalb:
+>
+> 1. ein `pg_dump` unmittelbar vor `prisma migrate deploy`, abgelegt neben dem
+>    Build unter `.deploy/backups/<Zeitstempel>/`,
+> 2. eine Aufbewahrungsregel (die Sicherungen wachsen sonst unbegrenzt),
+> 3. einen **geprobten** Rückweg — eine Sicherung, die nie zurückgespielt
+>    wurde, ist eine Vermutung, keine Sicherung.
+>
+> Bis dahin gilt: Auslieferungen mit Migration von Hand begleiten und vorher
+> selbst sichern.
+
 > **`npm run db:seed:demo` gehört nie auf ein System, das in Betrieb geht.**
 > Er legt erfundene Kundschaft, erfundene Bewertungen und **Rechnungen** an.
 > Die Rechnungen verbrauchen Nummern aus `NumberSequence`; diese Folge muss
@@ -76,10 +100,18 @@ In Vercel unter *Settings → Environment Variables*. Pflicht in Produktion:
 DATABASE_URL
 DIRECT_URL
 JWT_SECRET                 openssl rand -base64 48
-NEXT_PUBLIC_APP_URL        https://clenaris.ch
+NEXT_PUBLIC_APP_URL        https://clenaris.qasemi.ch
 CRON_SECRET                openssl rand -hex 32
 ENCRYPTION_KEY             openssl rand -hex 32   (genau 64 Hex-Zeichen)
 ```
+
+> **Die Produktionsadresse ist `clenaris.qasemi.ch`**, nicht `clenaris.ch`.
+> Letzteres ist der Markenname und steht in den Firmenangaben; im DNS
+> existiert es (Stand 2026-09-19) nicht. Überall dort, wo eine Adresse
+> *angesprochen* wird — `NEXT_PUBLIC_APP_URL`, `API_URL`, die `servers` der
+> OpenAPI-Spezifikation —, gehört die erreichbare Adresse hin. Eine
+> Konfiguration, die auf einen nicht auflösenden Namen zeigt, erzeugt Magic
+> Links und PDF-Verweise, die ins Leere führen.
 
 `ENCRYPTION_KEY` verschlüsselt das TOTP-Geheimnis, die AHV-Nummer und den
 Alarmcode in der Datenbank (`src/lib/crypto.ts`). Fehlt er, leitet die
@@ -435,7 +467,8 @@ der nächtliche Führungslauf aus — ohne jede Fehlermeldung.
 | `SERVER_PORT` | nein | SSH-Port, Vorgabe 22 |
 | `SERVER_SSH_KNOWN_HOSTS` | empfohlen | Wirtsschlüssel. Fehlt er, wird er ungeprüft übernommen und der Lauf warnt |
 | `DIRECT_URL` | empfohlen | Direktverbindung für Migrationen |
-| `API_URL` | empfohlen | Öffentliche Adresse, etwa `https://clenaris.ch`. Wird zu `NEXT_PUBLIC_APP_URL` und trägt den Health Check von aussen |
+| `API_URL` | empfohlen | Öffentliche Adresse, zurzeit `https://clenaris.qasemi.ch`. Wird zu `NEXT_PUBLIC_APP_URL` und trägt den Health Check von aussen |
+| `ENCRYPTION_KEY` | empfohlen | Schlüssel der Feldverschlüsselung (64 Hex). Ohne ihn leitet die Anwendung ihn aus `JWT_SECRET` ab — siehe Abschnitt 3 |
 | `CRON_SECRET` | empfohlen | Für die planmässigen Aufgaben |
 
 **Zwei Namen aus der Anforderung gibt es hier nicht.**

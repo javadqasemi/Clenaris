@@ -392,6 +392,9 @@ Legende: **✅** vollständig · **🟡** vorhanden mit Lücken · **❌** fehlt
 | B-08 | Telefonnummern hartkodiert statt aus `getPublicCompanyInfo()` | `error.tsx:57`, `booking-actions.tsx:97`, `chat-widget.tsx:111` | niedrig |
 | B-09 | `roundToRappen()` definiert und nie verwendet — Entscheid fehlt | `src/lib/utils.ts:160` | niedrig |
 | T-01 | Die Testreihe hielt das Demopasswort fest, der Seed nimmt `SEED_ADMIN_PASSWORD` — auf jeder Maschine mit eigenem Startpasswort scheiterten vierzehn Dateien an einem Scheinfehler *(behoben in Phase 1)* | `tests/helpers/accounts.ts` | mittel |
+| **D-01** | **P1: Production PostgreSQL backup before schema migrations** — `scripts/deploy.sh` sichert `.next` und `.env`, aber **nicht die Datenbank**. Der Rücksprung stellt Code und Umgebung wieder her; eine bereits angewandte Migration nimmt er nicht zurück, und das kann er auch nicht. Solange eine Auslieferung keine Migration mitbringt, ist das folgenlos. Vor der **ersten** Auslieferung mit echter Schemaänderung braucht die Pipeline ein `pg_dump` vor `prisma migrate deploy`, mit Aufbewahrung und einem nachweislich geprobten Rückweg | `scripts/deploy.sh` Abschnitt 3 und 6 | **hoch, sobald eine Migration ansteht** |
+| S-08 | `src/lib/crypto.ts` kennt keine Schlüsselrotation: Ein Wert mit Präfix `enc:v1:`, der sich mit dem aktuellen Schlüssel nicht entschlüsseln lässt, wirft. Es gibt keinen Zweitschlüssel-Lesepfad (`ENCRYPTION_KEY_PREVIOUS`) und kein Umschlüsselungsskript. Solange der Schlüssel **vor** dem ersten verschlüsselten Wert steht, ist das folgenlos — danach wird jeder Wechsel zu einem eigenen Vorhaben | `src/lib/crypto.ts` | mittel |
+| S-09 | Der Host-Schlüssel von `46.62.175.39` weicht (Stand 2026-09-19) von `~/.ssh/known_hosts` ab. Entweder wurde der Server neu aufgesetzt oder die Adresse neu vergeben — oder es ist etwas anderes. Bis das geklärt ist, wurde kein SSH-Zugriff durchgeführt | Betrieb | **zu klären** |
 
 ---
 
