@@ -61,7 +61,7 @@ import type { UserRole } from '@prisma/client';
 
 import { cn } from '@/lib/utils';
 import { api, queryKeys } from '@/lib/api/client';
-import { Logo } from '@/components/marketing/logo';
+import { Logo, LogoMark } from '@/components/marketing/logo';
 import { ThemeToggle } from '@/components/theme-toggle';
 import { Button } from '@/components/ui/button';
 import { PersonAvatar, ScrollArea } from '@/components/ui/primitives';
@@ -300,7 +300,22 @@ export function AppShell({
           href="/"
           className="flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
         >
-          <Logo href="/" showWordmark={false} className="pointer-events-none [&_svg]:size-[1.125rem]" />
+          {/*
+            `LogoMark` statt `Logo`: `Logo` bringt seinen eigenen `Link` mit,
+            und der landete hier im `Link` darüber — ein `<a>` im `<a>`. Das
+            erlaubt das HTML-Parsing-Modell nicht; der Browser bricht den
+            äusseren Anker vor dem inneren auf, React erwartet beim Hydrieren
+            aber die verschachtelte Struktur aus dem Server-HTML. Ergebnis war
+            ein Hydration-Fehler auf jeder Seite von `/admin`, `/portal` und
+            `/konto`.
+
+            Das frühere `pointer-events-none` zeigt, dass das Symptom bekannt
+            war: Es nahm dem inneren Anker den Klick, nicht aber seine
+            Existenz. `LogoMark` rendert nur das SVG und löst damit die
+            Ursache statt der Wirkung — der Klickbereich bleibt die ganze
+            Zeile, weil der äussere `Link` sie umschliesst.
+          */}
+          <LogoMark className="size-[1.125rem]" />
           Zur Website
         </Link>
       </div>
