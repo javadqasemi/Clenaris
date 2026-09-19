@@ -1,3 +1,5 @@
+import { createHash, timingSafeEqual } from 'node:crypto';
+
 import type { NextRequest } from 'next/server';
 import type { ZodType, ZodTypeDef } from 'zod';
 import type { UserRole } from '@prisma/client';
@@ -242,6 +244,25 @@ export function definePublicRoute<
 }
 
 /**
+ * Zeichenkettenvergleich in konstanter Zeit.
+ *
+ * `===` bricht beim ersten abweichenden Byte ab. Wer das Zeitverhalten misst,
+ * kann ein Geheimnis daran Zeichen für Zeichen erraten, statt es zu suchen —
+ * aus 2^256 Versuchen werden einige hundert. Über das Internet ist das Rauschen
+ * meist grösser als das Signal, aber der Scheduler läuft im selben Netz wie
+ * die Anwendung, oft sogar auf demselben Wirt.
+ *
+ * Die Längen werden zuerst über den Hash angeglichen — `timingSafeEqual` wirft
+ * bei ungleich langen Puffern, und diese Ausnahme wäre selbst wieder ein
+ * Seitenkanal, der die Länge des Geheimnisses verrät.
+ */
+function secretsMatch(provided: string, expected: string): boolean {
+  const a = createHash('sha256').update(provided).digest();
+  const b = createHash('sha256').update(expected).digest();
+  return timingSafeEqual(a, b);
+}
+
+/**
  * Endpunkt, der ausschliesslich vom Scheduler aufgerufen werden darf.
  * Vercel Cron sendet `Authorization: Bearer $CRON_SECRET`.
  */
@@ -252,7 +273,7 @@ export function defineCronRoute(config: {
     try {
       const secret = process.env.CRON_SECRET;
       const provided = request.headers.get('authorization')?.replace(/^Bearer\s+/i, '');
-      if (!secret || provided !== secret) {
+      if (!secret || !provided || !secretsMatch(provided, secret)) {
         throw new UnauthorizedError('Ungültiges Cron-Token.');
       }
       return await config.handler(request);

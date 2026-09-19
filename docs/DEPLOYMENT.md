@@ -42,7 +42,22 @@ npm run db:seed       # nur bei einer Neuinstallation
 
 Vor dem Seed in Produktion `SEED_ADMIN_EMAIL` und `SEED_ADMIN_PASSWORD` setzen
 — sonst entsteht ein Administrationskonto mit den Demo-Zugangsdaten aus dem
-Repository.
+Repository. Der Seed bricht in der Produktion ab, wenn sie fehlen.
+
+> **`npm run db:seed:demo` gehört nie auf ein System, das in Betrieb geht.**
+> Er legt erfundene Kundschaft, erfundene Bewertungen und **Rechnungen** an.
+> Die Rechnungen verbrauchen Nummern aus `NumberSequence`; diese Folge muss
+> nach Art. 957a OR lückenlos sein, und eine im Spass vergebene Nummer lässt
+> sich nicht zurückgeben. Erfundene Kundenstimmen auf einer öffentlichen
+> Website sind zusätzlich wettbewerbsrechtlich heikel.
+>
+> `prisma/seed-guard.ts` bricht den Demo-Seed deshalb ab, sobald die
+> Zieldatenbank nicht als Testdatenbank erkennbar ist (`test`, `demo`,
+> `scratch`, `sandbox` im Namen). Verlassen Sie sich nicht allein darauf —
+> der Schalter kennt Ihre Produktionsdatenbank nur an ihrem Namen.
+>
+> Für Prüfungen gibt es `npm run db:test:setup`; die Trennung der Umgebungen
+> steht in `tests/README.md`.
 
 ## 2. Dateiablage
 
@@ -63,7 +78,20 @@ DIRECT_URL
 JWT_SECRET                 openssl rand -base64 48
 NEXT_PUBLIC_APP_URL        https://clenaris.ch
 CRON_SECRET                openssl rand -hex 32
+ENCRYPTION_KEY             openssl rand -hex 32   (genau 64 Hex-Zeichen)
 ```
+
+`ENCRYPTION_KEY` verschlüsselt das TOTP-Geheimnis, die AHV-Nummer und den
+Alarmcode in der Datenbank (`src/lib/crypto.ts`). Fehlt er, leitet die
+Anwendung den Schlüssel aus `JWT_SECRET` ab und läuft weiter — ein Wechsel von
+`JWT_SECRET` machte dann aber alle drei Felder unlesbar. Deshalb steht er hier
+unter den Pflichtwerten und nicht unter den Empfehlungen.
+
+**Diesen Schlüssel sichern wie das Datenbankpasswort.** Geht er verloren,
+geht kein Konto verloren — aber jede Person mit zweitem Faktor muss ihn neu
+einrichten, und AHV-Nummern und Alarmcodes sind nachzutragen. Rotieren lässt
+er sich nur mit einem Skript, das jeden Wert entschlüsselt und neu
+verschlüsselt; ein blosser Austausch der Variablen macht den Bestand unlesbar.
 
 Empfohlen:
 

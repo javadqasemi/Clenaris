@@ -28,6 +28,17 @@ import { hash } from '@node-rs/argon2';
 
 // Derselbe Rechenkern wie in der Anwendung — der Seed erfindet kein Ergebnis.
 import { computeScenario, type ScenarioDriverKey } from '../src/lib/bi/math';
+import { assertDemoSeedErlaubt, databaseNameOf } from './seed-guard';
+
+/**
+ * Vor allem anderen: Zeigt `DATABASE_URL` auf eine Testdatenbank?
+ *
+ * Die Prüfung steht hier oben und nicht in `main()`, damit sie auch dann
+ * greift, wenn jemand die Datei künftig anders einhängt. Sie beendet den
+ * Prozess, bevor eine Verbindung zustande kommt — ein Schutzschalter, der
+ * erst nach dem ersten Schreibvorgang auslöst, ist keiner.
+ */
+assertDemoSeedErlaubt();
 
 const prisma = new PrismaClient();
 
@@ -47,7 +58,7 @@ function randomCode(length = 6): string {
 }
 
 async function main() {
-  console.log('🌱  Demodaten …\n');
+  console.log(`🌱  Demodaten in „${databaseNameOf(process.env.DATABASE_URL) ?? '?'}" …\n`);
 
   /**
    * Was der Konfigurations-Seed angelegt hat, wird hier nachgeschlagen statt

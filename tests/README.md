@@ -10,37 +10,80 @@ Rechte prüft, und die Rechteprüfung ist hier das Wesentliche.
 Ausgeführt wird mit dem Testläufer von Node (`node:test`) über `tsx`. Keine
 zusätzliche Abhängigkeit, keine Konfigurationsdatei.
 
+## Die Datenbanken sind getrennt — und das ist keine Förmlichkeit
+
+| Umgebung | Zweck | Demo-Seed | Zurücksetzen |
+|---|---|---|---|
+| **Produktion** | echte Daten | nie | nie |
+| **Entwicklung** (`clenaris`) | örtliches Arbeiten im Browser | nein | von Hand, bewusst |
+| **Test** (`clenaris_test`) | die Prüfreihe | ja | jederzeit (`--frisch`) |
+| **CI** | ein Lauf, dann weg | ja | mit dem Container |
+
+Warum die Prüfungen nicht mehr gegen die Entwicklungsdatenbank laufen sollen,
+hat zwei Gründe, und beide haben einmal Geld gekostet:
+
+**Rechnungsnummern sind endlich.** Der Demo-Seed und `flows.test.ts` stellen
+Rechnungen aus. Deren Nummern zieht `NumberSequence`, und die Folge muss nach
+Art. 957a OR lückenlos sein. Eine im Test vergebene `RE-2026-00042` lässt sich
+nicht zurückgeben — deshalb steht weiter unten auch, dass eine ausgestellte
+Rechnung stehen bleibt. In einer eigenen Datenbank ist die Folge eine eigene,
+und die Frage stellt sich nicht mehr.
+
+**Die Prüfungen verändern den Bestand.** Sie legen an, ändern, setzen die
+Rolle der Betriebsleitung kurzzeitig herab. Wer daneben im Browser arbeitet,
+sieht Zustände, die er nicht erzeugt hat, und sucht Fehler, die keine sind.
+
+Ein Schutzschalter (`prisma/seed-guard.ts`) bricht den Demo-Seed ab, sobald
+die Zieldatenbank nicht als Testdatenbank erkennbar ist. Er lässt sich mit
+`ALLOW_DEMO_SEED=ja` übersteuern — bewusst, laut und einzeln.
+
 ## Voraussetzungen
 
-1. Eine Datenbank mit den Demodaten:
+1. **Testdatenbank einrichten** — einmal, danach nur bei Schemaänderungen:
 
    ```
-   npm run db:deploy
-   npm run db:seed:demo
+   npm run db:test:setup             # legt <name>_test an, migriert, seedet
+   npm run db:test:setup -- --frisch # wirft sie vorher weg
    ```
 
-   **`db:seed:demo`, nicht `db:seed`.** Der gewöhnliche Seed legt nur die
-   Konfiguration an — Firma, Leistungen, Preise, Einsatzgebiet, Team. Die
-   Prüfungen fahren aber Kundenakten, Rechnungen und Nachrichtenverläufe an;
-   ohne Bestand prüfen sie nichts. Der Demo-Seed schliesst den gewöhnlichen
-   ein, ein getrennter Aufruf ist also nicht nötig.
+   Das Skript leitet die Adresse aus `DATABASE_URL` ab (derselbe Server,
+   Name mit `_test`), weigert sich, wenn der Zielname nicht nach Testdatenbank
+   aussieht, und rührt die Entwicklungsdatenbank nicht an. `TEST_DATABASE_URL`
+   übersteuert die Adresse.
 
-2. Ein laufender Server:
+   Es seedet mit den **Demo-Zugangsdaten**, nicht mit denen aus Ihrer `.env`.
+   Sonst hinge die Reproduzierbarkeit der Prüfungen daran, wie die jeweilige
+   Maschine konfiguriert ist — und genau das ist einmal passiert: Wer in
+   seiner `.env` ein eigenes `SEED_ADMIN_PASSWORD` gesetzt hatte, sah rund
+   vierzehn Dateien an „E-Mail-Adresse oder Passwort ist falsch" scheitern und
+   suchte den Fehler im Produkt.
 
-   ```
-   npm run build
-   npm run start:built
+2. **Server gegen die Testdatenbank starten**, auf einem eigenen Port, damit
+   der Entwicklungsserver auf 3000 weiterlaufen kann:
+
+   ```powershell
+   $test = 'postgresql://…/clenaris_test?schema=public'
+   $env:DATABASE_URL = $test
+   $env:DIRECT_URL   = $test
+   npm run build                                    # einmal nach Codeänderungen
+   node node_modules\next\dist\bin\next start -p 3001
    ```
 
    Der Entwicklungsserver (`npm run dev`) geht auch, ist aber langsamer und
    liefert Seiten teils anders aus als der Produktionsbau — geprüft werden
    sollte, was ausgeliefert wird.
 
-Läuft der Server woanders, setzen Sie `TEST_BASE_URL`:
+   **Prüfen Sie, welche Datenbank der Testserver bedient**, bevor Sie die
+   Reihe starten. Der billigste Nachweis: `admin@clenaris.ch` mit
+   `Admin#2026Clenaris` anmelden. Geht das auf 3001 und nicht auf 3000, sind
+   die beiden getrennt.
 
-```
-$env:TEST_BASE_URL = 'http://localhost:4000'
-```
+3. **Die Reihe dagegen fahren:**
+
+   ```
+   $env:TEST_BASE_URL = 'http://127.0.0.1:3001'
+   npm test
+   ```
 
 ## Ausführen
 
@@ -63,12 +106,13 @@ npx tsx --test tests/api/two-factor.test.ts    # eine einzelne Datei
 | `api/website-ops.test.ts` | Fragen, Galerie, Navigation, Rechtstexte, Einsatzgebiet, Stellen, Automatisierungen, Firmendaten |
 | `api/ownership.test.ts` | Mit *wessen* Daten ein Endpunkt antwortet: Objekte je Rolle, Rollenvergabe über die Personalakte, Herkunftsprüfung, Platzhalter im HTML |
 | `api/session-refresh.test.ts` | Stille Sitzungserneuerung: Seitenaufruf ohne Zugangstoken geht zur Erneuerung, nicht zur Anmeldung; neue Cookies und Rücksprung; verbrauchter Token sperrt; kein fremdes Ziel |
-| `api/employees.test.ts` | Personal: Rechte je Rolle, Anlegen (Datum als JJJJ-MM-TT, Doppel), Bearbeiten aller Felder samt `null` für geleerte, Eindeutigkeit von E-Mail und Personalnummer, Lohnhistorie, Konto-Handlungen (Zugangslink, Passwortzwang, Sperre, Foto), Stilllegen |
+| `api/employees.test.ts` | Personal: Rechte je Rolle, Anlegen (Datum als JJJJ-MM-TT, Doppel), Bearbeiten aller Felder samt `null` für geleerte, Eindeutigkeit von E-Mail und Personalnummer, Lohnhistorie, **Lohn-, AHV- und Bankfelder für die Betriebsleitung gesperrt** (lesen *und* schreiben), Rundlauf der verschlüsselten AHV-Nummer, Konto-Handlungen (Zugangslink, Passwortzwang, Sperre, Foto), Stilllegen |
 | `api/jobs.test.ts` | Einsätze: bearbeiten (Rechte, Termin, Notiz leeren, Ende vor Beginn), Team mit mehreren Personen und Rollen, Materialverbrauch als Materialaufwand, Herleitung der Lohnkosten aus Team und Plan |
 | `api/crud-audit.test.ts` | Feiertage als vollständige Datensatzart (Rechte je Rolle, anlegen, ändern, Doppel, löschen), Zurückziehen eigener Abwesenheitsanträge samt Fremdzugriff, Papierkorb-Seite und Wiederherstellen |
 | `api/bi-fuehrung.test.ts` | Unternehmensführung: Rechtegrenzen je Rolle, Sichtbarkeit von Zielen und Dokumenten, die fachlichen Regeln (Genehmigung friert ein, Wirksamkeit erst nach Abschluss, abgelöste Tafeln bleiben), Berichte in drei Formaten |
 | `api/purge.test.ts` | Datenbereinigung: Seite und Endpunkt nur für die Systemverantwortung, Vorschau je Bereich, Bestätigungssatz, unbekannte Bereiche, Kundschaft nur zusammen mit den Finanzen — die Sperren, nicht das Löschen selbst |
-| `api/bi-rechenkerne.test.ts` | Abschreibung, Gesundheitswert, Budgetabweichung, Szenario und Perioden mit festen Zahlen — die einzige Datei, die Anwendungscode direkt importiert, weil die Rechenkerne reine Funktionen sind |
+| `api/bi-rechenkerne.test.ts` | Abschreibung, Gesundheitswert, Budgetabweichung, Szenario und Perioden mit festen Zahlen — importiert Anwendungscode direkt, weil die Rechenkerne reine Funktionen sind |
+| `api/verschluesselung.test.ts` | Feldverschlüsselung (AES-256-GCM): Rundlauf, frischer Initialisierungsvektor je Aufruf, Bindung ans Feld, erkannte Manipulation, Klartext-Altbestand bleibt lesbar — importiert ebenfalls direkt, aus demselben Grund |
 | `pages/smoke.test.ts` | Antwortet jede Seite und jeder Endpunkt je Rolle? |
 | `pages/tables.test.ts` | Läuft irgendeine Tabelle oder Liste aus ihrem Rahmen? |
 | `pages/sorting.test.ts` | Wirkt die Sortierung — und überlebt sie das Blättern? |
@@ -90,8 +134,9 @@ sondern unzuverlässig — der Lauf dauert dafür einige Minuten.
 
 **Eine ausgestellte Rechnung bleibt stehen.** Art. 957a OR verlangt eine
 lückenlose Nummernfolge. Was `flows.test.ts` ausstellt, bleibt in der
-Entwicklungsdatenbank; ein Test, der die Regel umginge, prüfte etwas anderes
-als die Anwendung tut.
+Testdatenbank; ein Test, der die Regel umginge, prüfte etwas anderes als die
+Anwendung tut. Genau deshalb gehört das in eine Datenbank, die weggeworfen
+werden darf.
 
 **Ein 429 ist kein Fehlschlag.** Die Anmeldewege liegen hinter einem strengen
 Limit. Eine Testreihe fährt sie schneller an, als ein Mensch es je täte, und
@@ -102,6 +147,12 @@ läuft hinein — das ist der Beweis, dass die Bremse greift. Der Klient in
 `helpers/totp.ts` rechnet TOTP unabhängig aus dem RFC nach, statt
 `src/lib/auth/totp.ts` aufzurufen. Sonst prüfte der Test dieselbe Funktion mit
 sich selbst, und ein Fehler im Format käme in beiden Richtungen gleich heraus.
+
+Die zwei Ausnahmen (`bi-rechenkerne`, `verschluesselung`) widersprechen dem
+nicht: Dort ist der Gegenstand die Rechnung selbst, nicht ihr Weg durch die
+Anwendung. Ob eine Abschreibung stimmt, lässt sich über HTTP nur mit einem
+Datenbestand prüfen, der die Rechnung verdeckt; ob ein Chiffrat an seine Spalte
+gebunden ist, lässt sich von aussen überhaupt nicht beobachten.
 
 **Die Zugangsdaten in `helpers/accounts.ts` stehen im Klartext.** Sie sind
 Demodaten aus `prisma/seed.ts` und gehören nie in die Nähe einer produktiven

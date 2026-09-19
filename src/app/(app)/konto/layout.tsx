@@ -3,6 +3,7 @@ import { redirect } from 'next/navigation';
 import { prisma } from '@/lib/db';
 import { serverEnv } from '@/lib/env';
 import { getSession } from '@/lib/auth/session';
+import { guardForPath, homeRouteFor } from '@/lib/auth/rbac';
 import { AppShell, type NavGroup } from '@/components/app/app-shell';
 
 /**
@@ -15,6 +16,22 @@ import { AppShell, type NavGroup } from '@/components/app/app-shell';
 export default async function AccountLayout({ children }: { children: React.ReactNode }) {
   const session = await getSession();
   if (!session) redirect('/auth/anmelden');
+
+  /**
+   * Eigene Rollenprüfung, obwohl die Middleware dieselbe Schranke kennt.
+   *
+   * Die Middleware ist ein Vorfilter, keine Autorisierung — das steht so in
+   * `src/middleware.ts` und gilt für jeden Bereich. Das Mitarbeitendenportal
+   * zieht seine Schranke deshalb selbst nach; der Kundenbereich tat es als
+   * einziger nicht und war damit die eine Seite, die vollständig auf einer
+   * Edge-Schicht ruhte. Zwei Zeilen sind billiger als die Frage, ob eine
+   * Umgehung der Middleware hier etwas preisgibt.
+   *
+   * Die zugelassenen Rollen kommen aus `ROUTE_GUARDS`, nicht aus einer
+   * zweiten Aufzählung — sonst driften die beiden Listen auseinander.
+   */
+  const guard = guardForPath('/konto')!;
+  if (!guard.roles.includes(session.role)) redirect(homeRouteFor(session.role));
 
   const customerId = session.role === 'CUSTOMER' ? session.profileId : null;
 

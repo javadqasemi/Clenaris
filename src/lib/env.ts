@@ -33,6 +33,18 @@ const serverSchema = z.object({
   SESSION_IDLE_TTL: z.coerce.number().int().positive().default(900),
   AUTH_COOKIE_DOMAIN: z.string().optional(),
 
+  /**
+   * Schlüssel für die Feldverschlüsselung (`src/lib/crypto.ts`): 32 Byte als
+   * 64 Hex-Zeichen. Fehlt er, leitet das Modul den Schlüssel aus `JWT_SECRET`
+   * ab — die Anwendung läuft also auch ohne, aber dann hängen die
+   * verschlüsselten Felder an einem Schlüssel, der einem anderen Zweck dient.
+   * Die Begründung steht im Kopf von `crypto.ts`.
+   */
+  ENCRYPTION_KEY: z
+    .string()
+    .regex(/^[0-9a-fA-F]{64}$/, 'ENCRYPTION_KEY muss 64 Hex-Zeichen (32 Byte) lang sein')
+    .optional(),
+
   SUPABASE_SERVICE_ROLE_KEY: z.string().optional(),
   SUPABASE_STORAGE_BUCKET: z.string().default('clenaris'),
 

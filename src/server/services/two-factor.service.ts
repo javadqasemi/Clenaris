@@ -9,6 +9,7 @@ import { hashPassword, verifyPassword } from '@/lib/auth/password';
 import { signAccessToken, verifyAccessToken } from '@/lib/auth/jwt';
 import { createSession, revokeAllSessions } from '@/lib/auth/session';
 import { BusinessRuleError, NotFoundError, UnauthorizedError } from '@/lib/errors';
+import { CRYPTO_CONTEXT, decrypt, encrypt } from '@/lib/crypto';
 import {
   generateRecoveryCodes,
   generateSecret,
@@ -42,6 +43,15 @@ import {
  *    markiert.** Er soll kein zweites Mal funktionieren, und eine Liste mit
  *    „schon benutzt" wäre eine Liste, aus der man versehentlich wieder
  *    auswählt.
+ *
+ *  • **Das TOTP-Geheimnis liegt verschlüsselt in der Datenbank**
+ *    (`src/lib/crypto.ts`). Gehasht ginge nicht — im Gegensatz zu einem
+ *    Passwort muss die Anwendung es zurückbekommen, um den Code der
+ *    Authenticator-App nachzurechnen. Im Klartext wäre die
+ *    Zwei-Faktor-Anmeldung für jede Person, die einen Datenbankabzug in die
+ *    Hand bekommt, nur noch ein zusätzliches Eingabefeld. Altbestand im
+ *    Klartext bleibt lesbar und wandert beim nächsten Einrichten ins neue
+ *    Format.
  */
 
 /** Der Zwischenschein zwischen Passwort und Code. */
@@ -86,7 +96,11 @@ export async function beginTwoFactorSetup(params: {
     where: { id: user.id },
     // Das Geheimnis wird gespeichert, der Schutz aber noch nicht scharf
     // gestellt: erst der bestätigte Code schaltet ihn ein.
-    data: { twoFactorSecret: secret, twoFactorEnabled: false, twoFactorConfirmedAt: null },
+    data: {
+      twoFactorSecret: encrypt(secret, CRYPTO_CONTEXT.twoFactorSecret),
+      twoFactorEnabled: false,
+      twoFactorConfirmedAt: null,
+    },
   });
 
   return {
@@ -120,7 +134,7 @@ export async function confirmTwoFactor(params: {
     throw new BusinessRuleError('Beginnen Sie mit der Einrichtung, bevor Sie einen Code bestätigen.');
   }
 
-  if (!verifyToken(user.twoFactorSecret, params.token)) {
+  if (!verifyToken(decrypt(user.twoFactorSecret, CRYPTO_CONTEXT.twoFactorSecret), params.token)) {
     throw new UnauthorizedError(
       'Der Code stimmt nicht. Prüfen Sie, ob die Uhrzeit Ihres Telefons stimmt — TOTP hängt daran.',
     );
@@ -186,7 +200,10 @@ export async function disableTwoFactor(params: {
     throw new UnauthorizedError('Das Passwort stimmt nicht.');
   }
 
-  const byToken = verifyToken(user.twoFactorSecret, params.token);
+  const byToken = verifyToken(
+    decrypt(user.twoFactorSecret, CRYPTO_CONTEXT.twoFactorSecret),
+    params.token,
+  );
   const byRecovery = byToken ? false : await matchRecoveryCode(user.twoFactorRecoveryCodes, params.token);
 
   if (!byToken && byRecovery === null) {
@@ -301,7 +318,10 @@ export async function completeMfaLogin(params: {
     throw new UnauthorizedError('Anmeldung nicht möglich.');
   }
 
-  const byToken = verifyToken(user.twoFactorSecret, params.token);
+  const byToken = verifyToken(
+    decrypt(user.twoFactorSecret, CRYPTO_CONTEXT.twoFactorSecret),
+    params.token,
+  );
   const recoveryIndex = byToken ? null : await matchRecoveryCode(user.twoFactorRecoveryCodes, params.token);
 
   if (!byToken && recoveryIndex === null) {

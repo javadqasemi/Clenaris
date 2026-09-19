@@ -81,6 +81,26 @@ function fields(
     { name: 'hasPets', label: 'Haustiere', type: 'checkbox' },
     { name: 'parkingInfo', label: 'Parkieren', nullable: true },
     { name: 'keyLocation', label: 'Schlüsseldepot', nullable: true, hint: 'Wo der Schlüssel liegt — nur für zugeteilte Mitarbeitende sichtbar.' },
+    /**
+     * Der Alarmcode ist das einzige Feld dieses Formulars, das nur geschrieben
+     * und nie zurückgelesen wird.
+     *
+     * Er liegt verschlüsselt in der Datenbank (`src/lib/crypto.ts`) und
+     * erscheint an genau einer Stelle: auf dem Einsatzrapport der zugeteilten
+     * Person. Ihn hier zum Bearbeiten vorzubelegen hiesse, ihn in jede
+     * Objektliste zu tragen, aus der dieses Formular geöffnet wird — und eine
+     * Objektliste ist der falsche Ort für den Zugang zu einer fremden Wohnung.
+     *
+     * Deshalb ohne `nullable`: Ein leeres Feld wird gar nicht erst gesendet
+     * (siehe `resource-form.tsx`), lässt den hinterlegten Code also
+     * unangetastet. Wer ihn ersetzen will, tippt den neuen.
+     */
+    {
+      name: 'alarmCode',
+      label: 'Alarmcode',
+      half: true,
+      hint: 'Wird verschlüsselt abgelegt und nur der zugeteilten Person am Einsatztag gezeigt. Leer lassen ändert nichts.',
+    },
     { name: 'accessNote', label: 'Zugangshinweis', type: 'textarea', rows: 2, nullable: true },
     { name: 'notes', label: 'Notizen', type: 'textarea', rows: 2, nullable: true },
   ];

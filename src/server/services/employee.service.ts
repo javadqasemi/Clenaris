@@ -6,6 +6,7 @@ import { prisma, toNumber } from '@/lib/db';
 import { BusinessRuleError, ConflictError, NotFoundError } from '@/lib/errors';
 import { round2 } from '@/lib/utils';
 import { audit } from '@/lib/audit';
+import { CRYPTO_CONTEXT, decryptNullable, encryptNullable } from '@/lib/crypto';
 import type {
   AbsenceRequestInput,
   CreateEmployeeInput,
@@ -104,7 +105,7 @@ export async function createEmployee(params: {
         monthlySalary: params.input.monthlySalary ?? null,
         workloadPct: params.input.workloadPct,
         vacationDaysPerYear: params.input.vacationDaysPerYear,
-        ahvNumber: params.input.ahvNumber ?? null,
+        ahvNumber: encryptNullable(params.input.ahvNumber, CRYPTO_CONTEXT.ahvNumber),
         iban: params.input.iban ?? null,
         nationality: params.input.nationality ?? null,
         permitType: params.input.permitType ?? null,
@@ -250,7 +251,9 @@ export async function updateEmployee(params: {
       : {}),
     ...(input.hourlyRate !== undefined ? { hourlyRate: input.hourlyRate ?? null } : {}),
     ...(input.monthlySalary !== undefined ? { monthlySalary: input.monthlySalary ?? null } : {}),
-    ...(input.ahvNumber !== undefined ? { ahvNumber: input.ahvNumber ?? null } : {}),
+    ...(input.ahvNumber !== undefined
+      ? { ahvNumber: encryptNullable(input.ahvNumber, CRYPTO_CONTEXT.ahvNumber) }
+      : {}),
     ...(input.iban !== undefined ? { iban: input.iban ?? null } : {}),
     ...(input.nationality !== undefined ? { nationality: input.nationality ?? null } : {}),
     ...(input.permitType !== undefined ? { permitType: input.permitType ?? null } : {}),
@@ -418,7 +421,15 @@ export async function getEmployeeDetail(params: {
     };
   }
 
-  return employee;
+  /**
+   * Die AHV-Nummer liegt verschlüsselt in der Spalte (`src/lib/crypto.ts`) und
+   * wird erst hier zurückgewandelt — also genau an der einzigen Stelle, die
+   * sie überhaupt herausgibt, und nur für Rollen mit `payslip:create`.
+   */
+  return {
+    ...employee,
+    ahvNumber: decryptNullable(employee.ahvNumber, CRYPTO_CONTEXT.ahvNumber),
+  };
 }
 
 // ---------------------------------------------------------------------------

@@ -1,10 +1,11 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
-import { ArrowLeft, KeyRound, MapPin, Navigation, Phone, StickyNote } from 'lucide-react';
+import { ArrowLeft, KeyRound, MapPin, Navigation, Phone, ShieldAlert, StickyNote } from 'lucide-react';
 
 import { requireEmployeeId } from '@/lib/auth/session';
 import { NotFoundError } from '@/lib/errors';
+import { CRYPTO_CONTEXT, decryptNullable } from '@/lib/crypto';
 import { formatDateLong, formatDuration, formatPhone, timeRangeLabel } from '@/lib/utils';
 import { navigationUrl } from '@/lib/maps/google';
 import { getOrganizationId } from '@/server/services/organization.service';
@@ -38,6 +39,18 @@ export default async function PortalJobPage({ params }: { params: Promise<{ id: 
     if (error instanceof NotFoundError) notFound();
     throw error;
   });
+
+  /**
+   * Der Alarmcode liegt verschlüsselt in der Spalte (`src/lib/crypto.ts`) und
+   * wird genau hier zurückgewandelt: auf dem Rapport der Person, die vor der
+   * Tür steht. `getJobDetail` hat den Einsatz für Mitarbeitende bereits auf
+   * die eigenen Zuteilungen eingegrenzt — die Entschlüsselung erbt damit
+   * dieselbe Schranke, ohne sie ein zweites Mal zu formulieren.
+   *
+   * Die Umwandlung geschieht in der Server Component; über die Leitung geht
+   * nur der gerenderte Text, und auch der nur, wenn ein Code hinterlegt ist.
+   */
+  const alarmCode = decryptNullable(job.property?.alarmCode ?? null, CRYPTO_CONTEXT.alarmCode);
 
   const address = job.address
     ? `${job.address.street} ${job.address.streetNo ?? ''}, ${job.address.postalCode} ${job.address.city}`.replace(
@@ -108,13 +121,21 @@ export default async function PortalJobPage({ params }: { params: Promise<{ id: 
       ) : null}
 
       {/* Zugangshinweise */}
-      {job.internalNote || job.property?.keyLocation || job.property?.parkingInfo ? (
+      {job.internalNote || job.property?.keyLocation || job.property?.parkingInfo || alarmCode ? (
         <Alert variant="info" title="Zugang und Hinweise">
           <ul className="space-y-1.5">
             {job.property?.keyLocation ? (
               <li className="flex items-start gap-2">
                 <KeyRound className="mt-0.5 size-3.5 shrink-0" aria-hidden />
                 {job.property.keyLocation}
+              </li>
+            ) : null}
+            {alarmCode ? (
+              <li className="flex items-start gap-2">
+                <ShieldAlert className="mt-0.5 size-3.5 shrink-0" aria-hidden />
+                <span>
+                  Alarmcode <span className="font-mono tabular-nums">{alarmCode}</span>
+                </span>
               </li>
             ) : null}
             {job.property?.parkingInfo ? (

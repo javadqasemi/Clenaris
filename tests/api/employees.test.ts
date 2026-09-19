@@ -30,8 +30,13 @@ interface EmployeeDetail {
   city: string | null;
   notes: string | null;
   hourlyRate: string | number | null;
+  ahvNumber: string | null;
   user: { id: string; email: string; firstName: string; phone: string | null; status: string; mustChangePassword: boolean };
-  salaryHistory?: { hourlyRate: string | number | null; reason: string | null; workloadPct: number }[];
+  salaryHistory?: {
+    hourlyRate: string | number | null;
+    reason: string | null;
+    workloadPct: number;
+  }[];
 }
 
 const RUN = Date.now();
@@ -190,11 +195,81 @@ describe('Personal — anlegen, bearbeiten, Lohnhistorie, Konto', () => {
     employee = await detail(jars.admin);
     assert.equal(employee.salaryHistory?.length, 2, 'keine Zeile ohne Änderung');
 
-    const salaryByManager = await patch(`/api/employees/${employeeId}`, { hourlyRate: 99 }, { jar: jars.manager });
-    // Die Betriebsleitung darf die Akte pflegen; ob sie Lohnfelder setzen
-    // darf, entscheidet das Schema nicht — die Oberfläche zeigt sie ihr nicht.
-    // Festgehalten wird hier nur, dass die Antwort keine 500 ist.
-    assert.ok(salaryByManager.status < 500);
+  });
+
+  /**
+   * Die Rechteasymmetrie, die diese Prüfung festhält.
+   *
+   * Das Lesen trennte von Anfang an sauber: Lohn, AHV-Nummer und IBAN liefert
+   * `GET /api/employees/:id` nur mit `payslip:create`. Das Schreiben tat es
+   * nicht — `employee:update` genügte, und das hat die Betriebsleitung. Sie
+   * konnte damit einen Stundenlohn und eine Auszahlungs-IBAN überschreiben,
+   * deren bisherigen Wert sie nicht sehen darf; das Prüfprotokoll hält solche
+   * Felder redigiert fest, die Änderung wäre also nicht einmal im Nachhinein
+   * rekonstruierbar gewesen.
+   *
+   * Geprüft wird beides: dass die Betriebsleitung abgewiesen wird *und* dass
+   * sie die Akte im Übrigen weiter pflegen darf. Eine Sperre, die zu weit
+   * greift, wäre der nächste Fehler.
+   */
+  it('weist Lohn-, AHV- und Bankfelder von der Betriebsleitung ab — die übrige Akte nicht', async () => {
+    for (const payload of [
+      { hourlyRate: 99 },
+      { monthlySalary: 7000 },
+      { ahvNumber: '756.9999.9999.99' },
+      { iban: 'CH93 0076 2011 6238 5295 7' },
+      { hourlyRate: 99, salaryReason: 'Versuch' },
+    ]) {
+      const denied = await patch(`/api/employees/${employeeId}`, payload, { jar: jars.manager });
+      assert.equal(denied.status, 403, `${Object.keys(payload).join('+')} — ${denied.text}`);
+    }
+
+    const allowed = await patch(
+      `/api/employees/${employeeId}`,
+      { position: 'Vorarbeiterin', workloadPct: 90 },
+      { jar: jars.manager },
+    );
+    assert.equal(allowed.status, 200, allowed.text);
+
+    const employee = await detail(jars.admin);
+    assert.equal(Number(employee.hourlyRate), 33, 'der Lohn steht unverändert');
+    assert.equal(employee.position, 'Vorarbeiterin', 'die Akte liess sich weiter pflegen');
+
+    /**
+     * Kein abgewiesener Versuch darf sich in der Lohnhistorie niederschlagen.
+     *
+     * Geprüft wird das über die *Werte*, nicht über die Zeilenzahl: Das
+     * Pensum gehört zur Lohnbasis, eine Änderung von 80 auf 90 Prozent
+     * schreibt deshalb zu Recht eine Zeile (`employee.service.ts`,
+     * `salaryChanged`). Das ist keine Lücke — das Pensum liefert `GET` der
+     * Betriebsleitung aus, sie ändert also nichts, was sie nicht sieht, und
+     * der Ansatz wandert unverändert mit.
+     */
+    const ansaetze = (employee.salaryHistory ?? []).map((zeile) => Number(zeile.hourlyRate));
+    assert.ok(!ansaetze.includes(99), `kein abgewiesener Ansatz in der Historie: ${ansaetze}`);
+    assert.deepEqual(
+      [...(employee.salaryHistory ?? [])].map((zeile) => zeile.workloadPct).sort(),
+      [80, 80, 90],
+      'Anstellung (80), Lohnrunde (80), Pensumsänderung (90)',
+    );
+  });
+
+  /**
+   * Die AHV-Nummer liegt verschlüsselt in der Datenbank (`src/lib/crypto.ts`).
+   * Der Rundlauf über HTTP ist der einzige Beweis, der zählt: Was
+   * hineingeschrieben wurde, muss lesbar zurückkommen — und zwar nur für die
+   * Rolle, die auch den Lohn sieht.
+   */
+  it('gibt die verschlüsselte AHV-Nummer im Klartext zurück — und der Betriebsleitung gar nicht', async () => {
+    const saved = await patch(
+      `/api/employees/${employeeId}`,
+      { ahvNumber: '756.1234.5678.97' },
+      { jar: jars.admin },
+    );
+    assert.equal(saved.status, 200, saved.text);
+
+    assert.equal((await detail(jars.admin)).ahvNumber, '756.1234.5678.97');
+    assert.equal((await detail(jars.manager)).ahvNumber, null);
   });
 
   it('Konto-Handlungen: Zugangslink, Passwortzwang, Sperre, Profilbild', async () => {

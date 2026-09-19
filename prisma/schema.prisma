@@ -646,6 +646,9 @@ model User {
 
   // Sicherheit
   twoFactorEnabled       Boolean   @default(false)
+  /// TOTP-Geheimnis, AES-256-GCM mit Praefix `enc:v1:` ueber `src/lib/crypto.ts`.
+  /// Nicht gehasht, weil die Anwendung es zum Nachrechnen des Codes im Klartext
+  /// zurueckbraucht — anders als ein Passwort.
   twoFactorSecret        String?
   /// Gehashte Wiederherstellungscodes. Sie sind der einzige Weg zurueck,
   /// wenn das Telefon verloren geht — im Klartext gespeichert waeren sie
@@ -1092,7 +1095,10 @@ model Property {
   hasElevator  Boolean  @default(false)
   parkingInfo  String?
   keyLocation  String?
-  alarmCode    String? // verschlüsselt gespeichert (siehe lib/crypto)
+  /// AES-256-GCM, Präfix `enc:v1:` — geschrieben und gelesen über
+  /// `src/lib/crypto.ts`. Nie in einer Liste, nur auf dem Einsatzrapport der
+  /// zugeteilten Person.
+  alarmCode    String?
   accessNote   String?
   notes        String?
 
@@ -1919,7 +1925,8 @@ model Employee {
   vacationDaysPerYear Decimal  @default(20) @db.Decimal(4, 1)
 
   // Schweizer Personaldaten
-  ahvNumber        String? // 756.xxxx.xxxx.xx — verschlüsselt
+  /// 756.xxxx.xxxx.xx — AES-256-GCM, Präfix `enc:v1:`, über `src/lib/crypto.ts`.
+  ahvNumber        String?
   iban             String?
   nationality      String?
   permitType       String? // B, C, G, L, CH

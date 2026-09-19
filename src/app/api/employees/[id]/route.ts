@@ -1,5 +1,5 @@
 import { defineRoute, idParam } from '@/lib/api/handler';
-import { BusinessRuleError, NotFoundError } from '@/lib/errors';
+import { BusinessRuleError, ForbiddenError, NotFoundError } from '@/lib/errors';
 import { audit } from '@/lib/audit';
 import { prisma } from '@/lib/db';
 import { noContent, ok } from '@/lib/api/response';
@@ -36,11 +36,42 @@ export const GET = defineRoute({
 });
 
 /**
+ * Felder, die `getEmployeeDetail()` ohne `includeSensitive` aus der Antwort
+ * entfernt — plus die beiden Begleitangaben, die nur bei einer Lohnänderung
+ * eine Rolle spielen.
+ *
+ * Die Liste steht hier und nicht im Validierungsschema, weil sie keine Frage
+ * der Form ist, sondern der Berechtigung: dasselbe Schema ist für die
+ * Administration vollständig gültig.
+ */
+const SENSITIVE_EMPLOYEE_FIELDS = [
+  'hourlyRate',
+  'monthlySalary',
+  'salaryValidFrom',
+  'salaryReason',
+  'ahvNumber',
+  'iban',
+] as const;
+
+/**
  * PATCH /api/employees/:id
  *
  * Lohn- und AHV-Angaben stecken im selben Schema. Sie sind besonders
  * schützenswerte Personendaten nach DSG; das Prüfprotokoll redigiert sie
  * bereits beim Schreiben.
+ *
+ * Deshalb gilt hier dieselbe Schwelle wie beim Lesen (`payslip:create`, siehe
+ * oben) — und zwar aus einem Grund, der über die Symmetrie hinausgeht: Ohne
+ * diese Prüfung könnte die Betriebsleitung einen Stundenlohn oder eine
+ * Auszahlungs-IBAN überschreiben, deren bisherigen Wert sie nicht sehen darf.
+ * Das Prüfprotokoll hielte die Änderung fest, aber redigiert — die Korrektur
+ * wäre also nicht einmal im Nachhinein rekonstruierbar. Dass das Anlegen von
+ * Personal seinerseits auf `ADMIN`/`SUPER_ADMIN` beschränkt ist (siehe
+ * `../route.ts`), zeigt, dass die Lücke beim Ändern ein Versehen war.
+ *
+ * Abgewiesen wird, nicht stillschweigend verworfen: Ein Formular, das „Lohn
+ * gespeichert" meldet und nichts gespeichert hat, ist schlimmer als eine
+ * Fehlermeldung.
  */
 export const PATCH = defineRoute({
   permissions: ['employee:update'],
@@ -48,6 +79,15 @@ export const PATCH = defineRoute({
   body: updateEmployeeSchema,
   rateLimit: 'apiWrite',
   handler: async ({ params, body, session }) => {
+    if (!can(session.role, 'payslip:create')) {
+      const attempted = SENSITIVE_EMPLOYEE_FIELDS.filter((field) => body[field] !== undefined);
+      if (attempted.length > 0) {
+        throw new ForbiddenError(
+          'Lohn-, AHV- und Bankangaben darf nur ändern, wer auch Lohnabrechnungen erstellen darf.',
+        );
+      }
+    }
+
     const employee = await updateEmployee({
       organizationId: await getOrganizationId(),
       employeeId: params.id,

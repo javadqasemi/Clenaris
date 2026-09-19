@@ -8,10 +8,32 @@ import { cachedJar, forgetJar, rememberJar } from './session-cache';
  * einer lokalen Entwicklungsdatenbank. Diese Datei gehört deshalb nie in die
  * Nähe einer produktiven Umgebung — die Prüfungen laufen gegen `localhost`
  * oder gegen eine eigens dafür aufgesetzte Instanz.
+ *
+ * Die beiden Verwaltungskonten lesen dieselben Umgebungsvariablen wie der
+ * Seed. Grund: `prisma/seed.ts` setzt ihr Passwort aus
+ * `SEED_ADMIN_EMAIL`/`SEED_ADMIN_PASSWORD` und fällt nur ohne diese auf die
+ * Demowerte zurück. Wer in seiner `.env` ein eigenes Startpasswort gesetzt
+ * hat — was auf einem erreichbaren System richtig ist —, bekam hier sonst
+ * vierzehn Fehlschläge mit der Meldung «E-Mail-Adresse oder Passwort ist
+ * falsch» und suchte den Fehler im Produkt. In der CI ist nichts gesetzt,
+ * dort gelten weiterhin die Demowerte.
  */
+const seedValue = (name: string, fallback: string): string => {
+  const value = process.env[name]?.trim();
+  return value && value.length > 0 ? value : fallback;
+};
+
 export const ACCOUNTS = {
-  super: { email: 'system@clenaris.ch', password: 'System#2026Clenaris', role: 'SUPER_ADMIN' },
-  admin: { email: 'admin@clenaris.ch', password: 'Admin#2026Clenaris', role: 'ADMIN' },
+  super: {
+    email: seedValue('SEED_SUPERADMIN_EMAIL', 'system@clenaris.ch'),
+    password: seedValue('SEED_SUPERADMIN_PASSWORD', 'System#2026Clenaris'),
+    role: 'SUPER_ADMIN',
+  },
+  admin: {
+    email: seedValue('SEED_ADMIN_EMAIL', 'admin@clenaris.ch'),
+    password: seedValue('SEED_ADMIN_PASSWORD', 'Admin#2026Clenaris'),
+    role: 'ADMIN',
+  },
   manager: { email: 'manager@clenaris.ch', password: 'Demo#2026Clenaris', role: 'MANAGER' },
   employee: {
     email: 'anna.keller@clenaris.ch',

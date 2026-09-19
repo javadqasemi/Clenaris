@@ -5,6 +5,7 @@ import { created, ok } from '@/lib/api/response';
 import { prisma } from '@/lib/db';
 import { audit } from '@/lib/audit';
 import { ForbiddenError, NotFoundError } from '@/lib/errors';
+import { CRYPTO_CONTEXT, encryptNullable } from '@/lib/crypto';
 import { createPropertySchema } from '@/lib/validation/crm';
 import { getOrganizationId } from '@/server/services/organization.service';
 import { mayManagePropertyOf, propertyVisibilityWhere } from '@/server/services/property.service';
@@ -146,6 +147,15 @@ export const POST = defineRoute({
         hasElevator: body.hasElevator,
         parkingInfo: body.parkingInfo ?? null,
         keyLocation: body.keyLocation ?? null,
+        /**
+         * Der Alarmcode wird verschlüsselt abgelegt (`src/lib/crypto.ts`).
+         *
+         * Bis hierher war er im Schema deklariert, im Zod-Schema
+         * entgegengenommen — und dann verworfen: Die Eingabe verschwand
+         * kommentarlos. Ein Feld, das eine Antwort mit 201 quittiert und den
+         * Wert wegwirft, ist schlimmer als ein fehlendes Feld.
+         */
+        alarmCode: encryptNullable(body.alarmCode, CRYPTO_CONTEXT.alarmCode),
         accessNote: body.accessNote ?? null,
         notes: body.notes ?? null,
       },
