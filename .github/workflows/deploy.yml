@@ -269,11 +269,33 @@ jobs:
           JWT_SECRET: ${{ secrets.JWT_SECRET }}
           API_URL: ${{ secrets.API_URL }}
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          ENCRYPTION_KEY: ${{ secrets.ENCRYPTION_KEY }}
         run: |
           set -euo pipefail
           test -n "$APP_DIRECTORY" || { echo "::error::Secret APP_DIRECTORY fehlt."; exit 1; }
           test -n "$DATABASE_URL"  || { echo "::error::Secret DATABASE_URL fehlt."; exit 1; }
           test -n "$JWT_SECRET"    || { echo "::error::Secret JWT_SECRET fehlt."; exit 1; }
+
+          # `ENCRYPTION_KEY` ist nicht zwingend — ohne ihn leitet die Anwendung
+          # den Schlüssel aus `JWT_SECRET` ab und läuft. Eine Warnung ist er
+          # trotzdem wert, und zwar eine mit Verfallsdatum: Sobald das erste
+          # TOTP-Geheimnis, die erste AHV-Nummer oder der erste Alarmcode
+          # geschrieben ist, hängt dieser Wert am abgeleiteten Schlüssel. Ihn
+          # danach durch einen eigenen zu ersetzen, macht ihn unlesbar — eine
+          # Schlüsselrotation gibt es in `src/lib/crypto.ts` nicht.
+          #
+          # Der richtige Zeitpunkt ist also vor dem ersten solchen Wert, und
+          # diese Zeile sagt es, solange er noch nicht verstrichen ist.
+          if [ -z "${ENCRYPTION_KEY:-}" ]; then
+            echo "::warning::Secret ENCRYPTION_KEY fehlt — die Feldverschlüsselung leitet ihren Schlüssel aus JWT_SECRET ab. Vor dem ersten verschlüsselten Wert nachtragen (openssl rand -hex 32)."
+          elif ! printf '%s' "$ENCRYPTION_KEY" | grep -qE '^[0-9a-fA-F]{64}$'; then
+            # Die Prüfung hier statt erst beim Start der Anwendung: Ein
+            # falsch formatierter Schlüssel liesse `src/lib/env.ts` die
+            # Konfiguration verwerfen — und zwar nach dem Reload, wenn der
+            # alte Prozess schon weg ist.
+            echo "::error::ENCRYPTION_KEY hat nicht das erwartete Format (64 Hex-Zeichen)."
+            exit 1
+          fi
 
           # Nur die von GitHub verwalteten Schlüssel. `scripts/deploy.sh` führt
           # sie in die `.env` des Servers ein, statt sie zu ersetzen — alles
@@ -290,6 +312,7 @@ jobs:
             echo "JWT_SECRET=${JWT_SECRET}"
             [ -n "${API_URL:-}" ]    && echo "NEXT_PUBLIC_APP_URL=${API_URL}"
             [ -n "${CRON_SECRET:-}" ] && echo "CRON_SECRET=${CRON_SECRET}"
+            [ -n "${ENCRYPTION_KEY:-}" ] && echo "ENCRYPTION_KEY=${ENCRYPTION_KEY}"
             echo "NODE_ENV=production"
           } | ssh -i ~/.ssh/id_deploy -p "${PORT:-22}" \
                   -o BatchMode=yes -o ConnectTimeout=20 \
