@@ -183,6 +183,39 @@ test('rendert ein kontrolliertes PDF, startet den Worker aus dem eigenen Ursprun
   const dokumentAbrufe = pdfjsAnfragen(netz, new RegExp(`/api/bi/documents/${dokumentId}/content`));
   expect(dokumentAbrufe.length).toBeGreaterThan(0);
   expect(dokumentAbrufe[0]!.status).toBe(200);
+
+  /**
+   * — Und sie kamen **vollständig** an.
+   *
+   * Der Fehler, den dieser Fall festhält: Trifft `application/pdf` auf eine
+   * `Content-Disposition`, übernimmt Chromiums PDF-Plugin den Datenstrom und
+   * beantwortet den `fetch()` des Viewers mit einem leeren 204. Der Viewer
+   * meldete dann „Datei nicht lesbar" — in jedem echten Chrome und Edge, und
+   * in keiner einzigen Prüfung, weil beide Ebenen ohne PDF-Plugin liefen.
+   *
+   * Geprüft wird deshalb der Abruf so, wie der Viewer ihn stellt: Status,
+   * Content-Type und tatsächliche Byte-Länge. Ein 204 fiele hier sofort auf.
+   */
+  const abruf = await page.evaluate(async (id) => {
+    const antwort = await fetch(`/api/bi/documents/${id}/content?version=1`, {
+      credentials: 'same-origin',
+      headers: { Accept: 'application/pdf' },
+    });
+    const bytes = new Uint8Array(await antwort.arrayBuffer());
+    return {
+      status: antwort.status,
+      typ: antwort.headers.get('content-type'),
+      disposition: antwort.headers.get('content-disposition'),
+      laenge: bytes.byteLength,
+      kopf: String.fromCharCode(...bytes.slice(0, 5)),
+    };
+  }, dokumentId);
+
+  expect(abruf.status, 'Der Abruf des Viewers wurde abgefangen.').toBe(200);
+  expect(abruf.typ).toBe('application/pdf');
+  expect(abruf.disposition, 'Ein Abruf des Viewers darf keine Content-Disposition bekommen.').toBeNull();
+  expect(abruf.laenge).toBeGreaterThan(1000);
+  expect(abruf.kopf).toBe('%PDF-');
 });
 
 test('liefert wasm und cmaps aus demselben Ursprung aus, falls ein Dokument sie braucht', async ({

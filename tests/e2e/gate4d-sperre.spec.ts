@@ -319,6 +319,10 @@ test('lässt ein zweites Gerät derselben Person unberührt', async ({ page, bro
    * aus § 32.
    */
   const geraetB = await browser.newContext();
+  // Derselbe Dienst wie in `helpers/basis.ts`: Dieser Kontext entsteht von
+  // Hand und erbt die Vorrichtung nicht, bräuchte das fehlende Favicon aber
+  // genauso wenig als Fehler gemeldet.
+  await geraetB.route('**/favicon.ico', (route) => route.fulfill({ status: 204, body: '' }));
   const seiteB = await geraetB.newPage();
   const konsoleB = konsoleUeberwachen(seiteB);
 

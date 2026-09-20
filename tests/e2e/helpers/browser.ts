@@ -45,7 +45,17 @@ export interface Konsolenwache {
 export function konsoleUeberwachen(page: Page, erlaubt: RegExp[] = []): Konsolenwache {
   const fehler: string[] = [];
 
-  const erlaubtIst = (text: string) => erlaubt.some((muster) => muster.test(text));
+  /**
+   * Chromiums Meldung „Failed to load resource: … 404" nennt die Adresse
+   * nicht — man weiss also, dass etwas fehlt, aber nicht was. Deshalb werden
+   * misslungene Antworten mitgeschrieben und der Fehlermeldung angehängt.
+   */
+  const misslungen: string[] = [];
+  page.on('response', (antwort) => {
+    if (antwort.status() >= 400) misslungen.push(`${antwort.status()} ${antwort.url()}`);
+  });
+
+  const erlaubtIst = (text: string) => [...erlaubt, ...IMMER_ERLAUBT].some((muster) => muster.test(text));
 
   page.on('console', (nachricht) => {
     if (nachricht.type() !== 'error') return;
@@ -71,7 +81,10 @@ export function konsoleUeberwachen(page: Page, erlaubt: RegExp[] = []): Konsolen
       return entfernt;
     },
     keineFehler() {
-      expect(fehler, `Unerwartete Browserfehler:\n  - ${fehler.join('\n  - ')}`).toEqual([]);
+      const antworten = misslungen.length
+        ? `\n\n  Misslungene Antworten dieser Seite:\n  - ${misslungen.join('\n  - ')}`
+        : '';
+      expect(fehler, `Unerwartete Browserfehler:\n  - ${fehler.join('\n  - ')}${antworten}`).toEqual([]);
     },
   };
 }
@@ -79,6 +92,19 @@ export function konsoleUeberwachen(page: Page, erlaubt: RegExp[] = []): Konsolen
 /** Der 4xx/5xx-Lärm, den Chromium selbst schreibt — nur mit erwartetem Status. */
 export const ressourcenfehler = (status: number) =>
   new RegExp(`Failed to load resource.*status of ${status}`);
+
+/**
+ * Hier steht bewusst **nichts**.
+ *
+ * Es wäre bequem gewesen, den 404 des fehlenden Favicons pauschal zu erlauben
+ * — aber Chromiums Konsolenzeile nennt die Adresse gar nicht („Failed to load
+ * resource: the server responded with a status of 404"). Ein Muster dagegen
+ * hätte jeden anderen 404 gleich mit durchgelassen, und genau die will diese
+ * Reihe sehen. Die Ursache wird deshalb im Testrahmen behandelt, nicht die
+ * Meldung gefiltert: `tests/e2e/helpers/basis.ts` beantwortet `/favicon.ico`
+ * selbst.
+ */
+const IMMER_ERLAUBT: RegExp[] = [];
 
 // ---------------------------------------------------------------------------
 //  Netzverkehr

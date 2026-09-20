@@ -133,6 +133,33 @@ export default defineConfig({
       name: 'chromium',
       use: {
         browserName: 'chromium',
+        /**
+         * **Der volle Chromium-Bau, nicht die Headless-Shell.**
+         *
+         * Playwrights Vorgabe ist `headless_shell` — ein abgespeckter Bau ohne
+         * Erweiterungen und ohne PDF-Plugin. Genau dieser Unterschied hat einen
+         * Fehler durchgelassen, der jede PDF-Anzeige des Produkts in jedem
+         * echten Chrome und Edge zerstörte: Trifft `application/pdf` auf eine
+         * `Content-Disposition`, übernimmt Chromiums Plugin-Interceptor den
+         * Datenstrom und beantwortet den `fetch()` des Viewers mit einem leeren
+         * 204 (die Messung steht in `src/lib/api/binary-response.ts`). Die
+         * Headless-Shell kennt den Interceptor nicht und lieferte brav 200 —
+         * zwanzig grüne Browsertests über einem Produkt, das im Browser nicht
+         * funktionierte.
+         *
+         * Nachgemessen am 2026-09-20 gegen dieselbe Antwort:
+         *
+         * ```
+         *   headless_shell            → 200, 3449 Bytes   (blind)
+         *   channel chromium, kopflos → 204, 0 Bytes      (sieht den Fehler)
+         *   channel chromium, sichtbar→ 204, 0 Bytes
+         * ```
+         *
+         * Der Kanal bleibt kopflos und damit CI-tauglich; er ist nur der
+         * *vollständige* Browser statt der Attrappe. Wer ihn zurückstellt,
+         * nimmt der Reihe die Fähigkeit, diese Klasse von Fehlern zu sehen.
+         */
+        channel: 'chromium',
         viewport: { width: 1366, height: 900 },
         deviceScaleFactor: 1,
       },
