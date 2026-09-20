@@ -183,9 +183,8 @@ async function main(): Promise<void> {
   console.log('');
   console.log('  Server dagegen starten (zweite Instanz, Port 3001):');
   console.log('');
-  console.log(`      $env:DATABASE_URL = '${testUrl}'`);
-  console.log(`      $env:DIRECT_URL   = '${testUrl}'`);
-  console.log('      node node_modules\\next\\dist\\bin\\next start -p 3001');
+  console.log('      npm run build          # bei gestopptem Entwicklungsserver');
+  console.log('      npm run test:server    # setzt Testdatenbank, Proxy-Modus und Zähler-Verzeichnis');
   console.log('');
   console.log('  Prüfungen dagegen fahren:');
   console.log('');

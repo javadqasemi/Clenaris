@@ -61,13 +61,25 @@ die Zieldatenbank nicht als Testdatenbank erkennbar ist. Er lässt sich mit
 2. **Server gegen die Testdatenbank starten**, auf einem eigenen Port, damit
    der Entwicklungsserver auf 3000 weiterlaufen kann:
 
-   ```powershell
-   $test = 'postgresql://…/clenaris_test?schema=public'
-   $env:DATABASE_URL = $test
-   $env:DIRECT_URL   = $test
-   npm run build                                    # einmal nach Codeänderungen
-   node node_modules\next\dist\bin\next start -p 3001
    ```
+   npm run build          # einmal nach Codeänderungen, bei gestopptem Server
+   npm run test:server    # Port 3001; PORT=3002 für einen anderen
+   ```
+
+   `scripts/test-server.ts` leitet die Adresse der Testdatenbank ab (wie
+   `db:test:setup`), verweigert jeden Namen, der nicht nach Testdatenbank
+   aussieht, und legt die Umgebung fest, in der die Reihe die Anwendung
+   sieht — **deterministisch, nicht aus der persönlichen `.env`**:
+
+   - `TRUSTED_PROXY_MODE=NONE`: Vor dem Testserver steht kein Proxy, also
+     tut die Anwendung nicht so, als stünde einer da. Alle Aufrufer teilen
+     sich damit den Adressschlüssel `unbekannt`.
+   - `CLENARIS_TEST_CACHE_DIR`: Die Rate-Limit-Zähler liegen als Dateien im
+     Temp-Verzeichnis. `loginAll()` leert sie beim Start jeder Datei
+     (`helpers/rate-limit.ts`), und `rate-limit.test.ts` prüft die Limits
+     selbst gegen die unveränderten Werte. Ein Server ohne die Variable
+     funktioniert weiterhin — die Reihe wartet dann Fenstergrenzen ab und
+     überspringt `rate-limit.test.ts`.
 
    Der Entwicklungsserver (`npm run dev`) geht auch, ist aber langsamer und
    liefert Seiten teils anders aus als der Produktionsbau — geprüft werden
@@ -124,6 +136,7 @@ npx tsx --test tests/api/two-factor.test.ts    # eine einzelne Datei
 | `api/datei-zugriff.test.ts` | Wer welche Datei bekommt: öffentliche Assets (Galerie, Teambild) ohne Anmeldung und mit langem Zwischenspeicher, private nur mit Sitzung und passender Rolle und nie `public`/`immutable`; **die Kennung der Ablage allein öffnet nichts** — der behobene Befund; fremde und nicht vorhandene Dateien antworten gleich, damit die Route kein Orakel ist; Kopfzeilen (`nosniff`, Content-Disposition, kein Einschleusen über den Dateinamen) |
 | `api/signatur-rechenkerne.test.ts` | Die reine Rechnung der Unterzeichnung: Adressermittlung je `TRUSTED_PROXY_MODE` (**gefälschte `CF-Connecting-IP` und `X-Forwarded-For` landen nirgends**), Positionsprüfung gegen die tatsächliche Seite, Erkennen von AcroForm-`/Sig`-Feldern und `/ByteRange`-Strukturen in einem programmatisch erzeugten PDF, Zustimmungstext und -hash, Sitzungscookie-Optionen — importiert direkt |
 | `api/signatur.test.ts` | Der ganze Weg über HTTP: Rechte je Rolle, Anlegen bindet **Bytes** (Hash A aus dem Upload), Tausch nur im Körper und nur einmal sichtbar, Cookie eng (HttpOnly, Pfad `/api/public/signatures`), Antworten ohne 64-Hex-Wert, Fassung N bleibt gebunden nach N+1, Code: kein Klartext, Argon2, Versuche gezählt, Sperre, Einmaligkeit; Zustimmung serverseitig mit Snapshot und Hash; **vier gleichzeitige Abschlüsse ergeben genau einen**; manipulierte Originalbytes → 422 und `INTEGRITY_FAILED`; EMBEDDED mit sichtbarer Position und Signaturseite (B ≠ A), DETACHED lässt das Original unangetastet; Protokoll (C) nie gleich A oder B; Ereignisse lassen sich in der Datenbank weder ändern noch löschen (Trigger); Abbrechen widerruft Sitzungen sofort; Ablehnen terminal; Ergebnislink mit eigenem Zweck; Bereinigung mit Beweisen gesperrt; Wortlaut ohne QES/ZertES |
+| `api/rate-limit.test.ts` | Die Rate-Limits gegen die echten Werte: Anmeldung 8 je Adresse → der neunte 429 mit `Retry-After` im Fenster; Schreibkontingent je **Benutzer** (die Verwaltung erschöpft 90, die Betriebsleitung nicht); Signaturtausch 20 je Adresse; nach dem kontrollierten Zurücksetzen beginnt das Kontingent neu, Sitzungen und Daten bleiben — braucht den dateibasierten Zähler aus `test:server`, sonst übersprungen |
 | `pages/smoke.test.ts` | Antwortet jede Seite und jeder Endpunkt je Rolle? |
 | `pages/tables.test.ts` | Läuft irgendeine Tabelle oder Liste aus ihrem Rahmen? |
 | `pages/sorting.test.ts` | Wirkt die Sortierung — und überlebt sie das Blättern? |
@@ -153,6 +166,21 @@ werden darf.
 Limit. Eine Testreihe fährt sie schneller an, als ein Mensch es je täte, und
 läuft hinein — das ist der Beweis, dass die Bremse greift. Der Klient in
 `helpers/client.ts` wartet die vom Server genannte Zeit ab und macht weiter.
+
+**Die 34 Fehlschläge vom 2026-09-20 — und warum sie nicht wiederkommen.**
+Einmal scheiterte `website-ops.test.ts` komplett mit 401, in einem Lauf, der
+eine Minute später grün war. Kein Produktfehler, sondern zwei Dinge, die
+zusammenfielen: (1) Alle Dateien schreiben als dieselbe Verwaltung, und ihr
+Kontingent `apiWrite` (90 je Minute, gezählt je Benutzer, im Serverprozess)
+war nach `settings`, `signatur` und `two-factor` voll — `POST /api/faq`
+bekam 429 mit `Retry-After: 36`. (2) Das Verwaltungs-Cookie stammte aus dem
+Sitzungs-Cache eines *früheren* Laufs und war 14 Minuten 40 Sekunden alt;
+während der Wartezeit lief das Zugangstoken (15 Minuten) ab, der wiederholte
+Aufruf und alle folgenden Aufrufe der Datei bekamen 401. Belegt über die
+Zeitstempel des Cache (Neuanmeldung der nächsten Datei exakt bei Ablauf).
+Seither: `loginAs` verwirft Cookies mit weniger als fünf Minuten
+Restlaufzeit, und `loginAll` leert die Zähler des Testservers zu Beginn jeder
+Datei. Die Limits selbst sind unverändert; `rate-limit.test.ts` beweist sie.
 
 **Nichts wird aus der Anwendung importiert, wo der Test genau das prüfen soll.**
 `helpers/totp.ts` rechnet TOTP unabhängig aus dem RFC nach, statt

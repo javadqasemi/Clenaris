@@ -18,6 +18,7 @@
     "test": "tsx --test --test-concurrency=1 \"tests/**/*.test.ts\"",
     "test:api": "tsx --test --test-concurrency=1 \"tests/api/*.test.ts\"",
     "test:pages": "tsx --test --test-concurrency=1 \"tests/pages/*.test.ts\"",
+    "test:server": "tsx scripts/test-server.ts",
     "format": "prettier --write \"src/**/*.{ts,tsx,css,json,md}\"",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",

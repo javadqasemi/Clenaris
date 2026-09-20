@@ -1,4 +1,5 @@
 import { get, post, type ApiResponse } from './client';
+import { resetRateLimits } from './rate-limit';
 import { cachedJar, forgetJar, rememberJar } from './session-cache';
 
 /**
@@ -82,6 +83,39 @@ async function stillValid(jar: string, expectedRole: string): Promise<boolean> {
 }
 
 /**
+ * Wie lange das Zugangstoken eines Cookies noch gilt, in Sekunden — oder
+ * `null`, wenn sich das nicht lesen lässt.
+ *
+ * Nur die Nutzlast wird gelesen, nicht geprüft; prüfen tut der Server. Es
+ * geht allein um `exp`.
+ */
+function verbleibendeSekunden(jar: string): number | null {
+  const token = /clenaris_at=([^;]+)/.exec(jar)?.[1];
+  const teil = token?.split('.')[1];
+  if (!teil) return null;
+  try {
+    const nutzlast = JSON.parse(Buffer.from(teil, 'base64url').toString('utf8')) as { exp?: number };
+    return typeof nutzlast.exp === 'number' ? nutzlast.exp - Math.floor(Date.now() / 1000) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * So viel Restlaufzeit muss ein Cookie am Anfang einer Datei haben.
+ *
+ * **Der Fehler, den das verhindert.** Das Zugangstoken lebt fünfzehn Minuten;
+ * der Sitzungs-Cache überlebt Läufe. Am 2026-09-20 nahm `website-ops.test.ts`
+ * ein Cookie an, das noch gut war — und wartete gleich darauf 37 Sekunden auf
+ * eine Fenstergrenze des Rate-Limits. In dieser Zeit lief das Token ab; der
+ * wiederholte Aufruf und alle folgenden bekamen 401. Fünf Minuten Reserve sind
+ * mehr als jede Datei samt Wartezeiten dauert. Erneuert wird durch eine neue
+ * Anmeldung, nicht durch `refresh`: Die Rotation des Refresh-Tokens in einem
+ * Prozess machte das Cookie eines anderen zur „Wiederverwendung".
+ */
+const MINDEST_RESTLAUFZEIT_S = 5 * 60;
+
+/**
  * Angemeldet sein — und dafür möglichst keine neue Anmeldung verbrauchen.
  *
  * Die Anmeldung erlaubt acht Versuche je fünf Minuten und Adresse. Das ist für
@@ -94,7 +128,8 @@ export async function loginAs(account: AccountName): Promise<string> {
   const { email, password, role } = ACCOUNTS[account];
 
   const cached = cachedJar(account);
-  if (cached && (await stillValid(cached, role))) return cached;
+  const frisch = cached ? (verbleibendeSekunden(cached) ?? 0) >= MINDEST_RESTLAUFZEIT_S : false;
+  if (cached && frisch && (await stillValid(cached, role))) return cached;
   if (cached) forgetJar(account);
 
   const result = await login(email, password);
@@ -118,8 +153,16 @@ export async function loginAs(account: AccountName): Promise<string> {
   return result.jar;
 }
 
-/** Alle fünf Rollen bereitstellen, einmal pro Testdatei. */
+/**
+ * Alle fünf Rollen bereitstellen, einmal pro Testdatei.
+ *
+ * Vorher werden die Rate-Limit-Zähler des Testservers geleert (siehe
+ * `helpers/rate-limit.ts`): Jede Datei beginnt mit vollem Kontingent, so wie
+ * ein einzelner Benutzer es hätte — statt das Kontingent zu erben, das die
+ * vorherigen Dateien unter demselben Konto verbraucht haben.
+ */
 export async function loginAll(): Promise<Record<AccountName, string>> {
+  resetRateLimits();
   const jars = {} as Record<AccountName, string>;
   for (const name of ROLE_ORDER) {
     jars[name] = await loginAs(name);

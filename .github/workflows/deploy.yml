@@ -161,6 +161,12 @@ jobs:
         run: npm run build
 
       - name: Anwendung starten
+        # Dieselbe Umgebung wie `npm run test:server` örtlich: kein Proxy vor
+        # dem Testserver, und die Rate-Limit-Zähler als Dateien, damit die
+        # Reihe sie zwischen zwei Dateien leeren kann (tests/README.md).
+        env:
+          TRUSTED_PROXY_MODE: NONE
+          CLENARIS_TEST_CACHE_DIR: ${{ runner.temp }}/clenaris-tests/cache
         run: |
           NODE_ENV=production npx next start > server.log 2>&1 &
           echo $! > server.pid
@@ -184,6 +190,7 @@ jobs:
         run: npm test
         env:
           TEST_BASE_URL: http://localhost:3000
+          CLENARIS_TEST_CACHE_DIR: ${{ runner.temp }}/clenaris-tests/cache
 
       - name: Anwendung beenden
         if: always()

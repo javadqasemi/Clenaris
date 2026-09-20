@@ -1,3 +1,6 @@
+import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+
 import Redis from 'ioredis';
 import { logger } from '@/lib/logger';
 
@@ -74,6 +77,91 @@ class MemoryDriver implements CacheDriver {
   }
 }
 
+/**
+ * Dateibasierter Speicher — **nur für die Prüfreihe**, nie für den Betrieb.
+ *
+ * **Warum es ihn gibt.** Die Rate-Limits liegen ohne Redis im Arbeitsspeicher
+ * des Serverprozesses. Die Prüfreihe läuft in eigenen Prozessen und teilt
+ * sich dieselben fünf Konten; der Zähler `apiWrite` der Verwaltung (90 je
+ * Minute, je Benutzer) war nach drei Dateien voll, und die Reihe wartete
+ * pro Lauf rund zwei Minuten auf Fenstergrenzen. Einmal fiel ein solches
+ * Warten mit dem Ablauf eines zwischengespeicherten Zugangstokens zusammen
+ * — 34 Fehlschläge, die kein Produktfehler waren (`tests/README.md`).
+ *
+ * Das Limit abzusenken hiesse, eine Anwendung zu prüfen, die es so nicht
+ * gibt. Stattdessen legt dieser Treiber die Einträge als Dateien ab, und der
+ * Testprozess räumt die Zähler zwischen zwei Dateien auf (`tests/helpers/
+ * rate-limit.ts`) — ohne HTTP-Endpunkt, ohne Kopfzeile, ohne Umgehung im
+ * Anfragepfad. Der Treiber ist nur aktiv, wenn `CLENARIS_TEST_CACHE_DIR`
+ * gesetzt ist **und** kein `REDIS_URL`; ein Server, der ihn benutzt, sagt das
+ * beim Start laut. In der Produktionsumgebung ist die Variable nicht gesetzt.
+ *
+ * Synchrone Dateizugriffe mit Absicht: `incr` muss innerhalb des Prozesses
+ * atomar sein, und Node arbeitet einen synchronen Block ohne Unterbrechung ab.
+ */
+class FileDriver implements CacheDriver {
+  constructor(private dir: string) {
+    mkdirSync(dir, { recursive: true });
+  }
+
+  private pfad(key: string): string {
+    return join(this.dir, `${Buffer.from(key, 'utf8').toString('base64url')}.json`);
+  }
+
+  private lesen(key: string): { value: string; expiresAt: number | null } | undefined {
+    try {
+      const entry = JSON.parse(readFileSync(this.pfad(key), 'utf8')) as { value: string; expiresAt: number | null };
+      if (entry.expiresAt !== null && entry.expiresAt < Date.now()) {
+        rmSync(this.pfad(key), { force: true });
+        return undefined;
+      }
+      return entry;
+    } catch {
+      return undefined;
+    }
+  }
+
+  private schreiben(key: string, entry: { value: string; expiresAt: number | null }) {
+    writeFileSync(this.pfad(key), JSON.stringify(entry), 'utf8');
+  }
+
+  async get(key: string) {
+    return this.lesen(key)?.value ?? null;
+  }
+
+  async set(key: string, value: string, ttlSeconds?: number) {
+    this.schreiben(key, { value, expiresAt: ttlSeconds ? Date.now() + ttlSeconds * 1000 : null });
+  }
+
+  async del(key: string) {
+    rmSync(this.pfad(key), { force: true });
+  }
+
+  async incr(key: string, ttlSeconds: number) {
+    const entry = this.lesen(key);
+    const next = Number(entry?.value ?? 0) + 1;
+    this.schreiben(key, { value: String(next), expiresAt: entry?.expiresAt ?? Date.now() + ttlSeconds * 1000 });
+    return next;
+  }
+
+  async ttl(key: string) {
+    const entry = this.lesen(key);
+    if (!entry || entry.expiresAt === null) return -1;
+    return Math.max(0, Math.ceil((entry.expiresAt - Date.now()) / 1000));
+  }
+
+  async keys(pattern: string) {
+    const rx = new RegExp('^' + pattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*') + '$');
+    const out: string[] = [];
+    for (const datei of readdirSync(this.dir)) {
+      if (!datei.endsWith('.json')) continue;
+      const key = Buffer.from(datei.slice(0, -5), 'base64url').toString('utf8');
+      if (rx.test(key) && this.lesen(key)) out.push(key);
+    }
+    return out;
+  }
+}
+
 class RedisDriver implements CacheDriver {
   constructor(private client: Redis) {}
 
@@ -125,6 +213,12 @@ function resolveDriver(): CacheDriver {
 
   const url = process.env.REDIS_URL;
   if (!url) {
+    const testDir = process.env.CLENARIS_TEST_CACHE_DIR?.trim();
+    if (testDir) {
+      log.warn('Dateibasierter Cache aktiv — nur für die Prüfreihe, nie im Betrieb', { dir: testDir });
+      globalForRedis.cacheDriver = new FileDriver(testDir);
+      return globalForRedis.cacheDriver;
+    }
     globalForRedis.cacheDriver = new MemoryDriver();
     return globalForRedis.cacheDriver;
   }

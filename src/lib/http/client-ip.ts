@@ -19,9 +19,20 @@
  *    unbekannte Adresse ist besser als eine erfundene.
  *  • `SINGLE_REVERSE_PROXY` — genau ein Proxy (Nginx) davor, der
  *    `X-Real-IP` aus seiner eigenen Socket-Adresse **setzt** und alles vom
- *    Internet Gelieferte überschreibt. Siehe `docs/DEPLOYMENT.md`.
+ *    Internet Gelieferte überschreibt. Siehe `docs/DEPLOYMENT.md` 13.5.1.
  *  • `CLOUDFLARE` — `CF-Connecting-IP`, und nur, wenn der Ursprung nicht
  *    direkt aus dem Internet erreichbar ist (sonst ist der Kopf fälschbar).
+ *
+ * **Was dieser Code nicht leisten kann — und nicht behauptet.** Er sieht nur
+ * Kopfzeilen. Ob `X-Real-IP` wirklich vom eigenen Nginx stammt oder von einem
+ * Client, der den Anwendungsport direkt erreicht, lässt sich hier nicht
+ * unterscheiden. `SINGLE_REVERSE_PROXY` und `CLOUDFLARE` sind deshalb keine
+ * Spoofing-Sperren, sondern **Zusagen über die Topologie**: Der Modus ist nur
+ * dann richtig, wenn der Ursprung ausschliesslich über den benannten Proxy
+ * erreichbar ist (Loopback-Bindung oder Firewall) und dieser die Kopfzeile
+ * überschreibt statt weiterreicht. Fehlt eine der beiden Bedingungen, ist der
+ * gespeicherte Wert wieder eine Behauptung des Absenders — der Modus macht ihn
+ * nicht wahrer. Wer die Topologie nicht kennt, lässt `NONE`.
  *
  * Die Quelle wird mitgeliefert (`source`) und im Signaturprotokoll neben der
  * Adresse gespeichert. Eine IP-Adresse ist ein technisches Metadatum, kein

@@ -340,6 +340,16 @@ dem Rollout getrennt prüfen — HTTP/TLS, Security-Header, öffentliche
 Angriffsfläche, Reputation, DNS, CSP, Cookies, Auth-Endpunkte, Rate-Limits,
 Dateizugriff, `PublicAccessToken`-Flüsse, Informationspreisgabe.
 
+**Direktzugriff auf den Anwendungsport** (13.5.1). Status:
+`PRE-PRODUCTION VERIFICATION REQUIRED`. Von einem externen Netz prüfen, dass
+`http://<server>:3000/` und `http://<server>:3000/api/health` **nicht**
+antworten (Verbindung verworfen oder Timeout), während
+`https://clenaris.qasemi.ch/api/health` antwortet. Erst wenn das feststeht,
+ist `TRUSTED_PROXY_MODE=SINGLE_REVERSE_PROXY` eine wahre Aussage; bis dahin
+bleibt `NONE` die richtige Einstellung, auch wenn Nginx die Köpfe bereits
+setzt. Zusätzlich `ecosystem.config.js` auf `args: 'start -H 127.0.0.1'`
+umstellen — bewusst, mit dem Rollout, nicht nebenbei.
+
 **Supabase-Rücklauf beim Datei-Abschluss** (`downloadObject` in
 `src/lib/storage/supabase.ts`): implementiert und typgeprüft, aber nie gegen
 einen echten Objektspeicher gefahren. Status:
@@ -508,15 +518,33 @@ wählbar, solange kein Proxy davor ihn überschreibt. Die gespeicherte Adresse
 im Prüfprotokoll und im Signaturprotokoll wäre sonst eine Behauptung des
 Absenders.
 
-| `TRUSTED_PROXY_MODE` | Gelesener Kopf | Voraussetzung |
+| `TRUSTED_PROXY_MODE` | Gelesener Kopf | Topologie, die der Modus voraussetzt |
 |---|---|---|
-| `NONE` (Vorgabe) | keiner — die Adresse gilt als **nicht verfügbar** | kein bekannter Proxy; ehrlicher als eine erfundene Adresse |
-| `SINGLE_REVERSE_PROXY` | `X-Real-IP` (Rückfall: erster Eintrag von `X-Forwarded-For`) | genau ein Nginx davor, der beide Köpfe **setzt**, nicht anhängt |
-| `CLOUDFLARE` | `CF-Connecting-IP` | Ursprung nur über Cloudflare erreichbar (Firewall auf Cloudflare-Netze) |
+| `NONE` (Vorgabe) | keiner — die Adresse gilt als **nicht verfügbar** | keine Annahme. Alle Aufrufer teilen sich einen Rate-Limit-Schlüssel; ehrlicher als eine erfundene Adresse |
+| `SINGLE_REVERSE_PROXY` | `X-Real-IP` (Rückfall: erster Eintrag von `X-Forwarded-For`) | `Client → Reverse Proxy → Next.js`, **nie** `Client → Next.js direkt`; der Proxy **setzt** beide Köpfe aus `$remote_addr` |
+| `CLOUDFLARE` | `CF-Connecting-IP` | `Client → Cloudflare → geschützter Ursprung`; der Ursprung nimmt nur Cloudflare-Netze an |
 
-Für den Nginx-Betrieb aus 13.5 gehört deshalb in den `location`-Block
-zusätzlich — und `X-Forwarded-For` wird **gesetzt**, nicht mit
-`$proxy_add_x_forwarded_for` verlängert:
+**Die Zusage, die ein Modus macht — und die, die er nicht machen kann.** Die
+Anwendung sieht nur Kopfzeilen. Sie kann nicht wissen, ob `X-Real-IP` von
+Ihrem Nginx stammt oder von einem Client, der den Anwendungsport direkt
+erreicht hat. Richtig ist deshalb nicht „`SINGLE_REVERSE_PROXY` verhindert
+Header-Spoofing", sondern:
+
+> `SINGLE_REVERSE_PROXY` ist nur sicher, wenn der Ursprung **ausschliesslich**
+> über den kontrollierten Reverse Proxy erreichbar ist und dieser `X-Real-IP`
+> und `X-Forwarded-For` **überschreibt**.
+
+Dasselbe gilt für `CLOUDFLARE`: `CF-Connecting-IP` verdient kein Vertrauen,
+nur weil der Kopf vorhanden ist — jeder kann ihn setzen. Er verdient es erst,
+wenn der Ursprung Verbindungen ausserhalb der Cloudflare-Netze verwirft.
+Cloudflare wird derzeit nicht eingesetzt; der Modus bleibt aus, bis diese
+Bedingung hergestellt und geprüft ist.
+
+**Invariante für den Reverse Proxy (13.5).** Der Proxy setzt beide Köpfe aus
+der Socket-Adresse und reicht nichts vom Client durch — `X-Forwarded-For`
+wird **gesetzt**, nicht mit `$proxy_add_x_forwarded_for` verlängert (das
+hängt den serverseitigen Wert an einen vom Client gelieferten an, und die
+Anwendung liest den ersten Eintrag):
 
 ```nginx
     proxy_set_header X-Real-IP       $remote_addr;
@@ -525,9 +553,28 @@ zusätzlich — und `X-Forwarded-For` wird **gesetzt**, nicht mit
 
 und in die Umgebung `TRUSTED_PROXY_MODE=SINGLE_REVERSE_PROXY`. Ohne diese
 Variable läuft die Anwendung im Modus `NONE`: Rate-Limits greifen dann je
-Prozess ohne Adressbezug, und Prüf- wie Signaturprotokoll tragen
+Prozess ohne Adressbezug (alle Aufrufer teilen sich den Schlüssel
+`unbekannt`), und Prüf- wie Signaturprotokoll tragen
 `ipSource = UNAVAILABLE`. Das ist kein Fehler, sondern die Aussage „nicht
 bekannt" — sie wird im Protokoll genau so ausgewiesen.
+
+**Invariante für den Anwendungsport.** Der Next.js-Port (Vorgabe 3000) darf
+in Produktion **nicht** aus dem Internet erreichbar sein — sonst umgeht jede
+direkte Verbindung den Proxy, und mit ihr die Adressermittlung, TLS und die
+Zugriffsprotokolle. Erlaubt ist ausschliesslich:
+
+```
+Internet → 443 → Reverse Proxy → 127.0.0.1:3000 (Next.js)
+```
+
+Bevorzugt bindet Next.js nur an Loopback (`next start -H 127.0.0.1`, in
+`ecosystem.config.js` als `args: 'start -H 127.0.0.1'`); ersatzweise eine
+Host-Firewall-Regel, die 3000 von aussen verwirft. **Befund des Audits vom
+2026-09-20:** `ecosystem.config.js` startet heute mit `args: 'start'` und
+bindet damit an alle Schnittstellen; ob eine Firewall den Port schliesst,
+lässt sich aus dem Repository nicht ablesen. Die Konfiguration wurde
+**nicht** geändert — siehe 11.1, der Punkt ist vor dem Produktivgang zu
+prüfen und die Bindung dann bewusst zu setzen.
 
 **13.5.2 Der Unterzeichnungsbereich.** `/signieren` und `/api/public/signatures`
 brauchen keinen eigenen Proxy-Block. Zwei Dinge dürfen dort aber nicht
