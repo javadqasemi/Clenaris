@@ -392,9 +392,107 @@ Legende: **✅** vollständig · **🟡** vorhanden mit Lücken · **❌** fehlt
 | B-08 | Telefonnummern hartkodiert statt aus `getPublicCompanyInfo()` | `error.tsx:57`, `booking-actions.tsx:97`, `chat-widget.tsx:111` | niedrig |
 | B-09 | `roundToRappen()` definiert und nie verwendet — Entscheid fehlt | `src/lib/utils.ts:160` | niedrig |
 | T-01 | Die Testreihe hielt das Demopasswort fest, der Seed nimmt `SEED_ADMIN_PASSWORD` — auf jeder Maschine mit eigenem Startpasswort scheiterten vierzehn Dateien an einem Scheinfehler *(behoben in Phase 1)* | `tests/helpers/accounts.ts` | mittel |
-| **D-01** | **P1: Production PostgreSQL backup before schema migrations** — `scripts/deploy.sh` sichert `.next` und `.env`, aber **nicht die Datenbank**. Der Rücksprung stellt Code und Umgebung wieder her; eine bereits angewandte Migration nimmt er nicht zurück, und das kann er auch nicht. Solange eine Auslieferung keine Migration mitbringt, ist das folgenlos. Vor der **ersten** Auslieferung mit echter Schemaänderung braucht die Pipeline ein `pg_dump` vor `prisma migrate deploy`, mit Aufbewahrung und einem nachweislich geprobten Rückweg | `scripts/deploy.sh` Abschnitt 3 und 6 | **hoch, sobald eine Migration ansteht** |
+| ~~D-01~~ | ~~**P1: Production PostgreSQL backup before schema migrations**~~ — *erledigt in `f0e70d4`.* `scripts/deploy.sh` führt vor `prisma migrate deploy` erst `migration-preflight.ts` (nur lesend, prüft die Eindeutigkeiten gegen die vorhandenen Daten) und dann `db-backup.ts` aus (`pg_dump --format=custom`, danach vier Prüfungen inklusive `pg_restore --list`). Beides fail-closed. Der Rückweg ist mit `db-restore-verify.ts` gegen `clenaris_preview` geprobt: 894 Archiveinträge, alle vierzehn Tabellen mit übereinstimmender Zeilenzahl | `scripts/deploy.sh`, `scripts/db-backup.ts` | **erledigt** |
 | S-08 | `src/lib/crypto.ts` kennt keine Schlüsselrotation: Ein Wert mit Präfix `enc:v1:`, der sich mit dem aktuellen Schlüssel nicht entschlüsseln lässt, wirft. Es gibt keinen Zweitschlüssel-Lesepfad (`ENCRYPTION_KEY_PREVIOUS`) und kein Umschlüsselungsskript. Solange der Schlüssel **vor** dem ersten verschlüsselten Wert steht, ist das folgenlos — danach wird jeder Wechsel zu einem eigenen Vorhaben | `src/lib/crypto.ts` | mittel |
-| S-09 | Der Host-Schlüssel von `46.62.175.39` weicht (Stand 2026-09-19) von `~/.ssh/known_hosts` ab. Entweder wurde der Server neu aufgesetzt oder die Adresse neu vergeben — oder es ist etwas anderes. Bis das geklärt ist, wurde kein SSH-Zugriff durchgeführt | Betrieb | **zu klären** |
+| S-09 | Die Host-Schlüssel-Abweichung bei `46.62.175.39` — **infrastrukturell aufgeklärt, siehe unten**. Die Adresse ist nicht der Clenaris-Server. Offen bleiben der neue Host-Schlüssel und die Frage, wie weit frühere Auslieferungsläufe kamen | Betrieb | **teilweise geklärt** |
+| S-10 | Der Auslieferungs-Workflow auf `origin/main` enthält einen `ssh-keyscan`-Rückfall: Fehlt `SERVER_SSH_KNOWN_HOSTS`, nimmt er den Schlüssel entgegen, den der Gegenüber gerade anbietet. Wäre je ein Lauf gestartet, hätte er damit den fremden Host vertraut und ihm `SERVER_SSH_KEY`, `DATABASE_URL`, `JWT_SECRET`, `CRON_SECRET` und `ENCRYPTION_KEY` übergeben. Der Rückfall ist lokal in `625cfc2` entfernt, aber **noch nicht gepusht** | `.github/workflows/deploy.yml` auf `origin/main` | **hoch bis zum nächsten Push** |
+
+### S-09 im Einzelnen — das veraltete Auslieferungsziel
+
+Untersucht am 2026-09-21, ausschliesslich lesend: Hetzner Cloud API (`GET`),
+Repository, Git-Historie, lokale `known_hosts`, öffentliches DNS und TLS. Kein
+SSH, keine Schreibaktion.
+
+**Was belegt ist.**
+
+| Befund | Beleg |
+|---|---|
+| Das Hetzner-Projekt enthält genau **einen** Server: `164144336` „CX26", `cx23`, hel1, angelegt 2026-08-31, Status `running` | Hetzner API, `GET /v1/servers` |
+| Seine IPv4 ist **`2.29.18.45`**, IPv6 `2a01:4f9:c015:2b4e::/64` | dieselbe Antwort |
+| `46.62.175.39` gehört **keinem** Server und keiner Primary IP dieses Projekts | `GET /v1/servers`, `GET /v1/primary_ips` |
+| Der PTR von `46.62.175.39` lautet heute `mail1.domainmarket.gr` | öffentliches DNS |
+| `2.29.18.45` liefert unter SNI `clenaris.qasemi.ch` ein Let's-Encrypt-Zertifikat auf **`CN=clenaris.qasemi.ch`**, gültig ab 2026-09-07 | TLS-Handshake von aussen |
+| `https://clenaris.qasemi.ch` steht hinter Cloudflare und antwortet mit `status: ok`, `datenbank: ok`, **`migrationen: 12`** | öffentlicher Health-Endpunkt |
+| Die lokale `known_hosts` enthält genau eine Zeile — den **alten** Schlüssel zu `46.62.175.39` — und wurde seit **2025-10-01** nicht mehr verändert | Dateizeitstempel, `ssh-keygen -F` |
+
+**Was daraus folgt.** `2.29.18.45` ist der Ursprung hinter Cloudflare und damit
+der Produktionsserver; das ist über zwei unabhängige Wege bestätigt (Hetzner-API
+und das ausgelieferte Zertifikat). Die historische Adresse `46.62.175.39` ist
+**stale production target** — sie gehört heute einem Dritten. Die
+Schlüsselabweichung vom 2026-09-19 ist damit vollständig durch ein veraltetes
+Ziel erklärbar.
+
+**Was ausdrücklich nicht folgt.** Dass der frühere Server nicht kompromittiert
+war, ist damit **nicht** gezeigt — es ist nur nicht mehr nötig, es anzunehmen.
+Ebenso wenig ist bewiesen, wann genau die Adresse neu vergeben wurde. Beides
+bleibt Interpretation.
+
+**Der unveränderte Zeitstempel der `known_hosts` ist der wertvollste Einzelbefund.**
+Hätte jemand von diesem Arbeitsplatz aus den geänderten Schlüssel akzeptiert —
+etwa mit `ssh-keygen -R` und einer neuen Verbindung —, trüge die Datei ein
+neues Datum. Sie trägt seit elf Monaten dasselbe. Von hier aus ist also nach
+dem Adresswechsel keine SSH-Verbindung zustande gekommen.
+
+**Der alte Vergleichsfingerabdruck ist entwertet.**
+`SHA256:xiMHcWWxo4UVb4JmYzwremYJdN1lXoGxw+UEZK7+1k4` stammt aus der Verbindung
+zur alten Adresse und darf **nicht** als Sollwert für `2.29.18.45` verwendet
+werden. Der gültige Schlüssel muss über die Hetzner-Konsole des Servers
+`164144336` neu erhoben werden:
+
+```bash
+ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub -E sha256
+```
+
+Kein `ssh-keyscan` als Vertrauensquelle — weder für die alte noch für die neue
+Adresse.
+
+### Kam je eine Auslieferung bis zum Geheimnistransfer?
+
+**Status: `SECRET EXPOSURE STATUS UNKNOWN`** — mit starken Anhaltspunkten
+dagegen, aber ohne den einen Beleg, der die Frage schliessen würde.
+
+Was dafür spricht, dass nichts abgeflossen ist:
+
+1. Der Auslieferungs-Workflow existiert auf `origin/main` erst seit dem Push am
+   **2026-09-14 23:06** (Commit `4d07be0`). Danach gab es genau **einen**
+   weiteren Push: **2026-09-19 13:59** (`0b9fec2`).
+2. Die Fassung des Workflows auf `origin/main` enthält
+   `url: ${{ secrets.API_URL }}` unter `jobs.<id>.environment.url`. Der
+   `secrets`-Kontext ist dort nicht zulässig; GitHub verwirft eine solche Datei
+   beim Parsen. Der Lauf entsteht und scheitert in derselben Sekunde — **mit
+   null Jobs**. Weder das Qualitätstor noch die Auslieferung liefen je an.
+3. Die lokale `known_hosts` ist seit 2025-10-01 unverändert (siehe oben).
+4. Die laufende Produktion meldet `version: null`. `scripts/deploy.sh` setzt
+   diesen Wert; sein Fehlen passt zu einer Instanz, die **nicht** über die
+   Pipeline ausgeliefert wurde.
+
+Was fehlt, um daraus `NO EVIDENCE OF SECRET DISCLOSURE VIA OLD HOST` zu machen:
+
+- **Die Lauf-Historie von GitHub Actions selbst.** `gh` ist auf dem
+  Arbeitsplatz nicht installiert und es liegt kein GitHub-Token vor; die
+  Schlussfolgerung oben ist aus dem Dateiinhalt abgeleitet, nicht an den
+  Läufen beobachtet.
+- **Der Wert von `SERVER_HOST`.** GitHub gibt Secretwerte technisch nicht
+  heraus. Ob dort je `46.62.175.39` stand, ist von hier aus nicht feststellbar.
+- **Auslieferungen von anderen Maschinen.** Die `known_hosts`-Aussage gilt nur
+  für diesen Arbeitsplatz.
+
+**Der Beinahe-Unfall gehört dazu.** Die Fassung auf `origin/main` enthält den
+`ssh-keyscan`-Rückfall (siehe S-10). Wäre der Workflow gültig gewesen, hätte
+der erste Lauf gegen ein veraltetes Ziel den fremden Schlüssel gepinnt und
+anschliessend `SERVER_SSH_KEY`, `DATABASE_URL`, `JWT_SECRET`, `CRON_SECRET` und
+`ENCRYPTION_KEY` dorthin übertragen. Verhindert hat das ein **unabhängiger
+YAML-Fehler**, keine Sicherheitsmassnahme. Der Rückfall ist lokal in `625cfc2`
+entfernt; bis dieser Commit gepusht ist, steht er weiterhin auf `origin/main`.
+
+### Wie die Adressen künftig zu behandeln sind
+
+- `46.62.175.39` — **historisch, nie wieder Auslieferungsziel.** In
+  Sicherheitsdokumentation darf die Adresse stehen, immer als
+  *stale production target* gekennzeichnet.
+- `2.29.18.45` — aktueller Produktionsserver. **Nicht** hartkodieren: Die
+  Quelle der Wahrheit ist das GitHub-Secret `SERVER_HOST`; die Adresse steht in
+  der Dokumentation nur als Prüfwert.
 
 ---
 

@@ -44,6 +44,56 @@ Vor dem Seed in Produktion `SEED_ADMIN_EMAIL` und `SEED_ADMIN_PASSWORD` setzen
 — sonst entsteht ein Administrationskonto mit den Demo-Zugangsdaten aus dem
 Repository. Der Seed bricht in der Produktion ab, wenn sie fehlen.
 
+### Vor dem nächsten Push: offene Release-Blocker
+
+Stand 2026-09-21. Die ersten beiden sind erledigt, der Rest nicht — und ohne
+Punkt 3 bis 5 darf nichts auf `main` gepusht werden, weil ein Push die
+Auslieferung auslöst.
+
+| # | Punkt | Stand |
+|---|---|---|
+| 1 | Aktuellen Server bestätigt: Hetzner `164144336`, `2.29.18.45`, hel1 | **erledigt** — Hetzner-API und TLS-Zertifikat des Ursprungs |
+| 2 | Frühere Auslieferungsläufe auf Geheimnisabfluss geprüft | **teilweise** — `SECRET EXPOSURE STATUS UNKNOWN`, Begründung in `NEXT_DEVELOPMENT_AUDIT.md` S-09 |
+| 3 | `SERVER_HOST` zeigt auf den aktuellen Server | **offen** — nur Sie können das sehen |
+| 4 | Host-Schlüssel von `2.29.18.45` über die Hetzner-Konsole erhoben | **offen** — der alte Fingerabdruck ist entwertet |
+| 5 | `SERVER_SSH_KNOWN_HOSTS` mit genau diesem Schlüssel gesetzt | **offen** |
+| 6 | Cloud-Firewall am Server | **offen** — es hängt keine; die vorhandene `Zentra-Firewall` öffnet 22/5432/4444 gegen `0.0.0.0/0` und darf **nicht** angehängt werden |
+| 7 | Port 3000 extern dicht | **erledigt** — externer Verbindungsversuch: gefiltert |
+| 8 | PostgreSQL (5432/5433) extern dicht | **erledigt** — beide gefiltert |
+| 9 | Redis (6379) extern dicht | **erledigt** — gefiltert |
+| 10 | Lösch- und Rebuild-Schutz am Server | **offen** — beide `false` |
+| 11 | `pg_dump`/`pg_restore` auf dem Server vorhanden und Hauptversion ≥ Server | **offen** — prüft das Sicherungsskript selbst und bricht sonst ab |
+| 12 | Sicherungsverzeichnis beschreibbar | **offen** |
+| 13 | Produktions-Secrets vollständig | **offen** — nur Sie können das sehen |
+| 14 | Migrations-Vorprüfung gegen Produktionsdaten | läuft automatisch vor der Migration |
+| 15 | Unmittelbare Datenbanksicherung | läuft automatisch vor der Migration |
+| 16 | Push, CI, Auslieferung | **erst danach** |
+
+Zu 7 bis 9: Der Server hat **keine** Cloud-Firewall, die Ports sind trotzdem
+dicht — das besorgt die Firewall auf dem Server selbst beziehungsweise die
+Loopback-Bindung. Die Cloud-Firewall bleibt als zweite Schicht empfehlenswert,
+ist aber kein offenes Scheunentor.
+
+### Zwei Sicherungsebenen, die nicht dasselbe sind
+
+Sie werden leicht verwechselt, und die Verwechslung kostet im Ernstfall Daten.
+
+**Anwendungssicherung (Datenbank).** Der `pg_dump` unten, vor jeder Migration,
+aus der Auslieferung heraus. Er sichert genau den fachlichen Zustand und lässt
+sich selektiv zurückspielen. Er sichert **nicht** den Server, nicht die
+Dateiablage der `StoredFile`-Zeilen ausserhalb der Datenbank und nicht die
+Konfiguration.
+
+**Infrastruktursicherung (Hetzner).** Cloud-Backup beziehungsweise Snapshot des
+gesamten Servers. Sie ist **derzeit nicht aktiviert** (`backup_window: null`).
+Sie deckt Betriebssystem, Konfiguration und Platte ab und hilft bei einem
+Serververlust — aber sie ist kein Ersatz für den Dump vor einer Migration: Ein
+tägliches Snapshot liegt im Zweifel Stunden daneben, und aus einem Snapshot eine
+einzelne Tabelle zurückzuholen ist ein eigenes Vorhaben.
+
+Keine der beiden ersetzt die andere. Für den Produktionsbetrieb gehören beide
+eingeschaltet.
+
 ### Datenbanksicherung vor Schemaänderungen
 
 Hier stand bis zuletzt ein offener P1: Die Auslieferung sicherte Build und
@@ -709,14 +759,14 @@ der nächtliche Führungslauf aus — ohne jede Fehlermeldung.
 
 | Secret | Pflicht | Bedeutung |
 | --- | --- | --- |
-| `SERVER_HOST` | ja | Adresse des Servers |
+| `SERVER_HOST` | ja | Adresse des Servers. **Quelle der Wahrheit** — die Adresse wird nirgends im Repository hartkodiert. Vor dem nächsten Push prüfen, dass sie auf den aktuellen Server zeigt (`2.29.18.45`, Hetzner `164144336`) und **nicht** mehr auf `46.62.175.39`; jene Adresse gehört seit dem Neuaufbau einem Dritten (`PTR mail1.domainmarket.gr`). GitHub gibt Secretwerte nicht heraus — die Prüfung kann nur Sie vornehmen |
 | `SERVER_USER` | ja | Dienstbenutzer, etwa `clenaris` |
 | `SERVER_SSH_KEY` | ja | Privater Schlüssel, vollständig samt Kopf- und Fusszeile |
 | `APP_DIRECTORY` | ja | Absoluter Pfad, etwa `/home/clenaris/app` |
 | `DATABASE_URL` | ja | Verbindung der Anwendung |
 | `JWT_SECRET` | ja | Mindestens 32 Zeichen. **Nie ändern** — ein neuer Wert meldet alle Sitzungen ab |
 | `SERVER_PORT` | nein | SSH-Port, Vorgabe 22 |
-| `SERVER_SSH_KNOWN_HOSTS` | **ja** | Gepinnter Wirtsschlüssel. Fehlt er, **bricht die Auslieferung ab** — es gibt keinen Rückfall (siehe 13.4) |
+| `SERVER_SSH_KNOWN_HOSTS` | **ja** | Gepinnter Wirtsschlüssel. Fehlt er, **bricht die Auslieferung ab** — es gibt keinen Rückfall (siehe 13.4). **Muss für den aktuellen Server neu erhoben werden.** Ein Eintrag, der aus einem `ssh-keyscan` gegen `46.62.175.39` stammt, pinnt den Schlüssel eines fremden Hosts und ist sofort zu ersetzen |
 | `DIRECT_URL` | empfohlen | Direktverbindung für Migrationen |
 | `API_URL` | empfohlen | Öffentliche Adresse, zurzeit `https://clenaris.qasemi.ch`. Wird zu `NEXT_PUBLIC_APP_URL` und trägt den Health Check von aussen |
 | `ENCRYPTION_KEY` | empfohlen | Schlüssel der Feldverschlüsselung (64 Hex). Ohne ihn leitet die Anwendung ihn aus `JWT_SECRET` ab — siehe Abschnitt 3 |
