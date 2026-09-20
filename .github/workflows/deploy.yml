@@ -303,7 +303,7 @@ jobs:
           # ab. Eine Warnung hätte denselben Text und dieselbe Wirkung wie
           # vorher, nämlich keine.
           test -n "${KNOWN_HOSTS:-}" || {
-            echo "::error::Secret SERVER_SSH_KNOWN_HOSTS fehlt. Ohne gepinnten Wirtsschlüssel wird nicht ausgeliefert — erzeugen mit 'ssh-keyscan -H <host>' auf einem vertrauenswürdigen Weg und den Fingerabdruck beim Anbieter gegenprüfen."
+            echo "::error::Secret SERVER_SSH_KNOWN_HOSTS fehlt. Ohne gepinnten Wirtsschlüssel wird nicht ausgeliefert. Den Wert NICHT aus 'ssh-keyscan' übernehmen — das sagt nur, was der Gegenüber gerade anbietet. Den Schlüssel über die Konsole des Anbieters lesen; die fertige Zeile steht in docs/DEPLOYMENT.md 13.4a."
             exit 1
           }
           printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts

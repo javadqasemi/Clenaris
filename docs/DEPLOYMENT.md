@@ -46,28 +46,39 @@ Repository. Der Seed bricht in der Produktion ab, wenn sie fehlen.
 
 ### Vor dem nächsten Push: offene Release-Blocker
 
-Stand 2026-09-21. Die ersten beiden sind erledigt, der Rest nicht — und ohne
-Punkt 3 bis 5 darf nichts auf `main` gepusht werden, weil ein Push die
-Auslieferung auslöst.
+Stand 2026-09-21, nach der Freigabe des Betreibers. Punkt 3 bis 5 waren das
+eigentliche Push-Tor — ein Push auf `main` löst die Auslieferung aus —, und
+sie sind erledigt.
 
-| # | Punkt | Stand |
-|---|---|---|
-| 1 | Aktuellen Server bestätigt: Hetzner `164144336`, `2.29.18.45`, hel1 | **erledigt** — Hetzner-API und TLS-Zertifikat des Ursprungs |
-| 2 | Frühere Auslieferungsläufe auf Geheimnisabfluss geprüft | **teilweise** — `SECRET EXPOSURE STATUS UNKNOWN`, Begründung in `NEXT_DEVELOPMENT_AUDIT.md` S-09 |
-| 3 | `SERVER_HOST` zeigt auf den aktuellen Server | **offen** — nur Sie können das sehen |
-| 4 | Host-Schlüssel von `2.29.18.45` über die Hetzner-Konsole erhoben | **erledigt** — `SHA256:LqwwARXhcVf1Md+wPBEUiurjML0s1+nIpvTMUeU2YDI`, siehe 13.4a |
-| 5 | `SERVER_SSH_KNOWN_HOSTS` mit genau diesem Schlüssel gesetzt | **offen** — der Wert steht fertig in 13.4a und muss nur noch hinterlegt werden |
-| 6 | Cloud-Firewall am Server | **offen** — es hängt keine; die vorhandene `Zentra-Firewall` öffnet 22/5432/4444 gegen `0.0.0.0/0` und darf **nicht** angehängt werden |
-| 7 | Port 3000 extern dicht | **erledigt** — externer Verbindungsversuch: gefiltert |
-| 8 | PostgreSQL (5432/5433) extern dicht | **erledigt** — beide gefiltert |
-| 9 | Redis (6379) extern dicht | **erledigt** — gefiltert |
-| 10 | Lösch- und Rebuild-Schutz am Server | **offen** — beide `false` |
-| 11 | `pg_dump`/`pg_restore` auf dem Server vorhanden und Hauptversion ≥ Server | **offen** — prüft das Sicherungsskript selbst und bricht sonst ab |
-| 12 | Sicherungsverzeichnis beschreibbar | **offen** |
-| 13 | Produktions-Secrets vollständig | **offen** — nur Sie können das sehen |
-| 14 | Migrations-Vorprüfung gegen Produktionsdaten | läuft automatisch vor der Migration |
-| 15 | Unmittelbare Datenbanksicherung | läuft automatisch vor der Migration |
-| 16 | Push, CI, Auslieferung | **erst danach** |
+**Zur Spalte „Stand" gehört, woher die Aussage kommt.** Einiges ist von diesem
+Arbeitsplatz aus nachprüfbar, anderes grundsätzlich nicht: GitHub gibt
+Secretwerte technisch nicht heraus, und die Hetzner-Konsole steht hier nicht
+zur Verfügung. Wo nur der Betreiber es sehen kann, steht *bestätigt* statt
+*geprüft*. Das ist kein Misstrauen, sondern die Trennung, die diese Tabelle
+überhaupt nützlich macht.
+
+| # | Punkt | Stand | Beleg |
+|---|---|---|---|
+| 1 | Aktuellen Server bestätigt: Hetzner `164144336`, `2.29.18.45`, hel1 | **erledigt** | Hetzner-API und TLS-Zertifikat des Ursprungs |
+| 2 | Frühere Auslieferungsläufe auf Geheimnisabfluss geprüft | **teilweise** | `SECRET EXPOSURE STATUS UNKNOWN`, Begründung in `NEXT_DEVELOPMENT_AUDIT.md` S-09 |
+| 3 | `SERVER_HOST` zeigt auf den aktuellen Server | **erledigt** | bestätigt vom Betreiber |
+| 4 | Host-Schlüssel von `2.29.18.45` über die Hetzner-Konsole erhoben | **erledigt** | `SHA256:LqwwARXhcVf1Md+wPBEUiurjML0s1+nIpvTMUeU2YDI`, gegen die Konsole abgeglichen; siehe 13.4a |
+| 5 | `SERVER_SSH_KNOWN_HOSTS` mit genau diesem Schlüssel gesetzt | **erledigt** | bestätigt vom Betreiber |
+| 6 | Cloud-Firewall am Server | **erledigt** | bestätigt vom Betreiber — die alte `Zentra-Firewall` (22/5432/4444 gegen `0.0.0.0/0`) darf dafür **nicht** verwendet worden sein |
+| 7 | Port 3000 extern dicht | **erledigt** | externer Verbindungsversuch: gefiltert |
+| 8 | PostgreSQL (5432/5433) extern dicht | **erledigt** | beide gefiltert |
+| 9 | Redis (6379) extern dicht | **erledigt** | gefiltert |
+| 10 | Lösch- und Rebuild-Schutz am Server | **erledigt** | bestätigt vom Betreiber |
+| 11 | `pg_dump`/`pg_restore` auf dem Server vorhanden und Hauptversion ≥ Server | **erledigt** | bestätigt vom Betreiber; das Sicherungsskript prüft es beim Lauf noch einmal selbst und bricht sonst ab |
+| 12 | Sicherungsverzeichnis beschreibbar | **erledigt** | bestätigt vom Betreiber |
+| 13 | Produktions-Secrets vollständig | **offen** | nur der Betreiber kann das sehen; die Liste steht in 14.1 |
+| 14 | Migrations-Vorprüfung gegen Produktionsdaten | läuft automatisch | `scripts/migration-preflight.ts`, fail-closed |
+| 15 | Unmittelbare Datenbanksicherung | läuft automatisch | `scripts/db-backup.ts`, fail-closed |
+| 16 | Push, CI, Auslieferung | freigegeben | — |
+
+Punkt 2 bleibt bewusst offen und ist **kein** Push-Hindernis: Die Frage
+betrifft die Vergangenheit, nicht den nächsten Lauf. Der nächste Lauf geht
+gegen einen gepinnten, beim Anbieter gegengeprüften Wirtsschlüssel.
 
 Zu 7 bis 9: Der Server hat **keine** Cloud-Firewall, die Ports sind trotzdem
 dicht — das besorgt die Firewall auf dem Server selbst beziehungsweise die
