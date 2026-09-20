@@ -16,8 +16,8 @@ import { loginAll } from '../helpers/accounts.js';
  *
  * Die Werkzeuge des Viewers (Blättern, Zoom, Anpassen) sind Rechnung und
  * stehen in `pdf-viewer-mathematik.test.ts`. Was dazwischen liegt — Klick,
- * Tastatur, Rendern — braucht einen Browser; dafür gibt es hier keinen
- * Prüfstand, und das steht so im Bericht.
+ * Tastatur, Rendern, der startende Worker — braucht einen Browser und steht
+ * seit Gate 4D.1 in `tests/e2e/gate3-pdf-viewer.spec.ts`.
  */
 
 type Zugaenge = Awaited<ReturnType<typeof loginAll>>;
@@ -25,6 +25,8 @@ let jars: Zugaenge;
 let rechnungId: string | null = null;
 let offerteId: string | null = null;
 let dokumentId: string | null = null;
+/** Ein Dokument, das tatsächlich eine Fassung mit Datei hat. */
+let dokumentMitDatei: string | null = null;
 
 async function erste(pfad: string, jar: string): Promise<string | null> {
   const antwort = await get<{ data: Array<{ id: string }> }>(pfad, { jar });
@@ -37,6 +39,22 @@ before(async () => {
   rechnungId = await erste('/api/invoices?pageSize=1', jars.admin);
   offerteId = await erste('/api/quotes?pageSize=1', jars.admin);
   dokumentId = await erste('/api/bi/documents?pageSize=1', jars.admin);
+
+  /**
+   * Die Ablage darf Dokumente ohne Fassung enthalten — eine Police, die
+   * jemand angelegt und noch nicht hochgeladen hat. Für die Auslieferung
+   * braucht es eines mit Datei; welches, ist gleichgültig.
+   */
+  const liste = await get<{ data: Array<{ id: string }> }>('/api/bi/documents?pageSize=25', { jar: jars.admin });
+  if (liste.status === 200) {
+    for (const eintrag of data(liste)) {
+      const inhalt = await get(`/api/bi/documents/${eintrag.id}/content`, { jar: jars.admin });
+      if (inhalt.status === 200) {
+        dokumentMitDatei = eintrag.id;
+        break;
+      }
+    }
+  }
 });
 
 /** Die Kopfzeilen, die jede private PDF-Antwort tragen muss. */
@@ -112,6 +130,59 @@ describe('Dokumentfassung: der neue Content-Endpunkt', () => {
     if (!dokumentId) return;
     const antwort = await get(`/api/bi/documents/${dokumentId}/content?version=9999`, { jar: jars.admin });
     assert.equal(antwort.status, 404);
+  });
+});
+
+/**
+ * Der Download — der Befund aus Gate 4D.1.
+ *
+ * **Was hier vorher stand und warum es nicht genügte.** Die Prüfung dieser
+ * Route bestand darin, dass sie mit 302 antwortet. Das tat sie auch. Wohin,
+ * hat nie jemand nachgesehen: Ohne eingerichteten Objektspeicher — die
+ * Vorgabe dieser Anwendung — gab `createSignedDownloadUrl` den blossen
+ * Ablagepfad zurück, und die Route leitete auf `<orgId>/documents/<datei>`
+ * weiter. Diese Adresse gibt es nicht. Jeder Klick auf „Herunterladen" landete
+ * auf einer 404-Seite; aufgefallen ist es erst, als ein Browser tatsächlich
+ * klickte (`tests/e2e/gate3-pdf-viewer.spec.ts`).
+ *
+ * Ein Statuscode ist keine Datei. Diese Reihe prüft deshalb die Datei.
+ */
+describe('Dokumentfassung: der Download liefert die Datei', () => {
+  it('antwortet mit den Bytes — oder mit einer Weiterleitung, die wirklich woandershin zeigt', async () => {
+    if (!dokumentMitDatei) return;
+    const antwort = await get(`/api/bi/documents/${dokumentMitDatei}/download`, { jar: jars.admin });
+
+    if ([301, 302, 303, 307, 308].includes(antwort.status)) {
+      /**
+       * Mit Objektspeicher ist die Weiterleitung richtig — dann muss sie aber
+       * auf eine vollständige, fremde Adresse zeigen. Ein relativer Pfad wäre
+       * genau der Fehler, den diese Prüfung fängt.
+       */
+      const ziel = antwort.headers.get('location') ?? '';
+      assert.match(ziel, /^https?:\/\//, `Weiterleitung auf „${ziel}" — das ist keine ausstellbare Adresse.`);
+      return;
+    }
+
+    assert.equal(antwort.status, 200, antwort.text.slice(0, 200));
+    assert.match(
+      antwort.headers.get('content-disposition') ?? '',
+      /^attachment; filename=/,
+      'Ein Download wird angeboten, nicht angezeigt.',
+    );
+    assert.equal(antwort.headers.get('x-content-type-options'), 'nosniff');
+    assert.doesNotMatch(antwort.headers.get('cache-control') ?? '', /public/);
+    assert.ok(antwort.text.length > 0, 'Der Download ist leer.');
+    if (antwort.headers.get('content-type') === 'application/pdf') {
+      assert.ok(antwort.text.startsWith('%PDF-'), 'keine PDF-Signatur am Anfang');
+    }
+  });
+
+  it('gibt Kundschaft und Anonymen nichts', async () => {
+    if (!dokumentMitDatei) return;
+    const alsKunde = await get(`/api/bi/documents/${dokumentMitDatei}/download`, { jar: jars.customer });
+    assert.ok([403, 404].includes(alsKunde.status), `Status ${alsKunde.status}`);
+    const ohne = await get(`/api/bi/documents/${dokumentMitDatei}/download`);
+    assert.ok([401, 403].includes(ohne.status), `Status ${ohne.status}`);
   });
 });
 

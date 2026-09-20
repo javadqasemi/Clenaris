@@ -123,6 +123,39 @@ export async function createSignedDownloadUrl(path: string, expiresIn = 3600): P
 }
 
 /**
+ * Wie eine nicht-öffentliche Datei die anfragende Person erreicht.
+ *
+ * **Der Befund, der diesen Typ erzwungen hat (Gate 4D.1).** Die beiden
+ * Download-Routen der Unternehmensführung riefen `createSignedDownloadUrl` und
+ * leiteten auf das Ergebnis weiter. Mit Supabase ist das Ergebnis eine
+ * vollständige, befristete Adresse und alles stimmt. **Ohne** Supabase gibt
+ * dieselbe Funktion den Ablagepfad zurück — `<orgId>/documents/<datei>.pdf` —,
+ * und daraus wurde eine Weiterleitung auf eine Adresse, die es in dieser
+ * Anwendung nicht gibt. Jeder Klick auf „Herunterladen" landete auf einer
+ * 404-Seite, in der Entwicklung wie im Betrieb, weil die Rückfallebene die
+ * Vorgabe ist.
+ *
+ * Aufgefallen ist es erst im Browser: Die HTTP-Prüfung stellte fest, dass die
+ * Route mit 302 antwortet, und folgte der Weiterleitung nie. Ein Statuscode
+ * ist eben keine Datei.
+ *
+ * Die Rückfallebene *kann* keine befristete Adresse ausstellen — ihre Bytes
+ * liegen in der Datenbank, und die einzige Route, die sie ausliefert
+ * (`/api/files/blob/…`), prüft gröber als die Fachdienste: Sie kennt
+ * `document:read`, aber nicht `EMPLOYEE_PRIVATE` und die betroffene Person.
+ * Dorthin weiterzuleiten hiesse, die feinere Prüfung zu umgehen. Der einzige
+ * Weg, der beides einhält, ist deshalb: Der Fachdienst, der die
+ * Sichtbarkeit ohnehin schon in seiner `where`-Klausel geprüft hat, liefert
+ * die Bytes selbst aus.
+ *
+ * Dieser Typ macht die Unterscheidung sichtbar, statt sie einer Zeichenkette
+ * zu überlassen, der man nicht ansieht, ob sie Adresse oder Pfad ist.
+ */
+export type Dateiauslieferung =
+  | { art: 'weiterleitung'; url: string; filename: string; mimeType: string }
+  | { art: 'bytes'; bytes: Buffer; filename: string; mimeType: string };
+
+/**
  * Die tatsächlich gespeicherten Bytes einer Datei lesen — treiberunabhängig.
  *
  * Das ist die eine Stelle, an der der Abschluss erfährt, was wirklich abgelegt

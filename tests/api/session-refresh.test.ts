@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { get, post, requireServer } from '../helpers/client';
+import { BASE_URL, get, post, requireServer } from '../helpers/client';
 import { ACCOUNTS, login } from '../helpers/accounts';
 
 /**
@@ -61,6 +61,36 @@ describe('Sitzungserneuerung', { concurrency: 1 }, async () => {
     const location = replay.headers.get('location') ?? '';
     assert.ok(location.includes('/auth/anmelden'), `Location: ${location}`);
     assert.ok(location.includes('grund=abgelaufen'));
+  });
+
+  /**
+   * **Der Befund aus Gate 4D.1.** Die Erneuerung antwortete mit
+   * `Location: http://localhost:3001/portal` — auch dann, wenn die Anfrage an
+   * `http://127.0.0.1:3001` ging. `request.nextUrl.origin` nennt nämlich den
+   * Ursprung, unter dem der Server lauscht, nicht den aus dem `Host`-Kopf.
+   *
+   * Cookies sind hostgebunden. Ein Hostwechsel *innerhalb* der Erneuerung
+   * lässt die soeben gesetzten Zugangs- und Refresh-Cookies zurück: Auf dem
+   * neuen Host kommt die Person unangemeldet an und sieht die Anmeldemaske,
+   * obwohl die Erneuerung gerade gelungen ist. Hinter einem Reverse Proxy
+   * trifft das jede stille Erneuerung, denn dort ist der Ursprung des Servers
+   * nie der der Adresszeile.
+   *
+   * Über HTTP war der 303 bis dahin ein Erfolg, weil ihm niemand folgte —
+   * gefunden hat es erst ein Browser (`tests/e2e/gate4d-sperre.spec.ts`).
+   */
+  it('wechselt dabei nicht den Host — sonst reisen die neuen Cookies nicht mit', async () => {
+    const fresh = await login(ACCOUNTS.manager.email, ACCOUNTS.manager.password);
+    const response = await get('/api/auth/refresh?weiter=%2Fportal', { jar: refreshOnly(fresh.jar) });
+    assert.equal(response.status, 303);
+
+    const location = response.headers.get('location') ?? '';
+    assert.ok(location.length > 0, 'keine Weiterleitung');
+    assert.equal(
+      new URL(location, BASE_URL).origin,
+      new URL(BASE_URL).origin,
+      `Die Erneuerung leitet auf einen anderen Ursprung: „${location}"`,
+    );
   });
 
   it('lässt kein fremdes Ziel zu', async () => {

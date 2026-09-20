@@ -11,7 +11,14 @@ import { audit } from '@/lib/audit';
 import type { SessionUser } from '@/lib/auth/session';
 import { BusinessRuleError, NotFoundError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
-import { createSignedDownloadUrl, uploadBuffer } from '@/lib/storage';
+import {
+  createSignedDownloadUrl,
+  readLocalBytes,
+  readStoredBytes,
+  uploadBuffer,
+  usesRemoteStorage,
+  type Dateiauslieferung,
+} from '@/lib/storage';
 import { sendEmail } from '@/lib/email/client';
 import { escapeHtml, renderEmail } from '@/lib/email/layout';
 import { formatDate } from '@/lib/utils';
@@ -405,13 +412,49 @@ export async function listReportRuns(organizationId: string, filter: { kind?: st
   });
 }
 
-export async function resolveReportDownload(session: SessionUser, organizationId: string, id: string, ip?: string | null) {
-  const run = await prisma.reportRun.findFirst({ where: { id, organizationId }, include: { file: true } });
+export async function resolveReportDownload(
+  session: SessionUser,
+  organizationId: string,
+  id: string,
+  ip?: string | null,
+): Promise<Dateiauslieferung> {
+  const run = await prisma.reportRun.findFirst({
+    where: { id, organizationId },
+    include: { file: { include: { storedFile: true } } },
+  });
   if (!run) throw new NotFoundError('Bericht');
   if (run.status !== 'READY' || !run.file) throw new BusinessRuleError('Dieser Bericht ist nicht bereit — er ist fehlgeschlagen oder wird noch erzeugt.');
-  const url = await createSignedDownloadUrl(run.file.path, 600);
-  await audit.exported({ organizationId, userId: session.id, entity: 'ReportRun', entityId: id, summary: `Bericht „${run.file.filename}" heruntergeladen`, ip });
-  return { url, filename: run.file.filename, mimeType: run.file.mimeType };
+
+  const file = run.file;
+
+  /**
+   * Derselbe Befund wie bei den Dokumenten (siehe `Dateiauslieferung`): Ohne
+   * Objektspeicher gibt `createSignedDownloadUrl` den Ablagepfad zurück, und
+   * eine Weiterleitung darauf führte ins Leere. Ein Bericht enthält
+   * Kennzahlen, Budget und Risiken — er darf nicht an einer Route hängen, die
+   * nur `document:read` kennt. Also liefert dieser Dienst die Bytes selbst,
+   * nachdem er den Mandanten geprüft hat.
+   */
+  if (usesRemoteStorage()) {
+    const url = await createSignedDownloadUrl(file.path, 600);
+    await audit.exported({ organizationId, userId: session.id, entity: 'ReportRun', entityId: id, summary: `Bericht „${file.filename}" heruntergeladen`, ip });
+    return { art: 'weiterleitung', url, filename: file.filename, mimeType: file.mimeType };
+  }
+
+  let bytes: Buffer | null = null;
+  if (file.storedFile) {
+    bytes = await readStoredBytes({ id: file.storedFile.id, path: file.storedFile.path, driver: file.storedFile.driver });
+  } else {
+    // Berichte legt `putLocalBuffer` ab, ohne das Asset an die Ablagezeile zu
+    // hängen; ihre Adresse ist dann die einzige Spur. Exakt diese Form, nichts
+    // erraten.
+    const treffer = /^\/api\/files\/blob\/([A-Za-z0-9_-]+)$/.exec(file.url);
+    if (treffer) bytes = await readLocalBytes(treffer[1]!);
+  }
+  if (!bytes) throw new NotFoundError('Datei');
+
+  await audit.exported({ organizationId, userId: session.id, entity: 'ReportRun', entityId: id, summary: `Bericht „${file.filename}" heruntergeladen`, ip });
+  return { art: 'bytes', bytes, filename: file.filename, mimeType: file.mimeType };
 }
 
 // ---------------------------------------------------------------------------

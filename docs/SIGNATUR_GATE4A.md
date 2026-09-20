@@ -695,6 +695,24 @@ Nur, wo eine Produkt- oder Architekturentscheidung nötig ist:
 5. **Zugang zum signierten Dokument nach Abschluss** für die unterzeichnende Person: neuer `SIGNATURE_ACCESS`-Leselink in der Abschluss-E-Mail (90 Tage) — oder nur PDF-Anhang?
 6. **`TRUSTED_PROXY`:** Welche Kette gilt in Produktion (Cloudflare → Nginx → Node)? Davon hängt ab, welchem Kopf die IP-Ermittlung glauben darf — auch für das bestehende `AuditLog`.
 
-## 22. Offener Verifikationspunkt aus Gate 3
+## 22. Offener Verifikationspunkt aus Gate 3 — **geschlossen in Gate 4D.1**
 
-Kein Browser-/E2E-Prüfstand im Repository. Nicht im echten Browser beobachtet: Worker-Laden unter der CSP, Rendern, Text-Layer, Skripte in PDFs. Bleibt `PRE-PRODUCTION VERIFICATION REQUIRED`; Gate 4A wurde dafür nicht erweitert.
+Hier stand: „Kein Browser-/E2E-Prüfstand im Repository. Nicht im echten Browser beobachtet: Worker-Laden unter der CSP, Rendern, Text-Layer, Skripte in PDFs. Bleibt `PRE-PRODUCTION VERIFICATION REQUIRED`."
+
+Gate 4D.1 hat den Prüfstand gebaut (`tests/e2e`, Playwright, `npm run e2e`) und die vier Punkte gemessen:
+
+* **Worker unter der CSP:** `/pdfjs/<Version>/pdf.worker.min.mjs` wird geladen, HTTP 200, eigener Ursprung, keine CSP-Meldung in der Konsole.
+* **Rendern:** Ein eigens erzeugtes dreiseitiges PDF rastert sichtbar auf die Leinwand — gemessen an den Bildpunkten, nicht am Vorhandensein eines `<canvas>`. Die Seitenzahl im Viewer stimmt mit dem erzeugten Objekt überein, und ein Seitenwechsel ändert das gerasterte Bild.
+* **Text-Layer und Hilfsdateien:** Kein Abruf verlässt den eigenen Ursprung. Welche Hilfsdateien PDF.js nachlädt, entscheidet das Dokument; dass wasm, cmaps und Standardschriften unter der versionierten Adresse mit 200 ausgeliefert werden, ist einzeln geprüft.
+* **Skripte in PDFs:** Ein Prüfobjekt mit `/OpenAction` **und** benanntem `/JavaScript`-Baum wird geöffnet. Kein Dialog, keine Anfrage nach der Skript-Sandbox von PDF.js, kein Hinweis auf eine ausgeführte Aktion.
+
+Was damit **nicht** geschlossen ist und ausdrücklich offenbleibt: andere Browser als Chromium, ein physischer Digitizer (die Berührungen sind echte Touch-Ereignisse der Engine, kein echtes Eingabegerät) und eine erschöpfende Untersuchung aller PDF-Aktionstypen. Die Abgrenzung steht in `tests/e2e/README.md`.
+
+## 23. Produktentscheid aus Gate 4D.1: „Kundschaft nicht anwesend"
+
+Es gibt **keinen eigenen persistierten Ausgang** für den Fall, dass bei der Abnahme niemand vor Ort ist. Das ist eine Entscheidung, keine Lücke, und sie bleibt mit Gate 4D.1 unverändert:
+
+* **Keine Kundenabnahme** heisst `Job.customerAcceptedAt = null`. Der Einsatz bleibt, was er war; die Bürokontrolle (`VERIFIED`) ist davon unberührt.
+* **Ausdrückliche Ablehnung** heisst `SignatureRequest.status = DECLINED`, mit Grund im Protokoll. Das Gerät bleibt gesperrt, bis das Personal es mit seinem Passwort übernimmt.
+
+Ein dritter Zustand `NOT_PRESENT` wäre ein neues Feld, eine Migration und ein neuer Zweig in `job-acceptance.service.ts` — also eine Businessfunktion. Gate 4D.1 fügt keine hinzu. Wer ihn später will, entscheidet zuerst, ob „nicht anwesend" ein Ergebnis des *Vorgangs* ist (dann gehört er in `SignatureRequestStatus`) oder eine Feststellung am *Einsatz* (dann an den Job) — beides zugleich wäre die dritte Wahrheit über denselben Sachverhalt.

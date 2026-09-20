@@ -144,6 +144,20 @@ npx tsx --test tests/api/two-factor.test.ts    # eine einzelne Datei
 | `pages/sorting.test.ts` | Wirkt die Sortierung — und überlebt sie das Blättern? |
 | `pages/public-site.test.ts` | Ist jede öffentliche Seite verlinkt und erreichbar? |
 
+## Die zweite Ebene: der Browser
+
+Seit Gate 4D.1 gibt es daneben eine Browser-Reihe (`tests/e2e`, Playwright,
+`npm run e2e`). Sie **ersetzt nichts** von der obigen Tabelle; sie beantwortet
+die drei Fragen, die über HTTP grundsätzlich offenbleiben: Startet der
+PDF.js-Worker unter der ausgelieferten CSP? Erzeugt eine Handbewegung auf dem
+Unterschriftenfeld tatsächlich eine Unterschrift? Und hält die Gerätesperre
+auch gegen zweiten Tab, Zurück-Taste, Neuladen, geschlossenen Tab und gelöschte
+Cookies?
+
+Sie läuft gegen denselben Testserver und dieselbe Testdatenbank. Einzelheiten
+— und vor allem die Trennung zwischen dem, was empirisch bewiesen ist, und dem,
+was nur emuliert wurde — stehen in `tests/e2e/README.md`.
+
 ## Grundsätze
 
 **Die Prüfungen räumen hinter sich auf.** Was sie anlegen, entfernen sie; was

@@ -40,6 +40,13 @@ prisma/*.db-journal
 
 # testing
 coverage/
+# Playwright: Spuren, Bildschirmfotos und Berichte entstehen bei jedem Lauf.
+# Sie gehören nicht ins Repository — eine Spur der Unterzeichnungsseite trägt
+# den rohen Zugangstoken aus dem Fragment und Namen aus dem Demobestand.
+test-results/
+playwright-report/
+blob-report/
+.playwright/
 
 # editors
 .idea/

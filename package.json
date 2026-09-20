@@ -19,6 +19,9 @@
     "test:api": "tsx --test --test-concurrency=1 \"tests/api/*.test.ts\"",
     "test:pages": "tsx --test --test-concurrency=1 \"tests/pages/*.test.ts\"",
     "test:server": "tsx scripts/test-server.ts",
+    "e2e": "playwright test",
+    "e2e:ui": "playwright test --ui",
+    "e2e:install": "playwright install chromium",
     "format": "prettier --write \"src/**/*.{ts,tsx,css,json,md}\"",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
@@ -95,6 +98,7 @@
     "zustand": "^5.0.2"
   },
   "devDependencies": {
+    "@playwright/test": "1.63.0",
     "@types/node": "^22.10.5",
     "@types/qrcode": "^1.5.6",
     "@types/react": "^19.0.4",

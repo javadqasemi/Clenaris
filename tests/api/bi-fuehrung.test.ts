@@ -273,8 +273,24 @@ describe('Unternehmensführung', { concurrency: 1 }, async () => {
       const run = await post<Envelope<{ id: string; status: string }>>('/api/bi/reports/generate', { kind: 'BUSINESS_PERFORMANCE', format: 'PDF', periodStart: '2026-01-01', periodEnd: '2026-03-31' }, { jar: jars.admin });
       assert.equal(run.status, 201);
       assert.equal(run.payload.data.status, 'READY');
+      /**
+       * **Hier stand bis Gate 4D.1 nur `assert.ok([302, 307].includes(...))`.**
+       * Das war der Fehler: Die Route antwortete brav mit 302 — auf den
+       * blossen Ablagepfad, weil `createSignedDownloadUrl` ohne
+       * Objektspeicher keine Adresse ausstellen kann. Wer der Weiterleitung
+       * folgte, bekam eine 404-Seite statt eines Berichts. Ein Statuscode ist
+       * keine Datei; geprüft wird deshalb die Datei.
+       */
       const download = await get(`/api/bi/reports/${run.payload.data.id}/download`, { jar: jars.admin });
-      assert.ok([302, 307].includes(download.status), `HTTP ${download.status}`);
+      if ([301, 302, 303, 307, 308].includes(download.status)) {
+        const ziel = download.headers.get('location') ?? '';
+        assert.match(ziel, /^https?:\/\//, `Weiterleitung auf „${ziel}" — keine ausstellbare Adresse.`);
+      } else {
+        assert.equal(download.status, 200, download.text.slice(0, 200));
+        assert.match(download.headers.get('content-disposition') ?? '', /^attachment; filename=/);
+        assert.equal(download.headers.get('content-type'), 'application/pdf');
+        assert.ok(download.text.startsWith('%PDF-'), 'keine PDF-Signatur am Anfang');
+      }
       assert.equal((await get(`/api/bi/reports/${run.payload.data.id}/download`, { jar: jars.manager })).status, 403);
     });
 

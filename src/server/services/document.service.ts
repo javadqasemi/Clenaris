@@ -7,7 +7,13 @@ import { audit } from '@/lib/audit';
 import { can } from '@/lib/auth/rbac';
 import type { SessionUser } from '@/lib/auth/session';
 import { BusinessRuleError, NotFoundError } from '@/lib/errors';
-import { createSignedDownloadUrl, readLocalBytes, readStoredBytes } from '@/lib/storage';
+import {
+  createSignedDownloadUrl,
+  readLocalBytes,
+  readStoredBytes,
+  usesRemoteStorage,
+  type Dateiauslieferung,
+} from '@/lib/storage';
 import { addDays, today } from '@/lib/bi/periods';
 import type { AddDocumentVersionInput, CreateDocumentInput, UpdateDocumentInput } from '@/lib/validation/bi-knowledge';
 import { notify } from './notification.service';
@@ -236,17 +242,48 @@ export async function deleteDocument(session: SessionUser, organizationId: strin
  * Dokument geprüft, nie über die Datei: eine `FileAsset`-ID allein öffnet
  * hier nichts.
  */
-export async function resolveDocumentDownload(session: SessionUser, organizationId: string, id: string, version?: number, ip?: string | null) {
+export async function resolveDocumentDownload(
+  session: SessionUser,
+  organizationId: string,
+  id: string,
+  version?: number,
+  ip?: string | null,
+): Promise<Dateiauslieferung> {
   const document = await prisma.managedDocument.findFirst({
     where: { ...documentVisibilityWhere(session, organizationId), id },
-    include: { currentVersion: { include: { file: true } } },
+    include: { currentVersion: { include: { file: { include: { storedFile: true } } } } },
   });
   if (!document) throw new NotFoundError('Dokument');
   const target = version
-    ? await prisma.documentVersion.findFirst({ where: { documentId: id, version }, include: { file: true } })
+    ? await prisma.documentVersion.findFirst({
+        where: { documentId: id, version },
+        include: { file: { include: { storedFile: true } } },
+      })
     : document.currentVersion;
   if (!target) throw new NotFoundError('Fassung');
-  const url = await createSignedDownloadUrl(target.file.path, 600);
+
+  const file = target.file;
+
+  /**
+   * Ohne externen Objektspeicher gibt es keine befristete Adresse, auf die
+   * sich weiterleiten liesse (siehe `Dateiauslieferung`). Dann liefert dieser
+   * Dienst die Bytes selbst aus — hier, wo `documentVisibilityWhere` bereits
+   * in der `where`-Klausel steht und `EMPLOYEE_PRIVATE` mitgeprüft ist.
+   */
+  const ausgeliefert: Dateiauslieferung = usesRemoteStorage()
+    ? {
+        art: 'weiterleitung',
+        url: await createSignedDownloadUrl(file.path, 600),
+        filename: file.filename,
+        mimeType: file.mimeType,
+      }
+    : {
+        art: 'bytes',
+        bytes: await fassungsBytes(file),
+        filename: file.filename,
+        mimeType: file.mimeType,
+      };
+
   await audit.exported({
     organizationId,
     userId: session.id,
@@ -255,7 +292,43 @@ export async function resolveDocumentDownload(session: SessionUser, organization
     summary: `Dokument „${document.title}" (Fassung ${target.version}) heruntergeladen`,
     ip,
   });
-  return { url, filename: target.file.filename, mimeType: target.file.mimeType };
+  return ausgeliefert;
+}
+
+/**
+ * Die Bytes einer Fassung — aus der Ablagezeile, sonst über den einen
+ * zugelassenen Altbestandsweg.
+ *
+ * Herausgezogen, weil Ansehen und Herunterladen dieselbe Datei meinen. Zwei
+ * Abschriften dieser Auflösung liefen bei der nächsten Änderung auseinander,
+ * und die Abweichung fiele erst auf, wenn ein Dokument sich ansehen, aber
+ * nicht herunterladen lässt.
+ */
+async function fassungsBytes(file: {
+  url: string;
+  storedFile: { id: string; path: string; driver: 'LOCAL' | 'SUPABASE' } | null;
+}): Promise<Buffer> {
+  let bytes: Buffer | null = null;
+
+  if (file.storedFile) {
+    bytes = await readStoredBytes({
+      id: file.storedFile.id,
+      path: file.storedFile.path,
+      driver: file.storedFile.driver,
+    });
+  } else {
+    /**
+     * Altbestand vor Gate 2: kein Fremdschlüssel zur Ablage, nur die
+     * gespeicherte Adresse. Der kontrollierte Legacy-Weg — exakt diese eine
+     * Adressform, nichts erraten. Passt sie nicht, gibt es die Datei über
+     * diesen Weg nicht.
+     */
+    const treffer = /^\/api\/files\/blob\/([A-Za-z0-9_-]+)$/.exec(file.url);
+    if (treffer) bytes = await readLocalBytes(treffer[1]!);
+  }
+
+  if (!bytes) throw new NotFoundError('Datei');
+  return bytes;
 }
 
 /**
@@ -301,26 +374,7 @@ export async function resolveDocumentContent(
   if (!target) throw new NotFoundError('Fassung');
 
   const file = target.file;
-  let bytes: Buffer | null = null;
-
-  if (file.storedFile) {
-    bytes = await readStoredBytes({
-      id: file.storedFile.id,
-      path: file.storedFile.path,
-      driver: file.storedFile.driver,
-    });
-  } else {
-    /**
-     * Altbestand vor Gate 2: kein Fremdschlüssel zur Ablage, nur die
-     * gespeicherte Adresse. Der kontrollierte Legacy-Weg — exakt diese eine
-     * Adressform, nichts erraten. Passt sie nicht, gibt es die Datei über
-     * diesen Weg nicht.
-     */
-    const treffer = /^\/api\/files\/blob\/([A-Za-z0-9_-]+)$/.exec(file.url);
-    if (treffer) bytes = await readLocalBytes(treffer[1]!);
-  }
-
-  if (!bytes) throw new NotFoundError('Datei');
+  const bytes = await fassungsBytes(file);
 
   await audit.exported({
     organizationId,

@@ -1,0 +1,154 @@
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+import { defineConfig } from '@playwright/test';
+
+/**
+ * Browser-Prüfungen (Gate 4D.1).
+ *
+ * ---------------------------------------------------------------------------
+ *  Warum es diese zweite Prüfebene überhaupt gibt
+ * ---------------------------------------------------------------------------
+ *
+ * Die 809 Prüfungen unter `tests/api` und `tests/pages` fahren die Anwendung
+ * über echtes HTTP an. Das ist die richtige Ebene für Berechtigungen,
+ * Statuscodes und ausgeliefertes HTML — und sie bleibt unverändert bestehen.
+ * Drei Dinge kann sie aber grundsätzlich nicht beobachten:
+ *
+ *  • **Ob PDF.js im Browser tatsächlich rendert.** Dass Worker und wasm aus
+ *    dem eigenen Ursprung ausgeliefert werden, ist über HTTP geprüft; dass
+ *    die CSP den Worker dann auch startet, ist eine Aussage über eine
+ *    Browser-Laufzeit. Bis hierher war sie *konfigurativ* begründet, nicht
+ *    empirisch belegt.
+ *  • **Ob eine gezeichnete Unterschrift entsteht.** Ein `imageDataUrl` im
+ *    Anfragekörper beweist, dass der Server ein PNG annimmt. Er beweist
+ *    nicht, dass die Pointer-Events des Unterschriftenfelds im Browser eine
+ *    Zeichnung erzeugen.
+ *  • **Ob die Gerätesperre den Browser wirklich einschliesst.** Der
+ *    HTTP-Test zeigt 423 auf einem Cookie-Kopf. Im Browser gibt es
+ *    ausserdem Zurück-Taste, zweiten Tab, Neuladen, geschlossenen Tab und
+ *    Verlauf — Wege, die eine Sperre umgehen könnten, ohne dass ein
+ *    einziger Statuscode falsch wäre.
+ *
+ * Diese Ebene ergänzt also, sie ersetzt nichts.
+ *
+ * ---------------------------------------------------------------------------
+ *  Warum Playwright und warum nur eine Plattform
+ * ---------------------------------------------------------------------------
+ *
+ * Vor Gate 4D.1 gab es im Repository keinerlei Browser-Harness — kein
+ * Playwright, kein Cypress, kein Selenium, keine CI-Browserstufe. Die Wahl war
+ * also frei, und sie fiel auf Playwright, weil es als einziges der drei alle
+ * vier Dinge mitbringt, die diese Reihe braucht: echte Pointer-Ereignisse auf
+ * einem Canvas (`mouse.move/down/up`), mehrere `BrowserContext` nebeneinander
+ * (zweites Gerät) mit mehreren Seiten *im selben* Kontext (zweiter Tab),
+ * Zugriff auf Netzwerkantworten samt Status, und ein eigener Cookie-Speicher
+ * je Kontext. Eine zweite Plattform daneben gäbe es nicht — zwei Harnesse
+ * bedeuten zwei Wahrheiten darüber, was „grün" heisst.
+ *
+ * Version fest verdrahtet (`--save-exact`): Ein Browsertest, der nach einem
+ * Nebenversionssprung anders ausgeht, prüft die Anwendung nicht mehr.
+ *
+ * ---------------------------------------------------------------------------
+ *  Umgebung
+ * ---------------------------------------------------------------------------
+ *
+ * Gefahren wird gegen **dieselbe** Umgebung wie die bestehende Reihe:
+ * `scripts/test-server.ts` auf Port 3001, gegen die Testdatenbank, mit
+ * `TRUSTED_PROXY_MODE=NONE` und dateibasierten Rate-Limit-Zählern. Kein
+ * eigener Serverstart, keine zweite Datenbank, keine zweite Seed-Strategie —
+ * was die HTTP-Reihe sieht, sieht der Browser auch.
+ *
+ * `reuseExistingServer` ist bewusst **immer** an: Läuft bereits ein
+ * Testserver (der übliche Fall beim Arbeiten), wird er verwendet; sonst
+ * startet Playwright ihn und wartet auf `/api/auth/session` statt auf eine
+ * geratene Anzahl Sekunden.
+ *
+ * `CLENARIS_TEST_CACHE_DIR` steht hier ausdrücklich auf demselben Wert, den
+ * `test-server.ts` und `tests/helpers/rate-limit.ts` als Vorgabe verwenden.
+ * Das ist kein Doppel, sondern die Bedingung dafür, dass ein *bereits
+ * laufender* Server und dieser Prozess denselben Postausgang meinen.
+ */
+
+const port = process.env.E2E_PORT?.trim() || '3001';
+const baseURL = `http://127.0.0.1:${port}`;
+
+/** Derselbe Vorgabewert wie in `scripts/test-server.ts` und `tests/helpers/rate-limit.ts`. */
+const cacheDir = process.env.CLENARIS_TEST_CACHE_DIR?.trim() || join(tmpdir(), 'clenaris-tests', 'cache');
+
+// Die Helfer aus `tests/helpers` lesen beides beim Laden des Moduls — auch im
+// Worker-Prozess, der diese Datei erneut auswertet.
+process.env.TEST_BASE_URL = baseURL;
+process.env.CLENARIS_TEST_CACHE_DIR = cacheDir;
+
+export default defineConfig({
+  testDir: './tests/e2e',
+  testMatch: '**/*.spec.ts',
+
+  /**
+   * Nacheinander, aus demselben Grund wie `--test-concurrency=1` in der
+   * HTTP-Reihe: Alle Dateien teilen sich eine Datenbank und dieselben fünf
+   * Demokonten. Dazu kommt hier das Anmeldelimit — acht Versuche je fünf
+   * Minuten und Adresse, und ohne Proxy-Modus teilen sich alle Aufrufer eine
+   * Adresse. Nebenläufigkeit wäre nicht schneller, sondern unzuverlässig.
+   */
+  fullyParallel: false,
+  workers: 1,
+
+  /**
+   * Kein Wiederholen. Ein Browsertest, der erst im zweiten Anlauf grün wird,
+   * hat etwas gefunden — das soll man sehen und nicht wegretryen.
+   */
+  retries: 0,
+  forbidOnly: true,
+  timeout: 90_000,
+  expect: { timeout: 15_000 },
+
+  reporter: [['list'], ['html', { outputFolder: 'playwright-report', open: 'never' }]],
+  outputDir: 'test-results',
+
+  globalSetup: './tests/e2e/helpers/global-setup.ts',
+
+  use: {
+    baseURL,
+    /**
+     * Spuren, Bildschirmfotos und Video **nur bei Fehlschlag**, und alle drei
+     * landen in `test-results/`, das nicht verfolgt wird. Der Grund ist nicht
+     * Sparsamkeit: Eine Spur der Unterzeichnungsseite enthält den rohen
+     * Zugangstoken aus dem Fragment und Kundennamen aus dem Demobestand. Als
+     * Repository-Artefakt wäre das ein Geheimnis, das den Umweg über einen
+     * Testlauf genommen hat.
+     */
+    trace: 'retain-on-failure',
+    screenshot: 'only-on-failure',
+    video: 'off',
+    actionTimeout: 15_000,
+    navigationTimeout: 30_000,
+    locale: 'de-CH',
+    timezoneId: 'Europe/Zurich',
+  },
+
+  projects: [
+    {
+      name: 'chromium',
+      use: {
+        browserName: 'chromium',
+        viewport: { width: 1366, height: 900 },
+        deviceScaleFactor: 1,
+      },
+    },
+  ],
+
+  webServer: {
+    command: 'npm run test:server',
+    url: `${baseURL}/api/auth/session`,
+    reuseExistingServer: true,
+    timeout: 180_000,
+    stdout: 'ignore',
+    stderr: 'pipe',
+    env: {
+      PORT: port,
+      CLENARIS_TEST_CACHE_DIR: cacheDir,
+    },
+  },
+});
