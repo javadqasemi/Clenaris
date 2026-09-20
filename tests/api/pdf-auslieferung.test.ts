@@ -134,6 +134,90 @@ describe('Dokumentfassung: der neue Content-Endpunkt', () => {
 });
 
 /**
+ * **Content-Disposition nur für Navigationen** — der Befund, an dem jede
+ * PDF-Anzeige des Produkts in echten Browsern scheiterte.
+ *
+ * Der Viewer lädt die Bytes selbst per `fetch`. Trifft in Chromium
+ * `application/pdf` auf eine `Content-Disposition`, übernimmt der
+ * PDF-Plugin-Interceptor den Datenstrom und beantwortet den Abruf mit einem
+ * leeren **204**; der Viewer sah „kein PDF" und meldete „Datei nicht lesbar".
+ * Betroffen war alles: Offerte, Rechnung, Führungsdokument, Rapport, das
+ * eingefrorene Dokument der Unterzeichnung und das Protokoll.
+ *
+ * Gefunden hat es niemand, weil beide Prüfebenen blind waren: Node kennt kein
+ * PDF-Plugin, und Playwrights Vorgabe ist die Headless-Shell, die ebenfalls
+ * keines hat. Die Herleitung und die Messung stehen in
+ * `src/lib/api/binary-response.ts`.
+ *
+ * Geprüft wird die Regel, nicht der Browser: Ein Abruf mit
+ * `Sec-Fetch-Dest: empty` darf die Kopfzeile **nicht** bekommen, eine
+ * Navigation (`document`) schon — und die Bytes müssen in beiden Fällen
+ * dieselben sein.
+ */
+describe('Content-Disposition nur für Navigationen', () => {
+  /** Jede Adresse, hinter der ein PDF steht, das der Viewer liest. */
+  function pdfQuellen(): Array<[string, string, string]> {
+    const quellen: Array<[string, string, string]> = [];
+    if (rechnungId) quellen.push(['Rechnung', `/api/invoices/${rechnungId}/pdf`, 'admin']);
+    if (offerteId) quellen.push(['Offerte', `/api/quotes/${offerteId}/pdf`, 'admin']);
+    if (dokumentMitDatei) quellen.push(['Dokumentfassung', `/api/bi/documents/${dokumentMitDatei}/content`, 'admin']);
+    return quellen;
+  }
+
+  it('lässt die Kopfzeile bei einem Abruf des Viewers weg', async () => {
+    const quellen = pdfQuellen();
+    if (quellen.length === 0) return;
+
+    for (const [name, pfad, rolle] of quellen) {
+      const antwort = await get(pfad, {
+        jar: jars[rolle as keyof Zugaenge],
+        headers: { 'Sec-Fetch-Dest': 'empty', 'Sec-Fetch-Mode': 'cors', 'Sec-Fetch-Site': 'same-origin' },
+      });
+      assert.equal(antwort.status, 200, `${name}: ${antwort.status}`);
+      assert.equal(
+        antwort.headers.get('content-disposition'),
+        null,
+        `${name}: Ein Abruf des Viewers darf keine Content-Disposition bekommen — ` +
+          'Chromium beantwortet ihn sonst mit einem leeren 204.',
+      );
+      assert.equal(antwort.headers.get('content-type'), 'application/pdf', `${name}: Content-Type`);
+      assert.ok(antwort.text.startsWith('%PDF-'), `${name}: keine PDF-Signatur`);
+      assert.match(antwort.headers.get('vary') ?? '', /Sec-Fetch-Dest/i, `${name}: Vary fehlt`);
+    }
+  });
+
+  it('gibt sie einer Navigation — mit demselben Inhalt', async () => {
+    const quellen = pdfQuellen();
+    if (quellen.length === 0) return;
+
+    for (const [name, pfad, rolle] of quellen) {
+      const jar = jars[rolle as keyof Zugaenge];
+      const navigation = await get(pfad, { jar, headers: { 'Sec-Fetch-Dest': 'document' } });
+      assert.equal(navigation.status, 200, `${name}: ${navigation.status}`);
+      assert.match(
+        navigation.headers.get('content-disposition') ?? '',
+        /^(inline|attachment); filename=/,
+        `${name}: Eine Navigation braucht den Dateinamen`,
+      );
+
+      const abruf = await get(pfad, { jar, headers: { 'Sec-Fetch-Dest': 'empty' } });
+      assert.equal(
+        abruf.text.length,
+        navigation.text.length,
+        `${name}: Beide Wege müssen dieselben Bytes liefern`,
+      );
+    }
+  });
+
+  it('gibt sie auch ohne `Sec-Fetch-Dest` — Nicht-Browser verlieren den Dateinamen nicht', async () => {
+    if (!dokumentMitDatei) return;
+    const antwort = await get(`/api/bi/documents/${dokumentMitDatei}/content`, { jar: jars.admin });
+    assert.equal(antwort.status, 200);
+    assert.match(antwort.headers.get('content-disposition') ?? '', /filename=/);
+  });
+});
+
+/**
  * Der Download — der Befund aus Gate 4D.1.
  *
  * **Was hier vorher stand und warum es nicht genügte.** Die Prüfung dieser

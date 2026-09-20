@@ -1,3 +1,4 @@
+import { binaerAntwort } from '@/lib/api/binary-response';
 import { definePublicRoute } from '@/lib/api/handler';
 import { readSignatureSession } from '@/lib/auth/signature-session';
 import { sanitizeFilename } from '@/lib/storage';
@@ -14,18 +15,17 @@ export const maxDuration = 60;
 export const GET = definePublicRoute({
   params: signatureResultArtifactParams,
   rateLimit: 'publicTokenRead',
-  handler: async ({ params: p }) => {
+  handler: async ({ params: p, request }) => {
     const { bytes, filename } = await getResultArtifact(await readSignatureSession(), p.publicId, p.artifact);
-    return new Response(new Uint8Array(bytes), {
-      status: 200,
-      headers: {
-        'Content-Type': 'application/pdf',
-        'Content-Length': String(bytes.byteLength),
-        'Content-Disposition': `${p.artifact === 'evidence' ? 'attachment' : 'inline'}; filename="${sanitizeFilename(filename)}"`,
-        'X-Content-Type-Options': 'nosniff',
-        'Cache-Control': 'no-store',
-        'Referrer-Policy': 'no-referrer',
-      },
+    return binaerAntwort({
+      bytes,
+      mimeType: 'application/pdf',
+      filename: sanitizeFilename(filename),
+      // Das Protokoll ist ein Beleg zum Ablegen, das Dokument eines zum Ansehen.
+      disposition: p.artifact === 'evidence' ? 'attachment' : 'inline',
+      request,
+      cacheControl: 'no-store',
+      headers: { 'Referrer-Policy': 'no-referrer' },
     });
   },
 });

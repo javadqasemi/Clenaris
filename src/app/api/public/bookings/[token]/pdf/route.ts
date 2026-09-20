@@ -1,3 +1,4 @@
+import { binaerAntwort } from '@/lib/api/binary-response';
 import { definePublicRoute } from '@/lib/api/handler';
 import { prisma } from '@/lib/db';
 import { NotFoundError } from '@/lib/errors';
@@ -19,7 +20,7 @@ export const GET = definePublicRoute({
   params: publicTokenParams,
   // Engeres Kontingent als `apiRead` — siehe `rate-limit.ts`.
   rateLimit: 'publicTokenRead',
-  handler: async ({ params }) => {
+  handler: async ({ params, request }) => {
     const booking = await prisma.booking.findUnique({
       where: { confirmationToken: params.token },
       select: { id: true, deletedAt: true },
@@ -28,12 +29,13 @@ export const GET = definePublicRoute({
 
     const { buffer, filename } = await renderBookingConfirmationPdf(booking.id);
 
-    return new Response(new Uint8Array(buffer), {
-      headers: {
-        'Content-Type': 'application/pdf',
-        'Content-Disposition': `attachment; filename="${filename}"`,
-        'Cache-Control': 'private, no-store',
-      },
+    return binaerAntwort({
+      bytes: buffer,
+      mimeType: 'application/pdf',
+      filename,
+      disposition: 'attachment',
+      request,
+      cacheControl: 'private, no-store',
     });
   },
 });

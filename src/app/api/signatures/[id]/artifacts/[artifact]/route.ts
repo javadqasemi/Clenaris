@@ -1,3 +1,4 @@
+import { binaerAntwort } from '@/lib/api/binary-response';
 import { defineRoute } from '@/lib/api/handler';
 import { sanitizeFilename } from '@/lib/storage';
 import { signatureArtifactParams } from '@/lib/validation/signatures';
@@ -20,17 +21,15 @@ export const GET = defineRoute({
   permissions: ['signature:read'],
   params: signatureArtifactParams,
   rateLimit: 'fileDownload',
-  handler: async ({ params, session }) => {
+  handler: async ({ params, session, request }) => {
     const { bytes, filename } = await getSignatureArtifactAdmin(session, await getOrganizationId(), params.id, params.artifact);
-    return new Response(new Uint8Array(bytes), {
-      status: 200,
-      headers: {
-        'Content-Type': 'application/pdf',
-        'Content-Length': String(bytes.byteLength),
-        'Content-Disposition': `${params.artifact === 'evidence' ? 'attachment' : 'inline'}; filename="${sanitizeFilename(filename)}"`,
-        'X-Content-Type-Options': 'nosniff',
-        'Cache-Control': 'private, no-store',
-      },
+    return binaerAntwort({
+      bytes,
+      mimeType: 'application/pdf',
+      filename: sanitizeFilename(filename),
+      disposition: params.artifact === 'evidence' ? 'attachment' : 'inline',
+      request,
+      cacheControl: 'private, no-store',
     });
   },
 });

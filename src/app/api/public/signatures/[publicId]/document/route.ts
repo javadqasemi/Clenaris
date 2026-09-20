@@ -1,3 +1,4 @@
+import { binaerAntwort } from '@/lib/api/binary-response';
 import { definePublicRoute } from '@/lib/api/handler';
 import { readSignatureSession } from '@/lib/auth/signature-session';
 import { requestContext } from '@/lib/http/request-context';
@@ -20,16 +21,13 @@ export const GET = definePublicRoute({
   rateLimit: 'publicTokenRead',
   handler: async ({ params, request }) => {
     const { bytes, filename } = await getSigningDocument(await readSignatureSession(), params.publicId, requestContext(request));
-    return new Response(new Uint8Array(bytes), {
-      status: 200,
-      headers: {
-        'Content-Type': 'application/pdf',
-        'Content-Length': String(bytes.byteLength),
-        'Content-Disposition': `inline; filename="${sanitizeFilename(filename)}"`,
-        'X-Content-Type-Options': 'nosniff',
-        'Cache-Control': 'no-store',
-        'Referrer-Policy': 'no-referrer',
-      },
+    return binaerAntwort({
+      bytes,
+      mimeType: 'application/pdf',
+      filename: sanitizeFilename(filename),
+      request,
+      cacheControl: 'no-store',
+      headers: { 'Referrer-Policy': 'no-referrer' },
     });
   },
 });

@@ -1,3 +1,4 @@
+import { binaerAntwort } from '@/lib/api/binary-response';
 import { defineRoute, idParam } from '@/lib/api/handler';
 import { sanitizeFilename } from '@/lib/storage';
 import { documentDownloadQuery } from '@/lib/validation/bi-knowledge';
@@ -25,7 +26,7 @@ export const GET = defineRoute({
   params: idParam,
   query: documentDownloadQuery,
   rateLimit: 'apiRead',
-  handler: async ({ params, query, session, ip }) => {
+  handler: async ({ params, query, session, ip, request }) => {
     const inhalt = await resolveDocumentContent(
       session,
       await getOrganizationId(),
@@ -34,23 +35,18 @@ export const GET = defineRoute({
       ip,
     );
 
-    const istPdf = inhalt.mimeType === 'application/pdf';
-    const name = sanitizeFilename(inhalt.filename);
-
-    return new Response(new Uint8Array(inhalt.bytes), {
-      status: 200,
-      headers: {
-        'Content-Type': inhalt.mimeType,
-        'Content-Length': String(inhalt.bytes.byteLength),
-        // PDF darf im Fenster angezeigt werden; alles andere wird zum
-        // Herunterladen angeboten — ein Office-Dokument hat im Browser
-        // nichts zu rendern.
-        'Content-Disposition': `${istPdf ? 'inline' : 'attachment'}; filename="${name}"`,
-        'X-Content-Type-Options': 'nosniff',
-        'X-Document-Version': String(inhalt.version),
-        // Personal- und Vertragsdokumente: kein Zwischenspeicher, nirgends.
-        'Cache-Control': 'private, no-store, max-age=0, must-revalidate',
-      },
+    return binaerAntwort({
+      bytes: inhalt.bytes,
+      mimeType: inhalt.mimeType,
+      filename: sanitizeFilename(inhalt.filename),
+      // PDF darf im Fenster angezeigt werden; alles andere wird zum
+      // Herunterladen angeboten — ein Office-Dokument hat im Browser nichts
+      // zu rendern. Ob die Kopfzeile überhaupt mitgeht, entscheidet die Art
+      // der Anfrage (siehe `binary-response.ts`).
+      disposition: inhalt.mimeType === 'application/pdf' ? 'inline' : 'attachment',
+      request,
+      // Personal- und Vertragsdokumente: kein Zwischenspeicher, nirgends.
+      headers: { 'X-Document-Version': String(inhalt.version) },
     });
   },
 });

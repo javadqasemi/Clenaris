@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from 'next/server';
 
+import { binaerAntwort } from '@/lib/api/binary-response';
 import { toErrorResponse } from '@/lib/api/response';
 import { getSession } from '@/lib/auth/session';
 import { NotFoundError, ValidationError } from '@/lib/errors';
@@ -158,26 +159,24 @@ export async function GET(
     // einen zweiten Kopfzeileneintrag einzuschleusen.
     const name = sanitizeFilename(freigabe.filename);
 
-    return new NextResponse(new Uint8Array(file.data), {
-      status: 200,
-      headers: {
-        'Content-Type': freigabe.mimeType,
-        'Content-Length': String(file.sizeBytes),
-        /**
-         * Öffentliche Assets dürfen lange liegen bleiben: Eine Adresse wird
-         * genau einmal beschrieben, ein geändertes Bild bekommt eine neue.
-         *
-         * Private Dateien dürfen das nicht. `public, immutable` hiesse, dass
-         * ein Lebenslauf ein Jahr lang in jedem Zwischenspeicher zwischen
-         * Server und Browser liegen darf — auch in geteilten. Die Prüfung
-         * oben wäre damit einmalig statt bei jedem Abruf.
-         */
-        'Cache-Control': freigabe.isPublic
-          ? 'public, max-age=31536000, immutable'
-          : 'private, no-store, max-age=0, must-revalidate',
-        'X-Content-Type-Options': 'nosniff',
-        'Content-Disposition': `${inline ? 'inline' : 'attachment'}; filename="${name}"`,
-      },
+    return binaerAntwort({
+      bytes: file.data,
+      mimeType: freigabe.mimeType,
+      filename: name,
+      disposition: inline ? 'inline' : 'attachment',
+      request,
+      /**
+       * Öffentliche Assets dürfen lange liegen bleiben: Eine Adresse wird
+       * genau einmal beschrieben, ein geändertes Bild bekommt eine neue.
+       *
+       * Private Dateien dürfen das nicht. `public, immutable` hiesse, dass
+       * ein Lebenslauf ein Jahr lang in jedem Zwischenspeicher zwischen
+       * Server und Browser liegen darf — auch in geteilten. Die Prüfung
+       * oben wäre damit einmalig statt bei jedem Abruf.
+       */
+      cacheControl: freigabe.isPublic
+        ? 'public, max-age=31536000, immutable'
+        : 'private, no-store, max-age=0, must-revalidate',
     });
   } catch (error) {
     return toErrorResponse(error);

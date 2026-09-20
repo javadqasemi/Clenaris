@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 
+import { binaerAntwort } from '@/lib/api/binary-response';
 import { defineRoute, idParam } from '@/lib/api/handler';
 import { sanitizeFilename } from '@/lib/storage';
 import { documentDownloadQuery } from '@/lib/validation/bi-knowledge';
@@ -43,15 +44,12 @@ export const GET = defineRoute({
 
     // Ein Download ist ein Download: immer `attachment`, auch bei PDF. Wer
     // ansehen will, nimmt `/content` — dort steht der Viewer dahinter.
-    return new Response(new Uint8Array(ziel.bytes), {
-      status: 200,
-      headers: {
-        'Content-Type': ziel.mimeType,
-        'Content-Length': String(ziel.bytes.byteLength),
-        'Content-Disposition': `attachment; filename="${sanitizeFilename(ziel.filename)}"`,
-        'X-Content-Type-Options': 'nosniff',
-        'Cache-Control': 'private, no-store, max-age=0, must-revalidate',
-      },
+    return binaerAntwort({
+      bytes: ziel.bytes,
+      mimeType: ziel.mimeType,
+      filename: sanitizeFilename(ziel.filename),
+      disposition: 'attachment',
+      request,
     });
   },
 });

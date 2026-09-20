@@ -1,3 +1,4 @@
+import { binaerAntwort } from '@/lib/api/binary-response';
 import { definePublicRoute } from '@/lib/api/handler';
 import { prisma } from '@/lib/db';
 import { NotFoundError } from '@/lib/errors';
@@ -22,7 +23,7 @@ export const GET = definePublicRoute({
   params: publicTokenParams,
   // Engeres Kontingent als `apiRead` — siehe `rate-limit.ts`.
   rateLimit: 'publicTokenRead',
-  handler: async ({ params }) => {
+  handler: async ({ params, request }) => {
     const aufgeloest = await resolveWithLegacy({
       raw: params.token,
       purpose: 'INVOICE_VIEW',
@@ -45,14 +46,14 @@ export const GET = definePublicRoute({
 
     const { buffer, filename } = await renderInvoicePdf(invoice.id);
 
-    return new Response(new Uint8Array(buffer), {
-      headers: {
-        'Content-Type': 'application/pdf',
-        // `inline`, damit sich das PDF im Fenster öffnen lässt.
-        'Content-Disposition': `inline; filename="${filename}"`,
-        'X-Content-Type-Options': 'nosniff',
-        'Cache-Control': 'private, no-store',
-      },
+    // `inline`, damit sich das PDF im Fenster öffnen lässt — aber nur für
+    // eine Navigation; der Viewer liest die Bytes (siehe `binary-response.ts`).
+    return binaerAntwort({
+      bytes: buffer,
+      mimeType: 'application/pdf',
+      filename,
+      request,
+      cacheControl: 'private, no-store',
     });
   },
 });

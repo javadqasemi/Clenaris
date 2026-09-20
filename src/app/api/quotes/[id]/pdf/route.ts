@@ -1,3 +1,4 @@
+import { binaerAntwort } from '@/lib/api/binary-response';
 import { defineRoute, idParam } from '@/lib/api/handler';
 import { prisma } from '@/lib/db';
 import { ForbiddenError, NotFoundError } from '@/lib/errors';
@@ -14,7 +15,7 @@ export const GET = defineRoute({
   anyPermission: true,
   params: idParam,
   rateLimit: 'apiRead',
-  handler: async ({ params, session }) => {
+  handler: async ({ params, session, request }) => {
     const organizationId = await getOrganizationId();
 
     const quote = await prisma.quote.findFirst({
@@ -32,12 +33,13 @@ export const GET = defineRoute({
     const signiert = await getSignedQuoteArtifact(quote.id);
     const { buffer, filename } = signiert ? { buffer: signiert.bytes, filename: signiert.filename } : await renderQuotePdf(quote.id);
 
-    return new Response(new Uint8Array(buffer), {
-      headers: {
-        'Content-Type': 'application/pdf',
-        'Content-Disposition': `attachment; filename="${filename}"`,
-        'Cache-Control': 'private, no-store',
-      },
+    return binaerAntwort({
+      bytes: buffer,
+      mimeType: 'application/pdf',
+      filename,
+      disposition: 'attachment',
+      request,
+      cacheControl: 'private, no-store',
     });
   },
 });

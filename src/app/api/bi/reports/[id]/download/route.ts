@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 
+import { binaerAntwort } from '@/lib/api/binary-response';
 import { defineRoute, idParam } from '@/lib/api/handler';
 import { sanitizeFilename } from '@/lib/storage';
 import { resolveReportDownload } from '@/server/services/bi-report.service';
@@ -28,15 +29,12 @@ export const GET = defineRoute({
       return NextResponse.redirect(new URL(ziel.url, request.nextUrl.origin), 302);
     }
 
-    return new Response(new Uint8Array(ziel.bytes), {
-      status: 200,
-      headers: {
-        'Content-Type': ziel.mimeType,
-        'Content-Length': String(ziel.bytes.byteLength),
-        'Content-Disposition': `attachment; filename="${sanitizeFilename(ziel.filename)}"`,
-        'X-Content-Type-Options': 'nosniff',
-        'Cache-Control': 'private, no-store, max-age=0, must-revalidate',
-      },
+    return binaerAntwort({
+      bytes: ziel.bytes,
+      mimeType: ziel.mimeType,
+      filename: sanitizeFilename(ziel.filename),
+      disposition: 'attachment',
+      request,
     });
   },
 });

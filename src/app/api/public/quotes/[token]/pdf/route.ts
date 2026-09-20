@@ -1,3 +1,4 @@
+import { binaerAntwort } from '@/lib/api/binary-response';
 import { definePublicRoute } from '@/lib/api/handler';
 import { prisma } from '@/lib/db';
 import { NotFoundError } from '@/lib/errors';
@@ -29,7 +30,7 @@ export const GET = definePublicRoute({
   // Engeres Kontingent als `apiRead`: Bei einem Link ohne Anmeldung ist das
   // Limit die zweite Verteidigungslinie hinter der Entropie des Tokens.
   rateLimit: 'publicTokenRead',
-  handler: async ({ params }) => {
+  handler: async ({ params, request }) => {
     const aufgeloest = await resolveWithLegacy({
       raw: params.token,
       purpose: 'QUOTE_VIEW',
@@ -58,16 +59,16 @@ export const GET = definePublicRoute({
     const signiert = await getSignedQuoteArtifact(quote.id);
     const { buffer, filename } = signiert ? { buffer: signiert.bytes, filename: signiert.filename } : await renderQuotePdf(quote.id);
 
-    return new Response(new Uint8Array(buffer), {
-      headers: {
-        'Content-Type': 'application/pdf',
-        // `inline`: Das PDF soll sich im Fenster öffnen lassen. Der Viewer
-        // aus Gate 3 setzt genau hier an; ein erzwungener Download wäre
-        // dafür der falsche Vorgabewert.
-        'Content-Disposition': `inline; filename="${filename}"`,
-        'X-Content-Type-Options': 'nosniff',
-        'Cache-Control': 'private, no-store',
-      },
+    // `inline`: Wer die Adresse aufruft, soll das PDF im Fenster sehen — ein
+    // erzwungener Download wäre dafür der falsche Vorgabewert. Der Viewer
+    // *ruft* die Adresse aber nicht auf, er liest sie; er bekommt deshalb
+    // keine `Content-Disposition` (siehe `binary-response.ts`).
+    return binaerAntwort({
+      bytes: buffer,
+      mimeType: 'application/pdf',
+      filename,
+      request,
+      cacheControl: 'private, no-store',
     });
   },
 });

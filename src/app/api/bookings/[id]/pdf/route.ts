@@ -1,3 +1,4 @@
+import { binaerAntwort } from '@/lib/api/binary-response';
 import { defineRoute, idParam } from '@/lib/api/handler';
 import { prisma } from '@/lib/db';
 import { NotFoundError } from '@/lib/errors';
@@ -19,7 +20,7 @@ export const GET = defineRoute({
   anyPermission: true,
   params: idParam,
   rateLimit: 'apiRead',
-  handler: async ({ params, session }) => {
+  handler: async ({ params, session, request }) => {
     const booking = await prisma.booking.findFirst({
       where: {
         id: params.id,
@@ -33,12 +34,13 @@ export const GET = defineRoute({
 
     const { buffer, filename } = await renderBookingConfirmationPdf(booking.id);
 
-    return new Response(new Uint8Array(buffer), {
-      headers: {
-        'Content-Type': 'application/pdf',
-        'Content-Disposition': `attachment; filename="${filename}"`,
-        'Cache-Control': 'private, no-store',
-      },
+    return binaerAntwort({
+      bytes: buffer,
+      mimeType: 'application/pdf',
+      filename,
+      disposition: 'attachment',
+      request,
+      cacheControl: 'private, no-store',
     });
   },
 });
