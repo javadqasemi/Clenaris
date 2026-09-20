@@ -704,7 +704,7 @@ export function QuoteDocument(props: QuotePdfProps) {
                 <Image src={props.signature.dataUrl} style={styles.signatureImage} />
                 <View style={styles.signatureLine}>
                   <Text style={styles.signatureLabel}>
-                    {props.signature.name} · digital signiert am {formatDate(props.signature.signedAt)}
+                    {props.signature.name} · elektronisch unterzeichnet am {formatDate(props.signature.signedAt)}
                   </Text>
                 </View>
               </>
@@ -1067,6 +1067,221 @@ export function CreditNoteDocument(props: CreditNotePdfProps) {
         </View>
 
         <Footer company={company} label={`Gutschrift ${props.number}`} />
+      </Page>
+    </Document>
+  );
+}
+
+// ---------------------------------------------------------------------------
+//  Signaturprotokoll
+// ---------------------------------------------------------------------------
+
+export interface EvidenceParticipant {
+  name: string;
+  email: string;
+  method: 'DRAWN' | 'TYPED' | null;
+  signedName: string | null;
+  signedAt: Date | null;
+  authenticationMethod: string | null;
+  consentText: string | null;
+  consentHash: string | null;
+  consentVersion: string | null;
+  consentLocale: string | null;
+  consentAcceptedAt: Date | null;
+  signatureArtifactHash: string | null;
+  ipAddress: string | null;
+  ipSource: string | null;
+  userAgent: string | null;
+  otp: { channel: string; sentTo: string; requestedAt: Date; verifiedAt: Date | null }[];
+}
+
+export interface EvidenceEvent {
+  at: Date;
+  type: string;
+  participant: string | null;
+}
+
+export interface EvidencePdfProps {
+  company: PdfCompany;
+  requestId: string;
+  publicId: string;
+  title: string;
+  sourceType: string;
+  sourceReference: string;
+  artifactMode: 'EMBEDDED_VISUAL' | 'DETACHED_EVIDENCE';
+  assuranceLevel: string;
+  originalArtifactId: string;
+  originalHash: string;
+  signedArtifactId: string | null;
+  signedHash: string | null;
+  createdAt: Date;
+  completedAt: Date | null;
+  participants: EvidenceParticipant[];
+  events: EvidenceEvent[];
+  /** Zeitpunkt der Erzeugung dieses Protokolls — Serverzeit, kein Zeitstempeldienst. */
+  generatedAt: Date;
+}
+
+const ASSURANCE_TEXT: Record<string, string> = {
+  LINK_ONLY: 'Besitz des zugestellten Links',
+  LINK_PLUS_EMAIL_CODE: 'Besitz des Links und Bestätigungscode an dieselbe E-Mail-Adresse (derselbe Kanal)',
+  LINK_PLUS_SMS_CODE: 'Besitz des Links und Bestätigungscode an die hinterlegte Mobilnummer',
+};
+
+const EVENT_TEXT: Record<string, string> = {
+  REQUEST_CREATED: 'Vorgang angelegt',
+  LINK_ISSUED: 'Link ausgestellt',
+  LINK_EXCHANGED: 'Link geöffnet, Sitzung begonnen',
+  DOCUMENT_VIEWED: 'Dokument angesehen',
+  OTP_REQUESTED: 'Bestätigungscode angefordert',
+  OTP_VERIFIED: 'Bestätigungscode bestätigt',
+  OTP_FAILED: 'Bestätigungscode falsch',
+  CONSENT_ACCEPTED: 'Zustimmung erteilt',
+  SIGNATURE_SUBMITTED: 'Unterschrift übermittelt',
+  FINALIZATION_STARTED: 'Abschluss begonnen',
+  INTEGRITY_FAILED: 'Prüfsumme des Originals stimmte nicht — Abschluss abgebrochen',
+  SIGNED: 'Unterzeichnet',
+  DECLINED: 'Abgelehnt',
+  CANCELLED: 'Abgebrochen',
+  EXPIRED: 'Abgelaufen',
+  ARTIFACT_CREATED: 'Artefakt erzeugt',
+  REQUEST_COMPLETED: 'Vorgang abgeschlossen',
+  RESULT_LINK_ISSUED: 'Ergebnislink ausgestellt',
+  RESULT_VIEWED: 'Ergebnis angesehen',
+};
+
+function zuerich(d: Date): string {
+  return `${new Intl.DateTimeFormat('de-CH', {
+    dateStyle: 'medium',
+    timeStyle: 'medium',
+    timeZone: 'Europe/Zurich',
+  }).format(d)} (Europe/Zurich) · ${d.toISOString()} (UTC)`;
+}
+
+/**
+ * Das Signaturprotokoll.
+ *
+ * **Was es enthält:** Prüfsumme A des Originals, Prüfsumme B des signierten
+ * Artefakts (falls vorhanden), wer wann womit unterzeichnet hat, der exakte
+ * Wortlaut der Zustimmung samt Prüfsumme, die technischen Angaben mit ihrer
+ * Quelle, der Ablauf. **Was es nicht enthält:** seine eigene Prüfsumme C —
+ * ein Dokument kann seinen eigenen Hash nicht tragen. C wird über die
+ * gespeicherten Bytes dieses PDF gebildet und in der Datenbank gehalten.
+ *
+ * Es sagt „Code bestätigt", „Adresse laut Proxy", „Browser-Angabe" — nie
+ * „Identität verifiziert", nie „qualifizierter Zeitstempel".
+ */
+const ev = {
+  section: { marginBottom: 14 },
+  sectionTitle: { fontSize: 8, fontFamily: 'Helvetica-Bold', color: COLORS.ink, letterSpacing: 0.6, marginBottom: 4 },
+  body: { fontSize: 9.5, color: COLORS.ink },
+  meta: { fontSize: 8.5, color: COLORS.muted, lineHeight: 1.5 },
+} as const;
+
+export function EvidenceDocument(props: EvidencePdfProps) {
+  const { company } = props;
+  const mono = { fontFamily: 'Courier', fontSize: 7 } as const;
+  return (
+    <Document title={`Signaturprotokoll ${props.publicId}`} author={company.name}>
+      <Page size="A4" style={styles.page}>
+        <Header company={company} />
+        <Text style={styles.title}>Signaturprotokoll</Text>
+        <Text style={styles.subtitle}>Vorgang {props.publicId}</Text>
+
+        <View style={ev.section}>
+          <Text style={ev.sectionTitle}>Dokument</Text>
+          <Text style={ev.body}>{props.title}</Text>
+          <Text style={ev.meta}>
+            Quelle: {props.sourceType} · {props.sourceReference}
+          </Text>
+          <Text style={ev.meta}>
+            Modus: {props.artifactMode === 'EMBEDDED_VISUAL'
+              ? 'Signiertes Artefakt mit sichtbarer Unterschrift'
+              : 'Elektronisch bestätigtes Dokument mit separatem Signaturprotokoll — das Original bleibt bytegenau unverändert'}
+          </Text>
+          <Text style={ev.meta}>Prüfstufe: {ASSURANCE_TEXT[props.assuranceLevel] ?? props.assuranceLevel}</Text>
+        </View>
+
+        <View style={ev.section}>
+          <Text style={ev.sectionTitle}>Prüfsummen (SHA-256)</Text>
+          <Text style={ev.meta}>Original · {props.originalArtifactId}</Text>
+          <Text style={mono}>{props.originalHash}</Text>
+          {props.signedArtifactId ? (
+            <>
+              <Text style={[ev.meta, { marginTop: 4 }]}>Signiertes Artefakt · {props.signedArtifactId}</Text>
+              <Text style={mono}>{props.signedHash}</Text>
+            </>
+          ) : (
+            <Text style={[ev.meta, { marginTop: 4 }]}>Kein signiertes Artefakt (Modus ohne Einbettung).</Text>
+          )}
+          <Text style={[ev.meta, { marginTop: 4 }]}>
+            Die Prüfsumme dieses Protokolls wird über seine gespeicherten Bytes gebildet und in Clenaris
+            gehalten; sie steht nicht in diesem Dokument.
+          </Text>
+        </View>
+
+        {props.participants.map((p, i) => (
+          <View key={i} style={ev.section} wrap={false}>
+            <Text style={ev.sectionTitle}>Unterzeichnende Person {props.participants.length > 1 ? i + 1 : ''}</Text>
+            <Text style={ev.body}>{p.name}</Text>
+            <Text style={ev.meta}>Link zugestellt an: {p.email}</Text>
+            {p.signedAt ? (
+              <>
+                <Text style={ev.meta}>Unterzeichnet: {zuerich(p.signedAt)}</Text>
+                <Text style={ev.meta}>
+                  Methode: {p.method === 'DRAWN' ? 'gezeichnet' : 'getippt'} · eingegebener Name: {p.signedName}
+                </Text>
+                {p.signatureArtifactHash ? (
+                  <Text style={ev.meta}>Prüfsumme des Unterschriftsbilds: {p.signatureArtifactHash}</Text>
+                ) : null}
+                <Text style={ev.meta}>
+                  Geprüft: {ASSURANCE_TEXT[p.authenticationMethod ?? ''] ?? p.authenticationMethod}
+                </Text>
+              </>
+            ) : (
+              <Text style={ev.meta}>Nicht unterzeichnet.</Text>
+            )}
+            {p.otp.map((o, j) => (
+              <Text key={j} style={ev.meta}>
+                Code per {o.channel === 'SMS' ? 'SMS' : 'E-Mail'} an {o.sentTo}, angefordert {zuerich(o.requestedAt)}
+                {o.verifiedAt ? `, bestätigt ${zuerich(o.verifiedAt)}` : ', nicht bestätigt'}
+              </Text>
+            ))}
+            {p.consentText ? (
+              <>
+                <Text style={[ev.meta, { marginTop: 4 }]}>
+                  Zustimmung ({p.consentVersion}, {p.consentLocale}) erteilt {p.consentAcceptedAt ? zuerich(p.consentAcceptedAt) : ''}:
+                </Text>
+                <Text style={[ev.body, { fontStyle: 'italic' }]}>„{p.consentText}“</Text>
+                <Text style={mono}>{p.consentHash}</Text>
+              </>
+            ) : null}
+            <Text style={[ev.meta, { marginTop: 4 }]}>
+              Adresse: {p.ipAddress ?? 'nicht verfügbar'} (Quelle: {p.ipSource ?? 'UNAVAILABLE'}) — technisches Metadatum, kein Identitätsnachweis
+            </Text>
+            {p.userAgent ? <Text style={ev.meta}>Browser-Angabe (vom Gerät gemeldet): {p.userAgent}</Text> : null}
+          </View>
+        ))}
+
+        <View style={ev.section}>
+          <Text style={ev.sectionTitle}>Ablauf</Text>
+          {props.events.map((e, i) => (
+            <Text key={i} style={ev.meta}>
+              {zuerich(e.at)} — {EVENT_TEXT[e.type] ?? e.type}
+              {e.participant ? ` (${e.participant})` : ''}
+            </Text>
+          ))}
+        </View>
+
+        <View style={styles.note}>
+          <Text>
+            Erstellt am {zuerich(props.generatedAt)} aus den in Clenaris gespeicherten Daten. Zeiten sind
+            Systemzeit des Servers, kein qualifizierter Zeitstempel. Dieses Protokoll dokumentiert einen
+            elektronischen Unterzeichnungsablauf; es ist keine qualifizierte elektronische Signatur.
+          </Text>
+        </View>
+
+        <Footer company={company} label={`Signaturprotokoll ${props.publicId}`} />
       </Page>
     </Document>
   );

@@ -151,6 +151,21 @@ const DOMAINS: Domain[] = [
     ],
   },
   {
+    key: 'signatur',
+    title: 'Elektronische Unterzeichnung',
+    purpose:
+      'Ein `SignatureRequest` bindet sich an exakte Bytes (`originalDocumentHash`), nie an ein ' +
+      'veränderliches Geschäftsobjekt; genau eine Quelle (Offerte, Einsatz oder Dokumentfassung), ' +
+      'per CHECK erzwungen, `Restrict` in alle Richtungen. `SignatureParticipant` friert die ' +
+      'Kontaktdaten ein und trägt nach dem Abschluss Zustimmung, Methode und technische Angaben. ' +
+      '`SignatureEvent` ist das fachliche Protokoll — nur anhängen, in der Datenbank per Trigger ' +
+      'erzwungen. `SignatureOtpChallenge` hält Bestätigungscodes als Argon2id über einen HMAC; ' +
+      'der Hash ist kein Beweis und wird bereinigt. Alle Artefakte liegen in der Gate-2-Ablage ' +
+      '(`FileAsset` scope SIGNATURE). Keine qualifizierte Signatur; Entwurf in ' +
+      '`docs/SIGNATUR_GATE4A.md`.',
+    models: ['SignatureRequest', 'SignatureParticipant', 'SignatureEvent', 'SignatureOtpChallenge'],
+  },
+  {
     key: 'crm',
     title: 'CRM',
     purpose:

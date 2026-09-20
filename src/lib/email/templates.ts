@@ -514,6 +514,104 @@ export function newBookingInternalEmail(params: {
   };
 }
 
+// ---------------------------------------------------------------------------
+//  Elektronische Unterzeichnung
+// ---------------------------------------------------------------------------
+
+/**
+ * Einladung zur Unterzeichnung.
+ *
+ * Der Link trägt den Token im **Fragment** (`#t=…`): Das Fragment schickt
+ * kein Browser an den Server, es steht also in keinem Zugriffsprotokoll eines
+ * Proxys. Die Seite liest es lokal, tauscht es einmal gegen eine Sitzung und
+ * löscht es aus der Adresse. Wortlaut: „elektronisch unterzeichnen" — keine
+ * qualifizierte Signatur, kein Versprechen darüber hinaus.
+ */
+export function signatureInvitationEmail(params: {
+  name: string;
+  title: string;
+  senderName: string;
+  signUrl: string;
+  expiresAt: Date;
+  requiresCode: 'none' | 'email' | 'sms';
+}): EmailContent {
+  const code =
+    params.requiresCode === 'email'
+      ? '<p>Vor der Unterzeichnung senden wir Ihnen einen Bestätigungscode an diese E-Mail-Adresse.</p>'
+      : params.requiresCode === 'sms'
+        ? '<p>Vor der Unterzeichnung senden wir Ihnen einen Bestätigungscode per SMS an Ihre hinterlegte Mobilnummer.</p>'
+        : '';
+  const body = `
+    <p>Guten Tag ${escapeHtml(params.name)}</p>
+    <p>${escapeHtml(params.senderName)} bittet Sie, das Dokument <strong>${escapeHtml(params.title)}</strong> elektronisch zu unterzeichnen.</p>
+    <p>Sie sehen das Dokument zuerst vollständig, bestätigen dann Ihre Zustimmung und unterzeichnen — gezeichnet oder getippt.</p>
+    ${code}
+    ${button('Dokument ansehen und unterzeichnen', params.signUrl)}
+    ${callout(`Der Link ist bis ${formatDateLong(params.expiresAt)} gültig und nur für Sie bestimmt. Bitte geben Sie ihn nicht weiter.`, 'info')}
+    <p style="color:#64748B;font-size:14px;">Falls Sie diese Anfrage nicht erwartet haben, können Sie diese E-Mail ignorieren; es geschieht dann nichts.</p>`;
+
+  return {
+    subject: `Bitte unterzeichnen: ${params.title}`,
+    html: renderEmail('Elektronische Unterzeichnung', body, {
+      preheader: `${params.senderName} bittet um Ihre Unterschrift.`,
+    }),
+  };
+}
+
+/** Der Bestätigungscode — kurz, ohne Link, ohne Kontext, der zum Weiterleiten einlädt. */
+export function signatureOtpEmail(params: { name: string; code: string; title: string }): EmailContent {
+  const body = `
+    <p>Guten Tag ${escapeHtml(params.name)}</p>
+    <p>Ihr Bestätigungscode für die Unterzeichnung von <strong>${escapeHtml(params.title)}</strong>:</p>
+    <p style="font-size:28px;letter-spacing:6px;font-weight:700;font-family:monospace;margin:16px 0;">${escapeHtml(params.code)}</p>
+    <p>Der Code ist <strong>10 Minuten</strong> gültig. Geben Sie ihn nur auf der Unterzeichnungsseite ein — wir fragen ihn nie per E-Mail oder Telefon ab.</p>`;
+
+  return {
+    subject: `Ihr Bestätigungscode: ${params.code}`,
+    html: renderEmail('Bestätigungscode', body, { preheader: 'Gültig für 10 Minuten.' }),
+  };
+}
+
+/** Abschluss — mit befristetem Ergebnislink, ohne Anhang (widerrufbar, auditierbar). */
+export function signatureCompletedEmail(params: {
+  name: string;
+  title: string;
+  resultUrl: string;
+  resultExpiresAt: Date;
+}): EmailContent {
+  const body = `
+    <p>Guten Tag ${escapeHtml(params.name)}</p>
+    <p>Sie haben <strong>${escapeHtml(params.title)}</strong> elektronisch unterzeichnet. Vielen Dank.</p>
+    <p>Über den folgenden Link können Sie das Dokument und das Signaturprotokoll ansehen und herunterladen.</p>
+    ${button('Ergebnis ansehen', params.resultUrl)}
+    ${callout(`Der Link ist bis ${formatDateLong(params.resultExpiresAt)} gültig.`, 'info')}`;
+
+  return {
+    subject: `Unterzeichnet: ${params.title}`,
+    html: renderEmail('Unterzeichnung abgeschlossen', body, {
+      preheader: 'Dokument und Signaturprotokoll stehen bereit.',
+    }),
+  };
+}
+
+/** Intern: eine Person hat abgelehnt. */
+export function signatureDeclinedInternalEmail(params: {
+  title: string;
+  participantName: string;
+  reason?: string | null;
+  adminUrl: string;
+}): EmailContent {
+  const body = `
+    <p><strong>${escapeHtml(params.participantName)}</strong> hat die Unterzeichnung von <strong>${escapeHtml(params.title)}</strong> abgelehnt.</p>
+    ${params.reason ? `<p style="background:#F8FAFC;border-radius:12px;padding:16px;white-space:pre-wrap;">${escapeHtml(params.reason)}</p>` : ''}
+    ${button('Vorgang öffnen', params.adminUrl)}`;
+
+  return {
+    subject: `Unterzeichnung abgelehnt: ${params.title}`,
+    html: renderEmail('Unterzeichnung abgelehnt', body),
+  };
+}
+
 export function contactAutoReplyEmail(params: { firstName: string }): EmailContent {
   const body = `
     <p>Guten Tag ${escapeHtml(params.firstName)}</p>

@@ -19,6 +19,7 @@ import * as nav from '@/lib/validation/navigation';
 import * as users from '@/lib/validation/users';
 import * as settings from '@/lib/validation/settings';
 import * as system from '@/lib/validation/system';
+import * as sig from '@/lib/validation/signatures';
 import * as q from '@/lib/validation/queries';
 import { BI_ROUTES } from './openapi-routes-bi';
 
@@ -510,6 +511,195 @@ export const ROUTES: RouteDoc[] = [
     rateLimit: 'fileTransfer',
     body: files.finalizeUploadSchema,
     status: 201,
+  },
+
+  // -------------------------------------------------------------------------
+  //  Elektronische Unterzeichnung
+  //
+  //  Der rohe Zugangstoken erreicht den Server genau einmal: im Körper des
+  //  Tauschs. Alles danach läuft über ein Sitzungs-Cookie, das nur für
+  //  `/api/public/signatures` gilt und bei jedem Aufruf gegen die Datenbank
+  //  nachgeprüft wird (Vorgang offen, Token nicht widerrufen, Zweck passt).
+  // -------------------------------------------------------------------------
+  {
+    method: 'post',
+    path: '/api/public/signatures/exchange',
+    tag: 'Unterzeichnung',
+    summary: 'Zugangstoken gegen Sitzung tauschen',
+    description:
+      'Der einzige Aufruf, der den rohen Token trägt — im Körper, nie im Pfad oder in der ' +
+      'Abfrage, damit er in keinem Zugriffsprotokoll steht. Die Seite `/signieren` liest ihn aus ' +
+      'dem URL-Fragment, entfernt ihn aus der Adresse und ruft hierher. Antwort: die nicht geheime ' +
+      'Kennung des Vorgangs und der Bereich (`sign` oder `result`); die Sitzung liegt im Cookie ' +
+      '`clenaris_sig` (HttpOnly, 60 Minuten). Unbekannte, abgelaufene und widerrufene Tokens ' +
+      'antworten gleich (404).',
+    guard: { kind: 'public' },
+    rateLimit: 'signatureExchange',
+    body: sig.signatureExchangeSchema,
+    extraErrors: [404],
+  },
+  {
+    method: 'get',
+    path: '/api/public/signatures/{publicId}',
+    tag: 'Unterzeichnung',
+    summary: 'Stand des Vorgangs für die unterzeichnende Person',
+    description:
+      'Titel, Modus, Prüfstufe, Ablauf, Zustimmungstext (serverseitig, versioniert) und der eigene ' +
+      'Stand. E-Mail und Mobilnummer nur verschleiert. Ohne gültige Sitzung 404.',
+    guard: { kind: 'public' },
+    rateLimit: 'publicTokenRead',
+    params: sig.signaturePublicIdParams,
+    extraErrors: [404],
+  },
+  {
+    method: 'get',
+    path: '/api/public/signatures/{publicId}/document',
+    tag: 'Unterzeichnung',
+    summary: 'Das zu unterzeichnende Original',
+    description:
+      'Die Bytes der gebundenen Fassung für den Viewer, `inline`, nie zwischengespeichert. ' +
+      'Ereignis `DOCUMENT_VIEWED` einmal je Sitzung.',
+    guard: { kind: 'public' },
+    rateLimit: 'publicTokenRead',
+    params: sig.signaturePublicIdParams,
+    produces: 'application/pdf',
+    extraErrors: [404],
+  },
+  {
+    method: 'post',
+    path: '/api/public/signatures/{publicId}/otp/request',
+    tag: 'Unterzeichnung',
+    summary: 'Bestätigungscode anfordern',
+    description:
+      'Nur bei Prüfstufe mit Code (422 sonst). Sechs Ziffern aus dem CSPRNG, zehn Minuten gültig, ' +
+      'fünf Versuche, sechzig Sekunden Sperre bis zum nächsten Versand; ein neuer Code entwertet ' +
+      'alle offenen. Gespeichert wird nur ein Argon2id-Hash über ein HMAC des Codes. Das Limit ' +
+      'zählt je Vorgang, nicht je Adresse.',
+    guard: { kind: 'public' },
+    rateLimit: 'otpRequest',
+    params: sig.signaturePublicIdParams,
+    extraErrors: [404, 422],
+  },
+  {
+    method: 'post',
+    path: '/api/public/signatures/{publicId}/otp/verify',
+    tag: 'Unterzeichnung',
+    summary: 'Bestätigungscode prüfen',
+    description:
+      'Der Versuch wird gezählt, bevor der Code verglichen wird — ein abgebrochener Vergleich ' +
+      'schenkt keinen Versuch. Nach dem fünften Fehlversuch ist der Code verbraucht (422). ' +
+      'Einmalig: Ein bestätigter Code gilt nie ein zweites Mal.',
+    guard: { kind: 'public' },
+    rateLimit: 'otpVerify',
+    params: sig.signaturePublicIdParams,
+    body: sig.signatureOtpVerifySchema,
+    extraErrors: [404, 422],
+  },
+  {
+    method: 'post',
+    path: '/api/public/signatures/{publicId}/complete',
+    tag: 'Unterzeichnung',
+    summary: 'Verbindlich unterzeichnen',
+    description:
+      'Die eine Handlung. Der Server prüft Sitzung, Code (falls verlangt), Zustimmung, die ' +
+      'PNG-Bytes der gezeichneten Unterschrift und rechnet die Prüfsumme des Originals **aus den ' +
+      'gespeicherten Bytes** neu — stimmt sie nicht mehr, entsteht `INTEGRITY_FAILED` und die ' +
+      'Unterzeichnung wird verweigert (422). Text und Fassung der Zustimmung bestimmt der Server. ' +
+      'Haben alle unterzeichnet, beginnt der Abschluss (`FINALIZING`): signiertes Dokument (nur ' +
+      'EMBEDDED_VISUAL), Signaturprotokoll, `COMPLETED`, Ergebnislinks per E-Mail.',
+    guard: { kind: 'public' },
+    rateLimit: 'signatureFinalize',
+    params: sig.signaturePublicIdParams,
+    body: sig.signatureCompleteSchema,
+    extraErrors: [404, 422],
+  },
+  {
+    method: 'post',
+    path: '/api/public/signatures/{publicId}/decline',
+    tag: 'Unterzeichnung',
+    summary: 'Unterzeichnung ablehnen',
+    description: 'Beendet den Vorgang für alle (`DECLINED`), widerruft die Links und meldet es der Verwaltung.',
+    guard: { kind: 'public' },
+    rateLimit: 'signatureFinalize',
+    params: sig.signaturePublicIdParams,
+    body: sig.signatureDeclineSchema,
+    status: 204,
+    extraErrors: [404, 422],
+  },
+  {
+    method: 'get',
+    path: '/api/public/signatures/{publicId}/result',
+    tag: 'Unterzeichnung',
+    summary: 'Ergebnis nach Abschluss',
+    description:
+      'Mit der Ergebnis-Sitzung (eigener Zweck `SIGNATURE_RESULT_VIEW`, dreissig Tage): Titel, ' +
+      'Modus, die drei Prüfsummen und welche Dateien vorliegen. Ein Unterzeichnungslink öffnet ' +
+      'kein Ergebnis und umgekehrt.',
+    guard: { kind: 'public' },
+    rateLimit: 'publicTokenRead',
+    params: sig.signaturePublicIdParams,
+    extraErrors: [404],
+  },
+  {
+    method: 'get',
+    path: '/api/public/signatures/{publicId}/result/{artifact}',
+    tag: 'Unterzeichnung',
+    summary: 'Original, signiertes Dokument oder Signaturprotokoll',
+    description:
+      '`original` (A), `signed` (B, nur EMBEDDED_VISUAL) oder `evidence` (C). Nie zwischengespeichert, ' +
+      'kein Referrer. Das Protokoll als Anhang, die Dokumente `inline`.',
+    guard: { kind: 'public' },
+    rateLimit: 'publicTokenRead',
+    params: sig.signatureResultArtifactParams,
+    produces: 'application/pdf',
+    extraErrors: [404],
+  },
+  {
+    method: 'get',
+    path: '/api/signatures/{id}',
+    tag: 'Unterzeichnung',
+    summary: 'Vorgang für die Verwaltung',
+    description: 'Mit Teilnehmenden, dem vollständigen Ereignisprotokoll und den drei Artefakten. Sichtbarkeit des Dokuments gilt auch hier.',
+    guard: { kind: 'permissions', permissions: ['signature:read'], mode: 'all' },
+    rateLimit: 'apiRead',
+    params: q.idParam,
+  },
+  {
+    method: 'get',
+    path: '/api/signatures/{id}/integrity',
+    tag: 'Unterzeichnung',
+    summary: 'Prüfsummen nachrechnen',
+    description:
+      'A, B und C werden aus den tatsächlich gespeicherten Bytes neu gebildet und mit den ' +
+      'festgehaltenen Werten verglichen — die Antwort sagt je Datei `ok`, `abweichend` oder `fehlt`.',
+    guard: { kind: 'permissions', permissions: ['signature:read'], mode: 'all' },
+    rateLimit: 'apiRead',
+    params: q.idParam,
+  },
+  {
+    method: 'post',
+    path: '/api/signatures/{id}/send',
+    tag: 'Unterzeichnung',
+    summary: 'Links (erneut) versenden',
+    description:
+      'Stellt je Person einen frischen Zugangstoken aus und widerruft die alten. Der rohe Token ' +
+      'steht nur in der E-Mail, als Fragment der Adresse `/signieren#t=…`. Nicht bei beendeten Vorgängen (422).',
+    guard: { kind: 'permissions', permissions: ['signature:create'], mode: 'all' },
+    rateLimit: 'apiWrite',
+    params: q.idParam,
+    extraErrors: [422],
+  },
+  {
+    method: 'post',
+    path: '/api/signatures/{id}/cancel',
+    tag: 'Unterzeichnung',
+    summary: 'Vorgang abbrechen',
+    description: 'Widerruft alle Links und offenen Codes. Ein abgeschlossener Vorgang lässt sich nicht abbrechen (422) — seine Beweise bleiben.',
+    guard: { kind: 'permissions', permissions: ['signature:cancel'], mode: 'all' },
+    rateLimit: 'apiWrite',
+    params: q.idParam,
+    body: sig.signatureCancelSchema,
+    extraErrors: [422],
   },
 
   // -------------------------------------------------------------------------

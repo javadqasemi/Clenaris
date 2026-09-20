@@ -4,7 +4,7 @@
 > Diagramme sind damit nie älter als das Schema. Prosa und Bereichseinteilung
 > stehen in `scripts/generate-erd.ts`.
 
-**112 Modelle, 69 Aufzählungstypen, 2011 Felder.**
+**116 Modelle, 78 Aufzählungstypen, 2125 Felder.**
 PostgreSQL 16+; alle Zeitstempel als `timestamptz` in UTC, Anzeige in Europe/Zurich.
 
 ## Vier Entscheidungen, die das ganze Schema prägen
@@ -37,6 +37,7 @@ Beleg so lesbar, wie er ausgestellt wurde.
 flowchart LR
   stammdaten["Mandant und Stammdaten<br/><small>6 Modelle</small>"]
   identitaet["Identität und Zugriff<br/><small>6 Modelle</small>"]
+  signatur["Elektronische Unterzeichnung<br/><small>4 Modelle</small>"]
   crm["CRM<br/><small>13 Modelle</small>"]
   katalog["Leistungskatalog und Preislogik<br/><small>6 Modelle</small>"]
   auftrag["Buchung, Offerte, Einsatz<br/><small>10 Modelle</small>"]
@@ -123,7 +124,7 @@ erDiagram
 
 | Modell | Tabelle | Felder | Zweck |
 | --- | --- | --- | --- |
-| `Organization` | `organizations` | 108 | – |
+| `Organization` | `organizations` | 109 | – |
 | `NumberSequence` | `number_sequences` | 6 | – |
 | `OpeningHours` | `opening_hours` | 7 | – |
 | `Holiday` | `holidays` | 7 | – |
@@ -204,12 +205,71 @@ erDiagram
 
 | Modell | Tabelle | Felder | Zweck |
 | --- | --- | --- | --- |
-| `User` | `users` | 51 | – |
+| `User` | `users` | 52 | – |
 | `RefreshToken` | `refresh_tokens` | 10 | – |
 | `VerificationToken` | `verification_tokens` | 9 | – |
 | `PublicAccessToken` | `public_access_tokens` | 15 | – |
 | `Consent` | `consents` | 9 | – |
 | `AuditLog` | `audit_logs` | 13 | – |
+
+## Elektronische Unterzeichnung
+
+Ein `SignatureRequest` bindet sich an exakte Bytes (`originalDocumentHash`), nie an ein veränderliches Geschäftsobjekt; genau eine Quelle (Offerte, Einsatz oder Dokumentfassung), per CHECK erzwungen, `Restrict` in alle Richtungen. `SignatureParticipant` friert die Kontaktdaten ein und trägt nach dem Abschluss Zustimmung, Methode und technische Angaben. `SignatureEvent` ist das fachliche Protokoll — nur anhängen, in der Datenbank per Trigger erzwungen. `SignatureOtpChallenge` hält Bestätigungscodes als Argon2id über einen HMAC; der Hash ist kein Beweis und wird bereinigt. Alle Artefakte liegen in der Gate-2-Ablage (`FileAsset` scope SIGNATURE). Keine qualifizierte Signatur; Entwurf in `docs/SIGNATUR_GATE4A.md`.
+
+```mermaid
+erDiagram
+  SignatureRequest {
+    String id PK
+    String organizationId
+    String publicId UK
+    SignatureRequestStatus status
+    SignatureProviderType providerType
+    SignatureArtifactMode artifactMode
+    SignatureAssuranceLevel assuranceLevel
+    String title
+  }
+  SignatureParticipant {
+    String id PK
+    String requestId
+    Int order
+    SignatureParticipantRole role
+    SignatureParticipantStatus status
+    String nameSnapshot
+    String emailSnapshot
+    String phoneSnapshot
+  }
+  SignatureEvent {
+    String id PK
+    String requestId
+    String participantId
+    SignatureEventType type
+    DateTime at
+    String ipAddress
+    String ipSource
+    String clientReportedUserAgent
+  }
+  SignatureOtpChallenge {
+    String id PK
+    String participantId
+    SignatureOtpChannel channel
+    String sentTo
+    String codeHash
+    Int attempts
+    Int maxAttempts
+    DateTime expiresAt
+  }
+  SignatureRequest ||--o{ SignatureParticipant : "request"
+  SignatureRequest ||--o{ SignatureEvent : "request"
+  SignatureParticipant |o--o{ SignatureEvent : "participant"
+  SignatureParticipant ||--o{ SignatureOtpChallenge : "participant"
+```
+
+| Modell | Tabelle | Felder | Zweck |
+| --- | --- | --- | --- |
+| `SignatureRequest` | `signature_requests` | 46 | – |
+| `SignatureParticipant` | `signature_participants` | 32 | – |
+| `SignatureEvent` | `signature_events` | 12 | – |
+| `SignatureOtpChallenge` | `signature_otp_challenges` | 14 | – |
 
 ## CRM
 
@@ -353,7 +413,7 @@ erDiagram
 | Modell | Tabelle | Felder | Zweck |
 | --- | --- | --- | --- |
 | `Lead` | `leads` | 39 | – |
-| `Customer` | `customers` | 56 | – |
+| `Customer` | `customers` | 57 | – |
 | `Contact` | `contacts` | 13 | – |
 | `Address` | `addresses` | 25 | – |
 | `Building` | `buildings` | 17 | – |
@@ -565,9 +625,9 @@ erDiagram
 | `Booking` | `bookings` | 61 | – |
 | `BookingItem` | `booking_items` | 14 | – |
 | `BookingExtra` | `booking_extras` | 10 | – |
-| `Quote` | `quotes` | 47 | – |
+| `Quote` | `quotes` | 48 | – |
 | `QuoteItem` | `quote_items` | 15 | – |
-| `Job` | `jobs` | 49 | – |
+| `Job` | `jobs` | 50 | – |
 | `JobAssignment` | `job_assignments` | 11 | – |
 | `JobChecklistItem` | `job_checklist_items` | 11 | – |
 | `JobPhoto` | `job_photos` | 12 | – |
@@ -1046,7 +1106,7 @@ erDiagram
 | `GalleryItem` | `gallery_items` | 13 | – |
 | `JobPosting` | `job_postings` | 20 | – |
 | `JobApplication` | `job_applications` | 16 | – |
-| `FileAsset` | `file_assets` | 50 | – |
+| `FileAsset` | `file_assets` | 54 | – |
 | `StoredFile` | `stored_files` | 16 | – |
 
 ## Redaktion
@@ -1425,7 +1485,7 @@ erDiagram
 | `ControlEntry` | `control_entries` | 20 | – |
 | `CorrectiveAction` | `corrective_actions` | 22 | – |
 | `ManagedDocument` | `managed_documents` | 23 | – |
-| `DocumentVersion` | `document_versions` | 10 | – |
+| `DocumentVersion` | `document_versions` | 11 | – |
 | `KnowledgeArticle` | `knowledge_articles` | 21 | – |
 | `Competitor` | `competitors` | 22 | – |
 | `MarketInsight` | `market_insights` | 16 | – |
@@ -1480,11 +1540,20 @@ exakte TypeScript-Typen.
 | `AutomationTrigger` | `BOOKING_CREATED`, `BOOKING_CONFIRMED`, `BOOKING_REMINDER_24H`, `BOOKING_REMINDER_2H`, `BOOKING_COMPLETED`, `BOOKING_CANCELLED`, `QUOTE_SENT`, `QUOTE_ACCEPTED`, `QUOTE_EXPIRING`, `INVOICE_ISSUED`, `INVOICE_DUE_SOON`, `INVOICE_OVERDUE`, `JOB_ASSIGNED`, `JOB_COMPLETED`, `CUSTOMER_BIRTHDAY`, `REVIEW_REQUEST`, `LEAD_CREATED`, `LEAD_IDLE`, `TASK_DUE`, `RECURRING_BOOKING_GENERATE` |
 | `AutomationActionType` | `SEND_EMAIL`, `SEND_SMS`, `CREATE_TASK`, `CREATE_NOTIFICATION`, `UPDATE_STATUS`, `WEBHOOK`, `AI_GENERATE` |
 | `AutomationRunStatus` | `PENDING`, `RUNNING`, `SUCCESS`, `FAILED`, `SKIPPED` |
-| `FileScope` | `BOOKING`, `QUOTE`, `INVOICE`, `JOB`, `CUSTOMER`, `EMPLOYEE`, `PROPERTY`, `BLOG`, `GALLERY`, `APPLICATION`, `EXPENSE`, `MESSAGE`, `OTHER`, `OBJECTIVE`, `INVESTMENT`, `RISK`, `CONTROL`, `DOCUMENT`, `ARTICLE`, `MEETING`, `REPORT` |
+| `FileScope` | `BOOKING`, `QUOTE`, `INVOICE`, `JOB`, `CUSTOMER`, `EMPLOYEE`, `PROPERTY`, `BLOG`, `GALLERY`, `APPLICATION`, `EXPENSE`, `MESSAGE`, `OTHER`, `OBJECTIVE`, `INVESTMENT`, `RISK`, `CONTROL`, `DOCUMENT`, `ARTICLE`, `MEETING`, `REPORT`, `SIGNATURE` |
 | `AuditAction` | `CREATE`, `UPDATE`, `DELETE`, `LOGIN`, `LOGIN_FAILED`, `LOGOUT`, `PASSWORD_RESET`, `PERMISSION_CHANGE`, `EXPORT`, `IMPORT`, `PAYMENT`, `ACCESS_DENIED` |
 | `ConsentType` | `MARKETING_EMAIL`, `MARKETING_SMS`, `ANALYTICS`, `TERMS`, `PRIVACY`, `DATA_PROCESSING` |
-| `PublicTokenPurpose` | `QUOTE_VIEW`, `QUOTE_RESPOND`, `INVOICE_VIEW`, `INVOICE_PAY`, `BOOKING_MANAGE`, `DOCUMENT_VIEW`, `SIGNATURE_ACCESS`, `SIGNATURE_OTP` |
+| `PublicTokenPurpose` | `QUOTE_VIEW`, `QUOTE_RESPOND`, `INVOICE_VIEW`, `INVOICE_PAY`, `BOOKING_MANAGE`, `DOCUMENT_VIEW`, `SIGNATURE_ACCESS`, `SIGNATURE_OTP`, `SIGNATURE_RESULT_VIEW` |
 | `StorageDriver` | `LOCAL`, `SUPABASE` |
+| `SignatureProviderType` | `INTERNAL_EVIDENCE`, `QUALIFIED_EXTERNAL` |
+| `SignatureArtifactMode` | `EMBEDDED_VISUAL`, `DETACHED_EVIDENCE` |
+| `SignatureAssuranceLevel` | `LINK_ONLY`, `LINK_PLUS_EMAIL_CODE`, `LINK_PLUS_SMS_CODE` |
+| `SignatureRequestStatus` | `DRAFT`, `PENDING`, `FINALIZING`, `COMPLETED`, `DECLINED`, `EXPIRED`, `CANCELLED` |
+| `SignatureParticipantRole` | `SIGNER`, `CC` |
+| `SignatureParticipantStatus` | `PENDING`, `VIEWED`, `VERIFIED`, `SIGNED`, `DECLINED` |
+| `SignatureMethod` | `DRAWN`, `TYPED` |
+| `SignatureEventType` | `REQUEST_CREATED`, `LINK_ISSUED`, `LINK_EXCHANGED`, `DOCUMENT_VIEWED`, `OTP_REQUESTED`, `OTP_VERIFIED`, `OTP_FAILED`, `CONSENT_ACCEPTED`, `SIGNATURE_SUBMITTED`, `FINALIZATION_STARTED`, `INTEGRITY_FAILED`, `SIGNED`, `DECLINED`, `CANCELLED`, `EXPIRED`, `ARTIFACT_CREATED`, `REQUEST_COMPLETED`, `RESULT_LINK_ISSUED`, `RESULT_VIEWED` |
+| `SignatureOtpChannel` | `EMAIL`, `SMS` |
 | `CtaSlot` | `HEADER`, `HERO_PRIMARY`, `HERO_SECONDARY`, `SECTION_BANNER`, `FOOTER`, `MOBILE_BAR` |
 | `CtaStyle` | `PRIMARY`, `SECONDARY`, `OUTLINE`, `GHOST`, `ACCENT`, `SUCCESS`, `CUSTOM` |
 | `NavLocation` | `HEADER`, `HEADER_PANEL`, `FOOTER_SERVICES`, `FOOTER_COMPANY`, `FOOTER_LEGAL` |

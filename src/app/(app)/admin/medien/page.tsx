@@ -39,6 +39,7 @@ const SCOPE_LABELS: Record<FileScope, string> = {
   ARTICLE: 'Wissensartikel',
   MEETING: 'Sitzung',
   REPORT: 'Bericht',
+  SIGNATURE: 'Unterzeichnung',
 };
 
 /**

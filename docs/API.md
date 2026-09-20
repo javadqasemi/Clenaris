@@ -5,7 +5,7 @@
 > Quelle, aus der sowohl diese Referenz als auch die Laufzeitvalidierung
 > stammen.
 
-Stand: 381 Endpunkte. Die maschinenlesbare Fassung liegt in
+Stand: 396 Endpunkte. Die maschinenlesbare Fassung liegt in
 [`openapi.yaml`](./openapi.yaml) bzw. [`openapi.json`](./openapi.json).
 
 ## Grundlagen
@@ -39,6 +39,7 @@ Familie.
 - [Benutzer & Rollen](#benutzer-rollen)
 - [Öffentlich](#öffentlich)
 - [Dateien](#dateien)
+- [Unterzeichnung](#unterzeichnung)
 - [CRM](#crm)
 - [Nachrichten](#nachrichten)
 - [Buchungen](#buchungen)
@@ -716,6 +717,231 @@ Familie.
 | Feld | Typ | Pflicht | Regeln |
 | --- | --- | --- | --- |
 | `id` | string | ja | min. 1 Zeichen |
+
+## Unterzeichnung
+
+### `POST /api/public/signatures/exchange`
+
+**Zugangstoken gegen Sitzung tauschen.** Der einzige Aufruf, der den rohen Token trägt — im Körper, nie im Pfad oder in der Abfrage, damit er in keinem Zugriffsprotokoll steht. Die Seite `/signieren` liest ihn aus dem URL-Fragment, entfernt ihn aus der Adresse und ruft hierher. Antwort: die nicht geheime Kennung des Vorgangs und der Bereich (`sign` oder `result`); die Sitzung liegt im Cookie `clenaris_sig` (HttpOnly, 60 Minuten). Unbekannte, abgelaufene und widerrufene Tokens antworten gleich (404).
+
+- **Zugriff:** Öffentlich — keine Anmeldung nötig.
+- **Rate-Limit-Klasse:** `signatureExchange`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 404, 422, 429, 500
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `token` | string | ja | – |
+
+### `GET /api/public/signatures/{publicId}`
+
+**Stand des Vorgangs für die unterzeichnende Person.** Titel, Modus, Prüfstufe, Ablauf, Zustimmungstext (serverseitig, versioniert) und der eigene Stand. E-Mail und Mobilnummer nur verschleiert. Ohne gültige Sitzung 404.
+
+- **Zugriff:** Öffentlich — keine Anmeldung nötig.
+- **Rate-Limit-Klasse:** `publicTokenRead`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 404, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `publicId` | string | ja | – |
+
+### `GET /api/public/signatures/{publicId}/document`
+
+**Das zu unterzeichnende Original.** Die Bytes der gebundenen Fassung für den Viewer, `inline`, nie zwischengespeichert. Ereignis `DOCUMENT_VIEWED` einmal je Sitzung.
+
+- **Zugriff:** Öffentlich — keine Anmeldung nötig.
+- **Rate-Limit-Klasse:** `publicTokenRead`
+- **Erfolg:** 200 (`application/pdf`)
+- **Mögliche Fehler:** 400, 404, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `publicId` | string | ja | – |
+
+### `POST /api/public/signatures/{publicId}/otp/request`
+
+**Bestätigungscode anfordern.** Nur bei Prüfstufe mit Code (422 sonst). Sechs Ziffern aus dem CSPRNG, zehn Minuten gültig, fünf Versuche, sechzig Sekunden Sperre bis zum nächsten Versand; ein neuer Code entwertet alle offenen. Gespeichert wird nur ein Argon2id-Hash über ein HMAC des Codes. Das Limit zählt je Vorgang, nicht je Adresse.
+
+- **Zugriff:** Öffentlich — keine Anmeldung nötig.
+- **Rate-Limit-Klasse:** `otpRequest`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `publicId` | string | ja | – |
+
+### `POST /api/public/signatures/{publicId}/otp/verify`
+
+**Bestätigungscode prüfen.** Der Versuch wird gezählt, bevor der Code verglichen wird — ein abgebrochener Vergleich schenkt keinen Versuch. Nach dem fünften Fehlversuch ist der Code verbraucht (422). Einmalig: Ein bestätigter Code gilt nie ein zweites Mal.
+
+- **Zugriff:** Öffentlich — keine Anmeldung nötig.
+- **Rate-Limit-Klasse:** `otpVerify`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `publicId` | string | ja | – |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `code` | string | ja | – |
+
+### `POST /api/public/signatures/{publicId}/complete`
+
+**Verbindlich unterzeichnen.** Die eine Handlung. Der Server prüft Sitzung, Code (falls verlangt), Zustimmung, die PNG-Bytes der gezeichneten Unterschrift und rechnet die Prüfsumme des Originals **aus den gespeicherten Bytes** neu — stimmt sie nicht mehr, entsteht `INTEGRITY_FAILED` und die Unterzeichnung wird verweigert (422). Text und Fassung der Zustimmung bestimmt der Server. Haben alle unterzeichnet, beginnt der Abschluss (`FINALIZING`): signiertes Dokument (nur EMBEDDED_VISUAL), Signaturprotokoll, `COMPLETED`, Ergebnislinks per E-Mail.
+
+- **Zugriff:** Öffentlich — keine Anmeldung nötig.
+- **Rate-Limit-Klasse:** `signatureFinalize`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `publicId` | string | ja | – |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `accepted` | object | ja | – |
+| `method` | string | ja | `DRAWN` \| `TYPED` |
+| `name` | string | ja | min. 2 Zeichen, max. 120 Zeichen |
+| `imageDataUrl` | string | – | max. 700000 Zeichen |
+
+### `POST /api/public/signatures/{publicId}/decline`
+
+**Unterzeichnung ablehnen.** Beendet den Vorgang für alle (`DECLINED`), widerruft die Links und meldet es der Verwaltung.
+
+- **Zugriff:** Öffentlich — keine Anmeldung nötig.
+- **Rate-Limit-Klasse:** `signatureFinalize`
+- **Erfolg:** 204
+- **Mögliche Fehler:** 400, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `publicId` | string | ja | – |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `reason` | string | – | max. 500 Zeichen |
+
+### `GET /api/public/signatures/{publicId}/result`
+
+**Ergebnis nach Abschluss.** Mit der Ergebnis-Sitzung (eigener Zweck `SIGNATURE_RESULT_VIEW`, dreissig Tage): Titel, Modus, die drei Prüfsummen und welche Dateien vorliegen. Ein Unterzeichnungslink öffnet kein Ergebnis und umgekehrt.
+
+- **Zugriff:** Öffentlich — keine Anmeldung nötig.
+- **Rate-Limit-Klasse:** `publicTokenRead`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 404, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `publicId` | string | ja | – |
+
+### `GET /api/public/signatures/{publicId}/result/{artifact}`
+
+**Original, signiertes Dokument oder Signaturprotokoll.** `original` (A), `signed` (B, nur EMBEDDED_VISUAL) oder `evidence` (C). Nie zwischengespeichert, kein Referrer. Das Protokoll als Anhang, die Dokumente `inline`.
+
+- **Zugriff:** Öffentlich — keine Anmeldung nötig.
+- **Rate-Limit-Klasse:** `publicTokenRead`
+- **Erfolg:** 200 (`application/pdf`)
+- **Mögliche Fehler:** 400, 404, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `publicId` | string | ja | – |
+| `artifact` | string | ja | `original` \| `signed` \| `evidence` |
+
+### `GET /api/signatures/{id}`
+
+**Vorgang für die Verwaltung.** Mit Teilnehmenden, dem vollständigen Ereignisprotokoll und den drei Artefakten. Sichtbarkeit des Dokuments gilt auch hier.
+
+- **Zugriff:** Erfordert die Berechtigung: `signature:read`.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+### `GET /api/signatures/{id}/integrity`
+
+**Prüfsummen nachrechnen.** A, B und C werden aus den tatsächlich gespeicherten Bytes neu gebildet und mit den festgehaltenen Werten verglichen — die Antwort sagt je Datei `ok`, `abweichend` oder `fehlt`.
+
+- **Zugriff:** Erfordert die Berechtigung: `signature:read`.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+### `POST /api/signatures/{id}/send`
+
+**Links (erneut) versenden.** Stellt je Person einen frischen Zugangstoken aus und widerruft die alten. Der rohe Token steht nur in der E-Mail, als Fragment der Adresse `/signieren#t=…`. Nicht bei beendeten Vorgängen (422).
+
+- **Zugriff:** Erfordert die Berechtigung: `signature:create`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+### `POST /api/signatures/{id}/cancel`
+
+**Vorgang abbrechen.** Widerruft alle Links und offenen Codes. Ein abgeschlossener Vorgang lässt sich nicht abbrechen (422) — seine Beweise bleiben.
+
+- **Zugriff:** Erfordert die Berechtigung: `signature:cancel`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `reason` | string | – | max. 500 Zeichen |
 
 ## CRM
 
@@ -6918,6 +7144,57 @@ Familie.
 | Feld | Typ | Pflicht | Regeln |
 | --- | --- | --- | --- |
 | `version` | integer | – | ≥ 1, ≤ 10000 |
+
+### `GET /api/bi/documents/{id}/signature-requests`
+
+**Unterzeichnungsvorgänge eines Dokuments.** Alle Vorgänge über Fassungen dieses Dokuments, neueste zuerst, mit Teilnehmenden und Prüfsummen. Die Sichtbarkeit des Dokuments gilt auch hier.
+
+- **Zugriff:** Erfordert die Berechtigung: `signature:read`.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+### `POST /api/bi/documents/{id}/signature-requests`
+
+**Zur Unterschrift senden.** Bindet **genau eine Fassung** (ohne Angabe die geltende) über ihre SHA-256-Prüfsumme; nur PDF. `EMBEDDED_VISUAL` wird bei vorhandenen Signaturfeldern oder -strukturen verweigert (422), `DETACHED_EVIDENCE` lässt das Original unangetastet. Bis drei Personen, Prüfstufe `LINK_ONLY`, `LINK_PLUS_EMAIL_CODE` oder `LINK_PLUS_SMS_CODE` (Mobilnummer nötig), Ablauf 1–90 Tage. Mit `send` (Standard) gehen die Links sofort per E-Mail.
+
+- **Zugriff:** Erfordert die Berechtigung: `signature:create`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 201
+- **Mögliche Fehler:** 400, 401, 403, 404, 409, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `version` | integer | – | ≥ 1, ≤ 10000 |
+| `title` | string | – | min. 2 Zeichen, max. 200 Zeichen |
+| `assuranceLevel` | string | – | `LINK_ONLY` \| `LINK_PLUS_EMAIL_CODE` \| `LINK_PLUS_SMS_CODE`, Standard `"LINK_ONLY"` |
+| `artifactMode` | string | – | `EMBEDDED_VISUAL` \| `DETACHED_EVIDENCE`, Standard `"DETACHED_EVIDENCE"` |
+| `expiresInDays` | integer | – | ≥ 1, ≤ 90, Standard `14` |
+| `placement` | object | – | – |
+| `placement.page` | integer | ja | ≥ 1, ≤ 10000 |
+| `placement.x` | number | ja | ≥ 0, ≤ 20000 |
+| `placement.y` | number | ja | ≥ 0, ≤ 20000 |
+| `placement.width` | number | ja | ≥ 1, ≤ 20000 |
+| `placement.height` | number | ja | ≥ 1, ≤ 20000 |
+| `participants` | object[] | ja | min. 1 Einträge, max. 3 Einträge |
+| `participants[].name` | string | ja | min. 2 Zeichen, max. 80 Zeichen |
+| `participants[].email` | string | ja | email, min. 1 Zeichen, max. 255 Zeichen |
+| `participants[].phone` | string | – | – |
+| `send` | boolean | – | Standard `true` |
 
 ### `GET /api/bi/knowledge`
 

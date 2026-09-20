@@ -1,5 +1,6 @@
 import { cache } from '@/lib/redis';
 import { RateLimitError } from '@/lib/errors';
+import { resolveClientIp } from '@/lib/http/client-ip';
 
 /**
  * Fixed-Window-Rate-Limiting über Redis (bzw. In-Memory-Fallback).
@@ -124,6 +125,18 @@ export const RATE_LIMITS = {
    * ohne Bremse wären sie in Minuten durchprobiert.
    */
   otpVerify: { limit: 8, windowSeconds: 900 },
+  /**
+   * Einen Signaturlink gegen eine Sitzung tauschen. Der Tausch ist der
+   * einzige Aufruf, der den rohen Token trägt; wer hier rät, rät gegen
+   * 256 Bit — das Kontingent begrenzt nur das Tempo.
+   */
+  signatureExchange: { limit: 20, windowSeconds: 600 },
+  /**
+   * Unterzeichnen und Ablehnen: je Teilnehmer gezählt (Schlüssel ist der
+   * Hash der Teilnehmerkennung, nie ein Geheimnis). Zehn Versuche reichen
+   * für jeden ehrlichen Ablauf mit Wiederholung.
+   */
+  signatureFinalize: { limit: 10, windowSeconds: 600 },
 } as const satisfies Record<string, RateLimitRule>;
 
 export type RateLimitName = keyof typeof RATE_LIMITS;
@@ -178,13 +191,16 @@ export async function resetRateLimit(name: RateLimitName, identifier: string): P
   await cache.del(`rl:${name}:${identifier}`);
 }
 
-/** Client-IP aus den üblichen Proxy-Headern (Cloudflare → Vercel → App). */
+/**
+ * Client-IP als Zählschlüssel.
+ *
+ * **Korrektur.** Hier stand eine Kette `cf-connecting-ip → x-real-ip →
+ * x-forwarded-for`, die jedem Kopf glaubte. Die Auflösung liegt jetzt in
+ * `lib/http/client-ip.ts` und folgt `TRUSTED_PROXY_MODE`. Ist keine Adresse
+ * bekannt, zählt alles in einem Topf (`unbekannt`) — das ist die ehrliche
+ * Folge davon, dass die Betreiberin keinen Proxy benannt hat, und steht so in
+ * `docs/DEPLOYMENT.md`.
+ */
 export function getClientIp(request: Request): string {
-  const h = request.headers;
-  return (
-    h.get('cf-connecting-ip') ??
-    h.get('x-real-ip') ??
-    h.get('x-forwarded-for')?.split(',')[0]?.trim() ??
-    '127.0.0.1'
-  );
+  return resolveClientIp(request).ip ?? 'unbekannt';
 }

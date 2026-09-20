@@ -393,6 +393,10 @@ enum FileScope {
   ARTICLE
   MEETING
   REPORT
+  /// Artefakte eines Unterzeichnungsvorgangs: Original-Snapshot, signiertes
+  /// Dokument, Signaturprotokoll, Unterschriftsbild. Haengen ueber benannte
+  /// Relationen am Vorgang — nie per Cascade an Offerte, Einsatz oder Kundschaft.
+  SIGNATURE
 }
 
 enum AuditAction {
@@ -529,6 +533,7 @@ model Organization {
   contentRevisions  ContentRevision[]
   storedFiles       StoredFile[]
   publicTokens      PublicAccessToken[]
+  signatureRequests SignatureRequest[]
   seoMeta           SeoMeta[]
   accountingExports AccountingExport[]
   callsToAction     CallToAction[]
@@ -688,6 +693,7 @@ model User {
   tokens        VerificationToken[]
   notifications Notification[]
   auditLogs     AuditLog[]
+  signatureRequestsCreated SignatureRequest[] @relation("SignatureRequestsCreated")
   consents      Consent[]
   activities    Activity[]          @relation("ActivityAuthor")
   assignedTasks Task[]              @relation("TaskAssignee")
@@ -838,8 +844,16 @@ enum PublicTokenPurpose {
   INVOICE_PAY
   BOOKING_MANAGE
   DOCUMENT_VIEW
+  /// Link einer unterzeichnenden Person; Ressource ist der **Teilnehmer**,
+  /// nicht der Vorgang — jede Person hat ihren eigenen Schluessel.
   SIGNATURE_ACCESS
+  /// Nicht verwendet. Ein sechsstelliger Code darf nicht als SHA-256 liegen;
+  /// Einmalcodes stehen in `SignatureOtpChallenge`. Der Wert bleibt, damit
+  /// keine Migration ihn entfernen muss.
   SIGNATURE_OTP
+  /// Nach Abschluss: Ergebnis ansehen, signiertes Dokument und Protokoll
+  /// laden. Nichts davon veraendert den Vorgang.
+  SIGNATURE_RESULT_VIEW
 }
 
 /// Nachweis erteilter und widerrufener Einwilligungen mit Zeitpunkt und IP.
@@ -1058,6 +1072,7 @@ model Customer {
   tasks          Task[]
   reviews        Review[]
   files          FileAsset[]
+  signatureParticipations SignatureParticipant[]
   threads        MessageThread[]
   paymentMethods PaymentMethodRef[]
   leads          Lead[]
@@ -1736,7 +1751,12 @@ model Quote {
   rejectedAt   DateTime? @db.Timestamptz(6)
   rejectReason String?
 
-  // Elektronische Signatur
+  // LEGACY_SIGNATURE — Annahme ueber die Antwortmaske vor Gate 4. Bild als
+  // Data-URL in der Zeile, kein Snapshot, keine Pruefsumme, kein Protokoll;
+  // `signatureIp` stammt aus der Zeit vor der Proxy-Richtlinie und ist eine
+  // Behauptung des Absenders. Bleibt lesbar; neue Annahmen laufen ab Gate 4C
+  // ueber `SignatureRequest`. Kein Rueckfuellen: Beweise, die es nie gab,
+  // lassen sich nicht nachtraeglich erzeugen.
   signatureDataUrl String? // PNG DataURL der Unterschrift
   signatureName    String?
   signatureIp      String?
@@ -1754,6 +1774,7 @@ model Quote {
   customer     Customer?    @relation(fields: [customerId], references: [id], onDelete: SetNull)
   lead         Lead?        @relation(fields: [leadId], references: [id], onDelete: SetNull)
   property     Property?    @relation(fields: [propertyId], references: [id], onDelete: SetNull)
+  signatureRequests SignatureRequest[]
 
   items      QuoteItem[]
   booking    Booking?
@@ -1828,6 +1849,9 @@ model Job {
   // Abschluss
   completionNote   String?
   customerRating   Int?
+  // LEGACY_SIGNATURE — Abnahme auf dem Geraet der Reinigungskraft vor Ort.
+  // Anderer Fall als der Link-Ablauf (Praesenz, kein Code); Umstellung in
+  // Gate 4C mit eigener Sitzungs- und Akteurbetrachtung. Bleibt lesbar.
   signatureDataUrl String?
   signatureName    String?
   signedAt         DateTime? @db.Timestamptz(6)
@@ -1861,6 +1885,7 @@ model Job {
   files        FileAsset[]
   threads      MessageThread[]
   invoiceItems InvoiceItem[]
+  signatureRequests SignatureRequest[]
 
   @@unique([organizationId, number])
   @@index([organizationId, status, scheduledStart])
@@ -3168,10 +3193,321 @@ model FileAsset {
   versions     DocumentVersion[]
   reportRuns   ReportRun[]
 
+  /// Rollen in Unterzeichnungsvorgaengen — benannt, damit eindeutig ist,
+  /// welches Asset was ist. Keine generische Relation daneben.
+  /// Mehrere Vorgaenge duerfen dasselbe Original binden — etwa ein
+  /// abgebrochener und sein Nachfolger auf derselben Fassung.
+  signatureOriginalOf SignatureRequest[]    @relation("SignatureOriginal")
+  signatureSignedOf   SignatureRequest?     @relation("SignatureSigned")
+  signatureEvidenceOf SignatureRequest?     @relation("SignatureEvidence")
+  signatureOf         SignatureParticipant? @relation("ParticipantSignature")
+
   @@index([organizationId, scope])
   @@index([bookingId])
   @@index([jobId])
   @@map("file_assets")
+}
+
+// ===========================================================================
+//  ELEKTRONISCHE UNTERZEICHNUNG
+// ===========================================================================
+//
+// Entwurf und Begruendung: `docs/SIGNATUR_GATE4A.md`. Die Kurzfassung:
+//
+// Eine Unterschrift bezieht sich auf **Bytes**, nie auf ein veraenderliches
+// Geschaeftsobjekt. Der Vorgang friert die Pruefsumme des Originals ein
+// (Hash A), prueft sie vor dem Abschluss erneut aus den tatsaechlich
+// gespeicherten Bytes, und erzeugt danach hoechstens ein signiertes Artefakt
+// (Hash B) und ein Signaturprotokoll (Hash C). Alle drei liegen in der
+// Gate-2-Ablage (`StoredFile`/`FileAsset`, scope SIGNATURE).
+//
+// INTERNAL_EVIDENCE ist keine qualifizierte Signatur und wird nirgends als
+// solche bezeichnet. Ein Anbieter fuer QUALIFIED_EXTERNAL ist nicht angebunden.
+
+enum SignatureProviderType {
+  INTERNAL_EVIDENCE
+  QUALIFIED_EXTERNAL
+}
+
+/// Wie das signierte Artefakt entsteht.
+///
+/// `EMBEDDED_VISUAL` nur fuer Dokumente, deren Ursprung Clenaris kontrolliert
+/// (eigene Snapshots): Das Original wird kopiert, ein Unterschriftsbild und
+/// eine Signaturseite kommen dazu, ein neues Artefakt entsteht. Das Original
+/// selbst bleibt unangetastet.
+///
+/// `DETACHED_EVIDENCE` fuer hochgeladene Dokumente: Das Original bleibt
+/// bytegenau, wie es ist. Der Vorgang bindet sich ueber Hash A daran; das
+/// Ergebnis ist das Signaturprotokoll, nicht ein umgeschriebenes PDF. Grund:
+/// Ein hochgeladenes PDF kann eine fremde kryptografische Signatur tragen,
+/// und die Anwendung kann deren Abwesenheit nicht beweisen — ein Overlay
+/// zerstoerte sie still.
+enum SignatureArtifactMode {
+  EMBEDDED_VISUAL
+  DETACHED_EVIDENCE
+}
+
+/// Was technisch geprueft wurde — keine rechtliche Wertung, kein „MFA".
+enum SignatureAssuranceLevel {
+  /// Besitz des zugestellten Links.
+  LINK_ONLY
+  /// Link und ein Code an dieselbe E-Mail-Adresse — derselbe Kanal zweimal.
+  LINK_PLUS_EMAIL_CODE
+  /// Link per E-Mail, Code an die hinterlegte Mobilnummer.
+  LINK_PLUS_SMS_CODE
+}
+
+enum SignatureRequestStatus {
+  DRAFT
+  PENDING
+  /// Technischer Zwischenzustand: Artefakte werden erzeugt. Ablage und
+  /// Datenbank haben keine gemeinsame Transaktion; dieser Zustand macht einen
+  /// abgebrochenen Abschluss erkennbar und wiederholbar, statt ihn faelschlich
+  /// als COMPLETED zu melden.
+  FINALIZING
+  COMPLETED
+  DECLINED
+  EXPIRED
+  CANCELLED
+}
+
+enum SignatureParticipantRole {
+  SIGNER
+  CC
+}
+
+enum SignatureParticipantStatus {
+  PENDING
+  VIEWED
+  VERIFIED
+  SIGNED
+  DECLINED
+}
+
+enum SignatureMethod {
+  DRAWN
+  TYPED
+}
+
+enum SignatureEventType {
+  REQUEST_CREATED
+  LINK_ISSUED
+  LINK_EXCHANGED
+  DOCUMENT_VIEWED
+  OTP_REQUESTED
+  OTP_VERIFIED
+  OTP_FAILED
+  CONSENT_ACCEPTED
+  SIGNATURE_SUBMITTED
+  FINALIZATION_STARTED
+  INTEGRITY_FAILED
+  SIGNED
+  DECLINED
+  CANCELLED
+  EXPIRED
+  ARTIFACT_CREATED
+  REQUEST_COMPLETED
+  RESULT_LINK_ISSUED
+  RESULT_VIEWED
+}
+
+enum SignatureOtpChannel {
+  EMAIL
+  SMS
+}
+
+/// Ein Unterzeichnungsvorgang.
+///
+/// Genau eine Quelle (`quoteId` | `jobId` | `documentVersionId`) — die
+/// Datenbank erzwingt es per CHECK. `Restrict` in alle Richtungen: Ein
+/// Vorgang mit Beweis haelt sein Geschaeftsobjekt und seine Artefakte fest;
+/// wer loeschen will, muss den Vorgang zuerst bewusst behandeln. Die
+/// generische Bereinigung (`purge.service`) klammert Signaturen aus.
+model SignatureRequest {
+  id             String @id @default(cuid())
+  organizationId String
+  /// Nicht geheime Adresse fuer den Ablauf ohne rohen Token (16 Zufallsbytes
+  /// hex). Ohne Sitzung zeigt sie nur „Link nicht mehr gueltig".
+  publicId       String @unique
+
+  status         SignatureRequestStatus  @default(DRAFT)
+  providerType   SignatureProviderType   @default(INTERNAL_EVIDENCE)
+  artifactMode   SignatureArtifactMode   @default(DETACHED_EVIDENCE)
+  assuranceLevel SignatureAssuranceLevel @default(LINK_ONLY)
+  title          String
+  /// Vorgangskennung eines spaeteren externen Anbieters. Bei INTERNAL null.
+  providerReference String?
+
+  quoteId           String?
+  jobId             String?
+  documentVersionId String?
+
+  /// Immutable ab PENDING.
+  originalArtifactId   String
+  originalDocumentHash String // Hash A — SHA-256 der Originalbytes
+  signedArtifactId     String? @unique
+  signedArtifactHash   String? // Hash B
+  evidenceArtifactId   String? @unique
+  evidenceArtifactHash String? // Hash C
+
+  /// Welche Fassung des Zustimmungstexts (und welche Sprache) gilt. Der Text
+  /// selbst liegt im Code; beim Abschluss wird er am Teilnehmer eingefroren.
+  consentVersion String
+  consentLocale  String @default("de-CH")
+
+  /// Sichtbare Unterschrift bei EMBEDDED_VISUAL, PDF-Punkte; null = nur
+  /// Signaturseite. Wird gegen die tatsaechliche Seite validiert.
+  placementPage   Int?
+  placementX      Decimal? @db.Decimal(8, 2)
+  placementY      Decimal? @db.Decimal(8, 2)
+  placementWidth  Decimal? @db.Decimal(8, 2)
+  placementHeight Decimal? @db.Decimal(8, 2)
+
+  createdById      String
+  createdAt        DateTime  @default(now()) @db.Timestamptz(6)
+  sentAt           DateTime? @db.Timestamptz(6)
+  expiresAt        DateTime  @db.Timestamptz(6)
+  /// Seit wann der Abschluss laeuft — erkennt einen haengengebliebenen
+  /// FINALIZING-Zustand nach einem Absturz.
+  finalizingSince  DateTime? @db.Timestamptz(6)
+  completedAt      DateTime? @db.Timestamptz(6)
+  declinedAt       DateTime? @db.Timestamptz(6)
+  expiredAt        DateTime? @db.Timestamptz(6)
+  cancelledAt      DateTime? @db.Timestamptz(6)
+  cancelledById    String?
+  /// Fachliche Entwertung nach Abschluss durch einen neuen Vorgang — der
+  /// Beweis bleibt, nur die Bedeutung nicht.
+  supersededById   String?
+
+  organization     Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  quote            Quote?           @relation(fields: [quoteId], references: [id], onDelete: Restrict)
+  job              Job?             @relation(fields: [jobId], references: [id], onDelete: Restrict)
+  documentVersion  DocumentVersion? @relation(fields: [documentVersionId], references: [id], onDelete: Restrict)
+  originalArtifact FileAsset        @relation("SignatureOriginal", fields: [originalArtifactId], references: [id], onDelete: Restrict)
+  signedArtifact   FileAsset?       @relation("SignatureSigned", fields: [signedArtifactId], references: [id], onDelete: Restrict)
+  evidenceArtifact FileAsset?       @relation("SignatureEvidence", fields: [evidenceArtifactId], references: [id], onDelete: Restrict)
+  createdBy        User             @relation("SignatureRequestsCreated", fields: [createdById], references: [id], onDelete: Restrict)
+  participants     SignatureParticipant[]
+  events           SignatureEvent[]
+
+  @@index([organizationId, status])
+  @@index([organizationId, createdAt])
+  @@index([expiresAt])
+  @@index([quoteId])
+  @@index([jobId])
+  @@index([documentVersionId])
+  @@index([originalArtifactId])
+  @@map("signature_requests")
+}
+
+/// Wer unterzeichnet — mit eingefrorenen Kontaktdaten. Ein spaeterer
+/// Kundenwechsel aendert den Beweis nicht; `customerId` ist nur ein Bezug.
+model SignatureParticipant {
+  id        String @id @default(cuid())
+  requestId String
+  order     Int    @default(1)
+  role      SignatureParticipantRole   @default(SIGNER)
+  status    SignatureParticipantStatus @default(PENDING)
+
+  nameSnapshot  String
+  emailSnapshot String
+  phoneSnapshot String?
+  customerId    String?
+
+  viewedAt      DateTime? @db.Timestamptz(6)
+  verifiedAt    DateTime? @db.Timestamptz(6)
+  signedAt      DateTime? @db.Timestamptz(6)
+  declinedAt    DateTime? @db.Timestamptz(6)
+  declineReason String?
+
+  /// Immutable ab SIGNED. Was die Person angegeben hat — kein Identitaetsnachweis.
+  authenticationMethod SignatureAssuranceLevel?
+  signatureMethod      SignatureMethod?
+  signedName           String?
+  signatureArtifactId  String? @unique
+  signatureArtifactHash String?
+  consentTextSnapshot  String?
+  consentTextHash      String?
+  consentVersion       String?
+  consentLocale        String?
+  consentAcceptedAt    DateTime? @db.Timestamptz(6)
+  /// Technische Metadaten des Abschlusses — mit Quelle, siehe `client-ip.ts`.
+  ipAddress                String?
+  ipSource                 String?
+  clientReportedUserAgent  String?
+
+  request           SignatureRequest @relation(fields: [requestId], references: [id], onDelete: Restrict)
+  customer          Customer?        @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  signatureArtifact FileAsset?       @relation("ParticipantSignature", fields: [signatureArtifactId], references: [id], onDelete: Restrict)
+  events            SignatureEvent[]
+  otpChallenges     SignatureOtpChallenge[]
+
+  @@unique([requestId, order])
+  @@index([requestId, status])
+  @@map("signature_participants")
+}
+
+/// Fachliches Signaturprotokoll — **nur anhaengen**.
+///
+/// Kein Dienst aendert oder loescht Zeilen; es gibt keine Funktion dafuer.
+/// Zusaetzlich lehnt ein Trigger in der Datenbank UPDATE, DELETE und TRUNCATE
+/// ab (Migration `signatur_kern`). `Restrict` an beiden Relationen: Wer den
+/// Vorgang loeschen wollte, muesste zuerst das Protokoll loeschen — und das
+/// geht nicht. Das ist Absicht.
+///
+/// `AuditLog` bleibt das allgemeine Systemaudit (wer hat was geaendert);
+/// hier steht der Ablauf eines Vorgangs in seiner Reihenfolge.
+model SignatureEvent {
+  id            String @id @default(cuid())
+  requestId     String
+  participantId String?
+  type          SignatureEventType
+  at            DateTime @default(now()) @db.Timestamptz(6)
+  ipAddress     String?
+  ipSource      String?
+  clientReportedUserAgent String?
+  /// SHA-256 der Sitzungskennung — Zuordnung ohne Geheimnis.
+  sessionRef    String?
+  /// Sachliche Angaben ohne Geheimnisse (z. B. Hash, Kanal, Fehlgrund). Klein
+  /// und versioniert (`v`).
+  details       Json?
+
+  request     SignatureRequest      @relation(fields: [requestId], references: [id], onDelete: Restrict)
+  participant SignatureParticipant? @relation(fields: [participantId], references: [id], onDelete: Restrict)
+
+  @@index([requestId, at])
+  @@map("signature_events")
+}
+
+/// Ein zugestellter Bestaetigungscode.
+///
+/// Nicht `PublicAccessToken`: Sechs Ziffern sind eine Million
+/// Moeglichkeiten, und ein blosser SHA-256 waere aus einem Datenbankabzug in
+/// Sekunden durchprobiert. Gespeichert wird Argon2id ueber einen HMAC mit
+/// zweckgebundenem Schluessel (`signature-otp.ts`). Der Hash ist kein Teil des
+/// Beweises — nach Ablauf wird die Zeile bereinigt; im Protokoll bleibt die
+/// Tatsache (Kanal, Ziel, Zeit, Ergebnis), nie der Code.
+model SignatureOtpChallenge {
+  id            String @id @default(cuid())
+  participantId String
+  channel       SignatureOtpChannel
+  sentTo        String
+  codeHash      String
+  attempts      Int      @default(0)
+  maxAttempts   Int      @default(5)
+  expiresAt     DateTime @db.Timestamptz(6)
+  usedAt        DateTime? @db.Timestamptz(6)
+  invalidatedAt DateTime? @db.Timestamptz(6)
+  resendAfter   DateTime @db.Timestamptz(6)
+  /// SHA-256 der Sitzungskennung, aus der der Code angefordert wurde.
+  sessionRef    String?
+  createdAt     DateTime @default(now()) @db.Timestamptz(6)
+
+  participant SignatureParticipant @relation(fields: [participantId], references: [id], onDelete: Cascade)
+
+  @@index([participantId, createdAt])
+  @@index([expiresAt])
+  @@map("signature_otp_challenges")
 }
 
 // ---------------------------------------------------------------------------
@@ -4208,6 +4544,9 @@ model DocumentVersion {
   document ManagedDocument  @relation("AllVersions", fields: [documentId], references: [id], onDelete: Cascade)
   current  ManagedDocument? @relation("CurrentVersion")
   file     FileAsset        @relation(fields: [fileAssetId], references: [id], onDelete: Cascade)
+  /// Unterzeichnungsvorgaenge auf genau dieser Fassung. `Restrict` von dort:
+  /// Eine Fassung mit Beweis laesst sich nicht loeschen.
+  signatureRequests SignatureRequest[]
 
   @@unique([documentId, version])
   @@map("document_versions")

@@ -336,6 +336,33 @@ export interface PurgeResultArea {
  */
 const ROLLBACK = Symbol('purge-rollback');
 
+/**
+ * Signaturbeweise sind von der Bereinigung ausgenommen — und sie halten
+ * fest, woran sie hängen.
+ *
+ * `SignatureRequest` steht in keinem Bereich, und die Fremdschlüssel zu
+ * Offerte, Einsatz und Dokumentfassung sind `Restrict`. Ein Bereich, der
+ * solche Datensätze enthält, liesse sich nicht löschen — PostgreSQL würde
+ * die Einschränkung melden, mitten im Lauf. Deshalb wird vorher gezählt und
+ * mit einer verständlichen Meldung abgebrochen, statt die Datenbank sprechen
+ * zu lassen.
+ *
+ * Was eine Betreiberin mit abgeschlossenen Vorgängen tun darf, entscheidet
+ * ein späterer Governance-Ablauf; eine pauschale Aufbewahrungsfrist wird hier
+ * nicht erfunden.
+ */
+async function assertKeineSignaturbeweise(organizationId: string, areas: PurgeAreaKey[]): Promise<void> {
+  const relevant = areas.some((a) => a === 'auftraege' || a === 'fuehrung');
+  if (!relevant) return;
+  const anzahl = await prisma.signatureRequest.count({ where: { organizationId } });
+  if (anzahl > 0) {
+    throw new BusinessRuleError(
+      `${anzahl} Unterzeichnungsvorgang/-vorgänge hängen an Offerten, Einsätzen oder Dokumentfassungen dieser Bereiche. ` +
+        'Signaturbeweise werden nicht mitbereinigt; sie müssen zuerst bewusst behandelt werden.',
+    );
+  }
+}
+
 export async function runPurge(params: {
   organizationId: string;
   actorId: string;
@@ -362,6 +389,8 @@ export async function runPurge(params: {
   const ctx: StepContext = { organizationId, actorId };
 
   // In der festen Reihenfolge der Definition, nicht in der der Anfrage.
+  await assertKeineSignaturbeweise(organizationId, params.areas);
+
   const selected = PURGE_AREAS.filter((area) => params.areas.includes(area.key));
   if (selected.length === 0) {
     throw new BusinessRuleError('Es wurde kein Bereich ausgewählt.');

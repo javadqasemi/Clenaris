@@ -11,6 +11,7 @@ import {
   sendTaskReminders,
 } from '@/server/services/automation.service';
 import { runFuehrungNightly } from '@/server/services/fuehrung.service';
+import { runSignatureNightly } from '@/server/services/signature.service';
 import { purgeExpiredUploads } from '@/lib/storage';
 import { logger } from '@/lib/logger';
 
@@ -52,6 +53,9 @@ export const GET = defineCronRoute({
       // Prüfungen, ablaufende Dokumente, fällige Berichte — in dieser
       // Reihenfolge, weil die Berichte die frischen Snapshots brauchen.
       runFuehrungNightly(organizationId),
+      // Unterzeichnung: abgelaufene Vorgänge schliessen, hängengebliebene
+      // Abschlüsse nachholen, verbrauchte Codes bereinigen.
+      runSignatureNightly(organizationId),
     ]);
 
     const labels = [

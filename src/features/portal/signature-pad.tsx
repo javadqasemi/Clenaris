@@ -14,9 +14,14 @@ import { Button } from '@/components/ui/button';
  *    Maus, ohne Bibliothek.
  *  • Die Zeichenfläche skaliert mit `devicePixelRatio`, sonst wirkt der Strich
  *    auf Retina-Displays ausgefranst.
- *  • Ausgabe ist ein PNG-DataURL. Er wird am Beleg gespeichert und ins PDF
- *    eingebettet; zusammen mit Name, Zeitstempel und IP ist das eine
- *    einfache elektronische Signatur im Sinne des ZertES.
+ *  • Ausgabe ist ein PNG-DataURL — die *Darstellung* einer Unterschrift, mehr
+ *    nicht. Was sie beweist, entscheidet der Prozess dahinter (Snapshot,
+ *    Prüfsumme, Ereignisse, Zustimmung — `signature.service.ts`), nicht das
+ *    Bild. Eine rechtliche Einordnung gehört nicht in diesen Kommentar und
+ *    stand hier früher trotzdem.
+ *
+ * Für die Unterzeichnung über einen Link gibt es zusätzlich die getippte
+ * Variante (`TYPED`), weil Zeichnen nicht die einzige Möglichkeit sein darf.
  */
 export function SignaturePad({
   value,

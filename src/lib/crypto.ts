@@ -114,6 +114,23 @@ export function resetEncryptionKeyCache(): void {
   cachedKey = null;
 }
 
+/**
+ * Ein zweckgebundenes Geheimnis aus dem Wurzelschlüssel ableiten.
+ *
+ * **Warum nicht der Wurzelschlüssel selbst.** `ENCRYPTION_KEY` ist der
+ * AES-Schlüssel der Feldverschlüsselung. Ihn zusätzlich als HMAC-Schlüssel
+ * für Einmalcodes zu verwenden hiesse, ein Geheimnis in zwei Konstruktionen
+ * zu stecken — und eine Schwäche in der einen träfe die andere. HKDF mit
+ * einem eigenen `info` (dem Kontext) ergibt je Zweck einen anderen
+ * Schlüssel, aus dem sich der Wurzelschlüssel nicht zurückrechnen lässt.
+ *
+ * Der Kontext ist Teil des Namens (`…-v1`), damit ein späterer Wechsel des
+ * Verfahrens einen neuen Schlüssel bekommt, statt den alten umzudeuten.
+ */
+export function deriveSecret(context: string, bytes = 32): Buffer {
+  return Buffer.from(hkdfSync('sha256', key(), 'clenaris-abgeleitet', context, bytes));
+}
+
 /** Ist dieser Wert bereits verschlüsselt? */
 export function isEncrypted(value: string): boolean {
   return value.startsWith(PREFIX);

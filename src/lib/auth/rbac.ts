@@ -175,6 +175,10 @@ const MANAGER_PERMISSIONS: Permission[] = [
   'control:read',
   'knowledge:read',
   'meeting:read', 'meeting:create', 'meeting:update',
+  // Unterzeichnung: Vorgänge anstossen und verfolgen gehört zum Tagesgeschäft.
+  // Abbrechen nicht — ein laufender Vorgang beim Kunden ist eine Zusage, die
+  // die Geschäftsleitung zurücknimmt, nicht die Betriebsleitung.
+  'signature:read', 'signature:create',
 
   'message:read', 'message:create',
   'notification:read_own',

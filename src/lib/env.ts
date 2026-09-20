@@ -45,6 +45,14 @@ const serverSchema = z.object({
     .regex(/^[0-9a-fA-F]{64}$/, 'ENCRYPTION_KEY muss 64 Hex-Zeichen (32 Byte) lang sein')
     .optional(),
 
+  /**
+   * Welchem Proxy-Kopf die Client-Adresse entnommen wird (`lib/http/client-ip.ts`).
+   * `NONE`: keinem — die Adresse ist dann nicht verfügbar. Das ist die
+   * sichere Vorgabe; ein falsch gesetzter Modus liesse gefälschte Adressen
+   * ins Prüf- und Signaturprotokoll.
+   */
+  TRUSTED_PROXY_MODE: z.enum(['NONE', 'SINGLE_REVERSE_PROXY', 'CLOUDFLARE']).default('NONE'),
+
   SUPABASE_SERVICE_ROLE_KEY: z.string().optional(),
   SUPABASE_STORAGE_BUCKET: z.string().default('clenaris'),
 

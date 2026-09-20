@@ -10,6 +10,7 @@ import { formatBytes, formatDate, formatDateTime } from '@/lib/utils';
 import { DOCUMENT_CATEGORY_LABELS, DOCUMENT_VISIBILITY_LABELS, optionsOf } from '@/lib/bi/labels';
 import { getOrganizationId } from '@/server/services/organization.service';
 import { getDocument } from '@/server/services/document.service';
+import { listSignatureRequestsForDocument } from '@/server/services/signature.service';
 import { listEmployeeOptions, listSupplierOptions } from '@/server/services/fuehrung-options.service';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -19,6 +20,7 @@ import { PdfViewer } from '@/components/app/pdf-viewer';
 import { ActionButton } from '@/features/fuehrung/action-button';
 import { FormDialog } from '@/features/fuehrung/resource-form';
 import { DocumentUploadDialog } from '@/features/fuehrung/document-upload';
+import { SignatureRequestPanel } from '@/features/fuehrung/signature-request-panel';
 
 export const metadata: Metadata = {
   title: 'Dokument',
@@ -45,6 +47,14 @@ export default async function DocumentDetailPage({
   const [employees, suppliers] = await Promise.all([listEmployeeOptions(organizationId), listSupplierOptions(organizationId)]);
   const canEdit = can(session.role, 'document:update');
   const expired = document.expiresOn && document.expiresOn < new Date();
+
+  /**
+   * Unterzeichnungsvorgänge sieht nur, wer `signature:read` hält — der Dienst
+   * prüft das noch einmal. Ohne Recht bleibt der Abschnitt ganz weg, statt
+   * leer zu erscheinen.
+   */
+  const canReadSignatures = can(session.role, 'signature:read');
+  const signatureRequests = canReadSignatures ? await listSignatureRequestsForDocument(session, organizationId, id) : [];
 
   /**
    * Welche Fassung gezeigt wird, steht ausdrücklich in der Adresse
@@ -142,6 +152,17 @@ export default async function DocumentDetailPage({
             </div>
           )}
         </DetailSection>
+      ) : null}
+
+      {canReadSignatures ? (
+        <SignatureRequestPanel
+          documentId={id}
+          currentVersion={document.currentVersion?.version ?? null}
+          isPdf={document.currentVersion?.file.mimeType === 'application/pdf'}
+          requests={signatureRequests}
+          canCreate={can(session.role, 'signature:create')}
+          canCancel={can(session.role, 'signature:cancel')}
+        />
       ) : null}
 
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_20rem]">

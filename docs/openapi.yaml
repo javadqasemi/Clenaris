@@ -2466,6 +2466,837 @@ paths:
             'application/json':
               schema:
                 '$ref': '#/components/schemas/ErrorEnvelope'
+  '/api/public/signatures/exchange':
+    post:
+      tags:
+        - 'Unterzeichnung'
+      summary: 'Zugangstoken gegen Sitzung tauschen'
+      description: |-
+          Der einzige Aufruf, der den rohen Token trägt — im Körper, nie im Pfad oder in der Abfrage, damit er in keinem Zugriffsprotokoll steht. Die Seite `/signieren` liest ihn aus dem URL-Fragment, entfernt ihn aus der Adresse und ruft hierher. Antwort: die nicht geheime Kennung des Vorgangs und der Bereich (`sign` oder `result`); die Sitzung liegt im Cookie `clenaris_sig` (HttpOnly, 60 Minuten). Unbekannte, abgelaufene und widerrufene Tokens antworten gleich (404).
+
+          **Zugriff:** Öffentlich — keine Anmeldung nötig.
+
+          **Rate-Limit-Klasse:** `signatureExchange`
+      operationId: 'postPublicSignaturesExchange'
+      security: []
+      requestBody:
+        required: true
+        content:
+          'application/json':
+            schema:
+              type: 'object'
+              properties:
+                token:
+                  type: 'string'
+                  pattern: '^[0-9a-f]{64}$'
+              required:
+                - 'token'
+      responses:
+        '200':
+          description: 'Erfolg'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/SuccessEnvelope'
+        '400':
+          description: 'VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: 'NOT_FOUND — nicht vorhanden, oder für diese Sitzung nicht sichtbar.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: 'BUSINESS_RULE — fachlich nicht zulässig, etwa eine bereits ausgestellte Rechnung ändern.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: 'RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+  '/api/public/signatures/{publicId}':
+    get:
+      tags:
+        - 'Unterzeichnung'
+      summary: 'Stand des Vorgangs für die unterzeichnende Person'
+      description: |-
+          Titel, Modus, Prüfstufe, Ablauf, Zustimmungstext (serverseitig, versioniert) und der eigene Stand. E-Mail und Mobilnummer nur verschleiert. Ohne gültige Sitzung 404.
+
+          **Zugriff:** Öffentlich — keine Anmeldung nötig.
+
+          **Rate-Limit-Klasse:** `publicTokenRead`
+      operationId: 'getPublicSignaturesByPublicId'
+      security: []
+      parameters:
+        - name: 'publicId'
+          in: 'path'
+          required: true
+          schema:
+            type: 'string'
+            pattern: '^[0-9a-f]{32}$'
+      responses:
+        '200':
+          description: 'Erfolg'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/SuccessEnvelope'
+        '400':
+          description: 'VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: 'NOT_FOUND — nicht vorhanden, oder für diese Sitzung nicht sichtbar.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: 'RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+  '/api/public/signatures/{publicId}/document':
+    get:
+      tags:
+        - 'Unterzeichnung'
+      summary: 'Das zu unterzeichnende Original'
+      description: |-
+          Die Bytes der gebundenen Fassung für den Viewer, `inline`, nie zwischengespeichert. Ereignis `DOCUMENT_VIEWED` einmal je Sitzung.
+
+          **Zugriff:** Öffentlich — keine Anmeldung nötig.
+
+          **Rate-Limit-Klasse:** `publicTokenRead`
+      operationId: 'getPublicSignaturesByPublicIdDocument'
+      security: []
+      parameters:
+        - name: 'publicId'
+          in: 'path'
+          required: true
+          schema:
+            type: 'string'
+            pattern: '^[0-9a-f]{32}$'
+      responses:
+        '200':
+          description: 'PDF-Dokument'
+          content:
+            'application/pdf':
+              schema:
+                type: 'string'
+                format: 'binary'
+        '400':
+          description: 'VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: 'NOT_FOUND — nicht vorhanden, oder für diese Sitzung nicht sichtbar.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: 'RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+  '/api/public/signatures/{publicId}/otp/request':
+    post:
+      tags:
+        - 'Unterzeichnung'
+      summary: 'Bestätigungscode anfordern'
+      description: |-
+          Nur bei Prüfstufe mit Code (422 sonst). Sechs Ziffern aus dem CSPRNG, zehn Minuten gültig, fünf Versuche, sechzig Sekunden Sperre bis zum nächsten Versand; ein neuer Code entwertet alle offenen. Gespeichert wird nur ein Argon2id-Hash über ein HMAC des Codes. Das Limit zählt je Vorgang, nicht je Adresse.
+
+          **Zugriff:** Öffentlich — keine Anmeldung nötig.
+
+          **Rate-Limit-Klasse:** `otpRequest`
+      operationId: 'postPublicSignaturesByPublicIdOtpRequest'
+      security: []
+      parameters:
+        - name: 'publicId'
+          in: 'path'
+          required: true
+          schema:
+            type: 'string'
+            pattern: '^[0-9a-f]{32}$'
+      responses:
+        '200':
+          description: 'Erfolg'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/SuccessEnvelope'
+        '400':
+          description: 'VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: 'NOT_FOUND — nicht vorhanden, oder für diese Sitzung nicht sichtbar.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: 'BUSINESS_RULE — fachlich nicht zulässig, etwa eine bereits ausgestellte Rechnung ändern.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: 'RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+  '/api/public/signatures/{publicId}/otp/verify':
+    post:
+      tags:
+        - 'Unterzeichnung'
+      summary: 'Bestätigungscode prüfen'
+      description: |-
+          Der Versuch wird gezählt, bevor der Code verglichen wird — ein abgebrochener Vergleich schenkt keinen Versuch. Nach dem fünften Fehlversuch ist der Code verbraucht (422). Einmalig: Ein bestätigter Code gilt nie ein zweites Mal.
+
+          **Zugriff:** Öffentlich — keine Anmeldung nötig.
+
+          **Rate-Limit-Klasse:** `otpVerify`
+      operationId: 'postPublicSignaturesByPublicIdOtpVerify'
+      security: []
+      parameters:
+        - name: 'publicId'
+          in: 'path'
+          required: true
+          schema:
+            type: 'string'
+            pattern: '^[0-9a-f]{32}$'
+      requestBody:
+        required: true
+        content:
+          'application/json':
+            schema:
+              type: 'object'
+              properties:
+                code:
+                  type: 'string'
+                  pattern: '^\d{6}$'
+              required:
+                - 'code'
+      responses:
+        '200':
+          description: 'Erfolg'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/SuccessEnvelope'
+        '400':
+          description: 'VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: 'NOT_FOUND — nicht vorhanden, oder für diese Sitzung nicht sichtbar.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: 'BUSINESS_RULE — fachlich nicht zulässig, etwa eine bereits ausgestellte Rechnung ändern.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: 'RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+  '/api/public/signatures/{publicId}/complete':
+    post:
+      tags:
+        - 'Unterzeichnung'
+      summary: 'Verbindlich unterzeichnen'
+      description: |-
+          Die eine Handlung. Der Server prüft Sitzung, Code (falls verlangt), Zustimmung, die PNG-Bytes der gezeichneten Unterschrift und rechnet die Prüfsumme des Originals **aus den gespeicherten Bytes** neu — stimmt sie nicht mehr, entsteht `INTEGRITY_FAILED` und die Unterzeichnung wird verweigert (422). Text und Fassung der Zustimmung bestimmt der Server. Haben alle unterzeichnet, beginnt der Abschluss (`FINALIZING`): signiertes Dokument (nur EMBEDDED_VISUAL), Signaturprotokoll, `COMPLETED`, Ergebnislinks per E-Mail.
+
+          **Zugriff:** Öffentlich — keine Anmeldung nötig.
+
+          **Rate-Limit-Klasse:** `signatureFinalize`
+      operationId: 'postPublicSignaturesByPublicIdComplete'
+      security: []
+      parameters:
+        - name: 'publicId'
+          in: 'path'
+          required: true
+          schema:
+            type: 'string'
+            pattern: '^[0-9a-f]{32}$'
+      requestBody:
+        required: true
+        content:
+          'application/json':
+            schema:
+              type: 'object'
+              properties:
+                accepted:
+                  const: true
+                method:
+                  type: 'string'
+                  enum:
+                    - 'DRAWN'
+                    - 'TYPED'
+                name:
+                  type: 'string'
+                  minLength: 2
+                  maxLength: 120
+                imageDataUrl:
+                  type: 'string'
+                  maxLength: 700000
+                  pattern: '^data:image\/png;base64,[A-Za-z0-9+/=]+$'
+              required:
+                - 'accepted'
+                - 'method'
+                - 'name'
+      responses:
+        '200':
+          description: 'Erfolg'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/SuccessEnvelope'
+        '400':
+          description: 'VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: 'NOT_FOUND — nicht vorhanden, oder für diese Sitzung nicht sichtbar.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: 'BUSINESS_RULE — fachlich nicht zulässig, etwa eine bereits ausgestellte Rechnung ändern.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: 'RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+  '/api/public/signatures/{publicId}/decline':
+    post:
+      tags:
+        - 'Unterzeichnung'
+      summary: 'Unterzeichnung ablehnen'
+      description: |-
+          Beendet den Vorgang für alle (`DECLINED`), widerruft die Links und meldet es der Verwaltung.
+
+          **Zugriff:** Öffentlich — keine Anmeldung nötig.
+
+          **Rate-Limit-Klasse:** `signatureFinalize`
+      operationId: 'postPublicSignaturesByPublicIdDecline'
+      security: []
+      parameters:
+        - name: 'publicId'
+          in: 'path'
+          required: true
+          schema:
+            type: 'string'
+            pattern: '^[0-9a-f]{32}$'
+      requestBody:
+        required: true
+        content:
+          'application/json':
+            schema:
+              type: 'object'
+              properties:
+                reason:
+                  type: 'string'
+                  maxLength: 500
+      responses:
+        '204':
+          description: 'Erfolg'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/SuccessEnvelope'
+        '400':
+          description: 'VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: 'NOT_FOUND — nicht vorhanden, oder für diese Sitzung nicht sichtbar.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: 'BUSINESS_RULE — fachlich nicht zulässig, etwa eine bereits ausgestellte Rechnung ändern.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: 'RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+  '/api/public/signatures/{publicId}/result':
+    get:
+      tags:
+        - 'Unterzeichnung'
+      summary: 'Ergebnis nach Abschluss'
+      description: |-
+          Mit der Ergebnis-Sitzung (eigener Zweck `SIGNATURE_RESULT_VIEW`, dreissig Tage): Titel, Modus, die drei Prüfsummen und welche Dateien vorliegen. Ein Unterzeichnungslink öffnet kein Ergebnis und umgekehrt.
+
+          **Zugriff:** Öffentlich — keine Anmeldung nötig.
+
+          **Rate-Limit-Klasse:** `publicTokenRead`
+      operationId: 'getPublicSignaturesByPublicIdResult'
+      security: []
+      parameters:
+        - name: 'publicId'
+          in: 'path'
+          required: true
+          schema:
+            type: 'string'
+            pattern: '^[0-9a-f]{32}$'
+      responses:
+        '200':
+          description: 'Erfolg'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/SuccessEnvelope'
+        '400':
+          description: 'VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: 'NOT_FOUND — nicht vorhanden, oder für diese Sitzung nicht sichtbar.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: 'RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+  '/api/public/signatures/{publicId}/result/{artifact}':
+    get:
+      tags:
+        - 'Unterzeichnung'
+      summary: 'Original, signiertes Dokument oder Signaturprotokoll'
+      description: |-
+          `original` (A), `signed` (B, nur EMBEDDED_VISUAL) oder `evidence` (C). Nie zwischengespeichert, kein Referrer. Das Protokoll als Anhang, die Dokumente `inline`.
+
+          **Zugriff:** Öffentlich — keine Anmeldung nötig.
+
+          **Rate-Limit-Klasse:** `publicTokenRead`
+      operationId: 'getPublicSignaturesByPublicIdResultByArtifact'
+      security: []
+      parameters:
+        - name: 'publicId'
+          in: 'path'
+          required: true
+          schema:
+            type: 'string'
+            pattern: '^[0-9a-f]{32}$'
+        - name: 'artifact'
+          in: 'path'
+          required: true
+          schema:
+            type: 'string'
+            enum:
+              - 'original'
+              - 'signed'
+              - 'evidence'
+      responses:
+        '200':
+          description: 'PDF-Dokument'
+          content:
+            'application/pdf':
+              schema:
+                type: 'string'
+                format: 'binary'
+        '400':
+          description: 'VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: 'NOT_FOUND — nicht vorhanden, oder für diese Sitzung nicht sichtbar.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: 'RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+  '/api/signatures/{id}':
+    get:
+      tags:
+        - 'Unterzeichnung'
+      summary: 'Vorgang für die Verwaltung'
+      description: |-
+          Mit Teilnehmenden, dem vollständigen Ereignisprotokoll und den drei Artefakten. Sichtbarkeit des Dokuments gilt auch hier.
+
+          **Zugriff:** Erfordert die Berechtigung: `signature:read`.
+
+          **Rate-Limit-Klasse:** `apiRead`
+      operationId: 'getSignaturesById'
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: 'id'
+          in: 'path'
+          required: true
+          schema:
+            type: 'string'
+            minLength: 1
+      responses:
+        '200':
+          description: 'Erfolg'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/SuccessEnvelope'
+        '400':
+          description: 'VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 'UNAUTHORIZED — keine oder abgelaufene Sitzung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 'FORBIDDEN — angemeldet, aber ohne die nötige Berechtigung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: 'NOT_FOUND — nicht vorhanden, oder für diese Sitzung nicht sichtbar.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: 'RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+  '/api/signatures/{id}/integrity':
+    get:
+      tags:
+        - 'Unterzeichnung'
+      summary: 'Prüfsummen nachrechnen'
+      description: |-
+          A, B und C werden aus den tatsächlich gespeicherten Bytes neu gebildet und mit den festgehaltenen Werten verglichen — die Antwort sagt je Datei `ok`, `abweichend` oder `fehlt`.
+
+          **Zugriff:** Erfordert die Berechtigung: `signature:read`.
+
+          **Rate-Limit-Klasse:** `apiRead`
+      operationId: 'getSignaturesByIdIntegrity'
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: 'id'
+          in: 'path'
+          required: true
+          schema:
+            type: 'string'
+            minLength: 1
+      responses:
+        '200':
+          description: 'Erfolg'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/SuccessEnvelope'
+        '400':
+          description: 'VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 'UNAUTHORIZED — keine oder abgelaufene Sitzung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 'FORBIDDEN — angemeldet, aber ohne die nötige Berechtigung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: 'NOT_FOUND — nicht vorhanden, oder für diese Sitzung nicht sichtbar.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: 'RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+  '/api/signatures/{id}/send':
+    post:
+      tags:
+        - 'Unterzeichnung'
+      summary: 'Links (erneut) versenden'
+      description: |-
+          Stellt je Person einen frischen Zugangstoken aus und widerruft die alten. Der rohe Token steht nur in der E-Mail, als Fragment der Adresse `/signieren#t=…`. Nicht bei beendeten Vorgängen (422).
+
+          **Zugriff:** Erfordert die Berechtigung: `signature:create`.
+
+          **Rate-Limit-Klasse:** `apiWrite`
+      operationId: 'postSignaturesByIdSend'
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: 'id'
+          in: 'path'
+          required: true
+          schema:
+            type: 'string'
+            minLength: 1
+      responses:
+        '200':
+          description: 'Erfolg'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/SuccessEnvelope'
+        '400':
+          description: 'VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 'UNAUTHORIZED — keine oder abgelaufene Sitzung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 'FORBIDDEN — angemeldet, aber ohne die nötige Berechtigung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: 'NOT_FOUND — nicht vorhanden, oder für diese Sitzung nicht sichtbar.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: 'BUSINESS_RULE — fachlich nicht zulässig, etwa eine bereits ausgestellte Rechnung ändern.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: 'RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+  '/api/signatures/{id}/cancel':
+    post:
+      tags:
+        - 'Unterzeichnung'
+      summary: 'Vorgang abbrechen'
+      description: |-
+          Widerruft alle Links und offenen Codes. Ein abgeschlossener Vorgang lässt sich nicht abbrechen (422) — seine Beweise bleiben.
+
+          **Zugriff:** Erfordert die Berechtigung: `signature:cancel`.
+
+          **Rate-Limit-Klasse:** `apiWrite`
+      operationId: 'postSignaturesByIdCancel'
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: 'id'
+          in: 'path'
+          required: true
+          schema:
+            type: 'string'
+            minLength: 1
+      requestBody:
+        required: true
+        content:
+          'application/json':
+            schema:
+              type: 'object'
+              properties:
+                reason:
+                  type: 'string'
+                  maxLength: 500
+      responses:
+        '200':
+          description: 'Erfolg'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/SuccessEnvelope'
+        '400':
+          description: 'VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 'UNAUTHORIZED — keine oder abgelaufene Sitzung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 'FORBIDDEN — angemeldet, aber ohne die nötige Berechtigung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: 'NOT_FOUND — nicht vorhanden, oder für diese Sitzung nicht sichtbar.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: 'BUSINESS_RULE — fachlich nicht zulässig, etwa eine bereits ausgestellte Rechnung ändern.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: 'RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
   '/api/leads':
     get:
       tags:
@@ -30471,6 +31302,234 @@ paths:
                 '$ref': '#/components/schemas/ErrorEnvelope'
         '404':
           description: 'NOT_FOUND — nicht vorhanden, oder für diese Sitzung nicht sichtbar.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: 'RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+  '/api/bi/documents/{id}/signature-requests':
+    get:
+      tags:
+        - 'Führung: Wissen und Markt'
+      summary: 'Unterzeichnungsvorgänge eines Dokuments'
+      description: |-
+          Alle Vorgänge über Fassungen dieses Dokuments, neueste zuerst, mit Teilnehmenden und Prüfsummen. Die Sichtbarkeit des Dokuments gilt auch hier.
+
+          **Zugriff:** Erfordert die Berechtigung: `signature:read`.
+
+          **Rate-Limit-Klasse:** `apiRead`
+      operationId: 'getBiDocumentsByIdSignatureRequests'
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: 'id'
+          in: 'path'
+          required: true
+          schema:
+            type: 'string'
+            minLength: 1
+      responses:
+        '200':
+          description: 'Erfolg'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/SuccessEnvelope'
+        '400':
+          description: 'VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 'UNAUTHORIZED — keine oder abgelaufene Sitzung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 'FORBIDDEN — angemeldet, aber ohne die nötige Berechtigung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: 'NOT_FOUND — nicht vorhanden, oder für diese Sitzung nicht sichtbar.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: 'RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+    post:
+      tags:
+        - 'Führung: Wissen und Markt'
+      summary: 'Zur Unterschrift senden'
+      description: |-
+          Bindet **genau eine Fassung** (ohne Angabe die geltende) über ihre SHA-256-Prüfsumme; nur PDF. `EMBEDDED_VISUAL` wird bei vorhandenen Signaturfeldern oder -strukturen verweigert (422), `DETACHED_EVIDENCE` lässt das Original unangetastet. Bis drei Personen, Prüfstufe `LINK_ONLY`, `LINK_PLUS_EMAIL_CODE` oder `LINK_PLUS_SMS_CODE` (Mobilnummer nötig), Ablauf 1–90 Tage. Mit `send` (Standard) gehen die Links sofort per E-Mail.
+
+          **Zugriff:** Erfordert die Berechtigung: `signature:create`.
+
+          **Rate-Limit-Klasse:** `apiWrite`
+      operationId: 'postBiDocumentsByIdSignatureRequests'
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: 'id'
+          in: 'path'
+          required: true
+          schema:
+            type: 'string'
+            minLength: 1
+      requestBody:
+        required: true
+        content:
+          'application/json':
+            schema:
+              type: 'object'
+              properties:
+                version:
+                  type: 'integer'
+                  minimum: 1
+                  maximum: 10000
+                title:
+                  type: 'string'
+                  minLength: 2
+                  maxLength: 200
+                assuranceLevel:
+                  type: 'string'
+                  enum:
+                    - 'LINK_ONLY'
+                    - 'LINK_PLUS_EMAIL_CODE'
+                    - 'LINK_PLUS_SMS_CODE'
+                  default: 'LINK_ONLY'
+                artifactMode:
+                  type: 'string'
+                  enum:
+                    - 'EMBEDDED_VISUAL'
+                    - 'DETACHED_EVIDENCE'
+                  default: 'DETACHED_EVIDENCE'
+                expiresInDays:
+                  type: 'integer'
+                  minimum: 1
+                  maximum: 90
+                  default: 14
+                placement:
+                  type: 'object'
+                  properties:
+                    page:
+                      type: 'integer'
+                      minimum: 1
+                      maximum: 10000
+                    x:
+                      type: 'number'
+                      minimum: 0
+                      maximum: 20000
+                    y:
+                      type: 'number'
+                      minimum: 0
+                      maximum: 20000
+                    width:
+                      type: 'number'
+                      minimum: 1
+                      maximum: 20000
+                    height:
+                      type: 'number'
+                      minimum: 1
+                      maximum: 20000
+                  required:
+                    - 'page'
+                    - 'x'
+                    - 'y'
+                    - 'width'
+                    - 'height'
+                participants:
+                  type: 'array'
+                  items:
+                    type: 'object'
+                    properties:
+                      name:
+                        type: 'string'
+                        minLength: 2
+                        maxLength: 80
+                      email:
+                        type: 'string'
+                        minLength: 1
+                        maxLength: 255
+                        format: 'email'
+                      phone:
+                        type: 'string'
+                        pattern: '^(\+|00)?[0-9\s().-]{9,20}$'
+                    required:
+                      - 'name'
+                      - 'email'
+                  minItems: 1
+                  maxItems: 3
+                send:
+                  type: 'boolean'
+                  default: true
+              required:
+                - 'participants'
+      responses:
+        '201':
+          description: 'Erfolg'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/SuccessEnvelope'
+        '400':
+          description: 'VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 'UNAUTHORIZED — keine oder abgelaufene Sitzung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 'FORBIDDEN — angemeldet, aber ohne die nötige Berechtigung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: 'NOT_FOUND — nicht vorhanden, oder für diese Sitzung nicht sichtbar.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '409':
+          description: 'CONFLICT — verstösst gegen eine Eindeutigkeitsregel.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: 'BUSINESS_RULE — fachlich nicht zulässig, etwa eine bereits ausgestellte Rechnung ändern.'
           content:
             'application/json':
               schema:

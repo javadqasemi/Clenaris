@@ -9,6 +9,8 @@ import { uploadBuffer } from '@/lib/storage';
 import {
   BookingConfirmationDocument,
   CreditNoteDocument,
+  EvidenceDocument,
+  type EvidencePdfProps,
   InvoiceDocument,
   JobReportDocument,
   QuoteDocument,
@@ -94,6 +96,29 @@ function dominantVatRate(items: { vatRate: number; net: number }[]): number {
     byRate.set(item.vatRate, (byRate.get(item.vatRate) ?? 0) + item.net);
   }
   return [...byRate.entries()].sort((a, b) => b[1] - a[1])[0][0];
+}
+
+// ---------------------------------------------------------------------------
+//  Signaturprotokoll
+// ---------------------------------------------------------------------------
+
+/**
+ * Das Signaturprotokoll als PDF — aus bereits eingefrorenen Daten.
+ *
+ * Bewusst ohne Datenbankzugriff: Der Aufrufer (`signature.service.ts`) hat
+ * den Vorgang geladen und entschieden, was hineingehört. Diese Funktion
+ * rendert nur. Ein zweiter Aufruf mit denselben Eingaben ergibt dasselbe
+ * Dokument bis auf `generatedAt` — deshalb wird die Prüfsumme über die
+ * *gespeicherten* Bytes gebildet, nicht über eine Neuerzeugung.
+ */
+export async function renderEvidencePdf(
+  organizationId: string,
+  props: Omit<EvidencePdfProps, 'company'>,
+): Promise<Buffer> {
+  const company = await loadCompany(organizationId);
+  return Buffer.from(
+    await renderToBuffer(React.createElement(EvidenceDocument, { ...props, company }) as never),
+  );
 }
 
 // ---------------------------------------------------------------------------

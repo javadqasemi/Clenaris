@@ -89,8 +89,16 @@ export const PURPOSE_RESOURCE: Record<PublicTokenPurpose, string> = {
   INVOICE_PAY: 'Invoice',
   BOOKING_MANAGE: 'Booking',
   DOCUMENT_VIEW: 'ManagedDocument',
-  SIGNATURE_ACCESS: 'SignatureRequest',
-  SIGNATURE_OTP: 'SignatureRequest',
+  /**
+   * Beide Signaturzwecke binden an den **Teilnehmer**, nicht an den Vorgang:
+   * Jede unterzeichnende Person hat ihren eigenen Schlüssel, und ein Widerruf
+   * trifft genau sie. In Gate 1 stand hier `SignatureRequest` — das hätte
+   * einen Link für alle bedeutet.
+   */
+  SIGNATURE_ACCESS: 'SignatureParticipant',
+  SIGNATURE_RESULT_VIEW: 'SignatureParticipant',
+  /** Nicht verwendet — Einmalcodes liegen in `SignatureOtpChallenge`. */
+  SIGNATURE_OTP: 'SignatureParticipant',
 };
 
 /**

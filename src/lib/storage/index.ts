@@ -68,7 +68,18 @@ export async function uploadBuffer(params: {
   content: Buffer | Uint8Array;
   contentType: string;
   upsert?: boolean;
-}): Promise<{ path: string; publicUrl: string }> {
+}): Promise<{
+  path: string;
+  publicUrl: string;
+  /**
+   * Nur beim eingebauten Speicher: die Ablagezeile, an die ein `FileAsset`
+   * gehängt werden kann. Beim externen Speicher gibt es sie nicht — dort
+   * bleibt `verifyFileIntegrity` für servererzeugte Dateien ungeprüft
+   * (dokumentiert in `docs/DEPLOYMENT.md` als offener Punkt).
+   */
+  storedFileId?: string;
+  checksum?: string;
+}> {
   if (usesRemoteStorage()) {
     return remote.uploadBuffer({
       path: params.path,

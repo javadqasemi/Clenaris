@@ -140,6 +140,7 @@ EMAIL_FROM
 ANTHROPIC_API_KEY
 NEXT_PUBLIC_GOOGLE_MAPS_API_KEY
 GOOGLE_MAPS_SERVER_KEY
+TRUSTED_PROXY_MODE                 NONE | SINGLE_REVERSE_PROXY | CLOUDFLARE — siehe 13.5.1
 ```
 
 Firmenangaben (`COMPANY_*`) sind nur der Ausgangszustand für den Seed — im
@@ -497,6 +498,45 @@ location / {
 `X-Forwarded-For` ist nicht Kosmetik: Ohne diesen Kopf sehen alle
 Ratenbegrenzungen dieselbe IP-Adresse — die des Proxys — und greifen entweder
 für alle gleichzeitig oder für niemanden.
+
+**13.5.1 Welchem Kopf die Anwendung glaubt — `TRUSTED_PROXY_MODE`.** Seit Gate
+4B liest die Anwendung die Adresse der anfragenden Stelle nicht mehr aus
+„irgendeinem" Kopf, sondern nur aus dem, den die Betreiberin als
+vertrauenswürdig erklärt hat (`src/lib/http/client-ip.ts`). Der Grund: Ein
+Kopf wie `CF-Connecting-IP` oder `X-Forwarded-For` ist vom Absender frei
+wählbar, solange kein Proxy davor ihn überschreibt. Die gespeicherte Adresse
+im Prüfprotokoll und im Signaturprotokoll wäre sonst eine Behauptung des
+Absenders.
+
+| `TRUSTED_PROXY_MODE` | Gelesener Kopf | Voraussetzung |
+|---|---|---|
+| `NONE` (Vorgabe) | keiner — die Adresse gilt als **nicht verfügbar** | kein bekannter Proxy; ehrlicher als eine erfundene Adresse |
+| `SINGLE_REVERSE_PROXY` | `X-Real-IP` (Rückfall: erster Eintrag von `X-Forwarded-For`) | genau ein Nginx davor, der beide Köpfe **setzt**, nicht anhängt |
+| `CLOUDFLARE` | `CF-Connecting-IP` | Ursprung nur über Cloudflare erreichbar (Firewall auf Cloudflare-Netze) |
+
+Für den Nginx-Betrieb aus 13.5 gehört deshalb in den `location`-Block
+zusätzlich — und `X-Forwarded-For` wird **gesetzt**, nicht mit
+`$proxy_add_x_forwarded_for` verlängert:
+
+```nginx
+    proxy_set_header X-Real-IP       $remote_addr;
+    proxy_set_header X-Forwarded-For $remote_addr;
+```
+
+und in die Umgebung `TRUSTED_PROXY_MODE=SINGLE_REVERSE_PROXY`. Ohne diese
+Variable läuft die Anwendung im Modus `NONE`: Rate-Limits greifen dann je
+Prozess ohne Adressbezug, und Prüf- wie Signaturprotokoll tragen
+`ipSource = UNAVAILABLE`. Das ist kein Fehler, sondern die Aussage „nicht
+bekannt" — sie wird im Protokoll genau so ausgewiesen.
+
+**13.5.2 Der Unterzeichnungsbereich.** `/signieren` und `/api/public/signatures`
+brauchen keinen eigenen Proxy-Block. Zwei Dinge dürfen dort aber nicht
+passieren: Der Proxy darf `Referrer-Policy` und `Cache-Control` der Anwendung
+nicht überschreiben (der Bereich setzt `no-referrer` und `no-store`), und ein
+Zugriffsprotokoll, das **Fragmente** aufzeichnet, gibt es nicht — Browser
+schicken `#t=…` nie mit. Der rohe Zugangstoken erreicht den Server nur im
+Körper von `POST /api/public/signatures/exchange`; Körper gehören in kein
+Zugriffsprotokoll.
 
 **13.6 Planmässige Aufgaben.** `vercel.json` steuert die beiden Cron-Läufe nur
 auf Vercel. Im eigenen Betrieb übernimmt das die Crontab des Dienstbenutzers:

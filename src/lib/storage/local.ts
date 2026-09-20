@@ -145,7 +145,7 @@ export async function putLocalBuffer(params: {
   path: string;
   content: Buffer | Uint8Array;
   contentType: string;
-}): Promise<{ path: string; publicUrl: string }> {
+}): Promise<{ path: string; publicUrl: string; storedFileId: string; checksum: string }> {
   const data = Buffer.from(params.content);
 
   if (data.byteLength > LOCAL_MAX_BYTES) {
@@ -204,7 +204,7 @@ export async function putLocalBuffer(params: {
         select: { id: true },
       });
 
-  return { path: params.path, publicUrl: localUploadUrl(record.id) };
+  return { path: params.path, publicUrl: localUploadUrl(record.id), storedFileId: record.id, checksum };
 }
 
 /**
