@@ -77,6 +77,9 @@ fail() { log "FEHLER: $*"; exit 1; }
 
 PREVIOUS_SHA=""
 BACKUP_PATH=""
+# Die Datenbanksicherung dieser Auslieferung. Leer, solange keine Migration
+# ansteht — dann wird auch nichts gesichert, weil nichts geändert wird.
+DB_BACKUP=""
 MIGRATIONS_APPLIED="nein"
 DEPLOY_OK="nein"
 
@@ -369,11 +372,51 @@ migrate_status="$(npx prisma migrate status 2>&1 || true)"
 printf '%s\n' "${migrate_status}"
 
 if printf '%s' "${migrate_status}" | grep -qi 'not yet been applied\|following migration'; then
-  log "Neue Migrationen gefunden — werden angewandt."
+  log "Neue Migrationen gefunden."
+
+  # -------------------------------------------------------------------------
+  #  6a) Vorprüfung — würden die vorhandenen Daten die neuen Eindeutigkeiten
+  #      verletzen?
+  # -------------------------------------------------------------------------
+  #
+  # Eine additive Migration ist harmlos, bis sie eine Eindeutigkeit verlangt,
+  # die die Daten nicht erfüllen. Dann bricht `migrate deploy` **mittendrin**
+  # ab: ein Teil angewandt, der Rest nicht, und die Anwendung läuft auf einem
+  # Schema, das es so nie geben sollte. Der Rücksprung weiter oben stellt
+  # ausdrücklich nur die Anwendung wieder her, nicht das Schema.
+  #
+  # Die Vorprüfung liest ausschliesslich und beantwortet die Frage vorher.
+  step "Migrations-Vorprüfung"
+  if ! npx tsx scripts/migration-preflight.ts; then
+    fail "Die Migrations-Vorprüfung hat einen Konflikt gemeldet. Es wird nichts migriert und nichts bereinigt."
+  fi
+
+  # -------------------------------------------------------------------------
+  #  6b) Datenbanksicherung — unmittelbar vor der Migration
+  # -------------------------------------------------------------------------
+  #
+  # Bis hierher sicherte diese Auslieferung Build und `.env` — also genau das,
+  # was sich aus Git und den Secrets wiederherstellen lässt. Nicht gesichert
+  # wurde das Einzige, was sich nicht wiederherstellen lässt.
+  #
+  # Die Sicherung entsteht **jetzt**, nicht früher: Ein Stand von gestern ist
+  # kein Auslieferungsbackup. Und sie entsteht **fail-closed** — schlägt sie
+  # fehl oder lässt sich das Archiv nicht lesen, endet die Auslieferung hier,
+  # vor der ersten Schemaänderung.
+  step "Datenbanksicherung vor der Migration"
+  if ! npx tsx scripts/db-backup.ts --grund migration --commit "${NEW_SHA}" | tee -a "${LOG_FILE}.backup"; then
+    fail "Die Datenbanksicherung ist fehlgeschlagen oder liess sich nicht prüfen. Es wird nicht migriert."
+  fi
+  DB_BACKUP="$(grep -m1 '^BACKUP_DATEI=' "${LOG_FILE}.backup" | cut -d= -f2- || true)"
+  rm -f "${LOG_FILE}.backup"
+  [[ -n "${DB_BACKUP}" && -s "${DB_BACKUP}" ]] || fail "Die Sicherung wurde gemeldet, liegt aber nicht als Datei vor."
+  log "Sicherung bestätigt: ${DB_BACKUP}"
+
+  log "Migrationen werden angewandt."
   npx prisma migrate deploy
   MIGRATIONS_APPLIED="ja"
 else
-  log "Keine neuen Migrationen."
+  log "Keine neuen Migrationen — keine Sicherung nötig, es wird nichts am Schema geändert."
 fi
 
 if [[ "${DEPLOY_RUN_SEED:-false}" == "true" ]]; then
@@ -448,6 +491,11 @@ pm2 logs "${APP_NAME}" --lines 25 --nostream || true
 
 step "AUSLIEFERUNG ERFOLGREICH"
 log "Stand:       ${PREVIOUS_SHA} → ${NEW_SHA}"
+if [[ -n "${DB_BACKUP}" ]]; then
+  log "DB-Sicherung: ${DB_BACKUP}"
+else
+  log "DB-Sicherung: keine nötig (keine Migration)"
+fi
 log "Migrationen: ${MIGRATIONS_APPLIED}"
 log "Protokoll:   ${LOG_FILE}"
 [[ "${DEPLOY_OK}" == "ja" ]]

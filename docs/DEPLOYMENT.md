@@ -44,29 +44,80 @@ Vor dem Seed in Produktion `SEED_ADMIN_EMAIL` und `SEED_ADMIN_PASSWORD` setzen
 — sonst entsteht ein Administrationskonto mit den Demo-Zugangsdaten aus dem
 Repository. Der Seed bricht in der Produktion ab, wenn sie fehlen.
 
-> ### Offen: Datenbanksicherung vor Schemaänderungen
->
-> **P1: Production PostgreSQL backup before schema migrations.**
->
-> `scripts/deploy.sh` sichert vor jeder Auslieferung den Build (`.next`) und
-> die Umgebungsdatei (`.env`) und stellt beides beim Rücksprung wieder her.
-> Die **Datenbank sichert es nicht** — und der Rücksprung kann eine bereits
-> angewandte Migration auch nicht zurücknehmen. Das ist keine Nachlässigkeit,
-> sondern eine Grenze: Migrationen sind vorwärtsgerichtet, ein Rückweg müsste
-> fachlich formuliert werden und lässt sich nicht allgemein erzeugen.
->
-> Solange eine Auslieferung keine Migration mitbringt, ist der Rücksprung
-> vollständig. Vor der **ersten** Auslieferung mit echter Schemaänderung
-> braucht die Pipeline deshalb:
->
-> 1. ein `pg_dump` unmittelbar vor `prisma migrate deploy`, abgelegt neben dem
->    Build unter `.deploy/backups/<Zeitstempel>/`,
-> 2. eine Aufbewahrungsregel (die Sicherungen wachsen sonst unbegrenzt),
-> 3. einen **geprobten** Rückweg — eine Sicherung, die nie zurückgespielt
->    wurde, ist eine Vermutung, keine Sicherung.
->
-> Bis dahin gilt: Auslieferungen mit Migration von Hand begleiten und vorher
-> selbst sichern.
+### Datenbanksicherung vor Schemaänderungen
+
+Hier stand bis zuletzt ein offener P1: Die Auslieferung sicherte Build und
+`.env` — also genau das, was sich aus Git und den Secrets wiederherstellen
+lässt — und **nicht** die Daten. Der Punkt ist geschlossen.
+
+**Was jetzt passiert.** Meldet `prisma migrate status` offene Migrationen,
+läuft vor `migrate deploy` zwingend:
+
+1. **`scripts/migration-preflight.ts`** — liest die offenen Migrationen, sammelt
+   jede darin verlangte Eindeutigkeit ein und prüft **nur lesend**, ob die
+   vorhandenen Daten sie verletzen würden. Tabellen und Spalten, die dieselbe
+   Reihe erst anlegt, werden als solche erkannt und übersprungen.
+2. **`scripts/db-backup.ts`** — `pg_dump --format=custom`, danach vier
+   Prüfungen: Datei vorhanden, Grösse > 0, `pg_restore --list` lesbar und nicht
+   leer, SHA-256 gebildet.
+
+Beides ist **fail-closed**: Meldet die Vorprüfung einen Konflikt oder scheitert
+die Sicherung, endet die Auslieferung *vor* der ersten Schemaänderung. Ohne
+offene Migration wird nichts gesichert — es ändert sich ja nichts.
+
+| | |
+|---|---|
+| **Ablageort** | `CLENARIS_BACKUP_DIR`, Vorgabe `<über der Anwendung>/backups/clenaris-db`. Bewusst **ausserhalb** des Anwendungsverzeichnisses: Dort räumen `git reset --hard` und die Aufbewahrung der Build-Sicherungen. Wer `/var/backups/clenaris/database` will, gibt dem Dienstbenutzer Schreibrecht und setzt die Variable. |
+| **Format** | PostgreSQL Custom Archive (`--format=custom`, Kompression 6) — wahlfrei wiederherstellbar, einzelne Tabellen möglich |
+| **Name** | `clenaris_<UTC-Zeitstempel>_<Commit>.dump`, etwa `clenaris_2026-09-20T21-19-18-860Z_4eb385f2b032.dump` |
+| **Rechte** | Verzeichnis `700`, Datei `600`. Kein Nginx-Zugriff, kein Abruf über die Anwendung, **kein** Upload als CI-Artefakt |
+| **Aufbewahrung** | `CLENARIS_BACKUP_KEEP`, Vorgabe 7. Gelöscht wird erst **nach** der geprüften neuen Sicherung, nur im Sicherungsverzeichnis, nur bei exakt passendem Namensmuster, und die neueste nie |
+| **Protokolliert** | Zeitpunkt, Dateiname, Grösse, SHA-256, Archiveinträge, Server- und Clientversion |
+| **Nie protokolliert** | Verbindungszeichenfolge, Passwort, Secrets. Die Verbindung wird zerlegt und über `PGHOST`/`PGUSER`/`PGPASSWORD` übergeben — sie steht damit auch nicht in der Prozessliste des Servers |
+
+**Versionen.** Vor dem Dump wird `SHOW server_version` gegen den Server und
+`pg_dump --version` gegen den Client gestellt. Ein Client mit kleinerer
+Hauptversion bricht ab — ein älterer `pg_dump` kennt neuere Katalogstrukturen
+nicht und erzeugt im schlimmsten Fall ein unvollständiges Archiv, das erst beim
+Zurückspielen auffällt.
+
+**Der geprobte Rückweg.** `scripts/db-restore-verify.ts` legt eine
+Wegwerfdatenbank `clenaris_restore_verify_<Zeitstempel>` an, spielt ein Archiv
+hinein, vergleicht die Zeilenzahlen von vierzehn Tabellen mit der Quelle und
+wirft sie wieder weg. Der Zielname wird im Skript erzeugt und muss einem festen
+Muster entsprechen — `clenaris`, `clenaris_preview`, `clenaris_test` und jede
+Produktionsadresse können es nicht erfüllen.
+
+```bash
+# Sicherung von Hand, etwa vor einem Eingriff:
+APP_DIRECTORY=/home/clenaris/app npx tsx scripts/db-backup.ts --grund manuell
+
+# Den Rückweg proben (nicht gegen Production):
+npx tsx scripts/db-restore-verify.ts --datei <pfad.dump>
+```
+
+Der Restore-Test läuft **nicht** bei jeder Auslieferung: Dafür bräuchte es eine
+zweite Datenbank in Produktionsgrösse, und die gibt es nicht. Er beweist den
+Mechanismus; ein eigener Wiederherstellungslauf kann später folgen.
+
+**Zurückspielen im Ernstfall.** Das Archiv ist ein gewöhnliches Custom Archive:
+
+```bash
+# In eine frische Datenbank, nicht über die laufende drüber:
+createdb clenaris_wiederhergestellt
+pg_restore --no-owner --exit-on-error --dbname clenaris_wiederhergestellt <pfad.dump>
+```
+
+Erst prüfen, dann umschalten. Eine Migration wird **nicht** automatisch
+rückwärts ausgeführt — das bleibt eine fachliche Entscheidung.
+
+**Wenn etwas schiefgeht.** Scheitert die Sicherung oder die Vorprüfung, wird
+nicht migriert und nicht ausgeliefert; der laufende Stand bleibt unberührt.
+Scheitert die Migration selbst, bricht die Auslieferung ab, bevor gebaut oder
+neu geladen wird — die Anwendung läuft weiter auf dem alten Build, und die
+Sicherung von eben liegt bereit. Scheitert der Health Check, springt die
+Auslieferung auf den vorherigen Commit und den gesicherten Build zurück; das
+Schema bleibt, wie die Migration es hinterlassen hat.
 
 > **`npm run db:seed:demo` gehört nie auf ein System, das in Betrieb geht.**
 > Er legt erfundene Kundschaft, erfundene Bewertungen und **Rechnungen** an.
