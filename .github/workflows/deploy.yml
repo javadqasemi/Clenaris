@@ -168,6 +168,11 @@ jobs:
           TRUSTED_PROXY_MODE: NONE
           CLENARIS_TEST_CACHE_DIR: ${{ runner.temp }}/clenaris-tests/cache
         run: |
+          # Das Verzeichnis muss vor dem Start stehen: Dort landen die
+          # Rate-Limit-Zähler und der simulierte Postausgang. Die
+          # Browser-Prüfreihe verweigert den Start, wenn es fehlt — der
+          # Offertlink aus Gate 4C ist nur dort zu holen.
+          mkdir -p "${CLENARIS_TEST_CACHE_DIR}"
           NODE_ENV=production npx next start > server.log 2>&1 &
           echo $! > server.pid
           for i in $(seq 1 60); do
@@ -191,6 +196,36 @@ jobs:
         env:
           TEST_BASE_URL: http://localhost:3000
           CLENARIS_TEST_CACHE_DIR: ${{ runner.temp }}/clenaris-tests/cache
+
+      # -- Browser ------------------------------------------------------
+      #
+      # Gate 4D.1 hat die Browserebene als release-relevant eingeführt, und
+      # Gate 4D.2 hat gezeigt, warum sie es ist: Der PDF-Viewer war in jedem
+      # echten Chrome kaputt, während 812 HTTP-Prüfungen grün blieben. Ein
+      # Lauf, der diese Ebene auslässt, prüft das Produkt nicht dort, wo die
+      # Kundschaft es benutzt.
+      #
+      # Die Reihe fährt gegen den bereits laufenden Server auf 3000 statt
+      # einen zweiten zu starten (`E2E_PORT`), und sie braucht denselben
+      # Postausgang wie die HTTP-Reihe.
+      - name: Browser installieren
+        run: npx playwright install --with-deps chromium
+
+      - name: Browser-Prüfreihe
+        env:
+          E2E_PORT: '3000'
+          CLENARIS_TEST_CACHE_DIR: ${{ runner.temp }}/clenaris-tests/cache
+        run: npm run e2e
+
+      - name: Browser-Bericht sichern
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-bericht
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 7
 
       - name: Anwendung beenden
         if: always()

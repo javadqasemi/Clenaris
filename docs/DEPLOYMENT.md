@@ -476,14 +476,53 @@ pm2 startup        # den ausgegebenen Befehl als root ausführen
 Ohne `pm2 startup` und `pm2 save` steht die Anwendung nach einem Neustart des
 Servers still — und niemand merkt es, bis die erste Anfrage kommt.
 
-**13.4 Zugangsschlüssel.** Auf dem Arbeitsplatz erzeugen, den öffentlichen Teil
-auf den Server legen, den privaten als GitHub Secret:
+**13.4 Zugangsschlüssel und Wirtsschlüssel.** Auf dem Arbeitsplatz erzeugen, den
+öffentlichen Teil auf den Server legen, den privaten als GitHub Secret:
 
 ```bash
 ssh-keygen -t ed25519 -C "github-actions-clenaris" -f ~/.ssh/clenaris_deploy -N ""
 ssh-copy-id -i ~/.ssh/clenaris_deploy.pub clenaris@<server>
-ssh-keyscan -H <server> | base64 -w0     # Inhalt für SERVER_SSH_KNOWN_HOSTS
 ```
+
+**Der Wirtsschlüssel ist Pflicht, und `ssh-keyscan` allein genügt nicht.**
+
+Hier stand einmal, `SERVER_SSH_KNOWN_HOSTS` sei „empfohlen" und ein fehlender
+Schlüssel werde mit einer Warnung ungeprüft übernommen. Beides ist seit
+`625cfc2` falsch: Die Auslieferung **bricht ab**, wenn das Secret fehlt oder
+keinen Eintrag für den Wirt enthält, und sie verbindet ausschliesslich mit
+`StrictHostKeyChecking=yes`.
+
+Der Grund steht im Workflow ausführlich: Ein Rückfall auf `ssh-keyscan` ist
+Vertrauen beim ersten Kontakt. An einem Arbeitsplatz, der sich den Schlüssel
+merkt, ist das vertretbar; in einer Pipeline ist **jede** Verbindung die erste,
+also findet die Prüfung nie statt — und wer sich dazwischenstellt, bekommt den
+privaten Auslieferungsschlüssel und damit den Server.
+
+`ssh-keyscan` beantwortet nur die Frage „welchen Schlüssel bietet der Gegenüber
+gerade an". Es beantwortet **nicht** die Frage, ob das der richtige Gegenüber
+ist. Deshalb in dieser Reihenfolge, und der zweite Schritt ist der eigentliche:
+
+```bash
+# 1) Den angebotenen Schlüssel einsammeln — noch ohne ihm zu trauen.
+ssh-keyscan -t ed25519 <server> > /tmp/clenaris_known_hosts
+ssh-keygen -lf /tmp/clenaris_known_hosts -E sha256
+
+# 2) Auf dem Server selbst — über die Konsole des Anbieters, NICHT über SSH —
+#    denselben Fingerabdruck ausgeben lassen:
+ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub -E sha256
+
+# 3) Nur bei zeichengenauer Übereinstimmung: Inhalt als Secret hinterlegen.
+cat /tmp/clenaris_known_hosts
+```
+
+Stimmen die beiden Fingerabdrücke nicht überein, wird **nicht** ausgeliefert —
+dann steht jemand dazwischen, oder der Server wurde neu aufgesetzt. Im zweiten
+Fall wird der Schlüssel bewusst und nachvollziehbar ersetzt, nicht stillschweigend
+übernommen. Es gab in diesem Projekt bereits einen Wirtsschlüsselkonflikt; er ist
+der Grund für diesen Abschnitt.
+
+Bei einem SSH-Port ungleich 22 muss der Eintrag die Form `[host]:port` haben —
+der Workflow prüft das mit `ssh-keygen -F` und bricht sonst ab.
 
 In `/etc/ssh/sshd_config` sicherstellen: `PermitRootLogin no`,
 `PasswordAuthentication no`.
@@ -613,7 +652,7 @@ der nächtliche Führungslauf aus — ohne jede Fehlermeldung.
 | `DATABASE_URL` | ja | Verbindung der Anwendung |
 | `JWT_SECRET` | ja | Mindestens 32 Zeichen. **Nie ändern** — ein neuer Wert meldet alle Sitzungen ab |
 | `SERVER_PORT` | nein | SSH-Port, Vorgabe 22 |
-| `SERVER_SSH_KNOWN_HOSTS` | empfohlen | Wirtsschlüssel. Fehlt er, wird er ungeprüft übernommen und der Lauf warnt |
+| `SERVER_SSH_KNOWN_HOSTS` | **ja** | Gepinnter Wirtsschlüssel. Fehlt er, **bricht die Auslieferung ab** — es gibt keinen Rückfall (siehe 13.4) |
 | `DIRECT_URL` | empfohlen | Direktverbindung für Migrationen |
 | `API_URL` | empfohlen | Öffentliche Adresse, zurzeit `https://clenaris.qasemi.ch`. Wird zu `NEXT_PUBLIC_APP_URL` und trägt den Health Check von aussen |
 | `ENCRYPTION_KEY` | empfohlen | Schlüssel der Feldverschlüsselung (64 Hex). Ohne ihn leitet die Anwendung ihn aus `JWT_SECRET` ab — siehe Abschnitt 3 |
