@@ -46,44 +46,66 @@ Repository. Der Seed bricht in der Produktion ab, wenn sie fehlen.
 
 ### Vor dem nächsten Push: offene Release-Blocker
 
-Stand 2026-09-21, nach der Freigabe des Betreibers. Punkt 3 bis 5 waren das
-eigentliche Push-Tor — ein Push auf `main` löst die Auslieferung aus —, und
-sie sind erledigt.
+Stand 2026-09-21.
 
-**Zur Spalte „Stand" gehört, woher die Aussage kommt.** Einiges ist von diesem
-Arbeitsplatz aus nachprüfbar, anderes grundsätzlich nicht: GitHub gibt
-Secretwerte technisch nicht heraus, und die Hetzner-Konsole steht hier nicht
-zur Verfügung. Wo nur der Betreiber es sehen kann, steht *bestätigt* statt
-*geprüft*. Das ist kein Misstrauen, sondern die Trennung, die diese Tabelle
-überhaupt nützlich macht.
+**Die Spalte „Beleg" ist der eigentliche Inhalt dieser Tabelle.** Ein Häkchen
+ohne Beleg ist in einer Sicherheitsliste schlimmer als ein offener Punkt: Der
+offene Punkt wird bearbeitet, das unbelegte Häkchen nicht mehr. Deshalb drei
+Stufen, und sie werden nicht vermischt:
+
+- **belegt** — von diesem Arbeitsplatz aus nachgemessen (Hetzner-API,
+  TLS-Handshake, Portversuch, Prisma-Versuch).
+- **bestätigt** — der Betreiber hat es gesehen, hier grundsätzlich nicht
+  nachprüfbar. Trifft auf GitHub-Secrets zu (GitHub gibt Werte technisch nicht
+  heraus) und auf die Anbieterkonsole.
+- **unbelegt** — es liegt *kein* aktueller Beleg vor. Auch dann, wenn die
+  Arbeit vielleicht getan ist.
+
+Der Unterschied zwischen *bestätigt* und *unbelegt* hängt daran, ob es einen
+unabhängigen Messweg gibt. Bei einem Secret gibt es keinen — die Aussage des
+Betreibers ist die bestmögliche Evidenz. Beim Zustand eines Hetzner-Servers
+gibt es einen: die API. Solange die nicht neu abgefragt wurde, bleibt der
+letzte tatsächliche Messwert massgeblich, und der lautete am 2026-09-21: keine
+Cloud-Firewall, `delete_protection: false`, `rebuild_protection: false`.
 
 | # | Punkt | Stand | Beleg |
 |---|---|---|---|
-| 1 | Aktuellen Server bestätigt: Hetzner `164144336`, `2.29.18.45`, hel1 | **erledigt** | Hetzner-API und TLS-Zertifikat des Ursprungs |
+| 1 | Aktuellen Server bestätigt: Hetzner `164144336`, `2.29.18.45`, hel1 | **belegt** | Hetzner-API und TLS-Zertifikat des Ursprungs |
 | 2 | Frühere Auslieferungsläufe auf Geheimnisabfluss geprüft | **teilweise** | `SECRET EXPOSURE STATUS UNKNOWN`, Begründung in `NEXT_DEVELOPMENT_AUDIT.md` S-09 |
-| 3 | `SERVER_HOST` zeigt auf den aktuellen Server | **erledigt** | bestätigt vom Betreiber |
-| 4 | Host-Schlüssel von `2.29.18.45` über die Hetzner-Konsole erhoben | **erledigt** | `SHA256:LqwwARXhcVf1Md+wPBEUiurjML0s1+nIpvTMUeU2YDI`, gegen die Konsole abgeglichen; siehe 13.4a |
-| 5 | `SERVER_SSH_KNOWN_HOSTS` mit genau diesem Schlüssel gesetzt | **erledigt** | bestätigt vom Betreiber |
-| 6 | Cloud-Firewall am Server | **erledigt** | bestätigt vom Betreiber — die alte `Zentra-Firewall` (22/5432/4444 gegen `0.0.0.0/0`) darf dafür **nicht** verwendet worden sein |
-| 7 | Port 3000 extern dicht | **erledigt** | externer Verbindungsversuch: gefiltert |
-| 8 | PostgreSQL (5432/5433) extern dicht | **erledigt** | beide gefiltert |
-| 9 | Redis (6379) extern dicht | **erledigt** | gefiltert |
-| 10 | Lösch- und Rebuild-Schutz am Server | **erledigt** | bestätigt vom Betreiber |
-| 11 | `pg_dump`/`pg_restore` auf dem Server vorhanden und Hauptversion ≥ Server | **erledigt** | bestätigt vom Betreiber; das Sicherungsskript prüft es beim Lauf noch einmal selbst und bricht sonst ab |
-| 12 | Sicherungsverzeichnis beschreibbar | **erledigt** | bestätigt vom Betreiber |
-| 13 | Produktions-Secrets vollständig | **offen** | nur der Betreiber kann das sehen; die Liste steht in 14.1 |
-| 14 | Migrations-Vorprüfung gegen Produktionsdaten | läuft automatisch | `scripts/migration-preflight.ts`, fail-closed |
-| 15 | Unmittelbare Datenbanksicherung | läuft automatisch | `scripts/db-backup.ts`, fail-closed |
-| 16 | Push, CI, Auslieferung | freigegeben | — |
+| 3 | `SERVER_HOST` zeigt auf den aktuellen Server | **bestätigt** | Aussage des Betreibers; ein anderer Weg existiert nicht |
+| 4 | Host-Schlüssel von `2.29.18.45` über die Hetzner-Konsole erhoben | **bestätigt** | `SHA256:LqwwARXhcVf1Md+wPBEUiurjML0s1+nIpvTMUeU2YDI`, vom Betreiber gegen die Konsole abgeglichen; Schlüsselkörper hier strukturell geprüft (13.4a) |
+| 5 | `SERVER_SSH_KNOWN_HOSTS` mit genau diesem Schlüssel gesetzt | **bestätigt** | Aussage des Betreibers |
+| 6 | **Hetzner Cloud Firewall** am Server | **unbelegt** | letzte API-Messung: **keine** Firewall zugewiesen. Die vorhandene `Zentra-Firewall` (id 2454352) öffnet 22/5432/4444 gegen `0.0.0.0/0` und darf **nicht** angehängt werden |
+| 7 | Port 3000 extern dicht | **belegt** | externer Verbindungsversuch: gefiltert — durch die **Firewall auf dem Server**, siehe unten |
+| 8 | PostgreSQL (5432/5433) extern dicht | **belegt** | beide gefiltert, ebenfalls serverseitig |
+| 9 | Redis (6379) extern dicht | **belegt** | gefiltert, ebenfalls serverseitig |
+| 10 | `delete_protection` am Server | **unbelegt** | letzte API-Messung: `false` |
+| 11 | `rebuild_protection` am Server | **unbelegt** | letzte API-Messung: `false` |
+| 12 | `pg_dump`/`pg_restore` auf dem Server vorhanden und Hauptversion ≥ Server | **unbelegt** | das Sicherungsskript prüft es beim Lauf selbst und bricht sonst ab — der Lauf ist damit sicher, aber nicht vorab belegt |
+| 13 | Sicherungsverzeichnis beschreibbar | **unbelegt** | ebenso, fail-closed im Skript |
+| 14 | Produktions-Secrets vollständig | **offen** | nur der Betreiber kann das sehen; Liste in 14.1. **`DIRECT_URL` ist erforderlich** — siehe dort |
+| 15 | Migrations-Vorprüfung gegen Produktionsdaten | läuft automatisch | `scripts/migration-preflight.ts`, fail-closed |
+| 16 | Unmittelbare Datenbanksicherung | läuft automatisch | `scripts/db-backup.ts`, fail-closed |
+
+**Die beiden Firewalls gehören auseinandergehalten.** Punkt 6 und die Punkte 7
+bis 9 messen nicht dasselbe:
+
+- Die **Hetzner Cloud Firewall** liegt vor dem Server, im Netz des Anbieters.
+  Sie ist unabhängig vom Betriebssystem und wirkt auch dann, wenn die Maschine
+  falsch konfiguriert, frisch aufgesetzt oder im Rettungssystem ist. **Sie ist
+  nicht vorhanden.**
+- Die **Firewall auf dem Server** (nftables/ufw) ist vorhanden und wirksam —
+  das ist durch den Portversuch von aussen belegt und der Grund, warum 3000,
+  5432, 5433 und 6379 geschlossen sind.
+
+Dass 7 bis 9 belegt sind, heisst also **nicht**, dass 6 erledigt ist. Es ist
+eine Schicht statt zwei. Das ist kein offenes Scheunentor und auch kein
+Push-Hindernis, aber ein `ufw disable` oder ein Rebuild nimmt in der jetzigen
+Lage die einzige Schicht weg.
 
 Punkt 2 bleibt bewusst offen und ist **kein** Push-Hindernis: Die Frage
 betrifft die Vergangenheit, nicht den nächsten Lauf. Der nächste Lauf geht
 gegen einen gepinnten, beim Anbieter gegengeprüften Wirtsschlüssel.
-
-Zu 7 bis 9: Der Server hat **keine** Cloud-Firewall, die Ports sind trotzdem
-dicht — das besorgt die Firewall auf dem Server selbst beziehungsweise die
-Loopback-Bindung. Die Cloud-Firewall bleibt als zweite Schicht empfehlenswert,
-ist aber kein offenes Scheunentor.
 
 ### Zwei Sicherungsebenen, die nicht dasselbe sind
 
@@ -831,17 +853,30 @@ der nächtliche Führungslauf aus — ohne jede Fehlermeldung.
 | Secret | Pflicht | Bedeutung |
 | --- | --- | --- |
 | `SERVER_HOST` | ja | Adresse des Servers. **Quelle der Wahrheit** — die Adresse wird nirgends im Repository hartkodiert. Vor dem nächsten Push prüfen, dass sie auf den aktuellen Server zeigt (`2.29.18.45`, Hetzner `164144336`) und **nicht** mehr auf `46.62.175.39`; jene Adresse gehört seit dem Neuaufbau einem Dritten (`PTR mail1.domainmarket.gr`). GitHub gibt Secretwerte nicht heraus — die Prüfung kann nur Sie vornehmen |
-| `SERVER_USER` | ja | Dienstbenutzer, etwa `clenaris` |
+| `SERVER_USER` | ja | Dienstbenutzer, etwa `clenaris`. Anders als `SERVER_HOST` und `SERVER_SSH_KEY` **ungeprüft**: Fehlt er, verbindet der Lauf als `@host` und scheitert erst beim Aushandeln, mit einer Meldung, die aufs Netz zeigt statt auf die Konfiguration |
 | `SERVER_SSH_KEY` | ja | Privater Schlüssel, vollständig samt Kopf- und Fusszeile |
 | `APP_DIRECTORY` | ja | Absoluter Pfad, etwa `/home/clenaris/app` |
 | `DATABASE_URL` | ja | Verbindung der Anwendung |
-| `JWT_SECRET` | ja | Mindestens 32 Zeichen. **Nie ändern** — ein neuer Wert meldet alle Sitzungen ab |
+| `JWT_SECRET` | ja | Mindestens 32 Zeichen. **Nie ändern** — ein neuer Wert meldet alle Sitzungen ab, und ohne eigenen `ENCRYPTION_KEY` hängt die Feldverschlüsselung daran (siehe dort) |
 | `SERVER_PORT` | nein | SSH-Port, Vorgabe 22 |
 | `SERVER_SSH_KNOWN_HOSTS` | **ja** | Gepinnter Wirtsschlüssel. Fehlt er, **bricht die Auslieferung ab** — es gibt keinen Rückfall (siehe 13.4). Der Wert für den aktuellen Server steht fertig in **13.4a**; sein Fingerabdruck ist `SHA256:Lqww…U2YDI`. Ein Eintrag, der aus einem `ssh-keyscan` gegen `46.62.175.39` stammt, pinnt den Schlüssel eines fremden Hosts und ist sofort zu ersetzen |
-| `DIRECT_URL` | empfohlen | Direktverbindung für Migrationen |
+| `DIRECT_URL` | **ja** | Direktverbindung für Migrationen. Hier stand „empfohlen" — das war falsch. `prisma/schema.prisma` deklariert `directUrl = env("DIRECT_URL")`, und Prisma bricht ohne die Variable mit **P1012 „Environment variable not found: DIRECT_URL"** ab; **ein leerer Wert zählt dabei als fehlend.** Damit scheitern `prisma generate`, der Bau und `migrate deploy` auf dem Server. Der Workflow überträgt die Variable aber nur, wenn sie nicht leer ist — fehlt das Secret, kommt sie nie in der `.env` an. Nachgemessen am 2026-09-21 gegen ein isoliertes Schema, damit die `.env` des Arbeitsplatzes die Antwort nicht verfälscht |
 | `API_URL` | empfohlen | Öffentliche Adresse, zurzeit `https://clenaris.qasemi.ch`. Wird zu `NEXT_PUBLIC_APP_URL` und trägt den Health Check von aussen |
 | `ENCRYPTION_KEY` | empfohlen | Schlüssel der Feldverschlüsselung (64 Hex). Ohne ihn leitet die Anwendung ihn aus `JWT_SECRET` ab — siehe Abschnitt 3 |
 | `CRON_SECRET` | empfohlen | Für die planmässigen Aufgaben |
+
+**Bestehende Werte nicht ohne Not neu erzeugen.** Für vier Secrets ist ein
+frischer Wert keine Hygienemassnahme, sondern ein Eingriff mit Folgen:
+
+| Secret | Was ein neuer Wert anrichtet |
+|---|---|
+| `DATABASE_URL` | zeigt auf eine andere Datenbank oder scheitert. Nur ändern, wenn sich Zugangsdaten oder Ziel tatsächlich geändert haben |
+| `JWT_SECRET` | alle bestehenden Sitzungen sind sofort ungültig — und alle Verschlüsselungswerte, falls kein eigener `ENCRYPTION_KEY` gesetzt ist |
+| `CRON_SECRET` | die Cron-Einträge auf dem Server tragen den alten Wert; die planmässigen Aufgaben scheitern danach still mit 401 |
+| `ENCRYPTION_KEY` | **der gefährlichste.** `src/lib/crypto.ts` kennt keine Schlüsselrotation und keinen Zweitschlüssel-Lesepfad (S-08). Sind bereits TOTP-Geheimnisse, AHV-Nummern oder Alarmcodes verschlüsselt, macht ein neuer Wert sie unlesbar — nicht ungültig, sondern unwiederbringlich. Nur setzen, solange noch kein solcher Wert geschrieben ist |
+
+Für alle vier gilt: Wenn sie heute gesetzt und funktionsfähig sind, bleiben sie
+stehen.
 
 **Zwei Namen aus der Anforderung gibt es hier nicht.**
 
