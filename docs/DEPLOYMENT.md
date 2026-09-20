@@ -75,6 +75,19 @@ offene Migration wird nichts gesichert — es ändert sich ja nichts.
 | **Protokolliert** | Zeitpunkt, Dateiname, Grösse, SHA-256, Archiveinträge, Server- und Clientversion |
 | **Nie protokolliert** | Verbindungszeichenfolge, Passwort, Secrets. Die Verbindung wird zerlegt und über `PGHOST`/`PGUSER`/`PGPASSWORD` übergeben — sie steht damit auch nicht in der Prozessliste des Servers |
 
+> **Voraussetzung auf dem Server.** Die Sicherung braucht `pg_dump`,
+> `pg_restore` und `psql` — die PostgreSQL-Clientwerkzeuge. Auf einem Server,
+> auf dem die Datenbank selbst läuft, sind sie da; liegt die Datenbank
+> woanders, gehören sie nachinstalliert:
+>
+> ```bash
+> sudo apt install postgresql-client-18   # Hauptversion wie der Server
+> ```
+>
+> Fehlen sie, bricht die Auslieferung **vor** der Migration ab und sagt es —
+> sie läuft nicht ohne Sicherung weiter. Liegen sie ausserhalb des `PATH`,
+> zeigt `PG_BIN` auf ihr Verzeichnis.
+
 **Versionen.** Vor dem Dump wird `SHOW server_version` gegen den Server und
 `pg_dump --version` gegen den Client gestellt. Ein Client mit kleinerer
 Hauptversion bricht ab — ein älterer `pg_dump` kennt neuere Katalogstrukturen
