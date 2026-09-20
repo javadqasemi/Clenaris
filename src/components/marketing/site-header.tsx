@@ -201,8 +201,20 @@ export function SiteHeader({
       )}
     >
       <div className="container flex h-[4.5rem] items-center justify-between gap-4">
-        <div className="flex items-center gap-8">
-          <Logo />
+        <div className="flex min-w-0 items-center gap-8">
+          {/*
+            Unter 640 px trägt die Bildmarke allein.
+
+            Die Zeile muss dort Marke, Hörer, einen Handlungsaufruf und das
+            Menü fassen. Mit ausgeschriebener Wortmarke sind das rund 358 px
+            bei 335 px verfügbarer Breite auf einem 375-px-Telefon — es passt
+            also nicht, und etwas muss weichen. Die Wahl fiel auf die
+            Wortmarke und nicht auf den Hörer: Die Bildmarke ist unverkennbar
+            und führt weiterhin zur Startseite, während „anrufen" die Handlung
+            ist, wegen der jemand die Seite eines lokalen Betriebs auf dem
+            Telefon öffnet.
+          */}
+          <Logo className="shrink-0 max-sm:[&>span]:hidden" />
 
           <nav className="hidden items-center gap-1 lg:flex" aria-label="Hauptnavigation">
             {/* Leistungen */}
@@ -300,7 +312,7 @@ export function SiteHeader({
           </nav>
         </div>
 
-        <div className="flex items-center gap-1.5">
+        <div className="flex shrink-0 items-center gap-1.5">
           {/*
             Anrufen und Buchen sind die beiden Handlungen, wegen derer jemand
             hier ist — sie bleiben auf jedem Bildschirm sichtbar und wandern
@@ -327,8 +339,25 @@ export function SiteHeader({
             Reihenfolge: erst die Handlung, wegen der jemand hier ist („Termin
             buchen"), dann Anmelden, ganz rechts das Farbschema. Das Wichtigste
             steht damit direkt neben dem Buchungsknopf, die Einstellung am Rand.
+
+            Auf dem Telefon bleibt davon **eine** Schaltfläche übrig. Zwei
+            passten dort nie: Wortmarke, Hörer, zwei Aufrufe und das Menü
+            ergeben rund 480 px in einer Zeile, die auf einem üblichen Gerät
+            375 px breit ist. Weil `CtaSlot` standardmässig umbricht, fiel das
+            nicht als Überlauf auf, sondern als zweite Zeile in einer Kopfzeile
+            mit fester Höhe von 4.5 rem — die Schaltfläche wurde also schlicht
+            abgeschnitten. `flex-nowrap` nimmt den Umbruch weg, damit ein
+            künftiger Fehler dieser Art sichtbar ist statt versteckt, und die
+            zweite Schaltfläche wird unterhalb von 640 px ausgeblendet. Sie
+            geht nicht verloren: im Menü stehen dieselben Aufrufe oben und über
+            die volle Breite.
           */}
-          <CtaSlot ctas={ctas} size="sm" max={2} className="gap-1.5" />
+          <CtaSlot
+            ctas={ctas}
+            size="sm"
+            max={2}
+            className="flex-nowrap gap-1.5 max-sm:[&>*:nth-child(n+2)]:hidden"
+          />
 
           <AccountButton className="hidden sm:inline-flex" />
           <ThemeToggle className="hidden md:inline-flex" />

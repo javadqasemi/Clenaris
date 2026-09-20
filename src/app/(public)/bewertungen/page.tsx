@@ -76,11 +76,17 @@ export default async function ReviewsPage() {
               Wir veröffentlichen alle Bewertungen — auch die kritischen. Bewerten kann nur, wer
               tatsächlich einen Einsatz bei uns gebucht hat.
             </p>
-            <div className="flex flex-wrap items-center gap-3">
-              <Stars rating={average} />
-              <span className="text-lg font-semibold tabular-nums">{average.toFixed(1)} / 5</span>
-              <span className="text-muted-foreground">aus {total} Bewertungen</span>
-            </div>
+            {/* Ohne Bewertungen keine Notenzeile: «0.0 / 5 aus 0 Bewertungen»
+                neben fünf leeren Sternen liest sich wie eine vernichtende
+                Bilanz, obwohl schlicht noch niemand geantwortet hat. Der
+                leere Zustand weiter unten sagt dasselbe, nur richtig. */}
+            {total > 0 ? (
+              <div className="flex flex-wrap items-center gap-3">
+                <Stars rating={average} />
+                <span className="text-lg font-semibold tabular-nums">{average.toFixed(1)} / 5</span>
+                <span className="text-muted-foreground">aus {total} Bewertungen</span>
+              </div>
+            ) : null}
           </div>
         </div>
       </section>
@@ -107,7 +113,10 @@ export default async function ReviewsPage() {
               action={{ href: '/buchen', label: 'Termin buchen' }}
             />
           ) : (
-            <ul className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
+            /* Siehe Ratgeberliste: ab `3xl` wächst der Behälter, und eine
+               Bewertung ist ein kurzer Text — drei Spalten würden dort zu
+               sehr breiten, sehr flachen Karten. */
+            <ul className="grid gap-6 md:grid-cols-2 lg:grid-cols-3 3xl:grid-cols-4 5xl:grid-cols-5">
               {reviews.map((review) => (
                 <li key={review.id}>
                   <figure className="flex h-full flex-col gap-4 rounded-2xl border border-border bg-card p-6 shadow-soft">

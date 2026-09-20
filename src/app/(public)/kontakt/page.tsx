@@ -23,7 +23,10 @@ export default async function ContactPage() {
     <>
       <section className="relative overflow-hidden border-b border-border">
         <div className="aare-wash pointer-events-none absolute inset-0" aria-hidden />
-        <div className="container relative py-16 sm:py-20">
+        {/* Auch der Kopfbereich trägt `form-measure`: Sonst begänne die
+            Überschrift auf einem sehr breiten Bildschirm weiter links als das
+            Formular darunter, und die Seite hätte zwei linke Kanten. */}
+        <div className="form-measure container relative py-16 sm:py-20">
           <div className="max-w-2xl space-y-5">
             <h1 className="text-display font-bold text-balance">Sprechen wir darüber</h1>
             <p className="text-lg leading-relaxed text-muted-foreground">
@@ -35,7 +38,9 @@ export default async function ContactPage() {
       </section>
 
       <Section>
-        <div className="container grid gap-12 lg:grid-cols-[minmax(0,1fr)_22rem] lg:gap-16">
+        {/* `form-measure`: Höchstbreite auf sehr grossen Bildschirmen, siehe
+            `globals.css`. */}
+        <div className="form-measure container grid gap-12 lg:grid-cols-[minmax(0,1fr)_22rem] lg:gap-16">
           {/* Formular */}
           <div className="space-y-6">
             <h2 className="text-headline font-bold">Schreiben Sie uns</h2>

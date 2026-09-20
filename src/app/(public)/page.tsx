@@ -107,7 +107,18 @@ export default async function HomePage() {
       prisma.job.count({ where: { organizationId, status: { in: ['COMPLETED', 'VERIFIED'] } } }),
     ]);
 
-  const averageRating = ratingAgg._avg.rating ?? 5;
+  /**
+   * Bewertungsschnitt nur, wenn es Bewertungen gibt.
+   *
+   * Hier stand `?? 5`: Ein Betrieb ohne eine einzige Bewertung zeigte damit
+   * fünf gefüllte Sterne und «5.0 aus 0 Bewertungen». Das ist keine
+   * Vorbelegung, sondern eine erfundene Zahl auf der Startseite — und eine
+   * erfundene Bestnote ist wettbewerbsrechtlich heikel (UWG Art. 3 Abs. 1
+   * lit. b). Ohne Bestand wird die Zeile weggelassen; sie kommt zurück,
+   * sobald die erste echte Bewertung freigegeben ist.
+   */
+  const hasReviews = ratingAgg._count > 0;
+  const averageRating = ratingAgg._avg.rating ?? 0;
 
   const priceFor = (service: (typeof services)[number]) => {
     switch (service.pricingModel) {
@@ -147,10 +158,12 @@ export default async function HomePage() {
                   <span className="status-dot bg-success" aria-hidden />
                   {cms.raw('home.hero.availability').replace('{datum}', nextAvailableLabel())}
                 </Badge>
-                <span className="inline-flex items-center gap-2 text-sm text-muted-foreground">
-                  <Stars rating={averageRating} />
-                  {averageRating.toFixed(1)} aus {ratingAgg._count} Bewertungen
-                </span>
+                {hasReviews ? (
+                  <span className="inline-flex items-center gap-2 text-sm text-muted-foreground">
+                    <Stars rating={averageRating} />
+                    {averageRating.toFixed(1)} aus {ratingAgg._count} Bewertungen
+                  </span>
+                ) : null}
               </div>
 
               <h1 className="text-display font-bold text-balance text-foreground">
@@ -203,13 +216,23 @@ export default async function HomePage() {
         </div>
       </section>
 
-      {/* ================== Kennzahlen ================== */}
+      {/* ================== Kennzahlen ==================
+          Nur Kacheln, hinter denen ein Bestand steht. Die Einsatzzahl stand
+          vorher als `Math.max(completedJobs, 1)` da — ein frisch aufgesetzter
+          Betrieb meldete damit einen abgeschlossenen Einsatz, den es nie gab.
+          Einsatzgebiet und Antwortzeit bleiben: das eine zählt gepflegte
+          Postleitzahlen, das andere ist eine redaktionelle Zusage, kein
+          gemessener Wert. */}
       <div className="container">
         <StatStrip
           stats={[
             { value: `${areaCount}`, label: cms.text('home.stats.areasLabel') },
-            { value: `${Math.max(completedJobs, 1)}`, label: cms.text('home.stats.jobsLabel') },
-            { value: averageRating.toFixed(1), label: cms.text('home.stats.ratingLabel') },
+            ...(completedJobs > 0
+              ? [{ value: `${completedJobs}`, label: cms.text('home.stats.jobsLabel') }]
+              : []),
+            ...(hasReviews
+              ? [{ value: averageRating.toFixed(1), label: cms.text('home.stats.ratingLabel') }]
+              : []),
             {
               value: cms.text('home.stats.responseValue'),
               label: cms.text('home.stats.responseLabel'),

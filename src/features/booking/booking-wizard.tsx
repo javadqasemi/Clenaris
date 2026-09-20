@@ -195,7 +195,9 @@ export function BookingWizard({
   };
 
   return (
-    <div className="grid gap-10 lg:grid-cols-[minmax(0,1fr)_22rem] lg:items-start">
+    // `form-measure` deckelt die Breite auf sehr grossen Bildschirmen — die
+    // Begründung steht bei der Klasse in `globals.css`.
+    <div className="form-measure grid gap-10 lg:grid-cols-[minmax(0,1fr)_22rem] lg:items-start">
       <div className="space-y-8">
         {/* Fortschritt */}
         <nav aria-label="Buchungsschritte">

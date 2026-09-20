@@ -443,7 +443,23 @@ export function AppShell({
           </div>
         </header>
 
-        <main id="inhalt" className="min-w-0 flex-1 p-4 sm:p-6 lg:p-8">
+        {/*
+          Die Arbeitsfläche wächst mit, aber nicht unbegrenzt.
+
+          Ohne Deckel zieht sich eine Liste auf einem 49-Zöller über 4700 px:
+          Der Blick muss dann zwischen der ersten und der letzten Spalte
+          derselben Zeile über einen halben Meter wandern, und genau dabei
+          verliert man die Zeile. 120 rem sind bei der auf solchen Geräten
+          angehobenen Grundschrift (siehe `globals.css`) rund 2900 px — breit
+          genug, dass eine Rechnungstabelle alle Spalten ohne Querlauf zeigt,
+          schmal genug, dass eine Zeile in einem Blick erfassbar bleibt.
+
+          Der Wert in `rem` ist hier wichtiger als in Pixeln: Er deckelt erst
+          jenseits jedes üblichen Bildschirms — bis 2240 px Arbeitsfläche
+          ändert sich nichts — und wächst danach im selben Takt wie die
+          Schrift.
+        */}
+        <main id="inhalt" className="mx-auto w-full min-w-0 max-w-[120rem] flex-1 p-4 sm:p-6 lg:p-8">
           {children}
         </main>
       </div>
