@@ -55,8 +55,8 @@ Auslieferung auslöst.
 | 1 | Aktuellen Server bestätigt: Hetzner `164144336`, `2.29.18.45`, hel1 | **erledigt** — Hetzner-API und TLS-Zertifikat des Ursprungs |
 | 2 | Frühere Auslieferungsläufe auf Geheimnisabfluss geprüft | **teilweise** — `SECRET EXPOSURE STATUS UNKNOWN`, Begründung in `NEXT_DEVELOPMENT_AUDIT.md` S-09 |
 | 3 | `SERVER_HOST` zeigt auf den aktuellen Server | **offen** — nur Sie können das sehen |
-| 4 | Host-Schlüssel von `2.29.18.45` über die Hetzner-Konsole erhoben | **offen** — der alte Fingerabdruck ist entwertet |
-| 5 | `SERVER_SSH_KNOWN_HOSTS` mit genau diesem Schlüssel gesetzt | **offen** |
+| 4 | Host-Schlüssel von `2.29.18.45` über die Hetzner-Konsole erhoben | **erledigt** — `SHA256:LqwwARXhcVf1Md+wPBEUiurjML0s1+nIpvTMUeU2YDI`, siehe 13.4a |
+| 5 | `SERVER_SSH_KNOWN_HOSTS` mit genau diesem Schlüssel gesetzt | **offen** — der Wert steht fertig in 13.4a und muss nur noch hinterlegt werden |
 | 6 | Cloud-Firewall am Server | **offen** — es hängt keine; die vorhandene `Zentra-Firewall` öffnet 22/5432/4444 gegen `0.0.0.0/0` und darf **nicht** angehängt werden |
 | 7 | Port 3000 extern dicht | **erledigt** — externer Verbindungsversuch: gefiltert |
 | 8 | PostgreSQL (5432/5433) extern dicht | **erledigt** — beide gefiltert |
@@ -641,6 +641,66 @@ der Workflow prüft das mit `ssh-keygen -F` und bricht sonst ab.
 In `/etc/ssh/sshd_config` sicherstellen: `PermitRootLogin no`,
 `PasswordAuthentication no`.
 
+**13.4a Der erhobene Wirtsschlüssel des aktuellen Servers.**
+
+Am 2026-09-21 hat der Betreiber `/etc/ssh/ssh_host_ed25519_key.pub` auf Server
+`164144336` über die **Hetzner-Konsole** gelesen — also über den Weg des
+Anbieters, nicht über SSH und nicht über `ssh-keyscan`. Der Kommentar im
+Schlüssel lautet `root@ubuntu-4gb-hel1-1` und passt zur Maschine (4 GB, hel1).
+
+| | |
+|---|---|
+| Typ | `ssh-ed25519`, 256 Bit |
+| SHA-256 | `SHA256:LqwwARXhcVf1Md+wPBEUiurjML0s1+nIpvTMUeU2YDI` |
+| MD5 | `MD5:42:8e:2a:a7:19:54:bc:c8:e6:90:a3:9f:72:a5:da:70` |
+
+Der Schlüsselkörper wurde vor der Übernahme strukturell geprüft: 68 Zeichen
+Base64, 51 Byte, längenpräfixiert als `ssh-ed25519` (11) plus 32 Byte
+Schlüsselmaterial. Ein Übertragungsschaden beim Abtippen wäre daran
+aufgefallen; der Zeilenumbruch, den die Konsole im Kommentar erzeugt, ist
+belanglos, weil der Kommentar weder in den Fingerabdruck noch in `known_hosts`
+eingeht.
+
+Damit ist der Wert für `SERVER_SSH_KNOWN_HOSTS` — eine Zeile, kein
+Zeilenumbruch am Ende nötig, und **ohne** Kommentar:
+
+```
+2.29.18.45 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBXDXamMZlC8r2Tr/9Oh2Q6MlyufpmZiU7eDwBwNQCGv
+```
+
+Zwei Bedingungen hängen daran:
+
+- **Der Name links muss zeichengenau dem entsprechen, was in `SERVER_HOST`
+  steht.** `ssh` schlägt unter dem Namen nach, mit dem es verbindet, nicht
+  unter der aufgelösten Adresse. Steht dort ein DNS-Name statt der IP, lautet
+  die Zeile `<name> ssh-ed25519 AAAA…`; bei einem Port ungleich 22
+  `[<name>]:<port> ssh-ed25519 AAAA…`. Sind beide Wege im Gebrauch, gehören
+  beide Zeilen ins Secret.
+- **Den Eintrag nicht mit `ssh-keygen -H` verschlüsseln.** Gehashte Einträge
+  funktionieren zwar, aber dann lässt sich der Secretwert nicht mehr mit blossem
+  Auge gegen den Fingerabdruck oben prüfen — und genau diese Nachprüfbarkeit ist
+  der Zweck der Übung.
+
+**Drei Schlüssel, die nicht verwechselt werden dürfen.** Das Projekt hat im
+Verlauf drei verschiedene ed25519-Wirtsschlüssel gesehen; nur der erste ist
+gültig:
+
+| Fingerabdruck | Wozu er gehört |
+|---|---|
+| `SHA256:Lqww…U2YDI` | **Der aktuelle Server** `2.29.18.45`, aufgesetzt 2026-08-31. Der einzige Sollwert |
+| `SHA256:k2mQx1lDuD9kURdFAGxbKxznHfGqvvqHwJWJRmWTuPQ` | Der **frühere Clenaris-Server**, am 2025-10-01 lokal in `~/.ssh/known_hosts` unter `46.62.175.39` gepinnt. Historisch, die Maschine existiert nicht mehr |
+| `SHA256:xiMHcWWxo4UVb4JmYzwremYJdN1lXoGxw+UEZK7+1k4` | Der Schlüssel, den `46.62.175.39` am 2026-09-19 **angeboten** hat, als die Verbindung mit `REMOTE HOST IDENTIFICATION HAS CHANGED` scheiterte. Er gehört einem **Dritten** (`PTR mail1.domainmarket.gr`) und darf nirgends gepinnt werden |
+
+Der mittlere Eintrag steht weiterhin in der lokalen `~/.ssh/known_hosts` dieses
+Arbeitsplatzes und pinnt einen Schlüssel für eine Adresse, die fremd ist. Das
+ist kein aktives Risiko — die Zeile verhindert eher eine versehentliche
+Verbindung, als sie eine ermöglicht —, aber sie ist irreführend und gehört
+entfernt, sobald der Weg zum neuen Server eingerichtet ist:
+
+```bash
+ssh-keygen -R 46.62.175.39
+```
+
 **13.5 Reverse Proxy.** Die Anwendung hört auf `127.0.0.1:3000` und wird nie
 direkt ins Netz gestellt. Nginx oder Caddy davor beendet TLS und reicht weiter.
 Die Sicherheitskopfzeilen (CSP, HSTS, `X-Frame-Options`) setzt bereits
@@ -766,7 +826,7 @@ der nächtliche Führungslauf aus — ohne jede Fehlermeldung.
 | `DATABASE_URL` | ja | Verbindung der Anwendung |
 | `JWT_SECRET` | ja | Mindestens 32 Zeichen. **Nie ändern** — ein neuer Wert meldet alle Sitzungen ab |
 | `SERVER_PORT` | nein | SSH-Port, Vorgabe 22 |
-| `SERVER_SSH_KNOWN_HOSTS` | **ja** | Gepinnter Wirtsschlüssel. Fehlt er, **bricht die Auslieferung ab** — es gibt keinen Rückfall (siehe 13.4). **Muss für den aktuellen Server neu erhoben werden.** Ein Eintrag, der aus einem `ssh-keyscan` gegen `46.62.175.39` stammt, pinnt den Schlüssel eines fremden Hosts und ist sofort zu ersetzen |
+| `SERVER_SSH_KNOWN_HOSTS` | **ja** | Gepinnter Wirtsschlüssel. Fehlt er, **bricht die Auslieferung ab** — es gibt keinen Rückfall (siehe 13.4). Der Wert für den aktuellen Server steht fertig in **13.4a**; sein Fingerabdruck ist `SHA256:Lqww…U2YDI`. Ein Eintrag, der aus einem `ssh-keyscan` gegen `46.62.175.39` stammt, pinnt den Schlüssel eines fremden Hosts und ist sofort zu ersetzen |
 | `DIRECT_URL` | empfohlen | Direktverbindung für Migrationen |
 | `API_URL` | empfohlen | Öffentliche Adresse, zurzeit `https://clenaris.qasemi.ch`. Wird zu `NEXT_PUBLIC_APP_URL` und trägt den Health Check von aussen |
 | `ENCRYPTION_KEY` | empfohlen | Schlüssel der Feldverschlüsselung (64 Hex). Ohne ihn leitet die Anwendung ihn aus `JWT_SECRET` ab — siehe Abschnitt 3 |

@@ -394,7 +394,7 @@ Legende: **✅** vollständig · **🟡** vorhanden mit Lücken · **❌** fehlt
 | T-01 | Die Testreihe hielt das Demopasswort fest, der Seed nimmt `SEED_ADMIN_PASSWORD` — auf jeder Maschine mit eigenem Startpasswort scheiterten vierzehn Dateien an einem Scheinfehler *(behoben in Phase 1)* | `tests/helpers/accounts.ts` | mittel |
 | ~~D-01~~ | ~~**P1: Production PostgreSQL backup before schema migrations**~~ — *erledigt in `f0e70d4`.* `scripts/deploy.sh` führt vor `prisma migrate deploy` erst `migration-preflight.ts` (nur lesend, prüft die Eindeutigkeiten gegen die vorhandenen Daten) und dann `db-backup.ts` aus (`pg_dump --format=custom`, danach vier Prüfungen inklusive `pg_restore --list`). Beides fail-closed. Der Rückweg ist mit `db-restore-verify.ts` gegen `clenaris_preview` geprobt: 894 Archiveinträge, alle vierzehn Tabellen mit übereinstimmender Zeilenzahl | `scripts/deploy.sh`, `scripts/db-backup.ts` | **erledigt** |
 | S-08 | `src/lib/crypto.ts` kennt keine Schlüsselrotation: Ein Wert mit Präfix `enc:v1:`, der sich mit dem aktuellen Schlüssel nicht entschlüsseln lässt, wirft. Es gibt keinen Zweitschlüssel-Lesepfad (`ENCRYPTION_KEY_PREVIOUS`) und kein Umschlüsselungsskript. Solange der Schlüssel **vor** dem ersten verschlüsselten Wert steht, ist das folgenlos — danach wird jeder Wechsel zu einem eigenen Vorhaben | `src/lib/crypto.ts` | mittel |
-| S-09 | Die Host-Schlüssel-Abweichung bei `46.62.175.39` — **infrastrukturell aufgeklärt, siehe unten**. Die Adresse ist nicht der Clenaris-Server. Offen bleiben der neue Host-Schlüssel und die Frage, wie weit frühere Auslieferungsläufe kamen | Betrieb | **teilweise geklärt** |
+| S-09 | Die Host-Schlüssel-Abweichung bei `46.62.175.39` — **aufgeklärt, siehe unten**. Die Adresse ist nicht der Clenaris-Server, sondern gehört einem Dritten; der Wirtsschlüssel des aktuellen Servers ist am 2026-09-21 über die Hetzner-Konsole erhoben. Offen bleibt allein, wie weit frühere Auslieferungsläufe kamen (`SECRET EXPOSURE STATUS UNKNOWN`) | Betrieb | **geklärt, Restfrage Geheimnisabfluss** |
 | S-10 | Der Auslieferungs-Workflow auf `origin/main` enthält einen `ssh-keyscan`-Rückfall: Fehlt `SERVER_SSH_KNOWN_HOSTS`, nimmt er den Schlüssel entgegen, den der Gegenüber gerade anbietet. Wäre je ein Lauf gestartet, hätte er damit den fremden Host vertraut und ihm `SERVER_SSH_KEY`, `DATABASE_URL`, `JWT_SECRET`, `CRON_SECRET` und `ENCRYPTION_KEY` übergeben. Der Rückfall ist lokal in `625cfc2` entfernt, aber **noch nicht gepusht** | `.github/workflows/deploy.yml` auf `origin/main` | **hoch bis zum nächsten Push** |
 
 ### S-09 im Einzelnen — das veraltete Auslieferungsziel
@@ -433,15 +433,33 @@ etwa mit `ssh-keygen -R` und einer neuen Verbindung —, trüge die Datei ein
 neues Datum. Sie trägt seit elf Monaten dasselbe. Von hier aus ist also nach
 dem Adresswechsel keine SSH-Verbindung zustande gekommen.
 
-**Der alte Vergleichsfingerabdruck ist entwertet.**
-`SHA256:xiMHcWWxo4UVb4JmYzwremYJdN1lXoGxw+UEZK7+1k4` stammt aus der Verbindung
-zur alten Adresse und darf **nicht** als Sollwert für `2.29.18.45` verwendet
-werden. Der gültige Schlüssel muss über die Hetzner-Konsole des Servers
-`164144336` neu erhoben werden:
+**Der gültige Wirtsschlüssel ist am 2026-09-21 erhoben — über die
+Hetzner-Konsole des Servers `164144336`, nicht über SSH und nicht über
+`ssh-keyscan`.** Er lautet
+`SHA256:LqwwARXhcVf1Md+wPBEUiurjML0s1+nIpvTMUeU2YDI` (ed25519, Kommentar
+`root@ubuntu-4gb-hel1-1`). Der fertige `SERVER_SSH_KNOWN_HOSTS`-Wert steht in
+`DEPLOYMENT.md` 13.4a.
 
-```bash
-ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub -E sha256
-```
+**Drei Schlüssel, und nur einer gilt.** Die Nachrechnung hat eine
+Ungenauigkeit dieses Dokuments aufgedeckt: Hier stand, der Fingerabdruck
+`SHA256:xiMHcWWxo4UVb4JmYzwremYJdN1lXoGxw+UEZK7+1k4` sei „der alte
+Vergleichswert". Das trifft nicht zu. Die lokale `known_hosts` pinnt unter
+`46.62.175.39` einen **anderen** Schlüssel,
+`SHA256:k2mQx1lDuD9kURdFAGxbKxznHfGqvvqHwJWJRmWTuPQ`. Da beim Konflikt vom
+2026-09-19 genau zwei Schlüssel im Spiel waren — der gepinnte und der
+angebotene — und der gepinnte nachweislich `k2mQ…` ist, war `xiMHc…` der
+**angebotene**: der Schlüssel des fremden Hosts. Er ist kein veralteter
+Sollwert, sondern der Schlüssel eines Dritten.
+
+| Fingerabdruck | Gehört zu | Verwendung |
+|---|---|---|
+| `SHA256:Lqww…U2YDI` | `2.29.18.45`, aufgesetzt 2026-08-31 | **der einzige Sollwert** |
+| `SHA256:k2mQ…WTuPQ` | dem früheren Clenaris-Server, gepinnt 2025-10-01 | historisch, Maschine existiert nicht mehr |
+| `SHA256:xiMH…7+1k4` | dem **Fremdhost** hinter `46.62.175.39` | nie pinnen |
+
+Der mittlere Eintrag steht weiterhin in `~/.ssh/known_hosts` und pinnt einen
+Schlüssel für eine fremde Adresse. Er ist mit `ssh-keygen -R 46.62.175.39` zu
+entfernen — nicht dringend, aber irreführend.
 
 Kein `ssh-keyscan` als Vertrauensquelle — weder für die alte noch für die neue
 Adresse.
