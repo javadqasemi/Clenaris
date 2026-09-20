@@ -73,7 +73,7 @@ Cloud-Firewall, `delete_protection: false`, `rebuild_protection: false`.
 | 1 | Aktuellen Server bestätigt: Hetzner `164144336`, `2.29.18.45`, hel1 | **belegt** | Hetzner-API und TLS-Zertifikat des Ursprungs |
 | 2 | Frühere Auslieferungsläufe auf Geheimnisabfluss geprüft | **teilweise** | `SECRET EXPOSURE STATUS UNKNOWN`, Begründung in `NEXT_DEVELOPMENT_AUDIT.md` S-09 |
 | 3 | `SERVER_HOST` zeigt auf den aktuellen Server | **bestätigt** | Aussage des Betreibers; ein anderer Weg existiert nicht |
-| 4 | Host-Schlüssel von `2.29.18.45` über die Hetzner-Konsole erhoben | **bestätigt** | `SHA256:LqwwARXhcVf1Md+wPBEUiurjML0s1+nIpvTMUeU2YDI`, vom Betreiber gegen die Konsole abgeglichen; Schlüsselkörper hier strukturell geprüft (13.4a) |
+| 4 | Host-Schlüssel von `2.29.18.45` erhoben **und live gegengeprüft** | **belegt** | `SHA256:LqwwARXhcVf1Md+wPBEUiurjML0s1+nIpvTMUeU2YDI` — vom Betreiber an der Hetzner-Konsole gelesen und am 2026-09-21 von diesem Arbeitsplatz aus bestätigt: eine Verbindung mit genau diesem angehefteten Fingerabdruck kam bis zur Anmeldung, ohne Schlüsselbeanstandung (13.4a) |
 | 5 | `SERVER_SSH_KNOWN_HOSTS` mit genau diesem Schlüssel gesetzt | **bestätigt** | Aussage des Betreibers |
 | 6 | **Hetzner Cloud Firewall** am Server | **unbelegt** | letzte API-Messung: **keine** Firewall zugewiesen. Die vorhandene `Zentra-Firewall` (id 2454352) öffnet 22/5432/4444 gegen `0.0.0.0/0` und darf **nicht** angehängt werden |
 | 7 | Port 3000 extern dicht | **belegt** | externer Verbindungsversuch: gefiltert — durch die **Firewall auf dem Server**, siehe unten |
@@ -86,6 +86,9 @@ Cloud-Firewall, `delete_protection: false`, `rebuild_protection: false`.
 | 14 | Produktions-Secrets vollständig | **offen** | nur der Betreiber kann das sehen; Liste in 14.1. **`DIRECT_URL` ist erforderlich** — siehe dort |
 | 15 | Migrations-Vorprüfung gegen Produktionsdaten | läuft automatisch | `scripts/migration-preflight.ts`, fail-closed |
 | 16 | Unmittelbare Datenbanksicherung | läuft automatisch | `scripts/db-backup.ts`, fail-closed |
+| 17 | **Ursprung `2.29.18.45:443` nur für Cloudflare-Netze erreichbar** | **offen — Release-Blocker** | von aussen belegt: der Ursprung antwortet direkt mit 200. Solange das gilt, ist kein `TRUSTED_PROXY_MODE` ausser `NONE` vertretbar — Begründung in 13.5.1 |
+| 18 | `TRUSTED_PROXY_MODE` auf dem Server bewusst gesetzt | **unbelegt** | die Variable wird **nicht** vom Workflow übertragen und steht in keiner Secret-Liste; sie lebt allein in der `.env` des Servers. Fehlt sie, gilt `NONE`, und alle Aufrufer teilen sich einen Rate-Limit-Schlüssel |
+| 19 | `clientIpFrom` in `session.ts` auf den geprüften Auflöser umstellen | **offen** | `src/lib/auth/session.ts:426` liest noch ungeprüft `cf-connecting-ip → x-real-ip → x-forwarded-for`. Betrifft `session.ip` und `lastLoginIp`, **nicht** das Signaturprotokoll (das nutzt `getClientIp`) |
 
 **Die beiden Firewalls gehören auseinandergehalten.** Punkt 6 und die Punkte 7
 bis 9 messen nicht dasselbe:
@@ -784,8 +787,48 @@ Header-Spoofing", sondern:
 Dasselbe gilt für `CLOUDFLARE`: `CF-Connecting-IP` verdient kein Vertrauen,
 nur weil der Kopf vorhanden ist — jeder kann ihn setzen. Er verdient es erst,
 wenn der Ursprung Verbindungen ausserhalb der Cloudflare-Netze verwirft.
-Cloudflare wird derzeit nicht eingesetzt; der Modus bleibt aus, bis diese
-Bedingung hergestellt und geprüft ist.
+
+**Korrektur vom 2026-09-21: Cloudflare ist im Einsatz, und der Ursprung ist
+trotzdem direkt erreichbar.** Hier stand „Cloudflare wird derzeit nicht
+eingesetzt". Das stimmt nicht mehr. Nachgemessen von aussen:
+
+| Messung | Ergebnis |
+|---|---|
+| `https://clenaris.qasemi.ch/api/health` | 200, `server: cloudflare`, `cf-ray: …-ZRH`, Zertifikat von SSL Corporation |
+| `https://2.29.18.45/api/health` mit `Host: clenaris.qasemi.ch` | **200**, `server: nginx`, Let's-Encrypt-Zertifikat auf denselben Namen |
+| dieselbe Anfrage mit selbst gesetztem `X-Forwarded-For`/`X-Real-IP` | **200** — die Anfrage wird bedient |
+
+Der Ursprung beantwortet Anfragen also auch dann, wenn sie an Cloudflare
+vorbeigehen. Damit ist **kein** Modus in dieser Topologie richtig:
+
+- **`CLOUDFLARE` wäre unsicher.** Wer die IP kennt, spricht direkt mit Nginx
+  und setzt `CF-Connecting-IP` selbst. Genau die Bedingung, die der Modus
+  voraussetzt — „der Ursprung nimmt nur Cloudflare-Netze an" — ist nicht
+  erfüllt.
+- **`SINGLE_REVERSE_PROXY` wäre unsicher *und* falsch.** Unsicher, weil der
+  Anwendungsport zwar gefiltert ist, `443` am Ursprung aber offen: Wer dort
+  anklopft, ist für Nginx ein gewöhnlicher Client, und Nginx setzt `X-Real-IP`
+  auf dessen echte Adresse — so weit korrekt. Falsch wird es für den
+  regulären Weg: Kommt die Anfrage über Cloudflare, ist `$remote_addr` die
+  Adresse eines Cloudflare-Knotens. Alle echten Besucherinnen erscheinen dann
+  unter einer Handvoll Adressen. Rate-Limits werden dadurch beinahe global,
+  und — schwerer wiegend — **das Signaturprotokoll schriebe die Adresse eines
+  Cloudflare-Knotens statt die der unterzeichnenden Person.** Ein
+  Beweisprotokoll, das eine fremde Adresse als die des Unterzeichners führt,
+  ist schlechter als eines, das `UNAVAILABLE` sagt.
+- **`NONE`** ist als einziger Modus ehrlich, kostet aber die Adressbindung der
+  Rate-Limits: Alle Aufrufer teilen sich den Schlüssel `unbekannt`, und ein
+  einzelner Angreifer sperrt damit alle anderen aus.
+
+**Die Reihenfolge der Behebung ist damit vorgegeben.** Zuerst den Ursprung
+schliessen — Cloud Firewall oder Nginx-Allowlist auf die Cloudflare-Netze für
+`80`/`443` —, danach `real_ip_header CF-Connecting-IP` mit
+`set_real_ip_from` für dieselben Netze, und **erst dann**
+`TRUSTED_PROXY_MODE=CLOUDFLARE`. In umgekehrter Reihenfolge entsteht genau die
+Vertrauensannahme, die `client-ip.ts` vermeiden soll.
+
+Bis dahin bleibt `NONE` richtig. Es ist die einzige Einstellung, die keine
+Aussage behauptet, die die Topologie nicht hergibt.
 
 **Invariante für den Reverse Proxy (13.5).** Der Proxy setzt beide Köpfe aus
 der Socket-Adresse und reicht nichts vom Client durch — `X-Forwarded-For`
