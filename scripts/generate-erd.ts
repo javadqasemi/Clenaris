@@ -161,9 +161,20 @@ const DOMAINS: Domain[] = [
       '`SignatureEvent` ist das fachliche Protokoll — nur anhängen, in der Datenbank per Trigger ' +
       'erzwungen. `SignatureOtpChallenge` hält Bestätigungscodes als Argon2id über einen HMAC; ' +
       'der Hash ist kein Beweis und wird bereinigt. Alle Artefakte liegen in der Gate-2-Ablage ' +
-      '(`FileAsset` scope SIGNATURE). Keine qualifizierte Signatur; Entwurf in ' +
-      '`docs/SIGNATUR_GATE4A.md`.',
-    models: ['SignatureRequest', 'SignatureParticipant', 'SignatureEvent', 'SignatureOtpChallenge'],
+      '(`FileAsset` scope SIGNATURE). `ceremonyMode` hält den *Hergang* fest — Link, Kundenkonto ' +
+      'oder Übergabe vor Ort — und ist bewusst getrennt vom `assuranceLevel`, das den Zugangsweg ' +
+      'beschreibt; keines steht für das andere ein. `DeviceHandoffSession` sperrt bei der ' +
+      'Vor-Ort-Abnahme die Mitarbeitersitzung *dieses* Browsers (Bindung an ' +
+      '`RefreshToken.family`, nicht an die Person, damit ein zweites Gerät weiterläuft); ' +
+      'freigegeben wird sie ausschliesslich durch Passwortbestätigung, nie durch Ablauf. ' +
+      'Keine qualifizierte Signatur; Entwurf in `docs/SIGNATUR_GATE4A.md`.',
+    models: [
+      'SignatureRequest',
+      'SignatureParticipant',
+      'SignatureEvent',
+      'SignatureOtpChallenge',
+      'DeviceHandoffSession',
+    ],
   },
   {
     key: 'crm',

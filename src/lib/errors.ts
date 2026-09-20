@@ -20,6 +20,8 @@ export type ErrorCode =
   /** Ein Dienst ist nicht eingerichtet — vom Ausfall zu unterscheiden. */
   | 'NOT_CONFIGURED'
   | 'BUSINESS_RULE'
+  /** Das Gerät ist übergeben — die Sitzung ist vorübergehend gesperrt. */
+  | 'DEVICE_HANDOFF_LOCKED'
   | 'INTERNAL_ERROR';
 
 export class AppError extends Error {
@@ -63,6 +65,26 @@ export class UnauthorizedError extends AppError {
 export class ForbiddenError extends AppError {
   constructor(message = 'Für diese Aktion fehlen Ihnen die Berechtigungen.') {
     super('FORBIDDEN', message, 403);
+  }
+}
+
+/**
+ * Das Gerät ist gerade beim Kunden — 423 Locked.
+ *
+ * **Warum nicht 403.** Ein 403 sagt „Ihnen fehlt die Berechtigung"; das wäre
+ * hier falsch und für die Person am Gerät irreführend. Die Berechtigung ist
+ * unverändert vorhanden, nur die Ressource — das Gerät — ist belegt. Genau
+ * dafür gibt es 423 (RFC 4918): der Zustand ist vorübergehend und wird durch
+ * eine bestimmte Handlung aufgehoben, nicht durch andere Rechte.
+ *
+ * Der Klient erkennt den Zustand am Code und führt zur Entsperrmaske,
+ * statt eine Fehlermeldung zu zeigen.
+ */
+export class DeviceHandoffLockedError extends AppError {
+  constructor(
+    message = 'Dieses Gerät ist für eine Kundenabnahme übergeben. Bitte zuerst zum Mitarbeiterbereich zurückkehren.',
+  ) {
+    super('DEVICE_HANDOFF_LOCKED', message, 423);
   }
 }
 

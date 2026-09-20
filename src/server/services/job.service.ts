@@ -28,10 +28,25 @@ import type {
   UpdateJobInput,
 } from '@/lib/validation/operations';
 
+import { renderJobReportSnapshot } from '@/lib/pdf/render';
+
 import { nextNumber } from './numbering.service';
 import { notify } from './notification.service';
 import { invalidateAvailability } from './availability.service';
 import { assertAssignable } from './assignment.service';
+import {
+  HANDOFF_TTL_MS,
+  assertRapportNichtEingefroren,
+  createHandoffInTx,
+  stempelSitzungNeu,
+} from './device-handoff.service';
+import { assertJobAbnahmefaehig, cancelActiveJobAcceptanceInTx } from './job-acceptance.service';
+import {
+  createJobAcceptanceRequest,
+  findActiveJobAcceptance,
+  issueJobAcceptanceSession,
+} from './signature.service';
+import type { AnfrageKontext } from './signature-events';
 
 /**
  * Einsatzsteuerung (Disposition, Zeiterfassung, Abschluss).
@@ -312,6 +327,9 @@ export async function updateJob(params: {
     include: { assignments: { select: { employeeId: true } } },
   });
   if (!job) throw new NotFoundError('Einsatz');
+
+  // Der Rapport ist eingefroren, solange die Kundschaft ihn liest (§ 12).
+  await assertRapportNichtEingefroren(job.id);
 
   /**
    * Das Bearbeitungsformular kann den Termin verschieben — dann gilt
@@ -789,6 +807,10 @@ export async function completeJob(params: {
     throw new ForbiddenError('Sie sind diesem Einsatz nicht zugeteilt.');
   }
 
+  // Ein zweiter Abschluss während der Kundenabnahme würde genau den Rapport
+  // verändern, den die Kundschaft gerade vor sich hat (§ 12).
+  await assertRapportNichtEingefroren(job.id);
+
   const openRequired = job.checklist.filter((item) => item.required && !item.done);
   if (openRequired.length > 0) {
     throw new BusinessRuleError(
@@ -841,9 +863,6 @@ export async function completeJob(params: {
         status: 'COMPLETED',
         actualEnd: new Date(),
         completionNote: params.input.completionNote ?? null,
-        signatureDataUrl: params.input.signatureDataUrl ?? null,
-        signatureName: params.input.signatureName ?? null,
-        signedAt: params.input.signatureDataUrl ? new Date() : null,
         materialCost: { increment: round2(materialCost) },
       },
     });
@@ -878,6 +897,257 @@ export async function completeJob(params: {
   return updated;
 }
 
+// ---------------------------------------------------------------------------
+//  Vor-Ort-Abnahme (Gate 4D)
+// ---------------------------------------------------------------------------
+
+/**
+ * Ist diese Person berechtigt, die Kundenabnahme dieses Einsatzes zu starten?
+ *
+ * **Nicht nur die Berechtigung zählt.** `job:complete_assigned` sagt „darf
+ * zugeteilte Einsätze abschliessen" — welche das sind, sagt sie nicht. Wer
+ * das Gerät übergibt, muss diesem Einsatz auch tatsächlich zugeteilt sein;
+ * sonst könnte jede Reinigungskraft die Abnahme eines fremden Einsatzes
+ * eröffnen und dessen Rapport einfrieren.
+ *
+ * Die Disposition (`job:update`) darf ohne Zuteilung — das ist die
+ * bestehende Regel aus `completeJob` und wird hier nicht neu erfunden.
+ */
+function assertDarfAbnahmeStarten(
+  job: { assignments: { employeeId: string }[] },
+  params: { employeeId?: string },
+): void {
+  if (params.employeeId && !job.assignments.some((a) => a.employeeId === params.employeeId)) {
+    throw new ForbiddenError('Sie sind diesem Einsatz nicht zugeteilt.');
+  }
+}
+
+/**
+ * Die Kundenabnahme starten: Rapport einfrieren, Gerät übergeben.
+ *
+ * **Der Ablauf, und warum in dieser Reihenfolge.** Erst wird der Rapport
+ * serverseitig gerendert und abgelegt — die Bytes, die die Kundschaft gleich
+ * sieht, stehen fest, bevor irgendjemand etwas übergibt (Hash A). Dann
+ * entsteht der Vorgang, dann die Signatursitzung für das Gerät, und ganz
+ * zuletzt die Sperre. Andersherum gäbe es einen Moment, in dem das Gerät
+ * gesperrt ist, aber noch nichts zu unterschreiben da wäre.
+ *
+ * **Was der Browser nicht schickt.** Keine Positionen, keine Zeiten, kein
+ * PDF, kein HTML, keinen Hash, keinen Teilnehmernamen. Der Server lädt den
+ * Einsatz aus der Datenbank und rendert selbst; wer unterzeichnen soll,
+ * bestimmt die Kundschaft des Einsatzes. Der Name, den die Person vor Ort
+ * eintippt, kommt später und getrennt beim Abschluss an (`signedName`) — er
+ * ergänzt den Beweis, er bestimmt ihn nicht.
+ *
+ * Mehrfaches Tippen erzeugt einen Vorgang, nicht vier: Der Teilindex
+ * entscheidet, der Verlierer verwendet den Vorgang des Gewinners weiter.
+ */
+export async function startCustomerHandoff(params: {
+  organizationId: string;
+  jobId: string;
+  userId: string;
+  employeeId?: string;
+  sessionFamily: string;
+  ctx: AnfrageKontext;
+}): Promise<{
+  requestId: string;
+  publicId: string;
+  handoffId: string;
+  /** Die Signatursitzung für das Gerät — der Aufrufer setzt daraus das Cookie. */
+  sessionToken: string;
+}> {
+  const job = await prisma.job.findFirst({
+    where: { id: params.jobId, organizationId: params.organizationId },
+    include: {
+      assignments: { select: { employeeId: true } },
+      customer: { select: { id: true, firstName: true, lastName: true, companyName: true, email: true } },
+    },
+  });
+  if (!job || job.deletedAt) throw new NotFoundError('Einsatz');
+
+  assertDarfAbnahmeStarten(job, params);
+  assertJobAbnahmefaehig(job);
+
+  // Läuft bereits eine Abnahme, wird sie fortgesetzt statt verdoppelt.
+  const vorhanden = await findActiveJobAcceptance(job.id);
+  if (vorhanden && vorhanden.status === 'FINALIZING') {
+    throw new BusinessRuleError('Die Abnahme dieses Einsatzes wird gerade abgeschlossen.');
+  }
+
+  const kundenName =
+    job.customer.companyName ?? `${job.customer.firstName} ${job.customer.lastName}`.trim();
+  const kundenMail = job.customer.email;
+  if (!kundenName || !kundenMail) {
+    throw new BusinessRuleError(
+      'Für diese Kundschaft fehlt ein Name oder eine E-Mail-Adresse — die Abnahme lässt sich nicht zuordnen.',
+    );
+  }
+
+  const person = await prisma.user.findUniqueOrThrow({
+    where: { id: params.userId },
+    select: { firstName: true, lastName: true },
+  });
+  const presenterName = `${person.firstName} ${person.lastName}`.trim();
+  const expiresAt = new Date(Date.now() + HANDOFF_TTL_MS);
+
+  let requestId = vorhanden?.id ?? null;
+  let publicId = vorhanden?.publicId ?? null;
+  let participantId = vorhanden?.participants[0]?.id ?? null;
+
+  if (!requestId) {
+    const snapshot = await renderJobReportSnapshot(job.id);
+    const angelegt = await createJobAcceptanceRequest({
+      job: { id: job.id, organizationId: job.organizationId, number: job.number, title: job.title },
+      participant: { name: kundenName, email: kundenMail, customerId: job.customer.id },
+      snapshot: { bytes: snapshot.buffer, filename: snapshot.filename },
+      expiresAt,
+      presenter: { userId: params.userId, name: presenterName, employeeId: params.employeeId ?? null },
+      ctx: params.ctx,
+    });
+    if (angelegt) {
+      requestId = angelegt.id;
+      publicId = angelegt.publicId;
+      participantId = angelegt.participantId;
+    } else {
+      // Jemand war schneller — dessen Vorgang gilt.
+      const gewinner = await findActiveJobAcceptance(job.id);
+      requestId = gewinner?.id ?? null;
+      publicId = gewinner?.publicId ?? null;
+      participantId = gewinner?.participants[0]?.id ?? null;
+    }
+  }
+
+  if (!requestId || !publicId || !participantId) {
+    throw new BusinessRuleError('Die Abnahme konnte nicht begonnen werden. Bitte erneut versuchen.');
+  }
+
+  const sitzung = await issueJobAcceptanceSession({
+    organizationId: job.organizationId,
+    requestId,
+    participantId,
+    expiresAt,
+    presenterUserId: params.userId,
+    ctx: params.ctx,
+  });
+
+  /**
+   * Die Sperre zuletzt — und in einer eigenen Transaktion, damit ein
+   * verlorenes Rennen um die Familie (zweiter Tab) nicht den bereits
+   * angelegten Vorgang zurückrollt.
+   */
+  let handoffId: string;
+  try {
+    handoffId = await prisma.$transaction((tx) =>
+      createHandoffInTx(tx, {
+        organizationId: job.organizationId,
+        userId: params.userId,
+        jobId: job.id,
+        signatureRequestId: requestId,
+        sessionFamily: params.sessionFamily,
+        expiresAt,
+      }),
+    );
+  } catch (error) {
+    if ((error as { code?: string }).code !== 'P2002') throw error;
+    const bestehend = await prisma.deviceHandoffSession.findFirstOrThrow({
+      where: { sessionFamily: params.sessionFamily, status: 'ACTIVE' },
+      select: { id: true },
+    });
+    handoffId = bestehend.id;
+  }
+
+  // Das Zugangstoken trägt die Sperre ab jetzt mit sich.
+  await stempelSitzungNeu(params.userId);
+
+  await audit.updated({
+    organizationId: job.organizationId,
+    userId: params.userId,
+    entity: 'Job',
+    entityId: job.id,
+    summary: `Kundenabnahme für Einsatz ${job.number} begonnen — Gerät übergeben (Vorgang ${requestId})`,
+    ip: params.ctx.ip,
+    userAgent: params.ctx.userAgent,
+  });
+
+  return { requestId, publicId, handoffId, sessionToken: sitzung.sessionToken };
+}
+
+/**
+ * Eine versehentlich begonnene Abnahme abbrechen — erst nach dem Entsperren.
+ *
+ * Der Kundschaft wird bewusst **keine** Schaltfläche angeboten, die den
+ * Mitarbeiterbereich wieder freigäbe; das wäre die Sperre mit einem Klick
+ * daneben. Abbrechen darf nur, wer das Gerät zurückbekommen und sein
+ * Passwort bestätigt hat.
+ */
+export async function cancelCustomerHandoff(params: {
+  organizationId: string;
+  jobId: string;
+  userId: string;
+  employeeId?: string;
+  ctx: AnfrageKontext;
+}): Promise<{ abgebrochen: number }> {
+  const job = await prisma.job.findFirst({
+    where: { id: params.jobId, organizationId: params.organizationId, deletedAt: null },
+    include: { assignments: { select: { employeeId: true } } },
+  });
+  if (!job) throw new NotFoundError('Einsatz');
+  assertDarfAbnahmeStarten(job, params);
+
+  const abgebrochen = await prisma.$transaction((tx) =>
+    cancelActiveJobAcceptanceInTx(tx, {
+      jobId: job.id,
+      reason: 'handoff_cancelled',
+      ctx: params.ctx,
+      cancelledById: params.userId,
+    }),
+  );
+
+  if (abgebrochen > 0) {
+    await audit.updated({
+      organizationId: job.organizationId,
+      userId: params.userId,
+      entity: 'Job',
+      entityId: job.id,
+      summary: `Kundenabnahme für Einsatz ${job.number} abgebrochen — Rapport wieder bearbeitbar`,
+      ip: params.ctx.ip,
+      userAgent: params.ctx.userAgent,
+    });
+  }
+
+  return { abgebrochen };
+}
+
+/** Der Abnahmezustand eines Einsatzes — für Seiten und Masken. */
+export async function getJobAcceptanceState(jobId: string) {
+  const [aktiv, fertig] = await Promise.all([
+    findActiveJobAcceptance(jobId),
+    prisma.signatureRequest.findFirst({
+      where: { jobId, ceremonyMode: 'IN_PERSON_HANDOFF', status: 'COMPLETED' },
+      orderBy: { completedAt: 'desc' },
+      include: { participants: { orderBy: { order: 'asc' } } },
+    }),
+  ]);
+  const signer = fertig?.participants[0] ?? null;
+  return {
+    active: aktiv ? { requestId: aktiv.id, publicId: aktiv.publicId, expiresAt: aktiv.expiresAt } : null,
+    completed: fertig
+      ? {
+          requestId: fertig.id,
+          signedName: signer?.signedName ?? signer?.nameSnapshot ?? null,
+          method: signer?.signatureMethod ?? null,
+          signedAt: signer?.signedAt ?? fertig.completedAt,
+          presentedByName: fertig.presentedByName,
+          hashes: {
+            original: fertig.originalDocumentHash,
+            signed: fertig.signedArtifactHash,
+            evidence: fertig.evidenceArtifactHash,
+          },
+        }
+      : null,
+  };
+}
+
 export async function toggleChecklistItem(params: {
   itemId: string;
   employeeId?: string;
@@ -893,6 +1163,8 @@ export async function toggleChecklistItem(params: {
   if (params.employeeId && !item.job.assignments.some((a) => a.employeeId === params.employeeId)) {
     throw new ForbiddenError('Sie sind diesem Einsatz nicht zugeteilt.');
   }
+
+  await assertRapportNichtEingefroren(item.job.id);
 
   /**
    * Ein abgeschlossener Einsatz ist rapportiert; seine Checkliste ist der
@@ -938,6 +1210,8 @@ export async function replaceChecklist(params: {
     include: { checklist: true },
   });
   if (!job) throw new NotFoundError('Einsatz');
+
+  await assertRapportNichtEingefroren(job.id);
 
   const keptIds = params.input.items
     .map((item) => item.id)
@@ -1004,6 +1278,8 @@ export async function applyChecklistTemplate(params: {
     select: { id: true, number: true },
   });
   if (!job) throw new NotFoundError('Einsatz');
+
+  await assertRapportNichtEingefroren(job.id);
 
   const template = CHECKLIST_TEMPLATES[params.input.kind];
 
@@ -1319,6 +1595,8 @@ export async function replaceJobMaterials(params: {
     select: { id: true, number: true },
   });
   if (!job) throw new NotFoundError('Einsatz');
+
+  await assertRapportNichtEingefroren(job.id);
 
   const materialCost = round2(
     params.input.materials.reduce((sum, item) => sum + item.quantity * item.unitCost, 0),

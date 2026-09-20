@@ -208,6 +208,7 @@ export default async function PortalJobPage({ params }: { params: Promise<{ id: 
         jobId={job.id}
         status={job.status}
         canComplete={isAssigned}
+        customerAccepted={Boolean(job.customerAcceptedAt)}
         checklist={job.checklist.map((item) => ({
           id: item.id,
           label: item.label,

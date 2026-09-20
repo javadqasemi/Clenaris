@@ -5,7 +5,7 @@
 > Quelle, aus der sowohl diese Referenz als auch die Laufzeitvalidierung
 > stammen.
 
-Stand: 397 Endpunkte. Die maschinenlesbare Fassung liegt in
+Stand: 401 Endpunkte. Die maschinenlesbare Fassung liegt in
 [`openapi.yaml`](./openapi.yaml) bzw. [`openapi.json`](./openapi.json).
 
 ## Grundlagen
@@ -874,6 +874,29 @@ Familie.
 | --- | --- | --- | --- |
 | `publicId` | string | ja | – |
 | `artifact` | string | ja | `original` \| `signed` \| `evidence` |
+
+### `GET /api/handoff`
+
+**Läuft auf diesem Gerät eine Kundenabnahme?.** Einer von zwei Endpunkten, die während einer Geräteübergabe antworten (`allowDuringHandoff`) — sonst gäbe es keinen Weg zurück in den Mitarbeiterbereich. Liefert Einsatznummer, Zeitpunkte und den Zustand des Vorgangs, keine Rapport- oder Kundendaten.
+
+- **Zugriff:** Erfordert eine angemeldete Sitzung.
+- **Erfolg:** 200
+- **Mögliche Fehler:** 401, 500
+
+### `POST /api/handoff/unlock`
+
+**Gerät nach der Kundenabnahme wieder übernehmen.** Bestätigung mit dem Passwort des bereits angemeldeten Kontos — keine Anmeldung: Die Sitzung und ihre Rotationsfamilie bleiben dieselben, nur die Sperre fällt. Das Kontingent zählt je Übergabe, damit falsches Tippen niemanden auf seinen übrigen Geräten aussperrt.
+
+- **Zugriff:** Erfordert eine angemeldete Sitzung.
+- **Rate-Limit-Klasse:** `handoffUnlock`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 422, 429, 500
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `password` | string | ja | min. 1 Zeichen, max. 200 Zeichen |
 
 ### `GET /api/signatures/{id}`
 
@@ -2402,7 +2425,7 @@ Familie.
 
 ### `POST /api/jobs/{id}/complete`
 
-**Einsatz abschliessen.** Erfasst Abschlussbericht, Materialverbrauch und die Unterschrift der Kundschaft und stoppt laufende Zeiterfassungen.
+**Einsatz abschliessen.** Erfasst Abschlussbericht und Materialverbrauch und stoppt laufende Zeiterfassungen. Seit Gate 4D ohne Unterschrift — die Abnahme durch die Kundschaft ist ein eigener Vorgang auf dem Signaturkern.
 
 - **Zugriff:** Erfordert eine der Berechtigungen: `job:complete_assigned`, `job:update`.
 - **Rate-Limit-Klasse:** `apiWrite`
@@ -2420,8 +2443,6 @@ Familie.
 | Feld | Typ | Pflicht | Regeln |
 | --- | --- | --- | --- |
 | `completionNote` | string | – | max. 4000 Zeichen |
-| `signatureDataUrl` | string | – | max. 500000 Zeichen |
-| `signatureName` | string | – | max. 120 Zeichen |
 | `materials` | object[] | – | max. 50 Einträge, Standard `[]` |
 | `materials[].name` | string | ja | min. 2 Zeichen, max. 120 Zeichen |
 | `materials[].sku` | string | – | max. 60 Zeichen |
@@ -2429,6 +2450,36 @@ Familie.
 | `materials[].unit` | string | – | max. 20 Zeichen, Standard `"Stk."` |
 | `materials[].unitCost` | number | – | ≥ 0, ≤ 9999999, Standard `0` |
 | `materials[].billable` | boolean | – | Standard `false` |
+
+### `POST /api/jobs/{id}/handoff`
+
+**Kundenabnahme beginnen und Gerät übergeben.** Rendert den Rapport serverseitig, legt ihn unveränderlich ab (Hash A), erzeugt den Unterzeichnungsvorgang mit ceremonyMode IN_PERSON_HANDOFF und sperrt die Mitarbeitersitzung dieses Browsers. Antwortet mit der nicht geheimen Adresse des Kundenmodus; die Signatursitzung wird als Cookie gesetzt, nie als Token ausgegeben.
+
+- **Zugriff:** Erfordert eine der Berechtigungen: `job:complete_assigned`, `job:update`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+### `DELETE /api/jobs/{id}/handoff`
+
+**Begonnene Kundenabnahme abbrechen.** Bricht den offenen Abnahmevorgang ab und gibt den Rapport wieder zur Bearbeitung frei. Erreichbar erst nach dem Entsperren des Geräts — während der Übergabe antwortet die Route 423.
+
+- **Zugriff:** Erfordert eine der Berechtigungen: `job:complete_assigned`, `job:update`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
 
 ### `POST /api/jobs/{id}/photos`
 

@@ -4,7 +4,7 @@
 > Diagramme sind damit nie älter als das Schema. Prosa und Bereichseinteilung
 > stehen in `scripts/generate-erd.ts`.
 
-**116 Modelle, 78 Aufzählungstypen, 2125 Felder.**
+**117 Modelle, 80 Aufzählungstypen, 2150 Felder.**
 PostgreSQL 16+; alle Zeitstempel als `timestamptz` in UTC, Anzeige in Europe/Zurich.
 
 ## Vier Entscheidungen, die das ganze Schema prägen
@@ -37,7 +37,7 @@ Beleg so lesbar, wie er ausgestellt wurde.
 flowchart LR
   stammdaten["Mandant und Stammdaten<br/><small>6 Modelle</small>"]
   identitaet["Identität und Zugriff<br/><small>6 Modelle</small>"]
-  signatur["Elektronische Unterzeichnung<br/><small>4 Modelle</small>"]
+  signatur["Elektronische Unterzeichnung<br/><small>5 Modelle</small>"]
   crm["CRM<br/><small>13 Modelle</small>"]
   katalog["Leistungskatalog und Preislogik<br/><small>6 Modelle</small>"]
   auftrag["Buchung, Offerte, Einsatz<br/><small>10 Modelle</small>"]
@@ -124,7 +124,7 @@ erDiagram
 
 | Modell | Tabelle | Felder | Zweck |
 | --- | --- | --- | --- |
-| `Organization` | `organizations` | 109 | – |
+| `Organization` | `organizations` | 110 | – |
 | `NumberSequence` | `number_sequences` | 6 | – |
 | `OpeningHours` | `opening_hours` | 7 | – |
 | `Holiday` | `holidays` | 7 | – |
@@ -205,7 +205,7 @@ erDiagram
 
 | Modell | Tabelle | Felder | Zweck |
 | --- | --- | --- | --- |
-| `User` | `users` | 52 | – |
+| `User` | `users` | 54 | – |
 | `RefreshToken` | `refresh_tokens` | 10 | – |
 | `VerificationToken` | `verification_tokens` | 9 | – |
 | `PublicAccessToken` | `public_access_tokens` | 15 | – |
@@ -214,7 +214,7 @@ erDiagram
 
 ## Elektronische Unterzeichnung
 
-Ein `SignatureRequest` bindet sich an exakte Bytes (`originalDocumentHash`), nie an ein veränderliches Geschäftsobjekt; genau eine Quelle (Offerte, Einsatz oder Dokumentfassung), per CHECK erzwungen, `Restrict` in alle Richtungen. `SignatureParticipant` friert die Kontaktdaten ein und trägt nach dem Abschluss Zustimmung, Methode und technische Angaben. `SignatureEvent` ist das fachliche Protokoll — nur anhängen, in der Datenbank per Trigger erzwungen. `SignatureOtpChallenge` hält Bestätigungscodes als Argon2id über einen HMAC; der Hash ist kein Beweis und wird bereinigt. Alle Artefakte liegen in der Gate-2-Ablage (`FileAsset` scope SIGNATURE). Keine qualifizierte Signatur; Entwurf in `docs/SIGNATUR_GATE4A.md`.
+Ein `SignatureRequest` bindet sich an exakte Bytes (`originalDocumentHash`), nie an ein veränderliches Geschäftsobjekt; genau eine Quelle (Offerte, Einsatz oder Dokumentfassung), per CHECK erzwungen, `Restrict` in alle Richtungen. `SignatureParticipant` friert die Kontaktdaten ein und trägt nach dem Abschluss Zustimmung, Methode und technische Angaben. `SignatureEvent` ist das fachliche Protokoll — nur anhängen, in der Datenbank per Trigger erzwungen. `SignatureOtpChallenge` hält Bestätigungscodes als Argon2id über einen HMAC; der Hash ist kein Beweis und wird bereinigt. Alle Artefakte liegen in der Gate-2-Ablage (`FileAsset` scope SIGNATURE). `ceremonyMode` hält den *Hergang* fest — Link, Kundenkonto oder Übergabe vor Ort — und ist bewusst getrennt vom `assuranceLevel`, das den Zugangsweg beschreibt; keines steht für das andere ein. `DeviceHandoffSession` sperrt bei der Vor-Ort-Abnahme die Mitarbeitersitzung *dieses* Browsers (Bindung an `RefreshToken.family`, nicht an die Person, damit ein zweites Gerät weiterläuft); freigegeben wird sie ausschliesslich durch Passwortbestätigung, nie durch Ablauf. Keine qualifizierte Signatur; Entwurf in `docs/SIGNATUR_GATE4A.md`.
 
 ```mermaid
 erDiagram
@@ -226,7 +226,17 @@ erDiagram
     SignatureProviderType providerType
     SignatureArtifactMode artifactMode
     SignatureAssuranceLevel assuranceLevel
-    String title
+    SignatureCeremonyMode ceremonyMode
+  }
+  DeviceHandoffSession {
+    String id PK
+    String organizationId
+    String userId
+    String jobId
+    String signatureRequestId
+    String sessionFamily
+    DeviceHandoffStatus status
+    DateTime startedAt
   }
   SignatureParticipant {
     String id PK
@@ -258,6 +268,7 @@ erDiagram
     Int maxAttempts
     DateTime expiresAt
   }
+  SignatureRequest ||--o{ DeviceHandoffSession : "signatureRequest"
   SignatureRequest ||--o{ SignatureParticipant : "request"
   SignatureRequest ||--o{ SignatureEvent : "request"
   SignatureParticipant |o--o{ SignatureEvent : "participant"
@@ -266,10 +277,11 @@ erDiagram
 
 | Modell | Tabelle | Felder | Zweck |
 | --- | --- | --- | --- |
-| `SignatureRequest` | `signature_requests` | 46 | – |
+| `SignatureRequest` | `signature_requests` | 52 | – |
 | `SignatureParticipant` | `signature_participants` | 32 | – |
 | `SignatureEvent` | `signature_events` | 12 | – |
 | `SignatureOtpChallenge` | `signature_otp_challenges` | 14 | – |
+| `DeviceHandoffSession` | `device_handoff_sessions` | 14 | – |
 
 ## CRM
 
@@ -627,7 +639,7 @@ erDiagram
 | `BookingExtra` | `booking_extras` | 10 | – |
 | `Quote` | `quotes` | 48 | – |
 | `QuoteItem` | `quote_items` | 15 | – |
-| `Job` | `jobs` | 50 | – |
+| `Job` | `jobs` | 52 | – |
 | `JobAssignment` | `job_assignments` | 11 | – |
 | `JobChecklistItem` | `job_checklist_items` | 11 | – |
 | `JobPhoto` | `job_photos` | 12 | – |
@@ -1548,6 +1560,8 @@ exakte TypeScript-Typen.
 | `SignatureProviderType` | `INTERNAL_EVIDENCE`, `QUALIFIED_EXTERNAL` |
 | `SignatureArtifactMode` | `EMBEDDED_VISUAL`, `DETACHED_EVIDENCE` |
 | `SignatureAssuranceLevel` | `LINK_ONLY`, `LINK_PLUS_EMAIL_CODE`, `LINK_PLUS_SMS_CODE` |
+| `SignatureCeremonyMode` | `REMOTE_LINK`, `AUTHENTICATED_CUSTOMER`, `IN_PERSON_HANDOFF` |
+| `DeviceHandoffStatus` | `ACTIVE`, `RELEASED` |
 | `SignatureRequestStatus` | `DRAFT`, `PENDING`, `FINALIZING`, `COMPLETED`, `DECLINED`, `EXPIRED`, `CANCELLED` |
 | `SignatureParticipantRole` | `SIGNER`, `CC` |
 | `SignatureParticipantStatus` | `PENDING`, `VIEWED`, `VERIFIED`, `SIGNED`, `DECLINED` |

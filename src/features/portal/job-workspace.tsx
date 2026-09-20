@@ -21,7 +21,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/overlays';
-import { SignaturePad } from '@/features/portal/signature-pad';
 
 /**
  * Arbeitsfläche für den Einsatz vor Ort.
@@ -60,18 +59,41 @@ export function JobWorkspace({
   photos: initialPhotos,
   status,
   canComplete,
+  customerAccepted = false,
 }: {
   jobId: string;
   checklist: ChecklistItemDto[];
   photos: JobPhotoDto[];
   status: string;
   canComplete: boolean;
+  /** Hat die Kundschaft den Rapport schon vor Ort abgenommen? */
+  customerAccepted?: boolean;
 }) {
   const router = useRouter();
   const [checklist, setChecklist] = React.useState(initialChecklist);
   const [photos, setPhotos] = React.useState(initialPhotos);
   const [uploading, setUploading] = React.useState<string | null>(null);
   const [completeOpen, setCompleteOpen] = React.useState(false);
+  const [uebergabe, setUebergabe] = React.useState(false);
+
+  /**
+   * Das Gerät übergeben: Der Server friert den Rapport ein und sperrt diese
+   * Sitzung, bevor die Antwort zurückkommt. Danach ein voller Seitenwechsel
+   * in den Kundenmodus — `router.push` würde den Client-Router behalten und
+   * damit Seiten aus der Zeit vor der Sperre zeigen können.
+   */
+  const abnahmeStarten = async () => {
+    setUebergabe(true);
+    try {
+      const antwort = await api.post<{ signatureUrl: string }>(`/api/jobs/${jobId}/handoff`);
+      window.location.assign(antwort.signatureUrl);
+    } catch (err) {
+      toast.error(
+        err instanceof ApiError ? err.message : 'Die Abnahme konnte nicht begonnen werden.',
+      );
+      setUebergabe(false);
+    }
+  };
 
   const done = checklist.filter((item) => item.done).length;
   const openRequired = checklist.filter((item) => item.required && !item.done);
@@ -284,6 +306,34 @@ export function JobWorkspace({
         </section>
       ) : null}
 
+      {/*
+        Die Kundenabnahme — ein eigener Schritt nach dem Abschluss.
+        Erst steht der Rapport, dann liest ihn die Kundschaft. Wer das
+        zusammenlegt, lässt auf einem Bildschirm unterschreiben, der sich
+        danach noch ändern lässt.
+      */}
+      {isClosed && status !== 'CANCELLED' && canComplete ? (
+        <section className="space-y-3">
+          {customerAccepted ? (
+            <Alert variant="success" title="Von der Kundschaft abgenommen">
+              Der Rapport wurde vor Ort elektronisch bestätigt.
+            </Alert>
+          ) : (
+            <>
+              <Button size="xl" width="full" variant="outline" loading={uebergabe} onClick={abnahmeStarten}>
+                <PenLine aria-hidden />
+                Kundenabnahme vorbereiten
+              </Button>
+              <p className="text-2xs text-muted-foreground">
+                Der Rapport wird festgehalten und das Gerät für die Kundschaft freigegeben. Dein
+                Mitarbeiterbereich ist so lange gesperrt — du entsperrst ihn danach mit deinem
+                Passwort.
+              </p>
+            </>
+          )}
+        </section>
+      ) : null}
+
       <CompleteDialog
         jobId={jobId}
         open={completeOpen}
@@ -318,8 +368,6 @@ function CompleteDialog({
   onDone: () => void;
 }) {
   const [note, setNote] = React.useState('');
-  const [signatureName, setSignatureName] = React.useState('');
-  const [signature, setSignature] = React.useState<string | null>(null);
   const [materials, setMaterials] = React.useState<MaterialRow[]>([]);
   const [saving, setSaving] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
@@ -330,8 +378,6 @@ function CompleteDialog({
     try {
       await api.post(`/api/jobs/${jobId}/complete`, {
         completionNote: note || undefined,
-        signatureDataUrl: signature ?? undefined,
-        signatureName: signatureName || undefined,
         materials: materials
           .filter((row) => row.name.trim() && Number(row.quantity) > 0)
           .map((row) => ({
@@ -367,8 +413,8 @@ function CompleteDialog({
         <DialogHeader>
           <DialogTitle>Einsatz abschliessen</DialogTitle>
           <DialogDescription>
-            Halte fest, was erledigt wurde. Ist jemand vor Ort, lass die Arbeit direkt hier
-            unterschreiben — das erspart später Diskussionen.
+            Halte fest, was erledigt wurde. Die Kundenabnahme kommt danach als eigener Schritt —
+            dann siehst du zuerst den fertigen Rapport und übergibst erst dann das Gerät.
           </DialogDescription>
         </DialogHeader>
 
@@ -485,17 +531,6 @@ function CompleteDialog({
             ) : null}
           </div>
 
-          {/* Unterschrift */}
-          <div className="space-y-3">
-            <Label>Abnahme durch die Kundschaft (optional)</Label>
-            <Input
-              value={signatureName}
-              onChange={(event) => setSignatureName(event.target.value)}
-              placeholder="Name der unterschreibenden Person"
-              aria-label="Name der unterschreibenden Person"
-            />
-            <SignaturePad value={signature} onChange={setSignature} />
-          </div>
         </div>
 
         <DialogFooter>

@@ -48,6 +48,7 @@ import {
   CURRENT_CONSENT_VERSION,
   DEFAULT_CONSENT_LOCALE,
   QUOTE_CONSENT_VERSION,
+  RAPPORT_CONSENT_VERSION,
   consentHash,
   consentText,
   isConsentLocale,
@@ -69,6 +70,7 @@ import {
 } from './access-token.service';
 import { documentVisibilityWhere } from './document.service';
 import { notifyStaff } from './notification.service';
+import { acceptJobInTx, afterJobAccepted } from './job-acceptance.service';
 import { ACCEPTANCE_ACTIVE, acceptQuoteInTx, afterQuoteAccepted } from './quote-acceptance.service';
 import { appendSignatureEvent, type ActorSource, type AnfrageKontext } from './signature-events';
 
@@ -399,6 +401,177 @@ export async function issueQuoteAcceptanceSession(params: {
     ctx: params.ctx,
     sessionJti: sitzung.jti,
     details: { tokenId: anker.record.id, actorSource: 'AUTHENTICATED_CUSTOMER', userId: params.userId },
+  });
+  return { sessionToken: sitzung.token, expiresAt: sitzung.expiresAt };
+}
+
+// ---------------------------------------------------------------------------
+//  Vor-Ort-Abnahme (Gate 4D): Vorgang anlegen, Sitzung für das Gerät
+// ---------------------------------------------------------------------------
+
+/**
+ * Den Abnahmevorgang eines Einsatzes anlegen — mit dem Rapport als Original.
+ *
+ * Wie bei der Offerte entsteht der Snapshot **beim Start** und wird gehasht
+ * (Hash A); ab dann ist er das, was unterzeichnet wird. Zwei Dinge sind hier
+ * anders als beim Link-Ablauf:
+ *
+ *  • `ceremonyMode = IN_PERSON_HANDOFF` und die `presentedBy…`-Felder halten
+ *    fest, **wer das Gerät bereitgestellt hat**. Das ist keine
+ *    Identitätsbestätigung und darf nirgends als solche erscheinen — die
+ *    Person aus dem Betrieb reicht ein Telefon weiter, mehr behauptet der
+ *    Beweis nicht.
+ *  • Der Teilnehmer ist die Kundschaft des Einsatzes, nicht die angemeldete
+ *    Person. `createdById` trägt zwar das Personalkonto (Pflichtfeld mit
+ *    Fremdschlüssel), aber wer **unterschrieben** hat, steht ausschliesslich
+ *    am Teilnehmer.
+ *
+ * Genau ein offener Vorgang je Einsatz: Der Teilindex
+ * `signature_requests_offene_abnahme_je_einsatz` erzwingt es. Verliert dieser
+ * Aufruf das Rennen, gibt er `null` zurück.
+ */
+export async function createJobAcceptanceRequest(params: {
+  job: { id: string; organizationId: string; number: string; title: string };
+  participant: { name: string; email: string; customerId: string | null };
+  snapshot: { bytes: Buffer; filename: string };
+  expiresAt: Date;
+  presenter: { userId: string; name: string; employeeId: string | null };
+  ctx: AnfrageKontext;
+}): Promise<{ id: string; publicId: string; participantId: string } | null> {
+  const befund = await inspectPdf(params.snapshot.bytes);
+  if (befund.pageCount < 1) throw new BusinessRuleError('Der Rapport liess sich nicht als Dokument erzeugen.');
+
+  const publicId = randomToken(16);
+  const original = await artefaktAblegen({
+    organizationId: params.job.organizationId,
+    requestId: publicId,
+    art: 'original',
+    bytes: params.snapshot.bytes,
+    contentType: 'application/pdf',
+    filename: params.snapshot.filename,
+  });
+
+  try {
+    return await prisma.$transaction(async (tx) => {
+      const created = await tx.signatureRequest.create({
+        data: {
+          organizationId: params.job.organizationId,
+          publicId,
+          status: 'PENDING',
+          sentAt: new Date(),
+          providerType: 'INTERNAL_EVIDENCE',
+          artifactMode: 'EMBEDDED_VISUAL',
+          assuranceLevel: 'LINK_ONLY',
+          ceremonyMode: 'IN_PERSON_HANDOFF',
+          title: `Rapport ${params.job.number} — ${params.job.title}`,
+          jobId: params.job.id,
+          originalArtifactId: original.assetId,
+          originalDocumentHash: original.checksum,
+          consentVersion: RAPPORT_CONSENT_VERSION,
+          consentLocale: DEFAULT_CONSENT_LOCALE,
+          createdById: params.presenter.userId,
+          presentedById: params.presenter.userId,
+          presentedByName: params.presenter.name,
+          presentedByEmployeeId: params.presenter.employeeId,
+          expiresAt: params.expiresAt,
+          participants: {
+            create: {
+              order: 1,
+              role: 'SIGNER',
+              nameSnapshot: params.participant.name,
+              emailSnapshot: params.participant.email.toLowerCase(),
+              customerId: params.participant.customerId,
+            },
+          },
+        },
+        select: { id: true, publicId: true, participants: { select: { id: true } } },
+      });
+      await appendSignatureEvent(tx, {
+        requestId: created.id,
+        type: 'REQUEST_CREATED',
+        ctx: params.ctx,
+        details: {
+          source: 'Job',
+          jobId: params.job.id,
+          jobNumber: params.job.number,
+          artifactMode: 'EMBEDDED_VISUAL',
+          assuranceLevel: 'LINK_ONLY',
+          ceremonyMode: 'IN_PERSON_HANDOFF',
+          originalHash: original.checksum,
+          actorSource: 'IN_PERSON_HANDOFF',
+          presentedBy: params.presenter.name,
+          note: 'Geraet fuer die Kundenabnahme bereitgestellt — keine Identitaetspruefung.',
+          signatureCheck: {
+            acroFormSignatureFields: befund.hasSignatureFields,
+            signatureStructures: befund.hasSignatureStructures,
+            note: 'Clenaris-eigener Snapshot; Suche nach Signaturstrukturen als Vorsichtsmassnahme, keine kryptografische Pruefung.',
+          },
+        },
+      });
+      return { id: created.id, publicId: created.publicId, participantId: created.participants[0]!.id };
+    });
+  } catch (error) {
+    if ((error as { code?: string }).code === 'P2002') return null;
+    throw error;
+  }
+}
+
+/** Der offene Abnahmevorgang eines Einsatzes — oder `null`. */
+export async function findActiveJobAcceptance(jobId: string) {
+  return prisma.signatureRequest.findFirst({
+    where: {
+      jobId,
+      ceremonyMode: 'IN_PERSON_HANDOFF',
+      status: { in: ['DRAFT', 'PENDING', 'FINALIZING'] },
+    },
+    include: { participants: { orderBy: { order: 'asc' } } },
+  });
+}
+
+/**
+ * Die Signatursitzung für das übergebene Gerät.
+ *
+ * **Kein Link, kein roher Token, keine E-Mail.** Die Kundschaft sitzt bereits
+ * am Gerät; ein zugestellter Zugang wäre ein Geheimnis, das ohne Not
+ * entsteht und irgendwo liegen bleibt. Der `SIGNATURE_ACCESS`-Token wird
+ * trotzdem angelegt — der Kern verankert jede Sitzung an einem widerrufbaren
+ * Objekt, und darauf zu verzichten hiesse, eine zweite Sitzungsarchitektur
+ * neben die bestehende zu stellen. Sein Rohwert wird hier schlicht
+ * weggeworfen: Was niemand erfährt, kann niemand weitergeben.
+ */
+export async function issueJobAcceptanceSession(params: {
+  organizationId: string;
+  requestId: string;
+  participantId: string;
+  expiresAt: Date;
+  presenterUserId: string;
+  ctx: AnfrageKontext;
+}): Promise<{ sessionToken: string; expiresAt: Date }> {
+  const anker = await issuePublicToken({
+    organizationId: params.organizationId,
+    purpose: 'SIGNATURE_ACCESS',
+    resourceId: params.participantId,
+    createdById: params.presenterUserId,
+    expiresAt: params.expiresAt,
+  });
+  const sitzung = await issueSignatureSession({
+    scope: 'sign',
+    requestId: params.requestId,
+    participantId: params.participantId,
+    tokenId: anker.record.id,
+  });
+  await appendSignatureEvent(prisma, {
+    requestId: params.requestId,
+    participantId: params.participantId,
+    type: 'LINK_EXCHANGED',
+    ctx: params.ctx,
+    sessionJti: sitzung.jti,
+    details: {
+      tokenId: anker.record.id,
+      actorSource: 'IN_PERSON_HANDOFF',
+      channel: 'device_handoff',
+      note: 'Sitzung auf dem uebergebenen Geraet ausgestellt; kein Zugang versendet.',
+    },
   });
   return { sessionToken: sitzung.token, expiresAt: sitzung.expiresAt };
 }
@@ -1377,9 +1550,45 @@ export async function declineSignature(
  */
 /** Steuert den Rückroll der Abschluss-Transaktion — kein Fehler für den Aufrufer. */
 class Kopplungsfehler extends Error {
-  constructor(readonly grund: 'QUOTE_NOT_ACCEPTABLE' | 'REQUEST_NOT_FINALIZING') {
+  constructor(
+    readonly grund: 'QUOTE_NOT_ACCEPTABLE' | 'JOB_NOT_ACCEPTABLE' | 'REQUEST_NOT_FINALIZING',
+  ) {
     super(grund);
   }
+}
+
+/**
+ * Der Vorgang ist technisch fertig, das Geschäftsobjekt nimmt ihn nicht mehr
+ * an — abbrechen, mit Grund.
+ *
+ * Kein stiller Endzustand „unterschrieben, aber nichts passiert": Die
+ * Unterschrift wurde geleistet, sie trifft nur nichts mehr. Snapshot und
+ * Protokoll bleiben als Beleg, die Zugänge werden entwertet, und der Zustand
+ * hat einen Namen und ein Ereignis. Gemeinsam für Offerte und Einsatz, damit
+ * es nicht zwei Auslegungen desselben Bruchs gibt.
+ */
+async function vorgangAbbrechenNachBruch(
+  requestId: string,
+  participants: { id: string }[],
+  ctx: AnfrageKontext | undefined,
+  details: Record<string, unknown>,
+): Promise<void> {
+  await prisma.$transaction(async (tx) => {
+    const abgebrochen = await tx.signatureRequest.updateMany({
+      where: { id: requestId, status: 'FINALIZING' },
+      data: { status: 'CANCELLED', cancelledAt: new Date(), finalizingSince: null },
+    });
+    if (abgebrochen.count === 0) return;
+    for (const p of participants) {
+      await revokeTokensFor({ tx, purpose: 'SIGNATURE_ACCESS', resourceId: p.id });
+    }
+    await appendSignatureEvent(tx, {
+      requestId,
+      type: 'CANCELLED',
+      ctx,
+      details: { by: 'system', ...details },
+    });
+  });
 }
 
 export async function finalizeSignatureRequest(requestId: string, ctx?: AnfrageKontext): Promise<string> {
@@ -1575,6 +1784,13 @@ export async function finalizeSignatureRequest(requestId: string, ctx?: AnfrageK
      * angenommen" — er hat einen Namen und ein Ereignis.
      */
     const quoteId = request.quoteId;
+    /**
+     * Der Einsatz wird nur gekoppelt, wenn es sich um eine **Vor-Ort-Abnahme**
+     * handelt. Ein Vorgang mit `jobId` aus einem anderen Hergang — etwa ein
+     * später zugestellter Link — hat andere Regeln und darf hier nicht
+     * versehentlich eine Abnahme buchen.
+     */
+    const jobId = request.ceremonyMode === 'IN_PERSON_HANDOFF' ? request.jobId : null;
     let ergebnis: 'COMPLETED' | 'CANCELLED' | 'OFFEN' = 'OFFEN';
     let grund: string | null = null;
     try {
@@ -1583,12 +1799,25 @@ export async function finalizeSignatureRequest(requestId: string, ctx?: AnfrageK
           const angenommen = await acceptQuoteInTx(tx, quoteId, now);
           if (!angenommen) throw new Kopplungsfehler('QUOTE_NOT_ACCEPTABLE');
         }
+        if (jobId) {
+          const abgenommen = await acceptJobInTx(tx, jobId, now);
+          if (!abgenommen) throw new Kopplungsfehler('JOB_NOT_ACCEPTABLE');
+        }
         const fertig = await tx.signatureRequest.updateMany({
           where: { id: requestId, status: 'FINALIZING', evidenceArtifactId: { not: null } },
           data: { status: 'COMPLETED', completedAt: now, finalizingSince: null },
         });
         if (fertig.count === 0) throw new Kopplungsfehler('REQUEST_NOT_FINALIZING');
-        await appendSignatureEvent(tx, { requestId, type: 'REQUEST_COMPLETED', ctx, details: quoteId ? { quoteId, quoteStatus: 'ACCEPTED' } : undefined });
+        await appendSignatureEvent(tx, {
+          requestId,
+          type: 'REQUEST_COMPLETED',
+          ctx,
+          details: quoteId
+            ? { quoteId, quoteStatus: 'ACCEPTED' }
+            : jobId
+              ? { jobId, jobAccepted: true }
+              : undefined,
+        });
       });
       ergebnis = 'COMPLETED';
     } catch (error) {
@@ -1596,26 +1825,23 @@ export async function finalizeSignatureRequest(requestId: string, ctx?: AnfrageK
       grund = error.grund;
       if (error.grund === 'QUOTE_NOT_ACCEPTABLE' && quoteId) {
         const zustand = await prisma.quote.findUnique({ where: { id: quoteId }, select: { status: true, validUntil: true } });
-        await prisma.$transaction(async (tx) => {
-          const abgebrochen = await tx.signatureRequest.updateMany({
-            where: { id: requestId, status: 'FINALIZING' },
-            data: { status: 'CANCELLED', cancelledAt: new Date(), finalizingSince: null },
-          });
-          if (abgebrochen.count === 0) return;
-          for (const p of request.participants) {
-            await revokeTokensFor({ tx, purpose: 'SIGNATURE_ACCESS', resourceId: p.id });
-          }
-          await appendSignatureEvent(tx, {
-            requestId,
-            type: 'CANCELLED',
-            ctx,
-            details: {
-              by: 'system',
-              reason: 'quote_not_acceptable_at_completion',
-              quoteStatus: zustand?.status ?? null,
-              quoteValidUntil: zustand?.validUntil?.toISOString() ?? null,
-            },
-          });
+        await vorgangAbbrechenNachBruch(requestId, request.participants, ctx, {
+          reason: 'quote_not_acceptable_at_completion',
+          quoteStatus: zustand?.status ?? null,
+          quoteValidUntil: zustand?.validUntil?.toISOString() ?? null,
+        });
+        ergebnis = 'CANCELLED';
+      }
+      if (error.grund === 'JOB_NOT_ACCEPTABLE' && jobId) {
+        const zustand = await prisma.job.findUnique({
+          where: { id: jobId },
+          select: { status: true, deletedAt: true, customerAcceptedAt: true },
+        });
+        await vorgangAbbrechenNachBruch(requestId, request.participants, ctx, {
+          reason: 'job_not_acceptable_at_completion',
+          jobStatus: zustand?.status ?? null,
+          jobDeleted: Boolean(zustand?.deletedAt),
+          jobAlreadyAccepted: Boolean(zustand?.customerAcceptedAt),
         });
         ergebnis = 'CANCELLED';
       }
@@ -1630,7 +1856,23 @@ export async function finalizeSignatureRequest(requestId: string, ctx?: AnfrageK
           | null;
         await afterQuoteAccepted({ quoteId, requestId, actorSource, ctx });
       }
-      await ergebnisLinksVersenden(requestId, ctx);
+      if (jobId) {
+        const signer = request.participants.find((p) => p.role === 'SIGNER');
+        await afterJobAccepted({
+          jobId,
+          requestId,
+          signerName: signer?.signedName ?? signer?.nameSnapshot ?? 'unbekannt',
+          presentedByName: request.presentedByName,
+          ctx,
+        });
+      }
+      /**
+       * Ergebnislinks gehen nur nach aussen, wenn der Vorgang auch von
+       * aussen kam. Bei der Vor-Ort-Abnahme hält die Kundschaft das Gerät
+       * gerade in der Hand und sieht das Ergebnis dort — eine E-Mail mit
+       * einem Zugang wäre ein Geheimnis, das ohne Not entsteht.
+       */
+      if (!jobId) await ergebnisLinksVersenden(requestId, ctx);
       return 'COMPLETED';
     }
     if (ergebnis === 'CANCELLED') {

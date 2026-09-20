@@ -534,6 +534,7 @@ model Organization {
   storedFiles       StoredFile[]
   publicTokens      PublicAccessToken[]
   signatureRequests SignatureRequest[]
+  deviceHandoffs    DeviceHandoffSession[]
   seoMeta           SeoMeta[]
   accountingExports AccountingExport[]
   callsToAction     CallToAction[]
@@ -694,6 +695,8 @@ model User {
   notifications Notification[]
   auditLogs     AuditLog[]
   signatureRequestsCreated SignatureRequest[] @relation("SignatureRequestsCreated")
+  signatureRequestsPresented SignatureRequest[] @relation("SignatureRequestsPresented")
+  deviceHandoffs DeviceHandoffSession[] @relation("DeviceHandoffs")
   consents      Consent[]
   activities    Activity[]          @relation("ActivityAuthor")
   assignedTasks Task[]              @relation("TaskAssignee")
@@ -1850,11 +1853,21 @@ model Job {
   completionNote   String?
   customerRating   Int?
   // LEGACY_SIGNATURE — Abnahme auf dem Geraet der Reinigungskraft vor Ort.
-  // Anderer Fall als der Link-Ablauf (Praesenz, kein Code); Umstellung in
-  // Gate 4C mit eigener Sitzungs- und Akteurbetrachtung. Bleibt lesbar.
+  // Seit Gate 4D schreibt kein neuer Ablauf mehr in diese drei Spalten; sie
+  // tragen den Altbestand und bleiben lesbar. Neue Abnahmen stehen im
+  // Signaturkern (`SignatureRequest` mit `ceremonyMode = IN_PERSON_HANDOFF`).
   signatureDataUrl String?
   signatureName    String?
   signedAt         DateTime? @db.Timestamptz(6)
+
+  /// Wann die Kundschaft den Rapport vor Ort elektronisch bestaetigt hat.
+  ///
+  /// Eigenes Feld statt eines neuen `JobStatus`: `VERIFIED` heisst in diesem
+  /// Produkt „vom Buero kontrolliert und abrechnungsreif" — eine interne
+  /// Freigabe. Die Kundenabnahme ist eine andere Tatsache und darf jene
+  /// Bedeutung nicht stillschweigend uebernehmen. Zusicherung aus Gate 4D:
+  /// gesetzt genau dann, wenn ein abgeschlossener Abnahmevorgang existiert.
+  customerAcceptedAt DateTime? @db.Timestamptz(6)
 
   // Kostenrechnung
   laborCost    Decimal @default(0) @db.Decimal(12, 2)
@@ -1886,6 +1899,7 @@ model Job {
   threads      MessageThread[]
   invoiceItems InvoiceItem[]
   signatureRequests SignatureRequest[]
+  deviceHandoffs    DeviceHandoffSession[]
 
   @@unique([organizationId, number])
   @@index([organizationId, status, scheduledStart])
@@ -3257,6 +3271,34 @@ enum SignatureAssuranceLevel {
   LINK_PLUS_SMS_CODE
 }
 
+/// Wie die Unterzeichnung zustande kam — der *Hergang*, nicht die Sicherheit.
+///
+/// Bewusst getrennt von `SignatureAssuranceLevel`: Dort steht, womit der
+/// Zugang nachgewiesen wurde (Link, Link plus Code). Hier steht, in welcher
+/// Situation unterschrieben wurde. Beides zusammen ergibt erst das Bild, und
+/// keines darf fuer das andere einstehen.
+///
+/// `IN_PERSON_HANDOFF` behauptet ausschliesslich: Das Geraet wurde von einer
+/// Person aus dem Betrieb fuer genau diesen Vorgang uebergeben. Es behauptet
+/// **nicht**, dass eine Identitaet geprueft, ein Ausweis gesehen oder eine
+/// Vollmacht nachgewiesen wurde. Wer daraus mehr liest, liest etwas hinein.
+enum SignatureCeremonyMode {
+  /// Aus der Ferne ueber einen zugestellten Link, ohne Anmeldung.
+  REMOTE_LINK
+  /// Aus dem angemeldeten Kundenbereich heraus.
+  AUTHENTICATED_CUSTOMER
+  /// Vor Ort auf dem uebergebenen Geraet des Betriebs.
+  IN_PERSON_HANDOFF
+}
+
+/// Zustand einer Geraeteuebergabe zur Vor-Ort-Abnahme.
+enum DeviceHandoffStatus {
+  /// Geraet ist beim Kunden, die Mitarbeitersitzung ist gesperrt.
+  ACTIVE
+  /// Mitarbeiter hat wieder uebernommen (Passwort bestaetigt).
+  RELEASED
+}
+
 enum SignatureRequestStatus {
   DRAFT
   PENDING
@@ -3334,6 +3376,20 @@ model SignatureRequest {
   providerType   SignatureProviderType   @default(INTERNAL_EVIDENCE)
   artifactMode   SignatureArtifactMode   @default(DETACHED_EVIDENCE)
   assuranceLevel SignatureAssuranceLevel @default(LINK_ONLY)
+  /// Der Hergang der Unterzeichnung. Bis Gate 4D stand er nur in den
+  /// `details` einzelner Ereignisse; als Spalte laesst er sich abfragen und
+  /// im Beweis eindeutig ausweisen.
+  ceremonyMode   SignatureCeremonyMode   @default(REMOTE_LINK)
+
+  /// Wer die Vor-Ort-Abnahme begonnen und das Geraet uebergeben hat.
+  ///
+  /// Ausdruecklich **nicht** der Unterzeichner: Die Person aus dem Betrieb
+  /// stellt das Geraet bereit, unterschreibt aber nicht und bestaetigt auch
+  /// keine Identitaet. Der Name wird als Schnappschuss mitgefuehrt, weil ein
+  /// spaeterer Namenswechsel den Beweis nicht veraendern darf.
+  presentedById       String?
+  presentedByName     String?
+  presentedByEmployeeId String?
   title          String
   /// Vorgangskennung eines spaeteren externen Anbieters. Bei INTERNAL null.
   providerReference String?
@@ -3387,8 +3443,10 @@ model SignatureRequest {
   signedArtifact   FileAsset?       @relation("SignatureSigned", fields: [signedArtifactId], references: [id], onDelete: Restrict)
   evidenceArtifact FileAsset?       @relation("SignatureEvidence", fields: [evidenceArtifactId], references: [id], onDelete: Restrict)
   createdBy        User             @relation("SignatureRequestsCreated", fields: [createdById], references: [id], onDelete: Restrict)
+  presentedBy      User?            @relation("SignatureRequestsPresented", fields: [presentedById], references: [id], onDelete: SetNull)
   participants     SignatureParticipant[]
   events           SignatureEvent[]
+  deviceHandoffs   DeviceHandoffSession[]
 
   @@index([organizationId, status])
   @@index([organizationId, createdAt])
@@ -3398,6 +3456,57 @@ model SignatureRequest {
   @@index([documentVersionId])
   @@index([originalArtifactId])
   @@map("signature_requests")
+}
+
+/// Die Geraeteuebergabe: Solange sie laeuft, haelt der Kunde das Geraet der
+/// Mitarbeiterin bzw. des Mitarbeiters — und die Mitarbeitersitzung ist
+/// gesperrt.
+///
+/// **Warum eine Tabelle und kein Cookie.** Ein Cookie liegt im Browser, den
+/// der Kunde gerade in der Hand haelt; es waere genau dort widerlegbar, wo es
+/// gelten muss. Und ein prozesslokaler Zwischenspeicher taugt nicht, weil PM2
+/// im Cluster laeuft: Die Sperre entstuende auf Worker 1 und der naechste
+/// Aufruf traefe Worker 2. Die Sperre gehoert deshalb in die Datenbank, wie
+/// `User.sessionsRevokedAt` und aus demselben Grund.
+///
+/// **Warum an die Familie gebunden und nicht an den Benutzer.** Dieselbe
+/// Person ist oft auf dem Arbeitstelefon *und* am Buerorechner angemeldet.
+/// Eine Sperre je Benutzer wuerde beim Uebergeben des Telefons den Rechner
+/// mitsperren. `RefreshToken.family` bleibt ueber alle Rotationen hinweg
+/// dieselbe und benennt damit genau einen Browser.
+model DeviceHandoffSession {
+  id             String @id @default(cuid())
+  organizationId String
+  /// Die gesperrte Person — der Mitarbeiter, nicht der Unterzeichner.
+  userId         String
+  jobId          String
+  signatureRequestId String
+
+  /// `RefreshToken.family` des gesperrten Browsers. Kein Geheimnis: Die
+  /// Familie ist eine Zufallskennung ohne Zugriffswirkung; der Token selbst
+  /// liegt nur als Hash in `refresh_tokens`.
+  sessionFamily  String
+  status         DeviceHandoffStatus @default(ACTIVE)
+
+  startedAt   DateTime  @default(now()) @db.Timestamptz(6)
+  /// Wann die Unterzeichnung spaetestens endet. **Entsperrt nicht**: Ein
+  /// abgelaufener Vorgang gibt das Geraet nicht frei, sonst zeigte ein
+  /// liegengelassenes Telefon nach Fristablauf wieder den Mitarbeiterbereich.
+  expiresAt   DateTime  @db.Timestamptz(6)
+  releasedAt  DateTime? @db.Timestamptz(6)
+
+  organization     Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user             User             @relation("DeviceHandoffs", fields: [userId], references: [id], onDelete: Cascade)
+  job              Job              @relation(fields: [jobId], references: [id], onDelete: Restrict)
+  signatureRequest SignatureRequest @relation(fields: [signatureRequestId], references: [id], onDelete: Restrict)
+
+  @@index([organizationId, status])
+  @@index([userId])
+  @@index([jobId])
+  @@index([signatureRequestId])
+  /// Der eigentliche Schluessel: Nachschlagen je Browser, bei jedem Refresh.
+  @@index([sessionFamily, status])
+  @@map("device_handoff_sessions")
 }
 
 /// Wer unterzeichnet — mit eingefrorenen Kontaktdaten. Ein spaeterer

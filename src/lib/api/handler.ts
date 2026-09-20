@@ -6,7 +6,12 @@ import type { UserRole } from '@prisma/client';
 
 import { getSession, type SessionUser } from '@/lib/auth/session';
 import { can, type Permission } from '@/lib/auth/rbac';
-import { ForbiddenError, UnauthorizedError, ValidationError } from '@/lib/errors';
+import {
+  DeviceHandoffLockedError,
+  ForbiddenError,
+  UnauthorizedError,
+  ValidationError,
+} from '@/lib/errors';
 import { enforceRateLimit, getClientIp, type RateLimitName } from '@/lib/rate-limit';
 import { toErrorResponse } from './response';
 
@@ -71,6 +76,21 @@ interface ProtectedConfig<TBody, TQuery, TParams> extends BaseConfig<TBody, TQue
    * ist sie vorzuziehen: sie überlebt eine spätere Rollenerweiterung.
    */
   roles?: UserRole[];
+  /**
+   * Darf dieser Endpunkt laufen, während das Gerät übergeben ist (Gate 4D)?
+   *
+   * Vorgabe ist `false`, und das ist der Punkt: Während der Kunde das Gerät
+   * hält, ist **jeder** angemeldete Endpunkt gesperrt, bis ihn jemand
+   * ausdrücklich freigibt. Eine Erlaubnisliste, die man vergisst zu pflegen,
+   * lässt Türen offen; eine Verbotsliste, die man vergisst zu pflegen,
+   * schliesst sie. Erlaubt ist nur, was die Übergabe selbst braucht — die
+   * Statusabfrage und das Entsperren.
+   *
+   * Die öffentlichen Signaturendpunkte laufen über `definePublicRoute` und
+   * sind von der Sperre ohnehin nicht betroffen: Sie hängen an der
+   * Signatursitzung des Kunden, nicht an der Mitarbeitersitzung.
+   */
+  allowDuringHandoff?: boolean;
   handler: (ctx: RouteContext<TBody, TQuery, TParams>) => Promise<Response> | Response;
 }
 
@@ -185,6 +205,19 @@ export function defineRoute<TBody = undefined, TQuery = undefined, TParams = Rec
       const session = await getSession();
       if (!session) throw new UnauthorizedError();
 
+      /**
+       * Die Gerätesperre steht **vor** Rolle und Berechtigung.
+       *
+       * Sie ist keine Frage der Rechte — die Person hat sie weiterhin —,
+       * sondern eine des Geräts: Es liegt gerade beim Kunden. Deshalb hier,
+       * an der einen Stelle, durch die jeder angemeldete Endpunkt läuft.
+       * Eine Prüfung in den einzelnen Handlern wäre eine Prüfung, die in
+       * dem einen vergessen wird, der sie gebraucht hätte.
+       */
+      if (session.handoffId && !config.allowDuringHandoff) {
+        throw new DeviceHandoffLockedError();
+      }
+
       if (config.roles?.length && !config.roles.includes(session.role)) {
         throw new ForbiddenError('Diese Aktion ist Ihrer Rolle nicht erlaubt.');
       }
@@ -226,7 +259,19 @@ export function definePublicRoute<
       assertTrustedOrigin(request);
 
       const ip = getClientIp(request);
-      const session = await getSession();
+      /**
+       * Während einer Geräteübergabe gilt die Mitarbeitersitzung hier als
+       * nicht vorhanden.
+       *
+       * Öffentliche Endpunkte werden nicht gesperrt — die Signaturwege des
+       * Kunden laufen über sie. Sie dürfen die Sitzung der Person, die das
+       * Gerät übergeben hat, aber auch nicht *sehen*: Sonst schriebe ein
+       * Endpunkt, der „falls angemeldet, dann diese Person" auswertet, dem
+       * Kunden die Identität des Personals zu. Der Unterzeichner weist sich
+       * allein über die Signatursitzung aus.
+       */
+      const roh = await getSession();
+      const session = roh?.handoffId ? null : roh;
 
       if (config.rateLimit) {
         const key = config.rateLimitKey?.({ request, ip, session }) ?? ip;

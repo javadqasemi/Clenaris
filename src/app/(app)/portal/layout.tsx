@@ -17,6 +17,15 @@ import { AppShell, type NavGroup } from '@/components/app/app-shell';
 export default async function PortalLayout({ children }: { children: React.ReactNode }) {
   const session = await getSession();
   if (!session) redirect('/auth/anmelden');
+  /**
+   * Gerät übergeben → zur Rückgabeseite, bevor irgendetwas rendert.
+   *
+   * Die Middleware leitet bereits um, wenn das Zugangstoken die Sperre
+   * trägt; sie läuft aber auf der Edge und kann nicht nachschlagen. Ein
+   * Token, das vor der Übergabe ausgestellt wurde, kommt dort also durch.
+   * Hier ist die Sperre nachgeschlagen (`getSession`) und damit verbindlich.
+   */
+  if (session.handoffId) redirect('/geraet-uebernehmen');
   // Zugelassene Rollen zentral aus `ROUTE_GUARDS`, nicht hier aufgezählt.
   const guard = guardForPath('/portal')!;
   if (!guard.roles.includes(session.role)) redirect(homeRouteFor(session.role));

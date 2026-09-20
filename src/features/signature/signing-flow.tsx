@@ -51,7 +51,26 @@ interface Zustand {
   };
 }
 
-export function SigningFlow({ publicId }: { publicId: string }) {
+/**
+ * Woher die unterzeichnende Person kommt — das ändert nur die Worte.
+ *
+ * `remote`: über einen zugestellten Link, auf dem eigenen Gerät. Nach der
+ * Unterschrift folgt eine E-Mail mit dem Ergebnislink.
+ *
+ * `vor-ort`: auf dem übergebenen Gerät des Betriebs. Dann gibt es keine
+ * E-Mail zu versprechen — die Person steht daneben —, und der letzte Satz
+ * muss der einzige sein, der hier zählt: Bitte das Gerät zurückgeben. Die
+ * Mitarbeitersitzung bleibt gesperrt, bis das geschehen ist.
+ */
+export type SigningVariant = 'remote' | 'vor-ort';
+
+export function SigningFlow({
+  publicId,
+  variant = 'remote',
+}: {
+  publicId: string;
+  variant?: SigningVariant;
+}) {
   const [zustand, setZustand] = React.useState<Zustand | null>(null);
   const [lade, setLade] = React.useState<'laden' | 'bereit' | 'ungueltig' | 'fehler'>('laden');
 
@@ -161,7 +180,9 @@ export function SigningFlow({ publicId }: { publicId: string }) {
   return (
     <div className="container max-w-3xl space-y-8 py-10">
       <header className="space-y-2">
-        <p className="text-meta text-muted-foreground">Elektronische Unterzeichnung</p>
+        <p className="text-meta text-muted-foreground">
+          {variant === 'vor-ort' ? 'Abnahme vor Ort' : 'Elektronische Unterzeichnung'}
+        </p>
         <h1 className="font-display text-title font-bold">{request.title}</h1>
         <p className="text-sm text-muted-foreground">
           Für {participant.name} ({participant.email})
@@ -171,13 +192,29 @@ export function SigningFlow({ publicId }: { publicId: string }) {
       </header>
 
       {fertig ? (
-        <Alert variant="success" title="Unterzeichnet">
-          Vielen Dank. Sie erhalten eine E-Mail mit einem Link zum unterzeichneten Dokument und zum Signaturprotokoll.
+        variant === 'vor-ort' ? (
+          <Alert variant="success" title="Vielen Dank — die Abnahme ist gespeichert">
+            Bitte geben Sie das Gerät wieder der Mitarbeiterin oder dem Mitarbeiter zurück.
+          </Alert>
+        ) : (
+          <Alert variant="success" title="Unterzeichnet">
+            Vielen Dank. Sie erhalten eine E-Mail mit einem Link zum unterzeichneten Dokument und zum Signaturprotokoll.
+          </Alert>
+        )
+      ) : null}
+      {abgelehnt ? (
+        <Alert variant="warning" title="Abgelehnt">
+          {variant === 'vor-ort'
+            ? 'Sie haben den Rapport nicht bestätigt. Bitte geben Sie das Gerät zurück — die Mitarbeiterin oder der Mitarbeiter klärt das Weitere mit Ihnen.'
+            : 'Sie haben die Unterzeichnung abgelehnt.'}
         </Alert>
       ) : null}
-      {abgelehnt ? <Alert variant="warning" title="Abgelehnt">Sie haben die Unterzeichnung abgelehnt.</Alert> : null}
       {!offen && !fertig && !abgelehnt ? (
-        <Alert variant="warning" title="Vorgang beendet">Dieser Vorgang ist nicht mehr offen.</Alert>
+        <Alert variant="warning" title="Vorgang beendet">
+          {variant === 'vor-ort'
+            ? 'Diese Abnahme ist abgelaufen oder wurde beendet. Bitte geben Sie das Gerät zurück.'
+            : 'Dieser Vorgang ist nicht mehr offen.'}
+        </Alert>
       ) : null}
 
       <section aria-label="Dokument" className="space-y-3">

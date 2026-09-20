@@ -24,10 +24,11 @@ import { createHash } from 'node:crypto';
  * nicht um „ein Dokument" —, aber dieselbe Regel: versioniert, eingefroren,
  * gehasht, ohne rechtliche Zusage.
  */
-export const CONSENT_VERSIONS = ['v1', 'quote-v1'] as const;
+export const CONSENT_VERSIONS = ['v1', 'quote-v1', 'rapport-v1'] as const;
 export type ConsentVersion = (typeof CONSENT_VERSIONS)[number];
 export const CURRENT_CONSENT_VERSION: ConsentVersion = 'v1';
 export const QUOTE_CONSENT_VERSION: ConsentVersion = 'quote-v1';
+export const RAPPORT_CONSENT_VERSION: ConsentVersion = 'rapport-v1';
 
 export const CONSENT_LOCALES = ['de-CH'] as const;
 export type ConsentLocale = (typeof CONSENT_LOCALES)[number];
@@ -48,6 +49,20 @@ const TEXTE: Record<ConsentVersion, Record<ConsentLocale, string>> = {
       'Dokument in genau dieser Fassung. Mir ist bekannt, dass Clenaris den Ablauf dieser Annahme ' +
       '(Zeitpunkt, verwendeter Zugang, technische Angaben meines Geräts) in einem Signaturprotokoll ' +
       'festhält.',
+  },
+  /**
+   * Vor Ort, auf dem Gerät des Betriebs. Der Text sagt ausdrücklich, was
+   * bestätigt wird — die *dokumentierten* Arbeiten in genau dieser Fassung —
+   * und behauptet nichts über die Identität der unterzeichnenden Person:
+   * Wer vor Ort unterschreibt, hat sich niemandem ausgewiesen, und der
+   * Beweis soll nicht so tun, als wäre es anders.
+   */
+  'rapport-v1': {
+    'de-CH':
+      'Ich habe den angezeigten Rapport geprüft und bestätige die darin dokumentierten ' +
+      'ausgeführten Arbeiten elektronisch. Massgebend ist das angezeigte Dokument in genau ' +
+      'dieser Fassung. Mir ist bekannt, dass Clenaris den Ablauf dieser Abnahme (Zeitpunkt, ' +
+      'verwendetes Gerät, technische Angaben) in einem Signaturprotokoll festhält.',
   },
 };
 

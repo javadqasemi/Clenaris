@@ -30,6 +30,8 @@ export default async function AccountLayout({ children }: { children: React.Reac
    * Die zugelassenen Rollen kommen aus `ROUTE_GUARDS`, nicht aus einer
    * zweiten Aufzählung — sonst driften die beiden Listen auseinander.
    */
+  // Gerät übergeben → zur Rückgabeseite (siehe `portal/layout.tsx`).
+  if (session.handoffId) redirect('/geraet-uebernehmen');
   const guard = guardForPath('/konto')!;
   if (!guard.roles.includes(session.role)) redirect(homeRouteFor(session.role));
 

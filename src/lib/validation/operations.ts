@@ -170,14 +170,23 @@ export const assignJobSchema = z.object({
   notify: z.boolean().default(true),
 });
 
+/**
+ * Einsatz abschliessen — seit Gate 4D **ohne** Unterschrift.
+ *
+ * Hier standen `signatureDataUrl` und `signatureName`: Das Team liess die
+ * Kundschaft auf demselben Bildschirm unterschreiben, auf dem es gerade den
+ * Rapport getippt hatte, und beides ging in einem Aufruf an den Server. Was
+ * unterschrieben wurde, stand nirgends — der Rapport liess sich danach
+ * ändern, und das Bild hing an nichts.
+ *
+ * Der Abschluss ist jetzt wieder, was er heisst: Das Team meldet die
+ * Ausführung. Die Abnahme durch die Kundschaft ist ein eigener Vorgang auf
+ * dem Signaturkern (`startCustomerHandoff`), mit eingefrorenem Rapport,
+ * Zustimmung und Protokoll — und mit einer Gerätesperre dazwischen, damit
+ * die beiden Personen am selben Gerät nicht dieselbe Sitzung teilen.
+ */
 export const completeJobSchema = z.object({
   completionNote: z.string().trim().max(4000).optional(),
-  signatureDataUrl: z
-    .string()
-    .max(500_000)
-    .regex(/^data:image\/(png|jpeg);base64,/, 'Ungültiges Unterschriftsformat.')
-    .optional(),
-  signatureName: z.string().trim().max(120).optional(),
   materials: z
     .array(
       z.object({

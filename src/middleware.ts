@@ -58,6 +58,20 @@ export async function middleware(request: NextRequest) {
     return response;
   }
 
+  /**
+   * Gerät übergeben → zur Rückgabeseite (Gate 4D).
+   *
+   * Die Sperre steht als Anspruch im Token, die Middleware kann sie also
+   * ohne Datenbank lesen. Sie leitet um, damit niemand auf einer halb
+   * gerenderten Seite mit 423 landet — mehr nicht. **Die Sicherheitsgrenze
+   * ist das nicht**: Sie liegt in `requireSession()` und in der
+   * Routen-Fabrik, die beide dieselbe Sperre prüfen und dabei die Datenbank
+   * hinter sich haben. Wer diese Umleitung umgeht, kommt dort an.
+   */
+  if (claims.lck) {
+    return NextResponse.redirect(new URL('/geraet-uebernehmen', request.url));
+  }
+
   // Angemeldet, aber falscher Bereich → in den eigenen Bereich umleiten.
   if (!guard.roles.includes(claims.role)) {
     return NextResponse.redirect(new URL(homeRouteFor(claims.role), request.url));

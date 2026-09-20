@@ -27,6 +27,8 @@ export default async function AdminLayout({ children }: { children: React.ReactN
   // auch die Middleware prüft. Eine zweite, hier ausgeschriebene Aufzählung
   // wäre beim nächsten Rollenzuwachs stillschweigend falsch (genau das ist mit
   // SUPER_ADMIN passiert).
+  // Gerät übergeben → zur Rückgabeseite (siehe `portal/layout.tsx`).
+  if (session.handoffId) redirect('/geraet-uebernehmen');
   const guard = guardForPath('/admin')!;
   if (!guard.roles.includes(session.role)) redirect(homeRouteFor(session.role));
 

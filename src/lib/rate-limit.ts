@@ -137,6 +137,19 @@ export const RATE_LIMITS = {
    * für jeden ehrlichen Ablauf mit Wiederholung.
    */
   signatureFinalize: { limit: 10, windowSeconds: 600 },
+  /**
+   * Gerät nach der Kundenabnahme wieder übernehmen (Gate 4D).
+   *
+   * Gezählt **je Übergabe**, nicht je Konto: Ein kontoweites Limit liesse
+   * sich von aussen auslösen — dreimal daneben getippt, und die Person käme
+   * auf keinem ihrer Geräte mehr hinein. Die Übergabe ist der engere und
+   * richtigere Schlüssel; sie endet ohnehin mit dem Entsperren.
+   *
+   * Zehn Versuche sind grosszügig für jemanden, der auf einem Telefon
+   * zwischen zwei Terminen ein Passwort eintippt, und eng genug, dass
+   * Raten über ein liegengelassenes Gerät nicht lohnt.
+   */
+  handoffUnlock: { limit: 10, windowSeconds: 900 },
 } as const satisfies Record<string, RateLimitRule>;
 
 export type RateLimitName = keyof typeof RATE_LIMITS;

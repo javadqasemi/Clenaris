@@ -105,6 +105,19 @@ export const signatureCancelSchema = z.object({
 
 export const signatureIdParams = z.object({ id: cuidSchema });
 
+/**
+ * Das Gerät nach der Kundenabnahme wieder übernehmen (Gate 4D).
+ *
+ * Nur das Passwort — die Person ist bekannt, ihre Sitzung besteht, und es
+ * geht nicht um eine Anmeldung, sondern um die Frage, ob wieder die richtige
+ * Person am Gerät ist. Keine E-Mail-Adresse (die wäre Ratespielraum ohne
+ * Nutzen), kein zweiter Faktor, kein eigener PIN.
+ */
+export const handoffUnlockSchema = z.object({
+  password: z.string().min(1, 'Bitte geben Sie Ihr Passwort ein.').max(200),
+});
+export type HandoffUnlockInput = z.infer<typeof handoffUnlockSchema>;
+
 /** Verwaltung: welches Artefakt eines Vorgangs. */
 export const signatureArtifactParams = z.object({
   id: cuidSchema,

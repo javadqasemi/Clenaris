@@ -660,6 +660,30 @@ export const ROUTES: RouteDoc[] = [
   },
   {
     method: 'get',
+    path: '/api/handoff',
+    tag: 'Unterzeichnung',
+    summary: 'Läuft auf diesem Gerät eine Kundenabnahme?',
+    description:
+      'Einer von zwei Endpunkten, die während einer Geräteübergabe antworten (`allowDuringHandoff`) — ' +
+      'sonst gäbe es keinen Weg zurück in den Mitarbeiterbereich. Liefert Einsatznummer, Zeitpunkte ' +
+      'und den Zustand des Vorgangs, keine Rapport- oder Kundendaten.',
+    guard: { kind: 'session' },
+  },
+  {
+    method: 'post',
+    path: '/api/handoff/unlock',
+    tag: 'Unterzeichnung',
+    summary: 'Gerät nach der Kundenabnahme wieder übernehmen',
+    description:
+      'Bestätigung mit dem Passwort des bereits angemeldeten Kontos — keine Anmeldung: Die Sitzung ' +
+      'und ihre Rotationsfamilie bleiben dieselben, nur die Sperre fällt. Das Kontingent zählt je ' +
+      'Übergabe, damit falsches Tippen niemanden auf seinen übrigen Geräten aussperrt.',
+    guard: { kind: 'session' },
+    rateLimit: 'handoffUnlock',
+    body: sig.handoffUnlockSchema,
+  },
+  {
+    method: 'get',
     path: '/api/signatures/{id}',
     tag: 'Unterzeichnung',
     summary: 'Vorgang für die Verwaltung',
@@ -1209,12 +1233,40 @@ export const ROUTES: RouteDoc[] = [
     tag: 'Einsätze',
     summary: 'Einsatz abschliessen',
     description:
-      'Erfasst Abschlussbericht, Materialverbrauch und die Unterschrift der Kundschaft und ' +
-      'stoppt laufende Zeiterfassungen.',
+      'Erfasst Abschlussbericht und Materialverbrauch und stoppt laufende Zeiterfassungen. ' +
+      'Seit Gate 4D ohne Unterschrift — die Abnahme durch die Kundschaft ist ein eigener ' +
+      'Vorgang auf dem Signaturkern.',
     guard: perm('any', 'job:complete_assigned', 'job:update'),
     rateLimit: 'apiWrite',
     params: q.idParam,
     body: operations.completeJobSchema,
+  },
+  {
+    method: 'post',
+    path: '/api/jobs/{id}/handoff',
+    tag: 'Einsätze',
+    summary: 'Kundenabnahme beginnen und Gerät übergeben',
+    description:
+      'Rendert den Rapport serverseitig, legt ihn unveränderlich ab (Hash A), erzeugt den ' +
+      'Unterzeichnungsvorgang mit ceremonyMode IN_PERSON_HANDOFF und sperrt die ' +
+      'Mitarbeitersitzung dieses Browsers. Antwortet mit der nicht geheimen Adresse des ' +
+      'Kundenmodus; die Signatursitzung wird als Cookie gesetzt, nie als Token ausgegeben.',
+    guard: perm('any', 'job:complete_assigned', 'job:update'),
+    rateLimit: 'apiWrite',
+    params: q.idParam,
+  },
+  {
+    method: 'delete',
+    path: '/api/jobs/{id}/handoff',
+    tag: 'Einsätze',
+    summary: 'Begonnene Kundenabnahme abbrechen',
+    description:
+      'Bricht den offenen Abnahmevorgang ab und gibt den Rapport wieder zur Bearbeitung frei. ' +
+      'Erreichbar erst nach dem Entsperren des Geräts — während der Übergabe antwortet die ' +
+      'Route 423.',
+    guard: perm('any', 'job:complete_assigned', 'job:update'),
+    rateLimit: 'apiWrite',
+    params: q.idParam,
   },
   {
     method: 'post',

@@ -14,6 +14,7 @@ import {
   InvoiceDocument,
   JobReportDocument,
   QuoteDocument,
+  type JobReportPdfProps,
   type PdfCompany,
   type PdfLineItem,
   type PdfRecipient,
@@ -385,10 +386,59 @@ export async function renderQuotePdf(quoteId: string): Promise<{
 //  Einsatzbericht
 // ---------------------------------------------------------------------------
 
+/**
+ * Der Rapport-Snapshot für die Vor-Ort-Abnahme (Gate 4D).
+ *
+ * Dieselbe Darstellung wie der gewöhnliche Einsatzbericht — Nummer, Datum,
+ * Objekt, Kundschaft, Team, Arbeitszeit, Checkliste samt Bemerkungen,
+ * kundenrelevantes Material, Abschlusstext —, aber **ohne** das
+ * Unterschriftsbild aus dem Altbestand und **ohne** Ablage am Einsatz.
+ *
+ * Die Bytes gehen an den Signaturkern, der sie als Original speichert und
+ * ihren SHA-256 (Hash A) einfriert. Was die Kundschaft auf dem Gerät sieht
+ * und unterschreibt, ist genau diese Datei; danach wird sie nie neu
+ * gerendert. Dass hier nichts persistiert wird, ist Absicht: Der
+ * `persist()`-Aufruf des gewöhnlichen Berichts schriebe unter
+ * `jobs/<id>/…` und überschriebe bei einer zweiten Abnahme den Beleg der
+ * ersten.
+ *
+ * Was bewusst **nicht** hineingeht, weil der Rapport ein Kundendokument
+ * ist: interne Notiz, Lohn- und Materialkosten, Nachkalkulation, Bewertung.
+ * `JobReportDocument` führt sie ohnehin nicht — geprüft in Gate 4D.
+ */
+export async function renderJobReportSnapshot(
+  jobId: string,
+): Promise<{ buffer: Buffer; filename: string }> {
+  const { props, number } = await einsatzberichtProps(jobId);
+  const buffer = await renderToBuffer(
+    React.createElement(JobReportDocument, { ...props, signature: null }) as never,
+  );
+  return { buffer, filename: `Rapport-${number}.pdf` };
+}
+
 export async function renderJobReportPdf(
   jobId: string,
   reportText?: string | null,
 ): Promise<{ buffer: Buffer; filename: string; url: string | null }> {
+  const { props, organizationId, jobId: id, number } = await einsatzberichtProps(jobId, reportText);
+  const buffer = await renderToBuffer(React.createElement(JobReportDocument, props) as never);
+
+  const filename = `Einsatzbericht-${number}.pdf`;
+  const url = await persist(organizationId, `jobs/${id}/${filename}`, buffer);
+
+  return { buffer, filename, url };
+}
+
+/** Eine Abfrage, zwei Renderer — der Bericht und sein unveränderlicher Schnappschuss. */
+async function einsatzberichtProps(
+  jobId: string,
+  reportText?: string | null,
+): Promise<{
+  props: JobReportPdfProps;
+  organizationId: string;
+  jobId: string;
+  number: string;
+}> {
   const job = await prisma.job.findUnique({
     where: { id: jobId },
     include: {
@@ -412,8 +462,11 @@ export async function renderJobReportPdf(
       ? Math.round((job.actualEnd.getTime() - job.actualStart.getTime()) / 60_000)
       : job.estimatedMin);
 
-  const buffer = await renderToBuffer(
-    React.createElement(JobReportDocument, {
+  return {
+    organizationId: job.organizationId,
+    jobId: job.id,
+    number: job.number,
+    props: {
       company,
       recipient: {
         name: `${job.customer.firstName} ${job.customer.lastName}`,
@@ -449,13 +502,8 @@ export async function renderJobReportPdf(
         job.signatureDataUrl && job.signatureName && job.signedAt
           ? { dataUrl: job.signatureDataUrl, name: job.signatureName, signedAt: job.signedAt }
           : null,
-    }) as never,
-  );
-
-  const filename = `Einsatzbericht-${job.number}.pdf`;
-  const url = await persist(job.organizationId, `jobs/${job.id}/${filename}`, buffer);
-
-  return { buffer, filename, url };
+    },
+  };
 }
 
 // ---------------------------------------------------------------------------
