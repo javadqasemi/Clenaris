@@ -7,6 +7,7 @@ import type { UserRole } from '@prisma/client';
 
 import { prisma } from '@/lib/db';
 import { serverEnv } from '@/lib/env';
+import { clientIpFromHeaders } from '@/lib/http/client-ip';
 import {
   ACCESS_COOKIE,
   REFRESH_COOKIE,
@@ -423,11 +424,25 @@ export async function revokeAllSessions(userId: string) {
   ]);
 }
 
+/**
+ * Die Adresse der anfragenden Stelle — aus der **einen** Richtlinie.
+ *
+ * Hier stand bis Gate 4D.2 eine eigene Kette
+ * `cf-connecting-ip → x-real-ip → x-forwarded-for`, die jedem dieser Köpfe
+ * glaubte. Sie war ein Überbleibsel: In `lib/http/client-ip.ts` war dieselbe
+ * Kette längst durch `TRUSTED_PROXY_MODE` ersetzt worden, in dieser Datei
+ * nicht. Zwei Auswertungen bedeuten zwei Sicherheitsniveaus, und das
+ * schwächere gewinnt immer dort, wo niemand hinschaut.
+ *
+ * Betroffen waren `RefreshToken.ip` und `User.lastLoginIp` — also genau die
+ * Felder, in die man bei einem Vorfall zuerst schaut. Ein Angreifer konnte
+ * sie mit einer einzigen Kopfzeile beliebig füllen, ohne dass irgendeine
+ * Prüfung dazwischenlag. Das Signaturprotokoll war nie betroffen; es bezieht
+ * `ctx.ip` seit Gate 4B aus `getClientIp`.
+ *
+ * Diese Funktion bleibt als Name bestehen, damit die Aufrufstellen lesbar
+ * bleiben, hat aber keine eigene Logik mehr.
+ */
 export function clientIpFrom(hdrs: Headers): string | null {
-  return (
-    hdrs.get('cf-connecting-ip') ??
-    hdrs.get('x-real-ip') ??
-    hdrs.get('x-forwarded-for')?.split(',')[0]?.trim() ??
-    null
-  );
+  return clientIpFromHeaders(hdrs);
 }

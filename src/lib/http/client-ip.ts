@@ -69,9 +69,22 @@ function bereinigt(wert: string | null): string | null {
   return IP_FORM.test(v) ? v : null;
 }
 
-export function resolveClientIp(request: Request): ResolvedClientIp {
-  const h = request.headers;
-
+/**
+ * Der Kern arbeitet auf `Headers`, nicht auf `Request`.
+ *
+ * Der Grund ist eine konkrete Lücke: `session.ts` und `auth.service.ts` haben
+ * die Adresse früher selbst aus den Kopfzeilen gelesen — mit der alten Kette
+ * `cf-connecting-ip → x-real-ip → x-forwarded-for`, die hier längst
+ * abgeschafft war. Sie taten es, weil sie im Server-Component-Kontext nur
+ * `headers()` haben und kein `Request`, und die einzige angebotene Funktion
+ * ein `Request` verlangte. Eine Richtlinie, die man nicht überall aufrufen
+ * kann, wird eben nicht überall aufgerufen; die zweite Kette war die Folge,
+ * nicht die Ursache.
+ *
+ * Deshalb ist `Headers` der Einstiegspunkt und `resolveClientIp` nur noch die
+ * bequeme Hülle für Aufrufer, die ein `Request` haben.
+ */
+export function resolveClientIpFromHeaders(h: Headers): ResolvedClientIp {
   switch (trustedProxyMode()) {
     case 'CLOUDFLARE': {
       const ip = bereinigt(h.get('cf-connecting-ip'));
@@ -96,6 +109,23 @@ export function resolveClientIp(request: Request): ResolvedClientIp {
       // davon vom Absender geschrieben.
       return { ip: null, source: 'UNAVAILABLE' };
   }
+}
+
+export function resolveClientIp(request: Request): ResolvedClientIp {
+  return resolveClientIpFromHeaders(request.headers);
+}
+
+/**
+ * Adresse oder `null`, für Aufrufer mit `Headers` — etwa `createSession` und
+ * die Anmeldung, die `session.ip` und `lastLoginIp` festhalten.
+ *
+ * Bewusst `null` statt `'unbekannt'`: Diese beiden Felder sind nullable und
+ * sollen den Unterschied zwischen „keine Adresse bekannt" und einer echten
+ * Adresse behalten. Der Ersatzwert `'unbekannt'` gehört allein in den
+ * Rate-Limit-Schlüssel, wo ein String gebraucht wird.
+ */
+export function clientIpFromHeaders(h: Headers): string | null {
+  return resolveClientIpFromHeaders(h).ip;
 }
 
 /**

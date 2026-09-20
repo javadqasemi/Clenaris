@@ -2,7 +2,13 @@ import { after, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 
-import { clientReportedUserAgent, resolveClientIp, trustedProxyMode } from '../../src/lib/http/client-ip';
+import {
+  clientIpFromHeaders,
+  clientReportedUserAgent,
+  resolveClientIp,
+  resolveClientIpFromHeaders,
+  trustedProxyMode,
+} from '../../src/lib/http/client-ip';
 import {
   CONSENT_VERSIONS,
   CURRENT_CONSENT_VERSION,
@@ -99,6 +105,91 @@ describe('Adressermittlung — TRUSTED_PROXY_MODE', () => {
       assert.deepEqual(resolveClientIp(anfrage({ 'cf-connecting-ip': wert })), { ip: null, source: 'UNAVAILABLE' }, `«${wert}»`);
     }
     assert.equal(resolveClientIp(anfrage({ 'cf-connecting-ip': '2001:db8::1' })).ip, '2001:db8::1', 'IPv6');
+  });
+
+  /**
+   * Gate 4D.2. Bis hierher galt die Richtlinie nur für Aufrufer mit einem
+   * `Request`. `createSession` und die Anmeldung haben im
+   * Server-Component-Kontext aber nur `headers()` — und lasen deshalb selbst,
+   * mit der alten Kette `cf-connecting-ip → x-real-ip → x-forwarded-for`, der
+   * jeder Kopf recht war. Betroffen waren `RefreshToken.ip` und
+   * `User.lastLoginIp`.
+   *
+   * Diese Fälle halten fest, dass derselbe Kopfsatz über beide Einstiege
+   * dieselbe Antwort ergibt. Sie prüfen nicht nur Werte, sondern die
+   * Gleichheit der beiden Wege: Eine zweite Auswertung kann gar nicht erst
+   * unbemerkt entstehen, solange dieser Vergleich grün ist.
+   */
+  describe('dieselbe Richtlinie für Aufrufer mit Headers statt Request', () => {
+    function kopfzeilen(h: Record<string, string>): Headers {
+      return new Headers(h);
+    }
+
+    it('NONE: die gefälschten Köpfe landen nicht in session.ip oder lastLoginIp', () => {
+      process.env.TRUSTED_PROXY_MODE = 'NONE';
+      assert.equal(
+        clientIpFromHeaders(kopfzeilen(GEFAELSCHT)),
+        null,
+        'ohne benannten Proxy darf keiner der drei Köpfe die Adresse setzen',
+      );
+      // Einzeln, damit ein späterer Rückfall auf genau einen Kopf auffällt.
+      for (const [name, wert] of Object.entries(GEFAELSCHT)) {
+        assert.equal(clientIpFromHeaders(kopfzeilen({ [name]: wert })), null, name);
+      }
+    });
+
+    it('SINGLE_REVERSE_PROXY: nur X-Real-IP, kein X-Forwarded-For zurück durch die Hintertür', () => {
+      process.env.TRUSTED_PROXY_MODE = 'SINGLE_REVERSE_PROXY';
+      assert.equal(clientIpFromHeaders(kopfzeilen(GEFAELSCHT)), '192.0.2.44');
+      assert.equal(
+        clientIpFromHeaders(kopfzeilen({ 'x-forwarded-for': '198.51.100.7, 203.0.113.99' })),
+        null,
+        'X-Forwarded-For allein ergibt auch auf diesem Weg keine Adresse',
+      );
+      assert.equal(
+        clientIpFromHeaders(kopfzeilen({ 'cf-connecting-ip': '203.0.113.99' })),
+        null,
+        'ein Cloudflare-Kopf hinter Nginx ist vom Absender geschrieben',
+      );
+    });
+
+    it('CLOUDFLARE: CF-Connecting-IP, und nur dieser', () => {
+      process.env.TRUSTED_PROXY_MODE = 'CLOUDFLARE';
+      assert.equal(clientIpFromHeaders(kopfzeilen(GEFAELSCHT)), '203.0.113.99');
+      assert.equal(
+        clientIpFromHeaders(kopfzeilen({ 'x-real-ip': '192.0.2.44', 'x-forwarded-for': '198.51.100.7' })),
+        null,
+      );
+    });
+
+    it('beide Einstiege antworten in jedem Modus gleich', () => {
+      const saetze: Record<string, string>[] = [
+        GEFAELSCHT,
+        { 'x-real-ip': '192.0.2.44' },
+        { 'cf-connecting-ip': '2001:db8::1' },
+        { 'x-forwarded-for': '198.51.100.7, 203.0.113.99' },
+        { 'cf-connecting-ip': 'kein-adresswert' },
+        {},
+      ];
+      for (const modus of ['NONE', 'SINGLE_REVERSE_PROXY', 'CLOUDFLARE'] as const) {
+        process.env.TRUSTED_PROXY_MODE = modus;
+        for (const satz of saetze) {
+          const ueberRequest = resolveClientIp(anfrage(satz));
+          const ueberHeaders = resolveClientIpFromHeaders(kopfzeilen(satz));
+          assert.deepEqual(ueberHeaders, ueberRequest, `${modus} — ${JSON.stringify(satz)}`);
+          assert.equal(clientIpFromHeaders(kopfzeilen(satz)), ueberRequest.ip, `${modus} — ip`);
+        }
+      }
+    });
+
+    it('ein unbekannter Modus kippt auch hier nicht in einen vertrauenden Zustand', () => {
+      process.env.TRUSTED_PROXY_MODE = 'CLOUDFARE'; // Tippfehler, mit Absicht
+      assert.equal(
+        clientIpFromHeaders(kopfzeilen(GEFAELSCHT)),
+        null,
+        'ein Vertipper im Modus darf keine Adresse glaubhaft machen',
+      );
+    });
   });
 
   it('kürzt und säubert die Browser-Angabe', () => {
