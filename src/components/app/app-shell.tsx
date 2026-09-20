@@ -228,7 +228,36 @@ export function AppShell({
     staleTime: 10_000,
   });
 
-  const unreadCount = unread.data?.unread ?? 0;
+  /**
+   * Der Zähler erscheint erst **nach** dem Einhängen — und das ist kein
+   * Schönheitsfehler, den man wegoptimiert.
+   *
+   * Der Server rendert den Rahmen ohne Daten, also mit `0`. Im Browser startet
+   * React Query denselben Abruf sofort; `/api/notifications/count` ist
+   * schnell, und die Antwort traf regelmässig **mitten in der Hydration** ein.
+   * Dann rendert der Client bereits die echte Zahl, während React noch das
+   * HTML des Servers abgleicht — Konflikt, React verwirft den Teilbaum und
+   * baut ihn neu auf (`Minified React error #418`).
+   *
+   * Gemessen am 2026-09-20 im vollen Chromium auf `/portal/einsaetze`:
+   * ohne Eingriff **4 von 8** Aufrufen mit Hydrationsfehler, mit künstlich um
+   * drei Sekunden verzögerter Antwort **0 von 8**. Öffentliche Seiten waren
+   * nie betroffen — sie tragen diesen Rahmen nicht.
+   *
+   * Der Fehler war erholbar und hat nie etwas kaputtgemacht; sichtbar wurde er
+   * erst, als die Browserreihe auf den vollen Chromium wechselte. Erholbar
+   * heisst aber nicht folgenlos: React wirft den gesamten Rahmen weg und baut
+   * ihn neu, bei jedem vierten Seitenaufruf.
+   *
+   * `eingehaengt` sorgt dafür, dass der erste Rendervorgang im Browser
+   * dasselbe ergibt wie der auf dem Server — dieselbe Vorgehensweise wie in
+   * `theme-toggle.tsx`, wo das Farbschema aus demselben Grund erst nach dem
+   * Einhängen gilt.
+   */
+  const [eingehaengt, setEingehaengt] = React.useState(false);
+  React.useEffect(() => setEingehaengt(true), []);
+
+  const unreadCount = eingehaengt ? (unread.data?.unread ?? 0) : 0;
 
   const logout = async () => {
     await api.post('/api/auth/logout').catch(() => undefined);
