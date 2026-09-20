@@ -2112,11 +2112,11 @@ paths:
         - 'Öffentlich'
       summary: 'Offerte annehmen oder ablehnen'
       description: |-
-          Bei Annahme werden Unterschrift, Name, IP und Zeitpunkt festgehalten — das ist der Nachweis des Vertragsschlusses.
+          `REJECT` entscheidet sofort und endgültig. `ACCEPT` entscheidet nicht selbst (Gate 4C): Es legt den Unterzeichnungsvorgang an — unveränderlicher Snapshot der Offerte, SHA-256 (Hash A) — und antwortet mit `requiresSignature: true` und `signatureUrl` (`/signieren#t=…`, Token nur im Fragment). Erst der Abschluss des Vorgangs (Zustimmung, gezeichnete oder getippte Unterschrift, Protokoll) setzt die Offerte auf ACCEPTED. Ein bereits begonnener Vorgang wird fortgesetzt, nicht verdoppelt. Gezählt je Link (`publicTokenAction`).
 
           **Zugriff:** Öffentlich — keine Anmeldung nötig.
 
-          **Rate-Limit-Klasse:** `apiWrite`
+          **Rate-Limit-Klasse:** `publicTokenAction`
       operationId: 'postPublicQuotesByTokenRespond'
       security: []
       parameters:
@@ -2138,13 +2138,6 @@ paths:
                   enum:
                     - 'ACCEPT'
                     - 'REJECT'
-                signatureDataUrl:
-                  type: 'string'
-                  maxLength: 500000
-                  pattern: '^data:image\/(png|jpeg);base64,'
-                signatureName:
-                  type: 'string'
-                  maxLength: 120
                 reason:
                   type: 'string'
                   maxLength: 1000
@@ -3111,6 +3104,80 @@ paths:
             'application/json':
               schema:
                 '$ref': '#/components/schemas/SuccessEnvelope'
+        '400':
+          description: 'VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 'UNAUTHORIZED — keine oder abgelaufene Sitzung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 'FORBIDDEN — angemeldet, aber ohne die nötige Berechtigung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: 'NOT_FOUND — nicht vorhanden, oder für diese Sitzung nicht sichtbar.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: 'RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+  '/api/signatures/{id}/artifacts/{artifact}':
+    get:
+      tags:
+        - 'Unterzeichnung'
+      summary: 'Artefakt für die Verwaltung'
+      description: |-
+          `original` (A), `signed` (B) oder `evidence` (C) mit Sitzung und `signature:read`; bei Vorgängen zu Offerten zusätzlich `quote:read`. Der Abruf steht im Prüfprotokoll. Nie zwischengespeichert.
+
+          **Zugriff:** Erfordert die Berechtigung: `signature:read`.
+
+          **Rate-Limit-Klasse:** `fileDownload`
+      operationId: 'getSignaturesByIdArtifactsByArtifact'
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: 'id'
+          in: 'path'
+          required: true
+          schema:
+            type: 'string'
+            minLength: 1
+        - name: 'artifact'
+          in: 'path'
+          required: true
+          schema:
+            type: 'string'
+            enum:
+              - 'original'
+              - 'signed'
+              - 'evidence'
+      responses:
+        '200':
+          description: 'PDF-Dokument'
+          content:
+            'application/pdf':
+              schema:
+                type: 'string'
+                format: 'binary'
         '400':
           description: 'VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.'
           content:
@@ -6507,7 +6574,7 @@ paths:
         - 'Offerten'
       summary: 'Offerte im Kundenkonto annehmen oder ablehnen'
       description: |-
-          Der angemeldete Weg neben dem öffentlichen Link. Wer eine Sitzung hat und die Offerte besitzt, braucht keine Capability. Die Eigentümerprüfung steht in der where-Klausel, die Geschäftsoperation ist dieselbe atomare Transition wie beim öffentlichen Weg — eine gleichzeitige Annahme über den Link und Ablehnung hier ergeben genau einen Übergang.
+          Der angemeldete Weg neben dem öffentlichen Link. Wer eine Sitzung hat und die Offerte besitzt, braucht keine Capability; die Eigentümerprüfung steht in der where-Klausel. `REJECT` ist die direkte, atomare Ablehnung. `ACCEPT` startet denselben Unterzeichnungsvorgang wie der öffentliche Weg, setzt direkt das teilnehmergebundene Signatur-Cookie und antwortet mit `signatureUrl` (`/signieren/s/<publicId>`, kein Token). Ablehnung und Abschluss der Unterzeichnung sind gegeneinander race-safe: genau eine terminale Entscheidung.
 
           **Zugriff:** Erfordert die Berechtigung: `quote:respond_own`.
 
@@ -6534,13 +6601,6 @@ paths:
                   enum:
                     - 'ACCEPT'
                     - 'REJECT'
-                signatureDataUrl:
-                  type: 'string'
-                  maxLength: 500000
-                  pattern: '^data:image\/(png|jpeg);base64,'
-                signatureName:
-                  type: 'string'
-                  maxLength: 120
                 reason:
                   type: 'string'
                   maxLength: 1000

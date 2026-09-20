@@ -7,12 +7,9 @@ import { BusinessRuleError, NotFoundError } from '@/lib/errors';
 import { absoluteUrl, round2 } from '@/lib/utils';
 import { orderByFor, resolveSort, type SortOrder } from '@/lib/sort';
 import { audit } from '@/lib/audit';
-import {
-  quoteAcceptedInternalEmail,
-  quoteExpiringEmail,
-  quoteSentEmail,
-} from '@/lib/email/templates';
-import { renderQuotePdf } from '@/lib/pdf/render';
+import { quoteExpiringEmail, quoteSentEmail } from '@/lib/email/templates';
+import { renderQuotePdf, renderQuoteSnapshot } from '@/lib/pdf/render';
+import { readLocalBytes, readStoredBytes } from '@/lib/storage';
 import { clampQuantity, rateForService, unitForService } from '@/lib/pricing/units';
 import type { QuoteRequestInput } from '@/lib/validation/crm';
 import type {
@@ -23,7 +20,7 @@ import type {
 } from '@/lib/validation/operations';
 
 import { nextNumber } from './numbering.service';
-import { notify, notifyStaff } from './notification.service';
+import { notify } from './notification.service';
 import { createInvoiceFromQuote } from './invoice.service';
 import {
   issuePublicToken,
@@ -32,6 +29,23 @@ import {
   revokeTokensFor,
   tokenRejectionError,
 } from './access-token.service';
+import {
+  assertQuoteAnnehmbar,
+  cancelActiveQuoteAcceptanceInTx,
+  declineQuoteCore,
+  quoteAcceptanceExpiresAt,
+  type AntwortHerkunft,
+} from './quote-acceptance.service';
+import type { AnfrageKontext } from './signature-events';
+import {
+  createQuoteAcceptanceRequest,
+  findActiveQuoteAcceptance,
+  findCompletedQuoteAcceptance,
+  issueQuoteAcceptanceAccess,
+  issueQuoteAcceptanceSession,
+} from './signature.service';
+
+export type { AntwortHerkunft } from './quote-acceptance.service';
 
 /**
  * Offertenverwaltung.
@@ -42,9 +56,13 @@ import {
  *     inkonsistenten Summen erzeugen.
  *  2. Optionale Positionen fliessen nicht ins Total ein, werden aber im PDF
  *     ausgewiesen. Das ist im Reinigungsgewerbe üblich (z. B. „Fenster zusätzlich").
- *  3. Versandte Offerten sind über einen unerratbaren `publicToken` ohne Login
- *     erreichbar. Zusagen erfolgen mit Namenseingabe und gezeichneter
- *     Unterschrift; IP und Zeitstempel werden zur Beweissicherung protokolliert.
+ *  3. Versandte Offerten sind über einen Capability-Link ohne Login erreichbar
+ *     (`access-token.service.ts`). Die Annahme läuft seit Gate 4C über den
+ *     Signaturkern: unveränderlicher Snapshot, Zustimmung, gezeichnete oder
+ *     getippte Unterschrift, Prüfsummen und Protokoll — die Offerte wird
+ *     erst mit dem Abschluss des Vorgangs ACCEPTED (`quote-acceptance.service.ts`).
+ *     Die Altfelder `signatureDataUrl`/`signatureName`/`signatureIp`/`signedAt`
+ *     werden von neuen Annahmen nicht mehr geschrieben.
  */
 
 interface ComputedTotals {
@@ -455,14 +473,43 @@ export async function updateQuote(params: {
     });
   }
 
-  const updated = await prisma.quote.update({ where: { id: quote.id }, data });
+  /**
+   * Signaturrelevant ist alles, was im Snapshot steht — Titel, Gültigkeit,
+   * Texte, Bedingungen, Positionen, Rabatt. Eine interne Notiz nicht.
+   *
+   * Läuft gerade eine Unterzeichnung, wird sie mit der Änderung abgebrochen
+   * (in derselben Transaktion, nach der Offerte — Sperrreihenfolge): Der
+   * alte Snapshot darf nicht still weiter unterschrieben werden, wenn die
+   * Offerte inzwischen etwas anderes sagt. Er bleibt als Beleg; ein neuer
+   * Versand führt zu einem neuen Vorgang mit neuem Snapshot (§ 12).
+   */
+  const signaturrelevant =
+    params.input.title !== undefined ||
+    params.input.validUntil !== undefined ||
+    params.input.introText !== undefined ||
+    params.input.outroText !== undefined ||
+    params.input.terms !== undefined ||
+    params.input.items !== undefined ||
+    params.input.discountType !== undefined ||
+    params.input.discountValue !== undefined;
+
+  const { updated, abgebrochen } = await prisma.$transaction(async (tx) => {
+    const updated = await tx.quote.update({ where: { id: quote.id }, data });
+    const abgebrochen = signaturrelevant
+      ? await cancelActiveQuoteAcceptanceInTx(tx, { quoteId: quote.id, reason: 'quote_changed', cancelledById: params.actorId })
+      : 0;
+    return { updated, abgebrochen };
+  });
 
   await audit.updated({
     organizationId: params.organizationId,
     userId: params.actorId,
     entity: 'Quote',
     entityId: quote.id,
-    summary: `Offerte ${quote.number} bearbeitet`,
+    summary:
+      abgebrochen > 0
+        ? `Offerte ${quote.number} bearbeitet — laufende Unterzeichnung abgebrochen`
+        : `Offerte ${quote.number} bearbeitet`,
   });
 
   return updated;
@@ -700,163 +747,114 @@ export async function getQuoteByToken(token: string) {
   return quote;
 }
 
-/** Zustände, aus denen heraus eine Offerte noch beantwortet werden kann. */
-const BEANTWORTBAR = ['DRAFT', 'SENT', 'VIEWED', 'EXPIRED'] as const;
-
-/** Wer geantwortet hat — für das Prüfprotokoll. */
-export type AntwortHerkunft =
-  /** Über einen Link ohne Anmeldung. */
-  | { art: 'LINK'; tokenId?: string }
-  /** Angemeldet im Kundenbereich. */
-  | { art: 'KUNDENKONTO'; userId: string };
+/**
+ * Ergebnis einer Antwort: Eine Ablehnung ist sofort entschieden; eine Annahme
+ * beginnt einen Unterzeichnungsvorgang und liefert den Weg dorthin — über
+ * den Link als rohen Zugangstoken (nur für das Fragment der Adresse), aus
+ * dem Kundenkonto als fertige Sitzung.
+ */
+export type QuoteAntwort =
+  | { kind: 'DECLINED'; status: string; rejectedAt: Date | null }
+  | { kind: 'SIGNATURE'; publicId: string; expiresAt: Date; raw: string | null; sessionToken: string | null };
 
 /**
- * Die eigentliche Antwort auf eine Offerte — unabhängig davon, woher sie kommt.
+ * Den Annahmevorgang starten oder fortsetzen — für beide Eingänge.
  *
- * **Warum das herausgelöst ist.** Es gibt jetzt zwei Eingänge: den
- * öffentlichen Link und die angemeldete Ansicht im Kundenbereich. Die
- * Berechtigung unterscheidet sich (Capability gegen Sitzung plus
- * Eigentümerschaft), die Geschäftsoperation nicht. Sie ein zweites Mal zu
- * schreiben hiesse, den Rennzustand, den Gate 1 behoben hat, an der zweiten
- * Stelle neu einzubauen — und zwar unbemerkt, weil die erste weiterhin
- * korrekt wäre.
+ * **Reihenfolge.** Offerte laden und prüfen (Zustand, Frist), offenen Vorgang
+ * suchen; gibt es keinen: Snapshot rendern — **jetzt**, nicht beim
+ * Abschluss —, ablegen, Vorgang anlegen. Verliert das Anlegen das Rennen
+ * gegen einen gleichzeitigen Start (Teilindex), wird der Vorgang des
+ * Gewinners weiterverwendet: Mehrfaches Klicken erzeugt einen Vorgang, nicht
+ * vier (§ 11, § 27).
  *
- * Der Aufrufer hat die Berechtigung bereits geprüft. Diese Funktion prüft
- * den *Zustand*: Frist, Übergang, Folgeaktionen.
+ * **Wer unterzeichnet**, bestimmt der Server aus Kundschaft bzw. Lead der
+ * Offerte — nicht der Browser (§ 14). Der eingegebene Name landet später
+ * getrennt als `signedName` am Teilnehmer.
  */
-async function respondToQuoteCore(params: {
+async function startQuoteAcceptanceCore(params: {
   quoteId: string;
   organizationId: string;
-  input: RespondQuoteInput;
   herkunft: AntwortHerkunft;
-  ip?: string;
-}): Promise<Quote> {
+  ctx: AnfrageKontext;
+}): Promise<{ requestId: string; publicId: string; participantId: string; expiresAt: Date }> {
   const quote = await prisma.quote.findFirst({
     where: { id: params.quoteId, organizationId: params.organizationId },
-    include: { customer: true, lead: true },
+    include: {
+      customer: { select: { id: true, firstName: true, lastName: true, companyName: true, email: true } },
+      lead: { select: { firstName: true, lastName: true, email: true } },
+    },
   });
   if (!quote || quote.deletedAt) throw new NotFoundError('Offerte');
+  assertQuoteAnnehmbar(quote);
 
-  if (quote.validUntil < new Date()) {
-    throw new BusinessRuleError(
-      'Diese Offerte ist abgelaufen. Wir erstellen Ihnen gerne ein aktualisiertes Angebot.',
-    );
+  const vorhanden = await findActiveQuoteAcceptance(quote.id);
+  if (vorhanden && vorhanden.status === 'PENDING' && vorhanden.expiresAt.getTime() > Date.now()) {
+    const p = vorhanden.participants[0];
+    if (p) return { requestId: vorhanden.id, publicId: vorhanden.publicId, participantId: p.id, expiresAt: vorhanden.expiresAt };
+  }
+  if (vorhanden && vorhanden.status === 'FINALIZING') {
+    throw new BusinessRuleError('Die Unterzeichnung dieser Offerte wird gerade abgeschlossen.');
   }
 
-  const accepted = params.input.decision === 'ACCEPT';
-
-  /**
-   * Der Statusübergang ist die Stelle, an der die Einmaligkeit hängt — nicht
-   * der Link und nicht die Sitzung.
-   *
-   * Vorher wurde gelesen, geprüft und danach geschrieben. Zwei gleichzeitige
-   * Annahmen sahen beide `SENT`, beide schrieben, beide lösten die
-   * Folgeaktionen aus: zwei Meldungen ans Büro, zwei Lead-Übergänge, zwei
-   * neu gerenderte PDF. Die Bedingung steht deshalb in der `where`-Klausel
-   * derselben Anweisung: `updateMany` trifft entweder eine Zeile oder keine,
-   * und PostgreSQL entscheidet das, nicht die Anwendung.
-   *
-   * Dass beide Eingänge hier durchlaufen, ist der Grund für die Auslagerung:
-   * Eine Annahme über den Link und eine Ablehnung im Kundenkonto,
-   * gleichzeitig abgeschickt, ergeben genau einen Übergang.
-   */
-  const uebergang = await prisma.quote.updateMany({
-    where: { id: quote.id, status: { in: [...BEANTWORTBAR] }, deletedAt: null },
-    data: accepted
-      ? {
-          status: 'ACCEPTED',
-          acceptedAt: new Date(),
-          signatureDataUrl: params.input.signatureDataUrl ?? null,
-          signatureName: params.input.signatureName ?? null,
-          signatureIp: params.ip ?? null,
-          signedAt: new Date(),
-        }
-      : {
-          status: 'REJECTED',
-          rejectedAt: new Date(),
-          rejectReason: params.input.reason ?? null,
-        },
-  });
-
-  if (uebergang.count === 0) {
-    throw new BusinessRuleError('Diese Offerte wurde bereits beantwortet.');
-  }
-
-  const updated = await prisma.quote.findUniqueOrThrow({ where: { id: quote.id } });
-
-  // Ab hier läuft nur noch, wer den Übergang gewonnen hat — die
-  // Folgeaktionen können also nicht doppelt auslösen.
-  if (params.herkunft.art === 'LINK' && params.herkunft.tokenId) {
-    await noteTokenUse(params.herkunft.tokenId).catch(() => undefined);
-  }
-
-  if (quote.leadId) {
-    await prisma.lead.update({
-      where: { id: quote.leadId },
-      data: accepted
-        ? { status: 'WON', convertedAt: new Date() }
-        : { status: 'LOST', lostReason: params.input.reason ?? 'Offerte abgelehnt' },
-    });
-  }
-
-  const customerName =
+  const name =
     quote.customer?.companyName ??
     `${quote.customer?.firstName ?? quote.lead?.firstName ?? ''} ${quote.customer?.lastName ?? quote.lead?.lastName ?? ''}`.trim();
-
-  await notifyStaff({
-    organizationId: quote.organizationId,
-    title: accepted ? 'Offerte angenommen' : 'Offerte abgelehnt',
-    body: `${quote.number} · ${customerName} · CHF ${toNumber(quote.grossTotal).toFixed(2)}`,
-    link: `/admin/offerten/${quote.id}`,
-    permission: 'quote:read',
-    emailContent: accepted
-      ? quoteAcceptedInternalEmail({
-          quoteNumber: quote.number,
-          customerName,
-          grossTotal: toNumber(quote.grossTotal),
-          adminUrl: absoluteUrl(`/admin/offerten/${quote.id}`),
-        })
-      : undefined,
-  });
-
-  /**
-   * Das Protokoll unterscheidet die beiden Wege.
-   *
-   * Eine Antwort über einen Link ohne Anmeldung ist etwas anderes als eine
-   * aus einem angemeldeten Konto: Im einen Fall weiss man, dass jemand den
-   * Link hatte, im anderen, wer es war. Beides als dasselbe zu verbuchen
-   * machte die Spur später unbrauchbar — gerade dort, wo sie zählt.
-   */
-  await audit.updated({
-    organizationId: quote.organizationId,
-    userId: params.herkunft.art === 'KUNDENKONTO' ? params.herkunft.userId : undefined,
-    entity: 'Quote',
-    entityId: quote.id,
-    summary:
-      params.herkunft.art === 'KUNDENKONTO'
-        ? `Offerte ${quote.number} im Kundenkonto ${accepted ? 'angenommen' : 'abgelehnt'}`
-        : `Offerte ${quote.number} über den Link ${accepted ? 'angenommen' : 'abgelehnt'}`,
-    ip: params.ip,
-  });
-
-  // PDF mit Unterschrift neu erzeugen.
-  if (accepted) {
-    await renderQuotePdf(quote.id).catch(() => undefined);
+  const email = quote.customer?.email ?? quote.lead?.email ?? null;
+  if (!name || !email) {
+    throw new BusinessRuleError('Für diese Offerte ist keine Empfängerin und keine E-Mail-Adresse hinterlegt.');
   }
 
-  return updated;
+  const snapshot = await renderQuoteSnapshot(quote.id);
+  const expiresAt = quoteAcceptanceExpiresAt(quote.validUntil);
+  const actorSource = params.herkunft.art === 'KUNDENKONTO' ? 'AUTHENTICATED_CUSTOMER' : 'PUBLIC_LINK';
+
+  const angelegt = await createQuoteAcceptanceRequest({
+    quote: { id: quote.id, organizationId: quote.organizationId, number: quote.number, title: quote.title, validUntil: quote.validUntil, createdById: quote.createdById },
+    participant: { name, email, customerId: quote.customer?.id ?? null },
+    // Die Naht zwischen zwei Sprachgebräuchen: `src/lib/pdf` liefert seit je
+    // `buffer`, der Signaturkern spricht von `bytes`. Hier umbenannt statt in
+    // einem der beiden Module — ein Renderer, der plötzlich `bytes` zurückgibt,
+    // fiele aus der Reihe der übrigen `render*Pdf`.
+    snapshot: { bytes: snapshot.buffer, filename: snapshot.filename },
+    expiresAt,
+    actorSource,
+    actorUserId: params.herkunft.art === 'KUNDENKONTO' ? params.herkunft.userId : null,
+    ctx: params.ctx,
+  });
+  if (angelegt) {
+    await audit.updated({
+      organizationId: quote.organizationId,
+      userId: params.herkunft.art === 'KUNDENKONTO' ? params.herkunft.userId : undefined,
+      entity: 'Quote',
+      entityId: quote.id,
+      summary: `Annahme der Offerte ${quote.number} begonnen (Vorgang ${angelegt.id}, ${actorSource === 'AUTHENTICATED_CUSTOMER' ? 'Kundenkonto' : 'Link'})`,
+      ip: params.ctx.ip,
+      userAgent: params.ctx.userAgent,
+    });
+    return { requestId: angelegt.id, publicId: angelegt.publicId, participantId: angelegt.participantId, expiresAt };
+  }
+
+  // Jemand war schneller — dessen Vorgang gilt.
+  const gewinner = await findActiveQuoteAcceptance(quote.id);
+  const p = gewinner?.participants[0];
+  if (!gewinner || !p) throw new BusinessRuleError('Der Annahmevorgang konnte nicht begonnen werden. Bitte erneut versuchen.');
+  return { requestId: gewinner.id, publicId: gewinner.publicId, participantId: p.id, expiresAt: gewinner.expiresAt };
 }
 
 /**
  * Antwort über den öffentlichen Link.
  *
- * Prüft die Capability und reicht danach an `respondToQuoteCore` weiter.
+ * Prüft die Capability (`QUOTE_RESPOND`, kein Altbestand) und entscheidet:
+ * Ablehnung direkt, Annahme als Start des Unterzeichnungsvorgangs. Der
+ * `QUOTE_RESPOND`-Link wird dabei **nicht** zum Signatur-Token: Für den
+ * Vorgang wird ein eigener `SIGNATURE_ACCESS` ausgestellt, den der Browser
+ * nur als Fragment sieht (§ 15, § 16).
  */
 export async function respondToQuote(params: {
   token: string;
   input: RespondQuoteInput;
-  ip?: string;
-}): Promise<Quote> {
+  ctx: AnfrageKontext;
+}): Promise<QuoteAntwort> {
   const aufgeloest = await resolveWithLegacy({
     raw: params.token,
     purpose: 'QUOTE_RESPOND',
@@ -878,13 +876,35 @@ export async function respondToQuote(params: {
   });
   if (!aufgeloest.ok) throw tokenRejectionError(aufgeloest.reason, 'Offerte');
 
-  return respondToQuoteCore({
+  const herkunft: AntwortHerkunft = { art: 'LINK', tokenId: aufgeloest.tokenId };
+  if (params.input.decision === 'REJECT') {
+    const abgelehnt = await declineQuoteCore({
+      quoteId: aufgeloest.resourceId,
+      organizationId: aufgeloest.organizationId,
+      reason: params.input.reason,
+      herkunft,
+      ctx: params.ctx,
+    });
+    if (aufgeloest.tokenId) await noteTokenUse(aufgeloest.tokenId).catch(() => undefined);
+    return { kind: 'DECLINED', status: abgelehnt.status, rejectedAt: abgelehnt.rejectedAt };
+  }
+
+  const start = await startQuoteAcceptanceCore({
     quoteId: aufgeloest.resourceId,
     organizationId: aufgeloest.organizationId,
-    input: params.input,
-    herkunft: { art: 'LINK', tokenId: aufgeloest.tokenId },
-    ip: params.ip,
+    herkunft,
+    ctx: params.ctx,
   });
+  if (aufgeloest.tokenId) await noteTokenUse(aufgeloest.tokenId).catch(() => undefined);
+  const zugang = await issueQuoteAcceptanceAccess({
+    organizationId: aufgeloest.organizationId,
+    requestId: start.requestId,
+    participantId: start.participantId,
+    expiresAt: start.expiresAt,
+    actorSource: 'PUBLIC_LINK',
+    ctx: params.ctx,
+  });
+  return { kind: 'SIGNATURE', publicId: start.publicId, expiresAt: zugang.expiresAt, raw: zugang.raw, sessionToken: null };
 }
 
 /**
@@ -904,8 +924,8 @@ export async function respondToQuoteAsCustomer(params: {
   customerId: string;
   userId: string;
   input: RespondQuoteInput;
-  ip?: string;
-}): Promise<Quote> {
+  ctx: AnfrageKontext;
+}): Promise<QuoteAntwort> {
   const eigene = await prisma.quote.findFirst({
     where: {
       id: params.quoteId,
@@ -917,13 +937,93 @@ export async function respondToQuoteAsCustomer(params: {
   });
   if (!eigene) throw new NotFoundError('Offerte');
 
-  return respondToQuoteCore({
+  const herkunft: AntwortHerkunft = { art: 'KUNDENKONTO', userId: params.userId };
+  if (params.input.decision === 'REJECT') {
+    const abgelehnt = await declineQuoteCore({
+      quoteId: eigene.id,
+      organizationId: params.organizationId,
+      reason: params.input.reason,
+      herkunft,
+      ctx: params.ctx,
+    });
+    return { kind: 'DECLINED', status: abgelehnt.status, rejectedAt: abgelehnt.rejectedAt };
+  }
+
+  /**
+   * Angemeldet heisst: Berechtigung bereits nachgewiesen. Statt eines Links
+   * an die eigene Adresse bekommt die Person direkt eine an den Teilnehmer
+   * gebundene Sitzung (§ 29, § 30) — das Protokoll hält den Zugangsweg fest.
+   */
+  const start = await startQuoteAcceptanceCore({
     quoteId: eigene.id,
     organizationId: params.organizationId,
-    input: params.input,
-    herkunft: { art: 'KUNDENKONTO', userId: params.userId },
-    ip: params.ip,
+    herkunft,
+    ctx: params.ctx,
   });
+  const sitzung = await issueQuoteAcceptanceSession({
+    organizationId: params.organizationId,
+    requestId: start.requestId,
+    participantId: start.participantId,
+    expiresAt: start.expiresAt,
+    userId: params.userId,
+    ctx: params.ctx,
+  });
+  return { kind: 'SIGNATURE', publicId: start.publicId, expiresAt: sitzung.expiresAt, raw: null, sessionToken: sitzung.sessionToken };
+}
+
+/**
+ * Der Annahmezustand einer Offerte — für Seiten und PDF-Routen.
+ *
+ * `active`: ein offener Vorgang (Maske zeigt „Unterzeichnung fortsetzen").
+ * `completed`: der abgeschlossene Vorgang mit Artefakten (die PDF-Routen
+ * liefern dann das signierte Artefakt B statt einer Neuberechnung).
+ * `legacy`: ACCEPTED aus der Zeit vor Gate 4C, nur mit den Altfeldern —
+ * wird als solches ausgewiesen und nicht als Signaturbeweis dargestellt.
+ */
+export async function getQuoteAcceptanceState(quote: {
+  id: string;
+  status: string;
+  signatureName: string | null;
+  signedAt: Date | null;
+}) {
+  const [active, completed] = await Promise.all([findActiveQuoteAcceptance(quote.id), findCompletedQuoteAcceptance(quote.id)]);
+  const signer = completed?.participants[0] ?? null;
+  return {
+    active: active && active.status === 'PENDING' ? { publicId: active.publicId, expiresAt: active.expiresAt } : null,
+    completed: completed
+      ? {
+          requestId: completed.id,
+          publicId: completed.publicId,
+          signedName: signer?.signedName ?? signer?.nameSnapshot ?? null,
+          method: signer?.signatureMethod ?? null,
+          signedAt: signer?.signedAt ?? completed.completedAt,
+          hashes: { original: completed.originalDocumentHash, signed: completed.signedArtifactHash, evidence: completed.evidenceArtifactHash },
+          hasSigned: completed.signedArtifactId !== null,
+          hasEvidence: completed.evidenceArtifactId !== null,
+        }
+      : null,
+    legacy: quote.status === 'ACCEPTED' && !completed && Boolean(quote.signatureName || quote.signedAt),
+  };
+}
+
+/**
+ * Die Bytes des signierten Artefakts (B) einer angenommenen Offerte — oder
+ * `null`, wenn die Annahme nicht über den Signaturkern lief. Die PDF-Routen
+ * liefern in diesem Fall das gewöhnliche Dokument.
+ */
+export async function getSignedQuoteArtifact(quoteId: string): Promise<{ bytes: Buffer; filename: string } | null> {
+  const completed = await findCompletedQuoteAcceptance(quoteId);
+  if (!completed?.signedArtifact) return null;
+  const asset = completed.signedArtifact;
+  let bytes: Buffer | null = null;
+  if (asset.storedFile) {
+    bytes = await readStoredBytes(asset.storedFile);
+  } else {
+    const treffer = /^\/api\/files\/blob\/([A-Za-z0-9_-]+)$/.exec(asset.url);
+    bytes = treffer ? await readLocalBytes(treffer[1]!) : null;
+  }
+  if (!bytes) return null;
+  return { bytes, filename: asset.filename };
 }
 
 /**
@@ -1176,6 +1276,28 @@ export async function getQuoteDetail(params: {
       property: true,
       files: true,
       activities: { orderBy: { occurredAt: 'desc' }, take: 30 },
+      /** Die Annahmevorgänge (Gate 4C) — Kennungen, Zustände, Prüfsummen; nie Tokens. */
+      signatureRequests: {
+        orderBy: { createdAt: 'desc' },
+        select: {
+          id: true,
+          publicId: true,
+          status: true,
+          assuranceLevel: true,
+          artifactMode: true,
+          createdAt: true,
+          expiresAt: true,
+          completedAt: true,
+          cancelledAt: true,
+          originalDocumentHash: true,
+          signedArtifactHash: true,
+          evidenceArtifactHash: true,
+          participants: {
+            orderBy: { order: 'asc' },
+            select: { id: true, nameSnapshot: true, emailSnapshot: true, status: true, signedName: true, signatureMethod: true, signedAt: true },
+          },
+        },
+      },
     },
   });
   if (!quote) throw new NotFoundError('Offerte');
@@ -1190,15 +1312,30 @@ export async function processExpiringQuotes(organizationId: string): Promise<{
   const now = new Date();
   const inThreeDays = new Date(now.getTime() + 3 * 86_400_000);
 
-  const expiredResult = await prisma.quote.updateMany({
-    where: {
-      organizationId,
-      deletedAt: null,
-      status: { in: ['SENT', 'VIEWED'] },
-      validUntil: { lt: now },
-    },
-    data: { status: 'EXPIRED' },
+  /**
+   * Ablauf — je Offerte in einer Transaktion, damit ein offener
+   * Annahmevorgang mitgeht (Sperrreihenfolge Offerte → Vorgang). Ein
+   * Vorgang, dessen Offerte abgelaufen ist, darf nicht weiter unterschrieben
+   * werden; der Abschluss würde ohnehin an `validUntil` scheitern, aber der
+   * Link soll gar nicht erst „gültig" wirken.
+   */
+  const faellig = await prisma.quote.findMany({
+    where: { organizationId, deletedAt: null, status: { in: ['SENT', 'VIEWED'] }, validUntil: { lt: now } },
+    select: { id: true },
   });
+  let expiredCount = 0;
+  for (const q of faellig) {
+    await prisma.$transaction(async (tx) => {
+      const u = await tx.quote.updateMany({
+        where: { id: q.id, status: { in: ['SENT', 'VIEWED'] }, validUntil: { lt: now } },
+        data: { status: 'EXPIRED' },
+      });
+      if (u.count === 0) return;
+      expiredCount += 1;
+      await cancelActiveQuoteAcceptanceInTx(tx, { quoteId: q.id, reason: 'quote_expired' });
+    });
+  }
+  const expiredResult = { count: expiredCount };
 
   const expiring = await prisma.quote.findMany({
     where: {
@@ -1217,6 +1354,19 @@ export async function processExpiringQuotes(organizationId: string): Promise<{
     const email = quote.customer?.email ?? quote.lead?.email;
     if (!email) continue;
 
+    /**
+     * Hier stand `/offerte/${quote.publicToken}` — der alte cuid-Link, der
+     * seit Gate 2.5 ohne ausdrückliche Freigabe nichts mehr öffnet. Die
+     * Erinnerung bekommt einen frischen Capability-Link; der ursprüngliche
+     * bleibt gültig (kein Widerruf), beide enden mit der Offerte.
+     */
+    const link = await issuePublicToken({
+      organizationId: quote.organizationId,
+      purpose: 'QUOTE_RESPOND',
+      resourceId: quote.id,
+      expiresAt: new Date(quote.validUntil.getTime() + 14 * 24 * 60 * 60 * 1000),
+    });
+
     await notify({
       userId: quote.customer?.user?.id ?? null,
       email,
@@ -1227,7 +1377,7 @@ export async function processExpiringQuotes(organizationId: string): Promise<{
         firstName: quote.customer?.firstName ?? quote.lead?.firstName ?? 'Kundin/Kunde',
         quoteNumber: quote.number,
         validUntil: quote.validUntil,
-        quoteUrl: absoluteUrl(`/offerte/${quote.publicToken}`),
+        quoteUrl: absoluteUrl(`/offerte/${link.raw}`),
       }),
       entity: 'Quote',
       entityId: quote.id,

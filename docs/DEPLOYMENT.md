@@ -347,8 +347,9 @@ antworten (Verbindung verworfen oder Timeout), während
 `https://clenaris.qasemi.ch/api/health` antwortet. Erst wenn das feststeht,
 ist `TRUSTED_PROXY_MODE=SINGLE_REVERSE_PROXY` eine wahre Aussage; bis dahin
 bleibt `NONE` die richtige Einstellung, auch wenn Nginx die Köpfe bereits
-setzt. Zusätzlich `ecosystem.config.js` auf `args: 'start -H 127.0.0.1'`
-umstellen — bewusst, mit dem Rollout, nicht nebenbei.
+setzt. `ecosystem.config.js` bindet seit Gate 4C an `127.0.0.1`; die
+Prüfung von aussen bleibt trotzdem nötig, weil sie den *laufenden* Server
+betrifft, nicht die Datei im Repository.
 
 **Supabase-Rücklauf beim Datei-Abschluss** (`downloadObject` in
 `src/lib/storage/supabase.ts`): implementiert und typgeprüft, aber nie gegen
@@ -521,7 +522,7 @@ Absenders.
 | `TRUSTED_PROXY_MODE` | Gelesener Kopf | Topologie, die der Modus voraussetzt |
 |---|---|---|
 | `NONE` (Vorgabe) | keiner — die Adresse gilt als **nicht verfügbar** | keine Annahme. Alle Aufrufer teilen sich einen Rate-Limit-Schlüssel; ehrlicher als eine erfundene Adresse |
-| `SINGLE_REVERSE_PROXY` | `X-Real-IP` (Rückfall: erster Eintrag von `X-Forwarded-For`) | `Client → Reverse Proxy → Next.js`, **nie** `Client → Next.js direkt`; der Proxy **setzt** beide Köpfe aus `$remote_addr` |
+| `SINGLE_REVERSE_PROXY` | **nur** `X-Real-IP` — fehlt er, gilt die Adresse als nicht verfügbar (kein Rückfall auf `X-Forwarded-For`, seit Gate 4C) | `Client → Reverse Proxy → Next.js`, **nie** `Client → Next.js direkt`; der Proxy **setzt** beide Köpfe aus `$remote_addr` |
 | `CLOUDFLARE` | `CF-Connecting-IP` | `Client → Cloudflare → geschützter Ursprung`; der Ursprung nimmt nur Cloudflare-Netze an |
 
 **Die Zusage, die ein Modus macht — und die, die er nicht machen kann.** Die
@@ -567,14 +568,16 @@ Zugriffsprotokolle. Erlaubt ist ausschliesslich:
 Internet → 443 → Reverse Proxy → 127.0.0.1:3000 (Next.js)
 ```
 
-Bevorzugt bindet Next.js nur an Loopback (`next start -H 127.0.0.1`, in
-`ecosystem.config.js` als `args: 'start -H 127.0.0.1'`); ersatzweise eine
-Host-Firewall-Regel, die 3000 von aussen verwirft. **Befund des Audits vom
-2026-09-20:** `ecosystem.config.js` startet heute mit `args: 'start'` und
-bindet damit an alle Schnittstellen; ob eine Firewall den Port schliesst,
-lässt sich aus dem Repository nicht ablesen. Die Konfiguration wurde
-**nicht** geändert — siehe 11.1, der Punkt ist vor dem Produktivgang zu
-prüfen und die Bindung dann bewusst zu setzen.
+Seit Gate 4C bindet `ecosystem.config.js` Next.js nur an Loopback
+(`args: 'start -H 127.0.0.1'`) — örtlich geprüft: Der Port antwortet auf
+`127.0.0.1`, auf der Netzadresse der Maschine wird die Verbindung verworfen.
+Nginx (`proxy_pass http://127.0.0.1:3000`) und der Health-Check in
+`scripts/deploy.sh` (`http://127.0.0.1:<port>/api/health`) sprechen ohnehin
+Loopback an; für sie ändert sich nichts. Das ersetzt keine Host-Firewall,
+macht aber den offenen Port zur Ausnahme, die jemand bewusst herstellen
+müsste. Was auf dem Server *heute* läuft, ist damit nicht bewiesen — siehe
+11.1: Vor dem Produktivgang von aussen prüfen, dass `:3000` nicht
+erreichbar ist, und erst danach den Proxy-Modus setzen.
 
 **13.5.2 Der Unterzeichnungsbereich.** `/signieren` und `/api/public/signatures`
 brauchen keinen eigenen Proxy-Block. Zwei Dinge dürfen dort aber nicht

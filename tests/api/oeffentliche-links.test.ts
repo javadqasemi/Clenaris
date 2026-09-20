@@ -39,16 +39,16 @@ interface QuoteDetail {
 const RUN = Date.now();
 
 /**
- * Eine gültige Unterschrift: ein 1×1-PNG als Data-URL.
+ * Die Annahme — seit Gate 4C ohne Name und ohne Bild.
  *
- * Das Schema verlangt zur Annahme Name **und** Unterschrift
- * (`respondQuoteSchema`) — eine Annahme ohne Unterschrift ist fachlich keine.
- * Der Bildinhalt spielt keine Rolle, das Format schon.
+ * Hier standen beide, weil `respondQuoteSchema` sie verlangte und die Route
+ * die Offerte damit unmittelbar auf ACCEPTED setzte. Seit Gate 4C beginnt
+ * `ACCEPT` nur den Unterzeichnungsvorgang; Name und Unterschrift kommen im
+ * Signaturkern an, gegen einen eingefrorenen Snapshot. Der ganze Weg steht
+ * in `offertannahme.test.ts` — diese Datei prüft weiterhin nur, was an den
+ * *Links* hängt.
  */
-const UNTERSCHRIFT =
-  'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
-
-const ANNAHME = { decision: 'ACCEPT', signatureName: `Pruef ${RUN}`, signatureDataUrl: UNTERSCHRIFT };
+const ANNAHME = { decision: 'ACCEPT' };
 
 function inTagen(tage: number): string {
   const d = new Date();
@@ -201,7 +201,7 @@ describe('Öffentliche Links — Bindung, Rennen, Altbestand', () => {
   //  Der Rennzustand
   // =========================================================================
 
-  it('beantwortet eine Offerte auch bei gleichzeitigen Anfragen genau einmal', ohneDb, async () => {
+  it('beginnt auch bei gleichzeitigen Anfragen genau einen Annahmevorgang', ohneDb, async () => {
     const offerte = await offerteAnlegen(`Rennen ${RUN}`);
     const token = await capability({
       organizationId,
@@ -210,9 +210,17 @@ describe('Öffentliche Links — Bindung, Rennen, Altbestand', () => {
     });
 
     /**
-     * Vier gleichzeitige Annahmen. Vor der Korrektur lasen alle denselben
-     * Status, bestanden alle die Prüfung und schrieben alle — mit vier
-     * Meldungen ans Büro und vier neu gerenderten PDF als Folge.
+     * Vier gleichzeitige Annahmen. Vor der Korrektur aus Gate 1 lasen alle
+     * denselben Status, bestanden alle die Prüfung und schrieben alle — mit
+     * vier Meldungen ans Büro und vier neu gerenderten PDF als Folge.
+     *
+     * **Was sich mit Gate 4C verschoben hat.** Die Einmaligkeit liegt nicht
+     * mehr im Statusübergang der Offerte — `ACCEPT` setzt gar keinen Status
+     * mehr —, sondern im Annahmevorgang: Vier gleichzeitige Starts dürfen
+     * nicht vier Snapshots mit vier Links ergeben. Dafür sorgt der
+     * Teilindex `signature_requests_offene_annahme_je_offerte`. Antworten
+     * dürfen deshalb alle vier mit 200 kommen; sie führen auf **denselben**
+     * Vorgang, und genau das wird hier gemessen.
      *
      * `Promise.all` startet sie ohne Wartezeit dazwischen; das Fenster
      * zwischen Lesen und Schreiben ist genau das, was getroffen werden soll.
@@ -223,26 +231,35 @@ describe('Öffentliche Links — Bindung, Rennen, Altbestand', () => {
      */
     const antworten = await Promise.all(
       Array.from({ length: 4 }, () =>
-        post(`/api/public/quotes/${token}/respond`, ANNAHME, { retries: 0 }),
+        post<{ data: { requiresSignature: boolean; signatureUrl?: string } }>(
+          `/api/public/quotes/${token}/respond`,
+          ANNAHME,
+          { retries: 0 },
+        ),
       ),
     );
 
     const erfolge = antworten.filter((r) => r.status === 200);
-    const abgewiesen = antworten.filter((r) => r.status === 422);
-
-    assert.equal(
-      erfolge.length,
-      1,
-      `genau eine Annahme, erhalten: ${antworten.map((r) => r.status).join(', ')}`,
+    assert.ok(
+      erfolge.length >= 1,
+      `mindestens ein Start gelingt, erhalten: ${antworten.map((r) => r.status).join(', ')}`,
     );
-    assert.equal(abgewiesen.length, 3, 'die übrigen drei werden fachlich abgewiesen');
-    for (const r of abgewiesen) assert.match(r.text, /bereits beantwortet/i);
+    for (const r of erfolge) {
+      assert.equal(data(r).requiresSignature, true, 'die Annahme entscheidet nicht, sie beginnt');
+    }
+
+    const vorgaenge = await db!.signatureRequest.count({ where: { quoteId: offerte.id } });
+    assert.equal(vorgaenge, 1, `genau ein Annahmevorgang, nicht ${vorgaenge}`);
 
     const danach = await get<{ data: QuoteDetail }>(`/api/quotes/${offerte.id}`, { jar: jars.admin });
-    assert.equal(data(danach).status, 'ACCEPTED', 'der Zustand ist eindeutig');
+    assert.notEqual(
+      data(danach).status,
+      'ACCEPTED',
+      'ohne abgeschlossene Unterzeichnung wird nichts angenommen',
+    );
   });
 
-  it('lässt eine bereits beantwortete Offerte nicht nachträglich ablehnen', ohneDb, async () => {
+  it('lässt eine bereits abgelehnte Offerte nicht nachträglich annehmen', ohneDb, async () => {
     const offerte = await offerteAnlegen(`Nachzuegler ${RUN}`);
     const token = await capability({
       organizationId,
@@ -250,20 +267,33 @@ describe('Öffentliche Links — Bindung, Rennen, Altbestand', () => {
       resourceId: offerte.id,
     });
 
-    const ersteAntwort = await post(`/api/public/quotes/${token}/respond`, ANNAHME, {
-      retries: 0,
-    });
-    assert.equal(ersteAntwort.status, 200, ersteAntwort.text);
-
-    const zweiteAntwort = await post(
+    /**
+     * Die Richtung ist gedreht: Seit Gate 4C ist die **Ablehnung** der
+     * terminale Einzeiler, die Annahme dagegen ein mehrstufiger Vorgang.
+     * Was terminal ist, bleibt terminal — das prüft dieser Fall. Der
+     * umgekehrte Weg (abgeschlossene Annahme, danach Ablehnung) steht in
+     * `offertannahme.test.ts`, wo die Unterzeichnung wirklich gefahren wird.
+     */
+    const ersteAntwort = await post(
       `/api/public/quotes/${token}/respond`,
       { decision: 'REJECT', reason: 'Doch nicht' },
       { retries: 0 },
     );
+    assert.equal(ersteAntwort.status, 200, ersteAntwort.text);
+
+    const zweiteAntwort = await post(`/api/public/quotes/${token}/respond`, ANNAHME, {
+      retries: 0,
+    });
     assert.equal(zweiteAntwort.status, 422, zweiteAntwort.text);
+    assert.match(zweiteAntwort.text, /bereits beantwortet/i);
 
     const danach = await get<{ data: QuoteDetail }>(`/api/quotes/${offerte.id}`, { jar: jars.admin });
-    assert.equal(data(danach).status, 'ACCEPTED', 'die Annahme bleibt stehen');
+    assert.equal(data(danach).status, 'REJECTED', 'die Ablehnung bleibt stehen');
+    assert.equal(
+      await db!.signatureRequest.count({ where: { quoteId: offerte.id } }),
+      0,
+      'und erzeugt keinen Vorgang',
+    );
   });
 
   it('zeigt die beantwortete Offerte über denselben Link weiter an', ohneDb, async () => {

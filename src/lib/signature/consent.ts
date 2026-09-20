@@ -18,9 +18,16 @@ import { createHash } from 'node:crypto';
  * kein „handschriftlich gleichgestellt".
  */
 
-export const CONSENT_VERSIONS = ['v1'] as const;
+/**
+ * `v1` gilt für Dokumentfassungen, `quote-v1` für die Annahme einer Offerte
+ * (Gate 4C): fachlich präziser — es geht um Bedingungen und eine Annahme,
+ * nicht um „ein Dokument" —, aber dieselbe Regel: versioniert, eingefroren,
+ * gehasht, ohne rechtliche Zusage.
+ */
+export const CONSENT_VERSIONS = ['v1', 'quote-v1'] as const;
 export type ConsentVersion = (typeof CONSENT_VERSIONS)[number];
 export const CURRENT_CONSENT_VERSION: ConsentVersion = 'v1';
+export const QUOTE_CONSENT_VERSION: ConsentVersion = 'quote-v1';
 
 export const CONSENT_LOCALES = ['de-CH'] as const;
 export type ConsentLocale = (typeof CONSENT_LOCALES)[number];
@@ -33,6 +40,14 @@ const TEXTE: Record<ConsentVersion, Record<ConsentLocale, string>> = {
       'elektronisch unterzeichne. Mir ist bekannt, dass Clenaris den Ablauf dieser Unterzeichnung ' +
       '(Zeitpunkt, verwendeter Link, bestätigter Code, technische Angaben meines Geräts) in einem ' +
       'Signaturprotokoll festhält.',
+  },
+  'quote-v1': {
+    'de-CH':
+      'Ich habe die angezeigte Offerte einschliesslich der darin enthaltenen Positionen, Preise und ' +
+      'Bedingungen gelesen und nehme sie hiermit elektronisch an. Massgebend ist das angezeigte ' +
+      'Dokument in genau dieser Fassung. Mir ist bekannt, dass Clenaris den Ablauf dieser Annahme ' +
+      '(Zeitpunkt, verwendeter Zugang, technische Angaben meines Geräts) in einem Signaturprotokoll ' +
+      'festhält.',
   },
 };
 

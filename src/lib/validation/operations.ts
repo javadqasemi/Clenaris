@@ -65,22 +65,20 @@ export const sendQuoteSchema = z.object({
   attachPdf: z.boolean().default(true),
 });
 
-/** Kundenantwort auf eine Offerte über den öffentlichen Link. */
-export const respondQuoteSchema = z
-  .object({
-    decision: z.enum(['ACCEPT', 'REJECT']),
-    signatureDataUrl: z
-      .string()
-      .max(500_000, 'Die Unterschrift ist zu gross.')
-      .regex(/^data:image\/(png|jpeg);base64,/, 'Ungültiges Unterschriftsformat.')
-      .optional(),
-    signatureName: z.string().trim().max(120).optional(),
-    reason: z.string().trim().max(1000).optional(),
-  })
-  .refine((d) => d.decision !== 'ACCEPT' || Boolean(d.signatureDataUrl && d.signatureName), {
-    message: 'Zur Annahme sind Name und Unterschrift erforderlich.',
-    path: ['signatureName'],
-  });
+/**
+ * Kundenantwort auf eine Offerte — über den Link oder im Kundenkonto.
+ *
+ * Seit Gate 4C trägt die Annahme **keine** Unterschrift mehr: `ACCEPT`
+ * startet den Unterzeichnungsvorgang (Snapshot, Zustimmung, gezeichnete
+ * oder getippte Unterschrift, Protokoll) und antwortet mit dem Weg dorthin.
+ * Name und Bild kommen im Signaturkern an, mit Prüfsumme und Ereignissen —
+ * nicht mehr als zwei Felder in der Offertzeile. `REJECT` bleibt eine
+ * direkte Entscheidung; eine Ablehnung braucht keine Unterschrift.
+ */
+export const respondQuoteSchema = z.object({
+  decision: z.enum(['ACCEPT', 'REJECT']),
+  reason: z.string().trim().max(1000).optional(),
+});
 export type RespondQuoteInput = z.infer<typeof respondQuoteSchema>;
 
 export const convertQuoteSchema = z.object({

@@ -3,7 +3,7 @@ import { notFound } from 'next/navigation';
 
 import { toNumber } from '@/lib/db';
 import { NotFoundError } from '@/lib/errors';
-import { getQuoteByToken } from '@/server/services/quote.service';
+import { getQuoteAcceptanceState, getQuoteByToken } from '@/server/services/quote.service';
 import { QuoteView } from '@/features/shared/quote-view';
 import { QuoteResponse } from '@/features/public/quote-response';
 import { PdfViewer } from '@/components/app/pdf-viewer';
@@ -40,6 +40,14 @@ export default async function PublicQuotePage({
   const answered = ['ACCEPTED', 'REJECTED', 'CONVERTED'].includes(quote.status);
   const canRespond = !answered && !expired;
 
+  /**
+   * Läuft schon eine Unterzeichnung? Dann heisst die Schaltfläche
+   * „fortsetzen" statt „annehmen" (§ 46). Gelesen wird nur der Zustand —
+   * die Kennung des Vorgangs ist nicht geheim, ein Zugang entsteht hier
+   * nicht; den stellt erst die Antwortroute nach ihrer Prüfung aus.
+   */
+  const annahme = canRespond ? await getQuoteAcceptanceState(quote) : null;
+
   return (
     <QuoteView
       quote={quote}
@@ -62,6 +70,7 @@ export default async function PublicQuotePage({
             grossTotal={toNumber(quote.grossTotal)}
             endpoint={`/api/public/quotes/${token}/respond`}
             pdfUrl={`/api/public/quotes/${token}/pdf`}
+            laufendeUnterzeichnung={Boolean(annahme?.active)}
           />
         ) : undefined
       }

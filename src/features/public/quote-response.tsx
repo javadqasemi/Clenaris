@@ -1,14 +1,14 @@
-﻿'use client';
+'use client';
 
 import * as React from 'react';
 import { useRouter } from 'next/navigation';
-import { Check, Download, X } from 'lucide-react';
+import { Check, Download, PenLine, X } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { formatCurrency } from '@/lib/utils';
 import { api, ApiError } from '@/lib/api/client';
 import { Button } from '@/components/ui/button';
-import { Input, Textarea } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/input';
 import { Label } from '@/components/ui/form';
 import { Alert } from '@/components/ui/primitives';
 import {
@@ -19,17 +19,26 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/overlays';
-import { SignaturePad } from '@/features/portal/signature-pad';
 
 /**
  * Annahme oder Ablehnung einer Offerte durch die Kundschaft.
  *
- * Die Annahme verlangt Name *und* Unterschrift. Zusammen mit Zeitstempel und
- * IP-Adresse, die der Server protokolliert, ergibt das eine einfache
- * elektronische Signatur nach ZertES — ausreichend für einen
- * Dienstleistungsvertrag ohne gesetzliche Formvorschrift.
+ * **Was sich mit Gate 4C geändert hat.** Hier standen ein Namensfeld und ein
+ * Unterschriftenfeld, und das Abschicken setzte die Offerte unmittelbar auf
+ * ACCEPTED. Beides ist weg. Die Annahme entscheidet diese Maske nicht mehr —
+ * sie *beginnt* sie: Der Server legt den Unterzeichnungsvorgang an, friert
+ * die Offerte als PDF ein (Hash A) und antwortet mit dem Weg dorthin. Erst
+ * auf `/signieren` folgen Zustimmung, Unterschrift und Protokoll, und erst
+ * deren Abschluss nimmt die Offerte an.
  *
- * Die Ablehnung ist bewusst genauso leicht erreichbar. Eine versteckte
+ * **Warum die Unterschrift nicht hierbleiben konnte.** Ein Bild neben einem
+ * Datensatz, der sich danach noch ändern lässt, belegt nichts. Der
+ * Signaturkern bindet stattdessen Bytes: Was unterschrieben wird, ist die
+ * eingefrorene Fassung, und ihre Prüfsumme steht im Protokoll. Diese Maske
+ * darf davon nichts nachbauen — sonst gäbe es wieder zwei Schreibwege.
+ *
+ * Die Ablehnung bleibt, was sie war: eine direkte Entscheidung, ohne
+ * Unterzeichnung, genauso leicht erreichbar wie die Annahme. Eine versteckte
  * Ablehnung erzeugt keine Zusagen, nur unbeantwortete Offerten.
  */
 export interface QuoteResponseProps {
@@ -43,32 +52,57 @@ export interface QuoteResponseProps {
   endpoint: string;
   /** Abrufadresse des PDF, passend zum selben Eingang. */
   pdfUrl: string;
+  /**
+   * Läuft bereits eine Unterzeichnung für diese Offerte? Dann heisst die
+   * Schaltfläche „fortsetzen", und der Server stellt beim Klick einen
+   * erneuerten Zugang zum **selben** Vorgang aus — kein zweiter Snapshot
+   * (§ 17). Die Kennung ist nicht geheim und dient nur der Anzeige.
+   */
+  laufendeUnterzeichnung?: boolean;
 }
 
-export function QuoteResponse({ grossTotal, endpoint, pdfUrl }: QuoteResponseProps) {
+/** Was die Antwortroute zurückgibt — zwei Fälle, ein Schema. */
+interface Antwort {
+  requiresSignature: boolean;
+  signatureUrl?: string;
+}
+
+export function QuoteResponse({
+  grossTotal,
+  endpoint,
+  pdfUrl,
+  laufendeUnterzeichnung = false,
+}: QuoteResponseProps) {
   const router = useRouter();
   const [dialog, setDialog] = React.useState<'accept' | 'reject' | null>(null);
   const [pending, setPending] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
-
-  const [name, setName] = React.useState('');
-  const [signature, setSignature] = React.useState<string | null>(null);
   const [reason, setReason] = React.useState('');
 
   const respond = async (decision: 'ACCEPT' | 'REJECT') => {
     setPending(true);
     setError(null);
     try {
-      await api.post(endpoint, {
+      const antwort = await api.post<Antwort>(endpoint, {
         decision,
-        signatureDataUrl: decision === 'ACCEPT' ? signature : undefined,
-        signatureName: decision === 'ACCEPT' ? name : undefined,
         reason: decision === 'REJECT' ? reason || undefined : undefined,
       });
 
+      if (decision === 'ACCEPT' && antwort?.requiresSignature && antwort.signatureUrl) {
+        /**
+         * `assign`, nicht `router.push`: Beim öffentlichen Weg trägt die
+         * Adresse den Zugang im **Fragment**. Das überlebt den Client-Router
+         * nicht zuverlässig, und der Browser schickt es ohnehin nie an den
+         * Server — genau dafür steht es dort. Ein voller Seitenwechsel ist
+         * hier das Einfachere und das Sichere.
+         */
+        window.location.assign(antwort.signatureUrl);
+        return;
+      }
+
       toast.success(
         decision === 'ACCEPT'
-          ? 'Vielen Dank. Wir melden uns zur Terminvereinbarung.'
+          ? 'Der Unterzeichnungsvorgang ist bereit.'
           : 'Ihre Rückmeldung ist angekommen.',
       );
       setDialog(null);
@@ -87,18 +121,29 @@ export function QuoteResponse({ grossTotal, endpoint, pdfUrl }: QuoteResponsePro
     <>
       <div className="rounded-2xl border border-border bg-card p-6 shadow-card sm:p-8">
         <h2 className="font-display text-lg font-semibold tracking-tight">
-          Möchten Sie die Offerte annehmen?
+          {laufendeUnterzeichnung
+            ? 'Ihre Unterzeichnung ist noch offen'
+            : 'Möchten Sie die Offerte annehmen?'}
         </h2>
         <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-          Mit der Annahme beauftragen Sie uns zum Gesamtbetrag von{' '}
-          <strong className="text-foreground">{formatCurrency(grossTotal)}</strong> inkl. MWST.
-          Anschliessend vereinbaren wir gemeinsam den Termin.
+          {laufendeUnterzeichnung ? (
+            <>
+              Sie haben die Annahme bereits begonnen. Setzen Sie die Unterzeichnung fort — es gilt
+              die Fassung der Offerte, die beim Beginn festgehalten wurde.
+            </>
+          ) : (
+            <>
+              Mit der Annahme beauftragen Sie uns zum Gesamtbetrag von{' '}
+              <strong className="text-foreground">{formatCurrency(grossTotal)}</strong> inkl. MWST.
+              Im nächsten Schritt unterzeichnen Sie die Offerte elektronisch.
+            </>
+          )}
         </p>
 
         <div className="mt-6 flex flex-col gap-3 sm:flex-row">
           <Button size="lg" onClick={() => setDialog('accept')} className="sm:flex-1">
-            <Check aria-hidden />
-            Offerte annehmen
+            {laufendeUnterzeichnung ? <PenLine aria-hidden /> : <Check aria-hidden />}
+            {laufendeUnterzeichnung ? 'Unterzeichnung fortsetzen' : 'Offerte annehmen'}
           </Button>
           <Button size="lg" variant="outline" onClick={() => setDialog('reject')}>
             <X aria-hidden />
@@ -113,55 +158,34 @@ export function QuoteResponse({ grossTotal, endpoint, pdfUrl }: QuoteResponsePro
         </div>
       </div>
 
-      {/* Annehmen */}
+      {/* Annehmen — der Beginn, nicht der Abschluss */}
       <Dialog open={dialog === 'accept'} onOpenChange={(open) => !open && setDialog(null)}>
-        <DialogContent size="md">
+        <DialogContent size="sm">
           <DialogHeader>
-            <DialogTitle>Offerte annehmen</DialogTitle>
+            <DialogTitle>
+              {laufendeUnterzeichnung ? 'Unterzeichnung fortsetzen' : 'Offerte annehmen'}
+            </DialogTitle>
             <DialogDescription>
-              Bitte bestätigen Sie mit Ihrem Namen und Ihrer Unterschrift. Wir speichern beides
-              zusammen mit Datum und Uhrzeit als Nachweis der Auftragserteilung.
+              Wir halten die Offerte in ihrer aktuellen Fassung als PDF fest. Auf der nächsten Seite
+              lesen Sie dieses Dokument, stimmen zu und unterschreiben — getippt oder gezeichnet.
+              Erst damit ist die Offerte angenommen.
             </DialogDescription>
           </DialogHeader>
 
           {error ? <Alert variant="destructive">{error}</Alert> : null}
 
-          <div className="space-y-5">
-            <div className="space-y-2">
-              <Label htmlFor="signature-name" required>
-                Vor- und Nachname
-              </Label>
-              <Input
-                id="signature-name"
-                value={name}
-                onChange={(event) => setName(event.target.value)}
-                placeholder="Maria Muster"
-                autoComplete="name"
-              />
-            </div>
-
-            <div className="space-y-2">
-              <Label required>Unterschrift</Label>
-              <SignaturePad value={signature} onChange={setSignature} />
-            </div>
-          </div>
-
           <DialogFooter>
             <Button variant="ghost" onClick={() => setDialog(null)}>
               Abbrechen
             </Button>
-            <Button
-              loading={pending}
-              disabled={name.trim().length < 3 || !signature}
-              onClick={() => respond('ACCEPT')}
-            >
-              Verbindlich annehmen
+            <Button loading={pending} onClick={() => respond('ACCEPT')}>
+              Weiter zur Unterzeichnung
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
 
-      {/* Ablehnen */}
+      {/* Ablehnen — direkt und endgültig */}
       <Dialog open={dialog === 'reject'} onOpenChange={(open) => !open && setDialog(null)}>
         <DialogContent size="sm">
           <DialogHeader>

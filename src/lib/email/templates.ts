@@ -242,7 +242,7 @@ export function quoteSentEmail(params: {
 }): EmailContent {
   const body = `
     <p>Guten Tag ${escapeHtml(params.firstName)}</p>
-    ${params.message ? `<p>${escapeHtml(params.message).replace(/\n/g, '<br>')}</p>` : '<p>Gerne unterbreiten wir Ihnen unsere Offerte. Sie können sie online einsehen und direkt digital annehmen.</p>'}
+    ${params.message ? `<p>${escapeHtml(params.message).replace(/\n/g, '<br>')}</p>` : '<p>Gerne unterbreiten wir Ihnen unsere Offerte. Sie können sie online einsehen und direkt elektronisch annehmen.</p>'}
     ${infoTable([
       { label: 'Offerte', value: escapeHtml(params.quoteNumber) },
       { label: 'Betreff', value: escapeHtml(params.title) },

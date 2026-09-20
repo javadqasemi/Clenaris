@@ -1,6 +1,10 @@
+import { cookies } from 'next/headers';
+
 import { defineRoute, idParam } from '@/lib/api/handler';
 import { ok } from '@/lib/api/response';
+import { SIGNATURE_COOKIE, signatureCookieOptions } from '@/lib/auth/signature-session';
 import { ForbiddenError } from '@/lib/errors';
+import { requestContext } from '@/lib/http/request-context';
 import { respondQuoteSchema } from '@/lib/validation/operations';
 import { getOrganizationId } from '@/server/services/organization.service';
 import { respondToQuoteAsCustomer } from '@/server/services/quote.service';
@@ -18,43 +22,43 @@ export const maxDuration = 60;
  * auszustellen hiesse, ein Geheimnis zu erzeugen, das niemand braucht, und
  * es durch eine Adresszeile zu schicken.
  *
- * **Was sie sich mit der öffentlichen Route teilt.** Die Geschäftsoperation.
- * Beide rufen `respondToQuoteCore` und damit denselben atomaren
- * Statusübergang. Eine zweite Umsetzung hätte den Rennzustand, den Gate 1
- * behoben hat, an dieser Stelle neu eingebaut — und zwar unbemerkt, weil die
- * erste weiterhin richtig gewesen wäre. Eine Annahme über den Link und eine
- * Ablehnung hier, gleichzeitig abgeschickt, ergeben genau einen Übergang.
+ * **Seit Gate 4C.** `REJECT` bleibt die direkte Entscheidung. `ACCEPT`
+ * startet den Unterzeichnungsvorgang und setzt — nach Sitzung und
+ * Eigentümerschaft — direkt das an den Teilnehmer gebundene Signatur-Cookie
+ * (Pfad `/api/public/signatures`); die Antwort nennt die nicht geheime
+ * Adresse `/signieren/s/<publicId>`. Kein Link per E-Mail an sich selbst,
+ * kein roher Token im Körper. Das Protokoll hält den Zugangsweg
+ * `AUTHENTICATED_CUSTOMER` fest — ohne Anspruch auf höhere
+ * Identitätssicherheit als beim Link.
  */
 export const POST = defineRoute({
   permissions: ['quote:respond_own'],
   params: idParam,
   body: respondQuoteSchema,
-  // Wie beim öffentlichen Weg: eine Offerte beantwortet man einmal. Hier
-  // zählt die Sitzung, also genügt das übliche Schreiblimit.
   rateLimit: 'apiWrite',
-  handler: async ({ params, body, session, ip }) => {
-    /**
-     * Ohne verknüpften Kundendatensatz gibt es keine eigene Offerte. Der
-     * Fall tritt bei Personal auf, das die Berechtigung über eine andere
-     * Rolle mitbringt.
-     */
+  handler: async ({ params, body, session, request }) => {
     if (!session.profileId) {
       throw new ForbiddenError('Dieses Konto ist keiner Kundschaft zugeordnet.');
     }
 
-    const quote = await respondToQuoteAsCustomer({
+    const antwort = await respondToQuoteAsCustomer({
       quoteId: params.id,
       organizationId: await getOrganizationId(),
       customerId: session.profileId,
       userId: session.id,
       input: body,
-      ip,
+      ctx: requestContext(request),
     });
 
-    return ok({
-      status: quote.status,
-      acceptedAt: quote.acceptedAt,
-      rejectedAt: quote.rejectedAt,
-    });
+    if (antwort.kind === 'DECLINED') {
+      return ok({ status: antwort.status, rejectedAt: antwort.rejectedAt, requiresSignature: false }, { headers: { 'Cache-Control': 'no-store' } });
+    }
+
+    const store = await cookies();
+    store.set(SIGNATURE_COOKIE, antwort.sessionToken!, signatureCookieOptions());
+    return ok(
+      { requiresSignature: true, signatureUrl: `/signieren/s/${antwort.publicId}`, signatureExpiresAt: antwort.expiresAt },
+      { headers: { 'Cache-Control': 'no-store' } },
+    );
   },
 });

@@ -5,7 +5,7 @@
 > Quelle, aus der sowohl diese Referenz als auch die Laufzeitvalidierung
 > stammen.
 
-Stand: 396 Endpunkte. Die maschinenlesbare Fassung liegt in
+Stand: 397 Endpunkte. Die maschinenlesbare Fassung liegt in
 [`openapi.yaml`](./openapi.yaml) bzw. [`openapi.json`](./openapi.json).
 
 ## Grundlagen
@@ -559,10 +559,10 @@ Familie.
 
 ### `POST /api/public/quotes/{token}/respond`
 
-**Offerte annehmen oder ablehnen.** Bei Annahme werden Unterschrift, Name, IP und Zeitpunkt festgehalten — das ist der Nachweis des Vertragsschlusses.
+**Offerte annehmen oder ablehnen.** `REJECT` entscheidet sofort und endgültig. `ACCEPT` entscheidet nicht selbst (Gate 4C): Es legt den Unterzeichnungsvorgang an — unveränderlicher Snapshot der Offerte, SHA-256 (Hash A) — und antwortet mit `requiresSignature: true` und `signatureUrl` (`/signieren#t=…`, Token nur im Fragment). Erst der Abschluss des Vorgangs (Zustimmung, gezeichnete oder getippte Unterschrift, Protokoll) setzt die Offerte auf ACCEPTED. Ein bereits begonnener Vorgang wird fortgesetzt, nicht verdoppelt. Gezählt je Link (`publicTokenAction`).
 
 - **Zugriff:** Öffentlich — keine Anmeldung nötig.
-- **Rate-Limit-Klasse:** `apiWrite`
+- **Rate-Limit-Klasse:** `publicTokenAction`
 - **Erfolg:** 200
 - **Mögliche Fehler:** 400, 404, 422, 429, 500
 
@@ -577,8 +577,6 @@ Familie.
 | Feld | Typ | Pflicht | Regeln |
 | --- | --- | --- | --- |
 | `decision` | string | ja | `ACCEPT` \| `REJECT` |
-| `signatureDataUrl` | string | – | max. 500000 Zeichen |
-| `signatureName` | string | – | max. 120 Zeichen |
 | `reason` | string | – | max. 1000 Zeichen |
 
 ### `GET /api/public/invoices/{token}/pdf`
@@ -906,6 +904,22 @@ Familie.
 | Feld | Typ | Pflicht | Regeln |
 | --- | --- | --- | --- |
 | `id` | string | ja | min. 1 Zeichen |
+
+### `GET /api/signatures/{id}/artifacts/{artifact}`
+
+**Artefakt für die Verwaltung.** `original` (A), `signed` (B) oder `evidence` (C) mit Sitzung und `signature:read`; bei Vorgängen zu Offerten zusätzlich `quote:read`. Der Abruf steht im Prüfprotokoll. Nie zwischengespeichert.
+
+- **Zugriff:** Erfordert die Berechtigung: `signature:read`.
+- **Rate-Limit-Klasse:** `fileDownload`
+- **Erfolg:** 200 (`application/pdf`)
+- **Mögliche Fehler:** 400, 401, 403, 404, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+| `artifact` | string | ja | `original` \| `signed` \| `evidence` |
 
 ### `POST /api/signatures/{id}/send`
 
@@ -2183,7 +2197,7 @@ Familie.
 
 ### `POST /api/quotes/{id}/respond`
 
-**Offerte im Kundenkonto annehmen oder ablehnen.** Der angemeldete Weg neben dem öffentlichen Link. Wer eine Sitzung hat und die Offerte besitzt, braucht keine Capability. Die Eigentümerprüfung steht in der where-Klausel, die Geschäftsoperation ist dieselbe atomare Transition wie beim öffentlichen Weg — eine gleichzeitige Annahme über den Link und Ablehnung hier ergeben genau einen Übergang.
+**Offerte im Kundenkonto annehmen oder ablehnen.** Der angemeldete Weg neben dem öffentlichen Link. Wer eine Sitzung hat und die Offerte besitzt, braucht keine Capability; die Eigentümerprüfung steht in der where-Klausel. `REJECT` ist die direkte, atomare Ablehnung. `ACCEPT` startet denselben Unterzeichnungsvorgang wie der öffentliche Weg, setzt direkt das teilnehmergebundene Signatur-Cookie und antwortet mit `signatureUrl` (`/signieren/s/<publicId>`, kein Token). Ablehnung und Abschluss der Unterzeichnung sind gegeneinander race-safe: genau eine terminale Entscheidung.
 
 - **Zugriff:** Erfordert die Berechtigung: `quote:respond_own`.
 - **Rate-Limit-Klasse:** `apiWrite`
@@ -2201,8 +2215,6 @@ Familie.
 | Feld | Typ | Pflicht | Regeln |
 | --- | --- | --- | --- |
 | `decision` | string | ja | `ACCEPT` \| `REJECT` |
-| `signatureDataUrl` | string | – | max. 500000 Zeichen |
-| `signatureName` | string | – | max. 120 Zeichen |
 | `reason` | string | – | max. 1000 Zeichen |
 
 ### `DELETE /api/quotes/{id}`

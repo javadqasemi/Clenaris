@@ -55,7 +55,14 @@ module.exports = {
        * bauen — die Auslieferung hat das längst getan.
        */
       script: path.join('node_modules', 'next', 'dist', 'bin', 'next'),
-      args: 'start',
+      /**
+       * Nur Loopback. Ohne `-H` hört `next start` auf allen Schnittstellen,
+       * und der Anwendungsport wäre — je nach Host-Firewall — direkt aus dem
+       * Internet erreichbar: an TLS, Zugriffsprotokoll und der Adressermittlung
+       * (`TRUSTED_PROXY_MODE`) vorbei. Nginx und der Health-Check sprechen
+       * ohnehin `127.0.0.1` an (docs/DEPLOYMENT.md 13.5.1).
+       */
+      args: 'start -H 127.0.0.1',
       cwd: __dirname,
 
       exec_mode: 'cluster',

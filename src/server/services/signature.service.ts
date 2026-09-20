@@ -1,11 +1,6 @@
 import 'server-only';
 
-import type {
-  Prisma,
-  SignatureEventType,
-  SignatureMethod,
-  SignatureOtpChannel,
-} from '@prisma/client';
+import type { SignatureMethod, SignatureOtpChannel } from '@prisma/client';
 
 import { audit } from '@/lib/audit';
 import { can } from '@/lib/auth/rbac';
@@ -25,7 +20,7 @@ import {
   type SignatureSessionClaims,
 } from '@/lib/auth/signature-session';
 import { sha256Hex } from '@/lib/crypto';
-import { prisma, type Tx } from '@/lib/db';
+import { prisma } from '@/lib/db';
 import { sendEmail } from '@/lib/email/client';
 import {
   signatureCompletedEmail,
@@ -47,10 +42,12 @@ import {
   validatePlacement,
   type Placement,
 } from '@/lib/pdf/signature-artifacts';
+import { actorSourceText } from '@/lib/pdf/documents';
 import { renderEvidencePdf } from '@/lib/pdf/render';
 import {
   CURRENT_CONSENT_VERSION,
   DEFAULT_CONSENT_LOCALE,
+  QUOTE_CONSENT_VERSION,
   consentHash,
   consentText,
   isConsentLocale,
@@ -72,6 +69,10 @@ import {
 } from './access-token.service';
 import { documentVisibilityWhere } from './document.service';
 import { notifyStaff } from './notification.service';
+import { ACCEPTANCE_ACTIVE, acceptQuoteInTx, afterQuoteAccepted } from './quote-acceptance.service';
+import { appendSignatureEvent, type ActorSource, type AnfrageKontext } from './signature-events';
+
+export { appendSignatureEvent, type AnfrageKontext } from './signature-events';
 
 const log = logger('signatur');
 
@@ -102,50 +103,12 @@ const log = logger('signatur');
 //  Gemeinsames
 // ---------------------------------------------------------------------------
 
-export interface AnfrageKontext {
-  ip: string | null;
-  ipSource: string;
-  userAgent: string | null;
-}
-
 const REQUEST_ACTIVE = ['PENDING', 'FINALIZING'] as const;
 const PARTICIPANT_OPEN = ['PENDING', 'VIEWED', 'VERIFIED'] as const;
 /** Nach dieser Zeit gilt ein FINALIZING als hängengeblieben und darf übernommen werden. */
 const FINALIZING_STALE_MS = 10 * 60 * 1000;
 /** Ergebnislink: 30 Tage — nicht 90; verlängern kann die Verwaltung. */
 const RESULT_LINK_TTL_MS = 30 * 24 * 60 * 60 * 1000;
-
-/**
- * Ein Ereignis anhängen. Die einzige Schreibfunktion für `signature_events`.
- *
- * Nie mit Geheimnissen: kein Token, kein Code, kein Cookie, kein Bild.
- * `details` ist klein und trägt eine Fassungsnummer (`v`), damit spätere
- * Leser wissen, wie sie es deuten.
- */
-export async function appendSignatureEvent(
-  client: Tx | typeof prisma,
-  params: {
-    requestId: string;
-    participantId?: string | null;
-    type: SignatureEventType;
-    ctx?: AnfrageKontext | null;
-    sessionJti?: string | null;
-    details?: Record<string, unknown>;
-  },
-): Promise<void> {
-  await client.signatureEvent.create({
-    data: {
-      requestId: params.requestId,
-      participantId: params.participantId ?? null,
-      type: params.type,
-      ipAddress: params.ctx?.ip ?? null,
-      ipSource: params.ctx?.ipSource ?? null,
-      clientReportedUserAgent: params.ctx?.userAgent ?? null,
-      sessionRef: params.sessionJti ? sessionRef(params.sessionJti) : null,
-      details: params.details ? ({ v: 1, ...params.details } as Prisma.InputJsonObject) : undefined,
-    },
-  });
-}
 
 /** Die Bytes eines Artefakts — über die Ablage, sonst über die eine Altbestandsadresse. */
 async function artefaktBytes(asset: {
@@ -167,8 +130,9 @@ async function artefaktBytes(asset: {
  */
 async function artefaktAblegen(params: {
   organizationId: string;
+  /** Ordner unter `signatures/` — die Vorgangskennung, oder bei Snapshots vor dem Anlegen die `publicId`. */
   requestId: string;
-  art: 'signed' | 'evidence' | 'signature';
+  art: 'original' | 'signed' | 'evidence' | 'signature';
   suffix?: string;
   bytes: Buffer;
   contentType: 'application/pdf' | 'image/png';
@@ -228,6 +192,215 @@ function verschleiert(email: string): string {
   const [name, domain] = email.split('@');
   if (!name || !domain) return '…';
   return `${name.slice(0, 1)}…${name.slice(-1)}@${domain}`;
+}
+
+// ---------------------------------------------------------------------------
+//  Offertannahme (Gate 4C): anlegen, Zugang ausstellen, nachschlagen
+// ---------------------------------------------------------------------------
+
+/**
+ * Den Annahmevorgang einer Offerte anlegen — mit dem Snapshot als Original.
+ *
+ * Der Snapshot wird **hier**, beim Start, abgelegt und gehasht (Hash A);
+ * ab dann ist er das, was unterzeichnet wird. Was die Offerte in der
+ * Datenbank später zeigt, ändert daran nichts mehr (§ 8, § 13).
+ *
+ * Genau ein offener Vorgang je Offerte: Der Teilindex
+ * `signature_requests_offene_annahme_je_offerte` erzwingt es. Verliert
+ * dieser Aufruf das Rennen gegen einen gleichzeitigen, gibt er `null`
+ * zurück, und der Aufrufer verwendet den Vorgang des Gewinners. Der bereits
+ * abgelegte Snapshot des Verlierers bleibt eine verwaiste Datei ohne
+ * Vorgang — harmlos, und seltener als jede Aufräumlogik wert wäre.
+ *
+ * `createdById` ist ein Pflichtfeld mit Fremdschlüssel: Beim Start über den
+ * Link gibt es keine angemeldete Person, der Vorgang wird der Person
+ * zugeschrieben, die die Offerte erstellt hat (ersatzweise der
+ * Systemverantwortung). Wer tatsächlich gehandelt hat, steht in den
+ * Ereignissen (`actorSource`).
+ */
+export async function createQuoteAcceptanceRequest(params: {
+  quote: { id: string; organizationId: string; number: string; title: string; validUntil: Date; createdById: string | null };
+  participant: { name: string; email: string; customerId: string | null };
+  snapshot: { bytes: Buffer; filename: string };
+  expiresAt: Date;
+  actorSource: ActorSource;
+  actorUserId?: string | null;
+  ctx: AnfrageKontext;
+}): Promise<{ id: string; publicId: string; participantId: string } | null> {
+  const befund = await inspectPdf(params.snapshot.bytes);
+  if (befund.pageCount < 1) throw new BusinessRuleError('Die Offerte liess sich nicht als Dokument erzeugen.');
+
+  const publicId = randomToken(16);
+  const original = await artefaktAblegen({
+    organizationId: params.quote.organizationId,
+    requestId: publicId,
+    art: 'original',
+    bytes: params.snapshot.bytes,
+    contentType: 'application/pdf',
+    filename: params.snapshot.filename,
+  });
+
+  const createdById =
+    params.actorUserId ??
+    params.quote.createdById ??
+    (await prisma.user.findFirst({ where: { organizationId: params.quote.organizationId, role: 'SUPER_ADMIN' }, select: { id: true } }))?.id ??
+    null;
+  if (!createdById) throw new BusinessRuleError('Für diesen Vorgang lässt sich keine verantwortliche Person ermitteln.');
+
+  try {
+    return await prisma.$transaction(async (tx) => {
+      const created = await tx.signatureRequest.create({
+        data: {
+          organizationId: params.quote.organizationId,
+          publicId,
+          status: 'PENDING',
+          sentAt: new Date(),
+          providerType: 'INTERNAL_EVIDENCE',
+          artifactMode: 'EMBEDDED_VISUAL',
+          assuranceLevel: 'LINK_ONLY',
+          title: `Offerte ${params.quote.number} — ${params.quote.title}`,
+          quoteId: params.quote.id,
+          originalArtifactId: original.assetId,
+          originalDocumentHash: original.checksum,
+          consentVersion: QUOTE_CONSENT_VERSION,
+          consentLocale: DEFAULT_CONSENT_LOCALE,
+          createdById,
+          expiresAt: params.expiresAt,
+          participants: {
+            create: {
+              order: 1,
+              role: 'SIGNER',
+              nameSnapshot: params.participant.name,
+              emailSnapshot: params.participant.email.toLowerCase(),
+              customerId: params.participant.customerId,
+            },
+          },
+        },
+        select: { id: true, publicId: true, participants: { select: { id: true } } },
+      });
+      await appendSignatureEvent(tx, {
+        requestId: created.id,
+        type: 'REQUEST_CREATED',
+        ctx: params.ctx,
+        details: {
+          source: 'Quote',
+          quoteId: params.quote.id,
+          quoteNumber: params.quote.number,
+          artifactMode: 'EMBEDDED_VISUAL',
+          assuranceLevel: 'LINK_ONLY',
+          originalHash: original.checksum,
+          actorSource: params.actorSource,
+          signatureCheck: {
+            acroFormSignatureFields: befund.hasSignatureFields,
+            signatureStructures: befund.hasSignatureStructures,
+            note: 'Clenaris-eigener Snapshot; Suche nach Signaturstrukturen als Vorsichtsmassnahme, keine kryptografische Prüfung.',
+          },
+        },
+      });
+      return { id: created.id, publicId: created.publicId, participantId: created.participants[0]!.id };
+    });
+  } catch (error) {
+    // Der Teilindex hat entschieden: Jemand war schneller.
+    if ((error as { code?: string }).code === 'P2002') return null;
+    throw error;
+  }
+}
+
+/** Der offene Annahmevorgang einer Offerte — oder `null`. */
+export async function findActiveQuoteAcceptance(quoteId: string) {
+  return prisma.signatureRequest.findFirst({
+    where: { quoteId, status: { in: [...ACCEPTANCE_ACTIVE] } },
+    include: { participants: { orderBy: { order: 'asc' } } },
+  });
+}
+
+/** Der abgeschlossene Annahmevorgang einer Offerte — mit Artefakten, oder `null`. */
+export async function findCompletedQuoteAcceptance(quoteId: string) {
+  return prisma.signatureRequest.findFirst({
+    where: { quoteId, status: 'COMPLETED' },
+    orderBy: { completedAt: 'desc' },
+    include: {
+      participants: { orderBy: { order: 'asc' } },
+      signedArtifact: { include: { storedFile: true } },
+      evidenceArtifact: { include: { storedFile: true } },
+    },
+  });
+}
+
+/**
+ * Zugang zum Vorgang für den Browser ausstellen — der Rohwert geht als
+ * Fragment (`/signieren#t=…`) zurück und wird nie gespeichert.
+ *
+ * Anders als beim Versand per E-Mail werden ältere Zugänge **nicht**
+ * widerrufen: Zwei offene Browserfenster derselben Person sollen beide zum
+ * selben Vorgang führen; die Einmaligkeit hängt am Abschluss, nicht am
+ * Link. Widerrufen wird bei Abbruch, Ablehnung und Ablauf.
+ */
+export async function issueQuoteAcceptanceAccess(params: {
+  organizationId: string;
+  requestId: string;
+  participantId: string;
+  expiresAt: Date;
+  actorSource: ActorSource;
+  ctx: AnfrageKontext;
+}): Promise<{ raw: string; expiresAt: Date }> {
+  const link = await issuePublicToken({
+    organizationId: params.organizationId,
+    purpose: 'SIGNATURE_ACCESS',
+    resourceId: params.participantId,
+    expiresAt: params.expiresAt,
+  });
+  await appendSignatureEvent(prisma, {
+    requestId: params.requestId,
+    participantId: params.participantId,
+    type: 'LINK_ISSUED',
+    ctx: params.ctx,
+    details: { tokenId: link.record.id, channel: 'browser', actorSource: params.actorSource, expiresAt: params.expiresAt.toISOString() },
+  });
+  return { raw: link.raw, expiresAt: params.expiresAt };
+}
+
+/**
+ * Eine Unterzeichnungssitzung für die **angemeldete** Kundschaft — ohne Link
+ * per E-Mail an sich selbst.
+ *
+ * Die Sitzung braucht einen Token als Anker (`tok`), damit Abbruch und
+ * Widerruf sie sofort entwerten. Er wird ausgestellt, sein Rohwert aber
+ * nirgends verwendet — die Person hat ihre Berechtigung bereits über
+ * Sitzung und Eigentümerschaft nachgewiesen. Das Protokoll hält
+ * `AUTHENTICATED_CUSTOMER` fest; es behauptet damit keine höhere
+ * Identitätssicherheit, nur einen anderen Zugangsweg.
+ */
+export async function issueQuoteAcceptanceSession(params: {
+  organizationId: string;
+  requestId: string;
+  participantId: string;
+  expiresAt: Date;
+  userId: string;
+  ctx: AnfrageKontext;
+}): Promise<{ sessionToken: string; expiresAt: Date }> {
+  const anker = await issuePublicToken({
+    organizationId: params.organizationId,
+    purpose: 'SIGNATURE_ACCESS',
+    resourceId: params.participantId,
+    createdById: params.userId,
+    expiresAt: params.expiresAt,
+  });
+  const sitzung = await issueSignatureSession({
+    scope: 'sign',
+    requestId: params.requestId,
+    participantId: params.participantId,
+    tokenId: anker.record.id,
+  });
+  await appendSignatureEvent(prisma, {
+    requestId: params.requestId,
+    participantId: params.participantId,
+    type: 'LINK_EXCHANGED',
+    ctx: params.ctx,
+    sessionJti: sitzung.jti,
+    details: { tokenId: anker.record.id, actorSource: 'AUTHENTICATED_CUSTOMER', userId: params.userId },
+  });
+  return { sessionToken: sitzung.token, expiresAt: sitzung.expiresAt };
 }
 
 // ---------------------------------------------------------------------------
@@ -595,12 +768,15 @@ export async function getSignatureRequestAdmin(session: SessionUser, organizatio
       participants: { orderBy: { order: 'asc' } },
       events: { orderBy: { at: 'asc' } },
       documentVersion: { select: { id: true, version: true, documentId: true } },
+      quote: { select: { id: true, number: true, title: true, status: true } },
       originalArtifact: { select: { id: true, filename: true, checksum: true } },
       signedArtifact: { select: { id: true, filename: true, checksum: true } },
       evidenceArtifact: { select: { id: true, filename: true, checksum: true } },
     },
   });
   if (!request) throw new NotFoundError('Unterzeichnungsvorgang');
+  // Das Recht am Vorgang ersetzt nicht das Recht am Ursprung — auch bei Offerten.
+  if (request.quoteId && !can(session.role, 'quote:read')) throw new NotFoundError('Unterzeichnungsvorgang');
   if (request.documentVersion) {
     assertDokumentLesbar(session);
     const sichtbar = await prisma.managedDocument.findFirst({
@@ -610,6 +786,41 @@ export async function getSignatureRequestAdmin(session: SessionUser, organizatio
     if (!sichtbar) throw new NotFoundError('Unterzeichnungsvorgang');
   }
   return request;
+}
+
+/**
+ * Ein Artefakt für die Verwaltung — Original (A), signiert (B) oder
+ * Protokoll (C). Dieselbe Berechtigung wie die Ansicht des Vorgangs; der
+ * Abruf wird als Ereignis nicht protokolliert (das Signaturprotokoll gehört
+ * der Unterzeichnung), wohl aber im allgemeinen Prüfprotokoll des Aufrufers.
+ */
+export async function getSignatureArtifactAdmin(
+  session: SessionUser,
+  organizationId: string,
+  requestId: string,
+  which: 'original' | 'signed' | 'evidence',
+): Promise<{ bytes: Buffer; filename: string }> {
+  await getSignatureRequestAdmin(session, organizationId, requestId);
+  const request = await prisma.signatureRequest.findUniqueOrThrow({
+    where: { id: requestId },
+    include: {
+      originalArtifact: { include: { storedFile: true } },
+      signedArtifact: { include: { storedFile: true } },
+      evidenceArtifact: { include: { storedFile: true } },
+    },
+  });
+  const asset = which === 'original' ? request.originalArtifact : which === 'signed' ? request.signedArtifact : request.evidenceArtifact;
+  if (!asset) throw new NotFoundError('Datei');
+  const bytes = await artefaktBytes(asset);
+  if (!bytes) throw new NotFoundError('Datei');
+  await audit.updated({
+    organizationId,
+    userId: session.id,
+    entity: 'SignatureRequest',
+    entityId: requestId,
+    summary: `Artefakt „${which}" des Unterzeichnungsvorgangs heruntergeladen`,
+  });
+  return { bytes, filename: asset.filename };
 }
 
 /** A, B und C aus den tatsächlich gespeicherten Bytes nachrechnen. */
@@ -701,7 +912,7 @@ export async function exchangeSignatureToken(
       type: scope === 'sign' ? 'LINK_EXCHANGED' : 'RESULT_VIEWED',
       ctx,
       sessionJti: sitzung.jti,
-      details: { tokenId: aufgeloest.token.record.id },
+      details: { tokenId: aufgeloest.token.record.id, actorSource: 'PUBLIC_LINK' },
     });
 
     return { publicId: participant.request.publicId, sessionToken: sitzung.token, expiresAt: sitzung.expiresAt, scope };
@@ -772,6 +983,8 @@ export async function loadSigningContext(claims: SignatureSessionClaims | null, 
       publicId: request.publicId,
       title: request.title,
       status: request.status,
+      /** Woran hängt der Vorgang — die Maske wählt danach ihre Worte. */
+      source: request.quoteId ? ('quote' as const) : request.jobId ? ('job' as const) : ('document' as const),
       artifactMode: request.artifactMode,
       assuranceLevel: request.assuranceLevel,
       expiresAt: request.expiresAt,
@@ -1162,6 +1375,13 @@ export async function declineSignature(
  *  4. Erst wenn alles da ist, COMPLETED. Nie zwei signierte Artefakte, nie
  *     zwei Protokolle: `signedArtifactId`/`evidenceArtifactId` sind eindeutig.
  */
+/** Steuert den Rückroll der Abschluss-Transaktion — kein Fehler für den Aufrufer. */
+class Kopplungsfehler extends Error {
+  constructor(readonly grund: 'QUOTE_NOT_ACCEPTABLE' | 'REQUEST_NOT_FINALIZING') {
+    super(grund);
+  }
+}
+
 export async function finalizeSignatureRequest(requestId: string, ctx?: AnfrageKontext): Promise<string> {
   const now = new Date();
 
@@ -1189,6 +1409,7 @@ export async function finalizeSignatureRequest(requestId: string, ctx?: AnfrageK
         participants: { orderBy: { order: 'asc' }, include: { signatureArtifact: { include: { storedFile: true } }, otpChallenges: { orderBy: { createdAt: 'asc' } } } },
         originalArtifact: { include: { storedFile: true } },
         documentVersion: { select: { version: true, document: { select: { title: true } } } },
+        quote: { select: { id: true, number: true, title: true } },
         events: { orderBy: { at: 'asc' } },
       },
     });
@@ -1273,10 +1494,12 @@ export async function finalizeSignatureRequest(requestId: string, ctx?: AnfrageK
         requestId: request.id,
         publicId: request.publicId,
         title: request.title,
-        sourceType: request.documentVersion ? 'Dokumentfassung' : request.quoteId ? 'Offerte' : 'Einsatz',
+        sourceType: request.documentVersion ? 'Dokumentfassung' : request.quote ? 'Offerte' : 'Einsatz',
         sourceReference: request.documentVersion
           ? `${request.documentVersion.document.title} · Fassung ${request.documentVersion.version}`
-          : (request.quoteId ?? request.jobId ?? ''),
+          : request.quote
+            ? `Offerte ${request.quote.number} · ${request.quote.title} (${request.quote.id})`
+            : (request.jobId ?? ''),
         artifactMode: request.artifactMode,
         assuranceLevel: request.assuranceLevel,
         originalArtifactId: request.originalArtifactId,
@@ -1305,7 +1528,12 @@ export async function finalizeSignatureRequest(requestId: string, ctx?: AnfrageK
             .filter((c) => c.usedAt)
             .map((c) => ({ channel: c.channel, sentTo: c.channel === 'SMS' ? `…${c.sentTo.slice(-3)}` : verschleiert(c.sentTo), requestedAt: c.createdAt, verifiedAt: c.usedAt })),
         })),
-        events: frisch.events.map((e) => ({ at: e.at, type: e.type, participant: e.participant?.nameSnapshot ?? null })),
+        events: frisch.events.map((e) => ({
+          at: e.at,
+          type: e.type,
+          participant: e.participant?.nameSnapshot ?? null,
+          note: actorSourceText((e.details as { actorSource?: string } | null)?.actorSource),
+        })),
         generatedAt: new Date(),
       });
       const abgelegt = await artefaktAblegen({
@@ -1328,14 +1556,86 @@ export async function finalizeSignatureRequest(requestId: string, ctx?: AnfrageK
       }
     }
 
-    const fertig = await prisma.signatureRequest.updateMany({
-      where: { id: requestId, status: 'FINALIZING', evidenceArtifactId: { not: null } },
-      data: { status: 'COMPLETED', completedAt: now, finalizingSince: null },
-    });
-    if (fertig.count === 1) {
-      await appendSignatureEvent(prisma, { requestId, type: 'REQUEST_COMPLETED', ctx });
+    /**
+     * Der Abschluss — und bei Offerten die Kopplung an das Geschäftsobjekt.
+     *
+     * Für einen Vorgang mit `quoteId` geschehen zwei Übergänge in **einer**
+     * Transaktion, in der Sperrreihenfolge `Quote → SignatureRequest`:
+     * erst die Offerte nach ACCEPTED (nur wenn sie noch annehmbar ist —
+     * die Bedingungen stehen in der `where`-Klausel), dann der Vorgang
+     * nach COMPLETED. Trifft einer der beiden keine Zeile, rollt alles
+     * zurück. Ein COMPLETED ohne ACCEPTED gibt es damit nicht, und ein
+     * ACCEPTED ohne COMPLETED auch nicht.
+     *
+     * Ist die Offerte nicht mehr annehmbar (inzwischen abgelehnt, geändert,
+     * abgelaufen), wird der Vorgang aus FINALIZING heraus **abgebrochen**:
+     * Die Unterschrift wurde geleistet, aber sie trifft nichts mehr. Der
+     * Snapshot und das Protokoll bleiben als Beleg; die Links werden
+     * widerrufen. Kein stiller Endzustand „unterschrieben, aber nicht
+     * angenommen" — er hat einen Namen und ein Ereignis.
+     */
+    const quoteId = request.quoteId;
+    let ergebnis: 'COMPLETED' | 'CANCELLED' | 'OFFEN' = 'OFFEN';
+    let grund: string | null = null;
+    try {
+      await prisma.$transaction(async (tx) => {
+        if (quoteId) {
+          const angenommen = await acceptQuoteInTx(tx, quoteId, now);
+          if (!angenommen) throw new Kopplungsfehler('QUOTE_NOT_ACCEPTABLE');
+        }
+        const fertig = await tx.signatureRequest.updateMany({
+          where: { id: requestId, status: 'FINALIZING', evidenceArtifactId: { not: null } },
+          data: { status: 'COMPLETED', completedAt: now, finalizingSince: null },
+        });
+        if (fertig.count === 0) throw new Kopplungsfehler('REQUEST_NOT_FINALIZING');
+        await appendSignatureEvent(tx, { requestId, type: 'REQUEST_COMPLETED', ctx, details: quoteId ? { quoteId, quoteStatus: 'ACCEPTED' } : undefined });
+      });
+      ergebnis = 'COMPLETED';
+    } catch (error) {
+      if (!(error instanceof Kopplungsfehler)) throw error;
+      grund = error.grund;
+      if (error.grund === 'QUOTE_NOT_ACCEPTABLE' && quoteId) {
+        const zustand = await prisma.quote.findUnique({ where: { id: quoteId }, select: { status: true, validUntil: true } });
+        await prisma.$transaction(async (tx) => {
+          const abgebrochen = await tx.signatureRequest.updateMany({
+            where: { id: requestId, status: 'FINALIZING' },
+            data: { status: 'CANCELLED', cancelledAt: new Date(), finalizingSince: null },
+          });
+          if (abgebrochen.count === 0) return;
+          for (const p of request.participants) {
+            await revokeTokensFor({ tx, purpose: 'SIGNATURE_ACCESS', resourceId: p.id });
+          }
+          await appendSignatureEvent(tx, {
+            requestId,
+            type: 'CANCELLED',
+            ctx,
+            details: {
+              by: 'system',
+              reason: 'quote_not_acceptable_at_completion',
+              quoteStatus: zustand?.status ?? null,
+              quoteValidUntil: zustand?.validUntil?.toISOString() ?? null,
+            },
+          });
+        });
+        ergebnis = 'CANCELLED';
+      }
+    }
+
+    if (ergebnis === 'COMPLETED') {
+      if (quoteId) {
+        const letzterZugang = [...request.events].reverse().find((e) => e.type === 'LINK_EXCHANGED');
+        const actorSource = ((letzterZugang?.details as { actorSource?: string } | null)?.actorSource ?? null) as
+          | 'PUBLIC_LINK'
+          | 'AUTHENTICATED_CUSTOMER'
+          | null;
+        await afterQuoteAccepted({ quoteId, requestId, actorSource, ctx });
+      }
       await ergebnisLinksVersenden(requestId, ctx);
       return 'COMPLETED';
+    }
+    if (ergebnis === 'CANCELLED') {
+      log.warn('Unterzeichnung abgeschlossen, Offerte nicht mehr annehmbar — Vorgang abgebrochen', { requestId, grund });
+      return 'CANCELLED';
     }
     return (await prisma.signatureRequest.findUniqueOrThrow({ where: { id: requestId }, select: { status: true } })).status;
   } catch (error) {

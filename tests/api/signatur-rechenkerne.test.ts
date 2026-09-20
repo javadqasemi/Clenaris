@@ -73,12 +73,18 @@ describe('Adressermittlung — TRUSTED_PROXY_MODE', () => {
     );
   });
 
-  it('SINGLE_REVERSE_PROXY: X-Real-IP zuerst, dann der erste Eintrag von X-Forwarded-For, nie CF-Connecting-IP', () => {
+  it('SINGLE_REVERSE_PROXY: ausschliesslich X-Real-IP — kein Rückfall auf X-Forwarded-For, nie CF-Connecting-IP', () => {
     process.env.TRUSTED_PROXY_MODE = 'SINGLE_REVERSE_PROXY';
     assert.deepEqual(resolveClientIp(anfrage(GEFAELSCHT)), { ip: '192.0.2.44', source: 'NGINX_X_REAL_IP' });
+    /**
+     * Gate 4C: Fehlt `X-Real-IP`, ist der Proxy falsch konfiguriert oder die
+     * Anfrage kam an ihm vorbei. Ein Rückfall auf `X-Forwarded-For` eröffnete
+     * genau dann einen zweiten, vom Absender beschreibbaren Pfad — fail-closed.
+     */
     assert.deepEqual(
       resolveClientIp(anfrage({ 'x-forwarded-for': '198.51.100.7, 203.0.113.99' })),
-      { ip: '198.51.100.7', source: 'NGINX_X_REAL_IP' },
+      { ip: null, source: 'UNAVAILABLE' },
+      'X-Forwarded-For allein ergibt keine Adresse',
     );
     assert.deepEqual(
       resolveClientIp(anfrage({ 'cf-connecting-ip': '203.0.113.99' })),

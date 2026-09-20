@@ -244,11 +244,12 @@ export async function renderInvoicePdf(invoiceId: string): Promise<{
 //  Offerte
 // ---------------------------------------------------------------------------
 
-export async function renderQuotePdf(quoteId: string): Promise<{
-  buffer: Buffer;
-  filename: string;
-  url: string | null;
-}> {
+/**
+ * Die Offerte samt allem, was das Dokument braucht — eine Abfrage, zwei
+ * Renderer (unten): das gewöhnliche PDF mit Altbestands-Unterschrift und der
+ * Snapshot für die Unterzeichnung ohne sie.
+ */
+async function offerteLaden(quoteId: string) {
   const quote = await prisma.quote.findUnique({
     where: { id: quoteId },
     include: {
@@ -258,8 +259,30 @@ export async function renderQuotePdf(quoteId: string): Promise<{
     },
   });
   if (!quote) throw new NotFoundError('Offerte');
+  return quote;
+}
 
+/**
+ * Der Snapshot für die Annahme (Gate 4C): dieselbe Darstellung wie das
+ * gewöhnliche Offert-PDF — Anbieter, Kundschaft, Nummer, Datum, Gültigkeit,
+ * Positionen, Rabatt, MWST, Total, Texte, Bedingungen —, aber **ohne**
+ * Unterschriftsbild aus dem Altbestand und **ohne** Ablage an der Offerte.
+ * Die Bytes gehen an den Signaturkern, der sie als Original speichert und
+ * ihren SHA-256 (Hash A) einfriert. Was die Kundschaft unterzeichnet, ist
+ * genau diese Datei; danach wird sie nie neu gerendert.
+ */
+export async function renderQuoteSnapshot(quoteId: string): Promise<{ buffer: Buffer; filename: string }> {
+  const quote = await offerteLaden(quoteId);
   const company = await loadCompany(quote.organizationId);
+  const buffer = await renderToBuffer(
+    React.createElement(QuoteDocument, { ...offertDokumentProps(quote, company), signature: null }) as never,
+  );
+  return { buffer, filename: `Offerte-${quote.number}.pdf` };
+}
+
+type GeladeneOfferte = Awaited<ReturnType<typeof offerteLaden>>;
+
+function offertDokumentProps(quote: GeladeneOfferte, company: PdfCompany) {
 
   const billing = quote.customer?.addresses[0];
   const recipient: PdfRecipient = quote.customer
@@ -299,24 +322,44 @@ export async function renderQuotePdf(quoteId: string): Promise<{
       .map((i) => ({ vatRate: toNumber(i.vatRate), net: toNumber(i.lineTotal) })),
   );
 
+  return {
+    company,
+    recipient,
+    number: quote.number,
+    title: quote.title,
+    issueDate: quote.createdAt,
+    validUntil: quote.validUntil,
+    items,
+    subtotal: toNumber(quote.subtotal),
+    discountAmount: toNumber(quote.discountAmount),
+    netTotal: toNumber(quote.netTotal),
+    vatAmount: toNumber(quote.vatAmount),
+    vatRate,
+    grossTotal: toNumber(quote.grossTotal),
+    introText: quote.introText,
+    outroText: quote.outroText,
+    terms: quote.terms,
+  };
+}
+
+/**
+ * Das gewöhnliche Offert-PDF: für Versand, Download und Ansicht vor der
+ * Annahme. Trägt bei Annahmen aus der Zeit vor Gate 4C das Unterschriftsbild
+ * aus dem Altbestand (`LEGACY_SIGNATURE`); Annahmen über den Signaturkern
+ * werden hier **nicht** dargestellt — für sie gibt es das signierte Artefakt
+ * (Hash B), das die PDF-Routen an seiner Stelle ausliefern.
+ */
+export async function renderQuotePdf(quoteId: string): Promise<{
+  buffer: Buffer;
+  filename: string;
+  url: string | null;
+}> {
+  const quote = await offerteLaden(quoteId);
+  const company = await loadCompany(quote.organizationId);
+
   const buffer = await renderToBuffer(
     React.createElement(QuoteDocument, {
-      company,
-      recipient,
-      number: quote.number,
-      title: quote.title,
-      issueDate: quote.createdAt,
-      validUntil: quote.validUntil,
-      items,
-      subtotal: toNumber(quote.subtotal),
-      discountAmount: toNumber(quote.discountAmount),
-      netTotal: toNumber(quote.netTotal),
-      vatAmount: toNumber(quote.vatAmount),
-      vatRate,
-      grossTotal: toNumber(quote.grossTotal),
-      introText: quote.introText,
-      outroText: quote.outroText,
-      terms: quote.terms,
+      ...offertDokumentProps(quote, company),
       signature:
         quote.signatureDataUrl && quote.signatureName && quote.signedAt
           ? {

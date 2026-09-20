@@ -4,6 +4,7 @@ import { NotFoundError } from '@/lib/errors';
 import { renderQuotePdf } from '@/lib/pdf/render';
 import { publicTokenParams } from '@/lib/validation/queries';
 import { resolveWithLegacy, tokenRejectionError } from '@/server/services/access-token.service';
+import { getSignedQuoteArtifact } from '@/server/services/quote.service';
 
 export const runtime = 'nodejs';
 export const maxDuration = 60;
@@ -46,7 +47,16 @@ export const GET = definePublicRoute({
     });
     if (!quote || quote.deletedAt) throw new NotFoundError('Offerte');
 
-    const { buffer, filename } = await renderQuotePdf(quote.id);
+    /**
+     * Nach einer Annahme über den Signaturkern ist das Dokument das signierte
+     * Artefakt (B) — Snapshot plus Signaturseite, bytegenau wie abgelegt.
+     * Eine Neuberechnung aus der Datenbank wäre genau das, was Gate 4A als
+     * Fehler benannt hat: ein „unterschriebenes" PDF aus veränderlichen
+     * Daten. Ohne solchen Vorgang (offen, abgelehnt, Altbestand) bleibt es
+     * beim gewöhnlichen Dokument.
+     */
+    const signiert = await getSignedQuoteArtifact(quote.id);
+    const { buffer, filename } = signiert ? { buffer: signiert.bytes, filename: signiert.filename } : await renderQuotePdf(quote.id);
 
     return new Response(new Uint8Array(buffer), {
       headers: {

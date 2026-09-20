@@ -446,11 +446,15 @@ export const ROUTES: RouteDoc[] = [
     tag: 'Öffentlich',
     summary: 'Offerte annehmen oder ablehnen',
     description:
-      'Bei Annahme werden Unterschrift, Name, IP und Zeitpunkt festgehalten — das ist der ' +
-      'Nachweis des Vertragsschlusses.',
+      '`REJECT` entscheidet sofort und endgültig. `ACCEPT` entscheidet nicht selbst (Gate 4C): Es legt ' +
+      'den Unterzeichnungsvorgang an — unveränderlicher Snapshot der Offerte, SHA-256 (Hash A) — und ' +
+      'antwortet mit `requiresSignature: true` und `signatureUrl` (`/signieren#t=…`, Token nur im Fragment). ' +
+      'Erst der Abschluss des Vorgangs (Zustimmung, gezeichnete oder getippte Unterschrift, Protokoll) ' +
+      'setzt die Offerte auf ACCEPTED. Ein bereits begonnener Vorgang wird fortgesetzt, nicht verdoppelt. ' +
+      'Gezählt je Link (`publicTokenAction`).',
     guard: { kind: 'public' },
-    extraErrors: [404],
-    rateLimit: 'apiWrite',
+    extraErrors: [404, 422],
+    rateLimit: 'publicTokenAction',
     params: q.publicTokenParams,
     body: operations.respondQuoteSchema,
   },
@@ -675,6 +679,20 @@ export const ROUTES: RouteDoc[] = [
     guard: { kind: 'permissions', permissions: ['signature:read'], mode: 'all' },
     rateLimit: 'apiRead',
     params: q.idParam,
+  },
+  {
+    method: 'get',
+    path: '/api/signatures/{id}/artifacts/{artifact}',
+    tag: 'Unterzeichnung',
+    summary: 'Artefakt für die Verwaltung',
+    description:
+      '`original` (A), `signed` (B) oder `evidence` (C) mit Sitzung und `signature:read`; bei Vorgängen zu ' +
+      'Offerten zusätzlich `quote:read`. Der Abruf steht im Prüfprotokoll. Nie zwischengespeichert.',
+    guard: { kind: 'permissions', permissions: ['signature:read'], mode: 'all' },
+    rateLimit: 'fileDownload',
+    params: sig.signatureArtifactParams,
+    produces: 'application/pdf',
+    extraErrors: [404],
   },
   {
     method: 'post',
@@ -1085,9 +1103,11 @@ export const ROUTES: RouteDoc[] = [
     summary: 'Offerte im Kundenkonto annehmen oder ablehnen',
     description:
       'Der angemeldete Weg neben dem öffentlichen Link. Wer eine Sitzung hat und die Offerte ' +
-      'besitzt, braucht keine Capability. Die Eigentümerprüfung steht in der where-Klausel, die ' +
-      'Geschäftsoperation ist dieselbe atomare Transition wie beim öffentlichen Weg — eine ' +
-      'gleichzeitige Annahme über den Link und Ablehnung hier ergeben genau einen Übergang.',
+      'besitzt, braucht keine Capability; die Eigentümerprüfung steht in der where-Klausel. ' +
+      '`REJECT` ist die direkte, atomare Ablehnung. `ACCEPT` startet denselben Unterzeichnungsvorgang ' +
+      'wie der öffentliche Weg, setzt direkt das teilnehmergebundene Signatur-Cookie und antwortet mit ' +
+      '`signatureUrl` (`/signieren/s/<publicId>`, kein Token). Ablehnung und Abschluss der Unterzeichnung ' +
+      'sind gegeneinander race-safe: genau eine terminale Entscheidung.',
     guard: perm('all', 'quote:respond_own'),
     rateLimit: 'apiWrite',
     params: q.idParam,

@@ -3,6 +3,7 @@ import { prisma } from '@/lib/db';
 import { ForbiddenError, NotFoundError } from '@/lib/errors';
 import { renderQuotePdf } from '@/lib/pdf/render';
 import { getOrganizationId } from '@/server/services/organization.service';
+import { getSignedQuoteArtifact } from '@/server/services/quote.service';
 
 export const runtime = 'nodejs';
 export const maxDuration = 60;
@@ -26,7 +27,10 @@ export const GET = defineRoute({
       throw new ForbiddenError('Diese Offerte gehört nicht zu Ihrem Konto.');
     }
 
-    const { buffer, filename } = await renderQuotePdf(quote.id);
+    // Nach einer Annahme über den Signaturkern das signierte Artefakt (B),
+    // nie eine Neuberechnung — siehe die öffentliche PDF-Route.
+    const signiert = await getSignedQuoteArtifact(quote.id);
+    const { buffer, filename } = signiert ? { buffer: signiert.bytes, filename: signiert.filename } : await renderQuotePdf(quote.id);
 
     return new Response(new Uint8Array(buffer), {
       headers: {

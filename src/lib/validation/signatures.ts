@@ -104,3 +104,9 @@ export const signatureCancelSchema = z.object({
 });
 
 export const signatureIdParams = z.object({ id: cuidSchema });
+
+/** Verwaltung: welches Artefakt eines Vorgangs. */
+export const signatureArtifactParams = z.object({
+  id: cuidSchema,
+  artifact: z.enum(['original', 'signed', 'evidence']),
+});

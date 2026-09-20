@@ -1099,6 +1099,18 @@ export interface EvidenceEvent {
   at: Date;
   type: string;
   participant: string | null;
+  /** Kurze sachliche Ergänzung aus den Details, z. B. der Zugangsweg. */
+  note?: string | null;
+}
+
+/** Woher die handelnde Person kam — ohne Anspruch auf mehr Identitätssicherheit. */
+const ACTOR_SOURCE_TEXT: Record<string, string> = {
+  PUBLIC_LINK: 'über den zugestellten Link',
+  AUTHENTICATED_CUSTOMER: 'aus dem angemeldeten Kundenkonto (Sitzung, keine zusätzliche Identitätsprüfung)',
+};
+
+export function actorSourceText(source: string | null | undefined): string | null {
+  return source ? (ACTOR_SOURCE_TEXT[source] ?? source) : null;
 }
 
 export interface EvidencePdfProps {
@@ -1269,6 +1281,7 @@ export function EvidenceDocument(props: EvidencePdfProps) {
             <Text key={i} style={ev.meta}>
               {zuerich(e.at)} — {EVENT_TEXT[e.type] ?? e.type}
               {e.participant ? ` (${e.participant})` : ''}
+              {e.note ? ` — ${e.note}` : ''}
             </Text>
           ))}
         </View>

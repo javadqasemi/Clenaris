@@ -78,14 +78,17 @@ export function resolveClientIp(request: Request): ResolvedClientIp {
       return ip ? { ip, source: 'CLOUDFLARE' } : { ip: null, source: 'UNAVAILABLE' };
     }
     case 'SINGLE_REVERSE_PROXY': {
-      // `X-Real-IP` ist der Kopf, den Nginx aus `$remote_addr` setzt. Als
-      // Rückfall der *erste* Eintrag von `X-Forwarded-For` — nur weil derselbe
-      // Proxy ihn ebenfalls überschreibt (Dokumentation). Ohne diese Zusage
-      // wäre er anhängbar.
+      /**
+       * Ausschliesslich `X-Real-IP` — der Kopf, den Nginx aus `$remote_addr`
+       * setzt. Bis Gate 4C stand hier ein Rückfall auf den ersten Eintrag von
+       * `X-Forwarded-For`; er ist weg. Die Deployment-Invariante verlangt,
+       * dass der Proxy `X-Real-IP` selbst setzt. Fehlt der Kopf, ist der
+       * Proxy falsch konfiguriert oder die Anfrage kam an ihm vorbei — in
+       * beiden Fällen ist „nicht verfügbar" die richtige Antwort, nicht ein
+       * zweiter Kopf, dem man nun ersatzweise glaubt. Fail-closed.
+       */
       const real = bereinigt(h.get('x-real-ip'));
-      if (real) return { ip: real, source: 'NGINX_X_REAL_IP' };
-      const xff = bereinigt(h.get('x-forwarded-for')?.split(',')[0] ?? null);
-      return xff ? { ip: xff, source: 'NGINX_X_REAL_IP' } : { ip: null, source: 'UNAVAILABLE' };
+      return real ? { ip: real, source: 'NGINX_X_REAL_IP' } : { ip: null, source: 'UNAVAILABLE' };
     }
     case 'NONE':
     default:

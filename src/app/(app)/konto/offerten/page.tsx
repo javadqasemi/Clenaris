@@ -39,7 +39,7 @@ export default async function AccountQuotesPage() {
         title="Offerten"
         description={
           open.length > 0
-            ? `${open.length} ${open.length === 1 ? 'Offerte wartet' : 'Offerten warten'} auf Ihre Antwort. Sie können online annehmen — mit digitaler Unterschrift.`
+            ? `${open.length} ${open.length === 1 ? 'Offerte wartet' : 'Offerten warten'} auf Ihre Antwort. Sie können online annehmen — mit elektronischer Unterzeichnung.`
             : 'Alle Ihre Angebote auf einen Blick.'
         }
       />

@@ -66,7 +66,7 @@ export default async function NewQuotePage({
 
       <PageHeader
         title="Neue Offerte"
-        description="Positionen erfassen, Preis prüfen, versenden. Die Kundschaft kann online annehmen — mit rechtsgültiger digitaler Unterschrift."
+        description="Positionen erfassen, Preis prüfen, versenden. Die Kundschaft kann online annehmen — elektronisch unterzeichnet, mit Signaturprotokoll."
       />
 
       <QuoteEditor

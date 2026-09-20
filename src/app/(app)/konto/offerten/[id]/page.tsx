@@ -4,7 +4,7 @@ import { notFound } from 'next/navigation';
 import { toNumber } from '@/lib/db';
 import { NotFoundError } from '@/lib/errors';
 import { requirePermission } from '@/lib/auth/session';
-import { getQuoteForCustomer } from '@/server/services/quote.service';
+import { getQuoteAcceptanceState, getQuoteForCustomer } from '@/server/services/quote.service';
 import { getOrganizationId } from '@/server/services/organization.service';
 import { QuoteView } from '@/features/shared/quote-view';
 import { QuoteResponse } from '@/features/public/quote-response';
@@ -31,9 +31,11 @@ export const dynamic = 'force-dynamic';
  * `getQuoteForCustomer`: Eine fremde Offerte wird nicht gefunden, statt
  * gefunden und verweigert zu werden. Das deckt auch die Organisation ab.
  *
- * Darstellung und Antwortmaske teilt sie sich mit der öffentlichen Seite;
- * die Antwort geht aber an die angemeldete Route, und die Geschäftsoperation
- * dahinter ist dieselbe atomare Transition (`respondToQuoteCore`).
+ * Darstellung und Antwortmaske teilt sie sich mit der öffentlichen Seite; die
+ * Antwort geht aber an die angemeldete Route. Dahinter steht seit Gate 4C
+ * derselbe Kern: Ablehnen ist eine direkte Transition (`declineQuoteCore`),
+ * Annehmen startet den Unterzeichnungsvorgang — hier ohne Link an die eigene
+ * Adresse, mit einer an den Teilnehmer gebundenen Sitzung.
  */
 export default async function KontoOffertePage({
   params,
@@ -63,6 +65,9 @@ export default async function KontoOffertePage({
   const answered = ['ACCEPTED', 'REJECTED', 'CONVERTED'].includes(quote.status);
   const canRespond = !answered && !expired;
 
+  /** Wie auf der öffentlichen Seite: schon begonnen ⇒ „fortsetzen" (§ 47). */
+  const annahme = canRespond ? await getQuoteAcceptanceState(quote) : null;
+
   return (
     <QuoteView
       quote={quote}
@@ -79,6 +84,7 @@ export default async function KontoOffertePage({
             grossTotal={toNumber(quote.grossTotal)}
             endpoint={`/api/quotes/${quote.id}/respond`}
             pdfUrl={`/api/quotes/${quote.id}/pdf`}
+            laufendeUnterzeichnung={Boolean(annahme?.active)}
           />
         ) : undefined
       }
