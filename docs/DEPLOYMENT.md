@@ -86,9 +86,11 @@ Cloud-Firewall, `delete_protection: false`, `rebuild_protection: false`.
 | 14 | Produktions-Secrets vollständig | **offen** | nur der Betreiber kann das sehen; Liste in 14.1. **`DIRECT_URL` ist erforderlich** — siehe dort |
 | 15 | Migrations-Vorprüfung gegen Produktionsdaten | läuft automatisch | `scripts/migration-preflight.ts`, fail-closed |
 | 16 | Unmittelbare Datenbanksicherung | läuft automatisch | `scripts/db-backup.ts`, fail-closed |
-| 17 | **Ursprung `2.29.18.45:443` nur für Cloudflare-Netze erreichbar** | **offen — Release-Blocker** | von aussen belegt: der Ursprung antwortet direkt mit 200. Solange das gilt, ist kein `TRUSTED_PROXY_MODE` ausser `NONE` vertretbar — Begründung in 13.5.1 |
-| 18 | `TRUSTED_PROXY_MODE` auf dem Server bewusst gesetzt | **unbelegt** | die Variable wird **nicht** vom Workflow übertragen und steht in keiner Secret-Liste; sie lebt allein in der `.env` des Servers. Fehlt sie, gilt `NONE`, und alle Aufrufer teilen sich einen Rate-Limit-Schlüssel |
-| 19 | `clientIpFrom` in `session.ts` auf den geprüften Auflöser umstellen | **offen** | `src/lib/auth/session.ts:426` liest noch ungeprüft `cf-connecting-ip → x-real-ip → x-forwarded-for`. Betrifft `session.ip` und `lastLoginIp`, **nicht** das Signaturprotokoll (das nutzt `getClientIp`) |
+| 17 | **Ursprung `2.29.18.45:443` nur für Cloudflare-Netze erreichbar** | **offen — Release-Blocker** | von aussen belegt: der Ursprung antwortet direkt mit 200. Solange das gilt, ist kein `TRUSTED_PROXY_MODE` ausser `NONE` vertretbar. Plan in 13.5.2 |
+| 18 | `TRUSTED_PROXY_MODE` über die Auslieferung verwaltbar | **erledigt** | seit Gate 4D.2 als Repository-Variable (14.2). Ein unbekannter Wert bricht ab, statt lautlos auf `NONE` zu fallen; eine *nicht gesetzte* Variable lässt die `.env` des Servers bewusst unangetastet |
+| 19 | Client-Adresse aus **einer** Richtlinie | **erledigt** | `session.ts` und `auth.service.ts` gehen über `clientIpFromHeaders`; `tests/api/auslieferung-absicherung.test.ts` hält fest, dass keine zweite Auswertung zurückkommt |
+| 20 | `SERVER_USER` fail-closed im Workflow | **erledigt** | Prüfung vor dem ersten SSH, kein Rückfall auf `root` |
+| 21 | `DIRECT_URL` fail-closed im Workflow | **erledigt** | bricht ab, bevor Prisma auf dem Server mit P1012 scheitert |
 
 **Die beiden Firewalls gehören auseinandergehalten.** Punkt 6 und die Punkte 7
 bis 9 messen nicht dasselbe:
@@ -830,6 +832,94 @@ Vertrauensannahme, die `client-ip.ts` vermeiden soll.
 Bis dahin bleibt `NONE` richtig. Es ist die einzige Einstellung, die keine
 Aussage behauptet, die die Topologie nicht hergibt.
 
+**13.5.2 Der Weg dorthin — Firewall-Plan, noch nicht angewendet.**
+
+Reihenfolge ist hier alles. Wer den Modus zuerst umstellt und die Firewall
+danach baut, hat in der Zwischenzeit genau die Lücke offen, die er schliessen
+wollte.
+
+**Schritt 1 — Cloudflare-Netze frisch holen.** Die Listen ändern sich. Keine
+Liste aus diesem Dokument und keine aus einem älteren Skript übernehmen,
+sondern zum Zeitpunkt der Änderung direkt von der offiziellen Quelle:
+
+```bash
+curl -fsS https://www.cloudflare.com/ips-v4 -o /tmp/cf-v4.txt
+curl -fsS https://www.cloudflare.com/ips-v6 -o /tmp/cf-v6.txt
+wc -l /tmp/cf-v4.txt /tmp/cf-v6.txt   # Plausibilität: grössenordnungsmässig 15 und 7
+```
+
+Das ist der Wartungspunkt des ganzen Aufbaus. Eine eingefrorene Liste sperrt
+irgendwann echte Besucherinnen aus, und der Fehler sieht aus wie ein Ausfall
+von Cloudflare. Wer die Liste pflegt und wie oft, gehört in den Betriebsplan —
+ein Cron-Eintrag, der die Datei zieht und bei Änderung meldet, ist das
+Minimum.
+
+**Schritt 2 — Hetzner Cloud Firewall, neu anlegen.** Die bestehende
+`Zentra-Firewall` (id 2454352) wird **nicht** verwendet und **nicht**
+angehängt: Sie öffnet 22, 5432 und 4444 gegen `0.0.0.0/0`. Eine neue Regelmenge
+für Server `164144336`:
+
+| Richtung | Protokoll | Port | Quellen | Begründung |
+|---|---|---|---|---|
+| eingehend | TCP | **443** | die aktuellen Cloudflare-IPv4- und -IPv6-Netze | der eigentliche Zweck — der Ursprung antwortet nur noch hinter Cloudflare |
+| eingehend | TCP | **80** | dieselben Netze | Cloudflare spricht den Ursprung teils auf 80 an; die 301 nach HTTPS bleibt erhalten |
+| eingehend | TCP | **22** | **eigene Verwaltungsadressen, nicht Cloudflare** | Cloudflare leitet kein SSH weiter. Käme 22 in die Cloudflare-Regel, wäre der Server ausgesperrt |
+| eingehend | 3000, 5432, 5433, 6379, 4444 | — | **keine Regel** | nicht freigeben. Die Hetzner Cloud Firewall verwirft alles, wofür keine Regel besteht |
+| ausgehend | — | — | **unbeschränkt** | die Anwendung holt Let's-Encrypt-Erneuerungen, Paketquellen, Stripe, Resend und Twilio |
+
+Die Hetzner Cloud Firewall ist **stateful**: Antwortpakete zu erlaubten
+eingehenden Verbindungen brauchen keine eigene ausgehende Regel, und
+ausgehende Verbindungen brauchen keine eingehende. Wer hier trotzdem
+Rückrichtungen mitpflegt, baut sich Regeln, die nichts tun und beim nächsten
+Lesen Verwirrung stiften.
+
+**Zu Port 22 die Warnung, die dieser Aufbau verdient.** Der Zugang zum Server
+hängt danach an einer Regel, die man selbst schreibt. Vor dem Anhängen der
+Firewall die eigene Adresse prüfen, eine zweite Verwaltungsadresse eintragen,
+wenn eine existiert, und die Hetzner-Konsole als Rückweg im Kopf behalten —
+sie funktioniert unabhängig von der Firewall.
+
+**Schritt 3 — Nginx die echte Adresse beibringen.** Erst *nachdem* die
+Firewall hängt und geprüft ist:
+
+```nginx
+# Die Netze aus Schritt 1, eine Zeile je Präfix. Ausgelagert, damit ein
+# Aktualisierungslauf die Datei ersetzen kann, ohne den Server-Block anzufassen.
+include /etc/nginx/cloudflare-real-ip.conf;   # set_real_ip_from <präfix>; …
+real_ip_header CF-Connecting-IP;
+real_ip_recursive off;
+
+proxy_set_header X-Real-IP       $remote_addr;
+proxy_set_header X-Forwarded-For $remote_addr;
+proxy_set_header X-Forwarded-Proto $scheme;
+```
+
+Nach `real_ip_header` ist `$remote_addr` **die Adresse der Besucherin**, nicht
+mehr die des Cloudflare-Knotens — das ist der ganze Punkt, und deshalb dürfen
+die `proxy_set_header`-Zeilen unverändert `$remote_addr` verwenden. Weiterhin
+gilt: **setzen, nicht anhängen.** `$proxy_add_x_forwarded_for` hängt den
+serverseitigen Wert an einen vom Client gelieferten an, und die Anwendung liest
+den ersten Eintrag — also den des Angreifers.
+
+**Schritt 4 — Modus umstellen.** Repository-Variable
+`TRUSTED_PROXY_MODE=CLOUDFLARE` setzen (14.2) und ausliefern.
+
+**Schritt 5 — nachmessen, nicht annehmen.** Der direkte Zugriff muss danach
+ins Leere laufen:
+
+```bash
+curl -sS --max-time 10 --resolve clenaris.qasemi.ch:443:2.29.18.45 \
+     https://clenaris.qasemi.ch/api/health
+# erwartet: Zeitüberschreitung oder abgewiesene Verbindung, keine 200
+```
+
+Erst wenn dieser Aufruf **nicht** antwortet, ist `DIRECT ORIGIN HTTP/HTTPS
+ACCESS: BLOCKED` eine belegte Aussage. Und erst dann stimmt, was der Modus
+`CLOUDFLARE` über die Topologie behauptet.
+
+Die Zielkette lautet dann: Internet → Cloudflare → Hetzner Cloud Firewall →
+Nginx → Next.js auf Loopback.
+
 **Invariante für den Reverse Proxy (13.5).** Der Proxy setzt beide Köpfe aus
 der Socket-Adresse und reicht nichts vom Client durch — `X-Forwarded-For`
 wird **gesetzt**, nicht mit `$proxy_add_x_forwarded_for` verlängert (das
@@ -930,6 +1020,26 @@ stehen.
 - `API_URL` — die Anwendung kennt keine getrennte Schnittstellenadresse, weil
   Oberfläche und Schnittstelle unter derselben Adresse laufen. Das Secret
   existiert trotzdem und wird auf `NEXT_PUBLIC_APP_URL` abgebildet.
+
+**14.2 Repository-Variablen — Konfiguration, keine Geheimnisse.**
+
+*Settings → Secrets and variables → Actions → **Variables***. Der Unterschied
+ist nicht kosmetisch: Ein Secret wird in Protokollen maskiert und lässt sich
+nicht wieder anzeigen, eine Variable schon. Für einen Wert, der ohnehin
+öffentlich sein darf, ist die Maskierung kein Gewinn, sondern verhindert nur,
+dass man im Protokoll sieht, was gesetzt war.
+
+| Variable | Pflicht | Bedeutung |
+| --- | --- | --- |
+| `TRUSTED_PROXY_MODE` | nein, aber empfohlen | `NONE` \| `SINGLE_REVERSE_PROXY` \| `CLOUDFLARE` — welcher Kopfzeile die Anwendung die Client-Adresse glaubt (13.5.1). **Ist sie nicht gesetzt, überträgt die Auslieferung nichts und die `.env` des Servers behält ihren bisherigen Wert.** Das ist Absicht: Eine Auslieferung soll die Vertrauensannahme nicht heimlich umstellen. Ein *unbekannter* Wert bricht die Auslieferung dagegen ab, statt stillschweigend auf `NONE` zu fallen |
+
+**Warum die Prüfung auf den unbekannten Wert wichtiger ist als die Variable
+selbst.** `src/lib/http/client-ip.ts` fällt bei jedem nicht erkannten Wert auf
+`NONE` zurück. Im Anfragepfad ist das genau richtig — lieber keine Adresse als
+eine erfundene. Als Auslieferungsverhalten wäre es eine Falle: Aus `CLOUDFARE`
+würde lautlos „kein Proxy bekannt", alle Aufrufer teilten sich ab sofort einen
+Rate-Limit-Schlüssel, und niemand erführe davon. Der Workflow lässt deshalb nur
+die drei Namen durch.
 
 **Nur diese Werte verwaltet GitHub.** Stripe, Resend, Twilio, Supabase, Maps
 und die Firmenangaben bleiben in der `.env` auf dem Server. `deploy.sh` führt
