@@ -279,10 +279,31 @@ jobs:
           KNOWN_HOSTS: ${{ secrets.SERVER_SSH_KNOWN_HOSTS }}
           HOST: ${{ secrets.SERVER_HOST }}
           PORT: ${{ secrets.SERVER_PORT }}
+          USER_NAME: ${{ secrets.SERVER_USER }}
         run: |
           set -euo pipefail
           test -n "$SSH_KEY"  || { echo "::error::Secret SERVER_SSH_KEY fehlt."; exit 1; }
           test -n "$HOST"     || { echo "::error::Secret SERVER_HOST fehlt."; exit 1; }
+
+          # `SERVER_USER` gehört hierher, obwohl er erst zwei Schritte später
+          # gebraucht wird.
+          #
+          # Fehlt er, ist er nicht etwa „leer" — GitHub setzt die Variable auf
+          # den leeren String, `set -u` schlägt also nicht an, und die
+          # Verbindung geht als `@host` hinaus. Was dann zurückkommt, ist eine
+          # Meldung über die Gegenstelle: Der Server lehnt einen leeren
+          # Benutzernamen ab, und im Protokoll steht etwas über
+          # Authentifizierung. Man sucht dann am Server, am Schlüssel, an der
+          # Firewall — an allem ausser der einen fehlenden Zeile in den
+          # Einstellungen.
+          #
+          # Ebenso wenig wird hier auf `root` zurückgefallen. Ein stiller
+          # Rückfall auf den mächtigsten Benutzer ist die falsche Antwort auf
+          # eine fehlende Angabe.
+          test -n "${USER_NAME:-}" || {
+            echo "::error::Secret SERVER_USER fehlt. Ohne Dienstbenutzer wird nicht ausgeliefert — es gibt keine Vorgabe und insbesondere keinen Rückfall auf root."
+            exit 1
+          }
           mkdir -p ~/.ssh && chmod 700 ~/.ssh
           printf '%s\n' "$SSH_KEY" > ~/.ssh/id_deploy
           chmod 600 ~/.ssh/id_deploy
@@ -335,11 +356,51 @@ jobs:
           API_URL: ${{ secrets.API_URL }}
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
           ENCRYPTION_KEY: ${{ secrets.ENCRYPTION_KEY }}
+          TRUSTED_PROXY_MODE: ${{ vars.TRUSTED_PROXY_MODE }}
         run: |
           set -euo pipefail
           test -n "$APP_DIRECTORY" || { echo "::error::Secret APP_DIRECTORY fehlt."; exit 1; }
           test -n "$DATABASE_URL"  || { echo "::error::Secret DATABASE_URL fehlt."; exit 1; }
           test -n "$JWT_SECRET"    || { echo "::error::Secret JWT_SECRET fehlt."; exit 1; }
+
+          # `DIRECT_URL` ist keine Empfehlung, sondern Voraussetzung.
+          # `prisma/schema.prisma` deklariert `directUrl = env("DIRECT_URL")`;
+          # fehlt die Variable, bricht Prisma mit P1012 ab — und ein leerer
+          # Wert zählt dabei als fehlend. Der Abbruch käme sonst erst auf dem
+          # Server, beim `prisma generate` mitten in der Auslieferung.
+          test -n "${DIRECT_URL:-}" || {
+            echo "::error::Secret DIRECT_URL fehlt. schema.prisma verlangt directUrl; ohne die Variable scheitern generate, Bau und migrate deploy mit P1012."
+            exit 1
+          }
+
+          # `TRUSTED_PROXY_MODE` ist Konfiguration, kein Geheimnis — deshalb
+          # `vars` statt `secrets`. Er entscheidet, welcher Kopfzeile die
+          # Anwendung die Client-Adresse glaubt (13.5.1).
+          #
+          # Geprüft wird hier, weil ein Tippfehler sonst *lautlos* wirkt:
+          # `src/lib/http/client-ip.ts` fällt bei jedem unbekannten Wert auf
+          # `NONE` zurück. Das ist im Anfragepfad die richtige Entscheidung —
+          # aber als Auslieferungsverhalten wäre es eine Falle. Aus
+          # `CLOUDFARE` würde stillschweigend „kein Proxy bekannt", die
+          # Rate-Limits liefen ab sofort über einen gemeinsamen Schlüssel, und
+          # niemand erführe davon.
+          #
+          # Ist die Variable nicht gesetzt, wird sie **nicht** übertragen und
+          # die `.env` des Servers behält ihren bisherigen Wert. Das ist
+          # Absicht: Diese Auslieferung soll die Produktion nicht heimlich
+          # umstellen.
+          if [ -n "${TRUSTED_PROXY_MODE:-}" ]; then
+            case "$TRUSTED_PROXY_MODE" in
+              NONE|SINGLE_REVERSE_PROXY|CLOUDFLARE) ;;
+              *)
+                echo "::error::TRUSTED_PROXY_MODE hat den unbekannten Wert '${TRUSTED_PROXY_MODE}'. Erlaubt sind NONE, SINGLE_REVERSE_PROXY, CLOUDFLARE."
+                exit 1
+                ;;
+            esac
+            echo "TRUSTED_PROXY_MODE=${TRUSTED_PROXY_MODE} wird übertragen."
+          else
+            echo "::notice::TRUSTED_PROXY_MODE ist nicht gesetzt — die .env des Servers behält ihren Wert. Ist dort ebenfalls nichts gesetzt, läuft die Anwendung im Modus NONE."
+          fi
 
           # `ENCRYPTION_KEY` ist nicht zwingend — ohne ihn leitet die Anwendung
           # den Schlüssel aus `JWT_SECRET` ab und läuft. Eine Warnung ist er
@@ -378,6 +439,7 @@ jobs:
             [ -n "${API_URL:-}" ]    && echo "NEXT_PUBLIC_APP_URL=${API_URL}"
             [ -n "${CRON_SECRET:-}" ] && echo "CRON_SECRET=${CRON_SECRET}"
             [ -n "${ENCRYPTION_KEY:-}" ] && echo "ENCRYPTION_KEY=${ENCRYPTION_KEY}"
+            [ -n "${TRUSTED_PROXY_MODE:-}" ] && echo "TRUSTED_PROXY_MODE=${TRUSTED_PROXY_MODE}"
             echo "NODE_ENV=production"
           } | ssh -i ~/.ssh/id_deploy -p "${PORT:-22}" \
                   -o BatchMode=yes -o ConnectTimeout=20 \
