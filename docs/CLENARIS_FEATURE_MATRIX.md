@@ -24,22 +24,22 @@ Spalten `FE` (Frontend), `BE` (Backend), `DB`, `RBAC`, `SEC` (eigener Sicherheit
 
 ## Gesamtverteilung
 
-*Stand nach Wave 7 (2026-09-21). Änderungen gegenüber der Erstfassung sind unten begründet; die Anteile sind gerundet.*
+*Stand nach Wave 8 (2026-09-21). Änderungen gegenüber der Erstfassung sind unten begründet; die Anteile sind gerundet.*
 
 | Status | Anzahl | Anteil |
 |---|---|---|
-| COMPLETE + VERIFIED | **93** | 51 % |
-| COMPLETE | **57** | 31 % |
+| COMPLETE + VERIFIED | **94** | 51 % |
+| COMPLETE | **58** | 31 % |
 | COMPLETE / EXTERNAL VERIFICATION REQUIRED | **6** | 3 % |
 | PARTIAL | **19** | 10 % |
 | BACKEND ONLY | **0** | 0 % |
 | FRONTEND ONLY | **1** | 1 % |
 | SCHEMA ONLY | **3** | 2 % |
 | NOT IMPLEMENTED | **5** | 3 % |
-| **Summe** | **184** | |
+| **Summe** | **185** | |
 
-**Technisch nutzbar (C+V oder C): 150 von 184 = 82 %.**
-**Durch Tests belegt: 93 von 184 = 51 %.**
+**Technisch nutzbar (C+V oder C): 152 von 185 = 82 %.**
+**Durch Tests belegt: 94 von 185 = 51 %.**
 
 > **BACKEND ONLY ist leer.** Das war die kleinste der Kategorien und die
 > ärgerlichste: Logik, die es gibt und die niemand bedienen kann. Beide
@@ -102,6 +102,13 @@ Spalten `FE` (Frontend), `BE` (Backend), `DB`, `RBAC`, `SEC` (eigener Sicherheit
 | **EMP-008, EMP-009: BO → C+V** | Beide Listen wurden gelesen und liessen sich nicht ändern. Die Arbeitszeit entstand beim Anlegen als Mo–Fr 07:00–17:00 und blieb das für immer — für einen Betrieb mit Teilzeit und Schichten keine Vorgabe, sondern eine Behauptung, auf der die Eignungswarnung beruhte. **BACKEND ONLY ist damit leer.** |
 | **JOB-010: P → C** | Die Eignungsprüfung wertete die Arbeitszeit aus; was fehlte, war die Pflegemaske. Sie gibt es. |
 | **JOB-011 bleibt PARTIAL** | Die Qualifikationen sind jetzt pflegbar, fliessen aber weiterhin **nur in den Personalvorschlag** ein und nicht in die Eignungsprüfung. Eine echte Prüfregel wäre eine fachliche Entscheidung („darf jemand ohne Staplerschein diesen Einsatz übernehmen — Warnung oder Sperre?") und gehört nicht als Nebenwirkung einer Pflegemaske hinein. |
+
+### Änderungen in Wave 8
+
+| Änderung | Begründung |
+|---|---|
+| **EMP-010 geteilt und geprüft** | Die Zeile stand auf **C** mit dem Vermerk „**Prüfungen**" — und in der Risikoliste auf Platz 9 mit „Grundlage der Lohnabrechnung". Beides zusammen war der Anlass. Das Stempeln (EMP-010) ist jetzt belegt; was darüber hinausging, war gar nicht vorhanden und steht als eigene Zeile. |
+| **EMP-015 neu: C** | Ansehen, korrigieren, freigeben. `TimeEntry.approved`, `approvedById` und `manual` standen im Schema und wurden von keinem Codepfad je geschrieben; `timetracking:approve` war an Rollen vergeben und wurde von **nichts** geprüft. Nicht **C+V**, obwohl 22 Prüfungen dahinterstehen: Es fehlt die Ansicht in der Verwaltung, und ohne sie ist der Vorgang für den Betrieb nicht abgeschlossen — die Schnittstelle allein bedient niemand. |
 
 ---
 
@@ -275,7 +282,8 @@ Spalten `FE` (Frontend), `BE` (Backend), `DB`, `RBAC`, `SEC` (eigener Sicherheit
 | EMP-007 | Stilllegen / Personalnummer eindeutig | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | – | **C** | `employees.test.ts` | – |
 | EMP-008 | Fähigkeiten (`EmployeeSkill`) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | – | **C+V** | `PUT /api/employees/{id}/skills`, `EmployeeSkillsDialog`, `personalstammdaten.test.ts` | – |
 | EMP-009 | Arbeitszeiten (`Availability`) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | – | **C+V** | `PUT /api/employees/{id}/availability`, freie Fensterliste (geteilter Dienst), Überschneidungsprüfung | – |
-| EMP-010 | Zeiterfassung | ✓ | ✓ | ✓ | ✓ | ✓ | – | – | **C** | `/api/time`, `/portal/zeiterfassung` | **Prüfungen** |
+| EMP-010 | Zeiterfassung — stempeln | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | – | **C+V** | `/api/time/clock-in`, `clock-out`, `/portal/zeiterfassung`, `zeiterfassung.test.ts` | – |
+| EMP-015 | Zeiterfassung — ansehen, korrigieren, freigeben | – | ✓ | ✓ | ✓ | ✓ | ✓ | – | **C** | `timetracking.service.ts`, fünf Endpunkte, 22 Prüfungen | Eine Ansicht in der Verwaltung — heute nur über die Schnittstelle |
 | EMP-011 | Abwesenheiten (Antrag, Bewilligung, Rückzug) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | – | **C+V** | `crud-audit.test.ts`, `dispatch.test.ts` | – |
 | EMP-012 | Stellen und Bewerbungen | ✓ | ✓ | ✓ | ✓ | ✓ | ○ | – | **P** | `/karriere`, `/admin/personal/bewerbungen` | Prüfungen, Bewerberweg |
 | EMP-013 | **Lohnabrechnung** | – | – | – | ✓ | – | – | – | **NI** | nur `payslip:create`/`payslip:read_own` | Modell, Dienst, Route, PDF, AHV/ALV/BVG/UVG |

@@ -820,4 +820,75 @@ einschränkt, wirft keine bereits geplanten Einsätze um.
 
 ---
 
+## 17. Wave 8 — Zeiterfassung (Stand 2026-09-21)
+
+Risikoliste Platz 9: „Zeiterfassung prüfen — C, ungeprüft — **Grundlage der
+Lohnabrechnung**". Die Prüfung ergab, dass mehr fehlte als Prüfungen.
+
+### Der Befund
+
+Es gab zwei Endpunkte: einstempeln und ausstempeln.
+
+`TimeEntry.approved`, `approvedById` und `manual` standen im Schema und wurden
+von **keinem Codepfad je geschrieben**. `timetracking:approve` war an Rollen
+vergeben und wurde von **nichts** geprüft. `timetracking:read_all` nur vom
+Buchhaltungsexport — es gab keinen Weg, die Zeiten *anzusehen*, ohne sie zu
+exportieren.
+
+Im Betrieb: Wer das Ausstempeln vergisst, hat einen offenen Eintrag, den
+niemand schliessen kann. Wer sich vertippt, hat eine falsche Zeit, die niemand
+korrigieren kann. Und niemand kann eine Zeit freigeben, bevor sie in die
+Lohnabrechnung geht.
+
+Damit war es dasselbe Muster wie bei den Automatisierungen in Wave 6: nicht
+eine fehlende Funktion, sondern Felder und Berechtigungen, die eine Zusage
+machen, die das System nicht einlöst.
+
+### Die vier Regeln
+
+| Regel | Was sie verhindert |
+|---|---|
+| **Die Dauer rechnet der Server** | `minutes` kommt in keinem Schema vor. Ein Feld, in das der Client eine Minutenzahl schreiben könnte, wäre ein Feld, in das jemand eine Lohnsumme schreiben kann — dieselbe Regel wie bei den Preisen |
+| **Eine freigegebene Zeit ist eingefroren** | Ohne diese Schwelle wäre „freigegeben" eine Anzeige und keine Aussage. Korrigieren verlangt ein ausdrückliches Aufheben, und das steht im Protokoll |
+| **Keine Überschneidungen je Person** | Zwei gleichzeitige Erfassungen ergäben doppelten Lohn für dieselbe Stunde |
+| **Die Lohnkosten wandern mit** | `clockOut` schreibt `job.laborCost` fort. Eine Korrektur, die das nicht nachzieht, lässt die Nachkalkulation auseinanderlaufen — still, weil niemand die beiden Zahlen nebeneinander sieht |
+
+Dazu eine Obergrenze von 24 Stunden je Erfassung. Nicht, weil jemand 25
+Stunden arbeiten könnte, sondern wegen des vergessenen Ausstempelns: Ein
+Eintrag von Freitagmorgen bis Montagmittag ergibt 4400 Minuten, und die gehen
+unbemerkt in die Lohnkosten.
+
+### Zwei Entwurfsentscheidungen
+
+**Freigeben als Stapel, Zurücknehmen einzeln.** Die Asymmetrie ist Absicht: Der
+häufige Weg (Monatsende, Liste durchgehen) ist bequem, der seltene ist einzeln
+und lässt sich nicht versehentlich auf einen ganzen Monat anwenden. Eine
+*laufende* Erfassung wird beim Stapel übersprungen und nicht abgewiesen — wer
+dreissig Zeilen markiert und eine laufende dabei hat, soll die neunundzwanzig
+freigeben können.
+
+**Die Summe über alle Treffer, nicht über die Seite.** Eine Seitensumme wäre
+die häufigste Fehlerquelle einer solchen Ansicht: Sie sieht aus wie die
+Monatssumme und ist es nicht, und niemand merkt es, solange der Monat auf eine
+Seite passt. (Dieselbe Falle wie bei den Sicherheitsereignissen in Wave 6, dort
+in meinen eigenen Prüfungen.)
+
+### Warum EMP-015 auf `C` steht und nicht auf `C+V`
+
+22 Prüfungen stehen dahinter, und trotzdem: Es fehlt die **Ansicht in der
+Verwaltung**. Ohne sie ist der Vorgang für den Betrieb nicht abgeschlossen —
+eine Schnittstelle bedient niemand. Die Regel aus Abschnitt 9 („kein Merkmal
+wird COMPLETE genannt, weil Code existiert") gilt in beide Richtungen.
+
+### Verifikation nach Wave 8
+
+| Prüfung | Ergebnis |
+|---|---|
+| `npm run typecheck`, `npm run lint`, `npm run build` | ✅ |
+| `npm run docs` | ✅ **414 Endpunkte** (von 408) |
+| `npm test` | ✅ **1056 Prüfungen, 1053 bestanden, 0 Fehlschläge**, 3 übersprungen |
+| `npm run e2e` | ✅ **20 / 20** |
+
+---
+
 *Diese Datei wird nach jeder Wave fortgeschrieben.*
