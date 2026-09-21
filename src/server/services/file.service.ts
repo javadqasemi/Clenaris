@@ -653,6 +653,67 @@ export async function scanFileAsset(fileAssetId: string): Promise<ScanErgebnis> 
 }
 
 /**
+ * Der wiederkehrende Nachlauf über Dateien ohne Befund.
+ *
+ * ---------------------------------------------------------------------------
+ *  Wofür
+ * ---------------------------------------------------------------------------
+ *
+ * Zwei Sorten Dateien liegen gesperrt herum und kommen nicht von selbst frei:
+ *
+ *  • **Altbestand** aus der Zeit vor der Prüfung (`LEGACY_UNSCANNED`). Die
+ *    Migration hat sie ehrlich als ungeprüft markiert — das ist richtig und
+ *    hat die Folge, dass sie nicht mehr abrufbar sind.
+ *  • **Fälle, bei denen der Prüfer beim Abschluss nicht erreichbar war**
+ *    (`ERROR`). Der Upload ist durch, die Datei liegt fest, und niemand hat
+ *    je wieder hingesehen.
+ *
+ * Bis Wave 6 gab es dafür nur `scripts/scan-backfill.ts` — einen Lauf von
+ * Hand. Der ist richtig für eine einmalige Umstellung und falsch für einen
+ * Zustand, der jeden Tag neu entsteht: Wer soll ihn täglich starten?
+ *
+ * ---------------------------------------------------------------------------
+ *  Warum begrenzt
+ * ---------------------------------------------------------------------------
+ *
+ * Ein Nachtlauf, der zehntausend Dateien durch den Prüfer schiebt, ist selbst
+ * eine Störung — er bindet den Prüfer, die Datenbank und das Zeitfenster des
+ * Schedulers. Begrenzt wird deshalb, was ein Lauf anfasst; der Rest kommt in
+ * der nächsten Nacht. `scanFileAsset` beansprucht jede Datei einzeln, also
+ * stören sich zwei Läufe auch dann nicht, wenn sie sich überschneiden.
+ */
+export async function runScanNachlauf(
+  organizationId: string,
+  limit = 200,
+): Promise<{ geprueft: number; sauber: number; befund: number; ohneErgebnis: number }> {
+  const offen = await prisma.fileAsset.findMany({
+    where: {
+      organizationId,
+      provenance: { in: ['LEGACY_UNSCANNED', 'USER_UPLOAD'] },
+      scanStatus: { in: ['PENDING', 'ERROR'] },
+      scanAttempts: { lt: SCAN_MAX_ATTEMPTS },
+    },
+    // Die ältesten zuerst: Was am längsten gesperrt liegt, wartet am längsten.
+    orderBy: { createdAt: 'asc' },
+    take: Math.min(limit, 1000),
+    select: { id: true },
+  });
+
+  const zahlen = { geprueft: 0, sauber: 0, befund: 0, ohneErgebnis: 0 };
+
+  for (const { id } of offen) {
+    const ergebnis = await scanFileAsset(id);
+    zahlen.geprueft += 1;
+    if (ergebnis.status === 'CLEAN') zahlen.sauber += 1;
+    else if (ergebnis.status === 'INFECTED' || ergebnis.status === 'QUARANTINED') {
+      zahlen.befund += 1;
+    } else if (ergebnis.status === 'ERROR') zahlen.ohneErgebnis += 1;
+  }
+
+  return zahlen;
+}
+
+/**
  * Die Auslieferungsentscheidung steht in `lib/security/malware/auslieferung.ts`
  * und wird hier nur weitergereicht.
  *
