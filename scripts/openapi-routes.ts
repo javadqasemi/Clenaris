@@ -2532,6 +2532,22 @@ export const ROUTES: RouteDoc[] = [
   },
   {
     method: 'get',
+    path: '/api/metrics',
+    tag: 'System',
+    summary: 'Kennzahlen des laufenden Prozesses',
+    description:
+      'Je Route und Methode: Anfragen, Verteilung auf Statusklassen, Dauer als Mittelwert, ' +
+      'p50, p95 und Maximum. Die Reihen laufen über **Vorlagen** (`/api/jobs/:id`) — es gibt ' +
+      'keine Zeile je Datensatz und keine Angabe darüber, wer eine Anfrage gestellt hat. ' +
+      'Die Zahlen gelten je Prozess und überleben keinen Neustart; `prozessId` und ' +
+      '`prozessStartzeit` sagen, ob zwei Antworten vergleichbar sind. Nur die ' +
+      'Systemverantwortung: offen wäre der Endpunkt eine Echtzeitauskunft darüber, ob ein ' +
+      'Angriff auffällt.',
+    guard: perm('all', 'security:read'),
+    rateLimit: 'apiRead',
+  },
+  {
+    method: 'get',
     path: '/api/security/events',
     tag: 'System',
     summary: 'Sicherheitsereignisse',

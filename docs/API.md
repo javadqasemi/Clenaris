@@ -5,7 +5,7 @@
 > Quelle, aus der sowohl diese Referenz als auch die Laufzeitvalidierung
 > stammen.
 
-Stand: 405 Endpunkte. Die maschinenlesbare Fassung liegt in
+Stand: 406 Endpunkte. Die maschinenlesbare Fassung liegt in
 [`openapi.yaml`](./openapi.yaml) bzw. [`openapi.json`](./openapi.json).
 
 ## Grundlagen
@@ -5141,6 +5141,15 @@ Familie.
 | Feld | Typ | Pflicht | Regeln |
 | --- | --- | --- | --- |
 | `role` | string | ja | `CUSTOMER` \| `EMPLOYEE` \| `MANAGER` \| `ADMIN` \| `SUPER_ADMIN` |
+
+### `GET /api/metrics`
+
+**Kennzahlen des laufenden Prozesses.** Je Route und Methode: Anfragen, Verteilung auf Statusklassen, Dauer als Mittelwert, p50, p95 und Maximum. Die Reihen laufen über **Vorlagen** (`/api/jobs/:id`) — es gibt keine Zeile je Datensatz und keine Angabe darüber, wer eine Anfrage gestellt hat. Die Zahlen gelten je Prozess und überleben keinen Neustart; `prozessId` und `prozessStartzeit` sagen, ob zwei Antworten vergleichbar sind. Nur die Systemverantwortung: offen wäre der Endpunkt eine Echtzeitauskunft darüber, ob ein Angriff auffällt.
+
+- **Zugriff:** Erfordert die Berechtigung: `security:read`.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 401, 403, 429, 500
 
 ### `GET /api/security/events`
 

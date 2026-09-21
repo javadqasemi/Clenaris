@@ -13,7 +13,127 @@ import {
   ValidationError,
 } from '@/lib/errors';
 import { enforceRateLimit, getClientIp, type RateLimitName } from '@/lib/rate-limit';
+import { logger } from '@/lib/logger';
+import {
+  mitAnfrageKontext,
+  neueRequestId,
+  routenVorlage,
+  type AnfrageKontext,
+} from '@/lib/observability/context';
+import { beobachteAnfrage } from '@/lib/observability/metrics';
 import { toErrorResponse } from './response';
+
+const beobachtung = logger('http');
+
+/**
+ * Die Beobachtungshülle um jeden Endpunkt.
+ *
+ * ---------------------------------------------------------------------------
+ *  Warum sie hier sitzt und nicht in der Middleware
+ * ---------------------------------------------------------------------------
+ *
+ * Die Middleware läuft auf Edge. Dort gibt es kein `AsyncLocalStorage`, keine
+ * Prisma-Verbindung und keinen gemeinsamen Speicher mit dem Node-Prozess, der
+ * die Anfrage tatsächlich bedient — Kennzahlen aus der Middleware wären
+ * Kennzahlen aus einem anderen Prozess. Ausserdem sieht die Middleware nicht,
+ * was der Handler am Ende antwortet.
+ *
+ * Diese Fabrik ist die Stelle, durch die **jeder** Endpunkt läuft. Das ist
+ * dieselbe Überlegung, aus der hier schon Herkunftsprüfung, Sitzung,
+ * Gerätesperre, Rechte und Rate-Limit stehen: Eine Prüfung in den einzelnen
+ * Handlern wäre eine Prüfung, die in dem einen vergessen wird, der sie
+ * gebraucht hätte.
+ *
+ * ---------------------------------------------------------------------------
+ *  Was sie tut
+ * ---------------------------------------------------------------------------
+ *
+ *  1. Kennung erzeugen und den Kontext für die Dauer der Anfrage setzen —
+ *     danach trägt jede Protokollzeile dieselbe Kennung, ohne dass sie jemand
+ *     weiterreicht.
+ *  2. Den Handler laufen lassen und die Dauer messen.
+ *  3. Die Kennung in die Antwort schreiben (`X-Request-Id`).
+ *  4. Die Anfrage in den Kennzahlen aufnehmen — unter der **Vorlage** des
+ *     Pfads, nie unter dem Pfad selbst.
+ *  5. Fehlschläge protokollieren: 5xx als Fehler, 4xx als Hinweis auf
+ *     `debug`. Ein abgelehnter Zugriff ist der Normalfall einer
+ *     funktionierenden Rechteprüfung und gehört nicht auf `warn` — sonst
+ *     besteht das Protokoll aus abgewiesenen Anfragen und niemand liest es.
+ *
+ * Die Hülle **fängt nichts ab**. Die Fehlerbehandlung bleibt, wo sie war; hier
+ * wird nur gemessen und weitergereicht.
+ */
+async function mitBeobachtung(
+  request: NextRequest,
+  routeParams: Record<string, unknown>,
+  fn: () => Promise<Response>,
+): Promise<Response> {
+  const pfad = new URL(request.url).pathname;
+  const kontext: AnfrageKontext = {
+    requestId: neueRequestId(),
+    route: routenVorlage(pfad, routeParams),
+    method: request.method,
+    startedAt: Date.now(),
+  };
+
+  return mitAnfrageKontext(kontext, async () => {
+    let antwort: Response;
+    try {
+      antwort = await fn();
+    } catch (fehler) {
+      /**
+       * Hierher kommt nur, was die Fehlerbehandlung der Fabrik **nicht**
+       * gefangen hat — also ein Fehler in der Fehlerbehandlung selbst oder
+       * etwas ausserhalb ihres `try`. Selten, und genau deshalb soll es nicht
+       * spurlos durchgehen: Die Anfrage wird als 500 gezählt und der Fehler
+       * protokolliert, bevor er weiterfliegt.
+       */
+      beobachteAnfrage({ ...kontext, status: 500, dauerMs: Date.now() - kontext.startedAt });
+      beobachtung.error('Unbehandelter Fehler im Endpunkt', {
+        route: kontext.route,
+        method: kontext.method,
+        error: fehler,
+      });
+      throw fehler;
+    }
+
+    const dauerMs = Date.now() - kontext.startedAt;
+    beobachteAnfrage({ ...kontext, status: antwort.status, dauerMs });
+
+    if (antwort.status >= 500) {
+      beobachtung.error('Endpunkt antwortet mit Serverfehler', {
+        route: kontext.route,
+        method: kontext.method,
+        status: antwort.status,
+        dauerMs,
+      });
+    } else if (antwort.status >= 400) {
+      beobachtung.debug('Endpunkt weist ab', {
+        route: kontext.route,
+        method: kontext.method,
+        status: antwort.status,
+        dauerMs,
+      });
+    }
+
+    /**
+     * Die Kopfzeile wird auf einer **Kopie** gesetzt.
+     *
+     * `Response.headers` ist bei einer bereits erzeugten Antwort
+     * unveränderlich; ein `set` darauf wirft in Node. Die Kopie behält Rumpf
+     * und Statuscode und bekommt die Kennung dazu.
+     */
+    const kopfzeilen = new Headers(antwort.headers);
+    kopfzeilen.set('X-Request-Id', kontext.requestId);
+    kopfzeilen.set('Server-Timing', `app;dur=${dauerMs}`);
+
+    return new Response(antwort.body, {
+      status: antwort.status,
+      statusText: antwort.statusText,
+      headers: kopfzeilen,
+    });
+  });
+}
 
 /**
  * Route-Handler-Fabrik.
@@ -198,6 +318,15 @@ export function defineRoute<TBody = undefined, TQuery = undefined, TParams = Rec
   config: ProtectedConfig<TBody, TQuery, TParams>,
 ) {
   return async (request: NextRequest, args: NextRouteArgs): Promise<Response> => {
+    /**
+     * Die Parameter werden **vor** der Hülle aufgelöst, weil die Vorlage des
+     * Pfads sie braucht. Ohne sie hiesse die Kennzahlenreihe
+     * `/api/jobs/clx123/team` statt `/api/jobs/:id/team` — und dann gäbe es
+     * eine Reihe je Einsatz.
+     */
+    const routeParams = (await args?.params) ?? {};
+
+    return mitBeobachtung(request, routeParams, async () => {
     try {
       assertTrustedOrigin(request);
 
@@ -238,13 +367,13 @@ export function defineRoute<TBody = undefined, TQuery = undefined, TParams = Rec
         await enforceRateLimit(config.rateLimit, key);
       }
 
-      const routeParams = (await args?.params) ?? {};
       const { body, query, params } = await parseInputs(request, config, routeParams);
 
       return await config.handler({ request, body, query, params, session, ip });
     } catch (error) {
       return toErrorResponse(error);
     }
+    });
   };
 }
 
@@ -255,6 +384,9 @@ export function definePublicRoute<
   TParams = Record<string, string>,
 >(config: PublicConfig<TBody, TQuery, TParams>) {
   return async (request: NextRequest, args: NextRouteArgs): Promise<Response> => {
+    const routeParams = (await args?.params) ?? {};
+
+    return mitBeobachtung(request, routeParams, async () => {
     try {
       assertTrustedOrigin(request);
 
@@ -278,13 +410,13 @@ export function definePublicRoute<
         await enforceRateLimit(config.rateLimit, key);
       }
 
-      const routeParams = (await args?.params) ?? {};
       const { body, query, params } = await parseInputs(request, config, routeParams);
 
       return await config.handler({ request, body, query, params, session, ip });
     } catch (error) {
       return toErrorResponse(error);
     }
+    });
   };
 }
 
@@ -315,6 +447,15 @@ export function defineCronRoute(config: {
   handler: (request: NextRequest) => Promise<Response> | Response;
 }) {
   return async (request: NextRequest): Promise<Response> => {
+    /**
+     * Auch der Scheduler läuft durch die Beobachtung, und gerade er: Der
+     * nächtliche Lauf ist die Anfrage, die am ehesten stillschweigend
+     * scheitert — sie hat keinen Benutzer, der sich meldet. Die Kennung in der
+     * Antwort ist der einzige Faden zurück ins Protokoll.
+     *
+     * Parameter gibt es hier keine; die Vorlage ist der Pfad selbst.
+     */
+    return mitBeobachtung(request, {}, async () => {
     try {
       const secret = process.env.CRON_SECRET;
       const provided = request.headers.get('authorization')?.replace(/^Bearer\s+/i, '');
@@ -325,6 +466,7 @@ export function defineCronRoute(config: {
     } catch (error) {
       return toErrorResponse(error);
     }
+    });
   };
 }
 

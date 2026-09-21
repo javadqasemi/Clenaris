@@ -17483,6 +17483,51 @@ paths:
             'application/json':
               schema:
                 '$ref': '#/components/schemas/ErrorEnvelope'
+  '/api/metrics':
+    get:
+      tags:
+        - 'System'
+      summary: 'Kennzahlen des laufenden Prozesses'
+      description: |-
+          Je Route und Methode: Anfragen, Verteilung auf Statusklassen, Dauer als Mittelwert, p50, p95 und Maximum. Die Reihen laufen über **Vorlagen** (`/api/jobs/:id`) — es gibt keine Zeile je Datensatz und keine Angabe darüber, wer eine Anfrage gestellt hat. Die Zahlen gelten je Prozess und überleben keinen Neustart; `prozessId` und `prozessStartzeit` sagen, ob zwei Antworten vergleichbar sind. Nur die Systemverantwortung: offen wäre der Endpunkt eine Echtzeitauskunft darüber, ob ein Angriff auffällt.
+
+          **Zugriff:** Erfordert die Berechtigung: `security:read`.
+
+          **Rate-Limit-Klasse:** `apiRead`
+      operationId: 'getMetrics'
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: 'Erfolg'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/SuccessEnvelope'
+        '401':
+          description: 'UNAUTHORIZED — keine oder abgelaufene Sitzung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 'FORBIDDEN — angemeldet, aber ohne die nötige Berechtigung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: 'RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
   '/api/security/events':
     get:
       tags:
