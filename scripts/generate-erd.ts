@@ -258,6 +258,7 @@ const DOMAINS: Domain[] = [
       'Availability',
       'Absence',
       'Payslip',
+      'PayrollSetting',
       'TimeEntry',
       'GpsEvent',
     ],

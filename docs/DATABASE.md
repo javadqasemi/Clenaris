@@ -4,7 +4,7 @@
 > Diagramme sind damit nie älter als das Schema. Prosa und Bereichseinteilung
 > stehen in `scripts/generate-erd.ts`.
 
-**118 Modelle, 84 Aufzählungstypen, 2182 Felder.**
+**119 Modelle, 84 Aufzählungstypen, 2207 Felder.**
 PostgreSQL 16+; alle Zeitstempel als `timestamptz` in UTC, Anzeige in Europe/Zurich.
 
 ## Vier Entscheidungen, die das ganze Schema prägen
@@ -41,7 +41,7 @@ flowchart LR
   crm["CRM<br/><small>13 Modelle</small>"]
   katalog["Leistungskatalog und Preislogik<br/><small>6 Modelle</small>"]
   auftrag["Buchung, Offerte, Einsatz<br/><small>10 Modelle</small>"]
-  personal["Personal und Zeit<br/><small>8 Modelle</small>"]
+  personal["Personal und Zeit<br/><small>9 Modelle</small>"]
   finanzen["Finanzen<br/><small>8 Modelle</small>"]
   kommunikation["Kommunikation und Automatisierung<br/><small>10 Modelle</small>"]
   marketing["Marketing und Inhalte<br/><small>13 Modelle</small>"]
@@ -124,7 +124,7 @@ erDiagram
 
 | Modell | Tabelle | Felder | Zweck |
 | --- | --- | --- | --- |
-| `Organization` | `organizations` | 111 | – |
+| `Organization` | `organizations` | 112 | – |
 | `NumberSequence` | `number_sequences` | 6 | – |
 | `OpeningHours` | `opening_hours` | 7 | – |
 | `Holiday` | `holidays` | 7 | – |
@@ -728,6 +728,16 @@ erDiagram
     Boolean halfDay
     Decimal days
   }
+  PayrollSetting {
+    String id PK
+    String organizationId
+    Int year
+    Decimal ahvIvEo
+    Decimal alv
+    Decimal alvGrenzeJahr
+    Decimal alvUeberGrenze
+    Decimal uvgNbu
+  }
   Payslip {
     String id PK
     String employeeId
@@ -754,7 +764,8 @@ erDiagram
 | `SalaryRecord` | `salary_records` | 10 | – |
 | `Availability` | `availabilities` | 6 | – |
 | `Absence` | `absences` | 15 | – |
-| `Payslip` | `payslips` | 16 | – |
+| `Payslip` | `payslips` | 22 | – |
+| `PayrollSetting` | `payroll_settings` | 18 | – |
 | `TimeEntry` | `time_entries` | 16 | – |
 | `GpsEvent` | `gps_events` | 12 | – |
 

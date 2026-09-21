@@ -526,6 +526,7 @@ model Organization {
   tags              Tag[]
   auditLogs         AuditLog[]
   securityEvents    SecurityEvent[]
+  payrollSettings   PayrollSetting[]
   numberSequences   NumberSequence[]
   files             FileAsset[]
   newsletter        NewsletterSubscriber[]
@@ -2302,6 +2303,58 @@ model Absence {
 }
 
 /// Lohnabrechnung mit AHV/IV/EO, ALV, BVG und UVG. Erst sichtbar, wenn freigegeben.
+/// Beitragssätze eines Jahres — je Organisation.
+///
+/// **Warum sie nicht im Code stehen.** Die Versuchung ist, `AHV = 5.3` als
+/// Konstante zu schreiben. Das wäre für genau ein Jahr richtig und danach
+/// falsch — und zwar still: Eine Lohnabrechnung mit dem Satz des Vorjahres
+/// sieht aus wie eine Lohnabrechnung.
+///
+/// Drei Dinge ändern sich unabhängig voneinander: die gesetzlichen Sätze
+/// (jährlich, vom Bund), der UVG-Satz (je Branche und Schadenerfahrung, steht
+/// im Versicherungsvertrag) und der BVG-Plan (je Vorsorgeeinrichtung, oft über
+/// dem Gesetzesminimum).
+///
+/// **Je Jahr eine Zeile, und alte Zeilen bleiben stehen.** Eine nachträgliche
+/// Korrektur einer Abrechnung von 2025 muss mit den Sätzen von 2025 rechnen.
+/// Die Sätze zu überschreiben hiesse, die Vergangenheit umzuschreiben.
+model PayrollSetting {
+  id             String @id @default(cuid())
+  organizationId String
+  year           Int
+
+  /// AHV, IV und EO zusammen — Arbeitnehmeranteil, in Prozent.
+  ahvIvEo               Decimal @default(5.3) @db.Decimal(6, 3)
+  alv                   Decimal @default(1.1) @db.Decimal(6, 3)
+  alvGrenzeJahr         Decimal @default(148200) @db.Decimal(12, 2)
+  /// Solidaritätsbeitrag über der Grenze. Seit 2023 aufgehoben — das Feld
+  /// bleibt, weil ein aufgehobener Beitrag wiederkommen kann und weil eine
+  /// Abrechnung für ein älteres Jahr ihn braucht.
+  alvUeberGrenze        Decimal @default(0) @db.Decimal(6, 3)
+  /// Nichtberufsunfall — trägt die angestellte Person. Betriebsabhängig.
+  uvgNbu                Decimal @default(1.6) @db.Decimal(6, 3)
+  /// Krankentaggeld, sofern der Betrieb eine Versicherung hat.
+  ktg                   Decimal @default(0) @db.Decimal(6, 3)
+
+  bvgEintrittsschwelle  Decimal @default(22680) @db.Decimal(12, 2)
+  bvgKoordinationsabzug Decimal @default(26460) @db.Decimal(12, 2)
+  bvgMindestKoordiniert Decimal @default(3780) @db.Decimal(12, 2)
+  bvgObergrenze         Decimal @default(90720) @db.Decimal(12, 2)
+  /// Altersgutschriften als `[{ abAlter, satz }]` — der **gesamte** Satz.
+  bvgSaetze             Json    @default("[{\"abAlter\":25,\"satz\":7},{\"abAlter\":35,\"satz\":10},{\"abAlter\":45,\"satz\":15},{\"abAlter\":55,\"satz\":18}]")
+  /// Anteil der angestellten Person an der Altersgutschrift, in Prozent.
+  /// Gesetzlich trägt der Betrieb mindestens die Hälfte.
+  bvgAnteilArbeitnehmer Decimal @default(50) @db.Decimal(6, 3)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, year])
+  @@map("payroll_settings")
+}
+
 model Payslip {
   id              String  @id @default(cuid())
   employeeId      String
@@ -2317,12 +2370,39 @@ model Payslip {
   netPay          Decimal @default(0) @db.Decimal(12, 2)
   pdfUrl          String?
   published       Boolean @default(false)
+  /// Krankentaggeld — bis Wave 9 fehlte die Spalte, obwohl die Versicherung
+  /// in vielen Gesamtarbeitsverträgen dieses Gewerbes vorgeschrieben ist. Ohne
+  /// sie wäre der Abzug in `otherDeductions` verschwunden, und die Abrechnung
+  /// mit der Versicherung liesse sich nicht mehr herleiten.
+  ktg             Decimal @default(0) @db.Decimal(12, 2)
+
+  /// Wie der Bruttolohn zustande kam.
+  ///
+  /// `HOURLY` — aus **freigegebenen** Zeiterfassungen; `MONTHLY` — aus dem
+  /// Monatslohn mal Pensum. Die Angabe steht hier und nicht nur implizit im
+  /// Personalstamm, weil sich der Anstellungstyp später ändern kann und eine
+  /// alte Abrechnung dann nicht mehr erklärbar wäre.
+  basis           String  @default("HOURLY")
+
+  /// Die vollständige Herleitung, wie sie zum Zeitpunkt der Erstellung galt.
+  ///
+  /// Enthält die angewandten Sätze, den koordinierten Jahreslohn, den
+  /// BVG-Altersband-Satz und die Zahl der berücksichtigten Zeiterfassungen.
+  /// **Eine Momentaufnahme, kein Verweis** — dieselbe Überlegung wie bei der
+  /// Empfängeradresse einer Rechnung: Ändert sich der Satz im nächsten Jahr,
+  /// bleibt die alte Abrechnung nachvollziehbar.
+  breakdown       Json?
+
+  publishedAt     DateTime? @db.Timestamptz(6)
+  createdById     String?
 
   createdAt DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
 
   employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
 
   @@unique([employeeId, year, month])
+  @@index([year, month])
   @@map("payslips")
 }
 
