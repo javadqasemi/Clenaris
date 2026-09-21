@@ -24,22 +24,22 @@ Spalten `FE` (Frontend), `BE` (Backend), `DB`, `RBAC`, `SEC` (eigener Sicherheit
 
 ## Gesamtverteilung
 
-*Stand nach Wave 0 (2026-09-21). Änderungen gegenüber der Erstfassung sind unten begründet.*
+*Stand nach Wave 2 (2026-09-21). Änderungen gegenüber der Erstfassung sind unten begründet.*
 
 | Status | Anzahl | Anteil |
 |---|---|---|
-| COMPLETE + VERIFIED | **80** | 45 % |
-| COMPLETE | **56** | 32 % |
-| COMPLETE / EXTERNAL VERIFICATION REQUIRED | **4** | 2 % |
-| PARTIAL | **19** | 11 % |
+| COMPLETE + VERIFIED | **83** | 47 % |
+| COMPLETE | **56** | 31 % |
+| COMPLETE / EXTERNAL VERIFICATION REQUIRED | **5** | 3 % |
+| PARTIAL | **18** | 10 % |
 | BACKEND ONLY | **2** | 1 % |
 | FRONTEND ONLY | **1** | 1 % |
 | SCHEMA ONLY | **4** | 2 % |
-| NOT IMPLEMENTED | **10** | 6 % |
-| **Summe** | **176** | **100 %** |
+| NOT IMPLEMENTED | **9** | 5 % |
+| **Summe** | **178** | **100 %** |
 
-**Technisch nutzbar (C+V oder C): 136 von 176 = 77 %.**
-**Durch Tests belegt: 80 von 176 = 45 %.**
+**Technisch nutzbar (C+V oder C): 139 von 178 = 78 %.**
+**Durch Tests belegt: 83 von 178 = 47 %.**
 
 ### Änderungen in Wave 0
 
@@ -48,9 +48,23 @@ Spalten `FE` (Frontend), `BE` (Backend), `DB`, `RBAC`, `SEC` (eigener Sicherheit
 | **INF-001 … INF-004: C → C/EVR** | Die reale Pipeline war noch nie grün (0 von 6 Läufen, 0 Deployments). Code allein ist kein Nachweis, dass eine Auslieferung funktioniert. Auf ausdrücklichen Hinweis hin zurückgestuft. |
 | **SEC-021 neu: NOT IMPLEMENTED** | Lohn- und Bankdaten werden **nicht** verschlüsselt — nur AHV-Nummer, Alarmcode und TOTP-Geheimnis. Der Erstbericht hatte das falsch dargestellt. |
 
+### Änderungen in Wave 1
+
+| Änderung | Begründung |
+|---|---|
+| **SEC-017: P → C+V** | Von den drei gemeldeten Auditlücken waren zwei echt (Tokenausstellung, `employeeIds` der Zuteilung) und sind geschlossen. Die dritte — Objektänderungen — gab es nicht; ich hatte nach Dateilage statt nach Aufrufpfad gemessen. Eine Gegenprüfung in `protokoll-und-schranken.test.ts` hält das fest, statt den Befund stillschweigend zu streichen. |
+| **SEC-014, SEC-015: offene Punkte geschlossen** | Alle vier Benachrichtigungsrouten tragen eine Limitklasse; die Tokenausstellung steht im Prüfprotokoll, ohne rohen Token und ohne Hash. Beides wird geprüft, nicht behauptet. |
+
+### Änderungen in Wave 2
+
+| Änderung | Begründung |
+|---|---|
+| **SEC-020: NI → C/EVR** | Die Kette ist vollständig: Dateipolitik, Prüferabstraktion, ClamAV-Anbindung über `zINSTREAM`, Zustandsautomat mit Quarantäne, Auslieferungstor bei jedem Abruf, Nachlaufskript. Nicht **C+V**, weil in der vertrauenswürdigen Entwicklungsumgebung kein `clamd` läuft — der Adapter ist gegen das Protokoll gebaut, aber nicht gegen einen echten Dienst gelaufen. |
+| **SEC-022, SEC-023 neu: C+V** | Dateipolitik und Auslieferungstor sind eigene Eigenschaften mit eigenem Nachweis und hängen nicht am Vorhandensein eines Prüfers. Sie wirken auch dann, wenn gar kein Prüfer eingerichtet ist — dann bleibt jede Datei gesperrt. |
+
 ---
 
-## SEC — Plattform und Sicherheit (20)
+## SEC — Plattform und Sicherheit (23)
 
 | ID | Feature | FE | BE | DB | RBAC | SEC | T | E2E | Status | Evidence | Missing Work |
 |---|---|---|---|---|---|---|---|---|---|---|---|
@@ -67,13 +81,15 @@ Spalten `FE` (Frontend), `BE` (Backend), `DB`, `RBAC`, `SEC` (eigener Sicherheit
 | SEC-011 | Eigentümerfilter in der Abfrage | – | ✓ | ✓ | ✓ | ✓ | ✓ | – | **C+V** | `ownership.test.ts` (9) | – |
 | SEC-012 | Mandantentrennung (`organizationId`) | – | ✓ | ✓ | ✓ | ✓ | ○ | – | **C** | 65/117 Modelle, `dispatch.test.ts` | systematische Vollprüfung |
 | SEC-013 | CSRF / Herkunftsprüfung | – | ✓ | – | – | ✓ | ○ | – | **C** | `assertTrustedOrigin` in `handler.ts` | eigene Prüfung |
-| SEC-014 | Rate-Limiting — 24 Klassen | – | ✓ | – | – | ✓ | ✓ | – | **C+V** | `rate-limit.ts`, `rate-limit.test.ts` (4) | Benachrichtigungen ergänzen |
-| SEC-015 | Öffentliche Zugriffstokens | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | **C+V** | `access-token.service.ts`, 40 Prüfungen | Ausstellung protokollieren |
+| SEC-014 | Rate-Limiting — 24 Klassen | – | ✓ | – | – | ✓ | ✓ | – | **C+V** | `rate-limit.ts`, `rate-limit.test.ts` (4); Benachrichtigungsrouten seit Wave 1 gedeckt, `protokoll-und-schranken.test.ts` prüft jede | – |
+| SEC-015 | Öffentliche Zugriffstokens | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | **C+V** | `access-token.service.ts`, 40 Prüfungen; Ausstellung seit Wave 1 protokolliert — ohne rohen Token und ohne Hash | – |
 | SEC-016 | Feldverschlüsselung AES-256-GCM | – | ✓ | ✓ | – | ✓ | ✓ | – | **C+V** | `crypto.ts`, `verschluesselung.test.ts` (9) | – |
-| SEC-017 | Prüfprotokoll (`AuditLog`) | ✓ | ✓ | ✓ | ✓ | ✓ | ○ | – | **P** | `audit.ts`, 223 Aufrufe / 60 Dateien | Zuteilung, Objekt, Token |
+| SEC-017 | Prüfprotokoll (`AuditLog`) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | – | **C+V** | `audit.ts`, 223 Aufrufe / 60 Dateien, `protokoll-und-schranken.test.ts` (24); Wave 1: Tokenausstellung und `employeeIds` der Zuteilung ergänzt — die gemeldete Objektlücke gab es nicht, eine Gegenprüfung hält das fest | – |
 | SEC-018 | Sicherheitskopfzeilen / CSP | – | ✓ | – | – | ✓ | ○ | – | **C** | `next.config.ts` | – |
 | SEC-019 | Schlüsselrotation | – | – | – | – | – | – | – | **NI** | S-08; `crypto.ts` kennt keine | Zweitschlüsselpfad + Skript |
-| SEC-020 | Virenprüfung bei Uploads | – | – | – | – | – | – | – | **NI** | keine Codestelle | Prüfdienst anbinden (Wave 2) |
+| SEC-020 | Schadsoftwareprüfung bei Uploads | – | ✓ | ✓ | ✓ | ✓ | ✓ | – | **C/EVR** | `src/lib/security/malware/*`, `dateipolitik.ts`, `scanFileAsset`/`authorizeStoredFile` in `file.service.ts`, `scan-backfill.ts`, `dateisicherheit.test.ts` (41) | **PRE-PRODUCTION VERIFICATION REQUIRED** — kein `clamd` in der Entwicklungsumgebung, der ClamAV-Adapter ist gegen das Protokoll gebaut, aber nicht gegen einen echten Dienst gelaufen; Bucket-Sichtbarkeit prüfen |
+| SEC-022 | Dateipolitik (Name, Endung, Typ) | – | ✓ | – | – | ✓ | ✓ | – | **C+V** | `src/lib/storage/dateipolitik.ts`, `dateisicherheit.test.ts` | – |
+| SEC-023 | Auslieferungstor Zustand × Herkunft | – | ✓ | ✓ | ✓ | ✓ | ✓ | – | **C+V** | `malware/auslieferung.ts`, `authorizeStoredFile`, 30 Tabellenfälle | Altbestand nachprüfen (`scan-backfill.ts`) |
 | SEC-021 | Verschlüsselung von Lohn- und Bankdaten | – | – | ✓ | ✓ | – | – | – | **NI** | `employee.service.ts:104–105,140–141,252–253` schreibt `hourlyRate`/`monthlySalary` **im Klartext**; `CRYPTO_CONTEXT` kennt nur 2FA, AHV, Alarmcode | Kontexte ergänzen, Bestand umschlüsseln (Wave 4) |
 
 ---

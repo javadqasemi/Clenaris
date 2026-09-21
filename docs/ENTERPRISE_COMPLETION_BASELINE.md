@@ -251,4 +251,97 @@ Damit ist „Automatisierungen" eine Oberfläche ohne Wirkung — ein **FRONTEND
 
 ---
 
+## 11. Wave 2 — Schadsoftware- und Dateisicherheit (Stand 2026-09-21)
+
+Ausgangslage: **SEC-020 = NOT IMPLEMENTED**, keine Codestelle. Uploads wurden
+byteweise gegen die Signatur geprüft (`verifyBytes`, Gate 2), aber niemand sah
+sich an, *was* in diesen Bytes steht — und der Dateiname wurde überhaupt nicht
+betrachtet.
+
+### Was gebaut wurde
+
+| Teil | Ort | Kern |
+|---|---|---|
+| Zustände und Schnittstelle | `src/lib/security/malware/scanner.ts` | Genau ein auslieferbarer Zustand; `ERROR` ist das Gegenteil von `CLEAN`, nicht dessen Sonderfall |
+| ClamAV | `…/clamav.ts` | `zINSTREAM` über TCP, eigener Zeitgeber statt Socket-Timeout, Fehlercodes statt Prüfertext |
+| Testprüfer | `…/test-scanner.ts` | Nur EICAR; wirft beim Erzeugen, wenn er in der Produktion landen würde |
+| Auslieferungstor | `…/auslieferung.ts` | Zustand × Herkunft, fail closed |
+| Dateipolitik | `src/lib/storage/dateipolitik.ts` | Endung gegen nachgewiesenen Typ, Verbotsliste über den **ganzen** Namen |
+| Durchsetzung | `src/server/services/file.service.ts` | `scanFileAsset`, Einbindung in `finalizeUpload` und `authorizeStoredFile` |
+| Nachlauf | `scripts/scan-backfill.ts` | Altbestand und liegengebliebene Fälle |
+| Dokumentation | `docs/MALWARE_PROTECTION.md` | Reihenfolge der Tore, `clamd.conf`-Abgleich, Betriebs-Checkliste |
+
+### Drei Entscheidungen, die den Unterschied machen
+
+1. **`AUSLIEFERBAR` ist eine Erlaubnisliste mit einem Eintrag.** Eine Liste der
+   gesperrten Zustände hätte bei jedem neuen Zustand erweitert werden müssen,
+   und wer sie vergisst, hat einen neuen Zustand erfunden, der ausgeliefert
+   wird. So ist ein neuer Zustand automatisch gesperrt.
+2. **Das Tor sitzt bei jedem Abruf, nicht einmalig beim Abschluss.** Eine
+   Datei, die ein Nachlauf morgen in Quarantäne schickt, ist ab diesem Moment
+   nicht mehr abrufbar, ohne dass irgendwo ein Zwischenspeicher zu leeren wäre.
+3. **Die Migration stuft jede Altdatei als `LEGACY_UNSCANNED`/`PENDING` ein,
+   keine als `CLEAN`.** Gegen die Entwicklungsdatenbank belegt: 15 Zeilen,
+   keine automatisch als sauber. Der Bestand ist damit zunächst gesperrt; der
+   Weg heraus ist der Nachlauf, nicht eine Behauptung.
+
+### Zwei Befunde, die erst die Prüfreihe hervorgebracht hat
+
+**Gemischte Schreibweise bei den gefährlichen MIME-Typen.** Der Eingabewert
+wurde gesenkt, die Menge stand gemischt — durchgelassen wurden genau die drei
+makrofähigen Office-Typen, also die einzigen in der Liste, auf die es fachlich
+wirklich ankommt. Gefunden von `dateisicherheit.test.ts`, nicht von einem
+Review.
+
+**Eine öffentliche Leseadresse im Upload-Ticket.** `createSignedUpload` gab
+neben der Schreibadresse die öffentliche Objektadresse zurück, und
+`POST /api/files/upload-url` reichte das Ticket unverändert an den Client
+weiter. Beim Supabase-Treiber war das ein Zeiger auf Bytes, die zu diesem
+Zeitpunkt weder byteweise geprüft noch gegen die Dateipolitik gehalten noch auf
+Schadsoftware untersucht sind — und zu denen es noch gar kein `FileAsset` gibt,
+an dem sich eine Berechtigung prüfen liesse. Ob der Umweg tatsächlich trägt,
+hing an der Sichtbarkeit des Buckets, also an einer Einstellung ausserhalb
+dieses Codes; eine Sicherheitseigenschaft, die daran hängt, ist keine. Das Feld
+ist entfallen — gebraucht hat es nie jemand, `UploadZiel` in `lib/upload.ts`
+kennt es nicht einmal.
+
+### Offen — bewusst in spätere Waves verschoben
+
+| Punkt | Wohin | Warum |
+|---|---|---|
+| Eigene `SecurityEvent`-Ereignisse (`FILE_SCAN_*`, `FILE_QUARANTINED`) | Wave 3 | Sie gehören in das Sicherheitszentrum, das es noch nicht gibt. Heute steht der Befund als Auditeintrag und am Datensatz |
+| Geplanter Nachlauf statt Skript von Hand | Wave 6 | Ein wiederkehrender Auftrag gehört in die Hintergrundaufträge und nicht in `file.service.ts` |
+| Kennzahlen (`ERROR`-Quote, Verweildauer in `SCANNING`) | Wave 5 | Ohne Beobachtbarkeit gibt es keinen Ort, an dem sie landen |
+
+### Verifikation nach Wave 2
+
+| Prüfung | Ergebnis |
+|---|---|
+| `npm run typecheck` | ✅ |
+| `npm run lint` | ✅ |
+| `npm run build` | ✅ |
+| `prisma validate` | ✅ |
+| `npm run docs` | ✅ 401 Endpunkte, Schutz stimmt überein; `docs/DATABASE.md` um die neuen Aufzählungstypen und Felder ergänzt |
+| Migration gegen die Entwicklungsdatenbank | ✅ additiv, 15 Altzeilen auf `LEGACY_UNSCANNED`/`PENDING`, keine auf `CLEAN` |
+| `scripts/scan-backfill.ts` (echter Lauf) | ✅ 3 `CLEAN`, 12 `ERROR` (`NO_BYTES` — Altzeilen ohne physische Ablage) |
+| `npm test` | ✅ **919 Prüfungen, 917 bestanden, 0 Fehlschläge**, 2 übersprungen (von 878) |
+| `npm run e2e` | ✅ **20 / 20** |
+
+> **PRE-PRODUCTION VERIFICATION REQUIRED.** In der vertrauenswürdigen
+> Entwicklungsumgebung läuft kein `clamd`. Der ClamAV-Adapter ist vollständig
+> und gegen das Protokoll gebaut, aber nicht gegen einen echten Dienst
+> gelaufen. Vor dem Produktivgang: `clamd` erreichbar, `clamd.conf` gegen die
+> Tabelle in `docs/MALWARE_PROTECTION.md` abgeglichen (`StreamMaxLength`
+> **grösser** als `SCAN_MAX_BYTES`), `freshclam` aktiv, Ablage-Bucket nicht
+> öffentlich, Nachlauf gefahren, `CLENARIS_LEGACY_FILES` danach entfernt.
+
+> **Eine Falle beim Prüflauf, die Zeit gekostet hat:** Ein mit `Start-Job`
+> gestarteter Testserver stirbt mit der PowerShell-Sitzung. Der Folgeaufruf
+> lief gegen einen toten Server und meldete 483 statt 919 Prüfungen — 74
+> Reihen „not ok" bei `# fail 0`, was wie ein Flächenbrand aussieht und keiner
+> war. Der Server gehört losgelöst gestartet (`Start-Process … -WindowStyle
+> Hidden`), wie es `CLAUDE.md` für `next start` ohnehin schon festhält.
+
+---
+
 *Diese Datei wird nach jeder Wave fortgeschrieben.*
