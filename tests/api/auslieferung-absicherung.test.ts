@@ -100,6 +100,98 @@ describe('Auslieferungs-Workflow — fail-closed', () => {
    * derselben Sekunde, mit null Jobs. Genau das ist hier einmal passiert und
    * monatelang unbemerkt geblieben.
    */
+  /**
+   * Production V2. Bis hierher prüfte der Workflow nur `main` — also erst,
+   * nachdem der Fehler im ausgelieferten Zweig stand.
+   */
+  it('prüft Pull Requests gegen main', () => {
+    assert.match(
+      workflow,
+      /^\s*pull_request:\s*\n\s*branches:\s*\[main\]\s*$/m,
+      'ohne pull_request-Auslöser wird erst nach dem Zusammenführen geprüft',
+    );
+  });
+
+  /**
+   * `pull_request_target` führt den Workflow im Kontext des Zielzweigs aus
+   * **und** stellt dabei die Secrets bereit, während der geprüfte Code aus
+   * dem Pull Request stammt. Wer einen Fork öffnen darf, bekäme damit die
+   * Produktions-Secrets.
+   */
+  it('benutzt kein pull_request_target', () => {
+    // Geprüft wird der **Auslöser**, nicht das Wort: Der Kommentar im
+    // Workflow nennt `pull_request_target` ausdrücklich, um zu begründen,
+    // warum es dort nicht steht. Eine Prüfung, die eine Begründung verbietet,
+    // erzwingt schweigende Entscheidungen.
+    assert.doesNotMatch(
+      workflow,
+      /^\s{0,4}pull_request_target:/m,
+      'pull_request_target stellt Secrets bereit, während es fremden Code ausführt',
+    );
+  });
+
+  /**
+   * Der Kern der Trennung: Ein Pull Request ist eine Frage, keine
+   * Entscheidung. Er löst das volle Qualitätstor aus und nichts sonst.
+   */
+  it('liefert aus einem Pull Request niemals aus', () => {
+    const auftrag = workflow.slice(workflow.indexOf('\n  auslieferung:'));
+    assert.match(
+      auftrag,
+      /github\.event_name != 'pull_request'/,
+      'der Auslieferungsauftrag muss Pull Requests ausdrücklich ausschliessen',
+    );
+    assert.match(auftrag, /needs:\s*qualitaet/, 'und erst nach dem Qualitätstor laufen');
+  });
+
+  /**
+   * Fail-closed: Ist `DEPLOY_ENABLED` nicht gesetzt, liefert GitHub den
+   * leeren String und der Auftrag wird übersprungen. Solange für Production
+   * V2 kein Server steht, darf ein grüner Lauf auf `main` keine Auslieferung
+   * an das alte Ziel auslösen.
+   */
+  it('liefert nur bei ausdrücklich eingeschalteter Auslieferung aus', () => {
+    const auftrag = workflow.slice(workflow.indexOf('\n  auslieferung:'));
+    assert.match(
+      auftrag,
+      /vars\.DEPLOY_ENABLED == 'true'/,
+      'ohne diesen Schalter liefert der nächste grüne Lauf an das Ziel der bestehenden Secrets',
+    );
+  });
+
+  /**
+   * Das Qualitätstor läuft auch für Pull Requests aus Forks. Dort stellt
+   * GitHub keine Secrets bereit — ein Auftrag, der welche läse, schlüge
+   * genau dann fehl, wenn er gebraucht wird. Er kommt deshalb vollständig
+   * mit Wegwerfwerten aus.
+   */
+  it('das Qualitätstor liest kein einziges Secret', () => {
+    const anfang = workflow.indexOf('\n  qualitaet:');
+    const ende = workflow.indexOf('\n  auslieferung:');
+    assert.ok(anfang > 0 && ende > anfang, 'beide Aufträge müssen existieren');
+    const tor = workflow.slice(anfang, ende);
+    assert.doesNotMatch(
+      tor,
+      /secrets\./,
+      'ein Qualitätstor mit Secrets ist für Fork-Pull-Requests nicht lauffähig',
+    );
+  });
+
+  /**
+   * Die öffentliche Adresse ist Konfiguration. In der Zusammenfassung — einer
+   * reinen Anzeigefläche — hat der `secrets`-Kontext nichts zu suchen.
+   */
+  it('schreibt keinen secrets-Wert in die Zusammenfassung', () => {
+    const stelle = workflow.indexOf('GITHUB_STEP_SUMMARY');
+    assert.ok(stelle > 0, 'die Zusammenfassung muss existieren');
+    const block = workflow.slice(workflow.lastIndexOf('- name: Zusammenfassung'), stelle);
+    assert.doesNotMatch(
+      block,
+      /secrets\./,
+      'die Regel «Secrets stehen in keiner Ausgabe» verliert ihren Wert mit der ersten Ausnahme',
+    );
+  });
+
   it('verwendet den secrets-Kontext nicht unter environment.url', () => {
     const zeilen = workflow.split(/\r?\n/);
     const inUmgebung = zeilen.findIndex((z) => /^\s*environment:\s*$/.test(z));

@@ -20,8 +20,24 @@
 
 name: Auslieferung
 
+# Drei Auslöser, und nur zwei davon dürfen je einen Server berühren.
+#
+# `pull_request` ist seit Production V2 dabei: Bis dahin prüfte dieser
+# Workflow ausschliesslich `main` — also *nach* dem Zusammenführen. Ein
+# Fehler fiel damit zum spätestmöglichen Zeitpunkt auf, nämlich auf dem
+# Zweig, der ausgeliefert wird.
+#
+# Bewusst `pull_request` und **nicht** `pull_request_target`: Letzteres führt
+# den Workflow im Kontext des Zielzweigs aus und stellt dabei die Secrets des
+# Repositories bereit — während der geprüfte Code aus dem Pull Request stammt.
+# Wer einen Fork öffnen darf, bekäme damit die Produktions-Secrets. Bei
+# `pull_request` läuft der Code des Pull Requests ohne Secrets; genau deshalb
+# kommt das Qualitätstor unten mit Wegwerfwerten aus und liest kein einziges
+# `secrets.*`.
 on:
   push:
+    branches: [main]
+  pull_request:
     branches: [main]
   workflow_dispatch:
     inputs:
@@ -35,13 +51,23 @@ on:
         default: false
 
 # Zwei Auslieferungen gleichzeitig zögen sich auf dem Server den Arbeitsbaum
-# gegenseitig weg. `cancel-in-progress: false`, weil ein *abgebrochener* Lauf
-# den Server in einem halben Zustand zurückliesse — der zweite wartet.
+# gegenseitig weg. Für `main` deshalb `cancel-in-progress: false`: Ein
+# *abgebrochener* Lauf liesse den Server in einem halben Zustand zurück — der
+# zweite wartet.
+#
+# Für einen Pull Request gilt das Gegenteil. Dort berührt niemand einen
+# Server, und wer zweimal hintereinander pusht, will die Meinung zum neuen
+# Stand, nicht zum alten. Ein laufender Lauf auf einem überholten Stand kostet
+# nur Wartezeit.
 concurrency:
   group: auslieferung-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
-# Nur lesen. Der Workflow schreibt nichts ins Repository zurück.
+# Nur lesen, und zwar als Vorgabe für alle Aufträge. Der Workflow schreibt
+# nichts ins Repository zurück: keine Marke, kein Kommentar, keine Freigabe
+# eines Pull Requests. `contents: read` ist das Einzige, was bleibt, weil
+# `actions/checkout` im Qualitätstor es braucht; der Auslieferungsauftrag
+# setzt es weiter unten auf gar nichts.
 permissions:
   contents: read
 
@@ -247,6 +273,44 @@ jobs:
     needs: qualitaet
     runs-on: ubuntu-latest
     timeout-minutes: 25
+
+    # Zwei Bedingungen, und beide müssen gelten. `needs: qualitaet` ist die
+    # dritte: Der Auftrag beginnt ohnehin nur, wenn das Qualitätstor grün ist.
+    #
+    # **Erstens: niemals aus einem Pull Request.** Ein Pull Request ist eine
+    # Frage, keine Entscheidung. Er darf den vollen Prüflauf auslösen und
+    # nichts sonst. Ohne diese Zeile genügte das Öffnen eines Pull Requests,
+    # um einen Produktionsserver zu berühren.
+    #
+    # **Zweitens: nur bei ausdrücklich eingeschalteter Auslieferung.**
+    # `DEPLOY_ENABLED` ist eine Repository-Variable, und sie ist fail-closed:
+    # Ist sie nicht gesetzt, liefert GitHub den leeren String, der Vergleich
+    # scheitert, der Auftrag wird übersprungen.
+    #
+    # Der Grund ist der Zustand des Projekts, nicht Vorsicht im Allgemeinen.
+    # Für Production V2 wird ein neuer Server aufgebaut; der bisherige ist
+    # Beweismaterial eines Vorfalls und darf nicht mehr beliefert werden. Die
+    # Secrets `SERVER_HOST`, `SERVER_SSH_KEY` und `SERVER_SSH_KNOWN_HOSTS`
+    # zeigen aber bis zu ihrer Ersetzung weiter auf ihn. Ohne diesen Schalter
+    # wäre der erste grüne Lauf nach fünf roten zugleich eine Auslieferung
+    # genau dorthin — und zwar ohne dass jemand sie ausgelöst hätte.
+    #
+    # Eine Variable und kein auskommentierter Auftrag: Auskommentierter Code
+    # wird beim Wiedereinschalten nicht gelesen, sondern nur entkommentiert.
+    # Eine Variable ist an einer Stelle sichtbar, hat einen Namen und lässt
+    # sich zurücknehmen, ohne die Datei anzufassen.
+    #
+    # Einschalten, sobald der V2-Server steht und die Secrets auf ihn zeigen:
+    # Settings → Secrets and variables → Actions → Variables →
+    # `DEPLOY_ENABLED` = `true`.
+    if: >-
+      github.event_name != 'pull_request'
+      && vars.DEPLOY_ENABLED == 'true'
+
+    # Dieser Auftrag checkt nichts aus und liest nichts aus dem Repository —
+    # er verbindet sich über SSH und ruft dort ein Skript auf. Er braucht
+    # deshalb kein einziges Recht am `GITHUB_TOKEN`.
+    permissions: {}
     # Bindet den Auftrag an die GitHub-Umgebung «production». Dort liegen die
     # Secrets, und dort lässt sich bei Bedarf eine Freigabe durch eine zweite
     # Person einschalten, ohne den Workflow zu ändern.
@@ -353,7 +417,17 @@ jobs:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           DIRECT_URL: ${{ secrets.DIRECT_URL }}
           JWT_SECRET: ${{ secrets.JWT_SECRET }}
-          API_URL: ${{ secrets.API_URL }}
+          # Die öffentliche Adresse der Anwendung ist Konfiguration, kein
+          # Geheimnis — sie steht in jedem Link, jeder E-Mail und jedem
+          # Zertifikat. Sie gehört deshalb nach `vars` (14.2).
+          #
+          # Der Rückfall auf `secrets.API_URL` steht hier für den Übergang:
+          # Der Wert liegt heute als Secret vor, und ein harter Wechsel
+          # liesse die Variable leer — die Anwendung bekäme dann still eine
+          # `.env` ohne `NEXT_PUBLIC_APP_URL`, und Magic Links und
+          # PDF-Verweise zeigten auf `localhost`. Sobald die Variable gesetzt
+          # ist, kann das Secret gelöscht und dieser Rückfall entfernt werden.
+          API_URL: ${{ vars.API_URL || secrets.API_URL }}
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
           ENCRYPTION_KEY: ${{ secrets.ENCRYPTION_KEY }}
           TRUSTED_PROXY_MODE: ${{ vars.TRUSTED_PROXY_MODE }}
@@ -474,7 +548,8 @@ jobs:
 
       - name: Health Check von aussen
         env:
-          API_URL: ${{ secrets.API_URL }}
+          # Siehe oben: `vars` ist der Zielzustand, das Secret der Übergang.
+          API_URL: ${{ vars.API_URL || secrets.API_URL }}
           ERWARTET: ${{ github.sha }}
         run: |
           set -euo pipefail
@@ -519,5 +594,18 @@ jobs:
             echo "| Stand | \`${{ github.sha }}\` |"
             echo "| Auslöser | ${{ github.event_name }} |"
             echo "| Von | ${{ github.actor }} |"
-            echo "| Ziel | ${{ secrets.API_URL }} |"
+            # Hier bewusst **nur** `vars`, ohne Rückfall auf das Secret.
+            #
+            # Die Zusammenfassung ist eine Anzeigefläche, kein Arbeitsschritt:
+            # Sie wird gebraucht, um nachzulesen, wohin geliefert wurde. Ein
+            # Wert aus dem `secrets`-Kontext hat in einer solchen Fläche
+            # nichts zu suchen — auch dann nicht, wenn er wie hier ohnehin
+            # öffentlich ist. Die Regel «Secrets stehen in keiner Ausgabe»
+            # verliert ihren Wert, sobald sie Ausnahmen kennt, über die man
+            # von Fall zu Fall entscheidet.
+            #
+            # Ist die Variable nicht gesetzt, bleibt die Zelle leer. Das ist
+            # richtig so: Sie sagt dann «nicht als Variable hinterlegt» und
+            # behauptet nichts.
+            echo "| Ziel | ${{ vars.API_URL }} |"
           } >> "$GITHUB_STEP_SUMMARY"
