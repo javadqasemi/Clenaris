@@ -4,6 +4,7 @@ import type { PublicAccessToken, PublicTokenPurpose } from '@prisma/client';
 
 import { prisma, type Tx } from '@/lib/db';
 import { audit } from '@/lib/audit';
+import { recordSecurityEvent } from '@/lib/security/record';
 import { NotFoundError } from '@/lib/errors';
 import { randomToken } from '@/lib/auth/jwt';
 import { legacyTokensAllowed, purposesSatisfying } from '@/lib/auth/public-token-policy';
@@ -189,6 +190,30 @@ export async function issuePublicToken(params: {
       (params.maxUses ? `, höchstens ${params.maxUses} Verwendung(en)` : ''),
   });
 
+  /**
+   * Derselbe Vorgang, zweimal festgehalten — und das ist kein Versehen.
+   *
+   * Im Prüfprotokoll steht er als Änderung an einem Datensatz: Wer hat wann
+   * welchen Link erzeugt. Hier steht er als Ereignis, das jemand sehen soll:
+   * Es ist gerade Zugang nach aussen gewährt worden. Beide Fragen werden von
+   * verschiedenen Personen zu verschiedenen Zeiten gestellt, und ein Eintrag,
+   * der beide beantworten soll, beantwortet keine gut.
+   *
+   * Wie oben: Zweck, Ressource, Frist. Kein Tokenwert, kein Hash.
+   */
+  await recordSecurityEvent({
+    organizationId: params.organizationId,
+    userId: params.createdById ?? null,
+    kind: 'PUBLIC_LINK_ISSUED',
+    summary: `Zugangslink ausgestellt — ${params.purpose}`,
+    context: {
+      zweck: params.purpose,
+      ressource: params.resourceId,
+      gueltigBis: expiresAt.toISOString().slice(0, 10),
+      maxVerwendungen: params.maxUses ?? null,
+    },
+  });
+
   return { raw, record };
 }
 
@@ -232,10 +257,44 @@ export async function resolvePublicToken(params: {
   const erlaubt = purposesSatisfying(params.purpose);
   if (!record || !erlaubt.includes(record.purpose)) return { ok: false, reason: 'UNKNOWN' };
 
-  if (record.revokedAt) return { ok: false, reason: 'REVOKED' };
-  if (record.expiresAt.getTime() <= Date.now()) return { ok: false, reason: 'EXPIRED' };
+  /**
+   * Abgewiesene Links, die es **gibt**, werden gemeldet — geratene nicht.
+   *
+   * Das ist bewusst asymmetrisch und der Grund liegt nicht in der
+   * Aussagekraft, sondern in der Menge. Ein Ereignis je unbekanntem Wert
+   * hiesse: Wer vierstellig oft rät, schreibt vierstellig viele Zeilen in die
+   * Sicherheitstabelle. Ein Protokoll, das sich von aussen füllen lässt, ist
+   * ein Verstärker — es verdrängt die echten Einträge, wächst unbegrenzt und
+   * kostet je Versuch eine Schreiboperation mehr als das Raten selbst.
+   * Gegen das Raten steht das Rate-Limit der Route, und das ist der richtige
+   * Ort dafür.
+   *
+   * Ein abgelaufener, widerrufener oder verbrauchter Link ist etwas anderes:
+   * Er existiert, er gehört einer bekannten Organisation und einer bekannten
+   * Ressource, und die Zahl solcher Ereignisse ist durch die Zahl ausgestellter
+   * Links begrenzt. Er ist ausserdem die häufigste echte Kundenmeldung
+   * („der Link geht nicht") — und dafür will man ihn im Protokoll haben.
+   */
+  const abgewiesen = async (reason: Exclude<TokenRejection, 'UNKNOWN'>, text: string) => {
+    await recordSecurityEvent({
+      organizationId: record.organizationId,
+      kind: 'PUBLIC_LINK_REJECTED',
+      summary: text,
+      context: {
+        zweck: record.purpose,
+        ressource: record.resourceId,
+        grund: reason,
+      },
+    });
+    return { ok: false as const, reason };
+  };
+
+  if (record.revokedAt) return abgewiesen('REVOKED', 'Zurückgezogener Zugangslink vorgelegt');
+  if (record.expiresAt.getTime() <= Date.now()) {
+    return abgewiesen('EXPIRED', 'Abgelaufener Zugangslink vorgelegt');
+  }
   if (record.maxUses !== null && record.useCount >= record.maxUses) {
-    return { ok: false, reason: 'EXHAUSTED' };
+    return abgewiesen('EXHAUSTED', 'Bereits verbrauchter Zugangslink vorgelegt');
   }
 
   return {

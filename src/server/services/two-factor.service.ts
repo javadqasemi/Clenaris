@@ -5,6 +5,7 @@ import QRCode from 'qrcode';
 
 import { prisma } from '@/lib/db';
 import { audit, recordAudit } from '@/lib/audit';
+import { recordSecurityEvent } from '@/lib/security/record';
 import { hashPassword, verifyPassword } from '@/lib/auth/password';
 import { signAccessToken, verifyAccessToken } from '@/lib/auth/jwt';
 import { createSession, revokeAllSessions } from '@/lib/auth/session';
@@ -164,6 +165,13 @@ export async function confirmTwoFactor(params: {
     ip: params.ip,
   });
 
+  await recordSecurityEvent({
+    organizationId: user.organizationId,
+    userId: user.id,
+    kind: 'TWO_FACTOR_ENABLED',
+    ip: params.ip,
+  });
+
   return { recoveryCodes };
 }
 
@@ -227,6 +235,19 @@ export async function disableTwoFactor(params: {
     entity: 'User',
     entityId: user.id,
     summary: 'Zwei-Faktor-Anmeldung ausgeschaltet',
+    ip: params.ip,
+  });
+
+  /**
+   * `CRITICAL` — siehe die Begründung im Katalog. Das Abschalten ist regulär
+   * und verlangt Passwort *und* Code; trotzdem ist es der Schritt, den jemand
+   * als Erstes geht, der ein Konto übernommen hat. Wer es selbst getan hat,
+   * bestätigt den Eintrag in zehn Sekunden.
+   */
+  await recordSecurityEvent({
+    organizationId: user.organizationId,
+    userId: user.id,
+    kind: 'TWO_FACTOR_DISABLED',
     ip: params.ip,
   });
 }
@@ -333,6 +354,22 @@ export async function completeMfaLogin(params: {
       summary: 'Zweiter Faktor falsch',
       ip: params.ip,
     });
+
+    /**
+     * Wiegt schwerer als ein falsches Passwort und wird trotzdem gleich
+     * eingestuft — die Aussage steckt in der Häufung, nicht im Einzelfall.
+     * Wer hier landet, hat das Passwort bereits gehabt; eine Reihe solcher
+     * Einträge auf ein Konto ist deshalb der deutlichste Hinweis auf ein
+     * abgeflossenes Passwort, den dieses System überhaupt geben kann.
+     */
+    await recordSecurityEvent({
+      organizationId: user.organizationId,
+      userId: user.id,
+      kind: 'TWO_FACTOR_FAILED',
+      summary: 'Zweiter Faktor falsch — das Passwort war richtig',
+      ip: params.ip,
+    });
+
     throw new UnauthorizedError('Der Code stimmt nicht.');
   }
 
@@ -364,6 +401,20 @@ export async function completeMfaLogin(params: {
       recoveryIndex !== null
         ? `Anmeldung mit Wiederherstellungscode (${remaining} verbleibend)`
         : 'Anmeldung mit zweitem Faktor',
+    ip: params.ip,
+  });
+
+  await recordSecurityEvent({
+    organizationId: user.organizationId,
+    userId: user.id,
+    kind: 'LOGIN_SUCCEEDED',
+    summary:
+      recoveryIndex !== null
+        ? `Anmeldung mit Wiederherstellungscode (${remaining} verbleibend)`
+        : 'Anmeldung mit zweitem Faktor',
+    // Die Zahl der verbleibenden Codes gehört in den Zusammenhang: Wer bei
+    // null ankommt, sperrt sich aus, und das soll vorher jemand sehen.
+    context: recoveryIndex !== null ? { verbleibendeCodes: remaining } : undefined,
     ip: params.ip,
   });
 
@@ -411,6 +462,31 @@ export async function resetTwoFactorFor(params: {
     entity: 'User',
     entityId: user.id,
     summary: `Zwei-Faktor-Anmeldung von ${user.email} zurückgesetzt und alle Sitzungen beendet`,
+    ip: params.ip,
+  });
+
+  /**
+   * Zwei Ereignisse, weil zwei Dinge geschehen sind — und beide betreffen
+   * dasselbe Konto, nicht die handelnde Person. `userId` ist deshalb `user.id`
+   * und nicht `params.actorId`; wer es getan hat, steht im Zusammenhang. Die
+   * Übersicht filtert nach dem betroffenen Konto, und genau dort sollen beide
+   * Zeilen auftauchen.
+   */
+  await recordSecurityEvent({
+    organizationId: params.organizationId,
+    userId: user.id,
+    kind: 'TWO_FACTOR_DISABLED',
+    summary: 'Zweiter Faktor durch die Systemverantwortung zurückgesetzt',
+    context: { durch: params.actorId },
+    ip: params.ip,
+  });
+
+  await recordSecurityEvent({
+    organizationId: params.organizationId,
+    userId: user.id,
+    kind: 'SESSIONS_REVOKED',
+    summary: 'Alle Sitzungen beendet — Rücksetzung des zweiten Faktors',
+    context: { durch: params.actorId },
     ip: params.ip,
   });
 }

@@ -3,6 +3,7 @@ import 'server-only';
 import { cookies } from 'next/headers';
 
 import { prisma } from '@/lib/db';
+import { recordSecurityEvent } from '@/lib/security/record';
 import { serverEnv } from '@/lib/env';
 import { UnauthorizedError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
@@ -55,7 +56,9 @@ export async function refreshSession(): Promise<{ id: string; role: string; emai
   const tokenHash = await hashToken(token);
   const record = await prisma.refreshToken.findUnique({
     where: { tokenHash },
-    include: { user: { select: { id: true, status: true, deletedAt: true } } },
+    include: {
+      user: { select: { id: true, status: true, deletedAt: true, organizationId: true } },
+    },
   });
 
   if (!record || record.expiresAt < new Date()) {
@@ -70,6 +73,30 @@ export async function refreshSession(): Promise<{ id: string; role: string; emai
     });
     forget();
     log.warn('Token-Wiederverwendung erkannt — Familie gesperrt', { family: record.family });
+
+    /**
+     * Das schwerwiegendste Ereignis, das dieser Ablauf erzeugen kann.
+     *
+     * Ein Erneuerungstoken wird beim ersten Gebrauch verbraucht. Kommt er ein
+     * zweites Mal, gibt es genau zwei Erklärungen: ein Wettlauf zweier Tabs
+     * derselben Person — oder jemand hat eine Kopie. Unterscheiden lässt sich
+     * das von hier aus nicht, und deshalb wird die ganze Familie gesperrt und
+     * der Fall gemeldet, statt ihn als Bedienfehler abzutun.
+     *
+     * `family` steht im Zusammenhang, weil es die Zuordnung zu einem Browser
+     * herstellt und dafür gebraucht wird. Es ist eine Kennung, kein Zugang —
+     * der Tokenhash bleibt draussen, wie überall.
+     */
+    if (record.user) {
+      await recordSecurityEvent({
+        organizationId: record.user.organizationId,
+        userId: record.user.id,
+        kind: 'REFRESH_REUSE_DETECTED',
+        summary: 'Erneuerungstoken ein zweites Mal vorgelegt — alle Sitzungen dieses Browsers beendet',
+        context: { family: record.family },
+      });
+    }
+
     throw new UnauthorizedError(
       'Aus Sicherheitsgründen wurde die Sitzung beendet. Bitte melden Sie sich erneut an.',
     );

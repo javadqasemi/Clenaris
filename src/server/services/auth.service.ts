@@ -10,6 +10,7 @@ import { clientIpFrom, createSession, revokeAllSessions } from '@/lib/auth/sessi
 import { BusinessRuleError, ConflictError, NotFoundError, UnauthorizedError } from '@/lib/errors';
 import { absoluteUrl } from '@/lib/utils';
 import { audit, recordAudit } from '@/lib/audit';
+import { recordSecurityEvent } from '@/lib/security/record';
 import { sendEmail } from '@/lib/email/client';
 import {
   passwordResetEmail,
@@ -198,12 +199,37 @@ export async function login(params: { input: LoginInput; ip: string }) {
 
   if (user.lockedUntil && user.lockedUntil > new Date()) {
     const minutes = Math.ceil((user.lockedUntil.getTime() - Date.now()) / 60_000);
+
+    /**
+     * Der Versuch auf ein gesperrtes Konto ist die interessantere Hälfte des
+     * Vorgangs: Die Sperre selbst wurde bereits gemeldet, aber ob danach
+     * weiterprobiert wird, sagt, ob jemand gezielt an diesem einen Konto
+     * arbeitet. Ob das Passwort gestimmt hätte, wird ausdrücklich **nicht**
+     * geprüft — die Sperre ist die Antwort, und ein Prüflauf dahinter wäre
+     * genau das Orakel, das sie verhindern soll.
+     */
+    await recordSecurityEvent({
+      organizationId: user.organizationId,
+      userId: user.id,
+      kind: 'LOGIN_BLOCKED',
+      summary: `Anmeldeversuch auf ein gesperrtes Konto — noch ${minutes} Minuten`,
+      ip: params.ip,
+    });
+
     throw new UnauthorizedError(
       `Das Konto ist aus Sicherheitsgründen gesperrt. Bitte versuchen Sie es in ${minutes} Minuten erneut.`,
     );
   }
 
   if (user.status === 'SUSPENDED' || user.status === 'DISABLED') {
+    await recordSecurityEvent({
+      organizationId: user.organizationId,
+      userId: user.id,
+      kind: 'LOGIN_BLOCKED',
+      summary: `Anmeldeversuch auf ein stillgelegtes Konto (${user.status})`,
+      ip: params.ip,
+    });
+
     throw new UnauthorizedError(
       'Dieses Konto ist deaktiviert. Bitte kontaktieren Sie uns, wenn Sie Fragen haben.',
     );
@@ -213,14 +239,13 @@ export async function login(params: { input: LoginInput; ip: string }) {
 
   if (!valid) {
     const failedCount = user.failedLoginCount + 1;
+    const gesperrt = failedCount >= MAX_FAILED_LOGINS;
+
     await prisma.user.update({
       where: { id: user.id },
       data: {
         failedLoginCount: failedCount,
-        lockedUntil:
-          failedCount >= MAX_FAILED_LOGINS
-            ? new Date(Date.now() + LOCKOUT_MINUTES * 60_000)
-            : null,
+        lockedUntil: gesperrt ? new Date(Date.now() + LOCKOUT_MINUTES * 60_000) : null,
       },
     });
 
@@ -232,6 +257,32 @@ export async function login(params: { input: LoginInput; ip: string }) {
       summary: `Fehlgeschlagener Login (${failedCount}/${MAX_FAILED_LOGINS})`,
       ip: params.ip,
     });
+
+    await recordSecurityEvent({
+      organizationId: user.organizationId,
+      userId: user.id,
+      kind: 'LOGIN_FAILED',
+      summary: `Fehlgeschlagene Anmeldung (${failedCount}/${MAX_FAILED_LOGINS})`,
+      context: { versuche: failedCount, grenze: MAX_FAILED_LOGINS },
+      ip: params.ip,
+    });
+
+    /**
+     * Die Sperre bekommt ein **eigenes** Ereignis und ersetzt den Fehlversuch
+     * nicht. Beides sind verschiedene Aussagen: Der Fehlversuch ist der achte
+     * einer Reihe, die Sperre ist die Folge daraus. Wer später nachvollzieht,
+     * was geschah, will die Reihe sehen und den Moment, in dem sie abriss.
+     */
+    if (gesperrt) {
+      await recordSecurityEvent({
+        organizationId: user.organizationId,
+        userId: user.id,
+        kind: 'ACCOUNT_LOCKED',
+        summary: `Konto nach ${failedCount} Fehlversuchen für ${LOCKOUT_MINUTES} Minuten gesperrt`,
+        context: { minuten: LOCKOUT_MINUTES },
+        ip: params.ip,
+      });
+    }
 
     throw new UnauthorizedError('E-Mail-Adresse oder Passwort ist falsch.');
   }
@@ -285,6 +336,24 @@ export async function login(params: { input: LoginInput; ip: string }) {
     entity: 'User',
     entityId: user.id,
     summary: 'Erfolgreiche Anmeldung',
+    ip: params.ip,
+  });
+
+  /**
+   * Auch die geglückte Anmeldung gehört in den Strom, obwohl sie alltäglich
+   * ist. Ohne sie beantwortet das Sicherheitszentrum die wichtigste Frage
+   * nicht: Was ist nach der Reihe von Fehlversuchen passiert? Ein Protokoll,
+   * das nur das Auffällige sammelt, zeigt den Einbruch — nicht, ob er
+   * gelungen ist.
+   */
+  await recordSecurityEvent({
+    organizationId: user.organizationId,
+    userId: user.id,
+    kind: 'LOGIN_SUCCEEDED',
+    // Hier ist der Zweitfaktor aus — mit ihm wäre der Ablauf oben schon
+    // beendet. Die Anmeldung *mit* zweitem Faktor meldet `two-factor.service`,
+    // sobald der Code stimmt.
+    summary: 'Anmeldung mit Passwort',
     ip: params.ip,
   });
 
@@ -402,6 +471,14 @@ export async function resetPassword(params: {
     summary: 'Passwort über Reset-Link geändert',
     ip: params.ip,
   });
+
+  await recordSecurityEvent({
+    organizationId: record.user.organizationId,
+    userId: record.user.id,
+    kind: 'PASSWORD_CHANGED',
+    summary: 'Passwort über Zurücksetzungslink geändert — alle Sitzungen beendet',
+    ip: params.ip,
+  });
 }
 
 export async function changePassword(params: {
@@ -439,6 +516,14 @@ export async function changePassword(params: {
     entity: 'User',
     entityId: user.id,
     summary: 'Passwort geändert',
+    ip: params.ip,
+  });
+
+  await recordSecurityEvent({
+    organizationId: user.organizationId,
+    userId: user.id,
+    kind: 'PASSWORD_CHANGED',
+    summary: 'Passwort im Konto geändert — andere Sitzungen beendet',
     ip: params.ip,
   });
 }

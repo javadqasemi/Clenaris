@@ -1,4 +1,4 @@
-﻿import 'server-only';
+import 'server-only';
 
 import type { FileScope, Prisma } from '@prisma/client';
 
@@ -13,6 +13,7 @@ import {
   ValidationError,
 } from '@/lib/errors';
 import { audit } from '@/lib/audit';
+import { recordSecurityEvent } from '@/lib/security/record';
 import { logger } from '@/lib/logger';
 import { readStoredBytes, verifyBytes, type UploadProfile } from '@/lib/storage';
 import { pruefeDateipolitik } from '@/lib/storage/dateipolitik';
@@ -228,7 +229,34 @@ export async function finalizeUpload(params: {
    * Rechner der Person, die ihn herunterlädt, nicht. Windows blendet bekannte
    * Endungen standardmässig aus; im Ordner steht dann `rechnung.pdf`.
    */
-  pruefeDateipolitik(params.filename, befund.mimeType);
+  try {
+    pruefeDateipolitik(params.filename, befund.mimeType);
+  } catch (fehler) {
+    /**
+     * Die Ablehnung wird gemeldet und dann unverändert weitergeworfen.
+     *
+     * Der Grund für das Protokoll ist nicht die einzelne Datei — die ist
+     * abgewiesen und damit erledigt. Es ist das Muster: Eine `.exe` unter
+     * falschem Namen kommt gelegentlich versehentlich vorbei, zwanzig davon
+     * aus derselben Sitzung nicht. Ohne Eintrag wäre der Unterschied für
+     * niemanden sichtbar.
+     *
+     * Der Dateiname steht im Zusammenhang, weil er hier der Gegenstand ist.
+     */
+    await recordSecurityEvent({
+      organizationId: ticket.organizationId,
+      userId: params.session?.id ?? null,
+      kind: 'FILE_POLICY_REJECTED',
+      summary:
+        fehler instanceof ValidationError
+          ? fehler.message
+          : 'Datei wegen Name, Endung oder Typ abgewiesen',
+      context: { filename: params.filename, mimeType: befund.mimeType },
+      ip: params.ip,
+    });
+
+    throw fehler;
+  }
 
   const { scope, oeffentlich, beziehung } = zuordnungFuer(
     ticket.profile as UploadProfile,
@@ -419,6 +447,10 @@ export async function scanFileAsset(fileAssetId: string): Promise<ScanErgebnis> 
       provenance: true,
       scanStatus: true,
       scanAttempts: true,
+      // Für das Sicherheitsereignis: Bei einem Fund soll auf der Übersicht
+      // stehen, über wessen Anmeldung die Datei hereinkam. `null` bei den
+      // beiden Wegen ohne Anmeldung (Buchungsfoto, Bewerbungsunterlage).
+      uploadedById: true,
       storedFile: { select: { id: true, path: true, driver: true } },
     },
   });
@@ -474,6 +506,19 @@ export async function scanFileAsset(fileAssetId: string): Promise<ScanErgebnis> 
      * ohne Prüfung" die ganze Kette entwerten würde.
      */
     await abschluss({ scanStatus: 'ERROR', lastScanErrorCode: 'NO_SCANNER', scanner: null });
+
+    /**
+     * Ein Betriebszustand, kein Dateiproblem — deshalb `SCANNER_MISSING` und
+     * nicht `FILE_SCAN_UNAVAILABLE`. Die Unterscheidung zählt: Bei „nicht
+     * erreichbar" wartet man, bei „nicht eingerichtet" stellt man etwas ein.
+     */
+    await recordSecurityEvent({
+      organizationId: asset.organizationId,
+      kind: 'SCANNER_MISSING',
+      summary: 'Datei angenommen, aber kein Prüfer eingerichtet — sie bleibt gesperrt',
+      context: { fileAssetId: asset.id },
+    });
+
     return { status: 'ERROR', code: 'NO_SCANNER' };
   }
 
@@ -508,6 +553,19 @@ export async function scanFileAsset(fileAssetId: string): Promise<ScanErgebnis> 
       entityId: asset.id,
       summary: 'Datei in Quarantäne: Die Bytes weichen von der beim Abschluss gebildeten Prüfsumme ab.',
     });
+    /**
+     * Der schwerere der beiden Quarantänefälle. Ein Fund heisst, der Prüfer
+     * hat gearbeitet. Veränderte Bytes heissen, jemand hatte Zugriff auf die
+     * Ablage — und dann ist diese eine Datei die kleinere Frage.
+     */
+    await recordSecurityEvent({
+      organizationId: asset.organizationId,
+      kind: 'FILE_QUARANTINED',
+      summary:
+        'Die gespeicherten Bytes weichen von der beim Abschluss gebildeten Prüfsumme ab — Datei isoliert',
+      context: { fileAssetId: asset.id, filename: asset.filename, grund: 'CHECKSUM_MISMATCH' },
+    });
+
     log.error('Prüfsumme weicht ab — Datei in Quarantäne', { fileAssetId: asset.id });
     return { status: 'QUARANTINED', grund: 'CHECKSUM_MISMATCH' };
   }
@@ -548,6 +606,19 @@ export async function scanFileAsset(fileAssetId: string): Promise<ScanErgebnis> 
       entityId: asset.id,
       summary: `Schadsoftware gefunden (${name}) — Datei in Quarantäne.`,
     });
+    await recordSecurityEvent({
+      organizationId: asset.organizationId,
+      userId: asset.uploadedById ?? null,
+      kind: 'FILE_SCAN_INFECTED',
+      summary: `Schadsoftware gefunden (${name}) — Datei isoliert`,
+      context: {
+        fileAssetId: asset.id,
+        filename: asset.filename,
+        detectionName: name,
+        scanner: scanner.name,
+      },
+    });
+
     log.error('Schadsoftware gefunden', { fileAssetId: asset.id, detectionName: name });
     return { status: 'INFECTED', detectionName: name };
   }
@@ -559,6 +630,24 @@ export async function scanFileAsset(fileAssetId: string): Promise<ScanErgebnis> 
     scannerVersion: version,
     lastScanErrorCode: code,
   });
+  /**
+   * Nur nach dem **letzten** Versuch. Ein Fehlschlag mitten in der Reihe
+   * erzeugt kein Ereignis: Ein kurzer Netzaussetzer meldete sonst für jede
+   * gerade hochgeladene Datei eine Zeile, und ein Protokoll, das bei einer
+   * Störung überläuft, wird beim nächsten Mal nicht mehr gelesen.
+   *
+   * `scanAttempts` ist zu Beginn dieses Laufs bereits erhöht worden — der
+   * Vergleich `>=` trifft also den Lauf, nach dem nichts mehr folgt.
+   */
+  if (asset.scanAttempts + 1 >= SCAN_MAX_ATTEMPTS) {
+    await recordSecurityEvent({
+      organizationId: asset.organizationId,
+      kind: 'FILE_SCAN_UNAVAILABLE',
+      summary: `Prüfung nach ${SCAN_MAX_ATTEMPTS} Versuchen ohne Ergebnis (${code}) — Datei bleibt gesperrt`,
+      context: { fileAssetId: asset.id, filename: asset.filename, code },
+    });
+  }
+
   log.warn('Prüflauf ohne Ergebnis', { fileAssetId: asset.id, code });
   return { status: 'ERROR', code };
 }

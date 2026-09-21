@@ -4,6 +4,7 @@ import { Prisma, type UserRole } from '@prisma/client';
 
 import { prisma } from '@/lib/db';
 import { audit, diff } from '@/lib/audit';
+import { recordSecurityEvent } from '@/lib/security/record';
 import { BusinessRuleError, ConflictError, ForbiddenError, NotFoundError } from '@/lib/errors';
 import { assignableRoles, ROLE_LABELS, type ActorRole } from '@/lib/auth/rbac';
 import type { UpdateUserInput } from '@/lib/validation/users';
@@ -163,6 +164,30 @@ export async function updateUser({
       ip,
     });
 
+    /**
+     * Nur der Statuswechsel erzeugt ein Sicherheitsereignis, nicht jede
+     * Änderung an einem Konto.
+     *
+     * Eine geänderte Telefonnummer gehört ins Prüfprotokoll und nirgendwo
+     * sonst hin. Stilllegen und Wiederaktivieren sind etwas anderes: Sie
+     * entscheiden, ob sich jemand anmelden kann, und beide Richtungen sind
+     * interessant — die Sperre, weil sie jemanden aussperrt, die Aufhebung,
+     * weil sie jemandem den Zugang zurückgibt.
+     */
+    if (input.status !== undefined && input.status !== before.status) {
+      await recordSecurityEvent({
+        organizationId,
+        userId,
+        kind: input.status === 'ACTIVE' ? 'USER_REACTIVATED' : 'USER_SUSPENDED',
+        summary:
+          input.status === 'ACTIVE'
+            ? 'Konto wieder aktiviert'
+            : `Konto stillgelegt (${input.status})`,
+        context: { von: before.status, zu: input.status, durch: actorId },
+        ip,
+      });
+    }
+
     return user;
   } catch (error) {
     if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
@@ -256,6 +281,33 @@ export async function assignRole({
     entityId: userId,
     summary: `Rolle von ${user.email}: ${ROLE_LABELS[target.role]} → ${ROLE_LABELS[role]}`,
     changes: { role: { from: target.role, to: role } },
+    ip,
+  });
+
+  /**
+   * `CRITICAL` und damit bestätigungspflichtig — auch bei einer Herabstufung.
+   *
+   * Der Gedanke „nur Höherstufungen sind interessant" ist naheliegend und
+   * falsch: Eine Herabstufung, die niemand veranlasst hat, ist genauso ein
+   * Zeichen wie eine Höherstufung, und wer die Rechteverwaltung übernommen
+   * hat, probiert beide Richtungen. Die Zeile steht am **betroffenen** Konto,
+   * wer sie ausgelöst hat, steht im Zusammenhang.
+   */
+  await recordSecurityEvent({
+    organizationId,
+    userId,
+    kind: 'ROLE_ASSIGNED',
+    summary: `Rolle geändert: ${ROLE_LABELS[target.role]} → ${ROLE_LABELS[role]}`,
+    context: { von: target.role, zu: role, durch: actorId },
+    ip,
+  });
+
+  await recordSecurityEvent({
+    organizationId,
+    userId,
+    kind: 'SESSIONS_REVOKED',
+    summary: 'Alle Sitzungen beendet — Rollenänderung',
+    context: { durch: actorId },
     ip,
   });
 
