@@ -1,0 +1,394 @@
+﻿# Clenaris — Feature Matrix
+
+**Stand:** 2026-09-21 · **Grundlage:** Arbeitsbaum, Basis `main` = `7ec5d74`
+**Ausführlicher Bericht:** [`CLENARIS_ENTERPRISE_SYSTEM_REPORT.md`](CLENARIS_ENTERPRISE_SYSTEM_REPORT.md)
+
+Die IDs sind stabil und für spätere Entwicklungswellen gedacht.
+
+## Legende
+
+| Kürzel | Bedeutung |
+|---|---|
+| **C+V** | COMPLETE + VERIFIED — implementiert **und** durch benannte Tests belegt |
+| **C** | COMPLETE — implementiert und technisch nutzbar, ohne gezielten Testbeleg |
+| **C/EVR** | COMPLETE / EXTERNAL VERIFICATION REQUIRED — Code vollständig, Wirksamkeit aber nur ausserhalb dieses Repositorys nachweisbar (reale Pipeline, echter Anbieter, echte Infrastruktur). **Zählt nicht als erledigt.** |
+| **P** | PARTIAL — wesentliche Teile da, Prozess nicht vollständig |
+| **BO** | BACKEND ONLY — Logik da, keine Bedienoberfläche |
+| **FO** | FRONTEND ONLY — Oberfläche da, Fachlogik fehlt |
+| **SO** | SCHEMA ONLY — nur Datenmodell |
+| **NI** | NOT IMPLEMENTED |
+
+Spalten `FE` (Frontend), `BE` (Backend), `DB`, `RBAC`, `SEC` (eigener Sicherheitsmechanismus), `T` (HTTP-Prüfung), `E2E` (Browser): `✓` vorhanden · `○` teilweise · `–` nicht vorhanden/nicht anwendbar.
+
+---
+
+## Gesamtverteilung
+
+*Stand nach Wave 0 (2026-09-21). Änderungen gegenüber der Erstfassung sind unten begründet.*
+
+| Status | Anzahl | Anteil |
+|---|---|---|
+| COMPLETE + VERIFIED | **80** | 45 % |
+| COMPLETE | **56** | 32 % |
+| COMPLETE / EXTERNAL VERIFICATION REQUIRED | **4** | 2 % |
+| PARTIAL | **19** | 11 % |
+| BACKEND ONLY | **2** | 1 % |
+| FRONTEND ONLY | **1** | 1 % |
+| SCHEMA ONLY | **4** | 2 % |
+| NOT IMPLEMENTED | **10** | 6 % |
+| **Summe** | **176** | **100 %** |
+
+**Technisch nutzbar (C+V oder C): 136 von 176 = 77 %.**
+**Durch Tests belegt: 80 von 176 = 45 %.**
+
+### Änderungen in Wave 0
+
+| Änderung | Begründung |
+|---|---|
+| **INF-001 … INF-004: C → C/EVR** | Die reale Pipeline war noch nie grün (0 von 6 Läufen, 0 Deployments). Code allein ist kein Nachweis, dass eine Auslieferung funktioniert. Auf ausdrücklichen Hinweis hin zurückgestuft. |
+| **SEC-021 neu: NOT IMPLEMENTED** | Lohn- und Bankdaten werden **nicht** verschlüsselt — nur AHV-Nummer, Alarmcode und TOTP-Geheimnis. Der Erstbericht hatte das falsch dargestellt. |
+
+---
+
+## SEC — Plattform und Sicherheit (20)
+
+| ID | Feature | FE | BE | DB | RBAC | SEC | T | E2E | Status | Evidence | Missing Work |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| SEC-001 | Anmeldung / Abmeldung | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | – | **C+V** | `src/app/api/auth/*`, `auth.service.ts`, `two-factor.test.ts` | – |
+| SEC-002 | Passwort-Hashing Argon2id | – | ✓ | ✓ | – | ✓ | ✓ | – | **C+V** | `src/lib/auth/password.ts`, `@node-rs/argon2` | – |
+| SEC-003 | Zugangstoken 15 min | – | ✓ | – | – | ✓ | ✓ | – | **C+V** | `src/lib/auth/jwt.ts`, `session-refresh.test.ts` | – |
+| SEC-004 | Refresh-Rotation + Leerlauffenster | ✓ | ✓ | ✓ | – | ✓ | ✓ | – | **C+V** | `session-refresh.service.ts`, `session-refresh.test.ts` (5) | – |
+| SEC-005 | Sofortiger Sitzungswiderruf | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | – | **C+V** | `User.sessionsRevokedAt`, `two-factor.test.ts` | – |
+| SEC-006 | Zwei-Faktor-Anmeldung (TOTP) | ✓ | ✓ | ✓ | – | ✓ | ✓ | – | **C+V** | `totp.ts`, `two-factor.service.ts`, `two-factor.test.ts` (28) | – |
+| SEC-007 | Passwort zurücksetzen | ✓ | ✓ | ✓ | – | ✓ | ○ | – | **C** | `/auth/passwort-vergessen`, `/auth/passwort-neu` | eigene Prüfungen |
+| SEC-008 | Kontoaktivierung / Einladung | ✓ | ✓ | ✓ | ✓ | ✓ | ○ | – | **C** | `/auth/einladung`, `/auth/verifizieren` | eigene Prüfungen |
+| SEC-009 | RBAC — 215 Rechte, 6 Rollen | ✓ | ✓ | – | ✓ | ✓ | ✓ | – | **C+V** | `permissions.ts` (215), `rbac.ts`, `rbac.test.ts` (25) | – |
+| SEC-010 | Routen-Wächter (Middleware) | – | ✓ | – | ✓ | ✓ | ✓ | – | **C+V** | `src/middleware.ts`, `ROUTE_GUARDS`, `PERMISSION_ROUTES` | – |
+| SEC-011 | Eigentümerfilter in der Abfrage | – | ✓ | ✓ | ✓ | ✓ | ✓ | – | **C+V** | `ownership.test.ts` (9) | – |
+| SEC-012 | Mandantentrennung (`organizationId`) | – | ✓ | ✓ | ✓ | ✓ | ○ | – | **C** | 65/117 Modelle, `dispatch.test.ts` | systematische Vollprüfung |
+| SEC-013 | CSRF / Herkunftsprüfung | – | ✓ | – | – | ✓ | ○ | – | **C** | `assertTrustedOrigin` in `handler.ts` | eigene Prüfung |
+| SEC-014 | Rate-Limiting — 24 Klassen | – | ✓ | – | – | ✓ | ✓ | – | **C+V** | `rate-limit.ts`, `rate-limit.test.ts` (4) | Benachrichtigungen ergänzen |
+| SEC-015 | Öffentliche Zugriffstokens | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | **C+V** | `access-token.service.ts`, 40 Prüfungen | Ausstellung protokollieren |
+| SEC-016 | Feldverschlüsselung AES-256-GCM | – | ✓ | ✓ | – | ✓ | ✓ | – | **C+V** | `crypto.ts`, `verschluesselung.test.ts` (9) | – |
+| SEC-017 | Prüfprotokoll (`AuditLog`) | ✓ | ✓ | ✓ | ✓ | ✓ | ○ | – | **P** | `audit.ts`, 223 Aufrufe / 60 Dateien | Zuteilung, Objekt, Token |
+| SEC-018 | Sicherheitskopfzeilen / CSP | – | ✓ | – | – | ✓ | ○ | – | **C** | `next.config.ts` | – |
+| SEC-019 | Schlüsselrotation | – | – | – | – | – | – | – | **NI** | S-08; `crypto.ts` kennt keine | Zweitschlüsselpfad + Skript |
+| SEC-020 | Virenprüfung bei Uploads | – | – | – | – | – | – | – | **NI** | keine Codestelle | Prüfdienst anbinden (Wave 2) |
+| SEC-021 | Verschlüsselung von Lohn- und Bankdaten | – | – | ✓ | ✓ | – | – | – | **NI** | `employee.service.ts:104–105,140–141,252–253` schreibt `hourlyRate`/`monthlySalary` **im Klartext**; `CRYPTO_CONTEXT` kennt nur 2FA, AHV, Alarmcode | Kontexte ergänzen, Bestand umschlüsseln (Wave 4) |
+
+---
+
+## SIG — Elektronische Unterzeichnung (9)
+
+| ID | Feature | FE | BE | DB | RBAC | SEC | T | E2E | Status | Evidence | Missing Work |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| SIG-001 | Signaturkern — Bindung an Bytes | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | **C+V** | `signature.service.ts`, `signatur.test.ts` (25) | – |
+| SIG-002 | Artefakte A / B / C | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | **C+V** | `signature-artifacts.ts`, geprüft B≠A, C≠A/B | – |
+| SIG-003 | Tokentausch genau einmal sichtbar | ✓ | ✓ | ✓ | – | ✓ | ✓ | ✓ | **C+V** | `signatur.test.ts` | – |
+| SIG-004 | Einmalcode — Argon2, Sperre, Einmaligkeit | ✓ | ✓ | ✓ | – | ✓ | ✓ | – | **C+V** | `signature-otp.ts`, `SignatureOtpChallenge` | – |
+| SIG-005 | Zustimmung — versioniert, gehasht | ✓ | ✓ | ✓ | – | ✓ | ✓ | ✓ | **C+V** | `src/lib/signature/`, `signatur.test.ts` | – |
+| SIG-006 | Append-only Ereignisse (4 Trigger) | – | ✓ | ✓ | – | ✓ | ✓ | – | **C+V** | Migration `…_signatur_kern` | – |
+| SIG-007 | Offertannahme mit Unterschrift | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | **C+V** | `quote-acceptance.service.ts`, `offertannahme.test.ts` (16), `gate4c` (3) | – |
+| SIG-008 | Vor-Ort-Abnahme | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | **C+V** | `job-acceptance.service.ts`, `vor-ort-abnahme.test.ts` (19), `gate4d-abnahme` (3) | – |
+| SIG-009 | Gerätesperre — 423, Rotationsfamilie | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | **C+V** | `device-handoff.service.ts`, `gate4d-sperre` (8) | – |
+
+---
+
+## WEB — Website und CMS (14)
+
+| ID | Feature | FE | BE | DB | RBAC | SEC | T | E2E | Status | Evidence | Missing Work |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| WEB-001 | Öffentliche Website — 29 Seiten | ✓ | ✓ | ✓ | – | ✓ | ✓ | – | **C+V** | `src/app/(public)`, `public-site.test.ts` (4) | – |
+| WEB-002 | CMS — Bearbeitung in der echten Seite | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | – | **C+V** | `editable.tsx`, `preview-bridge.tsx`, `cms.test.ts` (16) | – |
+| WEB-003 | Entwurf → Veröffentlichung → Revisionen | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | – | **C+V** | Migration `…_content_draft_publish_revisions` | – |
+| WEB-004 | SEO-Angaben | ✓ | ✓ | ✓ | ✓ | – | ✓ | – | **C+V** | `/admin/seo`, `cms.test.ts` | – |
+| WEB-005 | Handlungsaufrufe (CTA) mit Terminierung | ✓ | ✓ | ✓ | ✓ | – | ○ | – | **C** | `/admin/cta`, 5 Dateien / 8 Ops | Prüfungen |
+| WEB-006 | Navigation pflegen | ✓ | ✓ | ✓ | ✓ | – | ✓ | – | **C** | `website-ops.test.ts` | – |
+| WEB-007 | Rechtstexte | ✓ | ✓ | ✓ | ✓ | – | ✓ | – | **C** | `website-ops.test.ts` | – |
+| WEB-008 | Galerie | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | – | **C** | `GalleryItem`, Asset-Allowlist | – |
+| WEB-009 | FAQ | ✓ | ✓ | ✓ | ✓ | – | ✓ | – | **C** | `website-ops.test.ts` | – |
+| WEB-010 | Blog | ✓ | ✓ | ✓ | ✓ | – | ○ | – | **C** | `/admin/blog`, `BlogPost` | Prüfungen |
+| WEB-011 | Bewertungen / Moderation | ✓ | ✓ | ✓ | ✓ | – | ✓ | – | **C** | `review:moderate` | – |
+| WEB-012 | Mediathek | ✓ | ✓ | ✓ | ✓ | ✓ | ○ | – | **C** | `/admin/medien`, `media:*` | Prüfungen |
+| WEB-013 | Strukturierte Daten | ○ | ○ | – | – | – | – | – | **P** | Metadaten je Seite | Nachweis, Schema.org-Abdeckung |
+| WEB-014 | Cookie-/Consent-Steuerung | ○ | – | – | – | – | – | – | **P** | `/legal/cookies` vorhanden | Banner mit Wirkung auf Zähler |
+
+---
+
+## CRM — Kundenbeziehung (10)
+
+| ID | Feature | FE | BE | DB | RBAC | SEC | T | E2E | Status | Evidence | Missing Work |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| CRM-001 | Leads / Pipeline | ✓ | ✓ | ✓ | ✓ | ✓ | ○ | – | **C** | `/admin/leads` (+3), 4 Dateien / 6 Ops | Prüfungen |
+| CRM-002 | Kundenakte | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | – | **C+V** | `crm.service.ts`, `flows.test.ts` (34) | – |
+| CRM-003 | Kundenadressen | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | – | **C+V** | `address.service.ts`, `addresses.test.ts` (28) | – |
+| CRM-004 | Kontakte | ✓ | ✓ | ✓ | ✓ | ✓ | ○ | – | **C** | `Contact`, Kundendetail | Prüfungen |
+| CRM-005 | Aktivitäten / Zeitachse | ✓ | ✓ | ✓ | ✓ | ✓ | ○ | – | **C** | `/api/activities` | Ändern/Löschen fehlt |
+| CRM-006 | Aufgaben | ✓ | ✓ | ✓ | ✓ | ✓ | ○ | – | **C** | `/admin/aufgaben`, `Task` | Prüfungen |
+| CRM-007 | Nachrichtenverläufe | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | – | **C+V** | `flows.test.ts`, `ownership.test.ts` | – |
+| CRM-008 | Schlagworte (Tags) | ✓ | ✓ | ✓ | ✓ | – | ○ | – | **C** | `Tag`, `LeadTag`, verschachtelt | Prüfungen |
+| CRM-009 | Kundenportal — 11 Seiten | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | – | **C** | `src/app/(app)/konto`, `smoke.test.ts` | – |
+| CRM-010 | Globale Suche | – | – | – | – | – | – | – | **NI** | keine Codestelle | modulübergreifende Suche |
+
+---
+
+## PROP — Objekte (4)
+
+| ID | Feature | FE | BE | DB | RBAC | SEC | T | E2E | Status | Evidence | Missing Work |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| PROP-001 | Objekte CRUD | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | – | **C+V** | `property.service.ts`, `ownership.test.ts` | Protokollierung |
+| PROP-002 | Alarmcode verschlüsselt | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | – | **C+V** | `CRYPTO_CONTEXT.alarmCode`, `verschluesselung.test.ts` | – |
+| PROP-003 | Zugangsdaten nur für die zugeteilte Person | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | – | **C+V** | `job.service.ts:1863`, `dispatch.test.ts` | – |
+| PROP-004 | Liegenschaften (`Building`) | – | – | ✓ | – | – | – | – | **SO** | Modell ohne jede Codeberührung | Dienst, Route, Maske |
+
+---
+
+## BOOK — Buchungen (7)
+
+| ID | Feature | FE | BE | DB | RBAC | SEC | T | E2E | Status | Evidence | Missing Work |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| BOOK-001 | Online-Buchungsstrecke | ✓ | ✓ | ✓ | – | ✓ | ✓ | – | **C+V** | `features/booking/steps.tsx`, `flows.test.ts` | – |
+| BOOK-002 | Preisvorschau serverseitig | ✓ | ✓ | – | – | ✓ | ✓ | – | **C+V** | `/api/public/pricing/estimate`, `catalog.test.ts` | – |
+| BOOK-003 | Verfügbarkeit / freie Termine | ✓ | ✓ | ✓ | – | ✓ | ○ | – | **C** | `availability.service.ts` | Prüfungen |
+| BOOK-004 | Büroerfassung | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | – | **C+V** | `dispatch.test.ts` (22) | – |
+| BOOK-005 | Kundenabgleich / -anlage | – | ✓ | ✓ | ✓ | ✓ | ✓ | – | **C+V** | `booking.service.ts`, `flows.test.ts` | – |
+| BOOK-006 | Stornierung (auch durch Kundschaft) | ✓ | ✓ | ✓ | ✓ | ✓ | ○ | – | **C** | `booking:write_own` | Prüfungen |
+| BOOK-007 | Serienbuchungen | ○ | ✓ | ✓ | ✓ | ✓ | ○ | – | **C** | `generateRecurringBookings`, Cron | Prüfungen |
+
+---
+
+## QUOTE — Offerten (8)
+
+| ID | Feature | FE | BE | DB | RBAC | SEC | T | E2E | Status | Evidence | Missing Work |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| QUOTE-001 | Offerte anlegen, Positionen | ✓ | ✓ | ✓ | ✓ | ✓ | ○ | – | **C** | `quote.service.ts`, `QuoteItem` verschachtelt | Prüfungen der Maske |
+| QUOTE-002 | Serverseitige Totale, Rabatt, MwSt. | – | ✓ | ✓ | – | ✓ | ✓ | – | **C+V** | `quote.service.ts:77–125` | – |
+| QUOTE-003 | Offert-PDF | – | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | **C+V** | `documents.tsx`, `pdf-auslieferung.test.ts` | – |
+| QUOTE-004 | Versand mit Zugriffstoken | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | **C+V** | `oeffentlicher-zugang.test.ts` (18) | – |
+| QUOTE-005 | Annahme mit Unterschrift | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | **C+V** | `offertannahme.test.ts` (16), `gate4c` (3) | – |
+| QUOTE-006 | Ablehnung (terminal) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | **C+V** | `offertannahme.test.ts` | – |
+| QUOTE-007 | Ablauf (`validUntil`) | – | ✓ | ✓ | – | ✓ | ✓ | – | **C** | `processExpiringQuotes`, Cron | – |
+| QUOTE-008 | Umwandlung in Einsatz / Rechnung | ✓ | ✓ | ✓ | ✓ | ✓ | ○ | – | **P** | `quote:convert` | Prüfungen, Vollständigkeit |
+
+---
+
+## CTR — Verträge und wiederkehrende Leistungen (2)
+
+| ID | Feature | FE | BE | DB | RBAC | SEC | T | E2E | Status | Evidence | Missing Work |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| CTR-001 | Vertragsmodell (Laufzeit, Verlängerung, Kündigung) | – | – | – | – | – | – | – | **NI** | kein `Contract` im Schema | vollständig zu bauen |
+| CTR-002 | Wiederkehrende Leistungen über Serienbuchung | ○ | ✓ | ✓ | ✓ | ✓ | ○ | – | **P** | `generateRecurringBookings` | Laufzeit, Kündigung, Indexierung |
+
+---
+
+## JOB — Einsätze und Disposition (13)
+
+| ID | Feature | FE | BE | DB | RBAC | SEC | T | E2E | Status | Evidence | Missing Work |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| JOB-001 | Einsatz anlegen (aus Buchung/Offerte/manuell) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | – | **C+V** | `job.service.ts`, `dispatch.test.ts` | – |
+| JOB-002 | Zustandsmaschine | ✓ | ✓ | ✓ | ✓ | ✓ | ○ | – | **C** | `JobStatus` | Übergangsprüfungen |
+| JOB-003 | Team mit mehreren Personen und Rollen | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | – | **C+V** | `jobs.test.ts` (6) | – |
+| JOB-004 | Materialverbrauch als Aufwand | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | – | **C+V** | `jobs.test.ts` | – |
+| JOB-005 | Lohnkosten aus Team und Plan | – | ✓ | ✓ | ✓ | ✓ | ✓ | – | **C+V** | `jobs.test.ts` | – |
+| JOB-006 | Rapport | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | **C+V** | `vor-ort-abnahme.test.ts` | – |
+| JOB-007 | Einsatzkalender | ✓ | ✓ | ✓ | ✓ | ✓ | ○ | – | **C** | FullCalendar, `/admin/kalender` | Darstellungsprüfungen |
+| JOB-008 | Zuteilung mit Eignungsprüfung | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | – | **C+V** | `assignment.service.ts`, `dispatch.test.ts` | **Protokollierung** |
+| JOB-009 | Abwesenheit blockiert / warnt | – | ✓ | ✓ | ✓ | ✓ | ✓ | – | **C+V** | `dispatch.test.ts` | – |
+| JOB-010 | Arbeitszeiten in der Eignungsprüfung | – | ✓ | ✓ | – | – | ○ | – | **P** | `assignment.service.ts:162` | Pflegemaske |
+| JOB-011 | Fähigkeiten in der Eignungsprüfung | – | ○ | ✓ | – | – | – | – | **P** | nur `suggestStaffing` | Pflegemaske, echte Prüfregel |
+| JOB-012 | Verschieben / Umteilen | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | – | **C+V** | `moveJob`, `dispatch.test.ts` | – |
+| JOB-013 | Keine doppelten Einsätze aus einer Buchung | – | ✓ | ✓ | – | ✓ | ✓ | – | **C+V** | `dispatch.test.ts` | – |
+
+---
+
+## EMP — Personal (14)
+
+| ID | Feature | FE | BE | DB | RBAC | SEC | T | E2E | Status | Evidence | Missing Work |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| EMP-001 | Personalakte anlegen | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | – | **C+V** | `employee.service.ts`, `employees.test.ts` (10) | – |
+| EMP-002 | Profil bearbeiten (inkl. `null`-Leerung) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | – | **C+V** | `employees.test.ts` | – |
+| EMP-003 | Lohn-, AHV- und Bankfelder für MANAGER gesperrt | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | – | **C+V** | `employees.test.ts` | – |
+| EMP-004 | Lohnhistorie (`SalaryRecord`) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | – | **C+V** | `employee.service.ts:132–278` | – |
+| EMP-005 | Konto, Zugangslink, Passwortzwang, Sperre | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | – | **C+V** | `employees.test.ts` | – |
+| EMP-006 | Rolle über die Personalakte | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | – | **C** | `ownership.test.ts` | – |
+| EMP-007 | Stilllegen / Personalnummer eindeutig | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | – | **C** | `employees.test.ts` | – |
+| EMP-008 | Fähigkeiten (`EmployeeSkill`) | – | ○ | ✓ | – | – | – | – | **BO** | gelesen `/ueber-uns`, `employee.service.ts:383` | CRUD, Maske, Rechte |
+| EMP-009 | Arbeitszeiten (`Availability`) | – | ○ | ✓ | – | – | – | – | **BO** | Vorgabe bei Anlage, gelesen in der Disposition | CRUD, Maske |
+| EMP-010 | Zeiterfassung | ✓ | ✓ | ✓ | ✓ | ✓ | – | – | **C** | `/api/time`, `/portal/zeiterfassung` | **Prüfungen** |
+| EMP-011 | Abwesenheiten (Antrag, Bewilligung, Rückzug) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | – | **C+V** | `crud-audit.test.ts`, `dispatch.test.ts` | – |
+| EMP-012 | Stellen und Bewerbungen | ✓ | ✓ | ✓ | ✓ | ✓ | ○ | – | **P** | `/karriere`, `/admin/personal/bewerbungen` | Prüfungen, Bewerberweg |
+| EMP-013 | **Lohnabrechnung** | – | – | – | ✓ | – | – | – | **NI** | nur `payslip:create`/`payslip:read_own` | Modell, Dienst, Route, PDF, AHV/ALV/BVG/UVG |
+| EMP-014 | Seite `/portal/lohn` | ✓ | – | – | ✓ | – | – | – | **FO** | Seite vorhanden, Inhalt kann nicht entstehen | siehe EMP-013 |
+
+---
+
+## INV — Finanzen (13)
+
+| ID | Feature | FE | BE | DB | RBAC | SEC | T | E2E | Status | Evidence | Missing Work |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| INV-001 | Rechnung anlegen und ausstellen | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | – | **C+V** | `invoice.service.ts`, `flows.test.ts` | – |
+| INV-002 | Nummernkreis in der Transaktion | – | ✓ | ✓ | – | ✓ | ○ | – | **C** | `numbering.service.ts` | Nebenläufigkeitsprüfung |
+| INV-003 | Swiss QR-Rechnung (SIX v2.3) | – | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | **C+V** | `swiss-qr.ts`, `pdf-auslieferung.test.ts` | – |
+| INV-004 | Versand mit Zahllink | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | – | **C+V** | `oeffentlicher-zugang.test.ts` | – |
+| INV-005 | Mahnlauf | – | ✓ | ✓ | ✓ | ✓ | ○ | – | **C** | `processOverdueInvoices`, Cron | Prüfungen |
+| INV-006 | Unveränderlichkeit ausgestellter Rechnungen | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | – | **C** | `invoice:update` nur Entwurf | – |
+| INV-007 | Gutschriften | ✓ | ✓ | ✓ | ✓ | ✓ | ○ | – | **C** | `CreditNote` | Prüfungen |
+| INV-008 | Zahlungen manuell verbuchen | ✓ | ✓ | ✓ | ✓ | ✓ | ○ | – | **C** | `payment:create` | Prüfungen |
+| INV-009 | Stripe / TWINT | ✓ | ✓ | ✓ | ✓ | ✓ | ○ | – | **P** | `stripe.ts`, Webhook, `stripe-rueckkehr.test.ts` (4) | Durchlauf gegen echtes Stripe, Rückerstattung |
+| INV-010 | Datatrans | – | – | – | – | – | – | – | **NI** | nur `.env.example` | vollständig |
+| INV-011 | Ausgaben | ✓ | ✓ | ✓ | ✓ | ✓ | – | – | **C** | `/admin/ausgaben`, `Expense` | Prüfungen |
+| INV-012 | Lieferanten | ✓ | ✓ | ✓ | ✓ | ✓ | – | – | **C** | `Supplier` | Prüfungen |
+| INV-013 | Buchhaltungsexport | ✓ | ✓ | ✓ | ✓ | ✓ | ○ | – | **P** | `accounting:export`, `/api/exports` | Lohn fehlt, Treuhandformat unbelegt |
+
+---
+
+## BI — Unternehmensführung (17)
+
+| ID | Feature | FE | BE | DB | RBAC | SEC | T | E2E | Status | Evidence | Missing Work |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| BI-001 | Führungscockpit | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | – | **C+V** | `cockpit.service.ts`, `bi-fuehrung.test.ts` (26) | – |
+| BI-002 | Gesundheitswert | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | – | **C+V** | `src/lib/bi/math.ts`, `bi-rechenkerne.test.ts` | – |
+| BI-003 | Kennzahlen mit gespeicherter Historie | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | – | **C+V** | `KpiSnapshot`, `kpi.service.ts` | – |
+| BI-004 | Rechenkerne (Abschreibung, Varianz, Szenario, Perioden) | – | ✓ | – | – | – | ✓ | – | **C+V** | `bi-rechenkerne.test.ts` (22) | – |
+| BI-005 | Ziele / OKR / Strategie / Roadmap | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | – | **C+V** | `objective.service.ts`, `bi-fuehrung.test.ts` | – |
+| BI-006 | Budget mit Plan/Ist/Abweichung | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | – | **C** | `budget.service.ts` | – |
+| BI-007 | Investitionen / Anlagenverzeichnis | ✓ | ✓ | ✓ | ✓ | ✓ | ○ | – | **C** | `investment.service.ts` | Prüfungen |
+| BI-008 | Szenarien | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | – | **C** | `scenario.service.ts` | – |
+| BI-009 | Risikoregister und -matrix | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | – | **C** | `governance.service.ts` | – |
+| BI-010 | Qualität und Compliance (Kontrollen) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | – | **C** | `ControlEntry` | – |
+| BI-011 | Massnahmen mit Wirksamkeit | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | – | **C** | `Action` | – |
+| BI-012 | Dokumentenablage mit Sichtbarkeit | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | – | **C** | `documentVisibilityWhere`, Downloads auditiert | – |
+| BI-013 | Wissensdatenbank | ✓ | ✓ | ✓ | ✓ | ✓ | ○ | – | **C** | `knowledge.service.ts`, `/portal/wissen` | Prüfungen |
+| BI-014 | Markt / Wettbewerb (SWOT, PESTEL) | ✓ | ✓ | ✓ | ✓ | ✓ | ○ | – | **P** | `insight.service.ts` | Prüfungen, Vollständigkeit |
+| BI-015 | Sitzungen und Protokolle | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | – | **C** | `meeting.service.ts` | Beschlussregister |
+| BI-016 | Berichte in drei Formaten + Zeitpläne | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | – | **C+V** | `bi-report.service.ts`, `bi-fuehrung.test.ts` | – |
+| BI-017 | KI-Assistent mit Begründung und Quellen | ✓ | ✓ | ✓ | ✓ | ✓ | – | – | **P** | `/api/bi/assistant`, `bi-assistant.service.ts` | Prüfungen |
+
+---
+
+## COM — Kommunikation (7)
+
+| ID | Feature | FE | BE | DB | RBAC | SEC | T | E2E | Status | Evidence | Missing Work |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| COM-001 | E-Mail (Resend) | ✓ | ✓ | ✓ | ✓ | ✓ | ○ | – | **P** | `email/client.ts`, Postausgang für Prüfungen | DKIM/SPF/DMARC, Zustellprüfung |
+| COM-002 | SMS (Twilio) | ○ | ✓ | ✓ | ✓ | ✓ | – | – | **P** | `sms/client.ts`, `SmsLog` | Prüfungen, Ansicht |
+| COM-003 | Nachrichtenvorlagen | ✓ | ✓ | ✓ | ✓ | ✓ | – | – | **C** | `/api/templates` | Prüfungen, Anlegen/Löschen |
+| COM-004 | Benachrichtigungszentrum | ✓ | ✓ | ✓ | ✓ | ○ | – | – | **P** | 4 Dateien / 4 Ops | **Rate-Limit**, Prüfungen |
+| COM-005 | Newsletter mit Double-Opt-in | ✓ | ✓ | ✓ | ✓ | ✓ | ○ | – | **C** | `/api/newsletter` | Prüfungen |
+| COM-006 | Erinnerungen (Termin, Crew, Aufgaben) | – | ✓ | ✓ | – | ✓ | ○ | – | **C** | Cron stündlich/täglich | Prüfungen |
+| COM-007 | Interne Nachrichtenverläufe | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | – | **C+V** | `flows.test.ts`, `ownership.test.ts` | – |
+
+---
+
+## OPS — Stammdaten und Plattformbetrieb (11)
+
+| ID | Feature | FE | BE | DB | RBAC | SEC | T | E2E | Status | Evidence | Missing Work |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| OPS-001 | Einstellungen (alle Gruppen) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | – | **C+V** | `settings.test.ts` (17) | – |
+| OPS-002 | Leistungskatalog / Kategorien / Zusätze | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | – | **C+V** | `catalog.test.ts` (8) | – |
+| OPS-003 | Preisregeln und Preis-Engine | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | – | **C+V** | `pricing/engine.ts`, `catalog.test.ts` | – |
+| OPS-004 | Steuersätze | ✓ | ✓ | ✓ | ✓ | ✓ | ○ | – | **C** | `TaxRate`, Vorgabe 8,1 % | Prüfungen |
+| OPS-005 | Gutscheine | ✓ | ✓ | ✓ | ✓ | ✓ | – | – | **C** | `Coupon`, `coupon:*` | Prüfungen |
+| OPS-006 | Einsatzgebiet und Anfahrtspauschalen | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | – | **C+V** | `website-ops.test.ts` | – |
+| OPS-007 | Öffnungszeiten und Feiertage | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | – | **C+V** | `crud-audit.test.ts` | – |
+| OPS-008 | Papierkorb (7 Datensatzarten) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | – | **C+V** | `trash.service.ts`, `crud-audit.test.ts` | – |
+| OPS-009 | Datenbereinigung (`data:purge`) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | – | **C+V** | `purge.service.ts`, `purge.test.ts` (7) | – |
+| OPS-010 | Automatisierungen | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | – | **C** | `automation.service.ts`, `website-ops.test.ts` | Protokollierung |
+| OPS-011 | Automatisierungsprotokoll (`AutomationRun`) | – | – | ✓ | – | – | – | – | **SO** | nur als Bereinigungsziel | Schreibpfad, Ansicht |
+
+---
+
+## FILE — Dateien und PDF (7)
+
+| ID | Feature | FE | BE | DB | RBAC | SEC | T | E2E | Status | Evidence | Missing Work |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| FILE-001 | Upload mit Ticket und Profilgrenzen | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | – | **C+V** | `file.service.ts`, `datei-integritaet.test.ts` (13) | – |
+| FILE-002 | Byteprüfung (echter Typ) | – | ✓ | ✓ | – | ✓ | ✓ | – | **C+V** | `datei-integritaet.test.ts` | – |
+| FILE-003 | Abschlussgrenze, Prüfsumme, Nebenläufigkeit | – | ✓ | ✓ | ✓ | ✓ | ✓ | – | **C+V** | `datei-integritaet.test.ts` | – |
+| FILE-004 | Zugriffsbindung (Ablagekennung öffnet nichts) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | – | **C+V** | `datei-zugriff.test.ts` (11) | – |
+| FILE-005 | Objektspeicher Supabase | – | ✓ | ✓ | ✓ | ✓ | – | – | **P** | `storage/supabase.ts`, Rückfall auf Postgres-Blob | Lauf gegen echten Speicher |
+| FILE-006 | PDF-Erzeugung (Offerte, Rechnung, Rapport, Bericht) | – | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | **C+V** | `src/lib/pdf/` (2 453 Zeilen) | Lohnabrechnung fehlt |
+| FILE-007 | Sicherer PDF-Betrachter | ✓ | ✓ | – | ✓ | ✓ | ✓ | ✓ | **C+V** | `gate3-pdf-viewer.spec.ts` (6), `pdf-viewer-mathematik.test.ts` (15) | – |
+
+---
+
+## INF — Infrastruktur, CI/CD, Betrieb (10)
+
+| ID | Feature | FE | BE | DB | RBAC | SEC | T | E2E | Status | Evidence | Missing Work |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| INF-001 | CI-Qualitätstor (Lint, Typen, Doku, DB, Build, Tests, Browser) | – | – | – | – | ✓ | ✓ | – | **C/EVR** | `.github/workflows/deploy.yml` | **nie erfolgreich gelaufen** |
+| INF-002 | PR-Prüfung ohne Auslieferung | – | – | – | – | ✓ | ✓ | – | **C/EVR** | `auslieferung-absicherung.test.ts` (24) | erster grüner PR-Lauf |
+| INF-003 | Deployment-Gating (`DEPLOY_ENABLED`, fail-closed) | – | – | – | – | ✓ | ✓ | – | **C/EVR** | Workflow `if:`, statisch ausgewertet | Variable setzen, wenn V2 steht |
+| INF-004 | Auslieferungsskript mit Rücksprung | – | – | – | – | ✓ | ✓ | – | **C/EVR** | `scripts/deploy.sh` (502 Zeilen) | nie gelaufen |
+| INF-005 | Datenbanksicherung fail-closed | – | ✓ | ✓ | – | ✓ | ✓ | – | **C+V** | `db-backup.ts`, `datenbanksicherung.test.ts` (19) | – |
+| INF-006 | Wiederherstellungsprobe mit Namensschutz | – | ✓ | ✓ | – | ✓ | ✓ | – | **C+V** | `db-restore-verify.ts` | echter Produktionslauf |
+| INF-007 | Health-Endpunkt mit Commit-Abgleich | – | ✓ | ✓ | – | ✓ | ✓ | – | **C** | `/api/health`, `APP_VERSION` | – |
+| INF-008 | Beobachtbarkeit (Fehlerverfolgung, Alarm) | – | – | – | – | – | – | – | **NI** | kein Sentry/Prometheus/OTel | vollständig |
+| INF-009 | Warteschlange für Hintergrundarbeit | – | – | – | – | – | – | – | **NI** | alles im Cron-Request | Wiederholung, Entkopplung |
+| INF-010 | Cloudflare- und Firewall-Topologie | – | – | – | – | ○ | – | – | **NI** | `TRUSTED_PROXY_MODE` vorbereitet | V2-Server |
+
+---
+
+## X — Querschnitt (9)
+
+| ID | Feature | FE | BE | DB | RBAC | SEC | T | E2E | Status | Evidence | Missing Work |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| X-001 | Validierung (Zod, 28 Module, eine Quelle) | ✓ | ✓ | – | – | ✓ | ✓ | – | **C+V** | `src/lib/validation/`, OpenAPI abgeleitet | Antwortvalidierung |
+| X-002 | Typisierte Fehlerklassen (12) | ✓ | ✓ | – | – | ✓ | ○ | – | **C** | `src/lib/errors.ts` | `VALIDATION_ERROR` doppelt belegt |
+| X-003 | Caching (Redis mit Prozessrückfall) | – | ✓ | – | – | – | ○ | – | **C** | `src/lib/redis.ts` | – |
+| X-004 | Strukturiertes Logging | – | ✓ | – | – | ✓ | – | – | **C** | `src/lib/logger.ts` | Rotation erzwingen |
+| X-005 | Mehrsprachigkeit | – | – | ✓ | – | – | – | – | **SO** | `Locale` DE/EN/FR/IT, keine i18n-Bibliothek | Bibliothek, Routen, Übersetzungen |
+| X-006 | Barrierefreiheit | ○ | – | – | – | – | ○ | ○ | **P** | Signatur/PDF geprüft, kein axe | axe in die Browserreihe |
+| X-007 | Responsive / Mobil | ✓ | – | – | – | – | ✓ | ✓ | **P** | `tables.test.ts`, `gate4d` Telefonfall | breitere Abdeckung |
+| X-008 | Performance | ○ | ○ | ✓ | – | – | – | – | **P** | 150 Indizes, Caching, Bündel 103 kB | Budgets, Lasttest, N+1-Messung |
+| X-009 | Landingpages (`LandingPage`) | – | – | ✓ | – | – | – | – | **SO** | nirgends erreichbar | Dienst, Route, Maske |
+
+---
+
+## Statuszählung je Domäne
+
+| Domäne | Merkmale | C+V | C | C/EVR | P | BO | FO | SO | NI |
+|---|---|---|---|---|---|---|---|---|---|
+| SEC — Plattform und Sicherheit | 21 | 12 | 5 | – | 1 | – | – | – | 3 |
+| SIG — Unterzeichnung | 9 | 9 | – | – | – | – | – | – | – |
+| WEB — Website und CMS | 14 | 4 | 8 | – | 2 | – | – | – | – |
+| CRM — Kundenbeziehung | 10 | 3 | 6 | – | – | – | – | – | 1 |
+| PROP — Objekte | 4 | 3 | – | – | – | – | – | 1 | – |
+| BOOK — Buchungen | 7 | 4 | 3 | – | – | – | – | – | – |
+| QUOTE — Offerten | 8 | 5 | 2 | – | 1 | – | – | – | – |
+| CTR — Verträge | 2 | – | – | – | 1 | – | – | – | 1 |
+| JOB — Einsätze und Disposition | 13 | 9 | 2 | – | 2 | – | – | – | – |
+| EMP — Personal | 14 | 5 | 4 | – | 1 | 2 | 1 | – | 1 |
+| INV — Finanzen | 13 | 3 | 7 | – | 2 | – | – | – | 1 |
+| BI — Unternehmensführung | 17 | 6 | 9 | – | 2 | – | – | – | – |
+| COM — Kommunikation | 7 | 1 | 3 | – | 3 | – | – | – | – |
+| OPS — Stammdaten und Betrieb | 11 | 7 | 3 | – | – | – | – | 1 | – |
+| FILE — Dateien und PDF | 7 | 6 | – | – | 1 | – | – | – | – |
+| INF — Infrastruktur und CI/CD | 10 | 2 | 1 | 4 | – | – | – | – | 3 |
+| X — Querschnitt | 9 | 1 | 3 | – | 3 | – | – | 2 | – |
+| **Summe** | **176** | **80** | **56** | **4** | **19** | **2** | **1** | **4** | **10** |
+
+---
+
+## Die 12 Merkmale, die einer Inbetriebnahme im Weg stehen
+
+Nach Priorität, mit ID:
+
+| Rang | ID | Merkmal | Status | Warum jetzt |
+|---|---|---|---|---|
+| 1 | INF-001/002 | Pipeline zum ersten Mal grün | C, nie gelaufen | Ohne Nachweis ist jede Auslieferung ein Erstversuch |
+| 2 | SEC-019 | `ENCRYPTION_KEY` vor dem ersten Wert | NI | Danach unwiderruflich |
+| 3 | EMP-013 | Lohnabrechnung | NI | Kernprozess endet im Nichts |
+| 4 | INF-008 | Beobachtbarkeit | NI | Fehler fallen durch Anrufe auf |
+| 5 | INF-010 | Firewall- und Cloudflare-Topologie | NI | `TRUSTED_PROXY_MODE` hängt daran |
+| 6 | INV-009 | Stripe produktiv erproben | P | Geldfluss unbelegt |
+| 7 | COM-001 | DKIM/SPF/DMARC | P | Ohne DKIM landet die Rechnung im Spam |
+| 8 | SEC-017 | Drei Auditlücken | P | Zugangsrelevante Handlungen |
+| 9 | EMP-010 | Zeiterfassung prüfen | C, ungeprüft | Grundlage der Lohnabrechnung |
+| 10 | EMP-008/009 | Fähigkeiten und Arbeitszeiten pflegbar | BO | Disposition rechnet mit unveränderlichen Daten |
+| 11 | CTR-001 | Vertragsmodell | NI | Unterhaltsreinigung ist das Kerngeschäft |
+| 12 | COM-004 | Benachrichtigungen mit Rate-Limit | P | Vier offene Endpunkte |
+
+---
+
+*Erhoben am 2026-09-21 gegen den Arbeitsbaum. Statusvergabe nach den Regeln in `CLENARIS_ENTERPRISE_SYSTEM_REPORT.md`; `C+V` nur, wo eine benannte Testdatei das Merkmal abdeckt.*
