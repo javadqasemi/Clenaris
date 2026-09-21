@@ -745,4 +745,79 @@ nicht die Sache. Jetzt über `gesamt` (ein `count` über die ganze Abfrage) und
 
 ---
 
+## 16. Wave 7 — Personalstammdaten (Stand 2026-09-21)
+
+Zwei PARTIAL-Punkte aus Abschnitt 4: „Mitarbeiterfähigkeiten — Schreibpfad und
+Maske" und „Arbeitszeiten — Bearbeitungsmaske und Endpunkt".
+
+### Der Befund
+
+Beide Listen wurden **gelesen** — die Personalakte zeigt sie, die
+Eignungsprüfung beim Zuteilen wertet die Arbeitszeit aus, der
+Personalvorschlag die Qualifikationen — und **keine der beiden liess sich
+ändern**. Die Arbeitszeit entstand beim Anlegen als Montag bis Freitag
+07:00–17:00 und blieb das für immer.
+
+Für einen Betrieb mit Teilzeit, Schichten und Samstagsdiensten ist das keine
+Vorgabe, sondern eine Behauptung — und die Warnung beim Zuteilen entsprechend
+falsch. **Eine Angabe, die niemand pflegen kann, ist schlechter als keine: Sie
+sieht aus wie eine Aussage.**
+
+### Was gebaut wurde
+
+`PUT /api/employees/{id}/skills` und `…/availability`, beide `employee:update`,
+beide ersetzen die Liste als Ganzes. Dazu zwei Dialoge in der Personalakte und
+13 Prüfungen.
+
+### Vier Entscheidungen
+
+**`PUT`, nicht `PATCH`.** Keine Formsache: `PATCH` verspricht eine
+Teiländerung, und wer das erwartet, schickt eine Qualifikation und verliert die
+anderen.
+
+**Ersetzen, nicht abgleichen.** Der feinere Weg hätte einen Zweck, wenn an den
+Zeilen etwas hinge, das ihre Kennung braucht — eine Historie, ein
+Fremdschlüssel, ein Prüfpfad. Nichts davon ist der Fall. Ohne diesen Zweck ist
+der Abgleich nur eine zweite Stelle, an der etwas falsch sein kann. Und
+Ersetzen ist wettlauffrei.
+
+**Eine freie Fensterliste statt sieben Wochentagszeilen.** Sieben Zeilen wären
+übersichtlicher und liessen den **geteilten Dienst** nicht zu (morgens
+Treppenhaus, abends Büroreinigung) — häufig in diesem Gewerbe. Der Endpunkt
+kann zwei Fenster am selben Tag; eine Maske, die es nicht kann, würde das
+zweite beim nächsten Speichern stillschweigend löschen.
+
+**Zwei Prüfungen, die der eindeutige Index nicht leisten kann.** Doppelte Namen
+fängt er ab, aber als 409 über eine Datenbankeinschränkung; das Schema sagt,
+*welcher* Name doppelt ist. Überlappende Zeitfenster fängt er gar nicht — er
+deckt nur `(employee, weekday, startTime)` ab, also gingen 07:00–12:00 und
+09:00–17:00 glatt durch.
+
+### Was bewusst nicht dazukam
+
+**Qualifikationen fliessen weiterhin nur in den Personalvorschlag ein, nicht in
+die Eignungsprüfung.** Eine echte Prüfregel wäre eine fachliche Entscheidung —
+„darf jemand ohne Staplerschein diesen Einsatz übernehmen: Warnung oder
+Sperre?" — und gehört nicht als Nebenwirkung einer Pflegemaske hinein.
+JOB-011 bleibt deshalb **PARTIAL** mit genau dieser offenen Frage.
+
+**Die Arbeitszeit bleibt eine Planungshilfe.** Die Eignungsprüfung warnt bei
+einem Einsatz ausserhalb und blockiert ihn nicht; das steht so in
+`assignment.service.ts`. Daraus folgt das Gegenstück: Wer die Zeiten
+einschränkt, wirft keine bereits geplanten Einsätze um.
+
+### Verifikation nach Wave 7
+
+| Prüfung | Ergebnis |
+|---|---|
+| `npm run typecheck`, `npm run lint`, `npm run build` | ✅ |
+| `npm run docs` | ✅ **408 Endpunkte** (von 406) |
+| `npm test` | ✅ **1034 Prüfungen, 1031 bestanden, 0 Fehlschläge**, 3 übersprungen |
+| `npm run e2e` | ✅ **20 / 20** |
+
+> **BACKEND ONLY ist damit leer.** Das war die kleinste Kategorie der Matrix
+> und die ärgerlichste: Logik, die es gibt und die niemand bedienen kann.
+
+---
+
 *Diese Datei wird nach jeder Wave fortgeschrieben.*

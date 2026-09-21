@@ -1,4 +1,4 @@
-﻿# Clenaris — Feature Matrix
+# Clenaris — Feature Matrix
 
 **Stand:** 2026-09-21 · **Grundlage:** Arbeitsbaum, Basis `main` = `7ec5d74`
 **Ausführlicher Bericht:** [`CLENARIS_ENTERPRISE_SYSTEM_REPORT.md`](CLENARIS_ENTERPRISE_SYSTEM_REPORT.md)
@@ -24,22 +24,26 @@ Spalten `FE` (Frontend), `BE` (Backend), `DB`, `RBAC`, `SEC` (eigener Sicherheit
 
 ## Gesamtverteilung
 
-*Stand nach Wave 6 (2026-09-21). Änderungen gegenüber der Erstfassung sind unten begründet; die Anteile sind gerundet.*
+*Stand nach Wave 7 (2026-09-21). Änderungen gegenüber der Erstfassung sind unten begründet; die Anteile sind gerundet.*
 
 | Status | Anzahl | Anteil |
 |---|---|---|
-| COMPLETE + VERIFIED | **91** | 50 % |
-| COMPLETE | **56** | 31 % |
+| COMPLETE + VERIFIED | **93** | 51 % |
+| COMPLETE | **57** | 31 % |
 | COMPLETE / EXTERNAL VERIFICATION REQUIRED | **6** | 3 % |
-| PARTIAL | **20** | 11 % |
-| BACKEND ONLY | **2** | 1 % |
+| PARTIAL | **19** | 10 % |
+| BACKEND ONLY | **0** | 0 % |
 | FRONTEND ONLY | **1** | 1 % |
 | SCHEMA ONLY | **3** | 2 % |
 | NOT IMPLEMENTED | **5** | 3 % |
 | **Summe** | **184** | |
 
-**Technisch nutzbar (C+V oder C): 147 von 184 = 80 %.**
-**Durch Tests belegt: 91 von 184 = 49 %.**
+**Technisch nutzbar (C+V oder C): 150 von 184 = 82 %.**
+**Durch Tests belegt: 93 von 184 = 51 %.**
+
+> **BACKEND ONLY ist leer.** Das war die kleinste der Kategorien und die
+> ärgerlichste: Logik, die es gibt und die niemand bedienen kann. Beide
+> Einträge (Fähigkeiten, Arbeitszeiten) sind in Wave 7 geschlossen worden.
 
 ### Änderungen in Wave 0
 
@@ -90,6 +94,14 @@ Spalten `FE` (Frontend), `BE` (Backend), `DB`, `RBAC`, `SEC` (eigener Sicherheit
 | **OPS-010 war zu gut bewertet** | Die Zeile stand auf **C** mit `automation.service.ts` als Beleg — aber der enthält die **fest verdrahteten** Tagesaufgaben, nicht die Regeln, die Benutzer anlegen. Die beiden sind jetzt getrennt (OPS-010 Regeln, OPS-012 feste Läufe), und die Bewertung stimmt wieder. Dass die Baseline dasselbe Merkmal als **FRONTEND ONLY** führte, war der Widerspruch, der die Wave ausgelöst hat. |
 | **OPS-011: SO → C+V** | `automation_runs` wurde von keinem Codepfad je beschrieben. Jetzt: Schreibpfad, Beanspruchung in der `where`-Klausel, drei Versuche mit wachsendem Abstand, Ergebnis je Aktion. |
 | **INF-009: NI → PARTIAL** | `AutomationRun` **ist** die Warteschlange — mit Beanspruchung, Wiederholung, Obergrenze und Entkopplung. Was fehlt, ist Minutengenauigkeit, und die verlangt einen eigenen Arbeitsprozess. Das ist eine Betriebsentscheidung und kein Codemangel. |
+
+### Änderungen in Wave 7
+
+| Änderung | Begründung |
+|---|---|
+| **EMP-008, EMP-009: BO → C+V** | Beide Listen wurden gelesen und liessen sich nicht ändern. Die Arbeitszeit entstand beim Anlegen als Mo–Fr 07:00–17:00 und blieb das für immer — für einen Betrieb mit Teilzeit und Schichten keine Vorgabe, sondern eine Behauptung, auf der die Eignungswarnung beruhte. **BACKEND ONLY ist damit leer.** |
+| **JOB-010: P → C** | Die Eignungsprüfung wertete die Arbeitszeit aus; was fehlte, war die Pflegemaske. Sie gibt es. |
+| **JOB-011 bleibt PARTIAL** | Die Qualifikationen sind jetzt pflegbar, fliessen aber weiterhin **nur in den Personalvorschlag** ein und nicht in die Eignungsprüfung. Eine echte Prüfregel wäre eine fachliche Entscheidung („darf jemand ohne Staplerschein diesen Einsatz übernehmen — Warnung oder Sperre?") und gehört nicht als Nebenwirkung einer Pflegemaske hinein. |
 
 ---
 
@@ -243,8 +255,8 @@ Spalten `FE` (Frontend), `BE` (Backend), `DB`, `RBAC`, `SEC` (eigener Sicherheit
 | JOB-007 | Einsatzkalender | ✓ | ✓ | ✓ | ✓ | ✓ | ○ | – | **C** | FullCalendar, `/admin/kalender` | Darstellungsprüfungen |
 | JOB-008 | Zuteilung mit Eignungsprüfung | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | – | **C+V** | `assignment.service.ts`, `dispatch.test.ts` | **Protokollierung** |
 | JOB-009 | Abwesenheit blockiert / warnt | – | ✓ | ✓ | ✓ | ✓ | ✓ | – | **C+V** | `dispatch.test.ts` | – |
-| JOB-010 | Arbeitszeiten in der Eignungsprüfung | – | ✓ | ✓ | – | – | ○ | – | **P** | `assignment.service.ts:162` | Pflegemaske |
-| JOB-011 | Fähigkeiten in der Eignungsprüfung | – | ○ | ✓ | – | – | – | – | **P** | nur `suggestStaffing` | Pflegemaske, echte Prüfregel |
+| JOB-010 | Arbeitszeiten in der Eignungsprüfung | – | ✓ | ✓ | – | – | ✓ | – | **C** | `assignment.service.ts:162`; die Angabe dahinter ist seit Wave 7 pflegbar | – |
+| JOB-011 | Fähigkeiten in der Eignungsprüfung | – | ○ | ✓ | – | – | ○ | – | **P** | nur `suggestStaffing`; die Angabe ist seit Wave 7 pflegbar | Eine **echte** Prüfregel in `assignment.service.ts` — heute fliessen Qualifikationen nur in den Vorschlag ein, nicht in die Eignung |
 | JOB-012 | Verschieben / Umteilen | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | – | **C+V** | `moveJob`, `dispatch.test.ts` | – |
 | JOB-013 | Keine doppelten Einsätze aus einer Buchung | – | ✓ | ✓ | – | ✓ | ✓ | – | **C+V** | `dispatch.test.ts` | – |
 
@@ -261,8 +273,8 @@ Spalten `FE` (Frontend), `BE` (Backend), `DB`, `RBAC`, `SEC` (eigener Sicherheit
 | EMP-005 | Konto, Zugangslink, Passwortzwang, Sperre | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | – | **C+V** | `employees.test.ts` | – |
 | EMP-006 | Rolle über die Personalakte | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | – | **C** | `ownership.test.ts` | – |
 | EMP-007 | Stilllegen / Personalnummer eindeutig | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | – | **C** | `employees.test.ts` | – |
-| EMP-008 | Fähigkeiten (`EmployeeSkill`) | – | ○ | ✓ | – | – | – | – | **BO** | gelesen `/ueber-uns`, `employee.service.ts:383` | CRUD, Maske, Rechte |
-| EMP-009 | Arbeitszeiten (`Availability`) | – | ○ | ✓ | – | – | – | – | **BO** | Vorgabe bei Anlage, gelesen in der Disposition | CRUD, Maske |
+| EMP-008 | Fähigkeiten (`EmployeeSkill`) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | – | **C+V** | `PUT /api/employees/{id}/skills`, `EmployeeSkillsDialog`, `personalstammdaten.test.ts` | – |
+| EMP-009 | Arbeitszeiten (`Availability`) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | – | **C+V** | `PUT /api/employees/{id}/availability`, freie Fensterliste (geteilter Dienst), Überschneidungsprüfung | – |
 | EMP-010 | Zeiterfassung | ✓ | ✓ | ✓ | ✓ | ✓ | – | – | **C** | `/api/time`, `/portal/zeiterfassung` | **Prüfungen** |
 | EMP-011 | Abwesenheiten (Antrag, Bewilligung, Rückzug) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | – | **C+V** | `crud-audit.test.ts`, `dispatch.test.ts` | – |
 | EMP-012 | Stellen und Bewerbungen | ✓ | ✓ | ✓ | ✓ | ✓ | ○ | – | **P** | `/karriere`, `/admin/personal/bewerbungen` | Prüfungen, Bewerberweg |
