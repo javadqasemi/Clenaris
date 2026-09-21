@@ -20131,6 +20131,492 @@ paths:
             'application/json':
               schema:
                 '$ref': '#/components/schemas/ErrorEnvelope'
+  '/api/time':
+    get:
+      tags:
+        - 'Personal'
+      summary: 'Erfasste Zeiten'
+      description: |-
+          Filterbar nach Person, Einsatz, Zeitraum, Freigabestand und „nur laufende". Die Summe der Minuten kommt über **alle** Treffer, nicht über die angezeigte Seite — eine Seitensumme sähe aus wie die Monatssumme und wäre keine. `timetracking:read_all` gab es seit jeher und wurde bis Wave 8 von genau einem Endpunkt geprüft (dem Buchhaltungsexport): Es gab keinen Weg, die Zeiten anzusehen, ohne sie zu exportieren.
+
+          **Zugriff:** Erfordert die Berechtigung: `timetracking:read_all`.
+
+          **Rate-Limit-Klasse:** `apiRead`
+      operationId: 'getTime'
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: 'employeeId'
+          in: 'query'
+          required: false
+          schema:
+            type: 'string'
+        - name: 'jobId'
+          in: 'query'
+          required: false
+          schema:
+            type: 'string'
+        - name: 'from'
+          in: 'query'
+          required: false
+          schema:
+            type: 'string'
+            format: 'date-time'
+        - name: 'to'
+          in: 'query'
+          required: false
+          schema:
+            type: 'string'
+            format: 'date-time'
+        - name: 'approved'
+          in: 'query'
+          required: false
+          schema:
+            type: 'string'
+            enum:
+              - 'true'
+              - 'false'
+        - name: 'nurOffen'
+          in: 'query'
+          required: false
+          schema:
+            const: 'true'
+        - name: 'page'
+          in: 'query'
+          required: false
+          schema:
+            type: 'integer'
+            minimum: 1
+        - name: 'pageSize'
+          in: 'query'
+          required: false
+          schema:
+            type: 'integer'
+            minimum: 1
+            maximum: 200
+      responses:
+        '200':
+          description: 'Erfolg'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/SuccessEnvelope'
+        '400':
+          description: 'VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 'UNAUTHORIZED — keine oder abgelaufene Sitzung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 'FORBIDDEN — angemeldet, aber ohne die nötige Berechtigung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: 'RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+    post:
+      tags:
+        - 'Personal'
+      summary: 'Zeit von Hand erfassen'
+      description: |-
+          Für vergessenes Stempeln, fehlenden Empfang oder einen Gerätewechsel. `minutes` kommt **nicht** aus dem Körper — die Dauer rechnet der Server aus Beginn, Ende und Pause, dieselbe Regel wie bei den Preisen. Der Eintrag wird als `manual` gekennzeichnet. Überschneidungen mit einer anderen Erfassung derselben Person werden abgewiesen (422): zwei gleichzeitige Zeiten ergäben doppelten Lohn für dieselbe Stunde.
+
+          **Zugriff:** Erfordert die Berechtigung: `timetracking:approve`.
+
+          **Rate-Limit-Klasse:** `apiWrite`
+      operationId: 'postTime'
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          'application/json':
+            schema:
+              type: 'object'
+              properties:
+                employeeId:
+                  type: 'string'
+                jobId:
+                  type: 'string'
+                startedAt:
+                  type: 'string'
+                  format: 'date-time'
+                endedAt:
+                  type: 'string'
+                  format: 'date-time'
+                breakMin:
+                  type: 'integer'
+                  minimum: 0
+                  maximum: 480
+                  default: 0
+                note:
+                  type: 'string'
+                  maxLength: 500
+              required:
+                - 'employeeId'
+                - 'startedAt'
+                - 'endedAt'
+      responses:
+        '200':
+          description: 'Erfolg'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/SuccessEnvelope'
+        '400':
+          description: 'VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 'UNAUTHORIZED — keine oder abgelaufene Sitzung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 'FORBIDDEN — angemeldet, aber ohne die nötige Berechtigung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: 'BUSINESS_RULE — fachlich nicht zulässig, etwa eine bereits ausgestellte Rechnung ändern.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: 'RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+  '/api/time/{id}':
+    patch:
+      tags:
+        - 'Personal'
+      summary: 'Zeit korrigieren'
+      description: |-
+          Eine **freigegebene** Zeit lässt sich nicht ändern (422) — sie ist Grundlage einer Abrechnung. Zuerst die Freigabe aufheben. Die Lohnkosten des Einsatzes werden um die Differenz angepasst, damit die Nachkalkulation nicht auseinanderläuft.
+
+          **Zugriff:** Erfordert die Berechtigung: `timetracking:approve`.
+
+          **Rate-Limit-Klasse:** `apiWrite`
+      operationId: 'patchTimeById'
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: 'id'
+          in: 'path'
+          required: true
+          schema:
+            type: 'string'
+            minLength: 1
+      requestBody:
+        required: true
+        content:
+          'application/json':
+            schema:
+              type: 'object'
+              properties:
+                startedAt:
+                  type: 'string'
+                  format: 'date-time'
+                endedAt:
+                  type: 'string'
+                  format: 'date-time'
+                breakMin:
+                  type: 'integer'
+                  minimum: 0
+                  maximum: 480
+                note:
+                  type: 'string'
+                  maxLength: 500
+      responses:
+        '200':
+          description: 'Erfolg'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/SuccessEnvelope'
+        '400':
+          description: 'VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 'UNAUTHORIZED — keine oder abgelaufene Sitzung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 'FORBIDDEN — angemeldet, aber ohne die nötige Berechtigung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: 'NOT_FOUND — nicht vorhanden, oder für diese Sitzung nicht sichtbar.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: 'BUSINESS_RULE — fachlich nicht zulässig, etwa eine bereits ausgestellte Rechnung ändern.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: 'RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+    delete:
+      tags:
+        - 'Personal'
+      summary: 'Zeit entfernen'
+      description: |-
+          Nur solange sie nicht freigegeben ist. Der Fall dahinter ist der Doppeleintrag; ihn auf null Minuten zu korrigieren wäre eine Zeile, die aussieht wie Arbeit ohne Dauer.
+
+          **Zugriff:** Erfordert die Berechtigung: `timetracking:approve`.
+
+          **Rate-Limit-Klasse:** `apiWrite`
+      operationId: 'deleteTimeById'
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: 'id'
+          in: 'path'
+          required: true
+          schema:
+            type: 'string'
+            minLength: 1
+      responses:
+        '200':
+          description: 'Erfolg'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/SuccessEnvelope'
+        '400':
+          description: 'VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 'UNAUTHORIZED — keine oder abgelaufene Sitzung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 'FORBIDDEN — angemeldet, aber ohne die nötige Berechtigung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: 'NOT_FOUND — nicht vorhanden, oder für diese Sitzung nicht sichtbar.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: 'BUSINESS_RULE — fachlich nicht zulässig, etwa eine bereits ausgestellte Rechnung ändern.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: 'RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+  '/api/time/approve':
+    post:
+      tags:
+        - 'Personal'
+      summary: 'Zeiten freigeben'
+      description: |-
+          Mehrere auf einmal — das ist der Arbeitsablauf am Monatsende. Eine **laufende** Erfassung wird übersprungen und nicht abgewiesen: Wer dreissig Zeilen markiert und eine laufende dabei hat, soll die neunundzwanzig freigeben können. Die Antwort sagt beides.
+
+          **Zugriff:** Erfordert die Berechtigung: `timetracking:approve`.
+
+          **Rate-Limit-Klasse:** `apiWrite`
+      operationId: 'postTimeApprove'
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          'application/json':
+            schema:
+              type: 'object'
+              properties:
+                entryIds:
+                  type: 'array'
+                  items:
+                    type: 'string'
+                  minItems: 1
+                  maxItems: 200
+              required:
+                - 'entryIds'
+      responses:
+        '200':
+          description: 'Erfolg'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/SuccessEnvelope'
+        '400':
+          description: 'VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 'UNAUTHORIZED — keine oder abgelaufene Sitzung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 'FORBIDDEN — angemeldet, aber ohne die nötige Berechtigung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: 'BUSINESS_RULE — fachlich nicht zulässig, etwa eine bereits ausgestellte Rechnung ändern.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: 'RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+  '/api/time/{id}/reopen':
+    post:
+      tags:
+        - 'Personal'
+      summary: 'Freigabe aufheben'
+      description: |-
+          Bewusst **einzeln** und nicht als Stapel — anders als das Freigeben. Der häufige Weg ist bequem, der seltene ist einzeln.
+
+          **Zugriff:** Erfordert die Berechtigung: `timetracking:approve`.
+
+          **Rate-Limit-Klasse:** `apiWrite`
+      operationId: 'postTimeByIdReopen'
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: 'id'
+          in: 'path'
+          required: true
+          schema:
+            type: 'string'
+            minLength: 1
+      responses:
+        '200':
+          description: 'Erfolg'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/SuccessEnvelope'
+        '400':
+          description: 'VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 'UNAUTHORIZED — keine oder abgelaufene Sitzung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 'FORBIDDEN — angemeldet, aber ohne die nötige Berechtigung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: 'NOT_FOUND — nicht vorhanden, oder für diese Sitzung nicht sichtbar.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: 'BUSINESS_RULE — fachlich nicht zulässig, etwa eine bereits ausgestellte Rechnung ändern.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: 'RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
   '/api/employees/{id}/skills':
     put:
       tags:

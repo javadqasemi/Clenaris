@@ -5,7 +5,7 @@
 > Quelle, aus der sowohl diese Referenz als auch die Laufzeitvalidierung
 > stammen.
 
-Stand: 408 Endpunkte. Die maschinenlesbare Fassung liegt in
+Stand: 414 Endpunkte. Die maschinenlesbare Fassung liegt in
 [`openapi.yaml`](./openapi.yaml) bzw. [`openapi.json`](./openapi.json).
 
 ## Grundlagen
@@ -3134,6 +3134,117 @@ Familie.
 - **Zugriff:** Erfordert die Berechtigung: `jobPosting:delete`.
 - **Rate-Limit-Klasse:** `apiWrite`
 - **Erfolg:** 204
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+### `GET /api/time`
+
+**Erfasste Zeiten.** Filterbar nach Person, Einsatz, Zeitraum, Freigabestand und „nur laufende". Die Summe der Minuten kommt über **alle** Treffer, nicht über die angezeigte Seite — eine Seitensumme sähe aus wie die Monatssumme und wäre keine. `timetracking:read_all` gab es seit jeher und wurde bis Wave 8 von genau einem Endpunkt geprüft (dem Buchhaltungsexport): Es gab keinen Weg, die Zeiten anzusehen, ohne sie zu exportieren.
+
+- **Zugriff:** Erfordert die Berechtigung: `timetracking:read_all`.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 429, 500
+
+**Query-Parameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `employeeId` | string | – | – |
+| `jobId` | string | – | – |
+| `from` | string | – | date-time |
+| `to` | string | – | date-time |
+| `approved` | string | – | `true` \| `false` |
+| `nurOffen` | object | – | – |
+| `page` | integer | – | ≥ 1 |
+| `pageSize` | integer | – | ≥ 1, ≤ 200 |
+
+### `POST /api/time`
+
+**Zeit von Hand erfassen.** Für vergessenes Stempeln, fehlenden Empfang oder einen Gerätewechsel. `minutes` kommt **nicht** aus dem Körper — die Dauer rechnet der Server aus Beginn, Ende und Pause, dieselbe Regel wie bei den Preisen. Der Eintrag wird als `manual` gekennzeichnet. Überschneidungen mit einer anderen Erfassung derselben Person werden abgewiesen (422): zwei gleichzeitige Zeiten ergäben doppelten Lohn für dieselbe Stunde.
+
+- **Zugriff:** Erfordert die Berechtigung: `timetracking:approve`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 422, 429, 500
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `employeeId` | string | ja | – |
+| `jobId` | string | – | – |
+| `startedAt` | string | ja | date-time |
+| `endedAt` | string | ja | date-time |
+| `breakMin` | integer | – | ≥ 0, ≤ 480, Standard `0` |
+| `note` | string | – | max. 500 Zeichen |
+
+### `PATCH /api/time/{id}`
+
+**Zeit korrigieren.** Eine **freigegebene** Zeit lässt sich nicht ändern (422) — sie ist Grundlage einer Abrechnung. Zuerst die Freigabe aufheben. Die Lohnkosten des Einsatzes werden um die Differenz angepasst, damit die Nachkalkulation nicht auseinanderläuft.
+
+- **Zugriff:** Erfordert die Berechtigung: `timetracking:approve`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `startedAt` | string | – | date-time |
+| `endedAt` | string | – | date-time |
+| `breakMin` | integer | – | ≥ 0, ≤ 480 |
+| `note` | string | – | max. 500 Zeichen |
+
+### `DELETE /api/time/{id}`
+
+**Zeit entfernen.** Nur solange sie nicht freigegeben ist. Der Fall dahinter ist der Doppeleintrag; ihn auf null Minuten zu korrigieren wäre eine Zeile, die aussieht wie Arbeit ohne Dauer.
+
+- **Zugriff:** Erfordert die Berechtigung: `timetracking:approve`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+### `POST /api/time/approve`
+
+**Zeiten freigeben.** Mehrere auf einmal — das ist der Arbeitsablauf am Monatsende. Eine **laufende** Erfassung wird übersprungen und nicht abgewiesen: Wer dreissig Zeilen markiert und eine laufende dabei hat, soll die neunundzwanzig freigeben können. Die Antwort sagt beides.
+
+- **Zugriff:** Erfordert die Berechtigung: `timetracking:approve`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 422, 429, 500
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `entryIds` | string[] | ja | min. 1 Einträge, max. 200 Einträge |
+
+### `POST /api/time/{id}/reopen`
+
+**Freigabe aufheben.** Bewusst **einzeln** und nicht als Stapel — anders als das Freigeben. Der häufige Weg ist bequem, der seltene ist einzeln.
+
+- **Zugriff:** Erfordert die Berechtigung: `timetracking:approve`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
 - **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
 
 **Pfadparameter**

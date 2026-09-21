@@ -2988,6 +2988,92 @@ export const ROUTES: RouteDoc[] = [
     body: crm.updateCustomerSchema,
   },
   {
+    method: 'get',
+    path: '/api/time',
+    tag: 'Personal',
+    summary: 'Erfasste Zeiten',
+    description:
+      'Filterbar nach Person, Einsatz, Zeitraum, Freigabestand und „nur laufende". Die Summe ' +
+      'der Minuten kommt über **alle** Treffer, nicht über die angezeigte Seite — eine ' +
+      'Seitensumme sähe aus wie die Monatssumme und wäre keine. ' +
+      '`timetracking:read_all` gab es seit jeher und wurde bis Wave 8 von genau einem Endpunkt ' +
+      'geprüft (dem Buchhaltungsexport): Es gab keinen Weg, die Zeiten anzusehen, ohne sie zu ' +
+      'exportieren.',
+    guard: perm('all', 'timetracking:read_all'),
+    rateLimit: 'apiRead',
+    query: operations.timeEntryQuerySchema,
+  },
+  {
+    method: 'post',
+    path: '/api/time',
+    tag: 'Personal',
+    summary: 'Zeit von Hand erfassen',
+    description:
+      'Für vergessenes Stempeln, fehlenden Empfang oder einen Gerätewechsel. `minutes` kommt ' +
+      '**nicht** aus dem Körper — die Dauer rechnet der Server aus Beginn, Ende und Pause, ' +
+      'dieselbe Regel wie bei den Preisen. Der Eintrag wird als `manual` gekennzeichnet. ' +
+      'Überschneidungen mit einer anderen Erfassung derselben Person werden abgewiesen (422): ' +
+      'zwei gleichzeitige Zeiten ergäben doppelten Lohn für dieselbe Stunde.',
+    guard: perm('all', 'timetracking:approve'),
+    rateLimit: 'apiWrite',
+    body: operations.createTimeEntrySchema,
+    extraErrors: [422],
+  },
+  {
+    method: 'patch',
+    path: '/api/time/{id}',
+    tag: 'Personal',
+    summary: 'Zeit korrigieren',
+    description:
+      'Eine **freigegebene** Zeit lässt sich nicht ändern (422) — sie ist Grundlage einer ' +
+      'Abrechnung. Zuerst die Freigabe aufheben. Die Lohnkosten des Einsatzes werden um die ' +
+      'Differenz angepasst, damit die Nachkalkulation nicht auseinanderläuft.',
+    guard: perm('all', 'timetracking:approve'),
+    rateLimit: 'apiWrite',
+    params: q.idParam,
+    body: operations.updateTimeEntrySchema,
+    extraErrors: [422],
+  },
+  {
+    method: 'delete',
+    path: '/api/time/{id}',
+    tag: 'Personal',
+    summary: 'Zeit entfernen',
+    description:
+      'Nur solange sie nicht freigegeben ist. Der Fall dahinter ist der Doppeleintrag; ihn auf ' +
+      'null Minuten zu korrigieren wäre eine Zeile, die aussieht wie Arbeit ohne Dauer.',
+    guard: perm('all', 'timetracking:approve'),
+    rateLimit: 'apiWrite',
+    params: q.idParam,
+    extraErrors: [422],
+  },
+  {
+    method: 'post',
+    path: '/api/time/approve',
+    tag: 'Personal',
+    summary: 'Zeiten freigeben',
+    description:
+      'Mehrere auf einmal — das ist der Arbeitsablauf am Monatsende. Eine **laufende** ' +
+      'Erfassung wird übersprungen und nicht abgewiesen: Wer dreissig Zeilen markiert und eine ' +
+      'laufende dabei hat, soll die neunundzwanzig freigeben können. Die Antwort sagt beides.',
+    guard: perm('all', 'timetracking:approve'),
+    rateLimit: 'apiWrite',
+    body: operations.approveTimeEntriesSchema,
+  },
+  {
+    method: 'post',
+    path: '/api/time/{id}/reopen',
+    tag: 'Personal',
+    summary: 'Freigabe aufheben',
+    description:
+      'Bewusst **einzeln** und nicht als Stapel — anders als das Freigeben. Der häufige Weg ist ' +
+      'bequem, der seltene ist einzeln.',
+    guard: perm('all', 'timetracking:approve'),
+    rateLimit: 'apiWrite',
+    params: q.idParam,
+    extraErrors: [422],
+  },
+  {
     method: 'put',
     path: '/api/employees/{id}/skills',
     tag: 'Personal',

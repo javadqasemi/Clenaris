@@ -1,0 +1,570 @@
+import 'server-only';
+
+import type { Prisma } from '@prisma/client';
+
+import { audit } from '@/lib/audit';
+import { prisma, toNumber, type Tx } from '@/lib/db';
+import { BusinessRuleError, NotFoundError } from '@/lib/errors';
+import { round2 } from '@/lib/utils';
+
+/**
+ * Zeiterfassung — ansehen, korrigieren, freigeben.
+ *
+ * ---------------------------------------------------------------------------
+ *  Der Befund
+ * ---------------------------------------------------------------------------
+ *
+ * Es gab zwei Endpunkte: einstempeln und ausstempeln. Mehr nicht.
+ *
+ * `TimeEntry.approved`, `approvedById` und `manual` standen im Schema und
+ * wurden von keinem Codepfad je geschrieben. `timetracking:approve` war an
+ * Rollen vergeben und wurde von **nichts** geprüft. `timetracking:read_all`
+ * nur vom Buchhaltungsexport.
+ *
+ * Das heisst im Betrieb: Wer das Ausstempeln vergisst, hat einen offenen
+ * Eintrag, den niemand schliessen kann. Wer sich vertippt, hat eine falsche
+ * Zeit, die niemand korrigieren kann. Und niemand kann eine Zeit freigeben,
+ * bevor sie in die Lohnabrechnung geht — obwohl die Matrix die Zeiterfassung
+ * als „Grundlage der Lohnabrechnung" führt.
+ *
+ * ---------------------------------------------------------------------------
+ *  Die vier Regeln, die dieser Dienst durchsetzt
+ * ---------------------------------------------------------------------------
+ *
+ * 1. **Die Dauer rechnet der Server.** Nie der Client — dieselbe Regel wie bei
+ *    den Preisen. `minutes` wird bei jeder Änderung neu aus Beginn, Ende und
+ *    Pause gebildet; ein mitgeschickter Wert wird ignoriert, weil er gar nicht
+ *    erst entgegengenommen wird.
+ *
+ * 2. **Eine freigegebene Zeit ist eingefroren.** Sie ist die Grundlage einer
+ *    Abrechnung. Wer sie korrigieren will, hebt zuerst die Freigabe auf — eine
+ *    eigene, protokollierte Handlung. Ohne diese Schwelle wäre „freigegeben"
+ *    eine Anzeige und keine Aussage.
+ *
+ * 3. **Keine Überschneidungen je Person.** Zwei gleichzeitige Erfassungen
+ *    ergäben doppelten Lohn für dieselbe Stunde. Das ist der Fehler, der in
+ *    der Lohnbuchhaltung landet und nicht in der Fehlersuche.
+ *
+ * 4. **Die Lohnkosten des Einsatzes wandern mit.** `clockOut` schreibt sie
+ *    fort (`job.laborCost`); eine Korrektur, die das nicht nachzieht, lässt
+ *    die Nachkalkulation auseinanderlaufen — und zwar still, weil niemand die
+ *    beiden Zahlen nebeneinander sieht.
+ */
+
+/** Obergrenze für eine einzelne Erfassung. */
+export const MAX_MINUTEN = 24 * 60;
+
+/**
+ * Warum überhaupt eine Obergrenze.
+ *
+ * Nicht, weil jemand 25 Stunden arbeiten könnte, sondern wegen des
+ * vergessenen Ausstempelns: Ein Eintrag von Freitagmorgen bis Montagmittag
+ * ergibt 4400 Minuten, und die gehen unbemerkt in die Lohnkosten des
+ * Einsatzes und in die Nachkalkulation. Die Grenze macht daraus eine Absage
+ * mit einem Satz — und zwingt zur Korrektur statt zur Übernahme.
+ */
+export function berechneMinuten(startedAt: Date, endedAt: Date, breakMin: number): number {
+  const spanne = Math.round((endedAt.getTime() - startedAt.getTime()) / 60_000);
+
+  if (spanne <= 0) {
+    throw new BusinessRuleError('Das Ende muss nach dem Beginn liegen.');
+  }
+  if (breakMin >= spanne) {
+    throw new BusinessRuleError(
+      `Die Pause (${breakMin} Min.) ist so lang wie die erfasste Zeit oder länger.`,
+    );
+  }
+  if (spanne > MAX_MINUTEN) {
+    throw new BusinessRuleError(
+      `Eine einzelne Erfassung darf höchstens ${MAX_MINUTEN / 60} Stunden umfassen. ` +
+        'Wurde das Ausstempeln vergessen? Dann bitte Beginn und Ende von Hand setzen.',
+    );
+  }
+
+  return spanne - breakMin;
+}
+
+/**
+ * Überschneidet sich dieser Zeitraum mit einer anderen Erfassung derselben
+ * Person?
+ *
+ * Der laufende Eintrag (`endedAt: null`) zählt mit: Wer noch eingestempelt
+ * ist, kann nicht gleichzeitig irgendwo anders gearbeitet haben. Sein Ende ist
+ * unbekannt, also wird es als „jetzt" gelesen — die vorsichtige Auslegung.
+ */
+async function pruefeUeberschneidung(
+  tx: Tx,
+  employeeId: string,
+  startedAt: Date,
+  endedAt: Date,
+  ausserId?: string,
+): Promise<void> {
+  const andere = await tx.timeEntry.findMany({
+    where: {
+      employeeId,
+      ...(ausserId ? { id: { not: ausserId } } : {}),
+      startedAt: { lt: endedAt },
+    },
+    select: { id: true, startedAt: true, endedAt: true },
+    orderBy: { startedAt: 'desc' },
+    take: 50,
+  });
+
+  for (const eintrag of andere) {
+    const ende = eintrag.endedAt ?? new Date();
+    if (eintrag.startedAt < endedAt && startedAt < ende) {
+      throw new BusinessRuleError(
+        `Überschneidet sich mit einer Erfassung ab ${eintrag.startedAt.toISOString().slice(0, 16).replace('T', ' ')}. ` +
+          'Zwei gleichzeitige Zeiten ergäben doppelten Lohn für dieselbe Stunde.',
+      );
+    }
+  }
+}
+
+/**
+ * Die Lohnkosten des Einsatzes um die Differenz anpassen.
+ *
+ * `increment` mit einer Differenz statt Neusetzen: Ein Einsatz hat mehrere
+ * Erfassungen von mehreren Personen, und der Gesamtwert neu zu berechnen
+ * hiesse, alle zu laden — und bei zwei gleichzeitigen Korrekturen verlöre eine
+ * die andere. Die Differenz ist wettlauffrei.
+ */
+async function passeLohnkostenAn(
+  tx: Tx,
+  jobId: string | null,
+  minutenDelta: number,
+  stundensatz: number,
+): Promise<void> {
+  if (!jobId || minutenDelta === 0 || stundensatz <= 0) return;
+
+  await tx.job.update({
+    where: { id: jobId },
+    data: { laborCost: { increment: round2((minutenDelta / 60) * stundensatz) } },
+  });
+}
+
+/** Der Eintrag samt Mandantenprüfung — über die Personalakte. */
+async function ladeEintrag(organizationId: string, id: string) {
+  const eintrag = await prisma.timeEntry.findFirst({
+    /**
+     * `TimeEntry` trägt kein `organizationId`; die Zugehörigkeit hängt an der
+     * Personalakte. Der Filter steht deshalb in der **Beziehung** und nicht
+     * hinter der Abfrage — ein Eintrag einer fremden Organisation wird gar
+     * nicht erst gefunden, statt gefunden und danach abgelehnt zu werden.
+     */
+    where: { id, employee: { organizationId } },
+    include: {
+      employee: { select: { id: true, employeeNumber: true } },
+      job: { select: { id: true, number: true } },
+    },
+  });
+  if (!eintrag) throw new NotFoundError('Zeiterfassung');
+  return eintrag;
+}
+
+// ---------------------------------------------------------------------------
+//  Lesen
+// ---------------------------------------------------------------------------
+
+export interface TimeEntryFilter {
+  organizationId: string;
+  /** Ohne Angabe: alle. Mit: nur diese Person. */
+  employeeId?: string;
+  jobId?: string;
+  from?: Date;
+  to?: Date;
+  /** `true` = nur freigegebene, `false` = nur offene, `undefined` = alle. */
+  approved?: boolean;
+  /** Nur noch laufende Erfassungen — der Fall „Ausstempeln vergessen". */
+  nurOffen?: boolean;
+  page?: number;
+  pageSize?: number;
+}
+
+export async function listTimeEntries(filter: TimeEntryFilter) {
+  const pageSize = Math.min(filter.pageSize ?? 50, 200);
+  const page = Math.max(filter.page ?? 1, 1);
+
+  const where: Prisma.TimeEntryWhereInput = {
+    employee: { organizationId: filter.organizationId },
+    ...(filter.employeeId ? { employeeId: filter.employeeId } : {}),
+    ...(filter.jobId ? { jobId: filter.jobId } : {}),
+    ...(filter.approved !== undefined ? { approved: filter.approved } : {}),
+    ...(filter.nurOffen ? { endedAt: null } : {}),
+    ...(filter.from || filter.to
+      ? {
+          startedAt: {
+            ...(filter.from ? { gte: filter.from } : {}),
+            ...(filter.to ? { lt: filter.to } : {}),
+          },
+        }
+      : {}),
+  };
+
+  const [eintraege, gesamt, summe] = await prisma.$transaction([
+    prisma.timeEntry.findMany({
+      where,
+      orderBy: { startedAt: 'desc' },
+      skip: (page - 1) * pageSize,
+      take: pageSize,
+      select: {
+        id: true,
+        startedAt: true,
+        endedAt: true,
+        breakMin: true,
+        minutes: true,
+        note: true,
+        manual: true,
+        approved: true,
+        employee: {
+          select: {
+            id: true,
+            employeeNumber: true,
+            user: { select: { firstName: true, lastName: true } },
+          },
+        },
+        job: { select: { id: true, number: true } },
+      },
+    }),
+    prisma.timeEntry.count({ where }),
+    /**
+     * Die Summe über **alle** Treffer, nicht über die angezeigte Seite.
+     *
+     * Eine Seitensumme wäre die häufigste Fehlerquelle einer solchen Ansicht:
+     * Sie sieht aus wie die Monatssumme und ist es nicht, und niemand merkt
+     * es, solange der Monat auf eine Seite passt.
+     */
+    prisma.timeEntry.aggregate({ where, _sum: { minutes: true } }),
+  ]);
+
+  return {
+    eintraege,
+    gesamt,
+    page,
+    pageSize,
+    summeMinuten: summe._sum.minutes ?? 0,
+  };
+}
+
+// ---------------------------------------------------------------------------
+//  Erfassen und korrigieren
+// ---------------------------------------------------------------------------
+
+export interface ManuelleZeitInput {
+  employeeId: string;
+  jobId?: string | null;
+  startedAt: Date;
+  endedAt: Date;
+  breakMin: number;
+  note?: string | null;
+}
+
+/**
+ * Eine Zeit von Hand erfassen.
+ *
+ * Der Fall: Jemand hat das Stempeln vergessen, war ohne Empfang unterwegs oder
+ * die Erfassung ist bei einem Gerätewechsel verlorengegangen. Ohne diesen Weg
+ * bliebe nur, die Stunde nicht zu bezahlen oder sie neben dem System zu
+ * führen — und beides passiert dann auch.
+ *
+ * `manual: true` hält fest, dass die Zeit nicht gestempelt wurde. Das ist
+ * keine Verdächtigung, sondern die Auskunft, die eine Lohnkontrolle braucht:
+ * Eine gestempelte Zeit hat einen Zeitpunkt und einen Ort, eine erfasste hat
+ * eine Person, die sie eingetragen hat.
+ */
+export async function createManualTimeEntry(params: {
+  organizationId: string;
+  actorId: string;
+  ip?: string | null;
+  input: ManuelleZeitInput;
+}) {
+  const employee = await prisma.employee.findFirst({
+    where: { id: params.input.employeeId, organizationId: params.organizationId },
+    select: { id: true, employeeNumber: true, hourlyRate: true, monthlySalary: true },
+  });
+  if (!employee) throw new NotFoundError('Mitarbeitende/r');
+
+  const minutes = berechneMinuten(
+    params.input.startedAt,
+    params.input.endedAt,
+    params.input.breakMin,
+  );
+
+  if (params.input.jobId) {
+    const job = await prisma.job.findFirst({
+      where: { id: params.input.jobId, organizationId: params.organizationId },
+      select: { id: true },
+    });
+    if (!job) throw new NotFoundError('Einsatz');
+  }
+
+  /**
+   * Der Stundenansatz wird als Momentaufnahme mitgeschrieben — genau wie beim
+   * Einstempeln (`clockIn`). Eine spätere Lohnerhöhung soll vergangene
+   * Einsätze nicht rückwirkend verteuern.
+   */
+  const stundensatz = toNumber(employee.hourlyRate);
+
+  const eintrag = await prisma.$transaction(async (tx) => {
+    await pruefeUeberschneidung(
+      tx,
+      employee.id,
+      params.input.startedAt,
+      params.input.endedAt,
+    );
+
+    const erstellt = await tx.timeEntry.create({
+      data: {
+        employeeId: employee.id,
+        jobId: params.input.jobId ?? null,
+        startedAt: params.input.startedAt,
+        endedAt: params.input.endedAt,
+        breakMin: params.input.breakMin,
+        minutes,
+        note: params.input.note ?? null,
+        manual: true,
+        hourlyRate: stundensatz > 0 ? stundensatz : null,
+      },
+      select: { id: true },
+    });
+
+    await passeLohnkostenAn(tx, params.input.jobId ?? null, minutes, stundensatz);
+    return erstellt;
+  });
+
+  await audit.created({
+    organizationId: params.organizationId,
+    userId: params.actorId,
+    entity: 'TimeEntry',
+    entityId: eintrag.id,
+    summary:
+      `Zeit von Hand erfasst für ${employee.employeeNumber}: ` +
+      `${params.input.startedAt.toISOString().slice(0, 16).replace('T', ' ')}, ${minutes} Min.`,
+    ip: params.ip,
+  });
+
+  return { id: eintrag.id, minutes };
+}
+
+/**
+ * Eine Erfassung korrigieren.
+ *
+ * **Eine freigegebene Zeit lässt sich nicht ändern.** Sie ist die Grundlage
+ * einer Abrechnung; wer sie korrigieren will, hebt zuerst die Freigabe auf.
+ * Das ist eine eigene Handlung mit eigenem Protokolleintrag — und genau diese
+ * Schwelle macht aus „freigegeben" eine Aussage statt einer Anzeige.
+ */
+export async function updateTimeEntry(params: {
+  organizationId: string;
+  entryId: string;
+  actorId: string;
+  ip?: string | null;
+  input: { startedAt?: Date; endedAt?: Date | null; breakMin?: number; note?: string | null };
+}) {
+  const eintrag = await ladeEintrag(params.organizationId, params.entryId);
+
+  if (eintrag.approved) {
+    throw new BusinessRuleError(
+      'Diese Zeit ist freigegeben und damit Grundlage einer Abrechnung. ' +
+        'Zum Korrigieren zuerst die Freigabe aufheben.',
+    );
+  }
+
+  const startedAt = params.input.startedAt ?? eintrag.startedAt;
+  const endedAt =
+    params.input.endedAt === undefined ? eintrag.endedAt : params.input.endedAt;
+  const breakMin = params.input.breakMin ?? eintrag.breakMin;
+
+  /**
+   * Ein Eintrag ohne Ende ist eine **laufende** Erfassung. Er darf so bleiben
+   * (jemand ist gerade eingestempelt), und dann gibt es keine Dauer zu
+   * rechnen — `minutes` bleibt 0, bis ausgestempelt oder ein Ende gesetzt
+   * wird.
+   */
+  const minutes = endedAt ? berechneMinuten(startedAt, endedAt, breakMin) : 0;
+  const delta = minutes - eintrag.minutes;
+  const stundensatz = toNumber(eintrag.hourlyRate);
+
+  await prisma.$transaction(async (tx) => {
+    if (endedAt) {
+      await pruefeUeberschneidung(tx, eintrag.employeeId, startedAt, endedAt, eintrag.id);
+    }
+
+    await tx.timeEntry.update({
+      where: { id: eintrag.id },
+      data: {
+        startedAt,
+        endedAt,
+        breakMin,
+        minutes,
+        note: params.input.note === undefined ? eintrag.note : params.input.note,
+        /**
+         * Eine korrigierte Zeit gilt als von Hand erfasst — auch wenn sie
+         * gestempelt begann. Der Stempel belegt sie nicht mehr; was zählt,
+         * ist die Person, die korrigiert hat, und die steht im Protokoll.
+         */
+        manual: true,
+      },
+    });
+
+    await passeLohnkostenAn(tx, eintrag.jobId, delta, stundensatz);
+  });
+
+  await audit.updated({
+    organizationId: params.organizationId,
+    userId: params.actorId,
+    entity: 'TimeEntry',
+    entityId: eintrag.id,
+    summary: `Zeit von ${eintrag.employee.employeeNumber} korrigiert (${eintrag.minutes} → ${minutes} Min.)`,
+    changes: {
+      startedAt: { from: eintrag.startedAt, to: startedAt },
+      endedAt: { from: eintrag.endedAt, to: endedAt },
+      breakMin: { from: eintrag.breakMin, to: breakMin },
+      minutes: { from: eintrag.minutes, to: minutes },
+    },
+    ip: params.ip,
+  });
+
+  return { id: eintrag.id, minutes };
+}
+
+/**
+ * Eine Erfassung löschen.
+ *
+ * Nur, solange sie nicht freigegeben ist — aus demselben Grund wie beim
+ * Korrigieren. Ein Doppeleintrag (zweimal eingestempelt, einmal vergessen
+ * auszustempeln) lässt sich sonst nicht aus der Welt schaffen, und ihn auf
+ * null Minuten zu korrigieren wäre eine Zeile, die aussieht wie Arbeit ohne
+ * Dauer.
+ */
+export async function deleteTimeEntry(params: {
+  organizationId: string;
+  entryId: string;
+  actorId: string;
+  ip?: string | null;
+}) {
+  const eintrag = await ladeEintrag(params.organizationId, params.entryId);
+
+  if (eintrag.approved) {
+    throw new BusinessRuleError(
+      'Eine freigegebene Zeit wird nicht gelöscht. Zuerst die Freigabe aufheben.',
+    );
+  }
+
+  const stundensatz = toNumber(eintrag.hourlyRate);
+
+  await prisma.$transaction(async (tx) => {
+    await tx.timeEntry.delete({ where: { id: eintrag.id } });
+    await passeLohnkostenAn(tx, eintrag.jobId, -eintrag.minutes, stundensatz);
+  });
+
+  await audit.deleted({
+    organizationId: params.organizationId,
+    userId: params.actorId,
+    entity: 'TimeEntry',
+    entityId: eintrag.id,
+    summary:
+      `Zeit von ${eintrag.employee.employeeNumber} gelöscht ` +
+      `(${eintrag.startedAt.toISOString().slice(0, 16).replace('T', ' ')}, ${eintrag.minutes} Min.)`,
+    ip: params.ip,
+  });
+
+  return { id: eintrag.id };
+}
+
+// ---------------------------------------------------------------------------
+//  Freigeben
+// ---------------------------------------------------------------------------
+
+/**
+ * Zeiten freigeben.
+ *
+ * Mehrere auf einmal, weil das der Arbeitsablauf ist: Am Monatsende geht
+ * jemand die Liste durch und gibt frei, was stimmt. Ein Endpunkt je Zeile
+ * hiesse dreissig Aufrufe für einen Monat.
+ *
+ * **Eine laufende Erfassung wird nicht freigegeben.** Ohne Ende gibt es keine
+ * Dauer, und eine Freigabe von null Minuten wäre eine Zusage über etwas, das
+ * noch nicht feststeht.
+ */
+export async function approveTimeEntries(params: {
+  organizationId: string;
+  entryIds: string[];
+  actorId: string;
+  ip?: string | null;
+}): Promise<{ freigegeben: number; uebersprungen: number }> {
+  const eintraege = await prisma.timeEntry.findMany({
+    where: {
+      id: { in: params.entryIds },
+      employee: { organizationId: params.organizationId },
+    },
+    select: { id: true, endedAt: true, approved: true },
+  });
+
+  const geeignet = eintraege.filter((e) => e.endedAt !== null && !e.approved).map((e) => e.id);
+
+  if (geeignet.length === 0) {
+    return { freigegeben: 0, uebersprungen: eintraege.length };
+  }
+
+  /**
+   * Die Bedingung steht in der `where`-Klausel, nicht nur in der Auswahl
+   * oben. Zwischen Lesen und Schreiben kann jemand anders freigegeben haben;
+   * so entscheidet die Datenbank, und der zweite Aufruf überschreibt weder
+   * Zeitpunkt noch Person des ersten.
+   */
+  const treffer = await prisma.timeEntry.updateMany({
+    where: { id: { in: geeignet }, approved: false, endedAt: { not: null } },
+    data: { approved: true, approvedById: params.actorId },
+  });
+
+  await audit.updated({
+    organizationId: params.organizationId,
+    userId: params.actorId,
+    entity: 'TimeEntry',
+    summary: `${treffer.count} Zeiterfassung(en) freigegeben`,
+    changes: { entryIds: geeignet },
+    ip: params.ip,
+  });
+
+  return {
+    freigegeben: treffer.count,
+    uebersprungen: eintraege.length - treffer.count,
+  };
+}
+
+/**
+ * Eine Freigabe aufheben.
+ *
+ * Der Gegenweg zum Korrigieren. Bewusst **einzeln** und nicht als Stapel: Eine
+ * Freigabe zurückzunehmen ist der seltene Fall und soll sich nicht versehentlich
+ * auf einen ganzen Monat anwenden lassen.
+ */
+export async function reopenTimeEntry(params: {
+  organizationId: string;
+  entryId: string;
+  actorId: string;
+  ip?: string | null;
+}) {
+  const eintrag = await ladeEintrag(params.organizationId, params.entryId);
+
+  if (!eintrag.approved) {
+    throw new BusinessRuleError('Diese Zeit ist nicht freigegeben.');
+  }
+
+  await prisma.timeEntry.update({
+    where: { id: eintrag.id },
+    data: { approved: false, approvedById: null },
+  });
+
+  await audit.updated({
+    organizationId: params.organizationId,
+    userId: params.actorId,
+    entity: 'TimeEntry',
+    entityId: eintrag.id,
+    summary: `Freigabe der Zeit von ${eintrag.employee.employeeNumber} aufgehoben`,
+    ip: params.ip,
+  });
+
+  return { id: eintrag.id, approved: false };
+}

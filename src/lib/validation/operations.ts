@@ -607,6 +607,62 @@ export const employeeAvailabilitySchema = z.object({
 export type EmployeeSkillsInput = z.infer<typeof employeeSkillsSchema>;
 export type EmployeeAvailabilityInput = z.infer<typeof employeeAvailabilitySchema>;
 
+// ---------------------------------------------------------------------------
+//  Zeiterfassung — ansehen, korrigieren, freigeben
+// ---------------------------------------------------------------------------
+
+/**
+ * **`minutes` kommt in keinem dieser Schemata vor**, und das ist der Punkt.
+ *
+ * Die Dauer rechnet der Server aus Beginn, Ende und Pause — dieselbe Regel wie
+ * bei den Preisen. Ein Feld, in das der Client eine Minutenzahl schreiben
+ * könnte, wäre ein Feld, in das jemand eine Lohnsumme schreiben kann.
+ */
+export const timeEntryQuerySchema = z.object({
+  employeeId: z.string().cuid().optional(),
+  jobId: z.string().cuid().optional(),
+  from: z.coerce.date().optional(),
+  to: z.coerce.date().optional(),
+  /** Als Zeichenkette, weil eine Abfragezeichenfolge nichts anderes kennt. */
+  approved: z.enum(['true', 'false']).optional(),
+  nurOffen: z.literal('true').optional(),
+  page: z.coerce.number().int().min(1).optional(),
+  pageSize: z.coerce.number().int().min(1).max(200).optional(),
+});
+
+export const createTimeEntrySchema = z.object({
+  employeeId: z.string().cuid(),
+  jobId: z.string().cuid().optional().nullable(),
+  startedAt: z.coerce.date(),
+  endedAt: z.coerce.date(),
+  breakMin: z.number().int().min(0).max(8 * 60).default(0),
+  note: z.string().trim().max(500).optional().nullable(),
+});
+
+export const updateTimeEntrySchema = z
+  .object({
+    startedAt: z.coerce.date().optional(),
+    endedAt: z.coerce.date().optional().nullable(),
+    breakMin: z.number().int().min(0).max(8 * 60).optional(),
+    note: z.string().trim().max(500).optional().nullable(),
+  })
+  .refine((wert) => Object.keys(wert).length > 0, {
+    message: 'Es wurde nichts zum Ändern angegeben.',
+  });
+
+export const approveTimeEntriesSchema = z.object({
+  /**
+   * Mehrere auf einmal, weil das der Arbeitsablauf ist: Am Monatsende geht
+   * jemand die Liste durch. Die Obergrenze verhindert, dass ein Aufruf den
+   * ganzen Bestand anfasst.
+   */
+  entryIds: z.array(z.string().cuid()).min(1).max(200),
+});
+
+export type TimeEntryQuery = z.infer<typeof timeEntryQuerySchema>;
+export type CreateTimeEntryInput = z.infer<typeof createTimeEntrySchema>;
+export type UpdateTimeEntryInput = z.infer<typeof updateTimeEntrySchema>;
+
 export const absenceRequestSchema = z.object({
   type: z
     .enum([
