@@ -21,6 +21,7 @@ import * as settings from '@/lib/validation/settings';
 import * as system from '@/lib/validation/system';
 import * as sig from '@/lib/validation/signatures';
 import * as security from '@/lib/validation/security';
+import * as payroll from '@/lib/validation/payroll';
 import * as q from '@/lib/validation/queries';
 import { BI_ROUTES } from './openapi-routes-bi';
 
@@ -2986,6 +2987,95 @@ export const ROUTES: RouteDoc[] = [
     rateLimit: 'apiWrite',
     params: q.idParam,
     body: crm.updateCustomerSchema,
+  },
+  {
+    method: 'post',
+    path: '/api/payroll/run',
+    tag: 'Personal',
+    summary: 'Lohnlauf eines Monats',
+    description:
+      'Erzeugt die Abrechnungen. **Nur freigegebene Zeiten** fliessen in den Bruttolohn — offene ' +
+      'werden gezählt und gemeldet, aber nicht bezahlt. Ein **laufender** Monat wird abgewiesen ' +
+      '(422): Ein Lauf am 12. sähe aus wie eine Abrechnung und wäre um zwei Drittel zu tief. ' +
+      'Idempotent je Person und Monat — ein zweiter Lauf überschreibt die noch nicht ' +
+      'veröffentlichten und lässt die veröffentlichten unberührt. ' +
+      '`saetzeGeprueft: false` heisst, dass UVG-Satz und BVG-Plan noch Vorbelegungen sind.',
+    guard: perm('all', 'payslip:create'),
+    rateLimit: 'apiWrite',
+    body: payroll.payrollRunSchema,
+    extraErrors: [422],
+  },
+  {
+    method: 'post',
+    path: '/api/payroll/publish',
+    tag: 'Personal',
+    summary: 'Abrechnungen veröffentlichen',
+    description:
+      'Macht sie unter `/portal/lohn` sichtbar und **unveränderlich** — dieselbe Schwelle wie ' +
+      'beim Ausstellen einer Rechnung. **Es gibt kein Zurücknehmen:** Eine Abrechnung, die ' +
+      'wieder verschwindet, ist schlimmer als eine falsche, die korrigiert wird. Korrekturen ' +
+      'laufen über die Abrechnung des Folgemonats. Eigene Berechtigung, weil Erstellen ein ' +
+      'wiederholbarer Rechenlauf ist und Veröffentlichen endgültig.',
+    guard: perm('all', 'payslip:publish'),
+    rateLimit: 'apiWrite',
+    body: payroll.payrollPublishSchema,
+  },
+  {
+    method: 'get',
+    path: '/api/payroll/payslips',
+    tag: 'Personal',
+    summary: 'Abrechnungen einsehen',
+    description:
+      'Filterbar nach Jahr, Monat, Person und Veröffentlichungsstand, mit den Summen über alle ' +
+      'Treffer. Ohne diese Ansicht lässt sich ein Lohnlauf nicht prüfen, bevor er ' +
+      'veröffentlicht wird.',
+    guard: perm('all', 'payslip:read_all'),
+    rateLimit: 'apiRead',
+    query: payroll.payslipQuerySchema,
+  },
+  {
+    method: 'get',
+    path: '/api/payroll/payslips/{id}',
+    tag: 'Personal',
+    summary: 'Eine Abrechnung samt Herleitung',
+    description:
+      'Zwei Wege hinein: Mit `payslip:read_all` jede Abrechnung, mit `payslip:read_own` nur die ' +
+      'eigene **und nur, wenn sie veröffentlicht ist** — eine unveröffentlichte ist ein Entwurf, ' +
+      'und eine Zahl, die sich ändert, nachdem jemand sie gesehen hat, ist schlimmer als keine. ' +
+      'Beides steht in der Prisma-`where`-Klausel und nicht in einer Prüfung danach. ' +
+      '`breakdown` trägt die angewandten Sätze, den koordinierten Jahreslohn und den ' +
+      'BVG-Altersband-Satz als Momentaufnahme.',
+    guard: perm('any', 'payslip:read_own'),
+    rateLimit: 'apiRead',
+    params: q.idParam,
+  },
+  {
+    method: 'get',
+    path: '/api/payroll/settings',
+    tag: 'Personal',
+    summary: 'Beitragssätze eines Jahres',
+    description:
+      'Legt sie an, wenn es sie noch nicht gibt — mit den gesetzlichen Vorgaben und, sofern ' +
+      'vorhanden, den betriebsabhängigen Sätzen des Vorjahres.',
+    guard: perm('all', 'payslip:create'),
+    rateLimit: 'apiRead',
+    query: q.payrollYearQuery,
+  },
+  {
+    method: 'patch',
+    path: '/api/payroll/settings',
+    tag: 'Personal',
+    summary: 'Beitragssätze pflegen',
+    description:
+      'Wer hier eine Zahl ändert, ändert den Nettolohn **aller** Mitarbeitenden für ein ganzes ' +
+      'Jahr — deshalb eine eigene Berechtigung. `bvgAnteilArbeitnehmer` ist auf 50 % gedeckelt: ' +
+      'Gesetzlich trägt der Betrieb mindestens die Hälfte der Altersgutschrift (Art. 66 BVG). ' +
+      'Alte Jahre bleiben unberührt — eine Korrektur für 2025 muss mit den Sätzen von 2025 ' +
+      'rechnen.',
+    guard: perm('all', 'payslip:publish'),
+    rateLimit: 'apiWrite',
+    query: q.payrollYearQuery,
+    body: payroll.payrollSettingsSchema,
   },
   {
     method: 'get',

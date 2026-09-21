@@ -5,7 +5,7 @@
 > Quelle, aus der sowohl diese Referenz als auch die Laufzeitvalidierung
 > stammen.
 
-Stand: 414 Endpunkte. Die maschinenlesbare Fassung liegt in
+Stand: 420 Endpunkte. Die maschinenlesbare Fassung liegt in
 [`openapi.yaml`](./openapi.yaml) bzw. [`openapi.json`](./openapi.json).
 
 ## Grundlagen
@@ -3141,6 +3141,120 @@ Familie.
 | Feld | Typ | Pflicht | Regeln |
 | --- | --- | --- | --- |
 | `id` | string | ja | min. 1 Zeichen |
+
+### `POST /api/payroll/run`
+
+**Lohnlauf eines Monats.** Erzeugt die Abrechnungen. **Nur freigegebene Zeiten** fliessen in den Bruttolohn — offene werden gezählt und gemeldet, aber nicht bezahlt. Ein **laufender** Monat wird abgewiesen (422): Ein Lauf am 12. sähe aus wie eine Abrechnung und wäre um zwei Drittel zu tief. Idempotent je Person und Monat — ein zweiter Lauf überschreibt die noch nicht veröffentlichten und lässt die veröffentlichten unberührt. `saetzeGeprueft: false` heisst, dass UVG-Satz und BVG-Plan noch Vorbelegungen sind.
+
+- **Zugriff:** Erfordert die Berechtigung: `payslip:create`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 422, 429, 500
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `year` | integer | ja | ≥ 2020, ≤ 2100 |
+| `month` | integer | ja | ≥ 1, ≤ 12 |
+| `employeeIds` | string[] | – | max. 500 Einträge |
+
+### `POST /api/payroll/publish`
+
+**Abrechnungen veröffentlichen.** Macht sie unter `/portal/lohn` sichtbar und **unveränderlich** — dieselbe Schwelle wie beim Ausstellen einer Rechnung. **Es gibt kein Zurücknehmen:** Eine Abrechnung, die wieder verschwindet, ist schlimmer als eine falsche, die korrigiert wird. Korrekturen laufen über die Abrechnung des Folgemonats. Eigene Berechtigung, weil Erstellen ein wiederholbarer Rechenlauf ist und Veröffentlichen endgültig.
+
+- **Zugriff:** Erfordert die Berechtigung: `payslip:publish`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 422, 429, 500
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `payslipIds` | string[] | ja | min. 1 Einträge, max. 500 Einträge |
+
+### `GET /api/payroll/payslips`
+
+**Abrechnungen einsehen.** Filterbar nach Jahr, Monat, Person und Veröffentlichungsstand, mit den Summen über alle Treffer. Ohne diese Ansicht lässt sich ein Lohnlauf nicht prüfen, bevor er veröffentlicht wird.
+
+- **Zugriff:** Erfordert die Berechtigung: `payslip:read_all`.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 429, 500
+
+**Query-Parameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `year` | integer | – | ≥ 2020, ≤ 2100 |
+| `month` | integer | – | ≥ 1, ≤ 12 |
+| `employeeId` | string | – | – |
+| `published` | string | – | `true` \| `false` |
+
+### `GET /api/payroll/payslips/{id}`
+
+**Eine Abrechnung samt Herleitung.** Zwei Wege hinein: Mit `payslip:read_all` jede Abrechnung, mit `payslip:read_own` nur die eigene **und nur, wenn sie veröffentlicht ist** — eine unveröffentlichte ist ein Entwurf, und eine Zahl, die sich ändert, nachdem jemand sie gesehen hat, ist schlimmer als keine. Beides steht in der Prisma-`where`-Klausel und nicht in einer Prüfung danach. `breakdown` trägt die angewandten Sätze, den koordinierten Jahreslohn und den BVG-Altersband-Satz als Momentaufnahme.
+
+- **Zugriff:** Erfordert eine der Berechtigungen: `payslip:read_own`.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+### `GET /api/payroll/settings`
+
+**Beitragssätze eines Jahres.** Legt sie an, wenn es sie noch nicht gibt — mit den gesetzlichen Vorgaben und, sofern vorhanden, den betriebsabhängigen Sätzen des Vorjahres.
+
+- **Zugriff:** Erfordert die Berechtigung: `payslip:create`.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 429, 500
+
+**Query-Parameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `year` | integer | ja | ≥ 2020, ≤ 2100 |
+
+### `PATCH /api/payroll/settings`
+
+**Beitragssätze pflegen.** Wer hier eine Zahl ändert, ändert den Nettolohn **aller** Mitarbeitenden für ein ganzes Jahr — deshalb eine eigene Berechtigung. `bvgAnteilArbeitnehmer` ist auf 50 % gedeckelt: Gesetzlich trägt der Betrieb mindestens die Hälfte der Altersgutschrift (Art. 66 BVG). Alte Jahre bleiben unberührt — eine Korrektur für 2025 muss mit den Sätzen von 2025 rechnen.
+
+- **Zugriff:** Erfordert die Berechtigung: `payslip:publish`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 422, 429, 500
+
+**Query-Parameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `year` | integer | ja | ≥ 2020, ≤ 2100 |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `ahvIvEo` | number | – | ≥ 0, ≤ 100 |
+| `alv` | number | – | ≥ 0, ≤ 100 |
+| `alvGrenzeJahr` | number | – | ≥ 0, ≤ 1000000 |
+| `alvUeberGrenze` | number | – | ≥ 0, ≤ 100 |
+| `uvgNbu` | number | – | ≥ 0, ≤ 100 |
+| `ktg` | number | – | ≥ 0, ≤ 100 |
+| `bvgEintrittsschwelle` | number | – | ≥ 0, ≤ 1000000 |
+| `bvgKoordinationsabzug` | number | – | ≥ 0, ≤ 1000000 |
+| `bvgMindestKoordiniert` | number | – | ≥ 0, ≤ 1000000 |
+| `bvgObergrenze` | number | – | ≥ 0, ≤ 1000000 |
+| `bvgAnteilArbeitnehmer` | number | – | ≥ 0, ≤ 50 |
+| `bvgSaetze` | object[] | – | min. 1 Einträge, max. 10 Einträge |
+| `bvgSaetze[].abAlter` | integer | ja | ≥ 16, ≤ 75 |
+| `bvgSaetze[].satz` | number | ja | ≥ 0, ≤ 100 |
 
 ### `GET /api/time`
 

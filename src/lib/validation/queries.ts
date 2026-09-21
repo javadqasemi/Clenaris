@@ -109,3 +109,14 @@ export const postalCodeQuery = z.object({
 export const publicTokenParams = z.object({
   token: z.string().min(10, 'Ungültiger Zugriffslink.'),
 });
+
+/**
+ * Das Abrechnungsjahr in der Abfragezeichenfolge.
+ *
+ * Steht hier und nicht bei payroll.ts, weil die OpenAPI-Registrierung
+ * Abfrageschemata aus dieser Datei bezieht — und weil ein Jahr keine
+ * fachliche Regel der Lohnabrechnung ist, sondern ein Abfrageparameter.
+ */
+export const payrollYearQuery = z.object({
+  year: z.coerce.number().int().min(2020).max(2100),
+});
