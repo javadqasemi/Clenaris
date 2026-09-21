@@ -16,6 +16,14 @@
 # `.env.example` mit seinen Platzhaltern (`sk_test_...`, `AIza...`, `re_...`)
 # nicht anschlägt: Ein Platzhalter ist zu kurz, ein echter Schlüssel nie.
 #
+# **Reichweite.** Geprüft wird der *verfolgte Bestand im Arbeitsbaum*, nicht
+# die Historie. Das ist Absicht — ein Lauf über alle Commits gehört nicht in
+# jede Auslieferung. Die Historie wurde am 2026-09-21 einmalig vollständig
+# geprüft (alle 55 erreichbaren Commits, sämtliche Muster unten plus GitHub-,
+# Slack-, AWS- und Datenbank-Verbindungsmuster): kein echtes Zugangsdatum,
+# nur Platzhalter, `example.ch`-Fixtures und die Wegwerfwerte des CI-Laufs.
+# Wird die Prüfung wiederholt, gehört das Ergebnis hierher.
+#
 set -Eeuo pipefail
 
 cd -- "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/.."
@@ -54,21 +62,47 @@ fi
 #  3) Anbieter-Schlüssel im Quelltext
 # ---------------------------------------------------------------------------
 
+# Eine Tokengrenze vor jedem Präfix: Zeilenanfang oder ein Zeichen, das kein
+# Wortzeichen ist.
+#
+# **Der Anlass, und er hat die Auslieferung fünf Tage lang blockiert.** Das
+# Resend-Muster lautete `re_[0-9A-Za-z_-]{24,}` — ohne Grenze. In
+# `signature_requests_signedArtifactId_key` steckt aber `…signatu` **`re_`**
+# `quests_signedArtifactId_key`, und danach folgen mehr als 24 Wortzeichen.
+# Der Signaturkern brachte am 2026-09-20 rund sechshundert solcher Bezeichner
+# mit; seither meldete jeder Lauf einen Fund, und die Prüfung scheiterte an
+# SQL-Bezeichnern statt an einem Schlüssel.
+#
+# Warum eine Grenze und nicht ein kürzeres Muster: Ein abgeschwächtes Muster
+# findet weniger echte Schlüssel. Die Grenze ändert dagegen nicht, *was* ein
+# Schlüssel ist, sondern *wo* einer anfangen darf — nämlich dort, wo auch ein
+# Mensch ein neues Wort sieht. Ein echter Schlüssel steht immer hinter `=`,
+# `"`, `'`, Leerzeichen, `:`, `/` oder am Zeilenanfang; keiner steht mitten in
+# einem Bezeichner.
+#
+# `\b` stünde näher an der Absicht, ist in POSIX-ERE aber nicht zugesichert —
+# `git grep -E` müsste dafür je nach Fassung auf PCRE ausweichen. Die
+# Alternation ist in jeder ERE-Umsetzung dasselbe und braucht kein `-P`.
+readonly TOKENGRENZE='(^|[^0-9A-Za-z_])'
+
 # Paare aus Beschreibung und erweitertem regulärem Ausdruck.
+#
+# Getrennt wird am **ersten** `|`; die Ausdrücke dürfen also selbst welche
+# enthalten (die Grenze oben tut es).
 muster=(
-  'Stripe (live)|sk_live_[0-9a-zA-Z]{20,}'
-  'Stripe (test)|sk_test_[0-9a-zA-Z]{20,}'
-  'Stripe Restricted|rk_live_[0-9a-zA-Z]{20,}'
-  'Stripe Webhook|whsec_[0-9a-zA-Z]{24,}'
-  'Google API|AIza[0-9A-Za-z_-]{35}'
-  'Resend|re_[0-9A-Za-z_-]{24,}'
-  'Anthropic|sk-ant-[0-9A-Za-z_-]{24,}'
-  'OpenAI|sk-proj-[0-9A-Za-z_-]{24,}'
-  'Twilio Account SID|AC[0-9a-f]{32}'
-  'SendGrid|SG\.[0-9A-Za-z_-]{20,}\.[0-9A-Za-z_-]{20,}'
-  'AWS Zugriffsschlüssel|AKIA[0-9A-Z]{16}'
+  "Stripe (live)|${TOKENGRENZE}sk_live_[0-9a-zA-Z]{20,}"
+  "Stripe (test)|${TOKENGRENZE}sk_test_[0-9a-zA-Z]{20,}"
+  "Stripe Restricted|${TOKENGRENZE}rk_live_[0-9a-zA-Z]{20,}"
+  "Stripe Webhook|${TOKENGRENZE}whsec_[0-9a-zA-Z]{24,}"
+  "Google API|${TOKENGRENZE}AIza[0-9A-Za-z_-]{35}"
+  "Resend|${TOKENGRENZE}re_[0-9A-Za-z_-]{24,}"
+  "Anthropic|${TOKENGRENZE}sk-ant-[0-9A-Za-z_-]{24,}"
+  "OpenAI|${TOKENGRENZE}sk-proj-[0-9A-Za-z_-]{24,}"
+  "Twilio Account SID|${TOKENGRENZE}AC[0-9a-f]{32}"
+  "SendGrid|${TOKENGRENZE}SG\.[0-9A-Za-z_-]{20,}\.[0-9A-Za-z_-]{20,}"
+  "AWS Zugriffsschlüssel|${TOKENGRENZE}AKIA[0-9A-Z]{16}"
   'Privater Schlüssel|-----BEGIN [A-Z ]*PRIVATE KEY-----'
-  'JSON Web Token|eyJhbGciOi[0-9A-Za-z_-]{30,}'
+  "JSON Web Token|${TOKENGRENZE}eyJhbGciOi[0-9A-Za-z_-]{30,}"
 )
 
 # Erzeugte Dokumentation und die Sperrdatei bleiben aussen vor: In `docs/`
@@ -105,8 +139,23 @@ done
 #    CI-Dienstcontainer oder eine Entwicklungsumgebung. Ohne diese Ausnahme
 #    meldete die Suche den eigenen Prüfauftrag als Fund — und eine Prüfung,
 #    die zuverlässig falschen Alarm schlägt, wird abgeschaltet statt gelesen.
-if treffer="$(git grep -nIE -- 'postgres(ql)?://[a-zA-Z0-9_.-]+:[^@/ ":]{8,}@' -- "${AUSNAHMEN[@]}" ':!.env.example' 2>/dev/null \
-              | grep -vE '@(localhost|127\.0\.0\.1)(:[0-9]+)?/' || true)"; then
+#
+#  • **Dokumentationsnamen.** `example.com`, `example.net`, `example.org`,
+#    `example.ch` sowie `.invalid`, `.test` und `.localhost`. Diese Namen
+#    sind für Beispiele reserviert beziehungsweise nicht auflösbar; eine
+#    Verbindungszeichenfolge dorthin *kann* keine Produktionszugangsdaten
+#    tragen. Das Projekt benutzt `example.ch` durchgehend als Fixture-Domain.
+#
+#    Der Anlass ist derselbe wie bei der Tokengrenze oben: Seit
+#    `tests/api/datenbanksicherung.test.ts` das Zerlegen einer
+#    Verbindungszeichenfolge prüft — mit erfundenen Passwörtern gegen
+#    `db.example.ch` —, meldete diese Suche zwei Funde je Lauf. Beide waren
+#    Fixtures. Wer eine Verbindung zerlegen testen will, braucht eine
+#    Verbindung mit Passwort; der Test lässt sich nicht ohne sie schreiben.
+readonly DB_MUSTER='postgres(ql)?://[a-zA-Z0-9_.-]+:[^@/ ":]{8,}@'
+readonly DB_AUSNAHMEHOSTS='@(([a-zA-Z0-9_-]+\.)*(localhost|invalid|test|example\.(com|net|org|ch))|127\.0\.0\.1)(:[0-9]+)?/'
+if treffer="$(git grep -nIE -- "${DB_MUSTER}" -- "${AUSNAHMEN[@]}" ':!.env.example' 2>/dev/null \
+              | grep -vE "${DB_AUSNAHMEHOSTS}" || true)"; then
   while IFS= read -r zeile; do
     [[ -z "${zeile}" ]] && continue
     melde "Datenbankverbindung mit Passwort: ${zeile%%:*}:$(echo "${zeile}" | cut -d: -f2)"
