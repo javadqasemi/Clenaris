@@ -106,7 +106,7 @@ export async function createEmployee(params: {
         workloadPct: params.input.workloadPct,
         vacationDaysPerYear: params.input.vacationDaysPerYear,
         ahvNumber: encryptNullable(params.input.ahvNumber, CRYPTO_CONTEXT.ahvNumber),
-        iban: params.input.iban ?? null,
+        iban: encryptNullable(params.input.iban, CRYPTO_CONTEXT.iban),
         nationality: params.input.nationality ?? null,
         permitType: params.input.permitType ?? null,
         permitValidUntil: params.input.permitValidUntil ?? null,
@@ -254,7 +254,9 @@ export async function updateEmployee(params: {
     ...(input.ahvNumber !== undefined
       ? { ahvNumber: encryptNullable(input.ahvNumber, CRYPTO_CONTEXT.ahvNumber) }
       : {}),
-    ...(input.iban !== undefined ? { iban: input.iban ?? null } : {}),
+    ...(input.iban !== undefined
+      ? { iban: encryptNullable(input.iban, CRYPTO_CONTEXT.iban) }
+      : {}),
     ...(input.nationality !== undefined ? { nationality: input.nationality ?? null } : {}),
     ...(input.permitType !== undefined ? { permitType: input.permitType ?? null } : {}),
     ...(input.permitValidUntil !== undefined
@@ -422,13 +424,20 @@ export async function getEmployeeDetail(params: {
   }
 
   /**
-   * Die AHV-Nummer liegt verschlüsselt in der Spalte (`src/lib/crypto.ts`) und
-   * wird erst hier zurückgewandelt — also genau an der einzigen Stelle, die
-   * sie überhaupt herausgibt, und nur für Rollen mit `payslip:create`.
+   * AHV-Nummer und Auszahlungs-IBAN liegen verschlüsselt in der Spalte
+   * (`src/lib/crypto.ts`) und werden erst hier zurückgewandelt — also genau an
+   * der einzigen Stelle, die sie überhaupt herausgibt, und nur für Rollen mit
+   * `payslip:create`.
+   *
+   * Die Reihenfolge zählt: Der Zweig oben (`!includeSensitive`) gibt beide als
+   * `null` zurück und kommt **vor** dieser Entschlüsselung. Wer sie nicht
+   * sehen darf, löst also gar keine Entschlüsselung aus — der Klartext
+   * entsteht nie, statt zu entstehen und dann verworfen zu werden.
    */
   return {
     ...employee,
     ahvNumber: decryptNullable(employee.ahvNumber, CRYPTO_CONTEXT.ahvNumber),
+    iban: decryptNullable(employee.iban, CRYPTO_CONTEXT.iban),
   };
 }
 
