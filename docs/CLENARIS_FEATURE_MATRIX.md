@@ -24,26 +24,27 @@ Spalten `FE` (Frontend), `BE` (Backend), `DB`, `RBAC`, `SEC` (eigener Sicherheit
 
 ## Gesamtverteilung
 
-*Stand nach Wave 8 (2026-09-21). Änderungen gegenüber der Erstfassung sind unten begründet; die Anteile sind gerundet.*
+*Stand nach Wave 9 (2026-09-21). Änderungen gegenüber der Erstfassung sind unten begründet; die Anteile sind gerundet.*
 
 | Status | Anzahl | Anteil |
 |---|---|---|
-| COMPLETE + VERIFIED | **94** | 51 % |
-| COMPLETE | **58** | 31 % |
+| COMPLETE + VERIFIED | **95** | 51 % |
+| COMPLETE | **59** | 32 % |
 | COMPLETE / EXTERNAL VERIFICATION REQUIRED | **6** | 3 % |
 | PARTIAL | **19** | 10 % |
 | BACKEND ONLY | **0** | 0 % |
-| FRONTEND ONLY | **1** | 1 % |
+| FRONTEND ONLY | **0** | 0 % |
 | SCHEMA ONLY | **3** | 2 % |
-| NOT IMPLEMENTED | **5** | 3 % |
+| NOT IMPLEMENTED | **4** | 2 % |
 | **Summe** | **185** | |
 
-**Technisch nutzbar (C+V oder C): 152 von 185 = 82 %.**
-**Durch Tests belegt: 94 von 185 = 51 %.**
+**Technisch nutzbar (C+V oder C): 154 von 185 = 83 %.**
+**Durch Tests belegt: 95 von 185 = 51 %.**
 
-> **BACKEND ONLY ist leer.** Das war die kleinste der Kategorien und die
-> ärgerlichste: Logik, die es gibt und die niemand bedienen kann. Beide
-> Einträge (Fähigkeiten, Arbeitszeiten) sind in Wave 7 geschlossen worden.
+> **BACKEND ONLY und FRONTEND ONLY sind beide leer.** Das waren die zwei
+> kleinsten Kategorien und die zwei ärgerlichsten: Logik, die niemand bedienen
+> kann (Wave 7: Fähigkeiten, Arbeitszeiten), und eine Oberfläche, deren Inhalt
+> nicht entstehen konnte (Wave 9: `/portal/lohn`).
 
 ### Änderungen in Wave 0
 
@@ -109,6 +110,14 @@ Spalten `FE` (Frontend), `BE` (Backend), `DB`, `RBAC`, `SEC` (eigener Sicherheit
 |---|---|
 | **EMP-010 geteilt und geprüft** | Die Zeile stand auf **C** mit dem Vermerk „**Prüfungen**" — und in der Risikoliste auf Platz 9 mit „Grundlage der Lohnabrechnung". Beides zusammen war der Anlass. Das Stempeln (EMP-010) ist jetzt belegt; was darüber hinausging, war gar nicht vorhanden und steht als eigene Zeile. |
 | **EMP-015 neu: C** | Ansehen, korrigieren, freigeben. `TimeEntry.approved`, `approvedById` und `manual` standen im Schema und wurden von keinem Codepfad je geschrieben; `timetracking:approve` war an Rollen vergeben und wurde von **nichts** geprüft. Nicht **C+V**, obwohl 22 Prüfungen dahinterstehen: Es fehlt die Ansicht in der Verwaltung, und ohne sie ist der Vorgang für den Betrieb nicht abgeschlossen — die Schnittstelle allein bedient niemand. |
+
+### Änderungen in Wave 9
+
+| Änderung | Begründung |
+|---|---|
+| **EMP-013: NI → C** | `Payslip` stand seit der ersten Migration im Schema, samt AHV-, ALV-, BVG- und UVG-Spalten — und kein Codepfad hat je eine Abrechnung erzeugt. Jetzt: Beitragsrechnung, Satztabelle je Jahr, Lohnlauf, Veröffentlichung. Nicht **C+V**, weil das PDF fehlt und der Lauf nur über die Schnittstelle zu starten ist. |
+| **EMP-014: FO → C+V** | Die Seite `/portal/lohn` war vorhanden und konnte keinen Inhalt bekommen. Jetzt gibt es welchen — und ein Entwurf bleibt für die eigene Person unsichtbar. **FRONTEND ONLY ist damit leer.** |
+| **Was ausdrücklich nicht dazukam** | Quellensteuer, Kinderzulagen, 13. Monatslohn, Ferienentschädigung, Naturalleistungen und Lohnausweis. Jedes ist eine eigene Regel mit eigenen Ausnahmen; eine halbe Umsetzung sähe aus wie eine vollständige Abrechnung. Die Abgrenzung steht in `docs/PAYROLL.md` §1 — nicht als Versäumnis, sondern als Entscheidung. |
 
 ---
 
@@ -286,8 +295,8 @@ Spalten `FE` (Frontend), `BE` (Backend), `DB`, `RBAC`, `SEC` (eigener Sicherheit
 | EMP-015 | Zeiterfassung — ansehen, korrigieren, freigeben | – | ✓ | ✓ | ✓ | ✓ | ✓ | – | **C** | `timetracking.service.ts`, fünf Endpunkte, 22 Prüfungen | Eine Ansicht in der Verwaltung — heute nur über die Schnittstelle |
 | EMP-011 | Abwesenheiten (Antrag, Bewilligung, Rückzug) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | – | **C+V** | `crud-audit.test.ts`, `dispatch.test.ts` | – |
 | EMP-012 | Stellen und Bewerbungen | ✓ | ✓ | ✓ | ✓ | ✓ | ○ | – | **P** | `/karriere`, `/admin/personal/bewerbungen` | Prüfungen, Bewerberweg |
-| EMP-013 | **Lohnabrechnung** | – | – | – | ✓ | – | – | – | **NI** | nur `payslip:create`/`payslip:read_own` | Modell, Dienst, Route, PDF, AHV/ALV/BVG/UVG |
-| EMP-014 | Seite `/portal/lohn` | ✓ | – | – | ✓ | – | – | – | **FO** | Seite vorhanden, Inhalt kann nicht entstehen | siehe EMP-013 |
+| EMP-013 | **Lohnabrechnung** | – | ✓ | ✓ | ✓ | ✓ | ✓ | – | **C** | `lib/payroll/beitraege.ts`, `payroll.service.ts`, `PayrollSetting`, sechs Endpunkte, `lohnabrechnung.test.ts` (26) | PDF (`pdfUrl` bleibt leer), Maske in der Verwaltung, Arbeitgeberbeiträge. Quellensteuer und Zulagen ausdrücklich **nicht** — siehe `docs/PAYROLL.md` §1 |
+| EMP-014 | Seite `/portal/lohn` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | – | **C+V** | Die Seite hat seit Wave 9 einen Inhalt: veröffentlichte Abrechnungen. Ein Entwurf existiert für die eigene Person nicht (404) | – |
 
 ---
 

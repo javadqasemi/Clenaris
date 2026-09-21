@@ -891,4 +891,132 @@ wird COMPLETE genannt, weil Code existiert") gilt in beide Richtungen.
 
 ---
 
+## 18. Wave 9 — Lohnabrechnung (Stand 2026-09-21)
+
+**MISSING #1**, Risikoliste Platz 3: „Lohnabrechnung — Kernprozess endet im
+Nichts."
+
+### Der Befund
+
+`Payslip` stand seit der ersten Migration im Schema — samt Spalten für AHV,
+ALV, BVG und UVG. Zwei Seiten lesen daraus, `payslip:create` war an Rollen
+vergeben. **Kein Codepfad hat je eine Abrechnung erzeugt.**
+
+Zum dritten Mal dasselbe Muster (nach den Automatisierungen in Wave 6 und der
+Zeiterfassung in Wave 8): Felder und Berechtigungen, die eine Zusage machen,
+die das System nicht einlöst.
+
+### Die tragende Entscheidung: die Sätze kommen von aussen
+
+Die Versuchung ist, `AHV = 5.3` als Konstante zu schreiben. Das wäre für genau
+ein Jahr richtig und danach falsch — und zwar **still**: Eine Lohnabrechnung
+mit dem Satz des Vorjahres sieht aus wie eine Lohnabrechnung.
+
+Drei Dinge ändern sich unabhängig: die gesetzlichen Sätze (jährlich), der
+UVG-Satz (je Branche, im Versicherungsvertrag), der BVG-Plan (je
+Vorsorgeeinrichtung). `PayrollSetting` hält sie je Organisation **und Jahr**;
+alte Zeilen bleiben stehen, weil eine Korrektur für 2025 mit den Sätzen von
+2025 rechnen muss.
+
+Die Werte für 2026 sind eine **Vorbelegung, keine Wahrheit**. Solange sie
+niemand bestätigt hat, meldet jeder Lauf `saetzeGeprueft: false`.
+
+### Vier Regeln
+
+| Regel | Was sie verhindert |
+|---|---|
+| **Nur freigegebene Zeiten** | Eine Abrechnung, die offene Zeiten mitnimmt, zahlt Stunden aus, die niemand geprüft hat. Der Ertrag aus Wave 8 |
+| **Kein laufender Monat** | Ein Lauf am 12. sähe aus wie eine Abrechnung und wäre um zwei Drittel zu tief — und ein späterer Lauf überschriebe ihn stillschweigend |
+| **Veröffentlichen ist endgültig** | Dieselbe Schwelle wie beim Ausstellen einer Rechnung. Kein Zurücknehmen: Eine Abrechnung, die wieder verschwindet, ist schlimmer als eine falsche, die korrigiert wird |
+| **Kein Feld für einen Betrag** | Weder Brutto noch Netto noch ein Abzug lässt sich von aussen setzen — dieselbe Regel wie bei den Preisen |
+
+### Drei Stellen, an denen ein Nachbau scheitert
+
+**Der Mindestbetrag beim koordinierten Lohn.** Wird beim Nachbauen am
+häufigsten vergessen, und der Fehler trifft genau die Teilzeitstellen, die in
+diesem Gewerbe die Mehrheit sind: Ohne ihn fiele jemand knapp über der
+Eintrittsschwelle auf fast null.
+
+**Das Alter am 31. Dezember, nicht am Stichtag.** Die BVG-Altersbänder wechseln
+auf den 1. Januar nach dem Geburtstag; am Stichtag zu rechnen liesse den Satz
+mitten im Jahr springen.
+
+**Rundung je Beitragsart, nicht erst am Ende.** Eine Summe, die sich aus den
+angezeigten Zeilen nicht nachrechnen lässt, erzeugt eine Rückfrage je Monat und
+je Person.
+
+### Zwei benannte Vereinfachungen
+
+Die ALV-Grenze wird durch zwölf geteilt statt über eine laufende Jahressumme
+geführt; die Jahreshochrechnung bei Stundenlohn kommt aus dem Pensum statt aus
+`Monatslohn × 12`. Beides steht im Code und in `docs/PAYROLL.md`, statt
+verschwiegen zu werden.
+
+### Die Abgrenzung
+
+`docs/PAYROLL.md` beginnt mit dem, was **nicht** enthalten ist: Quellensteuer,
+Kinderzulagen, 13. Monatslohn, Ferienentschädigung, Naturalleistungen,
+Lohnausweis. Jedes ist eine eigene Regel mit eigenen Ausnahmen, und **eine
+halbe Umsetzung wäre gefährlicher als keine — sie sieht aus wie eine
+vollständige Abrechnung.**
+
+### Eine Handkorrektur an der Migration
+
+`prisma migrate diff` erzeugte für `updatedAt` ein
+`ADD COLUMN … NOT NULL` **ohne Vorgabewert**. Das ist auf einer leeren Tabelle
+unauffällig und scheitert auf jeder anderen. Hier trifft es zufällig keine
+Zeile — `payslips` wurde nie beschrieben, und genau das ist der Befund — aber
+die Migration soll auf jeder Datenbank laufen, nicht nur auf dieser.
+
+### Eine Prüfung, die sich selbst wertlos gemacht hätte
+
+Die erste Fassung nahm die erste Personalakte der Liste. Die ist nach Nachname
+sortiert und im Demobestand die Person mit **Monatslohn** — bei ihr greift die
+Zeiterfassung gar nicht, und der Kernfall der ganzen Wave wäre stillschweigend
+übersprungen worden (`# skipped`, grüner Lauf). Die Auswahl muss zum geprüften
+Fall passen, nicht zur Sortierung.
+
+### Ein offener Befund aus dem Browserlauf
+
+Beim Verifizieren ist die Browserreihe dreimal mit **19/20** durchgelaufen,
+jedes Mal an einer anderen Stelle und in drei verschiedenen Dateien. Einzeln
+läuft jede Datei grün, und drei aufeinanderfolgende Gesamtläufe waren
+anschliessend 20/20.
+
+Die Ursache ist eingegrenzt, aber **nicht behoben**:
+
+```
+pageerror: Minified React error #418  (args[]=HTML)
+  → Hydration failed because the server rendered HTML didn't match the client
+```
+
+Ein zeitweiser Hydrationsfehler im Anwendungsrahmen. `app-shell.tsx` trägt
+bereits eine Abhilfe für **einen** solchen Fall (den Glockenzähler, mit
+Messung dokumentiert); es gibt offenbar eine zweite Quelle.
+
+Was ich versucht habe und warum es nicht weiterführte: Die Meldung ist im
+Produktionsbau minifiziert. Ein Entwicklungsbau gegen die Testdatenbank hätte
+das mismatchende Element benannt — aber `playwright.config.ts` startet über
+`webServer` immer den eigenen Produktionsserver, und `next dev` überschreibt
+dabei `.next`. Die Spur kostet mehr, als sie an dieser Stelle einbringt.
+
+**Das ist kein Wave-9-Regress:** Ein 19/20 mit Hydrationsfehler steht schon im
+Abschnitt zu Wave 1. Es gehört als eigener Punkt angegangen, mit angepasstem
+`webServer.reuseExistingServer`, statt mit einer geratenen Änderung am
+Anwendungsrahmen. **`retries: 0` in der Playwright-Konfiguration heisst, dass
+ein solcher Zufall die Auslieferung rot macht** — das ist eine Entscheidung,
+die der Betrieb bewusst treffen sollte.
+
+### Verifikation nach Wave 9
+
+| Prüfung | Ergebnis |
+|---|---|
+| `npm run typecheck`, `npm run lint`, `npm run build` | ✅ |
+| `npm run docs` | ✅ **420 Endpunkte** (von 414), 119 Modelle |
+| Migration | ✅ additiv, mit Handkorrektur an `updatedAt` |
+| `npm test` | ✅ **1082 Prüfungen, 1079 bestanden, 0 Fehlschläge**, 3 übersprungen |
+| `npm run e2e` | ✅ **20 / 20**, dreimal in Folge — siehe den offenen Befund oben |
+
+---
+
 *Diese Datei wird nach jeder Wave fortgeschrieben.*
