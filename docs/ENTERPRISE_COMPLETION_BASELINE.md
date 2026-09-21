@@ -446,4 +446,106 @@ Ergebnis: **86 Sekunden** — schneller als vor der Wave.
 
 ---
 
+## 13. Wave 4 — Schlüsselverwaltung (Stand 2026-09-21)
+
+Zwei MISSING-Punkte auf einmal: **#3 Schlüsselrotation** und **#4
+Verschlüsselung von Lohn- und Bankdaten (SEC-021)**. Der zweite ist nicht so
+erledigt worden, wie er formuliert war — und das ist das Ergebnis, nicht eine
+Abkürzung.
+
+### SEC-019 — Rotation
+
+Vorher gab es keine. Der Kommentar in `crypto.ts` sagte das ehrlich, aber es
+hiess: Ein einmal abgeflossener Schlüssel bleibt für immer der Schlüssel, es
+sei denn, man nimmt in Kauf, dass alle zweiten Faktoren, AHV-Nummern und
+Alarmcodes unlesbar werden.
+
+| Teil | Kern |
+|---|---|
+| Schlüsselbund | `ENCRYPTION_KEY` aktiv (schreibt), `ENCRYPTION_KEY_PREVIOUS` nur lesend |
+| Format `enc:v2:<kid>` | Acht Hexzeichen SHA-256 über die Schlüsselbytes |
+| `scripts/rotate-encryption-key.ts` | `--status` und der Umschlüsselungslauf |
+| `deriveSecretAll` | Bestätigungscodes und Unterzeichnungssitzungen überstehen die Rotation |
+
+**Warum der zweite Lesepfad die ganze Sache ist.** Ohne ihn wäre eine Rotation
+ein Ausfall: In dem Moment, in dem der neue Schlüssel aktiv wird, ist jeder
+vorhandene Wert unlesbar. Vorher umschlüsseln geht auch nicht — dann ist der
+Bestand neu und die laufende Anwendung alt. Es gibt keine Reihenfolge, die
+ohne zweiten Lesepfad funktioniert.
+
+**Warum die Schlüsselkennung dazugehört.** v1 sagt nicht, mit welchem
+Schlüssel es verschlüsselt wurde. Ohne diese Auskunft lässt sich weder
+beantworten, ob eine Rotation fertig ist, noch warum ein einzelner Wert nicht
+aufgeht. Die Kennung ist ein Hash über den Schlüssel und darf deshalb in eine
+Fehlermeldung — die Prüfreihe hält fest, dass sie weder Präfix noch Teil des
+Schlüssels ist.
+
+### SEC-021 — geprüft, und anders entschieden
+
+Der Auftrag lautete, vor der Entscheidung Suchbarkeit, Sortierung,
+Lohnrechnung, Berichte, Decimal-Verhalten, Rotation, Sicherung und Rechte je
+Feld zu untersuchen — und ausdrücklich **keine** pauschale Verschlüsselung.
+Das Ergebnis:
+
+| Feld | Entscheid | Ausschlaggebend |
+|---|---|---|
+| `Employee.iban` | **verschlüsselt** | Eine Kennung. Wird nirgends gerechnet, sortiert, gefiltert oder aggregiert — die Verschlüsselung kostet sie nichts |
+| `Employee.hourlyRate`, `monthlySalary`, `TimeEntry.hourlyRate` | **nicht verschlüsselt** | Werden **in der Datenbank** verrechnet: `_avg` in `scenario.service.ts`, zweimal SQL-`SUM` in `analytics.service.ts`. Ein Chiffrat ist eine Zeichenkette; `AVG` darüber ergibt einen Fehler, keine Zahl |
+| `Organization.iban`, `qrIban` | **nicht verschlüsselt** | Stehen auf jeder Rechnung. Etwas zu verschlüsseln, das man selbst veröffentlicht, ist keine Massnahme |
+
+Drei weitere Gründe gegen die Lohnfelder, jeder für sich hinreichend:
+`Decimal(12,2)` ginge verloren und die Rundungsregeln wanderten aus der
+Datenbank in die Anwendung; die Migration wäre ein `ALTER COLUMN … TYPE text`
+über Produktionsdaten; und der Gewinn wäre klein, weil im selben Abzug alle
+Rechnungsbeträge, alle Zeiterfassungen und die vollständige Lohnhistorie
+stehen — wer den Lohn wissen will, rechnet ihn aus dem Rest aus.
+
+**Tokenisierung** wurde geprüft und verworfen: Sie lohnt sich, wenn ein Wert
+eine Systemgrenze überschreitet. Ein Lohn tut das nie, und der Tresor wäre
+eine zweite Datenbank mit demselben Problem.
+
+**Die Antwort für die Zahlenfelder ist die Ebene darunter**: verschlüsselter
+Datenträger und verschlüsselte Sicherungskopien. Sie schützt denselben Angriff
+— den gestohlenen Abzug —, ohne einen einzigen `AVG`-Aufruf anzufassen. Das
+ist Betrieb und nicht Code, deshalb steht SEC-021 als **C/EVR**.
+
+Die Entscheidung ist als Prüfung festgehalten, nicht nur als Text: Eine
+Prüfung liest die IBAN verschlüsselt aus der Spalte, eine zweite lässt die
+Aggregation über `hourlyRate` laufen. Wer es später umdreht, bricht beide.
+
+### Ein Fehler, den der erste echte Lauf gefunden hat
+
+`argv.indexOf('--feld')` liefert **−1**, wenn der Schalter fehlt — und
+`argv[-1 + 1]` ist `argv[0]`. Ein Lauf mit `--status` hatte damit den
+Feldnamen `"--status"` und übersprang **jedes** Feld: keine Fehlermeldung,
+keine Zeile, am Ende „✓ Alle Werte stehen auf dem aktiven Schlüssel."
+
+Genau so sieht ein Rotationsskript aus, das nichts tut und behauptet, fertig
+zu sein. Gefunden nur, weil der Lauf gegen eine echte Datenbank ging und die
+erwarteten Feldzeilen fehlten.
+
+### Verifikation nach Wave 4
+
+| Prüfung | Ergebnis |
+|---|---|
+| `npm run typecheck` | ✅ |
+| `npm run lint` | ✅ (ganzes Projekt) |
+| `npm run build` | ✅ |
+| `npm run docs` | ✅ 405 Endpunkte, erzeugte Dateien unverändert |
+| Rotationslauf gegen die Testdatenbank | ✅ **4 v1-Werte umgeschlüsselt** (3 AHV-Nummern, 1 Alarmcode), Status danach vollständig auf dem aktiven Schlüssel |
+| Fehlerweg an echten Zeilen | ✅ fremder Schlüssel ⇒ je Zeile „Für diesen Wert fehlt der Schlüssel defb7c8f. Vorhanden: ce5d1d18.", **nichts geändert**, Exitcode 1; Bestand danach unverändert |
+| `npm test` | ✅ **963 Prüfungen, 959 bestanden, 0 Fehlschläge**, 4 übersprungen |
+| `npm run e2e` | ✅ **20 / 20** |
+
+> **PRE-PRODUCTION VERIFICATION REQUIRED.** `ENCRYPTION_KEY` muss in der
+> Produktion gesetzt sein — ohne ihn hängt alles an `JWT_SECRET`, und der
+> abgeleitete Schlüssel lässt sich nicht als Hexwert in
+> `ENCRYPTION_KEY_PREVIOUS` eintragen. **Ohne `ENCRYPTION_KEY` ist keine
+> Rotation durchführbar.** Dazu: verschlüsselter Datenträger und
+> verschlüsselte Sicherungskopien, eine zweite Kopie des Schlüssels an einem
+> Ort, der einen Serverausfall überlebt, und ein `--status`-Lauf ohne
+> Klartext-Altbestand. Die Liste steht in `docs/KEY_MANAGEMENT.md` §8.
+
+---
+
 *Diese Datei wird nach jeder Wave fortgeschrieben.*

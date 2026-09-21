@@ -24,22 +24,22 @@ Spalten `FE` (Frontend), `BE` (Backend), `DB`, `RBAC`, `SEC` (eigener Sicherheit
 
 ## Gesamtverteilung
 
-*Stand nach Wave 3 (2026-09-21). Änderungen gegenüber der Erstfassung sind unten begründet.*
+*Stand nach Wave 4 (2026-09-21). Änderungen gegenüber der Erstfassung sind unten begründet.*
 
 | Status | Anzahl | Anteil |
 |---|---|---|
-| COMPLETE + VERIFIED | **85** | 47 % |
+| COMPLETE + VERIFIED | **86** | 48 % |
 | COMPLETE | **56** | 31 % |
-| COMPLETE / EXTERNAL VERIFICATION REQUIRED | **5** | 3 % |
+| COMPLETE / EXTERNAL VERIFICATION REQUIRED | **6** | 3 % |
 | PARTIAL | **18** | 10 % |
 | BACKEND ONLY | **2** | 1 % |
 | FRONTEND ONLY | **1** | 1 % |
 | SCHEMA ONLY | **4** | 2 % |
-| NOT IMPLEMENTED | **9** | 5 % |
+| NOT IMPLEMENTED | **7** | 4 % |
 | **Summe** | **180** | **100 %** |
 
-**Technisch nutzbar (C+V oder C): 141 von 180 = 78 %.**
-**Durch Tests belegt: 85 von 180 = 47 %.**
+**Technisch nutzbar (C+V oder C): 142 von 180 = 79 %.**
+**Durch Tests belegt: 86 von 180 = 48 %.**
 
 ### Änderungen in Wave 0
 
@@ -69,6 +69,13 @@ Spalten `FE` (Frontend), `BE` (Backend), `DB`, `RBAC`, `SEC` (eigener Sicherheit
 | **SEC-024 neu: C+V** | „Security Center" stand als MISSING #8 in der Baseline und hatte bis dahin keine Zeile in dieser Matrix — ein Merkmal, das nirgends geführt wird, wird auch nicht vermisst. Es gibt es jetzt: Modell, Katalog, Dienst, Seite, vier Endpunkte, 26 Prüfungen. |
 | **SEC-025 neu: C+V** | Der Katalog ist getrennt vom **Anschluss** geführt, und das ist keine Erbsenzählerei: Ein Ereignisstrom, den niemand füllt, ist eine leere Tabelle mit einer schönen Oberfläche davor. Dass sechs Dienste tatsächlich schreiben, ist eine eigene Eigenschaft mit eigenem Nachweis. |
 
+### Änderungen in Wave 4
+
+| Änderung | Begründung |
+|---|---|
+| **SEC-019: NI → C+V** | Schlüsselbund mit zweitem Lesepfad, Format mit Schlüsselkennung, Rotationsskript mit Statusanzeige. Gegen die Testdatenbank an echten Zeilen gefahren — einschliesslich des Fehlerwegs mit fehlendem Schlüssel. |
+| **SEC-021: NI → C/EVR, und umbenannt** | Nicht mehr „Verschlüsselung von Lohn- und Bankdaten", sondern „**Schutz** von Lohn- und Bankdaten". Die Umbenennung ist das Ergebnis: Pauschale Feldverschlüsselung wurde geprüft und verworfen, weil sie die Aggregation in der Datenbank bricht und den Schutz nicht erhöht — die Herleitung des Lohns steht im selben Abzug. Die IBAN ist verschlüsselt, die Zahlenfelder schützt die Ebene darunter. Das ist Betrieb, nicht Code, deshalb **EVR**. |
+
 ---
 
 ## SEC — Plattform und Sicherheit (25)
@@ -93,13 +100,13 @@ Spalten `FE` (Frontend), `BE` (Backend), `DB`, `RBAC`, `SEC` (eigener Sicherheit
 | SEC-016 | Feldverschlüsselung AES-256-GCM | – | ✓ | ✓ | – | ✓ | ✓ | – | **C+V** | `crypto.ts`, `verschluesselung.test.ts` (9) | – |
 | SEC-017 | Prüfprotokoll (`AuditLog`) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | – | **C+V** | `audit.ts`, 223 Aufrufe / 60 Dateien, `protokoll-und-schranken.test.ts` (24); Wave 1: Tokenausstellung und `employeeIds` der Zuteilung ergänzt — die gemeldete Objektlücke gab es nicht, eine Gegenprüfung hält das fest | – |
 | SEC-018 | Sicherheitskopfzeilen / CSP | – | ✓ | – | – | ✓ | ○ | – | **C** | `next.config.ts` | – |
-| SEC-019 | Schlüsselrotation | – | – | – | – | – | – | – | **NI** | S-08; `crypto.ts` kennt keine | Zweitschlüsselpfad + Skript |
+| SEC-019 | Schlüsselrotation | – | ✓ | – | – | ✓ | ✓ | – | **C+V** | Schlüsselbund in `crypto.ts` (`ENCRYPTION_KEY_PREVIOUS`), Format `enc:v2:<kid>`, `scripts/rotate-encryption-key.ts`, `schluesselrotation.test.ts` | `ENCRYPTION_KEY` in der Produktion setzen — ohne ihn ist keine Rotation möglich |
 | SEC-020 | Schadsoftwareprüfung bei Uploads | – | ✓ | ✓ | ✓ | ✓ | ✓ | – | **C/EVR** | `src/lib/security/malware/*`, `dateipolitik.ts`, `scanFileAsset`/`authorizeStoredFile` in `file.service.ts`, `scan-backfill.ts`, `dateisicherheit.test.ts` (41) | **PRE-PRODUCTION VERIFICATION REQUIRED** — kein `clamd` in der Entwicklungsumgebung, der ClamAV-Adapter ist gegen das Protokoll gebaut, aber nicht gegen einen echten Dienst gelaufen; Bucket-Sichtbarkeit prüfen |
 | SEC-022 | Dateipolitik (Name, Endung, Typ) | – | ✓ | – | – | ✓ | ✓ | – | **C+V** | `src/lib/storage/dateipolitik.ts`, `dateisicherheit.test.ts` | – |
 | SEC-023 | Auslieferungstor Zustand × Herkunft | – | ✓ | ✓ | ✓ | ✓ | ✓ | – | **C+V** | `malware/auslieferung.ts`, `authorizeStoredFile`, 30 Tabellenfälle | Altbestand nachprüfen (`scan-backfill.ts`) |
 | SEC-024 | Security Center | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | – | **C+V** | `SecurityEvent`, `lib/security/events.ts`, `security.service.ts`, `/admin/sicherheit`, 4 Endpunkte, `sicherheitszentrum.test.ts` (26) | Aufbewahrungsfrist (Wave 24) |
 | SEC-025 | Sicherheitsereignisse an den Zustandsübergängen | – | ✓ | ✓ | – | ✓ | ✓ | – | **C+V** | 6 Dienste angeschlossen: Anmeldung, Zweitfaktor, Sitzungserneuerung, Rollen/Status, Zugangslinks, Dateiprüfung | – |
-| SEC-021 | Verschlüsselung von Lohn- und Bankdaten | – | – | ✓ | ✓ | – | – | – | **NI** | `employee.service.ts:104–105,140–141,252–253` schreibt `hourlyRate`/`monthlySalary` **im Klartext**; `CRYPTO_CONTEXT` kennt nur 2FA, AHV, Alarmcode | Kontexte ergänzen, Bestand umschlüsseln (Wave 4) |
+| SEC-021 | Schutz von Lohn- und Bankdaten | – | ✓ | ✓ | ✓ | ✓ | ✓ | – | **C/EVR** | Analyse und Entscheid in `docs/KEY_MANAGEMENT.md` §3: **`Employee.iban` verschlüsselt** (Kennung, wird nirgends gerechnet), **Lohnbeträge bewusst nicht** — sie werden in der Datenbank aggregiert (`_avg` in `scenario.service.ts`, SQL-Summe in `analytics.service.ts`); `schluesselrotation.test.ts` prüft beide Hälften | **PRE-PRODUCTION VERIFICATION REQUIRED** — verschlüsselter Datenträger und verschlüsselte Sicherungskopien sind die Massnahme für die Zahlenfelder; das ist Betrieb, nicht Code |
 
 ---
 
