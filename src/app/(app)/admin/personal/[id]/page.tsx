@@ -5,6 +5,10 @@ import { ArrowLeft, ExternalLink, FileText, Mail, Phone, ShieldCheck } from 'luc
 
 import { prisma, toNumber } from '@/lib/db';
 import { requirePermission } from '@/lib/auth/session';
+import {
+  EmployeeAvailabilityDialog,
+  EmployeeSkillsDialog,
+} from '@/features/admin/employee-qualifications';
 import { can, ROLE_LABELS, type ActorRole } from '@/lib/auth/rbac';
 import { NotFoundError } from '@/lib/errors';
 import { USER_STATUS_LABELS } from '@/lib/validation/users';
@@ -508,8 +512,37 @@ export default async function StaffDetailPage({
         )}
       </DetailSection>
 
-      {employee.availability.length > 0 ? (
-        <DetailSection title="Verfügbarkeit">
+      {/*
+        Beide Abschnitte standen bis Wave 7 unter `length > 0` — sie
+        verschwanden also genau dann, wenn nichts erfasst war. Das war
+        folgerichtig, solange es keinen Weg zum Erfassen gab: ein leerer
+        Abschnitt ohne Schaltfläche ist nur Platz.
+
+        Mit der Bearbeitung ist es umgekehrt: Wer nichts hinterlegt hat, ist
+        genau die Person, die den Abschnitt sehen muss. Angezeigt wird jetzt
+        immer — mit einem Satz, der sagt, was fehlt und was das bedeutet.
+      */}
+      <DetailSection
+        title="Arbeitszeiten"
+        action={
+          canEdit ? (
+            <EmployeeAvailabilityDialog
+              employeeId={employee.id}
+              availability={employee.availability.map((slot) => ({
+                weekday: slot.weekday,
+                startTime: slot.startTime,
+                endTime: slot.endTime,
+              }))}
+            />
+          ) : null
+        }
+      >
+        {employee.availability.length === 0 ? (
+          <p className="py-6 text-sm text-muted-foreground">
+            Keine Arbeitszeiten hinterlegt. Beim Zuteilen entfällt damit der Hinweis, ob
+            ein Einsatz ausserhalb der üblichen Zeiten liegt.
+          </p>
+        ) : (
           <dl className="protocol-list">
             {employee.availability.map((slot) => (
               <DetailRow key={slot.id} label={WEEKDAYS[slot.weekday] ?? String(slot.weekday)}>
@@ -517,11 +550,32 @@ export default async function StaffDetailPage({
               </DetailRow>
             ))}
           </dl>
-        </DetailSection>
-      ) : null}
+        )}
+      </DetailSection>
 
-      {employee.skills.length > 0 ? (
-        <DetailSection title="Qualifikationen">
+      <DetailSection
+        title="Qualifikationen"
+        action={
+          canEdit ? (
+            <EmployeeSkillsDialog
+              employeeId={employee.id}
+              skills={employee.skills.map((skill) => ({
+                name: skill.name,
+                level: skill.level,
+                certifiedUntil: skill.certifiedUntil
+                  ? skill.certifiedUntil.toISOString().slice(0, 10)
+                  : null,
+              }))}
+            />
+          ) : null
+        }
+      >
+        {employee.skills.length === 0 ? (
+          <p className="py-6 text-sm text-muted-foreground">
+            Keine Qualifikationen erfasst. Sie bestimmen mit, wer einen Einsatz übernehmen
+            kann, und fliessen in den Personalvorschlag ein.
+          </p>
+        ) : (
           <div className="flex flex-wrap gap-2 py-4">
             {employee.skills.map((skill) => (
               <Badge key={skill.id} variant="neutral">
@@ -530,8 +584,8 @@ export default async function StaffDetailPage({
               </Badge>
             ))}
           </div>
-        </DetailSection>
-      ) : null}
+        )}
+      </DetailSection>
 
       <DetailSection title="Letzte Einsätze">
         {employee.assignments.length === 0 ? (
