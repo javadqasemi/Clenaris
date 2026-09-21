@@ -211,7 +211,7 @@ const MANAGER_PERMISSIONS: Permission[] = [
  * Der Systemverantwortung vorbehalten.
  *
  * Bewusst schmal. Die Administration führt den Betrieb vollständig;
- * SUPER_ADMIN kommt nur für drei Dinge dazu, die man nicht delegieren will:
+ * SUPER_ADMIN kommt nur für das dazu, was man nicht delegieren will:
  * **Rollen vergeben** (sonst könnte sich jede Administration selbst
  * höherstufen), **das Prüfprotokoll lesen** (wer überwacht wird, soll die
  * Überwachung nicht einsehen) und **sich als jemand anderes anmelden**.
@@ -222,9 +222,26 @@ const MANAGER_PERMISSIONS: Permission[] = [
  * ist unumkehrbar, und wer sie ausführt, soll im Protokoll stehen, das nur
  * diese Rolle liest.
  */
+/**
+ * `security:read` und `security:manage` folgen `audit:read` — aus demselben
+ * Grund und mit einer zusätzlichen Schärfe.
+ *
+ * Das Sicherheitszentrum zeigt, wessen Anmeldungen scheitern, wessen Konto
+ * gesperrt wurde und wer seinen zweiten Faktor abgeschaltet hat. Das ist eine
+ * Aufsicht über Personen, und wer beaufsichtigt wird, darf sie nicht öffnen —
+ * sonst sieht die Administration, die sich selbst zu weit vorgewagt hat, als
+ * Erste, dass es aufgefallen ist.
+ *
+ * `security:manage` kommt hinzu, weil die Handlungen dort dieselbe Tragweite
+ * haben wie das Lesen: Ein Konto entsperren heisst, eine Sperre aufzuheben,
+ * die aus einem Grund zugeschlagen hat, und ein Ereignis zu bestätigen heisst,
+ * es als angesehen zu erklären. Beides ist keine Betriebsführung.
+ */
 const SUPER_ADMIN_ONLY: Permission[] = [
   'role:assign',
   'audit:read',
+  'security:read',
+  'security:manage',
   'user:impersonate',
   'data:purge',
 ];
@@ -391,6 +408,9 @@ const PERMISSION_ROUTES: { prefix: string; permission: Permission }[] = [
   { prefix: '/admin/personal/neu', permission: 'employee:create' },
   { prefix: '/admin/rollen', permission: 'role:read' },
   { prefix: '/admin/protokoll', permission: 'audit:read' },
+  // Dieselbe Klasse wie das Prüfprotokoll: Es gibt keinen Lesemodus für
+  // andere Rollen, die Seite existiert für sie nicht.
+  { prefix: '/admin/sicherheit', permission: 'security:read' },
   // Reine Handlungsmaske ohne Lesemodus: wer nicht löschen darf, soll die
   // Seite gar nicht sehen — sie antwortet mit 404, nicht mit 403.
   { prefix: '/admin/datenbereinigung', permission: 'data:purge' },

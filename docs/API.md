@@ -5,7 +5,7 @@
 > Quelle, aus der sowohl diese Referenz als auch die Laufzeitvalidierung
 > stammen.
 
-Stand: 401 Endpunkte. Die maschinenlesbare Fassung liegt in
+Stand: 405 Endpunkte. Die maschinenlesbare Fassung liegt in
 [`openapi.yaml`](./openapi.yaml) bzw. [`openapi.json`](./openapi.json).
 
 ## Grundlagen
@@ -5141,6 +5141,59 @@ Familie.
 | Feld | Typ | Pflicht | Regeln |
 | --- | --- | --- | --- |
 | `role` | string | ja | `CUSTOMER` \| `EMPLOYEE` \| `MANAGER` \| `ADMIN` \| `SUPER_ADMIN` |
+
+### `GET /api/security/events`
+
+**Sicherheitsereignisse.** Der Strom aus Anmeldungen, Fehlversuchen, Sperren, Sitzungswiderrufen, Rollenwechseln, Zugangslinks und Dateibefunden. Nur die Systemverantwortung — die Liste ist eine Aufsicht über Personen. Enthält keine Geheimnisse: `context` ist beim Schreiben redigiert, rohe Tokenwerte und Hashes kommen gar nicht erst hinein.
+
+- **Zugriff:** Erfordert die Berechtigung: `security:read`.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 429, 500
+
+**Query-Parameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `category` | string | – | `AUTHENTICATION` \| `SESSION` \| `ACCESS` \| `PUBLIC_LINK` \| `FILE` \| `SYSTEM` |
+| `severity` | string | – | `INFO` \| `WARNING` \| `CRITICAL` |
+| `nurOffen` | object | – | – |
+| `userId` | string | – | – |
+| `seite` | integer | – | ≥ 1 |
+| `proSeite` | integer | – | ≥ 1, ≤ 200 |
+
+### `POST /api/security/events/{id}/acknowledge`
+
+**Sicherheitsereignis bestätigen.** Erklärt ein Ereignis als gesehen. Die Zeile bleibt unverändert stehen; Zeitpunkt, Person und Notiz kommen hinzu — bestätigen heisst nicht löschen. Ein bereits bestätigtes Ereignis antwortet mit 200 und `bestaetigt: false`.
+
+- **Zugriff:** Erfordert die Berechtigung: `security:manage`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 422, 429, 500
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `note` | string | – | max. 1000 Zeichen |
+
+### `POST /api/security/users/{id}/unlock`
+
+**Kontosperre aufheben.** Setzt Fehlversuchszähler und Sperrfrist zurück — mehr nicht. Kein neues Passwort, keine Sitzung: Wer entsperrt wird, meldet sich selbst an.
+
+- **Zugriff:** Erfordert die Berechtigung: `security:manage`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 401, 403, 422, 429, 500
+
+### `POST /api/security/users/{id}/revoke-sessions`
+
+**Alle Sitzungen eines Kontos beenden.** Widerruft alle Erneuerungstokens **und** setzt `sessionsRevokedAt`. Nur das Erste liesse die bereits ausgestellten Zugangstokens ihre restlichen fünfzehn Minuten weiterlaufen.
+
+- **Zugriff:** Erfordert die Berechtigung: `security:manage`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 401, 403, 422, 429, 500
 
 ### `GET /api/system/purge`
 

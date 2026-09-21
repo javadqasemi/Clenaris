@@ -20,6 +20,7 @@ import * as users from '@/lib/validation/users';
 import * as settings from '@/lib/validation/settings';
 import * as system from '@/lib/validation/system';
 import * as sig from '@/lib/validation/signatures';
+import * as security from '@/lib/validation/security';
 import * as q from '@/lib/validation/queries';
 import { BI_ROUTES } from './openapi-routes-bi';
 
@@ -2528,6 +2529,55 @@ export const ROUTES: RouteDoc[] = [
     params: q.idParam,
     body: users.assignRoleSchema,
     extraErrors: [422],
+  },
+  {
+    method: 'get',
+    path: '/api/security/events',
+    tag: 'System',
+    summary: 'Sicherheitsereignisse',
+    description:
+      'Der Strom aus Anmeldungen, Fehlversuchen, Sperren, Sitzungswiderrufen, Rollenwechseln, ' +
+      'Zugangslinks und Dateibefunden. Nur die Systemverantwortung — die Liste ist eine Aufsicht ' +
+      'über Personen. Enthält keine Geheimnisse: `context` ist beim Schreiben redigiert, rohe ' +
+      'Tokenwerte und Hashes kommen gar nicht erst hinein.',
+    guard: perm('all', 'security:read'),
+    rateLimit: 'apiRead',
+    query: security.securityEventQuerySchema,
+  },
+  {
+    method: 'post',
+    path: '/api/security/events/{id}/acknowledge',
+    tag: 'System',
+    summary: 'Sicherheitsereignis bestätigen',
+    description:
+      'Erklärt ein Ereignis als gesehen. Die Zeile bleibt unverändert stehen; Zeitpunkt, Person ' +
+      'und Notiz kommen hinzu — bestätigen heisst nicht löschen. Ein bereits bestätigtes ' +
+      'Ereignis antwortet mit 200 und `bestaetigt: false`.',
+    guard: perm('all', 'security:manage'),
+    rateLimit: 'apiWrite',
+    body: security.acknowledgeEventSchema,
+  },
+  {
+    method: 'post',
+    path: '/api/security/users/{id}/unlock',
+    tag: 'System',
+    summary: 'Kontosperre aufheben',
+    description:
+      'Setzt Fehlversuchszähler und Sperrfrist zurück — mehr nicht. Kein neues Passwort, keine ' +
+      'Sitzung: Wer entsperrt wird, meldet sich selbst an.',
+    guard: perm('all', 'security:manage'),
+    rateLimit: 'apiWrite',
+  },
+  {
+    method: 'post',
+    path: '/api/security/users/{id}/revoke-sessions',
+    tag: 'System',
+    summary: 'Alle Sitzungen eines Kontos beenden',
+    description:
+      'Widerruft alle Erneuerungstokens **und** setzt `sessionsRevokedAt`. Nur das Erste liesse ' +
+      'die bereits ausgestellten Zugangstokens ihre restlichen fünfzehn Minuten weiterlaufen.',
+    guard: perm('all', 'security:manage'),
+    rateLimit: 'apiWrite',
   },
   {
     method: 'get',

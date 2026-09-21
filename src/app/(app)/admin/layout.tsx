@@ -176,6 +176,10 @@ export default async function AdminLayout({ children }: { children: React.ReactN
         { href: '/admin/benutzer', label: 'Benutzerkonten', icon: 'users', permission: 'user:read' },
         { href: '/admin/rollen', label: 'Rollen und Rechte', icon: 'roles', permission: 'role:read' },
         { href: '/admin/protokoll', label: 'Prüfprotokoll', icon: 'protocol', permission: 'audit:read' },
+        // Steht bewusst *nach* dem Prüfprotokoll: Das eine sagt, wer was
+        // geändert hat, das andere, was an Zugängen geschehen ist. Beide nur
+        // für die Systemverantwortung, aus derselben Überlegung.
+        { href: '/admin/sicherheit', label: 'Sicherheit', icon: 'shield', permission: 'security:read' },
         // Wer löschen darf, darf wiederherstellen — dieselbe Schwelle wie die
         // Seite selbst (`booking:delete` haben Leitung und Administration).
         { href: '/admin/papierkorb', label: 'Papierkorb', icon: 'trash', permission: 'booking:delete' },
