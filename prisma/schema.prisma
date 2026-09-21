@@ -2810,6 +2810,47 @@ enum StorageDriver {
   SUPABASE
 }
 
+/// Woher die Bytes einer Datei stammen — und damit, welches Vertrauen sie
+/// von Haus aus verdienen.
+///
+/// Die Unterscheidung ist nötig, weil „alles scannen" und „alles vertrauen"
+/// beide falsch sind. Ein Rechnungs-PDF, das unser eigener Renderer aus
+/// unseren eigenen Daten erzeugt hat, ist etwas anderes als eine
+/// Bewerbungsunterlage aus dem Internet — und ein Altbestand aus der Zeit vor
+/// dieser Prüfung ist wieder etwas anderes als beides.
+enum FileProvenance {
+  /// Von aussen hochgeladen. Wird immer geprüft, bevor sie ausgeliefert wird.
+  USER_UPLOAD
+  /// Vom Server selbst erzeugt: Rechnungs- und Offert-PDF, Rapport,
+  /// Führungsbericht, Signaturartefakte. Die Bytes entstehen aus unseren
+  /// eigenen Daten und haben nie fremden Inhalt berührt.
+  SYSTEM_GENERATED
+  /// Aus einer kontrollierten Übernahme, deren Herkunft ausdrücklich
+  /// verantwortet wurde. Heute von keinem Codepfad vergeben — der Wert
+  /// existiert, damit eine spätere Datenübernahme sich nicht als
+  /// `USER_UPLOAD` tarnen muss.
+  TRUSTED_IMPORT
+  /// Vor Einführung der Prüfung angelegt. Nie geprüft und rückwirkend nicht
+  /// prüfbar, solange die Bytes nicht erneut gelesen werden.
+  LEGACY_UNSCANNED
+}
+
+/// Wo eine Datei im Prüfablauf steht.
+///
+/// **Genau ein Zustand ist auslieferbar: `CLEAN`.** Alles andere heisst
+/// „nicht ausliefern", und die Gründe sind verschieden genug, dass sie
+/// auseinandergehalten gehören: `PENDING` heisst noch nicht angefasst,
+/// `ERROR` heisst wir wissen nichts, `INFECTED` heisst wir wissen etwas
+/// Schlechtes.
+enum FileScanStatus {
+  PENDING
+  SCANNING
+  CLEAN
+  INFECTED
+  ERROR
+  QUARANTINED
+}
+
 /// Eingebauter Dateispeicher — die Rückfallebene, wenn kein externer
 /// Objektspeicher eingerichtet ist.
 ///
@@ -3123,6 +3164,35 @@ model FileAsset {
   organizationId String
   scope          FileScope @default(OTHER)
 
+  /// Herkunft der Bytes. Entscheidet mit darüber, ob eine Datei ohne
+  /// Prüflauf ausgeliefert werden darf (siehe `FileProvenance`).
+  ///
+  /// Die Vorgabe ist `USER_UPLOAD` — die misstrauischste der vier. Wer eine
+  /// Datei serverseitig erzeugt, muss das ausdrücklich hinschreiben; wer es
+  /// vergisst, bekommt eine Datei, die erst nach einem Prüflauf erscheint.
+  /// Andersherum wäre der Vergessensfall eine ungeprüft ausgelieferte Datei.
+  provenance FileProvenance @default(USER_UPLOAD)
+
+  /// Stand der Schadsoftwareprüfung. Nur `CLEAN` wird ausgeliefert.
+  scanStatus     FileScanStatus @default(PENDING)
+  /// Welcher Prüfer, in welcher Fassung — damit ein späterer Befund
+  /// einordenbar ist. Ein `CLEAN` von vor zwei Jahren sagt etwas anderes als
+  /// eines von heute.
+  scanner        String?
+  scannerVersion String?
+  scanStartedAt  DateTime? @db.Timestamptz(6)
+  scannedAt      DateTime? @db.Timestamptz(6)
+  /// Name des Fundes, wie der Prüfer ihn meldet. Nie die Rohantwort.
+  detectionName  String?
+  /// Der tatsächlich erkannte Typ, falls er vom angemeldeten abwich.
+  detectedMimeType String?
+  quarantinedAt  DateTime? @db.Timestamptz(6)
+  /// Begrenzt die erneuten Versuche. `ERROR` wird nie von selbst `CLEAN`.
+  scanAttempts   Int     @default(0)
+  /// Maschinenlesbarer Grund des letzten Fehlversuchs — `TIMEOUT`,
+  /// `UNAVAILABLE`, `TOO_LARGE`, `NO_SCANNER`, `PROTOCOL`. Nie Prüfertext.
+  lastScanErrorCode String?
+
   bucket    String  @default("clenaris")
   path      String // Supabase Storage Pfad
   url       String
@@ -3219,6 +3289,11 @@ model FileAsset {
   @@index([organizationId, scope])
   @@index([bookingId])
   @@index([jobId])
+  /// Für das Sicherheitscockpit und den erneuten Prüflauf: „alles, was nicht
+  /// CLEAN ist" muss sich ohne vollen Tabellendurchlauf finden lassen.
+  @@index([organizationId, scanStatus])
+  /// Für den Wiederholungslauf: offene Fälle nach Alter.
+  @@index([scanStatus, scanAttempts])
   @@map("file_assets")
 }
 

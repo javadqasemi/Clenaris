@@ -4,7 +4,7 @@
 > Diagramme sind damit nie älter als das Schema. Prosa und Bereichseinteilung
 > stehen in `scripts/generate-erd.ts`.
 
-**117 Modelle, 80 Aufzählungstypen, 2150 Felder.**
+**117 Modelle, 82 Aufzählungstypen, 2161 Felder.**
 PostgreSQL 16+; alle Zeitstempel als `timestamptz` in UTC, Anzeige in Europe/Zurich.
 
 ## Vier Entscheidungen, die das ganze Schema prägen
@@ -1092,11 +1092,11 @@ erDiagram
     String id PK
     String organizationId
     FileScope scope
-    String bucket
-    String path
-    String url
-    String filename
-    String mimeType
+    FileProvenance provenance
+    FileScanStatus scanStatus
+    String scanner
+    String scannerVersion
+    DateTime scanStartedAt
   }
   BlogCategory |o--o{ BlogPost : "category"
   FileAsset |o--o{ StoredFile : "asset"
@@ -1118,7 +1118,7 @@ erDiagram
 | `GalleryItem` | `gallery_items` | 13 | – |
 | `JobPosting` | `job_postings` | 20 | – |
 | `JobApplication` | `job_applications` | 16 | – |
-| `FileAsset` | `file_assets` | 54 | – |
+| `FileAsset` | `file_assets` | 65 | – |
 | `StoredFile` | `stored_files` | 16 | – |
 
 ## Redaktion
@@ -1557,6 +1557,8 @@ exakte TypeScript-Typen.
 | `ConsentType` | `MARKETING_EMAIL`, `MARKETING_SMS`, `ANALYTICS`, `TERMS`, `PRIVACY`, `DATA_PROCESSING` |
 | `PublicTokenPurpose` | `QUOTE_VIEW`, `QUOTE_RESPOND`, `INVOICE_VIEW`, `INVOICE_PAY`, `BOOKING_MANAGE`, `DOCUMENT_VIEW`, `SIGNATURE_ACCESS`, `SIGNATURE_OTP`, `SIGNATURE_RESULT_VIEW` |
 | `StorageDriver` | `LOCAL`, `SUPABASE` |
+| `FileProvenance` | `USER_UPLOAD`, `SYSTEM_GENERATED`, `TRUSTED_IMPORT`, `LEGACY_UNSCANNED` |
+| `FileScanStatus` | `PENDING`, `SCANNING`, `CLEAN`, `INFECTED`, `ERROR`, `QUARANTINED` |
 | `SignatureProviderType` | `INTERNAL_EVIDENCE`, `QUALIFIED_EXTERNAL` |
 | `SignatureArtifactMode` | `EMBEDDED_VISUAL`, `DETACHED_EVIDENCE` |
 | `SignatureAssuranceLevel` | `LINK_ONLY`, `LINK_PLUS_EMAIL_CODE`, `LINK_PLUS_SMS_CODE` |
