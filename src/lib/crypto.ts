@@ -56,8 +56,13 @@ import { serverEnv } from '@/lib/env';
  * unverändert zurückgegeben. Das ist bewusst: Die Einführung darf keine
  * Datenmigration erzwingen und keine Anmeldung brechen. Jeder Wert wandert
  * beim nächsten Schreiben von selbst ins neue Format — bei 2FA also beim
- * nächsten Einrichten, bei der AHV-Nummer bei der nächsten Änderung. Wer den
- * Bestand sofort umstellen will, nimmt `scripts/encrypt-existing.ts`.
+ * nächsten Einrichten, bei der AHV-Nummer bei der nächsten Änderung.
+ *
+ * Ein Skript, das den Bestand sofort umstellt, gibt es **nicht**. Hier stand
+ * ein Verweis auf `scripts/encrypt-existing.ts`; die Datei existierte nie.
+ * Der Verweis ist gefährlicher als sein Fehlen: Wer ihn liest, hält die Frage
+ * für beantwortet und plant eine Umstellung ein, die niemand geschrieben hat.
+ * Dasselbe gilt für die Schlüsselrotation weiter unten.
  *
  * ---------------------------------------------------------------------------
  *  Schlüssel

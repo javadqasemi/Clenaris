@@ -1,21 +1,57 @@
 # Inbetriebnahme und Betrieb
 
-Zielumgebung: **Vercel** in der Region `fra1` (Frankfurt) mit **Supabase**
-Postgres und Storage. Beides steht in der EU; für Schweizer Personendaten ist
-das nach DSG und DSGVO zulässig, sofern es in der Datenschutzerklärung genannt
-ist — die mitgelieferte Erklärung nennt es.
+**Zielumgebung ist Production V2: ein eigener Hetzner-Server.** Die Kette
+lautet
 
-Die Applikation ist an nichts davon gebunden: sie braucht Node ≥ 20.11, ein
-PostgreSQL ≥ 16 und einen S3-kompatiblen Speicher. Ein einzelner Server tut es
-auch.
+```
+Internet → Cloudflare → Hetzner Cloud Firewall → Nginx → Next.js auf 127.0.0.1:3000
+```
 
-> **Zwei Wege, dieselbe Anwendung.**
-> Die Abschnitte 1 bis 11 beschreiben den Betrieb allgemein und die
-> Auslieferung über Vercel. Ab **Abschnitt 12** steht die automatische
-> Auslieferung auf einen **eigenen Server** über GitHub Actions, PM2 und SSH —
-> ein Push auf `main` genügt. Die Abschnitte 1 bis 3, 5 bis 6 und 9 gelten für
-> beide Wege; nur Abschnitt 4 (`vercel --prod`), 7 (Vercel Cron) und 8 (DNS auf
-> Vercel) werden im eigenen Betrieb durch Abschnitt 13 ersetzt.
+und darin sind alle Glieder verbindlich, nicht nur das letzte. Datenbank und
+Redis sind aus dem Internet nicht erreichbar.
+
+Die verbindlichen Festlegungen für V2, jede davon andernorts in diesem
+Dokument ausgeführt:
+
+| | |
+|---|---|
+| Quelle der Wahrheit | **GitHub `main`** im Repository `javadqasemi/Clenaris`. Der Server zieht ausschliesslich von dort |
+| Repository | **privat.** Der Server braucht deshalb einen eigenen, nur lesenden Deploy-Key (13.3) |
+| Auslieferung | **GitHub Actions**, Qualitätstor und Auslieferung getrennt (Teil II) |
+| Wirtsschlüssel | **gepinnt, Pflicht.** Kein `ssh-keyscan`-Rückfall, kein Vertrauen beim ersten Kontakt (13.4) |
+| `SERVER_USER` | **Pflicht.** Kein Rückfall auf `root` (14) |
+| `DIRECT_URL` | **Pflicht.** `schema.prisma` verlangt sie; ohne sie bricht Prisma mit P1012 ab (14) |
+| HTTP-Eingang | **nur über Cloudflare.** Der Ursprung nimmt auf 80/443 nur Cloudflare-Netze an (13.5.2) |
+| Secrets | **keine Übernahme aus dem Altbestand.** Neu erzeugen oder beim Anbieter rotieren (14) |
+
+Die Anwendung selbst ist an keinen Anbieter gebunden: sie braucht Node ≥ 20.11,
+ein PostgreSQL ≥ 16 und einen S3-kompatiblen Speicher — ohne den fällt sie auf
+einen lokalen Postgres-Blob-Treiber zurück.
+
+> **HISTORICAL — Vercel.**
+> Die Abschnitte 4 (`vercel --prod`), 7 (Vercel Cron) und 8 (DNS auf Vercel)
+> beschreiben einen **früheren** Betriebsweg und gelten für V2 **nicht**. Sie
+> bleiben stehen, weil `vercel.json` noch im Repository liegt und die
+> Abschnitte erklären, was diese Datei tut; ersetzt werden sie durch
+> Abschnitt 13 (eigener Server), 13.6 (Crontab) und die Cloudflare-Kette
+> oben. Die Abschnitte 1 bis 3, 5, 6 und 9 bis 11 gelten unverändert für
+> beide Wege — sie handeln von Datenbank, Speicher, Konfiguration, Stripe,
+> E-Mail, Sicherung und Betrieb, nicht vom Anbieter.
+
+> **Wo die Angaben zum alten Server geblieben sind.**
+> Bis 2026-09-21 stand hier die Infrastruktur des bisherigen
+> Produktionsservers: Adresse, Anbieterkennung, Wirtsschlüssel-Fingerabdruck,
+> Firewall-Messungen. Dieser Server ist **Beweismaterial eines Vorfalls** und
+> wird für V2 nicht wiederverwendet, nicht beliefert und nicht als Vorlage
+> genommen. Die Angaben sind deshalb aus dieser Betriebsanleitung entfernt
+> und stehen dort, wo sie hingehören: im Untersuchungsteil S-09 von
+> [`NEXT_DEVELOPMENT_AUDIT.md`](NEXT_DEVELOPMENT_AUDIT.md).
+>
+> Sie sind **keine Geheimnisse** — eine IP-Adresse und ein öffentlicher
+> Wirtsschlüssel sind öffentliche Angaben, und sie werden hier auch nicht wie
+> kompromittierte Zugangsdaten behandelt. Sie sind schlicht **veraltet**, und
+> eine Betriebsanleitung, die ein totes Ziel nennt, ist gefährlicher als eine,
+> die schweigt: Jemand liefert danach dorthin aus.
 
 ---
 
@@ -44,7 +80,7 @@ Vor dem Seed in Produktion `SEED_ADMIN_EMAIL` und `SEED_ADMIN_PASSWORD` setzen
 — sonst entsteht ein Administrationskonto mit den Demo-Zugangsdaten aus dem
 Repository. Der Seed bricht in der Produktion ab, wenn sie fehlen.
 
-### Vor dem nächsten Push: offene Release-Blocker
+### Vor der Inbetriebnahme von Production V2: offene Punkte
 
 Stand 2026-09-21.
 
@@ -53,8 +89,8 @@ ohne Beleg ist in einer Sicherheitsliste schlimmer als ein offener Punkt: Der
 offene Punkt wird bearbeitet, das unbelegte Häkchen nicht mehr. Deshalb drei
 Stufen, und sie werden nicht vermischt:
 
-- **belegt** — von diesem Arbeitsplatz aus nachgemessen (Hetzner-API,
-  TLS-Handshake, Portversuch, Prisma-Versuch).
+- **belegt** — von diesem Arbeitsplatz aus nachgemessen (Anbieter-API,
+  TLS-Handshake, Portversuch, Prisma-Versuch, GitHub-API).
 - **bestätigt** — der Betreiber hat es gesehen, hier grundsätzlich nicht
   nachprüfbar. Trifft auf GitHub-Secrets zu (GitHub gibt Werte technisch nicht
   heraus) und auf die Anbieterkonsole.
@@ -63,54 +99,69 @@ Stufen, und sie werden nicht vermischt:
 
 Der Unterschied zwischen *bestätigt* und *unbelegt* hängt daran, ob es einen
 unabhängigen Messweg gibt. Bei einem Secret gibt es keinen — die Aussage des
-Betreibers ist die bestmögliche Evidenz. Beim Zustand eines Hetzner-Servers
-gibt es einen: die API. Solange die nicht neu abgefragt wurde, bleibt der
-letzte tatsächliche Messwert massgeblich, und der lautete am 2026-09-21: keine
-Cloud-Firewall, `delete_protection: false`, `rebuild_protection: false`.
+Betreibers ist die bestmögliche Evidenz. Beim Zustand eines Servers gibt es
+einen: die API des Anbieters.
+
+**Die Liste beschreibt den zu bauenden Server, nicht den alten.** Alle
+Messwerte, die sich auf den bisherigen Produktionsserver bezogen, sind nach
+[`NEXT_DEVELOPMENT_AUDIT.md`](NEXT_DEVELOPMENT_AUDIT.md) S-09 gewandert. Sie
+sind Vorfallsbelege und taugen nicht als Zielvorgabe: Ein Häkchen, das an
+einer Maschine gemessen wurde, die nicht mehr beliefert wird, ist kein
+Häkchen.
+
+**A — GitHub, gehärtet vor dem Serverbau.**
 
 | # | Punkt | Stand | Beleg |
 |---|---|---|---|
-| 1 | Aktuellen Server bestätigt: Hetzner `164144336`, `2.29.18.45`, hel1 | **belegt** | Hetzner-API und TLS-Zertifikat des Ursprungs |
-| 2 | Frühere Auslieferungsläufe auf Geheimnisabfluss geprüft | **teilweise** | `SECRET EXPOSURE STATUS UNKNOWN`, Begründung in `NEXT_DEVELOPMENT_AUDIT.md` S-09 |
-| 3 | `SERVER_HOST` zeigt auf den aktuellen Server | **bestätigt** | Aussage des Betreibers; ein anderer Weg existiert nicht |
-| 4 | Host-Schlüssel von `2.29.18.45` erhoben **und live gegengeprüft** | **belegt** | `SHA256:LqwwARXhcVf1Md+wPBEUiurjML0s1+nIpvTMUeU2YDI` — vom Betreiber an der Hetzner-Konsole gelesen und am 2026-09-21 von diesem Arbeitsplatz aus bestätigt: eine Verbindung mit genau diesem angehefteten Fingerabdruck kam bis zur Anmeldung, ohne Schlüsselbeanstandung (13.4a) |
-| 5 | `SERVER_SSH_KNOWN_HOSTS` mit genau diesem Schlüssel gesetzt | **bestätigt** | Aussage des Betreibers |
-| 6 | **Hetzner Cloud Firewall** am Server | **unbelegt** | letzte API-Messung: **keine** Firewall zugewiesen. Die vorhandene `Zentra-Firewall` (id 2454352) öffnet 22/5432/4444 gegen `0.0.0.0/0` und darf **nicht** angehängt werden |
-| 7 | Port 3000 extern dicht | **belegt** | externer Verbindungsversuch: gefiltert — durch die **Firewall auf dem Server**, siehe unten |
-| 8 | PostgreSQL (5432/5433) extern dicht | **belegt** | beide gefiltert, ebenfalls serverseitig |
-| 9 | Redis (6379) extern dicht | **belegt** | gefiltert, ebenfalls serverseitig |
-| 10 | `delete_protection` am Server | **unbelegt** | letzte API-Messung: `false` |
-| 11 | `rebuild_protection` am Server | **unbelegt** | letzte API-Messung: `false` |
-| 12 | `pg_dump`/`pg_restore` auf dem Server vorhanden und Hauptversion ≥ Server | **unbelegt** | das Sicherungsskript prüft es beim Lauf selbst und bricht sonst ab — der Lauf ist damit sicher, aber nicht vorab belegt |
-| 13 | Sicherungsverzeichnis beschreibbar | **unbelegt** | ebenso, fail-closed im Skript |
-| 14 | Produktions-Secrets vollständig | **offen** | nur der Betreiber kann das sehen; Liste in 14.1. **`DIRECT_URL` ist erforderlich** — siehe dort |
-| 15 | Migrations-Vorprüfung gegen Produktionsdaten | läuft automatisch | `scripts/migration-preflight.ts`, fail-closed |
-| 16 | Unmittelbare Datenbanksicherung | läuft automatisch | `scripts/db-backup.ts`, fail-closed |
-| 17 | **Ursprung `2.29.18.45:443` nur für Cloudflare-Netze erreichbar** | **offen — Release-Blocker** | von aussen belegt: der Ursprung antwortet direkt mit 200. Solange das gilt, ist kein `TRUSTED_PROXY_MODE` ausser `NONE` vertretbar. Plan in 13.5.2 |
-| 18 | `TRUSTED_PROXY_MODE` über die Auslieferung verwaltbar | **erledigt** | seit Gate 4D.2 als Repository-Variable (14.2). Ein unbekannter Wert bricht ab, statt lautlos auf `NONE` zu fallen; eine *nicht gesetzte* Variable lässt die `.env` des Servers bewusst unangetastet |
-| 19 | Client-Adresse aus **einer** Richtlinie | **erledigt** | `session.ts` und `auth.service.ts` gehen über `clientIpFromHeaders`; `tests/api/auslieferung-absicherung.test.ts` hält fest, dass keine zweite Auswertung zurückkommt |
-| 20 | `SERVER_USER` fail-closed im Workflow | **erledigt** | Prüfung vor dem ersten SSH, kein Rückfall auf `root` |
-| 21 | `DIRECT_URL` fail-closed im Workflow | **erledigt** | bricht ab, bevor Prisma auf dem Server mit P1012 scheitert |
+| A1 | Historie vollständig auf Zugangsdaten geprüft | **belegt** | alle 55 erreichbaren Commits, sämtliche Anbietermuster: kein echtes Zugangsdatum, nur Platzhalter, `example.ch`-Fixtures und CI-Wegwerfwerte |
+| A2 | Geheimnis-Suche ohne Fehlalarm | **belegt** | Tokengrenze in `scripts/ci-secret-scan.sh`; Regressionsprüfungen in `tests/api/auslieferung-absicherung.test.ts` |
+| A3 | Pull Requests durchlaufen das Qualitätstor | **belegt** | Auslöser `pull_request` gegen `main`, kein `pull_request_target` |
+| A4 | Ein Pull Request liefert nie aus | **belegt** | `github.event_name != 'pull_request'` am Auslieferungsauftrag, dazu `needs: qualitaet` |
+| A5 | Auslieferung nur nach ausdrücklichem Einschalten | **belegt** | `vars.DEPLOY_ENABLED == 'true'`, fail-closed — verhindert, dass der erste grüne Lauf an ein Altziel liefert |
+| A6 | Default-Branch ist `main` | **offen** | siehe Betreiberliste unten |
+| A7 | `main` gegen Force-Push und Löschen geschützt, CI als Pflichtprüfung | **offen** | dito |
+| A8 | Repository privat | **offen** | dito |
+| A9 | Umgebung `production` nimmt nur `main` an | **offen** | dito |
+| A10 | Actions-Rechte nach Least Privilege | **teilweise belegt** | im Workflow: Vorgabe `contents: read`, Auslieferungsauftrag `permissions: {}`. Die Repository-Einstellung selbst ist Betreibersache |
 
-**Die beiden Firewalls gehören auseinandergehalten.** Punkt 6 und die Punkte 7
-bis 9 messen nicht dasselbe:
+**B — Der neue Server, vor der ersten Auslieferung.** Jeder Punkt gilt für die
+noch zu bauende Maschine; keiner ist heute belegbar.
 
-- Die **Hetzner Cloud Firewall** liegt vor dem Server, im Netz des Anbieters.
+| # | Punkt | Stand |
+|---|---|---|
+| B1 | Cloud Firewall des Anbieters angelegt und **angehängt**: 80/443 nur Cloudflare-Netze, 22 nur eigene Verwaltungsadressen, sonst nichts | offen |
+| B2 | Firewall auf dem Server (nftables/ufw) zusätzlich aktiv | offen |
+| B3 | 3000, 5432, 6379 von aussen nicht erreichbar — **nachgemessen**, nicht angenommen | offen |
+| B4 | `delete_protection` und `rebuild_protection` eingeschaltet | offen |
+| B5 | Infrastruktursicherung (Cloud-Backup/Snapshot) eingeschaltet | offen |
+| B6 | Wirtsschlüssel über die **Anbieterkonsole** gelesen und als `SERVER_SSH_KNOWN_HOSTS` gepinnt | offen |
+| B7 | Eigener, nur lesender Deploy-Key für das private Repository | offen |
+| B8 | `pg_dump`/`pg_restore` vorhanden, Hauptversion ≥ Server | offen — das Sicherungsskript prüft es beim Lauf und bricht sonst ab |
+| B9 | Sicherungsverzeichnis ausserhalb des Anwendungsverzeichnisses, beschreibbar | offen — ebenso fail-closed |
+| B10 | Produktions-Secrets vollständig und **neu** (14) | offen |
+| B11 | Ursprung nur für Cloudflare-Netze erreichbar, danach `TRUSTED_PROXY_MODE=CLOUDFLARE` — **in dieser Reihenfolge** (13.5.2) | offen |
+
+**Zwei Firewalls, und sie messen nicht dasselbe.** Der Unterschied hat am
+alten Server eine Schicht gekostet und gehört deshalb hierher:
+
+- Die **Cloud Firewall** des Anbieters liegt vor dem Server, in dessen Netz.
   Sie ist unabhängig vom Betriebssystem und wirkt auch dann, wenn die Maschine
-  falsch konfiguriert, frisch aufgesetzt oder im Rettungssystem ist. **Sie ist
-  nicht vorhanden.**
-- Die **Firewall auf dem Server** (nftables/ufw) ist vorhanden und wirksam —
-  das ist durch den Portversuch von aussen belegt und der Grund, warum 3000,
-  5432, 5433 und 6379 geschlossen sind.
+  falsch konfiguriert, frisch aufgesetzt oder im Rettungssystem ist.
+- Die **Firewall auf dem Server** (nftables/ufw) wirkt nur, solange das
+  System läuft und richtig konfiguriert ist. Ein `ufw disable`, ein Rebuild
+  oder ein Rettungssystem nimmt sie weg.
 
-Dass 7 bis 9 belegt sind, heisst also **nicht**, dass 6 erledigt ist. Es ist
-eine Schicht statt zwei. Das ist kein offenes Scheunentor und auch kein
-Push-Hindernis, aber ein `ufw disable` oder ein Rebuild nimmt in der jetzigen
-Lage die einzige Schicht weg.
+Ein geschlossener Port beweist also nur, dass *eine* der beiden greift. Für
+V2 sind beide vorgesehen, und B1 wird getrennt von B2 abgehakt. Eine
+vorhandene Firewall des Anbieters, die 22, 5432 oder 4444 gegen `0.0.0.0/0`
+öffnet, wird **nicht** wiederverwendet — sie ist keine Abkürzung, sondern das
+Gegenteil einer Regelmenge.
 
-Punkt 2 bleibt bewusst offen und ist **kein** Push-Hindernis: Die Frage
-betrifft die Vergangenheit, nicht den nächsten Lauf. Der nächste Lauf geht
-gegen einen gepinnten, beim Anbieter gegengeprüften Wirtsschlüssel.
+**Was nur der Betreiber abhaken kann (A6–A9).** GitHub gibt weder
+Secret-Werte noch Einstellungen ohne Authentifizierung heraus; von einem
+Arbeitsplatz ohne Token sind diese vier Punkte grundsätzlich nicht messbar.
+Sie stehen deshalb als *offen*, nicht als *erledigt* — auch dann, wenn die
+Arbeit getan ist.
 
 ### Zwei Sicherungsebenen, die nicht dasselbe sind
 
@@ -246,24 +297,26 @@ Erlaubte Dateitypen und Grössen stehen in `src/lib/storage/supabase.ts` unter
 
 ## 3. Umgebungsvariablen
 
-In Vercel unter *Settings → Environment Variables*. Pflicht in Produktion:
+Im eigenen Betrieb stehen sie in der `.env` des Servers (13.3); die von
+GitHub verwalteten führt die Auslieferung dort ein (14). Pflicht in
+Produktion:
 
 ```
 DATABASE_URL
 DIRECT_URL
 JWT_SECRET                 openssl rand -base64 48
-NEXT_PUBLIC_APP_URL        https://clenaris.qasemi.ch
+NEXT_PUBLIC_APP_URL        https://<produktionsadresse>
 CRON_SECRET                openssl rand -hex 32
 ENCRYPTION_KEY             openssl rand -hex 32   (genau 64 Hex-Zeichen)
 ```
 
-> **Die Produktionsadresse ist `clenaris.qasemi.ch`**, nicht `clenaris.ch`.
-> Letzteres ist der Markenname und steht in den Firmenangaben; im DNS
-> existiert es (Stand 2026-09-19) nicht. Überall dort, wo eine Adresse
-> *angesprochen* wird — `NEXT_PUBLIC_APP_URL`, `API_URL`, die `servers` der
-> OpenAPI-Spezifikation —, gehört die erreichbare Adresse hin. Eine
-> Konfiguration, die auf einen nicht auflösenden Namen zeigt, erzeugt Magic
-> Links und PDF-Verweise, die ins Leere führen.
+> **Die Produktionsadresse ist nicht `clenaris.ch`.** Das ist der Markenname
+> und steht in den Firmenangaben; als Hostname existierte er im DNS zuletzt
+> (2026-09-19) nicht. Überall dort, wo eine Adresse *angesprochen* wird —
+> `NEXT_PUBLIC_APP_URL`, `API_URL`, die `servers` der OpenAPI-Spezifikation —,
+> gehört die tatsächlich erreichbare Adresse hin. Eine Konfiguration, die auf
+> einen nicht auflösenden Namen zeigt, erzeugt Magic Links und PDF-Verweise,
+> die ins Leere führen, und der Fehler fällt erst der Kundschaft auf.
 
 `ENCRYPTION_KEY` verschlüsselt das TOTP-Geheimnis, die AHV-Nummer und den
 Alarmcode in der Datenbank (`src/lib/crypto.ts`). Fehlt er, leitet die
@@ -273,9 +326,28 @@ unter den Pflichtwerten und nicht unter den Empfehlungen.
 
 **Diesen Schlüssel sichern wie das Datenbankpasswort.** Geht er verloren,
 geht kein Konto verloren — aber jede Person mit zweitem Faktor muss ihn neu
-einrichten, und AHV-Nummern und Alarmcodes sind nachzutragen. Rotieren lässt
-er sich nur mit einem Skript, das jeden Wert entschlüsselt und neu
-verschlüsselt; ein blosser Austausch der Variablen macht den Bestand unlesbar.
+einrichten, und AHV-Nummern und Alarmcodes sind nachzutragen.
+
+**Rotieren lässt er sich heute nicht.** `src/lib/crypto.ts` kennt weder einen
+Zweitschlüssel-Lesepfad noch ein Umschlüsselungsskript (S-08); ein Wert mit
+Präfix `enc:v1:`, der sich mit dem aktuellen Schlüssel nicht entschlüsseln
+lässt, wirft. Ein blosser Austausch der Variablen macht den Bestand also
+unlesbar — nicht ungültig, sondern unwiederbringlich. Ein solches Skript
+müsste geschrieben und geprüft werden; es zu erfinden, ohne es gegen echte
+Daten gefahren zu haben, wäre schlimmer als sein Fehlen.
+
+> **Für Production V2 ist das Zeitfenster jetzt.** Eine frische Datenbank
+> enthält keinen Wert mit `enc:v1:`. Solange das gilt, ist der Schlüssel frei
+> wählbar und kostet nichts. Das Fenster schliesst sich mit dem **ersten**
+> eingerichteten zweiten Faktor, der ersten AHV-Nummer und dem ersten
+> Alarmcode. `ENCRYPTION_KEY` gehört deshalb in die allererste `.env`, nicht
+> in eine spätere Nachbesserung.
+>
+> Soll später ein Datenbestand aus einer früheren Installation übernommen
+> werden, kehrt sich die Lage um: Dann braucht es entweder den damaligen
+> Schlüssel — beziehungsweise den damaligen `JWT_SECRET`, falls nie ein
+> eigener gesetzt war — oder vorher ein Umschlüsselungsskript. Das ist eine
+> eigene Entscheidung und gehört nicht in die Inbetriebnahme.
 
 Empfohlen:
 
@@ -529,31 +601,41 @@ liefert aus, ohne dass jemand eingreift.
 
 ```
 Entwicklung
-    │  git push origin main
-    ▼
-GitHub
-    │
+    │  Arbeitszweig → Pull Request gegen main
     ▼
 GitHub Actions  ── .github/workflows/deploy.yml
     │
-    ├─ Auftrag 1: Prüfung  (bricht ab → keine Auslieferung)
+    ├─ Auftrag 1: Prüfung          läuft bei PR · Push auf main · Handstart
     │     Linter · TypeScript · Geheimnis-Suche · Dokumentation
     │     PostgreSQL 16 starten · Migrationen · Demodaten
-    │     Build · Anwendung starten · vollständige Testreihe
+    │     Build · Anwendung starten · vollständige Testreihe · Browser
     │
-    └─ Auftrag 2: Auslieferung  (nur wenn Auftrag 1 grün ist)
+    └─ Auftrag 2: Auslieferung     NUR bei Push auf main oder Handstart,
+          │                        NIE aus einem Pull Request,
+          │                        und nur bei DEPLOY_ENABLED = true
+          │                        (needs: Auftrag 1 grün)
           Secrets über SSH ablegen
           scripts/deploy.sh auf dem Server
              ├─ Sicherung von Build und .env
              ├─ git fetch · git reset --hard origin/main
              ├─ npm ci
-             ├─ prisma generate · migrate deploy (nur wenn nötig)
+             ├─ prisma generate · Vorprüfung · DB-Sicherung · migrate deploy
              ├─ npm run build
              ├─ pm2 reload  (ohne Ausfallzeit)
              ├─ Health Check lokal  ──┐ schlägt fehl → Rücksprung
              └─ Aufräumen             │
           Health Check von aussen  ───┘  prüft zusätzlich den Commit
 ```
+
+**Drei Auslöser, zwei davon dürfen liefern.** Ein Pull Request löst das volle
+Qualitätstor aus und nichts sonst — er ist eine Frage, keine Entscheidung.
+Bis Gate V2 prüfte der Workflow ausschliesslich `main`, also erst *nach* dem
+Zusammenführen; ein Fehler fiel damit zum spätestmöglichen Zeitpunkt auf.
+
+Bewusst `pull_request` und nicht `pull_request_target`: Letzteres stellt die
+Secrets des Repositories bereit, während es den Code aus dem Pull Request
+ausführt. Das Qualitätstor kommt deshalb ohne ein einziges `secrets.*` aus —
+`tests/api/auslieferung-absicherung.test.ts` hält das fest.
 
 **Was hier eine Anwendung ist.** Die Anforderung nennt „Frontend bauen" und
 „Backend bauen" getrennt. In diesem Projekt gibt es diese Trennung nicht:
@@ -573,7 +655,7 @@ erreichbar".
 
 | Datei | Aufgabe |
 | --- | --- |
-| `.github/workflows/deploy.yml` | Prüfung und Auslieferung, Auslöser `push` auf `main` und `workflow_dispatch` |
+| `.github/workflows/deploy.yml` | Prüfung und Auslieferung. Auslöser: `pull_request` gegen `main`, `push` auf `main`, `workflow_dispatch` |
 | `scripts/deploy.sh` | Auslieferung auf dem Server; idempotent, mit Rücksprung |
 | `scripts/ci-secret-scan.sh` | Sucht Zugangsdaten im verfolgten Bestand |
 | `ecosystem.config.js` | PM2: Cluster-Modus, zwei Instanzen, Reload ohne Ausfallzeit |
@@ -604,10 +686,43 @@ sudo npm install -g pm2
 
 **13.3 Repository und Umgebung.**
 
+Das Repository ist **privat**. Ein anonymes `git clone` über HTTPS scheitert
+deshalb — der Server braucht einen eigenen Zugang, und zwar einen, der nur
+lesen darf und nur für diesen Server gilt:
+
 ```bash
-cd ~ && git clone https://github.com/javadqasemi/Clenaris.git app && cd app
+# Auf dem Server, als Dienstbenutzer: Schlüsselpaar nur für das Holen des Codes.
+ssh-keygen -t ed25519 -C "clenaris-deploy-key-v2" -f ~/.ssh/id_repo -N ""
+cat ~/.ssh/id_repo.pub
+```
+
+Den öffentlichen Teil in GitHub unter *Settings → Deploy keys → Add deploy
+key* eintragen, **ohne** „Allow write access". Ein Deploy-Key gilt für genau
+ein Repository; ein persönliches Zugriffstoken gälte für alle und wäre auf
+einem Server der falsche Schlüssel.
+
+```bash
+cat >> ~/.ssh/config <<'EOF'
+Host github-clenaris
+  HostName github.com
+  User git
+  IdentityFile ~/.ssh/id_repo
+  IdentitiesOnly yes
+EOF
+chmod 600 ~/.ssh/config
+
+cd ~ && git clone github-clenaris:javadqasemi/Clenaris.git app && cd app
 cp .env.example .env && chmod 600 .env
 ```
+
+`IdentitiesOnly yes` ist kein Zierrat: Ohne die Zeile bietet `ssh` der
+Gegenstelle der Reihe nach jeden Schlüssel an, den der Agent kennt — und
+GitHub nimmt den ersten, der passt. Welches Repository der Server dann
+erreicht, hängt davon ab, welcher Schlüssel zuerst dran war.
+
+`deploy.sh` ruft später `git fetch origin main` auf und benutzt genau diesen
+Weg; ein Wechsel der Adresse gehört deshalb in `git remote set-url`, nicht in
+den Workflow.
 
 `.env` jetzt vollständig ausfüllen — **alle** Werte aus Abschnitt 3, nicht nur
 die aus den GitHub Secrets. Die Pipeline führt später nur die von GitHub
@@ -679,65 +794,60 @@ der Workflow prüft das mit `ssh-keygen -F` und bricht sonst ab.
 In `/etc/ssh/sshd_config` sicherstellen: `PermitRootLogin no`,
 `PasswordAuthentication no`.
 
-**13.4a Der erhobene Wirtsschlüssel des aktuellen Servers.**
+**13.4a Die Gestalt des Secrets `SERVER_SSH_KNOWN_HOSTS`.**
 
-Am 2026-09-21 hat der Betreiber `/etc/ssh/ssh_host_ed25519_key.pub` auf Server
-`164144336` über die **Hetzner-Konsole** gelesen — also über den Weg des
-Anbieters, nicht über SSH und nicht über `ssh-keyscan`. Der Kommentar im
-Schlüssel lautet `root@ubuntu-4gb-hel1-1` und passt zur Maschine (4 GB, hel1).
-
-| | |
-|---|---|
-| Typ | `ssh-ed25519`, 256 Bit |
-| SHA-256 | `SHA256:LqwwARXhcVf1Md+wPBEUiurjML0s1+nIpvTMUeU2YDI` |
-| MD5 | `MD5:42:8e:2a:a7:19:54:bc:c8:e6:90:a3:9f:72:a5:da:70` |
-
-Der Schlüsselkörper wurde vor der Übernahme strukturell geprüft: 68 Zeichen
-Base64, 51 Byte, längenpräfixiert als `ssh-ed25519` (11) plus 32 Byte
-Schlüsselmaterial. Ein Übertragungsschaden beim Abtippen wäre daran
-aufgefallen; der Zeilenumbruch, den die Konsole im Kommentar erzeugt, ist
-belanglos, weil der Kommentar weder in den Fingerabdruck noch in `known_hosts`
-eingeht.
-
-Damit ist der Wert für `SERVER_SSH_KNOWN_HOSTS` — eine Zeile, kein
-Zeilenumbruch am Ende nötig, und **ohne** Kommentar:
+Der Wert ist eine `known_hosts`-Zeile, ohne Kommentar, ohne nötigen
+Zeilenumbruch am Ende:
 
 ```
-2.29.18.45 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBXDXamMZlC8r2Tr/9Oh2Q6MlyufpmZiU7eDwBwNQCGv
+<name> ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA…
 ```
 
-Zwei Bedingungen hängen daran:
+Zwei Bedingungen hängen daran, und beide haben schon einmal eine Auslieferung
+gekostet:
 
 - **Der Name links muss zeichengenau dem entsprechen, was in `SERVER_HOST`
   steht.** `ssh` schlägt unter dem Namen nach, mit dem es verbindet, nicht
   unter der aufgelösten Adresse. Steht dort ein DNS-Name statt der IP, lautet
   die Zeile `<name> ssh-ed25519 AAAA…`; bei einem Port ungleich 22
   `[<name>]:<port> ssh-ed25519 AAAA…`. Sind beide Wege im Gebrauch, gehören
-  beide Zeilen ins Secret.
+  beide Zeilen ins Secret. Der Workflow prüft das mit `ssh-keygen -F` und
+  bricht sonst ab.
 - **Den Eintrag nicht mit `ssh-keygen -H` verschlüsseln.** Gehashte Einträge
-  funktionieren zwar, aber dann lässt sich der Secretwert nicht mehr mit blossem
-  Auge gegen den Fingerabdruck oben prüfen — und genau diese Nachprüfbarkeit ist
-  der Zweck der Übung.
+  funktionieren zwar, aber dann lässt sich der Secretwert nicht mehr mit
+  blossem Auge gegen den Fingerabdruck aus der Anbieterkonsole prüfen — und
+  genau diese Nachprüfbarkeit ist der Zweck der Übung.
 
-**Drei Schlüssel, die nicht verwechselt werden dürfen.** Das Projekt hat im
-Verlauf drei verschiedene ed25519-Wirtsschlüssel gesehen; nur der erste ist
-gültig:
+**Zur Struktur, falls der Schlüssel von Hand übertragen wird.** Ein
+ed25519-Wirtsschlüssel hat 68 Zeichen Base64, entpackt 51 Byte:
+längenpräfixiert `ssh-ed25519` (11 Byte) plus 32 Byte Schlüsselmaterial. Ein
+Übertragungsschaden beim Abtippen fällt daran auf. Der Kommentar hinter dem
+Schlüssel ist belanglos — er geht weder in den Fingerabdruck noch in
+`known_hosts` ein.
 
-| Fingerabdruck | Wozu er gehört |
-|---|---|
-| `SHA256:Lqww…U2YDI` | **Der aktuelle Server** `2.29.18.45`, aufgesetzt 2026-08-31. Der einzige Sollwert |
-| `SHA256:k2mQx1lDuD9kURdFAGxbKxznHfGqvvqHwJWJRmWTuPQ` | Der **frühere Clenaris-Server**, am 2025-10-01 lokal in `~/.ssh/known_hosts` unter `46.62.175.39` gepinnt. Historisch, die Maschine existiert nicht mehr |
-| `SHA256:xiMHcWWxo4UVb4JmYzwremYJdN1lXoGxw+UEZK7+1k4` | Der Schlüssel, den `46.62.175.39` am 2026-09-19 **angeboten** hat, als die Verbindung mit `REMOTE HOST IDENTIFICATION HAS CHANGED` scheiterte. Er gehört einem **Dritten** (`PTR mail1.domainmarket.gr`) und darf nirgends gepinnt werden |
+**Ein Wirtsschlüssel wird nie stillschweigend ersetzt.** Weicht der
+angebotene Schlüssel vom gepinnten ab, wird **nicht** ausgeliefert, und die
+Frage lautet zuerst *warum*: Entweder steht jemand dazwischen, oder die
+Maschine wurde neu aufgesetzt. Nur im zweiten Fall wird der Wert ersetzt, und
+zwar bewusst und aus der Anbieterkonsole.
 
-Der mittlere Eintrag steht weiterhin in der lokalen `~/.ssh/known_hosts` dieses
-Arbeitsplatzes und pinnt einen Schlüssel für eine Adresse, die fremd ist. Das
-ist kein aktives Risiko — die Zeile verhindert eher eine versehentliche
-Verbindung, als sie eine ermöglicht —, aber sie ist irreführend und gehört
-entfernt, sobald der Weg zum neuen Server eingerichtet ist:
-
-```bash
-ssh-keygen -R 46.62.175.39
-```
+> **Für Production V2 gibt es hier keinen Sollwert, und das ist Absicht.**
+> Der Server existiert noch nicht; sein Wirtsschlüssel entsteht beim
+> Aufsetzen. Ein hier eingetragener Fingerabdruck wäre entweder der einer
+> anderen Maschine oder eine Erfindung — beides ist schlimmer als eine leere
+> Stelle.
+>
+> Die Fingerabdrücke, die dieses Projekt bisher gesehen hat — der des alten
+> Produktionsservers, der eines noch früheren und der eines **fremden**
+> Hosts, der dessen freigewordene Adresse übernommen hat —, stehen in
+> [`NEXT_DEVELOPMENT_AUDIT.md`](NEXT_DEVELOPMENT_AUDIT.md) S-09. Keiner von
+> ihnen gehört je wieder in ein Secret.
+>
+> Steht in der lokalen `~/.ssh/known_hosts` dieses Arbeitsplatzes noch ein
+> Eintrag für eine frühere Adresse, gehört er entfernt
+> (`ssh-keygen -R <adresse>`): Er pinnt einen Schlüssel für eine Maschine,
+> die jemand anderem gehört. Gefährlich ist das nicht — die Zeile verhindert
+> eher eine Verbindung, als sie eine ermöglicht —, aber sie ist irreführend.
 
 **13.5 Reverse Proxy.** Die Anwendung hört auf `127.0.0.1:3000` und wird nie
 direkt ins Netz gestellt. Nginx oder Caddy davor beendet TLS und reicht weiter.
@@ -790,25 +900,22 @@ Dasselbe gilt für `CLOUDFLARE`: `CF-Connecting-IP` verdient kein Vertrauen,
 nur weil der Kopf vorhanden ist — jeder kann ihn setzen. Er verdient es erst,
 wenn der Ursprung Verbindungen ausserhalb der Cloudflare-Netze verwirft.
 
-**Korrektur vom 2026-09-21: Cloudflare ist im Einsatz, und der Ursprung ist
-trotzdem direkt erreichbar.** Hier stand „Cloudflare wird derzeit nicht
-eingesetzt". Das stimmt nicht mehr. Nachgemessen von aussen:
+**Die Falle, in die der alte Aufbau gelaufen ist — und die V2 vermeiden
+muss.** Cloudflare war im Einsatz, und der Ursprung war trotzdem unter seiner
+IP-Adresse direkt erreichbar: Eine Anfrage mit passendem `Host`-Kopf an die
+Adresse des Servers wurde mit 200 beantwortet, auch mit selbst gesetztem
+`X-Forwarded-For` und `X-Real-IP`. Die Messungen dazu stehen in
+[`NEXT_DEVELOPMENT_AUDIT.md`](NEXT_DEVELOPMENT_AUDIT.md) S-09.
 
-| Messung | Ergebnis |
-|---|---|
-| `https://clenaris.qasemi.ch/api/health` | 200, `server: cloudflare`, `cf-ray: …-ZRH`, Zertifikat von SSL Corporation |
-| `https://2.29.18.45/api/health` mit `Host: clenaris.qasemi.ch` | **200**, `server: nginx`, Let's-Encrypt-Zertifikat auf denselben Namen |
-| dieselbe Anfrage mit selbst gesetztem `X-Forwarded-For`/`X-Real-IP` | **200** — die Anfrage wird bedient |
-
-Der Ursprung beantwortet Anfragen also auch dann, wenn sie an Cloudflare
-vorbeigehen. Damit ist **kein** Modus in dieser Topologie richtig:
+Ein Ursprung, der Anfragen auch an Cloudflare vorbei beantwortet, macht
+**jeden** Modus falsch — und zwar ohne dass irgendetwas fehlschlägt:
 
 - **`CLOUDFLARE` wäre unsicher.** Wer die IP kennt, spricht direkt mit Nginx
   und setzt `CF-Connecting-IP` selbst. Genau die Bedingung, die der Modus
   voraussetzt — „der Ursprung nimmt nur Cloudflare-Netze an" — ist nicht
   erfüllt.
 - **`SINGLE_REVERSE_PROXY` wäre unsicher *und* falsch.** Unsicher, weil der
-  Anwendungsport zwar gefiltert ist, `443` am Ursprung aber offen: Wer dort
+  Anwendungsport zwar gefiltert sein mag, `443` am Ursprung aber offen ist: Wer dort
   anklopft, ist für Nginx ein gewöhnlicher Client, und Nginx setzt `X-Real-IP`
   auf dessen echte Adresse — so weit korrekt. Falsch wird es für den
   regulären Weg: Kommt die Anfrage über Cloudflare, ist `$remote_addr` die
@@ -854,10 +961,11 @@ von Cloudflare. Wer die Liste pflegt und wie oft, gehört in den Betriebsplan �
 ein Cron-Eintrag, der die Datei zieht und bei Änderung meldet, ist das
 Minimum.
 
-**Schritt 2 — Hetzner Cloud Firewall, neu anlegen.** Die bestehende
-`Zentra-Firewall` (id 2454352) wird **nicht** verwendet und **nicht**
-angehängt: Sie öffnet 22, 5432 und 4444 gegen `0.0.0.0/0`. Eine neue Regelmenge
-für Server `164144336`:
+**Schritt 2 — Hetzner Cloud Firewall, neu anlegen.** Eine im Projekt
+vorhandene Firewall wird **nicht** wiederverwendet und **nicht** angehängt,
+nur weil sie da ist: Die im Konto liegende Regelmenge öffnete 22, 5432 und
+4444 gegen `0.0.0.0/0` und wäre damit keine Firewall, sondern eine
+Bestätigung. Für den V2-Server entsteht eine eigene:
 
 | Richtung | Protokoll | Port | Quellen | Begründung |
 |---|---|---|---|---|
@@ -908,8 +1016,10 @@ den ersten Eintrag — also den des Angreifers.
 ins Leere laufen:
 
 ```bash
-curl -sS --max-time 10 --resolve clenaris.qasemi.ch:443:2.29.18.45 \
-     https://clenaris.qasemi.ch/api/health
+# <domain> = die öffentliche Adresse, <ursprung-ip> = die IP des V2-Servers.
+# `--resolve` geht bewusst an Cloudflare vorbei und spricht den Ursprung direkt an.
+curl -sS --max-time 10 --resolve <domain>:443:<ursprung-ip> \
+     https://<domain>/api/health
 # erwartet: Zeitüberschreitung oder abgewiesene Verbindung, keine 200
 ```
 
@@ -985,16 +1095,16 @@ der nächtliche Führungslauf aus — ohne jede Fehlermeldung.
 
 | Secret | Pflicht | Bedeutung |
 | --- | --- | --- |
-| `SERVER_HOST` | ja | Adresse des Servers. **Quelle der Wahrheit** — die Adresse wird nirgends im Repository hartkodiert. Vor dem nächsten Push prüfen, dass sie auf den aktuellen Server zeigt (`2.29.18.45`, Hetzner `164144336`) und **nicht** mehr auf `46.62.175.39`; jene Adresse gehört seit dem Neuaufbau einem Dritten (`PTR mail1.domainmarket.gr`). GitHub gibt Secretwerte nicht heraus — die Prüfung kann nur Sie vornehmen |
+| `SERVER_HOST` | ja | Adresse des Servers. **Quelle der Wahrheit** — die Adresse steht nirgends im Repository, und das ist Absicht: Sie darf sich ändern lassen, ohne dass jemand Code anfasst. Genau deshalb kann aber auch niemand ausser Ihnen prüfen, wohin sie zeigt. Für V2 gilt: **erst die Adresse des neuen Servers eintragen, dann `DEPLOY_ENABLED` setzen** (14.2), nie umgekehrt. Eine Adresse aus dem Altbestand wird nicht weiterverwendet — auch dann nicht, wenn sie „ja noch funktioniert" |
 | `SERVER_USER` | ja | Dienstbenutzer, etwa `clenaris`. Anders als `SERVER_HOST` und `SERVER_SSH_KEY` **ungeprüft**: Fehlt er, verbindet der Lauf als `@host` und scheitert erst beim Aushandeln, mit einer Meldung, die aufs Netz zeigt statt auf die Konfiguration |
 | `SERVER_SSH_KEY` | ja | Privater Schlüssel, vollständig samt Kopf- und Fusszeile |
 | `APP_DIRECTORY` | ja | Absoluter Pfad, etwa `/home/clenaris/app` |
 | `DATABASE_URL` | ja | Verbindung der Anwendung |
-| `JWT_SECRET` | ja | Mindestens 32 Zeichen. **Nie ändern** — ein neuer Wert meldet alle Sitzungen ab, und ohne eigenen `ENCRYPTION_KEY` hängt die Feldverschlüsselung daran (siehe dort) |
+| `JWT_SECRET` | ja | Mindestens 32 Zeichen. **Im laufenden Betrieb nie ändern** — ein neuer Wert meldet alle Sitzungen ab, und ohne eigenen `ENCRYPTION_KEY` hängt die Feldverschlüsselung daran (siehe dort). Für Production V2 gilt das Gegenteil: Der Wert wird **neu erzeugt**, weil ein Signaturschlüssel aus einer Umgebung, die als kompromittiert gilt, kein Signaturschlüssel mehr ist |
 | `SERVER_PORT` | nein | SSH-Port, Vorgabe 22 |
-| `SERVER_SSH_KNOWN_HOSTS` | **ja** | Gepinnter Wirtsschlüssel. Fehlt er, **bricht die Auslieferung ab** — es gibt keinen Rückfall (siehe 13.4). Der Wert für den aktuellen Server steht fertig in **13.4a**; sein Fingerabdruck ist `SHA256:Lqww…U2YDI`. Ein Eintrag, der aus einem `ssh-keyscan` gegen `46.62.175.39` stammt, pinnt den Schlüssel eines fremden Hosts und ist sofort zu ersetzen |
+| `SERVER_SSH_KNOWN_HOSTS` | **ja** | Gepinnter Wirtsschlüssel. Fehlt er, **bricht die Auslieferung ab** — es gibt keinen Rückfall (13.4), und die Gestalt des Werts steht in 13.4a. Der Schlüssel des V2-Servers wird über die **Anbieterkonsole** gelesen, nicht über `ssh-keyscan`: Letzteres sagt nur, was der Gegenüber gerade anbietet, nicht ob es der richtige Gegenüber ist. Ein Eintrag aus dem Altbestand pinnt eine Maschine, die nicht mehr beliefert wird — im schlimmsten Fall eine, die inzwischen jemand anderem gehört |
 | `DIRECT_URL` | **ja** | Direktverbindung für Migrationen. Hier stand „empfohlen" — das war falsch. `prisma/schema.prisma` deklariert `directUrl = env("DIRECT_URL")`, und Prisma bricht ohne die Variable mit **P1012 „Environment variable not found: DIRECT_URL"** ab; **ein leerer Wert zählt dabei als fehlend.** Damit scheitern `prisma generate`, der Bau und `migrate deploy` auf dem Server. Der Workflow überträgt die Variable aber nur, wenn sie nicht leer ist — fehlt das Secret, kommt sie nie in der `.env` an. Nachgemessen am 2026-09-21 gegen ein isoliertes Schema, damit die `.env` des Arbeitsplatzes die Antwort nicht verfälscht |
-| `API_URL` | empfohlen | Öffentliche Adresse, zurzeit `https://clenaris.qasemi.ch`. Wird zu `NEXT_PUBLIC_APP_URL` und trägt den Health Check von aussen |
+| `API_URL` | **abgelöst** | Wandert nach *Variables* (14.2): Die öffentliche Adresse ist Konfiguration, kein Geheimnis. Der Workflow liest `vars.API_URL` und fällt für den Übergang auf das Secret zurück; sobald die Variable steht, wird das Secret gelöscht |
 | `ENCRYPTION_KEY` | empfohlen | Schlüssel der Feldverschlüsselung (64 Hex). Ohne ihn leitet die Anwendung ihn aus `JWT_SECRET` ab — siehe Abschnitt 3 |
 | `CRON_SECRET` | empfohlen | Für die planmässigen Aufgaben |
 
@@ -1031,6 +1141,8 @@ dass man im Protokoll sieht, was gesetzt war.
 
 | Variable | Pflicht | Bedeutung |
 | --- | --- | --- |
+| `DEPLOY_ENABLED` | **Schalter** | `true` schaltet den Auslieferungsauftrag ein. Jeder andere Wert und jede nicht gesetzte Variable lassen ihn **übersprungen** — fail-closed. Das Qualitätstor läuft davon unberührt bei jedem Push, jedem Pull Request und jedem Handstart. **Erst setzen, wenn der V2-Server steht und `SERVER_HOST`, `SERVER_SSH_KEY` und `SERVER_SSH_KNOWN_HOSTS` auf ihn zeigen.** Ohne diesen Schalter wäre der erste grüne Lauf zugleich eine Auslieferung an das Ziel, das die bestehenden Secrets gerade nennen — und niemand hätte sie ausgelöst |
+| `API_URL` | empfohlen | Öffentliche Adresse der Anwendung, etwa `https://<domain>`. Wird auf dem Server zu `NEXT_PUBLIC_APP_URL` und trägt den Health Check von aussen. Steht sie nicht, fällt der Workflow für den Übergang auf das gleichnamige Secret zurück; fehlt beides, entfällt die Prüfung von aussen mit einer Warnung |
 | `TRUSTED_PROXY_MODE` | nein, aber empfohlen | `NONE` \| `SINGLE_REVERSE_PROXY` \| `CLOUDFLARE` — welcher Kopfzeile die Anwendung die Client-Adresse glaubt (13.5.1). **Ist sie nicht gesetzt, überträgt die Auslieferung nichts und die `.env` des Servers behält ihren bisherigen Wert.** Das ist Absicht: Eine Auslieferung soll die Vertrauensannahme nicht heimlich umstellen. Ein *unbekannter* Wert bricht die Auslieferung dagegen ab, statt stillschweigend auf `NONE` zu fallen |
 
 **Warum die Prüfung auf den unbekannten Wert wichtiger ist als die Variable
@@ -1050,13 +1162,26 @@ ein lauter Abbruch.
 
 ## 15. Ablauf einer Auslieferung
 
+`main` ist geschützt und nimmt keinen direkten Push mehr an. Der Weg führt
+über einen Arbeitszweig und einen Pull Request:
+
 ```bash
+git switch -c arbeit/beschreibung
 git add .
 git commit -m "Beschreibung"
-git push origin main
+git push -u origin arbeit/beschreibung
+# Pull Request gegen main öffnen — das Qualitätstor läuft darauf.
 ```
 
-Mehr ist nicht zu tun. Unter *Actions* läuft der Fortschritt mit.
+Ist der Pull Request grün, wird er zusammengeführt. Der Push auf `main`, der
+dabei entsteht, löst denselben Workflow ein zweites Mal aus — diesmal mit dem
+Auslieferungsauftrag, sofern `DEPLOY_ENABLED` auf `true` steht. Unter
+*Actions* läuft der Fortschritt mit.
+
+Dass das Qualitätstor zweimal läuft, ist kein Versehen: Der Pull Request
+prüft den *zusammengeführten* Stand, wie GitHub ihn erzeugt; der Lauf auf
+`main` prüft, was tatsächlich dort gelandet ist. Zwischen beiden kann ein
+zweiter Pull Request liegen.
 
 **Von Hand auslösen.** *Actions → Auslieferung → Run workflow*. Zwei Schalter:
 `seed` führt zusätzlich den Konfigurations-Seed aus (Firma, Leistungen, Preise
@@ -1207,7 +1332,10 @@ git push origin v1.2.0
 Die Marke ändert an der Auslieferung nichts; sie macht einen Commit später
 auffindbar.
 
-**Empfohlene Ergänzung.** Dieser Workflow prüft `main`, also *nach* dem
-Zusammenführen. Wer den Fehler vorher finden will, schaltet in den
-Zweigschutzregeln von `main` den Prüfauftrag als erforderlich für Pull
-Requests ein — dieselbe Datei, ein zusätzlicher Auslöser `pull_request`.
+**Erledigt seit Production V2.** Hier stand als Empfehlung, den Prüfauftrag
+zusätzlich für Pull Requests auszulösen. Das ist geschehen: Der Workflow
+trägt den Auslöser `pull_request` gegen `main`, und der Auslieferungsauftrag
+schliesst Pull Requests ausdrücklich aus. Was noch aussteht, ist die andere
+Hälfte — den Prüfauftrag in den Schutzregeln von `main` als **erforderlich**
+zu hinterlegen. Ein Auslöser sagt, dass geprüft *wird*; erst die Schutzregel
+sagt, dass ohne grüne Prüfung nicht zusammengeführt werden *darf*.

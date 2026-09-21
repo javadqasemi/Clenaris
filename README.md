@@ -19,8 +19,8 @@ Schweizer DSG und DSGVO.
 | **Umfang** | 134 Seiten · 244 Route-Dateien mit 374 Endpunkten · 111 Datenmodelle · 47 Dienste · ~108 000 Zeilen |
 | **Rollen** | SUPER_ADMIN · ADMIN · MANAGER · EMPLOYEE · CUSTOMER |
 | **Sprache** | Deutsch (Schema und Endpunkte für FR/IT/EN vorbereitet) |
-| **Betrieb** | Eigener Server über GitHub Actions → SSH → PM2, oder Vercel (Region `fra1`) · Postgres & Objektspeicher · Redis empfohlen |
-| **Prüfung** | 20 Testdateien gegen die laufende Anwendung über HTTP; die CI führt sie bei jedem Push auf `main` aus, bevor ausgeliefert wird |
+| **Betrieb** | Eigener Server: Internet → Cloudflare → Cloud Firewall → Nginx → Next.js auf `127.0.0.1:3000`, ausgeliefert über GitHub Actions → SSH → PM2 · Postgres & Objektspeicher · Redis empfohlen |
+| **Prüfung** | 20 Testdateien gegen die laufende Anwendung über HTTP; die CI führt sie bei jedem Pull Request gegen `main` und bei jedem Push auf `main` aus — ausgeliefert wird nur aus `main`, nie aus einem Pull Request |
 
 ## Loslegen
 
@@ -156,7 +156,7 @@ liefern Entwürfe; ausgeführt oder versendet wird nichts ohne Freigabe.
 ## Aufbau
 
 ```
-.github/workflows/         Prüfung und Auslieferung bei jedem Push auf main
+.github/workflows/         Prüfung bei jedem Pull Request, Auslieferung nur aus main
 prisma/
   schema.prisma            111 Modelle, 67 Aufzählungstypen
   migrations/              12 Migrationen
