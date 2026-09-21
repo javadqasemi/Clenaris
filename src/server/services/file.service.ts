@@ -1,4 +1,4 @@
-import 'server-only';
+﻿import 'server-only';
 
 import type { FileScope, Prisma } from '@prisma/client';
 
@@ -13,8 +13,14 @@ import {
   ValidationError,
 } from '@/lib/errors';
 import { audit } from '@/lib/audit';
+import { logger } from '@/lib/logger';
 import { readStoredBytes, verifyBytes, type UploadProfile } from '@/lib/storage';
+import { pruefeDateipolitik } from '@/lib/storage/dateipolitik';
 import { loadTicket } from '@/lib/storage/tickets';
+import { SCAN_MAX_ATTEMPTS, getScanner } from '@/lib/security/malware';
+import { darfAusgeliefertWerden as pruefeAuslieferung } from '@/lib/security/malware/auslieferung';
+
+const log = logger('file.security');
 
 /**
  * Die Sicherheitsgrenze für Dateien.
@@ -210,6 +216,20 @@ export async function finalizeUpload(params: {
   // Die eine Prüfung, durch die jede angenommene Benutzerdatei geht.
   const befund = verifyBytes(ticket.profile as UploadProfile, ticket.mimeType, bytes);
 
+  /**
+   * Name und Endung, nachdem der Inhalt nachgewiesen ist.
+   *
+   * Die Reihenfolge ist Absicht: `verifyBytes` stellt fest, *was* die Datei
+   * ist; erst danach lässt sich beurteilen, ob ihr Name dazu passt. Umgekehrt
+   * würde man eine Endung gegen eine Behauptung prüfen.
+   *
+   * Der Fall, den das abfängt: Ein Inhalt, der nachweislich ein PDF ist, unter
+   * dem Namen `rechnung.pdf.exe`. Im Speicher ist er harmlos — auf dem
+   * Rechner der Person, die ihn herunterlädt, nicht. Windows blendet bekannte
+   * Endungen standardmässig aus; im Ordner steht dann `rechnung.pdf`.
+   */
+  pruefeDateipolitik(params.filename, befund.mimeType);
+
   const { scope, oeffentlich, beziehung } = zuordnungFuer(
     ticket.profile as UploadProfile,
     params.session,
@@ -246,6 +266,14 @@ export async function finalizeUpload(params: {
           isPublic: oeffentlich,
           storedFileId: ticket.id,
           uploadedById: params.session?.id ?? null,
+          /**
+           * Ausdrücklich, obwohl es die Vorgabe ist. Diese Zeile ist die
+           * Gegenstelle zu `signature.service.ts` und `bi-report.service.ts`,
+           * die `SYSTEM_GENERATED` setzen — wer den Abschluss liest, soll
+           * sehen, dass hier bewusst die misstrauischste Einstufung steht.
+           */
+          provenance: 'USER_UPLOAD',
+          scanStatus: 'PENDING',
           ...beziehung,
         },
         select: { id: true, url: true },
@@ -260,6 +288,28 @@ export async function finalizeUpload(params: {
       summary: `Datei „${params.filename}" geprüft und übernommen (${Math.round(befund.sizeBytes / 1024)} kB, ${befund.mimeType})`,
       ip: params.ip,
     });
+
+    /**
+     * Der Prüflauf, gleich im Anschluss.
+     *
+     * **Warum hier und nicht in einer Warteschlange:** Die gibt es noch
+     * nicht (Wave 6). `scanFileAsset` ist so gebaut, dass sie von dort
+     * unverändert aufgerufen werden kann — sie nimmt eine Kennung und ist
+     * beliebig oft ausführbar.
+     *
+     * **Warum der Abschluss trotzdem gelingt, wenn der Prüfer streikt:** Der
+     * Upload ist angenommen und die Datei liegt fest; ob sie ausgeliefert
+     * wird, entscheidet der Zustand, nicht dieser Aufruf. Eine Ausnahme hier
+     * würde den Abschluss zurückrollen und den Browser eine bereits
+     * gespeicherte Datei erneut hochladen lassen — und beim nächsten Versuch
+     * genauso scheitern. Der Fehler gehört an die Datei, nicht an die
+     * Antwort.
+     */
+    try {
+      await scanFileAsset(asset.id);
+    } catch (fehler) {
+      log.error('Prüflauf nach dem Abschluss fehlgeschlagen', { fileAssetId: asset.id, fehler });
+    }
 
     return {
       fileAssetId: asset.id,
@@ -300,6 +350,231 @@ export async function finalizeUpload(params: {
 }
 
 // ---------------------------------------------------------------------------
+//  Schadsoftwareprüfung
+// ---------------------------------------------------------------------------
+
+export type ScanErgebnis =
+  | { status: 'CLEAN' }
+  | { status: 'INFECTED'; detectionName: string }
+  | { status: 'ERROR'; code: string }
+  | { status: 'QUARANTINED'; grund: string }
+  /** Ein anderer Lauf hat die Datei bereits in Arbeit oder abgeschlossen. */
+  | { status: 'UEBERSPRUNGEN'; grund: string };
+
+/**
+ * Eine Datei prüfen und ihren Zustand fortschreiben.
+ *
+ * ---------------------------------------------------------------------------
+ *  Die Anspruchnahme — warum der erste Schritt ein UPDATE ist
+ * ---------------------------------------------------------------------------
+ *
+ * Zwei Prüfläufe über dieselbe Datei sind kein hypothetischer Fall: Der
+ * Abschluss stösst einen an, ein Wiederholungslauf einen zweiten, und ein
+ * ungeduldiger Browser schickt den Abschluss ein drittes Mal. Ohne
+ * Anspruchnahme schreiben sie am Ende in beliebiger Reihenfolge — und der
+ * letzte gewinnt, auch wenn er der ältere Befund ist.
+ *
+ * Deshalb beginnt der Lauf mit einem bedingten `updateMany`: von `PENDING`
+ * oder `ERROR` auf `SCANNING`. PostgreSQL entscheidet, wer zuerst kommt; wer
+ * `count === 0` sieht, hat verloren und hört auf. Das ist dieselbe
+ * Konstruktion wie beim Abschluss (`storedFileId` eindeutig) und bei der
+ * Offertannahme (Teilindex) — die Nebenläufigkeit steht in der Datenbank,
+ * nicht in der Anwendung.
+ *
+ * ---------------------------------------------------------------------------
+ *  Die Hash-Gegenprobe — TOCTOU
+ * ---------------------------------------------------------------------------
+ *
+ * Geprüft werden die Bytes, die wir **jetzt** lesen. Ausgeliefert werden die
+ * Bytes, die **später** gelesen werden. Zwischen beidem liegt Zeit, und ein
+ * Befund über andere Bytes als die ausgelieferten ist wertlos.
+ *
+ * Der Abschluss hat `FileAsset.checksum` gesetzt. Dieser Lauf rechnet die
+ * Prüfsumme der gelesenen Bytes neu und vergleicht. Weichen sie ab, hat sich
+ * die Datei nach dem Abschluss geändert — das darf auf keinem vorgesehenen
+ * Weg passieren, und wenn es doch passiert, ist die Datei nicht
+ * vertrauenswürdig. Sie geht dann nicht in `ERROR`, sondern direkt in
+ * `QUARANTINED`: `ERROR` heisst „wir wissen nichts", hier wissen wir etwas.
+ *
+ * ---------------------------------------------------------------------------
+ *  Warteschlangenfähig, aber ohne Warteschlange
+ * ---------------------------------------------------------------------------
+ *
+ * Diese Funktion nimmt eine Kennung und gibt ein Ergebnis zurück. Sie hält
+ * keinen Zustand, kennt keinen Auslöser und darf beliebig oft aufgerufen
+ * werden. Wave 6 kann sie unverändert aus einer Warteschlange heraus
+ * aufrufen; bis dahin ruft der Abschluss sie direkt. Eine zweite,
+ * warteschlangenspezifische Fassung würde genau die Doppelpflege erzeugen,
+ * die dieser Entwurf vermeidet.
+ */
+export async function scanFileAsset(fileAssetId: string): Promise<ScanErgebnis> {
+  const asset = await prisma.fileAsset.findUnique({
+    where: { id: fileAssetId },
+    select: {
+      id: true,
+      organizationId: true,
+      filename: true,
+      mimeType: true,
+      checksum: true,
+      provenance: true,
+      scanStatus: true,
+      scanAttempts: true,
+      storedFile: { select: { id: true, path: true, driver: true } },
+    },
+  });
+
+  if (!asset) return { status: 'UEBERSPRUNGEN', grund: 'unbekannt' };
+
+  /**
+   * Servererzeugte Artefakte gehen nicht durch den Prüfer.
+   *
+   * Nicht aus Bequemlichkeit: Ihre Bytes entstehen im selben Prozess aus
+   * unseren eigenen Daten — ein Rechnungs-PDF, ein Rapport, ein
+   * Signaturartefakt. Es gibt keinen Weg, auf dem fremder Inhalt
+   * hineinkäme, ausser über einen Fehler in unserem eigenen Renderer, und
+   * den würde ein Virenscanner nicht finden.
+   *
+   * Die Einstufung steht ausdrücklich in der Zeile (`provenance`), nicht in
+   * einer Annahme über Dateitypen. „Alle PDF sind sauber" wäre genau die
+   * pauschale Regel, die diese Unterscheidung vermeiden soll.
+   */
+  if (asset.provenance === 'SYSTEM_GENERATED' || asset.provenance === 'TRUSTED_IMPORT') {
+    return { status: 'UEBERSPRUNGEN', grund: 'vertrauenswürdige Herkunft' };
+  }
+
+  if (asset.scanAttempts >= SCAN_MAX_ATTEMPTS && asset.scanStatus === 'ERROR') {
+    return { status: 'UEBERSPRUNGEN', grund: 'Versuchsgrenze erreicht' };
+  }
+
+  // Anspruchnahme. Wer hier nichts trifft, hat verloren und hört auf.
+  const beansprucht = await prisma.fileAsset.updateMany({
+    where: { id: asset.id, scanStatus: { in: ['PENDING', 'ERROR'] } },
+    data: { scanStatus: 'SCANNING', scanStartedAt: new Date(), scanAttempts: { increment: 1 } },
+  });
+  if (beansprucht.count === 0) {
+    return { status: 'UEBERSPRUNGEN', grund: 'bereits in Arbeit oder abgeschlossen' };
+  }
+
+  const abschluss = async (
+    daten: Prisma.FileAssetUpdateManyMutationInput,
+  ): Promise<boolean> => {
+    // Nur schreiben, solange *dieser* Lauf den Anspruch hält.
+    const treffer = await prisma.fileAsset.updateMany({
+      where: { id: asset.id, scanStatus: 'SCANNING' },
+      data: daten,
+    });
+    return treffer.count > 0;
+  };
+
+  const scanner = getScanner();
+  if (!scanner) {
+    /**
+     * Kein Prüfer eingerichtet. Die Datei bleibt liegen — sie wird **nicht**
+     * durchgewunken. Das ist der eine Fall, in dem eine Zeile „dann eben
+     * ohne Prüfung" die ganze Kette entwerten würde.
+     */
+    await abschluss({ scanStatus: 'ERROR', lastScanErrorCode: 'NO_SCANNER', scanner: null });
+    return { status: 'ERROR', code: 'NO_SCANNER' };
+  }
+
+  if (!asset.storedFile) {
+    await abschluss({ scanStatus: 'ERROR', lastScanErrorCode: 'NO_BYTES' });
+    return { status: 'ERROR', code: 'NO_BYTES' };
+  }
+
+  const bytes = await readStoredBytes({
+    id: asset.storedFile.id,
+    path: asset.storedFile.path,
+    driver: asset.storedFile.driver,
+  });
+
+  if (!bytes) {
+    await abschluss({ scanStatus: 'ERROR', lastScanErrorCode: 'NO_BYTES' });
+    return { status: 'ERROR', code: 'NO_BYTES' };
+  }
+
+  // TOCTOU: Sind das noch dieselben Bytes wie beim Abschluss?
+  const jetzt = sha256Hex(bytes);
+  if (asset.checksum && jetzt !== asset.checksum) {
+    await abschluss({
+      scanStatus: 'QUARANTINED',
+      quarantinedAt: new Date(),
+      lastScanErrorCode: 'CHECKSUM_MISMATCH',
+      scanner: scanner.name,
+    });
+    await audit.denied({
+      organizationId: asset.organizationId,
+      entity: 'FileAsset',
+      entityId: asset.id,
+      summary: 'Datei in Quarantäne: Die Bytes weichen von der beim Abschluss gebildeten Prüfsumme ab.',
+    });
+    log.error('Prüfsumme weicht ab — Datei in Quarantäne', { fileAssetId: asset.id });
+    return { status: 'QUARANTINED', grund: 'CHECKSUM_MISMATCH' };
+  }
+
+  const version = await scanner.version();
+  const befund = await scanner.scan(bytes, { filename: asset.filename });
+
+  if (befund.ergebnis === 'clean') {
+    await abschluss({
+      scanStatus: 'CLEAN',
+      scannedAt: new Date(),
+      scanner: scanner.name,
+      scannerVersion: version,
+      lastScanErrorCode: null,
+    });
+    return { status: 'CLEAN' };
+  }
+
+  if (befund.ergebnis === 'infected') {
+    const name = befund.detectionName ?? 'unbenannt';
+    /**
+     * Fund heisst sofort Quarantäne, nicht erst `INFECTED` und später
+     * jemand-räumt-auf. Zwischen beidem läge ein Zeitraum, in dem der
+     * Zustand „bekannt schädlich" bereits feststeht und die Isolierung noch
+     * nicht — und genau in diesem Zeitraum würde jemand die Datei abrufen.
+     */
+    await abschluss({
+      scanStatus: 'QUARANTINED',
+      scannedAt: new Date(),
+      quarantinedAt: new Date(),
+      scanner: scanner.name,
+      scannerVersion: version,
+      detectionName: name,
+    });
+    await audit.denied({
+      organizationId: asset.organizationId,
+      entity: 'FileAsset',
+      entityId: asset.id,
+      summary: `Schadsoftware gefunden (${name}) — Datei in Quarantäne.`,
+    });
+    log.error('Schadsoftware gefunden', { fileAssetId: asset.id, detectionName: name });
+    return { status: 'INFECTED', detectionName: name };
+  }
+
+  const code = befund.fehlerCode ?? 'UNKNOWN';
+  await abschluss({
+    scanStatus: 'ERROR',
+    scanner: scanner.name,
+    scannerVersion: version,
+    lastScanErrorCode: code,
+  });
+  log.warn('Prüflauf ohne Ergebnis', { fileAssetId: asset.id, code });
+  return { status: 'ERROR', code };
+}
+
+/**
+ * Die Auslieferungsentscheidung steht in `lib/security/malware/auslieferung.ts`
+ * und wird hier nur weitergereicht.
+ *
+ * Sie ist eine reine Funktion von Prüfstand und Herkunft — kein
+ * Datenbankzugriff, keine Sitzung. Dieses Modul trägt `server-only`; dort
+ * stünde die Regel ohne laufenden Server nicht zur Prüfung zur Verfügung, und
+ * eine Regel dieser Tragweite ungeprüft zu lassen wäre der falsche Handel.
+ */
+export { darfAusgeliefertWerden } from '@/lib/security/malware/auslieferung';
+
+// ---------------------------------------------------------------------------
 //  Autorisierung
 // ---------------------------------------------------------------------------
 
@@ -320,6 +595,10 @@ const MIT_BEZIEHUNGEN = {
   organizationId: true,
   storedFileId: true,
   uploadedById: true,
+  // Für die Auslieferungssperre. Sie steht neben der Berechtigung, nicht in
+  // ihr: Eine infizierte Datei bleibt infiziert, auch für die Geschäftsleitung.
+  scanStatus: true,
+  provenance: true,
   employeeId: true,
   customerId: true,
   jobId: true,
@@ -483,6 +762,37 @@ export async function authorizeStoredFile(
   if (!asset || !asset.storedFileId) return null;
 
   if (!(await darfLesen(asset, session))) return null;
+
+  /**
+   * Die zweite Tür: Berechtigung **und** Prüfstand.
+   *
+   * Sie steht hinter der Berechtigungsprüfung, nicht davor — und zwar aus
+   * demselben Grund, aus dem `null` nicht sagt, woran es lag: Wer keinen
+   * Zugriff auf die Datei hat, soll auch nicht erfahren, dass sie in
+   * Quarantäne liegt. Das wäre eine Auskunft über fremde Daten.
+   *
+   * `null` in beiden Fällen. Die Route unterscheidet sie nicht, weil sie den
+   * Unterschied nicht preisgeben soll.
+   */
+  const freigabe = pruefeAuslieferung(asset);
+  if (!freigabe.erlaubt) {
+    log.warn('Datei nicht ausgeliefert', {
+      fileAssetId: asset.id,
+      grund: freigabe.grund,
+    });
+    return null;
+  }
+
+  if (freigabe.grund === 'LEGACY_ALLOWED') {
+    /**
+     * Jeder Zugriff auf ungeprüften Altbestand wird festgehalten. Das ist
+     * der Preis der Übergangseinstellung: Sie ist zulässig, aber nicht
+     * unbemerkt.
+     */
+    log.warn('Ungeprüfter Altbestand ausgeliefert (CLENARIS_LEGACY_FILES=allow)', {
+      fileAssetId: asset.id,
+    });
+  }
 
   return {
     storedFileId: asset.storedFileId,

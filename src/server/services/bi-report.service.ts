@@ -372,6 +372,13 @@ export async function generateReport(params: {
         scope: 'REPORT',
         isPublic: false,
         uploadedById: params.actorId,
+        /**
+         * Der Bericht entsteht zwei Zeilen weiter oben aus unseren eigenen
+         * Daten (`buildReportContent` → `renderReport`). Es gibt keinen Weg,
+         * auf dem fremder Inhalt in diese Bytes käme — `uploadedById` ist die
+         * auslösende Person, nicht die Quelle des Inhalts.
+         */
+        provenance: 'SYSTEM_GENERATED',
       },
     });
     const finished = await prisma.reportRun.update({

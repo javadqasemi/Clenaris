@@ -100,7 +100,8 @@ export async function createSignedUpload(params: {
     ticketId: ticket.id,
     token: data.token,
     signedUrl: data.signedUrl,
-    publicUrl: getPublicUrl(path),
+    // Keine öffentliche Leseadresse im Ticket — Begründung bei
+    // `SignedUploadTarget` in `profiles.ts`.
     expiresIn: 7200,
   };
 }

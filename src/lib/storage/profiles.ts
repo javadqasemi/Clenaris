@@ -178,6 +178,31 @@ export interface SignedUploadTarget {
   ticketId: string;
   token: string;
   signedUrl: string;
-  publicUrl: string;
   expiresIn: number;
 }
+
+/**
+ * Warum hier **keine** `publicUrl` mehr steht.
+ *
+ * Bis Wave 2 gab das Ticket neben der Schreibadresse auch die öffentliche
+ * Leseadresse des Objekts zurück — bei Supabase
+ * `…/storage/v1/object/public/<bucket>/<pfad>`. Die Antwort von
+ * `POST /api/files/upload-url` geht an den Client, und `created(target)` gibt
+ * das Ticket unverändert weiter.
+ *
+ * Das war eine Abkürzung an sämtlichen Toren vorbei: Diese Adresse zeigt auf
+ * Bytes, die zu diesem Zeitpunkt noch gar nicht hochgeladen sind — und wenn
+ * sie es sind, sind sie weder byteweise geprüft (`verifyBytes`) noch gegen die
+ * Dateipolitik gehalten noch auf Schadsoftware untersucht, und `FileAsset`
+ * existiert noch nicht, also gibt es auch niemanden, der eine Berechtigung
+ * prüfen könnte. Wer die Adresse hat, liest an `authorizeStoredFile` vorbei.
+ *
+ * Ob das tatsächlich trägt, hängt daran, ob der Ablage-Bucket öffentlich ist —
+ * also an einer Betriebseinstellung ausserhalb dieses Codes. Genau deshalb
+ * fällt das Feld weg: Eine Sicherheitseigenschaft, die von einer Einstellung
+ * in einer fremden Oberfläche abhängt, ist keine.
+ *
+ * Genommen hat das Feld ohnehin nie jemand — `UploadZiel` in `lib/upload.ts`
+ * kennt nur `ticketId`, `signedUrl` und `path`. Ausgeliefert wird
+ * ausschliesslich über `/api/files/blob/[id]`, und dort steht das Tor.
+ */

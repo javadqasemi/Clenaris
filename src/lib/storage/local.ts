@@ -134,7 +134,11 @@ export async function createLocalUpload(params: {
     ticketId: record.id,
     token: record.id,
     signedUrl: absoluteUrl(localUploadUrl(record.id)),
-    publicUrl: localUploadUrl(record.id),
+    // Keine öffentliche Leseadresse im Ticket — Begründung bei
+    // `SignedUploadTarget` in `profiles.ts`. Beim lokalen Treiber wäre sie
+    // harmlos gewesen (sie zeigte auf dasselbe bewachte `/api/files/blob/…`),
+    // aber die Schnittstelle ist für beide Treiber dieselbe, und ein Feld,
+    // das bei einem Treiber vorbeiführt, gehört bei keinem hinein.
     expiresIn: UPLOAD_WINDOW_MS / 1000,
   };
 }

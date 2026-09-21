@@ -184,6 +184,22 @@ async function artefaktAblegen(params: {
       isPublic: false,
       storedFileId: stored.storedFileId ?? null,
       uploadedById: params.uploadedById ?? null,
+      /**
+       * Signaturartefakte entstehen in diesem Prozess: Schnappschuss A aus
+       * unserem eigenen Renderer, das signierte Artefakt B und das
+       * Beweisprotokoll C aus A plus unseren eigenen Daten. Fremder Inhalt
+       * kommt auf diesem Weg nicht herein.
+       *
+       * Die Einstufung steht deshalb hier und nicht als Annahme über den
+       * Dateityp. „PDF sind sauber" wäre eine Regel, die auch für jede
+       * hochgeladene PDF gälte.
+       *
+       * `scanStatus` bleibt `PENDING` und heisst hier „war nie im Prüfablauf",
+       * nicht „wartet auf Prüfung" — `darfAusgeliefertWerden` entscheidet
+       * über die Herkunft. Das Sicherheitscockpit blendet Herkunft
+       * `SYSTEM_GENERATED` aus der Liste offener Fälle aus.
+       */
+      provenance: 'SYSTEM_GENERATED',
     },
     select: { id: true },
   });
