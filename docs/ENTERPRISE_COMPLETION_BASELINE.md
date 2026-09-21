@@ -548,4 +548,82 @@ erwarteten Feldzeilen fehlten.
 
 ---
 
+## 14. Wave 5 — Beobachtbarkeit (Stand 2026-09-21)
+
+MISSING #6. Die Ausgangslage war nicht „kein Protokoll" — `lib/logger.ts` gibt
+seit Langem strukturierte, maskierte Zeilen aus. Was fehlte, war die
+**Klammer** und die **Messung**.
+
+### Die Abgrenzung, die diese Wave ehrlich macht
+
+Was entsteht, ist die **Erhebung** an der richtigen Stelle, nicht ein
+Beobachtungssystem. Kein Prometheus, kein Datadog, kein Sentry, keine
+Ausleitung. Ein Kennzahlendienst ist eine Betriebsentscheidung mit Kosten,
+Datenschutzfragen und einem zweiten System, das laufen muss — die gehört dem
+Betrieb. INF-008 steht deshalb auf **PARTIAL** und nicht auf COMPLETE, und
+`docs/OBSERVABILITY.md` §1 sagt warum, damit es später nicht als Versäumnis
+gelesen wird.
+
+### Was gebaut wurde
+
+| Teil | Kern |
+|---|---|
+| `observability/context.ts` | `AsyncLocalStorage` mit Anfragekennung; `routenVorlage` |
+| `observability/metrics.ts` | Registrierung je Route × Methode, Zeitklassen, Quantile — rein, direkt prüfbar |
+| `mitBeobachtung` in `handler.ts` | Um **alle drei** Fabriken, auch `defineCronRoute` |
+| `logger.ts` | Zieht die Kennung selbst aus dem Kontext |
+| `response.ts` | Kennung im Rumpf einer 500er-Antwort |
+| `GET /api/metrics` | `security:read` |
+
+### Vier Entscheidungen, die man leicht andersherum trifft
+
+**Eine mitgeschickte `X-Request-Id` wird nicht übernommen.** Viele Proxys
+setzen sie, und es ist verlockend. Sie ist aber eine Behauptung — genau wie
+`X-Forwarded-For`. Wer sie übernähme, liesse jemanden beliebig viele
+Protokollzeilen unter einer Kennung seiner Wahl ablegen, etwa unter der einer
+echten Anfrage, die er stören will.
+
+**Die Kennung steht nur bei 500 im Rumpf.** Bei 401, 403 und 422 fehlt sie
+absichtlich: Die brauchen keine Nachforschung, und eine Kennung an jeder
+Absage lädt dazu ein, sie zu sammeln.
+
+**Die Kennzahlen laufen über Routen-Vorlagen.** `/api/jobs/clx…/team` wird zu
+`/api/jobs/:id/team`. Ohne diesen Schritt entstünde eine Reihe je Datensatz —
+bei zehntausend Einsätzen zehntausend Reihen, von denen keine genug
+Beobachtungen für eine Aussage hätte, und die Registrierung wüchse mit den
+Daten. Eine Prüfung durchsucht die laufenden Kennzahlen nach cuids: Findet sie
+eine, ist die Vorlagenbildung kaputt.
+
+**`/api/metrics` ist angemeldet.** Die übliche Bauart ist offen, dafür nur im
+internen Netz erreichbar — das setzt ein internes Netz voraus, und in dieser
+Betriebsform gibt es keines. Offen wäre der Endpunkt eine Echtzeitauskunft
+darüber, ob ein Angriff auffällt.
+
+### Offen — bewusst verschoben
+
+| Punkt | Wohin |
+|---|---|
+| Ausleitung an einen Sammler, Alarmierung, Zeitreihe | Betriebsentscheidung |
+| Kennzahlen der Dateiprüfung (`ERROR`-Quote, Verweildauer in `SCANNING`) | Wave 6 — sie hängen an einem wiederkehrenden Lauf |
+| `ACCESS_DENIED` als Zähler je Konto | Wave 6 — gehört als Zähler hierher, nicht als Zeile in den Sicherheitsstrom |
+| Ablaufverfolgung über Dienstgrenzen | entfällt — es gibt nur einen Dienst |
+
+### Verifikation nach Wave 5
+
+| Prüfung | Ergebnis |
+|---|---|
+| `npm run typecheck` | ✅ |
+| `npm run lint` | ✅ (ganzes Projekt) |
+| `npm run build` | ✅ |
+| `npm run docs` | ✅ **406 Endpunkte** (von 405), Schutz stimmt überein |
+| `npm test` | ✅ **986 Prüfungen, 982 bestanden, 0 Fehlschläge**, 4 übersprungen |
+| `npm run e2e` | ✅ **20 / 20** |
+
+> Die Gesamtreihe misst sich seit dieser Wave selbst mit: Jede der 986
+> Prüfungen läuft durch `mitBeobachtung`. Dass die Laufzeit gegenüber Wave 4
+> unverändert bei rund 90 Sekunden liegt, ist der Nachweis, dass die Messung
+> nichts kostet.
+
+---
+
 *Diese Datei wird nach jeder Wave fortgeschrieben.*

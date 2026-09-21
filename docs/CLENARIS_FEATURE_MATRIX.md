@@ -24,22 +24,22 @@ Spalten `FE` (Frontend), `BE` (Backend), `DB`, `RBAC`, `SEC` (eigener Sicherheit
 
 ## Gesamtverteilung
 
-*Stand nach Wave 4 (2026-09-21). Änderungen gegenüber der Erstfassung sind unten begründet.*
+*Stand nach Wave 5 (2026-09-21). Änderungen gegenüber der Erstfassung sind unten begründet. Die Anteile sind gerundet und summieren sich deshalb auf 99 %.*
 
 | Status | Anzahl | Anteil |
 |---|---|---|
-| COMPLETE + VERIFIED | **86** | 48 % |
+| COMPLETE + VERIFIED | **88** | 48 % |
 | COMPLETE | **56** | 31 % |
 | COMPLETE / EXTERNAL VERIFICATION REQUIRED | **6** | 3 % |
-| PARTIAL | **18** | 10 % |
+| PARTIAL | **19** | 10 % |
 | BACKEND ONLY | **2** | 1 % |
 | FRONTEND ONLY | **1** | 1 % |
 | SCHEMA ONLY | **4** | 2 % |
-| NOT IMPLEMENTED | **7** | 4 % |
-| **Summe** | **180** | **100 %** |
+| NOT IMPLEMENTED | **6** | 3 % |
+| **Summe** | **182** | |
 
-**Technisch nutzbar (C+V oder C): 142 von 180 = 79 %.**
-**Durch Tests belegt: 86 von 180 = 48 %.**
+**Technisch nutzbar (C+V oder C): 144 von 182 = 79 %.**
+**Durch Tests belegt: 88 von 182 = 48 %.**
 
 ### Änderungen in Wave 0
 
@@ -76,6 +76,13 @@ Spalten `FE` (Frontend), `BE` (Backend), `DB`, `RBAC`, `SEC` (eigener Sicherheit
 | **SEC-019: NI → C+V** | Schlüsselbund mit zweitem Lesepfad, Format mit Schlüsselkennung, Rotationsskript mit Statusanzeige. Gegen die Testdatenbank an echten Zeilen gefahren — einschliesslich des Fehlerwegs mit fehlendem Schlüssel. |
 | **SEC-021: NI → C/EVR, und umbenannt** | Nicht mehr „Verschlüsselung von Lohn- und Bankdaten", sondern „**Schutz** von Lohn- und Bankdaten". Die Umbenennung ist das Ergebnis: Pauschale Feldverschlüsselung wurde geprüft und verworfen, weil sie die Aggregation in der Datenbank bricht und den Schutz nicht erhöht — die Herleitung des Lohns steht im selben Abzug. Die IBAN ist verschlüsselt, die Zahlenfelder schützt die Ebene darunter. Das ist Betrieb, nicht Code, deshalb **EVR**. |
 
+### Änderungen in Wave 5
+
+| Änderung | Begründung |
+|---|---|
+| **INF-008: NI → PARTIAL** | Anfragekennung, Kennzahlen je Endpunkt, `/api/metrics`. **Nicht C**, weil Alarmierung und eine Zeitreihe über Neustarts hinweg einen Sammler brauchen — und der ist eine Betriebsentscheidung, keine Codelücke. Die Abgrenzung steht in `docs/OBSERVABILITY.md` §1, damit sie nicht später als Versäumnis gelesen wird. |
+| **SEC-026, SEC-027 neu: C+V** | Kennung und Kennzahlen sind getrennt geführt, weil sie Verschiedenes leisten: Die eine verbindet Protokollzeilen einer Anfrage, die andere beantwortet „wie oft und wie lange". Beide sitzen in der Handlerfabrik — der einen Stelle, durch die jeder Endpunkt läuft. |
+
 ---
 
 ## SEC — Plattform und Sicherheit (25)
@@ -106,6 +113,8 @@ Spalten `FE` (Frontend), `BE` (Backend), `DB`, `RBAC`, `SEC` (eigener Sicherheit
 | SEC-023 | Auslieferungstor Zustand × Herkunft | – | ✓ | ✓ | ✓ | ✓ | ✓ | – | **C+V** | `malware/auslieferung.ts`, `authorizeStoredFile`, 30 Tabellenfälle | Altbestand nachprüfen (`scan-backfill.ts`) |
 | SEC-024 | Security Center | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | – | **C+V** | `SecurityEvent`, `lib/security/events.ts`, `security.service.ts`, `/admin/sicherheit`, 4 Endpunkte, `sicherheitszentrum.test.ts` (26) | Aufbewahrungsfrist (Wave 24) |
 | SEC-025 | Sicherheitsereignisse an den Zustandsübergängen | – | ✓ | ✓ | – | ✓ | ✓ | – | **C+V** | 6 Dienste angeschlossen: Anmeldung, Zweitfaktor, Sitzungserneuerung, Rollen/Status, Zugangslinks, Dateiprüfung | – |
+| SEC-026 | Anfragekennung und Protokollzusammenhang | – | ✓ | – | – | ✓ | ✓ | – | **C+V** | `observability/context.ts`, `X-Request-Id` an jeder Antwort, Kennung im Rumpf einer 500er, `beobachtbarkeit.test.ts` | – |
+| SEC-027 | Kennzahlen je Endpunkt | – | ✓ | – | ✓ | ✓ | ✓ | – | **C+V** | `observability/metrics.ts`, `mitBeobachtung` um alle drei Fabriken, `GET /api/metrics` (`security:read`) | Ausleitung an einen Sammler — Betriebsentscheidung, bewusst offen |
 | SEC-021 | Schutz von Lohn- und Bankdaten | – | ✓ | ✓ | ✓ | ✓ | ✓ | – | **C/EVR** | Analyse und Entscheid in `docs/KEY_MANAGEMENT.md` §3: **`Employee.iban` verschlüsselt** (Kennung, wird nirgends gerechnet), **Lohnbeträge bewusst nicht** — sie werden in der Datenbank aggregiert (`_avg` in `scenario.service.ts`, SQL-Summe in `analytics.service.ts`); `schluesselrotation.test.ts` prüft beide Hälften | **PRE-PRODUCTION VERIFICATION REQUIRED** — verschlüsselter Datenträger und verschlüsselte Sicherungskopien sind die Massnahme für die Zahlenfelder; das ist Betrieb, nicht Code |
 
 ---
@@ -355,7 +364,7 @@ Spalten `FE` (Frontend), `BE` (Backend), `DB`, `RBAC`, `SEC` (eigener Sicherheit
 | INF-005 | Datenbanksicherung fail-closed | – | ✓ | ✓ | – | ✓ | ✓ | – | **C+V** | `db-backup.ts`, `datenbanksicherung.test.ts` (19) | – |
 | INF-006 | Wiederherstellungsprobe mit Namensschutz | – | ✓ | ✓ | – | ✓ | ✓ | – | **C+V** | `db-restore-verify.ts` | echter Produktionslauf |
 | INF-007 | Health-Endpunkt mit Commit-Abgleich | – | ✓ | ✓ | – | ✓ | ✓ | – | **C** | `/api/health`, `APP_VERSION` | – |
-| INF-008 | Beobachtbarkeit (Fehlerverfolgung, Alarm) | – | – | – | – | – | – | – | **NI** | kein Sentry/Prometheus/OTel | vollständig |
+| INF-008 | Beobachtbarkeit (Fehlerverfolgung, Alarm) | – | ✓ | – | ✓ | ✓ | ✓ | – | **P** | Seit Wave 5: Anfragekennung, Kennzahlen je Endpunkt, `/api/metrics`, `/api/health`. **Kein Anbieter** — das ist die Abgrenzung, nicht die Lücke (`docs/OBSERVABILITY.md` §1) | Alarmierung und Zeitreihe über Neustarts hinweg brauchen einen Sammler — Betriebsentscheidung |
 | INF-009 | Warteschlange für Hintergrundarbeit | – | – | – | – | – | – | – | **NI** | alles im Cron-Request | Wiederholung, Entkopplung |
 | INF-010 | Cloudflare- und Firewall-Topologie | – | – | – | – | ○ | – | – | **NI** | `TRUSTED_PROXY_MODE` vorbereitet | V2-Server |
 
