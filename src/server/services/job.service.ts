@@ -11,6 +11,7 @@ import { CRYPTO_CONTEXT, decryptNullable } from '@/lib/crypto';
 import { jobAssignedEmail } from '@/lib/email/templates';
 import { smsTemplates } from '@/lib/sms/client';
 import { audit } from '@/lib/audit';
+import { emitAutomationTrigger } from './automation-engine.service';
 import {
   deriveJobCosts,
   effectiveHourlyRate,
@@ -566,6 +567,12 @@ export async function assignJob(params: {
     summary: `Einsatz ${job.number} an ${params.employeeIds.length} Person(en) zugeteilt`,
     changes: { employeeIds: params.employeeIds, role: params.role ?? 'MEMBER' },
   });
+
+  await emitAutomationTrigger({
+    organizationId: params.organizationId,
+    trigger: 'JOB_ASSIGNED',
+    entityId: job.id,
+  });
 }
 
 async function notifyAssignees(jobId: string, employeeIds: string[]) {
@@ -909,6 +916,35 @@ export async function completeJob(params: {
     entityId: job.id,
     summary: `Einsatz ${job.number} abgeschlossen`,
   });
+
+  await emitAutomationTrigger({
+    organizationId: params.organizationId,
+    trigger: 'JOB_COMPLETED',
+    entityId: job.id,
+  });
+
+  /**
+   * Schliesst der Einsatz die letzte offene Position einer Buchung, gilt auch
+   * die Buchung als abgeschlossen — das entscheidet die Transaktion oben. Der
+   * Auslöser dazu gehört hierher und nicht dorthin: Innerhalb der Transaktion
+   * wäre der neue Zustand für die Maschine nicht sichtbar, und ein zweiter
+   * Lauf entsteht durch den Teilindex ohnehin nicht.
+   */
+  if (job.bookingId) {
+    const offen = await prisma.job.count({
+      where: {
+        bookingId: job.bookingId,
+        status: { notIn: ['COMPLETED', 'VERIFIED', 'CANCELLED'] },
+      },
+    });
+    if (offen === 0) {
+      await emitAutomationTrigger({
+        organizationId: params.organizationId,
+        trigger: 'BOOKING_COMPLETED',
+        entityId: job.bookingId,
+      });
+    }
+  }
 
   return updated;
 }

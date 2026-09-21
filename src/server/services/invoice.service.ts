@@ -7,6 +7,7 @@ import { BusinessRuleError, NotFoundError } from '@/lib/errors';
 import { absoluteUrl, round2 } from '@/lib/utils';
 import { orderByFor, resolveSort, type SortOrder } from '@/lib/sort';
 import { audit } from '@/lib/audit';
+import { emitAutomationTrigger } from './automation-engine.service';
 import {
   invoiceIssuedEmail,
   paymentReceivedEmail,
@@ -365,6 +366,12 @@ export async function issueInvoice(params: {
     entity: 'Invoice',
     entityId: issued.id,
     summary: `Rechnung ${issued.number} ausgestellt`,
+  });
+
+  await emitAutomationTrigger({
+    organizationId: params.organizationId,
+    trigger: 'INVOICE_ISSUED',
+    entityId: issued.id,
   });
 
   return issued;

@@ -1,4 +1,4 @@
-﻿import 'server-only';
+import 'server-only';
 
 import type { Prisma, Quote } from '@prisma/client';
 
@@ -7,6 +7,7 @@ import { BusinessRuleError, NotFoundError } from '@/lib/errors';
 import { absoluteUrl, round2 } from '@/lib/utils';
 import { orderByFor, resolveSort, type SortOrder } from '@/lib/sort';
 import { audit } from '@/lib/audit';
+import { emitAutomationTrigger } from './automation-engine.service';
 import { quoteExpiringEmail, quoteSentEmail } from '@/lib/email/templates';
 import { renderQuotePdf, renderQuoteSnapshot } from '@/lib/pdf/render';
 import { readLocalBytes, readStoredBytes } from '@/lib/storage';
@@ -689,6 +690,12 @@ export async function sendQuote(params: {
     entity: 'Quote',
     entityId: quote.id,
     summary: `Offerte ${quote.number} an ${recipientEmail} versendet`,
+  });
+
+  await emitAutomationTrigger({
+    organizationId: params.organizationId,
+    trigger: 'QUOTE_SENT',
+    entityId: quote.id,
   });
 
   return updated;

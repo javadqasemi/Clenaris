@@ -2731,6 +2731,17 @@ model AutomationRun {
   finishedAt   DateTime?           @db.Timestamptz(6)
   result       Json?
   error        String?
+  /// Wie oft dieser Lauf schon versucht wurde.
+  ///
+  /// Ohne diesen Zähler gäbe es nur zwei Möglichkeiten, und beide sind
+  /// falsch: Ein Fehlschlag wäre entweder endgültig — dann fällt jede
+  /// Erinnerung aus, während der Mailversand eine Minute lang klemmt — oder
+  /// er würde ewig wiederholt, und eine dauerhaft unerreichbare Gegenstelle
+  /// erzeugte eine Schleife, die mit jedem Vorgang länger wird.
+  ///
+  /// Mit ihm: dreimal mit wachsendem Abstand, danach bleibt `FAILED` stehen
+  /// und ist sichtbar. Das ist der Zustand, den jemand sehen *soll*.
+  attempts     Int                 @default(0)
 
   createdAt DateTime @default(now()) @db.Timestamptz(6)
 

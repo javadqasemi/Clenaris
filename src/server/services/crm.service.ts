@@ -8,6 +8,7 @@ import { absoluteUrl } from '@/lib/utils';
 import { orderByFor, resolveSort, type SortOrder } from '@/lib/sort';
 import { randomToken } from '@/lib/auth/jwt';
 import { audit } from '@/lib/audit';
+import { emitAutomationTrigger } from './automation-engine.service';
 import { sendEmail } from '@/lib/email/client';
 import { contactAutoReplyEmail, newLeadInternalEmail } from '@/lib/email/templates';
 import { hasIntegration } from '@/lib/env';
@@ -328,6 +329,12 @@ export async function createLeadFromContactForm(params: {
     ip: params.ip,
   });
 
+  await emitAutomationTrigger({
+    organizationId: params.organizationId,
+    trigger: 'LEAD_CREATED',
+    entityId: lead.id,
+  });
+
   return { ...lead, isNew: true };
 }
 
@@ -430,6 +437,12 @@ export async function createLead(params: {
     entity: 'Lead',
     entityId: lead.id,
     summary: `Lead ${lead.number} manuell erfasst`,
+  });
+
+  await emitAutomationTrigger({
+    organizationId: params.organizationId,
+    trigger: 'LEAD_CREATED',
+    entityId: lead.id,
   });
 
   return lead;

@@ -4,7 +4,7 @@
 > Diagramme sind damit nie älter als das Schema. Prosa und Bereichseinteilung
 > stehen in `scripts/generate-erd.ts`.
 
-**118 Modelle, 84 Aufzählungstypen, 2181 Felder.**
+**118 Modelle, 84 Aufzählungstypen, 2182 Felder.**
 PostgreSQL 16+; alle Zeitstempel als `timestamptz` in UTC, Anzeige in Europe/Zurich.
 
 ## Vier Entscheidungen, die das ganze Schema prägen
@@ -976,7 +976,7 @@ erDiagram
 | `SmsLog` | `sms_logs` | 11 | – |
 | `Automation` | `automations` | 13 | – |
 | `AutomationAction` | `automation_actions` | 6 | – |
-| `AutomationRun` | `automation_runs` | 12 | – |
+| `AutomationRun` | `automation_runs` | 13 | – |
 
 ## Marketing und Inhalte
 

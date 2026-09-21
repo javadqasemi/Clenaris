@@ -1,4 +1,4 @@
-﻿import 'server-only';
+import 'server-only';
 
 import type { Booking, Frequency, Prisma } from '@prisma/client';
 
@@ -20,6 +20,7 @@ import {
 } from '@/lib/email/templates';
 import { smsTemplates } from '@/lib/sms/client';
 import { audit } from '@/lib/audit';
+import { emitAutomationTrigger } from './automation-engine.service';
 import { logger } from '@/lib/logger';
 import { renderBookingConfirmationPdf } from '@/lib/pdf/render';
 
@@ -372,6 +373,22 @@ export async function createBooking(params: {
     ip: params.ip,
   });
 
+  /**
+   * Der Auslöser steht **nach** allem, was fachlich zur Buchung gehört, und
+   * ausserhalb der Transaktion.
+   *
+   * Zwei Gründe. Erstens muss der Datensatz endgültig festgeschrieben sein —
+   * die Maschine lädt ihn beim Ausführen neu, und innerhalb der Transaktion
+   * sähe sie ihn nicht. Zweitens darf eine Regel, die jemand angelegt hat, die
+   * Buchung nicht scheitern lassen; `emitAutomationTrigger` wirft deshalb nie,
+   * und selbst wenn es das täte, wäre die Buchung längst gültig.
+   */
+  await emitAutomationTrigger({
+    organizationId,
+    trigger: 'BOOKING_CREATED',
+    entityId: booking.id,
+  });
+
   return { booking, confirmationUrl, isNewCustomer };
 }
 
@@ -458,6 +475,12 @@ export async function confirmBooking(params: {
     summary: `Buchung ${booking.number} bestätigt`,
   });
 
+  await emitAutomationTrigger({
+    organizationId: params.organizationId,
+    trigger: 'BOOKING_CONFIRMED',
+    entityId: booking.id,
+  });
+
   return updated;
 }
 
@@ -532,6 +555,12 @@ export async function cancelBooking(params: {
     entity: 'Booking',
     entityId: booking.id,
     summary: `Buchung ${booking.number} storniert: ${params.reason}`,
+  });
+
+  await emitAutomationTrigger({
+    organizationId: params.organizationId,
+    trigger: 'BOOKING_CANCELLED',
+    entityId: booking.id,
   });
 
   return updated;
@@ -1555,8 +1584,53 @@ async function resolveCustomer(params: {
   };
 }
 
+/**
+ * Eine bei der Buchung eingegebene Adresse anlegen.
+ *
+ * ---------------------------------------------------------------------------
+ *  Der Fehler, den diese Funktion hatte
+ * ---------------------------------------------------------------------------
+ *
+ * Sie setzte `isDefault: true` und `isBilling: true` **bedingungslos**. Wer
+ * dreimal mit einer neuen Adresse buchte, hatte danach drei Standard- und drei
+ * Rechnungsadressen — während die Adressverwaltung genau eine erzwingt und
+ * `addresses.test.ts` das auch prüft. Die Buchung ging an dieser Regel vorbei.
+ *
+ * Das ist nicht nur Unordnung. `invoice.service.ts` holt die Rechnungsadresse
+ * mit `where: { isBilling: true }, take: 1` — **ohne Sortierung**. Bei mehreren
+ * Treffern entscheidet die Datenbank, welcher zurückkommt, und der
+ * Rechnungsempfänger wäre damit von Lauf zu Lauf ein anderer.
+ *
+ * Gefunden hat den Fehler die Prüfreihe aus Wave 6: Sie erfasst Buchungen mit
+ * Adresse, und `addresses.test.ts` fand danach drei Standardadressen. Der
+ * Fehlschlag stand in einer anderen Datei als seine Ursache — und die Ursache
+ * war diesmal nicht die Prüfreihe, sondern das Produkt.
+ *
+ * ---------------------------------------------------------------------------
+ *  Was jetzt gilt
+ * ---------------------------------------------------------------------------
+ *
+ * **Standard:** Die neue Adresse wird es, und die bisherige verliert die
+ * Markierung. Das entspricht der Absicht — wer eine neue Adresse eingibt,
+ * bucht dort — und hält die Regel „genau eine" ein.
+ *
+ * **Rechnung:** Nur, wenn es noch keine gibt. Eine Einsatzadresse ist nicht
+ * zwangsläufig die Rechnungsadresse; die Rechnung einer Firma still an die
+ * Wohnung der Hauswartin umzuleiten, weil dort zuletzt geputzt wurde, wäre
+ * die schlechtere Vorgabe. Wer die Rechnungsadresse ändern will, tut das in
+ * der Kundenakte.
+ */
 async function createAddress(tx: Tx, customerId: string, input: BookingCoreInput): Promise<string> {
   const address = input.address!;
+
+  const [, hatRechnungsadresse] = await Promise.all([
+    tx.address.updateMany({
+      where: { customerId, isDefault: true },
+      data: { isDefault: false },
+    }),
+    tx.address.count({ where: { customerId, isBilling: true } }),
+  ]);
+
   const created = await tx.address.create({
     data: {
       customerId,
@@ -1573,7 +1647,7 @@ async function createAddress(tx: Tx, customerId: string, input: BookingCoreInput
       placeId: address.placeId ?? null,
       accessNote: input.accessNote ?? address.accessNote ?? null,
       isDefault: true,
-      isBilling: true,
+      isBilling: hatRechnungsadresse === 0,
     },
   });
   return created.id;
