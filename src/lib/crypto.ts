@@ -47,80 +47,177 @@ import { serverEnv } from '@/lib/env';
  *  Format
  * ---------------------------------------------------------------------------
  *
- *     enc:v1:<base64(iv ‖ authTag ‖ ciphertext)>
+ *     enc:v1:<base64(iv ‖ authTag ‖ ciphertext)>            — Altbestand, lesbar
+ *     enc:v2:<kid>:<base64(iv ‖ authTag ‖ ciphertext)>      — wird geschrieben
  *
- * Das Präfix trägt eine Fassungsnummer, damit ein späterer Wechsel des
- * Verfahrens den Bestand nicht entwertet: `decrypt()` kann dann beide lesen.
+ * **Warum v2 eine Schlüsselkennung trägt.** v1 sagt nicht, mit welchem
+ * Schlüssel es verschlüsselt wurde. Solange es nur einen gibt, fällt das nicht
+ * auf; sobald rotiert wird, fehlt genau die Auskunft, auf die es ankommt:
+ *
+ *  • *Ist die Rotation fertig?* Ohne Kennung lässt sich das nicht beantworten
+ *    — man kann nur alles blind neu verschlüsseln und hoffen.
+ *  • *Warum geht dieser eine Wert nicht auf?* Mit Kennung: „Schlüssel a1b2c3d4
+ *    ist nicht konfiguriert." Ohne: „Entschlüsselung fehlgeschlagen."
+ *
+ * Die Kennung sind die ersten acht Hexzeichen des SHA-256 über die
+ * Schlüsselbytes. Sie ist damit ohne Konfiguration stabil und verrät nichts:
+ * Aus einem Hash über 256 Zufallsbits lässt sich der Schlüssel nicht
+ * zurückrechnen, und acht Zeichen reichen, um zwei bis drei gleichzeitig
+ * gültige Schlüssel auseinanderzuhalten.
  *
  * Ein Wert **ohne** Präfix gilt als Altbestand im Klartext und wird
  * unverändert zurückgegeben. Das ist bewusst: Die Einführung darf keine
- * Datenmigration erzwingen und keine Anmeldung brechen. Jeder Wert wandert
- * beim nächsten Schreiben von selbst ins neue Format — bei 2FA also beim
- * nächsten Einrichten, bei der AHV-Nummer bei der nächsten Änderung.
- *
- * Ein Skript, das den Bestand sofort umstellt, gibt es **nicht**. Hier stand
- * ein Verweis auf `scripts/encrypt-existing.ts`; die Datei existierte nie.
- * Der Verweis ist gefährlicher als sein Fehlen: Wer ihn liest, hält die Frage
- * für beantwortet und plant eine Umstellung ein, die niemand geschrieben hat.
- * Dasselbe gilt für die Schlüsselrotation weiter unten.
+ * Datenmigration erzwingen und keine Anmeldung brechen.
  *
  * ---------------------------------------------------------------------------
- *  Schlüssel
+ *  Schlüsselbund
  * ---------------------------------------------------------------------------
  *
- * `ENCRYPTION_KEY` (32 Byte als 64 Hex-Zeichen) ist der vorgesehene Weg.
- * Fehlt er, wird der Schlüssel über HKDF-SHA256 aus `JWT_SECRET` abgeleitet —
- * nicht, weil das gleichwertig wäre, sondern weil die Alternative schlechter
- * ist: Ein harter Abbruch beim ersten Start nach der Auslieferung hiesse, dass
- * eine Sicherheitsverbesserung die Anwendung umwirft. HKDF trennt den
- * abgeleiteten Schlüssel kryptografisch vom Signaturschlüssel, sodass der eine
- * den anderen nicht preisgibt.
+ * `ENCRYPTION_KEY` (32 Byte als 64 Hex-Zeichen) ist der **aktive** Schlüssel.
+ * Mit ihm wird geschrieben, und nur mit ihm.
+ *
+ * `ENCRYPTION_KEY_PREVIOUS` nimmt einen oder mehrere **ausgemusterte**
+ * Schlüssel auf, durch Komma getrennt. Mit ihnen wird ausschliesslich gelesen.
+ * Das ist die ganze Rotation: neuen Schlüssel aktiv setzen, alten nach
+ * `ENCRYPTION_KEY_PREVIOUS` schieben, Bestand umschlüsseln
+ * (`scripts/rotate-encryption-key.ts`), alten Schlüssel entfernen.
+ *
+ * Ohne diesen Lesepfad wäre eine Rotation ein Ausfall: In dem Moment, in dem
+ * der neue Schlüssel aktiv wird, wäre jeder vorhandene Wert unlesbar — die
+ * zweiten Faktoren aller Konten, alle AHV-Nummern, alle Alarmcodes. Man
+ * *könnte* vorher umschlüsseln, aber dann gäbe es einen Zeitraum, in dem der
+ * Bestand schon neu und die Anwendung noch alt ist. Es gibt keine Reihenfolge,
+ * die ohne zweiten Lesepfad funktioniert.
+ *
+ * Fehlt `ENCRYPTION_KEY` ganz, wird der Schlüssel über HKDF-SHA256 aus
+ * `JWT_SECRET` abgeleitet — nicht, weil das gleichwertig wäre, sondern weil
+ * die Alternative schlechter ist: Ein harter Abbruch beim ersten Start nach
+ * der Auslieferung hiesse, dass eine Sicherheitsverbesserung die Anwendung
+ * umwirft. HKDF trennt den abgeleiteten Schlüssel kryptografisch vom
+ * Signaturschlüssel, sodass der eine den anderen nicht preisgibt.
  *
  * **Betrieblich wichtig:** Ohne gesetzten `ENCRYPTION_KEY` hängen die
  * verschlüsselten Felder an `JWT_SECRET`. Wer den wechselt, macht sie
- * unlesbar — betroffen wären die zweiten Faktoren (neu einrichten), die
- * AHV-Nummern und die Alarmcodes. `docs/DEPLOYMENT.md` sagt ohnehin, dass
- * `JWT_SECRET` nicht rotiert wird; mit gesetztem `ENCRYPTION_KEY` ist die
- * Frage endgültig entkoppelt.
+ * unlesbar. `docs/DEPLOYMENT.md` sagt ohnehin, dass `JWT_SECRET` nicht rotiert
+ * wird; mit gesetztem `ENCRYPTION_KEY` ist die Frage endgültig entkoppelt.
+ * Der ganze Ablauf steht in `docs/KEY_MANAGEMENT.md`.
  */
 
-const PREFIX = 'enc:v1:';
+const PREFIX_V1 = 'enc:v1:';
+const PREFIX_V2 = 'enc:v2:';
 const IV_BYTES = 12; // GCM-Norm: 96 Bit
 const TAG_BYTES = 16;
 
-let cachedKey: Buffer | null = null;
-
-function key(): Buffer {
-  if (cachedKey) return cachedKey;
-
-  const configured = process.env.ENCRYPTION_KEY?.trim();
-  if (configured) {
-    if (!/^[0-9a-fA-F]{64}$/.test(configured)) {
-      throw new Error(
-        'ENCRYPTION_KEY muss 64 Hex-Zeichen (32 Byte) lang sein — erzeugen mit: openssl rand -hex 32',
-      );
-    }
-    cachedKey = Buffer.from(configured, 'hex');
-    return cachedKey;
-  }
-
-  /**
-   * `hkdfSync` liefert einen `ArrayBuffer`; `Buffer.from` übernimmt ihn ohne
-   * Kopie. Das `info`-Feld bindet die Ableitung an diesen Zweck: Derselbe
-   * `JWT_SECRET` ergäbe mit einem anderen `info` einen anderen Schlüssel.
-   */
-  const derived = hkdfSync('sha256', serverEnv().JWT_SECRET, 'clenaris-feldverschluesselung', 'aes-256-gcm-v1', 32);
-  cachedKey = Buffer.from(derived);
-  return cachedKey;
+export interface Schluessel {
+  /** Die ersten acht Hexzeichen von SHA-256 über die Schlüsselbytes. */
+  kid: string;
+  bytes: Buffer;
+  /** Woher er stammt — für die Anzeige im Rotationsskript. */
+  herkunft: 'ENCRYPTION_KEY' | 'ENCRYPTION_KEY_PREVIOUS' | 'JWT_SECRET (abgeleitet)';
 }
 
-/** Nur für Tests: erzwingt, dass der Schlüssel neu gelesen wird. */
-export function resetEncryptionKeyCache(): void {
-  cachedKey = null;
+let cachedBund: { aktiv: Schluessel; alle: Schluessel[] } | null = null;
+
+function kidOf(bytes: Buffer): string {
+  return createHash('sha256').update(bytes).digest('hex').slice(0, 8);
+}
+
+function parseHexKey(wert: string, quelle: string): Buffer {
+  if (!/^[0-9a-fA-F]{64}$/.test(wert)) {
+    throw new Error(
+      `${quelle} muss 64 Hex-Zeichen (32 Byte) lang sein — erzeugen mit: openssl rand -hex 32`,
+    );
+  }
+  return Buffer.from(wert, 'hex');
+}
+
+function bund(): { aktiv: Schluessel; alle: Schluessel[] } {
+  if (cachedBund) return cachedBund;
+
+  const konfiguriert = process.env.ENCRYPTION_KEY?.trim();
+
+  const aktiv: Schluessel = konfiguriert
+    ? {
+        bytes: parseHexKey(konfiguriert, 'ENCRYPTION_KEY'),
+        kid: kidOf(parseHexKey(konfiguriert, 'ENCRYPTION_KEY')),
+        herkunft: 'ENCRYPTION_KEY',
+      }
+    : (() => {
+        /**
+         * `hkdfSync` liefert einen `ArrayBuffer`; `Buffer.from` übernimmt ihn
+         * ohne Kopie. Das `info`-Feld bindet die Ableitung an diesen Zweck:
+         * Derselbe `JWT_SECRET` ergäbe mit einem anderen `info` einen anderen
+         * Schlüssel.
+         */
+        const bytes = Buffer.from(
+          hkdfSync(
+            'sha256',
+            serverEnv().JWT_SECRET,
+            'clenaris-feldverschluesselung',
+            'aes-256-gcm-v1',
+            32,
+          ),
+        );
+        return { bytes, kid: kidOf(bytes), herkunft: 'JWT_SECRET (abgeleitet)' as const };
+      })();
+
+  /**
+   * Die ausgemusterten Schlüssel. Doppelte werden verworfen — der häufigste
+   * Bedienfehler bei einer Rotation ist, den neuen Schlüssel *auch* in
+   * `ENCRYPTION_KEY_PREVIOUS` stehen zu lassen. Ohne Entdoppelung entstünden
+   * daraus zwei Einträge mit derselben Kennung, und die Fehlersuche liefe auf
+   * eine Frage hinaus, die gar keine ist.
+   */
+  const alte = (process.env.ENCRYPTION_KEY_PREVIOUS ?? '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .map<Schluessel>((wert) => {
+      const bytes = parseHexKey(wert, 'ENCRYPTION_KEY_PREVIOUS');
+      return { bytes, kid: kidOf(bytes), herkunft: 'ENCRYPTION_KEY_PREVIOUS' };
+    });
+
+  const gesehen = new Set([aktiv.kid]);
+  const alle = [aktiv];
+  for (const k of alte) {
+    if (gesehen.has(k.kid)) continue;
+    gesehen.add(k.kid);
+    alle.push(k);
+  }
+
+  cachedBund = { aktiv, alle };
+  return cachedBund;
+}
+
+function key(): Buffer {
+  return bund().aktiv.bytes;
 }
 
 /**
- * Ein zweckgebundenes Geheimnis aus dem Wurzelschlüssel ableiten.
+ * Der Schlüsselbund, für Rotationsskript und Betriebsanzeige.
+ *
+ * Gibt **Kennungen und Herkunft** zurück, nie Schlüsselbytes. Ein Helfer, der
+ * den Schlüssel herausgibt, wird irgendwann von etwas aufgerufen, das ihn
+ * protokolliert.
+ */
+export function schluesselUebersicht(): {
+  aktiv: string;
+  alle: { kid: string; herkunft: Schluessel['herkunft'] }[];
+} {
+  const b = bund();
+  return {
+    aktiv: b.aktiv.kid,
+    alle: b.alle.map(({ kid, herkunft }) => ({ kid, herkunft })),
+  };
+}
+
+/** Nur für Tests: erzwingt, dass der Schlüsselbund neu gelesen wird. */
+export function resetEncryptionKeyCache(): void {
+  cachedBund = null;
+}
+
+/**
+ * Ein zweckgebundenes Geheimnis aus dem **aktiven** Wurzelschlüssel ableiten.
  *
  * **Warum nicht der Wurzelschlüssel selbst.** `ENCRYPTION_KEY` ist der
  * AES-Schlüssel der Feldverschlüsselung. Ihn zusätzlich als HMAC-Schlüssel
@@ -136,9 +233,61 @@ export function deriveSecret(context: string, bytes = 32): Buffer {
   return Buffer.from(hkdfSync('sha256', key(), 'clenaris-abgeleitet', context, bytes));
 }
 
+/**
+ * Dasselbe Geheimnis unter **allen** Schlüsseln des Bundes — aktiver zuerst.
+ *
+ * ---------------------------------------------------------------------------
+ *  Warum es das braucht
+ * ---------------------------------------------------------------------------
+ *
+ * Die abgeleiteten Geheimnisse schützen zwei Dinge, die zum Zeitpunkt einer
+ * Rotation **unterwegs** sein können:
+ *
+ *  • den HMAC über einen Bestätigungscode (`signature-otp.ts`) — der steht als
+ *    Argon2-Hash in der Datenbank und lässt sich nur mit demselben
+ *    abgeleiteten Schlüssel prüfen, der ihn erzeugt hat;
+ *  • den Signaturschlüssel der Unterzeichnungssitzung
+ *    (`signature-session.ts`) — ein bereits ausgestelltes Cookie ist mit dem
+ *    alten Schlüssel signiert.
+ *
+ * Ohne diesen Weg bräche eine Rotation genau das: Wer gerade einen Vertrag
+ * unterzeichnet und den Code schon per SMS bekommen hat, sähe „Der Code stimmt
+ * nicht" — und zwar ohne jeden Hinweis darauf, warum. Beides ist
+ * kurzlebig (zehn Minuten, eine Sitzung), aber „kurzlebig" ist kein Trost für
+ * die Person, die gerade unterschreibt.
+ *
+ * **Geschrieben wird weiterhin nur mit dem aktiven Schlüssel** (`deriveSecret`).
+ * Diese Liste ist ein reiner Prüfpfad, und sie ist genau so lang wie der
+ * Schlüsselbund — also im Normalbetrieb ein Eintrag.
+ */
+export function deriveSecretAll(context: string, bytes = 32): Buffer[] {
+  return bund().alle.map((k) =>
+    Buffer.from(hkdfSync('sha256', k.bytes, 'clenaris-abgeleitet', context, bytes)),
+  );
+}
+
 /** Ist dieser Wert bereits verschlüsselt? */
 export function isEncrypted(value: string): boolean {
-  return value.startsWith(PREFIX);
+  return value.startsWith(PREFIX_V1) || value.startsWith(PREFIX_V2);
+}
+
+/**
+ * Mit welchem Schlüssel wurde dieser Wert verschlüsselt?
+ *
+ * `null` für Klartext-Altbestand und für v1 — dort steht es schlicht nicht
+ * drin. Das Rotationsskript zählt damit, wie weit es ist; ein v1-Wert gilt
+ * dabei als „muss noch".
+ */
+export function kidOfValue(value: string): string | null {
+  if (!value.startsWith(PREFIX_V2)) return null;
+  const rest = value.slice(PREFIX_V2.length);
+  const trenner = rest.indexOf(':');
+  return trenner > 0 ? rest.slice(0, trenner) : null;
+}
+
+/** Steht dieser Wert schon unter dem aktiven Schlüssel? */
+export function istAktuellVerschluesselt(value: string): boolean {
+  return kidOfValue(value) === bund().aktiv.kid;
 }
 
 /**
@@ -151,11 +300,13 @@ export function isEncrypted(value: string): boolean {
  * Ohne AAD wäre genau das ein lautloser Angriff mit reinem Datenbankzugriff.
  */
 export function encrypt(plaintext: string, context: string): string {
+  const aktiv = bund().aktiv;
   const iv = randomBytes(IV_BYTES);
-  const cipher = createCipheriv('aes-256-gcm', key(), iv);
+  const cipher = createCipheriv('aes-256-gcm', aktiv.bytes, iv);
   cipher.setAAD(Buffer.from(context, 'utf8'));
   const ciphertext = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()]);
-  return PREFIX + Buffer.concat([iv, cipher.getAuthTag(), ciphertext]).toString('base64');
+  const nutzlast = Buffer.concat([iv, cipher.getAuthTag(), ciphertext]).toString('base64');
+  return `${PREFIX_V2}${aktiv.kid}:${nutzlast}`;
 }
 
 /**
@@ -170,12 +321,65 @@ export function encrypt(plaintext: string, context: string): string {
 export function decrypt(stored: string, context: string): string {
   if (!isEncrypted(stored)) return stored;
 
-  const raw = Buffer.from(stored.slice(PREFIX.length), 'base64');
+  const b = bund();
+
+  if (stored.startsWith(PREFIX_V2)) {
+    const rest = stored.slice(PREFIX_V2.length);
+    const trenner = rest.indexOf(':');
+    if (trenner <= 0) throw new Error('Verschlüsselter Wert ist unvollständig.');
+
+    const kid = rest.slice(0, trenner);
+    const schluessel = b.alle.find((k) => k.kid === kid);
+
+    /**
+     * Die Meldung nennt die Kennung. Das ist der ganze Sinn von v2: Ohne sie
+     * stünde hier „Entschlüsselung fehlgeschlagen", und die nächste Stunde
+     * ginge für die Frage drauf, *welcher* Schlüssel fehlt. Die Kennung ist
+     * ein Hash über den Schlüssel, kein Schlüsselmaterial — sie darf in eine
+     * Fehlermeldung.
+     */
+    if (!schluessel) {
+      throw new Error(
+        `Für diesen Wert fehlt der Schlüssel ${kid}. ` +
+          `Vorhanden: ${b.alle.map((k) => k.kid).join(', ')}. ` +
+          'Der ausgemusterte Schlüssel gehört nach ENCRYPTION_KEY_PREVIOUS.',
+      );
+    }
+
+    return oeffne(rest.slice(trenner + 1), schluessel.bytes, context);
+  }
+
+  /**
+   * v1 trägt keine Kennung — hier bleibt nur, die Schlüssel der Reihe nach zu
+   * versuchen. Das ist nicht teuer: Der GCM-Prüfwert schlägt sofort fehl, und
+   * der Bund hat im Normalbetrieb einen Eintrag.
+   *
+   * Der **aktive zuerst**, weil er im Normalfall passt. Erst wenn kein
+   * Schlüssel greift, ist es ein echter Fehler.
+   */
+  const nutzlast = stored.slice(PREFIX_V1.length);
+  for (const schluessel of b.alle) {
+    try {
+      return oeffne(nutzlast, schluessel.bytes, context);
+    } catch {
+      // Nächster Schlüssel. Der Fehler nach dem letzten wird geworfen.
+    }
+  }
+
+  throw new Error(
+    'Verschlüsselter Wert (v1) liess sich mit keinem konfigurierten Schlüssel öffnen. ' +
+      `Versucht: ${b.alle.map((k) => k.kid).join(', ')}.`,
+  );
+}
+
+/** Der reine AES-GCM-Teil, für beide Fassungen gleich. */
+function oeffne(base64: string, schluessel: Buffer, context: string): string {
+  const raw = Buffer.from(base64, 'base64');
   if (raw.length <= IV_BYTES + TAG_BYTES) {
     throw new Error('Verschlüsselter Wert ist unvollständig.');
   }
 
-  const decipher = createDecipheriv('aes-256-gcm', key(), raw.subarray(0, IV_BYTES));
+  const decipher = createDecipheriv('aes-256-gcm', schluessel, raw.subarray(0, IV_BYTES));
   decipher.setAAD(Buffer.from(context, 'utf8'));
   decipher.setAuthTag(raw.subarray(IV_BYTES, IV_BYTES + TAG_BYTES));
   return Buffer.concat([
@@ -229,4 +433,25 @@ export const CRYPTO_CONTEXT = {
   twoFactorSecret: 'user.twoFactorSecret',
   ahvNumber: 'employee.ahvNumber',
   alarmCode: 'property.alarmCode',
+  /**
+   * Die Auszahlungs-IBAN der Mitarbeitenden — seit Wave 4.
+   *
+   * **Warum sie dazukommt und die Lohnbeträge nicht.** Eine IBAN ist eine
+   * Kennung: Sie wird gespeichert, angezeigt und weitergegeben, aber in dieser
+   * Anwendung nirgends gerechnet, sortiert, gefiltert oder aggregiert. Die
+   * Verschlüsselung kostet sie nichts.
+   *
+   * `hourlyRate` und `monthlySalary` sind `Decimal(12,2)` und werden **in der
+   * Datenbank** verrechnet — `prisma.employee.aggregate({ _avg: { hourlyRate }})`
+   * in `scenario.service.ts` und die SQL-Summe über `TimeEntry.hourlyRate` in
+   * `analytics.service.ts`. Ein Chiffrat ist eine Zeichenkette; `AVG` darüber
+   * ergibt einen Fehler, keine Zahl. Die vollständige Abwägung samt der
+   * geprüften Alternativen steht in `docs/KEY_MANAGEMENT.md`.
+   *
+   * **Wichtig: nur `Employee.iban`.** `Organization.iban` und
+   * `Organization.qrIban` bleiben Klartext — sie stehen auf jeder Rechnung und
+   * in jedem Einzahlungsschein. Etwas zu verschlüsseln, das man selbst
+   * veröffentlicht, ist keine Massnahme, sondern eine Behauptung.
+   */
+  iban: 'employee.iban',
 } as const;

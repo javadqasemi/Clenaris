@@ -3,7 +3,7 @@ import 'server-only';
 import { createHmac, randomInt } from 'node:crypto';
 
 import { hashPassword, verifyPassword } from '@/lib/auth/password';
-import { deriveSecret } from '@/lib/crypto';
+import { deriveSecret, deriveSecretAll } from '@/lib/crypto';
 
 /**
  * Bestätigungscodes für die elektronische Unterzeichnung.
@@ -34,21 +34,46 @@ export function generateOtpCode(): string {
   return String(randomInt(0, 10 ** OTP_DIGITS)).padStart(OTP_DIGITS, '0');
 }
 
-function geschuetzt(challengeId: string, code: string): string {
-  return createHmac('sha256', deriveSecret('clenaris-signature-otp-v1'))
-    .update(`${challengeId}:${code}`)
-    .digest('hex');
+const OTP_KONTEXT = 'clenaris-signature-otp-v1';
+
+function geschuetztMit(schluessel: Buffer, challengeId: string, code: string): string {
+  return createHmac('sha256', schluessel).update(`${challengeId}:${code}`).digest('hex');
 }
 
 export async function hashOtpCode(challengeId: string, code: string): Promise<string> {
-  return hashPassword(geschuetzt(challengeId, code));
+  // Geschrieben wird immer mit dem aktiven Schlüssel — nie mit einem alten.
+  return hashPassword(geschuetztMit(deriveSecret(OTP_KONTEXT), challengeId, code));
 }
 
+/**
+ * Prüfen — unter jedem Schlüssel des Bundes, aktiver zuerst.
+ *
+ * **Warum nicht nur unter dem aktiven.** Der Hash in der Datenbank ist mit dem
+ * Schlüssel entstanden, der zum Zeitpunkt des Versands aktiv war. Wird
+ * dazwischen rotiert, passt er nicht mehr — und die Person, die gerade
+ * unterzeichnet und den Code per SMS bekommen hat, sähe „Der Code stimmt
+ * nicht", ohne jeden Hinweis auf den Grund.
+ *
+ * Der Code lebt zehn Minuten; das Fenster ist also klein. Klein ist aber kein
+ * Trost für den, der hineinfällt, und die Kosten sind gering: Im Normalbetrieb
+ * hat der Bund genau einen Eintrag, und die Schleife endet beim ersten
+ * Treffer. Während einer Rotation sind es zwei Argon2-Läufe statt einem — für
+ * die Dauer der Rotation, bei einer Handvoll offener Codes.
+ *
+ * Der Reihenfolge wegen: Der aktive Schlüssel steht vorn, also kostet der
+ * Normalfall unverändert einen Lauf.
+ */
 export async function verifyOtpCode(
   codeHash: string,
   challengeId: string,
   code: string,
 ): Promise<boolean> {
   if (!/^\d{6}$/.test(code)) return false;
-  return verifyPassword(codeHash, geschuetzt(challengeId, code));
+
+  for (const schluessel of deriveSecretAll(OTP_KONTEXT)) {
+    if (await verifyPassword(codeHash, geschuetztMit(schluessel, challengeId, code))) {
+      return true;
+    }
+  }
+  return false;
 }

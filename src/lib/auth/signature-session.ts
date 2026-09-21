@@ -4,7 +4,7 @@ import { SignJWT, jwtVerify } from 'jose';
 import { cookies } from 'next/headers';
 
 import { randomToken } from '@/lib/auth/jwt';
-import { deriveSecret, sha256Hex } from '@/lib/crypto';
+import { deriveSecret, deriveSecretAll, sha256Hex } from '@/lib/crypto';
 
 /**
  * Die Sitzung einer unterzeichnenden Person — zustandslos, kurz, eng.
@@ -50,10 +50,30 @@ export interface SignatureSessionClaims {
   tok: string;
 }
 
-let cachedKey: Uint8Array | null = null;
+const SITZUNG_KONTEXT = 'clenaris-signature-session-v1';
+
+/** Der Schlüssel, mit dem **ausgestellt** wird — immer der aktive. */
 function key(): Uint8Array {
-  cachedKey ??= new Uint8Array(deriveSecret('clenaris-signature-session-v1'));
-  return cachedKey;
+  return new Uint8Array(deriveSecret(SITZUNG_KONTEXT));
+}
+
+/**
+ * Alle Schlüssel, unter denen eine Sitzung geprüft wird — aktiver zuerst.
+ *
+ * Dieselbe Überlegung wie beim Bestätigungscode: Ein Cookie, das vor einer
+ * Schlüsselrotation ausgestellt wurde, trägt die Signatur des alten
+ * Schlüssels. Ohne diesen Weg fiele mitten im Unterzeichnungsvorgang die
+ * Sitzung weg — und zwar so, wie sie auch bei einem gefälschten Cookie
+ * wegfiele: stillschweigend. Der Unterschied wäre für niemanden erkennbar.
+ *
+ * **Kein Zwischenspeicher mehr.** Die vorherige Fassung hielt den abgeleiteten
+ * Schlüssel in einer Modulvariablen. Das war richtig, solange es genau einen
+ * gab, und wäre jetzt falsch: `resetEncryptionKeyCache()` erreichte ihn nicht,
+ * und eine Rotation wirkte erst nach einem Neustart. Die Ableitung ist ein
+ * HKDF-Aufruf über 32 Byte — die Ersparnis wog den stillen Fehler nicht auf.
+ */
+function pruefSchluessel(): Uint8Array[] {
+  return deriveSecretAll(SITZUNG_KONTEXT).map((b) => new Uint8Array(b));
 }
 
 export async function issueSignatureSession(params: {
@@ -95,8 +115,20 @@ export async function readSignatureSession(): Promise<SignatureSessionClaims | n
   const store = await cookies();
   const wert = store.get(SIGNATURE_COOKIE)?.value;
   if (!wert) return null;
+
+  for (const schluessel of pruefSchluessel()) {
+    const claims = await pruefe(wert, schluessel);
+    if (claims) return claims;
+  }
+  return null;
+}
+
+async function pruefe(
+  wert: string,
+  schluessel: Uint8Array,
+): Promise<SignatureSessionClaims | null> {
   try {
-    const { payload } = await jwtVerify(wert, key(), { algorithms: ['HS256'] });
+    const { payload } = await jwtVerify(wert, schluessel, { algorithms: ['HS256'] });
     if (payload.typ !== 'sig') return null;
     if (payload.scope !== 'sign' && payload.scope !== 'result') return null;
     if (
