@@ -24,11 +24,11 @@ Spalten `FE` (Frontend), `BE` (Backend), `DB`, `RBAC`, `SEC` (eigener Sicherheit
 
 ## Gesamtverteilung
 
-*Stand nach Wave 2 (2026-09-21). Änderungen gegenüber der Erstfassung sind unten begründet.*
+*Stand nach Wave 3 (2026-09-21). Änderungen gegenüber der Erstfassung sind unten begründet.*
 
 | Status | Anzahl | Anteil |
 |---|---|---|
-| COMPLETE + VERIFIED | **83** | 47 % |
+| COMPLETE + VERIFIED | **85** | 47 % |
 | COMPLETE | **56** | 31 % |
 | COMPLETE / EXTERNAL VERIFICATION REQUIRED | **5** | 3 % |
 | PARTIAL | **18** | 10 % |
@@ -36,10 +36,10 @@ Spalten `FE` (Frontend), `BE` (Backend), `DB`, `RBAC`, `SEC` (eigener Sicherheit
 | FRONTEND ONLY | **1** | 1 % |
 | SCHEMA ONLY | **4** | 2 % |
 | NOT IMPLEMENTED | **9** | 5 % |
-| **Summe** | **178** | **100 %** |
+| **Summe** | **180** | **100 %** |
 
-**Technisch nutzbar (C+V oder C): 139 von 178 = 78 %.**
-**Durch Tests belegt: 83 von 178 = 47 %.**
+**Technisch nutzbar (C+V oder C): 141 von 180 = 78 %.**
+**Durch Tests belegt: 85 von 180 = 47 %.**
 
 ### Änderungen in Wave 0
 
@@ -62,9 +62,16 @@ Spalten `FE` (Frontend), `BE` (Backend), `DB`, `RBAC`, `SEC` (eigener Sicherheit
 | **SEC-020: NI → C/EVR** | Die Kette ist vollständig: Dateipolitik, Prüferabstraktion, ClamAV-Anbindung über `zINSTREAM`, Zustandsautomat mit Quarantäne, Auslieferungstor bei jedem Abruf, Nachlaufskript. Nicht **C+V**, weil in der vertrauenswürdigen Entwicklungsumgebung kein `clamd` läuft — der Adapter ist gegen das Protokoll gebaut, aber nicht gegen einen echten Dienst gelaufen. |
 | **SEC-022, SEC-023 neu: C+V** | Dateipolitik und Auslieferungstor sind eigene Eigenschaften mit eigenem Nachweis und hängen nicht am Vorhandensein eines Prüfers. Sie wirken auch dann, wenn gar kein Prüfer eingerichtet ist — dann bleibt jede Datei gesperrt. |
 
+### Änderungen in Wave 3
+
+| Änderung | Begründung |
+|---|---|
+| **SEC-024 neu: C+V** | „Security Center" stand als MISSING #8 in der Baseline und hatte bis dahin keine Zeile in dieser Matrix — ein Merkmal, das nirgends geführt wird, wird auch nicht vermisst. Es gibt es jetzt: Modell, Katalog, Dienst, Seite, vier Endpunkte, 26 Prüfungen. |
+| **SEC-025 neu: C+V** | Der Katalog ist getrennt vom **Anschluss** geführt, und das ist keine Erbsenzählerei: Ein Ereignisstrom, den niemand füllt, ist eine leere Tabelle mit einer schönen Oberfläche davor. Dass sechs Dienste tatsächlich schreiben, ist eine eigene Eigenschaft mit eigenem Nachweis. |
+
 ---
 
-## SEC — Plattform und Sicherheit (23)
+## SEC — Plattform und Sicherheit (25)
 
 | ID | Feature | FE | BE | DB | RBAC | SEC | T | E2E | Status | Evidence | Missing Work |
 |---|---|---|---|---|---|---|---|---|---|---|---|
@@ -90,6 +97,8 @@ Spalten `FE` (Frontend), `BE` (Backend), `DB`, `RBAC`, `SEC` (eigener Sicherheit
 | SEC-020 | Schadsoftwareprüfung bei Uploads | – | ✓ | ✓ | ✓ | ✓ | ✓ | – | **C/EVR** | `src/lib/security/malware/*`, `dateipolitik.ts`, `scanFileAsset`/`authorizeStoredFile` in `file.service.ts`, `scan-backfill.ts`, `dateisicherheit.test.ts` (41) | **PRE-PRODUCTION VERIFICATION REQUIRED** — kein `clamd` in der Entwicklungsumgebung, der ClamAV-Adapter ist gegen das Protokoll gebaut, aber nicht gegen einen echten Dienst gelaufen; Bucket-Sichtbarkeit prüfen |
 | SEC-022 | Dateipolitik (Name, Endung, Typ) | – | ✓ | – | – | ✓ | ✓ | – | **C+V** | `src/lib/storage/dateipolitik.ts`, `dateisicherheit.test.ts` | – |
 | SEC-023 | Auslieferungstor Zustand × Herkunft | – | ✓ | ✓ | ✓ | ✓ | ✓ | – | **C+V** | `malware/auslieferung.ts`, `authorizeStoredFile`, 30 Tabellenfälle | Altbestand nachprüfen (`scan-backfill.ts`) |
+| SEC-024 | Security Center | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | – | **C+V** | `SecurityEvent`, `lib/security/events.ts`, `security.service.ts`, `/admin/sicherheit`, 4 Endpunkte, `sicherheitszentrum.test.ts` (26) | Aufbewahrungsfrist (Wave 24) |
+| SEC-025 | Sicherheitsereignisse an den Zustandsübergängen | – | ✓ | ✓ | – | ✓ | ✓ | – | **C+V** | 6 Dienste angeschlossen: Anmeldung, Zweitfaktor, Sitzungserneuerung, Rollen/Status, Zugangslinks, Dateiprüfung | – |
 | SEC-021 | Verschlüsselung von Lohn- und Bankdaten | – | – | ✓ | ✓ | – | – | – | **NI** | `employee.service.ts:104–105,140–141,252–253` schreibt `hourlyRate`/`monthlySalary` **im Klartext**; `CRYPTO_CONTEXT` kennt nur 2FA, AHV, Alarmcode | Kontexte ergänzen, Bestand umschlüsseln (Wave 4) |
 
 ---

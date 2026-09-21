@@ -344,4 +344,106 @@ kennt es nicht einmal.
 
 ---
 
+## 12. Wave 3 — Sicherheitszentrum (Stand 2026-09-21)
+
+Ausgangslage: **MISSING #8**, kein Security Center. Der Zustand war überall
+vorhanden — `User.lockedUntil`, `User.failedLoginCount`, `RefreshToken`,
+`DeviceHandoffSession`, seit Wave 2 auch `FileAsset.scanStatus` — aber an
+keiner Stelle zusammengeführt, und handeln liess sich nur über Umwege
+(Passwort zurücksetzen, Zweitfaktor zurücksetzen), die beide mehr tun, als man
+will.
+
+### Die eine Entscheidung, an der alles hängt
+
+**`SecurityEvent` steht neben `AuditLog`, nicht darin.** Technisch hätte alles
+hineingepasst. Drei Gründe dagegen; der dritte wiegt am schwersten:
+
+1. **Menge** — das Prüfprotokoll nimmt jeden ändernden Geschäftsvorgang auf
+   (223 Aufrufstellen). Eine Sicherheitssicht darin *findet* Fehlversuche und
+   *übersieht* sie trotzdem, weil sie zwischen Rechnungsänderungen stehen.
+2. **Frage** — das Prüfprotokoll sagt, wer welchen Datensatz geändert hat. Ein
+   Fehlversuch ändert keinen. Ihn als „Änderung an `User`" zu führen, wäre eine
+   Notlüge, die man später glaubt.
+3. **Bearbeitungszustand** — ein Protokolleintrag ist fertig, sobald er
+   geschrieben ist. Ein gesperrtes Konto ist *offen*, bis jemand hingesehen
+   hat. `acknowledgedAt` in `AuditLog` wäre für 99 % der Zeilen bedeutungslos.
+
+Der Strom **ersetzt** das Prüfprotokoll nicht: Eine Rollenvergabe steht in
+beiden, und das ist richtig.
+
+### Was gebaut wurde
+
+| Teil | Ort |
+|---|---|
+| Modell, zwei Aufzählungstypen, vier Indizes | `prisma/schema.prisma`, Migration `20260921170000` |
+| Katalog (26 Arten, Kategorie × Schwere) | `src/lib/security/events.ts` — rein, direkt prüfbar |
+| Schreibweg mit derselben Redigierung wie das Prüfprotokoll | `src/lib/security/record.ts` |
+| Anschluss an sechs Dienste | Anmeldung, Zweitfaktor, Sitzungserneuerung, Rollen/Status, Zugangslinks, Dateiprüfung |
+| Lesesicht, Handlungen | `src/server/services/security.service.ts` |
+| Vier Endpunkte | `/api/security/events`, `…/{id}/acknowledge`, `…/users/{id}/unlock`, `…/users/{id}/revoke-sessions` |
+| Seite | `/admin/sicherheit` |
+| Dokumentation | `docs/SECURITY_CENTER.md` |
+
+### Drei Entwurfsentscheidungen, die man leicht andersherum trifft
+
+**Die Art ist eine Zeichenkette, kein `enum`.** Ein `enum` wäre sauberer und
+verlangte für jede neue Art eine Migration. Wer im Betrieb eine Stelle
+absichert, schreibt dann kein Ereignis mit — nicht aus Nachlässigkeit, sondern
+weil der Aufwand im Moment grösser ist als der Nutzen. So entstehen
+Sicherheitsprotokolle mit Lücken. Die Typsicherheit wandert in den Katalog.
+
+**Ein geratener Zugangslink erzeugt kein Ereignis.** Abgelaufen, widerrufen und
+verbraucht schon. Ein Ereignis je unbekanntem Wert hiesse: Wer vierstellig oft
+rät, schreibt vierstellig viele Zeilen. Ein Protokoll, das sich von aussen
+füllen lässt, ist ein Verstärker. Gegen das Raten steht das Rate-Limit.
+
+**Bestätigen löscht nicht.** Die Zeile bleibt; Zeitpunkt, Person und Notiz
+kommen hinzu. Ein „erledigt"-Häkchen, das die Zeile verschwinden lässt, wäre
+die bequemere Oberfläche und die schlechtere Auskunft.
+
+### Ein Befund über die Prüfreihe selbst
+
+Der erste Gesamtlauf nach Wave 3 meldete **drei Fehlschläge in
+`addresses.test.ts`** — einer Datei, die ich nicht angefasst hatte. Ursache
+war meine eigene neue Prüfreihe: Sie legte Wegwerfkonten mit der Rolle
+`CUSTOMER` an, und eine Einladung als `CUSTOMER` erzeugt über
+`ensureCustomerProfile` eine **Kundenakte**, die beim weichen Löschen des
+Kontos stehen bleibt. `addresses.test.ts` nimmt „irgendeine fremde Akte" aus
+der Kundenliste — und das war dann eine ohne Adressen.
+
+Der Fehlschlag stand also in einer anderen Datei als seine Ursache. Genau die
+Verschmutzung, die `tests/README.md` mit „jede Prüfung räumt vor und nach sich
+auf" meint. Behoben durch die Rolle `EMPLOYEE`, die keine Akte anlegt; der
+Grund steht als Kommentar an der Stelle, damit niemand ihn zurückdreht.
+
+Zweiter Befund aus demselben Lauf: Die Gesamtreihe wuchs von **128 auf 422
+Sekunden**. Ursache war der Sperrtest — das Anmeldelimit (8 je Adresse) liegt
+genau auf der Kontosperre (8 Fehlversuche), also lief er unweigerlich in den
+429 und der Klient sass die Fenster aus. Die Zähler werden jetzt vor jedem
+Versuch geleert; geprüft wird die Kontosperre, und die zählt am Konto.
+Ergebnis: **86 Sekunden** — schneller als vor der Wave.
+
+### Offen — bewusst verschoben
+
+| Punkt | Wohin | Warum |
+|---|---|---|
+| Aufbewahrungsfrist für `security_events` | Wave 24 | Gehört einheitlich mit `AuditLog` und `Notification` geregelt, nicht je Tabelle einzeln. Heute löscht nichts diese Tabelle |
+| `ACCESS_DENIED` aus `defineRoute` heraus | Wave 5 | Jeder abgelehnte Zugriff als Zeile wäre dieselbe Mengenfalle wie beim geratenen Link. Das gehört als **Zähler** in die Beobachtbarkeit, nicht als Ereignis in den Strom |
+| Geräteübergaben als Ereignis | Wave 6 | Die Arten stehen im Katalog; der Anschluss wartet, bis die Hintergrundaufträge da sind — dort entsteht ohnehin der Ablauf, der offene Übergaben aufräumt |
+
+### Verifikation nach Wave 3
+
+| Prüfung | Ergebnis |
+|---|---|
+| `npm run typecheck` | ✅ |
+| `npm run lint` | ✅ (ganzes Projekt) |
+| `npm run build` | ✅ |
+| `prisma validate` | ✅ |
+| `npm run docs` | ✅ **405 Endpunkte** (von 401), Schutz stimmt überein; `docs/DATABASE.md` 118 Modelle |
+| Migration gegen die Entwicklungsdatenbank | ✅ additiv, keine Rückfüllung — ein Ereignis ist kein Zustand |
+| `npm test` (frische Testdatenbank) | ✅ **945 Prüfungen, 941 bestanden, 0 Fehlschläge**, 4 übersprungen (alle bestandsabhängig und vorbestehend) |
+| `npm run e2e` | ✅ **20 / 20** |
+
+---
+
 *Diese Datei wird nach jeder Wave fortgeschrieben.*
