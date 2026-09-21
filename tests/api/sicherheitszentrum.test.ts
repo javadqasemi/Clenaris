@@ -266,9 +266,21 @@ describe('Ereignisse entstehen an den Stellen, an denen etwas geschieht', () => 
     jars = await loginAll();
   });
 
-  it('eine fehlgeschlagene Anmeldung landet im Strom', async () => {
-    const vorher = await ereignisse('?severity=WARNING&proSeite=200');
-    const vorherZahl = vorher.eintraege.filter((e) => e.kind === 'LOGIN_FAILED').length;
+  /**
+   * **Gemessen wird `gesamt`, nicht die Zahl auf einer Seite.**
+   *
+   * Der erste Entwurf zählte die Treffer innerhalb einer Seite von 200
+   * Einträgen und verglich vorher/nachher. Das ging gut, solange der Strom
+   * kürzer als eine Seite war, und schlug in der Gesamtreihe fehl, sobald er
+   * darüber hinauswuchs: Der neue Eintrag steht vorn, verdrängt aber den
+   * ältesten — und war der auch ein Fehlversuch, bleibt die Zahl gleich.
+   *
+   * Eine Prüfung, die von der Länge des Bestands abhängt, misst den Bestand
+   * und nicht die Sache. `gesamt` kommt aus einem `count` über die ganze
+   * Abfrage und ist davon unabhängig.
+   */
+  it('eine fehlgeschlagene Anmeldung landet im Strom', async (t) => {
+    const vorher = await ereignisse('?category=AUTHENTICATION&proSeite=1');
 
     // Ein einzelner Fehlversuch soll nicht am Kontingent scheitern, das eine
     // vorherige Datei gefüllt hat — geprüft wird das Protokoll, nicht das Limit.
@@ -277,37 +289,39 @@ describe('Ereignisse entstehen an den Stellen, an denen etwas geschieht', () => 
       email: ACCOUNTS.customer.email,
       password: 'garantiert-falsch-fuer-die-pruefreihe',
     });
+
+    // Bei 429 ist der Versuch gar nicht bis zum Passwortvergleich gekommen —
+    // dann gibt es auch kein Ereignis, und das ist richtig so.
+    if (versuch.status === 429) return t.skip('Anmeldekontingent erschöpft');
+    assert.equal(versuch.status, 401, 'der Versuch muss abgewiesen werden');
+
+    const nachher = await ereignisse('?category=AUTHENTICATION&proSeite=1');
     assert.ok(
-      versuch.status === 401 || versuch.status === 429,
-      `erwartet 401 (oder 429 bei erschöpftem Kontingent), kam ${versuch.status}`,
+      nachher.gesamt > vorher.gesamt,
+      `der Fehlversuch muss als Ereignis erscheinen (vorher ${vorher.gesamt}, nachher ${nachher.gesamt})`,
     );
 
-    // Bei 429 ist der Anmeldeversuch gar nicht bis zum Passwortvergleich
-    // gekommen — dann gibt es auch kein Ereignis, und das ist richtig so.
-    if (versuch.status === 429) return;
-
-    const nachher = await ereignisse('?severity=WARNING&proSeite=200');
-    const treffer = nachher.eintraege.filter((e) => e.kind === 'LOGIN_FAILED');
-    assert.ok(
-      treffer.length > vorherZahl,
-      'der Fehlversuch muss als Ereignis erscheinen',
-    );
-
-    const neuestes = treffer[0];
+    const neuestes = nachher.eintraege[0];
+    assert.equal(neuestes.kind, 'LOGIN_FAILED', 'und zwar als jüngster Eintrag');
     assert.equal(neuestes.severity, 'WARNING');
-    assert.equal(neuestes.category, 'AUTHENTICATION');
     assert.ok(neuestes.user, 'das betroffene Konto gehört an den Eintrag');
     assert.equal(neuestes.user?.email, ACCOUNTS.customer.email);
   });
 
   it('eine geglückte Anmeldung ebenso — sonst fehlt die Antwort auf „und dann?“', async () => {
+    const vorher = await ereignisse('?category=AUTHENTICATION&proSeite=1');
+
+    resetRateLimits();
     await login(ACCOUNTS.employee.email, ACCOUNTS.employee.password);
 
-    const strom = await ereignisse('?severity=INFO&proSeite=200');
-    const treffer = strom.eintraege.filter(
-      (e) => e.kind === 'LOGIN_SUCCEEDED' && e.user?.email === ACCOUNTS.employee.email,
+    const nachher = await ereignisse('?category=AUTHENTICATION&proSeite=5');
+    assert.ok(nachher.gesamt > vorher.gesamt, 'die Anmeldung muss einen Eintrag erzeugen');
+    assert.ok(
+      nachher.eintraege.some(
+        (e) => e.kind === 'LOGIN_SUCCEEDED' && e.user?.email === ACCOUNTS.employee.email,
+      ),
+      'und zwar unter den jüngsten',
     );
-    assert.ok(treffer.length > 0, 'die geglückte Anmeldung muss im Strom stehen');
   });
 
   /**
@@ -357,8 +371,13 @@ describe('Ereignisse entstehen an den Stellen, an denen etwas geschieht', () => 
 
       assert.ok(gesperrt, 'nach acht Fehlversuchen muss die Sperre greifen');
 
-      const strom = await ereignisse('?proSeite=200');
-      const eigene = strom.eintraege.filter((e) => e.user?.id === konto.id);
+      /**
+       * Nach Konto **gefiltert**, statt aus einer Seite herausgesucht. Was auf
+       * einer Seite steht, hängt daran, wie lang der Strom insgesamt ist — und
+       * eine Prüfung, die davon abhängt, misst den Bestand und nicht die Sache.
+       */
+      const strom = await ereignisse(`?userId=${konto.id}&proSeite=50`);
+      const eigene = strom.eintraege;
 
       assert.ok(
         eigene.some((e) => e.kind === 'ACCOUNT_LOCKED'),
@@ -382,11 +401,9 @@ describe('Ereignisse entstehen an den Stellen, an denen etwas geschieht', () => 
       });
       assert.equal(entsperrt.status, 200);
 
-      const danach = await ereignisse('?proSeite=200');
+      const danach = await ereignisse(`?userId=${konto.id}&proSeite=50`);
       assert.ok(
-        danach.eintraege.some(
-          (e) => e.kind === 'USER_REACTIVATED' && e.user?.id === konto.id,
-        ),
+        danach.eintraege.some((e) => e.kind === 'USER_REACTIVATED'),
         'das Aufheben der Sperre gehört ebenfalls in den Strom',
       );
     } finally {
@@ -496,8 +513,14 @@ describe('Handlungen im Sicherheitszentrum', () => {
     assert.equal(antwort.status, 200);
     assert.equal(data(antwort).bestaetigt, true);
 
-    /** Die Zeile bleibt — bestätigen heisst nicht löschen. */
-    const danach = await ereignisse('?proSeite=200');
+    /**
+     * Die Zeile bleibt — bestätigen heisst nicht löschen.
+     *
+     * Gesucht wird unter `CRITICAL`: eine kleine Menge, die zuverlässig auf
+     * eine Seite passt. Der gesamte Strom tut das nicht, und eine Suche darin
+     * schlüge fehl, sobald er über eine Seite hinauswächst.
+     */
+    const danach = await ereignisse('?severity=CRITICAL&proSeite=200');
     const wieder = danach.eintraege.find((e) => e.id === ziel.id);
     assert.ok(wieder, 'das Ereignis muss weiterhin im Strom stehen');
     assert.ok(wieder?.acknowledgedAt, 'der Bestätigungszeitpunkt muss gesetzt sein');
