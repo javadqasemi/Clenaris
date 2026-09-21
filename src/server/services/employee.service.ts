@@ -442,6 +442,143 @@ export async function getEmployeeDetail(params: {
 }
 
 // ---------------------------------------------------------------------------
+//  Qualifikationen und Arbeitszeiten
+// ---------------------------------------------------------------------------
+
+/**
+ * Beide Listen werden **als Ganzes** ersetzt: löschen, neu anlegen, in einer
+ * Transaktion.
+ *
+ * ---------------------------------------------------------------------------
+ *  Warum nicht abgleichen
+ * ---------------------------------------------------------------------------
+ *
+ * Der feinere Weg wäre, alt und neu zu vergleichen und nur die Unterschiede zu
+ * schreiben. Er hätte einen Zweck, wenn an den Zeilen etwas hinge, das ihre
+ * Kennung braucht — eine Historie, ein Fremdschlüssel, ein Prüfpfad. Nichts
+ * davon ist der Fall: `EmployeeSkill` und `Availability` sind Stammdaten ohne
+ * Bezug nach aussen, und ihre Kennungen tauchen nirgends sonst auf.
+ *
+ * Ohne diesen Zweck ist der Abgleich nur eine zweite Stelle, an der etwas
+ * falsch sein kann — und die Sorte Fehler, die dabei entsteht (ein Eintrag
+ * bleibt stehen, weil der Vergleich ihn für gleich hielt), fällt erst auf,
+ * wenn jemand sich über die Planung wundert.
+ */
+export async function replaceEmployeeSkills(params: {
+  organizationId: string;
+  employeeId: string;
+  actorId: string;
+  ip?: string | null;
+  skills: { name: string; level: number; certifiedUntil?: Date | null }[];
+}): Promise<{ anzahl: number }> {
+  const employee = await prisma.employee.findFirst({
+    // Employee kennt kein deletedAt; ein Austritt steht in ctive.
+    // Auch eine ausgetretene Person darf nachgepflegt werden — etwa um ein
+    // abgelaufenes Zertifikat zu korrigieren.
+    where: { id: params.employeeId, organizationId: params.organizationId },
+    select: { id: true, employeeNumber: true, skills: { select: { name: true } } },
+  });
+  if (!employee) throw new NotFoundError('Mitarbeitende/r');
+
+  await prisma.$transaction([
+    prisma.employeeSkill.deleteMany({ where: { employeeId: employee.id } }),
+    prisma.employeeSkill.createMany({
+      data: params.skills.map((s) => ({
+        employeeId: employee.id,
+        name: s.name,
+        level: s.level,
+        certifiedUntil: s.certifiedUntil ?? null,
+      })),
+    }),
+  ]);
+
+  await audit.updated({
+    organizationId: params.organizationId,
+    userId: params.actorId,
+    entity: 'Employee',
+    entityId: employee.id,
+    summary: `Qualifikationen von ${employee.employeeNumber} gesetzt (${params.skills.length})`,
+    /**
+     * Vorher/nachher als Namensliste, nicht als Zeilenkennungen: Wer das
+     * Protokoll liest, will wissen, welche Qualifikation dazukam — nicht,
+     * welche cuid verschwunden ist.
+     */
+    changes: {
+      skills: {
+        from: employee.skills.map((s) => s.name),
+        to: params.skills.map((s) => s.name),
+      },
+    },
+    ip: params.ip,
+  });
+
+  return { anzahl: params.skills.length };
+}
+
+export async function replaceEmployeeAvailability(params: {
+  organizationId: string;
+  employeeId: string;
+  actorId: string;
+  ip?: string | null;
+  availability: { weekday: number; startTime: string; endTime: string }[];
+}): Promise<{ anzahl: number }> {
+  const employee = await prisma.employee.findFirst({
+    where: { id: params.employeeId, organizationId: params.organizationId },
+    select: {
+      id: true,
+      employeeNumber: true,
+      availability: { select: { weekday: true, startTime: true, endTime: true } },
+    },
+  });
+  if (!employee) throw new NotFoundError('Mitarbeitende/r');
+
+  await prisma.$transaction([
+    prisma.availability.deleteMany({ where: { employeeId: employee.id } }),
+    prisma.availability.createMany({
+      data: params.availability.map((a) => ({
+        employeeId: employee.id,
+        weekday: a.weekday,
+        startTime: a.startTime,
+        endTime: a.endTime,
+      })),
+    }),
+  ]);
+
+  const alsText = (liste: { weekday: number; startTime: string; endTime: string }[]) =>
+    liste
+      .slice()
+      .sort((a, b) => a.weekday - b.weekday || a.startTime.localeCompare(b.startTime))
+      .map((a) => `${a.weekday}:${a.startTime}-${a.endTime}`);
+
+  await audit.updated({
+    organizationId: params.organizationId,
+    userId: params.actorId,
+    entity: 'Employee',
+    entityId: employee.id,
+    summary: `Arbeitszeiten von ${employee.employeeNumber} gesetzt (${params.availability.length} Fenster)`,
+    changes: {
+      availability: { from: alsText(employee.availability), to: alsText(params.availability) },
+    },
+    ip: params.ip,
+  });
+
+  /**
+   * **Kein Eingriff in bestehende Zuteilungen.**
+   *
+   * Die Verfügbarkeit ist eine Planungshilfe, keine Zusage — das steht so in
+   * `assignment.service.ts` und ist dort begründet: Ein Sonntagseinsatz nach
+   * Absprache ist normal, und ihn zu blockieren hiesse, das Büro zu zwingen,
+   * zuerst ein Stammdatum zu ändern.
+   *
+   * Aus derselben Überlegung folgt hier das Gegenstück: Wer die Arbeitszeiten
+   * einschränkt, wirft damit keine bereits geplanten Einsätze um. Die
+   * Eignungsprüfung **warnt** beim nächsten Zuteilen; entscheiden tut die
+   * Disposition.
+   */
+  return { anzahl: params.availability.length };
+}
+
+// ---------------------------------------------------------------------------
 //  Abwesenheiten
 // ---------------------------------------------------------------------------
 

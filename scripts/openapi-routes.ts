@@ -2988,6 +2988,37 @@ export const ROUTES: RouteDoc[] = [
     body: crm.updateCustomerSchema,
   },
   {
+    method: 'put',
+    path: '/api/employees/{id}/skills',
+    tag: 'Personal',
+    summary: 'Qualifikationen setzen',
+    description:
+      'Ersetzt die Liste **als Ganzes** — deshalb `PUT` und nicht `PATCH`. Diese Zeilen haben ' +
+      'keinen Bezug nach aussen; ein Abgleich wäre nur eine zweite Stelle, an der etwas falsch ' +
+      'sein kann, und Ersetzen ist wettlauffrei. Doppelte Namen und mehr als 30 Einträge werden ' +
+      'abgewiesen.',
+    guard: perm('all', 'employee:update'),
+    rateLimit: 'apiWrite',
+    params: q.idParam,
+    body: operations.employeeSkillsSchema,
+  },
+  {
+    method: 'put',
+    path: '/api/employees/{id}/availability',
+    tag: 'Personal',
+    summary: 'Arbeitszeiten setzen',
+    description:
+      'Ersetzt die Zeitfenster als Ganzes. Überschneidungen am selben Tag werden abgewiesen — ' +
+      'der eindeutige Index deckt nur gleiche Startzeiten ab, und zwei sich überlappende ' +
+      'Fenster ergäben eine Verfügbarkeit, die sich nicht mehr lesen lässt. ' +
+      'Die Arbeitszeit bleibt eine **Planungshilfe**: Die Eignungsprüfung warnt bei einem ' +
+      'Einsatz ausserhalb und blockiert ihn nicht. Bereits geplante Einsätze bleiben unberührt.',
+    guard: perm('all', 'employee:update'),
+    rateLimit: 'apiWrite',
+    params: q.idParam,
+    body: operations.employeeAvailabilitySchema,
+  },
+  {
     method: 'get',
     path: '/api/employees/{id}',
     tag: 'Personal',

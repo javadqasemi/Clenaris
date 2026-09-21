@@ -500,6 +500,113 @@ export const updateEmployeeSchema = z.object({
 });
 export type UpdateEmployeeInput = z.infer<typeof updateEmployeeSchema>;
 
+// ---------------------------------------------------------------------------
+//  Qualifikationen und Arbeitszeiten
+// ---------------------------------------------------------------------------
+
+/**
+ * Beide Listen werden **als Ganzes** ersetzt, nicht Zeile für Zeile.
+ *
+ * Die Alternative wären Endpunkte zum Anlegen, Ändern und Löschen einzelner
+ * Einträge — sechs statt zwei, jeder mit eigener Rechteprüfung, und die
+ * Oberfläche müsste die Unterschiede zwischen altem und neuem Stand selbst
+ * ausrechnen und einzeln schicken. Bei Listen dieser Grösse (eine Handvoll
+ * Qualifikationen, höchstens ein paar Zeitfenster je Woche) ist das
+ * Aufwand ohne Gewinn.
+ *
+ * Dazu kommt ein handfester Vorteil: Ersetzen ist **wettlauffrei**. Wer eine
+ * Liste in zwei Browserfenstern bearbeitet, bekommt am Ende die zuletzt
+ * gespeicherte Fassung — und nicht eine Mischung aus beiden, bei der ein
+ * gelöschter Eintrag wieder auftaucht.
+ */
+
+const ZEIT = /^([01]\d|2[0-3]):[0-5]\d$/;
+
+export const employeeSkillSchema = z.object({
+  name: z.string().trim().min(2, 'Ein Name ist erforderlich.').max(80),
+  /**
+   * 1 bis 5. Die Stufen sind bewusst unbenannt: „Grundkenntnisse" bis
+   * „Experte" klingt genauer, als eine Selbsteinschätzung je sein kann, und
+   * die Zahl steht ohnehin nur neben dem Namen.
+   */
+  level: z.number().int().min(1).max(5).default(1),
+  certifiedUntil: dateOnlySchema.optional().nullable(),
+});
+
+export const employeeSkillsSchema = z.object({
+  skills: z
+    .array(employeeSkillSchema)
+    .max(30, 'Höchstens 30 Qualifikationen.')
+    .superRefine((liste, ctx) => {
+      /**
+       * Doppelte Namen fängt sonst erst der eindeutige Index ab — als 409 mit
+       * einer Meldung über eine Datenbankeinschränkung. Hier kommt ein Satz,
+       * der sagt, welcher Name doppelt ist.
+       */
+      const gesehen = new Set<string>();
+      liste.forEach((eintrag, index) => {
+        const schluessel = eintrag.name.toLowerCase();
+        if (gesehen.has(schluessel)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: [index, 'name'],
+            message: `„${eintrag.name}" steht zweimal in der Liste.`,
+          });
+        }
+        gesehen.add(schluessel);
+      });
+    }),
+});
+
+export const availabilitySlotSchema = z
+  .object({
+    /** 0 = Sonntag, wie `Date.getDay()`. */
+    weekday: z.number().int().min(0).max(6),
+    startTime: z.string().regex(ZEIT, 'Uhrzeit im Format HH:MM.'),
+    endTime: z.string().regex(ZEIT, 'Uhrzeit im Format HH:MM.'),
+  })
+  .refine((slot) => slot.startTime < slot.endTime, {
+    path: ['endTime'],
+    message: 'Das Ende muss nach dem Beginn liegen.',
+  });
+
+export const employeeAvailabilitySchema = z.object({
+  availability: z
+    .array(availabilitySlotSchema)
+    .max(21, 'Höchstens drei Fenster je Wochentag.')
+    .superRefine((liste, ctx) => {
+      /**
+       * Überschneidungen innerhalb eines Tages.
+       *
+       * Der eindeutige Index deckt nur `(employee, weekday, startTime)` ab —
+       * zwei Fenster 07:00–12:00 und 09:00–17:00 gingen glatt durch. Sie
+       * ergäben keine falsche Antwort (die Eignungsprüfung nimmt jedes
+       * Fenster einzeln), aber eine Verfügbarkeit, die sich nicht mehr lesen
+       * lässt: Wer soll sagen, wann diese Person arbeitet?
+       */
+      const jeTag = new Map<number, { startTime: string; endTime: string; index: number }[]>();
+
+      liste.forEach((slot, index) => {
+        const tag = jeTag.get(slot.weekday) ?? [];
+        for (const vorhanden of tag) {
+          if (slot.startTime < vorhanden.endTime && vorhanden.startTime < slot.endTime) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: [index, 'startTime'],
+              message: `Überschneidet sich mit ${vorhanden.startTime}–${vorhanden.endTime} am selben Tag.`,
+            });
+            break;
+          }
+        }
+        tag.push({ startTime: slot.startTime, endTime: slot.endTime, index });
+        jeTag.set(slot.weekday, tag);
+      });
+    }),
+});
+
+export type EmployeeSkillsInput = z.infer<typeof employeeSkillsSchema>;
+export type EmployeeAvailabilityInput = z.infer<typeof employeeAvailabilitySchema>;
+
 export const absenceRequestSchema = z.object({
   type: z
     .enum([

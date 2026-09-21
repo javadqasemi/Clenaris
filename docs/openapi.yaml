@@ -20131,6 +20131,204 @@ paths:
             'application/json':
               schema:
                 '$ref': '#/components/schemas/ErrorEnvelope'
+  '/api/employees/{id}/skills':
+    put:
+      tags:
+        - 'Personal'
+      summary: 'Qualifikationen setzen'
+      description: |-
+          Ersetzt die Liste **als Ganzes** — deshalb `PUT` und nicht `PATCH`. Diese Zeilen haben keinen Bezug nach aussen; ein Abgleich wäre nur eine zweite Stelle, an der etwas falsch sein kann, und Ersetzen ist wettlauffrei. Doppelte Namen und mehr als 30 Einträge werden abgewiesen.
+
+          **Zugriff:** Erfordert die Berechtigung: `employee:update`.
+
+          **Rate-Limit-Klasse:** `apiWrite`
+      operationId: 'putEmployeesByIdSkills'
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: 'id'
+          in: 'path'
+          required: true
+          schema:
+            type: 'string'
+            minLength: 1
+      requestBody:
+        required: true
+        content:
+          'application/json':
+            schema:
+              type: 'object'
+              properties:
+                skills:
+                  type: 'array'
+                  items:
+                    type: 'object'
+                    properties:
+                      name:
+                        type: 'string'
+                        minLength: 2
+                        maxLength: 80
+                      level:
+                        type: 'integer'
+                        minimum: 1
+                        maximum: 5
+                        default: 1
+                      certifiedUntil:
+                        type: 'string'
+                        pattern: '^\d{4}-\d{2}-\d{2}$'
+                    required:
+                      - 'name'
+                  maxItems: 30
+              required:
+                - 'skills'
+      responses:
+        '200':
+          description: 'Erfolg'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/SuccessEnvelope'
+        '400':
+          description: 'VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 'UNAUTHORIZED — keine oder abgelaufene Sitzung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 'FORBIDDEN — angemeldet, aber ohne die nötige Berechtigung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: 'NOT_FOUND — nicht vorhanden, oder für diese Sitzung nicht sichtbar.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: 'BUSINESS_RULE — fachlich nicht zulässig, etwa eine bereits ausgestellte Rechnung ändern.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: 'RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+  '/api/employees/{id}/availability':
+    put:
+      tags:
+        - 'Personal'
+      summary: 'Arbeitszeiten setzen'
+      description: |-
+          Ersetzt die Zeitfenster als Ganzes. Überschneidungen am selben Tag werden abgewiesen — der eindeutige Index deckt nur gleiche Startzeiten ab, und zwei sich überlappende Fenster ergäben eine Verfügbarkeit, die sich nicht mehr lesen lässt. Die Arbeitszeit bleibt eine **Planungshilfe**: Die Eignungsprüfung warnt bei einem Einsatz ausserhalb und blockiert ihn nicht. Bereits geplante Einsätze bleiben unberührt.
+
+          **Zugriff:** Erfordert die Berechtigung: `employee:update`.
+
+          **Rate-Limit-Klasse:** `apiWrite`
+      operationId: 'putEmployeesByIdAvailability'
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: 'id'
+          in: 'path'
+          required: true
+          schema:
+            type: 'string'
+            minLength: 1
+      requestBody:
+        required: true
+        content:
+          'application/json':
+            schema:
+              type: 'object'
+              properties:
+                availability:
+                  type: 'array'
+                  items:
+                    type: 'object'
+                    properties:
+                      weekday:
+                        type: 'integer'
+                        minimum: 0
+                        maximum: 6
+                      startTime:
+                        type: 'string'
+                        pattern: '^([01]\d|2[0-3]):[0-5]\d$'
+                      endTime:
+                        type: 'string'
+                        pattern: '^([01]\d|2[0-3]):[0-5]\d$'
+                    required:
+                      - 'weekday'
+                      - 'startTime'
+                      - 'endTime'
+                  maxItems: 21
+              required:
+                - 'availability'
+      responses:
+        '200':
+          description: 'Erfolg'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/SuccessEnvelope'
+        '400':
+          description: 'VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 'UNAUTHORIZED — keine oder abgelaufene Sitzung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 'FORBIDDEN — angemeldet, aber ohne die nötige Berechtigung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: 'NOT_FOUND — nicht vorhanden, oder für diese Sitzung nicht sichtbar.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: 'BUSINESS_RULE — fachlich nicht zulässig, etwa eine bereits ausgestellte Rechnung ändern.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: 'RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
   '/api/employees/{id}':
     get:
       tags:

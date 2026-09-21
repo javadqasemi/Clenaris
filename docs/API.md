@@ -5,7 +5,7 @@
 > Quelle, aus der sowohl diese Referenz als auch die Laufzeitvalidierung
 > stammen.
 
-Stand: 406 Endpunkte. Die maschinenlesbare Fassung liegt in
+Stand: 408 Endpunkte. Die maschinenlesbare Fassung liegt in
 [`openapi.yaml`](./openapi.yaml) bzw. [`openapi.json`](./openapi.json).
 
 ## Grundlagen
@@ -3141,6 +3141,54 @@ Familie.
 | Feld | Typ | Pflicht | Regeln |
 | --- | --- | --- | --- |
 | `id` | string | ja | min. 1 Zeichen |
+
+### `PUT /api/employees/{id}/skills`
+
+**Qualifikationen setzen.** Ersetzt die Liste **als Ganzes** — deshalb `PUT` und nicht `PATCH`. Diese Zeilen haben keinen Bezug nach aussen; ein Abgleich wäre nur eine zweite Stelle, an der etwas falsch sein kann, und Ersetzen ist wettlauffrei. Doppelte Namen und mehr als 30 Einträge werden abgewiesen.
+
+- **Zugriff:** Erfordert die Berechtigung: `employee:update`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `skills` | object[] | ja | max. 30 Einträge |
+| `skills[].name` | string | ja | min. 2 Zeichen, max. 80 Zeichen |
+| `skills[].level` | integer | – | ≥ 1, ≤ 5, Standard `1` |
+| `skills[].certifiedUntil` | string | – | – |
+
+### `PUT /api/employees/{id}/availability`
+
+**Arbeitszeiten setzen.** Ersetzt die Zeitfenster als Ganzes. Überschneidungen am selben Tag werden abgewiesen — der eindeutige Index deckt nur gleiche Startzeiten ab, und zwei sich überlappende Fenster ergäben eine Verfügbarkeit, die sich nicht mehr lesen lässt. Die Arbeitszeit bleibt eine **Planungshilfe**: Die Eignungsprüfung warnt bei einem Einsatz ausserhalb und blockiert ihn nicht. Bereits geplante Einsätze bleiben unberührt.
+
+- **Zugriff:** Erfordert die Berechtigung: `employee:update`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `availability` | object[] | ja | max. 21 Einträge |
+| `availability[].weekday` | integer | ja | ≥ 0, ≤ 6 |
+| `availability[].startTime` | string | ja | – |
+| `availability[].endTime` | string | ja | – |
 
 ### `GET /api/employees/{id}`
 
