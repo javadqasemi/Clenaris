@@ -17,7 +17,7 @@ const log = logger('audit');
  */
 
 /** Feldnamen, deren Werte nie im Log landen. */
-const REDACTED_FIELDS = new Set([
+export const REDACTED_FIELDS = new Set([
   'password',
   'passwordHash',
   'twoFactorSecret',
@@ -31,7 +31,13 @@ const REDACTED_FIELDS = new Set([
   'secret',
 ]);
 
-function redact(value: unknown, depth = 0): unknown {
+/**
+ * Exportiert, damit das Sicherheitsprotokoll dieselbe Redigierung benutzt und
+ * nicht eine zweite, die auseinanderläuft. Eine zweite Liste gepflegter
+ * Feldnamen wäre eine Liste, die beim nächsten neuen Geheimnis nur an einer
+ * Stelle ergänzt wird — und man merkt es an der Stelle, an der es zählt.
+ */
+export function redact(value: unknown, depth = 0): unknown {
   if (depth > 4 || value === null || typeof value !== 'object') return value;
   if (Array.isArray(value)) return value.slice(0, 50).map((v) => redact(v, depth + 1));
 

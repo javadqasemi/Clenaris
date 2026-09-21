@@ -4,7 +4,7 @@
 > Diagramme sind damit nie älter als das Schema. Prosa und Bereichseinteilung
 > stehen in `scripts/generate-erd.ts`.
 
-**117 Modelle, 82 Aufzählungstypen, 2161 Felder.**
+**118 Modelle, 84 Aufzählungstypen, 2181 Felder.**
 PostgreSQL 16+; alle Zeitstempel als `timestamptz` in UTC, Anzeige in Europe/Zurich.
 
 ## Vier Entscheidungen, die das ganze Schema prägen
@@ -36,7 +36,7 @@ Beleg so lesbar, wie er ausgestellt wurde.
 ```mermaid
 flowchart LR
   stammdaten["Mandant und Stammdaten<br/><small>6 Modelle</small>"]
-  identitaet["Identität und Zugriff<br/><small>6 Modelle</small>"]
+  identitaet["Identität und Zugriff<br/><small>7 Modelle</small>"]
   signatur["Elektronische Unterzeichnung<br/><small>5 Modelle</small>"]
   crm["CRM<br/><small>13 Modelle</small>"]
   katalog["Leistungskatalog und Preislogik<br/><small>6 Modelle</small>"]
@@ -124,7 +124,7 @@ erDiagram
 
 | Modell | Tabelle | Felder | Zweck |
 | --- | --- | --- | --- |
-| `Organization` | `organizations` | 110 | – |
+| `Organization` | `organizations` | 111 | – |
 | `NumberSequence` | `number_sequences` | 6 | – |
 | `OpeningHours` | `opening_hours` | 7 | – |
 | `Holiday` | `holidays` | 7 | – |
@@ -133,7 +133,7 @@ erDiagram
 
 ## Identität und Zugriff
 
-`User` trägt Anmeldung und Rolle; `Customer` und `Employee` sind die fachlichen Profile daneben. Diese Trennung erlaubt Gastbuchungen ohne Konto und Kundendatensätze, die erst später ein Login erhalten. `RefreshToken` speichert nur den SHA-256-Hash und eine Familien-ID — daran erkennt die Rotation die Wiederverwendung eines bereits verbrauchten Tokens. `AuditLog` und `Consent` sind die Nachweisschicht für das Schweizer DSG und die DSGVO. `PublicAccessToken` ist die eine Stelle für Links, die ohne Anmeldung funktionieren — Offerte, Rechnung, später Signatur: nur der SHA-256-Hash liegt in der Datenbank, dazu Zweck, Ressource, Ablauf und Widerruf.
+`User` trägt Anmeldung und Rolle; `Customer` und `Employee` sind die fachlichen Profile daneben. Diese Trennung erlaubt Gastbuchungen ohne Konto und Kundendatensätze, die erst später ein Login erhalten. `RefreshToken` speichert nur den SHA-256-Hash und eine Familien-ID — daran erkennt die Rotation die Wiederverwendung eines bereits verbrauchten Tokens. `AuditLog` und `Consent` sind die Nachweisschicht für das Schweizer DSG und die DSGVO. `PublicAccessToken` ist die eine Stelle für Links, die ohne Anmeldung funktionieren — Offerte, Rechnung, später Signatur: nur der SHA-256-Hash liegt in der Datenbank, dazu Zweck, Ressource, Ablauf und Widerruf. `SecurityEvent` steht bewusst **neben** `AuditLog` und nicht darin: Das Prüfprotokoll sagt, wer welchen Datensatz geändert hat, der Sicherheitsstrom, was an Zugängen geschehen ist. Ein fehlgeschlagener Anmeldeversuch ändert keinen Datensatz, und Sicherheitsereignisse brauchen einen Bearbeitungszustand, den ein Protokolleintrag nicht kennt.
 
 ```mermaid
 erDiagram
@@ -197,20 +197,33 @@ erDiagram
     String summary
     Json changes
   }
+  SecurityEvent {
+    String id PK
+    String organizationId
+    String userId
+    SecurityCategory category
+    SecuritySeverity severity
+    String kind
+    String summary
+    Json context
+  }
   User ||--o{ RefreshToken : "user"
   User |o--o{ VerificationToken : "user"
   User ||--o{ Consent : "user"
   User |o--o{ AuditLog : "user"
+  User |o--o{ SecurityEvent : "user"
+  User |o--o{ SecurityEvent : "acknowledgedBy"
 ```
 
 | Modell | Tabelle | Felder | Zweck |
 | --- | --- | --- | --- |
-| `User` | `users` | 54 | – |
+| `User` | `users` | 56 | – |
 | `RefreshToken` | `refresh_tokens` | 10 | – |
 | `VerificationToken` | `verification_tokens` | 9 | – |
 | `PublicAccessToken` | `public_access_tokens` | 15 | – |
 | `Consent` | `consents` | 9 | – |
 | `AuditLog` | `audit_logs` | 13 | – |
+| `SecurityEvent` | `security_events` | 17 | – |
 
 ## Elektronische Unterzeichnung
 
@@ -1556,6 +1569,8 @@ exakte TypeScript-Typen.
 | `AuditAction` | `CREATE`, `UPDATE`, `DELETE`, `LOGIN`, `LOGIN_FAILED`, `LOGOUT`, `PASSWORD_RESET`, `PERMISSION_CHANGE`, `EXPORT`, `IMPORT`, `PAYMENT`, `ACCESS_DENIED` |
 | `ConsentType` | `MARKETING_EMAIL`, `MARKETING_SMS`, `ANALYTICS`, `TERMS`, `PRIVACY`, `DATA_PROCESSING` |
 | `PublicTokenPurpose` | `QUOTE_VIEW`, `QUOTE_RESPOND`, `INVOICE_VIEW`, `INVOICE_PAY`, `BOOKING_MANAGE`, `DOCUMENT_VIEW`, `SIGNATURE_ACCESS`, `SIGNATURE_OTP`, `SIGNATURE_RESULT_VIEW` |
+| `SecuritySeverity` | `INFO`, `WARNING`, `CRITICAL` |
+| `SecurityCategory` | `AUTHENTICATION`, `SESSION`, `ACCESS`, `PUBLIC_LINK`, `FILE`, `SYSTEM` |
 | `StorageDriver` | `LOCAL`, `SUPABASE` |
 | `FileProvenance` | `USER_UPLOAD`, `SYSTEM_GENERATED`, `TRUSTED_IMPORT`, `LEGACY_UNSCANNED` |
 | `FileScanStatus` | `PENDING`, `SCANNING`, `CLEAN`, `INFECTED`, `ERROR`, `QUARANTINED` |

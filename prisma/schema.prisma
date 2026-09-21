@@ -525,6 +525,7 @@ model Organization {
   pipelineStages    PipelineStage[]
   tags              Tag[]
   auditLogs         AuditLog[]
+  securityEvents    SecurityEvent[]
   numberSequences   NumberSequence[]
   files             FileAsset[]
   newsletter        NewsletterSubscriber[]
@@ -694,6 +695,8 @@ model User {
   tokens        VerificationToken[]
   notifications Notification[]
   auditLogs     AuditLog[]
+  securityEvents           SecurityEvent[] @relation("SecurityEventSubject")
+  securityEventsAcknowledged SecurityEvent[] @relation("SecurityEventAcknowledger")
   signatureRequestsCreated SignatureRequest[] @relation("SignatureRequestsCreated")
   signatureRequestsPresented SignatureRequest[] @relation("SignatureRequestsPresented")
   deviceHandoffs DeviceHandoffSession[] @relation("DeviceHandoffs")
@@ -898,6 +901,122 @@ model AuditLog {
   @@index([entity, entityId])
   @@index([userId])
   @@map("audit_logs")
+}
+
+/// Wie schwer ein Sicherheitsereignis wiegt.
+///
+/// Die Stufe entscheidet **nicht**, ob etwas protokolliert wird — das steht
+/// an der Stelle fest, die das Ereignis auslöst. Sie entscheidet, was auf der
+/// Übersicht oben steht und was eine Bestätigung braucht.
+enum SecuritySeverity {
+  /// Normalbetrieb, nachvollziehbar: Anmeldung, Abmeldung, Gerät entsperrt.
+  INFO
+  /// Auffällig, aber erklärbar: fehlgeschlagene Anmeldung, abgelehnter
+  /// Zugriff, Zugangslink ausgestellt.
+  WARNING
+  /// Braucht eine Entscheidung: Konto gesperrt, Zweitfaktor abgeschaltet,
+  /// Datei in Quarantäne, wiederverwendeter Rotationstoken.
+  CRITICAL
+}
+
+/// Wovon das Ereignis handelt.
+///
+/// Bewusst grob. Eine feine Einteilung sieht in der Datenbank ordentlich aus
+/// und hilft niemandem beim Lesen — wer die Übersicht öffnet, sucht „stimmt
+/// etwas mit Anmeldungen nicht", nicht `LOGIN_FAILED_WRONG_PASSWORD_THIRD_TRY`.
+/// Was genau geschah, steht in `kind` und `summary`.
+enum SecurityCategory {
+  /// Anmeldung, Abmeldung, Sperre, Zweitfaktor.
+  AUTHENTICATION
+  /// Sitzungen, Rotation, Widerruf, Gerätesperre.
+  SESSION
+  /// Abgelehnte Zugriffe, Rollen- und Rechteänderungen.
+  ACCESS
+  /// Öffentliche Zugangslinks.
+  PUBLIC_LINK
+  /// Dateien: Fund, Quarantäne, abgewiesener Typ.
+  FILE
+  /// Betriebszustand der Sicherheitseinrichtungen selbst.
+  SYSTEM
+}
+
+/// Sicherheitsereignisse — der Strom, den das Sicherheitszentrum liest.
+///
+/// ---------------------------------------------------------------------------
+///  Warum das nicht in `AuditLog` gehört
+/// ---------------------------------------------------------------------------
+///
+/// Es wäre möglich. `AuditLog` hat `action`, `entity`, `summary`, `ip` und
+/// `userAgent` — technisch passt alles hinein. Und genau daran scheitert es:
+///
+///  1. **Mengenverhältnis.** Das Prüfprotokoll nimmt jeden ändernden
+///     Geschäftsvorgang auf; im Bestand sind das 223 Aufrufstellen. Eine
+///     Sicherheitsübersicht, die darin nach fehlgeschlagenen Anmeldungen
+///     filtert, findet sie — und übersieht sie im Alltag trotzdem, weil sie
+///     zwischen Rechnungsänderungen steht.
+///  2. **Das Prüfprotokoll beantwortet eine andere Frage.** Es sagt, *wer
+///     welchen Datensatz geändert hat*. Ein fehlgeschlagener Anmeldeversuch
+///     ändert keinen Datensatz, ein abgelehnter Zugriff erst recht nicht.
+///     Beides als „Änderung an `User`" zu führen, wäre eine Notlüge.
+///  3. **Sicherheitsereignisse brauchen einen Bearbeitungszustand.** Ein
+///     Prüfprotokolleintrag ist fertig, sobald er geschrieben ist — er wird
+///     gelesen, nicht bearbeitet. Ein gesperrtes Konto dagegen ist offen, bis
+///     jemand hingesehen hat. `acknowledgedAt` in `AuditLog` wäre eine Spalte,
+///     die für 99 % der Zeilen bedeutungslos ist.
+///
+/// Umgekehrt ersetzt dieser Strom das Prüfprotokoll nicht: Eine Rollenvergabe
+/// steht in beiden, und das ist richtig so. Im Prüfprotokoll als Änderung an
+/// einem Datensatz, hier als Ereignis, das jemand sehen soll.
+///
+/// ---------------------------------------------------------------------------
+///  Was hier nicht hineingehört
+/// ---------------------------------------------------------------------------
+///
+/// **Keine Geheimnisse, auch nicht gehasht.** Kein Passwort, kein roher
+/// Zugangstoken, kein Tokenhash, kein TOTP-Geheimnis, keine AHV-Nummer, kein
+/// Alarmcode. Ein Sicherheitsprotokoll ist genau die Datei, die jemand
+/// mitnimmt, wenn er schon drin ist; sie darf ihm nichts geben, was er noch
+/// nicht hat. `context` geht deshalb durch dieselbe Redigierung wie
+/// `AuditLog.changes`.
+model SecurityEvent {
+  id             String           @id @default(cuid())
+  organizationId String
+  /// Wen es betrifft. `null` bei Ereignissen ohne bekanntes Konto — eine
+  /// Anmeldung mit unbekannter E-Mail-Adresse etwa. Die Adresse selbst steht
+  /// dann **nicht** hier: Ein Protokoll, das jede getippte Adresse sammelt,
+  /// ist eine Adressliste.
+  userId         String?
+  category       SecurityCategory
+  severity       SecuritySeverity
+  /// Die genaue Art, als stabile Zeichenkette (`LOGIN_FAILED`,
+  /// `ACCOUNT_LOCKED`, `FILE_QUARANTINED`, …). Bewusst kein Aufzählungstyp:
+  /// Eine neue Art soll keine Migration brauchen, sonst entsteht sie nicht.
+  /// Die gültigen Werte stehen in `src/lib/security/events.ts`.
+  kind           String
+  /// Ein Satz auf Deutsch, lesbar ohne Codekenntnis.
+  summary        String
+  /// Zusatzangaben, redigiert. Niemals Geheimnisse.
+  context        Json?
+  ip             String?
+  userAgent      String?
+  occurredAt     DateTime         @default(now()) @db.Timestamptz(6)
+  /// Gesehen und eingeordnet. Nur `CRITICAL` verlangt das; alles andere darf
+  /// offen bleiben, ohne dass die Übersicht danach aussieht, als stünde etwas
+  /// an.
+  acknowledgedAt DateTime?        @db.Timestamptz(6)
+  acknowledgedById String?
+  /// Was die Person dazu festgehalten hat.
+  acknowledgedNote String?
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user           User?        @relation("SecurityEventSubject", fields: [userId], references: [id], onDelete: SetNull)
+  acknowledgedBy User?        @relation("SecurityEventAcknowledger", fields: [acknowledgedById], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, occurredAt])
+  @@index([organizationId, severity, acknowledgedAt])
+  @@index([organizationId, category, occurredAt])
+  @@index([userId, occurredAt])
+  @@map("security_events")
 }
 
 // ===========================================================================

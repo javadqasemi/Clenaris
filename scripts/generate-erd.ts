@@ -140,7 +140,12 @@ const DOMAINS: Domain[] = [
       'verbrauchten Tokens. `AuditLog` und `Consent` sind die Nachweisschicht für das ' +
       'Schweizer DSG und die DSGVO. `PublicAccessToken` ist die eine Stelle für Links, die ' +
       'ohne Anmeldung funktionieren — Offerte, Rechnung, später Signatur: nur der SHA-256-Hash ' +
-      'liegt in der Datenbank, dazu Zweck, Ressource, Ablauf und Widerruf.',
+      'liegt in der Datenbank, dazu Zweck, Ressource, Ablauf und Widerruf. ' +
+      '`SecurityEvent` steht bewusst **neben** `AuditLog` und nicht darin: Das Prüfprotokoll ' +
+      'sagt, wer welchen Datensatz geändert hat, der Sicherheitsstrom, was an Zugängen ' +
+      'geschehen ist. Ein fehlgeschlagener Anmeldeversuch ändert keinen Datensatz, und ' +
+      'Sicherheitsereignisse brauchen einen Bearbeitungszustand, den ein Protokolleintrag nicht ' +
+      'kennt.',
     models: [
       'User',
       'RefreshToken',
@@ -148,6 +153,7 @@ const DOMAINS: Domain[] = [
       'PublicAccessToken',
       'Consent',
       'AuditLog',
+      'SecurityEvent',
     ],
   },
   {
