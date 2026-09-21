@@ -421,12 +421,57 @@ export async function suggestStaffing(params: {
     driverLicense: boolean;
   }[];
 }): Promise<StaffingSuggestion> {
-  return generateStructured<StaffingSuggestion>({
+  /**
+   * Pseudonymisierung — der Grund, warum diese Funktion nicht einfach ihre
+   * Eingabe in den Prompt schreibt.
+   *
+   * Vorher standen im Prompt der **Klarname** jeder mitarbeitenden Person
+   * sowie ihre Datenbankkennung, dazu Qualifikationen, Verfügbarkeitsfenster
+   * und die bereits verplante Arbeitszeit. Das sind Personendaten eines
+   * Arbeitsverhältnisses, und sie gingen an einen Auftragsverarbeiter im
+   * Ausland — während die Dokumentation zusicherte, es würden keine
+   * personenbezogenen Daten gesendet. Beides zugleich konnte nicht stimmen.
+   *
+   * Der Ausweg ist nicht, die Funktion abzuschalten: Die Disposition braucht
+   * Qualifikation, Fenster und Auslastung, um überhaupt etwas vorschlagen zu
+   * können. Sie braucht aber **keinen Namen** — und sie braucht auch keine
+   * Datenbankkennung, denn die Antwort muss ohnehin wieder zugeordnet werden.
+   *
+   * Deshalb bekommt jede Person und jeder Einsatz für **diese eine Anfrage**
+   * ein Kürzel (`P1`, `A1`). Die Zuordnung bleibt im Prozess; beim Modell
+   * landen nur Kürzel und die fachlichen Merkmale. Das Kürzel ist ausserhalb
+   * dieser Anfrage bedeutungslos — es taugt weder zur Wiedererkennung über
+   * mehrere Anfragen hinweg noch zum Nachschlagen in unserer Datenbank.
+   *
+   * Was dadurch **nicht** verschwindet: Qualifikationen und Arbeitszeiten
+   * bleiben Merkmale realer Personen. Die Übermittlung wird damit
+   * datensparsam, nicht anonym. Wer sie ganz vermeiden will, schaltet die
+   * Funktion ab — ohne `ANTHROPIC_API_KEY` ist sie es ohnehin.
+   */
+  const personKuerzel = new Map<string, string>();
+  const personZurueck = new Map<string, string>();
+  params.employees.forEach((e, i) => {
+    const k = `P${i + 1}`;
+    personKuerzel.set(e.id, k);
+    personZurueck.set(k, e.id);
+  });
+
+  const einsatzKuerzel = new Map<string, string>();
+  const einsatzZurueck = new Map<string, string>();
+  params.jobs.forEach((j, i) => {
+    const k = `A${i + 1}`;
+    einsatzKuerzel.set(j.id, k);
+    einsatzZurueck.set(k, j.id);
+  });
+
+  const roh = await generateStructured<StaffingSuggestion>({
     system: `${SWISS_CONTEXT}
 
 Du planst die Personaleinsätze eines Reinigungsteams.
+Personen und Einsätze sind durch Kürzel bezeichnet (P1, P2 … bzw. A1, A2 …).
+Verwende in deiner Antwort ausschliesslich diese Kürzel.
 Regeln:
-- Niemand wird doppelt verplant; Einsätze desselben Teammitglieds dürfen sich nicht überschneiden.
+- Niemand wird doppelt verplant; Einsätze derselben Person dürfen sich nicht überschneiden.
 - Verfügbarkeitsfenster strikt einhalten.
 - Benötigte Qualifikationen müssen abgedeckt sein; mindestens eine Person pro Einsatz mit Führerausweis, wenn Material transportiert wird.
 - Arbeitszeit pro Person maximal 510 Minuten pro Tag (8.5 Stunden).
@@ -438,7 +483,7 @@ Einsätze:
 ${params.jobs
   .map(
     (j) =>
-      `- ${j.number} (ID ${j.id}): ${j.start}–${j.end}, ${j.crewSize} Person(en), Ort ${j.city}, Qualifikationen: ${j.requiredSkills.join(', ') || 'keine speziellen'}`,
+      `- ${einsatzKuerzel.get(j.id)}: ${j.start}–${j.end}, ${j.crewSize} Person(en), Ort ${j.city}, Qualifikationen: ${j.requiredSkills.join(', ') || 'keine speziellen'}`,
   )
   .join('\n')}
 
@@ -446,7 +491,7 @@ Verfügbares Personal:
 ${params.employees
   .map(
     (e) =>
-      `- ${e.name} (ID ${e.id}): verfügbar ${e.availableFrom}–${e.availableTo}, bereits verplant ${e.workloadMinutes} Min., Qualifikationen: ${e.skills.join(', ') || 'Grundreinigung'}, Führerausweis: ${e.driverLicense ? 'ja' : 'nein'}`,
+      `- ${personKuerzel.get(e.id)}: verfügbar ${e.availableFrom}–${e.availableTo}, bereits verplant ${e.workloadMinutes} Min., Qualifikationen: ${e.skills.join(', ') || 'Grundreinigung'}, Führerausweis: ${e.driverLicense ? 'ja' : 'nein'}`,
   )
   .join('\n')}`,
     schema: {
@@ -486,6 +531,32 @@ ${params.employees
     toolDescription: 'Schlägt eine Personalzuteilung für die Einsätze eines Tages vor.',
     effort: 'high',
   });
+
+  /**
+   * Rückübersetzung. Ein Kürzel, das wir nicht vergeben haben, wird
+   * **verworfen** statt durchgereicht: Das Modell kann sich eines ausdenken,
+   * und eine erfundene Kennung, die als Datensatzbezug weiterwandert, wäre
+   * schlimmer als ein fehlender Vorschlag. Ein Einsatz, dessen Kürzel nicht
+   * auflösbar ist, entfällt; eine Person, deren Kürzel nicht auflösbar ist,
+   * wird aus der Zuteilung entfernt.
+   */
+  const einsatz = (k: string) => einsatzZurueck.get(k.trim());
+
+  return {
+    assignments: roh.assignments.flatMap((a) => {
+      const jobId = einsatz(a.jobId);
+      if (!jobId) return [];
+      const employeeIds = a.employeeIds
+        .map((k) => personZurueck.get(k.trim()))
+        .filter((id): id is string => Boolean(id));
+      return employeeIds.length > 0 ? [{ jobId, employeeIds, reason: a.reason }] : [];
+    }),
+    unassigned: roh.unassigned.flatMap((u) => {
+      const jobId = einsatz(u.jobId);
+      return jobId ? [{ jobId, reason: u.reason }] : [];
+    }),
+    summary: roh.summary,
+  };
 }
 
 // ---------------------------------------------------------------------------

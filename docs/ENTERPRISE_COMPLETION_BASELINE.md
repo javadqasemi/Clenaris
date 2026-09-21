@@ -201,4 +201,54 @@ Stufe C — braucht die V2-/Staging-Umgebung
 
 ---
 
+---
+
+## 10. Wave 1 — Sicherheitshärtung (Stand 2026-09-21)
+
+### Gemeldet waren sechs Punkte. Drei Befunde stimmten nicht.
+
+| Punkt | Nachprüfung am Code | Ergebnis |
+|---|---|---|
+| Zuteilung nicht protokolliert | `job.service.ts:479` (`moveJob`) und `:546` (`assignJob`) schreiben `audit.updated` | **Fehlbefund.** Gemessen worden war `assignment.service.ts` — das ist die *Entscheidungs*stelle (Eignungsprüfung), nicht die Mutation. Ein lesender Prüfschritt hat nichts zu protokollieren. |
+| Objektänderungen nicht protokolliert | `properties/route.ts:164` (`audit.created`), `properties/[id]/route.ts:122` (`audit.updated` mit `diff`), Löschen über `trash.service` | **Fehlbefund.** Dieselbe Ursache: `property.service.ts` enthält nur Sichtbarkeitshelfer. |
+| Alarmcode-Änderung nicht nachvollziehbar | `diff()` redigiert `alarmCode`; die **Tatsache** der Änderung erscheint, der Wert nicht | **Fehlbefund** — und die vorhandene Lösung ist besser als die geforderte. |
+| **Ausstellung öffentlicher Zugangslinks nicht protokolliert** | `issuePublicToken` schrieb nur die Tokenzeile | **Echt. Behoben.** |
+| **Benachrichtigungsendpunkte ohne Rate-Limit** | vier Routen ohne `rateLimit` | **Echt. Behoben.** |
+| **KI sendet Personendaten** | `suggestStaffing` sendete Klarnamen und Datenbankkennungen | **Echt. Behoben.** |
+
+**Lehre für diese Mission:** Eine Aussage über Protokollabdeckung darf sich nicht an der Dateiablage orientieren, sondern muss dem Aufrufpfad folgen. Die Prüfungen in `tests/api/protokoll-und-schranken.test.ts` fragen deshalb den Code, nicht die Ordnerstruktur.
+
+### Umgesetzt
+
+| Änderung | Datei | Wirkung |
+|---|---|---|
+| Rate-Limit für alle vier Benachrichtigungsendpunkte | `src/app/api/notifications/**` | `apiRead` für Lesen, `apiWrite` für Schreiben. Es waren die einzigen angemeldeten Endpunkte ohne Schranke |
+| Protokolleintrag bei Ausstellung eines Zugangslinks | `access-token.service.ts` | Zweck, Ressource, Frist, Verwendungsgrenze — **ohne** rohen Token und ohne Hash |
+| Kennungen der zugeteilten Personen im Protokoll | `job.service.ts` (`assignJob`) | „an 3 Person(en) zugeteilt" beantwortete nicht, *wer*; die Zuteilung wird beim Umdisponieren überschrieben |
+| Pseudonymisierung im KI-Personalvorschlag | `src/lib/ai/features.ts` | Kürzel `P1…`/`A1…` je Anfrage; weder Name noch Datenbankkennung verlassen das System; unbekannte Kürzel in der Antwort werden verworfen |
+
+### Neuer Befund, grösser als gemeldet
+
+**Die Automatisierungs-Regelmaschine existiert nicht.** `Automation` lässt sich über `/admin/einstellungen` anlegen, ändern und löschen (`operations-admin.service.ts`), und `AutomationTrigger` kennt 20 Auslöser — aber **kein Codepfad liest die Regeln, um sie auszuführen**. `AutomationRun` wird nie geschrieben; das Modell erscheint ausschliesslich als Ziel der Datenbereinigung.
+
+Die fest verdrahteten Cron-Aufgaben in `automation.service.ts` (Terminerinnerungen, Bewertungsanfragen, Geburtstagsgrüsse) tun Ähnliches, ignorieren die konfigurierten Regeln aber vollständig.
+
+Damit ist „Automatisierungen" eine Oberfläche ohne Wirkung — ein **FRONTEND ONLY**-Merkmal, das eine Zusage macht, die das System nicht einlöst. Das ist eine Regelmaschine und gehört nach **Wave 6** (Hintergrundjobs), nicht in eine Sicherheitskorrektur. Bis dahin ist die Einstufung in der Matrix zu korrigieren.
+
+### Verifikation nach Wave 1
+
+| Prüfung | Ergebnis |
+|---|---|
+| `npm run typecheck` | ✅ |
+| `npm run lint` | ✅ |
+| `npm run build` | ✅ |
+| `npm run docs` | ✅ 401 Endpunkte, Schutz stimmt überein, erzeugte Dateien unverändert |
+| `npm test` | ✅ **878 Prüfungen, 876 bestanden, 0 Fehlschläge**, 2 übersprungen |
+| `npm run e2e` | ✅ **20 / 20** |
+| CI-Reihenfolge (`npm test` → `npm run e2e`, ein Server) | ✅ nachgestellt und grün |
+
+> **Ein Zwischenbefund, der festgehalten gehört:** Ein erster E2E-Lauf meldete 19/20 mit einem Hydrationsfehler. Ursache war **nicht** die Änderung, sondern erschöpfte Rate-Limit-Zähler aus einem zusätzlichen Zwischenlauf gegen denselben Server. Mit frisch gestartetem Server und in der exakten CI-Reihenfolge läuft alles grün. Die Zähler liegen als Dateien in `CLENARIS_TEST_CACHE_DIR` und werden beim Serverstart geleert — wer zwei volle Reihen gegen denselben Prozess fährt, muss damit rechnen.
+
+---
+
 *Diese Datei wird nach jeder Wave fortgeschrieben.*

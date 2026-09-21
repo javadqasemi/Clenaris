@@ -3,6 +3,7 @@ import 'server-only';
 import type { PublicAccessToken, PublicTokenPurpose } from '@prisma/client';
 
 import { prisma, type Tx } from '@/lib/db';
+import { audit } from '@/lib/audit';
 import { NotFoundError } from '@/lib/errors';
 import { randomToken } from '@/lib/auth/jwt';
 import { legacyTokensAllowed, purposesSatisfying } from '@/lib/auth/public-token-policy';
@@ -152,6 +153,40 @@ export async function issuePublicToken(params: {
       expiresAt,
       maxUses: params.maxUses ?? null,
     },
+  });
+
+  /**
+   * Die Ausstellung gehört ins Prüfprotokoll — sie ist eine Zugangsgewährung.
+   *
+   * Bis hierher stand sie nur in der Tokenzeile selbst (`createdById`,
+   * `createdAt`). Das genügt für die Frage „wer hat diesen Link erzeugt",
+   * nicht aber für die Frage, die im Ernstfall gestellt wird: *welche
+   * Zugänge sind in den letzten Tagen überhaupt vergeben worden?* Die
+   * Tokenzeile verschwindet zudem mit der nächtlichen Bereinigung
+   * (`cleanupExpiredTokens`); der Protokolleintrag bleibt.
+   *
+   * **Was hier bewusst nicht steht: der rohe Token.** Er ist der Zugang. Ein
+   * Prüfprotokoll, das ihn enthielte, wäre selbst ein Schlüsselbund — und es
+   * wird von anderen Personen gelesen als denen, die den Link bekommen
+   * sollten. Protokolliert werden Zweck, Ressource und Frist; das reicht, um
+   * eine Vergabe zu erkennen, und nicht, um sie zu benutzen.
+   *
+   * Der Eintrag entsteht **ausserhalb** einer etwaigen Transaktion — das ist
+   * die Regel dieses Moduls (`src/lib/audit.ts`). Für eine Zugangsgewährung
+   * ist die Richtung des Irrtums die richtige: Ein Eintrag zu einer
+   * zurückgerollten Ausstellung führt zu einer überflüssigen Nachfrage, ein
+   * fehlender Eintrag zu einer unbemerkten Vergabe.
+   */
+  await audit.created({
+    organizationId: params.organizationId,
+    userId: params.createdById ?? null,
+    entity: 'PublicAccessToken',
+    entityId: record.id,
+    summary:
+      `Zugangslink ausgestellt — Zweck ${params.purpose}, ` +
+      `Ressource ${PURPOSE_RESOURCE[params.purpose]} ${params.resourceId}, ` +
+      `gültig bis ${expiresAt.toISOString().slice(0, 10)}` +
+      (params.maxUses ? `, höchstens ${params.maxUses} Verwendung(en)` : ''),
   });
 
   return { raw, record };

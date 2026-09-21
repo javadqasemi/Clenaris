@@ -543,12 +543,28 @@ export async function assignJob(params: {
     await notifyAssignees(job.id, params.employeeIds);
   }
 
+  /**
+   * Die Kennungen der zugeteilten Personen gehören in den Eintrag, nicht nur
+   * ihre Anzahl.
+   *
+   * „an 3 Person(en) zugeteilt" beantwortet die Frage nicht, die im Ernstfall
+   * gestellt wird: *Wer* war an diesem Tag auf diesem Objekt? Diese Frage
+   * stellt sich bei einem Schadenfall, bei einem Schlüsselverlust und bei
+   * jeder arbeitsrechtlichen Auseinandersetzung — und die Zuteilung selbst
+   * wird beim nächsten Umdisponieren überschrieben (`deleteMany` oben). Ohne
+   * die Kennungen im Protokoll ist der frühere Stand danach nicht mehr
+   * rekonstruierbar.
+   *
+   * Kennungen und nicht Namen: Der Name steht in der Personalakte und ändert
+   * sich; die Kennung ist stabil und verrät für sich genommen nichts.
+   */
   await audit.updated({
     organizationId: params.organizationId,
     userId: params.actorId,
     entity: 'Job',
     entityId: job.id,
     summary: `Einsatz ${job.number} an ${params.employeeIds.length} Person(en) zugeteilt`,
+    changes: { employeeIds: params.employeeIds, role: params.role ?? 'MEMBER' },
   });
 }
 
