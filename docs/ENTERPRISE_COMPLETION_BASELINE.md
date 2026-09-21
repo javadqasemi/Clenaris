@@ -626,4 +626,123 @@ darüber, ob ein Angriff auffällt.
 
 ---
 
+## 15. Wave 6 — Hintergrundarbeit und Automatisierungsmaschine (Stand 2026-09-21)
+
+Zwei MISSING-Punkte: **#7 Hintergrundwarteschlange** und **#12
+`AutomationRun` wird nie geschrieben**. Der zweite war der ernstere, und er ist
+in Abschnitt 10 dieser Datei als „Oberfläche ohne Wirkung" festgehalten worden.
+
+### Der Befund, noch einmal
+
+`Automation`, `AutomationAction` und `AutomationRun` standen seit der ersten
+Migration im Schema. Es gab eine Oberfläche zum Anlegen von Regeln und einen
+Dienst, der sie verwaltete. **`automation_runs` wurde von keinem Codepfad je
+beschrieben.**
+
+Die schlechteste Form einer Lücke: keine fehlende Funktion, sondern eine
+Zusage, die das System nicht einlöst. Wer eine Regel anlegt, sieht sie aktiv in
+der Liste und verlässt sich darauf, dass die Erinnerung hinausgeht.
+
+### Was gebaut wurde
+
+| Teil | Kern |
+|---|---|
+| `automation/conditions.ts` | Tabelle aus Feldnamen und Vergleichen — keine Ausdruckssprache, kein `regex`, kein „oder" |
+| `automation/template.ts` | Platzhalter ersetzen, nicht auswerten; HTML maskiert |
+| `automation/webhook.ts` | SSRF-Prüfung über die **aufgelöste** Adresse |
+| `validation/automation-config.ts` | Schema je Aktionsart, Erlaubnisliste der Statuswerte |
+| `automation-engine.service.ts` | Auslöser, Lader je Ressourcenart, Lauf, sieben Aktionen |
+| Neun Auslöser in fünf Diensten | Buchung, Offerte, Rechnung, Einsatz, Anfrage |
+| `/api/cron/hourly` + `daily` | Fällige Läufe in beiden Takten |
+| Migration `…_versuche` | `attempts` — additiv |
+
+### Fünf Entscheidungen
+
+**Zwei Hälften, getrennt durch die Zeit.** Der Auslöser legt nur den Lauf an;
+ausgeführt wird er aus dem Scheduler. Die einzige Bauart, die mit
+`delayMinutes` verträglich ist — und sie sorgt nebenbei dafür, dass **eine
+Automatisierung keinen Geschäftsvorgang scheitern lassen kann**.
+
+**Der Zustand wird beim Ausführen neu geladen.** Zwischen Auslöser und
+Ausführung können Tage liegen; ohne die zweite Bedingungsprüfung ginge die
+Erinnerung an einen abgesagten Termin hinaus. Nebenbei liegt so keine Sammlung
+von Personendaten in einer Json-Spalte.
+
+**Die Nutzlast ist bewusst schmal.** Was dort nicht steht, kann eine Regel
+nicht verschicken — und beim Webhook ist die Nutzlast der Rumpf.
+
+**`UPDATE_STATUS` hat eine Erlaubnisliste, und nichts Finanzielles steht
+darin.** Ohne sie hiesse die Aktion „schreibe in ein beliebiges Feld eines
+beliebigen Datensatzes einen beliebigen Wert". Zusätzlich darf eine Regel nur
+den Datensatz ändern, der sie ausgelöst hat.
+
+**`AI_GENERATE` ist ausdrücklich nicht umgesetzt.** Ein Maschinentext, der
+ungelesen an die Kundschaft geht, ist genau das, was `docs/bi/` für den
+Assistenten ausschliesst. Der Weg dahin führt über eine Aufgabe, die jemand
+liest — und den gibt es als `CREATE_TASK`.
+
+### Die SSRF-Lücke, die bleibt
+
+Zwischen der Adressprüfung und der Auflösung, die `fetch` selbst vornimmt,
+liegt ein Moment. Wer den DNS-Eintrag in diesem Moment ändert, umgeht die
+Prüfung. Vollständig schliessen liesse sich das nur, indem die geprüfte Adresse
+direkt angewählt wird — dann passt der Name im TLS-Handschlag nicht mehr.
+
+**Benannt statt verschwiegen** (`docs/AUTOMATION.md` §7). Davor liegen
+`automation:update`, nur `https`, keine Weiterleitungen, Zeitlimit und
+Grössengrenze; wer es enger will, setzt `AUTOMATION_WEBHOOK_HOSTS`.
+
+### Zwei Fehler, die diese Wave gefunden hat
+
+**Ein Produktfehler in der Buchung.** `createAddress` setzte `isDefault` und
+`isBilling` bedingungslos auf `true`. Wer dreimal mit einer neuen Adresse
+buchte, hatte danach **drei** Standard- und drei Rechnungsadressen — während
+die Adressverwaltung genau eine erzwingt. Das ist nicht nur Unordnung:
+`invoice.service.ts` holt die Rechnungsadresse mit `take: 1` **ohne
+Sortierung**, der Rechnungsempfänger wäre also von Lauf zu Lauf ein anderer
+gewesen. Aufgefallen, weil die neue Prüfreihe Buchungen mit Adresse erfasst und
+`addresses.test.ts` danach drei Standardadressen fand.
+
+**Ein Auskunftsfehler im Tageslauf.** Aufgaben und Bezeichnungen standen in
+zwei Feldern, die über den Index zusammenfanden — elf Läufe, zehn
+Bezeichnungen. Der letzte (`runSignatureNightly`) landete unter dem Schlüssel
+`undefined`; wäre er gescheitert, hätte die Antwort eine fehlgeschlagene
+Aufgabe namens „undefined" gemeldet. Der Fehler machte nichts kaputt, er nahm
+nur die Auskunft weg — ausgerechnet über den Lauf, der Vorgänge abschliesst.
+
+### Und zwei eigene Prüfungen, die zu schwach waren
+
+Zwei Fälle in `sicherheitszentrum.test.ts` zählten Treffer **innerhalb einer
+Seite** von 200 Einträgen und verglichen vorher/nachher. Das ging gut, solange
+der Strom kürzer als eine Seite war, und schlug fehl, sobald er darüber
+hinauswuchs: Der neue Eintrag steht vorn, verdrängt aber den ältesten — und war
+der auch ein Fehlversuch, bleibt die Zahl gleich.
+
+Eine Prüfung, die von der Länge des Bestands abhängt, misst den Bestand und
+nicht die Sache. Jetzt über `gesamt` (ein `count` über die ganze Abfrage) und
+über den `userId`-Filter.
+
+### Offen — bewusst verschoben
+
+| Punkt | Wohin | Warum |
+|---|---|---|
+| Zeitbezogene Auslöser als Regeln (`*_REMINDER_*`, `QUOTE_EXPIRING`, `CUSTOMER_BIRTHDAY`) | später | Sie bezeichnen keinen Zustandsübergang, sondern einen Zeitpunkt. Für die häufigsten gibt es die festen Läufe; sie durch Regeln zu ersetzen ist eine eigene Änderung mit eigenem Nachweis |
+| Ansicht der Läufe in der Oberfläche | später | Der Schreibpfad ist die Zusage, die fehlte. Die Ansicht ist eine Bequemlichkeit |
+| Minutengenauigkeit | Betriebsentscheidung | Verlangt einen eigenen Arbeitsprozess |
+| `ACCESS_DENIED` als Zähler je Konto | **entfällt** | Aus Wave 3/5 übernommen und hier entschieden: Ein Zähler je Konto ist dieselbe Mengenfalle wie eine Zeile je geratenem Zugangslink. Die 4xx-Quote je Route (Wave 5) beantwortet die betriebliche Hälfte; die personenbezogene wird nicht gebaut |
+
+### Verifikation nach Wave 6
+
+| Prüfung | Ergebnis |
+|---|---|
+| `npm run typecheck` | ✅ |
+| `npm run lint` | ✅ (ganzes Projekt) |
+| `npm run build` | ✅ |
+| `npm run docs` | ✅ 406 Endpunkte, Schutz stimmt überein |
+| Migration | ✅ additiv (`attempts`), keine Rückfüllung nötig — es gab keine Zeilen |
+| `npm test` (auf **frischer** Testdatenbank) | ✅ **1021 Prüfungen, 1018 bestanden, 0 Fehlschläge**, 3 übersprungen |
+| `npm run e2e` | ✅ **20 / 20** |
+
+---
+
 *Diese Datei wird nach jeder Wave fortgeschrieben.*

@@ -24,22 +24,22 @@ Spalten `FE` (Frontend), `BE` (Backend), `DB`, `RBAC`, `SEC` (eigener Sicherheit
 
 ## Gesamtverteilung
 
-*Stand nach Wave 5 (2026-09-21). Änderungen gegenüber der Erstfassung sind unten begründet. Die Anteile sind gerundet und summieren sich deshalb auf 99 %.*
+*Stand nach Wave 6 (2026-09-21). Änderungen gegenüber der Erstfassung sind unten begründet; die Anteile sind gerundet.*
 
 | Status | Anzahl | Anteil |
 |---|---|---|
-| COMPLETE + VERIFIED | **88** | 48 % |
+| COMPLETE + VERIFIED | **91** | 50 % |
 | COMPLETE | **56** | 31 % |
 | COMPLETE / EXTERNAL VERIFICATION REQUIRED | **6** | 3 % |
-| PARTIAL | **19** | 10 % |
+| PARTIAL | **20** | 11 % |
 | BACKEND ONLY | **2** | 1 % |
 | FRONTEND ONLY | **1** | 1 % |
-| SCHEMA ONLY | **4** | 2 % |
-| NOT IMPLEMENTED | **6** | 3 % |
-| **Summe** | **182** | |
+| SCHEMA ONLY | **3** | 2 % |
+| NOT IMPLEMENTED | **5** | 3 % |
+| **Summe** | **184** | |
 
-**Technisch nutzbar (C+V oder C): 144 von 182 = 79 %.**
-**Durch Tests belegt: 88 von 182 = 48 %.**
+**Technisch nutzbar (C+V oder C): 147 von 184 = 80 %.**
+**Durch Tests belegt: 91 von 184 = 49 %.**
 
 ### Änderungen in Wave 0
 
@@ -82,6 +82,14 @@ Spalten `FE` (Frontend), `BE` (Backend), `DB`, `RBAC`, `SEC` (eigener Sicherheit
 |---|---|
 | **INF-008: NI → PARTIAL** | Anfragekennung, Kennzahlen je Endpunkt, `/api/metrics`. **Nicht C**, weil Alarmierung und eine Zeitreihe über Neustarts hinweg einen Sammler brauchen — und der ist eine Betriebsentscheidung, keine Codelücke. Die Abgrenzung steht in `docs/OBSERVABILITY.md` §1, damit sie nicht später als Versäumnis gelesen wird. |
 | **SEC-026, SEC-027 neu: C+V** | Kennung und Kennzahlen sind getrennt geführt, weil sie Verschiedenes leisten: Die eine verbindet Protokollzeilen einer Anfrage, die andere beantwortet „wie oft und wie lange". Beide sitzen in der Handlerfabrik — der einen Stelle, durch die jeder Endpunkt läuft. |
+
+### Änderungen in Wave 6
+
+| Änderung | Begründung |
+|---|---|
+| **OPS-010 war zu gut bewertet** | Die Zeile stand auf **C** mit `automation.service.ts` als Beleg — aber der enthält die **fest verdrahteten** Tagesaufgaben, nicht die Regeln, die Benutzer anlegen. Die beiden sind jetzt getrennt (OPS-010 Regeln, OPS-012 feste Läufe), und die Bewertung stimmt wieder. Dass die Baseline dasselbe Merkmal als **FRONTEND ONLY** führte, war der Widerspruch, der die Wave ausgelöst hat. |
+| **OPS-011: SO → C+V** | `automation_runs` wurde von keinem Codepfad je beschrieben. Jetzt: Schreibpfad, Beanspruchung in der `where`-Klausel, drei Versuche mit wachsendem Abstand, Ergebnis je Aktion. |
+| **INF-009: NI → PARTIAL** | `AutomationRun` **ist** die Warteschlange — mit Beanspruchung, Wiederholung, Obergrenze und Entkopplung. Was fehlt, ist Minutengenauigkeit, und die verlangt einen eigenen Arbeitsprozess. Das ist eine Betriebsentscheidung und kein Codemangel. |
 
 ---
 
@@ -334,8 +342,9 @@ Spalten `FE` (Frontend), `BE` (Backend), `DB`, `RBAC`, `SEC` (eigener Sicherheit
 | OPS-007 | Öffnungszeiten und Feiertage | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | – | **C+V** | `crud-audit.test.ts` | – |
 | OPS-008 | Papierkorb (7 Datensatzarten) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | – | **C+V** | `trash.service.ts`, `crud-audit.test.ts` | – |
 | OPS-009 | Datenbereinigung (`data:purge`) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | – | **C+V** | `purge.service.ts`, `purge.test.ts` (7) | – |
-| OPS-010 | Automatisierungen | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | – | **C** | `automation.service.ts`, `website-ops.test.ts` | Protokollierung |
-| OPS-011 | Automatisierungsprotokoll (`AutomationRun`) | – | – | ✓ | – | – | – | – | **SO** | nur als Bereinigungsziel | Schreibpfad, Ansicht |
+| OPS-010 | Automatisierungsregeln (Auslöser → Bedingungen → Aktionen) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | – | **C+V** | `automation-engine.service.ts`, 9 angeschlossene Zustandsübergänge, `automatisierungen.test.ts` (36) | Zeitbezogene Auslöser (`*_REMINDER_*`, `QUOTE_EXPIRING`, `CUSTOMER_BIRTHDAY`) — heute als feste Läufe in `automation.service.ts` |
+| OPS-011 | Automatisierungsprotokoll (`AutomationRun`) | – | ✓ | ✓ | – | ✓ | ✓ | – | **C+V** | Schreibpfad, Beanspruchung über die `where`-Klausel, drei Versuche mit wachsendem Abstand, Ergebnis je Aktion | Ansicht in der Oberfläche |
+| OPS-012 | Feste Tagesabläufe (Erinnerungen, Bewertungen, Geburtstage) | – | ✓ | ✓ | – | – | ○ | – | **C** | `automation.service.ts`, `/api/cron/*` | eigene Prüfungen |
 
 ---
 
@@ -365,7 +374,7 @@ Spalten `FE` (Frontend), `BE` (Backend), `DB`, `RBAC`, `SEC` (eigener Sicherheit
 | INF-006 | Wiederherstellungsprobe mit Namensschutz | – | ✓ | ✓ | – | ✓ | ✓ | – | **C+V** | `db-restore-verify.ts` | echter Produktionslauf |
 | INF-007 | Health-Endpunkt mit Commit-Abgleich | – | ✓ | ✓ | – | ✓ | ✓ | – | **C** | `/api/health`, `APP_VERSION` | – |
 | INF-008 | Beobachtbarkeit (Fehlerverfolgung, Alarm) | – | ✓ | – | ✓ | ✓ | ✓ | – | **P** | Seit Wave 5: Anfragekennung, Kennzahlen je Endpunkt, `/api/metrics`, `/api/health`. **Kein Anbieter** — das ist die Abgrenzung, nicht die Lücke (`docs/OBSERVABILITY.md` §1) | Alarmierung und Zeitreihe über Neustarts hinweg brauchen einen Sammler — Betriebsentscheidung |
-| INF-009 | Warteschlange für Hintergrundarbeit | – | – | – | – | – | – | – | **NI** | alles im Cron-Request | Wiederholung, Entkopplung |
+| INF-009 | Warteschlange für Hintergrundarbeit | – | ✓ | ✓ | – | ✓ | ✓ | – | **P** | `AutomationRun` **ist** die Warteschlange: Beanspruchung in der `where`-Klausel, Wiederholung mit wachsendem Abstand, Obergrenze je Lauf, Entkopplung vom Geschäftsvorgang. Angetrieben vom Scheduler | Ein eigener Arbeitsprozess brächte Minutengenauigkeit — Betriebsentscheidung, kein Codemangel (`docs/AUTOMATION.md` §10) |
 | INF-010 | Cloudflare- und Firewall-Topologie | – | – | – | – | ○ | – | – | **NI** | `TRUSTED_PROXY_MODE` vorbereitet | V2-Server |
 
 ---
