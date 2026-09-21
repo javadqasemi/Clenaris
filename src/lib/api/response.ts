@@ -5,6 +5,7 @@ import { Prisma } from '@prisma/client';
 import { type AppError, isAppError } from '@/lib/errors';
 import { serialize } from '@/lib/db';
 import { logger } from '@/lib/logger';
+import { aktuelleRequestId } from '@/lib/observability/context';
 
 const log = logger('api');
 
@@ -140,11 +141,32 @@ export function toErrorResponse(error: unknown): NextResponse {
   }
 
   log.error('Unbehandelter Fehler', { error });
+
+  /**
+   * Die Anfragekennung **im Rumpf**, nicht nur in der Kopfzeile.
+   *
+   * Die Kopfzeile `X-Request-Id` steht an jeder Antwort, aber niemand liest
+   * Kopfzeilen, wenn etwas schiefgeht — man sieht die Fehlermeldung auf dem
+   * Bildschirm und schreibt eine Nachricht. Steht die Kennung in der Meldung,
+   * steht sie in dieser Nachricht, und aus „bei mir kam ein Fehler, so gegen
+   * halb drei" wird ein Filter über das Protokoll.
+   *
+   * Sie verrät nichts: eine Zufalls-UUID, die nur für diese eine Anfrage gilt
+   * und nirgends als Zugang taugt. Genau deshalb steht sie **nur** hier und
+   * nicht bei den übrigen Fehlern — ein abgelehnter Zugriff oder eine
+   * ungültige Eingabe braucht keine Nachforschung, und eine Kennung an jeder
+   * Absage lädt dazu ein, sie irgendwo zu sammeln.
+   */
+  const rid = aktuelleRequestId();
+
   return NextResponse.json(
     {
       error: {
         code: 'INTERNAL_ERROR',
-        message: 'Es ist ein unerwarteter Fehler aufgetreten.',
+        message: rid
+          ? `Es ist ein unerwarteter Fehler aufgetreten. Kennung: ${rid}`
+          : 'Es ist ein unerwarteter Fehler aufgetreten.',
+        ...(rid ? { requestId: rid } : {}),
       },
     },
     { status: 500 },
