@@ -76,6 +76,14 @@ export const invoiceListQuery = searchQuery.extend({
     ])
     .optional(),
   customerId: cuidSchema.optional(),
+  /**
+   * Nur Rechnungen aus diesem Vertrag.
+   *
+   * Ohne diesen Filter liesse sich „was wurde aus diesem Vertrag schon
+   * fakturiert" nur beantworten, indem man die ganze Rechnungsliste durchsieht
+   * — bei einem Vertrag über Jahre also gar nicht.
+   */
+  contractId: cuidSchema.optional(),
   from: z.coerce.date().optional(),
   to: z.coerce.date().optional(),
 });

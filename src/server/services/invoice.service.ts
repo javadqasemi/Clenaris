@@ -107,6 +107,23 @@ export async function createInvoice(params: {
   organizationId: string;
   input: CreateInvoiceInput;
   actorId: string;
+  /**
+   * Herkunft aus einem Vertrag — gesetzt ausschliesslich vom
+   * Vertragsrechnungsdienst.
+   *
+   * Bewusst **kein** Teil von `CreateInvoiceInput`: Die Felder stehen damit
+   * nicht in der Zod-Eingabe und sind über `POST /api/invoices` nicht
+   * erreichbar. Sonst könnte eine von Hand erfasste Rechnung eine
+   * Abrechnungsperiode für sich beanspruchen, die der Serienlauf später
+   * braucht — und der Teilindex würde den regulären Lauf abweisen statt der
+   * Falscheingabe.
+   */
+  vertrag?: {
+    contractId: string;
+    contractVersionId: string;
+    /** Kanonischer Periodenbeginn — der Schlüssel gegen Doppelabrechnung. */
+    contractPeriodStart: Date;
+  };
 }): Promise<Invoice> {
   const customer = await prisma.customer.findFirst({
     where: { id: params.input.customerId, organizationId: params.organizationId, deletedAt: null },
@@ -142,6 +159,9 @@ export async function createInvoice(params: {
         customerId: customer.id,
         bookingId: params.input.bookingId ?? null,
         quoteId: params.input.quoteId ?? null,
+        contractId: params.vertrag?.contractId ?? null,
+        contractVersionId: params.vertrag?.contractVersionId ?? null,
+        contractPeriodStart: params.vertrag?.contractPeriodStart ?? null,
         status: params.input.issueImmediately ? 'ISSUED' : 'DRAFT',
         issueDate,
         dueDate,
@@ -789,6 +809,7 @@ export async function listInvoices(filter: {
   organizationId: string;
   status?: Invoice['status'];
   customerId?: string;
+  contractId?: string;
   from?: Date;
   to?: Date;
   q?: string;
@@ -802,6 +823,7 @@ export async function listInvoices(filter: {
     deletedAt: null,
     ...(filter.status ? { status: filter.status } : {}),
     ...(filter.customerId ? { customerId: filter.customerId } : {}),
+    ...(filter.contractId ? { contractId: filter.contractId } : {}),
     ...(filter.from || filter.to
       ? {
           issueDate: {
