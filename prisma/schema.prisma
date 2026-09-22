@@ -2473,6 +2473,24 @@ model Invoice {
   bookingId  String?
   quoteId    String?
 
+  /**
+   * Herkunft aus einem Vertrag (Wave 10).
+   *
+   * Alle drei zusammen, und der dritte ist der wichtige:
+   * `contractPeriodStart` ist der **kanonische** Beginn der Abrechnungsperiode
+   * (Monatserster, Quartalsbeginn, …), berechnet aus dem Zyklus der
+   * Vertragsversion. Er ist zugleich der Schlüssel gegen Doppelabrechnung —
+   * ein frei gewählter Zeitraum wäre keiner, weil sich beliebig viele
+   * überlappende „Perioden" bilden liessen.
+   *
+   * `contractVersionId` hält fest, unter welchen Konditionen fakturiert
+   * wurde. Ohne ihn liesse sich eine Rechnung nach der ersten Preisanpassung
+   * nicht mehr nachrechnen.
+   */
+  contractId          String?
+  contractVersionId   String?
+  contractPeriodStart DateTime? @db.Date
+
   status InvoiceStatus @default(DRAFT)
 
   issueDate  DateTime  @db.Date
@@ -2530,6 +2548,8 @@ model Invoice {
   customer     Customer     @relation(fields: [customerId], references: [id], onDelete: Restrict)
   booking      Booking?     @relation(fields: [bookingId], references: [id], onDelete: SetNull)
   quote        Quote?       @relation(fields: [quoteId], references: [id], onDelete: SetNull)
+  contract        Contract?        @relation(fields: [contractId], references: [id], onDelete: SetNull)
+  contractVersion ContractVersion? @relation(fields: [contractVersionId], references: [id], onDelete: SetNull)
 
   items       InvoiceItem[]
   payments    Payment[]
@@ -2542,6 +2562,7 @@ model Invoice {
   @@index([organizationId, status, dueDate])
   @@index([customerId])
   @@index([issueDate])
+  @@index([contractId, contractPeriodStart])
   @@map("invoices")
 }
 
@@ -5575,6 +5596,7 @@ model Contract {
   amendments       ContractAmendment[]
   priceAdjustments ContractPriceAdjustment[]
   jobs             Job[]
+  invoices         Invoice[]
   files            FileAsset[]
   activities       Activity[]
 
@@ -5656,6 +5678,28 @@ model ContractVersion {
   terms        String?
   internalNote String?
 
+  /**
+   * Die elektronische Annahme dieser Fassung (Wave 10, § 12).
+   *
+   * Unterzeichnet wird immer eine **konkrete Fassung**, nie „der Vertrag".
+   * `acceptedRequestId` zeigt auf den abgeschlossenen Signaturvorgang und ist
+   * eindeutig: Ein Vorgang gehört zu genau einer Fassung und umgekehrt. Damit
+   * lässt sich der Beweis in beide Richtungen führen — vom Protokoll zur
+   * Fassung und von der Fassung zum Protokoll.
+   *
+   * Die Spalte ist zugleich die Sperre: Eine angenommene Fassung ist
+   * unveränderlich, und der Dienst prüft das in der `where`-Klausel, nicht in
+   * der Anzeige. Ohne sie müsste jede Änderung erst Signaturvorgänge
+   * durchsuchen — und ein vergessener Aufruf wäre eine stille Änderung an
+   * etwas, das jemand unterschrieben hat.
+   *
+   * **Keine Rechtsbehauptung.** `acceptedAt` sagt, dass ein Vorgang über den
+   * Signaturkern abgeschlossen wurde. Welche Beweiskraft das hat, sagt es
+   * nicht; QES und ZertES behauptet das Produkt nirgends.
+   */
+  acceptedAt        DateTime? @db.Timestamptz(6)
+  acceptedRequestId String?   @unique
+
   createdById String?
   createdAt   DateTime @default(now()) @db.Timestamptz(6)
   updatedAt   DateTime @updatedAt @db.Timestamptz(6)
@@ -5663,6 +5707,7 @@ model ContractVersion {
   contract Contract          @relation(fields: [contractId], references: [id], onDelete: Cascade)
   services ContractService[]
   jobs     Job[]
+  invoices Invoice[]
   signatureRequests SignatureRequest[]
   amendmentsFrom ContractAmendment[] @relation("AmendmentPreviousVersion")
   amendmentsTo   ContractAmendment[] @relation("AmendmentNewVersion")

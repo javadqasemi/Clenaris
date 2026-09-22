@@ -4,7 +4,7 @@
 > Diagramme sind damit nie älter als das Schema. Prosa und Bereichseinteilung
 > stehen in `scripts/generate-erd.ts`.
 
-**126 Modelle, 94 Aufzählungstypen, 2402 Felder.**
+**126 Modelle, 94 Aufzählungstypen, 2411 Felder.**
 PostgreSQL 16+; alle Zeitstempel als `timestamptz` in UTC, Anzeige in Europe/Zurich.
 
 ## Vier Entscheidungen, die das ganze Schema prägen
@@ -748,8 +748,8 @@ erDiagram
 
 | Modell | Tabelle | Felder | Zweck |
 | --- | --- | --- | --- |
-| `Contract` | `contracts` | 41 | – |
-| `ContractVersion` | `contract_versions` | 39 | – |
+| `Contract` | `contracts` | 42 | – |
+| `ContractVersion` | `contract_versions` | 42 | – |
 | `ContractService` | `contract_services` | 21 | – |
 | `ServiceSchedule` | `service_schedules` | 18 | – |
 | `ScheduleException` | `schedule_exceptions` | 9 | – |
@@ -880,8 +880,8 @@ erDiagram
     String customerId
     String bookingId
     String quoteId
-    InvoiceStatus status
-    DateTime issueDate
+    String contractId
+    String contractVersionId
   }
   InvoiceItem {
     String id PK
@@ -961,7 +961,7 @@ erDiagram
 
 | Modell | Tabelle | Felder | Zweck |
 | --- | --- | --- | --- |
-| `Invoice` | `invoices` | 56 | – |
+| `Invoice` | `invoices` | 61 | – |
 | `InvoiceItem` | `invoice_items` | 16 | – |
 | `Payment` | `payments` | 21 | – |
 | `PaymentReminder` | `payment_reminders` | 8 | – |
