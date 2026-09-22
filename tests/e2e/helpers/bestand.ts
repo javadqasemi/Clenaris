@@ -281,6 +281,92 @@ export async function abgeschlossenenEinsatzAnlegen(
 export const einsatzEntfernen = (id: string, jar: string) =>
   del(`/api/jobs/${id}`, { jar }).catch(() => undefined);
 
+// ---------------------------------------------------------------------------
+//  Verträge (Wave 10)
+// ---------------------------------------------------------------------------
+
+let vertragsZaehler = 0;
+
+/** Nur das Datum — Verträge beginnen an einem Tag, nicht zu einer Uhrzeit. */
+const nurTag = (versatz: number): string => {
+  const d = new Date();
+  d.setDate(d.getDate() + versatz);
+  return d.toISOString().slice(0, 10);
+};
+
+/**
+ * Ein Vertragsentwurf mit erster Fassung und einer Leistung.
+ *
+ * Über die Schnittstelle, nicht über die Maske: Das Anlegen prüft
+ * `tests/api/vertraege.test.ts` erschöpfend. Was der Browser beweisen soll,
+ * beginnt danach — Einsatzplan, Inkraftsetzung, Unterzeichnung, Abrechnung.
+ */
+export async function vertragsentwurfAnlegen(
+  stamm: Stammdaten,
+  jar: string,
+  ueber: { startDate?: string; baseAmount?: number } = {},
+): Promise<{ id: string; versionId: string; serviceId: string }> {
+  vertragsZaehler += 1;
+  const start = ueber.startDate ?? nurTag(1);
+
+  const antwort = await post<{ data: { id: string } }>(
+    '/api/contracts',
+    {
+      contract: {
+        customerId: stamm.customerId,
+        propertyId: stamm.propertyId,
+        title: `Browserprüfung Wave 10 ${Date.now()}-${vertragsZaehler}`,
+        startDate: start,
+      },
+      version: {
+        effectiveFrom: start,
+        reason: 'Erstfassung aus der Browserprüfung',
+        billingCycle: 'MONTHLY',
+        paymentTermDays: 30,
+        pricingModel: 'FIXED_PERIOD',
+        baseAmount: ueber.baseAmount ?? 1200,
+        vatRate: 8.1,
+        noticePeriodDays: 90,
+        renewalType: 'NONE',
+      },
+      services: [
+        {
+          serviceId: stamm.serviceId,
+          label: 'Unterhaltsreinigung Büro',
+          estimatedMinutes: 120,
+          requiredCrewSize: 1,
+          materialsBy: 'PROVIDER',
+        },
+      ],
+    },
+    { jar },
+  );
+  if (antwort.status !== 201) throw new Error(`Vertrag anlegen: HTTP ${antwort.status} — ${antwort.text}`);
+  const id = data(antwort).id;
+
+  const gelesen = data(
+    await get<{ data: { versions: { id: string; services: { id: string }[] }[] } }>(`/api/contracts/${id}`, { jar }),
+  );
+  return {
+    id,
+    versionId: gelesen.versions[0]!.id,
+    serviceId: gelesen.versions[0]!.services[0]!.id,
+  };
+}
+
+/**
+ * Aufräumen, soweit die Regeln es zulassen.
+ *
+ * Ein Vertrag, der in Kraft war, lässt sich nicht löschen — das ist die Zusage
+ * des Moduls, kein Mangel der Prüfreihe. Was geht, ist ihn zu beenden; dann
+ * ruhen seine Einsatzpläne und der Nachtlauf rührt ihn nicht mehr an.
+ */
+export async function vertragAufraeumen(id: string, jar: string): Promise<void> {
+  const geloescht = await del(`/api/contracts/${id}`, { jar }).catch(() => null);
+  if (geloescht?.status === 204) return;
+  await post(`/api/contracts/${id}/end`, { reason: 'Aufräumen der Browserprüfung' }, { jar }).catch(() => undefined);
+}
+
 /**
  * Offene Gerätesperren derselben Person lösen.
  *

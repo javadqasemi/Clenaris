@@ -15,6 +15,7 @@ sind sicherheitsrelevant:
 | Rendert PDF.js unter der ausgelieferten CSP? | Dass Worker und wasm vom eigenen Ursprung kommen, ist über HTTP prüfbar. Ob der Browser den Worker dann auch startet, ist eine Aussage über eine Laufzeit. |
 | Entsteht aus einer Handbewegung eine Unterschrift? | Ein `imageDataUrl` im Anfragekörper beweist, dass der Server ein PNG annimmt — nicht, dass das Unterschriftenfeld eines erzeugt. |
 | Hält die Gerätesperre den Browser? | 423 auf einem Cookie-Kopf ist die halbe Antwort. Zweiter Tab, Zurück-Taste, Neuladen, geschlossener Tab, gelöschte Cookies und ein zweites Gerät sind die andere. |
+| **Gibt es die Maske wirklich — und schreibt sie?** | Seit Wave 10. Eine HTTP-Reihe prüft den Endpunkt; sie sagt nichts darüber, ob eine Schaltfläche ihn je aufruft. Genau dieses Muster — Schema, Berechtigung und Seite vorhanden, aber kein Weg dorthin — ist in diesem Projekt dreimal aufgefallen und jedes Mal erst beim Durchklicken. |
 
 ## Ausführen
 
@@ -46,6 +47,7 @@ E-Mail an `nicole.wyss@example.ch` hinaus.
 | `gate4c-offertannahme.spec.ts` | Der versendete Offertlink aus dem Postausgang → Annahme → Tausch → saubere Adresse → Zustimmung → getippt bzw. **auf dem Canvas gezeichnet** → Abschluss → Offerte ACCEPTED → Ergebnislink aus der Abschlussnachricht; Tokenhygiene nach jedem Schritt |
 | `gate4d-abnahme.spec.ts` | Der vollständige Weg über das übergebene Gerät — getippt, gezeichnet und auf einem Smartphone-Bildschirm mit Berührung; Rückgabe und Entsperren mit falschem und richtigem Passwort |
 | `gate4d-sperre.spec.ts` | Zweiter Tab, Zurück/Vorwärts/Neuladen, direkt eingetippte Adressen, geschlossener Tab, entfernte Cookies, zweites Gerät, abgelaufener Vorgang, Entsperren ohne Neuanmeldung |
+| `wave10-vertraege.spec.ts` | Die Vertragsmasken (Wave 10) — fünf Wege: Einsatzplan im Dialog → Inkraftsetzung → Einsätze **mit ihrer Fassung**; Fassung zur Unterschrift → im Browser gezeichnet → angenommen → danach eingefroren (Maske weg *und* Endpunkt 422); zweimal durch die Abrechnungsmaske ergibt **eine** Rechnung; Antrag → Freigabe → neue Fassung, bestehender Einsatz bleibt bei Fassung 1; Pause hält den Planer an, Fortsetzen lässt ihn weiterplanen |
 
 Die Helfer liegen in `helpers/`: Prüfbestand über die Schnittstelle
 (`bestand.ts`), Konsolen- und Netzwächter, Anmeldung, Tokenhygiene und die

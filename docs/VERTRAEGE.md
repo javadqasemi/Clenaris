@@ -222,6 +222,112 @@ Protokoll. `renewalType: AUTOMATIC` sagt etwas über den *Vertrag* aus, nicht
 Rechnung entsteht über den Rechnungsdienst, damit Nummernkreis, Belegregeln und
 Append-only an genau einer Stelle bleiben.
 
+### 7.1 Eine Periode, eine Rechnung
+
+`POST /api/contracts/{id}/invoices` erzeugt die Rechnung einer
+Abrechnungsperiode. Die Zusicherung dahinter ist die zweitteuerste des Moduls,
+und sie steht — wie die Idempotenz des Planers — **in der Datenbank**, nicht im
+Ablauf:
+
+```sql
+CREATE UNIQUE INDEX "invoices_vertragsperiode_einmal"
+  ON "invoices" ("contractId", "contractPeriodStart")
+  WHERE "contractId" IS NOT NULL
+    AND "contractPeriodStart" IS NOT NULL
+    AND "status" <> 'CANCELLED'
+    AND "deletedAt" IS NULL;
+```
+
+Drei Entscheidungen stecken darin:
+
+**Die Periode ist kanonisch, nicht frei wählbar.** Sie entsteht aus dem
+Abrechnungszyklus der geltenden Fassung und einem *Stichtag*; zwei Stichtage im
+selben Monat ergeben dieselbe Periode. Nähme der Endpunkt einen Zeitraum
+entgegen, liessen sich beliebig viele sich überlappende „Perioden" bilden und
+jede einzeln fakturieren — der Schutz hätte keinen Schlüssel mehr, an dem er
+greifen könnte.
+
+**Der Index entscheidet, nicht die Prüfung.** Der Dienst sieht zwar zuerst
+nach — das erspart im Normalfall eine vergebliche Transaktion —, verlässt sich
+aber auf den Verstoss gegen den Index und liefert dann die Rechnung des
+Gewinners zurück. Zwischen „gibt es schon eine?" und dem `INSERT` liegt ein
+Moment, und ein zweiter Klick, ein Wiederholungsversuch nach einem Netzabbruch
+und zwei gleichzeitige Monatsabschlüsse passen genau hinein. Der zweite Aufruf
+antwortet deshalb **200 statt 201** und meldet `neu: false`.
+
+**Storniert zählt nicht mit.** Eine zurückgenommene Rechnung darf die Periode
+nicht für immer blockieren — sonst wäre ein Fehler in der ersten Rechnung nicht
+mehr korrigierbar: stornieren ginge, neu ausstellen nicht.
+
+Die Rechnung trägt `contractId`, `contractVersionId` und
+`contractPeriodStart`. Der mittlere Wert ist der wichtige: Er hält fest, unter
+welchen Konditionen fakturiert wurde. Ohne ihn liesse sich eine Rechnung nach
+der ersten Preisanpassung nicht mehr nachrechnen — und eine spätere
+Vertragsänderung darf einen ausgestellten Beleg nicht berühren.
+
+Der Beleg selbst entsteht über `createInvoice` aus dem Rechnungsdienst, nicht
+in diesem Modul. Die Vertragsfelder sind dort bewusst **kein** Teil der
+Zod-Eingabe: Über `POST /api/invoices` sind sie nicht erreichbar, sonst könnte
+eine von Hand erfasste Rechnung eine Periode für sich beanspruchen, die der
+Serienlauf später braucht — und der Index wiese dann den regulären Lauf ab
+statt der Falscheingabe.
+
+`GET /api/contracts/{id}/invoices` beantwortet die Frage des Monatsabschlusses:
+welche Perioden gedeckt sind und welche offen. Die Perioden entstehen aus dem
+Zyklus, nicht aus den vorhandenen Rechnungen — eine vergessene Periode wäre
+sonst unsichtbar, weil zu ihr eben kein Beleg existiert.
+
+---
+
+## 7a. Elektronische Annahme einer Fassung
+
+`POST /api/contracts/{id}/versions/{versionId}/acceptance` schickt eine
+Vertragsfassung zur Unterzeichnung. **Kein zweiter Signaturweg**: Es entsteht
+ein gewöhnlicher `SignatureRequest` des bestehenden Kerns — unveränderlicher
+Snapshot, Hash A, versionierter Zustimmungstext, Protokoll, Ablauf. Neu ist
+allein die vierte Quelle (`contractVersionId`) neben `Quote`, `Job` und
+`DocumentVersion`.
+
+**Unterzeichnet wird eine Fassung, nie „der Vertrag".** Was die Kundschaft
+annimmt, sind konkrete Konditionen, und die stehen in der Version. Eine
+Unterschrift am Vertragskopf wäre eine Zusage auf etwas, das sich danach ändern
+kann — genau das, was die Versionierung verhindern soll. Das Dokument nennt die
+Versionsnummer im Titel, das Protokollereignis führt sie als eigene Angabe, und
+`ContractVersion.acceptedRequestId` ist eindeutig: Der Beweis lässt sich in
+beide Richtungen führen.
+
+**Die Kopplung ist dieselbe wie bei der Offerte.** Der Finalisierer ruft
+`acceptContractVersionInTx` in *derselben* Transaktion, in der er den Vorgang
+auf `COMPLETED` setzt:
+
+> Fassung angenommen ⇔ Annahmevorgang COMPLETED
+
+Ist die Fassung inzwischen abgelöst oder der Vertrag annulliert, trifft der
+Übergang keine Zeile, alles rollt zurück, und der Vorgang endet `CANCELLED` mit
+Grund. Es gibt keinen stillen Endzustand „unterschrieben, aber nichts
+geschehen".
+
+**Die Annahme setzt den Vertrag nicht in Kraft.** Sie ist die Zusage der
+Kundschaft; in Kraft setzt ihn der Betrieb mit `contract:activate`. Beides in
+einem Schritt zu erledigen hiesse, eine Zusage nach aussen von einem Klick der
+Gegenseite abhängig zu machen — und die Nummer aus dem Nummernkreis entstünde
+in einer Transaktion, die ein Aussenstehender auslöst. Stattdessen wandert der
+Vertrag nach `OFFERED`, und die Aktivierung findet die angenommene Fassung vor.
+
+**Ab dem Versand ist die Fassung eingefroren.** `updateContractVersion` und
+`replaceContractServices` weisen ab, solange ein Vorgang läuft oder die Fassung
+angenommen ist. Der Fall, den das verhindert: Die Kundschaft hat den Snapshot
+offen, jemand korrigiert „schnell noch" den Preis — und danach zeigt das
+unterschriebene Dokument den alten Betrag, die Datenbank den neuen. Wer doch
+ändern will, zieht den Vorgang zurück (`DELETE` auf denselben Pfad); das ist
+sichtbar und protokolliert. Eine **angenommene** Fassung lässt sich nicht
+zurückziehen — dafür gibt es die neue Version.
+
+**Keine Rechtsbehauptung.** `assuranceLevel` bleibt `LINK_ONLY`,
+`ceremonyMode` ist `REMOTE_LINK`. Wer den Link öffnet, hat einen Link; mehr
+behauptet das Produkt nicht, hier so wenig wie anderswo. QES oder ZertES kommen
+in keinem Text vor.
+
 Geliefert wird die Herleitung mit jeder Zwischengrösse — Preismodell, Zahl der
 Einsätze, freigegebene Minuten, Menge, Satz. Eine Summe, die sich nicht
 nachrechnen lässt, erzeugt eine Rückfrage je Monat und je Kundschaft.
@@ -264,8 +370,9 @@ Qualitätsanforderungen — steht am Einsatz, den sie zugeteilt bekommen.
 
 | Reihe | Fälle | Was sie belegt |
 |---|---|---|
-| `vertraege-rechenkern.test.ts` | **23** | Wochen- und Monatsrhythmus, Monatsletzter ohne Überlauf, Feiertagsbehandlung in allen vier Formen, Ausnahmen vor Feiertagen, Kündigungsfristen mit und ohne automatische Verlängerung |
-| `vertraege.test.ts` | **30** | Zustandsautomat samt unzulässiger Übergänge, Versionsregel, Kopieren des Leistungsumfangs, **Idempotenz des Planers einschliesslich gleichzeitiger Läufe**, Probelauf, Ausnahmen, Vier-Augen-Prinzip, Abrechnungsgrundlage, Rechte, Sichtbarkeit für die Kundschaft |
+| `vertraege-rechenkern.test.ts` | **35** | Wochen- und Monatsrhythmus, „alle n Wochen", Vertragsbeginn zwischen zwei Serientagen, Monatsletzter ohne Überlauf, Februar und Schaltjahr, Feiertagsbehandlung in allen vier Formen, Ausnahmen vor Feiertagen, Kündigungsfristen — und die **Ortszeit**: 06:00 bleibt 06:00 über beide Zeitumstellungen, die UTC-Stunde unterscheidet sich dabei um eine |
+| `vertraege.test.ts` | **44** | Zustandsautomat samt unzulässiger Übergänge, **Unveränderlichkeit einer geltenden Fassung** (Konditionen, Leistungsumfang, Einsatzplan — je 422), **Versions-Schnappschuss am Einsatz**, Idempotenz des Planers einschliesslich gleichzeitiger Läufe, Probelauf, Ausnahmen, Vier-Augen-Prinzip, Abrechnungsgrundlage, **Vertragsrechnung** (Idempotenz, gleichzeitige Läufe, Perioden, Schnappschuss nach Preisanpassung), Rechte, Sichtbarkeit für die Kundschaft |
+| `wave10-vertraege.spec.ts` (Browser) | **5** | Die Frage, die keine HTTP-Reihe beantwortet: ob es die Maske gibt, ob sie in dieselbe Datenbank schreibt und ob das Ergebnis auf der Seite erscheint. Einsatzplan im Dialog → Inkraftsetzung → Einsätze mit ihrer Fassung; Unterzeichnung im Browser samt Einfrierung danach; zweimal abrechnen ergibt eine Rechnung; Antrag, Freigabe, neue Fassung — bestehender Einsatz bleibt bei Fassung 1; Pause hält den Planer an |
 
 Der Rechenkern hat beim ersten Lauf einen echten Fehler gefunden: Bei
 zweiwöchentlichem Rhythmus wäre der **erste Termin eines Vertrags entfallen**,
@@ -298,9 +405,47 @@ ist.** Eine ausgegraute Schaltfläche wäre ehrlicher als eine, die 422
 antwortet — aber eine, die gar nicht da ist, ist die ehrlichste: Sie behauptet
 nichts.
 
-Der Einsatzplan ist heute **lesend**: Er wird beim Anlegen über die
-Schnittstelle gesetzt und in der Akte angezeigt. Eine Maske dafür steht in
-§11.
+### 10.1 Die Masken
+
+Alle schreiben über die **bestehenden Endpunkte** — dieselbe Validierung,
+dieselbe Rechteprüfung, dasselbe Protokoll wie jeder andere Zugriff. Keine
+zweite Schreibstrecke, keine Beispielwerte. Sie liegen in
+`src/features/admin/contract-panels.tsx`; die Seite bindet Komponenten ein, nie
+Konstanten (ein Import aus einer `'use client'`-Datei in eine Seite bricht den
+Bau).
+
+| Maske | Endpunkt | Sichtbar für |
+|---|---|---|
+| **Einsatzplan anlegen / ändern** | `POST /api/contract-services/{id}/schedules`, `PATCH /api/contract-schedules/{id}` | `contract:update`, nur am Entwurf |
+| **Ausnahme** (aussetzen, verschieben, ansetzen) | `POST /api/contract-schedules/{id}/exceptions` | `contract:update` |
+| **Leistung hinzufügen / entfernen** | `PUT /api/contracts/{id}/versions/{versionId}/services` | `contract:version`, nur am Entwurf |
+| **Neue Version** | `POST /api/contracts/{id}/versions` | `contract:version` |
+| **Versionsentwurf ändern** | `PATCH /api/contracts/{id}/versions/{versionId}` | `contract:version`, nicht wenn eingefroren |
+| **Änderung beantragen** | `POST /api/contracts/{id}/amendments` | `contract:version` |
+| **Freigeben / ablehnen / wirksam machen** | `.../decision`, `.../apply` | `contract:approve` |
+| **Zur Unterschrift senden / zurückziehen** | `POST` bzw. `DELETE .../acceptance` | `contract:sign` |
+| **Periode abrechnen** | `POST /api/contracts/{id}/invoices` | `contract:billing` **und** `invoice:create` |
+
+Zwei Entscheidungen, die sich beim Bauen ergaben und erklärungsbedürftig sind:
+
+**Der Einsatzplan hat eine eigene Komponente statt einer Feldliste.** Wochentage
+sind eine Menge — als Textfeld „1,3,5" eine Einladung zum Vertippen —, und die
+Uhrzeiten stehen in der Datenbank als Minuten seit Mitternacht, weil ein
+Zeitfenster keine Zeitpunktangabe ist und „ab 06:00" über die Sommerzeit hinweg
+richtig bleiben muss. Die Umrechnung gehört an eine Stelle, nicht in den Kopf
+der Nutzenden. `ResourceForm` erlaubt so etwas über `transform` — eine Funktion,
+und Funktionen lassen sich nicht von einer Server- an eine Client-Komponente
+reichen.
+
+**Der Leistungsumfang wird als Ganzes ersetzt.** Die Maske schickt die
+bestehenden Zeilen mit. Das ist kein Umweg, sondern die Regel des Dienstes: An
+den Zeilen eines Entwurfs hängt nichts, was ihre Kennung bräuchte, und ein
+zeilenweiser Abgleich brächte eine zweite Wahrheit über „welche Zeile ist
+welche".
+
+Eine Fassung, die zur Unterzeichnung vorliegt oder angenommen wurde, zeigt
+statt der Masken einen Satz, der sagt warum. Ohne ihn sähe die greifende Sperre
+aus wie ein Fehler der Anwendung.
 
 ---
 
@@ -308,13 +453,12 @@ Schnittstelle gesetzt und in der Akte angezeigt. Eine Maske dafür steht in
 
 | Offen | Warum |
 |---|---|
-| **Maske für Einsatzpläne und Ausnahmen** | Die Endpunkte stehen und sind geprüft; die Maske dafür ist ein eigenes Stück Arbeit mit Wochentagswahl, Zeitfenster und Ausnahmekalender |
-| **Maske für Versionen, Änderungsanträge und Preisanpassungen** | Dasselbe: vorhanden und geprüft über die Schnittstelle, ohne Formular |
-| **Signaturanbindung** (`contract:sign`) | Das Schema trägt `SignatureRequest.contractVersionId`, der Kern kennt die vierte Quelle noch nicht. Ihn anzuschliessen heisst, `quote-acceptance` und `job-acceptance` eine dritte Geschäftsregel zur Seite zu stellen — mit derselben Transaktionskopplung |
-| **Rechnungserzeugung aus dem Vertrag** | Die Grundlage rechnet (§7); der Schritt in den Rechnungsdienst hinein ist Wave 13 (Finanzen) |
-| **Browserprüfung** Offerte → Vertrag → Aktivierung → Plan → Einsatz | Der Weg ist über HTTP vollständig geprüft; im Browser fehlt er |
-| **Feiertagskalender** | `Holiday` ist je Organisation und Kanton befüllbar und wird vom Planer ausgewertet — befüllt ist er nicht |
+| **Feiertagskalender** | `Holiday` ist je Organisation und Kanton befüllbar und wird vom Planer ausgewertet — befüllt ist er nicht. Das ist Konfiguration, keine Entwicklung |
+| **Indexierung wirkt nicht von selbst** | `indexReference` und `indexBaseValue` halten fest, worauf sich die Parteien geeinigt haben. Eine automatische Erhöhung findet nur statt, wenn jemand sie über eine Preisanpassung freigibt — mit Absicht |
+| **Kein Mahnwesen je Vertrag** | Mahnungen hängen an der Rechnung, nicht am Vertrag. Eine zweite Mahnstrecke wäre eine zweite Wahrheit über den Zahlungsstand |
+| **Sammelrechnung über mehrere Verträge** | Heute eine Rechnung je Vertrag und Periode. Eine Kundschaft mit fünf Verträgen bekommt fünf Belege; ob das gewünscht ist, ist eine fachliche Frage, keine technische |
 
-**Wave 10 ist damit nicht abgeschlossen.** Was steht, ist die Domäne mit ihren
-Zusicherungen, die Dienste, 28 Endpunkte, drei Seiten und 53 Prüfungen. Was
-fehlt, steht oben — und nicht als „Detail", sondern als benannter Rest.
+**Was Wave 10 jetzt trägt.** Domäne mit ihren Zusicherungen, die Dienste, 30
+Endpunkte, drei Seiten mit neun Masken, die vierte Quelle des Signaturkerns,
+die idempotente Vertragsrechnung — und die Prüfungen aus §9 samt der
+Browserreihe `tests/e2e/wave10-vertraege.spec.ts`.
