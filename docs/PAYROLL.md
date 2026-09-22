@@ -233,6 +233,38 @@ danach.
 | **Maske in der Verwaltung** | Der Lauf ist heute nur über die Schnittstelle zu starten |
 | **Arbeitgeberbeiträge** | Für die Abrechnung mit der Ausgleichskasse nötig, für den Nettolohn nicht. Eigene Rechnung mit eigenen Sätzen |
 | **Quellensteuer und Zulagen** | Siehe Abschnitt 1 — Treuhand |
+| **13. Monatslohn, Ferien- und Feiertagsentschädigung** | Ergeben sich aus Vertrag und GAV, nicht aus einem Satz — siehe Abschnitt 1 |
+| **Lohnausweis und Jahresabschluss** | Formularpflichten mit eigenen Fristen — siehe Abschnitt 1 |
+
+---
+
+## 9a. Fachliche Prüfung — ausdrücklich ausstehend
+
+> **Diese Wave ist und bleibt bis auf Weiteres als PARTIAL eingestuft.**
+
+Was hier steht, ist eine **technisch geprüfte Rechnung mit fachlich
+ungeprüften Sätzen.** Der Unterschied ist wichtig genug, um ihn auszuschreiben:
+
+- Die Rechnung selbst ist gegen feste Zahlen geprüft
+  (`tests/api/lohnabrechnung.test.ts`): koordinierter Lohn in allen vier
+  Fällen, Altersbänder ab ihrem Anfang, ALV-Grenze auf den Monat,
+  Art. 66 BVG (über 50 % Arbeitnehmeranteil wird abgewiesen). Diese Prüfungen
+  belegen, dass die Formeln das tun, was in diesem Dokument steht.
+- Sie belegen **nicht**, dass die hinterlegten Prozentsätze, Eintrittsschwellen
+  und Grenzbeträge den geltenden Werten entsprechen. Beitragssätze ändern sich
+  von Jahr zu Jahr; der Wert im Seed ist ein Startwert, kein Nachweis.
+- Kein Treuhandbüro und keine Ausgleichskasse hat diese Umsetzung bisher
+  angesehen.
+
+**Vor dem produktiven Einsatz sind daher extern zu bestätigen:** AHV/IV/EO-,
+ALV- und UVG-Sätze, die BVG-Eintrittsschwelle, der Koordinationsabzug, die
+Ober- und Untergrenze des koordinierten Lohns, die Altersgutschriftsbänder und
+die ALV-Höchstgrenze — jeweils für das Abrechnungsjahr und für den Kanton
+Bern.
+
+Bis dahin gilt für jede Aussage über dieses Modul: **keine vollständige
+Schweizer Lohnbuchhaltung**, sondern eine nachvollziehbare Beitragsrechnung,
+deren Sätze konfiguriert und deren Richtigkeit von aussen zu bestätigen ist.
 
 ---
 
