@@ -45,6 +45,7 @@ import {
 import { actorSourceText } from '@/lib/pdf/documents';
 import { renderEvidencePdf } from '@/lib/pdf/render';
 import {
+  CONTRACT_CONSENT_VERSION,
   CURRENT_CONSENT_VERSION,
   DEFAULT_CONSENT_LOCALE,
   QUOTE_CONSENT_VERSION,
@@ -70,6 +71,11 @@ import {
 } from './access-token.service';
 import { documentVisibilityWhere } from './document.service';
 import { notifyStaff } from './notification.service';
+import {
+  VERTRAGSANNAHME_AKTIV,
+  acceptContractVersionInTx,
+  afterContractVersionAccepted,
+} from './contract-acceptance.service';
 import { acceptJobInTx, afterJobAccepted } from './job-acceptance.service';
 import { ACCEPTANCE_ACTIVE, acceptQuoteInTx, afterQuoteAccepted } from './quote-acceptance.service';
 import { appendSignatureEvent, type ActorSource, type AnfrageKontext } from './signature-events';
@@ -353,8 +359,14 @@ export async function findCompletedQuoteAcceptance(quoteId: string) {
  * widerrufen: Zwei offene Browserfenster derselben Person sollen beide zum
  * selben Vorgang führen; die Einmaligkeit hängt am Abschluss, nicht am
  * Link. Widerrufen wird bei Abbruch, Ablehnung und Ablauf.
+ *
+ * Der Zugang hängt am **Teilnehmer**, nicht am Geschäftsobjekt — er ist
+ * quellenunabhängig. Bis Wave 10 hiess die Funktion
+ * `issueQuoteAcceptanceAccess` und klang, als gäbe es je Quelle einen eigenen
+ * Tokentyp. Den gibt es nicht, und zwei Tokentypen für denselben Zweck wären
+ * zwei Widerrufswege — von denen man einen vergisst.
  */
-export async function issueQuoteAcceptanceAccess(params: {
+export async function issueSignatureAccess(params: {
   organizationId: string;
   requestId: string;
   participantId: string;
@@ -530,6 +542,156 @@ export async function createJobAcceptanceRequest(params: {
     if ((error as { code?: string }).code === 'P2002') return null;
     throw error;
   }
+}
+
+// ---------------------------------------------------------------------------
+//  Vertragsannahme (Wave 10): die vierte Quelle
+// ---------------------------------------------------------------------------
+
+/**
+ * Den Annahmevorgang einer **Vertragsfassung** anlegen — mit dem Snapshot als
+ * Original.
+ *
+ * Dieselbe Bauart wie bei der Offerte: Der Snapshot entsteht **hier**, beim
+ * Start, und sein SHA-256 wird als Hash A eingefroren. Was die Datenbank
+ * später zeigt, ändert daran nichts mehr.
+ *
+ * Genau ein offener Vorgang je Fassung — der Teilindex
+ * `signature_requests_offene_annahme_je_vertragsfassung` erzwingt es. Verliert
+ * dieser Aufruf das Rennen, gibt er `null` zurück, und der Aufrufer verwendet
+ * den Vorgang des Gewinners.
+ *
+ * `assuranceLevel` bleibt `LINK_ONLY`: Wer den Link öffnet, hat einen Link —
+ * mehr wird nicht behauptet.
+ */
+export async function createContractAcceptanceRequest(params: {
+  version: { id: string; versionNumber: number; organizationId: string; contractId: string };
+  contract: { number: string | null; title: string; createdById: string | null };
+  participant: { name: string; email: string; customerId: string | null };
+  snapshot: { bytes: Buffer; filename: string };
+  expiresAt: Date;
+  actorUserId?: string | null;
+  ctx: AnfrageKontext;
+}): Promise<{ id: string; publicId: string; participantId: string } | null> {
+  const befund = await inspectPdf(params.snapshot.bytes);
+  if (befund.pageCount < 1) throw new BusinessRuleError('Der Vertrag liess sich nicht als Dokument erzeugen.');
+
+  const publicId = randomToken(16);
+  const original = await artefaktAblegen({
+    organizationId: params.version.organizationId,
+    requestId: publicId,
+    art: 'original',
+    bytes: params.snapshot.bytes,
+    contentType: 'application/pdf',
+    filename: params.snapshot.filename,
+  });
+
+  const createdById =
+    params.actorUserId ??
+    params.contract.createdById ??
+    (
+      await prisma.user.findFirst({
+        where: { organizationId: params.version.organizationId, role: 'SUPER_ADMIN' },
+        select: { id: true },
+      })
+    )?.id ??
+    null;
+  if (!createdById) {
+    throw new BusinessRuleError('Für diesen Vorgang lässt sich keine verantwortliche Person ermitteln.');
+  }
+
+  const bezeichnung = params.contract.number ? `Vertrag ${params.contract.number}` : params.contract.title;
+
+  try {
+    return await prisma.$transaction(async (tx) => {
+      const created = await tx.signatureRequest.create({
+        data: {
+          organizationId: params.version.organizationId,
+          publicId,
+          status: 'PENDING',
+          sentAt: new Date(),
+          providerType: 'INTERNAL_EVIDENCE',
+          artifactMode: 'EMBEDDED_VISUAL',
+          assuranceLevel: 'LINK_ONLY',
+          ceremonyMode: 'REMOTE_LINK',
+          title: `${bezeichnung} — Fassung ${params.version.versionNumber}`,
+          contractVersionId: params.version.id,
+          originalArtifactId: original.assetId,
+          originalDocumentHash: original.checksum,
+          consentVersion: CONTRACT_CONSENT_VERSION,
+          consentLocale: DEFAULT_CONSENT_LOCALE,
+          createdById,
+          expiresAt: params.expiresAt,
+          participants: {
+            create: {
+              order: 1,
+              role: 'SIGNER',
+              nameSnapshot: params.participant.name,
+              emailSnapshot: params.participant.email.toLowerCase(),
+              customerId: params.participant.customerId,
+            },
+          },
+        },
+        select: { id: true, publicId: true, participants: { select: { id: true } } },
+      });
+
+      await appendSignatureEvent(tx, {
+        requestId: created.id,
+        type: 'REQUEST_CREATED',
+        ctx: params.ctx,
+        details: {
+          source: 'ContractVersion',
+          contractId: params.version.contractId,
+          contractNumber: params.contract.number,
+          contractVersionId: params.version.id,
+          /**
+           * Die Versionsnummer steht als eigene Angabe im Protokoll, nicht nur
+           * in der Kennung. Ein Beweis, in dem man erst eine cuid nachschlagen
+           * muss, um zu wissen, welche Fassung angenommen wurde, beantwortet
+           * die Frage nicht, für die er da ist.
+           */
+          versionNumber: params.version.versionNumber,
+          artifactMode: 'EMBEDDED_VISUAL',
+          assuranceLevel: 'LINK_ONLY',
+          ceremonyMode: 'REMOTE_LINK',
+          originalHash: original.checksum,
+          actorSource: 'PUBLIC_LINK',
+          signatureCheck: {
+            acroFormSignatureFields: befund.hasSignatureFields,
+            signatureStructures: befund.hasSignatureStructures,
+            note: 'Clenaris-eigener Snapshot; Suche nach Signaturstrukturen als Vorsichtsmassnahme, keine kryptografische Prüfung.',
+          },
+        },
+      });
+
+      return { id: created.id, publicId: created.publicId, participantId: created.participants[0]!.id };
+    });
+  } catch (error) {
+    // Der Teilindex hat entschieden: Jemand war schneller.
+    if ((error as { code?: string }).code === 'P2002') return null;
+    throw error;
+  }
+}
+
+/** Der offene Annahmevorgang einer Vertragsfassung — oder `null`. */
+export async function findActiveContractAcceptance(contractVersionId: string) {
+  return prisma.signatureRequest.findFirst({
+    where: { contractVersionId, status: { in: [...VERTRAGSANNAHME_AKTIV] } },
+    include: { participants: { orderBy: { order: 'asc' } } },
+  });
+}
+
+/** Der abgeschlossene Annahmevorgang einer Vertragsfassung — mit Artefakten, oder `null`. */
+export async function findCompletedContractAcceptance(contractVersionId: string) {
+  return prisma.signatureRequest.findFirst({
+    where: { contractVersionId, status: 'COMPLETED' },
+    orderBy: { completedAt: 'desc' },
+    include: {
+      participants: { orderBy: { order: 'asc' } },
+      signedArtifact: { include: { storedFile: true } },
+      evidenceArtifact: { include: { storedFile: true } },
+    },
+  });
 }
 
 /** Der offene Abnahmevorgang eines Einsatzes — oder `null`. */
@@ -1567,7 +1729,11 @@ export async function declineSignature(
 /** Steuert den Rückroll der Abschluss-Transaktion — kein Fehler für den Aufrufer. */
 class Kopplungsfehler extends Error {
   constructor(
-    readonly grund: 'QUOTE_NOT_ACCEPTABLE' | 'JOB_NOT_ACCEPTABLE' | 'REQUEST_NOT_FINALIZING',
+    readonly grund:
+      | 'QUOTE_NOT_ACCEPTABLE'
+      | 'JOB_NOT_ACCEPTABLE'
+      | 'CONTRACT_VERSION_NOT_ACCEPTABLE'
+      | 'REQUEST_NOT_FINALIZING',
   ) {
     super(grund);
   }
@@ -1807,6 +1973,16 @@ export async function finalizeSignatureRequest(requestId: string, ctx?: AnfrageK
      * versehentlich eine Abnahme buchen.
      */
     const jobId = request.ceremonyMode === 'IN_PERSON_HANDOFF' ? request.jobId : null;
+    /**
+     * Die Vertragsfassung — die vierte Quelle (Wave 10, § 12).
+     *
+     * Dieselbe Kopplung wie bei der Offerte, in derselben Transaktion:
+     * `Fassung angenommen ⇔ Vorgang COMPLETED`. Ist die Fassung inzwischen
+     * abgelöst oder der Vertrag annulliert, trifft der Übergang keine Zeile,
+     * und der Vorgang endet CANCELLED mit Grund — die Unterschrift wurde
+     * geleistet, aber sie trifft nichts mehr.
+     */
+    const contractVersionId = request.contractVersionId;
     let ergebnis: 'COMPLETED' | 'CANCELLED' | 'OFFEN' = 'OFFEN';
     let grund: string | null = null;
     try {
@@ -1818,6 +1994,14 @@ export async function finalizeSignatureRequest(requestId: string, ctx?: AnfrageK
         if (jobId) {
           const abgenommen = await acceptJobInTx(tx, jobId, now);
           if (!abgenommen) throw new Kopplungsfehler('JOB_NOT_ACCEPTABLE');
+        }
+        if (contractVersionId) {
+          const angenommen = await acceptContractVersionInTx(tx, {
+            contractVersionId,
+            requestId,
+            now,
+          });
+          if (!angenommen) throw new Kopplungsfehler('CONTRACT_VERSION_NOT_ACCEPTABLE');
         }
         const fertig = await tx.signatureRequest.updateMany({
           where: { id: requestId, status: 'FINALIZING', evidenceArtifactId: { not: null } },
@@ -1832,7 +2016,9 @@ export async function finalizeSignatureRequest(requestId: string, ctx?: AnfrageK
             ? { quoteId, quoteStatus: 'ACCEPTED' }
             : jobId
               ? { jobId, jobAccepted: true }
-              : undefined,
+              : contractVersionId
+                ? { contractVersionId, contractVersionAccepted: true }
+                : undefined,
         });
       });
       ergebnis = 'COMPLETED';
@@ -1861,6 +2047,20 @@ export async function finalizeSignatureRequest(requestId: string, ctx?: AnfrageK
         });
         ergebnis = 'CANCELLED';
       }
+      if (error.grund === 'CONTRACT_VERSION_NOT_ACCEPTABLE' && contractVersionId) {
+        const zustand = await prisma.contractVersion.findUnique({
+          where: { id: contractVersionId },
+          select: { status: true, acceptedAt: true, contract: { select: { status: true, deletedAt: true } } },
+        });
+        await vorgangAbbrechenNachBruch(requestId, request.participants, ctx, {
+          reason: 'contract_version_not_acceptable_at_completion',
+          versionStatus: zustand?.status ?? null,
+          versionAlreadyAccepted: Boolean(zustand?.acceptedAt),
+          contractStatus: zustand?.contract.status ?? null,
+          contractDeleted: Boolean(zustand?.contract.deletedAt),
+        });
+        ergebnis = 'CANCELLED';
+      }
     }
 
     if (ergebnis === 'COMPLETED') {
@@ -1879,6 +2079,15 @@ export async function finalizeSignatureRequest(requestId: string, ctx?: AnfrageK
           requestId,
           signerName: signer?.signedName ?? signer?.nameSnapshot ?? 'unbekannt',
           presentedByName: request.presentedByName,
+          ctx,
+        });
+      }
+      if (contractVersionId) {
+        const signer = request.participants.find((p) => p.role === 'SIGNER');
+        await afterContractVersionAccepted({
+          contractVersionId,
+          requestId,
+          signerName: signer?.signedName ?? signer?.nameSnapshot ?? 'unbekannt',
           ctx,
         });
       }

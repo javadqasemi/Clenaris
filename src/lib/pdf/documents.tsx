@@ -1073,6 +1073,119 @@ export function CreditNoteDocument(props: CreditNotePdfProps) {
 }
 
 // ---------------------------------------------------------------------------
+//  Vertragsfassung
+// ---------------------------------------------------------------------------
+
+export interface ContractVersionPdfProps {
+  company: PdfCompany;
+  recipient: PdfRecipient;
+  /** Leer, solange der Vertrag noch nicht in Kraft ist — die Nummer entsteht erst dann. */
+  contractNumber: string | null;
+  title: string;
+  versionNumber: number;
+  /** Warum es diese Fassung gibt. Steht im Dokument, nicht nur in der Akte. */
+  reason: string;
+  effectiveFrom: Date;
+  endDate?: Date | null;
+  objekt?: string | null;
+  konditionen: { label: string; value: string }[];
+  leistungen: { label: string; menge: string | null; rhythmus: string | null }[];
+  terms?: string | null;
+}
+
+/**
+ * Was bei einer Vertragsannahme unterzeichnet wird.
+ *
+ * **Eine Fassung, kein Vertrag.** Der Titel nennt ausdrücklich die
+ * Versionsnummer, und die Konditionen stehen ausgeschrieben im Dokument.
+ * Unterzeichnet wird damit ein bestimmter Stand, nicht ein Verweis auf einen
+ * Datensatz, der sich danach ändern könnte — genau das, was die Versionierung
+ * verhindern soll.
+ *
+ * **Keine Rechtsbehauptung.** Das Dokument sagt nicht, welche Beweiskraft die
+ * Unterschrift hat; es nennt den Hergang. Eine Aussage über QES oder ZertES
+ * steht hier so wenig wie anderswo im Produkt.
+ */
+export function ContractVersionDocument(props: ContractVersionPdfProps) {
+  const { company, recipient } = props;
+  const bezeichnung = props.contractNumber
+    ? `Vertrag ${props.contractNumber}`
+    : 'Vertrag (Nummer bei Inkraftsetzung)';
+
+  return (
+    <Document title={`${bezeichnung} — Fassung ${props.versionNumber}`} author={company.name} creator="Clenaris">
+      <Page size="A4" style={styles.page}>
+        <Header company={company} />
+
+        <View style={styles.addressRow}>
+          <RecipientBlock recipient={recipient} />
+          <MetaBlock
+            rows={[
+              { label: 'Vertrag', value: props.contractNumber ?? '—' },
+              { label: 'Fassung', value: String(props.versionNumber) },
+              { label: 'Gültig ab', value: formatDate(props.effectiveFrom) },
+              ...(props.endDate ? [{ label: 'Befristet bis', value: formatDate(props.endDate) }] : []),
+            ]}
+          />
+        </View>
+
+        <Text style={styles.title}>{bezeichnung}</Text>
+        <Text style={styles.subtitle}>
+          {props.title}
+          {props.objekt ? ` · ${props.objekt}` : ''}
+        </Text>
+
+        <Text style={styles.paragraph}>
+          Fassung {props.versionNumber} · {props.reason}
+        </Text>
+
+        <Text style={[styles.th, { marginTop: 14, marginBottom: 6 }]}>KONDITIONEN</Text>
+        {props.konditionen.map((row, i) => (
+          <View key={i} style={styles.tableRow} wrap={false}>
+            <Text style={[styles.td, { width: '45%' }]}>{row.label}</Text>
+            <Text style={[styles.td, { width: '55%' }]}>{row.value}</Text>
+          </View>
+        ))}
+
+        <Text style={[styles.th, { marginTop: 18, marginBottom: 6 }]}>VEREINBARTE LEISTUNGEN</Text>
+        {props.leistungen.map((leistung, i) => (
+          <View key={i} style={styles.tableRow} wrap={false}>
+            <View style={{ width: '60%' }}>
+              <Text style={styles.itemName}>{leistung.label}</Text>
+              {leistung.rhythmus ? <Text style={styles.itemDesc}>{leistung.rhythmus}</Text> : null}
+            </View>
+            <Text style={[styles.td, { width: '40%', textAlign: 'right' }]}>{leistung.menge ?? '—'}</Text>
+          </View>
+        ))}
+
+        {props.terms ? (
+          <View style={styles.note}>
+            <Text>{props.terms}</Text>
+          </View>
+        ) : null}
+
+        <View style={styles.signatureRow}>
+          <View style={styles.signatureBox}>
+            <Text style={styles.signatureLabel}>{company.name}</Text>
+            <View style={[styles.signatureLine, { marginTop: 42 }]}>
+              <Text style={styles.signatureLabel}>Ort, Datum, Unterschrift</Text>
+            </View>
+          </View>
+          <View style={styles.signatureBox}>
+            <Text style={styles.signatureLabel}>Auftraggeber/in</Text>
+            <View style={[styles.signatureLine, { marginTop: 42 }]}>
+              <Text style={styles.signatureLabel}>Ort, Datum, Unterschrift</Text>
+            </View>
+          </View>
+        </View>
+
+        <Footer company={company} label={`${bezeichnung} · Fassung ${props.versionNumber}`} />
+      </Page>
+    </Document>
+  );
+}
+
+// ---------------------------------------------------------------------------
 //  Signaturprotokoll
 // ---------------------------------------------------------------------------
 

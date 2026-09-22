@@ -8,6 +8,7 @@ import { NotFoundError } from '@/lib/errors';
 import { uploadBuffer } from '@/lib/storage';
 import {
   BookingConfirmationDocument,
+  ContractVersionDocument,
   CreditNoteDocument,
   EvidenceDocument,
   type EvidencePdfProps,
@@ -21,6 +22,12 @@ import {
   type QrSlipData,
 } from './documents';
 import { isQrIban, renderQrCode, splitStreet } from './swiss-qr';
+import {
+  ABRECHNUNGSZYKLUS,
+  PREISMODELL,
+  VERLAENGERUNG,
+  rhythmusText,
+} from '@/lib/contracts/bezeichnungen';
 import { FREQUENCY_LABEL } from '@/lib/pricing/engine';
 import { absoluteUrl } from '@/lib/utils';
 import { STATUS_MAP } from '@/components/ui/badge';
@@ -279,6 +286,147 @@ export async function renderQuoteSnapshot(quoteId: string): Promise<{ buffer: Bu
     React.createElement(QuoteDocument, { ...offertDokumentProps(quote, company), signature: null }) as never,
   );
   return { buffer, filename: `Offerte-${quote.number}.pdf` };
+}
+
+/**
+ * Der Snapshot einer Vertragsfassung für die elektronische Annahme (Wave 10).
+ *
+ * Dieselbe Rolle wie `renderQuoteSnapshot`: Die Bytes gehen an den
+ * Signaturkern, der sie als Original ablegt und ihren SHA-256 (Hash A)
+ * einfriert. Was unterzeichnet wird, ist genau diese Datei — sie wird danach
+ * nie neu gerendert, auch dann nicht, wenn sich der Vertrag ändert.
+ *
+ * Geladen wird die **Fassung**, nicht der Vertrag: Titel, Konditionen,
+ * Leistungen und Rhythmen stammen aus `ContractVersion` und hängen an ihr.
+ * Ein Snapshot, der die Konditionen aus „der derzeit geltenden Fassung"
+ * zöge, wäre nach der ersten Änderung nicht mehr das, was unterschrieben
+ * wurde.
+ */
+export async function renderContractVersionSnapshot(
+  contractVersionId: string,
+): Promise<{ buffer: Buffer; filename: string }> {
+  const version = await prisma.contractVersion.findUnique({
+    where: { id: contractVersionId },
+    include: {
+      contract: {
+        include: {
+          customer: { include: { addresses: { where: { isBilling: true }, take: 1 } } },
+          property: {
+            select: {
+              label: true,
+              address: { select: { street: true, streetNo: true, postalCode: true, city: true } },
+            },
+          },
+        },
+      },
+      services: {
+        orderBy: { position: 'asc' },
+        include: { schedules: { where: { active: true }, orderBy: { effectiveFrom: 'asc' } } },
+      },
+    },
+  });
+  if (!version) throw new NotFoundError('Vertragsfassung');
+
+  const vertrag = version.contract;
+  const company = await loadCompany(vertrag.organizationId);
+  const billing = vertrag.customer.addresses[0];
+
+  const recipient: PdfRecipient = {
+    name: `${vertrag.customer.firstName} ${vertrag.customer.lastName}`,
+    company: vertrag.customer.companyName,
+    street: billing ? [billing.street, billing.streetNo].filter(Boolean).join(' ') : '—',
+    postalCode: billing?.postalCode ?? '',
+    city: billing?.city ?? '',
+    country: billing?.country ?? 'CH',
+    vatNumber: vertrag.customer.vatNumber,
+  };
+
+  /**
+   * Der Preis steht ausgeschrieben, nicht als Modellname. „UNIT_BASED" ist
+   * in einem Dokument, das jemand unterschreibt, keine Preisvereinbarung.
+   */
+  const preis = (() => {
+    const satz = toNumber(version.vatRate);
+    switch (version.pricingModel) {
+      case 'HOURLY':
+        return `${version.currency} ${toNumber(version.hourlyRate).toFixed(2)} je Stunde · zzgl. ${satz} % MWST`;
+      case 'UNIT_BASED':
+        return `${version.currency} ${toNumber(version.unitPrice).toFixed(4)} je ${version.unitLabel ?? 'Einheit'} · zzgl. ${satz} % MWST`;
+      case 'FIXED_PER_VISIT':
+        return `${version.currency} ${toNumber(version.baseAmount).toFixed(2)} je Einsatz · zzgl. ${satz} % MWST`;
+      default:
+        return `${version.currency} ${toNumber(version.baseAmount).toFixed(2)} je Abrechnungsperiode · zzgl. ${satz} % MWST`;
+    }
+  })();
+
+  const konditionen: { label: string; value: string }[] = [
+    { label: 'Preismodell', value: PREISMODELL[version.pricingModel] ?? version.pricingModel },
+    { label: 'Preis', value: preis },
+    { label: 'Abrechnung', value: ABRECHNUNGSZYKLUS[version.billingCycle] ?? version.billingCycle },
+    { label: 'Zahlungsziel', value: `${version.paymentTermDays} Tage` },
+    { label: 'Kündigungsfrist', value: `${version.noticePeriodDays} Tage` },
+    { label: 'Verlängerung', value: VERLAENGERUNG[version.renewalType] ?? version.renewalType },
+  ];
+  if (version.minimumTermMonths) {
+    konditionen.splice(5, 0, { label: 'Mindestlaufzeit', value: `${version.minimumTermMonths} Monate` });
+  }
+  if (version.renewalType === 'AUTOMATIC' && version.renewalPeriodMonths) {
+    konditionen.push({ label: 'Verlängert sich um', value: `${version.renewalPeriodMonths} Monate` });
+  }
+  if (version.indexReference) {
+    konditionen.push({ label: 'Indexierung', value: version.indexReference });
+  }
+  if (version.responseHours) {
+    konditionen.push({ label: 'Reaktionszeit bei Reklamation', value: `${version.responseHours} Stunden` });
+  }
+
+  const objektAdresse = vertrag.property?.address;
+  const objekt = vertrag.property
+    ? [
+        vertrag.property.label,
+        objektAdresse ? [objektAdresse.street, objektAdresse.streetNo].filter(Boolean).join(' ') : null,
+        objektAdresse ? `${objektAdresse.postalCode} ${objektAdresse.city}` : null,
+      ]
+        .filter(Boolean)
+        .join(', ')
+    : null;
+
+  const buffer = await renderToBuffer(
+    React.createElement(ContractVersionDocument, {
+      company,
+      recipient,
+      contractNumber: vertrag.number,
+      title: vertrag.title,
+      versionNumber: version.versionNumber,
+      reason: version.reason,
+      effectiveFrom: version.effectiveFrom,
+      endDate: vertrag.endDate,
+      objekt,
+      konditionen,
+      leistungen: version.services.map((leistung) => ({
+        label: leistung.zone ? `${leistung.label} (${leistung.zone})` : leistung.label,
+        menge:
+          leistung.quantity != null
+            ? `${toNumber(leistung.quantity)} ${version.unitLabel ?? ''}`.trim()
+            : `${leistung.estimatedMinutes} Min. · ${leistung.requiredCrewSize} Person(en)`,
+        rhythmus:
+          leistung.schedules.map((plan) =>
+            rhythmusText({
+              frequency: plan.frequency,
+              intervalWeeks: plan.interval,
+              weekdays: plan.weekdays,
+              dayOfMonth: plan.monthDay,
+              startMinute: plan.startMinute,
+              endMinute: plan.endMinute,
+            }),
+          ).join(' · ') || null,
+      })),
+      terms: version.terms,
+    }) as never,
+  );
+
+  const kennung = vertrag.number ?? vertrag.id.slice(-6).toUpperCase();
+  return { buffer, filename: `Vertrag-${kennung}-Fassung-${version.versionNumber}.pdf` };
 }
 
 type GeladeneOfferte = Awaited<ReturnType<typeof offerteLaden>>;

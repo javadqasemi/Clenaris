@@ -4,8 +4,10 @@ import type { ContractStatus, Prisma } from '@prisma/client';
 
 import { audit } from '@/lib/audit';
 import { alsTag, kuendigungsfrist, kuendigungswirkung, plusMonate } from '@/lib/contracts/serie';
+import type { SessionUser } from '@/lib/auth/session';
 import { prisma, toNumber, type Tx } from '@/lib/db';
 import { BusinessRuleError, NotFoundError } from '@/lib/errors';
+import { renderContractVersionSnapshot } from '@/lib/pdf/render';
 import type {
   ContractCreateInput,
   ContractServiceInput,
@@ -13,7 +15,19 @@ import type {
   ContractVersionInput,
 } from '@/lib/validation/contracts';
 
+import {
+  assertFassungAnnehmbar,
+  cancelActiveContractAcceptanceInTx,
+  fassungIstGebunden,
+  vertragsannahmeLaeuftAb,
+} from './contract-acceptance.service';
 import { nextNumber } from './numbering.service';
+import type { AnfrageKontext } from './signature-events';
+import {
+  createContractAcceptanceRequest,
+  findActiveContractAcceptance,
+  sendSignatureRequest,
+} from './signature.service';
 
 /**
  * Verträge — Lebenslauf, Versionen, Leistungsumfang, Änderungen, Preise.
@@ -497,6 +511,7 @@ export async function updateContractVersion(params: {
       'Nur ein Versionsentwurf lässt sich ändern. Eine geltende Fassung wird durch eine neue Version abgelöst.',
     );
   }
+  await assertFassungFrei(version.id);
 
   const aktualisiert = await prisma.contractVersion.update({
     where: { id: version.id },
@@ -541,6 +556,28 @@ export async function updateContractVersion(params: {
   return aktualisiert;
 }
 
+/**
+ * Eine Fassung, die unterschrieben wird oder wurde, ist eingefroren.
+ *
+ * Der Fall, den das verhindert: Die Kundschaft hat den Snapshot offen, jemand
+ * im Büro korrigiert „schnell noch" den Preis — und danach zeigt das
+ * unterschriebene Dokument den alten Betrag, die Datenbank den neuen. Welcher
+ * gilt, wäre eine Frage, die sich nachträglich nicht mehr beantworten lässt.
+ *
+ * Die Sperre ist deshalb breiter als „angenommen": Schon der **laufende**
+ * Vorgang genügt. Wer trotzdem ändern will, zieht ihn zurück — das ist
+ * sichtbar und protokolliert, anders als eine stille Änderung.
+ */
+async function assertFassungFrei(contractVersionId: string): Promise<void> {
+  const bindung = await fassungIstGebunden(contractVersionId);
+  if (!bindung) return;
+  throw new BusinessRuleError(
+    bindung === 'ANGENOMMEN'
+      ? 'Diese Fassung wurde elektronisch angenommen und lässt sich nicht mehr ändern. Für eine Änderung braucht es eine neue Version.'
+      : 'Diese Fassung liegt zur Unterzeichnung vor und lässt sich solange nicht ändern. Ziehen Sie den Annahmevorgang zurück, wenn die Konditionen noch nicht stimmen.',
+  );
+}
+
 async function ladeVersion(organizationId: string, contractId: string, versionId: string) {
   const version = await prisma.contractVersion.findFirst({
     where: { id: versionId, contractId, contract: { organizationId, deletedAt: null } },
@@ -562,6 +599,7 @@ export async function replaceContractServices(params: {
   if (version.status !== 'DRAFT') {
     throw new BusinessRuleError('Der Leistungsumfang einer geltenden Fassung lässt sich nicht ändern.');
   }
+  await assertFassungFrei(version.id);
 
   await prisma.$transaction(async (tx) => {
     // Löscht über `onDelete: Cascade` auch die Einsatzpläne der Positionen.
@@ -601,6 +639,190 @@ export async function replaceContractServices(params: {
     where: { contractVersionId: version.id },
     orderBy: { position: 'asc' },
   });
+}
+
+// ---------------------------------------------------------------------------
+//  Elektronische Annahme einer Vertragsfassung (§ 12)
+// ---------------------------------------------------------------------------
+
+/**
+ * Eine Vertragsfassung zur Unterzeichnung schicken.
+ *
+ * **Kein zweiter Signaturweg.** Es entsteht ein gewöhnlicher
+ * `SignatureRequest` des bestehenden Kerns — mit Snapshot, Hash A,
+ * Zustimmungstext, Protokoll und Ablauf. Neu ist allein die vierte Quelle
+ * (`contractVersionId`) und die Geschäftsregel, die beim Abschluss greift.
+ *
+ * **Der Rohtoken geht nicht an die auslösende Person.** Versendet wird über
+ * `sendSignatureRequest`, also per E-Mail an die Kundschaft. Gäbe der
+ * Endpunkt den Link zurück, könnte die Person aus dem Betrieb den Vertrag
+ * selbst „annehmen" — und der Beweis sähe aus wie eine Kundenunterschrift.
+ * In der Prüfreihe ist der Postausgang die Stelle, an der der ausgestellte
+ * Link sichtbar wird; in der Datenbank steht nur sein Hash.
+ *
+ * Mehrfaches Auslösen erzeugt **einen** Vorgang: Gibt es einen offenen, wird
+ * er erneut versandt (der alte Link verfällt dabei), nicht ein zweiter
+ * angelegt. Zwei Vorgänge mit zwei Snapshots derselben Fassung wären zwei
+ * echte Unterschriften auf zwei Dokumenten, und welche gilt, wäre eine Frage
+ * der Reihenfolge.
+ */
+export async function startContractAcceptance(params: {
+  organizationId: string;
+  contractId: string;
+  versionId: string;
+  session: SessionUser;
+  ctx: AnfrageKontext;
+}): Promise<{ requestId: string; publicId: string; expiresAt: Date; erneutVersandt: boolean }> {
+  const version = await prisma.contractVersion.findFirst({
+    where: { id: params.versionId, contractId: params.contractId },
+    include: {
+      contract: {
+        select: {
+          id: true,
+          organizationId: true,
+          number: true,
+          title: true,
+          status: true,
+          deletedAt: true,
+          createdById: true,
+          customer: {
+            select: { id: true, firstName: true, lastName: true, companyName: true, email: true },
+          },
+        },
+      },
+      services: { select: { id: true } },
+    },
+  });
+  if (!version || version.contract.organizationId !== params.organizationId) {
+    throw new NotFoundError('Vertragsversion nicht gefunden.');
+  }
+
+  const vertrag = version.contract;
+  assertFassungAnnehmbar(version, vertrag);
+
+  /**
+   * Eine Fassung ohne Leistungen ist kein Vertrag, den jemand annehmen
+   * könnte — dieselbe Prüfung wie beim Aktivieren, nur früher. Ein Dokument
+   * mit leerer Leistungstabelle zur Unterschrift zu schicken, wäre die
+   * peinlichste Art, diesen Fehler zu bemerken.
+   */
+  if (version.services.length === 0) {
+    throw new BusinessRuleError('Diese Fassung enthält keine Leistungen und lässt sich nicht zur Annahme schicken.');
+  }
+
+  const kunde = vertrag.customer;
+  const name = kunde.companyName ?? `${kunde.firstName} ${kunde.lastName}`.trim();
+  if (!name || !kunde.email) {
+    throw new BusinessRuleError('Für diese Kundschaft ist keine E-Mail-Adresse hinterlegt.');
+  }
+
+  const vorhanden = await findActiveContractAcceptance(version.id);
+  if (vorhanden) {
+    if (vorhanden.status === 'FINALIZING') {
+      throw new BusinessRuleError('Die Unterzeichnung dieser Fassung wird gerade abgeschlossen.');
+    }
+    await sendSignatureRequest(params.session, params.organizationId, vorhanden.id, params.ctx);
+    return {
+      requestId: vorhanden.id,
+      publicId: vorhanden.publicId,
+      expiresAt: vorhanden.expiresAt,
+      erneutVersandt: true,
+    };
+  }
+
+  const snapshot = await renderContractVersionSnapshot(version.id);
+  const expiresAt = vertragsannahmeLaeuftAb();
+
+  const angelegt = await createContractAcceptanceRequest({
+    version: {
+      id: version.id,
+      versionNumber: version.versionNumber,
+      organizationId: vertrag.organizationId,
+      contractId: vertrag.id,
+    },
+    contract: { number: vertrag.number, title: vertrag.title, createdById: vertrag.createdById },
+    participant: { name, email: kunde.email, customerId: kunde.id },
+    // Dieselbe Naht wie bei der Offerte: `src/lib/pdf` liefert `buffer`, der
+    // Signaturkern spricht von `bytes`.
+    snapshot: { bytes: snapshot.buffer, filename: snapshot.filename },
+    expiresAt,
+    actorUserId: params.session.id,
+    ctx: params.ctx,
+  });
+
+  // Jemand war schneller — dessen Vorgang gilt.
+  const vorgang = angelegt ?? (await findActiveContractAcceptance(version.id));
+  if (!vorgang) {
+    throw new BusinessRuleError('Der Annahmevorgang konnte nicht begonnen werden. Bitte erneut versuchen.');
+  }
+
+  await sendSignatureRequest(params.session, params.organizationId, vorgang.id, params.ctx);
+
+  await audit.updated({
+    organizationId: params.organizationId,
+    userId: params.session.id,
+    entity: 'ContractVersion',
+    entityId: version.id,
+    summary: `Fassung ${version.versionNumber} von ${vertrag.number ?? vertrag.title} zur elektronischen Annahme versandt (Vorgang ${vorgang.id})`,
+    ip: params.ctx.ip,
+    userAgent: params.ctx.userAgent,
+  });
+
+  return {
+    requestId: vorgang.id,
+    publicId: vorgang.publicId,
+    expiresAt,
+    erneutVersandt: false,
+  };
+}
+
+/**
+ * Einen laufenden Annahmevorgang zurückziehen.
+ *
+ * Der Weg, den `assertFassungFrei` offenlässt: Wer die Konditionen doch noch
+ * ändern will, zieht die Unterzeichnung zurück — sichtbar, protokolliert und
+ * mit entwertetem Link. Eine stille Änderung am unterschriebenen Stand gibt
+ * es dafür nicht.
+ *
+ * Eine bereits **angenommene** Fassung lässt sich nicht zurückziehen; dafür
+ * gibt es die neue Version.
+ */
+export async function withdrawContractAcceptance(params: {
+  organizationId: string;
+  contractId: string;
+  versionId: string;
+  actorId: string;
+  ip?: string | null;
+  ctx?: AnfrageKontext | null;
+}): Promise<{ abgebrochen: number }> {
+  const version = await ladeVersion(params.organizationId, params.contractId, params.versionId);
+  if (version.acceptedAt) {
+    throw new BusinessRuleError(
+      'Diese Fassung wurde bereits angenommen. Eine Annahme lässt sich nicht zurücknehmen — dafür gibt es eine neue Version.',
+    );
+  }
+
+  const abgebrochen = await prisma.$transaction((tx) =>
+    cancelActiveContractAcceptanceInTx(tx, {
+      contractVersionId: version.id,
+      reason: 'withdrawn',
+      ctx: params.ctx,
+      cancelledById: params.actorId,
+    }),
+  );
+
+  if (abgebrochen > 0) {
+    await audit.updated({
+      organizationId: params.organizationId,
+      userId: params.actorId,
+      entity: 'ContractVersion',
+      entityId: version.id,
+      summary: `Annahmevorgang zu Fassung ${version.versionNumber} zurückgezogen`,
+      ip: params.ip,
+    });
+  }
+
+  return { abgebrochen };
 }
 
 // ---------------------------------------------------------------------------

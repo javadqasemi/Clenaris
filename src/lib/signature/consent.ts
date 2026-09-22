@@ -24,11 +24,12 @@ import { createHash } from 'node:crypto';
  * nicht um „ein Dokument" —, aber dieselbe Regel: versioniert, eingefroren,
  * gehasht, ohne rechtliche Zusage.
  */
-export const CONSENT_VERSIONS = ['v1', 'quote-v1', 'rapport-v1'] as const;
+export const CONSENT_VERSIONS = ['v1', 'quote-v1', 'rapport-v1', 'vertrag-v1'] as const;
 export type ConsentVersion = (typeof CONSENT_VERSIONS)[number];
 export const CURRENT_CONSENT_VERSION: ConsentVersion = 'v1';
 export const QUOTE_CONSENT_VERSION: ConsentVersion = 'quote-v1';
 export const RAPPORT_CONSENT_VERSION: ConsentVersion = 'rapport-v1';
+export const CONTRACT_CONSENT_VERSION: ConsentVersion = 'vertrag-v1';
 
 export const CONSENT_LOCALES = ['de-CH'] as const;
 export type ConsentLocale = (typeof CONSENT_LOCALES)[number];
@@ -63,6 +64,26 @@ const TEXTE: Record<ConsentVersion, Record<ConsentLocale, string>> = {
       'ausgeführten Arbeiten elektronisch. Massgebend ist das angezeigte Dokument in genau ' +
       'dieser Fassung. Mir ist bekannt, dass Clenaris den Ablauf dieser Abnahme (Zeitpunkt, ' +
       'verwendetes Gerät, technische Angaben) in einem Signaturprotokoll festhält.',
+  },
+  /**
+   * Die Annahme einer **Vertragsfassung**. Der Text nennt die Fassung
+   * ausdrücklich: Ein Dauervertrag bindet über Monate, und was angenommen
+   * wird, sind die Konditionen dieses einen Standes — nicht „der Vertrag",
+   * der sich später ändern kann.
+   *
+   * Der Hinweis auf die Inkraftsetzung steht bewusst dabei: Die Annahme ist
+   * die Zusage der Kundschaft, in Kraft setzt ihn der Betrieb. Ohne diesen
+   * Satz entstünde der Eindruck, mit der Unterschrift laufe der Vertrag
+   * bereits — und die erste Reinigung fände nicht statt.
+   */
+  'vertrag-v1': {
+    'de-CH':
+      'Ich habe die angezeigte Vertragsfassung einschliesslich der darin enthaltenen Leistungen, ' +
+      'Preise, Fristen und Bedingungen gelesen und nehme sie hiermit elektronisch an. Massgebend ' +
+      'ist das angezeigte Dokument in genau dieser Fassung. Der Vertrag tritt in Kraft, sobald ' +
+      'Clenaris ihn bestätigt; den vereinbarten Beginn entnehme ich dem Dokument. Mir ist bekannt, ' +
+      'dass Clenaris den Ablauf dieser Annahme (Zeitpunkt, verwendeter Zugang, technische Angaben ' +
+      'meines Geräts) in einem Signaturprotokoll festhält.',
   },
 };
 

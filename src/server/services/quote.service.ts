@@ -42,7 +42,7 @@ import {
   createQuoteAcceptanceRequest,
   findActiveQuoteAcceptance,
   findCompletedQuoteAcceptance,
-  issueQuoteAcceptanceAccess,
+  issueSignatureAccess,
   issueQuoteAcceptanceSession,
 } from './signature.service';
 
@@ -903,7 +903,7 @@ export async function respondToQuote(params: {
     ctx: params.ctx,
   });
   if (aufgeloest.tokenId) await noteTokenUse(aufgeloest.tokenId).catch(() => undefined);
-  const zugang = await issueQuoteAcceptanceAccess({
+  const zugang = await issueSignatureAccess({
     organizationId: aufgeloest.organizationId,
     requestId: start.requestId,
     participantId: start.participantId,
