@@ -16,6 +16,12 @@ next-env.d.ts
 # production
 dist/
 
+# Erzeugte Prüfberichte. Der Merkmalsbericht ist eine Momentaufnahme des
+# Quelltextes — im Repository wäre er am Tag nach dem nächsten Commit falsch,
+# und ein falscher Bericht ist schlimmer als keiner. Die CI hängt ihn als
+# Artefakt an den Lauf.
+artifacts/
+
 # misc
 .DS_Store
 *.pem

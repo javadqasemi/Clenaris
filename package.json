@@ -40,6 +40,7 @@
     "db:reset": "prisma migrate reset --force",
     "openapi": "tsx scripts/generate-openapi.ts",
     "erd": "tsx scripts/generate-erd.ts",
+    "audit:merkmale": "tsx scripts/feature-integrity.ts",
     "docs": "npm run openapi && npm run erd",
     "postinstall": "prisma generate"
   },

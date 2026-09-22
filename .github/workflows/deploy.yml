@@ -161,6 +161,37 @@ jobs:
             exit 1
           fi
 
+      - name: Merkmalsprüfung
+        # Sucht das Muster „Schema + Berechtigung + Oberfläche, aber kein
+        # Schreibpfad" — dreimal in diesem Projekt aufgefallen, jedes Mal erst
+        # beim Durchklicken.
+        #
+        # **Blockiert nicht, und das ist Absicht.** Die Prüfung arbeitet über
+        # den Quelltext und meldet erwiesenermassen auch Fälle, die in Ordnung
+        # sind (eine selbst zusammengesetzte Adresse sieht sie nicht). Eine
+        # Heuristik, die den Bau anhält, wird binnen einer Woche mit
+        # Ausnahmelisten stillgelegt — dann hat man den Aufwand und die Meldung
+        # verloren. Das Ergebnis steht in der Zusammenfassung des Laufs; wer es
+        # als Tor will, ruft das Skript mit `--streng`.
+        continue-on-error: true
+        run: |
+          npx tsx scripts/feature-integrity.ts | tee /tmp/merkmale.txt
+          {
+            echo '### Merkmalsprüfung'
+            echo '```'
+            cat /tmp/merkmale.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Merkmalsbericht sichern
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: feature-integrity-report
+          path: artifacts/feature-integrity-report.json
+          if-no-files-found: ignore
+          retention-days: 14
+
       # -- Ab hier mit Datenbank ----------------------------------------
       - name: Datenbankschema anwenden
         run: npx prisma migrate deploy
