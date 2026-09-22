@@ -558,3 +558,227 @@ aber gezielt: **eine** Grenze auf der teuersten Liste, gemessen gegen
 denselben Aufbau, und nicht 55 auf einmal. Die Messreihe aus Abschnitt 5 (zwei
 Grenzen 1–7 %, eine Grenze 7/400, null Grenzen 0/300) zeigt, dass die Zahl der
 Grenzen und nicht ihre Art den Ausschlag gibt.
+
+---
+
+## 13. Eine Ursache gefunden — die erste, die diesen Namen verdient
+
+Abschnitt 11 hat eingekreist. Dieser Abschnitt benennt.
+
+### 13.1 Das Werkzeug: die Reihenfolge der Veränderungen
+
+Der Baum **nach** dem Fehler hilft nicht. Er ist bereits neu gebaut, und jeder
+Unterschied darin kann die Ursache oder ihre Folge sein — beide sehen gleich
+aus. Der erste Versuch, ausgeliefertes HTML gegen das DOM zu stellen, lieferte
+genau das: einen Haufen echter Unterschiede, von denen keiner beweisbar der
+gesuchte war (andere `useId`-Werte, ein nachgeladener Glockenzähler, versetzte
+Skripte — alles Folgen des Neuaufbaus).
+
+Was hilft, ist ein `MutationObserver`, der ab dem allerersten Skript läuft und
+jede Entfernung mit Zeitstempel mitschreibt. Läuft die Hydration glatt,
+verändert sie die Struktur nicht. Läuft sie auf, fasst React den betroffenen
+Teilbaum an — und der Pfad der ersten Veränderung zeigt auf die Stelle.
+
+> **Eine Falle, die einen halben Lauf gekostet hat.** Der Beobachter hing
+> zuerst an `document.documentElement`. Playwrights Init-Skript läuft, bevor
+> der Parser irgendetwas erzeugt hat — das Wurzelelement gibt es da noch
+> nicht. Der Beobachter wurde nie eingehängt und meldete brav „0
+> Entfernungen", was wie ein Befund aussah und keiner war. Beobachtet wird
+> `document`.
+
+### 13.2 Der Befund
+
+Auf `/portal/einsaetze/‹id›`, zwei Treffer, identischer Pfad:
+
+```
+main#inhalt > div.space-y-6 > div.space-y-8 > section.space-y-4
+  > ul.divide-y.divide-border.overflow-hidden > li > label.flex.cursor-pointer.items-start
+```
+
+Das ist die **Abhakliste des Einsatzrapports** — und in jedem `<label>` steht
+eine Radix-Checkbox.
+
+### 13.3 Die Ursache
+
+Radix rendert zu jeder Checkbox, jedem Schalter und jedem Optionsfeld ein
+verstecktes `<input>`, damit ein Formular auch ohne JavaScript etwas
+abschickt. Ob es gebraucht wird, entscheidet es so
+(`@radix-ui/react-checkbox`, `dist/index.mjs`):
+
+```js
+const isFormControl = control
+  ? !!form || !!control.closest('form')
+  // We set this to true by default so that events bubble to forms without JS (SSR)
+  : true;
+```
+
+Auf dem **Server** gibt es kein `control` — der Wert ist `true`, und das
+`<input>` steht im ausgelieferten HTML. Im **Browser** setzt der Ref-Rückruf
+`control`; steht das Feld in keinem Formular, wird das `<input>` wieder
+**entfernt**.
+
+Genau diese Entfernung fällt in das Zeitfenster der Hydration. React 19
+hydriert nebenläufig und schreibt Teilbäume einzeln fest; der Ref eines frühen
+Feldes kann laufen, während spätere noch hydriert werden. Dann findet React
+ein Element weniger vor, als das HTML hatte — und das ist ein **Element**-,
+kein Textunterschied, genau wie `args[]=HTML` es sagt (§11.5).
+
+**Der Nachweis ohne Wahrscheinlichkeiten**, gemessen am Produktionsbau:
+
+| | ausgeliefertes HTML | DOM nach dem Laden |
+|---|---|---|
+| `button[role=checkbox]` | 5 | 5 |
+| `input[type=checkbox]` | **5** | **0** |
+| `<form>` | 0 | 0 |
+
+Fünf Elemente verschwinden bei jedem Ladevorgang. Ob daraus ein Fehler wird,
+entscheidet allein, wann sie verschwinden.
+
+### 13.4 Die Behebung
+
+In `src/components/ui/controls.tsx` bekommen `Checkbox`, `RadioGroupItem`,
+`OptionCard` und `Switch` ein `form`, wenn der Aufrufer keines angibt. Damit
+ist der erste Term `!!form` wahr, Server und Browser rendern **dieselbe**
+Elementmenge, und nichts wird mehr entfernt.
+
+Die Kennung zeigt absichtlich auf kein Formular: Ein `<input>` mit `form="…"`
+gehört zu genau diesem einen Formular; gibt es keines, gehört es zu keinem und
+schickt nirgends etwas mit. Die Schreibwege dieser Anwendung laufen ohnehin
+über `fetch`.
+
+Verworfen: jede Liste in ein `<form>` zu hüllen (eine Formularsemantik, die es
+nicht gibt, und die Lücke bliebe überall offen, wo es jemand vergisst); ein
+eigener Baustein statt Radix (der gründlichste Weg — und er kostet
+Tastaturverhalten, Zustände und Zugänglichkeit, die hier bereits stimmen).
+
+### 13.5 Die Wirkung, gemessen
+
+Je 400 Ladevorgänge, Produktionsbau, angemeldet, gleicher Browser:
+
+| Seite | vorher | nachher |
+|---|---|---|
+| `/portal/einsaetze/‹id›` (fünf Checkboxen) | 13 (3,25 %) | **2 (0,50 %)** |
+| `/portal/einsaetze` (Liste) | 2 (0,50 %) | **1 (0,25 %)** |
+| `/portal/profil` (keine) | 0 | 1 (0,25 %) |
+
+Auf der Seite mit den Checkboxen sinkt die Rate um rund vier Fünftel. Das ist
+die erste Ursache in dieser Untersuchung, die benannt, bewiesen und behoben
+ist — und nicht nur eingekreist.
+
+---
+
+## 14. Was bleibt — und warum es ein Release-Blocker ist
+
+**Diese Wave ist nicht abgeschlossen.** Der folgende Rest ist nicht erklärt,
+und er wird hier nicht als Randnotiz geführt.
+
+### 14.1 Häufigkeit
+
+Je 400 Ladevorgänge auf dem Produktionsbau, angemeldet als Mitarbeiterin:
+
+| Bau | `/portal/profil` | `/portal` |
+|---|---|---|
+| A (vor der Behebung aus §13) | 0 (0 %) | 4 (**1,00 %**) |
+| B (mit der Behebung) | 1 (0,25 %) | 23 (**5,75 %**) |
+| B, zweite Reihe | — | 42 (**10,50 %**) |
+| C (Behebung zurückgenommen, sonst gleich) | 1 (0,25 %) | 53 (**13,25 %**) |
+
+Die entscheidende Zeile ist C: **Ohne** die Behebung ist `/portal` nicht
+besser, sondern schlechter als mit ihr. Die Behebung aus §13 ist damit
+entlastet — und zugleich steht fest, dass die Rate auf dieser Seite zwischen
+1 % und 13 % schwankt, **ohne dass sich der Quelltext ändert**. Was sie
+bewegt, ist die Aufteilung der Bündel und damit die Ankunftszeit der Skripte;
+jeder Bau würfelt neu.
+
+Eine Zahl wie „0,3 %" aus Abschnitt 9.4 ist damit als Kennwert wertlos. Was
+gilt, ist: **auf dem Übersichtsbildschirm des Portals bis zu jeder achte
+Erstaufruf.**
+
+### 14.2 Betroffener Rahmen
+
+Nicht der Anwendungsrahmen (§11.2, gemessen), sondern der Seiteninhalt
+(§11.3). Am stärksten `/portal` (Übersicht), messbar auch auf
+`/portal/einsaetze/‹id›` und `/portal/einsaetze`, nicht auf `/portal/profil`.
+
+### 14.3 Reproduktion
+
+```powershell
+npm run build                 # bei gestopptem Server
+npm run test:server
+# Rate je Seite, 400 Ladevorgänge:
+npx tsx <scratchpad>/seiten-rate.ts 3001 400 /portal/profil /portal
+```
+
+Die Browserreihe reproduziert ihn ebenfalls, nur seltener: In der Stressreihe
+vom 22.09.2026 war 1 von 5 Läufen rot (Lauf 5, ein Hydrationsbefund).
+
+### 14.4 Beweise
+
+- `hydrationsbefunde/entsperrt-mit-dem-eigenen-passwort-…json` (124 KB):
+  `pageerror` mit `#418 args[]=HTML` auf `/portal/einsaetze/‹id›`, dazu
+  ausgeliefertes HTML, DOM und Bildschirmfoto.
+- Die Mitschrift des `MutationObserver`: **keine** Veränderung im `<body>` vor
+  dem Fehler; unmittelbar danach entfernt React vier `<script>`-Knoten direkt
+  unter `<body>` — mehr nicht. Auf `/portal` bleibt der Inhalt von `<main>`
+  unangetastet.
+
+### 14.5 Verbleibende Hypothesen
+
+1. **Verschiebung der Skripte.** React 19 räumt `<script>`- und
+   `<link>`-Knoten während der Hydration um (Float/Resource-Hoisting). Die
+   einzige beobachtete Veränderung im `<body>` sind genau solche Knoten. Wenn
+   diese Umräumung in das Hydrationsfenster fällt, ändert sich die Zahl der
+   Kindknoten von `<body>` — derselbe Mechanismus wie in §13, nur eine Ebene
+   höher und nicht von uns verursacht.
+2. **Ein zweites Bauteil mit demselben Muster wie Radix' Checkbox**: etwas,
+   das serverseitig ein Element rendert und es im Browser nach dem ersten
+   Ref-Rückruf entfernt. Auf `/portal` kommen dafür `Progress`, `KpiTile` und
+   `PersonAvatar` in Frage; keines ist bisher gemessen.
+3. **Ein Zusammenspiel mit der Bündelaufteilung.** Dass dieselbe Quelle je
+   nach Bau zwischen 1 % und 13 % liegt, passt zu einem Fehler, der nur bei
+   einer bestimmten Ankunftsreihenfolge der Kapitel auftritt.
+
+Hypothese 1 ist die wahrscheinlichste und zugleich die unangenehmste: Sie
+läge in Next/React selbst, und die Abhilfe wäre keine Zeile in diesem
+Projekt, sondern eine Fassung.
+
+### 14.6 Produktionsrisiko
+
+**Was passiert:** React verwirft den Baum und baut ihn im Browser neu. Der
+Zustand ist danach korrekt; es gehen keine Daten verloren, und eine
+Sicherheitswirkung gibt es nicht.
+
+**Was man sieht:** ein Flackern beim ersten Aufbau und eine verlorene
+Hydration — die Seite ist einen Wimpernschlag später bedienbar. Auf einem
+Telefon im Mobilfunknetz ist dieser Wimpernschlag länger.
+
+**Was es kostet:** Die Arbeit des Servers für das HTML ist in diesen Fällen
+verschenkt.
+
+### 14.7 Einstufung
+
+> **RELEASE-BLOCKER.**
+
+Begründung — und ausdrücklich gegen die bequemere Lesart:
+
+Die bequeme Lesart wäre: „React fängt es ab, der Zustand stimmt, also ist es
+ein Schönheitsfehler." Dagegen stehen zwei Tatsachen aus dieser Messreihe.
+
+**Erstens die Häufigkeit.** Bis zu 13 % der Erstaufrufe des
+Übersichtsbildschirms. Das ist keine Randerscheinung, sondern der Regelfall
+für einen Teil der Nutzenden.
+
+**Zweitens die Unerklärtheit.** Ein Fehler, dessen Rate sich ohne
+Quelltextänderung verdreizehnfacht, ist nicht abgeschätzt, sondern unbekannt.
+Solange Hypothese 2 offensteht, ist nicht ausgeschlossen, dass derselbe
+Mechanismus eine Stelle trifft, an der der Neuaufbau **nicht** folgenlos ist —
+etwa eine Maske mit bereits eingegebenen Werten.
+
+Die Behebung aus §13 bleibt richtig und im Bau: Sie entfernt eine bewiesene
+Ursache und senkt die Rate dort, wo sie wirkt, um vier Fünftel. Sie schliesst
+das Tor aber nicht.
+
+**Nächster Schritt**, in dieser Reihenfolge: (a) Hypothese 1 prüfen, indem die
+Zahl der `<script>`-Knoten unter `<body>` vor und nach der Hydration gemessen
+wird — dasselbe Vorgehen wie in §13.3, das dort in einer Messung entschieden
+hat; (b) `/portal` bauteilweise leeren, wie in §11 den Rahmen.
