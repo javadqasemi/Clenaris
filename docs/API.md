@@ -5,7 +5,7 @@
 > Quelle, aus der sowohl diese Referenz als auch die Laufzeitvalidierung
 > stammen.
 
-Stand: 452 Endpunkte. Die maschinenlesbare Fassung liegt in
+Stand: 458 Endpunkte. Die maschinenlesbare Fassung liegt in
 [`openapi.yaml`](./openapi.yaml) bzw. [`openapi.json`](./openapi.json).
 
 ## Grundlagen
@@ -62,6 +62,7 @@ Familie.
 - [Führung: Wissen und Markt](#führung-wissen-und-markt)
 - [Führung: Berichte](#führung-berichte)
 - [Verträge](#verträge)
+- [Qualität](#qualität)
 
 ## Authentifizierung
 
@@ -9065,3 +9066,140 @@ Familie.
 | `originalDate` | string | ja | – |
 | `newDate` | string | – | – |
 | `reason` | string | – | max. 500 Zeichen |
+
+## Qualität
+
+### `GET /api/quality-inspections`
+
+**Begehungen auflisten.** **Die Kundschaft liest dieselbe Liste**, eingegrenzt in der `where`-Klausel: nur die eigenen Objekte und Verträge, und nur abgeschlossene — ein Entwurf ist eine Momentaufnahme, keine Feststellung. `internalNote` fehlt in der Auswahl; ein Feld, das nur die Anzeige ausblendet, stünde trotzdem auf der Leitung.
+
+- **Zugriff:** Erfordert eine der Berechtigungen: `quality:read`, `quality:read_own`.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 429, 500
+
+**Query-Parameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `status` | string | – | `DRAFT` \| `COMPLETED` \| `CANCELLED` |
+| `outcome` | string | – | `BESTANDEN` \| `KNAPP` \| `NICHT_BESTANDEN` \| `OHNE_ZIEL` |
+| `contractId` | string | – | – |
+| `propertyId` | string | – | – |
+| `von` | string | – | date-time |
+| `bis` | string | – | date-time |
+| `page` | integer | – | ≥ 1, Standard `1` |
+| `perPage` | integer | – | ≥ 1, ≤ 100, Standard `25` |
+
+### `POST /api/quality-inspections`
+
+**Begehung erfassen.** Sie entsteht als **Entwurf**. Die Punktzahl rechnet der Server aus den Positionen; ein mitgeschicktes Ergebnis gibt es im Schema nicht — dieselbe Regel wie beim Preis. Der **Massstab wird eingefroren**: festgehalten wird, welche Vertragsfassung am Tag der Begehung galt und welchen Zielwert sie zusagte. Eine Kontrolle, die nach einer Vertragsänderung anders ausfiele, wäre kein Beleg. Abgewiesen (422): eine Begehung ohne Vertrag **und** ohne Objekt, eine Nachkontrolle zu einem Entwurf, eine zweite Nachkontrolle zu derselben Begehung.
+
+- **Zugriff:** Erfordert die Berechtigung: `quality:inspect`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 201
+- **Mögliche Fehler:** 400, 401, 403, 409, 422, 429, 500
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `contractId` | union | – | – |
+| `propertyId` | union | – | – |
+| `jobId` | union | – | – |
+| `inspectedAt` | string | ja | date-time |
+| `inspectorId` | union | – | – |
+| `followUpOfId` | union | – | – |
+| `note` | string | – | max. 4000 Zeichen |
+| `internalNote` | string | – | max. 4000 Zeichen |
+| `items` | object[] | – | max. 200 Einträge, Standard `[]` |
+| `items[].label` | string | ja | min. 2 Zeichen, max. 160 Zeichen |
+| `items[].room` | string | – | max. 120 Zeichen |
+| `items[].points` | number | ja | ≥ 0, ≤ 1000 |
+| `items[].maxPoints` | number | ja | ≥ 0.5, ≤ 1000 |
+| `items[].weight` | number | – | ≥ 0, ≤ 100, Standard `1` |
+| `items[].note` | string | – | max. 2000 Zeichen |
+| `items[].position` | integer | – | ≥ 0, ≤ 999, Standard `0` |
+
+### `PATCH /api/quality-inspections/{id}`
+
+**Begehungsentwurf ändern.** **Nur Entwürfe** (422 sonst). Eine abgeschlossene Begehung ist ein Beleg; korrigiert wird über eine Nachkontrolle, nicht durch Überschreiben. Die Positionen werden als Ganzes ersetzt. Verschiebt jemand das Begehungsdatum, verschiebt sich auch der Massstab — sonst trüge die Kontrolle die Zusage eines Tages, an dem sie nicht stattfand.
+
+- **Zugriff:** Erfordert die Berechtigung: `quality:inspect`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `inspectedAt` | string | – | date-time |
+| `inspectorId` | union | – | – |
+| `note` | string | – | max. 4000 Zeichen |
+| `internalNote` | string | – | max. 4000 Zeichen |
+| `items` | object[] | – | max. 200 Einträge |
+| `items[].label` | string | ja | min. 2 Zeichen, max. 160 Zeichen |
+| `items[].room` | string | – | max. 120 Zeichen |
+| `items[].points` | number | ja | ≥ 0, ≤ 1000 |
+| `items[].maxPoints` | number | ja | ≥ 0.5, ≤ 1000 |
+| `items[].weight` | number | – | ≥ 0, ≤ 100, Standard `1` |
+| `items[].note` | string | – | max. 2000 Zeichen |
+| `items[].position` | integer | – | ≥ 0, ≤ 999, Standard `0` |
+
+### `DELETE /api/quality-inspections/{id}`
+
+**Begehungsentwurf verwerfen.** Nur Entwürfe. Eine abgeschlossene Begehung wird nicht gelöscht — sie ist ein Beleg, und dafür gibt es keine Ausnahme.
+
+- **Zugriff:** Erfordert die Berechtigung: `quality:inspect`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+### `POST /api/quality-inspections/{id}/complete`
+
+**Begehung abschliessen.** Ab hier ist sie ein **Beleg**: Nummer aus dem Nummernkreis, Abschlusszeitpunkt, danach weder änderbar noch löschbar. Beides entsteht in *einer* Transaktion mit dem Zustand; die Nummer erst hier, damit ein verworfener Entwurf keine Lücke hinterlässt. Abgewiesen (422): eine Begehung ohne Positionen, und eine, bei der **keine** Position beurteilbar war — die wäre ein Beleg über nichts. Nicht bestanden meldet ans Büro, bestanden nicht.
+
+- **Zugriff:** Erfordert die Berechtigung: `quality:complete`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `note` | string | – | max. 4000 Zeichen |
+
+### `GET /api/contracts/{id}/quality`
+
+**Qualitätszusage und ihr Stand.** Der Endpunkt, der die drei SLA-Felder der Vertragsfassung endlich **misst**, statt sie nur zu speichern: zugesagter Zielwert, vereinbartes Kontrollintervall, die letzte abgeschlossene Begehung und wann die nächste ansteht. Gerechnet ab der **letzten durchgeführten** Kontrolle, nicht ab dem Vertragsbeginn — wer früher kontrolliert, verschiebt die nächste Frist nach hinten, statt Termine aufzustauen. Ein Entwurf zählt nicht. Ohne vereinbartes Intervall gibt es keine Fälligkeit, ohne zugesagten Zielwert kein Urteil.
+
+- **Zugriff:** Erfordert die Berechtigung: `quality:read`.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |

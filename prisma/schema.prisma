@@ -563,6 +563,7 @@ model Organization {
   meetings          Meeting[]
   reportSchedules   ReportSchedule[]
   reportRuns        ReportRun[]
+  qualityInspections QualityInspection[]
 
   @@map("organizations")
 }
@@ -718,6 +719,7 @@ model User {
   ownedControls     ControlEntry[]       @relation("ControlOwner")
   authoredArticles  KnowledgeArticle[]   @relation("ArticleAuthor")
   meetingSeats      MeetingParticipant[]
+  qualityInspections QualityInspection[] @relation("QualityInspector")
 
   @@index([organizationId, role])
   @@index([organizationId, status])
@@ -1352,6 +1354,7 @@ model Property {
   quotes    Quote[]
   files     FileAsset[]
   contracts Contract[]
+  qualityInspections QualityInspection[]
 
   @@index([customerId])
   @@map("properties")
@@ -2051,6 +2054,7 @@ model Job {
   invoiceItems InvoiceItem[]
   signatureRequests SignatureRequest[]
   deviceHandoffs    DeviceHandoffSession[]
+  qualityInspections QualityInspection[]
 
   @@unique([organizationId, number])
   /**
@@ -5599,6 +5603,7 @@ model Contract {
   invoices         Invoice[]
   files            FileAsset[]
   activities       Activity[]
+  qualityInspections QualityInspection[]
 
   @@unique([organizationId, number])
   @@index([organizationId, status, startDate])
@@ -5712,6 +5717,7 @@ model ContractVersion {
   amendmentsFrom ContractAmendment[] @relation("AmendmentPreviousVersion")
   amendmentsTo   ContractAmendment[] @relation("AmendmentNewVersion")
   priceAdjustments ContractPriceAdjustment[]
+  qualityInspections QualityInspection[]
 
   @@unique([contractId, versionNumber])
   @@index([contractId, status])
@@ -5942,4 +5948,148 @@ model ContractPriceAdjustment {
   @@index([contractId, status])
   @@index([contractId, reviewDueAt])
   @@map("contract_price_adjustments")
+}
+
+/// Eine Qualitätskontrolle vor Ort (Wave 11).
+///
+/// ---------------------------------------------------------------------------
+///  Warum es das gibt
+/// ---------------------------------------------------------------------------
+///
+/// `ContractVersion` trägt seit Wave 10 `targetQualityScore`,
+/// `inspectionIntervalDays` und `responseHours`. Die drei Felder wurden
+/// gespeichert, angezeigt und gedruckt — und von **nichts** gemessen. Eine
+/// vereinbarte Zusage ohne Mechanismus ist genau das Muster, das die
+/// Merkmalsprüfung (`scripts/feature-integrity.ts`) finden soll; hier hat sie
+/// die eigene Wave gefunden.
+///
+/// ---------------------------------------------------------------------------
+///  Die Zusicherungen
+/// ---------------------------------------------------------------------------
+///
+/// **Die Punktzahl rechnet der Server.** `scoreAchieved`, `scorePercent` und
+/// `outcome` entstehen aus den Positionen (`src/lib/quality/bewertung.ts`),
+/// nie aus einer Angabe des Clients. Dieselbe Regel wie beim Preis.
+///
+/// **Der Massstab ist ein Schnappschuss.** `contractVersionId` und
+/// `targetScore` halten fest, welche Zusage zum Zeitpunkt der Begehung galt.
+/// Eine Kontrolle, die nach einer Vertragsänderung plötzlich anders ausfiele,
+/// wäre kein Beleg — dieselbe Überlegung wie bei Einsatz und Rechnung.
+///
+/// **Abgeschlossen ist unveränderlich.** Eine Begehung ist ein Beleg;
+/// korrigiert wird über eine **Nachkontrolle** (`followUpOfId`), nicht durch
+/// Überschreiben. Der Teilindex lässt je Kontrolle genau eine Nachkontrolle
+/// zu.
+model QualityInspection {
+  id             String @id @default(cuid())
+  organizationId String
+  /// Aus dem Nummernkreis `quality`, vergeben beim **Abschluss** — nicht beim
+  /// Anlegen. Eine verworfene Begehung soll keine Lücke hinterlassen;
+  /// dieselbe Regel wie bei Rechnung und Vertrag.
+  number         String?
+
+  /// Woran gemessen wird. Ohne Vertrag ist es eine Begehung ohne Zusage —
+  /// erlaubt, aber ohne Urteil (`OHNE_ZIEL`).
+  contractId        String?
+  /// Die Fassung, deren Zusage galt. Schnappschuss, keine Auflösung auf „die
+  /// derzeit geltende".
+  contractVersionId String?
+  propertyId        String?
+  /// Wenn die Begehung im Anschluss an einen Einsatz stattfand.
+  jobId             String?
+
+  status QualityInspectionStatus @default(DRAFT)
+
+  /// Wann begangen wurde — nicht wann der Datensatz entstand.
+  inspectedAt DateTime @db.Timestamptz(6)
+  /// Wer begangen hat. Eine Begehung ohne Person ist kein Beleg.
+  inspectorId String?
+
+  // --- Ergebnis, serverseitig gerechnet ---
+  scoreAchieved Decimal  @default(0) @db.Decimal(8, 2)
+  scorePossible Decimal  @default(0) @db.Decimal(8, 2)
+  /// `null`, wenn kein Kriterium beurteilbar war — nicht 0. „Nichts geprüft"
+  /// ist nicht dasselbe wie „null Punkte".
+  scorePercent  Decimal? @db.Decimal(5, 2)
+  /// Der zugesagte Zielwert zum Zeitpunkt der Begehung. `null` = keine Zusage.
+  targetScore   Int?
+  outcome       QualityOutcome @default(OHNE_ZIEL)
+
+  note         String?
+  internalNote String?
+
+  /// Diese Begehung ist die Nachkontrolle zu jener. Eindeutig: eine
+  /// Nachkontrolle je Kontrolle, sonst wäre „welche gilt" eine Frage der
+  /// Reihenfolge.
+  followUpOfId String? @unique
+
+  createdById String?
+  createdAt   DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt   DateTime  @updatedAt @db.Timestamptz(6)
+  completedAt DateTime? @db.Timestamptz(6)
+  deletedAt   DateTime? @db.Timestamptz(6)
+
+  organization Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  contract     Contract?        @relation(fields: [contractId], references: [id], onDelete: SetNull)
+  version      ContractVersion? @relation(fields: [contractVersionId], references: [id], onDelete: SetNull)
+  property     Property?        @relation(fields: [propertyId], references: [id], onDelete: SetNull)
+  job          Job?             @relation(fields: [jobId], references: [id], onDelete: SetNull)
+  inspector    User?            @relation("QualityInspector", fields: [inspectorId], references: [id], onDelete: SetNull)
+
+  followUpOf QualityInspection?  @relation("QualityFollowUp", fields: [followUpOfId], references: [id], onDelete: SetNull)
+  followUp   QualityInspection?  @relation("QualityFollowUp")
+
+  items QualityInspectionItem[]
+
+  @@index([organizationId, status, inspectedAt])
+  @@index([contractId, inspectedAt])
+  @@index([propertyId, inspectedAt])
+  @@map("quality_inspections")
+}
+
+/// Eine Einzelbewertung innerhalb einer Begehung.
+///
+/// `weight = 0` heisst **nicht beurteilbar** — der Keller war verschlossen —
+/// und klammert die Position aus der Rechnung aus, statt sie als null Punkte
+/// zu werten. Der Unterschied ist wesentlich: „nicht geprüft" ist keine
+/// schlechte Note.
+model QualityInspectionItem {
+  id           String @id @default(cuid())
+  inspectionId String
+
+  /// Was beurteilt wurde. Freitext, weil es dafür in dieser Betriebsgrösse
+  /// keinen Kriterienstamm gibt — ein Fremdschlüssel ginge ins Leere.
+  label String
+  /// Wo. Etage, Zone, Raum.
+  room  String?
+
+  points    Decimal @default(0) @db.Decimal(6, 2)
+  maxPoints Decimal @default(5) @db.Decimal(6, 2)
+  weight    Decimal @default(1) @db.Decimal(6, 2)
+
+  note String?
+
+  position Int @default(0)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+
+  inspection QualityInspection @relation(fields: [inspectionId], references: [id], onDelete: Cascade)
+
+  @@index([inspectionId, position])
+  @@map("quality_inspection_items")
+}
+
+enum QualityInspectionStatus {
+  DRAFT
+  COMPLETED
+  CANCELLED
+}
+
+enum QualityOutcome {
+  BESTANDEN
+  KNAPP
+  NICHT_BESTANDEN
+  /// Keine Zusage vereinbart — die Begehung misst, urteilt aber nicht.
+  OHNE_ZIEL
 }

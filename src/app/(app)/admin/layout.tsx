@@ -107,6 +107,14 @@ export default async function AdminLayout({ children }: { children: React.ReactN
           Offerten, aus denen ebenfalls Arbeit entsteht.
         */
         { href: '/admin/vertraege', label: 'Verträge', icon: 'contract', permission: 'contract:read' },
+        /*
+          Die Qualitätskontrolle steht hier und nicht bei der
+          Unternehmensführung: Dort liegt das Kontrollregister der Steuerung
+          (`ControlEntry`) — eine Frage der Governance. Dies hier ist die
+          Begehung vor Ort, die misst, ob die im Vertrag zugesagte Qualität
+          erreicht wurde. Sie gehört zu der Arbeit, die sie beurteilt.
+        */
+        { href: '/admin/qualitaet', label: 'Qualität', icon: 'quality', permission: 'quality:read' },
       ],
     },
     {

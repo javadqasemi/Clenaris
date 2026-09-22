@@ -6,6 +6,7 @@ import { notFound } from 'next/navigation';
 import { can } from '@/lib/auth/rbac';
 import { requirePermission } from '@/lib/auth/session';
 import { alsTag, plusTage, tagSchluessel } from '@/lib/contracts/serie';
+import { naechsteKontrolle } from '@/lib/quality/bewertung';
 import { prisma, toNumber } from '@/lib/db';
 import { formatCurrency, formatDate } from '@/lib/utils';
 import { getOrganizationId } from '@/server/services/organization.service';
@@ -25,6 +26,7 @@ import {
   VertragsrechnungDialog,
   type Leistungszeile,
 } from '@/features/admin/contract-panels';
+import { BegehungDialog } from '@/features/admin/quality-panels';
 
 export const metadata: Metadata = {
   title: 'Vertrag',
@@ -117,7 +119,7 @@ export default async function ContractDetailPage({ params }: { params: Promise<{
   /** Die Fassung, deren Leistungen gezeigt werden: die geltende, sonst der Entwurf. */
   const gezeigt = geltend ?? entwurf ?? vertrag.versions[0] ?? null;
 
-  const [einsaetze, naechste, rechnungen, katalog, offeneAnnahme] = await Promise.all([
+  const [einsaetze, naechste, rechnungen, katalog, offeneAnnahme, begehungen] = await Promise.all([
     prisma.job.count({ where: { contractId: vertrag.id, deletedAt: null } }),
     prisma.job.findMany({
       where: { contractId: vertrag.id, deletedAt: null, scheduledStart: { gte: new Date() } },
@@ -158,6 +160,20 @@ export default async function ContractDetailPage({ params }: { params: Promise<{
       },
       select: { id: true, publicId: true, status: true, expiresAt: true, contractVersionId: true, sentAt: true },
     }),
+    prisma.qualityInspection.findMany({
+      where: { contractId: id, deletedAt: null },
+      orderBy: { inspectedAt: 'desc' },
+      take: 6,
+      select: {
+        id: true,
+        number: true,
+        status: true,
+        inspectedAt: true,
+        scorePercent: true,
+        targetScore: true,
+        outcome: true,
+      },
+    }),
   ]);
 
   const kundschaft =
@@ -170,6 +186,7 @@ export default async function ContractDetailPage({ params }: { params: Promise<{
   const darfFreigeben = can(session.role, 'contract:approve');
   const darfUnterzeichnen = can(session.role, 'contract:sign');
   const darfAbrechnen = can(session.role, 'contract:billing') && can(session.role, 'invoice:create');
+  const darfBegehen = can(session.role, 'quality:inspect');
 
   const planenBis = tagSchluessel(plusTage(alsTag(new Date()), 60));
 
@@ -221,6 +238,32 @@ export default async function ContractDetailPage({ params }: { params: Promise<{
       quantity: leistung.quantity ? toNumber(leistung.quantity) : null,
       specialInstructions: leistung.specialInstructions,
     })) ?? [];
+
+  /**
+   * Der Stand der Qualitätszusage — gerechnet, nicht gespeichert.
+   *
+   * Derselbe reine Kern wie im Dienst (`naechsteKontrolle`); die Akte fragt
+   * keinen Endpunkt, weil sie ohnehin serverseitig rendert. Ohne vereinbartes
+   * Intervall gibt es keine Fälligkeit, und dann steht hier auch nichts.
+   */
+  const qualitaetsstand = gezeigt
+    ? (() => {
+        const letzte = begehungen.find((b) => b.status === 'COMPLETED');
+        return {
+          letzte: letzte
+            ? {
+                inspectedAt: letzte.inspectedAt,
+                prozent: letzte.scorePercent === null ? null : toNumber(letzte.scorePercent),
+              }
+            : null,
+          ...naechsteKontrolle({
+            intervallTage: gezeigt.inspectionIntervalDays,
+            letzteKontrolleAm: letzte?.inspectedAt,
+            vertragsbeginn: vertrag.startDate,
+          }),
+        };
+      })()
+    : null;
 
   const entwurfGesperrt = entwurf
     ? entwurf.acceptedAt
@@ -762,6 +805,73 @@ export default async function ContractDetailPage({ params }: { params: Promise<{
           </DetailSection>
 
           {/* ---------------------------------------------------------- */}
+          {gezeigt?.targetQualityScore || gezeigt?.inspectionIntervalDays || begehungen.length > 0 ? (
+            <DetailSection
+              title="Qualitätskontrolle"
+              description="Die Begehungen, die gegen die Zusage dieser Fassung gemessen wurden."
+              body="flush"
+              action={
+                darfBegehen ? (
+                  <BegehungDialog
+                    contractId={vertrag.id}
+                    zielwert={gezeigt?.targetQualityScore ?? null}
+                    auslöser="Begehung erfassen"
+                  />
+                ) : null
+              }
+            >
+              {begehungen.length === 0 ? (
+                <p className="px-6 py-6 text-sm text-muted-foreground">
+                  Noch keine Begehung. Die Zusage steht in den Konditionen — gemessen wird sie erst hier.
+                </p>
+              ) : (
+                <TableScroll>
+                  <table className="data-table">
+                    <caption className="sr-only">Qualitätsbegehungen dieses Vertrags.</caption>
+                    <thead>
+                      <tr>
+                        <th scope="col">Nummer</th>
+                        <th scope="col">Begangen</th>
+                        <th scope="col" className="text-right">
+                          Ergebnis
+                        </th>
+                        <th scope="col">Urteil</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {begehungen.map((begehung) => (
+                        <tr key={begehung.id}>
+                          <td>
+                            <Link
+                              href={`/admin/qualitaet/${begehung.id}`}
+                              className="font-medium tabular-nums text-primary underline-offset-4 hover:underline"
+                            >
+                              {begehung.number ?? 'Entwurf'}
+                            </Link>
+                          </td>
+                          <td className="tabular-nums text-muted-foreground">{formatDate(begehung.inspectedAt)}</td>
+                          <td className="num">
+                            {begehung.scorePercent === null
+                              ? '—'
+                              : `${toNumber(begehung.scorePercent)} %${
+                                  begehung.targetScore !== null ? ` von ${begehung.targetScore} %` : ''
+                                }`}
+                          </td>
+                          <td>
+                            <StatusBadge
+                              status={begehung.status === 'COMPLETED' ? begehung.outcome : begehung.status}
+                            />
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </TableScroll>
+              )}
+            </DetailSection>
+          ) : null}
+
+          {/* ---------------------------------------------------------- */}
           <DetailSection
             title="Abrechnung"
             description="Eine Periode, eine Rechnung — die Zusicherung steht als Teilindex in der Datenbank, nicht als Prüfung im Ablauf."
@@ -878,6 +988,22 @@ export default async function ContractDetailPage({ params }: { params: Promise<{
                     ]
                       .filter(Boolean)
                       .join(' · ')}
+                    {/*
+                      Bis Wave 11 stand hier nur die Zusage. Die Zeile darunter
+                      ist der Unterschied zwischen einer Zusage und einer
+                      gemessenen Zusage — und sie war der Befund, mit dem
+                      Wave 11 begann.
+                    */}
+                    {qualitaetsstand ? (
+                      <p className="mt-1 text-meta text-muted-foreground">
+                        {qualitaetsstand.letzte
+                          ? `Zuletzt ${qualitaetsstand.letzte.prozent ?? '—'} % am ${formatDate(qualitaetsstand.letzte.inspectedAt)}`
+                          : 'Noch nicht kontrolliert'}
+                        {qualitaetsstand.faelligAm
+                          ? ` · nächste ${qualitaetsstand.ueberfaellig ? 'überfällig seit' : 'fällig'} ${formatDate(qualitaetsstand.faelligAm)}`
+                          : ''}
+                      </p>
+                    ) : null}
                   </DetailRow>
                 ) : null}
               </>

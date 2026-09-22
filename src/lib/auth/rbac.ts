@@ -80,6 +80,15 @@ const CUSTOMER_PERMISSIONS: Permission[] = [
   // Ein Dauerschuldverhältnis, dessen Inhalt die Kundschaft im Kundenbereich
   // nicht nachlesen kann, ist eine Bringschuld, die auf Anruf hinausläuft.
   'contract:read_own',
+  /**
+   * Die Kontrollen der eigenen Objekte.
+   *
+   * Eine zugesagte Qualität, deren Messung die Kundschaft nicht sehen darf,
+   * ist eine Zusage an niemanden. Sichtbar ist deshalb das Ergebnis — nicht
+   * die interne Notiz; die Einschränkung steht in der Prisma-`where`-Klausel
+   * und in der Auswahl, nicht in der Anzeige.
+   */
+  'quality:read_own',
   'invoice:read_own',
   'invoice:pay_own',
   'property:read',
@@ -160,6 +169,17 @@ const MANAGER_PERMISSIONS: Permission[] = [
   // eigentliche Grund für die feine Zerlegung dieser Rechte.
   'contract:read', 'contract:create', 'contract:update', 'contract:delete_draft',
   'contract:version', 'contract:billing',
+  /**
+   * Qualitätskontrolle: begehen **und** abschliessen.
+   *
+   * Anders als bei Verträgen liegt die Linie hier nicht zwischen Entwurf und
+   * Zusage nach aussen: Eine Begehung ist eine Feststellung über die eigene
+   * Arbeit, und wer sie macht, schliesst sie auch ab. Die Betriebsleitung
+   * davon auszuschliessen hiesse, die Person mit der Zange in der Hand auf
+   * eine Freigabe warten zu lassen — und in der Zwischenzeit steht ein
+   * halber Beleg im System.
+   */
+  'quality:read', 'quality:inspect', 'quality:complete',
   'job:read', 'job:create', 'job:update', 'job:delete', 'job:assign', 'job:dispatch',
   'serviceArea:read',
 

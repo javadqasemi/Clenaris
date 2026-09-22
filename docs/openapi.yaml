@@ -39880,6 +39880,594 @@ paths:
             'application/json':
               schema:
                 '$ref': '#/components/schemas/ErrorEnvelope'
+  '/api/quality-inspections':
+    get:
+      tags:
+        - 'Qualität'
+      summary: 'Begehungen auflisten'
+      description: |-
+          **Die Kundschaft liest dieselbe Liste**, eingegrenzt in der `where`-Klausel: nur die eigenen Objekte und Verträge, und nur abgeschlossene — ein Entwurf ist eine Momentaufnahme, keine Feststellung. `internalNote` fehlt in der Auswahl; ein Feld, das nur die Anzeige ausblendet, stünde trotzdem auf der Leitung.
+
+          **Zugriff:** Erfordert eine der Berechtigungen: `quality:read`, `quality:read_own`.
+
+          **Rate-Limit-Klasse:** `apiRead`
+      operationId: 'getQualityInspections'
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: 'status'
+          in: 'query'
+          required: false
+          schema:
+            type: 'string'
+            enum:
+              - 'DRAFT'
+              - 'COMPLETED'
+              - 'CANCELLED'
+        - name: 'outcome'
+          in: 'query'
+          required: false
+          schema:
+            type: 'string'
+            enum:
+              - 'BESTANDEN'
+              - 'KNAPP'
+              - 'NICHT_BESTANDEN'
+              - 'OHNE_ZIEL'
+        - name: 'contractId'
+          in: 'query'
+          required: false
+          schema:
+            type: 'string'
+        - name: 'propertyId'
+          in: 'query'
+          required: false
+          schema:
+            type: 'string'
+        - name: 'von'
+          in: 'query'
+          required: false
+          schema:
+            type: 'string'
+            format: 'date-time'
+        - name: 'bis'
+          in: 'query'
+          required: false
+          schema:
+            type: 'string'
+            format: 'date-time'
+        - name: 'page'
+          in: 'query'
+          required: false
+          schema:
+            type: 'integer'
+            minimum: 1
+            default: 1
+        - name: 'perPage'
+          in: 'query'
+          required: false
+          schema:
+            type: 'integer'
+            minimum: 1
+            maximum: 100
+            default: 25
+      responses:
+        '200':
+          description: 'Erfolg'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/SuccessEnvelope'
+        '400':
+          description: 'VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 'UNAUTHORIZED — keine oder abgelaufene Sitzung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 'FORBIDDEN — angemeldet, aber ohne die nötige Berechtigung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: 'RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+    post:
+      tags:
+        - 'Qualität'
+      summary: 'Begehung erfassen'
+      description: |-
+          Sie entsteht als **Entwurf**. Die Punktzahl rechnet der Server aus den Positionen; ein mitgeschicktes Ergebnis gibt es im Schema nicht — dieselbe Regel wie beim Preis. Der **Massstab wird eingefroren**: festgehalten wird, welche Vertragsfassung am Tag der Begehung galt und welchen Zielwert sie zusagte. Eine Kontrolle, die nach einer Vertragsänderung anders ausfiele, wäre kein Beleg. Abgewiesen (422): eine Begehung ohne Vertrag **und** ohne Objekt, eine Nachkontrolle zu einem Entwurf, eine zweite Nachkontrolle zu derselben Begehung.
+
+          **Zugriff:** Erfordert die Berechtigung: `quality:inspect`.
+
+          **Rate-Limit-Klasse:** `apiWrite`
+      operationId: 'postQualityInspections'
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          'application/json':
+            schema:
+              type: 'object'
+              properties:
+                contractId:
+                  anyOf:
+                    - type: 'string'
+                    - const: ''
+                propertyId:
+                  anyOf:
+                    - type: 'string'
+                    - const: ''
+                jobId:
+                  anyOf:
+                    - type: 'string'
+                    - const: ''
+                inspectedAt:
+                  type: 'string'
+                  format: 'date-time'
+                inspectorId:
+                  anyOf:
+                    - type: 'string'
+                    - const: ''
+                followUpOfId:
+                  anyOf:
+                    - type: 'string'
+                    - const: ''
+                note:
+                  type: 'string'
+                  maxLength: 4000
+                internalNote:
+                  type: 'string'
+                  maxLength: 4000
+                items:
+                  type: 'array'
+                  items:
+                    type: 'object'
+                    properties:
+                      label:
+                        type: 'string'
+                        minLength: 2
+                        maxLength: 160
+                      room:
+                        type: 'string'
+                        maxLength: 120
+                      points:
+                        type: 'number'
+                        minimum: 0
+                        maximum: 1000
+                      maxPoints:
+                        type: 'number'
+                        minimum: 0.5
+                        maximum: 1000
+                      weight:
+                        type: 'number'
+                        minimum: 0
+                        maximum: 100
+                        default: 1
+                      note:
+                        type: 'string'
+                        maxLength: 2000
+                      position:
+                        type: 'integer'
+                        minimum: 0
+                        maximum: 999
+                        default: 0
+                    required:
+                      - 'label'
+                      - 'points'
+                      - 'maxPoints'
+                  maxItems: 200
+                  default: []
+              required:
+                - 'inspectedAt'
+      responses:
+        '201':
+          description: 'Erfolg'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/SuccessEnvelope'
+        '400':
+          description: 'VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 'UNAUTHORIZED — keine oder abgelaufene Sitzung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 'FORBIDDEN — angemeldet, aber ohne die nötige Berechtigung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '409':
+          description: 'CONFLICT — verstösst gegen eine Eindeutigkeitsregel.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: 'BUSINESS_RULE — fachlich nicht zulässig, etwa eine bereits ausgestellte Rechnung ändern.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: 'RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+  '/api/quality-inspections/{id}':
+    patch:
+      tags:
+        - 'Qualität'
+      summary: 'Begehungsentwurf ändern'
+      description: |-
+          **Nur Entwürfe** (422 sonst). Eine abgeschlossene Begehung ist ein Beleg; korrigiert wird über eine Nachkontrolle, nicht durch Überschreiben. Die Positionen werden als Ganzes ersetzt. Verschiebt jemand das Begehungsdatum, verschiebt sich auch der Massstab — sonst trüge die Kontrolle die Zusage eines Tages, an dem sie nicht stattfand.
+
+          **Zugriff:** Erfordert die Berechtigung: `quality:inspect`.
+
+          **Rate-Limit-Klasse:** `apiWrite`
+      operationId: 'patchQualityInspectionsById'
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: 'id'
+          in: 'path'
+          required: true
+          schema:
+            type: 'string'
+            minLength: 1
+      requestBody:
+        required: true
+        content:
+          'application/json':
+            schema:
+              type: 'object'
+              properties:
+                inspectedAt:
+                  type: 'string'
+                  format: 'date-time'
+                inspectorId:
+                  anyOf:
+                    - type: 'string'
+                    - const: ''
+                note:
+                  type: 'string'
+                  maxLength: 4000
+                internalNote:
+                  type: 'string'
+                  maxLength: 4000
+                items:
+                  type: 'array'
+                  items:
+                    type: 'object'
+                    properties:
+                      label:
+                        type: 'string'
+                        minLength: 2
+                        maxLength: 160
+                      room:
+                        type: 'string'
+                        maxLength: 120
+                      points:
+                        type: 'number'
+                        minimum: 0
+                        maximum: 1000
+                      maxPoints:
+                        type: 'number'
+                        minimum: 0.5
+                        maximum: 1000
+                      weight:
+                        type: 'number'
+                        minimum: 0
+                        maximum: 100
+                        default: 1
+                      note:
+                        type: 'string'
+                        maxLength: 2000
+                      position:
+                        type: 'integer'
+                        minimum: 0
+                        maximum: 999
+                        default: 0
+                    required:
+                      - 'label'
+                      - 'points'
+                      - 'maxPoints'
+                  maxItems: 200
+      responses:
+        '200':
+          description: 'Erfolg'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/SuccessEnvelope'
+        '400':
+          description: 'VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 'UNAUTHORIZED — keine oder abgelaufene Sitzung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 'FORBIDDEN — angemeldet, aber ohne die nötige Berechtigung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: 'NOT_FOUND — nicht vorhanden, oder für diese Sitzung nicht sichtbar.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: 'BUSINESS_RULE — fachlich nicht zulässig, etwa eine bereits ausgestellte Rechnung ändern.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: 'RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+    delete:
+      tags:
+        - 'Qualität'
+      summary: 'Begehungsentwurf verwerfen'
+      description: |-
+          Nur Entwürfe. Eine abgeschlossene Begehung wird nicht gelöscht — sie ist ein Beleg, und dafür gibt es keine Ausnahme.
+
+          **Zugriff:** Erfordert die Berechtigung: `quality:inspect`.
+
+          **Rate-Limit-Klasse:** `apiWrite`
+      operationId: 'deleteQualityInspectionsById'
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: 'id'
+          in: 'path'
+          required: true
+          schema:
+            type: 'string'
+            minLength: 1
+      responses:
+        '200':
+          description: 'Erfolg'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/SuccessEnvelope'
+        '400':
+          description: 'VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 'UNAUTHORIZED — keine oder abgelaufene Sitzung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 'FORBIDDEN — angemeldet, aber ohne die nötige Berechtigung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: 'NOT_FOUND — nicht vorhanden, oder für diese Sitzung nicht sichtbar.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: 'BUSINESS_RULE — fachlich nicht zulässig, etwa eine bereits ausgestellte Rechnung ändern.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: 'RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+  '/api/quality-inspections/{id}/complete':
+    post:
+      tags:
+        - 'Qualität'
+      summary: 'Begehung abschliessen'
+      description: |-
+          Ab hier ist sie ein **Beleg**: Nummer aus dem Nummernkreis, Abschlusszeitpunkt, danach weder änderbar noch löschbar. Beides entsteht in *einer* Transaktion mit dem Zustand; die Nummer erst hier, damit ein verworfener Entwurf keine Lücke hinterlässt. Abgewiesen (422): eine Begehung ohne Positionen, und eine, bei der **keine** Position beurteilbar war — die wäre ein Beleg über nichts. Nicht bestanden meldet ans Büro, bestanden nicht.
+
+          **Zugriff:** Erfordert die Berechtigung: `quality:complete`.
+
+          **Rate-Limit-Klasse:** `apiWrite`
+      operationId: 'postQualityInspectionsByIdComplete'
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: 'id'
+          in: 'path'
+          required: true
+          schema:
+            type: 'string'
+            minLength: 1
+      requestBody:
+        required: true
+        content:
+          'application/json':
+            schema:
+              type: 'object'
+              properties:
+                note:
+                  type: 'string'
+                  maxLength: 4000
+      responses:
+        '200':
+          description: 'Erfolg'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/SuccessEnvelope'
+        '400':
+          description: 'VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 'UNAUTHORIZED — keine oder abgelaufene Sitzung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 'FORBIDDEN — angemeldet, aber ohne die nötige Berechtigung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: 'NOT_FOUND — nicht vorhanden, oder für diese Sitzung nicht sichtbar.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: 'BUSINESS_RULE — fachlich nicht zulässig, etwa eine bereits ausgestellte Rechnung ändern.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: 'RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+  '/api/contracts/{id}/quality':
+    get:
+      tags:
+        - 'Qualität'
+      summary: 'Qualitätszusage und ihr Stand'
+      description: |-
+          Der Endpunkt, der die drei SLA-Felder der Vertragsfassung endlich **misst**, statt sie nur zu speichern: zugesagter Zielwert, vereinbartes Kontrollintervall, die letzte abgeschlossene Begehung und wann die nächste ansteht. Gerechnet ab der **letzten durchgeführten** Kontrolle, nicht ab dem Vertragsbeginn — wer früher kontrolliert, verschiebt die nächste Frist nach hinten, statt Termine aufzustauen. Ein Entwurf zählt nicht. Ohne vereinbartes Intervall gibt es keine Fälligkeit, ohne zugesagten Zielwert kein Urteil.
+
+          **Zugriff:** Erfordert die Berechtigung: `quality:read`.
+
+          **Rate-Limit-Klasse:** `apiRead`
+      operationId: 'getContractsByIdQuality'
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: 'id'
+          in: 'path'
+          required: true
+          schema:
+            type: 'string'
+            minLength: 1
+      responses:
+        '200':
+          description: 'Erfolg'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/SuccessEnvelope'
+        '400':
+          description: 'VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 'UNAUTHORIZED — keine oder abgelaufene Sitzung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 'FORBIDDEN — angemeldet, aber ohne die nötige Berechtigung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: 'NOT_FOUND — nicht vorhanden, oder für diese Sitzung nicht sichtbar.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: 'RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
 components:
   securitySchemes:
     sessionCookie:

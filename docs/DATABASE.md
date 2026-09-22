@@ -4,7 +4,7 @@
 > Diagramme sind damit nie älter als das Schema. Prosa und Bereichseinteilung
 > stehen in `scripts/generate-erd.ts`.
 
-**126 Modelle, 94 Aufzählungstypen, 2411 Felder.**
+**128 Modelle, 96 Aufzählungstypen, 2461 Felder.**
 PostgreSQL 16+; alle Zeitstempel als `timestamptz` in UTC, Anzeige in Europe/Zurich.
 
 ## Vier Entscheidungen, die das ganze Schema prägen
@@ -41,7 +41,7 @@ flowchart LR
   crm["CRM<br/><small>13 Modelle</small>"]
   katalog["Leistungskatalog und Preislogik<br/><small>6 Modelle</small>"]
   auftrag["Buchung, Offerte, Einsatz<br/><small>10 Modelle</small>"]
-  vertraege["Verträge und Einsatzpläne<br/><small>7 Modelle</small>"]
+  vertraege["Verträge und Einsatzpläne<br/><small>9 Modelle</small>"]
   personal["Personal und Zeit<br/><small>9 Modelle</small>"]
   finanzen["Finanzen<br/><small>8 Modelle</small>"]
   kommunikation["Kommunikation und Automatisierung<br/><small>10 Modelle</small>"]
@@ -125,7 +125,7 @@ erDiagram
 
 | Modell | Tabelle | Felder | Zweck |
 | --- | --- | --- | --- |
-| `Organization` | `organizations` | 113 | – |
+| `Organization` | `organizations` | 114 | – |
 | `NumberSequence` | `number_sequences` | 6 | – |
 | `OpeningHours` | `opening_hours` | 7 | – |
 | `Holiday` | `holidays` | 7 | – |
@@ -218,7 +218,7 @@ erDiagram
 
 | Modell | Tabelle | Felder | Zweck |
 | --- | --- | --- | --- |
-| `User` | `users` | 56 | – |
+| `User` | `users` | 57 | – |
 | `RefreshToken` | `refresh_tokens` | 10 | – |
 | `VerificationToken` | `verification_tokens` | 9 | – |
 | `PublicAccessToken` | `public_access_tokens` | 15 | – |
@@ -443,7 +443,7 @@ erDiagram
 | `Contact` | `contacts` | 13 | – |
 | `Address` | `addresses` | 25 | – |
 | `Building` | `buildings` | 18 | – |
-| `Property` | `properties` | 31 | – |
+| `Property` | `properties` | 32 | – |
 | `PipelineStage` | `pipeline_stages` | 10 | – |
 | `Tag` | `tags` | 7 | – |
 | `LeadTag` | `lead_tags` | 4 | – |
@@ -653,7 +653,7 @@ erDiagram
 | `BookingExtra` | `booking_extras` | 10 | – |
 | `Quote` | `quotes` | 49 | – |
 | `QuoteItem` | `quote_items` | 15 | – |
-| `Job` | `jobs` | 59 | – |
+| `Job` | `jobs` | 60 | – |
 | `JobAssignment` | `job_assignments` | 11 | – |
 | `JobChecklistItem` | `job_checklist_items` | 11 | – |
 | `JobPhoto` | `job_photos` | 12 | – |
@@ -661,7 +661,7 @@ erDiagram
 
 ## Verträge und Einsatzpläne
 
-Der betriebliche Ursprung wiederkehrender Leistungen: angenommene Offerte → `Contract` → `ContractVersion` → `ContractService` → `ServiceSchedule` → `Job`. Der Vertragskopf trägt die Identität und den Lebenslauf, die **Version** alle kaufmännischen Konditionen — ein laufender Vertrag wird nie umgeschrieben, sondern abgelöst. Leistungen und Pläne hängen deshalb an der Version und werden beim Versionieren kopiert. Jeder erzeugte Einsatz trägt `contractId`, `contractVersionId` und `serviceScheduleId`, damit später beantwortbar bleibt, unter welchen Konditionen er erbracht wurde. `@@unique([serviceScheduleId, scheduleDate])` ist die Doppelsperre des Planers: Derselbe Serientermin kann keinen zweiten Einsatz erzeugen, auch bei gleichzeitigen Läufen nicht.
+Der betriebliche Ursprung wiederkehrender Leistungen: angenommene Offerte → `Contract` → `ContractVersion` → `ContractService` → `ServiceSchedule` → `Job`. Der Vertragskopf trägt die Identität und den Lebenslauf, die **Version** alle kaufmännischen Konditionen — ein laufender Vertrag wird nie umgeschrieben, sondern abgelöst. Leistungen und Pläne hängen deshalb an der Version und werden beim Versionieren kopiert. Jeder erzeugte Einsatz trägt `contractId`, `contractVersionId` und `serviceScheduleId`, damit später beantwortbar bleibt, unter welchen Konditionen er erbracht wurde. `@@unique([serviceScheduleId, scheduleDate])` ist die Doppelsperre des Planers: Derselbe Serientermin kann keinen zweiten Einsatz erzeugen, auch bei gleichzeitigen Läufen nicht. `QualityInspection` misst die Zusage der Fassung (`targetQualityScore`) und hält den Massstab als Schnappschuss fest — eine Begehung, die nach einer Vertragsänderung anders ausfiele, wäre kein Beleg.
 
 ```mermaid
 erDiagram
@@ -735,6 +735,26 @@ erDiagram
     Decimal oldAmount
     Decimal newAmount
   }
+  QualityInspection {
+    String id PK
+    String organizationId
+    String number
+    String contractId
+    String contractVersionId
+    String propertyId
+    String jobId
+    QualityInspectionStatus status
+  }
+  QualityInspectionItem {
+    String id PK
+    String inspectionId
+    String label
+    String room
+    Decimal points
+    Decimal maxPoints
+    Decimal weight
+    String note
+  }
   Contract ||--o{ ContractVersion : "contract"
   ContractVersion ||--o{ ContractService : "version"
   ContractService ||--o{ ServiceSchedule : "contractService"
@@ -744,17 +764,24 @@ erDiagram
   ContractVersion |o--o{ ContractAmendment : "newVersion"
   Contract ||--o{ ContractPriceAdjustment : "contract"
   ContractVersion |o--o{ ContractPriceAdjustment : "version"
+  Contract |o--o{ QualityInspection : "contract"
+  ContractVersion |o--o{ QualityInspection : "version"
+  QualityInspection |o--|| QualityInspection : "followUpOf"
+  QualityInspection |o--o{ QualityInspection : "followUp"
+  QualityInspection ||--o{ QualityInspectionItem : "inspection"
 ```
 
 | Modell | Tabelle | Felder | Zweck |
 | --- | --- | --- | --- |
-| `Contract` | `contracts` | 42 | – |
-| `ContractVersion` | `contract_versions` | 42 | – |
+| `Contract` | `contracts` | 43 | – |
+| `ContractVersion` | `contract_versions` | 43 | – |
 | `ContractService` | `contract_services` | 21 | – |
 | `ServiceSchedule` | `service_schedules` | 18 | – |
 | `ScheduleException` | `schedule_exceptions` | 9 | – |
 | `ContractAmendment` | `contract_amendments` | 22 | – |
 | `ContractPriceAdjustment` | `contract_price_adjustments` | 23 | – |
+| `QualityInspection` | `quality_inspections` | 32 | – |
+| `QualityInspectionItem` | `quality_inspection_items` | 12 | – |
 
 ## Personal und Zeit
 
@@ -1732,6 +1759,8 @@ exakte TypeScript-Typen.
 | `ContractPriceAdjustmentStatus` | `PLANNED`, `APPROVED`, `APPLIED`, `REJECTED` |
 | `ScheduleHolidayHandling` | `IGNORE`, `SKIP`, `MOVE_BEFORE`, `MOVE_AFTER` |
 | `ScheduleExceptionKind` | `SKIP`, `MOVE`, `EXTRA` |
+| `QualityInspectionStatus` | `DRAFT`, `COMPLETED`, `CANCELLED` |
+| `QualityOutcome` | `BESTANDEN`, `KNAPP`, `NICHT_BESTANDEN`, `OHNE_ZIEL` |
 
 ## Migrationen
 

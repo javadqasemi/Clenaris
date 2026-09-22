@@ -257,7 +257,9 @@ const DOMAINS: Domain[] = [
       '`serviceScheduleId`, damit später beantwortbar bleibt, unter welchen Konditionen er ' +
       'erbracht wurde. `@@unique([serviceScheduleId, scheduleDate])` ist die Doppelsperre des ' +
       'Planers: Derselbe Serientermin kann keinen zweiten Einsatz erzeugen, auch bei ' +
-      'gleichzeitigen Läufen nicht.',
+      'gleichzeitigen Läufen nicht. `QualityInspection` misst die Zusage der Fassung ' +
+      '(`targetQualityScore`) und hält den Massstab als Schnappschuss fest — eine Begehung, ' +
+      'die nach einer Vertragsänderung anders ausfiele, wäre kein Beleg.',
     models: [
       'Contract',
       'ContractVersion',
@@ -266,6 +268,8 @@ const DOMAINS: Domain[] = [
       'ScheduleException',
       'ContractAmendment',
       'ContractPriceAdjustment',
+      'QualityInspection',
+      'QualityInspectionItem',
     ],
   },
   {

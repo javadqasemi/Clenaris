@@ -112,6 +112,21 @@ const STATUS_MAP: Record<string, { label: string; variant: BadgeProps['variant']
   PLANNED: { label: 'Geplant', variant: 'neutral' },
   APPLIED: { label: 'Angewandt', variant: 'success' },
   REVIEW: { label: 'In Prüfung', variant: 'info' },
+
+  /*
+    Qualitätskontrolle (Wave 11).
+
+    `KNAPP` ist warnend und nicht zerstörend: Der Zielwert ist verfehlt, aber
+    innerhalb der Toleranz — das ist ein Hinweis, keine Massnahme. Die
+    Unterscheidung wäre wertlos, wenn beides gleich aussähe.
+
+    `OHNE_ZIEL` ist bewusst neutral und heisst „gemessen, nicht beurteilt".
+    Eine grüne Färbung suggerierte ein Bestehen, das niemand zugesagt hat.
+  */
+  BESTANDEN: { label: 'Bestanden', variant: 'success' },
+  KNAPP: { label: 'Knapp verfehlt', variant: 'warning' },
+  NICHT_BESTANDEN: { label: 'Nicht bestanden', variant: 'destructive' },
+  OHNE_ZIEL: { label: 'Ohne Zielwert', variant: 'neutral' },
 };
 
 export function StatusBadge({

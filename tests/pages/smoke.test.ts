@@ -26,6 +26,7 @@ const PAGES: Record<'admin' | 'employee' | 'customer', string[]> = {
     '/admin/offerten/neu',
     '/admin/vertraege',
     '/admin/vertraege/neu',
+    '/admin/qualitaet',
     '/admin/leads',
     '/admin/leads/neu',
     '/admin/kunden',
@@ -166,6 +167,13 @@ describe('Rauchtest', { concurrency: 1 }, async () => {
       firstId('/api/bi/analysis'),
     ]);
 
+    /*
+      Die Qualitätskontrolle hat im Demobestand nicht zwangsläufig einen
+      Datensatz. `firstId` gibt dann `null`, und die Schleife unten
+      überspringt den Fall — genau wie bei jedem anderen Bereich ohne Daten.
+    */
+    const inspectionId = await firstId('/api/quality-inspections');
+
     /**
      * Verträge liefern eine Hülle (`{ gesamt, contracts }`) statt einer nackten
      * Liste — die Seite braucht die Gesamtzahl für die Blätterung. `firstId`
@@ -196,6 +204,7 @@ describe('Rauchtest', { concurrency: 1 }, async () => {
       ['/admin/fuehrung/dokumente', documentId],
       ['/admin/fuehrung/sitzungen', meetingId],
       ['/admin/fuehrung/markt/analyse', boardId],
+      ['/admin/qualitaet', inspectionId],
     ];
 
     for (const [prefix, id] of targets) {

@@ -153,6 +153,10 @@ export const PERMISSIONS = [
   'job:complete_assigned',
   'serviceArea:read',
   'serviceArea:update',
+  'quality:read',
+  'quality:inspect',
+  'quality:complete',
+  'quality:read_own',
 
   // --- Finanzen -------------------------------------------------------------
   'invoice:read',
@@ -451,6 +455,10 @@ export const PERMISSION_META: Record<Permission, PermissionMeta> = {
   'job:complete_assigned': { label: 'Jobs.CompleteAssigned', group: 'Betrieb', description: 'Einen zugewiesenen Einsatz abschliessen und rapportieren.', scoped: true },
   'serviceArea:read': { label: 'ServiceArea.View', group: 'Betrieb', description: 'Einsatzgebiet und Anfahrtspauschalen einsehen.' },
   'serviceArea:update': { label: 'ServiceArea.Edit', group: 'Betrieb', description: 'Postleitzahlen, Anfahrtszeiten und Pauschalen pflegen.' },
+  'quality:read': { label: 'Quality.View', group: 'Betrieb', description: 'Qualitätskontrollen und ihre Ergebnisse einsehen.' },
+  'quality:inspect': { label: 'Quality.Inspect', group: 'Betrieb', description: 'Eine Begehung erfassen und bearbeiten, solange sie Entwurf ist.' },
+  'quality:complete': { label: 'Quality.Complete', group: 'Betrieb', description: 'Eine Begehung abschliessen — danach ist sie ein unveränderlicher Beleg.' },
+  'quality:read_own': { label: 'Quality.ViewOwn', group: 'Betrieb', description: 'Die Kontrollen der eigenen Objekte einsehen (Kundschaft).' },
 
   'invoice:read': { label: 'Invoices.View', group: 'Finanzen', description: 'Rechnungen einsehen.' },
   'invoice:create': { label: 'Invoices.Create', group: 'Finanzen', description: 'Rechnungen erstellen.' },

@@ -25,6 +25,7 @@ import * as payroll from '@/lib/validation/payroll';
 import * as q from '@/lib/validation/queries';
 import { BI_ROUTES } from './openapi-routes-bi';
 import { CONTRACT_ROUTES } from './openapi-routes-vertraege';
+import { QUALITY_ROUTES } from './openapi-routes-qualitaet';
 
 /**
  * Registrierung aller REST-Endpunkte.
@@ -4154,4 +4155,10 @@ export const ROUTES: RouteDoc[] = [
   //  Verträge — eigene Datei aus demselben Grund
   // -------------------------------------------------------------------------
   ...CONTRACT_ROUTES,
+
+  // -------------------------------------------------------------------------
+  //  Qualitätskontrolle — dasselbe Muster, damit die drei Module
+  //  nebeneinander wachsen können, ohne sich in einer Datei zu drängen
+  // -------------------------------------------------------------------------
+  ...QUALITY_ROUTES,
 ];
