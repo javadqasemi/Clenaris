@@ -267,20 +267,8 @@ export function AppShell({
     router.refresh();
   };
 
-  const sidebar = (
-    <div className="flex h-full flex-col">
-      <div className="flex h-16 shrink-0 items-center gap-3 border-b border-border px-5">
-        <Logo href={areaHref} showWordmark={false} />
-        <div className="min-w-0">
-          <p className="truncate font-display text-sm font-bold leading-tight tracking-tight">
-            Clenaris
-          </p>
-          <p className="truncate text-xs text-muted-foreground">{areaLabel}</p>
-        </div>
-      </div>
-
-      <ScrollArea className="flex-1">
-        <nav className="space-y-6 p-3" aria-label="Bereichsnavigation">
+  const navigationsliste = (
+    <nav className="space-y-6 p-3" aria-label="Bereichsnavigation">
           {navigation.map((group, groupIndex) => (
             <div key={group.label ?? groupIndex} className="space-y-1">
               {group.label ? (
@@ -348,8 +336,22 @@ export function AppShell({
               })}
             </div>
           ))}
-        </nav>
-      </ScrollArea>
+    </nav>
+  );
+
+  const sidebar = (
+    <div className="flex h-full flex-col">
+      <div className="flex h-16 shrink-0 items-center gap-3 border-b border-border px-5">
+        <Logo href={areaHref} showWordmark={false} />
+        <div className="min-w-0">
+          <p className="truncate font-display text-sm font-bold leading-tight tracking-tight">
+            Clenaris
+          </p>
+          <p className="truncate text-xs text-muted-foreground">{areaLabel}</p>
+        </div>
+      </div>
+
+      <ScrollArea className="flex-1">{navigationsliste}</ScrollArea>
 
       <div className="shrink-0 border-t border-border p-3">
         <Link

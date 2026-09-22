@@ -371,3 +371,190 @@ Fehlschläge**, 3 übersprungen.
 > zeigt, ist ein Beweis, den der nächste Lauf löscht, wertlos. Die Befunde
 > liegen deshalb in `hydrationsbefunde/` — ausserhalb von Playwrights
 > Ausgabeverzeichnis und in `.gitignore`.
+
+---
+
+## 11. Die Bisektion — durchgeführt, nicht geplant
+
+Abschnitt 9.4 endete mit einem Vorhaben. Dieser Abschnitt hält fest, was
+daraus wurde. Jede Runde folgt derselben Form: **Hypothese, kontrollierte
+Änderung, Produktionsbau, genügend Ladevorgänge, Ergebnis, Entscheidung.**
+Gemessen wurde auf `/portal/profil`, angemeldet als Mitarbeiterin, je
+**900 Ladevorgänge** gegen einen Produktionsbau auf Port 3003
+(`NEXT_DIST_DIR=.next-probe`).
+
+### 11.1 Das Werkzeug: eine Sonde, die Server und Browser gleich sieht
+
+Ein Bauteil versuchsweise wegzulassen ist nur dann eine Messung über die
+Hydration, wenn **Server und Browser dieselbe Fassung sehen**. Ein Schalter im
+Browser wäre wertlos — er erzeugte den Unterschied, den er messen soll.
+
+Die Sonde ist deshalb ein Cookie, den das Layout **serverseitig** liest
+(`src/lib/shell-probe.ts`, nur aktiv bei `SHELL_PROBE=1`). `app-shell.tsx`
+lässt die genannten Bauteile dann auf beiden Seiten weg. Nachgewiesen an der
+ausgelieferten Länge: leerer Cookie → 77 889 Zeichen, neun Bauteile
+abgeschaltet → 63 642 Zeichen.
+
+> Diese Sonde ist **Untersuchungsgerät, kein Produktmerkmal**. Sie wird vor dem
+> Abschluss entfernt; ohne `SHELL_PROBE=1` ist sie ohnehin wirkungslos.
+
+### 11.2 Runde 1 — der ganze Rahmen
+
+**Hypothese.** Der Fehler steckt in einem Bauteil der Kopf- und Seitenleiste:
+Radix-Auslöser (`Sheet`, `DropdownMenu`), Themenumschalter, Glocke,
+Personenbild, `SessionKeepalive`, `ThemeSync`, Fortschrittsbalken.
+
+**Kontrollierte Änderung.** Alle neun gleichzeitig abgeschaltet — die
+grosszügigste Variante der Hypothese. Bleibt der Fehler, sind alle neun
+ausgeschlossen, und eine Runde ersetzt neun.
+
+| Variante | Treffer |
+|---|---|
+| nichts abgeschaltet | 7 von 900 |
+| `sidebar, sheet, breadcrumbs, theme, bell, usermenu, keepalive, themesync, navprogress` | **18 von 900** |
+
+**Ergebnis.** Ohne den Rahmen ist die Rate **nicht niedriger, sondern höher.**
+
+**Entscheidung.** Die neun Bauteile sind als Ursache **ausgeschlossen**. Dass
+der Wert steigt, ist kein Widerspruch: Weniger Inhalt heisst ein schnelleres
+Dokument und damit ein anderes Zeitfenster für die Hydration. Genau das ist der
+Unterschied zwischen Ursache und Zeitverstärker — und der erste harte Beleg
+dafür, dass hier ein Zeitproblem und kein Bauteilproblem gemessen wird.
+
+### 11.3 Runde 2 — Rahmen gegen Seiteninhalt
+
+**Hypothese.** Wenn nicht der Rahmen, dann der Seiteninhalt in `<main>`.
+
+| Variante | Treffer |
+|---|---|
+| nichts abgeschaltet (Kontrolle) | 2 von 900 |
+| nur `main` abgeschaltet — voller Rahmen, kein Seiteninhalt | **0 von 900** |
+
+**Ergebnis.** Ohne Seiteninhalt kein Fehler, bei vollem Rahmen.
+
+**Entscheidung.** Der auseinanderlaufende Knoten liegt **im Teilbaum der
+Seite**, nicht im Rahmen. Zugleich zeigt die Kontrolle (2 statt 7 bei
+identischer Fassung), wie stark die Messung streut: Bei einer Rate um 0,5 %
+sind 900 Ladevorgänge gerade genug für eine Richtungsaussage, nicht für einen
+Prozentwert auf die Nachkommastelle. Jede Zahl hier ist so zu lesen.
+
+### 11.4 Die Messung, die die bisherige Erklärung widerlegt
+
+Nach Runde 2 stand die Frage, ob die Einblendung (`$RC`/`$RV`) überhaupt noch
+beteiligt sein *kann*. Das lässt sich ohne Wahrscheinlichkeiten beantworten —
+man muss nur nachsehen, was der Server ausliefert:
+
+| Seite | `<!--$?-->` offen | `<!--$-->` fertig | `$RC` | `$RS` | `$RV` |
+|---|---|---|---|---|---|
+| `/portal/profil` | 0 | 2 | 0 | 0 | 0 |
+| `/portal` | 0 | 2 | 0 | 0 | 0 |
+| `/portal/einsaetze` | 0 | 2 | 0 | 0 | 0 |
+
+**Kein einziger offener Platzhalter, kein einziger Einblendeaufruf.** Die
+angemeldeten Seiten kommen seit dem Entfernen der `loading.tsx` in *einem*
+Stück; die beiden fertigen Grenzen stammen aus dem Rahmen und stehen schon
+geschlossen im HTML.
+
+**Damit ist die gedrosselte Einblendung als Ursache des Restes ausgeschlossen.**
+Der Befund aus Abschnitt 4 war richtig — für den damals gemessenen Anteil von
+1–7 %. Für den Rest von 0,2–0,8 % ist er es nicht: Was nicht im Dokument steht,
+kann nichts verschieben. Abschnitt 4 beschreibt einen **Auslöser**, der
+abgestellt wurde; der Rest hat eine andere Ursache.
+
+### 11.5 Was der eingefangene Befund über die Art des Fehlers sagt
+
+React 19 wirft aus `throwOnHydrationMismatch(fiber, fromText)`. Das erste
+Argument der verdichteten Meldung ist `"text"`, wenn ein **Textknoten**
+auseinanderlief, und `"HTML"` bei einem **Element**. Der eingefangene Befund
+lautet `args[]=HTML`.
+
+Das schliesst die naheliegendste Erklärungsfamilie aus: eine zeitabhängige
+*Beschriftung* — „vor 3 Minuten", eine Uhrzeit, eine gerundete Dauer — erzeugt
+`text`, nicht `HTML`. Gesucht ist etwas, das im ersten Browserdurchgang ein
+**anderes Element oder eine andere Anzahl Elemente** ergibt als im HTML.
+
+### 11.6 Der Stand nach der Bisektion
+
+Eingekreist, jeweils gemessen und nicht vermutet:
+
+- **nicht** der Anwendungsrahmen (Runde 1),
+- **im** Teilbaum der Seite (Runde 2),
+- **nicht** Reacts gedrosselte Einblendung (11.4 — es gibt keine),
+- ein **Element**-Unterschied, kein Textunterschied (11.5),
+- zeitabhängig: rund fünf von tausend Ladevorgängen derselben Seite mit
+  identischem Datenbestand.
+
+Der nächste Schritt ist keine weitere Runde am Produktionsbau, sondern der
+**Entwicklungsbau** (`npm run diagnose:server`): Er gibt die vollständige
+Gegenüberstellung samt Komponentennamen aus, wo der Produktionsbau nur
+`#418` sagt. Ein Treffer dort benennt die Stelle, statt sie einzukreisen.
+
+---
+
+## 12. Die 55 entfernten `loading.tsx` — was sie gekostet haben
+
+Abschnitt 6 hat die Entfernung begründet und die Kosten in einem Absatz
+benannt. Dieser Abschnitt geht die Liste durch, Punkt für Punkt, und trennt
+dabei **gemessen** von **abgeschätzt**.
+
+### 12.1 Was tatsächlich verloren ging
+
+**Das Streaming.** Das ist der einzige technisch harte Verlust. Eine
+`loading.tsx` ist für Next eine Suspense-Grenze; mit ihr kann der Server den
+Rahmen ausliefern, bevor die Abfragen der Seite fertig sind. Ohne sie wartet
+das ganze Dokument auf die langsamste Abfrage. Gemessen an den ausgelieferten
+Dokumenten (Abschnitt 11.4): **null offene Platzhalter** — es wird nichts mehr
+gestreamt, die Seiten kommen in einem Stück.
+
+Für die angemeldeten Bereiche ist das ein anderer Handel als für eine
+öffentliche Seite: Sie sind ohnehin `dynamic = 'force-dynamic'`, die Abfragen
+laufen gegen eine Datenbank im selben Netz, und es gibt keine Suchmaschine, der
+ein früher erster Byte etwas nützte. Ein Verlust bleibt es trotzdem, und er
+wird hier nicht kleingeredet: Wer eine Liste mit achthundert Zeilen öffnet,
+wartet jetzt auf das vollständige Dokument statt auf den Rahmen.
+
+**Das Gerüst beim Seitenwechsel.** Statt eines Skeletts bleibt die alte Seite
+stehen, bis die neue fertig ist. Das ist nicht in jeder Hinsicht schlechter —
+lesbarer alter Inhalt schlägt graue Balken —, aber es ist eine andere
+Rückmeldung, und wer das Skelett gewohnt war, vermisst es.
+
+### 12.2 Was dafür besser wurde
+
+Der Ersatz (`NavigationProgress`) greift bei **jeder** Navigation über einen
+Link. Die Skelette gab es nur für Routen mit eigener Datei; `/portal/profil`,
+`/portal/wissen`, `/admin/sicherheit` und ein gutes Dutzend weitere hatten nie
+eine Rückmeldung. Gemessen an der Zahl der Routen mit Rückmeldung ist das eine
+Verbesserung, keine Verschlechterung.
+
+### 12.3 Die Punkte aus der Prüfliste, einzeln
+
+| Punkt | Befund |
+|---|---|
+| **Sprung im Aufbau** (Layout Shift) | Keiner. Der Balken ist `fixed`, zwei Pixel hoch, ausserhalb des Flusses und ohne Zeigerereignisse. Die Skelette erzeugten ebenfalls keinen — unentschieden |
+| **Balken bleibt hängen** | Ausgeschlossen: Deckel bei zwölf Sekunden. Ein Balken, der lügt, ist schlechter als keiner |
+| **Fehlernavigation beendet den Balken nicht** | Beendet: Der Pfad ändert sich auch zur Fehlerseite hin. Bleibt der Pfad gleich, greift der Deckel |
+| **Umleitungen** | Beendet: `/a` → `/b` ändert den Pfad |
+| **Abgebrochene Navigation** | Der Balken läuft bis zum Deckel weiter. Kleiner Schönheitsfehler, kein falscher Zustand |
+| **Vor und Zurück** | **Kein Balken.** `popstate` löst keinen Klick aus, und ein `popstate`-Zuhörer feuerte *nach* der Navigation — also genau dann, wenn nichts mehr zu warten ist. Für diese Wege hält Next den Clientcache vor |
+| **Navigation aus dem Programm** | **Kein Balken** (`router.push` nach einer Handlung). In diesen Fällen hat gerade eine Schaltfläche mit Ladezustand gewartet; eine Rückmeldung gab es also |
+| **Barrierefreiheit** | War **fehlerhaft und ist behoben.** Der erste Entwurf fügte den `aria-live`-Bereich gemeinsam mit seinem Inhalt ein — die eine Art, einen Live-Bereich zu benutzen, die nicht funktioniert, weil vorlesende Programme Änderungen *innerhalb* eines vorhandenen Bereichs beobachten. Der Bereich steht jetzt immer im Dokument, leer und ohne Höhe; erst sein Inhalt wechselt |
+
+### 12.4 Die Entscheidung
+
+**Die `loading.tsx` kommen nicht zurück** — und zwar aus einem Grund, der sich
+seit Abschnitt 6 geändert hat.
+
+Damals war die Begründung: Sie verursachen den dominierenden Anteil des
+Fehlers. Das stimmt weiterhin, die Gegenprobe steht in Abschnitt 5.
+
+Neu hinzu kommt aber Abschnitt 11.4: Die angemeldeten Seiten liefern heute
+**null** Suspense-Grenzen aus. Ihre Rückkehr wäre also keine Feinjustierung,
+sondern die Wiedereinführung genau des Mechanismus, dessen Wegfall 1–7 % auf
+0,2–0,8 % gedrückt hat. Solange der Rest nicht erklärt ist, wäre das ein Handel
+gegen die eigene Messung.
+
+Wenn der Rest gefunden und behoben ist, ist die Frage neu zu stellen — dann
+aber gezielt: **eine** Grenze auf der teuersten Liste, gemessen gegen
+denselben Aufbau, und nicht 55 auf einmal. Die Messreihe aus Abschnitt 5 (zwei
+Grenzen 1–7 %, eine Grenze 7/400, null Grenzen 0/300) zeigt, dass die Zahl der
+Grenzen und nicht ihre Art den Ausschlag gibt.

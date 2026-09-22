@@ -32,12 +32,13 @@ import { usePathname } from 'next/navigation';
  *  Drei Entscheidungen
  * ---------------------------------------------------------------------------
  *
- * **Der erste Rendervorgang ergibt `null` — auf dem Server und im Browser.**
- * Das ist keine Formsache, sondern der Grund, warum diese Komponente die
- * Krankheit nicht wiederholt, die sie behandelt: Ein Element, das im Browser
- * beim ersten Durchgang anders aussieht als im ausgelieferten HTML, ist genau
- * der Hydrationsfehler, den Wave 9.1 beseitigt hat. Der Balken entsteht
- * ausschliesslich durch einen Klick, also lange nach der Hydration.
+ * **Der erste Rendervorgang ergibt auf dem Server und im Browser dasselbe:**
+ * einen leeren Bereich ohne sichtbaren Inhalt. Das ist keine Formsache,
+ * sondern der Grund, warum diese Komponente die Krankheit nicht wiederholt,
+ * die sie behandelt: Ein Element, das im Browser beim ersten Durchgang anders
+ * aussieht als im ausgelieferten HTML, ist genau der Hydrationsfehler, den
+ * Wave 9.1 beseitigt hat. Der Balken entsteht ausschliesslich durch einen
+ * Klick, also lange nach der Hydration.
  *
  * **Gehört wird am Dokument, nicht an einzelnen Links.** Next bietet seit
  * 15.3 `useLinkStatus()`, das aber nur *innerhalb* eines `<Link>` gilt — man
@@ -52,6 +53,21 @@ import { usePathname } from 'next/navigation';
  * gäbe: Eine Navigation, die scheitert (Fehlerseite, abgebrochene Anfrage,
  * gleicher Pfad mit anderem Suchparameter), liesse einen Balken stehen, der
  * für immer lädt. Ein Balken, der lügt, ist schlechter als keiner.
+ *
+ * ---------------------------------------------------------------------------
+ *  Was er nicht abdeckt — benannt, nicht verschwiegen
+ * ---------------------------------------------------------------------------
+ *
+ * **Vor- und Zurück-Tasten** lösen keinen Klick aus und damit keinen Balken.
+ * Für diese Wege hält Next den Clientcache vor; sie sind in aller Regel sofort
+ * da. Ein `popstate`-Zuhörer feuerte nach der Navigation, nicht davor — er
+ * zeigte den Balken also genau dann, wenn nichts mehr zu warten ist.
+ *
+ * **Navigation aus dem Programm** (`router.push` nach einem Formular, der
+ * Sprung nach einer Handlung) löst ebenfalls keinen aus. Den Router dafür zu
+ * umwickeln hiesse, jede Aufrufstelle anzufassen oder eine Next-Innerei zu
+ * überschreiben; beides ist teurer als der Nutzen. In diesen Fällen hat gerade
+ * eine Schaltfläche mit Ladezustand gewartet — eine Rückmeldung gab es also.
  */
 
 /** Nach dieser Zeit verschwindet der Balken auch ohne Pfadwechsel. */
@@ -130,22 +146,35 @@ export function NavigationProgress() {
     return () => window.clearTimeout(zeitgeber);
   }, [laeuft]);
 
-  if (!laeuft) return null;
-
+  /**
+   * Der Bereich mit `aria-live` steht **immer** im Dokument, auch wenn nichts
+   * läuft — leer, ohne Höhe, ohne sichtbares Element.
+   *
+   * Der erste Entwurf gab `null` zurück, solange nichts lief, und baute Bereich
+   * und Text gemeinsam ein. Das ist die eine Art, einen Live-Bereich zu
+   * benutzen, die nicht funktioniert: Vorlesende Programme beobachten
+   * *Änderungen innerhalb* eines vorhandenen Bereichs. Wird der Bereich
+   * gleichzeitig mit seinem Inhalt eingefügt, gibt es für sie nichts zu
+   * beobachten, und die Ansage bleibt je nach Programm ganz aus.
+   *
+   * Für die Hydration ändert das nichts: Ein leerer `<div>` mit festen
+   * Attributen ist auf dem Server und im Browser derselbe. Nicht-deterministisch
+   * war der alte Entwurf ohnehin nicht — er war nur als Ansage wirkungslos.
+   */
   return (
-    <div
-      className="pointer-events-none fixed inset-x-0 top-0 z-[60] h-0.5"
-      role="status"
-      aria-live="polite"
-    >
-      <span className="sr-only">Seite wird geladen</span>
-      <div
-        className={
-          fertig
-            ? 'h-full w-full bg-primary transition-[width,opacity] duration-200 ease-out'
-            : 'h-full w-1/3 animate-nav-progress bg-primary'
-        }
-      />
+    <div className="pointer-events-none fixed inset-x-0 top-0 z-[60] h-0.5" role="status" aria-live="polite">
+      {laeuft ? (
+        <>
+          <span className="sr-only">{fertig ? 'Seite geladen' : 'Seite wird geladen'}</span>
+          <div
+            className={
+              fertig
+                ? 'h-full w-full bg-primary transition-[width,opacity] duration-200 ease-out'
+                : 'h-full w-1/3 animate-nav-progress bg-primary'
+            }
+          />
+        </>
+      ) : null}
     </div>
   );
 }
