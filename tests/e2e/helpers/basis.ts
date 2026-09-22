@@ -1,6 +1,7 @@
 import { test as basis } from '@playwright/test';
 
 import { resetRateLimits } from '../../helpers/rate-limit';
+import { diagnoseAnhaengen } from './diagnose';
 
 /**
  * Der gemeinsame Testrahmen der Browser-Reihe.
@@ -38,12 +39,29 @@ export const test = basis.extend({
    * benannter offener Punkt — diese Zeile versteckt ihn nicht, sie hält ihn
    * nur aus der Fehlerprüfung heraus.
    */
-  context: async ({ context }, use) => {
+  context: async ({ context }, use, testInfo) => {
     await context.route('**/favicon.ico', (route) => route.fulfill({ status: 204, body: '' }));
+
+    /**
+     * Die Hydrationswache hängt an **jedem** Fall.
+     *
+     * Vorher fiel ein Hydrationsfehler nur dort auf, wo ein Fall ausdrücklich
+     * `konsole.keineFehler()` aufrief — also in etwa der Hälfte. Genau das war
+     * der Grund, warum der Befund über Waves hinweg „mal hier, mal dort"
+     * aussah: Er trat vermutlich häufiger auf, als die Reihe ihn meldete.
+     *
+     * Ab hier ist ein React-Hydrationsfehler in jedem Fall ein Fehlschlag, und
+     * die Beweise dazu liegen als Artefakt vor, statt als eine Zeile im
+     * Terminal zu verschwinden.
+     */
+    const diagnose = diagnoseAnhaengen(context, testInfo);
+
     // `use` ist hier Playwrights Übergabefunktion für eine Testvorrichtung,
     // kein React-Hook. Die Regel erkennt nur den Namen und liegt deshalb falsch.
     // eslint-disable-next-line react-hooks/rules-of-hooks
     await use(context);
+
+    await diagnose.auswerten(testInfo);
   },
 });
 

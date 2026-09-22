@@ -24,22 +24,37 @@ Spalten `FE` (Frontend), `BE` (Backend), `DB`, `RBAC`, `SEC` (eigener Sicherheit
 
 ## Gesamtverteilung
 
-*Stand nach Wave 9 (2026-09-21). Änderungen gegenüber der Erstfassung sind unten begründet; die Anteile sind gerundet.*
+*Stand nach Wave 9.1 (2026-09-22). Änderungen gegenüber der Erstfassung sind unten begründet; die Anteile sind gerundet.*
 
 | Status | Anzahl | Anteil |
 |---|---|---|
 | COMPLETE + VERIFIED | **95** | 51 % |
-| COMPLETE | **59** | 32 % |
+| COMPLETE | **56** | 30 % |
 | COMPLETE / EXTERNAL VERIFICATION REQUIRED | **6** | 3 % |
-| PARTIAL | **19** | 10 % |
+| PARTIAL | **21** | 11 % |
 | BACKEND ONLY | **0** | 0 % |
 | FRONTEND ONLY | **0** | 0 % |
 | SCHEMA ONLY | **3** | 2 % |
 | NOT IMPLEMENTED | **4** | 2 % |
 | **Summe** | **185** | |
 
-**Technisch nutzbar (C+V oder C): 154 von 185 = 83 %.**
+**Technisch nutzbar (C+V oder C): 151 von 185 = 82 %.**
 **Durch Tests belegt: 95 von 185 = 51 %.**
+
+> **Diese Zahlen sind ausgezählt, nicht fortgeschrieben.** Sie stammen aus den
+> Zeilen dieser Datei selbst:
+>
+> ```powershell
+> Get-Content docs\CLENARIS_FEATURE_MATRIX.md |
+>   Where-Object { $_ -match '^\|\s*[A-Z]{1,6}-\d{3}\s*\|' } |
+>   ForEach-Object { [regex]::Match($_, '\|\s*\*\*(C\+V|C/EVR|C|P|NI|SO|BO|FO)\*\*\s*\|').Groups[1].Value } |
+>   Group-Object | Sort-Object Count -Descending
+> ```
+>
+> Der Anlass ist ein Fehler, den erst dieses Auszählen sichtbar gemacht hat:
+> Die Verteilung stand bis Wave 9 auf **59 × C**, gezählt waren es **57**. Eine
+> von Hand fortgeschriebene Zusammenfassung läuft still auseinander — und
+> gerade eine Statustabelle wird gelesen, als wäre sie gemessen.
 
 > **BACKEND ONLY und FRONTEND ONLY sind beide leer.** Das waren die zwei
 > kleinsten Kategorien und die zwei ärgerlichsten: Logik, die niemand bedienen
@@ -118,6 +133,15 @@ Spalten `FE` (Frontend), `BE` (Backend), `DB`, `RBAC`, `SEC` (eigener Sicherheit
 | **EMP-013: NI → C** | `Payslip` stand seit der ersten Migration im Schema, samt AHV-, ALV-, BVG- und UVG-Spalten — und kein Codepfad hat je eine Abrechnung erzeugt. Jetzt: Beitragsrechnung, Satztabelle je Jahr, Lohnlauf, Veröffentlichung. Nicht **C+V**, weil das PDF fehlt und der Lauf nur über die Schnittstelle zu starten ist. |
 | **EMP-014: FO → C+V** | Die Seite `/portal/lohn` war vorhanden und konnte keinen Inhalt bekommen. Jetzt gibt es welchen — und ein Entwurf bleibt für die eigene Person unsichtbar. **FRONTEND ONLY ist damit leer.** |
 | **Was ausdrücklich nicht dazukam** | Quellensteuer, Kinderzulagen, 13. Monatslohn, Ferienentschädigung, Naturalleistungen und Lohnausweis. Jedes ist eine eigene Regel mit eigenen Ausnahmen; eine halbe Umsetzung sähe aus wie eine vollständige Abrechnung. Die Abgrenzung steht in `docs/PAYROLL.md` §1 — nicht als Versäumnis, sondern als Entscheidung. |
+
+### Änderungen in Wave 9.1
+
+| Änderung | Begründung |
+|---|---|
+| **EMP-013: C → P** | Die Einstufung **C** las sich als „Lohnabrechnung fertig", und das ist sie nicht. Was vorhanden ist, ist der **Kern**: Beitragsrechnung (AHV/IV/EO, ALV, BVG, UVG, KTG), Sätze je Organisation und Jahr, Lohnlauf aus freigegebenen Zeiten, Veröffentlichung. Was fehlt, ist weder Randfall noch Kosmetik: PDF, Maske in der Verwaltung, Arbeitgeberbeiträge — und fachlich Quellensteuer, Zulagen, 13. Monatslohn, Ferienentschädigung und Lohnausweis. Nach der Legende dieser Datei ist das **PARTIAL**: wesentliche Teile da, Prozess nicht vollständig. Zusätzlich gilt für jeden gesetzlichen Wert **E-10** — die Sätze sind eine datierte Vorbelegung und keine Wahrheit; solange sie niemand bestätigt hat, meldet jeder Lauf `saetzeGeprueft: false`. |
+| **Keine Aussage über Konformität** | Weder „vollständige Schweizer Lohnbuchhaltung" noch „gesetzeskonform" noch „Swiss compliant". Diese Sätze darf nur eine Treuhandstelle sagen, und sie steht als **E-10** in der Baseline. Was hier steht, ist eine Umsetzung des definierten Kernumfangs, überprüfbar, datiert konfigurierbar — mehr nicht. |
+| **PDF-Zeile bereinigt** | FILE-006 trug „Lohnabrechnung fehlt" als offenen Punkt und behält ihn; er ist jetzt in EMP-013 sichtbar, statt nur dort zu stehen, wo ihn niemand sucht. |
+| **Neu: INF-011 (Hydration/E2E-Zuverlässigkeit) = PARTIAL** | Die Hauptursache des zeitweisen Hydrationsfehlers ist bestimmt und beseitigt — Reacts gedrosselte Suspense-Einblendung, gemessen von 1–7 % auf 0,3–0,5 %. Ein Restfehler bleibt: 16 Browserläufe, 13 grün, 3 rot. Er wird als **offen** geführt und nicht als behoben; neun Ausschlussmessungen, zwei dokumentierte Sackgassen und der nächste Schritt stehen in `docs/HYDRATION.md`. |
 
 ---
 
@@ -295,7 +319,7 @@ Spalten `FE` (Frontend), `BE` (Backend), `DB`, `RBAC`, `SEC` (eigener Sicherheit
 | EMP-015 | Zeiterfassung — ansehen, korrigieren, freigeben | – | ✓ | ✓ | ✓ | ✓ | ✓ | – | **C** | `timetracking.service.ts`, fünf Endpunkte, 22 Prüfungen | Eine Ansicht in der Verwaltung — heute nur über die Schnittstelle |
 | EMP-011 | Abwesenheiten (Antrag, Bewilligung, Rückzug) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | – | **C+V** | `crud-audit.test.ts`, `dispatch.test.ts` | – |
 | EMP-012 | Stellen und Bewerbungen | ✓ | ✓ | ✓ | ✓ | ✓ | ○ | – | **P** | `/karriere`, `/admin/personal/bewerbungen` | Prüfungen, Bewerberweg |
-| EMP-013 | **Lohnabrechnung** | – | ✓ | ✓ | ✓ | ✓ | ✓ | – | **C** | `lib/payroll/beitraege.ts`, `payroll.service.ts`, `PayrollSetting`, sechs Endpunkte, `lohnabrechnung.test.ts` (26) | PDF (`pdfUrl` bleibt leer), Maske in der Verwaltung, Arbeitgeberbeiträge. Quellensteuer und Zulagen ausdrücklich **nicht** — siehe `docs/PAYROLL.md` §1 |
+| EMP-013 | **Lohnabrechnung — definierter Kernumfang** | – | ✓ | ✓ | ✓ | ✓ | ✓ | – | **P** | `lib/payroll/beitraege.ts`, `payroll.service.ts`, `PayrollSetting`, sechs Endpunkte, `lohnabrechnung.test.ts` (26) | **Technisch:** PDF (`pdfUrl` bleibt leer), Maske in der Verwaltung, Arbeitgeberbeiträge. **Fachlich:** Quellensteuer, Kinder- und Ausbildungszulagen, 13. Monatslohn, Ferien- und Feiertagsentschädigung, Naturalleistungen, Lohnausweis — ausdrücklich **nicht** enthalten (`docs/PAYROLL.md` §1). **Keine Aussage über Konformität**: die Sätze sind eine datierte Vorbelegung, jeder Lauf meldet `saetzeGeprueft: false`, bis eine Treuhandstelle sie bestätigt (**E-10**) |
 | EMP-014 | Seite `/portal/lohn` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | – | **C+V** | Die Seite hat seit Wave 9 einen Inhalt: veröffentlichte Abrechnungen. Ein Entwurf existiert für die eigene Person nicht (404) | – |
 
 ---
@@ -405,6 +429,7 @@ Spalten `FE` (Frontend), `BE` (Backend), `DB`, `RBAC`, `SEC` (eigener Sicherheit
 | INF-008 | Beobachtbarkeit (Fehlerverfolgung, Alarm) | – | ✓ | – | ✓ | ✓ | ✓ | – | **P** | Seit Wave 5: Anfragekennung, Kennzahlen je Endpunkt, `/api/metrics`, `/api/health`. **Kein Anbieter** — das ist die Abgrenzung, nicht die Lücke (`docs/OBSERVABILITY.md` §1) | Alarmierung und Zeitreihe über Neustarts hinweg brauchen einen Sammler — Betriebsentscheidung |
 | INF-009 | Warteschlange für Hintergrundarbeit | – | ✓ | ✓ | – | ✓ | ✓ | – | **P** | `AutomationRun` **ist** die Warteschlange: Beanspruchung in der `where`-Klausel, Wiederholung mit wachsendem Abstand, Obergrenze je Lauf, Entkopplung vom Geschäftsvorgang. Angetrieben vom Scheduler | Ein eigener Arbeitsprozess brächte Minutengenauigkeit — Betriebsentscheidung, kein Codemangel (`docs/AUTOMATION.md` §10) |
 | INF-010 | Cloudflare- und Firewall-Topologie | – | – | – | – | ○ | – | – | **NI** | `TRUSTED_PROXY_MODE` vorbereitet | V2-Server |
+| INF-011 | **Hydrations- und Browserlauf-Zuverlässigkeit** | ✓ | – | – | – | – | – | ✓ | **P** | Wave 9.1: Hydrationswache an **jedem** Browserfall (`tests/e2e/helpers/diagnose.ts`), verschiebbares Bauverzeichnis, Diagnoseserver, Stressreihe. Hauptursache (Reacts gedrosselte Suspense-Einblendung) bestimmt und beseitigt: Rate von 1–7 % auf 0,3–0,5 % | **Restfehler offen.** 16 Browserläufe, 13 grün, 3 rot — das Tor „fünf aufeinanderfolgende 20/20" ist einmal erreicht und zweimal verfehlt. Ort eingegrenzt (Anwendungsrahmen, Elementebene, unverändertes DOM), Ursache nicht bestimmt. Neun Ausschlussmessungen und der Weg weiter in `docs/HYDRATION.md` §9 |
 
 ---
 

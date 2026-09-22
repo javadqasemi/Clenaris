@@ -1,8 +1,10 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
+import { readdirSync } from 'node:fs';
+
 import { BASE_URL } from '../../helpers/client';
-import { testCacheDir } from '../../helpers/rate-limit';
+import { resetRateLimits, testCacheDir } from '../../helpers/rate-limit';
 import { testDb, testDbGrund } from '../../helpers/testdb';
 
 /**
@@ -135,7 +137,82 @@ export default async function globalSetup(): Promise<void> {
     );
   }
 
+  // 5 — Zählerverzeichnis: schreibt der antwortende Server wirklich hierhin?
+  if (fehler.length === 0) {
+    const zaehlerfehler = await zaehlerverzeichnisPruefen();
+    if (zaehlerfehler) fehler.push(zaehlerfehler);
+  }
+
   if (fehler.length > 0) {
     throw new Error(`\n\nBrowser-Prüfreihe nicht startbar:\n\n  • ${fehler.join('\n\n  • ')}\n`);
   }
+}
+
+/** Die Dateinamen der Rate-Limit-Zähler (`rl:…`, base64url über den Schlüssel). */
+function zaehlerdateien(): Set<string> {
+  const namen = new Set<string>();
+  for (const datei of readdirSync(testCacheDir())) {
+    if (!datei.endsWith('.json')) continue;
+    try {
+      if (Buffer.from(datei.slice(0, -5), 'base64url').toString('utf8').startsWith('rl:')) namen.add(datei);
+    } catch {
+      /* Kein Zähler — Postausgang und andere Einträge liegen im selben Verzeichnis. */
+    }
+  }
+  return namen;
+}
+
+/**
+ * Nachweisen, dass der antwortende Server **dieses** Zählerverzeichnis
+ * benutzt — und die Zähler danach leeren.
+ *
+ * **Warum das eine eigene Prüfung verdient.** `reuseExistingServer` ist
+ * bewusst immer an: Läuft schon ein Testserver, wird er verwendet. Genau
+ * daraus entsteht aber die Falle, die in Wave 1 einen halben Tag gekostet hat
+ * — ein Server aus einem früheren Lauf, mit einem anderen
+ * `CLENARIS_TEST_CACHE_DIR` oder mit erschöpften Kontingenten. Dann leert
+ * `basis.ts` vor jedem Fall ein Verzeichnis, das niemand liest, der neunte
+ * Fall bekommt einen 429, und der Befund sieht aus wie ein Produktfehler.
+ * Damals wurde er als „Hydrationsfehler" gemeldet und war keiner.
+ *
+ * Die Prüfung ist bewusst ein **Nachweis** und keine Annahme: eine Anmeldung
+ * mit einer Adresse, die es nicht gibt, muss im Zählerverzeichnis eine neue
+ * Datei hinterlassen. Die Adresse ist erfunden (`.invalid` ist dafür
+ * reserviert), also erhöht sie keinen Fehlversuchszähler an einem echten
+ * Konto und kann keine Sperre auslösen.
+ *
+ * Am Ende werden alle Zähler geleert — der Lauf beginnt mit vollem
+ * Kontingent, unabhängig davon, was vorher gegen diesen Server lief. Die
+ * Limits selbst bleiben unverändert; ihre Semantik prüft
+ * `tests/api/rate-limit.test.ts` gegen die echten Werte.
+ */
+async function zaehlerverzeichnisPruefen(): Promise<string | null> {
+  const vorher = zaehlerdateien();
+
+  try {
+    await fetch(`${BASE_URL}/api/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: 'zaehlerprobe@nicht-vorhanden.invalid', password: 'x'.repeat(12) }),
+      signal: AbortSignal.timeout(10_000),
+    });
+  } catch (error) {
+    return `Die Zählerprobe gegen ${BASE_URL} schlug fehl: ${error instanceof Error ? error.message : String(error)}`;
+  }
+
+  const nachher = zaehlerdateien();
+  const neu = [...nachher].filter((datei) => !vorher.has(datei));
+
+  if (neu.length === 0 && vorher.size === 0) {
+    return (
+      `Der Server unter ${BASE_URL} schreibt seine Rate-Limit-Zähler nicht nach ${testCacheDir()}.\n` +
+      '    Wahrscheinlich läuft dort ein Server aus einem früheren Lauf oder ein von Hand\n' +
+      '    gestarteter `next start` ohne CLENARIS_TEST_CACHE_DIR. Diesen Prozess beenden und\n' +
+      '    `npm run test:server` verwenden — sonst leert die Reihe ein Verzeichnis, das\n' +
+      '    niemand liest, und der neunte Fall bekommt einen 429.'
+    );
+  }
+
+  resetRateLimits();
+  return null;
 }

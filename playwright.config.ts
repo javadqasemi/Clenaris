@@ -3,6 +3,8 @@ import { join } from 'node:path';
 
 import { defineConfig } from '@playwright/test';
 
+import { DIAGNOSE_CACHE_DIR, DIAGNOSE_PORT } from './scripts/diagnose-umgebung';
+
 /**
  * Browser-Prüfungen (Gate 4D.1).
  *
@@ -70,11 +72,30 @@ import { defineConfig } from '@playwright/test';
  * laufender* Server und dieser Prozess denselben Postausgang meinen.
  */
 
-const port = process.env.E2E_PORT?.trim() || '3001';
+/**
+ * Diagnosemodus (`E2E_DIAGNOSE=1`).
+ *
+ * Dieselben Fälle, aber gegen den **Entwicklungsbau** auf Port 3002
+ * (`scripts/diagnose-server.ts`). Der einzige Unterschied, auf den es ankommt:
+ * React meldet dort Hydrationsabweichungen im Klartext, mit der
+ * Gegenüberstellung von Server- und Client-Baum, statt als
+ * „Minified React error #418".
+ *
+ * **Das ist eine Untersuchung, keine Auslieferungsprüfung.** Der normale Lauf
+ * (`npm run e2e`) bleibt unverändert der Produktionsbau — ein Befund von hier
+ * wird dort nachgewiesen, nicht umgekehrt. Deshalb steht der Modus hinter
+ * einer Variablen und nicht hinter einem zweiten Projekt: Wer `npm run e2e`
+ * ruft, soll unter keinen Umständen versehentlich den Entwicklungsbau prüfen.
+ */
+const diagnose = process.env.E2E_DIAGNOSE === '1';
+
+const port = process.env.E2E_PORT?.trim() || (diagnose ? DIAGNOSE_PORT : '3001');
 const baseURL = `http://127.0.0.1:${port}`;
 
 /** Derselbe Vorgabewert wie in `scripts/test-server.ts` und `tests/helpers/rate-limit.ts`. */
-const cacheDir = process.env.CLENARIS_TEST_CACHE_DIR?.trim() || join(tmpdir(), 'clenaris-tests', 'cache');
+const cacheDir =
+  process.env.CLENARIS_TEST_CACHE_DIR?.trim() ||
+  (diagnose ? DIAGNOSE_CACHE_DIR : join(tmpdir(), 'clenaris-tests', 'cache'));
 
 // Die Helfer aus `tests/helpers` lesen beides beim Laden des Moduls — auch im
 // Worker-Prozess, der diese Datei erneut auswertet.
@@ -101,8 +122,15 @@ export default defineConfig({
    */
   retries: 0,
   forbidOnly: true,
-  timeout: 90_000,
-  expect: { timeout: 15_000 },
+  /**
+   * Im Diagnosemodus baut `next dev` jede Seite beim ersten Aufruf — der
+   * erste Fall je Route braucht dadurch ein Vielfaches. Die Grenze wird nur
+   * dort angehoben; für die Auslieferungsprüfung bleibt sie scharf, weil eine
+   * grosszügige Zeitgrenze dort genau die Langsamkeit verdeckt, die man sehen
+   * will.
+   */
+  timeout: diagnose ? 300_000 : 90_000,
+  expect: { timeout: diagnose ? 30_000 : 15_000 },
 
   reporter: [['list'], ['html', { outputFolder: 'playwright-report', open: 'never' }]],
   outputDir: 'test-results',
@@ -122,8 +150,8 @@ export default defineConfig({
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
     video: 'off',
-    actionTimeout: 15_000,
-    navigationTimeout: 30_000,
+    actionTimeout: diagnose ? 30_000 : 15_000,
+    navigationTimeout: diagnose ? 120_000 : 30_000,
     locale: 'de-CH',
     timezoneId: 'Europe/Zurich',
   },
@@ -167,11 +195,13 @@ export default defineConfig({
   ],
 
   webServer: {
-    command: 'npm run test:server',
+    command: diagnose ? 'npm run diagnose:server' : 'npm run test:server',
     url: `${baseURL}/api/auth/session`,
     reuseExistingServer: true,
     timeout: 180_000,
-    stdout: 'ignore',
+    // Im Diagnosemodus ist die Serverausgabe Teil des Beweismaterials: Next
+    // schreibt die Hydrationsgegenüberstellung auch dorthin.
+    stdout: diagnose ? 'pipe' : 'ignore',
     stderr: 'pipe',
     env: {
       PORT: port,

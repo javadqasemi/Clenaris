@@ -79,6 +79,7 @@ import {
   SheetTrigger,
 } from '@/components/ui/overlays';
 import { NotificationPanel } from '@/components/app/notification-panel';
+import { NavigationProgress } from '@/components/app/navigation-progress';
 import { ThemeSync } from '@/features/account/appearance-form';
 import { SessionKeepalive } from '@/features/account/session-keepalive';
 
@@ -212,50 +213,49 @@ export function AppShell({
   React.useEffect(() => setMobileOpen(false), [pathname]);
 
   /**
-   * Der Zähler der Glocke.
+   * **Bis zum Einhängen passiert im Rahmen nichts.**
    *
-   * `refetchOnWindowFocus` hebt hier die anwendungsweite Vorgabe auf: Für
-   * Listen ist Nachladen beim Tab-Wechsel eine Nachladewelle, für diese eine
-   * Zahl ist es der Moment, in dem sie am ehesten falsch ist. Wer nach einer
-   * halben Stunde zurückkommt, soll nicht bis zum nächsten Intervall auf eine
-   * veraltete Null schauen.
+   * Das ist die tragende Regel dieser Komponente, und sie ist teuer erkauft.
+   * Der Server rendert den Rahmen ohne Browserdaten; der erste Rendervorgang
+   * im Browser muss dasselbe ergeben, sonst verwirft React den **ganzen** Baum
+   * (`Minified React error #418`) und baut ihn neu.
+   *
+   * Gemessen am 2026-09-20 im vollen Chromium auf `/portal/einsaetze`: ohne
+   * Eingriff 4 von 8 Aufrufen mit Hydrationsfehler. Die vollständige
+   * Untersuchung samt Messreihen steht in `docs/HYDRATION.md`.
+   *
+   * `eingehaengt` ist der Schalter dafür: Es ist beim Rendern auf dem Server
+   * und beim ersten Durchgang im Browser nachweislich `false` — `useState`
+   * liefert den Anfangswert, und der Effekt läuft erst nach dem Festschreiben.
+   */
+  const [eingehaengt, setEingehaengt] = React.useState(false);
+  React.useEffect(() => setEingehaengt(true), []);
+
+  /**
+   * Der Zähler der Glocke — abgefragt erst **nach** dem Einhängen.
+   *
+   * `enabled`, nicht nur eine Fallunterscheidung bei der Anzeige. Vorher lief
+   * die Abfrage sofort und nur die *Anzeige* war festgenagelt. Das genügte für
+   * die Gleichheit des ersten Rendervorgangs, aber nicht für die Ruhe im Baum:
+   * `useQuery` hängt über `useSyncExternalStore` an einem äusseren Speicher,
+   * und jede Antwort — auch eine fehlgeschlagene samt Wiederholung — stösst
+   * währenddessen einen neuen Durchgang an. Mit `enabled` passiert bis zum
+   * Einhängen gar nichts: keine Anfrage, kein Speicherereignis, kein
+   * zusätzlicher Durchgang. Der sichtbare Unterschied ist keiner.
+   *
+   * `refetchOnWindowFocus` hebt die anwendungsweite Vorgabe auf: Für Listen
+   * ist Nachladen beim Tab-Wechsel eine Nachladewelle, für diese eine Zahl ist
+   * es der Moment, in dem sie am ehesten falsch ist. Wer nach einer halben
+   * Stunde zurückkommt, soll nicht auf eine veraltete Null schauen.
    */
   const unread = useQuery({
     queryKey: queryKeys.notifications(),
     queryFn: () => api.get<{ unread: number }>('/api/notifications/count'),
+    enabled: eingehaengt,
     refetchInterval: 30_000,
     refetchOnWindowFocus: true,
     staleTime: 10_000,
   });
-
-  /**
-   * Der Zähler erscheint erst **nach** dem Einhängen — und das ist kein
-   * Schönheitsfehler, den man wegoptimiert.
-   *
-   * Der Server rendert den Rahmen ohne Daten, also mit `0`. Im Browser startet
-   * React Query denselben Abruf sofort; `/api/notifications/count` ist
-   * schnell, und die Antwort traf regelmässig **mitten in der Hydration** ein.
-   * Dann rendert der Client bereits die echte Zahl, während React noch das
-   * HTML des Servers abgleicht — Konflikt, React verwirft den Teilbaum und
-   * baut ihn neu auf (`Minified React error #418`).
-   *
-   * Gemessen am 2026-09-20 im vollen Chromium auf `/portal/einsaetze`:
-   * ohne Eingriff **4 von 8** Aufrufen mit Hydrationsfehler, mit künstlich um
-   * drei Sekunden verzögerter Antwort **0 von 8**. Öffentliche Seiten waren
-   * nie betroffen — sie tragen diesen Rahmen nicht.
-   *
-   * Der Fehler war erholbar und hat nie etwas kaputtgemacht; sichtbar wurde er
-   * erst, als die Browserreihe auf den vollen Chromium wechselte. Erholbar
-   * heisst aber nicht folgenlos: React wirft den gesamten Rahmen weg und baut
-   * ihn neu, bei jedem vierten Seitenaufruf.
-   *
-   * `eingehaengt` sorgt dafür, dass der erste Rendervorgang im Browser
-   * dasselbe ergibt wie der auf dem Server — dieselbe Vorgehensweise wie in
-   * `theme-toggle.tsx`, wo das Farbschema aus demselben Grund erst nach dem
-   * Einhängen gilt.
-   */
-  const [eingehaengt, setEingehaengt] = React.useState(false);
-  React.useEffect(() => setEingehaengt(true), []);
 
   const unreadCount = eingehaengt ? (unread.data?.unread ?? 0) : 0;
 
@@ -303,14 +303,39 @@ export function AppShell({
                         : 'text-muted-foreground hover:bg-muted hover:text-foreground',
                     )}
                   >
-                    {active ? (
-                      <span
-                        className="absolute inset-y-2 left-0 w-0.5 rounded-full bg-primary"
-                        aria-hidden
-                      />
-                    ) : null}
+                    {/*
+                      Die Markierung des aktiven Eintrags steht **immer** im
+                      Baum und wird nur ein- und ausgefärbt.
+
+                      Vorher hing ihre Existenz an `active`, und `active` hängt
+                      an `usePathname()` — dem einzigen Wert im Rahmen, der aus
+                      dem Router kommt und nicht aus Server-Eigenschaften. Damit
+                      war die *Zahl der Elemente* von Client-Zustand abhängig,
+                      und genau das ist die Form, die einen Hydrationsfehler
+                      auslöst: React verlangt beim ersten Durchgang dieselbe
+                      Struktur wie im ausgelieferten HTML; abweichende
+                      Attribute flickt es stillschweigend, ein fehlendes oder
+                      überzähliges Element nicht.
+
+                      Der Grundsatz, der daraus folgt und für den ganzen
+                      Anwendungsrahmen gilt (`docs/HYDRATION.md` §9): **Die
+                      Struktur des Rahmens darf nicht von Client-Zustand
+                      abhängen — nur Attribute und Text dürfen es.**
+                    */}
+                    <span
+                      className={cn(
+                        'absolute inset-y-2 left-0 w-0.5 rounded-full',
+                        active ? 'bg-primary' : 'bg-transparent',
+                      )}
+                      aria-hidden
+                    />
                     <Icon className="size-[1.125rem] shrink-0" aria-hidden />
                     <span className="flex-1 truncate">{item.label}</span>
+                    {/*
+                      Die Zahl daneben kommt aus den Server-Eigenschaften und
+                      ist auf beiden Seiten dieselbe — sie darf deshalb
+                      weiterhin ganz entfallen.
+                    */}
                     {item.badge ? (
                       <span className="rounded-full bg-primary/12 px-1.5 py-0.5 text-xs font-semibold tabular-nums text-primary">
                         {item.badge > 99 ? '99+' : item.badge}
@@ -363,6 +388,14 @@ export function AppShell({
         wird, und beendet sie nach Leerlauf — siehe `session-keepalive.tsx`.
       */}
       <SessionKeepalive idleSeconds={sessionIdleSeconds} />
+      {/*
+        Rückmeldung beim Seitenwechsel. Sie hat die Skelette aus den
+        `loading.tsx`-Dateien abgelöst, die in Wave 9.1 entfallen mussten —
+        die Messreihe dazu steht in `docs/HYDRATION.md`. Vor dem ersten Klick
+        rendert die Komponente nichts, auf dem Server wie im Browser; sonst
+        brächte ausgerechnet die Abhilfe den Hydrationsfehler zurück.
+      */}
+      <NavigationProgress />
 
       {/* Seitenleiste (Desktop) */}
       <aside className="sticky top-0 hidden h-dvh w-64 shrink-0 border-r border-border bg-card lg:block">
@@ -513,6 +546,21 @@ function Breadcrumbs({
     .filter((item) => pathname === item.href || pathname.startsWith(`${item.href}/`))
     .sort((a, b) => b.href.length - a.href.length)[0];
 
+  const unterseite = match && match.href !== areaHref ? match.label : null;
+
+  /*
+    Auch hier hängt die Struktur nicht mehr am Pfad.
+
+    Vorher standen zwei verschiedene Zweige nebeneinander — zwei `<li>` für
+    eine Unterseite, eines für die Bereichsstartseite. Damit hing die Zahl der
+    Elemente an `usePathname()`, also am einzigen Wert im Rahmen, der nicht aus
+    Server-Eigenschaften stammt. Jetzt stehen immer dieselben drei `<li>`; was
+    sich ändert, sind Klassen und Text.
+
+    Die Bedeutung bleibt gleich: Auf schmalen Geräten ist der Bereichsname
+    ausgeblendet und stattdessen die Unterseite zu sehen — oder, wenn man auf
+    der Bereichsstartseite steht, der Bereichsname selbst.
+  */
   return (
     <nav aria-label="Brotkrumen" className="min-w-0">
       <ol className="flex min-w-0 items-center gap-1.5 text-sm">
@@ -524,16 +572,12 @@ function Breadcrumbs({
             {areaLabel}
           </Link>
         </li>
-        {match && match.href !== areaHref ? (
-          <>
-            <li className="hidden text-muted-foreground sm:block" aria-hidden>
-              /
-            </li>
-            <li className="truncate font-medium">{match.label}</li>
-          </>
-        ) : (
-          <li className="truncate font-medium sm:hidden">{areaLabel}</li>
-        )}
+        <li className={cn('text-muted-foreground', unterseite ? 'hidden sm:block' : 'hidden')} aria-hidden>
+          /
+        </li>
+        <li className={cn('truncate font-medium', unterseite ? '' : 'sm:hidden')}>
+          {unterseite ?? areaLabel}
+        </li>
       </ol>
     </nav>
   );

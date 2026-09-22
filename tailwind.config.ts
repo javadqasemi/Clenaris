@@ -200,6 +200,18 @@ const config: Config = {
           '70%': { transform: 'scale(1.35)', opacity: '0' },
           '100%': { transform: 'scale(1.35)', opacity: '0' },
         },
+        /**
+         * Der Navigationsbalken.
+         *
+         * Ein *unbestimmter* Lauf und keine Prozentanzeige: Wie lange eine
+         * Seite braucht, weiss niemand — eine Zahl, die bei 80 % stehen
+         * bleibt, ist eine Behauptung. Der Balken wandert von links nach
+         * rechts durch und sagt damit nur, was er weiss: es passiert etwas.
+         */
+        'nav-progress': {
+          '0%': { transform: 'translateX(-100%)' },
+          '100%': { transform: 'translateX(400%)' },
+        },
       },
       animation: {
         'accordion-down': 'accordion-down 0.22s cubic-bezier(0.32,0.72,0,1)',
@@ -208,6 +220,7 @@ const config: Config = {
         shimmer: 'shimmer 2s infinite',
         marquee: 'marquee 38s linear infinite',
         'pulse-ring': 'pulse-ring 2.4s cubic-bezier(0.24,0,0.38,1) infinite',
+        'nav-progress': 'nav-progress 1.1s cubic-bezier(0.4,0,0.2,1) infinite',
       },
       transitionTimingFunction: {
         spring: 'cubic-bezier(0.16, 1, 0.3, 1)',

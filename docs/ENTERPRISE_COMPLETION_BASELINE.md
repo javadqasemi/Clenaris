@@ -1019,4 +1019,151 @@ die der Betrieb bewusst treffen sollte.
 
 ---
 
+## 19. Wave 9.1 — Zuverlässigkeitstor: Hydration und Testisolation (Stand 2026-09-22)
+
+Kein neues Merkmal, sondern die Bedingung dafür, dass die folgenden Waves
+überhaupt etwas beweisen können: Solange die Browserreihe gelegentlich 19/20
+meldet, ist jedes „grün" eine Wahrscheinlichkeitsaussage.
+
+Die vollständige Untersuchung — Messreihen, Ursache, Abwägung, offener Rest —
+steht in **[`docs/HYDRATION.md`](HYDRATION.md)**. Hier nur das Ergebnis.
+
+### Was der Befund war
+
+Ein zeitweiser `Minified React error #418` („server rendered HTML didn't match
+the client"), seit Wave 1 gemeldet, in wechselnden Fällen, mit anschliessend
+mehrfach grünen Läufen. Wave 9 hielt ihn als offen fest und nannte die
+Sackgasse: Die Meldung ist im Produktionsbau minifiziert, und ein
+Entwicklungsbau überschrieb dasselbe `.next`, gegen das die Reihe läuft.
+
+### Zuerst Messbarkeit, dann Ursache
+
+| Werkzeug | Kern |
+|---|---|
+| Hydrationswache an **jedem** Browserfall | Vorher fiel ein solcher Fehler nur dort auf, wo ein Fall die Konsole ausdrücklich prüfte — also in etwa der Hälfte. Das erklärt das „mal hier, mal dort" |
+| Beweissicherung im Augenblick des Fehlers | DOM-Abzug, Bildschirmfoto, Konsole, Netz — **redigiert**: 64-stellige Hexwerte, `#t=`-Fragmente, JWT-Formen, E-Mail-Adressen |
+| `NEXT_DIST_DIR` | Entwicklungs- und Produktionsbau stehen nebeneinander. Die Sackgasse aus Wave 9 ist damit aufgelöst |
+| `npm run diagnose:server` / `npm run e2e:diagnose` | Entwicklungsbau auf Port 3002, eigenes Zählerverzeichnis. **Ersetzt die Auslieferungsprüfung nicht** |
+| `npm run e2e:stress` | n vollständige Läufe, jeder gegen einen **neu gestarteten** Server |
+
+### Die Ursache
+
+Reacts **gedrosselte Einblendung** einer Suspense-Grenze (`$RC` setzt sofort
+`$~`, `$RV` blendet erst rund 300 ms später wirklich ein) schiebt den DOM-Umbau
+in genau das Zeitfenster, in dem die Hydration läuft. Nachgewiesen, indem
+Reacts eigene Stromskripte umhüllt und mit Zeitstempel protokolliert wurden:
+
+```
+ fehlerhaft                     unauffällig
+ 444 ms  $RC                    366 ms  $RC
+ 447 ms  $RV                    370 ms  $RV
+ 591 ms  FEHLER #418            556 ms  $RS
+ 665 ms  $RS → parentNode-Fehler 557 ms  DOMContentLoaded
+```
+
+Der `parentNode`-Fehler ist die **Folge**, nicht die Ursache: Nach dem 418er
+verwirft React den Baum, und ein später eintreffendes `$RS` findet seinen
+Platzhalter nicht mehr.
+
+Betroffen ist die React-Fassung, die Next 15.5.25 mitbringt
+(`19.2.0-canary-0bdb9206-20250818`). **Ein Versionswechsel war keine Abhilfe:**
+15.5.25 ist die letzte 15.5er, und Next 16 wäre ein Hauptsprung mitten im
+Zuverlässigkeitstor.
+
+### Die Gegenprobe, die den Umfang der Korrektur entschieden hat
+
+| Bau | Suspense-Grenzen auf `/portal/einsaetze` | Ergebnis |
+|---|---|---|
+| Ausgangslage | zwei | 1–7 % |
+| Probe 1 | keine | **0 von 300** |
+| Probe 2 | eine | **7 von 400** |
+
+Es genügt **eine** Grenze. Damit schied die kleine Lösung („nur die
+verschachtelte entfernen") aus.
+
+### Was geändert wurde
+
+Die **55 `loading.tsx`-Dateien** der drei angemeldeten Bereiche sind entfallen,
+mit ihnen `src/components/app/page-skeletons.tsx`, das nur von ihnen benutzt
+wurde. Die öffentliche Website hatte nie welche.
+
+An ihre Stelle trat `src/components/app/navigation-progress.tsx` — ein
+Fortschrittsbalken, der bei **jeder** Navigation anspringt, nicht nur auf
+Routen mit eigener `loading.tsx`. Sein erster Rendervorgang ergibt `null`, auf
+dem Server wie im Browser; sonst brächte die Abhilfe den Fehler zurück.
+
+**Was dafür verloren geht, steht in `docs/HYDRATION.md` §6** und ist nicht
+verschwiegen: Beim *ersten* Aufruf einer Adresse erscheint nichts, bis die
+Seite fertig ist. Der Handel lohnt sich trotzdem — ein Ladeeffekt, der jeden
+zwanzigsten Aufruf einen vollständigen Neuaufbau des Baums kostet, verdeckt
+nicht Wartezeit, er erzeugt sie.
+
+### Testisolation (§ 4)
+
+Neu ist ein **Nachweis** statt einer Annahme: `global-setup.ts` meldet eine
+Anmeldung mit erfundener Adresse an und prüft, dass im erwarteten
+Zählerverzeichnis eine Datei entsteht. Tut sie das nicht, läuft dort ein Server
+aus einem früheren Lauf oder ein von Hand gestarteter `next start` — und die
+Reihe bricht mit Begründung ab, statt im neunten Fall einen 429 zu erklären.
+Dazu: Zähler vor jedem Fall geleert, jeder Stresslauf gegen einen neu
+gestarteten Server, Prozessbaum unter Windows mit `taskkill /T` beendet.
+**Kein Produktionslimit wurde abgesenkt.**
+
+### Der Rest, der offen bleibt — benannt, nicht abgehakt
+
+Nach dem Wegfall der Grenzen bleibt eine Restrate von **0,3–0,5 %** je
+Seitenaufruf. Neun Messreihen grenzen sie ein; alle Zahlen stehen in
+`docs/HYDRATION.md` §9:
+
+| Ausgeschlossen durch Messung | Beleg |
+|---|---|
+| Streaming | keine `$RC`/`$RS`/`<!--$?-->` mehr im HTML |
+| Eine DOM-Veränderung von aussen | der verworfene Teilbaum ist **zeichengleich** mit dem ausgelieferten HTML |
+| Wettlauf mit dem Parsen | `readyState` war in **jedem** Treffer `complete` |
+| Provider, Wurzellayout, Toaster, Farbschema-Umschalter | `/auth/anmelden`: **0 von 500** |
+| Seitengrösse und Baumtiefe | öffentliche Startseite, 142 KB: **0 von 1000** |
+| Seiteninhalt | `/portal/profil` (trivialer Inhalt): **4 von 800** |
+| Glockenzähler | mit blockierter Anfrage unverändert **4 von 800** |
+| Pfadabhängige Elementzahl | nach der Härtung unverändert |
+| Radix-`ScrollArea` | nach dem Ersatz unverändert **3 von 1000** |
+
+Es liegt im **Anwendungsrahmen**, auf Elementebene, bei unverändertem DOM.
+Zwei Sackgassen sind dokumentiert, damit sie niemand zweimal geht: Der
+Entwicklungsbau zeigt den Fehler nicht, und ein „Produktionsbündel mit
+unminifiziertem React" ist durch Modultausch nicht herstellbar.
+
+**Das Tor ist damit nicht bestanden.** 16 vollständige Browserläufe, 13 grün,
+3 rot — fünf aufeinanderfolgende grüne Läufe einmal erreicht, zweimal
+verfehlt. Der nächste Schritt steht in `docs/HYDRATION.md` §9.4: Bisektion im
+Rahmen, Bauteil für Bauteil.
+
+### Wave-9-Einstufung korrigiert
+
+**EMP-013 (Lohnabrechnung): C → PARTIAL.** Was da ist, ist der definierte
+Kernumfang; was fehlt, ist weder Randfall noch Kosmetik (PDF,
+Verwaltungsmaske, Arbeitgeberbeiträge — fachlich Quellensteuer, Zulagen, 13.
+Monatslohn, Ferienentschädigung, Lohnausweis). **Keine Aussage über
+Konformität**: Die Sätze sind eine datierte Vorbelegung, jeder Lauf meldet
+`saetzeGeprueft: false`, bis eine Treuhandstelle sie bestätigt (**E-10**).
+Weder „vollständige Schweizer Lohnbuchhaltung" noch „gesetzeskonform" — diese
+Sätze darf dieses Repository nicht sagen.
+
+Nebenbefund: Die Verteilungstabelle der Merkmalsmatrix war von Hand
+fortgeschrieben und um zwei Einträge auseinandergelaufen. Sie wird jetzt
+**ausgezählt**; der Befehl steht neben der Tabelle.
+
+### Verifikation nach Wave 9.1
+
+| Prüfung | Ergebnis |
+|---|---|
+| `npm run typecheck`, `npm run lint`, `npm run build` | ✅ |
+| `npm test` | ✅ **1082 Prüfungen, 1079 bestanden, 0 Fehlschläge**, 3 übersprungen — unverändert |
+| `npm run e2e:stress` Reihe 1 (5 Läufe) | ✅ **20/20 · 20/20 · 20/20 · 20/20 · 20/20**, 0 Hydrationsartefakte, `retries: 0`, je 87–100 s |
+| `npm run e2e:stress` Reihe 2 (5 Läufe) | ⚠️ 20/20 · 20/20 · **19/20** · **19/20** · 20/20 |
+| `npm run e2e:stress` Reihe 3 (6 Läufe) | ⚠️ 20/20 · 20/20 · **19/20** · 20/20 · 20/20 · 20/20 |
+
+**16 Läufe, 13 grün, 3 rot.** So gemessen, so aufgeschrieben.
+
+---
+
 *Diese Datei wird nach jeder Wave fortgeschrieben.*

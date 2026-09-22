@@ -4,7 +4,6 @@ import * as React from 'react';
 import { useTheme } from 'next-themes';
 import { Check, Monitor, Moon, Sun } from 'lucide-react';
 
-import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import {
   DropdownMenu,
@@ -33,9 +32,26 @@ import {
  *  • **Standard ist „System".** Gesetzt in `Providers` (`defaultTheme`), nicht
  *    hier — sonst gäbe es zwei Orte, an denen der Standard steht.
  *
- * Bis die Client-Hydration abgeschlossen ist, wird ein Platzhalter gleicher
- * Grösse gerendert: `theme` ist auf dem Server unbekannt, und ein Symbol, das
- * nach dem ersten Frame wechselt, liest sich wie ein Fehler.
+ * ---------------------------------------------------------------------------
+ *  Warum hier alle drei Symbole im Baum stehen
+ * ---------------------------------------------------------------------------
+ *
+ * Bis Wave 9.1 rendete diese Komponente vor dem Einhängen einen **Platzhalter**
+ * — ein `<div>` gleicher Grösse — und danach den `<button>`. Der erste
+ * Rendervorgang stimmte damit zwar mit dem Server überein (das war der Zweck),
+ * aber der Tausch danach änderte die *Struktur* des Anwendungsrahmens, und
+ * zwar im Bereich weniger Millisekunden um das Ende der Hydration herum:
+ * gemessen auf `/portal/profil` Platzhalter-Tausch bei 278–311 ms,
+ * Hydrationsfehler bei 303–494 ms.
+ *
+ * Deshalb steht jetzt immer dieselbe Struktur da: ein `<button>` mit **allen
+ * drei** Symbolen, von denen zwei ausgeblendet sind. Was sich ändert, sind
+ * Klassen und Beschriftung — nie ein Element. Der Preis sind zwei zusätzliche
+ * SVGs im Dokument; der Gewinn ist ein Rahmen, dessen Gestalt nicht davon
+ * abhängt, wie weit der Browser gerade ist.
+ *
+ * Vor dem Einhängen gilt „System" — derselbe Vorgabewert, den `Providers`
+ * setzt und den der Server rendert.
  */
 const OPTIONS = [
   { value: 'light', label: 'Hell', Icon: Sun },
@@ -55,18 +71,22 @@ export function ThemeToggle({
 
   React.useEffect(() => setMounted(true), []);
 
-  if (!mounted) {
-    return (
-      <div
-        className={cn('size-10 shrink-0 rounded-xl bg-muted/60', className)}
-        aria-hidden
-      />
-    );
-  }
+  /**
+   * Welches Symbol gilt — vor dem Einhängen immer „System".
+   *
+   * Das angezeigte Symbol folgt der tatsächlichen Darstellung, nicht der Wahl:
+   * Steht die Wahl auf „System" und das Betriebssystem auf dunkel, erscheint
+   * der Mond.
+   */
+  const sichtbar: 'monitor' | 'moon' | 'sun' = !mounted
+    ? 'monitor'
+    : theme === 'system'
+      ? 'monitor'
+      : resolvedTheme === 'dark'
+        ? 'moon'
+        : 'sun';
 
-  // Das angezeigte Symbol folgt der tatsächlichen Darstellung, nicht der Wahl.
-  const TriggerIcon = theme === 'system' ? Monitor : resolvedTheme === 'dark' ? Moon : Sun;
-  const current = OPTIONS.find((option) => option.value === theme) ?? OPTIONS[2];
+  const current = (mounted ? OPTIONS.find((option) => option.value === theme) : undefined) ?? OPTIONS[2];
 
   return (
     <DropdownMenu>
@@ -78,7 +98,14 @@ export function ThemeToggle({
           aria-label={`Farbschema: ${current.label}. Ändern`}
           title={`Farbschema: ${current.label}`}
         >
-          <TriggerIcon aria-hidden />
+          {/*
+            Alle drei Symbole stehen im Baum; zwei sind ausgeblendet. Die
+            Begründung steht oben im Kopfkommentar: Der Rahmen darf seine
+            Gestalt nicht ändern, während React noch hydriert.
+          */}
+          <Monitor className={sichtbar === 'monitor' ? undefined : 'hidden'} aria-hidden />
+          <Moon className={sichtbar === 'moon' ? undefined : 'hidden'} aria-hidden />
+          <Sun className={sichtbar === 'sun' ? undefined : 'hidden'} aria-hidden />
         </Button>
       </DropdownMenuTrigger>
 
@@ -86,7 +113,9 @@ export function ThemeToggle({
         <DropdownMenuLabel>Farbschema</DropdownMenuLabel>
         <DropdownMenuSeparator />
         {OPTIONS.map(({ value, label, Icon }) => {
-          const active = theme === value;
+          // Der Menüinhalt entsteht erst beim Öffnen, also lange nach der
+          // Hydration — hier darf die Struktur vom Zustand abhängen.
+          const active = mounted && theme === value;
           return (
             <DropdownMenuItem key={value} onSelect={() => setTheme(value)}>
               <Icon aria-hidden />

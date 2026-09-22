@@ -43,6 +43,28 @@ const nextConfig: NextConfig = {
   poweredByHeader: false,
   compress: true,
 
+  /**
+   * Das Bauverzeichnis ist über die Umgebung verschiebbar — Vorgabe bleibt
+   * `.next`.
+   *
+   * Der Grund ist ein Diagnoseproblem, das eine ganze Wave lang nicht lösbar
+   * war: Ein Hydrationsfehler meldet sich im Produktionsbau nur als
+   * „Minified React error #418" ohne das betroffene Element. Die Meldung im
+   * Klartext — samt Gegenüberstellung von Server- und Client-Baum — gibt es
+   * ausschliesslich im Entwicklungsbau. Der aber schrieb bisher in dasselbe
+   * `.next`, in dem der Produktionsbau steht, den die Browserreihe fährt.
+   * Wer also die Ursache suchte, zerstörte dabei die Umgebung, in der der
+   * Fehler auftrat, und musste vor dem nächsten Lauf neu bauen.
+   *
+   * Mit `NEXT_DIST_DIR=.next-diagnose` läuft der Entwicklungsserver in einem
+   * eigenen Verzeichnis neben dem Produktionsbau. Beide existieren
+   * gleichzeitig; `scripts/diagnose-server.ts` nutzt genau das.
+   *
+   * Der Produktionsweg ist davon unberührt: Ohne die Variable steht hier
+   * derselbe Wert wie vorher.
+   */
+  distDir: process.env.NEXT_DIST_DIR?.trim() || '.next',
+
   serverExternalPackages: [
     '@node-rs/argon2',
     'ioredis',

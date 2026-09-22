@@ -5,6 +5,10 @@ node_modules/
 
 # next.js
 .next/
+# Die Diagnosebauten aus Wave 9.1 stehen neben dem Produktionsbau
+# (`NEXT_DIST_DIR`): Entwicklungsserver, Produktionsbündel mit unminifiziertem
+# React, Gegenproben. Keiner davon gehört ins Repository.
+.next-*/
 out/
 build/
 next-env.d.ts
@@ -47,6 +51,11 @@ test-results/
 playwright-report/
 blob-report/
 .playwright/
+# Hydrationsbefunde liegen bewusst **ausserhalb** von `test-results/`: Playwright
+# leert sein Ausgabeverzeichnis zu Beginn jedes Laufs, und genau dadurch war der
+# Beweis eines zeitweisen Fehlers beim nächsten Lauf wieder weg (gemessen in
+# Wave 9.1). Die Dateien sind redigiert, gehören aber trotzdem nicht ins Repo.
+hydrationsbefunde/
 
 # editors
 .idea/

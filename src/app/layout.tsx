@@ -87,9 +87,25 @@ export const viewport: Viewport = {
   ],
 };
 
+/**
+ * `data-scroll-behavior="smooth"` ist keine Zierde, sondern eine Zusage an
+ * Next: `globals.css` setzt `scroll-behavior: smooth` auf `<html>`, und Next
+ * schaltet weiches Scrollen während eines Seitenwechsels heute noch
+ * stillschweigend ab — sonst gleitet der Browser bei jedem Wechsel sichtbar
+ * nach oben, statt oben zu beginnen. Ohne dieses Attribut warnt Next bei
+ * **jedem** Seitenaufruf in der Konsole, dass es das künftig nicht mehr tun
+ * wird. Eine Warnung, die in jedem Lauf steht und jedes Mal überlesen wird,
+ * nimmt allen anderen Meldungen die Aufmerksamkeit — und diese Reihe behandelt
+ * Konsolenmeldungen als Fehler.
+ */
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="de-CH" suppressHydrationWarning className={`${sans.variable} ${display.variable}`}>
+    <html
+      lang="de-CH"
+      suppressHydrationWarning
+      data-scroll-behavior="smooth"
+      className={`${sans.variable} ${display.variable}`}
+    >
       <body className="min-h-dvh bg-background font-sans">
         {/* Tastaturnavigation: erster Tabstopp springt zum Inhalt. */}
         <a
