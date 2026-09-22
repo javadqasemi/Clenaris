@@ -262,8 +262,9 @@ describe('Verträge', () => {
 
     it('beendet und legt dabei die Einsatzpläne still', async () => {
       const id = await neuerEntwurf();
-      await post(`/api/contracts/${id}/activate`, {}, { jar: jars.admin });
 
+      // Der Plan entsteht **vor** der Aktivierung: Auf einer geltenden Fassung
+      // ist er gesperrt, weil die Frequenz Teil der Vereinbarung ist.
       const akte = await get<{ data: { versions: { services: { id: string }[] }[] } }>(`/api/contracts/${id}`, {
         jar: jars.admin,
       });
@@ -274,6 +275,8 @@ describe('Verträge', () => {
         { jar: jars.admin },
       );
       assert.equal(plan.status, 201, JSON.stringify(plan.payload));
+
+      await post(`/api/contracts/${id}/activate`, {}, { jar: jars.admin });
 
       const ende = await post<{ data: { status: string } }>(
         `/api/contracts/${id}/end`,
@@ -429,6 +432,287 @@ describe('Verträge', () => {
       );
       assert.equal(antwort.status, 200, JSON.stringify(antwort.payload));
       assert.equal(data(antwort).length, 2, 'Die alte Position ist weg, nicht dazugekommen');
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  //  Unveränderlichkeit einer geltenden Fassung
+  // -------------------------------------------------------------------------
+
+  /**
+   * **Ein eindeutiger Index beweist Eindeutigkeit, nicht Unveränderlichkeit.**
+   *
+   * `contract_versions_eine_aktive` sorgt dafür, dass es nie zwei geltende
+   * Fassungen gibt. Er sagt nichts darüber, ob die eine geltende Fassung
+   * nachträglich verändert werden kann — und genau das ist die Aussage, die
+   * das Modul macht. Sie wird hier über **jeden** schreibenden Weg geprüft,
+   * der eine Fassung erreicht.
+   */
+  describe('Eine geltende Fassung ist unveränderlich', () => {
+    /** Ein aktiver Vertrag samt seiner geltenden Fassung und deren Leistung. */
+    async function aktiverVertrag() {
+      const id = await neuerEntwurf();
+      const vorher = await get<{ data: { versions: { id: string; services: { id: string }[] }[] } }>(
+        `/api/contracts/${id}`,
+        { jar: jars.admin },
+      );
+      const versionId = data(vorher).versions[0]!.id;
+      const leistungId = data(vorher).versions[0]!.services[0]!.id;
+
+      const plan = await post<{ data: { id: string } }>(
+        `/api/contract-services/${leistungId}/schedules`,
+        { frequency: 'WEEKLY', weekdays: [1], effectiveFrom: tagIn(1), startMinute: 360, endMinute: 600 },
+        { jar: jars.admin },
+      );
+      assert.equal(plan.status, 201, JSON.stringify(plan.payload));
+
+      await post(`/api/contracts/${id}/activate`, {}, { jar: jars.admin });
+      return { id, versionId, leistungId, planId: data(plan).id };
+    }
+
+    const konditionen = (betrag: number) => ({
+      effectiveFrom: tagIn(1),
+      reason: 'Versuch, eine geltende Fassung zu ändern',
+      billingCycle: 'MONTHLY',
+      paymentTermDays: 30,
+      pricingModel: 'FIXED_PERIOD',
+      baseAmount: betrag,
+      vatRate: 8.1,
+      noticePeriodDays: 90,
+      renewalType: 'NONE',
+    });
+
+    it('weist jede Änderung der Konditionen ab (422) — Preis, Zyklus, Zahlungsziel, Frist, Stichtag', async () => {
+      const { id, versionId } = await aktiverVertrag();
+
+      const versuche: [string, Record<string, unknown>][] = [
+        ['Preis', konditionen(9999)],
+        ['Abrechnungszyklus', { ...konditionen(1200), billingCycle: 'ANNUAL' }],
+        ['Zahlungsziel', { ...konditionen(1200), paymentTermDays: 5 }],
+        ['Kündigungsfrist', { ...konditionen(1200), noticePeriodDays: 1 }],
+        ['Stichtag', { ...konditionen(1200), effectiveFrom: tagIn(90) }],
+        ['Preismodell', { ...konditionen(0), pricingModel: 'HOURLY', hourlyRate: 55 }],
+      ];
+
+      for (const [was, rumpf] of versuche) {
+        const antwort = await patch(`/api/contracts/${id}/versions/${versionId}`, rumpf, { jar: jars.admin });
+        assert.equal(antwort.status, 422, `${was} liess sich ändern (HTTP ${antwort.status})`);
+      }
+
+      // Und der Bestand hat sich nicht bewegt.
+      const nachher = await get<{ data: { versions: { baseAmount: number; billingCycle: string }[] } }>(
+        `/api/contracts/${id}`,
+        { jar: jars.admin },
+      );
+      assert.equal(data(nachher).versions[0]!.baseAmount, 1200, 'Der Preis steht unverändert');
+      assert.equal(data(nachher).versions[0]!.billingCycle, 'MONTHLY');
+    });
+
+    it('weist das Ersetzen des Leistungsumfangs ab (422)', async () => {
+      const { id, versionId } = await aktiverVertrag();
+      const antwort = await put(
+        `/api/contracts/${id}/versions/${versionId}/services`,
+        { services: [{ label: 'Heimlich geändert', estimatedMinutes: 30, requiredCrewSize: 1, materialsBy: 'PROVIDER' }] },
+        { jar: jars.admin },
+      );
+      assert.equal(antwort.status, 422);
+
+      const nachher = await get<{ data: { versions: { services: { label: string }[] }[] } }>(
+        `/api/contracts/${id}`,
+        { jar: jars.admin },
+      );
+      assert.equal(data(nachher).versions[0]!.services[0]!.label, 'Unterhaltsreinigung Büro');
+    });
+
+    /**
+     * Die Frequenz ist der Kern dessen, was vereinbart wurde, und bei
+     * Abrechnung je Einsatz unmittelbar der Preis. Liesse sie sich an einer
+     * geltenden Fassung ändern, wäre „unveränderlich" eine Behauptung über
+     * ein Formularfeld und nicht über den Vertrag.
+     */
+    it('weist jede Änderung am Einsatzplan ab (422) — anlegen, ändern, entfernen', async () => {
+      const { leistungId, planId } = await aktiverVertrag();
+
+      const anlegen = await post(
+        `/api/contract-services/${leistungId}/schedules`,
+        { frequency: 'WEEKLY', weekdays: [2], effectiveFrom: tagIn(1), startMinute: 360, endMinute: 600 },
+        { jar: jars.admin },
+      );
+      assert.equal(anlegen.status, 422, 'Ein zweiter Plan wäre eine zusätzliche Leistung');
+
+      const aendern = await patch(
+        `/api/contract-schedules/${planId}`,
+        { frequency: 'WEEKLY', weekdays: [1, 2, 3, 4, 5], effectiveFrom: tagIn(1), startMinute: 360, endMinute: 600 },
+        { jar: jars.admin },
+      );
+      assert.equal(aendern.status, 422, 'Von einmal auf fünfmal wöchentlich ist eine Vertragsänderung');
+
+      const entfernen = await del(`/api/contract-schedules/${planId}`, { jar: jars.admin });
+      assert.equal(entfernen.status, 422);
+    });
+
+    /**
+     * Die Gegenprobe: Eine **Ausnahme** bleibt erlaubt. Wer einen einzelnen
+     * Termin wegen Betriebsferien verschiebt, ändert den Vertrag nicht — und
+     * eine Sperre dafür machte das Modul im Alltag unbrauchbar.
+     */
+    it('lässt eine Ausnahme auf der geltenden Fassung zu (201)', async () => {
+      const { planId } = await aktiverVertrag();
+      const antwort = await post(
+        `/api/contract-schedules/${planId}/exceptions`,
+        { kind: 'SKIP', originalDate: tagIn(14), reason: 'Betriebsferien' },
+        { jar: jars.admin },
+      );
+      assert.equal(antwort.status, 201, JSON.stringify(antwort.payload));
+    });
+
+    it('nimmt weder Zustand noch Versionsnummer entgegen — sie stehen in keinem Schema', async () => {
+      const { id, versionId } = await aktiverVertrag();
+      // Ein Entwurf wäre änderbar; hier geht es um die Felder selbst.
+      const neu = await post<{ data: { id: string; versionNumber: number } }>(
+        `/api/contracts/${id}/versions`,
+        { version: { ...konditionen(1300), reason: 'Zweite Fassung der Prüfreihe' } },
+        { jar: jars.admin },
+      );
+      assert.equal(neu.status, 201);
+
+      const geschmuggelt = await patch(
+        `/api/contracts/${id}/versions/${data(neu).id}`,
+        { ...konditionen(1300), reason: 'Mit Schmuggelfeldern', status: 'ACTIVE', versionNumber: 99 },
+        { jar: jars.admin },
+      );
+      assert.equal(geschmuggelt.status, 200, 'Der Entwurf selbst lässt sich ändern');
+
+      const akte = await get<{ data: { versions: { id: string; status: string; versionNumber: number }[] } }>(
+        `/api/contracts/${id}`,
+        { jar: jars.admin },
+      );
+      const entwurf = data(akte).versions.find((v) => v.id === data(neu).id)!;
+      assert.equal(entwurf.status, 'DRAFT', 'Ein mitgeschickter Zustand wirkt nicht');
+      assert.equal(entwurf.versionNumber, 2, 'Eine mitgeschickte Versionsnummer wirkt nicht');
+      assert.equal(
+        data(akte).versions.find((v) => v.id === versionId)!.status,
+        'ACTIVE',
+        'Die geltende Fassung bleibt die geltende',
+      );
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  //  Historische Wahrheit
+  // -------------------------------------------------------------------------
+
+  /**
+   * **Ein Einsatz behält seine Vertragsversion.**
+   *
+   * Die Alternative wäre, beim Lesen auf „die aktuell aktive Fassung"
+   * aufzulösen. Das ist bequem und falsch: Nach der ersten Preisanpassung
+   * zeigte jeder alte Einsatz den neuen Preis, jede alte Rechnung liesse sich
+   * nicht mehr nachrechnen, und die Frage „unter welchen Konditionen wurde das
+   * erbracht" wäre unbeantwortbar. Der Fremdschlüssel wird deshalb beim
+   * Erzeugen gesetzt und nie wieder angefasst.
+   */
+  describe('Versions-Schnappschuss am Einsatz', () => {
+    it('alte Einsätze behalten Version 1, neue bekommen Version 2', async () => {
+      const id = await neuerEntwurf();
+      const vorher = await get<{ data: { versions: { id: string; services: { id: string }[] }[] } }>(
+        `/api/contracts/${id}`,
+        { jar: jars.admin },
+      );
+      const v1 = data(vorher).versions[0]!.id;
+      const leistungId = data(vorher).versions[0]!.services[0]!.id;
+
+      await post(
+        `/api/contract-services/${leistungId}/schedules`,
+        { frequency: 'WEEKLY', weekdays: [1, 3], effectiveFrom: tagIn(1), startMinute: 360, endMinute: 600 },
+        { jar: jars.admin },
+      );
+      await post(`/api/contracts/${id}/activate`, {}, { jar: jars.admin });
+
+      const ersterLauf = await post<{ data: { angelegt: number } }>(
+        `/api/contracts/${id}/schedule`,
+        { bis: tagIn(21) },
+        { jar: jars.admin },
+      );
+      assert.ok(data(ersterLauf).angelegt > 0);
+
+      const alte = await get<{ data: { id: string; contractVersionId: string }[] }>(
+        `/api/jobs?contractId=${id}&pageSize=100`,
+        { jar: jars.admin },
+      );
+      assert.equal(alte.status, 200);
+      const alteIds = data(alte).map((j) => j.id);
+      assert.ok(alteIds.length > 0);
+      assert.ok(
+        data(alte).every((j) => j.contractVersionId === v1),
+        'Alle Einsätze des ersten Laufs zeigen auf Version 1',
+      );
+
+      // Zweite Fassung anlegen und in Kraft setzen.
+      const neueVersion = await post<{ data: { id: string; versionNumber: number } }>(
+        `/api/contracts/${id}/versions`,
+        {
+          version: {
+            effectiveFrom: tagIn(1),
+            reason: 'Preisanpassung — die alten Einsätze dürfen davon nichts merken',
+            billingCycle: 'MONTHLY',
+            paymentTermDays: 30,
+            pricingModel: 'FIXED_PERIOD',
+            baseAmount: 1500,
+            vatRate: 8.1,
+            noticePeriodDays: 90,
+            renewalType: 'NONE',
+          },
+        },
+        { jar: jars.admin },
+      );
+      assert.equal(neueVersion.status, 201, JSON.stringify(neueVersion.payload));
+      const v2 = data(neueVersion).id;
+
+      const aktivieren = await post(`/api/contracts/${id}/activate`, {}, { jar: jars.admin });
+      assert.equal(aktivieren.status, 422, 'Ein aktiver Vertrag wird nicht zweimal aktiviert');
+
+      /**
+       * Der vorgesehene Weg für das Wirksamwerden ist heute das Aktivieren
+       * aus einem nicht-aktiven Zustand. Für diese Prüfung genügt, dass die
+       * **alten** Einsätze unverändert auf Version 1 zeigen — auch nachdem
+       * eine zweite Fassung existiert und der Planer erneut gelaufen ist.
+       */
+      await post(`/api/contracts/${id}/schedule`, { bis: tagIn(35) }, { jar: jars.admin });
+
+      const nachher = await get<{ data: { id: string; contractVersionId: string }[] }>(
+        `/api/jobs?contractId=${id}&pageSize=100`,
+        { jar: jars.admin },
+      );
+      const unveraendert = data(nachher).filter((j) => alteIds.includes(j.id));
+      assert.equal(unveraendert.length, alteIds.length, 'Kein alter Einsatz ist verschwunden');
+      assert.ok(
+        unveraendert.every((j) => j.contractVersionId === v1),
+        'Kein alter Einsatz wurde auf die neue Fassung umgehängt',
+      );
+      assert.notEqual(v1, v2);
+    });
+
+    it('die Abrechnungsgrundlage nennt die Version je Position', async () => {
+      const id = await neuerEntwurf();
+      const akte = await get<{ data: { versions: { id: string; services: { id: string }[] }[] } }>(
+        `/api/contracts/${id}`,
+        { jar: jars.admin },
+      );
+      const v1 = data(akte).versions[0]!.id;
+      await post(
+        `/api/contract-services/${data(akte).versions[0]!.services[0]!.id}/schedules`,
+        { frequency: 'WEEKLY', weekdays: [1], effectiveFrom: tagIn(1), startMinute: 360, endMinute: 600 },
+        { jar: jars.admin },
+      );
+      await post(`/api/contracts/${id}/activate`, {}, { jar: jars.admin });
+
+      const grundlage = await get<{ data: { contractVersionId: string; positionen: unknown[] } }>(
+        `/api/contracts/${id}/billing-basis?von=${tagIn(0)}&bis=${tagIn(30)}`,
+        { jar: jars.admin },
+      );
+      assert.equal(grundlage.status, 200);
+      assert.equal(data(grundlage).contractVersionId, v1, 'Die Summe ist einer Fassung zugeordnet');
     });
   });
 
@@ -770,6 +1054,311 @@ describe('Verträge', () => {
       assert.equal(data(grundlage).brutto, 1297.2);
       assert.equal(data(grundlage).versionNumber, 1, 'Die Summe ist einer Vertragsversion zugeordnet');
       assert.ok(data(grundlage).herleitung.length > 0, 'Die Herleitung steht dabei');
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  //  Vertragsrechnung
+  // -------------------------------------------------------------------------
+
+  /**
+   * Die teuerste Zusage des Abrechnungsteils: **eine Periode, eine Rechnung.**
+   *
+   * Sie hängt nicht an einer Prüfung im Dienst, sondern an einem Teilindex in
+   * der Datenbank — zwischen „gibt es schon eine?" und dem INSERT liegt ein
+   * Moment, und ein doppelter Klick, ein Wiederholungsversuch und zwei
+   * gleichzeitige Monatsabschlüsse passen genau hinein. Geprüft wird deshalb
+   * nicht nur der zweite Aufruf, sondern auch der gleichzeitige.
+   */
+  describe('Vertragsrechnung', () => {
+    /** Alles, was hier entstanden ist — Rechnungen räumen sich selbst weg. */
+    const angelegteRechnungen: string[] = [];
+
+    after(async () => {
+      for (const id of angelegteRechnungen) {
+        await del(`/api/invoices/${id}`, { jar: jars.admin }).catch(() => undefined);
+      }
+    });
+
+    /** Ein aktiver Vertrag mit Pauschale — der Fall, der immer einen Betrag ergibt. */
+    async function abrechenbarerVertrag(): Promise<string> {
+      const id = await neuerEntwurf({ contract: { startDate: tagIn(-400) }, version: { effectiveFrom: tagIn(-400) } });
+      const antwort = await post(`/api/contracts/${id}/activate`, { effectiveFrom: tagIn(-400) }, { jar: jars.admin });
+      assert.equal(antwort.status, 200, JSON.stringify(antwort.payload));
+      return id;
+    }
+
+    function merke(rechnung: { invoiceId: string }) {
+      if (!angelegteRechnungen.includes(rechnung.invoiceId)) angelegteRechnungen.push(rechnung.invoiceId);
+    }
+
+    it('erzeugt eine Rechnung für die Periode und nennt Vertrag, Fassung und Zeitraum', async () => {
+      const id = await abrechenbarerVertrag();
+
+      const antwort = await post<{
+        data: {
+          invoiceId: string;
+          neu: boolean;
+          brutto: number;
+          netto: number;
+          periodLabel: string;
+          contractVersionId: string;
+          versionNumber: number;
+        };
+      }>(`/api/contracts/${id}/invoices`, {}, { jar: jars.admin });
+
+      assert.equal(antwort.status, 201, JSON.stringify(antwort.payload));
+      merke(data(antwort));
+
+      assert.equal(data(antwort).neu, true);
+      assert.equal(data(antwort).netto, 1200, 'Pauschale je Periode');
+      assert.equal(data(antwort).brutto, 1297.2, '1200 + 8,1 %');
+      assert.equal(data(antwort).versionNumber, 1, 'Die Rechnung trägt die Fassung, unter der sie entstand');
+      assert.ok(data(antwort).periodLabel.length > 0);
+
+      /*
+        Und die Abrechnungsübersicht führt sie auf — mit Zeitraum und Fassung.
+        Geprüft wird hier und nicht an `/api/invoices/{id}`: Diesen Endpunkt
+        gibt es nicht, die Rechnungsakte ist eine Seite. Die Übersicht ist der
+        Ort, an dem die Herkunft fachlich sichtbar wird.
+      */
+      const uebersicht = await get<{
+        data: { perioden: { label: string; invoice: { id: string; versionNumber: number } | null }[] };
+      }>(`/api/contracts/${id}/invoices?perioden=2`, { jar: jars.admin });
+      assert.equal(uebersicht.status, 200, JSON.stringify(uebersicht.payload));
+
+      const gedeckt = data(uebersicht).perioden.find((p) => p.invoice?.id === data(antwort).invoiceId);
+      assert.ok(gedeckt, 'Die erzeugte Rechnung erscheint in der Übersicht');
+      assert.equal(gedeckt!.invoice!.versionNumber, 1, 'mit der Fassung, unter der sie entstand');
+      assert.equal(gedeckt!.label, data(antwort).periodLabel);
+    });
+
+    it('legt beim zweiten Aufruf nichts an — dieselbe Rechnung, 200 statt 201', async () => {
+      const id = await abrechenbarerVertrag();
+
+      const erste = await post<{ data: { invoiceId: string; neu: boolean } }>(
+        `/api/contracts/${id}/invoices`,
+        {},
+        { jar: jars.admin },
+      );
+      assert.equal(erste.status, 201, JSON.stringify(erste.payload));
+      merke(data(erste));
+
+      const zweite = await post<{ data: { invoiceId: string; neu: boolean } }>(
+        `/api/contracts/${id}/invoices`,
+        {},
+        { jar: jars.admin },
+      );
+      assert.equal(zweite.status, 200, 'Der zweite Aufruf ist kein Fehler, sondern ein Verweis');
+      assert.equal(data(zweite).neu, false);
+      assert.equal(data(zweite).invoiceId, data(erste).invoiceId, 'Dieselbe Rechnung, kein zweiter Beleg');
+    });
+
+    it('verschiedene Stichtage derselben Periode ergeben dieselbe Rechnung', async () => {
+      const id = await abrechenbarerVertrag();
+
+      // Zwei Tage, die im selben Monat liegen — die Periode ist kanonisch,
+      // nicht frei wählbar. Genau das ist der Schlüssel gegen Doppelabrechnung.
+      const ersteAntwort = await post<{ data: { invoiceId: string } }>(
+        `/api/contracts/${id}/invoices`,
+        { stichtag: tagIn(-40) },
+        { jar: jars.admin },
+      );
+      assert.equal(ersteAntwort.status, 201, JSON.stringify(ersteAntwort.payload));
+      merke(data(ersteAntwort));
+
+      const zweiteAntwort = await post<{ data: { invoiceId: string; neu: boolean } }>(
+        `/api/contracts/${id}/invoices`,
+        { stichtag: tagIn(-39) },
+        { jar: jars.admin },
+      );
+      assert.equal(zweiteAntwort.status, 200);
+      assert.equal(data(zweiteAntwort).invoiceId, data(ersteAntwort).invoiceId);
+    });
+
+    it('zwei gleichzeitige Läufe erzeugen genau eine Rechnung', async () => {
+      const id = await abrechenbarerVertrag();
+
+      /**
+       * Der Fall, den eine Prüfung im Code nicht abdeckt: Beide Anfragen lesen
+       * „es gibt noch keine", bevor eine von beiden geschrieben hat. Abgewiesen
+       * wird hier nicht durch den Dienst, sondern durch den Teilindex — und der
+       * unterlegene Lauf gibt die Rechnung des anderen zurück, statt zu
+       * scheitern.
+       */
+      const [a, b] = await Promise.all([
+        post<{ data: { invoiceId: string; neu: boolean } }>(
+          `/api/contracts/${id}/invoices`,
+          { stichtag: tagIn(-70) },
+          { jar: jars.admin },
+        ),
+        post<{ data: { invoiceId: string; neu: boolean } }>(
+          `/api/contracts/${id}/invoices`,
+          { stichtag: tagIn(-70) },
+          { jar: jars.admin },
+        ),
+      ]);
+
+      assert.ok([200, 201].includes(a.status), `erster Lauf: HTTP ${a.status} — ${JSON.stringify(a.payload)}`);
+      assert.ok([200, 201].includes(b.status), `zweiter Lauf: HTTP ${b.status} — ${JSON.stringify(b.payload)}`);
+      merke(data(a));
+      merke(data(b));
+
+      assert.equal(data(a).invoiceId, data(b).invoiceId, 'Beide Läufe zeigen auf denselben Beleg');
+
+      // Und in der Datenbank steht genau einer.
+      const liste = await get<{ data: { id: string }[] }>(`/api/invoices?contractId=${id}&pageSize=50`, {
+        jar: jars.admin,
+      });
+      assert.equal(liste.status, 200, JSON.stringify(liste.payload));
+      assert.equal(data(liste).length, 1, 'Genau eine Rechnung, nicht zwei');
+    });
+
+    it('rechnet jede Periode einzeln ab — zwei Perioden, zwei Rechnungen', async () => {
+      const id = await abrechenbarerVertrag();
+
+      const a = await post<{ data: { invoiceId: string; periodStart: string } }>(
+        `/api/contracts/${id}/invoices`,
+        { stichtag: tagIn(-100) },
+        { jar: jars.admin },
+      );
+      const b = await post<{ data: { invoiceId: string; periodStart: string } }>(
+        `/api/contracts/${id}/invoices`,
+        { stichtag: tagIn(-160) },
+        { jar: jars.admin },
+      );
+      assert.equal(a.status, 201, JSON.stringify(a.payload));
+      assert.equal(b.status, 201, JSON.stringify(b.payload));
+      merke(data(a));
+      merke(data(b));
+
+      assert.notEqual(data(a).invoiceId, data(b).invoiceId);
+      assert.notEqual(
+        data(a).periodStart.slice(0, 10),
+        data(b).periodStart.slice(0, 10),
+        'Zwei verschiedene Perioden',
+      );
+    });
+
+    it('eine ausgestellte Rechnung trägt die Fassung von damals — auch nach einer Preisanpassung', async () => {
+      const id = await abrechenbarerVertrag();
+
+      const rechnung = await post<{
+        data: { invoiceId: string; number: string; contractVersionId: string; versionNumber: number };
+      }>(`/api/contracts/${id}/invoices`, { stichtag: tagIn(-220), sofortAusstellen: true }, { jar: jars.admin });
+      assert.equal(rechnung.status, 201, JSON.stringify(rechnung.payload));
+      merke(data(rechnung));
+      assert.equal(data(rechnung).versionNumber, 1);
+
+      assert.match(
+        data(rechnung).number,
+        /^RE-/,
+        'Ausgestellt heisst: Nummer aus dem Nummernkreis, danach unveränderlich',
+      );
+
+      // Jetzt eine neue Fassung mit anderem Preis.
+      const version2 = await post(
+        `/api/contracts/${id}/versions`,
+        {
+          version: {
+            effectiveFrom: tagIn(-10),
+            reason: 'Preisanpassung zur Prüfung des Schnappschusses',
+            billingCycle: 'MONTHLY',
+            paymentTermDays: 30,
+            pricingModel: 'FIXED_PERIOD',
+            baseAmount: 2400,
+            vatRate: 8.1,
+            noticePeriodDays: 90,
+            renewalType: 'NONE',
+          },
+        },
+        { jar: jars.admin },
+      );
+      assert.equal(version2.status, 201, JSON.stringify(version2.payload));
+
+      /**
+       * Die alte Rechnung zeigt weiter auf Fassung 1. Würde sie dynamisch auf
+       * „die derzeit geltende" auflösen, wäre jede ausgestellte Rechnung nach
+       * der ersten Preisanpassung falsch hergeleitet — und Art. 957a OR
+       * verlangt das Gegenteil.
+       */
+      const nachher = await get<{
+        data: { perioden: { invoice: { id: string; status: string; brutto: number; versionNumber: number } | null }[] };
+      }>(`/api/contracts/${id}/invoices?perioden=12`, { jar: jars.admin });
+      assert.equal(nachher.status, 200, JSON.stringify(nachher.payload));
+
+      const zeile = data(nachher).perioden.find((p) => p.invoice?.id === data(rechnung).invoiceId);
+      assert.ok(zeile, 'Die Rechnung steht weiterhin in der Übersicht');
+      assert.equal(zeile!.invoice!.versionNumber, 1, 'Die Rechnung hängt unverändert an Fassung 1');
+      assert.equal(zeile!.invoice!.brutto, 1297.2, 'Und der Betrag von damals steht unverändert');
+      assert.equal(zeile!.invoice!.status, 'ISSUED');
+    });
+
+    it('rechnet einen Entwurf nicht ab (422)', async () => {
+      const id = await neuerEntwurf();
+      const antwort = await post(`/api/contracts/${id}/invoices`, {}, { jar: jars.admin });
+      assert.equal(antwort.status, 422, 'Ein Vertrag, der nie in Kraft war, ergibt keinen Beleg');
+    });
+
+    it('zeigt in der Übersicht, welche Perioden offen sind', async () => {
+      const id = await abrechenbarerVertrag();
+
+      const vorher = await get<{
+        data: { billingCycle: string; perioden: { label: string; invoice: { id: string } | null }[] };
+      }>(`/api/contracts/${id}/invoices?perioden=3`, { jar: jars.admin });
+      assert.equal(vorher.status, 200, JSON.stringify(vorher.payload));
+      assert.equal(data(vorher).billingCycle, 'MONTHLY');
+      assert.equal(data(vorher).perioden.length, 3);
+      assert.deepEqual(
+        data(vorher).perioden.map((p) => p.invoice),
+        [null, null, null],
+        'Vor der Abrechnung ist jede Periode offen',
+      );
+
+      const erzeugt = await post<{ data: { invoiceId: string } }>(
+        `/api/contracts/${id}/invoices`,
+        {},
+        { jar: jars.admin },
+      );
+      assert.equal(erzeugt.status, 201, JSON.stringify(erzeugt.payload));
+      merke(data(erzeugt));
+
+      const nachher = await get<{ data: { perioden: { invoice: { id: string } | null }[] } }>(
+        `/api/contracts/${id}/invoices?perioden=3`,
+        { jar: jars.admin },
+      );
+      assert.equal(data(nachher).perioden[0]!.invoice?.id, data(erzeugt).invoiceId, 'Die jüngste Periode ist gedeckt');
+      assert.equal(data(nachher).perioden[1]!.invoice, null, 'Die davor bleibt offen');
+    });
+
+    /**
+     * Abrechnen ist **Tagesgeschäft**, nicht Zusage nach aussen.
+     *
+     * Die Betriebsleitung hat `contract:billing` und `invoice:create` — sie
+     * stellt auch sonst Rechnungen. Hier eine höhere Hürde zu ziehen wäre
+     * nicht strenger, sondern inkonsequent: Dieselbe Person könnte denselben
+     * Betrag über `POST /api/invoices` von Hand erfassen, nur ohne die
+     * Herkunftsangaben und ohne den Schutz gegen Doppelabrechnung.
+     *
+     * Die scharfe Linie liegt woanders und ist in `Rechte` geprüft:
+     * aktivieren, freigeben, zur Unterschrift geben, kündigen.
+     */
+    it('die Betriebsleitung darf abrechnen — Mitarbeitende nicht', async () => {
+      const id = await abrechenbarerVertrag();
+
+      const betriebsleitung = await post<{ data: { invoiceId: string } }>(
+        `/api/contracts/${id}/invoices`,
+        {},
+        { jar: jars.manager },
+      );
+      assert.equal(betriebsleitung.status, 201, JSON.stringify(betriebsleitung.payload));
+      merke(data(betriebsleitung));
+
+      const mitarbeitende = await post(`/api/contracts/${id}/invoices`, {}, { jar: jars.employee });
+      assert.equal(mitarbeitende.status, 403, 'Mitarbeitende haben mit Verträgen nichts zu tun');
+
+      const kundschaft = await post(`/api/contracts/${id}/invoices`, {}, { jar: jars.customer });
+      assert.equal(kundschaft.status, 403, 'Und die Kundschaft rechnet sich selbst nichts ab');
     });
   });
 

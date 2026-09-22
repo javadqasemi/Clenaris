@@ -10,6 +10,7 @@ import {
   serientage,
   tagSchluessel,
   termine,
+  zuercherZeitpunkt,
   type Serienregel,
 } from '../../src/lib/contracts/serie';
 
@@ -277,6 +278,151 @@ describe('Serien-Rechenkern der Verträge', () => {
       // Frühestens 2.5.2027 — das ist nach dem 31.3., also gilt das nächste
       // Laufzeitende.
       assert.equal(tagSchluessel(wirkung), '2028-03-31');
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  //  Kantenfälle des Kalenders
+  // -------------------------------------------------------------------------
+
+  describe('Kalender-Kantenfälle', () => {
+    it('„alle drei Wochen" zählt in Dreierschritten ab dem ersten Serientermin', () => {
+      const regel = woechentlich({ frequency: 'WEEKLY', interval: 3, weekdays: [2] });
+      // Beginn Do 2026-10-01 → erster Dienstag 06.10., dann 27.10., 17.11.
+      assert.deepEqual(
+        serientage(regel, tag('2026-10-01'), tag('2026-11-30')).map(tagSchluessel),
+        ['2026-10-06', '2026-10-27', '2026-11-17'],
+      );
+    });
+
+    it('Vertragsbeginn zwischen zwei Serientagen lässt den ersten nicht ausfallen', () => {
+      /**
+       * Der Fehler, den die erste Fassung hatte: Der Rhythmus zählte ab der
+       * Woche von `effectiveFrom`. Beginnt der Vertrag an einem Donnerstag und
+       * wird montags gereinigt, liegt der erste Montag in der Folgewoche — und
+       * bei zweiwöchentlichem Takt fiel er aus. Der erste Termin eines
+       * Vertrags entfiel, und beim Testen sieht das niemand.
+       */
+      for (const beginn of ['2026-10-01', '2026-10-02', '2026-10-03', '2026-10-04']) {
+        const regel = woechentlich({ frequency: 'BIWEEKLY', weekdays: [1], effectiveFrom: tag(beginn) });
+        const ergebnis = serientage(regel, tag(beginn), tag('2026-10-31'));
+        assert.equal(ergebnis[0] ? tagSchluessel(ergebnis[0]) : null, '2026-10-05', `Beginn ${beginn}`);
+      }
+    });
+
+    it('Vertrag endet vor dem nächsten Termin: keine Serientage', () => {
+      const regel = woechentlich({ weekdays: [1], effectiveFrom: tag('2026-10-06'), effectiveUntil: tag('2026-10-10') });
+      // Erster Montag nach dem 6.10. wäre der 12.10. — nach dem Ende.
+      assert.deepEqual(serientage(regel, tag('2026-10-01'), tag('2026-12-31')), []);
+    });
+
+    it('Monatsletzter im Februar — auch im Schaltjahr', () => {
+      const regel = woechentlich({
+        frequency: 'MONTHLY',
+        weekdays: [],
+        monthDay: 31,
+        effectiveFrom: tag('2028-01-31'),
+      });
+      // 2028 ist ein Schaltjahr: der 29. Februar existiert.
+      assert.deepEqual(
+        serientage(regel, tag('2028-01-01'), tag('2028-04-01')).map(tagSchluessel),
+        ['2028-01-31', '2028-02-29', '2028-03-31'],
+      );
+
+      const keinSchaltjahr = woechentlich({
+        frequency: 'MONTHLY',
+        weekdays: [],
+        monthDay: 30,
+        effectiveFrom: tag('2027-01-30'),
+      });
+      assert.deepEqual(
+        serientage(keinSchaltjahr, tag('2027-01-01'), tag('2027-04-01')).map(tagSchluessel),
+        ['2027-01-30', '2027-02-28', '2027-03-30'],
+      );
+    });
+
+    it('halbjährlich und jährlich treffen denselben Kalendertag', () => {
+      const halb = woechentlich({ frequency: 'SEMIANNUAL', weekdays: [], monthDay: 15, effectiveFrom: tag('2026-03-15') });
+      assert.deepEqual(
+        serientage(halb, tag('2026-01-01'), tag('2027-12-31')).map(tagSchluessel),
+        ['2026-03-15', '2026-09-15', '2027-03-15', '2027-09-15'],
+      );
+
+      const jaehrlich = woechentlich({ frequency: 'ANNUAL', weekdays: [], monthDay: 29, effectiveFrom: tag('2028-02-29') });
+      // 2029 hat keinen 29. Februar — der Termin fällt auf den Monatsletzten
+      // und wandert danach **nicht** weiter.
+      assert.deepEqual(
+        serientage(jaehrlich, tag('2028-01-01'), tag('2030-12-31')).map(tagSchluessel),
+        ['2028-02-29', '2029-02-28', '2030-02-28'],
+      );
+    });
+
+    it('ein Feiertag am Jahreswechsel verschiebt über die Jahresgrenze', () => {
+      // 1. Januar 2027 ist ein Freitag und Feiertag → Termin geht auf Montag.
+      const ergebnis = termine(
+        woechentlich({ weekdays: [5], holidayHandling: 'MOVE_AFTER', effectiveFrom: tag('2026-12-01') }),
+        tag('2026-12-28'),
+        tag('2027-01-03'),
+        new Set(['2027-01-01']),
+      );
+      assert.deepEqual(tage(ergebnis), ['2027-01-04']);
+      assert.equal(tagSchluessel(ergebnis[0]!.serientag), '2027-01-01');
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  //  Zeitzone
+  // -------------------------------------------------------------------------
+
+  /**
+   * Kalendertag und Zeitpunkt sind zwei verschiedene Dinge, und der Planer
+   * muss sie sauber trennen: Gespeichert wird UTC, gemeint ist Ortszeit.
+   * „Ab 06:00" heisst sechs Uhr in Bern — im Sommer wie im Winter.
+   */
+  describe('Ortszeit und Umstellung', () => {
+    const ortszeit = (zeitpunkt: Date) =>
+      new Intl.DateTimeFormat('de-CH', {
+        timeZone: 'Europe/Zurich',
+        hour12: false,
+        hour: '2-digit',
+        minute: '2-digit',
+      }).format(zeitpunkt);
+
+    it('06:00 bleibt 06:00 — im Winter wie im Sommer', () => {
+      assert.equal(ortszeit(zuercherZeitpunkt(tag('2027-01-15'), 6 * 60)), '06:00');
+      assert.equal(ortszeit(zuercherZeitpunkt(tag('2027-07-15'), 6 * 60)), '06:00');
+    });
+
+    it('die UTC-Zeitpunkte unterscheiden sich dabei um eine Stunde', () => {
+      const winter = zuercherZeitpunkt(tag('2027-01-15'), 6 * 60);
+      const sommer = zuercherZeitpunkt(tag('2027-07-15'), 6 * 60);
+      assert.equal(winter.getUTCHours(), 5, 'MEZ = UTC+1');
+      assert.equal(sommer.getUTCHours(), 4, 'MESZ = UTC+2');
+    });
+
+    it('Umstellung im Frühjahr: der Tag hat 23 Stunden, 06:00 bleibt 06:00', () => {
+      // 2027-03-28 ist der Umstellungssonntag (02:00 → 03:00).
+      assert.equal(ortszeit(zuercherZeitpunkt(tag('2027-03-28'), 6 * 60)), '06:00');
+      assert.equal(ortszeit(zuercherZeitpunkt(tag('2027-03-29'), 6 * 60)), '06:00');
+    });
+
+    it('Umstellung im Herbst: der Tag hat 25 Stunden, 06:00 bleibt 06:00', () => {
+      // 2027-10-31 ist der Rückstellungssonntag (03:00 → 02:00).
+      assert.equal(ortszeit(zuercherZeitpunkt(tag('2027-10-31'), 6 * 60)), '06:00');
+      assert.equal(ortszeit(zuercherZeitpunkt(tag('2027-11-01'), 6 * 60)), '06:00');
+    });
+
+    it('auch ein früher Beginn überlebt die Umstellung', () => {
+      // 01:00 liegt vor der Lücke und bleibt 01:00.
+      assert.equal(ortszeit(zuercherZeitpunkt(tag('2027-03-28'), 60)), '01:00');
+      // 04:00 liegt danach.
+      assert.equal(ortszeit(zuercherZeitpunkt(tag('2027-03-28'), 4 * 60)), '04:00');
+    });
+
+    it('der Kalendertag bleibt derselbe — kein Abrutschen in den Vortag', () => {
+      const zeitpunkt = zuercherZeitpunkt(tag('2027-07-15'), 0);
+      const datum = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Zurich' }).format(zeitpunkt);
+      assert.equal(datum, '2027-07-15');
     });
   });
 

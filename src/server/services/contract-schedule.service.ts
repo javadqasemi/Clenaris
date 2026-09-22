@@ -1,12 +1,12 @@
 import 'server-only';
 
 import { audit } from '@/lib/audit';
-import { zurichMidnight } from '@/lib/bi/periods';
 import {
   alsTag,
   plusTage,
   tagSchluessel,
   termine,
+  zuercherZeitpunkt,
   type Ausnahme,
   type Serienregel,
   type Termin,
@@ -59,6 +59,34 @@ export const PLANUNGSHORIZONT_TAGE = 60;
 //  Pflege der Pläne
 // ---------------------------------------------------------------------------
 
+/**
+ * **Ein Einsatzplan gehört zu den Konditionen — also nur an einem Entwurf.**
+ *
+ * Die Zusicherung „eine geltende Fassung ist unveränderlich" wäre leer, wenn
+ * sich die *Frequenz* daneben frei ändern liesse: Ob zweimal oder dreimal
+ * wöchentlich gereinigt wird, ist der Kern dessen, was vereinbart wurde, und
+ * es bestimmt bei Abrechnung je Einsatz unmittelbar den Preis. Wer hier
+ * änderte, hätte einen Vertrag umgeschrieben, ohne dass eine Version
+ * entstünde — und niemand könnte später sagen, was ab wann galt.
+ *
+ * Der Weg für eine echte Änderung ist der vorgesehene: Änderungsantrag →
+ * neue Version → aktivieren. Der Weg für einen einzelnen verlegten Termin ist
+ * `addScheduleException`, und der bleibt auf einer geltenden Fassung erlaubt:
+ * Eine Ausnahme ist ausdrücklich keine Regeländerung.
+ *
+ * Die **eine** Ausnahme von dieser Regel ist `generatedUntil` — eine
+ * Fortschrittsmarke des Planers, kein Teil der Vereinbarung. Sie wird direkt
+ * geschrieben und ist unten eigens begründet.
+ */
+function nurEntwurf(status: string, was: 'anlegen' | 'ändern' | 'entfernen'): void {
+  if (status === 'DRAFT') return;
+  throw new BusinessRuleError(
+    status === 'ACTIVE'
+      ? `Der Einsatzplan einer geltenden Vertragsfassung lässt sich nicht ${was}. Die Frequenz ist Teil der Vereinbarung — dafür braucht es eine neue Version. Einen einzelnen Termin verschiebt man über eine Ausnahme.`
+      : `Zu einer abgelösten Vertragsversion lässt sich kein Einsatzplan ${was}.`,
+  );
+}
+
 async function ladeLeistung(organizationId: string, contractServiceId: string) {
   const leistung = await prisma.contractService.findFirst({
     where: {
@@ -79,9 +107,7 @@ export async function createSchedule(params: {
   input: ServiceScheduleInput;
 }) {
   const leistung = await ladeLeistung(params.organizationId, params.contractServiceId);
-  if (leistung.version.status === 'SUPERSEDED') {
-    throw new BusinessRuleError('Zu einer abgelösten Vertragsversion lässt sich kein Einsatzplan mehr anlegen.');
-  }
+  nurEntwurf(leistung.version.status, 'anlegen');
 
   const plan = await prisma.serviceSchedule.create({
     data: {
@@ -119,6 +145,7 @@ export async function updateSchedule(params: {
   input: ServiceScheduleInput;
 }) {
   const plan = await ladePlan(params.organizationId, params.scheduleId);
+  nurEntwurf(plan.contractService.version.status, 'ändern');
 
   const aktualisiert = await prisma.serviceSchedule.update({
     where: { id: plan.id },
@@ -156,6 +183,7 @@ export async function deleteSchedule(params: {
   ip?: string | null;
 }) {
   const plan = await ladePlan(params.organizationId, params.scheduleId);
+  nurEntwurf(plan.contractService.version.status, 'entfernen');
 
   const bereitsGeplant = await prisma.job.count({ where: { serviceScheduleId: plan.id } });
   if (bereitsGeplant > 0) {
@@ -197,6 +225,10 @@ async function ladePlan(organizationId: string, scheduleId: string) {
       id: scheduleId,
       contractService: { version: { contract: { organizationId, deletedAt: null } } },
     },
+    // Der Zustand der Fassung wird immer mitgeladen: Jeder schreibende Weg
+    // hierhin muss ihn prüfen, und eine zweite Abfrage dafür wäre eine
+    // Gelegenheit, sie zu vergessen.
+    include: { contractService: { select: { version: { select: { id: true, status: true } } } } },
   });
   if (!plan) throw new NotFoundError('Einsatzplan nicht gefunden.');
   return plan;
@@ -405,6 +437,16 @@ export async function generateJobsForContract(params: {
       }
 
       if (!probelauf && offen.length > 0) {
+        /**
+         * **Die eine Schreiboperation auf einer geltenden Fassung.**
+         *
+         * `generatedUntil` ist kein Teil der Vereinbarung, sondern die
+         * Fortschrittsmarke des Planers: bis wohin er gekommen ist. Sie
+         * ändert nichts daran, *was* vereinbart wurde, und sie wandert nur
+         * vorwärts. Alles andere am Einsatzplan ist auf einer aktiven
+         * Fassung gesperrt (`nurEntwurf`); diese Ausnahme steht hier, damit
+         * sie beim Lesen nicht wie ein übersehener Fall aussieht.
+         */
         await prisma.serviceSchedule.update({
           where: { id: plan.id },
           data: { generatedUntil: horizont },
@@ -469,8 +511,8 @@ async function einsatzAnlegen(params: {
   plan: { id: string; startMinute: number; endMinute: number };
   termin: Termin;
 }): Promise<boolean> {
-  const beginn = zurichZeitpunkt(params.termin.datum, params.plan.startMinute);
-  const ende = zurichZeitpunkt(params.termin.datum, params.plan.endMinute);
+  const beginn = zuercherZeitpunkt(params.termin.datum, params.plan.startMinute);
+  const ende = zuercherZeitpunkt(params.termin.datum, params.plan.endMinute);
 
   try {
     await prisma.$transaction(async (tx) => {
@@ -507,25 +549,6 @@ async function einsatzAnlegen(params: {
     });
     throw error;
   }
-}
-
-/**
- * Kalendertag plus Minuten seit Mitternacht → Zeitpunkt.
- *
- * Über die Zürcher Mitternacht, nicht über UTC: „ab 06:00" heisst sechs Uhr in
- * Bern, im Sommer wie im Winter. Rechnete man in UTC, verschöbe sich jeder
- * Einsatz zweimal im Jahr um eine Stunde — und zwar still.
- *
- * Die eine Unschärfe, die bleibt: An den beiden Umstellungstagen ist die
- * Addition von Minuten auf die Mitternacht nicht dasselbe wie die Ortszeit
- * (die Nacht hat 23 bzw. 25 Stunden). Der Versatz beträgt eine Stunde an zwei
- * Tagen im Jahr und trifft nur Serien, die vor 03:00 beginnen. Das ist
- * benannt und nicht behoben, weil die Behebung eine zweite Zeitzonenrechnung
- * je Termin bedeutete.
- */
-function zurichZeitpunkt(tag: Date, minuten: number): Date {
-  const mitternacht = zurichMidnight(tag.getUTCFullYear(), tag.getUTCMonth(), tag.getUTCDate());
-  return new Date(mitternacht.getTime() + minuten * 60_000);
 }
 
 /** Feiertage der Organisation im Fenster, als Menge von `YYYY-MM-DD`. */

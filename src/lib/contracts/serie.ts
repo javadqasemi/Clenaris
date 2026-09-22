@@ -289,6 +289,156 @@ function naechsterWerktag(start: Date, richtung: 1 | -1, feiertage: ReadonlySet<
 }
 
 // ---------------------------------------------------------------------------
+//  Vom Kalendertag zum Zeitpunkt
+// ---------------------------------------------------------------------------
+
+const ZURICH = 'Europe/Zurich';
+
+const zuercherTeile = new Intl.DateTimeFormat('en-US', {
+  timeZone: ZURICH,
+  hour12: false,
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+  hour: '2-digit',
+  minute: '2-digit',
+  second: '2-digit',
+});
+
+/**
+ * Der Zeitpunkt, an dem in Zürich der genannte Kalendertag um 00:00 beginnt.
+ *
+ * Dieselbe Rechnung wie `zurichMidnight` in `src/lib/bi/periods.ts` — bewusst
+ * hier noch einmal und nicht importiert: Jenes Modul gehört der
+ * Kennzahlmaschine, und eine Abhängigkeit von dort in den Vertragskern hiesse,
+ * dass eine Änderung an den Periodengrenzen der Auswertung den Einsatzplan
+ * verschieben könnte.
+ */
+export function zuercherMitternacht(tag: Date): Date {
+  const versuch = Date.UTC(tag.getUTCFullYear(), tag.getUTCMonth(), tag.getUTCDate());
+  const felder: Record<string, number> = {};
+  for (const teil of zuercherTeile.formatToParts(new Date(versuch))) {
+    if (teil.type !== 'literal') felder[teil.type] = Number(teil.value);
+  }
+  const gesehen = Date.UTC(
+    felder.year!,
+    felder.month! - 1,
+    felder.day!,
+    felder.hour! === 24 ? 0 : felder.hour!,
+    felder.minute!,
+    felder.second!,
+  );
+  return new Date(versuch - (gesehen - versuch));
+}
+
+/**
+ * Kalendertag plus Minuten seit Mitternacht → Zeitpunkt in Ortszeit.
+ *
+ * **Warum nicht einfach Minuten auf die Mitternacht addieren.** An den beiden
+ * Umstellungstagen hat die Nacht 23 bzw. 25 Stunden; eine Addition auf den
+ * UTC-Zeitpunkt der Mitternacht verschöbe den Einsatz dann um eine Stunde.
+ * „Ab 06:00" heisst sechs Uhr in Bern, im Sommer wie im Winter — deshalb wird
+ * der Versatz **am Zieltag selbst** abgelesen und nicht von der Mitternacht
+ * übernommen.
+ *
+ * Für die Lücke am Frühjahrsumstellungstag (02:00–03:00 gibt es nicht) fällt
+ * das Ergebnis auf 03:00 Ortszeit; für die doppelte Stunde im Herbst gilt die
+ * erste. Beides ist die übliche Auslegung und hier festgehalten, damit es
+ * niemand für einen Zufall hält.
+ */
+export function zuercherZeitpunkt(tag: Date, minuten: number): Date {
+  const roh = zuercherMitternacht(alsTag(tag)).getTime() + minuten * 60_000;
+
+  // Gegenprobe: Zeigt der Zeitpunkt in Zürich tatsächlich die gewünschte
+  // Uhrzeit? Wenn nicht, lag eine Umstellung dazwischen — dann um die
+  // Differenz nachkorrigieren.
+  const felder: Record<string, number> = {};
+  for (const teil of zuercherTeile.formatToParts(new Date(roh))) {
+    if (teil.type !== 'literal') felder[teil.type] = Number(teil.value);
+  }
+  const istMinute = (felder.hour! === 24 ? 0 : felder.hour!) * 60 + felder.minute!;
+  const abweichung = istMinute - minuten;
+  if (abweichung === 0) return new Date(roh);
+  return new Date(roh - abweichung * 60_000);
+}
+
+// ---------------------------------------------------------------------------
+//  Abrechnungsperioden
+// ---------------------------------------------------------------------------
+
+export type Abrechnungszyklus = 'PER_VISIT' | 'MONTHLY' | 'QUARTERLY' | 'SEMIANNUAL' | 'ANNUAL';
+
+export interface Abrechnungsperiode {
+  /** Erster Kalendertag der Periode — zugleich der Schlüssel gegen Doppelabrechnung. */
+  start: Date;
+  /** Erster Tag der **nächsten** Periode. Die obere Grenze schliesst nicht ein. */
+  endeExklusiv: Date;
+  label: string;
+}
+
+const MONATSNAMEN = [
+  'Januar', 'Februar', 'März', 'April', 'Mai', 'Juni',
+  'Juli', 'August', 'September', 'Oktober', 'November', 'Dezember',
+];
+
+/**
+ * Die **kanonische** Abrechnungsperiode zu einem Stichtag.
+ *
+ * Kanonisch heisst: Zwei verschiedene Stichtage im selben Monat ergeben
+ * dieselbe Periode. Das ist keine Bequemlichkeit, sondern die Bedingung dafür,
+ * dass sich Doppelabrechnung über einen eindeutigen Index verhindern lässt:
+ * Wäre der Zeitraum frei wählbar, gäbe es beliebig viele sich überlappende
+ * „Perioden", und jede davon wäre ein neuer Schlüssel.
+ *
+ * `PER_VISIT` rechnet ebenfalls monatlich ab — nicht, weil je Einsatz
+ * fakturiert würde, sondern weil auch dort die Rechnung einen Zeitraum
+ * braucht, über den sie die Einsätze zusammenfasst. Was sich unterscheidet,
+ * ist die Preisbildung, nicht der Rhythmus des Belegs.
+ */
+export function abrechnungsperiode(zyklus: Abrechnungszyklus, stichtag: Date): Abrechnungsperiode {
+  const tag = alsTag(stichtag);
+  const jahr = tag.getUTCFullYear();
+  const monat = tag.getUTCMonth();
+
+  switch (zyklus) {
+    case 'QUARTERLY': {
+      const start = Math.floor(monat / 3) * 3;
+      return {
+        start: new Date(Date.UTC(jahr, start, 1)),
+        endeExklusiv: new Date(Date.UTC(jahr, start + 3, 1)),
+        label: `Q${start / 3 + 1} ${jahr}`,
+      };
+    }
+    case 'SEMIANNUAL': {
+      const start = monat < 6 ? 0 : 6;
+      return {
+        start: new Date(Date.UTC(jahr, start, 1)),
+        endeExklusiv: new Date(Date.UTC(jahr, start + 6, 1)),
+        label: `${start === 0 ? '1.' : '2.'} Halbjahr ${jahr}`,
+      };
+    }
+    case 'ANNUAL':
+      return {
+        start: new Date(Date.UTC(jahr, 0, 1)),
+        endeExklusiv: new Date(Date.UTC(jahr + 1, 0, 1)),
+        label: String(jahr),
+      };
+    default:
+      return {
+        start: new Date(Date.UTC(jahr, monat, 1)),
+        endeExklusiv: new Date(Date.UTC(jahr, monat + 1, 1)),
+        label: `${MONATSNAMEN[monat]} ${jahr}`,
+      };
+  }
+}
+
+/** Die Periode vor der, in die der Stichtag fällt — der Normalfall beim Fakturieren. */
+export function vorherigePeriode(zyklus: Abrechnungszyklus, stichtag: Date): Abrechnungsperiode {
+  const laufend = abrechnungsperiode(zyklus, stichtag);
+  return abrechnungsperiode(zyklus, plusTage(laufend.start, -1));
+}
+
+// ---------------------------------------------------------------------------
 //  Fristen
 // ---------------------------------------------------------------------------
 
