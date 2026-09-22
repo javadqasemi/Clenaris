@@ -24,29 +24,30 @@ Spalten `FE` (Frontend), `BE` (Backend), `DB`, `RBAC`, `SEC` (eigener Sicherheit
 
 ## Gesamtverteilung
 
-*Stand nach Wave 10, Teil 1 (2026-09-22). Änderungen gegenüber der Erstfassung sind unten begründet; die Anteile sind gerundet.*
+*Stand nach Wave 10 (2026-09-22). Änderungen gegenüber der Erstfassung sind unten begründet; die Anteile sind gerundet.*
 
 | Status | Anzahl | Anteil |
 |---|---|---|
-| COMPLETE + VERIFIED | **95** | 50 % |
-| COMPLETE | **56** | 30 % |
+| COMPLETE + VERIFIED | **96** | 51 % |
+| COMPLETE | **59** | 31 % |
 | COMPLETE / EXTERNAL VERIFICATION REQUIRED | **6** | 3 % |
 | PARTIAL | **23** | 12 % |
-| BACKEND ONLY | **4** | 2 % |
+| BACKEND ONLY | **0** | 0 % |
 | FRONTEND ONLY | **0** | 0 % |
 | SCHEMA ONLY | **2** | 1 % |
 | NOT IMPLEMENTED | **3** | 2 % |
 | **Summe** | **189** | |
 
-**Technisch nutzbar (C+V oder C): 151 von 189 = 80 %.**
-**Durch Tests belegt: 95 von 189 = 50 %.**
+**Technisch nutzbar (C+V oder C): 155 von 189 = 82 %.**
+**Durch Tests belegt: 96 von 189 = 51 %.**
 
-> **BACKEND ONLY ist wieder besetzt — und das ist eine Aussage, keine Panne.**
-> Die vier Zeilen sind das Vertragsmodul aus Wave 10: Domäne, Versionierung,
-> Serienplanung und Änderungsanträge stehen mit 53 Prüfungen, die Oberfläche
-> fehlt. Sie als COMPLETE zu führen wäre genau das Muster, das die Waves 6, 8
-> und 9 aufgedeckt haben — Felder und Rechte, die eine Zusage machen, die
-> niemand bedienen kann. Die Kategorie sagt hier die Wahrheit.
+> **BACKEND ONLY war während Wave 10 kurz wieder besetzt und ist es nicht
+> mehr.** Vier Zeilen standen dort, solange das Vertragsmodul Dienste und
+> Endpunkte hatte und keine Oberfläche. Mit den drei Seiten unter
+> `/admin/vertraege` ist der Vorgang bedienbar; was an Masken noch fehlt
+> (Serien, Versionen, Anträge), steht als offener Punkt in der jeweiligen
+> Zeile und in `docs/VERTRAEGE.md` §11 — nicht als Kategorie, weil der
+> Hauptweg begehbar ist.
 
 > **Diese Zahlen sind ausgezählt, nicht fortgeschrieben.** Sie stammen aus den
 > Zeilen dieser Datei selbst:
@@ -293,11 +294,11 @@ Spalten `FE` (Frontend), `BE` (Backend), `DB`, `RBAC`, `SEC` (eigener Sicherheit
 
 | ID | Feature | FE | BE | DB | RBAC | SEC | T | E2E | Status | Evidence | Missing Work |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| CTR-001 | **Vertragsmodell** (Laufzeit, Verlängerung, Kündigung, Zustandsautomat) | – | ✓ | ✓ | ✓ | ✓ | ✓ | – | **BO** | `contract.service.ts`, 7 Modelle, `vertraege.test.ts` (30). Zustandsautomat an einer Stelle; Nummer beim Aktivieren; Löschen nur für Entwürfe | **Oberfläche.** Ohne sie ist der Vorgang für den Betrieb nicht bedienbar — dieselbe Regel wie bei EMP-015 |
+| CTR-001 | **Vertragsmodell** (Laufzeit, Verlängerung, Kündigung, Zustandsautomat) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | – | **C+V** | `contract.service.ts`, 7 Modelle, `vertraege.test.ts` (30), drei Seiten unter `/admin/vertraege` inkl. Seitenprüfung, Demobestand im Seed. Zustandsautomat an einer Stelle; Nummer beim Aktivieren; Löschen nur für Entwürfe; Handlungsknöpfe nur für mögliche Übergänge | – |
 | CTR-002 | Wiederkehrende Leistungen über Serienbuchung | ○ | ✓ | ✓ | ✓ | ✓ | ○ | – | **P** | `generateRecurringBookings` | Bleibt für Buchungen der Kundschaft; Verträge laufen ab Wave 10 über CTR-003 |
-| CTR-003 | **Versionierung der Konditionen** | – | ✓ | ✓ | ✓ | ✓ | ✓ | – | **BO** | `ContractVersion`, Teilindex `contract_versions_eine_aktive`. Aktive Fassung unveränderlich (422); Leistungen und Pläne werden beim Versionieren **kopiert** | Oberfläche |
-| CTR-004 | **Serienplanung mit Idempotenz** | – | ✓ | ✓ | ✓ | ✓ | ✓ | – | **BO** | `contract-schedule.service.ts`, Rechenkern `lib/contracts/serie.ts` (23 Prüfungen), `@@unique([serviceScheduleId, scheduleDate])`. Gleichzeitige Läufe geprüft | Oberfläche; Feiertagskalender je Kanton ist konfigurierbar, aber nicht befüllt |
-| CTR-005 | **Änderungsanträge und Preisanpassungen** | – | ✓ | ✓ | ✓ | ✓ | ✓ | – | **BO** | `contract-amendment.service.ts`, Teilindex `contract_amendments_ein_offener`. Vier-Augen-Prinzip auch gegen die Administration | Oberfläche |
+| CTR-003 | **Versionierung der Konditionen** | ○ | ✓ | ✓ | ✓ | ✓ | ✓ | – | **C** | `ContractVersion`, Teilindex `contract_versions_eine_aktive`. Aktive Fassung unveränderlich (422); Leistungen und Pläne werden beim Versionieren **kopiert**. Fassungsgeschichte und Konditionen sind in der Akte sichtbar | Maske zum Anlegen einer Version — heute nur über die Schnittstelle |
+| CTR-004 | **Serienplanung mit Idempotenz** | ○ | ✓ | ✓ | ✓ | ✓ | ✓ | – | **C** | `contract-schedule.service.ts`, Rechenkern `lib/contracts/serie.ts` (23 Prüfungen), `@@unique([serviceScheduleId, scheduleDate])`. Gleichzeitige Läufe geprüft. „Jetzt planen" und die nächsten Einsätze stehen in der Akte | Maske für Serien und Ausnahmen; Feiertagskalender je Kanton ist konfigurierbar, aber nicht befüllt |
+| CTR-005 | **Änderungsanträge und Preisanpassungen** | ○ | ✓ | ✓ | ✓ | ✓ | ✓ | – | **C** | `contract-amendment.service.ts`, Teilindex `contract_amendments_ein_offener`. Vier-Augen-Prinzip auch gegen die Administration. Anträge und Anpassungen sind in der Akte sichtbar | Masken zum Stellen und Entscheiden — heute nur über die Schnittstelle |
 | CTR-006 | **Abrechnungsgrundlage aus dem Vertrag** | – | ✓ | ✓ | ✓ | ✓ | ✓ | – | **P** | `contractBillingBasis` — rechnet mit voller Herleitung, jede Position mit ihrer Vertragsversion | Der Schritt in den Rechnungsdienst hinein (Wave 13) |
 
 ---

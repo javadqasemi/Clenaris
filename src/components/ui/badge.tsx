@@ -91,6 +91,27 @@ const STATUS_MAP: Record<string, { label: string; variant: BadgeProps['variant']
   SUCCEEDED: { label: 'Erfolgreich', variant: 'success' },
   FAILED: { label: 'Fehlgeschlagen', variant: 'destructive' },
   REFUNDED: { label: 'Rückerstattet', variant: 'neutral' },
+
+  /*
+    Verträge (Wave 10).
+
+    `DRAFT`, `ACTIVE`, `CANCELLED` und `APPROVED` stehen schon oben und gelten
+    hier mit — das ist der Sinn einer gemeinsamen Tabelle: „Entwurf" heisst
+    überall dasselbe und sieht überall gleich aus. Neu sind nur die
+    Zustände, die es bisher nirgends gab.
+  */
+  IN_REVIEW: { label: 'In Prüfung', variant: 'info' },
+  OFFERED: { label: 'Offeriert', variant: 'accent' },
+  ACTIVE: { label: 'Aktiv', variant: 'success' },
+  PAUSED: { label: 'Pausiert', variant: 'warning' },
+  /* Warnend, nicht zerstörend: Der Vertrag läuft bis zum Wirkungsdatum weiter. */
+  NOTICE_GIVEN: { label: 'Gekündigt', variant: 'warning' },
+  ENDED: { label: 'Beendet', variant: 'neutral' },
+  SUPERSEDED: { label: 'Abgelöst', variant: 'neutral' },
+  EFFECTIVE: { label: 'Wirksam', variant: 'success' },
+  PLANNED: { label: 'Geplant', variant: 'neutral' },
+  APPLIED: { label: 'Angewandt', variant: 'success' },
+  REVIEW: { label: 'In Prüfung', variant: 'info' },
 };
 
 export function StatusBadge({

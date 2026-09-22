@@ -100,6 +100,13 @@ export default async function AdminLayout({ children }: { children: React.ReactN
         { href: '/admin/buchungen', label: 'Buchungen', icon: 'bookings', badge: pendingBookings, permission: 'booking:read' },
         { href: '/admin/einsaetze', label: 'Einsätze', icon: 'jobs', badge: unassignedJobs, permission: 'job:read' },
         { href: '/admin/offerten', label: 'Offerten', icon: 'quotes', permission: 'quote:read' },
+        /*
+          Verträge stehen bei der Auftragsabwicklung und nicht bei der
+          Kundschaft: Ein Vertrag ist hier kein Stammdatum, sondern der
+          Ursprung wiederkehrender Einsätze — er gehört neben Buchungen und
+          Offerten, aus denen ebenfalls Arbeit entsteht.
+        */
+        { href: '/admin/vertraege', label: 'Verträge', icon: 'contract', permission: 'contract:read' },
       ],
     },
     {

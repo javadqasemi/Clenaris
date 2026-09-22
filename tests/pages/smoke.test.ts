@@ -24,6 +24,8 @@ const PAGES: Record<'admin' | 'employee' | 'customer', string[]> = {
     '/admin/einsaetze',
     '/admin/offerten',
     '/admin/offerten/neu',
+    '/admin/vertraege',
+    '/admin/vertraege/neu',
     '/admin/leads',
     '/admin/leads/neu',
     '/admin/kunden',
@@ -164,7 +166,21 @@ describe('Rauchtest', { concurrency: 1 }, async () => {
       firstId('/api/bi/analysis'),
     ]);
 
+    /**
+     * Verträge liefern eine Hülle (`{ gesamt, contracts }`) statt einer nackten
+     * Liste — die Seite braucht die Gesamtzahl für die Blätterung. `firstId`
+     * passt deshalb nicht, und ein Sonderfall dort wäre ein Sonderfall für
+     * alle. Hier reicht ein eigener Griff.
+     */
+    const contractId = await (async () => {
+      const antwort = await get<{ data: { contracts: { id: string }[] } }>('/api/contracts', {
+        jar: jars.admin,
+      });
+      return antwort.payload?.data?.contracts?.[0]?.id ?? null;
+    })();
+
     const targets: [string, string | null][] = [
+      ['/admin/vertraege', contractId],
       ['/admin/kunden', customerId],
       ['/admin/leads', leadId],
       ['/admin/rechnungen', invoiceId],

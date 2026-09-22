@@ -1466,6 +1466,111 @@ Ein Abzieher nach jedem Duschen reduziert die Kalkbildung um schätzungsweise 80
 
   console.log('✓ Unternehmensführung: Ziele, Budget, Anlagen, Risiken, Kontrollen, Wissen, Markt, Sitzung');
 
+  // =========================================================================
+  //  Ein laufender Unterhaltsvertrag (Wave 10)
+  // =========================================================================
+  //
+  //  Genau einer, und zwar ein vollständiger: Vertrag, geltende Fassung,
+  //  Leistung, Einsatzplan. Ohne ihn wäre die Vertragsakte eine leere Seite,
+  //  und die Seitenprüfung (`tests/pages/smoke.test.ts`) hätte keine
+  //  Beispielkennung.
+  //
+  //  **Es werden hier keine Einsätze erzeugt.** Das tut der Planer, und dass
+  //  er es tut, ist gerade die Zusage, die geprüft werden soll. Ein Seed, der
+  //  sie vorwegnimmt, verdeckt sie.
+  const vertragsKunde = await prisma.customer.findFirst({
+    where: { organizationId: org.id, type: 'BUSINESS', deletedAt: null },
+    select: { id: true, properties: { where: { deletedAt: null }, take: 1, select: { id: true } } },
+  });
+
+  if (vertragsKunde && !(await prisma.contract.findFirst({ where: { organizationId: org.id } }))) {
+    const beginn = dateOnly(-120);
+    const ende = dateOnly(245);
+
+    const vertrag = await prisma.contract.create({
+      data: {
+        organizationId: org.id,
+        number: `VT-${year}-00001`,
+        customerId: vertragsKunde.id,
+        propertyId: vertragsKunde.properties[0]?.id ?? null,
+        title: 'Unterhaltsreinigung Bürogeschoss',
+        description:
+          'Zweimal wöchentlich Büro und Sanitär, monatlich Treppenhaus. Material stellt Clenaris.',
+        status: 'ACTIVE',
+        startDate: beginn,
+        endDate: ende,
+        // 90 Tage vor dem Ende — dieselbe Rechnung wie im Dienst.
+        noticeDeadline: dateOnly(155),
+        createdById: admin.id,
+      },
+    });
+
+    const version = await prisma.contractVersion.create({
+      data: {
+        contractId: vertrag.id,
+        versionNumber: 1,
+        status: 'ACTIVE',
+        effectiveFrom: beginn,
+        reason: 'Erstfassung nach angenommener Offerte',
+        minimumTermMonths: 12,
+        renewalType: 'AUTOMATIC',
+        renewalPeriodMonths: 12,
+        noticePeriodDays: 90,
+        billingCycle: 'MONTHLY',
+        paymentTermDays: 30,
+        pricingModel: 'FIXED_PERIOD',
+        baseAmount: 1480,
+        vatRate: 8.1,
+        indexReference: 'LIK Dezember',
+        nextReviewAt: dateOnly(200),
+        targetQualityScore: 85,
+        inspectionIntervalDays: 90,
+        responseHours: 24,
+        terms:
+          'Leistungen gemäss Leistungsverzeichnis. Zutritt über Schlüsseldepot. ' +
+          'Reklamationen innert zwei Werktagen nach Leistungserbringung.',
+        createdById: admin.id,
+      },
+    });
+
+    const unterhalt = await prisma.service.findFirst({
+      where: { organizationId: org.id, slug: 'unterhaltsreinigung' },
+      select: { id: true },
+    });
+
+    const leistung = await prisma.contractService.create({
+      data: {
+        contractVersionId: version.id,
+        serviceId: unterhalt?.id ?? null,
+        label: 'Büro und Sanitär',
+        description: 'Arbeitsplätze, Sitzungszimmer, Küche, WC-Anlagen.',
+        estimatedMinutes: 150,
+        requiredCrewSize: 1,
+        requiredSkills: ['Unterhaltsreinigung'],
+        qualityRequirement: 'Sichtkontrolle durch die Hauswartung, Protokoll je Monat.',
+        specialInstructions: 'Zutritt ab 06:00 über Schlüsseldepot Eingang Nord.',
+        materialsBy: 'PROVIDER',
+        position: 0,
+      },
+    });
+
+    await prisma.serviceSchedule.create({
+      data: {
+        contractServiceId: leistung.id,
+        frequency: 'WEEKLY',
+        interval: 1,
+        weekdays: [1, 4], // Montag und Donnerstag
+        startMinute: 6 * 60,
+        endMinute: 9 * 60,
+        effectiveFrom: beginn,
+        holidayHandling: 'SKIP',
+        active: true,
+      },
+    });
+
+    console.log('✓ Ein laufender Unterhaltsvertrag mit Fassung, Leistung und Einsatzplan');
+  }
+
   console.log('\n✅  Demodaten angelegt.\n');
   console.log('   Kundin     nicole.wyss@example.ch / Demo#2026Clenaris\n');
   console.log('   Achtung: Bewertungen und Galerie sind erfunden und öffentlich sichtbar.');

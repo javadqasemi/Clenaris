@@ -1166,7 +1166,7 @@ fortgeschrieben und um zwei Einträge auseinandergelaufen. Sie wird jetzt
 
 ---
 
-## 20. Wave 10 (Teil 1) — Verträge: Domäne, Dienste, Endpunkte (Stand 2026-09-22)
+## 20. Wave 10 — Verträge (Stand 2026-09-22)
 
 **MISSING #2** aus Abschnitt 5: „Vertragsmodell (Laufzeit, Verlängerung,
 Kündigung, Indexierung)". Ausführlich in **[`docs/VERTRAEGE.md`](VERTRAEGE.md)**.
@@ -1224,17 +1224,28 @@ PROP-004 = SCHEMA ONLY). Es ist jetzt das, wofür es gedacht war: Ein Vertrag
 über ein Mehrfamilienhaus benennt Leistungen je Gebäude und Zone, nicht je
 Wohnung.
 
+### Die Oberfläche
+
+Drei Seiten: Liste mit Kennzahlen und sechs Sichten, Anlegemaske für Kopf,
+erste Fassung und erste Leistung in einem Formular, und die Vertragsakte mit
+Übersicht, Leistungen samt Einsatzplan, den nächsten Einsätzen **mit ihrer
+Fassung**, Änderungen, Konditionen, Fassungsgeschichte und Dokumenten. Dazu
+ein Demobestand: ein laufender Unterhaltsvertrag mit Fassung, Leistung und
+Serie — **ohne** vorerzeugte Einsätze, weil gerade deren Entstehen die Zusage
+ist, die geprüft wird.
+
+Die Handlungsknöpfe zeigen nur, was aus dem aktuellen Zustand heraus möglich
+ist. Eine ausgegraute Schaltfläche wäre ehrlicher als eine, die 422 antwortet
+— eine, die gar nicht da ist, ist die ehrlichste.
+
 ### Was ausdrücklich fehlt
 
-**Wave 10 ist nicht abgeschlossen.** Es fehlen die Oberfläche, die
-Signaturanbindung der Vertragsversion, die Rechnungserzeugung, der
-Browser-Weg und ein Demobestand. Die Liste steht in `docs/VERTRAEGE.md` §10.
-Ohne Oberfläche wäre die Einstufung sonst genau das Muster, das die Waves 6, 8
-und 9 aufgedeckt haben — Felder und Rechte, die eine Zusage machen, die
-niemand bedienen kann. Deshalb steht der Vertrag in der Matrix als
-**BACKEND ONLY** und nicht als COMPLETE.
+**Wave 10 ist nicht abgeschlossen.** Es fehlen die Masken für Serien,
+Versionen und Änderungsanträge (die Endpunkte stehen und sind geprüft), die
+Signaturanbindung der Vertragsversion, die Rechnungserzeugung und der
+Browser-Weg. Die Liste steht in `docs/VERTRAEGE.md` §11.
 
-### Verifikation nach Wave 10 (Teil 1)
+### Verifikation nach Wave 10
 
 | Prüfung | Ergebnis |
 |---|---|
@@ -1242,7 +1253,7 @@ niemand bedienen kann. Deshalb steht der Vertrag in der Matrix als
 | `prisma validate` | ✅ |
 | Migration gegen Entwicklungs- **und** Testdatenbank | ✅ additiv, kein `DROP`, keine Rückfüllung |
 | `npm run docs` | ✅ **448 Endpunkte** (von 420), **126 Modelle** in 13 Bereichen |
-| `npm test` | ✅ **1135 Prüfungen, 1133 bestanden, 0 Fehlschläge**, 2 übersprungen (von 1082) |
+| `npm test` | ✅ **1138 Prüfungen, 1136 bestanden, 0 Fehlschläge**, 2 übersprungen (von 1082) |
 
 ---
 

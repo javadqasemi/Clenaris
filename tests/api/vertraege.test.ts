@@ -112,11 +112,27 @@ describe('Verträge', () => {
     leistungId = data(leistungen)[0]!.id;
   });
 
+  /**
+   * Aufräumen, soweit die Regeln es zulassen.
+   *
+   * Ein Vertrag, der in Kraft war, **lässt sich nicht löschen** — das ist die
+   * Zusage des Moduls und kein Mangel der Prüfreihe. Was geht, ist ihn zu
+   * beenden: Dann legt der Dienst seine Einsatzpläne stumm, der nächtliche
+   * Planer rührt ihn nicht mehr an, und er verschwindet aus jeder Sicht, die
+   * nach laufenden Verträgen fragt.
+   *
+   * Es bleiben also Zeilen liegen, und das ist bekannt. Sie sind der Preis
+   * dafür, dass „ein gelaufener Vertrag ist ein Beleg" auch in der Prüfreihe
+   * gilt — eine Ausnahme dafür wäre eine Tür, die in der Anwendung nicht
+   * existieren darf.
+   */
   after(async () => {
     for (const id of angelegteVertraege) {
-      // Beendete und aktive Verträge lassen sich nicht löschen — das ist die
-      // Regel und kein Aufräumproblem. Der Versuch schadet nicht.
-      await del(`/api/contracts/${id}`, { jar: jars.admin }).catch(() => undefined);
+      const geloescht = await del(`/api/contracts/${id}`, { jar: jars.admin }).catch(() => null);
+      if (geloescht?.status === 204) continue;
+      await post(`/api/contracts/${id}/end`, { reason: 'Aufräumen der Prüfreihe' }, { jar: jars.admin }).catch(
+        () => undefined,
+      );
     }
   });
 

@@ -1,6 +1,6 @@
 # Verträge
 
-> Stand: 22. September 2026 (Wave 10, Teil 1 — Domäne, Dienste, Endpunkte,
+> Stand: 22. September 2026 (Wave 10 — Domäne, Dienste, Endpunkte, Oberfläche,
 > Prüfreihe). Was noch fehlt, steht in §10.
 
 ---
@@ -273,16 +273,48 @@ wenn der Vertragsbeginn nicht auf einen Serientag fiel (§4.1).
 
 ---
 
-## 10. Was noch fehlt — Wave 10, Teil 2
+## 10. Die Oberfläche
 
-| Offen | Warum es nicht Teil 1 ist |
+`/admin/vertraege` — Liste mit Kennzahlen und sechs Sichten (Alle, Aktiv,
+Entwürfe, Kündigungsfristen, Laufen aus, Änderungen). Die Sichten sind Filter
+über denselben Pfad, keine eigenen Seiten: Es ist dieselbe Liste mit derselben
+Sortierung, und eine Auswahl, die in der Adresse steht, lässt sich weitergeben
+und als Lesezeichen ablegen — genau das tut man mit „welche Verträge laufen
+aus".
+
+`/admin/vertraege/neu` — eine Maske für Kopf, erste Fassung und erste Leistung.
+Fachlich sind es drei Dinge, und der Endpunkt nimmt sie auch getrennt
+entgegen; für die Eingabe wäre die Trennung trotzdem falsch, weil ein Vertrag
+ohne Konditionen nicht in Kraft treten kann und einer ohne Leistung erst recht
+nicht. Drei Masken hintereinander hiessen drei Gelegenheiten, nach der ersten
+aufzuhören — und zurück bliebe ein Entwurf, der nie etwas erzeugt.
+
+`/admin/vertraege/{id}` — die Vertragsakte: Übersicht, Leistungen mit
+Einsatzplan, nächste Einsätze **mit ihrer Fassung**, Änderungen und
+Preisanpassungen, Konditionen, Fassungsgeschichte, Dokumente.
+
+**Die Handlungsknöpfe zeigen nur, was aus dem aktuellen Zustand heraus möglich
+ist.** Eine ausgegraute Schaltfläche wäre ehrlicher als eine, die 422
+antwortet — aber eine, die gar nicht da ist, ist die ehrlichste: Sie behauptet
+nichts.
+
+Der Einsatzplan ist heute **lesend**: Er wird beim Anlegen über die
+Schnittstelle gesetzt und in der Akte angezeigt. Eine Maske dafür steht in
+§11.
+
+---
+
+## 11. Was noch fehlt
+
+| Offen | Warum |
 |---|---|
-| **Oberfläche** (`/admin/vertraege` mit Übersicht, Leistungen, Einsatzplan, Preisen, Abrechnung, SLA, Dokumenten, Änderungen, Historie) | Der Schreibweg ist die Zusage, die fehlte; ohne ihn wäre eine Maske eine Oberfläche ohne Wirkung — genau das Muster, das die Waves 6, 8 und 9 aufgedeckt haben |
-| **Signaturanbindung** (`contract:sign`) | Das Schema trägt `SignatureRequest.contractVersionId`, der Kern kennt die vierte Quelle noch nicht. Der Signaturkern serviert bisher drei Quellen, und eine vierte anzuschliessen heisst, `quote-acceptance` und `job-acceptance` eine dritte Geschäftsregel zur Seite zu stellen — mit derselben Transaktionskopplung |
+| **Maske für Einsatzpläne und Ausnahmen** | Die Endpunkte stehen und sind geprüft; die Maske dafür ist ein eigenes Stück Arbeit mit Wochentagswahl, Zeitfenster und Ausnahmekalender |
+| **Maske für Versionen, Änderungsanträge und Preisanpassungen** | Dasselbe: vorhanden und geprüft über die Schnittstelle, ohne Formular |
+| **Signaturanbindung** (`contract:sign`) | Das Schema trägt `SignatureRequest.contractVersionId`, der Kern kennt die vierte Quelle noch nicht. Ihn anzuschliessen heisst, `quote-acceptance` und `job-acceptance` eine dritte Geschäftsregel zur Seite zu stellen — mit derselben Transaktionskopplung |
 | **Rechnungserzeugung aus dem Vertrag** | Die Grundlage rechnet (§7); der Schritt in den Rechnungsdienst hinein ist Wave 13 (Finanzen) |
-| **E2E-Weg** Offerte → Vertrag → Aktivierung → Plan → Einsatz im Browser | Braucht die Oberfläche |
-| **Demobestand** | Ein Seed mit einem laufenden Unterhaltsvertrag macht die Oberfläche erst prüfbar |
+| **Browserprüfung** Offerte → Vertrag → Aktivierung → Plan → Einsatz | Der Weg ist über HTTP vollständig geprüft; im Browser fehlt er |
+| **Feiertagskalender** | `Holiday` ist je Organisation und Kanton befüllbar und wird vom Planer ausgewertet — befüllt ist er nicht |
 
-**Wave 10 ist damit ausdrücklich nicht abgeschlossen.** Was steht, ist die
-Domäne mit ihren Zusicherungen, die Dienste, 28 Endpunkte und 53 Prüfungen.
-Was fehlt, steht oben — und nicht als „Detail", sondern als benannter Rest.
+**Wave 10 ist damit nicht abgeschlossen.** Was steht, ist die Domäne mit ihren
+Zusicherungen, die Dienste, 28 Endpunkte, drei Seiten und 53 Prüfungen. Was
+fehlt, steht oben — und nicht als „Detail", sondern als benannter Rest.
