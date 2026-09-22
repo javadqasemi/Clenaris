@@ -1166,4 +1166,84 @@ fortgeschrieben und um zwei Einträge auseinandergelaufen. Sie wird jetzt
 
 ---
 
+## 20. Wave 10 (Teil 1) — Verträge: Domäne, Dienste, Endpunkte (Stand 2026-09-22)
+
+**MISSING #2** aus Abschnitt 5: „Vertragsmodell (Laufzeit, Verlängerung,
+Kündigung, Indexierung)". Ausführlich in **[`docs/VERTRAEGE.md`](VERTRAEGE.md)**.
+
+### Der Befund
+
+Es gab nichts. Kein `Contract`, keine Versionierung, keine Serienplanung — und
+damit auch keinen Weg, wiederkehrende Reinigung als das zu führen, was sie ist:
+ein Dauerschuldverhältnis mit Laufzeit, Frist und Preis. Was es gab, war
+`RecurrenceRule` für Serienbuchungen der Kundschaft; das ist eine andere
+Sache, und sie mitzubenutzen hätte beide Bedeutungen in ein Modell gezwängt.
+
+### Was gebaut wurde
+
+| Teil | Ort | Kern |
+|---|---|---|
+| Datenmodell | 7 Modelle, 10 Aufzählungstypen, Migration `…_vertraege` | Vollständig additiv. Zwei Teilindizes von Hand: genau eine aktive Version, genau ein offener Änderungsantrag |
+| Rechenkern | `src/lib/contracts/serie.ts` | Rein, ohne Datenbank, direkt geprüft — Serientage, Feiertage, Ausnahmen, Fristen |
+| Lebenslauf | `contract.service.ts` | Zustandsautomat an **einer** Stelle, Nummer beim Aktivieren, Abrechnungsgrundlage |
+| Planer | `contract-schedule.service.ts` | Idempotenz über einen Index, nicht über eine Prüfung; Nachtlauf; Fristenliste |
+| Änderungen | `contract-amendment.service.ts` | Antrag ≠ Änderung; Vier-Augen-Prinzip auch gegen die Administration |
+| Endpunkte | 28 unter `/api/contracts`, `/api/contract-services`, `/api/contract-schedules` | `npm run docs`: **448 Endpunkte** (von 420), Schutz stimmt überein |
+| Rechte | 11 neue in `permissions.ts` | Entwerfen ist Tagesgeschäft, in Kraft setzen nicht |
+| Prüfung | 2 Dateien, **53 Fälle** | Darunter der gleichzeitige Planungslauf |
+
+### Die drei Zusicherungen, die das Modul trägt
+
+1. **Ein laufender Vertrag wird nicht umgeschrieben.** Konditionen stehen nur
+   an der Version; eine aktive Version ist unveränderlich (422). Genau eine ist
+   `ACTIVE` — durchgesetzt über einen partiellen eindeutigen Index, nicht über
+   die Oberfläche. Zwei gültige Preise sind kein Anzeigefehler, sondern eine
+   falsche Rechnung.
+2. **Derselbe Serientermin erzeugt nie zwei Einsätze.** `@@unique([serviceScheduleId,
+   scheduleDate])`. Der Planer versucht anzulegen und wertet den Indexverstoss
+   als „war schon da" — eine Prüfung im Code allein reichte nicht, weil zwei
+   gleichzeitige Läufe genau in die Lücke passen. Die Prüfreihe fährt zwei
+   Läufe **parallel** und zählt danach nach.
+3. **Jeder Einsatz trägt seine Vertragsversion.** `contractId`,
+   `contractVersionId`, `serviceScheduleId` — damit die Frage „unter welchen
+   Konditionen wurde das erbracht" beantwortbar bleibt, auch nachdem der
+   Vertrag sich geändert hat.
+
+### Ein Fehler, den der Rechenkern beim ersten Lauf gefunden hat
+
+Bei zweiwöchentlichem Rhythmus wäre der **erste Termin eines Vertrags
+entfallen**, wenn der Vertragsbeginn nicht selbst auf einen Serientag fiel:
+Der Rhythmus zählte ab der Woche von `effectiveFrom`, und der erste passende
+Wochentag lag dann in der Folgewoche — also in der „ausgelassenen". Gefunden
+von einer Prüfung mit festen Daten, nicht von einem Review.
+
+### Zwei tote Modelle weniger
+
+`Building` hatte seit der ersten Migration keine Codeberührung (Matrix:
+PROP-004 = SCHEMA ONLY). Es ist jetzt das, wofür es gedacht war: Ein Vertrag
+über ein Mehrfamilienhaus benennt Leistungen je Gebäude und Zone, nicht je
+Wohnung.
+
+### Was ausdrücklich fehlt
+
+**Wave 10 ist nicht abgeschlossen.** Es fehlen die Oberfläche, die
+Signaturanbindung der Vertragsversion, die Rechnungserzeugung, der
+Browser-Weg und ein Demobestand. Die Liste steht in `docs/VERTRAEGE.md` §10.
+Ohne Oberfläche wäre die Einstufung sonst genau das Muster, das die Waves 6, 8
+und 9 aufgedeckt haben — Felder und Rechte, die eine Zusage machen, die
+niemand bedienen kann. Deshalb steht der Vertrag in der Matrix als
+**BACKEND ONLY** und nicht als COMPLETE.
+
+### Verifikation nach Wave 10 (Teil 1)
+
+| Prüfung | Ergebnis |
+|---|---|
+| `npm run typecheck`, `npm run lint`, `npm run build` | ✅ |
+| `prisma validate` | ✅ |
+| Migration gegen Entwicklungs- **und** Testdatenbank | ✅ additiv, kein `DROP`, keine Rückfüllung |
+| `npm run docs` | ✅ **448 Endpunkte** (von 420), **126 Modelle** in 13 Bereichen |
+| `npm test` | ✅ **1135 Prüfungen, 1133 bestanden, 0 Fehlschläge**, 2 übersprungen (von 1082) |
+
+---
+
 *Diese Datei wird nach jeder Wave fortgeschrieben.*

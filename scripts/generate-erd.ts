@@ -245,6 +245,30 @@ const DOMAINS: Domain[] = [
     ],
   },
   {
+    key: 'vertraege',
+    title: 'Verträge und Einsatzpläne',
+    purpose:
+      'Der betriebliche Ursprung wiederkehrender Leistungen: angenommene Offerte → `Contract` ' +
+      '→ `ContractVersion` → `ContractService` → `ServiceSchedule` → `Job`. Der Vertragskopf ' +
+      'trägt die Identität und den Lebenslauf, die **Version** alle kaufmännischen ' +
+      'Konditionen — ein laufender Vertrag wird nie umgeschrieben, sondern abgelöst. ' +
+      'Leistungen und Pläne hängen deshalb an der Version und werden beim Versionieren ' +
+      'kopiert. Jeder erzeugte Einsatz trägt `contractId`, `contractVersionId` und ' +
+      '`serviceScheduleId`, damit später beantwortbar bleibt, unter welchen Konditionen er ' +
+      'erbracht wurde. `@@unique([serviceScheduleId, scheduleDate])` ist die Doppelsperre des ' +
+      'Planers: Derselbe Serientermin kann keinen zweiten Einsatz erzeugen, auch bei ' +
+      'gleichzeitigen Läufen nicht.',
+    models: [
+      'Contract',
+      'ContractVersion',
+      'ContractService',
+      'ServiceSchedule',
+      'ScheduleException',
+      'ContractAmendment',
+      'ContractPriceAdjustment',
+    ],
+  },
+  {
     key: 'personal',
     title: 'Personal und Zeit',
     purpose:

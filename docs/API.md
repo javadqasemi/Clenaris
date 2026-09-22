@@ -5,7 +5,7 @@
 > Quelle, aus der sowohl diese Referenz als auch die Laufzeitvalidierung
 > stammen.
 
-Stand: 420 Endpunkte. Die maschinenlesbare Fassung liegt in
+Stand: 448 Endpunkte. Die maschinenlesbare Fassung liegt in
 [`openapi.yaml`](./openapi.yaml) bzw. [`openapi.json`](./openapi.json).
 
 ## Grundlagen
@@ -61,6 +61,7 @@ Familie.
 - [Führung: Risiko und Qualität](#führung-risiko-und-qualität)
 - [Führung: Wissen und Markt](#führung-wissen-und-markt)
 - [Führung: Berichte](#führung-berichte)
+- [Verträge](#verträge)
 
 ## Authentifizierung
 
@@ -2274,7 +2275,7 @@ Familie.
 
 ### `GET /api/jobs`
 
-**Einsätze auflisten.** Filter nach Status, Zeitraum, Kundschaft und zugeteilter Person, dazu Sortierung und Blätterung. Wer nur `job:read_assigned` hat, bekommt ausschliesslich die eigenen Einsätze — die Einschränkung steht in der where-Klausel, nicht in der Darstellung. Objektangaben wie Schlüsseldepot und Alarmcode sind nicht Teil der Liste; sie gehören auf den Rapport des einzelnen Einsatzes.
+**Einsätze auflisten.** Filter nach Status, Zeitraum, Kundschaft, zugeteilter Person und **Vertrag**, dazu Sortierung und Blätterung. Wer nur `job:read_assigned` hat, bekommt ausschliesslich die eigenen Einsätze — die Einschränkung steht in der where-Klausel, nicht in der Darstellung. Objektangaben wie Schlüsseldepot und Alarmcode sind nicht Teil der Liste; sie gehören auf den Rapport des einzelnen Einsatzes.
 
 - **Zugriff:** Erfordert eine der Berechtigungen: `job:read`, `job:read_assigned`.
 - **Rate-Limit-Klasse:** `apiRead`
@@ -8221,3 +8222,770 @@ Familie.
 
 | Feld | Typ | Pflicht | Regeln |
 | --- | --- | --- | --- |
+
+## Verträge
+
+### `GET /api/contracts`
+
+**Verträge auflisten.** Filtert nach Zustand, Kundschaft, Suchbegriff sowie nach nahender Kündigungsfrist und nahendem Vertragsende. **Die Einschränkung steht in der `where`-Klausel:** Wer nur `contract:read_own` hat, sieht ausschliesslich die Verträge der eigenen Kundenakte — verstecktes HTML wäre auf der Leitung trotzdem sichtbar.
+
+- **Zugriff:** Erfordert eine der Berechtigungen: `contract:read`, `contract:read_own`.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 429, 500
+
+**Query-Parameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `status` | string | – | `DRAFT` \| `IN_REVIEW` \| `OFFERED` \| `ACTIVE` \| `PAUSED` \| `NOTICE_GIVEN` \| `ENDED` \| `CANCELLED` |
+| `customerId` | string | – | – |
+| `q` | string | – | max. 120 Zeichen |
+| `fristInTagen` | integer | – | ≥ 1, ≤ 365 |
+| `endeInTagen` | integer | – | ≥ 1, ≤ 365 |
+| `page` | integer | – | ≥ 1, Standard `1` |
+| `perPage` | integer | – | ≥ 1, ≤ 100, Standard `25` |
+
+### `POST /api/contracts`
+
+**Vertragsentwurf anlegen.** Der Vertrag entsteht **immer mit seiner ersten Version** — ein Vertrag ohne Konditionen wäre ein Datensatz ohne Inhalt. Nummer und Zustand entstehen nicht hier: Die Nummer wird beim Aktivieren gezogen, damit ein verworfener Entwurf keine Lücke hinterlässt. Mit `quoteId` nur aus einer **angenommenen** Offerte (sonst 422).
+
+- **Zugriff:** Erfordert die Berechtigung: `contract:create`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 201
+- **Mögliche Fehler:** 400, 401, 403, 409, 422, 429, 500
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `contract` | object | ja | – |
+| `contract.customerId` | string | ja | – |
+| `contract.propertyId` | union | – | – |
+| `contract.quoteId` | union | – | – |
+| `contract.title` | string | ja | min. 3 Zeichen, max. 160 Zeichen |
+| `contract.description` | string | – | max. 4000 Zeichen |
+| `contract.startDate` | string | ja | – |
+| `contract.endDate` | string | – | – |
+| `contract.responsibleEmployeeId` | union | – | – |
+| `contract.salesOwnerId` | union | – | – |
+| `contract.serviceManagerId` | union | – | – |
+| `contract.costCenter` | string | – | max. 60 Zeichen |
+| `contract.internalNote` | string | – | max. 4000 Zeichen |
+| `version` | object | ja | – |
+| `version.effectiveFrom` | string | ja | – |
+| `version.reason` | string | ja | min. 5 Zeichen, max. 2000 Zeichen |
+| `version.minimumTermMonths` | integer | – | ≥ 0, ≤ 240 |
+| `version.renewalType` | string | – | `NONE` \| `AUTOMATIC` \| `MANUAL`, Standard `"NONE"` |
+| `version.renewalPeriodMonths` | integer | – | ≥ 1, ≤ 120 |
+| `version.noticePeriodDays` | integer | – | ≥ 0, ≤ 730, Standard `90` |
+| `version.billingCycle` | string | – | `PER_VISIT` \| `MONTHLY` \| `QUARTERLY` \| `SEMIANNUAL` \| `ANNUAL`, Standard `"MONTHLY"` |
+| `version.paymentTermDays` | integer | – | ≥ 0, ≤ 180, Standard `30` |
+| `version.currency` | string | – | Standard `"CHF"` |
+| `version.pricingModel` | string | – | `FIXED_PERIOD` \| `FIXED_PER_VISIT` \| `HOURLY` \| `UNIT_BASED` \| `CUSTOM`, Standard `"FIXED_PERIOD"` |
+| `version.baseAmount` | number | – | ≥ 0, ≤ 9999999, Standard `0` |
+| `version.hourlyRate` | number | – | ≥ 0, ≤ 9999999 |
+| `version.unitPrice` | number | – | ≥ 0, ≤ 999999 |
+| `version.unitLabel` | string | – | max. 40 Zeichen |
+| `version.vatRate` | number | – | ≥ 0, ≤ 100, Standard `8.1` |
+| `version.indexReference` | string | – | max. 120 Zeichen |
+| `version.indexBaseValue` | number | – | ≥ 0, ≤ 999999 |
+| `version.nextReviewAt` | string | – | – |
+| `version.targetQualityScore` | integer | – | ≥ 0, ≤ 100 |
+| `version.inspectionIntervalDays` | integer | – | ≥ 1, ≤ 3650 |
+| `version.responseHours` | integer | – | ≥ 1, ≤ 8760 |
+| `version.slaNote` | string | – | max. 2000 Zeichen |
+| `version.terms` | string | – | max. 20000 Zeichen |
+| `version.internalNote` | string | – | max. 4000 Zeichen |
+| `services` | object[] | – | max. 100 Einträge |
+| `services[].serviceId` | union | – | – |
+| `services[].label` | string | ja | min. 2 Zeichen, max. 160 Zeichen |
+| `services[].description` | string | – | max. 2000 Zeichen |
+| `services[].buildingId` | union | – | – |
+| `services[].zone` | string | – | max. 120 Zeichen |
+| `services[].estimatedMinutes` | integer | – | ≥ 5, ≤ 1440, Standard `120` |
+| `services[].requiredCrewSize` | integer | – | ≥ 1, ≤ 50, Standard `1` |
+| `services[].requiredSkills` | string[] | – | max. 20 Einträge, Standard `[]` |
+| `services[].qualityRequirement` | string | – | max. 2000 Zeichen |
+| `services[].specialInstructions` | string | – | max. 2000 Zeichen |
+| `services[].materialsBy` | string | – | `PROVIDER` \| `CUSTOMER`, Standard `"PROVIDER"` |
+| `services[].quantity` | number | – | ≥ 0, ≤ 9999999 |
+| `services[].position` | integer | – | ≥ 0, ≤ 999, Standard `0` |
+
+### `GET /api/contracts/deadlines`
+
+**Fristen, die auf jemanden warten.** Nahende Kündigungsfristen, auslaufende Verträge und fällige Preisüberprüfungen. Der Lauf **erinnert, er handelt nicht**: Verlängern, kündigen und Preise anpassen sind Verpflichtungen über Monate, die ein Mensch trifft.
+
+- **Zugriff:** Erfordert die Berechtigung: `contract:read`.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 429, 500
+
+**Query-Parameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `tage` | integer | – | ≥ 1, ≤ 365, Standard `45` |
+
+### `GET /api/contracts/{id}`
+
+**Vertragsakte.** Der Vertrag mit allen Versionen, Leistungen, Einsatzplänen, Ausnahmen, Änderungsanträgen und Preisanpassungen — **eine** Abfrage statt sechs. Sechs Abrufe hintereinander wären sechs Momente, in denen sich der Zustand zwischen zwei Antworten ändern kann. Jede Version meldet zusätzlich, wie viele Einsätze an ihr hängen.
+
+- **Zugriff:** Erfordert eine der Berechtigungen: `contract:read`, `contract:read_own`.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+### `PATCH /api/contracts/{id}`
+
+**Kopfdaten ändern.** Bezeichnung, Objekt, Betreuung, Kostenstelle, Notizen. **Konditionen sind hier nicht dabei** — auch nicht bei einem Entwurf. Sie stehen an der Version, und zwei Türen zu denselben Feldern wären zwei Stellen, an denen die Versionsregel durchzusetzen wäre. Beginn und Ende fehlen aus demselben Grund: Wer das Ende verschiebt, verlängert den Vertrag.
+
+- **Zugriff:** Erfordert die Berechtigung: `contract:update`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `title` | string | – | min. 3 Zeichen, max. 160 Zeichen |
+| `description` | string | – | max. 4000 Zeichen |
+| `propertyId` | union | – | – |
+| `responsibleEmployeeId` | union | – | – |
+| `salesOwnerId` | union | – | – |
+| `serviceManagerId` | union | – | – |
+| `costCenter` | string | – | max. 60 Zeichen |
+| `internalNote` | string | – | max. 4000 Zeichen |
+
+### `DELETE /api/contracts/{id}`
+
+**Entwurf verwerfen.** Weiches Löschen, **nur für Verträge, die nie in Kraft waren** (sonst 422). Ein gelaufener Vertrag ist ein Beleg; er wird beendet, nicht entfernt. Deshalb heisst das Recht `contract:delete_draft` und nicht `contract:delete`.
+
+- **Zugriff:** Erfordert die Berechtigung: `contract:delete_draft`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 204
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+### `POST /api/contracts/{id}/activate`
+
+**In Kraft setzen.** Nummer, geltende Version und Zustand entstehen in **einer** Transaktion. Sie auseinanderzuziehen hiesse, einen Moment zuzulassen, in dem ein Vertrag aktiv ist und keine Version hat — und in dem eine Abrechnung mit null rechnet. Ein Vertrag ohne Leistungen wird abgewiesen (422), ebenso jeder Übergang, den der Zustandsautomat nicht kennt. Eigene Berechtigung: Die Betriebsleitung hat sie ausdrücklich nicht.
+
+- **Zugriff:** Erfordert die Berechtigung: `contract:activate`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `effectiveFrom` | string | – | – |
+| `note` | string | – | max. 1000 Zeichen |
+
+### `POST /api/contracts/{id}/pause`
+
+**Aussetzen.** Der Vertrag besteht weiter, es wird nur in einem Zeitraum nicht geleistet — Bauarbeiten, Leerstand, Saison. Wirkung hat es beim Serienplaner, der in diesem Fenster keine Einsätze mehr erzeugt.
+
+- **Zugriff:** Erfordert die Berechtigung: `contract:activate`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `pausedFrom` | string | ja | – |
+| `pausedUntil` | string | – | – |
+| `reason` | string | ja | min. 5 Zeichen, max. 2000 Zeichen |
+
+### `POST /api/contracts/{id}/resume`
+
+**Pause beenden.** Kein Rumpf: Es gibt genau eine mögliche Wirkung. Ein Datum entgegenzunehmen lüde dazu ein, die Pause rückwirkend zu verkürzen — und die Einsätze, die in dieser Zeit nicht erzeugt wurden, entstünden dadurch nicht.
+
+- **Zugriff:** Erfordert die Berechtigung: `contract:activate`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+### `POST /api/contracts/{id}/notice`
+
+**Kündigung erfassen.** **Keine Rechtsauskunft.** Festgehalten wird, wer wann gekündigt hat; das Wirkungsdatum ist eine *Rechnung* aus Kündigungsfrist, Laufzeit und Verlängerungsart der geltenden Version und lässt sich überschreiben. Ob die Kündigung wirksam ist, entscheidet dieses System nicht.
+
+- **Zugriff:** Erfordert die Berechtigung: `contract:terminate`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `noticeGivenBy` | string | ja | `CUSTOMER` \| `PROVIDER` |
+| `noticeGivenAt` | string | – | – |
+| `terminationEffectiveAt` | string | – | – |
+| `reason` | string | – | max. 2000 Zeichen |
+
+### `POST /api/contracts/{id}/end`
+
+**Beenden.** Mit dem Ende laufen die Serien aus: Alle Einsatzpläne werden stillgelegt und bekommen ein Enddatum — sonst erzeugte der nächtliche Planer weiter Einsätze für einen beendeten Vertrag. Die Pläne werden **nicht gelöscht**; die Einsätze zeigen weiterhin auf sie. `ENDED` ist ein Endzustand.
+
+- **Zugriff:** Erfordert die Berechtigung: `contract:terminate`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `reason` | string | – | max. 2000 Zeichen |
+
+### `POST /api/contracts/{id}/cancel`
+
+**Entwurf stornieren.** Behält die Zeile, im Gegensatz zum Löschen. Gedacht für den im Verkauf häufigeren Fall — die Kundschaft springt ab, nachdem der Vertrag schon vorlag. Dass es einen Vertrag gab und woran er scheiterte, ist eine Auskunft; ein gelöschter Entwurf ist keine.
+
+- **Zugriff:** Erfordert die Berechtigung: `contract:delete_draft`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `reason` | string | – | max. 2000 Zeichen |
+
+### `POST /api/contracts/{id}/renew`
+
+**Laufzeit verlängern.** **Auch die „automatische" Verlängerung läuft hierüber.** Der nächtliche Lauf erinnert; verlängern tut ein Mensch, und wer es tut, gehört ins Protokoll. `renewalType: AUTOMATIC` sagt etwas über den *Vertrag* aus, nicht über den Server. Ein unbefristeter Vertrag wird abgewiesen (422).
+
+- **Zugriff:** Erfordert die Berechtigung: `contract:activate`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `months` | integer | – | ≥ 1, ≤ 120 |
+| `reason` | string | ja | min. 5 Zeichen, max. 2000 Zeichen |
+
+### `POST /api/contracts/{id}/versions`
+
+**Neue Vertragsversion anlegen.** Die neue Fassung entsteht als **Entwurf**; in Kraft tritt sie über `/activate`. Ohne `services` wird der Leistungsumfang der geltenden Fassung samt Einsatzplänen **kopiert** — eine Version, die auf die Leistungen ihrer Vorgängerin zeigte, wäre kein eigener Stand, sondern ein Zeiger, und eine spätere Änderung veränderte rückwirkend, was unter der alten Fassung galt. Ein zweiter offener Entwurf wird abgewiesen (422).
+
+- **Zugriff:** Erfordert die Berechtigung: `contract:version`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 201
+- **Mögliche Fehler:** 400, 401, 403, 404, 409, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `version` | object | ja | – |
+| `version.effectiveFrom` | string | ja | – |
+| `version.reason` | string | ja | min. 5 Zeichen, max. 2000 Zeichen |
+| `version.minimumTermMonths` | integer | – | ≥ 0, ≤ 240 |
+| `version.renewalType` | string | – | `NONE` \| `AUTOMATIC` \| `MANUAL`, Standard `"NONE"` |
+| `version.renewalPeriodMonths` | integer | – | ≥ 1, ≤ 120 |
+| `version.noticePeriodDays` | integer | – | ≥ 0, ≤ 730, Standard `90` |
+| `version.billingCycle` | string | – | `PER_VISIT` \| `MONTHLY` \| `QUARTERLY` \| `SEMIANNUAL` \| `ANNUAL`, Standard `"MONTHLY"` |
+| `version.paymentTermDays` | integer | – | ≥ 0, ≤ 180, Standard `30` |
+| `version.currency` | string | – | Standard `"CHF"` |
+| `version.pricingModel` | string | – | `FIXED_PERIOD` \| `FIXED_PER_VISIT` \| `HOURLY` \| `UNIT_BASED` \| `CUSTOM`, Standard `"FIXED_PERIOD"` |
+| `version.baseAmount` | number | – | ≥ 0, ≤ 9999999, Standard `0` |
+| `version.hourlyRate` | number | – | ≥ 0, ≤ 9999999 |
+| `version.unitPrice` | number | – | ≥ 0, ≤ 999999 |
+| `version.unitLabel` | string | – | max. 40 Zeichen |
+| `version.vatRate` | number | – | ≥ 0, ≤ 100, Standard `8.1` |
+| `version.indexReference` | string | – | max. 120 Zeichen |
+| `version.indexBaseValue` | number | – | ≥ 0, ≤ 999999 |
+| `version.nextReviewAt` | string | – | – |
+| `version.targetQualityScore` | integer | – | ≥ 0, ≤ 100 |
+| `version.inspectionIntervalDays` | integer | – | ≥ 1, ≤ 3650 |
+| `version.responseHours` | integer | – | ≥ 1, ≤ 8760 |
+| `version.slaNote` | string | – | max. 2000 Zeichen |
+| `version.terms` | string | – | max. 20000 Zeichen |
+| `version.internalNote` | string | – | max. 4000 Zeichen |
+| `services` | object[] | – | max. 100 Einträge |
+| `services[].serviceId` | union | – | – |
+| `services[].label` | string | ja | min. 2 Zeichen, max. 160 Zeichen |
+| `services[].description` | string | – | max. 2000 Zeichen |
+| `services[].buildingId` | union | – | – |
+| `services[].zone` | string | – | max. 120 Zeichen |
+| `services[].estimatedMinutes` | integer | – | ≥ 5, ≤ 1440, Standard `120` |
+| `services[].requiredCrewSize` | integer | – | ≥ 1, ≤ 50, Standard `1` |
+| `services[].requiredSkills` | string[] | – | max. 20 Einträge, Standard `[]` |
+| `services[].qualityRequirement` | string | – | max. 2000 Zeichen |
+| `services[].specialInstructions` | string | – | max. 2000 Zeichen |
+| `services[].materialsBy` | string | – | `PROVIDER` \| `CUSTOMER`, Standard `"PROVIDER"` |
+| `services[].quantity` | number | – | ≥ 0, ≤ 9999999 |
+| `services[].position` | integer | – | ≥ 0, ≤ 999, Standard `0` |
+
+### `PATCH /api/contracts/{id}/versions/{versionId}`
+
+**Versionsentwurf ändern.** **Nur Entwürfe** (sonst 422). Der Preis eines laufenden Vertrags ist die Grundlage ausgestellter Rechnungen; wer ihn ändern will, legt eine neue Version an. Der Rumpf trägt die vollständigen Konditionen, nicht eine Teilmenge.
+
+- **Zugriff:** Erfordert die Berechtigung: `contract:version`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+| `versionId` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `effectiveFrom` | string | ja | – |
+| `reason` | string | ja | min. 5 Zeichen, max. 2000 Zeichen |
+| `minimumTermMonths` | integer | – | ≥ 0, ≤ 240 |
+| `renewalType` | string | – | `NONE` \| `AUTOMATIC` \| `MANUAL`, Standard `"NONE"` |
+| `renewalPeriodMonths` | integer | – | ≥ 1, ≤ 120 |
+| `noticePeriodDays` | integer | – | ≥ 0, ≤ 730, Standard `90` |
+| `billingCycle` | string | – | `PER_VISIT` \| `MONTHLY` \| `QUARTERLY` \| `SEMIANNUAL` \| `ANNUAL`, Standard `"MONTHLY"` |
+| `paymentTermDays` | integer | – | ≥ 0, ≤ 180, Standard `30` |
+| `currency` | string | – | Standard `"CHF"` |
+| `pricingModel` | string | – | `FIXED_PERIOD` \| `FIXED_PER_VISIT` \| `HOURLY` \| `UNIT_BASED` \| `CUSTOM`, Standard `"FIXED_PERIOD"` |
+| `baseAmount` | number | – | ≥ 0, ≤ 9999999, Standard `0` |
+| `hourlyRate` | number | – | ≥ 0, ≤ 9999999 |
+| `unitPrice` | number | – | ≥ 0, ≤ 999999 |
+| `unitLabel` | string | – | max. 40 Zeichen |
+| `vatRate` | number | – | ≥ 0, ≤ 100, Standard `8.1` |
+| `indexReference` | string | – | max. 120 Zeichen |
+| `indexBaseValue` | number | – | ≥ 0, ≤ 999999 |
+| `nextReviewAt` | string | – | – |
+| `targetQualityScore` | integer | – | ≥ 0, ≤ 100 |
+| `inspectionIntervalDays` | integer | – | ≥ 1, ≤ 3650 |
+| `responseHours` | integer | – | ≥ 1, ≤ 8760 |
+| `slaNote` | string | – | max. 2000 Zeichen |
+| `terms` | string | – | max. 20000 Zeichen |
+| `internalNote` | string | – | max. 4000 Zeichen |
+
+### `PUT /api/contracts/{id}/versions/{versionId}/services`
+
+**Leistungsumfang setzen.** **`PUT` und als Ganzes** — dieselbe Entscheidung wie bei Qualifikationen und Arbeitszeiten: `PATCH` verspricht eine Teiländerung, und wer das erwartet, schickt eine Position und verliert die anderen. Nur auf einem Entwurf möglich; an den Leistungen einer geltenden Fassung hängen Einsatzpläne und Einsätze.
+
+- **Zugriff:** Erfordert die Berechtigung: `contract:version`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+| `versionId` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `services` | object[] | ja | max. 100 Einträge |
+| `services[].serviceId` | union | – | – |
+| `services[].label` | string | ja | min. 2 Zeichen, max. 160 Zeichen |
+| `services[].description` | string | – | max. 2000 Zeichen |
+| `services[].buildingId` | union | – | – |
+| `services[].zone` | string | – | max. 120 Zeichen |
+| `services[].estimatedMinutes` | integer | – | ≥ 5, ≤ 1440, Standard `120` |
+| `services[].requiredCrewSize` | integer | – | ≥ 1, ≤ 50, Standard `1` |
+| `services[].requiredSkills` | string[] | – | max. 20 Einträge, Standard `[]` |
+| `services[].qualityRequirement` | string | – | max. 2000 Zeichen |
+| `services[].specialInstructions` | string | – | max. 2000 Zeichen |
+| `services[].materialsBy` | string | – | `PROVIDER` \| `CUSTOMER`, Standard `"PROVIDER"` |
+| `services[].quantity` | number | – | ≥ 0, ≤ 9999999 |
+| `services[].position` | integer | – | ≥ 0, ≤ 999, Standard `0` |
+
+### `POST /api/contracts/{id}/schedule`
+
+**Einsätze aus den Serien erzeugen.** **Idempotent, und zwar in der Datenbank:** `@@unique([serviceScheduleId, scheduleDate])`. Der Planer *versucht* anzulegen und wertet einen Verstoss gegen den Index als „war schon da" — eine Prüfung im Code allein reichte nicht, weil zwischen „gibt es schon?" und `INSERT` ein Moment liegt, in den ein zweiter Lauf hineinpasst. Die Kennung ist der **Serientag**, nicht der tatsächliche Termin: Ein wegen eines Feiertags verschobener Einsatz behält ihn, sonst entstünde beim Nachtragen eines Feiertags ein zweiter. Die Antwort zeigt `angelegt` und `uebersprungen`; die zweite Zahl ist der Beweis. `probelauf: true` schreibt nichts.
+
+- **Zugriff:** Erfordert die Berechtigung: `contract:update`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `bis` | string | ja | – |
+| `probelauf` | boolean | – | Standard `false` |
+
+### `GET /api/contracts/{id}/billing-basis`
+
+**Abrechnungsgrundlage einer Periode.** **Rechnet, schreibt nichts** — die Rechnung entsteht über den Rechnungsdienst, damit Nummernkreis und Belegregeln an einer Stelle bleiben. Geliefert wird die Herleitung mit jeder Zwischengrösse; jede Position trägt ihre **Vertragsversion**, weil eine Summe ohne diese Zuordnung bei einem geänderten Vertrag nicht mehr prüfbar ist. Gezählt werden nur abgeschlossene und geprüfte Einsätze, bei Stundenabrechnung nur freigegebene Zeiten.
+
+- **Zugriff:** Erfordert die Berechtigung: `contract:billing`.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+**Query-Parameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `von` | string | ja | date-time |
+| `bis` | string | ja | date-time |
+
+### `POST /api/contracts/{id}/amendments`
+
+**Vertragsänderung beantragen.** **Der Antrag ist nicht die Änderung.** Er durchläuft Prüfung und Freigabe und wird erst dann wirksam, indem er eine neue Version erzeugt. Die Version allein sagt nur, *dass* sich etwas geändert hat — warum, auf wessen Wunsch und mit wessen Zustimmung steht im Antrag. Ein zweiter offener Antrag wird abgewiesen (422).
+
+- **Zugriff:** Erfordert die Berechtigung: `contract:version`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 201
+- **Mögliche Fehler:** 400, 401, 403, 404, 409, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `type` | string | ja | `SCOPE` \| `PRICE` \| `FREQUENCY` \| `TERM` \| `SLA` \| `PAYMENT_TERMS` \| `INDEXATION` \| `OTHER` |
+| `title` | string | ja | min. 3 Zeichen, max. 160 Zeichen |
+| `description` | string | – | max. 4000 Zeichen |
+| `reason` | string | ja | min. 5 Zeichen, max. 2000 Zeichen |
+| `effectiveFrom` | string | ja | – |
+
+### `POST /api/contracts/{id}/amendments/{amendmentId}/decision`
+
+**Änderungsantrag freigeben oder ablehnen.** **Vier-Augen-Prinzip, zweimal abgesichert:** im Rechteschnitt (`contract:version` hat die Betriebsleitung, `contract:approve` nicht) und im Dienst — wer den Antrag gestellt hat, kann ihn nicht selbst freigeben (422). Der Rechteschnitt allein reichte nicht, weil die Administration beide Rechte hat.
+
+- **Zugriff:** Erfordert die Berechtigung: `contract:approve`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+| `amendmentId` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `entscheidung` | string | ja | `APPROVE` \| `REJECT` |
+| `reason` | string | – | max. 2000 Zeichen |
+
+### `POST /api/contracts/{id}/amendments/{amendmentId}/apply`
+
+**Änderungsantrag wirksam machen.** Erzeugt aus dem freigegebenen Antrag eine neue Vertragsversion **im Entwurf**; in Kraft tritt sie über `/activate`. Danach trägt der Antrag beide Versionen — die abgelöste und die neue —, damit „was genau hat sich geändert" beantwortbar bleibt. Der Rumpf trägt die vollständigen neuen Konditionen.
+
+- **Zugriff:** Erfordert die Berechtigung: `contract:version`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 201
+- **Mögliche Fehler:** 400, 401, 403, 404, 409, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+| `amendmentId` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `version` | object | ja | – |
+| `version.effectiveFrom` | string | ja | – |
+| `version.reason` | string | ja | min. 5 Zeichen, max. 2000 Zeichen |
+| `version.minimumTermMonths` | integer | – | ≥ 0, ≤ 240 |
+| `version.renewalType` | string | – | `NONE` \| `AUTOMATIC` \| `MANUAL`, Standard `"NONE"` |
+| `version.renewalPeriodMonths` | integer | – | ≥ 1, ≤ 120 |
+| `version.noticePeriodDays` | integer | – | ≥ 0, ≤ 730, Standard `90` |
+| `version.billingCycle` | string | – | `PER_VISIT` \| `MONTHLY` \| `QUARTERLY` \| `SEMIANNUAL` \| `ANNUAL`, Standard `"MONTHLY"` |
+| `version.paymentTermDays` | integer | – | ≥ 0, ≤ 180, Standard `30` |
+| `version.currency` | string | – | Standard `"CHF"` |
+| `version.pricingModel` | string | – | `FIXED_PERIOD` \| `FIXED_PER_VISIT` \| `HOURLY` \| `UNIT_BASED` \| `CUSTOM`, Standard `"FIXED_PERIOD"` |
+| `version.baseAmount` | number | – | ≥ 0, ≤ 9999999, Standard `0` |
+| `version.hourlyRate` | number | – | ≥ 0, ≤ 9999999 |
+| `version.unitPrice` | number | – | ≥ 0, ≤ 999999 |
+| `version.unitLabel` | string | – | max. 40 Zeichen |
+| `version.vatRate` | number | – | ≥ 0, ≤ 100, Standard `8.1` |
+| `version.indexReference` | string | – | max. 120 Zeichen |
+| `version.indexBaseValue` | number | – | ≥ 0, ≤ 999999 |
+| `version.nextReviewAt` | string | – | – |
+| `version.targetQualityScore` | integer | – | ≥ 0, ≤ 100 |
+| `version.inspectionIntervalDays` | integer | – | ≥ 1, ≤ 3650 |
+| `version.responseHours` | integer | – | ≥ 1, ≤ 8760 |
+| `version.slaNote` | string | – | max. 2000 Zeichen |
+| `version.terms` | string | – | max. 20000 Zeichen |
+| `version.internalNote` | string | – | max. 4000 Zeichen |
+| `services` | object[] | – | max. 100 Einträge |
+| `services[].serviceId` | union | – | – |
+| `services[].label` | string | ja | min. 2 Zeichen, max. 160 Zeichen |
+| `services[].description` | string | – | max. 2000 Zeichen |
+| `services[].buildingId` | union | – | – |
+| `services[].zone` | string | – | max. 120 Zeichen |
+| `services[].estimatedMinutes` | integer | – | ≥ 5, ≤ 1440, Standard `120` |
+| `services[].requiredCrewSize` | integer | – | ≥ 1, ≤ 50, Standard `1` |
+| `services[].requiredSkills` | string[] | – | max. 20 Einträge, Standard `[]` |
+| `services[].qualityRequirement` | string | – | max. 2000 Zeichen |
+| `services[].specialInstructions` | string | – | max. 2000 Zeichen |
+| `services[].materialsBy` | string | – | `PROVIDER` \| `CUSTOMER`, Standard `"PROVIDER"` |
+| `services[].quantity` | number | – | ≥ 0, ≤ 9999999 |
+| `services[].position` | integer | – | ≥ 0, ≤ 999, Standard `0` |
+
+### `POST /api/contracts/{id}/price-adjustments`
+
+**Preisanpassung vorschlagen.** **Keine Behauptung über Indexierung.** Ob und wie indexiert wird, steht im Vertrag; dieses Modul erfindet keine Regel und ruft keinen Index ab. Eine automatische Erhöhung findet nicht statt. `oldAmount` ist kein Feld der Anfrage — der bisherige Betrag steht in der geltenden Version, und ihn mitschicken zu lassen hiesse, dem Client zu erlauben, die Vergangenheit zu behaupten.
+
+- **Zugriff:** Erfordert die Berechtigung: `contract:version`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 201
+- **Mögliche Fehler:** 400, 401, 403, 404, 409, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `effectiveFrom` | string | ja | – |
+| `reviewDueAt` | string | – | – |
+| `newAmount` | number | ja | ≥ 0, ≤ 9999999 |
+| `percent` | number | – | ≥ -100, ≤ 1000 |
+| `indexReference` | string | – | max. 120 Zeichen |
+| `indexOldValue` | number | – | ≥ 0, ≤ 999999 |
+| `indexNewValue` | number | – | ≥ 0, ≤ 999999 |
+| `reason` | string | ja | min. 5 Zeichen, max. 2000 Zeichen |
+
+### `POST /api/contracts/{id}/price-adjustments/{adjustmentId}/decision`
+
+**Preisanpassung freigeben oder ablehnen.** Wer vorgeschlagen hat, kann nicht selbst zustimmen (422). Bei einer Preiserhöhung ist das keine Formsache: Sie geht an die Kundschaft hinaus.
+
+- **Zugriff:** Erfordert die Berechtigung: `contract:approve`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+| `adjustmentId` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `entscheidung` | string | ja | `APPROVE` \| `REJECT` |
+| `reason` | string | – | max. 2000 Zeichen |
+
+### `POST /api/contracts/{id}/price-adjustments/{adjustmentId}/apply`
+
+**Preisanpassung wirksam machen.** **Kein Rumpf**, und das ist der Punkt: Die neue Version übernimmt alle Konditionen der geltenden Fassung und ändert genau einen Wert. Ein Rumpf hier lüde ein, „bei der Gelegenheit" noch etwas zu verschieben — dann wäre es keine Preisanpassung mehr.
+
+- **Zugriff:** Erfordert die Berechtigung: `contract:version`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 201
+- **Mögliche Fehler:** 400, 401, 403, 404, 409, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+| `adjustmentId` | string | ja | min. 1 Zeichen |
+
+### `POST /api/contract-services/{id}/schedules`
+
+**Einsatzplan anlegen.** Mehrere Pläne je Leistung sind der Normalfall: „Büro Mo/Mi/Fr früh" und „Treppenhaus jeden zweiten Dienstag" sind zwei Serien derselben Position. Die Mandantenprüfung läuft über die ganze Kette Leistung → Version → Vertrag → Organisation.
+
+- **Zugriff:** Erfordert die Berechtigung: `contract:version`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 201
+- **Mögliche Fehler:** 400, 401, 403, 404, 409, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `frequency` | string | – | `WEEKLY` \| `BIWEEKLY` \| `MONTHLY` \| `QUARTERLY` \| `SEMIANNUAL` \| `ANNUAL`, Standard `"WEEKLY"` |
+| `interval` | integer | – | ≥ 1, ≤ 52, Standard `1` |
+| `weekdays` | integer[] | – | max. 7 Einträge, Standard `[]` |
+| `monthDay` | integer | – | ≥ 1, ≤ 31 |
+| `startMinute` | integer | – | ≥ 0, ≤ 1439, Standard `360` |
+| `endMinute` | integer | – | ≥ 0, ≤ 1439, Standard `600` |
+| `effectiveFrom` | string | ja | – |
+| `effectiveUntil` | string | – | – |
+| `holidayHandling` | string | – | `IGNORE` \| `SKIP` \| `MOVE_BEFORE` \| `MOVE_AFTER`, Standard `"SKIP"` |
+| `active` | boolean | – | Standard `true` |
+
+### `PATCH /api/contract-schedules/{id}`
+
+**Einsatzplan ändern.** Bereits erzeugte Einsätze bleiben unberührt — sie sind disponiert, vielleicht schon angekündigt. Die Änderung wirkt ab dem nächsten Planungslauf und, weil `generatedUntil` stehen bleibt, erst jenseits des bereits geplanten Zeitraums. Wer früher wirken will, verschiebt einzelne Termine über eine Ausnahme.
+
+- **Zugriff:** Erfordert die Berechtigung: `contract:version`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `frequency` | string | – | `WEEKLY` \| `BIWEEKLY` \| `MONTHLY` \| `QUARTERLY` \| `SEMIANNUAL` \| `ANNUAL`, Standard `"WEEKLY"` |
+| `interval` | integer | – | ≥ 1, ≤ 52, Standard `1` |
+| `weekdays` | integer[] | – | max. 7 Einträge, Standard `[]` |
+| `monthDay` | integer | – | ≥ 1, ≤ 31 |
+| `startMinute` | integer | – | ≥ 0, ≤ 1439, Standard `360` |
+| `endMinute` | integer | – | ≥ 0, ≤ 1439, Standard `600` |
+| `effectiveFrom` | string | ja | – |
+| `effectiveUntil` | string | – | – |
+| `holidayHandling` | string | – | `IGNORE` \| `SKIP` \| `MOVE_BEFORE` \| `MOVE_AFTER`, Standard `"SKIP"` |
+| `active` | boolean | – | Standard `true` |
+
+### `DELETE /api/contract-schedules/{id}`
+
+**Einsatzplan entfernen.** Hängen bereits Einsätze daran, wird der Plan **stillgelegt statt gelöscht** und zurückgegeben (200 statt 204). Sonst verlören die Einsätze ihre Herkunft, und „aus welchem Plan kam dieser Termin" wäre für immer unbeantwortbar.
+
+- **Zugriff:** Erfordert die Berechtigung: `contract:version`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+### `POST /api/contract-schedules/{id}/exceptions`
+
+**Einzelnen Termin aussetzen, verschieben oder ansetzen.** Eine Ausnahme ist keine Regeländerung: Wer wegen Betriebsferien einen Termin verschiebt, will nicht den Vertrag ändern — und eine Regeländerung wäre eine neue Vertragsversion. Deshalb `contract:update` und nicht `contract:version`. Eine Ausnahme je Serientag; ein zweiter Eintrag für denselben Tag ersetzt den ersten.
+
+- **Zugriff:** Erfordert die Berechtigung: `contract:update`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 201
+- **Mögliche Fehler:** 400, 401, 403, 404, 409, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `kind` | string | ja | `SKIP` \| `MOVE` \| `EXTRA` |
+| `originalDate` | string | ja | – |
+| `newDate` | string | – | – |
+| `reason` | string | – | max. 500 Zeichen |

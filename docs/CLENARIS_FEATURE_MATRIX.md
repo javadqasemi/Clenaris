@@ -24,22 +24,29 @@ Spalten `FE` (Frontend), `BE` (Backend), `DB`, `RBAC`, `SEC` (eigener Sicherheit
 
 ## Gesamtverteilung
 
-*Stand nach Wave 9.1 (2026-09-22). Änderungen gegenüber der Erstfassung sind unten begründet; die Anteile sind gerundet.*
+*Stand nach Wave 10, Teil 1 (2026-09-22). Änderungen gegenüber der Erstfassung sind unten begründet; die Anteile sind gerundet.*
 
 | Status | Anzahl | Anteil |
 |---|---|---|
-| COMPLETE + VERIFIED | **95** | 51 % |
+| COMPLETE + VERIFIED | **95** | 50 % |
 | COMPLETE | **56** | 30 % |
 | COMPLETE / EXTERNAL VERIFICATION REQUIRED | **6** | 3 % |
-| PARTIAL | **21** | 11 % |
-| BACKEND ONLY | **0** | 0 % |
+| PARTIAL | **23** | 12 % |
+| BACKEND ONLY | **4** | 2 % |
 | FRONTEND ONLY | **0** | 0 % |
-| SCHEMA ONLY | **3** | 2 % |
-| NOT IMPLEMENTED | **4** | 2 % |
-| **Summe** | **185** | |
+| SCHEMA ONLY | **2** | 1 % |
+| NOT IMPLEMENTED | **3** | 2 % |
+| **Summe** | **189** | |
 
-**Technisch nutzbar (C+V oder C): 151 von 185 = 82 %.**
-**Durch Tests belegt: 95 von 185 = 51 %.**
+**Technisch nutzbar (C+V oder C): 151 von 189 = 80 %.**
+**Durch Tests belegt: 95 von 189 = 50 %.**
+
+> **BACKEND ONLY ist wieder besetzt — und das ist eine Aussage, keine Panne.**
+> Die vier Zeilen sind das Vertragsmodul aus Wave 10: Domäne, Versionierung,
+> Serienplanung und Änderungsanträge stehen mit 53 Prüfungen, die Oberfläche
+> fehlt. Sie als COMPLETE zu führen wäre genau das Muster, das die Waves 6, 8
+> und 9 aufgedeckt haben — Felder und Rechte, die eine Zusage machen, die
+> niemand bedienen kann. Die Kategorie sagt hier die Wahrheit.
 
 > **Diese Zahlen sind ausgezählt, nicht fortgeschrieben.** Sie stammen aus den
 > Zeilen dieser Datei selbst:
@@ -143,6 +150,15 @@ Spalten `FE` (Frontend), `BE` (Backend), `DB`, `RBAC`, `SEC` (eigener Sicherheit
 | **PDF-Zeile bereinigt** | FILE-006 trug „Lohnabrechnung fehlt" als offenen Punkt und behält ihn; er ist jetzt in EMP-013 sichtbar, statt nur dort zu stehen, wo ihn niemand sucht. |
 | **Neu: INF-011 (Hydration/E2E-Zuverlässigkeit) = PARTIAL** | Die Hauptursache des zeitweisen Hydrationsfehlers ist bestimmt und beseitigt — Reacts gedrosselte Suspense-Einblendung, gemessen von 1–7 % auf 0,3–0,5 %. Ein Restfehler bleibt: 16 Browserläufe, 13 grün, 3 rot. Er wird als **offen** geführt und nicht als behoben; neun Ausschlussmessungen, zwei dokumentierte Sackgassen und der nächste Schritt stehen in `docs/HYDRATION.md`. |
 
+### Änderungen in Wave 10 (Teil 1)
+
+| Änderung | Begründung |
+|---|---|
+| **CTR-001: NI → BACKEND ONLY** | `Contract` existiert: Zustandsautomat an einer Stelle, Nummer beim Aktivieren, Löschen nur für Entwürfe, 30 HTTP-Prüfungen. Nicht COMPLETE, weil die Oberfläche fehlt — und ohne sie bedient den Vorgang niemand. Dieselbe Regel wie bei EMP-015 in Wave 8. |
+| **CTR-003 … CTR-006 neu** | Versionierung, Serienplanung, Änderungsanträge und Abrechnungsgrundlage sind eigene Eigenschaften mit eigenem Nachweis. Sie in eine Zeile zu falten hiesse, dass „Vertrag vorhanden" auch „Idempotenz bewiesen" bedeutete — und genau das ist der Unterschied, auf den es bei einem Serienplaner ankommt. |
+| **PROP-004: SCHEMA ONLY → PARTIAL** | `Building` war seit der ersten Migration ein Modell ohne jede Codeberührung. Es ist jetzt das, wofür es gedacht war: Ein Vertrag über ein Mehrfamilienhaus benennt Leistungen je Gebäude und Zone. |
+| **CTR-002 neu eingeordnet** | Serienbuchungen bleiben, was sie sind — der Weg der Kundschaft. Verträge laufen über CTR-003 ff. Zwei Wege, weil es zwei Sachen sind: Eine Serienbuchung ist eine Bestellung, ein Vertrag ein Dauerschuldverhältnis. |
+
 ---
 
 ## SEC — Plattform und Sicherheit (25)
@@ -240,7 +256,7 @@ Spalten `FE` (Frontend), `BE` (Backend), `DB`, `RBAC`, `SEC` (eigener Sicherheit
 | PROP-001 | Objekte CRUD | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | – | **C+V** | `property.service.ts`, `ownership.test.ts` | Protokollierung |
 | PROP-002 | Alarmcode verschlüsselt | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | – | **C+V** | `CRYPTO_CONTEXT.alarmCode`, `verschluesselung.test.ts` | – |
 | PROP-003 | Zugangsdaten nur für die zugeteilte Person | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | – | **C+V** | `job.service.ts:1863`, `dispatch.test.ts` | – |
-| PROP-004 | Liegenschaften (`Building`) | – | – | ✓ | – | – | – | – | **SO** | Modell ohne jede Codeberührung | Dienst, Route, Maske |
+| PROP-004 | Liegenschaften (`Building`) | – | ✓ | ✓ | ✓ | ✓ | ○ | – | **P** | Seit Wave 10 kein totes Modell mehr: `ContractService.buildingId` — ein Vertrag über ein Mehrfamilienhaus benennt Leistungen je Gebäude und Zone | Eigene Maske; heute nur über den Vertrag erreichbar |
 
 ---
 
@@ -273,12 +289,16 @@ Spalten `FE` (Frontend), `BE` (Backend), `DB`, `RBAC`, `SEC` (eigener Sicherheit
 
 ---
 
-## CTR — Verträge und wiederkehrende Leistungen (2)
+## CTR — Verträge und wiederkehrende Leistungen (6)
 
 | ID | Feature | FE | BE | DB | RBAC | SEC | T | E2E | Status | Evidence | Missing Work |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| CTR-001 | Vertragsmodell (Laufzeit, Verlängerung, Kündigung) | – | – | – | – | – | – | – | **NI** | kein `Contract` im Schema | vollständig zu bauen |
-| CTR-002 | Wiederkehrende Leistungen über Serienbuchung | ○ | ✓ | ✓ | ✓ | ✓ | ○ | – | **P** | `generateRecurringBookings` | Laufzeit, Kündigung, Indexierung |
+| CTR-001 | **Vertragsmodell** (Laufzeit, Verlängerung, Kündigung, Zustandsautomat) | – | ✓ | ✓ | ✓ | ✓ | ✓ | – | **BO** | `contract.service.ts`, 7 Modelle, `vertraege.test.ts` (30). Zustandsautomat an einer Stelle; Nummer beim Aktivieren; Löschen nur für Entwürfe | **Oberfläche.** Ohne sie ist der Vorgang für den Betrieb nicht bedienbar — dieselbe Regel wie bei EMP-015 |
+| CTR-002 | Wiederkehrende Leistungen über Serienbuchung | ○ | ✓ | ✓ | ✓ | ✓ | ○ | – | **P** | `generateRecurringBookings` | Bleibt für Buchungen der Kundschaft; Verträge laufen ab Wave 10 über CTR-003 |
+| CTR-003 | **Versionierung der Konditionen** | – | ✓ | ✓ | ✓ | ✓ | ✓ | – | **BO** | `ContractVersion`, Teilindex `contract_versions_eine_aktive`. Aktive Fassung unveränderlich (422); Leistungen und Pläne werden beim Versionieren **kopiert** | Oberfläche |
+| CTR-004 | **Serienplanung mit Idempotenz** | – | ✓ | ✓ | ✓ | ✓ | ✓ | – | **BO** | `contract-schedule.service.ts`, Rechenkern `lib/contracts/serie.ts` (23 Prüfungen), `@@unique([serviceScheduleId, scheduleDate])`. Gleichzeitige Läufe geprüft | Oberfläche; Feiertagskalender je Kanton ist konfigurierbar, aber nicht befüllt |
+| CTR-005 | **Änderungsanträge und Preisanpassungen** | – | ✓ | ✓ | ✓ | ✓ | ✓ | – | **BO** | `contract-amendment.service.ts`, Teilindex `contract_amendments_ein_offener`. Vier-Augen-Prinzip auch gegen die Administration | Oberfläche |
+| CTR-006 | **Abrechnungsgrundlage aus dem Vertrag** | – | ✓ | ✓ | ✓ | ✓ | ✓ | – | **P** | `contractBillingBasis` — rechnet mit voller Herleitung, jede Position mit ihrer Vertragsversion | Der Schritt in den Rechnungsdienst hinein (Wave 13) |
 
 ---
 

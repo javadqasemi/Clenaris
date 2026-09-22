@@ -24,6 +24,7 @@ import * as security from '@/lib/validation/security';
 import * as payroll from '@/lib/validation/payroll';
 import * as q from '@/lib/validation/queries';
 import { BI_ROUTES } from './openapi-routes-bi';
+import { CONTRACT_ROUTES } from './openapi-routes-vertraege';
 
 /**
  * Registrierung aller REST-Endpunkte.
@@ -1150,8 +1151,8 @@ export const ROUTES: RouteDoc[] = [
     tag: 'Einsätze',
     summary: 'Einsätze auflisten',
     description:
-      'Filter nach Status, Zeitraum, Kundschaft und zugeteilter Person, dazu Sortierung und ' +
-      'Blätterung. Wer nur `job:read_assigned` hat, bekommt ausschliesslich die eigenen ' +
+      'Filter nach Status, Zeitraum, Kundschaft, zugeteilter Person und **Vertrag**, dazu ' +
+      'Sortierung und Blätterung. Wer nur `job:read_assigned` hat, bekommt ausschliesslich die eigenen ' +
       'Einsätze — die Einschränkung steht in der where-Klausel, nicht in der Darstellung. ' +
       'Objektangaben wie Schlüsseldepot und Alarmcode sind nicht Teil der Liste; sie gehören ' +
       'auf den Rapport des einzelnen Einsatzes.',
@@ -4148,4 +4149,9 @@ export const ROUTES: RouteDoc[] = [
   //  Unternehmensführung — eigene Datei, weil es über neunzig Operationen sind
   // -------------------------------------------------------------------------
   ...BI_ROUTES,
+
+  // -------------------------------------------------------------------------
+  //  Verträge — eigene Datei aus demselben Grund
+  // -------------------------------------------------------------------------
+  ...CONTRACT_ROUTES,
 ];

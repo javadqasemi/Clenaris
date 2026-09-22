@@ -6756,7 +6756,7 @@ paths:
         - 'Einsätze'
       summary: 'Einsätze auflisten'
       description: |-
-          Filter nach Status, Zeitraum, Kundschaft und zugeteilter Person, dazu Sortierung und Blätterung. Wer nur `job:read_assigned` hat, bekommt ausschliesslich die eigenen Einsätze — die Einschränkung steht in der where-Klausel, nicht in der Darstellung. Objektangaben wie Schlüsseldepot und Alarmcode sind nicht Teil der Liste; sie gehören auf den Rapport des einzelnen Einsatzes.
+          Filter nach Status, Zeitraum, Kundschaft, zugeteilter Person und **Vertrag**, dazu Sortierung und Blätterung. Wer nur `job:read_assigned` hat, bekommt ausschliesslich die eigenen Einsätze — die Einschränkung steht in der where-Klausel, nicht in der Darstellung. Objektangaben wie Schlüsseldepot und Alarmcode sind nicht Teil der Liste; sie gehören auf den Rapport des einzelnen Einsatzes.
 
           **Zugriff:** Erfordert eine der Berechtigungen: `job:read`, `job:read_assigned`.
 
@@ -36301,6 +36301,3258 @@ paths:
               schema:
                 '$ref': '#/components/schemas/ErrorEnvelope'
         '503':
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+  '/api/contracts':
+    get:
+      tags:
+        - 'Verträge'
+      summary: 'Verträge auflisten'
+      description: |-
+          Filtert nach Zustand, Kundschaft, Suchbegriff sowie nach nahender Kündigungsfrist und nahendem Vertragsende. **Die Einschränkung steht in der `where`-Klausel:** Wer nur `contract:read_own` hat, sieht ausschliesslich die Verträge der eigenen Kundenakte — verstecktes HTML wäre auf der Leitung trotzdem sichtbar.
+
+          **Zugriff:** Erfordert eine der Berechtigungen: `contract:read`, `contract:read_own`.
+
+          **Rate-Limit-Klasse:** `apiRead`
+      operationId: 'getContracts'
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: 'status'
+          in: 'query'
+          required: false
+          schema:
+            type: 'string'
+            enum:
+              - 'DRAFT'
+              - 'IN_REVIEW'
+              - 'OFFERED'
+              - 'ACTIVE'
+              - 'PAUSED'
+              - 'NOTICE_GIVEN'
+              - 'ENDED'
+              - 'CANCELLED'
+        - name: 'customerId'
+          in: 'query'
+          required: false
+          schema:
+            type: 'string'
+        - name: 'q'
+          in: 'query'
+          required: false
+          schema:
+            type: 'string'
+            maxLength: 120
+        - name: 'fristInTagen'
+          in: 'query'
+          required: false
+          schema:
+            type: 'integer'
+            minimum: 1
+            maximum: 365
+        - name: 'endeInTagen'
+          in: 'query'
+          required: false
+          schema:
+            type: 'integer'
+            minimum: 1
+            maximum: 365
+        - name: 'page'
+          in: 'query'
+          required: false
+          schema:
+            type: 'integer'
+            minimum: 1
+            default: 1
+        - name: 'perPage'
+          in: 'query'
+          required: false
+          schema:
+            type: 'integer'
+            minimum: 1
+            maximum: 100
+            default: 25
+      responses:
+        '200':
+          description: 'Erfolg'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/SuccessEnvelope'
+        '400':
+          description: 'VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 'UNAUTHORIZED — keine oder abgelaufene Sitzung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 'FORBIDDEN — angemeldet, aber ohne die nötige Berechtigung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: 'RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+    post:
+      tags:
+        - 'Verträge'
+      summary: 'Vertragsentwurf anlegen'
+      description: |-
+          Der Vertrag entsteht **immer mit seiner ersten Version** — ein Vertrag ohne Konditionen wäre ein Datensatz ohne Inhalt. Nummer und Zustand entstehen nicht hier: Die Nummer wird beim Aktivieren gezogen, damit ein verworfener Entwurf keine Lücke hinterlässt. Mit `quoteId` nur aus einer **angenommenen** Offerte (sonst 422).
+
+          **Zugriff:** Erfordert die Berechtigung: `contract:create`.
+
+          **Rate-Limit-Klasse:** `apiWrite`
+      operationId: 'postContracts'
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          'application/json':
+            schema:
+              type: 'object'
+              properties:
+                contract:
+                  type: 'object'
+                  properties:
+                    customerId:
+                      type: 'string'
+                    propertyId:
+                      anyOf:
+                        - type: 'string'
+                        - const: ''
+                    quoteId:
+                      anyOf:
+                        - type: 'string'
+                        - const: ''
+                    title:
+                      type: 'string'
+                      minLength: 3
+                      maxLength: 160
+                    description:
+                      type: 'string'
+                      maxLength: 4000
+                    startDate:
+                      type: 'string'
+                      pattern: '^\d{4}-\d{2}-\d{2}$'
+                    endDate:
+                      type: 'string'
+                      pattern: '^\d{4}-\d{2}-\d{2}$'
+                    responsibleEmployeeId:
+                      anyOf:
+                        - type: 'string'
+                        - const: ''
+                    salesOwnerId:
+                      anyOf:
+                        - type: 'string'
+                        - const: ''
+                    serviceManagerId:
+                      anyOf:
+                        - type: 'string'
+                        - const: ''
+                    costCenter:
+                      type: 'string'
+                      maxLength: 60
+                    internalNote:
+                      type: 'string'
+                      maxLength: 4000
+                  required:
+                    - 'customerId'
+                    - 'title'
+                    - 'startDate'
+                version:
+                  type: 'object'
+                  properties:
+                    effectiveFrom:
+                      type: 'string'
+                      pattern: '^\d{4}-\d{2}-\d{2}$'
+                    reason:
+                      type: 'string'
+                      minLength: 5
+                      maxLength: 2000
+                    minimumTermMonths:
+                      type: 'integer'
+                      minimum: 0
+                      maximum: 240
+                    renewalType:
+                      type: 'string'
+                      enum:
+                        - 'NONE'
+                        - 'AUTOMATIC'
+                        - 'MANUAL'
+                      default: 'NONE'
+                    renewalPeriodMonths:
+                      type: 'integer'
+                      minimum: 1
+                      maximum: 120
+                    noticePeriodDays:
+                      type: 'integer'
+                      minimum: 0
+                      maximum: 730
+                      default: 90
+                    billingCycle:
+                      type: 'string'
+                      enum:
+                        - 'PER_VISIT'
+                        - 'MONTHLY'
+                        - 'QUARTERLY'
+                        - 'SEMIANNUAL'
+                        - 'ANNUAL'
+                      default: 'MONTHLY'
+                    paymentTermDays:
+                      type: 'integer'
+                      minimum: 0
+                      maximum: 180
+                      default: 30
+                    currency:
+                      type: 'string'
+                      default: 'CHF'
+                    pricingModel:
+                      type: 'string'
+                      enum:
+                        - 'FIXED_PERIOD'
+                        - 'FIXED_PER_VISIT'
+                        - 'HOURLY'
+                        - 'UNIT_BASED'
+                        - 'CUSTOM'
+                      default: 'FIXED_PERIOD'
+                    baseAmount:
+                      type: 'number'
+                      minimum: 0
+                      maximum: 9999999
+                      default: 0
+                    hourlyRate:
+                      type: 'number'
+                      minimum: 0
+                      maximum: 9999999
+                    unitPrice:
+                      type: 'number'
+                      minimum: 0
+                      maximum: 999999
+                    unitLabel:
+                      type: 'string'
+                      maxLength: 40
+                    vatRate:
+                      type: 'number'
+                      minimum: 0
+                      maximum: 100
+                      default: 8.1
+                    indexReference:
+                      type: 'string'
+                      maxLength: 120
+                    indexBaseValue:
+                      type: 'number'
+                      minimum: 0
+                      maximum: 999999
+                    nextReviewAt:
+                      type: 'string'
+                      pattern: '^\d{4}-\d{2}-\d{2}$'
+                    targetQualityScore:
+                      type: 'integer'
+                      minimum: 0
+                      maximum: 100
+                    inspectionIntervalDays:
+                      type: 'integer'
+                      minimum: 1
+                      maximum: 3650
+                    responseHours:
+                      type: 'integer'
+                      minimum: 1
+                      maximum: 8760
+                    slaNote:
+                      type: 'string'
+                      maxLength: 2000
+                    terms:
+                      type: 'string'
+                      maxLength: 20000
+                    internalNote:
+                      type: 'string'
+                      maxLength: 4000
+                  required:
+                    - 'effectiveFrom'
+                    - 'reason'
+                services:
+                  type: 'array'
+                  items:
+                    type: 'object'
+                    properties:
+                      serviceId:
+                        anyOf:
+                          - type: 'string'
+                          - const: ''
+                      label:
+                        type: 'string'
+                        minLength: 2
+                        maxLength: 160
+                      description:
+                        type: 'string'
+                        maxLength: 2000
+                      buildingId:
+                        anyOf:
+                          - type: 'string'
+                          - const: ''
+                      zone:
+                        type: 'string'
+                        maxLength: 120
+                      estimatedMinutes:
+                        type: 'integer'
+                        minimum: 5
+                        maximum: 1440
+                        default: 120
+                      requiredCrewSize:
+                        type: 'integer'
+                        minimum: 1
+                        maximum: 50
+                        default: 1
+                      requiredSkills:
+                        type: 'array'
+                        items:
+                          type: 'string'
+                          minLength: 1
+                          maxLength: 60
+                        maxItems: 20
+                        default: []
+                      qualityRequirement:
+                        type: 'string'
+                        maxLength: 2000
+                      specialInstructions:
+                        type: 'string'
+                        maxLength: 2000
+                      materialsBy:
+                        type: 'string'
+                        enum:
+                          - 'PROVIDER'
+                          - 'CUSTOMER'
+                        default: 'PROVIDER'
+                      quantity:
+                        type: 'number'
+                        minimum: 0
+                        maximum: 9999999
+                      position:
+                        type: 'integer'
+                        minimum: 0
+                        maximum: 999
+                        default: 0
+                    required:
+                      - 'label'
+                  maxItems: 100
+              required:
+                - 'contract'
+                - 'version'
+      responses:
+        '201':
+          description: 'Erfolg'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/SuccessEnvelope'
+        '400':
+          description: 'VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 'UNAUTHORIZED — keine oder abgelaufene Sitzung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 'FORBIDDEN — angemeldet, aber ohne die nötige Berechtigung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '409':
+          description: 'CONFLICT — verstösst gegen eine Eindeutigkeitsregel.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: 'BUSINESS_RULE — fachlich nicht zulässig, etwa eine bereits ausgestellte Rechnung ändern.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: 'RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+  '/api/contracts/deadlines':
+    get:
+      tags:
+        - 'Verträge'
+      summary: 'Fristen, die auf jemanden warten'
+      description: |-
+          Nahende Kündigungsfristen, auslaufende Verträge und fällige Preisüberprüfungen. Der Lauf **erinnert, er handelt nicht**: Verlängern, kündigen und Preise anpassen sind Verpflichtungen über Monate, die ein Mensch trifft.
+
+          **Zugriff:** Erfordert die Berechtigung: `contract:read`.
+
+          **Rate-Limit-Klasse:** `apiRead`
+      operationId: 'getContractsDeadlines'
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: 'tage'
+          in: 'query'
+          required: false
+          schema:
+            type: 'integer'
+            minimum: 1
+            maximum: 365
+            default: 45
+      responses:
+        '200':
+          description: 'Erfolg'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/SuccessEnvelope'
+        '400':
+          description: 'VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 'UNAUTHORIZED — keine oder abgelaufene Sitzung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 'FORBIDDEN — angemeldet, aber ohne die nötige Berechtigung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: 'RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+  '/api/contracts/{id}':
+    get:
+      tags:
+        - 'Verträge'
+      summary: 'Vertragsakte'
+      description: |-
+          Der Vertrag mit allen Versionen, Leistungen, Einsatzplänen, Ausnahmen, Änderungsanträgen und Preisanpassungen — **eine** Abfrage statt sechs. Sechs Abrufe hintereinander wären sechs Momente, in denen sich der Zustand zwischen zwei Antworten ändern kann. Jede Version meldet zusätzlich, wie viele Einsätze an ihr hängen.
+
+          **Zugriff:** Erfordert eine der Berechtigungen: `contract:read`, `contract:read_own`.
+
+          **Rate-Limit-Klasse:** `apiRead`
+      operationId: 'getContractsById'
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: 'id'
+          in: 'path'
+          required: true
+          schema:
+            type: 'string'
+            minLength: 1
+      responses:
+        '200':
+          description: 'Erfolg'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/SuccessEnvelope'
+        '400':
+          description: 'VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 'UNAUTHORIZED — keine oder abgelaufene Sitzung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 'FORBIDDEN — angemeldet, aber ohne die nötige Berechtigung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: 'NOT_FOUND — nicht vorhanden, oder für diese Sitzung nicht sichtbar.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: 'RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+    patch:
+      tags:
+        - 'Verträge'
+      summary: 'Kopfdaten ändern'
+      description: |-
+          Bezeichnung, Objekt, Betreuung, Kostenstelle, Notizen. **Konditionen sind hier nicht dabei** — auch nicht bei einem Entwurf. Sie stehen an der Version, und zwei Türen zu denselben Feldern wären zwei Stellen, an denen die Versionsregel durchzusetzen wäre. Beginn und Ende fehlen aus demselben Grund: Wer das Ende verschiebt, verlängert den Vertrag.
+
+          **Zugriff:** Erfordert die Berechtigung: `contract:update`.
+
+          **Rate-Limit-Klasse:** `apiWrite`
+      operationId: 'patchContractsById'
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: 'id'
+          in: 'path'
+          required: true
+          schema:
+            type: 'string'
+            minLength: 1
+      requestBody:
+        required: true
+        content:
+          'application/json':
+            schema:
+              type: 'object'
+              properties:
+                title:
+                  type: 'string'
+                  minLength: 3
+                  maxLength: 160
+                description:
+                  type: 'string'
+                  maxLength: 4000
+                propertyId:
+                  anyOf:
+                    - type: 'string'
+                    - const: ''
+                responsibleEmployeeId:
+                  anyOf:
+                    - type: 'string'
+                    - const: ''
+                salesOwnerId:
+                  anyOf:
+                    - type: 'string'
+                    - const: ''
+                serviceManagerId:
+                  anyOf:
+                    - type: 'string'
+                    - const: ''
+                costCenter:
+                  type: 'string'
+                  maxLength: 60
+                internalNote:
+                  type: 'string'
+                  maxLength: 4000
+      responses:
+        '200':
+          description: 'Erfolg'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/SuccessEnvelope'
+        '400':
+          description: 'VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 'UNAUTHORIZED — keine oder abgelaufene Sitzung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 'FORBIDDEN — angemeldet, aber ohne die nötige Berechtigung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: 'NOT_FOUND — nicht vorhanden, oder für diese Sitzung nicht sichtbar.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: 'BUSINESS_RULE — fachlich nicht zulässig, etwa eine bereits ausgestellte Rechnung ändern.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: 'RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+    delete:
+      tags:
+        - 'Verträge'
+      summary: 'Entwurf verwerfen'
+      description: |-
+          Weiches Löschen, **nur für Verträge, die nie in Kraft waren** (sonst 422). Ein gelaufener Vertrag ist ein Beleg; er wird beendet, nicht entfernt. Deshalb heisst das Recht `contract:delete_draft` und nicht `contract:delete`.
+
+          **Zugriff:** Erfordert die Berechtigung: `contract:delete_draft`.
+
+          **Rate-Limit-Klasse:** `apiWrite`
+      operationId: 'deleteContractsById'
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: 'id'
+          in: 'path'
+          required: true
+          schema:
+            type: 'string'
+            minLength: 1
+      responses:
+        '204':
+          description: 'Erfolg'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/SuccessEnvelope'
+        '400':
+          description: 'VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 'UNAUTHORIZED — keine oder abgelaufene Sitzung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 'FORBIDDEN — angemeldet, aber ohne die nötige Berechtigung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: 'NOT_FOUND — nicht vorhanden, oder für diese Sitzung nicht sichtbar.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: 'BUSINESS_RULE — fachlich nicht zulässig, etwa eine bereits ausgestellte Rechnung ändern.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: 'RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+  '/api/contracts/{id}/activate':
+    post:
+      tags:
+        - 'Verträge'
+      summary: 'In Kraft setzen'
+      description: |-
+          Nummer, geltende Version und Zustand entstehen in **einer** Transaktion. Sie auseinanderzuziehen hiesse, einen Moment zuzulassen, in dem ein Vertrag aktiv ist und keine Version hat — und in dem eine Abrechnung mit null rechnet. Ein Vertrag ohne Leistungen wird abgewiesen (422), ebenso jeder Übergang, den der Zustandsautomat nicht kennt. Eigene Berechtigung: Die Betriebsleitung hat sie ausdrücklich nicht.
+
+          **Zugriff:** Erfordert die Berechtigung: `contract:activate`.
+
+          **Rate-Limit-Klasse:** `apiWrite`
+      operationId: 'postContractsByIdActivate'
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: 'id'
+          in: 'path'
+          required: true
+          schema:
+            type: 'string'
+            minLength: 1
+      requestBody:
+        required: true
+        content:
+          'application/json':
+            schema:
+              type: 'object'
+              properties:
+                effectiveFrom:
+                  type: 'string'
+                  pattern: '^\d{4}-\d{2}-\d{2}$'
+                note:
+                  type: 'string'
+                  maxLength: 1000
+      responses:
+        '200':
+          description: 'Erfolg'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/SuccessEnvelope'
+        '400':
+          description: 'VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 'UNAUTHORIZED — keine oder abgelaufene Sitzung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 'FORBIDDEN — angemeldet, aber ohne die nötige Berechtigung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: 'NOT_FOUND — nicht vorhanden, oder für diese Sitzung nicht sichtbar.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: 'BUSINESS_RULE — fachlich nicht zulässig, etwa eine bereits ausgestellte Rechnung ändern.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: 'RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+  '/api/contracts/{id}/pause':
+    post:
+      tags:
+        - 'Verträge'
+      summary: 'Aussetzen'
+      description: |-
+          Der Vertrag besteht weiter, es wird nur in einem Zeitraum nicht geleistet — Bauarbeiten, Leerstand, Saison. Wirkung hat es beim Serienplaner, der in diesem Fenster keine Einsätze mehr erzeugt.
+
+          **Zugriff:** Erfordert die Berechtigung: `contract:activate`.
+
+          **Rate-Limit-Klasse:** `apiWrite`
+      operationId: 'postContractsByIdPause'
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: 'id'
+          in: 'path'
+          required: true
+          schema:
+            type: 'string'
+            minLength: 1
+      requestBody:
+        required: true
+        content:
+          'application/json':
+            schema:
+              type: 'object'
+              properties:
+                pausedFrom:
+                  type: 'string'
+                  pattern: '^\d{4}-\d{2}-\d{2}$'
+                pausedUntil:
+                  type: 'string'
+                  pattern: '^\d{4}-\d{2}-\d{2}$'
+                reason:
+                  type: 'string'
+                  minLength: 5
+                  maxLength: 2000
+              required:
+                - 'pausedFrom'
+                - 'reason'
+      responses:
+        '200':
+          description: 'Erfolg'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/SuccessEnvelope'
+        '400':
+          description: 'VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 'UNAUTHORIZED — keine oder abgelaufene Sitzung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 'FORBIDDEN — angemeldet, aber ohne die nötige Berechtigung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: 'NOT_FOUND — nicht vorhanden, oder für diese Sitzung nicht sichtbar.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: 'BUSINESS_RULE — fachlich nicht zulässig, etwa eine bereits ausgestellte Rechnung ändern.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: 'RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+  '/api/contracts/{id}/resume':
+    post:
+      tags:
+        - 'Verträge'
+      summary: 'Pause beenden'
+      description: |-
+          Kein Rumpf: Es gibt genau eine mögliche Wirkung. Ein Datum entgegenzunehmen lüde dazu ein, die Pause rückwirkend zu verkürzen — und die Einsätze, die in dieser Zeit nicht erzeugt wurden, entstünden dadurch nicht.
+
+          **Zugriff:** Erfordert die Berechtigung: `contract:activate`.
+
+          **Rate-Limit-Klasse:** `apiWrite`
+      operationId: 'postContractsByIdResume'
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: 'id'
+          in: 'path'
+          required: true
+          schema:
+            type: 'string'
+            minLength: 1
+      responses:
+        '200':
+          description: 'Erfolg'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/SuccessEnvelope'
+        '400':
+          description: 'VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 'UNAUTHORIZED — keine oder abgelaufene Sitzung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 'FORBIDDEN — angemeldet, aber ohne die nötige Berechtigung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: 'NOT_FOUND — nicht vorhanden, oder für diese Sitzung nicht sichtbar.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: 'BUSINESS_RULE — fachlich nicht zulässig, etwa eine bereits ausgestellte Rechnung ändern.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: 'RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+  '/api/contracts/{id}/notice':
+    post:
+      tags:
+        - 'Verträge'
+      summary: 'Kündigung erfassen'
+      description: |-
+          **Keine Rechtsauskunft.** Festgehalten wird, wer wann gekündigt hat; das Wirkungsdatum ist eine *Rechnung* aus Kündigungsfrist, Laufzeit und Verlängerungsart der geltenden Version und lässt sich überschreiben. Ob die Kündigung wirksam ist, entscheidet dieses System nicht.
+
+          **Zugriff:** Erfordert die Berechtigung: `contract:terminate`.
+
+          **Rate-Limit-Klasse:** `apiWrite`
+      operationId: 'postContractsByIdNotice'
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: 'id'
+          in: 'path'
+          required: true
+          schema:
+            type: 'string'
+            minLength: 1
+      requestBody:
+        required: true
+        content:
+          'application/json':
+            schema:
+              type: 'object'
+              properties:
+                noticeGivenBy:
+                  type: 'string'
+                  enum:
+                    - 'CUSTOMER'
+                    - 'PROVIDER'
+                noticeGivenAt:
+                  type: 'string'
+                  pattern: '^\d{4}-\d{2}-\d{2}$'
+                terminationEffectiveAt:
+                  type: 'string'
+                  pattern: '^\d{4}-\d{2}-\d{2}$'
+                reason:
+                  type: 'string'
+                  maxLength: 2000
+              required:
+                - 'noticeGivenBy'
+      responses:
+        '200':
+          description: 'Erfolg'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/SuccessEnvelope'
+        '400':
+          description: 'VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 'UNAUTHORIZED — keine oder abgelaufene Sitzung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 'FORBIDDEN — angemeldet, aber ohne die nötige Berechtigung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: 'NOT_FOUND — nicht vorhanden, oder für diese Sitzung nicht sichtbar.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: 'BUSINESS_RULE — fachlich nicht zulässig, etwa eine bereits ausgestellte Rechnung ändern.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: 'RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+  '/api/contracts/{id}/end':
+    post:
+      tags:
+        - 'Verträge'
+      summary: 'Beenden'
+      description: |-
+          Mit dem Ende laufen die Serien aus: Alle Einsatzpläne werden stillgelegt und bekommen ein Enddatum — sonst erzeugte der nächtliche Planer weiter Einsätze für einen beendeten Vertrag. Die Pläne werden **nicht gelöscht**; die Einsätze zeigen weiterhin auf sie. `ENDED` ist ein Endzustand.
+
+          **Zugriff:** Erfordert die Berechtigung: `contract:terminate`.
+
+          **Rate-Limit-Klasse:** `apiWrite`
+      operationId: 'postContractsByIdEnd'
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: 'id'
+          in: 'path'
+          required: true
+          schema:
+            type: 'string'
+            minLength: 1
+      requestBody:
+        required: true
+        content:
+          'application/json':
+            schema:
+              type: 'object'
+              properties:
+                reason:
+                  type: 'string'
+                  maxLength: 2000
+      responses:
+        '200':
+          description: 'Erfolg'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/SuccessEnvelope'
+        '400':
+          description: 'VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 'UNAUTHORIZED — keine oder abgelaufene Sitzung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 'FORBIDDEN — angemeldet, aber ohne die nötige Berechtigung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: 'NOT_FOUND — nicht vorhanden, oder für diese Sitzung nicht sichtbar.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: 'BUSINESS_RULE — fachlich nicht zulässig, etwa eine bereits ausgestellte Rechnung ändern.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: 'RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+  '/api/contracts/{id}/cancel':
+    post:
+      tags:
+        - 'Verträge'
+      summary: 'Entwurf stornieren'
+      description: |-
+          Behält die Zeile, im Gegensatz zum Löschen. Gedacht für den im Verkauf häufigeren Fall — die Kundschaft springt ab, nachdem der Vertrag schon vorlag. Dass es einen Vertrag gab und woran er scheiterte, ist eine Auskunft; ein gelöschter Entwurf ist keine.
+
+          **Zugriff:** Erfordert die Berechtigung: `contract:delete_draft`.
+
+          **Rate-Limit-Klasse:** `apiWrite`
+      operationId: 'postContractsByIdCancel'
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: 'id'
+          in: 'path'
+          required: true
+          schema:
+            type: 'string'
+            minLength: 1
+      requestBody:
+        required: true
+        content:
+          'application/json':
+            schema:
+              type: 'object'
+              properties:
+                reason:
+                  type: 'string'
+                  maxLength: 2000
+      responses:
+        '200':
+          description: 'Erfolg'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/SuccessEnvelope'
+        '400':
+          description: 'VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 'UNAUTHORIZED — keine oder abgelaufene Sitzung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 'FORBIDDEN — angemeldet, aber ohne die nötige Berechtigung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: 'NOT_FOUND — nicht vorhanden, oder für diese Sitzung nicht sichtbar.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: 'BUSINESS_RULE — fachlich nicht zulässig, etwa eine bereits ausgestellte Rechnung ändern.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: 'RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+  '/api/contracts/{id}/renew':
+    post:
+      tags:
+        - 'Verträge'
+      summary: 'Laufzeit verlängern'
+      description: |-
+          **Auch die „automatische" Verlängerung läuft hierüber.** Der nächtliche Lauf erinnert; verlängern tut ein Mensch, und wer es tut, gehört ins Protokoll. `renewalType: AUTOMATIC` sagt etwas über den *Vertrag* aus, nicht über den Server. Ein unbefristeter Vertrag wird abgewiesen (422).
+
+          **Zugriff:** Erfordert die Berechtigung: `contract:activate`.
+
+          **Rate-Limit-Klasse:** `apiWrite`
+      operationId: 'postContractsByIdRenew'
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: 'id'
+          in: 'path'
+          required: true
+          schema:
+            type: 'string'
+            minLength: 1
+      requestBody:
+        required: true
+        content:
+          'application/json':
+            schema:
+              type: 'object'
+              properties:
+                months:
+                  type: 'integer'
+                  minimum: 1
+                  maximum: 120
+                reason:
+                  type: 'string'
+                  minLength: 5
+                  maxLength: 2000
+              required:
+                - 'reason'
+      responses:
+        '200':
+          description: 'Erfolg'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/SuccessEnvelope'
+        '400':
+          description: 'VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 'UNAUTHORIZED — keine oder abgelaufene Sitzung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 'FORBIDDEN — angemeldet, aber ohne die nötige Berechtigung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: 'NOT_FOUND — nicht vorhanden, oder für diese Sitzung nicht sichtbar.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: 'BUSINESS_RULE — fachlich nicht zulässig, etwa eine bereits ausgestellte Rechnung ändern.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: 'RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+  '/api/contracts/{id}/versions':
+    post:
+      tags:
+        - 'Verträge'
+      summary: 'Neue Vertragsversion anlegen'
+      description: |-
+          Die neue Fassung entsteht als **Entwurf**; in Kraft tritt sie über `/activate`. Ohne `services` wird der Leistungsumfang der geltenden Fassung samt Einsatzplänen **kopiert** — eine Version, die auf die Leistungen ihrer Vorgängerin zeigte, wäre kein eigener Stand, sondern ein Zeiger, und eine spätere Änderung veränderte rückwirkend, was unter der alten Fassung galt. Ein zweiter offener Entwurf wird abgewiesen (422).
+
+          **Zugriff:** Erfordert die Berechtigung: `contract:version`.
+
+          **Rate-Limit-Klasse:** `apiWrite`
+      operationId: 'postContractsByIdVersions'
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: 'id'
+          in: 'path'
+          required: true
+          schema:
+            type: 'string'
+            minLength: 1
+      requestBody:
+        required: true
+        content:
+          'application/json':
+            schema:
+              type: 'object'
+              properties:
+                version:
+                  type: 'object'
+                  properties:
+                    effectiveFrom:
+                      type: 'string'
+                      pattern: '^\d{4}-\d{2}-\d{2}$'
+                    reason:
+                      type: 'string'
+                      minLength: 5
+                      maxLength: 2000
+                    minimumTermMonths:
+                      type: 'integer'
+                      minimum: 0
+                      maximum: 240
+                    renewalType:
+                      type: 'string'
+                      enum:
+                        - 'NONE'
+                        - 'AUTOMATIC'
+                        - 'MANUAL'
+                      default: 'NONE'
+                    renewalPeriodMonths:
+                      type: 'integer'
+                      minimum: 1
+                      maximum: 120
+                    noticePeriodDays:
+                      type: 'integer'
+                      minimum: 0
+                      maximum: 730
+                      default: 90
+                    billingCycle:
+                      type: 'string'
+                      enum:
+                        - 'PER_VISIT'
+                        - 'MONTHLY'
+                        - 'QUARTERLY'
+                        - 'SEMIANNUAL'
+                        - 'ANNUAL'
+                      default: 'MONTHLY'
+                    paymentTermDays:
+                      type: 'integer'
+                      minimum: 0
+                      maximum: 180
+                      default: 30
+                    currency:
+                      type: 'string'
+                      default: 'CHF'
+                    pricingModel:
+                      type: 'string'
+                      enum:
+                        - 'FIXED_PERIOD'
+                        - 'FIXED_PER_VISIT'
+                        - 'HOURLY'
+                        - 'UNIT_BASED'
+                        - 'CUSTOM'
+                      default: 'FIXED_PERIOD'
+                    baseAmount:
+                      type: 'number'
+                      minimum: 0
+                      maximum: 9999999
+                      default: 0
+                    hourlyRate:
+                      type: 'number'
+                      minimum: 0
+                      maximum: 9999999
+                    unitPrice:
+                      type: 'number'
+                      minimum: 0
+                      maximum: 999999
+                    unitLabel:
+                      type: 'string'
+                      maxLength: 40
+                    vatRate:
+                      type: 'number'
+                      minimum: 0
+                      maximum: 100
+                      default: 8.1
+                    indexReference:
+                      type: 'string'
+                      maxLength: 120
+                    indexBaseValue:
+                      type: 'number'
+                      minimum: 0
+                      maximum: 999999
+                    nextReviewAt:
+                      type: 'string'
+                      pattern: '^\d{4}-\d{2}-\d{2}$'
+                    targetQualityScore:
+                      type: 'integer'
+                      minimum: 0
+                      maximum: 100
+                    inspectionIntervalDays:
+                      type: 'integer'
+                      minimum: 1
+                      maximum: 3650
+                    responseHours:
+                      type: 'integer'
+                      minimum: 1
+                      maximum: 8760
+                    slaNote:
+                      type: 'string'
+                      maxLength: 2000
+                    terms:
+                      type: 'string'
+                      maxLength: 20000
+                    internalNote:
+                      type: 'string'
+                      maxLength: 4000
+                  required:
+                    - 'effectiveFrom'
+                    - 'reason'
+                services:
+                  type: 'array'
+                  items:
+                    type: 'object'
+                    properties:
+                      serviceId:
+                        anyOf:
+                          - type: 'string'
+                          - const: ''
+                      label:
+                        type: 'string'
+                        minLength: 2
+                        maxLength: 160
+                      description:
+                        type: 'string'
+                        maxLength: 2000
+                      buildingId:
+                        anyOf:
+                          - type: 'string'
+                          - const: ''
+                      zone:
+                        type: 'string'
+                        maxLength: 120
+                      estimatedMinutes:
+                        type: 'integer'
+                        minimum: 5
+                        maximum: 1440
+                        default: 120
+                      requiredCrewSize:
+                        type: 'integer'
+                        minimum: 1
+                        maximum: 50
+                        default: 1
+                      requiredSkills:
+                        type: 'array'
+                        items:
+                          type: 'string'
+                          minLength: 1
+                          maxLength: 60
+                        maxItems: 20
+                        default: []
+                      qualityRequirement:
+                        type: 'string'
+                        maxLength: 2000
+                      specialInstructions:
+                        type: 'string'
+                        maxLength: 2000
+                      materialsBy:
+                        type: 'string'
+                        enum:
+                          - 'PROVIDER'
+                          - 'CUSTOMER'
+                        default: 'PROVIDER'
+                      quantity:
+                        type: 'number'
+                        minimum: 0
+                        maximum: 9999999
+                      position:
+                        type: 'integer'
+                        minimum: 0
+                        maximum: 999
+                        default: 0
+                    required:
+                      - 'label'
+                  maxItems: 100
+              required:
+                - 'version'
+      responses:
+        '201':
+          description: 'Erfolg'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/SuccessEnvelope'
+        '400':
+          description: 'VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 'UNAUTHORIZED — keine oder abgelaufene Sitzung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 'FORBIDDEN — angemeldet, aber ohne die nötige Berechtigung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: 'NOT_FOUND — nicht vorhanden, oder für diese Sitzung nicht sichtbar.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '409':
+          description: 'CONFLICT — verstösst gegen eine Eindeutigkeitsregel.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: 'BUSINESS_RULE — fachlich nicht zulässig, etwa eine bereits ausgestellte Rechnung ändern.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: 'RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+  '/api/contracts/{id}/versions/{versionId}':
+    patch:
+      tags:
+        - 'Verträge'
+      summary: 'Versionsentwurf ändern'
+      description: |-
+          **Nur Entwürfe** (sonst 422). Der Preis eines laufenden Vertrags ist die Grundlage ausgestellter Rechnungen; wer ihn ändern will, legt eine neue Version an. Der Rumpf trägt die vollständigen Konditionen, nicht eine Teilmenge.
+
+          **Zugriff:** Erfordert die Berechtigung: `contract:version`.
+
+          **Rate-Limit-Klasse:** `apiWrite`
+      operationId: 'patchContractsByIdVersionsByVersionId'
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: 'id'
+          in: 'path'
+          required: true
+          schema:
+            type: 'string'
+            minLength: 1
+        - name: 'versionId'
+          in: 'path'
+          required: true
+          schema:
+            type: 'string'
+            minLength: 1
+      requestBody:
+        required: true
+        content:
+          'application/json':
+            schema:
+              type: 'object'
+              properties:
+                effectiveFrom:
+                  type: 'string'
+                  pattern: '^\d{4}-\d{2}-\d{2}$'
+                reason:
+                  type: 'string'
+                  minLength: 5
+                  maxLength: 2000
+                minimumTermMonths:
+                  type: 'integer'
+                  minimum: 0
+                  maximum: 240
+                renewalType:
+                  type: 'string'
+                  enum:
+                    - 'NONE'
+                    - 'AUTOMATIC'
+                    - 'MANUAL'
+                  default: 'NONE'
+                renewalPeriodMonths:
+                  type: 'integer'
+                  minimum: 1
+                  maximum: 120
+                noticePeriodDays:
+                  type: 'integer'
+                  minimum: 0
+                  maximum: 730
+                  default: 90
+                billingCycle:
+                  type: 'string'
+                  enum:
+                    - 'PER_VISIT'
+                    - 'MONTHLY'
+                    - 'QUARTERLY'
+                    - 'SEMIANNUAL'
+                    - 'ANNUAL'
+                  default: 'MONTHLY'
+                paymentTermDays:
+                  type: 'integer'
+                  minimum: 0
+                  maximum: 180
+                  default: 30
+                currency:
+                  type: 'string'
+                  default: 'CHF'
+                pricingModel:
+                  type: 'string'
+                  enum:
+                    - 'FIXED_PERIOD'
+                    - 'FIXED_PER_VISIT'
+                    - 'HOURLY'
+                    - 'UNIT_BASED'
+                    - 'CUSTOM'
+                  default: 'FIXED_PERIOD'
+                baseAmount:
+                  type: 'number'
+                  minimum: 0
+                  maximum: 9999999
+                  default: 0
+                hourlyRate:
+                  type: 'number'
+                  minimum: 0
+                  maximum: 9999999
+                unitPrice:
+                  type: 'number'
+                  minimum: 0
+                  maximum: 999999
+                unitLabel:
+                  type: 'string'
+                  maxLength: 40
+                vatRate:
+                  type: 'number'
+                  minimum: 0
+                  maximum: 100
+                  default: 8.1
+                indexReference:
+                  type: 'string'
+                  maxLength: 120
+                indexBaseValue:
+                  type: 'number'
+                  minimum: 0
+                  maximum: 999999
+                nextReviewAt:
+                  type: 'string'
+                  pattern: '^\d{4}-\d{2}-\d{2}$'
+                targetQualityScore:
+                  type: 'integer'
+                  minimum: 0
+                  maximum: 100
+                inspectionIntervalDays:
+                  type: 'integer'
+                  minimum: 1
+                  maximum: 3650
+                responseHours:
+                  type: 'integer'
+                  minimum: 1
+                  maximum: 8760
+                slaNote:
+                  type: 'string'
+                  maxLength: 2000
+                terms:
+                  type: 'string'
+                  maxLength: 20000
+                internalNote:
+                  type: 'string'
+                  maxLength: 4000
+              required:
+                - 'effectiveFrom'
+                - 'reason'
+      responses:
+        '200':
+          description: 'Erfolg'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/SuccessEnvelope'
+        '400':
+          description: 'VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 'UNAUTHORIZED — keine oder abgelaufene Sitzung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 'FORBIDDEN — angemeldet, aber ohne die nötige Berechtigung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: 'NOT_FOUND — nicht vorhanden, oder für diese Sitzung nicht sichtbar.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: 'BUSINESS_RULE — fachlich nicht zulässig, etwa eine bereits ausgestellte Rechnung ändern.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: 'RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+  '/api/contracts/{id}/versions/{versionId}/services':
+    put:
+      tags:
+        - 'Verträge'
+      summary: 'Leistungsumfang setzen'
+      description: |-
+          **`PUT` und als Ganzes** — dieselbe Entscheidung wie bei Qualifikationen und Arbeitszeiten: `PATCH` verspricht eine Teiländerung, und wer das erwartet, schickt eine Position und verliert die anderen. Nur auf einem Entwurf möglich; an den Leistungen einer geltenden Fassung hängen Einsatzpläne und Einsätze.
+
+          **Zugriff:** Erfordert die Berechtigung: `contract:version`.
+
+          **Rate-Limit-Klasse:** `apiWrite`
+      operationId: 'putContractsByIdVersionsByVersionIdServices'
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: 'id'
+          in: 'path'
+          required: true
+          schema:
+            type: 'string'
+            minLength: 1
+        - name: 'versionId'
+          in: 'path'
+          required: true
+          schema:
+            type: 'string'
+            minLength: 1
+      requestBody:
+        required: true
+        content:
+          'application/json':
+            schema:
+              type: 'object'
+              properties:
+                services:
+                  type: 'array'
+                  items:
+                    type: 'object'
+                    properties:
+                      serviceId:
+                        anyOf:
+                          - type: 'string'
+                          - const: ''
+                      label:
+                        type: 'string'
+                        minLength: 2
+                        maxLength: 160
+                      description:
+                        type: 'string'
+                        maxLength: 2000
+                      buildingId:
+                        anyOf:
+                          - type: 'string'
+                          - const: ''
+                      zone:
+                        type: 'string'
+                        maxLength: 120
+                      estimatedMinutes:
+                        type: 'integer'
+                        minimum: 5
+                        maximum: 1440
+                        default: 120
+                      requiredCrewSize:
+                        type: 'integer'
+                        minimum: 1
+                        maximum: 50
+                        default: 1
+                      requiredSkills:
+                        type: 'array'
+                        items:
+                          type: 'string'
+                          minLength: 1
+                          maxLength: 60
+                        maxItems: 20
+                        default: []
+                      qualityRequirement:
+                        type: 'string'
+                        maxLength: 2000
+                      specialInstructions:
+                        type: 'string'
+                        maxLength: 2000
+                      materialsBy:
+                        type: 'string'
+                        enum:
+                          - 'PROVIDER'
+                          - 'CUSTOMER'
+                        default: 'PROVIDER'
+                      quantity:
+                        type: 'number'
+                        minimum: 0
+                        maximum: 9999999
+                      position:
+                        type: 'integer'
+                        minimum: 0
+                        maximum: 999
+                        default: 0
+                    required:
+                      - 'label'
+                  maxItems: 100
+              required:
+                - 'services'
+      responses:
+        '200':
+          description: 'Erfolg'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/SuccessEnvelope'
+        '400':
+          description: 'VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 'UNAUTHORIZED — keine oder abgelaufene Sitzung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 'FORBIDDEN — angemeldet, aber ohne die nötige Berechtigung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: 'NOT_FOUND — nicht vorhanden, oder für diese Sitzung nicht sichtbar.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: 'BUSINESS_RULE — fachlich nicht zulässig, etwa eine bereits ausgestellte Rechnung ändern.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: 'RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+  '/api/contracts/{id}/schedule':
+    post:
+      tags:
+        - 'Verträge'
+      summary: 'Einsätze aus den Serien erzeugen'
+      description: |-
+          **Idempotent, und zwar in der Datenbank:** `@@unique([serviceScheduleId, scheduleDate])`. Der Planer *versucht* anzulegen und wertet einen Verstoss gegen den Index als „war schon da" — eine Prüfung im Code allein reichte nicht, weil zwischen „gibt es schon?" und `INSERT` ein Moment liegt, in den ein zweiter Lauf hineinpasst. Die Kennung ist der **Serientag**, nicht der tatsächliche Termin: Ein wegen eines Feiertags verschobener Einsatz behält ihn, sonst entstünde beim Nachtragen eines Feiertags ein zweiter. Die Antwort zeigt `angelegt` und `uebersprungen`; die zweite Zahl ist der Beweis. `probelauf: true` schreibt nichts.
+
+          **Zugriff:** Erfordert die Berechtigung: `contract:update`.
+
+          **Rate-Limit-Klasse:** `apiWrite`
+      operationId: 'postContractsByIdSchedule'
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: 'id'
+          in: 'path'
+          required: true
+          schema:
+            type: 'string'
+            minLength: 1
+      requestBody:
+        required: true
+        content:
+          'application/json':
+            schema:
+              type: 'object'
+              properties:
+                bis:
+                  type: 'string'
+                  pattern: '^\d{4}-\d{2}-\d{2}$'
+                probelauf:
+                  type: 'boolean'
+                  default: false
+              required:
+                - 'bis'
+      responses:
+        '200':
+          description: 'Erfolg'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/SuccessEnvelope'
+        '400':
+          description: 'VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 'UNAUTHORIZED — keine oder abgelaufene Sitzung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 'FORBIDDEN — angemeldet, aber ohne die nötige Berechtigung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: 'NOT_FOUND — nicht vorhanden, oder für diese Sitzung nicht sichtbar.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: 'BUSINESS_RULE — fachlich nicht zulässig, etwa eine bereits ausgestellte Rechnung ändern.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: 'RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+  '/api/contracts/{id}/billing-basis':
+    get:
+      tags:
+        - 'Verträge'
+      summary: 'Abrechnungsgrundlage einer Periode'
+      description: |-
+          **Rechnet, schreibt nichts** — die Rechnung entsteht über den Rechnungsdienst, damit Nummernkreis und Belegregeln an einer Stelle bleiben. Geliefert wird die Herleitung mit jeder Zwischengrösse; jede Position trägt ihre **Vertragsversion**, weil eine Summe ohne diese Zuordnung bei einem geänderten Vertrag nicht mehr prüfbar ist. Gezählt werden nur abgeschlossene und geprüfte Einsätze, bei Stundenabrechnung nur freigegebene Zeiten.
+
+          **Zugriff:** Erfordert die Berechtigung: `contract:billing`.
+
+          **Rate-Limit-Klasse:** `apiRead`
+      operationId: 'getContractsByIdBillingBasis'
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: 'id'
+          in: 'path'
+          required: true
+          schema:
+            type: 'string'
+            minLength: 1
+        - name: 'von'
+          in: 'query'
+          required: true
+          schema:
+            type: 'string'
+            format: 'date-time'
+        - name: 'bis'
+          in: 'query'
+          required: true
+          schema:
+            type: 'string'
+            format: 'date-time'
+      responses:
+        '200':
+          description: 'Erfolg'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/SuccessEnvelope'
+        '400':
+          description: 'VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 'UNAUTHORIZED — keine oder abgelaufene Sitzung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 'FORBIDDEN — angemeldet, aber ohne die nötige Berechtigung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: 'NOT_FOUND — nicht vorhanden, oder für diese Sitzung nicht sichtbar.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: 'RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+  '/api/contracts/{id}/amendments':
+    post:
+      tags:
+        - 'Verträge'
+      summary: 'Vertragsänderung beantragen'
+      description: |-
+          **Der Antrag ist nicht die Änderung.** Er durchläuft Prüfung und Freigabe und wird erst dann wirksam, indem er eine neue Version erzeugt. Die Version allein sagt nur, *dass* sich etwas geändert hat — warum, auf wessen Wunsch und mit wessen Zustimmung steht im Antrag. Ein zweiter offener Antrag wird abgewiesen (422).
+
+          **Zugriff:** Erfordert die Berechtigung: `contract:version`.
+
+          **Rate-Limit-Klasse:** `apiWrite`
+      operationId: 'postContractsByIdAmendments'
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: 'id'
+          in: 'path'
+          required: true
+          schema:
+            type: 'string'
+            minLength: 1
+      requestBody:
+        required: true
+        content:
+          'application/json':
+            schema:
+              type: 'object'
+              properties:
+                type:
+                  type: 'string'
+                  enum:
+                    - 'SCOPE'
+                    - 'PRICE'
+                    - 'FREQUENCY'
+                    - 'TERM'
+                    - 'SLA'
+                    - 'PAYMENT_TERMS'
+                    - 'INDEXATION'
+                    - 'OTHER'
+                title:
+                  type: 'string'
+                  minLength: 3
+                  maxLength: 160
+                description:
+                  type: 'string'
+                  maxLength: 4000
+                reason:
+                  type: 'string'
+                  minLength: 5
+                  maxLength: 2000
+                effectiveFrom:
+                  type: 'string'
+                  pattern: '^\d{4}-\d{2}-\d{2}$'
+              required:
+                - 'type'
+                - 'title'
+                - 'reason'
+                - 'effectiveFrom'
+      responses:
+        '201':
+          description: 'Erfolg'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/SuccessEnvelope'
+        '400':
+          description: 'VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 'UNAUTHORIZED — keine oder abgelaufene Sitzung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 'FORBIDDEN — angemeldet, aber ohne die nötige Berechtigung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: 'NOT_FOUND — nicht vorhanden, oder für diese Sitzung nicht sichtbar.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '409':
+          description: 'CONFLICT — verstösst gegen eine Eindeutigkeitsregel.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: 'BUSINESS_RULE — fachlich nicht zulässig, etwa eine bereits ausgestellte Rechnung ändern.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: 'RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+  '/api/contracts/{id}/amendments/{amendmentId}/decision':
+    post:
+      tags:
+        - 'Verträge'
+      summary: 'Änderungsantrag freigeben oder ablehnen'
+      description: |-
+          **Vier-Augen-Prinzip, zweimal abgesichert:** im Rechteschnitt (`contract:version` hat die Betriebsleitung, `contract:approve` nicht) und im Dienst — wer den Antrag gestellt hat, kann ihn nicht selbst freigeben (422). Der Rechteschnitt allein reichte nicht, weil die Administration beide Rechte hat.
+
+          **Zugriff:** Erfordert die Berechtigung: `contract:approve`.
+
+          **Rate-Limit-Klasse:** `apiWrite`
+      operationId: 'postContractsByIdAmendmentsByAmendmentIdDecision'
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: 'id'
+          in: 'path'
+          required: true
+          schema:
+            type: 'string'
+            minLength: 1
+        - name: 'amendmentId'
+          in: 'path'
+          required: true
+          schema:
+            type: 'string'
+            minLength: 1
+      requestBody:
+        required: true
+        content:
+          'application/json':
+            schema:
+              type: 'object'
+              properties:
+                entscheidung:
+                  type: 'string'
+                  enum:
+                    - 'APPROVE'
+                    - 'REJECT'
+                reason:
+                  type: 'string'
+                  maxLength: 2000
+              required:
+                - 'entscheidung'
+      responses:
+        '200':
+          description: 'Erfolg'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/SuccessEnvelope'
+        '400':
+          description: 'VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 'UNAUTHORIZED — keine oder abgelaufene Sitzung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 'FORBIDDEN — angemeldet, aber ohne die nötige Berechtigung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: 'NOT_FOUND — nicht vorhanden, oder für diese Sitzung nicht sichtbar.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: 'BUSINESS_RULE — fachlich nicht zulässig, etwa eine bereits ausgestellte Rechnung ändern.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: 'RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+  '/api/contracts/{id}/amendments/{amendmentId}/apply':
+    post:
+      tags:
+        - 'Verträge'
+      summary: 'Änderungsantrag wirksam machen'
+      description: |-
+          Erzeugt aus dem freigegebenen Antrag eine neue Vertragsversion **im Entwurf**; in Kraft tritt sie über `/activate`. Danach trägt der Antrag beide Versionen — die abgelöste und die neue —, damit „was genau hat sich geändert" beantwortbar bleibt. Der Rumpf trägt die vollständigen neuen Konditionen.
+
+          **Zugriff:** Erfordert die Berechtigung: `contract:version`.
+
+          **Rate-Limit-Klasse:** `apiWrite`
+      operationId: 'postContractsByIdAmendmentsByAmendmentIdApply'
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: 'id'
+          in: 'path'
+          required: true
+          schema:
+            type: 'string'
+            minLength: 1
+        - name: 'amendmentId'
+          in: 'path'
+          required: true
+          schema:
+            type: 'string'
+            minLength: 1
+      requestBody:
+        required: true
+        content:
+          'application/json':
+            schema:
+              type: 'object'
+              properties:
+                version:
+                  type: 'object'
+                  properties:
+                    effectiveFrom:
+                      type: 'string'
+                      pattern: '^\d{4}-\d{2}-\d{2}$'
+                    reason:
+                      type: 'string'
+                      minLength: 5
+                      maxLength: 2000
+                    minimumTermMonths:
+                      type: 'integer'
+                      minimum: 0
+                      maximum: 240
+                    renewalType:
+                      type: 'string'
+                      enum:
+                        - 'NONE'
+                        - 'AUTOMATIC'
+                        - 'MANUAL'
+                      default: 'NONE'
+                    renewalPeriodMonths:
+                      type: 'integer'
+                      minimum: 1
+                      maximum: 120
+                    noticePeriodDays:
+                      type: 'integer'
+                      minimum: 0
+                      maximum: 730
+                      default: 90
+                    billingCycle:
+                      type: 'string'
+                      enum:
+                        - 'PER_VISIT'
+                        - 'MONTHLY'
+                        - 'QUARTERLY'
+                        - 'SEMIANNUAL'
+                        - 'ANNUAL'
+                      default: 'MONTHLY'
+                    paymentTermDays:
+                      type: 'integer'
+                      minimum: 0
+                      maximum: 180
+                      default: 30
+                    currency:
+                      type: 'string'
+                      default: 'CHF'
+                    pricingModel:
+                      type: 'string'
+                      enum:
+                        - 'FIXED_PERIOD'
+                        - 'FIXED_PER_VISIT'
+                        - 'HOURLY'
+                        - 'UNIT_BASED'
+                        - 'CUSTOM'
+                      default: 'FIXED_PERIOD'
+                    baseAmount:
+                      type: 'number'
+                      minimum: 0
+                      maximum: 9999999
+                      default: 0
+                    hourlyRate:
+                      type: 'number'
+                      minimum: 0
+                      maximum: 9999999
+                    unitPrice:
+                      type: 'number'
+                      minimum: 0
+                      maximum: 999999
+                    unitLabel:
+                      type: 'string'
+                      maxLength: 40
+                    vatRate:
+                      type: 'number'
+                      minimum: 0
+                      maximum: 100
+                      default: 8.1
+                    indexReference:
+                      type: 'string'
+                      maxLength: 120
+                    indexBaseValue:
+                      type: 'number'
+                      minimum: 0
+                      maximum: 999999
+                    nextReviewAt:
+                      type: 'string'
+                      pattern: '^\d{4}-\d{2}-\d{2}$'
+                    targetQualityScore:
+                      type: 'integer'
+                      minimum: 0
+                      maximum: 100
+                    inspectionIntervalDays:
+                      type: 'integer'
+                      minimum: 1
+                      maximum: 3650
+                    responseHours:
+                      type: 'integer'
+                      minimum: 1
+                      maximum: 8760
+                    slaNote:
+                      type: 'string'
+                      maxLength: 2000
+                    terms:
+                      type: 'string'
+                      maxLength: 20000
+                    internalNote:
+                      type: 'string'
+                      maxLength: 4000
+                  required:
+                    - 'effectiveFrom'
+                    - 'reason'
+                services:
+                  type: 'array'
+                  items:
+                    type: 'object'
+                    properties:
+                      serviceId:
+                        anyOf:
+                          - type: 'string'
+                          - const: ''
+                      label:
+                        type: 'string'
+                        minLength: 2
+                        maxLength: 160
+                      description:
+                        type: 'string'
+                        maxLength: 2000
+                      buildingId:
+                        anyOf:
+                          - type: 'string'
+                          - const: ''
+                      zone:
+                        type: 'string'
+                        maxLength: 120
+                      estimatedMinutes:
+                        type: 'integer'
+                        minimum: 5
+                        maximum: 1440
+                        default: 120
+                      requiredCrewSize:
+                        type: 'integer'
+                        minimum: 1
+                        maximum: 50
+                        default: 1
+                      requiredSkills:
+                        type: 'array'
+                        items:
+                          type: 'string'
+                          minLength: 1
+                          maxLength: 60
+                        maxItems: 20
+                        default: []
+                      qualityRequirement:
+                        type: 'string'
+                        maxLength: 2000
+                      specialInstructions:
+                        type: 'string'
+                        maxLength: 2000
+                      materialsBy:
+                        type: 'string'
+                        enum:
+                          - 'PROVIDER'
+                          - 'CUSTOMER'
+                        default: 'PROVIDER'
+                      quantity:
+                        type: 'number'
+                        minimum: 0
+                        maximum: 9999999
+                      position:
+                        type: 'integer'
+                        minimum: 0
+                        maximum: 999
+                        default: 0
+                    required:
+                      - 'label'
+                  maxItems: 100
+              required:
+                - 'version'
+      responses:
+        '201':
+          description: 'Erfolg'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/SuccessEnvelope'
+        '400':
+          description: 'VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 'UNAUTHORIZED — keine oder abgelaufene Sitzung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 'FORBIDDEN — angemeldet, aber ohne die nötige Berechtigung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: 'NOT_FOUND — nicht vorhanden, oder für diese Sitzung nicht sichtbar.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '409':
+          description: 'CONFLICT — verstösst gegen eine Eindeutigkeitsregel.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: 'BUSINESS_RULE — fachlich nicht zulässig, etwa eine bereits ausgestellte Rechnung ändern.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: 'RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+  '/api/contracts/{id}/price-adjustments':
+    post:
+      tags:
+        - 'Verträge'
+      summary: 'Preisanpassung vorschlagen'
+      description: |-
+          **Keine Behauptung über Indexierung.** Ob und wie indexiert wird, steht im Vertrag; dieses Modul erfindet keine Regel und ruft keinen Index ab. Eine automatische Erhöhung findet nicht statt. `oldAmount` ist kein Feld der Anfrage — der bisherige Betrag steht in der geltenden Version, und ihn mitschicken zu lassen hiesse, dem Client zu erlauben, die Vergangenheit zu behaupten.
+
+          **Zugriff:** Erfordert die Berechtigung: `contract:version`.
+
+          **Rate-Limit-Klasse:** `apiWrite`
+      operationId: 'postContractsByIdPriceAdjustments'
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: 'id'
+          in: 'path'
+          required: true
+          schema:
+            type: 'string'
+            minLength: 1
+      requestBody:
+        required: true
+        content:
+          'application/json':
+            schema:
+              type: 'object'
+              properties:
+                effectiveFrom:
+                  type: 'string'
+                  pattern: '^\d{4}-\d{2}-\d{2}$'
+                reviewDueAt:
+                  type: 'string'
+                  pattern: '^\d{4}-\d{2}-\d{2}$'
+                newAmount:
+                  type: 'number'
+                  minimum: 0
+                  maximum: 9999999
+                percent:
+                  type: 'number'
+                  minimum: -100
+                  maximum: 1000
+                indexReference:
+                  type: 'string'
+                  maxLength: 120
+                indexOldValue:
+                  type: 'number'
+                  minimum: 0
+                  maximum: 999999
+                indexNewValue:
+                  type: 'number'
+                  minimum: 0
+                  maximum: 999999
+                reason:
+                  type: 'string'
+                  minLength: 5
+                  maxLength: 2000
+              required:
+                - 'effectiveFrom'
+                - 'newAmount'
+                - 'reason'
+      responses:
+        '201':
+          description: 'Erfolg'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/SuccessEnvelope'
+        '400':
+          description: 'VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 'UNAUTHORIZED — keine oder abgelaufene Sitzung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 'FORBIDDEN — angemeldet, aber ohne die nötige Berechtigung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: 'NOT_FOUND — nicht vorhanden, oder für diese Sitzung nicht sichtbar.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '409':
+          description: 'CONFLICT — verstösst gegen eine Eindeutigkeitsregel.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: 'BUSINESS_RULE — fachlich nicht zulässig, etwa eine bereits ausgestellte Rechnung ändern.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: 'RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+  '/api/contracts/{id}/price-adjustments/{adjustmentId}/decision':
+    post:
+      tags:
+        - 'Verträge'
+      summary: 'Preisanpassung freigeben oder ablehnen'
+      description: |-
+          Wer vorgeschlagen hat, kann nicht selbst zustimmen (422). Bei einer Preiserhöhung ist das keine Formsache: Sie geht an die Kundschaft hinaus.
+
+          **Zugriff:** Erfordert die Berechtigung: `contract:approve`.
+
+          **Rate-Limit-Klasse:** `apiWrite`
+      operationId: 'postContractsByIdPriceAdjustmentsByAdjustmentIdDecision'
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: 'id'
+          in: 'path'
+          required: true
+          schema:
+            type: 'string'
+            minLength: 1
+        - name: 'adjustmentId'
+          in: 'path'
+          required: true
+          schema:
+            type: 'string'
+            minLength: 1
+      requestBody:
+        required: true
+        content:
+          'application/json':
+            schema:
+              type: 'object'
+              properties:
+                entscheidung:
+                  type: 'string'
+                  enum:
+                    - 'APPROVE'
+                    - 'REJECT'
+                reason:
+                  type: 'string'
+                  maxLength: 2000
+              required:
+                - 'entscheidung'
+      responses:
+        '200':
+          description: 'Erfolg'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/SuccessEnvelope'
+        '400':
+          description: 'VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 'UNAUTHORIZED — keine oder abgelaufene Sitzung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 'FORBIDDEN — angemeldet, aber ohne die nötige Berechtigung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: 'NOT_FOUND — nicht vorhanden, oder für diese Sitzung nicht sichtbar.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: 'BUSINESS_RULE — fachlich nicht zulässig, etwa eine bereits ausgestellte Rechnung ändern.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: 'RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+  '/api/contracts/{id}/price-adjustments/{adjustmentId}/apply':
+    post:
+      tags:
+        - 'Verträge'
+      summary: 'Preisanpassung wirksam machen'
+      description: |-
+          **Kein Rumpf**, und das ist der Punkt: Die neue Version übernimmt alle Konditionen der geltenden Fassung und ändert genau einen Wert. Ein Rumpf hier lüde ein, „bei der Gelegenheit" noch etwas zu verschieben — dann wäre es keine Preisanpassung mehr.
+
+          **Zugriff:** Erfordert die Berechtigung: `contract:version`.
+
+          **Rate-Limit-Klasse:** `apiWrite`
+      operationId: 'postContractsByIdPriceAdjustmentsByAdjustmentIdApply'
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: 'id'
+          in: 'path'
+          required: true
+          schema:
+            type: 'string'
+            minLength: 1
+        - name: 'adjustmentId'
+          in: 'path'
+          required: true
+          schema:
+            type: 'string'
+            minLength: 1
+      responses:
+        '201':
+          description: 'Erfolg'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/SuccessEnvelope'
+        '400':
+          description: 'VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 'UNAUTHORIZED — keine oder abgelaufene Sitzung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 'FORBIDDEN — angemeldet, aber ohne die nötige Berechtigung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: 'NOT_FOUND — nicht vorhanden, oder für diese Sitzung nicht sichtbar.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '409':
+          description: 'CONFLICT — verstösst gegen eine Eindeutigkeitsregel.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: 'BUSINESS_RULE — fachlich nicht zulässig, etwa eine bereits ausgestellte Rechnung ändern.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: 'RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+  '/api/contract-services/{id}/schedules':
+    post:
+      tags:
+        - 'Verträge'
+      summary: 'Einsatzplan anlegen'
+      description: |-
+          Mehrere Pläne je Leistung sind der Normalfall: „Büro Mo/Mi/Fr früh" und „Treppenhaus jeden zweiten Dienstag" sind zwei Serien derselben Position. Die Mandantenprüfung läuft über die ganze Kette Leistung → Version → Vertrag → Organisation.
+
+          **Zugriff:** Erfordert die Berechtigung: `contract:version`.
+
+          **Rate-Limit-Klasse:** `apiWrite`
+      operationId: 'postContractServicesByIdSchedules'
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: 'id'
+          in: 'path'
+          required: true
+          schema:
+            type: 'string'
+            minLength: 1
+      requestBody:
+        required: true
+        content:
+          'application/json':
+            schema:
+              type: 'object'
+              properties:
+                frequency:
+                  type: 'string'
+                  enum:
+                    - 'WEEKLY'
+                    - 'BIWEEKLY'
+                    - 'MONTHLY'
+                    - 'QUARTERLY'
+                    - 'SEMIANNUAL'
+                    - 'ANNUAL'
+                  default: 'WEEKLY'
+                interval:
+                  type: 'integer'
+                  minimum: 1
+                  maximum: 52
+                  default: 1
+                weekdays:
+                  type: 'array'
+                  items:
+                    type: 'integer'
+                    minimum: 0
+                    maximum: 6
+                  maxItems: 7
+                  default: []
+                monthDay:
+                  type: 'integer'
+                  minimum: 1
+                  maximum: 31
+                startMinute:
+                  type: 'integer'
+                  minimum: 0
+                  maximum: 1439
+                  default: 360
+                endMinute:
+                  type: 'integer'
+                  minimum: 0
+                  maximum: 1439
+                  default: 600
+                effectiveFrom:
+                  type: 'string'
+                  pattern: '^\d{4}-\d{2}-\d{2}$'
+                effectiveUntil:
+                  type: 'string'
+                  pattern: '^\d{4}-\d{2}-\d{2}$'
+                holidayHandling:
+                  type: 'string'
+                  enum:
+                    - 'IGNORE'
+                    - 'SKIP'
+                    - 'MOVE_BEFORE'
+                    - 'MOVE_AFTER'
+                  default: 'SKIP'
+                active:
+                  type: 'boolean'
+                  default: true
+              required:
+                - 'effectiveFrom'
+      responses:
+        '201':
+          description: 'Erfolg'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/SuccessEnvelope'
+        '400':
+          description: 'VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 'UNAUTHORIZED — keine oder abgelaufene Sitzung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 'FORBIDDEN — angemeldet, aber ohne die nötige Berechtigung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: 'NOT_FOUND — nicht vorhanden, oder für diese Sitzung nicht sichtbar.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '409':
+          description: 'CONFLICT — verstösst gegen eine Eindeutigkeitsregel.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: 'BUSINESS_RULE — fachlich nicht zulässig, etwa eine bereits ausgestellte Rechnung ändern.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: 'RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+  '/api/contract-schedules/{id}':
+    patch:
+      tags:
+        - 'Verträge'
+      summary: 'Einsatzplan ändern'
+      description: |-
+          Bereits erzeugte Einsätze bleiben unberührt — sie sind disponiert, vielleicht schon angekündigt. Die Änderung wirkt ab dem nächsten Planungslauf und, weil `generatedUntil` stehen bleibt, erst jenseits des bereits geplanten Zeitraums. Wer früher wirken will, verschiebt einzelne Termine über eine Ausnahme.
+
+          **Zugriff:** Erfordert die Berechtigung: `contract:version`.
+
+          **Rate-Limit-Klasse:** `apiWrite`
+      operationId: 'patchContractSchedulesById'
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: 'id'
+          in: 'path'
+          required: true
+          schema:
+            type: 'string'
+            minLength: 1
+      requestBody:
+        required: true
+        content:
+          'application/json':
+            schema:
+              type: 'object'
+              properties:
+                frequency:
+                  type: 'string'
+                  enum:
+                    - 'WEEKLY'
+                    - 'BIWEEKLY'
+                    - 'MONTHLY'
+                    - 'QUARTERLY'
+                    - 'SEMIANNUAL'
+                    - 'ANNUAL'
+                  default: 'WEEKLY'
+                interval:
+                  type: 'integer'
+                  minimum: 1
+                  maximum: 52
+                  default: 1
+                weekdays:
+                  type: 'array'
+                  items:
+                    type: 'integer'
+                    minimum: 0
+                    maximum: 6
+                  maxItems: 7
+                  default: []
+                monthDay:
+                  type: 'integer'
+                  minimum: 1
+                  maximum: 31
+                startMinute:
+                  type: 'integer'
+                  minimum: 0
+                  maximum: 1439
+                  default: 360
+                endMinute:
+                  type: 'integer'
+                  minimum: 0
+                  maximum: 1439
+                  default: 600
+                effectiveFrom:
+                  type: 'string'
+                  pattern: '^\d{4}-\d{2}-\d{2}$'
+                effectiveUntil:
+                  type: 'string'
+                  pattern: '^\d{4}-\d{2}-\d{2}$'
+                holidayHandling:
+                  type: 'string'
+                  enum:
+                    - 'IGNORE'
+                    - 'SKIP'
+                    - 'MOVE_BEFORE'
+                    - 'MOVE_AFTER'
+                  default: 'SKIP'
+                active:
+                  type: 'boolean'
+                  default: true
+              required:
+                - 'effectiveFrom'
+      responses:
+        '200':
+          description: 'Erfolg'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/SuccessEnvelope'
+        '400':
+          description: 'VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 'UNAUTHORIZED — keine oder abgelaufene Sitzung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 'FORBIDDEN — angemeldet, aber ohne die nötige Berechtigung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: 'NOT_FOUND — nicht vorhanden, oder für diese Sitzung nicht sichtbar.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: 'BUSINESS_RULE — fachlich nicht zulässig, etwa eine bereits ausgestellte Rechnung ändern.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: 'RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+    delete:
+      tags:
+        - 'Verträge'
+      summary: 'Einsatzplan entfernen'
+      description: |-
+          Hängen bereits Einsätze daran, wird der Plan **stillgelegt statt gelöscht** und zurückgegeben (200 statt 204). Sonst verlören die Einsätze ihre Herkunft, und „aus welchem Plan kam dieser Termin" wäre für immer unbeantwortbar.
+
+          **Zugriff:** Erfordert die Berechtigung: `contract:version`.
+
+          **Rate-Limit-Klasse:** `apiWrite`
+      operationId: 'deleteContractSchedulesById'
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: 'id'
+          in: 'path'
+          required: true
+          schema:
+            type: 'string'
+            minLength: 1
+      responses:
+        '200':
+          description: 'Erfolg'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/SuccessEnvelope'
+        '400':
+          description: 'VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 'UNAUTHORIZED — keine oder abgelaufene Sitzung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 'FORBIDDEN — angemeldet, aber ohne die nötige Berechtigung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: 'NOT_FOUND — nicht vorhanden, oder für diese Sitzung nicht sichtbar.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: 'BUSINESS_RULE — fachlich nicht zulässig, etwa eine bereits ausgestellte Rechnung ändern.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: 'RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+  '/api/contract-schedules/{id}/exceptions':
+    post:
+      tags:
+        - 'Verträge'
+      summary: 'Einzelnen Termin aussetzen, verschieben oder ansetzen'
+      description: |-
+          Eine Ausnahme ist keine Regeländerung: Wer wegen Betriebsferien einen Termin verschiebt, will nicht den Vertrag ändern — und eine Regeländerung wäre eine neue Vertragsversion. Deshalb `contract:update` und nicht `contract:version`. Eine Ausnahme je Serientag; ein zweiter Eintrag für denselben Tag ersetzt den ersten.
+
+          **Zugriff:** Erfordert die Berechtigung: `contract:update`.
+
+          **Rate-Limit-Klasse:** `apiWrite`
+      operationId: 'postContractSchedulesByIdExceptions'
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: 'id'
+          in: 'path'
+          required: true
+          schema:
+            type: 'string'
+            minLength: 1
+      requestBody:
+        required: true
+        content:
+          'application/json':
+            schema:
+              type: 'object'
+              properties:
+                kind:
+                  type: 'string'
+                  enum:
+                    - 'SKIP'
+                    - 'MOVE'
+                    - 'EXTRA'
+                originalDate:
+                  type: 'string'
+                  pattern: '^\d{4}-\d{2}-\d{2}$'
+                newDate:
+                  type: 'string'
+                  pattern: '^\d{4}-\d{2}-\d{2}$'
+                reason:
+                  type: 'string'
+                  maxLength: 500
+              required:
+                - 'kind'
+                - 'originalDate'
+      responses:
+        '201':
+          description: 'Erfolg'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/SuccessEnvelope'
+        '400':
+          description: 'VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 'UNAUTHORIZED — keine oder abgelaufene Sitzung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 'FORBIDDEN — angemeldet, aber ohne die nötige Berechtigung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: 'NOT_FOUND — nicht vorhanden, oder für diese Sitzung nicht sichtbar.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '409':
+          description: 'CONFLICT — verstösst gegen eine Eindeutigkeitsregel.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: 'BUSINESS_RULE — fachlich nicht zulässig, etwa eine bereits ausgestellte Rechnung ändern.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: 'RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
           content:
             'application/json':
               schema:

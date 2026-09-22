@@ -125,6 +125,24 @@ export const PERMISSIONS = [
   'quote:convert',
   'quote:read_own',
   'quote:respond_own',
+
+  // --- Verträge (Wave 10) ---------------------------------------------------
+  // Die Schreibrechte sind feiner zerlegt als bei Offerten, und das ist kein
+  // Selbstzweck: Ein Vertrag anlegen, eine Version freigeben, einen Vertrag
+  // aktivieren und einen Vertrag kündigen sind vier Entscheidungen mit ganz
+  // verschiedener Tragweite. Wer den Entwurf schreibt, soll ihn nicht auch in
+  // Kraft setzen können.
+  'contract:read',
+  'contract:create',
+  'contract:update',
+  'contract:delete_draft',
+  'contract:version',
+  'contract:approve',
+  'contract:activate',
+  'contract:terminate',
+  'contract:sign',
+  'contract:billing',
+  'contract:read_own',
   'job:read',
   'job:create',
   'job:update',
@@ -411,6 +429,17 @@ export const PERMISSION_META: Record<Permission, PermissionMeta> = {
   'quote:send': { label: 'Quotes.Send', group: 'Betrieb', description: 'Offerten an die Kundschaft versenden.' },
   'quote:convert': { label: 'Quotes.Convert', group: 'Betrieb', description: 'Angenommene Offerten in Aufträge und Rechnungen überführen.' },
   'quote:read_own': { label: 'Quotes.ViewOwn', group: 'Betrieb', description: 'Die eigenen Offerten einsehen.', scoped: true },
+  'contract:read': { label: 'Contracts.View', group: 'Betrieb', description: 'Verträge, Versionen und Einsatzpläne einsehen.' },
+  'contract:create': { label: 'Contracts.Create', group: 'Betrieb', description: 'Vertragsentwürfe anlegen — auch aus einer angenommenen Offerte.' },
+  'contract:update': { label: 'Contracts.Edit', group: 'Betrieb', description: 'Kopfdaten und Entwürfe ändern. Nicht die Konditionen eines laufenden Vertrags.' },
+  'contract:delete_draft': { label: 'Contracts.DeleteDraft', group: 'Betrieb', description: 'Einen Vertragsentwurf verwerfen. Ein Vertrag, der je aktiv war, lässt sich nicht löschen.' },
+  'contract:version': { label: 'Contracts.Version', group: 'Betrieb', description: 'Eine neue Vertragsversion anlegen und Änderungsanträge stellen.' },
+  'contract:approve': { label: 'Contracts.Approve', group: 'Betrieb', description: 'Änderungsanträge und Preisanpassungen freigeben oder ablehnen.' },
+  'contract:activate': { label: 'Contracts.Activate', group: 'Betrieb', description: 'Einen Vertrag in Kraft setzen, pausieren und wieder aufnehmen.' },
+  'contract:terminate': { label: 'Contracts.Terminate', group: 'Betrieb', description: 'Eine Kündigung erfassen und den Vertrag beenden.' },
+  'contract:sign': { label: 'Contracts.Sign', group: 'Betrieb', description: 'Eine Vertragsversion zur elektronischen Unterzeichnung geben.' },
+  'contract:billing': { label: 'Contracts.Billing', group: 'Betrieb', description: 'Aus einem Vertrag abrechnen und Abrechnungsangaben einsehen.' },
+  'contract:read_own': { label: 'Contracts.ViewOwn', group: 'Betrieb', description: 'Die eigenen Verträge einsehen.', scoped: true },
   'quote:respond_own': { label: 'Quotes.RespondOwn', group: 'Betrieb', description: 'Eine Offerte annehmen oder ablehnen.', scoped: true },
   'job:read': { label: 'Jobs.View', group: 'Betrieb', description: 'Alle Einsätze einsehen.' },
   'job:create': { label: 'Jobs.Create', group: 'Betrieb', description: 'Einsätze anlegen.' },

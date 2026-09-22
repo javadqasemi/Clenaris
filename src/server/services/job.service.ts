@@ -1739,6 +1739,8 @@ export async function listJobs(filter: {
   status?: Job['status'];
   employeeId?: string;
   customerId?: string;
+  /** Alle Einsätze, die aus einem Vertrag entstanden sind (Wave 10). */
+  contractId?: string;
   from?: Date;
   to?: Date;
   q?: string;
@@ -1752,6 +1754,7 @@ export async function listJobs(filter: {
     deletedAt: null,
     ...(filter.status ? { status: filter.status } : {}),
     ...(filter.customerId ? { customerId: filter.customerId } : {}),
+    ...(filter.contractId ? { contractId: filter.contractId } : {}),
     ...(filter.employeeId ? { assignments: { some: { employeeId: filter.employeeId } } } : {}),
     ...(filter.from || filter.to
       ? {

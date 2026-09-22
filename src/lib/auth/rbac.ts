@@ -76,6 +76,10 @@ const CUSTOMER_PERMISSIONS: Permission[] = [
   'booking:write_own',
   'quote:read_own',
   'quote:respond_own',
+  // Die eigenen Verträge einsehen — Laufzeit, Leistungen, Termine, Preis.
+  // Ein Dauerschuldverhältnis, dessen Inhalt die Kundschaft im Kundenbereich
+  // nicht nachlesen kann, ist eine Bringschuld, die auf Anruf hinausläuft.
+  'contract:read_own',
   'invoice:read_own',
   'invoice:pay_own',
   'property:read',
@@ -145,6 +149,17 @@ const MANAGER_PERMISSIONS: Permission[] = [
 
   'booking:read', 'booking:create', 'booking:update', 'booking:delete',
   'quote:read', 'quote:create', 'quote:update', 'quote:delete', 'quote:send', 'quote:convert',
+  // Verträge: vorbereiten ja, in Kraft setzen nein.
+  //
+  // Dieselbe Linie wie bei Preisen und Website, nur schärfer: Ein Vertrag
+  // bindet den Betrieb über Monate. Entwerfen, ändern, eine neue Version
+  // vorschlagen und daraus abrechnen gehört zum Tagesgeschäft. **Aktivieren,
+  // freigeben, zur Unterschrift geben und kündigen** sind vier Zusagen nach
+  // aussen — die trifft die Geschäftsleitung. Wer eine Änderung vorschlägt,
+  // soll sie nicht selbst genehmigen; das ist das Vier-Augen-Prinzip und der
+  // eigentliche Grund für die feine Zerlegung dieser Rechte.
+  'contract:read', 'contract:create', 'contract:update', 'contract:delete_draft',
+  'contract:version', 'contract:billing',
   'job:read', 'job:create', 'job:update', 'job:delete', 'job:assign', 'job:dispatch',
   'serviceArea:read',
 

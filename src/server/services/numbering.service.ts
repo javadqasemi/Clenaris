@@ -16,7 +16,16 @@ import { prisma, type Tx } from '@/lib/db';
  * Format: PREFIX-JAHR-LAUFNUMMER, z. B. RE-2026-00042
  */
 
-export type SequenceScope = 'invoice' | 'quote' | 'booking' | 'job' | 'credit_note' | 'customer' | 'lead' | 'employee';
+export type SequenceScope =
+  | 'invoice'
+  | 'quote'
+  | 'booking'
+  | 'job'
+  | 'credit_note'
+  | 'customer'
+  | 'lead'
+  | 'employee'
+  | 'contract';
 
 const PREFIX_FIELD: Record<SequenceScope, string> = {
   invoice: 'invoiceNumberPrefix',
@@ -27,12 +36,21 @@ const PREFIX_FIELD: Record<SequenceScope, string> = {
   customer: '',
   lead: '',
   employee: '',
+  contract: '',
 };
 
 const STATIC_PREFIX: Partial<Record<SequenceScope, string>> = {
   customer: 'K',
   lead: 'L',
   employee: 'MA',
+  /**
+   * Fester Präfix statt einer Spalte in `Organization` — wie bei Kundschaft,
+   * Anfragen und Personal. Die einstellbaren Präfixe gibt es für die Belege,
+   * die nach aussen gehen und auf denen ein Betrieb sein eigenes Schema
+   * gewohnt ist. Eine Vertragsnummer ist eine interne Kennung; eine weitere
+   * Einstellung dafür wäre eine Schraube, an der niemand dreht.
+   */
+  contract: 'VT',
 };
 
 export interface NextNumberResult {

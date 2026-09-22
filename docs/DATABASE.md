@@ -4,7 +4,7 @@
 > Diagramme sind damit nie älter als das Schema. Prosa und Bereichseinteilung
 > stehen in `scripts/generate-erd.ts`.
 
-**119 Modelle, 84 Aufzählungstypen, 2207 Felder.**
+**126 Modelle, 94 Aufzählungstypen, 2402 Felder.**
 PostgreSQL 16+; alle Zeitstempel als `timestamptz` in UTC, Anzeige in Europe/Zurich.
 
 ## Vier Entscheidungen, die das ganze Schema prägen
@@ -41,6 +41,7 @@ flowchart LR
   crm["CRM<br/><small>13 Modelle</small>"]
   katalog["Leistungskatalog und Preislogik<br/><small>6 Modelle</small>"]
   auftrag["Buchung, Offerte, Einsatz<br/><small>10 Modelle</small>"]
+  vertraege["Verträge und Einsatzpläne<br/><small>7 Modelle</small>"]
   personal["Personal und Zeit<br/><small>9 Modelle</small>"]
   finanzen["Finanzen<br/><small>8 Modelle</small>"]
   kommunikation["Kommunikation und Automatisierung<br/><small>10 Modelle</small>"]
@@ -124,7 +125,7 @@ erDiagram
 
 | Modell | Tabelle | Felder | Zweck |
 | --- | --- | --- | --- |
-| `Organization` | `organizations` | 112 | – |
+| `Organization` | `organizations` | 113 | – |
 | `NumberSequence` | `number_sequences` | 6 | – |
 | `OpeningHours` | `opening_hours` | 7 | – |
 | `Holiday` | `holidays` | 7 | – |
@@ -290,7 +291,7 @@ erDiagram
 
 | Modell | Tabelle | Felder | Zweck |
 | --- | --- | --- | --- |
-| `SignatureRequest` | `signature_requests` | 52 | – |
+| `SignatureRequest` | `signature_requests` | 54 | – |
 | `SignatureParticipant` | `signature_participants` | 32 | – |
 | `SignatureEvent` | `signature_events` | 12 | – |
 | `SignatureOtpChallenge` | `signature_otp_challenges` | 14 | – |
@@ -438,16 +439,16 @@ erDiagram
 | Modell | Tabelle | Felder | Zweck |
 | --- | --- | --- | --- |
 | `Lead` | `leads` | 39 | – |
-| `Customer` | `customers` | 57 | – |
+| `Customer` | `customers` | 58 | – |
 | `Contact` | `contacts` | 13 | – |
 | `Address` | `addresses` | 25 | – |
-| `Building` | `buildings` | 17 | – |
-| `Property` | `properties` | 30 | – |
+| `Building` | `buildings` | 18 | – |
+| `Property` | `properties` | 31 | – |
 | `PipelineStage` | `pipeline_stages` | 10 | – |
 | `Tag` | `tags` | 7 | – |
 | `LeadTag` | `lead_tags` | 4 | – |
 | `CustomerTag` | `customer_tags` | 4 | – |
-| `Activity` | `activities` | 22 | – |
+| `Activity` | `activities` | 24 | – |
 | `Task` | `tasks` | 26 | – |
 | `PaymentMethodRef` | `payment_methods` | 12 | – |
 
@@ -520,7 +521,7 @@ erDiagram
 | Modell | Tabelle | Felder | Zweck |
 | --- | --- | --- | --- |
 | `ServiceCategory` | `service_categories` | 13 | – |
-| `Service` | `services` | 42 | – |
+| `Service` | `services` | 43 | – |
 | `ServiceExtra` | `service_extras` | 15 | – |
 | `ServiceExtraOnService` | `service_extras_on_services` | 4 | – |
 | `PriceRule` | `price_rules` | 9 | – |
@@ -650,13 +651,110 @@ erDiagram
 | `Booking` | `bookings` | 61 | – |
 | `BookingItem` | `booking_items` | 14 | – |
 | `BookingExtra` | `booking_extras` | 10 | – |
-| `Quote` | `quotes` | 48 | – |
+| `Quote` | `quotes` | 49 | – |
 | `QuoteItem` | `quote_items` | 15 | – |
-| `Job` | `jobs` | 52 | – |
+| `Job` | `jobs` | 59 | – |
 | `JobAssignment` | `job_assignments` | 11 | – |
 | `JobChecklistItem` | `job_checklist_items` | 11 | – |
 | `JobPhoto` | `job_photos` | 12 | – |
 | `MaterialUsage` | `material_usages` | 11 | – |
+
+## Verträge und Einsatzpläne
+
+Der betriebliche Ursprung wiederkehrender Leistungen: angenommene Offerte → `Contract` → `ContractVersion` → `ContractService` → `ServiceSchedule` → `Job`. Der Vertragskopf trägt die Identität und den Lebenslauf, die **Version** alle kaufmännischen Konditionen — ein laufender Vertrag wird nie umgeschrieben, sondern abgelöst. Leistungen und Pläne hängen deshalb an der Version und werden beim Versionieren kopiert. Jeder erzeugte Einsatz trägt `contractId`, `contractVersionId` und `serviceScheduleId`, damit später beantwortbar bleibt, unter welchen Konditionen er erbracht wurde. `@@unique([serviceScheduleId, scheduleDate])` ist die Doppelsperre des Planers: Derselbe Serientermin kann keinen zweiten Einsatz erzeugen, auch bei gleichzeitigen Läufen nicht.
+
+```mermaid
+erDiagram
+  Contract {
+    String id PK
+    String organizationId
+    String number
+    String customerId
+    String propertyId
+    String quoteId
+    String title
+    String description
+  }
+  ContractVersion {
+    String id PK
+    String contractId
+    Int versionNumber
+    ContractVersionStatus status
+    DateTime effectiveFrom
+    DateTime effectiveUntil
+    String reason
+    Int minimumTermMonths
+  }
+  ContractService {
+    String id PK
+    String contractVersionId
+    String serviceId
+    String label
+    String description
+    String buildingId
+    String zone
+    Int estimatedMinutes
+  }
+  ServiceSchedule {
+    String id PK
+    String contractServiceId
+    Frequency frequency
+    Int interval
+    Int_list weekdays
+    Int monthDay
+    Int startMinute
+    Int endMinute
+  }
+  ScheduleException {
+    String id PK
+    String serviceScheduleId
+    ScheduleExceptionKind kind
+    DateTime originalDate
+    DateTime newDate
+    String reason
+    String createdById
+    DateTime createdAt
+  }
+  ContractAmendment {
+    String id PK
+    String contractId
+    ContractAmendmentType type
+    ContractAmendmentStatus status
+    String title
+    String description
+    String reason
+    DateTime requestedAt
+  }
+  ContractPriceAdjustment {
+    String id PK
+    String contractId
+    String contractVersionId
+    ContractPriceAdjustmentStatus status
+    DateTime effectiveFrom
+    DateTime reviewDueAt
+    Decimal oldAmount
+    Decimal newAmount
+  }
+  Contract ||--o{ ContractVersion : "contract"
+  ContractVersion ||--o{ ContractService : "version"
+  ContractService ||--o{ ServiceSchedule : "contractService"
+  ServiceSchedule ||--o{ ScheduleException : "schedule"
+  Contract ||--o{ ContractAmendment : "contract"
+  ContractVersion |o--o{ ContractAmendment : "previousVersion"
+  ContractVersion |o--o{ ContractAmendment : "newVersion"
+  Contract ||--o{ ContractPriceAdjustment : "contract"
+  ContractVersion |o--o{ ContractPriceAdjustment : "version"
+```
+
+| Modell | Tabelle | Felder | Zweck |
+| --- | --- | --- | --- |
+| `Contract` | `contracts` | 41 | – |
+| `ContractVersion` | `contract_versions` | 39 | – |
+| `ContractService` | `contract_services` | 21 | – |
+| `ServiceSchedule` | `service_schedules` | 18 | – |
+| `ScheduleException` | `schedule_exceptions` | 9 | – |
+| `ContractAmendment` | `contract_amendments` | 22 | – |
+| `ContractPriceAdjustment` | `contract_price_adjustments` | 23 | – |
 
 ## Personal und Zeit
 
@@ -759,7 +857,7 @@ erDiagram
 
 | Modell | Tabelle | Felder | Zweck |
 | --- | --- | --- | --- |
-| `Employee` | `employees` | 45 | – |
+| `Employee` | `employees` | 48 | – |
 | `EmployeeSkill` | `employee_skills` | 6 | – |
 | `SalaryRecord` | `salary_records` | 10 | – |
 | `Availability` | `availabilities` | 6 | – |
@@ -1142,7 +1240,7 @@ erDiagram
 | `GalleryItem` | `gallery_items` | 13 | – |
 | `JobPosting` | `job_postings` | 20 | – |
 | `JobApplication` | `job_applications` | 16 | – |
-| `FileAsset` | `file_assets` | 65 | – |
+| `FileAsset` | `file_assets` | 67 | – |
 | `StoredFile` | `stored_files` | 16 | – |
 
 ## Redaktion
@@ -1624,6 +1722,16 @@ exakte TypeScript-Typen.
 | `ReportKind` | `BUSINESS_PERFORMANCE`, `FINANCIAL`, `MARKETING`, `SALES`, `EMPLOYEE`, `CUSTOMER`, `QUARTERLY_REVIEW` |
 | `ReportCadence` | `WEEKLY`, `MONTHLY`, `QUARTERLY`, `YEARLY` |
 | `ReportFormat` | `PDF`, `XLSX`, `DOCX` |
+| `ContractStatus` | `DRAFT`, `IN_REVIEW`, `OFFERED`, `ACTIVE`, `PAUSED`, `NOTICE_GIVEN`, `ENDED`, `CANCELLED` |
+| `ContractRenewalType` | `NONE`, `AUTOMATIC`, `MANUAL` |
+| `ContractBillingCycle` | `PER_VISIT`, `MONTHLY`, `QUARTERLY`, `SEMIANNUAL`, `ANNUAL` |
+| `ContractPricingModel` | `FIXED_PERIOD`, `FIXED_PER_VISIT`, `HOURLY`, `UNIT_BASED`, `CUSTOM` |
+| `ContractVersionStatus` | `DRAFT`, `ACTIVE`, `SUPERSEDED` |
+| `ContractAmendmentType` | `SCOPE`, `PRICE`, `FREQUENCY`, `TERM`, `SLA`, `PAYMENT_TERMS`, `INDEXATION`, `OTHER` |
+| `ContractAmendmentStatus` | `DRAFT`, `REVIEW`, `APPROVED`, `EFFECTIVE`, `REJECTED` |
+| `ContractPriceAdjustmentStatus` | `PLANNED`, `APPROVED`, `APPLIED`, `REJECTED` |
+| `ScheduleHolidayHandling` | `IGNORE`, `SKIP`, `MOVE_BEFORE`, `MOVE_AFTER` |
+| `ScheduleExceptionKind` | `SKIP`, `MOVE`, `EXTRA` |
 
 ## Migrationen
 

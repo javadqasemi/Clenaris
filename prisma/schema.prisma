@@ -542,6 +542,7 @@ model Organization {
   callsToAction     CallToAction[]
   navigationItems   NavigationItem[]
   legalDocuments    LegalDocument[]
+  contracts         Contract[]
 
   // Unternehmensführung
   kpiDefinitions    KpiDefinition[]
@@ -1202,6 +1203,7 @@ model Customer {
   tags           CustomerTag[]
   giftCards      GiftCard[]
   payments       Payment[]
+  contracts      Contract[]
 
   @@unique([organizationId, number])
   @@index([organizationId, email])
@@ -1302,6 +1304,10 @@ model Building {
   updatedAt DateTime @updatedAt @db.Timestamptz(6)
 
   properties Property[]
+  /// Seit Wave 10 kein totes Modell mehr: Ein Vertrag über ein
+  /// Mehrfamilienhaus benennt Leistungen je Gebäude und Zone, nicht je
+  /// Wohnung.
+  contractServices ContractService[]
 
   @@index([postalCode])
   @@map("buildings")
@@ -1341,10 +1347,11 @@ model Property {
   customer Customer    @relation(fields: [customerId], references: [id], onDelete: Cascade)
   address  Address?    @relation(fields: [addressId], references: [id], onDelete: SetNull)
   building Building?   @relation(fields: [buildingId], references: [id], onDelete: SetNull)
-  bookings Booking[]
-  jobs     Job[]
-  quotes   Quote[]
-  files    FileAsset[]
+  bookings  Booking[]
+  jobs      Job[]
+  quotes    Quote[]
+  files     FileAsset[]
+  contracts Contract[]
 
   @@index([customerId])
   @@map("properties")
@@ -1389,6 +1396,7 @@ model Activity {
   bookingId  String?
   quoteId    String?
   invoiceId  String?
+  contractId String?
   authorId   String?
 
   durationMinutes Int?
@@ -1401,10 +1409,12 @@ model Activity {
   booking  Booking?  @relation(fields: [bookingId], references: [id], onDelete: Cascade)
   quote    Quote?    @relation(fields: [quoteId], references: [id], onDelete: Cascade)
   invoice  Invoice?  @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  contract Contract? @relation(fields: [contractId], references: [id], onDelete: Cascade)
   author   User?     @relation("ActivityAuthor", fields: [authorId], references: [id], onDelete: SetNull)
 
   @@index([customerId, occurredAt])
   @@index([leadId, occurredAt])
+  @@index([contractId, occurredAt])
   @@index([type])
   @@map("activities")
 }
@@ -1595,6 +1605,7 @@ model Service {
   bookings     BookingItem[]
   quoteItems   QuoteItem[]
   jobs         Job[]
+  contractServices ContractService[]
 
   @@unique([organizationId, slug])
   @@index([organizationId, active])
@@ -1904,6 +1915,7 @@ model Quote {
   invoices   Invoice[]
   files      FileAsset[]
   activities Activity[]
+  contracts  Contract[]
 
   @@unique([organizationId, number])
   @@index([organizationId, status])
@@ -1952,6 +1964,21 @@ model Job {
   addressId  String?
   propertyId String?
   serviceId  String?
+
+  /// Woher dieser Einsatz stammt, wenn er aus einem Vertrag erzeugt wurde.
+  ///
+  /// Alle drei zusammen, nicht nur der Vertrag: Die Frage, die später gestellt
+  /// wird, lautet „unter **welcher Vertragsversion** wurde das ausgeführt" —
+  /// und die beantwortet der Vertrag allein nicht, sobald er einmal geändert
+  /// wurde. `serviceScheduleId` kommt dazu, weil eine Vertragsversion mehrere
+  /// Serien hat und die Nachkalkulation je Serie rechnet.
+  contractId        String?
+  contractVersionId String?
+  serviceScheduleId String?
+  /// Der Serientag, für den dieser Einsatz erzeugt wurde. Kalendertag, nicht
+  /// Zeitpunkt: Der Planer denkt in Tagen, und das Zeitfenster steht an der
+  /// Serie.
+  scheduleDate      DateTime? @db.Date
 
   title  String
   status JobStatus @default(UNASSIGNED)
@@ -2007,6 +2034,10 @@ model Job {
   property     Property?    @relation(fields: [propertyId], references: [id], onDelete: SetNull)
   service      Service?     @relation(fields: [serviceId], references: [id], onDelete: SetNull)
 
+  contract        Contract?        @relation(fields: [contractId], references: [id], onDelete: SetNull)
+  contractVersion ContractVersion? @relation(fields: [contractVersionId], references: [id], onDelete: SetNull)
+  serviceSchedule ServiceSchedule? @relation(fields: [serviceScheduleId], references: [id], onDelete: SetNull)
+
   assignments  JobAssignment[]
   checklist    JobChecklistItem[]
   photos       JobPhoto[]
@@ -2022,9 +2053,25 @@ model Job {
   deviceHandoffs    DeviceHandoffSession[]
 
   @@unique([organizationId, number])
+  /**
+   * **Die Doppelsperre des Planers.**
+   *
+   * Ein Serienplaner, der zweimal läuft — nebenläufig, nach einem Fehler,
+   * nach einer Vertragsänderung —, darf denselben Einsatz nicht zweimal
+   * erzeugen. Eine Prüfung im Code genügt dafür nicht: Zwischen „gibt es
+   * schon?" und `INSERT` liegt ein Moment, und zwei gleichzeitige Läufe
+   * passen genau hinein.
+   *
+   * Dass hier ein gewöhnlicher eindeutiger Index reicht und kein partieller
+   * nötig ist, liegt an Postgres: In einem eindeutigen Index gelten zwei
+   * `NULL` als verschieden. Alle Einsätze ohne Serie tragen `NULL` in beiden
+   * Spalten und kollidieren deshalb nie miteinander.
+   */
+  @@unique([serviceScheduleId, scheduleDate])
   @@index([organizationId, status, scheduledStart])
   @@index([scheduledStart])
   @@index([customerId])
+  @@index([contractId])
   @@map("jobs")
 }
 
@@ -2221,6 +2268,12 @@ model Employee {
   files         FileAsset[]
   documents     ManagedDocument[]
   salaryHistory SalaryRecord[]
+
+  /// Drei Rollen am Vertrag, die im Reinigungsgewerbe regelmässig
+  /// auseinanderfallen: Wer verkauft hat, wer verantwortet, wer operativ führt.
+  contractsResponsible Contract[] @relation("ContractResponsible")
+  contractsSales       Contract[] @relation("ContractSalesOwner")
+  contractsManaged     Contract[] @relation("ContractServiceManager")
 
   @@unique([organizationId, employeeNumber])
   @@index([organizationId, active])
@@ -3452,6 +3505,11 @@ model FileAsset {
   expenseId     String?
   messageId     String?
   applicationId String?
+  /// Vertragsdokumente — unterschriebener Vertrag, Leistungsverzeichnis,
+  /// Anhänge. Bewusst dieselbe Dateikette wie überall sonst: Byteprüfung,
+  /// Dateipolitik, Schadsoftwareprüfung, Auslieferungstor. Eine zweite
+  /// Uploadarchitektur neben dieser wäre eine zweite Sicherheitsstufe.
+  contractId    String?
   // Unternehmensführung
   objectiveId  String?
   investmentId String?
@@ -3478,6 +3536,7 @@ model FileAsset {
   expense      Expense?        @relation(fields: [expenseId], references: [id], onDelete: Cascade)
   message      Message?        @relation(fields: [messageId], references: [id], onDelete: Cascade)
   application  JobApplication? @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  contract     Contract?       @relation(fields: [contractId], references: [id], onDelete: Cascade)
   objective    Objective?        @relation(fields: [objectiveId], references: [id], onDelete: Cascade)
   investment   Investment?       @relation(fields: [investmentId], references: [id], onDelete: Cascade)
   risk         RiskEntry?        @relation(fields: [riskId], references: [id], onDelete: Cascade)
@@ -3682,6 +3741,14 @@ model SignatureRequest {
   quoteId           String?
   jobId             String?
   documentVersionId String?
+  /// Die vierte Quelle des Signaturkerns (Wave 10).
+  ///
+  /// Unterzeichnet wird immer eine **Vertragsversion**, nie „der Vertrag":
+  /// Was der Kunde angenommen hat, sind konkrete Konditionen, und die stehen
+  /// in der Version. Eine Unterschrift am Vertragskopf wäre eine Zusage auf
+  /// etwas, das sich danach ändern kann — genau das, was die Versionierung
+  /// verhindern soll.
+  contractVersionId String?
 
   /// Immutable ab PENDING.
   originalArtifactId   String
@@ -3724,6 +3791,7 @@ model SignatureRequest {
   quote            Quote?           @relation(fields: [quoteId], references: [id], onDelete: Restrict)
   job              Job?             @relation(fields: [jobId], references: [id], onDelete: Restrict)
   documentVersion  DocumentVersion? @relation(fields: [documentVersionId], references: [id], onDelete: Restrict)
+  contractVersion  ContractVersion? @relation(fields: [contractVersionId], references: [id], onDelete: Restrict)
   originalArtifact FileAsset        @relation("SignatureOriginal", fields: [originalArtifactId], references: [id], onDelete: Restrict)
   signedArtifact   FileAsset?       @relation("SignatureSigned", fields: [signedArtifactId], references: [id], onDelete: Restrict)
   evidenceArtifact FileAsset?       @relation("SignatureEvidence", fields: [evidenceArtifactId], references: [id], onDelete: Restrict)
@@ -3739,6 +3807,7 @@ model SignatureRequest {
   @@index([quoteId])
   @@index([jobId])
   @@index([documentVersionId])
+  @@index([contractVersionId])
   @@index([originalArtifactId])
   @@map("signature_requests")
 }
@@ -5291,4 +5360,541 @@ model ReportRun {
 
   @@index([organizationId, kind, periodStart])
   @@map("report_runs")
+}
+
+// ===========================================================================
+//  Verträge (Wave 10)
+// ===========================================================================
+//
+//  Ein Reinigungsvertrag ist in diesem Produkt **kein Dokument**, sondern der
+//  betriebliche Ursprung wiederkehrender Leistungen:
+//
+//      Offerte → angenommen → Vertrag → Vertragsversion → Leistung →
+//      Einsatzplan → Einsätze → Disposition → Zeit → Rapport → Rechnung
+//
+//  Zwei Entscheidungen tragen das ganze Modell:
+//
+//  1. **Der Vertragskopf trägt die Identität, die Version die Konditionen.**
+//     Ein laufender Vertrag darf nicht rückwirkend umgeschrieben werden. Preis,
+//     Leistungsumfang, Frequenz, Zahlungsbedingungen, Laufzeit und SLA stehen
+//     deshalb ausschliesslich in `ContractVersion`. Wer etwas davon ändert,
+//     erzeugt eine neue Version; die alte bleibt vollständig lesbar, und jeder
+//     Einsatz und jede Rechnungsposition zeigt weiterhin auf *die* Version,
+//     unter der sie entstanden ist.
+//
+//  2. **Leistungen und Einsatzpläne hängen an der Version, nicht am Vertrag.**
+//     Der bequemere Weg wäre, sie am Vertrag zu führen und mit
+//     `gültigAb`/`gültigBis` zu versehen. Dann müsste aber jede Auswertung die
+//     Gültigkeit selbst nachrechnen, und ein vergessener Zeitfilter erzeugt
+//     eine falsche Antwort, die aussieht wie eine richtige. Beim Anlegen einer
+//     Version werden Leistungen und Pläne kopiert; das kostet Zeilen und
+//     erspart eine Klasse stiller Fehler.
+//
+//  Was dieses Modell **nicht** tut: Es beurteilt keine Kündigung. Clenaris
+//  verwaltet Fristen, Daten und Nachweise; ob eine Kündigung wirksam ist, ist
+//  eine Rechtsfrage und keine Datenbankspalte.
+
+enum ContractStatus {
+  DRAFT
+  IN_REVIEW
+  OFFERED
+  ACTIVE
+  PAUSED
+  NOTICE_GIVEN
+  ENDED
+  CANCELLED
+}
+
+/// Wie es nach Ablauf der Mindestlaufzeit weitergeht.
+enum ContractRenewalType {
+  /// Endet zum Enddatum, ohne Zutun.
+  NONE
+  /// Verlängert sich automatisch um `renewalPeriodMonths`.
+  AUTOMATIC
+  /// Verlängert sich nur, wenn jemand es ausdrücklich tut.
+  MANUAL
+}
+
+enum ContractBillingCycle {
+  PER_VISIT
+  MONTHLY
+  QUARTERLY
+  SEMIANNUAL
+  ANNUAL
+}
+
+/// Wie sich der Vertragspreis bildet.
+///
+/// Die Werte sind bewusst nicht dieselben wie `PricingModel` der Leistungen:
+/// Dort geht es um die Berechnung eines einzelnen Auftrags aus Fläche und
+/// Stunden, hier um die Abrechnungsform eines Dauerschuldverhältnisses.
+enum ContractPricingModel {
+  /// Fester Betrag je Abrechnungsperiode.
+  FIXED_PERIOD
+  /// Fester Betrag je Einsatz.
+  FIXED_PER_VISIT
+  /// Nach geleisteten Stunden.
+  HOURLY
+  /// Nach Menge (m², Fenster, Stockwerke) × Einzelpreis.
+  UNIT_BASED
+  /// Abweichende Vereinbarung — der Betrag wird je Periode erfasst.
+  CUSTOM
+}
+
+enum ContractVersionStatus {
+  DRAFT
+  ACTIVE
+  SUPERSEDED
+}
+
+enum ContractAmendmentType {
+  SCOPE
+  PRICE
+  FREQUENCY
+  TERM
+  SLA
+  PAYMENT_TERMS
+  INDEXATION
+  OTHER
+}
+
+enum ContractAmendmentStatus {
+  DRAFT
+  REVIEW
+  APPROVED
+  EFFECTIVE
+  REJECTED
+}
+
+enum ContractPriceAdjustmentStatus {
+  PLANNED
+  APPROVED
+  APPLIED
+  REJECTED
+}
+
+/// Was mit einem Serientermin geschieht, der auf einen Feiertag fällt.
+///
+/// **Keine Regel ist eingebaut.** Welche Tage Feiertage sind, steht in
+/// `Holiday` je Organisation und Kanton; wie damit umzugehen ist, entscheidet
+/// der Vertrag. Ein fest verdrahteter Feiertagskalender wäre für genau einen
+/// Kanton richtig und überall sonst still falsch.
+enum ScheduleHolidayHandling {
+  /// Feiertag wird nicht beachtet — der Termin bleibt stehen.
+  IGNORE
+  /// Termin entfällt ersatzlos.
+  SKIP
+  /// Termin wird auf den letzten Werktag davor vorgezogen.
+  MOVE_BEFORE
+  /// Termin wird auf den nächsten Werktag danach verschoben.
+  MOVE_AFTER
+}
+
+enum ScheduleExceptionKind {
+  /// Dieser eine Termin entfällt.
+  SKIP
+  /// Dieser eine Termin findet an einem anderen Tag statt.
+  MOVE
+  /// Ein zusätzlicher Termin ausserhalb der Serie.
+  EXTRA
+}
+
+/// Der Vertragskopf — Identität, Beteiligte, Lebenslauf.
+///
+/// Hier steht nichts, was sich kaufmännisch ändern kann; das gehört in die
+/// Version. Was hier steht, ändert sich entweder nie (Nummer, Kundschaft) oder
+/// ist ein Ereignis im Lebenslauf (Kündigung, Ende).
+model Contract {
+  id             String @id @default(cuid())
+  organizationId String
+  /// Aus dem Nummernkreis `contract`, vergeben beim **Aktivieren** — nicht
+  /// beim Anlegen. Ein Entwurf, der verworfen wird, soll keine Lücke
+  /// hinterlassen; dieselbe Regel wie bei der Rechnung.
+  number         String?
+
+  customerId String
+  propertyId String?
+  /// Die angenommene Offerte, aus der der Vertrag entstanden ist.
+  quoteId    String?
+
+  title       String
+  description String?
+  status      ContractStatus @default(DRAFT)
+
+  /// Beginn der Leistungserbringung. Kalendertag, keine Uhrzeit — ein Vertrag
+  /// beginnt an einem Tag, nicht um 08:00 in einer Zeitzone.
+  startDate DateTime  @db.Date
+  /// Vereinbartes Ende, sofern befristet. Bei unbefristeten Verträgen `null`,
+  /// bis eine Kündigung ein Ende setzt.
+  endDate   DateTime? @db.Date
+
+  /// Betreuung: wer verkauft hat, wer verantwortet, wer operativ führt.
+  /// Drei Rollen, weil sie im Reinigungsgewerbe regelmässig auseinanderfallen.
+  responsibleEmployeeId String?
+  salesOwnerId          String?
+  serviceManagerId      String?
+  /// Kostenstelle für die Nachkalkulation. Freitext, weil es in dieser
+  /// Betriebsgrösse keinen Kostenstellenstamm gibt — wäre ein Fremdschlüssel
+  /// ins Leere.
+  costCenter            String?
+
+  /// Kündigung: Tatsachen, keine Bewertung.
+  noticeGivenAt        DateTime? @db.Timestamptz(6)
+  /// Von wem die Kündigung ausging — `CUSTOMER` oder `PROVIDER`.
+  noticeGivenBy        String?
+  /// Der errechnete späteste Kündigungstermin; Grundlage der Erinnerung.
+  noticeDeadline       DateTime? @db.Date
+  terminationEffectiveAt DateTime? @db.Date
+  terminationReason      String?
+
+  /// Pause: der Vertrag besteht, es wird nur nicht geleistet (Bauarbeiten,
+  /// Leerstand, Saison). Der Planer erzeugt in dieser Zeit keine Einsätze.
+  pausedFrom DateTime? @db.Date
+  pausedUntil DateTime? @db.Date
+  pauseReason String?
+
+  internalNote String?
+
+  createdById String?
+  createdAt   DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt   DateTime  @updatedAt @db.Timestamptz(6)
+  /// Weiches Löschen gibt es nur für Entwürfe — der Dienst verweigert es für
+  /// jeden Vertrag, der je aktiv war. Ein abgelaufener Vertrag ist ein Beleg.
+  deletedAt   DateTime? @db.Timestamptz(6)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  customer     Customer     @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  property     Property?    @relation(fields: [propertyId], references: [id], onDelete: SetNull)
+  quote        Quote?       @relation(fields: [quoteId], references: [id], onDelete: SetNull)
+
+  responsibleEmployee Employee? @relation("ContractResponsible", fields: [responsibleEmployeeId], references: [id], onDelete: SetNull)
+  salesOwner          Employee? @relation("ContractSalesOwner", fields: [salesOwnerId], references: [id], onDelete: SetNull)
+  serviceManager      Employee? @relation("ContractServiceManager", fields: [serviceManagerId], references: [id], onDelete: SetNull)
+
+  versions         ContractVersion[]
+  amendments       ContractAmendment[]
+  priceAdjustments ContractPriceAdjustment[]
+  jobs             Job[]
+  files            FileAsset[]
+  activities       Activity[]
+
+  @@unique([organizationId, number])
+  @@index([organizationId, status, startDate])
+  @@index([organizationId, deletedAt])
+  @@index([customerId])
+  /// Für den Erinnerungslauf: welche Verträge laufen aus, welche Frist naht.
+  @@index([organizationId, noticeDeadline])
+  @@index([organizationId, endDate])
+  @@map("contracts")
+}
+
+/// Eine Fassung der kaufmännischen Vereinbarung.
+///
+/// **Genau eine Version ist `ACTIVE`** — durchgesetzt über einen partiellen
+/// eindeutigen Index in der Migration, nicht über die Oberfläche. Ein Vertrag
+/// mit zwei gültigen Preisen ist kein Anzeigefehler, sondern eine falsche
+/// Rechnung.
+model ContractVersion {
+  id         String @id @default(cuid())
+  contractId String
+
+  versionNumber Int
+  status        ContractVersionStatus @default(DRAFT)
+
+  effectiveFrom  DateTime  @db.Date
+  /// Gesetzt, sobald eine Nachfolgerin gilt. Solange `null`, ist dies die
+  /// aktuelle Fassung.
+  effectiveUntil DateTime? @db.Date
+  /// Warum es diese Version gibt. Pflichtangabe im Dienst — eine Version ohne
+  /// Grund ist eine Änderung, die niemand mehr erklären kann.
+  reason         String
+
+  // --- Laufzeit und Verlängerung ---
+  minimumTermMonths   Int?
+  renewalType         ContractRenewalType @default(NONE)
+  renewalPeriodMonths Int?
+  /// Kündigungsfrist in Tagen zum Ende der Laufzeit.
+  noticePeriodDays    Int                 @default(90)
+
+  // --- Abrechnung ---
+  billingCycle    ContractBillingCycle @default(MONTHLY)
+  paymentTermDays Int                  @default(30)
+  currency        String               @default("CHF")
+
+  // --- Preis ---
+  pricingModel ContractPricingModel @default(FIXED_PERIOD)
+  /// Betrag je Periode bzw. je Einsatz, abhängig von `pricingModel`.
+  /// `Decimal(12,2)` wie überall — gerechnet wird in der Datenbank, gerundet
+  /// an der Anzeigekante.
+  baseAmount   Decimal              @default(0) @db.Decimal(12, 2)
+  hourlyRate   Decimal?             @db.Decimal(12, 2)
+  unitPrice    Decimal?             @db.Decimal(12, 4)
+  /// Bezeichnung der Einheit bei `UNIT_BASED` — „m²", „Fenster", „Stockwerk".
+  unitLabel    String?
+  vatRate      Decimal              @default(8.1) @db.Decimal(5, 2)
+
+  // --- Indexierung ---
+  /// Bezugsgrösse einer vereinbarten Anpassung, z. B. „LIK Dezember".
+  ///
+  /// **Keine Rechtsbehauptung.** Ob und wie indexiert wird, steht im Vertrag;
+  /// dieses Feld hält fest, worauf sich die Parteien geeinigt haben. Eine
+  /// automatische Erhöhung findet nur statt, wenn jemand sie freigibt.
+  indexReference String?
+  indexBaseValue Decimal? @db.Decimal(12, 4)
+  nextReviewAt   DateTime? @db.Date
+
+  // --- Qualität / SLA (Vorbereitung für Wave 11) ---
+  /// Zielwert der Qualitätsbewertung (0–100). Ohne eigene Prüfmaschine —
+  /// hier steht nur, was vereinbart wurde.
+  targetQualityScore    Int?
+  /// Wie oft eine Kontrolle vereinbart ist, in Tagen.
+  inspectionIntervalDays Int?
+  /// Zugesagte Reaktionszeit auf eine Reklamation, in Stunden.
+  responseHours         Int?
+  slaNote               String?
+
+  terms        String?
+  internalNote String?
+
+  createdById String?
+  createdAt   DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt   DateTime @updatedAt @db.Timestamptz(6)
+
+  contract Contract          @relation(fields: [contractId], references: [id], onDelete: Cascade)
+  services ContractService[]
+  jobs     Job[]
+  signatureRequests SignatureRequest[]
+  amendmentsFrom ContractAmendment[] @relation("AmendmentPreviousVersion")
+  amendmentsTo   ContractAmendment[] @relation("AmendmentNewVersion")
+  priceAdjustments ContractPriceAdjustment[]
+
+  @@unique([contractId, versionNumber])
+  @@index([contractId, status])
+  @@map("contract_versions")
+}
+
+/// Eine vereinbarte Leistung innerhalb einer Vertragsversion.
+///
+/// Kein Freitext: `serviceId` zeigt auf den bestehenden Leistungskatalog.
+/// Eine Vertragsposition „Treppenhaus" als Zeichenkette wäre in der
+/// Auswertung wertlos und in der Preisfindung gefährlich.
+model ContractService {
+  id                String @id @default(cuid())
+  contractVersionId String
+  serviceId         String?
+
+  /// Bezeichnung auf dem Vertrag. Vorbelegt aus dem Katalog, änderbar — die
+  /// Kundschaft nennt „Unterhaltsreinigung" oft anders.
+  label       String
+  description String?
+
+  /// Wo genau. Das Objekt steht am Vertrag; hier geht es feiner.
+  buildingId String?
+  /// Etage, Zone, Trakt — Freitext, weil es dafür kein Stammdatum gibt.
+  zone       String?
+
+  /// Wie lange ein Einsatz dieser Leistung dauert und wie viele Personen er
+  /// braucht. Grundlage der Kapazitätsplanung, nicht des Preises.
+  estimatedMinutes Int @default(120)
+  requiredCrewSize Int @default(1)
+
+  /// Qualifikationen, die für diese Leistung nötig sind. Dieselben Namen wie
+  /// in `EmployeeSkill` — die Eignungsprüfung der Disposition kann sie später
+  /// auswerten, ohne ein zweites Vokabular zu lernen.
+  requiredSkills String[] @default([])
+
+  qualityRequirement  String?
+  specialInstructions String?
+  /// Wer Material und Verbrauchsgüter stellt — `PROVIDER` oder `CUSTOMER`.
+  materialsBy         String  @default("PROVIDER")
+
+  /// Menge bei mengenabhängigem Preis (m², Fenster, …).
+  quantity Decimal? @db.Decimal(12, 3)
+
+  position Int @default(0)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+
+  version   ContractVersion   @relation(fields: [contractVersionId], references: [id], onDelete: Cascade)
+  service   Service?          @relation(fields: [serviceId], references: [id], onDelete: SetNull)
+  building  Building?         @relation(fields: [buildingId], references: [id], onDelete: SetNull)
+  schedules ServiceSchedule[]
+
+  @@index([contractVersionId])
+  @@map("contract_services")
+}
+
+/// Der Einsatzplan einer Vertragsleistung — die Serie, aus der Einsätze
+/// entstehen.
+///
+/// Die Wiederholungsregel ist bewusst **nicht** `RecurrenceRule`: Jene gehört
+/// zu Serienbuchungen der Kundschaft und kennt weder Zeitfenster noch
+/// Feiertagsbehandlung noch Ausnahmen. Sie hier mitzubenutzen hiesse, beide
+/// Bedeutungen in ein Modell zu zwingen, und jede spätere Änderung träfe den
+/// jeweils anderen Ablauf mit.
+model ServiceSchedule {
+  id                String @id @default(cuid())
+  contractServiceId String
+
+  frequency Frequency @default(WEEKLY)
+  /// Alle n Perioden. Zusammen mit `frequency` deckt das „alle zwei Wochen"
+  /// und „alle drei Monate" ab, ohne eigene Aufzählungswerte dafür.
+  interval  Int       @default(1)
+  /// 0 = Sonntag … 6 = Samstag. Mehrere Tage je Woche sind der Normalfall im
+  /// Unterhalt („Mo, Mi, Fr").
+  weekdays  Int[]     @default([])
+  /// Tag im Monat bei MONTHLY/QUARTERLY; `null` heisst „selber Tag wie der
+  /// Beginn".
+  monthDay  Int?
+
+  /// Zeitfenster des Einsatzes, als Minuten seit Mitternacht in der
+  /// Ortszeit Europe/Zurich. Nicht als `DateTime`: Ein Zeitfenster ist keine
+  /// Zeitpunktangabe, und über die Sommerzeit hinweg bleibt „ab 06:00"
+  /// richtig, ein UTC-Zeitpunkt nicht.
+  startMinute Int @default(360)
+  endMinute   Int @default(600)
+
+  effectiveFrom  DateTime  @db.Date
+  effectiveUntil DateTime? @db.Date
+
+  holidayHandling ScheduleHolidayHandling @default(SKIP)
+
+  /// Bis wohin der Planer Einsätze erzeugt hat. Fortschrittsmarke, kein
+  /// Zustand — sie darf nur vorwärts wandern.
+  generatedUntil DateTime? @db.Date
+  active         Boolean   @default(true)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+
+  contractService ContractService            @relation(fields: [contractServiceId], references: [id], onDelete: Cascade)
+  exceptions      ScheduleException[]
+  jobs            Job[]
+
+  @@index([contractServiceId, active])
+  @@map("service_schedules")
+}
+
+/// Eine Abweichung von der Serie an einem bestimmten Tag.
+///
+/// Getrennt von der Serie, weil eine Ausnahme keine Regeländerung ist: Wer
+/// einen Termin verschiebt, will nicht den Vertrag ändern. Und weil eine
+/// Regeländerung eine neue Vertragsversion wäre — eine verlegte Reinigung
+/// nicht.
+model ScheduleException {
+  id                String @id @default(cuid())
+  serviceScheduleId String
+
+  kind         ScheduleExceptionKind
+  /// Der betroffene Serientag (bei EXTRA der zusätzliche Tag).
+  originalDate DateTime              @db.Date
+  /// Der Ersatztag bei MOVE.
+  newDate      DateTime?             @db.Date
+  reason       String?
+
+  createdById String?
+  createdAt   DateTime @default(now()) @db.Timestamptz(6)
+
+  schedule ServiceSchedule @relation(fields: [serviceScheduleId], references: [id], onDelete: Cascade)
+
+  /// Eine Ausnahme je Tag und Serie. Zwei Ausnahmen für denselben Tag sind
+  /// keine feinere Steuerung, sondern ein Widerspruch.
+  @@unique([serviceScheduleId, originalDate])
+  @@index([serviceScheduleId])
+  @@map("schedule_exceptions")
+}
+
+/// Eine nachvollziehbare Vertragsänderung.
+///
+/// Der Änderungsantrag ist **nicht** die Änderung: Er durchläuft
+/// Entwurf → Prüfung → Freigabe und wird erst dann wirksam, indem er eine
+/// neue Vertragsversion erzeugt. Beide Versionen bleiben am Antrag verlinkt,
+/// damit später beantwortbar ist, *warum* sich etwas geändert hat — die
+/// Version allein sagt nur, *dass*.
+model ContractAmendment {
+  id         String @id @default(cuid())
+  contractId String
+
+  type   ContractAmendmentType
+  status ContractAmendmentStatus @default(DRAFT)
+
+  title       String
+  description String?
+  reason      String
+
+  requestedAt   DateTime  @default(now()) @db.Timestamptz(6)
+  effectiveFrom DateTime  @db.Date
+  approvedAt    DateTime? @db.Timestamptz(6)
+  rejectedAt    DateTime? @db.Timestamptz(6)
+  rejectReason  String?
+  appliedAt     DateTime? @db.Timestamptz(6)
+
+  requestedById String?
+  approvedById  String?
+
+  previousVersionId String?
+  newVersionId      String?
+
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+
+  contract        Contract         @relation(fields: [contractId], references: [id], onDelete: Cascade)
+  previousVersion ContractVersion? @relation("AmendmentPreviousVersion", fields: [previousVersionId], references: [id], onDelete: SetNull)
+  newVersion      ContractVersion? @relation("AmendmentNewVersion", fields: [newVersionId], references: [id], onDelete: SetNull)
+
+  @@index([contractId, status])
+  @@map("contract_amendments")
+}
+
+/// Eine geplante oder vollzogene Preisanpassung.
+///
+/// Eigenes Modell und kein Sonderfall des Änderungsantrags, weil eine
+/// Preisüberprüfung einen Termin hat, an den erinnert werden muss, und weil
+/// die Frage „wann wurde zuletzt erhöht und um wie viel" ohne eigene Zeile nur
+/// durch Vergleich aller Versionen zu beantworten wäre.
+///
+/// **Automatisch passiert hier nichts.** Der Lauf schlägt vor; wirksam wird
+/// eine Anpassung erst durch eine Freigabe, und diese erzeugt eine neue
+/// Vertragsversion mit Protokolleintrag.
+model ContractPriceAdjustment {
+  id                String @id @default(cuid())
+  contractId        String
+  contractVersionId String?
+
+  status ContractPriceAdjustmentStatus @default(PLANNED)
+
+  /// Stichtag, zu dem der neue Preis gelten soll.
+  effectiveFrom DateTime @db.Date
+  /// Wann die Überprüfung fällig ist — Grundlage der Erinnerung.
+  reviewDueAt   DateTime? @db.Date
+
+  oldAmount Decimal  @db.Decimal(12, 2)
+  newAmount Decimal  @db.Decimal(12, 2)
+  /// Prozentsatz, falls über einen Satz gerechnet wurde. Nur zur Erklärung —
+  /// verbindlich ist der Betrag.
+  percent   Decimal? @db.Decimal(6, 3)
+
+  indexReference String?
+  indexOldValue  Decimal? @db.Decimal(12, 4)
+  indexNewValue  Decimal? @db.Decimal(12, 4)
+
+  reason String
+
+  proposedById String?
+  approvedById String?
+  approvedAt   DateTime? @db.Timestamptz(6)
+  appliedAt    DateTime? @db.Timestamptz(6)
+  rejectedAt   DateTime? @db.Timestamptz(6)
+  rejectReason String?
+
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+
+  contract Contract         @relation(fields: [contractId], references: [id], onDelete: Cascade)
+  version  ContractVersion? @relation(fields: [contractVersionId], references: [id], onDelete: SetNull)
+
+  @@index([contractId, status])
+  @@index([contractId, reviewDueAt])
+  @@map("contract_price_adjustments")
 }

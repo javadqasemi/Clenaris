@@ -14,6 +14,7 @@ import { runFuehrungNightly } from '@/server/services/fuehrung.service';
 import { runSignatureNightly } from '@/server/services/signature.service';
 import { runScanNachlauf } from '@/server/services/file.service';
 import { runDueAutomations } from '@/server/services/automation-engine.service';
+import { runContractScheduling } from '@/server/services/contract-schedule.service';
 import { purgeExpiredUploads } from '@/lib/storage';
 import { logger } from '@/lib/logger';
 
@@ -87,6 +88,21 @@ export const GET = defineCronRoute({
        * statt dass ein Rückstau bis zum nächsten Eingriff liegen bleibt.
        */
       { name: 'automatisierungen', lauf: () => runDueAutomations({ organizationId, limit: 500 }) },
+      /**
+       * Serienplanung der Verträge — Einsätze für die nächsten sechzig Tage.
+       *
+       * Der Lauf ist idempotent bis in die Datenbank hinein
+       * (`@@unique([serviceScheduleId, scheduleDate])`), also unbedenklich,
+       * wenn er zweimal läuft oder nach einem Abbruch wiederholt wird.
+       * Umgekehrt ist er die einzige Stelle, an der die Einsätze eines
+       * laufenden Vertrags von selbst entstehen: Ohne ihn stünde ein Vertrag
+       * aktiv in der Liste, und niemand käme putzen.
+       *
+       * Ein Fehler an einem einzelnen Vertrag beendet den Lauf nicht — er
+       * wird gezählt und protokolliert, und die übrigen Verträge werden
+       * trotzdem geplant.
+       */
+      { name: 'vertragsplanung', lauf: () => runContractScheduling(organizationId) },
     ];
 
     const results = await Promise.allSettled(aufgaben.map((a) => a.lauf()));

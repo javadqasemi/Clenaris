@@ -32,6 +32,15 @@ const listQuery = searchQuery.extend({
     .optional(),
   employeeId: z.string().min(1).optional(),
   customerId: z.string().min(1).optional(),
+  /**
+   * Alle Einsätze eines Vertrags (Wave 10).
+   *
+   * Die Frage „was ist aus diesem Vertrag entstanden" wird in der Vertragsakte
+   * gestellt und beim Prüfen der Serienplanung. Ohne diesen Filter bliebe nur,
+   * die ganze Liste zu holen und im Browser zu filtern — und das ist bei
+   * einem Unterhaltsvertrag über zwei Jahre eine vierstellige Zahl Zeilen.
+   */
+  contractId: z.string().min(1).optional(),
   from: z.coerce.date().optional(),
   to: z.coerce.date().optional(),
 });
@@ -67,6 +76,7 @@ export const GET = defineRoute({
       status: query.status,
       employeeId: nurEigene ? (session.profileId ?? '__keines__') : query.employeeId,
       customerId: query.customerId,
+      contractId: query.contractId,
       from: query.from,
       to: query.to,
       q: query.q,
