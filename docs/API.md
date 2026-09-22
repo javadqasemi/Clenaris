@@ -5,7 +5,7 @@
 > Quelle, aus der sowohl diese Referenz als auch die Laufzeitvalidierung
 > stammen.
 
-Stand: 448 Endpunkte. Die maschinenlesbare Fassung liegt in
+Stand: 452 Endpunkte. Die maschinenlesbare Fassung liegt in
 [`openapi.yaml`](./openapi.yaml) bzw. [`openapi.json`](./openapi.json).
 
 ## Grundlagen
@@ -3560,6 +3560,7 @@ Familie.
 | `order` | string | – | `asc` \| `desc`, Standard `"desc"` |
 | `status` | string | – | `DRAFT` \| `ISSUED` \| `SENT` \| `PARTIALLY_PAID` \| `PAID` \| `OVERDUE` \| `CANCELLED` \| `WRITTEN_OFF` |
 | `customerId` | string | – | min. 1 Zeichen |
+| `contractId` | string | – | min. 1 Zeichen |
 | `from` | string | – | date-time |
 | `to` | string | – | date-time |
 
@@ -8715,6 +8716,81 @@ Familie.
 | --- | --- | --- | --- |
 | `von` | string | ja | date-time |
 | `bis` | string | ja | date-time |
+
+### `POST /api/contracts/{id}/versions/{versionId}/acceptance`
+
+**Vertragsfassung zur elektronischen Annahme schicken.** **Kein zweiter Signaturweg**: Es entsteht ein gewöhnlicher Vorgang des bestehenden Signaturkerns — unveränderlicher Snapshot, Hash A, versionierter Zustimmungstext, Protokoll, Ablauf. Unterzeichnet wird eine **Vertragsfassung**, nie „der Vertrag": Was angenommen wird, sind konkrete Konditionen, und die stehen in der Version. Der Link geht per E-Mail an die Kundschaft, nicht an die auslösende Person — sonst könnte der Betrieb den Vertrag selbst „annehmen". Mehrfaches Auslösen versendet den bestehenden Vorgang erneut (200 statt 201, alter Link verfällt), statt einen zweiten anzulegen; erzwungen durch einen Teilindex. Ab dem Versand ist die Fassung eingefroren. Keine Aussage über QES oder ZertES: Der Vorgang belegt den Hergang, keine geprüfte Identität.
+
+- **Zugriff:** Erfordert die Berechtigung: `contract:sign`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 201
+- **Mögliche Fehler:** 400, 401, 403, 404, 409, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+| `versionId` | string | ja | min. 1 Zeichen |
+
+### `DELETE /api/contracts/{id}/versions/{versionId}/acceptance`
+
+**Annahmevorgang zurückziehen.** Der Weg, den die Einfrierung offenlässt: Wer die Konditionen doch noch ändern will, zieht die Unterzeichnung zurück — sichtbar, protokolliert, mit entwertetem Link. Eine bereits angenommene Fassung lässt sich nicht zurückziehen (422); dafür gibt es die neue Version. Snapshot und Protokoll bleiben erhalten.
+
+- **Zugriff:** Erfordert die Berechtigung: `contract:sign`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+| `versionId` | string | ja | min. 1 Zeichen |
+
+### `GET /api/contracts/{id}/invoices`
+
+**Abrechnungsübersicht des Vertrags.** Welche Perioden fakturiert sind und welche offen — die Frage des Monatsabschlusses. Die Perioden entstehen aus dem Zyklus der geltenden Version, nicht aus den vorhandenen Rechnungen; eine vergessene Periode wäre sonst unsichtbar, weil zu ihr eben kein Beleg existiert. Stornierte Rechnungen zählen nicht als fakturiert.
+
+- **Zugriff:** Erfordert die Berechtigung: `contract:billing`.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+**Query-Parameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `perioden` | integer | – | ≥ 1, ≤ 36, Standard `6` |
+
+### `POST /api/contracts/{id}/invoices`
+
+**Rechnung einer Vertragsperiode erzeugen.** **Idempotent.** Ein zweiter Aufruf für dieselbe Periode legt nichts an, sondern gibt die vorhandene Rechnung mit `neu: false` zurück — und antwortet darum mit 200 statt 201. Die Zusicherung steht als Teilindex in der Datenbank (`contractId` + kanonischer Periodenbeginn, ohne stornierte Belege), nicht als Prüfung im Code: Zwischen Lesen und Schreiben liegt ein Moment, in den ein zweiter Klick und zwei gleichzeitige Monatsabschlüsse genau hineinpassen. Kein Zeitraum und kein Betrag werden entgegengenommen — beide ergeben sich aus der geltenden Vertragsversion. Abgewiesen (422): Vertrag ohne geltende Fassung, Vertrag der nie in Kraft war, Periode ohne Betrag.
+
+- **Zugriff:** Erfordert die Berechtigungen: `contract:billing`, `invoice:create`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 201
+- **Mögliche Fehler:** 400, 401, 403, 404, 409, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `stichtag` | string | – | – |
+| `sofortAusstellen` | boolean | – | Standard `false` |
 
 ### `POST /api/contracts/{id}/amendments`
 

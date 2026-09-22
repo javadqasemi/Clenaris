@@ -400,6 +400,36 @@ export const priceAdjustmentDecisionSchema = z.object({
 });
 
 // ---------------------------------------------------------------------------
+//  Abrechnung
+// ---------------------------------------------------------------------------
+
+/**
+ * Die Rechnung einer Vertragsperiode auslösen.
+ *
+ * **Kein Zeitraum, nur ein Stichtag.** Der Zeitraum ergibt sich aus dem
+ * Abrechnungszyklus der geltenden Vertragsversion; der Stichtag sagt bloss,
+ * welche Periode gemeint ist. Liesse man ihn frei wählen, wären beliebig viele
+ * sich überlappende „Perioden" fakturierbar — und der Schutz gegen
+ * Doppelabrechnung hätte keinen Schlüssel mehr, an dem er greifen könnte.
+ *
+ * **Kein Betrag.** Was zu zahlen ist, rechnet der Server aus Version und
+ * erbrachten Einsätzen. Dasselbe Prinzip wie bei der Preisberechnung des
+ * Buchungsformulars.
+ */
+export const contractInvoiceSchema = z
+  .object({
+    /** Irgendein Tag in der gewünschten Periode. Ohne Angabe: die vorige. */
+    stichtag: dateOnlySchema.optional(),
+    /** true = sofort ausstellen; Nummer wird vergeben, der Beleg ist danach unveränderlich. */
+    sofortAusstellen: z.boolean().default(false),
+  })
+  .strict();
+
+export const contractBillingOverviewQuerySchema = z.object({
+  perioden: z.coerce.number().int().min(1).max(36).default(6),
+});
+
+// ---------------------------------------------------------------------------
 //  Abfragen
 // ---------------------------------------------------------------------------
 
@@ -425,3 +455,4 @@ export type ServiceScheduleInput = z.infer<typeof serviceScheduleSchema>;
 export type ScheduleExceptionInput = z.infer<typeof scheduleExceptionSchema>;
 export type ContractAmendmentCreateInput = z.infer<typeof contractAmendmentCreateSchema>;
 export type PriceAdjustmentCreateInput = z.infer<typeof priceAdjustmentCreateSchema>;
+export type ContractInvoiceInput = z.infer<typeof contractInvoiceSchema>;

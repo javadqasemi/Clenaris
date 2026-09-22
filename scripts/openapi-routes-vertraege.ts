@@ -306,6 +306,75 @@ export const CONTRACT_ROUTES: RouteDoc[] = [
   },
   {
     method: 'post',
+    path: '/api/contracts/{id}/versions/{versionId}/acceptance',
+    tag: 'Verträge',
+    summary: 'Vertragsfassung zur elektronischen Annahme schicken',
+    description:
+      '**Kein zweiter Signaturweg**: Es entsteht ein gewöhnlicher Vorgang des bestehenden ' +
+      'Signaturkerns — unveränderlicher Snapshot, Hash A, versionierter Zustimmungstext, ' +
+      'Protokoll, Ablauf. Unterzeichnet wird eine **Vertragsfassung**, nie „der Vertrag": Was ' +
+      'angenommen wird, sind konkrete Konditionen, und die stehen in der Version. Der Link geht ' +
+      'per E-Mail an die Kundschaft, nicht an die auslösende Person — sonst könnte der Betrieb ' +
+      'den Vertrag selbst „annehmen". Mehrfaches Auslösen versendet den bestehenden Vorgang ' +
+      'erneut (200 statt 201, alter Link verfällt), statt einen zweiten anzulegen; erzwungen ' +
+      'durch einen Teilindex. Ab dem Versand ist die Fassung eingefroren. Keine Aussage über QES ' +
+      'oder ZertES: Der Vorgang belegt den Hergang, keine geprüfte Identität.',
+    guard: perm('all', 'contract:sign'),
+    rateLimit: 'apiWrite',
+    params: versionParams,
+    status: 201,
+  },
+  {
+    method: 'delete',
+    path: '/api/contracts/{id}/versions/{versionId}/acceptance',
+    tag: 'Verträge',
+    summary: 'Annahmevorgang zurückziehen',
+    description:
+      'Der Weg, den die Einfrierung offenlässt: Wer die Konditionen doch noch ändern will, zieht ' +
+      'die Unterzeichnung zurück — sichtbar, protokolliert, mit entwertetem Link. Eine bereits ' +
+      'angenommene Fassung lässt sich nicht zurückziehen (422); dafür gibt es die neue Version. ' +
+      'Snapshot und Protokoll bleiben erhalten.',
+    guard: perm('all', 'contract:sign'),
+    rateLimit: 'apiWrite',
+    params: versionParams,
+  },
+  {
+    method: 'get',
+    path: '/api/contracts/{id}/invoices',
+    tag: 'Verträge',
+    summary: 'Abrechnungsübersicht des Vertrags',
+    description:
+      'Welche Perioden fakturiert sind und welche offen — die Frage des Monatsabschlusses. Die ' +
+      'Perioden entstehen aus dem Zyklus der geltenden Version, nicht aus den vorhandenen ' +
+      'Rechnungen; eine vergessene Periode wäre sonst unsichtbar, weil zu ihr eben kein Beleg ' +
+      'existiert. Stornierte Rechnungen zählen nicht als fakturiert.',
+    guard: perm('all', 'contract:billing'),
+    rateLimit: 'apiRead',
+    params: idParam,
+    query: vertrag.contractBillingOverviewQuerySchema,
+  },
+  {
+    method: 'post',
+    path: '/api/contracts/{id}/invoices',
+    tag: 'Verträge',
+    summary: 'Rechnung einer Vertragsperiode erzeugen',
+    description:
+      '**Idempotent.** Ein zweiter Aufruf für dieselbe Periode legt nichts an, sondern gibt die ' +
+      'vorhandene Rechnung mit `neu: false` zurück — und antwortet darum mit 200 statt 201. Die ' +
+      'Zusicherung steht als Teilindex in der Datenbank (`contractId` + kanonischer ' +
+      'Periodenbeginn, ohne stornierte Belege), nicht als Prüfung im Code: Zwischen Lesen und ' +
+      'Schreiben liegt ein Moment, in den ein zweiter Klick und zwei gleichzeitige ' +
+      'Monatsabschlüsse genau hineinpassen. Kein Zeitraum und kein Betrag werden ' +
+      'entgegengenommen — beide ergeben sich aus der geltenden Vertragsversion. Abgewiesen ' +
+      '(422): Vertrag ohne geltende Fassung, Vertrag der nie in Kraft war, Periode ohne Betrag.',
+    guard: perm('all', 'contract:billing', 'invoice:create'),
+    rateLimit: 'apiWrite',
+    params: idParam,
+    body: vertrag.contractInvoiceSchema,
+    status: 201,
+  },
+  {
+    method: 'post',
     path: '/api/contracts/{id}/amendments',
     tag: 'Verträge',
     summary: 'Vertragsänderung beantragen',

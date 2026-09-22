@@ -1,3 +1,4 @@
+import * as React from 'react';
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
@@ -11,6 +12,19 @@ import { getOrganizationId } from '@/server/services/organization.service';
 import { StatusBadge } from '@/components/ui/badge';
 import { ActionButton } from '@/components/app/action-button';
 import { DetailRow, DetailSection, PageHeader, TableScroll } from '@/components/app/page-parts';
+import {
+  AenderungsantragDialog,
+  AntragAnwendenDialog,
+  AusnahmeDialog,
+  EinsatzplanDialog,
+  GesperrtHinweis,
+  LeistungEntfernenButton,
+  LeistungHinzufuegenDialog,
+  NeueVersionDialog,
+  VersionBearbeitenDialog,
+  VertragsrechnungDialog,
+  type Leistungszeile,
+} from '@/features/admin/contract-panels';
 
 export const metadata: Metadata = {
   title: 'Vertrag',
@@ -103,13 +117,46 @@ export default async function ContractDetailPage({ params }: { params: Promise<{
   /** Die Fassung, deren Leistungen gezeigt werden: die geltende, sonst der Entwurf. */
   const gezeigt = geltend ?? entwurf ?? vertrag.versions[0] ?? null;
 
-  const [einsaetze, naechste] = await Promise.all([
+  const [einsaetze, naechste, rechnungen, katalog, offeneAnnahme] = await Promise.all([
     prisma.job.count({ where: { contractId: vertrag.id, deletedAt: null } }),
     prisma.job.findMany({
       where: { contractId: vertrag.id, deletedAt: null, scheduledStart: { gte: new Date() } },
       orderBy: { scheduledStart: 'asc' },
       take: 10,
       select: { id: true, number: true, title: true, scheduledStart: true, status: true, contractVersionId: true },
+    }),
+    prisma.invoice.findMany({
+      where: { contractId: vertrag.id, deletedAt: null },
+      orderBy: { contractPeriodStart: 'desc' },
+      take: 12,
+      select: {
+        id: true,
+        number: true,
+        status: true,
+        grossTotal: true,
+        contractPeriodStart: true,
+        periodFrom: true,
+        periodTo: true,
+        contractVersion: { select: { versionNumber: true } },
+      },
+    }),
+    prisma.service.findMany({
+      where: { organizationId, active: true },
+      orderBy: { name: 'asc' },
+      select: { id: true, name: true },
+    }),
+    /*
+      Der laufende Annahmevorgang der gezeigten Fassung. Sichtbar zu machen,
+      *dass* eine Unterzeichnung läuft, ist nicht Kosmetik: Solange sie läuft,
+      weist jede Änderung an der Fassung 422 zurück — ohne diesen Hinweis sähe
+      das nach einem Fehler der Anwendung aus.
+    */
+    prisma.signatureRequest.findFirst({
+      where: {
+        contractVersionId: { in: vertrag.versions.map((v) => v.id) },
+        status: { in: ['DRAFT', 'PENDING', 'FINALIZING'] },
+      },
+      select: { id: true, publicId: true, status: true, expiresAt: true, contractVersionId: true, sentAt: true },
     }),
   ]);
 
@@ -120,8 +167,68 @@ export default async function ContractDetailPage({ params }: { params: Promise<{
   const darfBeenden = can(session.role, 'contract:terminate');
   const darfVersionieren = can(session.role, 'contract:version');
   const darfPlanen = can(session.role, 'contract:update');
+  const darfFreigeben = can(session.role, 'contract:approve');
+  const darfUnterzeichnen = can(session.role, 'contract:sign');
+  const darfAbrechnen = can(session.role, 'contract:billing') && can(session.role, 'invoice:create');
 
   const planenBis = tagSchluessel(plusTage(alsTag(new Date()), 60));
+
+  /**
+   * Die Vorbelegung für eine neue Fassung: die Konditionen der gezeigten.
+   *
+   * Eine leere Maske wäre hier falsch. Wer den Preis ändert, will genau das
+   * ändern — und nicht Zahlungsziel, Kündigungsfrist und MWST von Hand neu
+   * eintippen, wo ein Zahlendreher eine Vertragsänderung wäre, die niemand
+   * beabsichtigt hat.
+   */
+  const konditionenVorlage = gezeigt
+    ? {
+        effectiveFrom: tagSchluessel(plusTage(alsTag(new Date()), 1)),
+        reason: '',
+        pricingModel: gezeigt.pricingModel,
+        baseAmount: toNumber(gezeigt.baseAmount),
+        hourlyRate: gezeigt.hourlyRate ? toNumber(gezeigt.hourlyRate) : null,
+        unitPrice: gezeigt.unitPrice ? toNumber(gezeigt.unitPrice) : null,
+        unitLabel: gezeigt.unitLabel,
+        vatRate: toNumber(gezeigt.vatRate),
+        billingCycle: gezeigt.billingCycle,
+        paymentTermDays: gezeigt.paymentTermDays,
+        noticePeriodDays: gezeigt.noticePeriodDays,
+        minimumTermMonths: gezeigt.minimumTermMonths,
+        renewalType: gezeigt.renewalType,
+        renewalPeriodMonths: gezeigt.renewalPeriodMonths,
+        indexReference: gezeigt.indexReference,
+        nextReviewAt: gezeigt.nextReviewAt,
+        targetQualityScore: gezeigt.targetQualityScore,
+        inspectionIntervalDays: gezeigt.inspectionIntervalDays,
+        responseHours: gezeigt.responseHours,
+        slaNote: gezeigt.slaNote,
+        terms: gezeigt.terms,
+        internalNote: gezeigt.internalNote,
+      }
+    : undefined;
+
+  /** Der Leistungsumfang des Entwurfs in der Form, die der PUT-Endpunkt erwartet. */
+  const entwurfsLeistungen: Leistungszeile[] =
+    entwurf?.services.map((leistung) => ({
+      serviceId: leistung.serviceId,
+      label: leistung.label,
+      description: leistung.description,
+      zone: leistung.zone,
+      estimatedMinutes: leistung.estimatedMinutes,
+      requiredCrewSize: leistung.requiredCrewSize,
+      materialsBy: leistung.materialsBy,
+      quantity: leistung.quantity ? toNumber(leistung.quantity) : null,
+      specialInstructions: leistung.specialInstructions,
+    })) ?? [];
+
+  const entwurfGesperrt = entwurf
+    ? entwurf.acceptedAt
+      ? ('ANGENOMMEN' as const)
+      : offeneAnnahme?.contractVersionId === entwurf.id
+        ? ('IN_UNTERZEICHNUNG' as const)
+        : null
+    : null;
 
   return (
     <div className="space-y-6">
@@ -209,6 +316,38 @@ export default async function ContractDetailPage({ params }: { params: Promise<{
                 successMessage="Die Serien sind geplant."
               />
             ) : null}
+
+            {/*
+              Zur Unterschrift geben: nur für einen Entwurf, der noch nicht
+              angenommen ist, und nur mit `contract:sign` — dieselbe Linie wie
+              beim Aktivieren. Der Link geht per E-Mail an die Kundschaft,
+              nicht an die Person, die hier klickt.
+            */}
+            {darfUnterzeichnen && entwurf && !entwurf.acceptedAt && !offeneAnnahme ? (
+              <ActionButton
+                endpoint={`/api/contracts/${vertrag.id}/versions/${entwurf.id}/acceptance`}
+                label="Zur Unterschrift senden"
+                confirmTitle="Vertragsfassung zur Annahme senden"
+                confirm="Die Kundschaft erhält einen befristeten Link auf ein unveränderliches Abbild dieser Fassung. Ab dem Versand lässt sich die Fassung nicht mehr ändern."
+                successMessage="Die Fassung ist zur Annahme versandt."
+              />
+            ) : null}
+
+            {darfUnterzeichnen && offeneAnnahme ? (
+              <ActionButton
+                endpoint={`/api/contracts/${vertrag.id}/versions/${offeneAnnahme.contractVersionId}/acceptance`}
+                method="DELETE"
+                label="Unterzeichnung zurückziehen"
+                variant="destructive"
+                confirmTitle="Annahmevorgang zurückziehen"
+                confirm="Der Link wird entwertet. Abbild und Protokoll bleiben als Beleg erhalten. Danach lässt sich die Fassung wieder ändern."
+                successMessage="Der Vorgang ist zurückgezogen."
+              />
+            ) : null}
+
+            {darfAbrechnen && ['ACTIVE', 'PAUSED', 'NOTICE_GIVEN', 'ENDED'].includes(vertrag.status) ? (
+              <VertragsrechnungDialog contractId={vertrag.id} />
+            ) : null}
           </div>
         }
       />
@@ -275,6 +414,18 @@ export default async function ContractDetailPage({ params }: { params: Promise<{
                 : undefined
             }
             body="flush"
+            action={
+              darfVersionieren && entwurf && !entwurfGesperrt && gezeigt?.id === entwurf.id ? (
+                <LeistungHinzufuegenDialog
+                  contractId={vertrag.id}
+                  versionId={entwurf.id}
+                  bestehende={entwurfsLeistungen}
+                  leistungen={katalog.map((l) => ({ value: l.id, label: l.name }))}
+                />
+              ) : entwurfGesperrt && gezeigt?.id === entwurf?.id ? (
+                <GesperrtHinweis grund={entwurfGesperrt} />
+              ) : null
+            }
           >
             {!gezeigt || gezeigt.services.length === 0 ? (
               <p className="px-6 py-6 text-sm text-muted-foreground">
@@ -296,6 +447,11 @@ export default async function ContractDetailPage({ params }: { params: Promise<{
                       <th scope="col" className="text-right">
                         Personen
                       </th>
+                      {darfPlanen ? (
+                        <th scope="col" className="text-right">
+                          <span className="sr-only">Handlungen</span>
+                        </th>
+                      ) : null}
                     </tr>
                   </thead>
                   <tbody>
@@ -331,6 +487,65 @@ export default async function ContractDetailPage({ params }: { params: Promise<{
                         </td>
                         <td className="num text-muted-foreground">{leistung.estimatedMinutes} min</td>
                         <td className="num text-muted-foreground">{leistung.requiredCrewSize}</td>
+                        {darfPlanen ? (
+                          <td className="text-right">
+                            <div className="flex flex-wrap justify-end gap-1">
+                              {/*
+                                Der Plan gehört zur Leistung, nicht zum
+                                Vertrag: Verschiedene Leistungen derselben
+                                Fassung haben verschiedene Rhythmen — das
+                                Treppenhaus wöchentlich, die Fenster
+                                vierteljährlich.
+                              */}
+                              {leistung.schedules.map((plan) => (
+                                <React.Fragment key={plan.id}>
+                                  <EinsatzplanDialog
+                                    contractServiceId={leistung.id}
+                                    auslöser={`Plan ${uhrzeit(plan.startMinute)}`}
+                                    plan={{
+                                      id: plan.id,
+                                      frequency: plan.frequency,
+                                      interval: plan.interval,
+                                      weekdays: plan.weekdays,
+                                      monthDay: plan.monthDay,
+                                      startMinute: plan.startMinute,
+                                      endMinute: plan.endMinute,
+                                      effectiveFrom: tagSchluessel(plan.effectiveFrom),
+                                      effectiveUntil: plan.effectiveUntil
+                                        ? tagSchluessel(plan.effectiveUntil)
+                                        : null,
+                                      holidayHandling: plan.holidayHandling,
+                                      active: plan.active,
+                                    }}
+                                  />
+                                  <AusnahmeDialog planId={plan.id} />
+                                </React.Fragment>
+                              ))}
+                              {/*
+                                Anlegen nur am Entwurf: Die Frequenz ist Teil
+                                der Vereinbarung, und ein neuer Plan an einer
+                                geltenden Fassung wäre eine stille
+                                Vertragsänderung. Der Dienst weist es ohnehin
+                                ab — die Schaltfläche behauptet es gar nicht
+                                erst.
+                              */}
+                              {gezeigt?.status === 'DRAFT' && !entwurfGesperrt ? (
+                                <EinsatzplanDialog contractServiceId={leistung.id} auslöser="Plan anlegen" />
+                              ) : null}
+                              {darfVersionieren &&
+                              entwurf &&
+                              !entwurfGesperrt &&
+                              gezeigt?.id === entwurf.id ? (
+                                <LeistungEntfernenButton
+                                  contractId={vertrag.id}
+                                  versionId={entwurf.id}
+                                  bestehende={entwurfsLeistungen}
+                                  index={gezeigt.services.indexOf(leistung)}
+                                />
+                              ) : null}
+                            </div>
+                          </td>
+                        ) : null}
                       </tr>
                     ))}
                   </tbody>
@@ -403,6 +618,11 @@ export default async function ContractDetailPage({ params }: { params: Promise<{
             title="Änderungen und Preisanpassungen"
             description="Der Antrag ist nicht die Änderung: Er wird geprüft, freigegeben und erzeugt dann eine neue Fassung."
             body="flush"
+            action={
+              darfVersionieren && ['ACTIVE', 'PAUSED', 'NOTICE_GIVEN'].includes(vertrag.status) ? (
+                <AenderungsantragDialog contractId={vertrag.id} />
+              ) : null
+            }
           >
             {vertrag.amendments.length === 0 && vertrag.priceAdjustments.length === 0 ? (
               <p className="px-6 py-6 text-sm text-muted-foreground">Keine Anträge.</p>
@@ -416,6 +636,11 @@ export default async function ContractDetailPage({ params }: { params: Promise<{
                       <th scope="col">Gegenstand</th>
                       <th scope="col">Wirksam ab</th>
                       <th scope="col">Status</th>
+                      {darfFreigeben || darfVersionieren ? (
+                        <th scope="col" className="text-right">
+                          <span className="sr-only">Handlungen</span>
+                        </th>
+                      ) : null}
                     </tr>
                   </thead>
                   <tbody>
@@ -430,6 +655,52 @@ export default async function ContractDetailPage({ params }: { params: Promise<{
                         <td>
                           <StatusBadge status={antrag.status} />
                         </td>
+                        {darfFreigeben || darfVersionieren ? (
+                          <td className="text-right">
+                            <div className="flex flex-wrap justify-end gap-1">
+                              {/*
+                                Zwei Rechte, zwei Schritte: Freigeben verlangt
+                                `contract:approve` (Geschäftsleitung), das
+                                Wirksamwerden `contract:version` — es erzeugt
+                                eine Fassung und ist Tagesgeschäft. Wer
+                                beantragt, gibt nicht frei; diese Prüfung
+                                steht im Dienst und greift auch dann, wenn
+                                beide Schaltflächen sichtbar sind.
+                              */}
+                              {darfFreigeben && (antrag.status === 'DRAFT' || antrag.status === 'REVIEW') ? (
+                                <>
+                                  <ActionButton
+                                    endpoint={`/api/contracts/${vertrag.id}/amendments/${antrag.id}/decision`}
+                                    body={{ entscheidung: 'APPROVE' }}
+                                    label="Freigeben"
+                                    variant="default"
+                                    successMessage="Der Antrag ist freigegeben."
+                                  />
+                                  <ActionButton
+                                    endpoint={`/api/contracts/${vertrag.id}/amendments/${antrag.id}/decision`}
+                                    body={{ entscheidung: 'REJECT' }}
+                                    label="Ablehnen"
+                                    withNote
+                                    noteLabel="Grund"
+                                    noteField="reason"
+                                    successMessage="Der Antrag ist abgelehnt."
+                                  />
+                                </>
+                              ) : null}
+                              {darfVersionieren && antrag.status === 'APPROVED' && konditionenVorlage ? (
+                                <AntragAnwendenDialog
+                                  contractId={vertrag.id}
+                                  amendmentId={antrag.id}
+                                  vorlage={{
+                                    ...konditionenVorlage,
+                                    effectiveFrom: tagSchluessel(antrag.effectiveFrom),
+                                    reason: antrag.title,
+                                  }}
+                                />
+                              ) : null}
+                            </div>
+                          </td>
+                        ) : null}
                       </tr>
                     ))}
                     {vertrag.priceAdjustments.map((anpassung) => (
@@ -445,6 +716,105 @@ export default async function ContractDetailPage({ params }: { params: Promise<{
                         <td className="tabular-nums text-muted-foreground">{formatDate(anpassung.effectiveFrom)}</td>
                         <td>
                           <StatusBadge status={anpassung.status} />
+                        </td>
+                        {darfFreigeben || darfVersionieren ? (
+                          <td className="text-right">
+                            <div className="flex flex-wrap justify-end gap-1">
+                              {darfFreigeben && anpassung.status === 'PLANNED' ? (
+                                <>
+                                  <ActionButton
+                                    endpoint={`/api/contracts/${vertrag.id}/price-adjustments/${anpassung.id}/decision`}
+                                    body={{ entscheidung: 'APPROVE' }}
+                                    label="Freigeben"
+                                    variant="default"
+                                    successMessage="Die Preisanpassung ist freigegeben."
+                                  />
+                                  <ActionButton
+                                    endpoint={`/api/contracts/${vertrag.id}/price-adjustments/${anpassung.id}/decision`}
+                                    body={{ entscheidung: 'REJECT' }}
+                                    label="Ablehnen"
+                                    withNote
+                                    noteLabel="Grund"
+                                    noteField="reason"
+                                    successMessage="Die Preisanpassung ist abgelehnt."
+                                  />
+                                </>
+                              ) : null}
+                              {darfVersionieren && anpassung.status === 'APPROVED' ? (
+                                <ActionButton
+                                  endpoint={`/api/contracts/${vertrag.id}/price-adjustments/${anpassung.id}/apply`}
+                                  label="Wirksam machen"
+                                  variant="default"
+                                  confirmTitle="Preisanpassung wirksam machen"
+                                  confirm="Es entsteht eine neue Vertragsfassung mit dem neuen Betrag. Ausgestellte Rechnungen bleiben unberührt."
+                                  successMessage="Die neue Fassung gilt."
+                                />
+                              ) : null}
+                            </div>
+                          </td>
+                        ) : null}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </TableScroll>
+            )}
+          </DetailSection>
+
+          {/* ---------------------------------------------------------- */}
+          <DetailSection
+            title="Abrechnung"
+            description="Eine Periode, eine Rechnung — die Zusicherung steht als Teilindex in der Datenbank, nicht als Prüfung im Ablauf."
+            body="flush"
+          >
+            {rechnungen.length === 0 ? (
+              <p className="px-6 py-6 text-sm text-muted-foreground">
+                Noch keine Rechnung aus diesem Vertrag. Der Betrag entsteht aus der geltenden Fassung und den
+                erbrachten Einsätzen.
+              </p>
+            ) : (
+              <TableScroll>
+                <table className="data-table">
+                  <caption className="sr-only">Rechnungen aus diesem Vertrag, je Abrechnungsperiode.</caption>
+                  <thead>
+                    <tr>
+                      <th scope="col">Nummer</th>
+                      <th scope="col">Zeitraum</th>
+                      <th scope="col">Fassung</th>
+                      <th scope="col" className="text-right">
+                        Betrag
+                      </th>
+                      <th scope="col">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rechnungen.map((rechnung) => (
+                      <tr key={rechnung.id}>
+                        <td>
+                          <Link
+                            href={`/admin/rechnungen/${rechnung.id}`}
+                            className="font-medium tabular-nums text-primary underline-offset-4 hover:underline"
+                          >
+                            {rechnung.number}
+                          </Link>
+                        </td>
+                        <td className="tabular-nums text-muted-foreground">
+                          {rechnung.periodFrom && rechnung.periodTo
+                            ? `${formatDate(rechnung.periodFrom)} – ${formatDate(rechnung.periodTo)}`
+                            : '—'}
+                        </td>
+                        {/*
+                          Die Fassung je Rechnung ist die Antwort auf „wie kam
+                          dieser Betrag zustande" — nach der ersten
+                          Preisanpassung lässt sich das sonst nicht mehr
+                          nachrechnen.
+                        */}
+                        <td className="text-muted-foreground">
+                          {rechnung.contractVersion ? `Version ${rechnung.contractVersion.versionNumber}` : '—'}
+                        </td>
+                        <td className="num">{formatCurrency(toNumber(rechnung.grossTotal))}</td>
+                        <td>
+                          <StatusBadge status={rechnung.status} />
                         </td>
                       </tr>
                     ))}
@@ -520,20 +890,57 @@ export default async function ContractDetailPage({ params }: { params: Promise<{
             title="Fassungen"
             description="Eine geltende Fassung ist unveränderlich. Änderungen entstehen als neue Version."
             body="flush"
+            action={
+              darfVersionieren && vertrag.status === 'ACTIVE' && !entwurf ? (
+                <NeueVersionDialog contractId={vertrag.id} vorlage={konditionenVorlage} />
+              ) : null
+            }
           >
             <ul className="divide-y divide-border">
               {vertrag.versions.map((version) => (
-                <li key={version.id} className="flex items-start justify-between gap-3 px-6 py-3">
-                  <div className="min-w-0">
-                    <p className="text-sm font-medium">
-                      Version {version.versionNumber}
-                      <span className="ml-2 font-normal text-muted-foreground tabular-nums">
-                        ab {formatDate(version.effectiveFrom)}
-                      </span>
-                    </p>
-                    <p className="text-meta text-muted-foreground">{version.reason}</p>
+                <li key={version.id} className="space-y-1 px-6 py-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium">
+                        Version {version.versionNumber}
+                        <span className="ml-2 font-normal text-muted-foreground tabular-nums">
+                          ab {formatDate(version.effectiveFrom)}
+                        </span>
+                      </p>
+                      <p className="text-meta text-muted-foreground">{version.reason}</p>
+                    </div>
+                    <StatusBadge status={version.status} />
                   </div>
-                  <StatusBadge status={version.status} />
+
+                  {/*
+                    Die Annahme steht an der Fassung, nicht am Vertrag: Was
+                    die Kundschaft unterschrieben hat, sind diese
+                    Konditionen. Eine Angabe am Vertragskopf wäre nach der
+                    ersten Änderung eine Behauptung über etwas anderes.
+                  */}
+                  {version.acceptedAt ? (
+                    <p className="text-2xs text-muted-foreground">
+                      Elektronisch angenommen am {formatDate(version.acceptedAt)}
+                    </p>
+                  ) : offeneAnnahme?.contractVersionId === version.id ? (
+                    <p className="text-2xs text-muted-foreground">
+                      Liegt zur Unterzeichnung vor · Link gültig bis {formatDate(offeneAnnahme.expiresAt)}
+                    </p>
+                  ) : null}
+
+                  {darfVersionieren && version.status === 'DRAFT' && !entwurfGesperrt && konditionenVorlage ? (
+                    <div className="pt-1">
+                      <VersionBearbeitenDialog
+                        contractId={vertrag.id}
+                        versionId={version.id}
+                        werte={{
+                          ...konditionenVorlage,
+                          effectiveFrom: tagSchluessel(version.effectiveFrom),
+                          reason: version.reason,
+                        }}
+                      />
+                    </div>
+                  ) : null}
                 </li>
               ))}
             </ul>

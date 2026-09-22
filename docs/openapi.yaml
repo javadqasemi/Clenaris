@@ -9074,6 +9074,12 @@ paths:
           schema:
             type: 'string'
             minLength: 1
+        - name: 'contractId'
+          in: 'query'
+          required: false
+          schema:
+            type: 'string'
+            minLength: 1
         - name: 'from'
           in: 'query'
           required: false
@@ -38335,6 +38341,323 @@ paths:
                 '$ref': '#/components/schemas/ErrorEnvelope'
         '404':
           description: 'NOT_FOUND — nicht vorhanden, oder für diese Sitzung nicht sichtbar.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: 'RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+  '/api/contracts/{id}/versions/{versionId}/acceptance':
+    post:
+      tags:
+        - 'Verträge'
+      summary: 'Vertragsfassung zur elektronischen Annahme schicken'
+      description: |-
+          **Kein zweiter Signaturweg**: Es entsteht ein gewöhnlicher Vorgang des bestehenden Signaturkerns — unveränderlicher Snapshot, Hash A, versionierter Zustimmungstext, Protokoll, Ablauf. Unterzeichnet wird eine **Vertragsfassung**, nie „der Vertrag": Was angenommen wird, sind konkrete Konditionen, und die stehen in der Version. Der Link geht per E-Mail an die Kundschaft, nicht an die auslösende Person — sonst könnte der Betrieb den Vertrag selbst „annehmen". Mehrfaches Auslösen versendet den bestehenden Vorgang erneut (200 statt 201, alter Link verfällt), statt einen zweiten anzulegen; erzwungen durch einen Teilindex. Ab dem Versand ist die Fassung eingefroren. Keine Aussage über QES oder ZertES: Der Vorgang belegt den Hergang, keine geprüfte Identität.
+
+          **Zugriff:** Erfordert die Berechtigung: `contract:sign`.
+
+          **Rate-Limit-Klasse:** `apiWrite`
+      operationId: 'postContractsByIdVersionsByVersionIdAcceptance'
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: 'id'
+          in: 'path'
+          required: true
+          schema:
+            type: 'string'
+            minLength: 1
+        - name: 'versionId'
+          in: 'path'
+          required: true
+          schema:
+            type: 'string'
+            minLength: 1
+      responses:
+        '201':
+          description: 'Erfolg'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/SuccessEnvelope'
+        '400':
+          description: 'VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 'UNAUTHORIZED — keine oder abgelaufene Sitzung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 'FORBIDDEN — angemeldet, aber ohne die nötige Berechtigung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: 'NOT_FOUND — nicht vorhanden, oder für diese Sitzung nicht sichtbar.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '409':
+          description: 'CONFLICT — verstösst gegen eine Eindeutigkeitsregel.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: 'BUSINESS_RULE — fachlich nicht zulässig, etwa eine bereits ausgestellte Rechnung ändern.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: 'RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+    delete:
+      tags:
+        - 'Verträge'
+      summary: 'Annahmevorgang zurückziehen'
+      description: |-
+          Der Weg, den die Einfrierung offenlässt: Wer die Konditionen doch noch ändern will, zieht die Unterzeichnung zurück — sichtbar, protokolliert, mit entwertetem Link. Eine bereits angenommene Fassung lässt sich nicht zurückziehen (422); dafür gibt es die neue Version. Snapshot und Protokoll bleiben erhalten.
+
+          **Zugriff:** Erfordert die Berechtigung: `contract:sign`.
+
+          **Rate-Limit-Klasse:** `apiWrite`
+      operationId: 'deleteContractsByIdVersionsByVersionIdAcceptance'
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: 'id'
+          in: 'path'
+          required: true
+          schema:
+            type: 'string'
+            minLength: 1
+        - name: 'versionId'
+          in: 'path'
+          required: true
+          schema:
+            type: 'string'
+            minLength: 1
+      responses:
+        '200':
+          description: 'Erfolg'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/SuccessEnvelope'
+        '400':
+          description: 'VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 'UNAUTHORIZED — keine oder abgelaufene Sitzung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 'FORBIDDEN — angemeldet, aber ohne die nötige Berechtigung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: 'NOT_FOUND — nicht vorhanden, oder für diese Sitzung nicht sichtbar.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: 'BUSINESS_RULE — fachlich nicht zulässig, etwa eine bereits ausgestellte Rechnung ändern.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: 'RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+  '/api/contracts/{id}/invoices':
+    get:
+      tags:
+        - 'Verträge'
+      summary: 'Abrechnungsübersicht des Vertrags'
+      description: |-
+          Welche Perioden fakturiert sind und welche offen — die Frage des Monatsabschlusses. Die Perioden entstehen aus dem Zyklus der geltenden Version, nicht aus den vorhandenen Rechnungen; eine vergessene Periode wäre sonst unsichtbar, weil zu ihr eben kein Beleg existiert. Stornierte Rechnungen zählen nicht als fakturiert.
+
+          **Zugriff:** Erfordert die Berechtigung: `contract:billing`.
+
+          **Rate-Limit-Klasse:** `apiRead`
+      operationId: 'getContractsByIdInvoices'
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: 'id'
+          in: 'path'
+          required: true
+          schema:
+            type: 'string'
+            minLength: 1
+        - name: 'perioden'
+          in: 'query'
+          required: false
+          schema:
+            type: 'integer'
+            minimum: 1
+            maximum: 36
+            default: 6
+      responses:
+        '200':
+          description: 'Erfolg'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/SuccessEnvelope'
+        '400':
+          description: 'VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 'UNAUTHORIZED — keine oder abgelaufene Sitzung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 'FORBIDDEN — angemeldet, aber ohne die nötige Berechtigung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: 'NOT_FOUND — nicht vorhanden, oder für diese Sitzung nicht sichtbar.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: 'RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+    post:
+      tags:
+        - 'Verträge'
+      summary: 'Rechnung einer Vertragsperiode erzeugen'
+      description: |-
+          **Idempotent.** Ein zweiter Aufruf für dieselbe Periode legt nichts an, sondern gibt die vorhandene Rechnung mit `neu: false` zurück — und antwortet darum mit 200 statt 201. Die Zusicherung steht als Teilindex in der Datenbank (`contractId` + kanonischer Periodenbeginn, ohne stornierte Belege), nicht als Prüfung im Code: Zwischen Lesen und Schreiben liegt ein Moment, in den ein zweiter Klick und zwei gleichzeitige Monatsabschlüsse genau hineinpassen. Kein Zeitraum und kein Betrag werden entgegengenommen — beide ergeben sich aus der geltenden Vertragsversion. Abgewiesen (422): Vertrag ohne geltende Fassung, Vertrag der nie in Kraft war, Periode ohne Betrag.
+
+          **Zugriff:** Erfordert die Berechtigungen: `contract:billing`, `invoice:create`.
+
+          **Rate-Limit-Klasse:** `apiWrite`
+      operationId: 'postContractsByIdInvoices'
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: 'id'
+          in: 'path'
+          required: true
+          schema:
+            type: 'string'
+            minLength: 1
+      requestBody:
+        required: true
+        content:
+          'application/json':
+            schema:
+              type: 'object'
+              properties:
+                stichtag:
+                  type: 'string'
+                  pattern: '^\d{4}-\d{2}-\d{2}$'
+                sofortAusstellen:
+                  type: 'boolean'
+                  default: false
+      responses:
+        '201':
+          description: 'Erfolg'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/SuccessEnvelope'
+        '400':
+          description: 'VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 'UNAUTHORIZED — keine oder abgelaufene Sitzung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 'FORBIDDEN — angemeldet, aber ohne die nötige Berechtigung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: 'NOT_FOUND — nicht vorhanden, oder für diese Sitzung nicht sichtbar.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '409':
+          description: 'CONFLICT — verstösst gegen eine Eindeutigkeitsregel.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: 'BUSINESS_RULE — fachlich nicht zulässig, etwa eine bereits ausgestellte Rechnung ändern.'
           content:
             'application/json':
               schema:
