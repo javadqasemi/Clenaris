@@ -26,6 +26,7 @@ import * as q from '@/lib/validation/queries';
 import { BI_ROUTES } from './openapi-routes-bi';
 import { CONTRACT_ROUTES } from './openapi-routes-vertraege';
 import { QUALITY_ROUTES } from './openapi-routes-qualitaet';
+import { BETRIEB_ROUTES } from './openapi-routes-betrieb';
 
 /**
  * Registrierung aller REST-Endpunkte.
@@ -4428,4 +4429,9 @@ export const ROUTES: RouteDoc[] = [
   //  nebeneinander wachsen können, ohne sich in einer Datei zu drängen
   // -------------------------------------------------------------------------
   ...QUALITY_ROUTES,
+
+  // -------------------------------------------------------------------------
+  //  Betrieb (Wave 11): Reklamationen, Material, Geräte
+  // -------------------------------------------------------------------------
+  ...BETRIEB_ROUTES,
 ];

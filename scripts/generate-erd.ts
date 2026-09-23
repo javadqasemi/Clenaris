@@ -245,6 +245,10 @@ const DOMAINS: Domain[] = [
       'JobChecklistItem',
       'JobPhoto',
       'MaterialUsage',
+      'Material',
+      'StockMovement',
+      'Equipment',
+      'EquipmentMaintenance',
     ],
   },
   {
@@ -272,6 +276,7 @@ const DOMAINS: Domain[] = [
       'ContractAmendment',
       'ContractPriceAdjustment',
       'QualityInspection',
+      'Complaint',
       'QualityInspectionItem',
     ],
   },

@@ -26,7 +26,9 @@ export type SequenceScope =
   | 'lead'
   | 'employee'
   | 'contract'
-  | 'quality';
+  | 'quality'
+  | 'complaint'
+  | 'equipment';
 
 const PREFIX_FIELD: Record<SequenceScope, string> = {
   invoice: 'invoiceNumberPrefix',
@@ -39,6 +41,8 @@ const PREFIX_FIELD: Record<SequenceScope, string> = {
   employee: '',
   contract: '',
   quality: '',
+  complaint: '',
+  equipment: '',
 };
 
 const STATIC_PREFIX: Partial<Record<SequenceScope, string>> = {
@@ -55,6 +59,10 @@ const STATIC_PREFIX: Partial<Record<SequenceScope, string>> = {
   contract: 'VT',
   /** Qualitätskontrolle — ebenfalls eine interne Kennung, ebenfalls fest. */
   quality: 'QK',
+  /** Reklamation/Vorfall (Wave 11) — die Nummer, unter der die Kundschaft nachfragt. */
+  complaint: 'REK',
+  /** Inventarnummer eines Geräts (Wave 11). */
+  equipment: 'GR',
 };
 
 export interface NextNumberResult {

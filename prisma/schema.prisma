@@ -536,6 +536,10 @@ model Organization {
   withholdingProfiles   WithholdingTaxProfile[]
   withholdingTaxRates   WithholdingTaxRate[]
   salaryCertificates    SalaryCertificate[]
+  complaints            Complaint[]
+  materials             Material[]
+  stockMovements        StockMovement[]
+  equipment             Equipment[]
   numberSequences   NumberSequence[]
   files             FileAsset[]
   newsletter        NewsletterSubscriber[]
@@ -729,6 +733,8 @@ model User {
   authoredArticles  KnowledgeArticle[]   @relation("ArticleAuthor")
   meetingSeats      MeetingParticipant[]
   qualityInspections QualityInspection[] @relation("QualityInspector")
+  complaintsAssigned Complaint[]         @relation("ComplaintAssignee")
+  complaintsReported Complaint[]         @relation("ComplaintReporter")
 
   @@index([organizationId, role])
   @@index([organizationId, status])
@@ -1258,6 +1264,7 @@ model Customer {
   giftCards      GiftCard[]
   payments       Payment[]
   contracts      Contract[]
+  complaints     Complaint[]
 
   @@unique([organizationId, number])
   @@index([organizationId, email])
@@ -1407,6 +1414,7 @@ model Property {
   files     FileAsset[]
   contracts Contract[]
   qualityInspections QualityInspection[]
+  complaints         Complaint[]
 
   @@index([customerId])
   @@map("properties")
@@ -2111,6 +2119,8 @@ model Job {
   signatureRequests SignatureRequest[]
   deviceHandoffs    DeviceHandoffSession[]
   qualityInspections QualityInspection[]
+  complaints         Complaint[]
+  stockMovements     StockMovement[]
 
   @@unique([organizationId, number])
   /**
@@ -2258,6 +2268,8 @@ model MaterialUsage {
   createdAt DateTime @default(now()) @db.Timestamptz(6)
 
   job Job @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  /// Die Lagerbuchung dazu, wenn das Material aus dem Bestand kam (Wave 11).
+  stockMovement StockMovement?
 
   @@index([jobId])
   @@map("material_usages")
@@ -2333,6 +2345,7 @@ model Employee {
   payrollItems        PayrollItem[]
   withholdingProfiles WithholdingTaxProfile[]
   salaryCertificates  SalaryCertificate[]
+  equipment           Equipment[]         @relation("EquipmentAssignee")
 
   /// Drei Rollen am Vertrag, die im Reinigungsgewerbe regelmässig
   /// auseinanderfallen: Wer verkauft hat, wer verantwortet, wer operativ führt.
@@ -5359,6 +5372,7 @@ model CorrectiveAction {
   control      ControlEntry? @relation(fields: [controlId], references: [id], onDelete: SetNull)
   review       Review?       @relation(fields: [reviewId], references: [id], onDelete: SetNull)
   task         Task?         @relation(fields: [taskId], references: [id], onDelete: SetNull)
+  complaint    Complaint?
 
   @@index([organizationId, completedAt])
   @@map("corrective_actions")
@@ -6039,6 +6053,7 @@ model Contract {
   files            FileAsset[]
   activities       Activity[]
   qualityInspections QualityInspection[]
+  complaints         Complaint[]
 
   @@unique([organizationId, number])
   @@index([organizationId, status, startDate])
@@ -6548,4 +6563,226 @@ enum QualityOutcome {
   NICHT_BESTANDEN
   /// Keine Zusage vereinbart — die Begehung misst, urteilt aber nicht.
   OHNE_ZIEL
+}
+
+// ===========================================================================
+//  BETRIEB: REKLAMATIONEN, MATERIAL, GERÄTE (Wave 11, 2026-09-23)
+// ===========================================================================
+
+enum ComplaintKind {
+  /// Unzufriedenheit mit einer Leistung.
+  COMPLAINT
+  /// Betrieblicher Vorfall (Schlüssel verloren, Alarm ausgelöst, Zugang verweigert).
+  INCIDENT
+  /// Sachschaden beim Kunden.
+  DAMAGE
+}
+
+enum ComplaintSeverity {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum ComplaintStatus {
+  OPEN
+  ACKNOWLEDGED
+  IN_PROGRESS
+  RESOLVED
+  CLOSED
+  REJECTED
+}
+
+enum ComplaintChannel {
+  PHONE
+  EMAIL
+  PORTAL
+  ON_SITE
+  OTHER
+}
+
+/// Reklamation oder Vorfall mit Reaktionsfrist.
+///
+/// **Die Frist kommt aus dem Vertrag, nie aus einer Annahme.** Beim Erfassen
+/// wird die Vertragsfassung gesucht, die am Meldezeitpunkt galt; deren
+/// `responseHours` wird als Momentaufnahme übernommen, die Frist daraus
+/// gerechnet. Ohne Vertrag oder ohne Zusage steht keine Frist — „keine
+/// Zusage" ist eine andere Aussage als „24 Stunden".
+///
+/// **Reaktion ist die Bestätigung**, nicht die Erledigung: `acknowledgedAt`
+/// wird beim ersten Übergang aus `OPEN` gesetzt und danach nie verschoben —
+/// sonst liesse sich eine verpasste Frist nachträglich einhalten.
+model Complaint {
+  id             String @id @default(cuid())
+  organizationId String
+  number         String
+
+  kind     ComplaintKind     @default(COMPLAINT)
+  severity ComplaintSeverity @default(MEDIUM)
+  channel  ComplaintChannel  @default(PHONE)
+  status   ComplaintStatus   @default(OPEN)
+
+  title       String
+  description String
+
+  customerId        String
+  propertyId        String?
+  contractId        String?
+  contractVersionId String?
+  jobId             String?
+
+  reportedAt     DateTime  @db.Timestamptz(6)
+  /// Zusage zum Meldezeitpunkt (Stunden) — Momentaufnahme aus der Vertragsfassung.
+  responseHours  Int?
+  responseDueAt  DateTime? @db.Timestamptz(6)
+  acknowledgedAt DateTime? @db.Timestamptz(6)
+  resolvedAt     DateTime? @db.Timestamptz(6)
+  closedAt       DateTime? @db.Timestamptz(6)
+
+  /// Für die Kundschaft sichtbar.
+  resolution   String?
+  /// Nur intern.
+  internalNote String?
+
+  assigneeId         String?
+  reportedByUserId   String?
+  correctiveActionId String? @unique
+
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+
+  organization     Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  customer         Customer          @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  property         Property?         @relation(fields: [propertyId], references: [id], onDelete: SetNull)
+  contract         Contract?         @relation(fields: [contractId], references: [id], onDelete: SetNull)
+  job              Job?              @relation(fields: [jobId], references: [id], onDelete: SetNull)
+  assignee         User?             @relation("ComplaintAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
+  reportedBy       User?             @relation("ComplaintReporter", fields: [reportedByUserId], references: [id], onDelete: SetNull)
+  correctiveAction CorrectiveAction? @relation(fields: [correctiveActionId], references: [id], onDelete: SetNull)
+
+  @@unique([organizationId, number])
+  @@index([organizationId, status, responseDueAt])
+  @@index([customerId, reportedAt])
+  @@map("complaints")
+}
+
+/// Verbrauchsmaterial mit Bestand. Der Bestand ist die **Summe der
+/// Bewegungen**, keine gepflegte Zahl — eine Zahl, die man überschreiben
+/// kann, erklärt nicht, wohin das Material gegangen ist.
+model Material {
+  id             String  @id @default(cuid())
+  organizationId String
+  sku            String
+  name           String
+  unit           String  @default("Stk.")
+  unitCost       Decimal @default(0) @db.Decimal(12, 2)
+  /// Meldebestand — darunter erscheint das Material als „nachbestellen".
+  minStock       Decimal @default(0) @db.Decimal(12, 2)
+  active         Boolean @default(true)
+  note           String?
+
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+
+  organization Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  movements    StockMovement[]
+
+  @@unique([organizationId, sku])
+  @@map("materials")
+}
+
+enum StockMovementKind {
+  /// Wareneingang (+).
+  RECEIPT
+  /// Entnahme für einen Einsatz (−).
+  ISSUE
+  /// Rückgabe aus einem Einsatz (+).
+  RETURN
+  /// Inventurkorrektur (±) — Begründung Pflicht.
+  ADJUSTMENT
+}
+
+/// Eine Lagerbewegung — **nur anfügen** (Trigger `stock_movements_nur_anfuegen`).
+/// Eine falsche Buchung wird durch eine Gegenbuchung berichtigt, nicht
+/// überschrieben.
+model StockMovement {
+  id             String            @id @default(cuid())
+  organizationId String
+  materialId     String
+  kind           StockMovementKind
+  /// Mit Vorzeichen: Eingang positiv, Entnahme negativ.
+  quantity       Decimal           @db.Decimal(12, 2)
+  unitCost       Decimal?          @db.Decimal(12, 2)
+  jobId          String?
+  materialUsageId String?          @unique
+  reference      String?
+  note           String?
+  createdById    String?
+  createdAt      DateTime          @default(now()) @db.Timestamptz(6)
+
+  organization  Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  material      Material       @relation(fields: [materialId], references: [id], onDelete: Restrict)
+  job           Job?           @relation(fields: [jobId], references: [id], onDelete: SetNull)
+  materialUsage MaterialUsage? @relation(fields: [materialUsageId], references: [id], onDelete: SetNull)
+
+  @@index([materialId, createdAt])
+  @@index([organizationId, createdAt])
+  @@map("stock_movements")
+}
+
+enum EquipmentStatus {
+  AVAILABLE
+  IN_USE
+  MAINTENANCE
+  RETIRED
+}
+
+/// Gerät (Maschine, Staubsauger, Hochdruckreiniger) mit Zuteilung und Wartung.
+model Equipment {
+  id              String          @id @default(cuid())
+  organizationId  String
+  inventoryNumber String
+  name            String
+  category        String?
+  serialNumber    String?
+  status          EquipmentStatus @default(AVAILABLE)
+  assignedEmployeeId String?
+  purchasedOn     DateTime?       @db.Date
+  purchaseCost    Decimal?        @db.Decimal(12, 2)
+  /// Wartungsintervall in Tagen — aus Herstellerangabe oder eigener Regel.
+  maintenanceIntervalDays Int?
+  nextMaintenanceOn       DateTime? @db.Date
+  retiredAt       DateTime?       @db.Timestamptz(6)
+  retiredReason   String?
+  note            String?
+
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+
+  organization     Organization           @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  assignedEmployee Employee?              @relation("EquipmentAssignee", fields: [assignedEmployeeId], references: [id], onDelete: SetNull)
+  maintenances     EquipmentMaintenance[]
+
+  @@unique([organizationId, inventoryNumber])
+  @@index([organizationId, status])
+  @@index([organizationId, nextMaintenanceOn])
+  @@map("equipment")
+}
+
+/// Eine durchgeführte Wartung — Beleg, nicht änderbar (Trigger).
+model EquipmentMaintenance {
+  id          String   @id @default(cuid())
+  equipmentId String
+  performedOn DateTime @db.Date
+  kind        String   @default("Wartung")
+  note        String?
+  cost        Decimal? @db.Decimal(12, 2)
+  createdById String?
+  createdAt   DateTime @default(now()) @db.Timestamptz(6)
+
+  equipment Equipment @relation(fields: [equipmentId], references: [id], onDelete: Cascade)
+
+  @@index([equipmentId, performedOn])
+  @@map("equipment_maintenances")
 }

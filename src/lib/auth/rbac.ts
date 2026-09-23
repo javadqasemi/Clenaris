@@ -89,6 +89,13 @@ const CUSTOMER_PERMISSIONS: Permission[] = [
    * und in der Auswahl, nicht in der Anzeige.
    */
   'quality:read_own',
+  /**
+   * Reklamationen zu den eigenen Objekten melden und verfolgen (Wave 11).
+   * Eine Reaktionsfrist, deren Stand die meldende Kundschaft nicht sieht,
+   * ist eine Zusage ohne Gegenüber. Die Eigentümerschaft steht in der Abfrage.
+   */
+  'complaint:read_own',
+  'complaint:create_own',
   'invoice:read_own',
   'invoice:pay_own',
   'property:read',
@@ -180,6 +187,10 @@ const MANAGER_PERMISSIONS: Permission[] = [
    * halber Beleg im System.
    */
   'quality:read', 'quality:inspect', 'quality:complete',
+  // Reklamationen, Material und Geräte sind laufender Betrieb (Wave 11).
+  'complaint:read', 'complaint:create', 'complaint:update',
+  'inventory:read', 'inventory:manage',
+  'equipment:read', 'equipment:manage',
   'job:read', 'job:create', 'job:update', 'job:delete', 'job:assign', 'job:dispatch',
   'serviceArea:read',
 

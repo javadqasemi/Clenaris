@@ -4,7 +4,7 @@
 > Diagramme sind damit nie älter als das Schema. Prosa und Bereichseinteilung
 > stehen in `scripts/generate-erd.ts`.
 
-**136 Modelle, 104 Aufzählungstypen, 2617 Felder.**
+**141 Modelle, 110 Aufzählungstypen, 2724 Felder.**
 PostgreSQL 16+; alle Zeitstempel als `timestamptz` in UTC, Anzeige in Europe/Zurich.
 
 ## Vier Entscheidungen, die das ganze Schema prägen
@@ -40,8 +40,8 @@ flowchart LR
   signatur["Elektronische Unterzeichnung<br/><small>5 Modelle</small>"]
   crm["CRM<br/><small>13 Modelle</small>"]
   katalog["Leistungskatalog und Preislogik<br/><small>6 Modelle</small>"]
-  auftrag["Buchung, Offerte, Einsatz<br/><small>10 Modelle</small>"]
-  vertraege["Verträge und Einsatzpläne<br/><small>9 Modelle</small>"]
+  auftrag["Buchung, Offerte, Einsatz<br/><small>14 Modelle</small>"]
+  vertraege["Verträge und Einsatzpläne<br/><small>10 Modelle</small>"]
   personal["Personal und Zeit<br/><small>16 Modelle</small>"]
   finanzen["Finanzen<br/><small>8 Modelle</small>"]
   kommunikation["Kommunikation und Automatisierung<br/><small>10 Modelle</small>"]
@@ -125,7 +125,7 @@ erDiagram
 
 | Modell | Tabelle | Felder | Zweck |
 | --- | --- | --- | --- |
-| `Organization` | `organizations` | 120 | Mandant — Firmendaten, Bankverbindung, Erscheinungsbild. Wurzel fast aller Beziehungen. |
+| `Organization` | `organizations` | 124 | Mandant — Firmendaten, Bankverbindung, Erscheinungsbild. Wurzel fast aller Beziehungen. |
 | `NumberSequence` | `number_sequences` | 6 | Fortlaufende, lückenlose Belegnummern (Schweizer Buchhaltungsanforderung). |
 | `OpeningHours` | `opening_hours` | 7 | Öffnungszeiten je Wochentag; Grundlage der buchbaren Zeitfenster. |
 | `Holiday` | `holidays` | 7 | Feiertage und Betriebsferien. Sperren Termine und zählen nicht als Abwesenheitstage. |
@@ -228,7 +228,7 @@ erDiagram
 
 | Modell | Tabelle | Felder | Zweck |
 | --- | --- | --- | --- |
-| `User` | `users` | 57 | Benutzerkonto mit Rolle und Anmeldedaten. Passwörter als Argon2id-Hash. |
+| `User` | `users` | 59 | Benutzerkonto mit Rolle und Anmeldedaten. Passwörter als Argon2id-Hash. |
 | `RefreshToken` | `refresh_tokens` | 10 | Rotierender Refresh-Token. Gespeichert wird nur der SHA-256-Hash plus Familien-ID zur Erkennung von Wiederverwendung. |
 | `VerificationToken` | `verification_tokens` | 9 | Einmaltoken für E-Mail-Bestätigung, Passwortreset und Einladung. |
 | `PublicAccessToken` | `public_access_tokens` | 15 | Ein Schluessel fuer genau eine Sache, ohne Anmeldung. |
@@ -450,11 +450,11 @@ erDiagram
 | Modell | Tabelle | Felder | Zweck |
 | --- | --- | --- | --- |
 | `Lead` | `leads` | 39 | Anfrage vor der Kundenbeziehung, mit Herkunft, Bewertung und Pipeline-Stufe. |
-| `Customer` | `customers` | 58 | Kundendatensatz mit Konditionen, Umsatz und Zahlungsverhalten. |
+| `Customer` | `customers` | 59 | Kundendatensatz mit Konditionen, Umsatz und Zahlungsverhalten. |
 | `Contact` | `contacts` | 13 | Ansprechperson bei Geschäftskundschaft. |
 | `Address` | `addresses` | 25 | Adresse einer Kundschaft — Einsatz-, Rechnungs- oder Standardadresse. |
 | `Building` | `buildings` | 18 | Liegenschaft mit mehreren Objekten, etwa eine Überbauung. |
-| `Property` | `properties` | 32 | Konkretes Reinigungsobjekt: Fläche, Zimmer, Zugang, Schlüsseldepot. |
+| `Property` | `properties` | 33 | Konkretes Reinigungsobjekt: Fläche, Zimmer, Zugang, Schlüsseldepot. |
 | `PipelineStage` | `pipeline_stages` | 10 | Stufe im Vertriebstrichter, frei benennbar. |
 | `Tag` | `tags` | 7 | Frei vergebbares Etikett für Kundschaft und Anfragen. |
 | `LeadTag` | `lead_tags` | 4 | Zuordnung Etikett ↔ Anfrage. |
@@ -644,6 +644,46 @@ erDiagram
     Decimal unitCost
     Decimal total
   }
+  Material {
+    String id PK
+    String organizationId
+    String sku
+    String name
+    String unit
+    Decimal unitCost
+    Decimal minStock
+    Boolean active
+  }
+  StockMovement {
+    String id PK
+    String organizationId
+    String materialId
+    StockMovementKind kind
+    Decimal quantity
+    Decimal unitCost
+    String jobId
+    String materialUsageId UK
+  }
+  Equipment {
+    String id PK
+    String organizationId
+    String inventoryNumber
+    String name
+    String category
+    String serialNumber
+    EquipmentStatus status
+    String assignedEmployeeId
+  }
+  EquipmentMaintenance {
+    String id PK
+    String equipmentId
+    DateTime performedOn
+    String kind
+    String note
+    Decimal cost
+    String createdById
+    DateTime createdAt
+  }
   Quote |o--|| Booking : "quote"
   Booking |o--o{ Booking : "parentBooking"
   Booking ||--o{ BookingItem : "booking"
@@ -655,6 +695,11 @@ erDiagram
   Job ||--o{ JobChecklistItem : "job"
   Job ||--o{ JobPhoto : "job"
   Job ||--o{ MaterialUsage : "job"
+  StockMovement |o--o{ MaterialUsage : "stockMovement"
+  Material ||--o{ StockMovement : "material"
+  Job |o--o{ StockMovement : "job"
+  MaterialUsage |o--|| StockMovement : "materialUsage"
+  Equipment ||--o{ EquipmentMaintenance : "equipment"
 ```
 
 | Modell | Tabelle | Felder | Zweck |
@@ -664,11 +709,15 @@ erDiagram
 | `BookingExtra` | `booking_extras` | 10 | Gebuchte Zusatzleistung mit Menge und Preis. |
 | `Quote` | `quotes` | 49 | Offerte mit Positionen, Gültigkeit, Magic-Link-Token und elektronischer Signatur. |
 | `QuoteItem` | `quote_items` | 15 | Offertposition; optionale Positionen zählen nicht ins Total. |
-| `Job` | `jobs` | 61 | Ausführung durch das Team: Termin, Zuteilung, Checkliste, Abschluss, Kosten. |
+| `Job` | `jobs` | 63 | Ausführung durch das Team: Termin, Zuteilung, Checkliste, Abschluss, Kosten. |
 | `JobAssignment` | `job_assignments` | 11 | Zuteilung einer Person zu einem Einsatz, samt Zu- oder Absage. |
 | `JobChecklistItem` | `job_checklist_items` | 11 | Prüfpunkt des Abnahmeprotokolls, mit Vermerk wer wann abgehakt hat. |
 | `JobPhoto` | `job_photos` | 12 | Vorher-, Nachher- oder Schadensfoto mit Standort und Zeitpunkt. |
-| `MaterialUsage` | `material_usages` | 11 | Verbrauchtes Material je Einsatz — Grundlage der Deckungsbeitragsrechnung. |
+| `MaterialUsage` | `material_usages` | 12 | Verbrauchtes Material je Einsatz — Grundlage der Deckungsbeitragsrechnung. |
+| `Material` | `materials` | 13 | Verbrauchsmaterial mit Bestand. Der Bestand ist die **Summe der |
+| `StockMovement` | `stock_movements` | 16 | Eine Lagerbewegung — **nur anfügen** (Trigger `stock_movements_nur_anfuegen`). |
+| `Equipment` | `equipment` | 20 | Gerät (Maschine, Staubsauger, Hochdruckreiniger) mit Zuteilung und Wartung. |
+| `EquipmentMaintenance` | `equipment_maintenances` | 9 | Eine durchgeführte Wartung — Beleg, nicht änderbar (Trigger). |
 
 ## Verträge und Einsatzpläne
 
@@ -766,6 +815,16 @@ erDiagram
     Decimal weight
     String note
   }
+  Complaint {
+    String id PK
+    String organizationId
+    String number
+    ComplaintKind kind
+    ComplaintSeverity severity
+    ComplaintChannel channel
+    ComplaintStatus status
+    String title
+  }
   Contract ||--o{ ContractVersion : "contract"
   ContractVersion ||--o{ ContractService : "version"
   ContractService ||--o{ ServiceSchedule : "contractService"
@@ -781,11 +840,12 @@ erDiagram
   QualityInspection |o--|| QualityInspection : "followUpOf"
   QualityInspection |o--o{ QualityInspection : "followUp"
   QualityInspection ||--o{ QualityInspectionItem : "inspection"
+  Contract |o--o{ Complaint : "contract"
 ```
 
 | Modell | Tabelle | Felder | Zweck |
 | --- | --- | --- | --- |
-| `Contract` | `contracts` | 43 | Der Vertragskopf — Identität, Beteiligte, Lebenslauf. |
+| `Contract` | `contracts` | 44 | Der Vertragskopf — Identität, Beteiligte, Lebenslauf. |
 | `ContractVersion` | `contract_versions` | 44 | Eine Fassung der kaufmännischen Vereinbarung. |
 | `ContractService` | `contract_services` | 21 | Eine vereinbarte Leistung innerhalb einer Vertragsversion. |
 | `ServiceSchedule` | `service_schedules` | 19 | Der Einsatzplan einer Vertragsleistung — die Serie, aus der Einsätze |
@@ -793,6 +853,7 @@ erDiagram
 | `ContractAmendment` | `contract_amendments` | 22 | Eine nachvollziehbare Vertragsänderung. |
 | `ContractPriceAdjustment` | `contract_price_adjustments` | 25 | Eine geplante oder vollzogene Preisanpassung. |
 | `QualityInspection` | `quality_inspections` | 32 | Eine Qualitätskontrolle vor Ort (Wave 11). |
+| `Complaint` | `complaints` | 35 | Reklamation oder Vorfall mit Reaktionsfrist. |
 | `QualityInspectionItem` | `quality_inspection_items` | 12 | Eine Einzelbewertung innerhalb einer Begehung. |
 
 ## Personal und Zeit
@@ -973,7 +1034,7 @@ erDiagram
 
 | Modell | Tabelle | Felder | Zweck |
 | --- | --- | --- | --- |
-| `Employee` | `employees` | 52 | Personalstammdaten inkl. Schweizer Angaben (AHV, Bewilligung, Pensum). |
+| `Employee` | `employees` | 53 | Personalstammdaten inkl. Schweizer Angaben (AHV, Bewilligung, Pensum). |
 | `EmployeeSkill` | `employee_skills` | 6 | Qualifikation mit Stufe und Zertifikatsablauf. |
 | `SalaryRecord` | `salary_records` | 10 | Lohnhistorie: jede Änderung von Ansatz, Monatslohn oder Pensum als eigene |
 | `Availability` | `availabilities` | 6 | Regelmässige Verfügbarkeit je Wochentag. |
@@ -1740,7 +1801,7 @@ erDiagram
 | `ScenarioAssumption` | `scenario_assumptions` | 10 | Eine Annahme eines Szenarios. |
 | `RiskEntry` | `risk_entries` | 28 | Risikoeintrag. |
 | `ControlEntry` | `control_entries` | 20 | – |
-| `CorrectiveAction` | `corrective_actions` | 22 | Massnahme (CAPA). |
+| `CorrectiveAction` | `corrective_actions` | 23 | Massnahme (CAPA). |
 | `ManagedDocument` | `managed_documents` | 23 | Dokument in der Ablage. |
 | `DocumentVersion` | `document_versions` | 11 | – |
 | `KnowledgeArticle` | `knowledge_articles` | 21 | Wissensartikel — Abläufe, Schulungsunterlagen, Richtlinien, FAQ. |
@@ -1865,6 +1926,12 @@ exakte TypeScript-Typen.
 | `ScheduleExceptionKind` | `SKIP`, `MOVE`, `EXTRA` |
 | `QualityInspectionStatus` | `DRAFT`, `COMPLETED`, `CANCELLED` |
 | `QualityOutcome` | `BESTANDEN`, `KNAPP`, `NICHT_BESTANDEN`, `OHNE_ZIEL` |
+| `ComplaintKind` | `COMPLAINT`, `INCIDENT`, `DAMAGE` |
+| `ComplaintSeverity` | `LOW`, `MEDIUM`, `HIGH`, `CRITICAL` |
+| `ComplaintStatus` | `OPEN`, `ACKNOWLEDGED`, `IN_PROGRESS`, `RESOLVED`, `CLOSED`, `REJECTED` |
+| `ComplaintChannel` | `PHONE`, `EMAIL`, `PORTAL`, `ON_SITE`, `OTHER` |
+| `StockMovementKind` | `RECEIPT`, `ISSUE`, `RETURN`, `ADJUSTMENT` |
+| `EquipmentStatus` | `AVAILABLE`, `IN_USE`, `MAINTENANCE`, `RETIRED` |
 
 ## Migrationen
 

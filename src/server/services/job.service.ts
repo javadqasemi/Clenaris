@@ -1650,12 +1650,24 @@ export async function replaceJobMaterials(params: {
 
   await assertRapportNichtEingefroren(job.id);
 
+  /**
+   * Zeilen aus dem Lager bleiben stehen (Wave 11). Sie hängen an einer
+   * Lagerbewegung; sie hier zu löschen hiesse, den Verbrauch aus der
+   * Nachkalkulation zu nehmen, während der Bestand weiter um diese Menge
+   * kleiner ist. Ersetzt werden nur die frei erfassten Zeilen; eine
+   * Lagerentnahme wird über eine Rückgabe im Lager berichtigt.
+   */
+  const lagerzeilen = await prisma.materialUsage.findMany({
+    where: { jobId: job.id, stockMovement: { isNot: null } },
+    select: { total: true },
+  });
   const materialCost = round2(
-    params.input.materials.reduce((sum, item) => sum + item.quantity * item.unitCost, 0),
+    params.input.materials.reduce((sum, item) => sum + item.quantity * item.unitCost, 0) +
+      lagerzeilen.reduce((sum, z) => sum + toNumber(z.total), 0),
   );
 
   await prisma.$transaction(async (tx) => {
-    await tx.materialUsage.deleteMany({ where: { jobId: job.id } });
+    await tx.materialUsage.deleteMany({ where: { jobId: job.id, stockMovement: { is: null } } });
     if (params.input.materials.length > 0) {
       await tx.materialUsage.createMany({
         data: params.input.materials.map((item) => ({

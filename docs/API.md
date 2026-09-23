@@ -5,7 +5,7 @@
 > Quelle, aus der sowohl diese Referenz als auch die Laufzeitvalidierung
 > stammen.
 
-Stand: 482 Endpunkte. Die maschinenlesbare Fassung liegt in
+Stand: 504 Endpunkte. Die maschinenlesbare Fassung liegt in
 [`openapi.yaml`](./openapi.yaml) bzw. [`openapi.json`](./openapi.json).
 
 ## Grundlagen
@@ -6311,6 +6311,449 @@ Familie.
 | `areas[].lat` | number | – | ≥ -90, ≤ 90 |
 | `areas[].lng` | number | – | ≥ -180, ≤ 180 |
 | `overwrite` | boolean | – | Standard `false` |
+
+### `GET /api/complaints`
+
+**Reklamationen und Vorfälle.** Mit dem gerechneten Stand der Reaktionsfrist (`frist`: KEINE_ZUSAGE, LAEUFT, EINGEHALTEN, VERPASST). Filter: Status, Kundschaft, nur offene, nur überfällige.
+
+- **Zugriff:** Erfordert die Berechtigung: `complaint:read`.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 429, 500
+
+**Query-Parameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `status` | string | – | `OPEN` \| `ACKNOWLEDGED` \| `IN_PROGRESS` \| `RESOLVED` \| `CLOSED` \| `REJECTED` |
+| `customerId` | string | – | min. 1 Zeichen |
+| `ueberfaellig` | string | – | `true` \| `false` |
+| `offen` | string | – | `true` \| `false` |
+
+### `POST /api/complaints`
+
+**Reklamation erfassen.** Die Reaktionsfrist rechnet der Server aus der Vertragsfassung, die am Meldetag galt — kein Feld setzt sie. Ohne Vertrag oder Zusage: keine Frist. Meldezeitpunkt nicht in der Zukunft und höchstens 30 Tage zurück (422).
+
+- **Zugriff:** Erfordert die Berechtigung: `complaint:create`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 422, 429, 500
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `customerId` | string | ja | min. 1 Zeichen |
+| `propertyId` | string | – | min. 1 Zeichen |
+| `contractId` | string | – | min. 1 Zeichen |
+| `jobId` | string | – | min. 1 Zeichen |
+| `kind` | string | – | `COMPLAINT` \| `INCIDENT` \| `DAMAGE`, Standard `"COMPLAINT"` |
+| `severity` | string | – | `LOW` \| `MEDIUM` \| `HIGH` \| `CRITICAL`, Standard `"MEDIUM"` |
+| `channel` | string | – | `PHONE` \| `EMAIL` \| `PORTAL` \| `ON_SITE` \| `OTHER`, Standard `"PHONE"` |
+| `title` | string | ja | min. 1 Zeichen, max. 160 Zeichen |
+| `description` | string | ja | min. 1 Zeichen, max. 4000 Zeichen |
+| `reportedAt` | string | – | date-time |
+| `assigneeId` | string | – | min. 1 Zeichen |
+
+### `GET /api/complaints/{id}`
+
+**Eine Reklamation.** Mit Vertrag, Einsatz, Zuständigkeit, Massnahme und Fristenstand.
+
+- **Zugriff:** Erfordert die Berechtigung: `complaint:read`.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+### `PATCH /api/complaints/{id}`
+
+**Reklamation ändern.** Schweregrad, Titel (solange offen), Zuständigkeit, interne Notiz. Frist und Meldezeitpunkt sind nicht änderbar.
+
+- **Zugriff:** Erfordert die Berechtigung: `complaint:update`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `severity` | string | – | `LOW` \| `MEDIUM` \| `HIGH` \| `CRITICAL` |
+| `assigneeId` | string | – | min. 1 Zeichen |
+| `internalNote` | string | – | max. 4000 Zeichen |
+| `title` | string | – | min. 1 Zeichen, max. 160 Zeichen |
+
+### `POST /api/complaints/{id}/transition`
+
+**Status einer Reklamation.** Bestätigen, bearbeiten, erledigen, abschliessen, ablehnen, wieder öffnen. Der erste Schritt aus „Offen" hält die Reaktion einmal fest. Unzulässige oder gleichzeitige Übergänge: 422.
+
+- **Zugriff:** Erfordert die Berechtigung: `complaint:update`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `action` | string | ja | `ACKNOWLEDGE` \| `START` \| `RESOLVE` \| `CLOSE` \| `REJECT` \| `REOPEN` |
+| `resolution` | string | – | max. 4000 Zeichen |
+
+### `POST /api/complaints/{id}/corrective-action`
+
+**Korrekturmassnahme ableiten.** Erscheint in den Massnahmen der Unternehmensführung. Je Reklamation eine (422).
+
+- **Zugriff:** Erfordert die Berechtigung: `complaint:update`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `title` | string | ja | min. 1 Zeichen, max. 160 Zeichen |
+| `rootCause` | string | – | max. 2000 Zeichen |
+| `dueOn` | string | – | – |
+
+### `GET /api/account/complaints`
+
+**Eigene Reklamationen.** Nur kundensichtbare Felder; die interne Notiz steht nicht in der Abfrage.
+
+- **Zugriff:** Erfordert die Berechtigung: `complaint:read_own`.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 401, 403, 429, 500
+
+### `POST /api/account/complaints`
+
+**Reklamation melden (Kundschaft).** Zu einem eigenen Objekt oder Einsatz; Fremdes existiert für diesen Weg nicht (404).
+
+- **Zugriff:** Erfordert die Berechtigung: `complaint:create_own`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 422, 429, 500
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `propertyId` | string | – | min. 1 Zeichen |
+| `jobId` | string | – | min. 1 Zeichen |
+| `kind` | string | – | `COMPLAINT` \| `INCIDENT` \| `DAMAGE`, Standard `"COMPLAINT"` |
+| `title` | string | ja | min. 1 Zeichen, max. 160 Zeichen |
+| `description` | string | ja | min. 1 Zeichen, max. 4000 Zeichen |
+
+### `GET /api/account/complaints/{id}`
+
+**Eine eigene Reklamation.** Fremde Reklamationen existieren nicht (404).
+
+- **Zugriff:** Erfordert die Berechtigung: `complaint:read_own`.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+### `GET /api/materials`
+
+**Material mit Bestand.** Bestand = Summe der Bewegungen; Lagerwert; Meldebestand (`nachbestellen=true`).
+
+- **Zugriff:** Erfordert die Berechtigung: `inventory:read`.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 429, 500
+
+**Query-Parameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `nachbestellen` | string | – | `true` \| `false` |
+| `inaktive` | string | – | `true` \| `false` |
+
+### `POST /api/materials`
+
+**Material anlegen.** Artikelnummer je Organisation eindeutig (409).
+
+- **Zugriff:** Erfordert die Berechtigung: `inventory:manage`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 409, 422, 429, 500
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `sku` | string | ja | min. 1 Zeichen, max. 40 Zeichen |
+| `name` | string | ja | min. 1 Zeichen, max. 120 Zeichen |
+| `unit` | string | – | min. 1 Zeichen, max. 20 Zeichen, Standard `"Stk."` |
+| `unitCost` | number | – | ≥ 0, ≤ 1000000, Standard `0` |
+| `minStock` | number | – | ≥ 0, ≤ 1000000, Standard `0` |
+| `note` | string | – | max. 1000 Zeichen |
+
+### `GET /api/materials/{id}`
+
+**Ein Material mit Bewegungen.** Bestand und die letzten 200 Bewegungen.
+
+- **Zugriff:** Erfordert die Berechtigung: `inventory:read`.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+### `PATCH /api/materials/{id}`
+
+**Material ändern.** Stammdaten und Aktivität — kein Bestandsfeld.
+
+- **Zugriff:** Erfordert die Berechtigung: `inventory:manage`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `name` | string | – | min. 1 Zeichen, max. 120 Zeichen |
+| `unit` | string | – | min. 1 Zeichen, max. 20 Zeichen |
+| `unitCost` | number | – | ≥ 0, ≤ 1000000 |
+| `minStock` | number | – | ≥ 0, ≤ 1000000 |
+| `active` | boolean | – | – |
+| `note` | string | – | max. 1000 Zeichen |
+
+### `POST /api/materials/{id}/movements`
+
+**Lagerbewegung buchen.** Eingang, Entnahme, Rückgabe, Inventurkorrektur (mit Begründung). Nur anfügen — die Datenbank verweigert Änderung und Löschung. Negativer Bestand: 422.
+
+- **Zugriff:** Erfordert die Berechtigung: `inventory:manage`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `kind` | string | ja | `RECEIPT` \| `ISSUE` \| `RETURN` \| `ADJUSTMENT` |
+| `quantity` | number | ja | – |
+| `unitCost` | number | – | ≥ 0, ≤ 1000000 |
+| `jobId` | string | – | min. 1 Zeichen |
+| `reference` | string | – | max. 120 Zeichen |
+| `note` | string | – | max. 1000 Zeichen |
+
+### `POST /api/jobs/{id}/material-issue`
+
+**Material für einen Einsatz entnehmen.** Verbrauchszeile, Lagerentnahme und Materialaufwand in einer Transaktion; Preis aus dem Materialstamm. Nach der Vor-Ort-Abnahme eingefroren (422).
+
+- **Zugriff:** Erfordert die Berechtigung: `inventory:manage`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `materialId` | string | ja | min. 1 Zeichen |
+| `quantity` | number | ja | ≥ 0, ≤ 100000 |
+| `billable` | boolean | – | Standard `false` |
+
+### `GET /api/equipment`
+
+**Geräte.** Mit Zuteilung und Wartungsfälligkeit; `wartungFaellig=true` für die nächsten 14 Tage.
+
+- **Zugriff:** Erfordert die Berechtigung: `equipment:read`.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 429, 500
+
+**Query-Parameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `status` | string | – | `AVAILABLE` \| `IN_USE` \| `MAINTENANCE` \| `RETIRED` |
+| `wartungFaellig` | string | – | `true` \| `false` |
+
+### `POST /api/equipment`
+
+**Gerät erfassen.** Die Inventarnummer vergibt der Server.
+
+- **Zugriff:** Erfordert die Berechtigung: `equipment:manage`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 422, 429, 500
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `name` | string | ja | min. 1 Zeichen, max. 120 Zeichen |
+| `category` | string | – | max. 60 Zeichen |
+| `serialNumber` | string | – | max. 80 Zeichen |
+| `purchasedOn` | string | – | – |
+| `purchaseCost` | number | – | ≥ 0, ≤ 1000000 |
+| `maintenanceIntervalDays` | integer | – | ≥ 1, ≤ 3650 |
+| `nextMaintenanceOn` | string | – | – |
+| `note` | string | – | max. 1000 Zeichen |
+
+### `GET /api/equipment/{id}`
+
+**Ein Gerät.** Mit Zuteilung und Wartungsbelegen.
+
+- **Zugriff:** Erfordert die Berechtigung: `equipment:read`.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+### `PATCH /api/equipment/{id}`
+
+**Gerät ändern.** Stammdaten und Wartungsplanung; nicht nach der Ausmusterung.
+
+- **Zugriff:** Erfordert die Berechtigung: `equipment:manage`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `name` | string | – | min. 1 Zeichen, max. 120 Zeichen |
+| `category` | string | – | max. 60 Zeichen |
+| `serialNumber` | string | – | max. 80 Zeichen |
+| `maintenanceIntervalDays` | integer | – | ≥ 1, ≤ 3650 |
+| `nextMaintenanceOn` | string | – | – |
+| `note` | string | – | max. 1000 Zeichen |
+
+### `POST /api/equipment/{id}/assign`
+
+**Gerät zuteilen oder zurücknehmen.** Nur an aktive Personen; nicht in Wartung oder ausgemustert (422).
+
+- **Zugriff:** Erfordert die Berechtigung: `equipment:manage`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `employeeId` | string | – | min. 1 Zeichen |
+
+### `POST /api/equipment/{id}/maintenance`
+
+**Wartung festhalten.** Unveränderlicher Beleg; nächste Fälligkeit aus Wartungstag und Intervall. Zukunft: 422.
+
+- **Zugriff:** Erfordert die Berechtigung: `equipment:manage`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `performedOn` | string | ja | – |
+| `kind` | string | – | min. 1 Zeichen, max. 60 Zeichen, Standard `"Wartung"` |
+| `note` | string | – | max. 1000 Zeichen |
+| `cost` | number | – | ≥ 0, ≤ 1000000 |
+| `wiederVerfuegbar` | boolean | – | Standard `true` |
+
+### `POST /api/equipment/{id}/status`
+
+**Gerätestatus.** In Wartung, zurück in Betrieb, ausmustern (mit Grund, endgültig).
+
+- **Zugriff:** Erfordert die Berechtigung: `equipment:manage`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `status` | string | ja | `AVAILABLE` \| `MAINTENANCE` \| `RETIRED` |
+| `reason` | string | – | max. 500 Zeichen |
 
 ## Kommunikation
 
