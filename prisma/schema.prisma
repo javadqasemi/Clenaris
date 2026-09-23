@@ -397,6 +397,9 @@ enum FileScope {
   /// Dokument, Signaturprotokoll, Unterschriftsbild. Haengen ueber benannte
   /// Relationen am Vorgang — nie per Cascade an Offerte, Einsatz oder Kundschaft.
   SIGNATURE
+  /// Lohnabrechnungs- und Lohnausweis-PDF. Über die allgemeine Dateiroute nur
+  /// mit `payslip:read_all`; die eigene Abrechnung liefert der Lohndienst.
+  PAYROLL
 }
 
 enum AuditAction {
@@ -528,6 +531,11 @@ model Organization {
   securityEvents    SecurityEvent[]
   cronRuns          CronRun[]
   payrollSettings   PayrollSetting[]
+  payrollRates          PayrollRate[]
+  payrollItems          PayrollItem[]
+  withholdingProfiles   WithholdingTaxProfile[]
+  withholdingTaxRates   WithholdingTaxRate[]
+  salaryCertificates    SalaryCertificate[]
   numberSequences   NumberSequence[]
   files             FileAsset[]
   newsletter        NewsletterSubscriber[]
@@ -2321,6 +2329,10 @@ model Employee {
   files         FileAsset[]
   documents     ManagedDocument[]
   salaryHistory SalaryRecord[]
+  payrollProfile      EmployeePayrollProfile?
+  payrollItems        PayrollItem[]
+  withholdingProfiles WithholdingTaxProfile[]
+  salaryCertificates  SalaryCertificate[]
 
   /// Drei Rollen am Vertrag, die im Reinigungsgewerbe regelmässig
   /// auseinanderfallen: Wer verkauft hat, wer verantwortet, wer operativ führt.
@@ -2502,14 +2514,374 @@ model Payslip {
   publishedAt     DateTime? @db.Timestamptz(6)
   createdById     String?
 
+  /// Quellensteuerabzug des Monats (Wave 9, 2026-09-23).
+  withholdingTax  Decimal @default(0) @db.Decimal(12, 2)
+  /// Spesen und andere nicht beitragspflichtige Vergütungen — kommen zur
+  /// Auszahlung dazu, sind aber kein Lohn.
+  expenses        Decimal @default(0) @db.Decimal(12, 2)
+  /// Summe der Arbeitgeberbeiträge — nicht Teil der Auszahlung, aber der
+  /// Lohnkosten und der Abrechnung mit den Kassen.
+  employerContributions Decimal @default(0) @db.Decimal(12, 2)
+
+  /// Die Beitragsversionen (`PayrollRate.id`), mit denen gerechnet wurde. Eine
+  /// Version, auf die eine veröffentlichte Abrechnung zeigt, ist unveränderlich.
+  rateVersionIds  String[] @default([])
+  /// Wurde mit mindestens einem ungeprüften Satz gerechnet?
+  unverifiedRates Boolean  @default(true)
+
+  /// Die Abrechnung braucht eine menschliche Prüfung, bevor sie veröffentlicht
+  /// werden darf — heute: Quellensteuer ohne hinterlegten Tarif.
+  reviewRequired   Boolean   @default(false)
+  reviewReason     String?
+  reviewResolvedAt DateTime? @db.Timestamptz(6)
+  reviewResolvedById String?
+  reviewNote       String?
+
+  /// Das beim Veröffentlichen erzeugte PDF — eine Momentaufnahme, nie neu
+  /// gerechnet. `FileAsset.id` im Bereich `PAYROLL`.
+  pdfFileId       String?
+  pdfChecksum     String?
+
   createdAt DateTime @default(now()) @db.Timestamptz(6)
   updatedAt DateTime @updatedAt @db.Timestamptz(6)
 
-  employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  employee Employee      @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  lines    PayslipLine[]
+  items    PayrollItem[] @relation("PayslipItems")
 
   @@unique([employeeId, year, month])
   @@index([year, month])
   @@map("payslips")
+}
+
+// ---------------------------------------------------------------------------
+//  Lohnabrechnung — technischer Ausbau (Wave 9, 2026-09-23)
+// ---------------------------------------------------------------------------
+
+/// Welche Beitragsart eine Satzversion beschreibt.
+enum PayrollRateCode {
+  /// AHV/IV/EO — Arbeitnehmer- und Arbeitgeberanteil.
+  AHV_IV_EO
+  /// ALV bis zur Jahresgrenze (`thresholdMax`).
+  ALV
+  /// ALV über der Grenze (Solidaritätsbeitrag; seit 2023 aufgehoben, bleibt für ältere Jahre).
+  ALV_SOLIDARITY
+  /// Nichtberufsunfall (UVG-NBU) — in der Regel die angestellte Person.
+  UVG_NBU
+  /// Berufsunfall (UVG-BU) — der Betrieb.
+  UVG_BU
+  /// Krankentaggeld.
+  KTG
+  /// Familienausgleichskasse — der Betrieb, kantonal.
+  FAK
+  /// Verwaltungskosten der Ausgleichskasse — der Betrieb, in Prozent der AHV-Beiträge.
+  VK
+  /// Berufliche Vorsorge — Schwellen und Altersbänder in `parameters`.
+  BVG
+}
+
+/// Ist ein Satz fachlich bestätigt?
+enum PayrollVerification {
+  UNGEPRUEFT
+  GEPRUEFT
+}
+
+/// Eine Version eines Beitragssatzes mit Gültigkeitszeitraum.
+///
+/// **Warum Versionen statt einer Zeile je Jahr.** Der UVG- oder KTG-Satz kann
+/// mitten im Jahr wechseln (neuer Versicherungsvertrag), und eine Abrechnung
+/// für März muss nach dem Wechsel im Juli noch mit dem Märzsatz nachrechenbar
+/// sein. Gerechnet wird mit der Version, die am **letzten Tag** des
+/// Abrechnungsmonats gilt.
+///
+/// **Keine Überschneidung je Art** — Ausschlussbedingung in der Migration.
+/// **Unveränderlich, sobald benutzt:** Zeigt eine veröffentlichte Abrechnung
+/// auf die Version, lehnt der Dienst jede Änderung ab; eine neue Version mit
+/// späterem `validFrom` ist der Weg.
+///
+/// **Nie erfunden:** `source`/`reference` halten fest, woher ein Wert kommt;
+/// `verification` sagt, ob ihn jemand fachlich bestätigt hat.
+model PayrollRate {
+  id             String          @id @default(cuid())
+  organizationId String
+  code           PayrollRateCode
+  validFrom      DateTime        @db.Date
+  /// Letzter gültiger Tag, einschliesslich. `null` = offen.
+  validUntil     DateTime?       @db.Date
+  /// Anteil der angestellten Person, in Prozent (5.3 = 5,3 %).
+  employeePct    Decimal         @default(0) @db.Decimal(7, 4)
+  /// Anteil des Betriebs, in Prozent.
+  employerPct    Decimal         @default(0) @db.Decimal(7, 4)
+  /// Untergrenze des beitragspflichtigen Jahreslohns (z. B. ALV-Solidarität ab Grenze).
+  thresholdMin   Decimal?        @db.Decimal(12, 2)
+  /// Obergrenze des beitragspflichtigen Jahreslohns (z. B. ALV-Grenze).
+  thresholdMax   Decimal?        @db.Decimal(12, 2)
+  /// Weitere Grössen je Art — heute nur BVG: Eintrittsschwelle,
+  /// Koordinationsabzug, Mindest- und Obergrenze, Altersbänder.
+  parameters     Json?
+  /// Woher der Wert stammt — „Vorbelegung Clenaris (ungeprüft)",
+  /// „Kreisschreiben …", „UVG-Police Nr. …".
+  source         String
+  reference      String?
+  verification   PayrollVerification @default(UNGEPRUEFT)
+  verifiedAt     DateTime?       @db.Timestamptz(6)
+  verifiedById   String?
+  verificationNote String?
+
+  createdById String?
+  createdAt   DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt   DateTime @updatedAt @db.Timestamptz(6)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, code, validFrom])
+  @@map("payroll_rates")
+}
+
+/// Wie der 13. Monatslohn ausgerichtet wird — vertraglich, nicht gesetzlich.
+enum ThirteenthSalaryMode {
+  /// Kein 13. Monatslohn vereinbart.
+  NONE
+  /// Ein Monatslohn im Auszahlungsmonat; bei unterjähriger Anstellung anteilig.
+  ANNUAL
+  /// Ein Zwölftel der im Jahr bezahlten Grundlöhne, im Auszahlungsmonat oder beim Austritt.
+  PRO_RATA
+  /// Monatlich ein Zwölftel des Grundlohns.
+  MONTHLY
+}
+
+/// Lohnbezogene Vereinbarungen einer Person — nur über die Lohnschnittstelle
+/// erreichbar (`payslip:create`), nie über die Personalakte.
+model EmployeePayrollProfile {
+  id                    String               @id @default(cuid())
+  employeeId            String               @unique
+  thirteenthMode        ThirteenthSalaryMode @default(NONE)
+  /// Auszahlungsmonat bei `ANNUAL`/`PRO_RATA` (1–12).
+  thirteenthPayoutMonth Int                  @default(12)
+  /// Ferienentschädigung mit dem Stundenlohn ausrichten (unregelmässige
+  /// Pensen). Der Satz ergibt sich aus den Ferienwochen der Personalakte.
+  vacationPayInWage     Boolean              @default(false)
+  /// Feiertagsentschädigung in Prozent des Grundlohns — vertraglich/GAV.
+  holidayPayPct         Decimal?             @db.Decimal(6, 3)
+  note                  String?
+
+  updatedById String?
+  createdAt   DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt   DateTime @updatedAt @db.Timestamptz(6)
+
+  employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@map("employee_payroll_profiles")
+}
+
+/// Von Hand erfasste Lohnpositionen eines Monats.
+enum PayrollItemType {
+  /// Überstunden: Stunden × Ansatz × (1 + Zuschlag).
+  OVERTIME
+  /// Zulage (beitragspflichtig) — Schicht, Nacht, Funktion.
+  ALLOWANCE
+  /// Kinder-/Ausbildungszulage (nicht AHV-pflichtig).
+  FAMILY_ALLOWANCE
+  /// Spesenvergütung (kein Lohn).
+  EXPENSE
+  /// Korrektur des beitragspflichtigen Lohns (±).
+  CORRECTION
+  /// Korrektur der Auszahlung ohne Beitragswirkung (±).
+  NET_CORRECTION
+  /// Anderer Abzug — Vorschuss, Mietzins, Lohnpfändung.
+  DEDUCTION
+  /// Quellensteuer von Hand — ersetzt die Tarifberechnung dieses Monats.
+  WITHHOLDING_TAX_MANUAL
+}
+
+model PayrollItem {
+  id             String          @id @default(cuid())
+  organizationId String
+  employeeId     String
+  year           Int
+  month          Int
+  type           PayrollItemType
+  label          String
+  quantity       Decimal?        @db.Decimal(10, 2)
+  rate           Decimal?        @db.Decimal(12, 2)
+  surchargePct   Decimal?        @db.Decimal(6, 2)
+  /// Betrag — bei Überstunden vom Server gerechnet, sonst erfasst. Vorzeichen
+  /// nur bei Korrekturen; Abzüge und Spesen sind positiv.
+  amount         Decimal         @db.Decimal(12, 2)
+  note           String?
+  /// Korrigiert eine frühere, veröffentlichte Abrechnung.
+  correctsPayslipId String?
+  /// In welche Abrechnung die Position eingeflossen ist.
+  payslipId      String?
+
+  createdById String?
+  createdAt   DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt   DateTime  @updatedAt @db.Timestamptz(6)
+  deletedAt   DateTime? @db.Timestamptz(6)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  employee     Employee     @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  payslip      Payslip?     @relation("PayslipItems", fields: [payslipId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, year, month])
+  @@index([employeeId, year, month])
+  @@map("payroll_items")
+}
+
+/// Art einer Abrechnungszeile.
+enum PayslipLineType {
+  BASE
+  UNPAID_LEAVE
+  OVERTIME
+  ALLOWANCE
+  FAMILY_ALLOWANCE
+  VACATION_PAY
+  HOLIDAY_PAY
+  THIRTEENTH
+  CORRECTION
+  EXPENSE
+  NET_CORRECTION
+  AHV_IV_EO
+  ALV
+  BVG
+  UVG_NBU
+  KTG
+  WITHHOLDING_TAX
+  DEDUCTION
+  /// Arbeitgeberbeitrag — informativ, nicht Teil der Auszahlung.
+  EMPLOYER
+}
+
+/// Wirkung einer Zeile.
+enum PayslipLineKind {
+  /// Beitragspflichtiger Lohnbestandteil.
+  EARNING
+  /// Auszahlung ohne Lohncharakter (Spesen, Netto-Korrektur, Familienzulage).
+  PAYMENT
+  /// Abzug von der Auszahlung.
+  DEDUCTION
+  /// Arbeitgeberbeitrag — informativ.
+  EMPLOYER
+}
+
+/// Eine Zeile der Abrechnung — Momentaufnahme, unveränderlich nach dem Veröffentlichen.
+model PayslipLine {
+  id          String          @id @default(cuid())
+  payslipId   String
+  position    Int
+  type        PayslipLineType
+  kind        PayslipLineKind
+  label       String
+  quantity    Decimal?        @db.Decimal(10, 2)
+  rate        Decimal?        @db.Decimal(12, 4)
+  amount      Decimal         @db.Decimal(12, 2)
+  /// Unterliegt die Zeile der Quellensteuer (steuerbarer Lohn)?
+  taxable     Boolean         @default(true)
+  /// Ziffer des Lohnausweises, in die die Zeile fällt — Zuordnung fachlich
+  /// zu bestätigen (`docs/PAYROLL.md` §11).
+  certificateField String?
+  sourceItemId String?
+
+  payslip Payslip @relation(fields: [payslipId], references: [id], onDelete: Cascade)
+
+  @@unique([payslipId, position])
+  @@map("payslip_lines")
+}
+
+/// Quellensteuerpflicht einer Person — mit Gültigkeitszeitraum.
+///
+/// Konfession, Kinderzahl und Tarif sind **besonders schützenswerte bzw.
+/// persönliche Daten**; sie stehen nur hier, sind nur über die
+/// Lohnschnittstelle erreichbar und im Prüfprotokoll geschwärzt.
+model WithholdingTaxProfile {
+  id             String    @id @default(cuid())
+  organizationId String
+  employeeId     String
+  validFrom      DateTime  @db.Date
+  validUntil     DateTime? @db.Date
+  /// Kanton der Quellensteuer, zweistellig (BE, ZH, …).
+  canton         String
+  /// Tarifcode, wie ihn die Steuerverwaltung vergibt (z. B. „A0N").
+  tariffCode     String
+  churchTax      Boolean   @default(false)
+  children       Int       @default(0)
+  note           String?
+
+  createdById String?
+  createdAt   DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt   DateTime @updatedAt @db.Timestamptz(6)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  employee     Employee     @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@index([employeeId, validFrom])
+  @@map("withholding_tax_profiles")
+}
+
+/// Eine Zeile eines Quellensteuertarifs — **nur aus einer Quelle eingelesen,
+/// nie erfunden**. Ohne passende Zeile rechnet der Lohnlauf keine
+/// Quellensteuer, sondern verlangt eine Prüfung.
+model WithholdingTaxRate {
+  id             String @id @default(cuid())
+  organizationId String
+  canton         String
+  year           Int
+  tariffCode     String
+  /// Monatliches steuerbares Einkommen von (einschliesslich) …
+  incomeFrom     Decimal @db.Decimal(12, 2)
+  /// … bis (ausschliesslich). `null` = offen nach oben.
+  incomeTo       Decimal? @db.Decimal(12, 2)
+  ratePct        Decimal  @db.Decimal(7, 4)
+  source         String
+  reference      String?
+  verification   PayrollVerification @default(UNGEPRUEFT)
+  importBatch    String?
+
+  createdById String?
+  createdAt   DateTime @default(now()) @db.Timestamptz(6)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, canton, year, tariffCode, incomeFrom])
+  @@index([organizationId, canton, year, tariffCode])
+  @@map("withholding_tax_rates")
+}
+
+enum SalaryCertificateStatus {
+  DRAFT
+  FINAL
+}
+
+/// Aufstellung für den Lohnausweis eines Jahres — aus veröffentlichten
+/// Abrechnungen verdichtet. **Nicht das amtliche Formular 11**; die Zuordnung
+/// zu den Ziffern ist fachlich zu bestätigen.
+model SalaryCertificate {
+  id             String                  @id @default(cuid())
+  organizationId String
+  employeeId     String
+  year           Int
+  version        Int                     @default(1)
+  status         SalaryCertificateStatus @default(DRAFT)
+  periodFrom     DateTime                @db.Date
+  periodTo       DateTime                @db.Date
+  /// Die Ziffern und ihre Beträge — Momentaufnahme.
+  fields         Json
+  /// Aus welchen Abrechnungen verdichtet wurde.
+  payslipIds     String[]
+  pdfFileId      String?
+  pdfChecksum    String?
+  finalizedAt    DateTime?               @db.Timestamptz(6)
+  finalizedById  String?
+
+  createdById String?
+  createdAt   DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt   DateTime @updatedAt @db.Timestamptz(6)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  employee     Employee     @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@unique([employeeId, year, version])
+  @@map("salary_certificates")
 }
 
 // ===========================================================================
