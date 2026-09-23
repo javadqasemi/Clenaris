@@ -20,7 +20,7 @@ Produktionsbau auf Port 3001.
 
 | Blocker | Bereich | Status | Blockiert Release weiterhin |
 |---|---|---|---|
-| RB-001 | Hydration | **OPEN** | **JA** |
+| RB-001 | Hydration | **CLOSED** (Nachtrag §7) | nein |
 | RB-002 | Fassungswechsel | CLOSED | nein |
 | RB-003 | Doppelte Einsätze | CLOSED | nein |
 | RB-004 | Reaktivierung zerstört Historie | CLOSED | nein |
@@ -38,9 +38,14 @@ Produktionsbau auf Port 3001.
 | RB-016 | Vertrags-UI | CLOSED | — (war NO) |
 | RB-017 | Testaussagen | PARTIAL | — (war NO) |
 
-**Vorher: 15 blockierend. Geschlossen: 10 (RB-002 … RB-008, RB-010, RB-011,
-RB-012). Weiterhin blockierend: 5 (RB-001, RB-009, RB-013, RB-014 extern,
-RB-015).**
+**Vorher: 15 blockierend. Geschlossen: 11 (RB-001 … RB-008, RB-010, RB-011,
+RB-012). Weiterhin blockierend: 4, alle ausserhalb des Anwendungscodes
+(RB-009 fachliche Lohnprüfung, RB-013 clamd-Abnahme, RB-014 externer
+Überwachungsdienst, RB-015 Production V2).**
+
+> RB-001 wurde in einer eigenen Mission nach diesem Bericht geschlossen —
+> Einzelheiten in §7 und `docs/HYDRATION.md` §16. Die Abschnitte §2 (RB-001)
+> und §4 unten geben den Stand davor wieder und bleiben als Beleg stehen.
 
 Zusätzlich während der Stabilisierung gefunden und behoben (nicht in der
 ursprünglichen Liste): **NB-1** Standardperiode der Vertragsabrechnung,
@@ -332,3 +337,32 @@ Bekannte Fehlalarme, weil die Prüfung nur literale Pfade erkennt:
 
 Echte Lücken ohne Oberfläche: `/api/payroll/run|publish|settings`,
 `/api/time/approve|reopen`. Sie gehören zu RB-009 und bleiben dort benannt.
+
+---
+
+## 7. Nachtrag: RB-001 geschlossen (2026-09-23)
+
+| | |
+|---|---|
+| **Original Finding** | #418 sporadisch; im Gate 2/10 Läufe grün, Stress 0/5, 33 Fehlschläge |
+| **Root Cause** | Fehler in der von Next 15.5 mitgelieferten React-Fassung (`19.2.0-canary-0bdb9206-20250818`): `replaySuspendedUnitOfWork` setzt beim Wiederabspielen eines Host-Elements den Hydrationszeiger nicht zurück. `<main id="inhalt">` wird ein zweites Mal gegen sein erstes Kind beansprucht. Auslöser: Das `LayoutRouter`-Element unter `<main>` ist in Flight blockiert, solange der Chunk der Segment-Fehlergrenze (`error.tsx`) lädt, und kommt als `lazy`. Ist er beim Weitermachen erfüllt, spielt React wieder ab statt neu zu rendern — zeitabhängig |
+| **Kleinster Reproduzierer** | `storageState` → `/portal` → **sofort** `goto(/portal/einsaetze/‹id›)`: 12/40; deterministisch im Test `hydration-wiederholung.spec.ts`: 10/10 |
+| **Fix** | Rückportierung der Korrektur aus React 19.3.0 (wörtlich) in alle acht React-Kopien von Next — `scripts/react-hydrationskorrektur.mjs`, in `postinstall`/`build`/`start`/`dev`, idempotent, fail-closed |
+| **Tests** | `tests/e2e/hydration-wiederholung.spec.ts` — scheitert ohne Korrektur, verlangt das Wiederabspielen |
+| **Status** | **CLOSED** |
+| **Evidence** | `docs/HYDRATION.md` §16; Gate 10/10 × 27/27; Stress 5/5 × 27/27; 0 × #418, 0 `pageerror`, 0 `console.error` |
+
+**Preload-Korrelation:** Folge. Der Link war beim Parsen in allen
+Ladevorgängen vorhanden und verschwand erst 6–8 ms **nach** dem Fehler, als
+React `<head>` neu aufbaute.
+
+**Hydration Gate nach der Korrektur: PASS.**
+
+| Lauf | Ergebnis |
+|---|---|
+| 01–10 (Browserreihe, `retries: 0`) | je 27/27, 0 × #418 |
+| Stress 1–5 | je 27/27, 0 Hydrationsbefunde |
+
+Weiterhin grün: typecheck, lint, `prisma validate`, `npm run docs`, sauberer
+Produktionsbau; `npm test` 1259 Tests, 1258 bestanden, 0 fehlgeschlagen,
+1 übersprungen (datenabhängig).

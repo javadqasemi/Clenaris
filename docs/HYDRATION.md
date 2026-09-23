@@ -867,3 +867,130 @@ schwächer geworden. Der fehlende Preload-Link ist der einzige noch ungeprüfte
 Unterschied in `<head>`; ob er auch in sauberen Läufen fehlt, ist die nächste
 Messung (Gegenprobe wie in §15.4).
 
+---
+
+## 16. Die Ursache — gefunden, bewiesen, behoben (RB-001)
+
+> Stand 2026-09-23. **Ein Fehler in der von Next 15.5 mitgelieferten
+> React-Fassung** (`19.2.0-canary-0bdb9206-20250818`), ausgelöst durch einen
+> noch nicht aufgelösten Flight-Chunk direkt unter `<main id="inhalt">`.
+> React 19.3 behebt ihn; die Korrektur ist rückportiert.
+
+### 16.1 Der Weg dorthin — was den Unterschied machte
+
+Die entscheidende Frage aus §15 war: *Was gibt es in der Browserreihe, das es
+beim isolierten Laden nicht gibt?* Beantwortet mit einer Achsenmatrix
+(`scripts/hydration-achsen.ts`), je 30–80 Versuche gegen denselben Bau:
+
+| Ablauf | #418 |
+|---|---|
+| `storageState` → `goto(Ziel)` (wie die 610 isolierten Messungen) | 0 / 30 |
+| Anmeldung über die Maske → sofort `goto(Ziel)` (wie die Reihe) | 5 / 30, 3 / 30 |
+| Anmeldung → Landeseite zur Ruhe → `goto(Ziel)` | 1 / 30 |
+| `storageState` → Landeseite → **sofort** `goto(Ziel)` | **12 / 40** |
+| dasselbe, Landeseite erst zur Ruhe | 1 / 40 |
+| warmer Speicher, Ziel in **neuer** Seite | 0 / 40 |
+| wie Zeile 4, ohne HTTP-Speicher | 4 / 40 |
+| Landeseite ohne Verweis auf das Ziel (`/portal/profil`) | 7 / 40 |
+
+**Nicht** die Anmeldung, **nicht** der Vorabruf von Verweisen: ein Vordokument
+im selben Tab, das beim Weiternavigieren noch arbeitet, verschiebt das
+Zeitfenster des nächsten Dokuments. Warmer Speicher verstärkt. Die Reihe tut
+genau das in fast jedem Fall: anmelden, `waitForURL`, sofort `goto`.
+
+**Preload-Link (§15.5): Folge, nicht Ursache.** Beim Parsen war er in allen
+Ladevorgängen vorhanden, auch in den fehlerhaften; er verschwindet 6–8 ms
+**nach** dem Fehler, wenn React `<head>` im Browser neu aufbaut.
+
+### 16.2 Die Stelle — ohne Debugger, ohne Eingriff in die Anwendung
+
+Debugger und MutationObserver liessen den Fehler verschwinden (0 von 40): Sie
+verschieben die Zeit. Die Stelle kam deshalb aus zwei Sonden, die bis zum
+Fehler nichts kosten:
+
+- **`Error`-Proxy:** In dem Augenblick, in dem React die Meldung #418 erzeugt,
+  wird festgehalten, welche Elemente schon ein `__reactFiber$…` tragen.
+  Ergebnis: `aside` und `header` vollständig hydriert, in `main#inhalt`
+  **kein einziges** Element.
+- **`WeakMap.prototype.set`:** React legt zum Fehler `{ value, source: fiber,
+  stack }` ab (`createCapturedValueAtFiber`). Ergebnis in beiden Treffern:
+  Der Fiber ist **`<main>` selbst**, das DOM hat an der Stelle genau
+  `header, main` — und die Kinder von `<main>` sind ein **`lazy`-Knoten**
+  (Flight-Chunk, Status beim Fehler `fulfilled`).
+
+### 16.3 Der Mechanismus, im Quelltext belegt
+
+Im mitgelieferten `react-dom-client.production.js`:
+
+1. `beginWork` Fall 5 beansprucht bei der Hydration `nextHydratableInstance`
+   und setzt den Zeiger auf `getNextHydratable(firstChild)`.
+2. Der Abgleich der Kinder trifft auf den `lazy`-Knoten → `resolveLazy` wirft
+   `SuspenseException` → der Arbeitszyklus hält an (Grund 3 → 7).
+3. Ist der Chunk beim Weitermachen `fulfilled`, ruft
+   `replaySuspendedUnitOfWork` für Fall 5 nur `resetHooksOnUnwind` und
+   `unwindInterruptedWork` (setzt den Host-Kontext zurück, **nicht** den
+   Hydrationszeiger) und dann `beginWork(<main>)` erneut.
+4. Der Zeiger steht auf dem ersten Kind; `canHydrateInstance(<div>, "main")`
+   → `throwOnHydrationMismatch(<main>)` → #418, der ganze Baum wird neu gebaut.
+
+Warum der Knoten `lazy` ist: Das Element unter `<main>` ist Nexts
+`LayoutRouter` (`$L3`). Es trägt die Fehlergrenze des Segments als Prop
+(`"error":"$1f"` → `app/(app)/portal/error-*.js`). Solange deren Chunk lädt,
+liefert Flight das ganze Element blockiert, also als `lazy`. Ob React dann
+**wiederabspielt** (Fehler) oder **von der Wurzel neu rendert** (kein Fehler),
+entscheidet, ob der Chunk beim nächsten Durchgang schon da ist — daher die
+Zeitabhängigkeit, und daher kein Fehler im Entwicklungsbau (anderes Timing,
+§11.6).
+
+**Unabhängige Bestätigung:** `react-dom@19.3.0` und
+`19.3.0-canary-8b0da1c6-20260922` enthalten im Fall 5 genau die fehlende
+Rücksetzung. Next 15.5.26 (letzte 15er-Fassung) bringt noch die fehlerhafte
+Kopie mit.
+
+### 16.4 Der deterministische Nachweis
+
+`tests/e2e/hydration-wiederholung.spec.ts` bündelt **die mitgelieferte**
+React-Fassung, hydriert `<div><header/><main>{lazy}</main></div>` wie Next
+(`startTransition`) mit einem Thenable wie ein Flight-Chunk, das nach dem
+ersten Leseversuch erfüllt wird. Protokollzeilen nur im Testbündel.
+
+- **Vor der Korrektur:** 10 von 10 mit #418; Protokoll
+  `throw at main → reason 7 → replay tag=5 type=main hpf=main nhi=P →
+  MISMATCH at main`. Der Test scheitert.
+- **Nach der Korrektur:** Das Wiederabspielen findet weiterhin statt (der Test
+  verlangt es, sonst bewiese er nichts) — ohne Abweichung.
+
+### 16.5 Die Korrektur
+
+`scripts/react-hydrationskorrektur.mjs` setzt die Zeilen aus React 19.3
+wörtlich in alle acht React-Kopien unter `next/dist/compiled/react-dom*`.
+Läuft in `postinstall`, `build`, `start` und `dev`; idempotent; bricht ab,
+wenn die erwartete Stelle fehlt (eine geänderte React-Fassung wird nicht
+still ungepatcht ausgeliefert); erkennt eine Fassung, die die Korrektur schon
+enthält.
+
+**Verworfen:** Streaming oder SSR abschalten, `ssr: false`, Wiederholungen,
+Filter — verboten und am Mechanismus vorbei. Ein Hüll-Bauteil um `{children}`
+in `<main>` hätte den einen gemessenen Ort umgangen, aber jeden anderen
+Host-Knoten mit einem blockierten Flight-Kind offen gelassen. Next 16 hätte
+die Korrektur, ist aber ein Hauptversionssprung — eine eigene Aufgabe.
+
+**Beim nächsten Next-Update:** `node scripts/react-hydrationskorrektur.mjs
+--pruefen`. Meldet es „erwartete Stelle nicht gefunden", prüfen, ob die neue
+React-Fassung die Korrektur enthält; dann Skript und Aufruf entfernen.
+
+### 16.6 Wirkung — gemessen am sauberen Produktionsbau
+
+| Messung | vorher | nachher |
+|---|---|---|
+| Reproduzierer `state-landung-goto`, Einsatzseite | 12/40, 7/40 | **0/80** |
+| Reproduzierer `login-goto`, Einsatzseite | 5/30, 3/30 | **0/40** |
+| Reproduzierer `state-landung-goto`, Vertragsseite | — | **0/40** |
+| Deterministischer Test (`hydration-wiederholung.spec.ts`) | 10/10 Abweichung | Wiederabspielen ohne Abweichung |
+| Browserreihe, 10 Läufe in Folge, `retries: 0` | 2/10 grün | **10/10 grün, je 27/27** |
+| `e2e:stress`, 5 Läufe | 0/5 grün | **5/5 grün, je 27/27** |
+| #418, `pageerror`, `console.error` in diesen 15 Läufen | 33 Fehlschläge | **0** |
+
+**Hydrationstor: bestanden.** Wave 9.1 ist damit abgeschlossen; §14 („Was
+bleibt") ist durch diesen Abschnitt erledigt.
+

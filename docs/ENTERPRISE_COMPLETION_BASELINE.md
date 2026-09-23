@@ -1273,8 +1273,16 @@ Cause, Fix, Tests und Commits: [`RELEASE_BLOCKER_CLOSURE_REPORT.md`](RELEASE_BLO
   (fachliche Prüfung extern), RB-013 ClamAV (Abnahme gegen echten clamd),
   RB-014 (externer Überwachungsdienst), RB-015 Production V2.
 - **Gates:** Contract Gate **PASS** (Wege A–F im Browser). Hydration Gate
-  **FAIL** (2 von 10 Läufen grün, Stressreihe 0 von 5; alle Fehlschläge #418).
-  Die Waves 11–25 sind deshalb **nicht** begonnen.
+  zunächst **FAIL** (2 von 10 Läufen grün, Stressreihe 0 von 5; alle
+  Fehlschläge #418).
+- **Nachtrag RB-001 (geschlossen):** Ursache war ein Fehler der von Next 15.5
+  mitgelieferten React-Fassung beim Wiederabspielen eines angehaltenen
+  Host-Elements während der Hydration. Die Korrektur aus React 19.3 ist
+  rückportiert (`scripts/react-hydrationskorrektur.mjs`), mit einem
+  deterministischen Regressionstest. Danach **Hydration Gate PASS**: 10 von 10
+  Läufen je 27/27, Stressreihe 5 von 5, 0 × #418 (`docs/HYDRATION.md` §16).
+  Weiterhin blockierend sind nur noch Punkte ausserhalb des Anwendungscodes
+  (RB-009, RB-013, RB-014 extern, RB-015).
 - **Prüfstand:** typecheck, lint, `prisma validate`, `npm run docs` grün;
   HTTP-Reihe 1258 Tests, 0 Fehler, 1 datenabhängig übersprungen.
 
