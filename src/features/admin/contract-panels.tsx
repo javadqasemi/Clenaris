@@ -564,17 +564,17 @@ export function AntragAnwendenDialog({
 }) {
   return (
     <FormDialog
-      title="Änderung wirksam machen"
-      description="Es entsteht eine neue Vertragsversion mit diesen Konditionen. Die bisherige wird abgelöst; bereits erzeugte Einsätze und ausgestellte Rechnungen bleiben unberührt."
-      triggerLabel="Wirksam machen"
+      title="Änderung übernehmen"
+      description="Es entsteht ein Versionsentwurf mit diesen Konditionen. Er gilt erst, wenn jemand mit Aktivierungsrecht „Fassung in Kraft setzen“ wählt — auf Wunsch nach der Annahme durch die Kundschaft."
+      triggerLabel="Übernehmen"
       triggerVariant="default"
       triggerSize="sm"
       fields={VERSIONSFELDER}
       values={vorlage}
       endpoint={`/api/contracts/${contractId}/amendments/${amendmentId}/apply`}
       method="POST"
-      submitLabel="Neue Fassung erzeugen"
-      successMessage="Die neue Fassung gilt."
+      submitLabel="Versionsentwurf erzeugen"
+      successMessage="Der Versionsentwurf ist angelegt. Er gilt ab „Fassung in Kraft setzen“."
       transform={(payload) => ({ version: payload })}
     />
   );
@@ -629,6 +629,12 @@ export function VertragsrechnungDialog({ contractId }: { contractId: string }) {
 // ---------------------------------------------------------------------------
 
 export interface Leistungszeile {
+  /**
+   * Die Kennung der bestehenden Zeile. Mit ihr behält der Dienst die Zeile
+   * samt Einsatzplan; ohne sie entstünde eine neue, und der Plan ginge über
+   * die Kaskade verloren (bis 2026-09-23 der Fall).
+   */
+  id?: string | null;
   serviceId?: string | null;
   label: string;
   description?: string | null;
@@ -643,11 +649,10 @@ export interface Leistungszeile {
 /**
  * Eine Leistung zum Entwurf hinzufügen.
  *
- * Der Endpunkt ersetzt den Leistungsumfang **als Ganzes** — deshalb schickt
- * die Maske die bestehenden Zeilen mit. Das ist kein Umweg, sondern die
- * Regel des Dienstes: An den Zeilen eines Entwurfs hängt nichts, was ihre
- * Kennung bräuchte, und ein zeilenweiser Abgleich brächte eine zweite
- * Wahrheit über „welche Zeile ist welche".
+ * Der Endpunkt nimmt den Leistungsumfang **als Ganzes** — deshalb schickt die
+ * Maske die bestehenden Zeilen mit, **mit ihrer Kennung**. Der Dienst behält
+ * genannte Zeilen und ihren Einsatzplan, entfernt nicht genannte und legt
+ * neue an.
  */
 export function LeistungHinzufuegenDialog({
   contractId,
@@ -736,6 +741,136 @@ export function LeistungEntfernenButton({
     >
       Entfernen
     </Button>
+  );
+}
+
+// ---------------------------------------------------------------------------
+//  Lebenslauf: Pause, Kündigung, Verlängerung, Preisanpassung
+// ---------------------------------------------------------------------------
+
+/**
+ * Pausieren — mit Beginn und optionalem Ende.
+ *
+ * Bis 2026-09-23 war die Pause ein Knopf: ab heute, ohne Ende. Eine
+ * vereinbarte Pause („Betriebsferien 20. Juli bis 10. August") liess sich
+ * nicht erfassen. Jetzt stehen beide Tage in der Maske; bereits geplante
+ * Einsätze im Zeitraum werden abgesagt, und nach dem Ende setzt der
+ * nächtliche Lauf den Vertrag von selbst fort.
+ */
+export function PauseDialog({ contractId, heute }: { contractId: string; heute: string }) {
+  return (
+    <FormDialog
+      title="Vertrag pausieren"
+      description="Im Zeitraum wird nicht gereinigt. Bereits geplante Einsätze darin werden abgesagt; davor und danach bleibt alles. Ohne Ende läuft die Pause, bis jemand fortsetzt."
+      triggerLabel="Pausieren"
+      triggerVariant="outline"
+      triggerSize="sm"
+      size="md"
+      fields={[
+        { name: 'pausedFrom', label: 'Ab', type: 'date', required: true, half: true },
+        { name: 'pausedUntil', label: 'Bis und mit', type: 'date', half: true, hint: 'Leer lassen für eine offene Pause.' },
+        { name: 'reason', label: 'Grund', type: 'text', required: true, placeholder: 'Betriebsferien der Kundschaft' },
+      ]}
+      values={{ pausedFrom: heute }}
+      endpoint={`/api/contracts/${contractId}/pause`}
+      method="POST"
+      submitLabel="Pausieren"
+      successMessage="Der Vertrag ist pausiert."
+    />
+  );
+}
+
+/**
+ * Eine Kündigung erfassen — wer, wann, auf wann.
+ *
+ * Bis 2026-09-23 schickte der Knopf fest „durch die Kundschaft, heute".
+ * Eine Kündigung der Firma oder eine nachgetragene liess sich nicht erfassen.
+ */
+export function KuendigungDialog({ contractId }: { contractId: string }) {
+  return (
+    <FormDialog
+      title="Kündigung erfassen"
+      description="Festgehalten wird, dass gekündigt wurde. Ohne Wirkungsdatum rechnet das System es aus Frist und Laufzeit — ob die Kündigung wirksam ist, entscheidet dieses System nicht. Einsätze nach der Wirkung werden abgesagt."
+      triggerLabel="Kündigung erfassen"
+      triggerVariant="outline"
+      triggerSize="sm"
+      size="md"
+      fields={[
+        {
+          name: 'noticeGivenBy',
+          label: 'Gekündigt durch',
+          type: 'select',
+          required: true,
+          options: [
+            { value: 'CUSTOMER', label: 'Die Kundschaft' },
+            { value: 'PROVIDER', label: 'Die Firma' },
+          ],
+        },
+        { name: 'noticeGivenAt', label: 'Gekündigt am', type: 'date', half: true, hint: 'Ohne Angabe: heute.' },
+        { name: 'terminationEffectiveAt', label: 'Wirksam auf', type: 'date', half: true, hint: 'Ohne Angabe: gerechnet.' },
+        { name: 'reason', label: 'Grund', type: 'textarea', rows: 2 },
+      ]}
+      values={{ noticeGivenBy: 'CUSTOMER' }}
+      endpoint={`/api/contracts/${contractId}/notice`}
+      method="POST"
+      submitLabel="Kündigung erfassen"
+      successMessage="Die Kündigung ist erfasst."
+    />
+  );
+}
+
+/** Verlängern — um die vereinbarte Dauer oder eine angegebene. */
+export function VerlaengernDialog({ contractId }: { contractId: string }) {
+  return (
+    <FormDialog
+      title="Vertrag verlängern"
+      description="Das Vertragsende verschiebt sich; die Kündigungsfrist wird neu gerechnet. Die Konditionen bleiben — ein anderer Preis ist eine neue Fassung."
+      triggerLabel="Verlängern"
+      triggerVariant="outline"
+      triggerSize="sm"
+      size="md"
+      fields={[
+        { name: 'months', label: 'Um Monate', type: 'number', min: 1, max: 120, hint: 'Ohne Angabe: die vereinbarte Verlängerungsdauer.' },
+        { name: 'reason', label: 'Begründung', type: 'textarea', rows: 2, required: true },
+      ]}
+      endpoint={`/api/contracts/${contractId}/renew`}
+      method="POST"
+      submitLabel="Verlängern"
+      successMessage="Der Vertrag ist verlängert."
+    />
+  );
+}
+
+/**
+ * Eine Preisanpassung vorschlagen.
+ *
+ * Der Endpunkt bestand seit Wave 10, eine Maske nicht (Audit 2026-09-23).
+ * Der alte Betrag fehlt in der Maske mit Absicht: Er steht in der geltenden
+ * Fassung, und ihn mitschicken zu lassen hiesse, dem Client die Vergangenheit
+ * behaupten zu lassen. Freigeben muss eine zweite Person.
+ */
+export function PreisanpassungDialog({ contractId }: { contractId: string }) {
+  return (
+    <FormDialog
+      title="Preisanpassung vorschlagen"
+      description="Der Vorschlag ändert nichts. Nach der Freigabe durch eine zweite Person entsteht daraus ein Versionsentwurf, der mit „Fassung in Kraft setzen“ gilt."
+      triggerLabel="Preisanpassung"
+      triggerVariant="outline"
+      triggerSize="sm"
+      size="md"
+      fields={[
+        { name: 'newAmount', label: 'Neuer Betrag', type: 'number', min: 0, required: true, half: true, suffix: 'CHF' },
+        { name: 'effectiveFrom', label: 'Gilt ab', type: 'date', required: true, half: true },
+        { name: 'indexReference', label: 'Index', type: 'text', placeholder: 'LIK, Basis Dez. 2025' },
+        { name: 'indexNewValue', label: 'Neuer Indexstand', type: 'number', min: 0, half: true },
+        { name: 'reviewDueAt', label: 'Nächste Überprüfung', type: 'date', half: true },
+        { name: 'reason', label: 'Begründung', type: 'textarea', rows: 2, required: true },
+      ]}
+      endpoint={`/api/contracts/${contractId}/price-adjustments`}
+      method="POST"
+      submitLabel="Vorschlagen"
+      successMessage="Die Preisanpassung ist vorgeschlagen. Freigeben muss sie jemand anderes."
+    />
   );
 }
 

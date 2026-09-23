@@ -5,7 +5,7 @@ import { notFound } from 'next/navigation';
 
 import { can } from '@/lib/auth/rbac';
 import { requirePermission } from '@/lib/auth/session';
-import { alsTag, plusTage, tagSchluessel } from '@/lib/contracts/serie';
+import { alsTag, plusTage, tagSchluessel, zuercherHeute } from '@/lib/contracts/serie';
 import { naechsteKontrolle } from '@/lib/quality/bewertung';
 import { prisma, toNumber } from '@/lib/db';
 import { formatCurrency, formatDate } from '@/lib/utils';
@@ -19,9 +19,13 @@ import {
   AusnahmeDialog,
   EinsatzplanDialog,
   GesperrtHinweis,
+  KuendigungDialog,
   LeistungEntfernenButton,
   LeistungHinzufuegenDialog,
   NeueVersionDialog,
+  PauseDialog,
+  PreisanpassungDialog,
+  VerlaengernDialog,
   VersionBearbeitenDialog,
   VertragsrechnungDialog,
   type Leistungszeile,
@@ -73,9 +77,16 @@ const FEIERTAG: Record<string, string> = {
 const uhrzeit = (minuten: number) =>
   `${String(Math.floor(minuten / 60)).padStart(2, '0')}:${String(minuten % 60).padStart(2, '0')}`;
 
-export default async function ContractDetailPage({ params }: { params: Promise<{ id: string }> }) {
+export default async function ContractDetailPage({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ id: string }>;
+  searchParams: Promise<{ fassung?: string }>;
+}) {
   const session = await requirePermission('contract:read');
   const { id } = await params;
+  const { fassung: gewuenschteFassung } = await searchParams;
   const organizationId = await getOrganizationId();
 
   const vertrag = await prisma.contract.findFirst({
@@ -116,8 +127,20 @@ export default async function ContractDetailPage({ params }: { params: Promise<{
 
   const geltend = vertrag.versions.find((v) => v.status === 'ACTIVE') ?? null;
   const entwurf = vertrag.versions.find((v) => v.status === 'DRAFT') ?? null;
-  /** Die Fassung, deren Leistungen gezeigt werden: die geltende, sonst der Entwurf. */
-  const gezeigt = geltend ?? entwurf ?? vertrag.versions[0] ?? null;
+  /**
+   * Die Fassung, deren Leistungen gezeigt werden: die gewählte (`?fassung=2`),
+   * sonst die geltende, sonst der Entwurf.
+   *
+   * Die Auswahl gibt es seit 2026-09-23. Vorher zeigte ein laufender Vertrag
+   * immer seine geltende Fassung — der Entwurf der nächsten war mit Leistungen
+   * und Einsatzplan nirgends zu sehen und damit nicht zu bearbeiten.
+   */
+  const gezeigt =
+    vertrag.versions.find((v) => String(v.versionNumber) === gewuenschteFassung) ??
+    geltend ??
+    entwurf ??
+    vertrag.versions[0] ??
+    null;
 
   const [einsaetze, naechste, rechnungen, katalog, offeneAnnahme, begehungen] = await Promise.all([
     prisma.job.count({ where: { contractId: vertrag.id, deletedAt: null } }),
@@ -187,6 +210,7 @@ export default async function ContractDetailPage({ params }: { params: Promise<{
   const darfUnterzeichnen = can(session.role, 'contract:sign');
   const darfAbrechnen = can(session.role, 'contract:billing') && can(session.role, 'invoice:create');
   const darfBegehen = can(session.role, 'quality:inspect');
+  const darfEntwurfLoeschen = can(session.role, 'contract:delete_draft');
 
   const planenBis = tagSchluessel(plusTage(alsTag(new Date()), 60));
 
@@ -228,6 +252,7 @@ export default async function ContractDetailPage({ params }: { params: Promise<{
   /** Der Leistungsumfang des Entwurfs in der Form, die der PUT-Endpunkt erwartet. */
   const entwurfsLeistungen: Leistungszeile[] =
     entwurf?.services.map((leistung) => ({
+      id: leistung.id,
       serviceId: leistung.serviceId,
       label: leistung.label,
       description: leistung.description,
@@ -298,18 +323,42 @@ export default async function ContractDetailPage({ params }: { params: Promise<{
               />
             ) : null}
 
-            {darfAktivieren && vertrag.status === 'ACTIVE' ? (
+            {/*
+              Fassung wechseln: Ein Versionsentwurf an einem laufenden
+              Vertrag wird hier wirksam — zu seinem Stichtag. Bis 2026-09-23
+              gab es diesen Knopf nicht, und eine beschlossene Änderung blieb
+              für immer Entwurf. Nicht während einer laufenden Unterzeichnung:
+              erst abschliessen oder zurückziehen.
+            */}
+            {darfAktivieren &&
+            entwurf &&
+            ['ACTIVE', 'PAUSED', 'NOTICE_GIVEN'].includes(vertrag.status) &&
+            entwurfGesperrt !== 'IN_UNTERZEICHNUNG' ? (
               <ActionButton
-                endpoint={`/api/contracts/${vertrag.id}/pause`}
-                body={{ pausedFrom: tagSchluessel(alsTag(new Date())) }}
-                label="Pausieren"
-                withNote
-                noteLabel="Grund der Pause"
-                noteField="reason"
-                confirmTitle="Vertrag aussetzen"
-                confirm="Während der Pause erzeugt der Planer keine Einsätze. Der Vertrag besteht weiter."
-                successMessage="Der Vertrag ist ausgesetzt."
+                endpoint={`/api/contracts/${vertrag.id}/versions/${entwurf.id}/activate`}
+                body={{}}
+                label={`Fassung ${entwurf.versionNumber} in Kraft setzen`}
+                variant="default"
+                confirmTitle={`Fassung ${entwurf.versionNumber} in Kraft setzen`}
+                confirm={`Fassung ${entwurf.versionNumber} gilt ab ${formatDate(entwurf.effectiveFrom)}; die bisherige endet an diesem Tag. Offene Einsätze ab dann werden auf die neue Fassung umgestellt oder abgesagt, fehlende angelegt. Einsätze davor bleiben bei der bisherigen Fassung.`}
+                successMessage={`Fassung ${entwurf.versionNumber} ist in Kraft.`}
               />
+            ) : null}
+
+            {darfVersionieren && entwurf && entwurf.versionNumber > 1 && !entwurf.acceptedAt ? (
+              <ActionButton
+                endpoint={`/api/contracts/${vertrag.id}/versions/${entwurf.id}`}
+                method="DELETE"
+                label="Entwurf verwerfen"
+                variant="ghost"
+                confirmTitle={`Versionsentwurf ${entwurf.versionNumber} verwerfen`}
+                confirm="Der Entwurf wird als verworfen markiert und gilt nie. Eine laufende Unterzeichnung wird abgebrochen. Danach lässt sich eine neue Fassung anlegen."
+                successMessage="Der Entwurf ist verworfen."
+              />
+            ) : null}
+
+            {darfAktivieren && vertrag.status === 'ACTIVE' ? (
+              <PauseDialog contractId={vertrag.id} heute={tagSchluessel(zuercherHeute())} />
             ) : null}
 
             {darfAktivieren && vertrag.status === 'PAUSED' ? (
@@ -317,22 +366,29 @@ export default async function ContractDetailPage({ params }: { params: Promise<{
                 endpoint={`/api/contracts/${vertrag.id}/resume`}
                 label="Fortsetzen"
                 variant="default"
+                confirmTitle="Vertrag fortsetzen"
+                confirm="Ab heute wird wieder geplant. Tage der Pause, die vorbei sind, werden nicht nachgeholt."
                 successMessage="Der Vertrag läuft wieder."
               />
             ) : null}
 
-            {darfBeenden && ['ACTIVE', 'PAUSED'].includes(vertrag.status) ? (
+            {darfAktivieren && vertrag.status === 'NOTICE_GIVEN' ? (
               <ActionButton
-                endpoint={`/api/contracts/${vertrag.id}/notice`}
-                body={{ noticeGivenBy: 'CUSTOMER' }}
-                label="Kündigung erfassen"
-                withNote
-                noteLabel="Grund"
-                noteField="reason"
-                confirmTitle="Kündigung erfassen"
-                confirm="Festgehalten wird, dass gekündigt wurde. Das Wirkungsdatum wird aus Frist und Laufzeit gerechnet — ob die Kündigung wirksam ist, entscheidet dieses System nicht."
-                successMessage="Die Kündigung ist erfasst."
+                endpoint={`/api/contracts/${vertrag.id}/activate`}
+                body={{}}
+                label="Kündigung zurücknehmen"
+                confirmTitle="Kündigung zurücknehmen"
+                confirm="Der Vertrag läuft weiter wie vor der Kündigung; die Fassungen bleiben unverändert."
+                successMessage="Die Kündigung ist zurückgenommen."
               />
+            ) : null}
+
+            {darfAktivieren && ['ACTIVE', 'PAUSED'].includes(vertrag.status) && vertrag.endDate ? (
+              <VerlaengernDialog contractId={vertrag.id} />
+            ) : null}
+
+            {darfBeenden && ['ACTIVE', 'PAUSED'].includes(vertrag.status) ? (
+              <KuendigungDialog contractId={vertrag.id} />
             ) : null}
 
             {darfBeenden && ['ACTIVE', 'PAUSED', 'NOTICE_GIVEN'].includes(vertrag.status) ? (
@@ -344,8 +400,22 @@ export default async function ContractDetailPage({ params }: { params: Promise<{
                 noteLabel="Grund"
                 noteField="reason"
                 confirmTitle="Vertrag beenden"
-                confirm="Alle Einsatzpläne werden stillgelegt. Bereits erzeugte Einsätze bleiben. Ein beendeter Vertrag lässt sich nicht wiederbeleben."
+                confirm="Nach dem Ende wird nichts mehr geplant; bereits geplante Einsätze danach werden abgesagt. Die Fassungen und ihre Pläne bleiben als Beleg. Ein beendeter Vertrag lässt sich nicht wiederbeleben."
                 successMessage="Der Vertrag ist beendet."
+              />
+            ) : null}
+
+            {darfEntwurfLoeschen && ['DRAFT', 'IN_REVIEW', 'OFFERED'].includes(vertrag.status) ? (
+              <ActionButton
+                endpoint={`/api/contracts/${vertrag.id}/cancel`}
+                label="Annullieren"
+                variant="destructive"
+                withNote
+                noteLabel="Grund"
+                noteField="reason"
+                confirmTitle="Vertrag annullieren"
+                confirm="Der Vertrag tritt nie in Kraft. Eine laufende Unterzeichnung wird abgebrochen; der Link der Kundschaft verliert seine Gültigkeit."
+                successMessage="Der Vertrag ist annulliert."
               />
             ) : null}
 
@@ -467,6 +537,17 @@ export default async function ContractDetailPage({ params }: { params: Promise<{
                 />
               ) : entwurfGesperrt && gezeigt?.id === entwurf?.id ? (
                 <GesperrtHinweis grund={entwurfGesperrt} />
+              ) : entwurf && gezeigt?.id !== entwurf.id ? (
+                <Link
+                  href={`/admin/vertraege/${vertrag.id}?fassung=${entwurf.versionNumber}`}
+                  className="text-sm text-primary underline-offset-4 hover:underline"
+                >
+                  Entwurf Fassung {entwurf.versionNumber} zeigen
+                </Link>
+              ) : gezeigt && geltend && gezeigt.id !== geltend.id ? (
+                <Link href={`/admin/vertraege/${vertrag.id}`} className="text-sm text-primary underline-offset-4 hover:underline">
+                  Geltende Fassung zeigen
+                </Link>
               ) : null
             }
           >
@@ -540,8 +621,16 @@ export default async function ContractDetailPage({ params }: { params: Promise<{
                                 Treppenhaus wöchentlich, die Fenster
                                 vierteljährlich.
                               */}
+                              {/*
+                                Plan ändern nur an einem freien Entwurf; eine
+                                Ausnahme nur an der geltenden Fassung oder
+                                einem Entwurf. Bis 2026-09-23 stand die
+                                Planmaske an **jeder** Fassung — auch an einer
+                                unterschriebenen (RB-006).
+                              */}
                               {leistung.schedules.map((plan) => (
                                 <React.Fragment key={plan.id}>
+                                  {gezeigt?.status === 'DRAFT' && !entwurfGesperrt ? (
                                   <EinsatzplanDialog
                                     contractServiceId={leistung.id}
                                     auslöser={`Plan ${uhrzeit(plan.startMinute)}`}
@@ -561,7 +650,10 @@ export default async function ContractDetailPage({ params }: { params: Promise<{
                                       active: plan.active,
                                     }}
                                   />
-                                  <AusnahmeDialog planId={plan.id} />
+                                  ) : null}
+                                  {gezeigt?.status === 'ACTIVE' || gezeigt?.status === 'DRAFT' ? (
+                                    <AusnahmeDialog planId={plan.id} />
+                                  ) : null}
                                 </React.Fragment>
                               ))}
                               {/*
@@ -663,7 +755,12 @@ export default async function ContractDetailPage({ params }: { params: Promise<{
             body="flush"
             action={
               darfVersionieren && ['ACTIVE', 'PAUSED', 'NOTICE_GIVEN'].includes(vertrag.status) ? (
-                <AenderungsantragDialog contractId={vertrag.id} />
+                <div className="flex flex-wrap gap-2">
+                  <AenderungsantragDialog contractId={vertrag.id} />
+                  {['ACTIVE', 'PAUSED'].includes(vertrag.status) ? (
+                    <PreisanpassungDialog contractId={vertrag.id} />
+                  ) : null}
+                </div>
               ) : null
             }
           >
@@ -786,11 +883,11 @@ export default async function ContractDetailPage({ params }: { params: Promise<{
                               {darfVersionieren && anpassung.status === 'APPROVED' ? (
                                 <ActionButton
                                   endpoint={`/api/contracts/${vertrag.id}/price-adjustments/${anpassung.id}/apply`}
-                                  label="Wirksam machen"
+                                  label="Übernehmen"
                                   variant="default"
-                                  confirmTitle="Preisanpassung wirksam machen"
-                                  confirm="Es entsteht eine neue Vertragsfassung mit dem neuen Betrag. Ausgestellte Rechnungen bleiben unberührt."
-                                  successMessage="Die neue Fassung gilt."
+                                  confirmTitle="Preisanpassung übernehmen"
+                                  confirm="Es entsteht ein Versionsentwurf mit dem neuen Betrag. Er gilt erst mit „Fassung in Kraft setzen“; ausgestellte Rechnungen bleiben unberührt."
+                                  successMessage="Der Versionsentwurf ist angelegt. Er gilt ab „Fassung in Kraft setzen“."
                                 />
                               ) : null}
                             </div>
@@ -1028,9 +1125,16 @@ export default async function ContractDetailPage({ params }: { params: Promise<{
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
                       <p className="text-sm font-medium">
-                        Version {version.versionNumber}
+                        <Link
+                          href={`/admin/vertraege/${vertrag.id}?fassung=${version.versionNumber}`}
+                          className="underline-offset-4 hover:underline"
+                          aria-current={gezeigt?.id === version.id ? 'true' : undefined}
+                        >
+                          Version {version.versionNumber}
+                        </Link>
                         <span className="ml-2 font-normal text-muted-foreground tabular-nums">
                           ab {formatDate(version.effectiveFrom)}
+                          {version.effectiveUntil ? ` bis ${formatDate(plusTage(alsTag(version.effectiveUntil), -1))}` : ''}
                         </span>
                       </p>
                       <p className="text-meta text-muted-foreground">{version.reason}</p>

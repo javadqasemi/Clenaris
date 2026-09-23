@@ -108,6 +108,7 @@ const STATUS_MAP: Record<string, { label: string; variant: BadgeProps['variant']
   NOTICE_GIVEN: { label: 'Gekündigt', variant: 'warning' },
   ENDED: { label: 'Beendet', variant: 'neutral' },
   SUPERSEDED: { label: 'Abgelöst', variant: 'neutral' },
+  DISCARDED: { label: 'Verworfen', variant: 'neutral' },
   EFFECTIVE: { label: 'Wirksam', variant: 'success' },
   PLANNED: { label: 'Geplant', variant: 'neutral' },
   APPLIED: { label: 'Angewandt', variant: 'success' },

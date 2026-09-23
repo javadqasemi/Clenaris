@@ -62,6 +62,7 @@ export const VERSIONSSTATUS: Record<string, string> = {
   DRAFT: 'Entwurf',
   ACTIVE: 'Geltend',
   SUPERSEDED: 'Abgelöst',
+  DISCARDED: 'Verworfen',
 };
 
 /** Uhrzeit aus Minuten seit Mitternacht — „06:00". */
