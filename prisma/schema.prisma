@@ -1982,6 +1982,10 @@ model Job {
   /// Zeitpunkt: Der Planer denkt in Tagen, und das Zeitfenster steht an der
   /// Serie.
   scheduleDate      DateTime? @db.Date
+  /// Die fachliche Serie (`ServiceSchedule.seriesKey`), unabhängig davon,
+  /// unter welcher Fassung der Einsatz entstand. Zusammen mit `contractId` und
+  /// `scheduleDate` die Identität eines geplanten Termins.
+  seriesKey         String?
 
   title  String
   status JobStatus @default(UNASSIGNED)
@@ -2058,20 +2062,21 @@ model Job {
 
   @@unique([organizationId, number])
   /**
-   * **Die Doppelsperre des Planers.**
+   * **Die Doppelsperre des Planers** steht als partieller eindeutiger Index
+   * `jobs_serientermin_einmal` in der Migration
+   * `20260923100000_vertragsintegritaet` — über `(contractId, seriesKey,
+   * scheduleDate)`, ohne abgesagte und gelöschte Einsätze. Prisma kann einen
+   * partiellen Index nicht ausdrücken; hier steht deshalb nur der gewöhnliche
+   * Suchindex.
    *
-   * Ein Serienplaner, der zweimal läuft — nebenläufig, nach einem Fehler,
-   * nach einer Vertragsänderung —, darf denselben Einsatz nicht zweimal
-   * erzeugen. Eine Prüfung im Code genügt dafür nicht: Zwischen „gibt es
-   * schon?" und `INSERT` liegt ein Moment, und zwei gleichzeitige Läufe
-   * passen genau hinein.
-   *
-   * Dass hier ein gewöhnlicher eindeutiger Index reicht und kein partieller
-   * nötig ist, liegt an Postgres: In einem eindeutigen Index gelten zwei
-   * `NULL` als verschieden. Alle Einsätze ohne Serie tragen `NULL` in beiden
-   * Spalten und kollidieren deshalb nie miteinander.
+   * Bis 2026-09-23 lautete sie `@@unique([serviceScheduleId, scheduleDate])`.
+   * Das hatte zwei Fehler: Die Serienkennung wechselt mit jeder neuen Fassung
+   * (Doppeleinsatz nach einem Fassungswechsel), und ein **abgesagter**
+   * Einsatz hielt seinen Schlüssel fest — nach einer Pause liess sich der
+   * Termin nie wieder anlegen.
    */
-  @@unique([serviceScheduleId, scheduleDate])
+  @@index([serviceScheduleId, scheduleDate])
+  @@index([contractId, seriesKey, scheduleDate])
   @@index([organizationId, status, scheduledStart])
   @@index([scheduledStart])
   @@index([customerId])
@@ -2494,6 +2499,15 @@ model Invoice {
   contractId          String?
   contractVersionId   String?
   contractPeriodStart DateTime? @db.Date
+  /// Erster Tag **nach** der Periode (obere Grenze schliesst nicht ein).
+  ///
+  /// Seit 2026-09-23. Der Beginn allein war kein ausreichender Schlüssel:
+  /// Wechselte der Zyklus von monatlich auf quartalsweise, begannen „Januar"
+  /// und „1. Quartal" am selben Tag, „Februar" aber nicht — Februar und März
+  /// liessen sich zusätzlich zum Quartal abrechnen. Mit dem Ende prüft die
+  /// Ausschlussbedingung `invoices_vertragsperiode_ueberlappungsfrei`, dass
+  /// sich keine zwei gültigen Rechnungen eines Vertrags zeitlich überlappen.
+  contractPeriodEnd   DateTime? @db.Date
 
   status InvoiceStatus @default(DRAFT)
 
@@ -5470,6 +5484,11 @@ enum ContractVersionStatus {
   DRAFT
   ACTIVE
   SUPERSEDED
+  /// Ein Entwurf, der nie gelten wird. Seit 2026-09-23: Ohne ihn blieb ein
+  /// ungewollter Entwurf für immer stehen und blockierte jede weitere Fassung
+  /// (je Vertrag gibt es nur einen). Gelöscht wird er nicht — ein
+  /// zurückgezogener Signaturvorgang zeigt auf ihn und ist ein Beleg.
+  DISCARDED
 }
 
 enum ContractAmendmentType {
@@ -5716,7 +5735,8 @@ model ContractVersion {
   signatureRequests SignatureRequest[]
   amendmentsFrom ContractAmendment[] @relation("AmendmentPreviousVersion")
   amendmentsTo   ContractAmendment[] @relation("AmendmentNewVersion")
-  priceAdjustments ContractPriceAdjustment[]
+  priceAdjustments ContractPriceAdjustment[] @relation("PriceAdjustmentBase")
+  priceAdjustmentResults ContractPriceAdjustment[] @relation("PriceAdjustmentResult")
   qualityInspections QualityInspection[]
 
   @@unique([contractId, versionNumber])
@@ -5816,6 +5836,17 @@ model ServiceSchedule {
   generatedUntil DateTime? @db.Date
   active         Boolean   @default(true)
 
+  /// Die **fachliche Identität** der Serie über Fassungswechsel hinweg.
+  ///
+  /// Eine neue Vertragsversion kopiert ihre Einsatzpläne — mit neuen Kennungen,
+  /// denn eine Fassung zeigt nicht auf die Zeilen ihrer Vorgängerin. Hinge die
+  /// Doppelsperre der Einsätze an `id`, wäre „Büroreinigung, Montag 14.
+  /// September" unter Fassung 1 und unter Fassung 2 zweimal derselbe Termin mit
+  /// zwei verschiedenen Schlüsseln — genau der Doppeleinsatz, den das Audit vom
+  /// 2026-09-23 gefunden hat. Die Kopie übernimmt deshalb `seriesKey`; eine neu
+  /// angelegte Serie bekommt einen eigenen.
+  seriesKey String @default(cuid())
+
   createdAt DateTime @default(now()) @db.Timestamptz(6)
   updatedAt DateTime @updatedAt @db.Timestamptz(6)
 
@@ -5824,6 +5855,7 @@ model ServiceSchedule {
   jobs            Job[]
 
   @@index([contractServiceId, active])
+  @@index([seriesKey])
   @@map("service_schedules")
 }
 
@@ -5942,8 +5974,16 @@ model ContractPriceAdjustment {
   createdAt DateTime @default(now()) @db.Timestamptz(6)
   updatedAt DateTime @updatedAt @db.Timestamptz(6)
 
-  contract Contract         @relation(fields: [contractId], references: [id], onDelete: Cascade)
-  version  ContractVersion? @relation(fields: [contractVersionId], references: [id], onDelete: SetNull)
+  /// Die Fassung, die durch das Anwenden **entstanden** ist.
+  ///
+  /// Getrennt von `contractVersionId`, der Ausgangsfassung. Bis 2026-09-23
+  /// überschrieb das Anwenden `contractVersionId` mit der neuen Fassung — danach
+  /// war nicht mehr beantwortbar, auf welchen Preis sich „+3 %" bezogen hatte.
+  resultVersionId String?
+
+  contract      Contract         @relation(fields: [contractId], references: [id], onDelete: Cascade)
+  version       ContractVersion? @relation("PriceAdjustmentBase", fields: [contractVersionId], references: [id], onDelete: SetNull)
+  resultVersion ContractVersion? @relation("PriceAdjustmentResult", fields: [resultVersionId], references: [id], onDelete: SetNull)
 
   @@index([contractId, status])
   @@index([contractId, reviewDueAt])

@@ -4,7 +4,7 @@
 > Diagramme sind damit nie älter als das Schema. Prosa und Bereichseinteilung
 > stehen in `scripts/generate-erd.ts`.
 
-**128 Modelle, 96 Aufzählungstypen, 2461 Felder.**
+**128 Modelle, 96 Aufzählungstypen, 2467 Felder.**
 PostgreSQL 16+; alle Zeitstempel als `timestamptz` in UTC, Anzeige in Europe/Zurich.
 
 ## Vier Entscheidungen, die das ganze Schema prägen
@@ -125,12 +125,12 @@ erDiagram
 
 | Modell | Tabelle | Felder | Zweck |
 | --- | --- | --- | --- |
-| `Organization` | `organizations` | 114 | – |
-| `NumberSequence` | `number_sequences` | 6 | – |
-| `OpeningHours` | `opening_hours` | 7 | – |
-| `Holiday` | `holidays` | 7 | – |
-| `ServiceArea` | `service_areas` | 11 | – |
-| `TaxRate` | `tax_rates` | 7 | – |
+| `Organization` | `organizations` | 114 | Mandant — Firmendaten, Bankverbindung, Erscheinungsbild. Wurzel fast aller Beziehungen. |
+| `NumberSequence` | `number_sequences` | 6 | Fortlaufende, lückenlose Belegnummern (Schweizer Buchhaltungsanforderung). |
+| `OpeningHours` | `opening_hours` | 7 | Öffnungszeiten je Wochentag; Grundlage der buchbaren Zeitfenster. |
+| `Holiday` | `holidays` | 7 | Feiertage und Betriebsferien. Sperren Termine und zählen nicht als Abwesenheitstage. |
+| `ServiceArea` | `service_areas` | 11 | Postleitzahlen im Einsatzgebiet, je mit Anfahrtspauschale und Fahrzeit. |
+| `TaxRate` | `tax_rates` | 7 | Mehrwertsteuersätze. Seit 2024 gilt in der Schweiz 8.1 % als Normalsatz. |
 
 ## Identität und Zugriff
 
@@ -218,13 +218,13 @@ erDiagram
 
 | Modell | Tabelle | Felder | Zweck |
 | --- | --- | --- | --- |
-| `User` | `users` | 57 | – |
-| `RefreshToken` | `refresh_tokens` | 10 | – |
-| `VerificationToken` | `verification_tokens` | 9 | – |
-| `PublicAccessToken` | `public_access_tokens` | 15 | – |
-| `Consent` | `consents` | 9 | – |
-| `AuditLog` | `audit_logs` | 13 | – |
-| `SecurityEvent` | `security_events` | 17 | – |
+| `User` | `users` | 57 | Benutzerkonto mit Rolle und Anmeldedaten. Passwörter als Argon2id-Hash. |
+| `RefreshToken` | `refresh_tokens` | 10 | Rotierender Refresh-Token. Gespeichert wird nur der SHA-256-Hash plus Familien-ID zur Erkennung von Wiederverwendung. |
+| `VerificationToken` | `verification_tokens` | 9 | Einmaltoken für E-Mail-Bestätigung, Passwortreset und Einladung. |
+| `PublicAccessToken` | `public_access_tokens` | 15 | Ein Schluessel fuer genau eine Sache, ohne Anmeldung. |
+| `Consent` | `consents` | 9 | Nachweis erteilter und widerrufener Einwilligungen mit Zeitpunkt und IP. |
+| `AuditLog` | `audit_logs` | 13 | Prüfprotokoll aller ändernden Vorgänge — wer, wann, was, vorher/nachher. |
+| `SecurityEvent` | `security_events` | 17 | Sicherheitsereignisse — der Strom, den das Sicherheitszentrum liest. |
 
 ## Elektronische Unterzeichnung
 
@@ -291,11 +291,11 @@ erDiagram
 
 | Modell | Tabelle | Felder | Zweck |
 | --- | --- | --- | --- |
-| `SignatureRequest` | `signature_requests` | 54 | – |
-| `SignatureParticipant` | `signature_participants` | 32 | – |
-| `SignatureEvent` | `signature_events` | 12 | – |
-| `SignatureOtpChallenge` | `signature_otp_challenges` | 14 | – |
-| `DeviceHandoffSession` | `device_handoff_sessions` | 14 | – |
+| `SignatureRequest` | `signature_requests` | 54 | Ein Unterzeichnungsvorgang. |
+| `SignatureParticipant` | `signature_participants` | 32 | Wer unterzeichnet — mit eingefrorenen Kontaktdaten. Ein spaeterer |
+| `SignatureEvent` | `signature_events` | 12 | Fachliches Signaturprotokoll — **nur anhaengen**. |
+| `SignatureOtpChallenge` | `signature_otp_challenges` | 14 | Ein zugestellter Bestaetigungscode. |
+| `DeviceHandoffSession` | `device_handoff_sessions` | 14 | Die Geraeteuebergabe: Solange sie laeuft, haelt der Kunde das Geraet der |
 
 ## CRM
 
@@ -438,19 +438,19 @@ erDiagram
 
 | Modell | Tabelle | Felder | Zweck |
 | --- | --- | --- | --- |
-| `Lead` | `leads` | 39 | – |
-| `Customer` | `customers` | 58 | – |
-| `Contact` | `contacts` | 13 | – |
-| `Address` | `addresses` | 25 | – |
-| `Building` | `buildings` | 18 | – |
-| `Property` | `properties` | 32 | – |
-| `PipelineStage` | `pipeline_stages` | 10 | – |
-| `Tag` | `tags` | 7 | – |
-| `LeadTag` | `lead_tags` | 4 | – |
-| `CustomerTag` | `customer_tags` | 4 | – |
-| `Activity` | `activities` | 24 | – |
-| `Task` | `tasks` | 26 | – |
-| `PaymentMethodRef` | `payment_methods` | 12 | – |
+| `Lead` | `leads` | 39 | Anfrage vor der Kundenbeziehung, mit Herkunft, Bewertung und Pipeline-Stufe. |
+| `Customer` | `customers` | 58 | Kundendatensatz mit Konditionen, Umsatz und Zahlungsverhalten. |
+| `Contact` | `contacts` | 13 | Ansprechperson bei Geschäftskundschaft. |
+| `Address` | `addresses` | 25 | Adresse einer Kundschaft — Einsatz-, Rechnungs- oder Standardadresse. |
+| `Building` | `buildings` | 18 | Liegenschaft mit mehreren Objekten, etwa eine Überbauung. |
+| `Property` | `properties` | 32 | Konkretes Reinigungsobjekt: Fläche, Zimmer, Zugang, Schlüsseldepot. |
+| `PipelineStage` | `pipeline_stages` | 10 | Stufe im Vertriebstrichter, frei benennbar. |
+| `Tag` | `tags` | 7 | Frei vergebbares Etikett für Kundschaft und Anfragen. |
+| `LeadTag` | `lead_tags` | 4 | Zuordnung Etikett ↔ Anfrage. |
+| `CustomerTag` | `customer_tags` | 4 | Zuordnung Etikett ↔ Kundschaft. |
+| `Activity` | `activities` | 24 | Verlaufseintrag: Notiz, Telefonat, E-Mail, Termin, Statuswechsel. |
+| `Task` | `tasks` | 26 | Aufgabe mit Fälligkeit, Zuständigkeit und Erinnerung. |
+| `PaymentMethodRef` | `payment_methods` | 12 | Hinterlegtes Zahlungsmittel — nur der Verweis beim Anbieter, nie die Kartendaten. |
 
 ## Leistungskatalog und Preislogik
 
@@ -520,12 +520,12 @@ erDiagram
 
 | Modell | Tabelle | Felder | Zweck |
 | --- | --- | --- | --- |
-| `ServiceCategory` | `service_categories` | 13 | – |
-| `Service` | `services` | 43 | – |
-| `ServiceExtra` | `service_extras` | 15 | – |
-| `ServiceExtraOnService` | `service_extras_on_services` | 4 | – |
-| `PriceRule` | `price_rules` | 9 | – |
-| `RecurrenceRule` | `recurrence_rules` | 13 | – |
+| `ServiceCategory` | `service_categories` | 13 | Gruppierung des Leistungskatalogs für Website und Navigation. |
+| `Service` | `services` | 43 | Angebotene Leistung mit Preismodell, Dauerkennzahlen und SEO-Angaben. |
+| `ServiceExtra` | `service_extras` | 15 | Zubuchbare Zusatzleistung, etwa Backofen oder Balkon. |
+| `ServiceExtraOnService` | `service_extras_on_services` | 4 | Welcher Zusatz ist zu welcher Leistung buchbar. |
+| `PriceRule` | `price_rules` | 9 | Multiplikatoren und Zuschläge, die die Preis-Engine anwendet. |
+| `RecurrenceRule` | `recurrence_rules` | 13 | Wiederholungsmuster einer Serienbuchung. |
 
 ## Buchung, Offerte, Einsatz
 
@@ -648,16 +648,16 @@ erDiagram
 
 | Modell | Tabelle | Felder | Zweck |
 | --- | --- | --- | --- |
-| `Booking` | `bookings` | 61 | – |
-| `BookingItem` | `booking_items` | 14 | – |
-| `BookingExtra` | `booking_extras` | 10 | – |
-| `Quote` | `quotes` | 49 | – |
-| `QuoteItem` | `quote_items` | 15 | – |
-| `Job` | `jobs` | 60 | – |
-| `JobAssignment` | `job_assignments` | 11 | – |
-| `JobChecklistItem` | `job_checklist_items` | 11 | – |
-| `JobPhoto` | `job_photos` | 12 | – |
-| `MaterialUsage` | `material_usages` | 11 | – |
+| `Booking` | `bookings` | 61 | Vereinbarung mit der Kundschaft: Termin, Objekt, Leistungen und Preis als Momentaufnahme. |
+| `BookingItem` | `booking_items` | 14 | Leistungsposition einer Buchung, mit Preis zum Buchungszeitpunkt. |
+| `BookingExtra` | `booking_extras` | 10 | Gebuchte Zusatzleistung mit Menge und Preis. |
+| `Quote` | `quotes` | 49 | Offerte mit Positionen, Gültigkeit, Magic-Link-Token und elektronischer Signatur. |
+| `QuoteItem` | `quote_items` | 15 | Offertposition; optionale Positionen zählen nicht ins Total. |
+| `Job` | `jobs` | 61 | Ausführung durch das Team: Termin, Zuteilung, Checkliste, Abschluss, Kosten. |
+| `JobAssignment` | `job_assignments` | 11 | Zuteilung einer Person zu einem Einsatz, samt Zu- oder Absage. |
+| `JobChecklistItem` | `job_checklist_items` | 11 | Prüfpunkt des Abnahmeprotokolls, mit Vermerk wer wann abgehakt hat. |
+| `JobPhoto` | `job_photos` | 12 | Vorher-, Nachher- oder Schadensfoto mit Standort und Zeitpunkt. |
+| `MaterialUsage` | `material_usages` | 11 | Verbrauchtes Material je Einsatz — Grundlage der Deckungsbeitragsrechnung. |
 
 ## Verträge und Einsatzpläne
 
@@ -764,6 +764,7 @@ erDiagram
   ContractVersion |o--o{ ContractAmendment : "newVersion"
   Contract ||--o{ ContractPriceAdjustment : "contract"
   ContractVersion |o--o{ ContractPriceAdjustment : "version"
+  ContractVersion |o--o{ ContractPriceAdjustment : "resultVersion"
   Contract |o--o{ QualityInspection : "contract"
   ContractVersion |o--o{ QualityInspection : "version"
   QualityInspection |o--|| QualityInspection : "followUpOf"
@@ -773,15 +774,15 @@ erDiagram
 
 | Modell | Tabelle | Felder | Zweck |
 | --- | --- | --- | --- |
-| `Contract` | `contracts` | 43 | – |
-| `ContractVersion` | `contract_versions` | 43 | – |
-| `ContractService` | `contract_services` | 21 | – |
-| `ServiceSchedule` | `service_schedules` | 18 | – |
-| `ScheduleException` | `schedule_exceptions` | 9 | – |
-| `ContractAmendment` | `contract_amendments` | 22 | – |
-| `ContractPriceAdjustment` | `contract_price_adjustments` | 23 | – |
-| `QualityInspection` | `quality_inspections` | 32 | – |
-| `QualityInspectionItem` | `quality_inspection_items` | 12 | – |
+| `Contract` | `contracts` | 43 | Der Vertragskopf — Identität, Beteiligte, Lebenslauf. |
+| `ContractVersion` | `contract_versions` | 44 | Eine Fassung der kaufmännischen Vereinbarung. |
+| `ContractService` | `contract_services` | 21 | Eine vereinbarte Leistung innerhalb einer Vertragsversion. |
+| `ServiceSchedule` | `service_schedules` | 19 | Der Einsatzplan einer Vertragsleistung — die Serie, aus der Einsätze |
+| `ScheduleException` | `schedule_exceptions` | 9 | Eine Abweichung von der Serie an einem bestimmten Tag. |
+| `ContractAmendment` | `contract_amendments` | 22 | Eine nachvollziehbare Vertragsänderung. |
+| `ContractPriceAdjustment` | `contract_price_adjustments` | 25 | Eine geplante oder vollzogene Preisanpassung. |
+| `QualityInspection` | `quality_inspections` | 32 | Eine Qualitätskontrolle vor Ort (Wave 11). |
+| `QualityInspectionItem` | `quality_inspection_items` | 12 | Eine Einzelbewertung innerhalb einer Begehung. |
 
 ## Personal und Zeit
 
@@ -884,15 +885,15 @@ erDiagram
 
 | Modell | Tabelle | Felder | Zweck |
 | --- | --- | --- | --- |
-| `Employee` | `employees` | 48 | – |
-| `EmployeeSkill` | `employee_skills` | 6 | – |
-| `SalaryRecord` | `salary_records` | 10 | – |
-| `Availability` | `availabilities` | 6 | – |
-| `Absence` | `absences` | 15 | – |
+| `Employee` | `employees` | 48 | Personalstammdaten inkl. Schweizer Angaben (AHV, Bewilligung, Pensum). |
+| `EmployeeSkill` | `employee_skills` | 6 | Qualifikation mit Stufe und Zertifikatsablauf. |
+| `SalaryRecord` | `salary_records` | 10 | Lohnhistorie: jede Änderung von Ansatz, Monatslohn oder Pensum als eigene |
+| `Availability` | `availabilities` | 6 | Regelmässige Verfügbarkeit je Wochentag. |
+| `Absence` | `absences` | 15 | Ferien, Krankheit, Militär und weitere Abwesenheiten mit Bewilligungsstand. |
 | `Payslip` | `payslips` | 22 | – |
-| `PayrollSetting` | `payroll_settings` | 18 | – |
-| `TimeEntry` | `time_entries` | 16 | – |
-| `GpsEvent` | `gps_events` | 12 | – |
+| `PayrollSetting` | `payroll_settings` | 18 | Lohnabrechnung mit AHV/IV/EO, ALV, BVG und UVG. Erst sichtbar, wenn freigegeben. |
+| `TimeEntry` | `time_entries` | 16 | Erfasste Arbeitszeit je Einsatz — Grundlage der Lohnverarbeitung. |
+| `GpsEvent` | `gps_events` | 12 | An- und Abfahrt mit Koordinaten, als Nachweis bei Objekten ohne Ansprechperson. |
 
 ## Finanzen
 
@@ -988,14 +989,14 @@ erDiagram
 
 | Modell | Tabelle | Felder | Zweck |
 | --- | --- | --- | --- |
-| `Invoice` | `invoices` | 61 | – |
-| `InvoiceItem` | `invoice_items` | 16 | – |
-| `Payment` | `payments` | 21 | – |
-| `PaymentReminder` | `payment_reminders` | 8 | – |
-| `CreditNote` | `credit_notes` | 17 | – |
-| `Supplier` | `suppliers` | 21 | – |
-| `Expense` | `expenses` | 23 | – |
-| `AccountingExport` | `accounting_exports` | 10 | – |
+| `Invoice` | `invoices` | 62 | Rechnung mit QR-Referenz und Empfänger-Momentaufnahme. Nach dem Ausstellen unveränderlich. |
+| `InvoiceItem` | `invoice_items` | 16 | Rechnungsposition mit Netto-, MWST- und Bruttobetrag. |
+| `Payment` | `payments` | 21 | Zahlungseingang. `providerPaymentId` ist eindeutig — daran bleibt der Webhook idempotent. |
+| `PaymentReminder` | `payment_reminders` | 8 | Mahnstufe mit Versandzeitpunkt und Gebühr. |
+| `CreditNote` | `credit_notes` | 17 | Gutschrift. Der einzige Weg, eine ausgestellte Rechnung zu korrigieren. |
+| `Supplier` | `suppliers` | 21 | Lieferant für Material, Fahrzeuge und Dienstleistungen. |
+| `Expense` | `expenses` | 23 | Ausgabe mit Beleg, Kategorie und Vorsteuerabzug. |
+| `AccountingExport` | `accounting_exports` | 10 | Protokoll erzeugter Buchhaltungsexporte, damit Perioden nicht doppelt laufen. |
 
 ## Kommunikation und Automatisierung
 
@@ -1103,16 +1104,16 @@ erDiagram
 
 | Modell | Tabelle | Felder | Zweck |
 | --- | --- | --- | --- |
-| `MessageThread` | `message_threads` | 10 | – |
-| `Message` | `messages` | 10 | – |
-| `Notification` | `notifications` | 13 | – |
-| `EmailTemplate` | `email_templates` | 11 | – |
-| `SmsTemplate` | `sms_templates` | 7 | – |
-| `EmailLog` | `email_logs` | 13 | – |
-| `SmsLog` | `sms_logs` | 11 | – |
-| `Automation` | `automations` | 13 | – |
-| `AutomationAction` | `automation_actions` | 6 | – |
-| `AutomationRun` | `automation_runs` | 13 | – |
+| `MessageThread` | `message_threads` | 10 | Nachrichtenverlauf mit der Kundschaft, gebunden an Kundschaft oder Einsatz. |
+| `Message` | `messages` | 10 | Einzelne Nachricht im Verlauf, mit Lesevermerk und Anhängen. |
+| `Notification` | `notifications` | 13 | In-App-, E-Mail- oder SMS-Meldung an eine Person, mit Zustellstand. |
+| `EmailTemplate` | `email_templates` | 11 | E-Mail-Vorlage je Sprache, mit Platzhaltern. |
+| `SmsTemplate` | `sms_templates` | 7 | SMS-Vorlage je Sprache. |
+| `EmailLog` | `email_logs` | 13 | Protokoll jedes E-Mail-Versands inkl. Öffnungen und Zustellfehlern. |
+| `SmsLog` | `sms_logs` | 11 | Protokoll jedes SMS-Versands inkl. Kosten. |
+| `Automation` | `automations` | 13 | Regel aus Auslöser und Aktionen, als Daten statt als Code. |
+| `AutomationAction` | `automation_actions` | 6 | Einzelne Aktion einer Regel, mit Verzögerung und Reihenfolge. |
+| `AutomationRun` | `automation_runs` | 13 | Ausführung einer Regel mit Ergebnis — macht Automatisierungen nachvollziehbar. |
 
 ## Marketing und Inhalte
 
@@ -1256,19 +1257,19 @@ erDiagram
 
 | Modell | Tabelle | Felder | Zweck |
 | --- | --- | --- | --- |
-| `Coupon` | `coupons` | 19 | – |
-| `GiftCard` | `gift_cards` | 16 | – |
-| `NewsletterSubscriber` | `newsletter_subscribers` | 12 | – |
-| `BlogCategory` | `blog_categories` | 7 | – |
-| `BlogPost` | `blog_posts` | 22 | – |
-| `LandingPage` | `landing_pages` | 13 | – |
-| `Review` | `reviews` | 22 | – |
-| `Faq` | `faqs` | 9 | – |
-| `GalleryItem` | `gallery_items` | 13 | – |
-| `JobPosting` | `job_postings` | 20 | – |
-| `JobApplication` | `job_applications` | 16 | – |
-| `FileAsset` | `file_assets` | 67 | – |
-| `StoredFile` | `stored_files` | 16 | – |
+| `Coupon` | `coupons` | 19 | Rabattcode mit Gültigkeit, Einlösegrenze und Mindestbestellwert. |
+| `GiftCard` | `gift_cards` | 16 | Geschenkkarte mit Restguthaben. |
+| `NewsletterSubscriber` | `newsletter_subscribers` | 12 | Newsletter-Anmeldung mit Double-Opt-in und Abmeldetoken. |
+| `BlogCategory` | `blog_categories` | 7 | Rubrik des Blogs. |
+| `BlogPost` | `blog_posts` | 22 | Blogbeitrag mit SEO-Angaben und Veröffentlichungsstand. |
+| `LandingPage` | `landing_pages` | 13 | Kampagnenseite mit eigenem Inhalt und Nachverfolgung. |
+| `Review` | `reviews` | 22 | Kundenbewertung mit Moderationsstand und öffentlicher Antwort. |
+| `Faq` | `faqs` | 9 | Häufige Frage samt Antwort, nach Rubrik geordnet. |
+| `GalleryItem` | `gallery_items` | 13 | Galerieeintrag, wahlweise als Vorher-Nachher-Paar. |
+| `JobPosting` | `job_postings` | 20 | Stellenausschreibung mit Anforderungen und Pensum. |
+| `JobApplication` | `job_applications` | 16 | Bewerbung mit Lebenslauf und Stand im Verfahren. |
+| `FileAsset` | `file_assets` | 67 | Datei in Supabase Storage mit fachlicher Zuordnung und Sichtbarkeit. |
+| `StoredFile` | `stored_files` | 16 | Eingebauter Dateispeicher — die Rückfallebene, wenn kein externer |
 
 ## Redaktion
 
@@ -1342,12 +1343,12 @@ erDiagram
 
 | Modell | Tabelle | Felder | Zweck |
 | --- | --- | --- | --- |
-| `ContentBlock` | `content_blocks` | 12 | – |
-| `ContentRevision` | `content_revisions` | 10 | – |
-| `SeoMeta` | `seo_meta` | 13 | – |
+| `ContentBlock` | `content_blocks` | 12 | Redaktionell pflegbarer Inhaltsbaustein der Website. |
+| `ContentRevision` | `content_revisions` | 10 | Frühere Fassung eines Textbausteins. |
+| `SeoMeta` | `seo_meta` | 13 | Suchmaschinen-Angaben je Seitenpfad. |
 | `CallToAction` | `calls_to_action` | 21 | – |
 | `NavigationItem` | `navigation_items` | 16 | – |
-| `LegalDocument` | `legal_documents` | 10 | – |
+| `LegalDocument` | `legal_documents` | 10 | Impressum, Datenschutzerklärung, AGB, Cookie-Hinweis. |
 
 ## Unternehmensführung
 
@@ -1630,32 +1631,32 @@ erDiagram
 
 | Modell | Tabelle | Felder | Zweck |
 | --- | --- | --- | --- |
-| `KpiDefinition` | `kpi_definitions` | 21 | – |
-| `KpiTarget` | `kpi_targets` | 8 | – |
-| `KpiSnapshot` | `kpi_snapshots` | 15 | – |
-| `HealthSnapshot` | `health_snapshots` | 9 | – |
+| `KpiDefinition` | `kpi_definitions` | 21 | Definition einer Kennzahl. |
+| `KpiTarget` | `kpi_targets` | 8 | Zielwert für eine bestimmte Periode. |
+| `KpiSnapshot` | `kpi_snapshots` | 15 | Festgeschriebener Kennzahlwert einer abgeschlossenen Periode. |
+| `HealthSnapshot` | `health_snapshots` | 9 | Gesundheitswert der Firma zu einem Stichtag. |
 | `Objective` | `objectives` | 33 | – |
-| `KeyResult` | `key_results` | 18 | – |
-| `KeyResultCheckin` | `key_result_checkins` | 9 | – |
-| `BudgetPeriod` | `budget_periods` | 14 | – |
-| `BudgetLine` | `budget_lines` | 12 | – |
-| `Investment` | `investments` | 28 | – |
-| `Scenario` | `scenarios` | 16 | – |
-| `ScenarioAssumption` | `scenario_assumptions` | 10 | – |
-| `RiskEntry` | `risk_entries` | 28 | – |
+| `KeyResult` | `key_results` | 18 | Messbares Ergebnis eines Ziels. |
+| `KeyResultCheckin` | `key_result_checkins` | 9 | Eintrag im Verlauf eines Key Results. |
+| `BudgetPeriod` | `budget_periods` | 14 | Budgetperiode — in der Regel ein Geschäftsjahr. |
+| `BudgetLine` | `budget_lines` | 12 | Budgetzeile. |
+| `Investment` | `investments` | 28 | Investition — zugleich das Anlagenverzeichnis. |
+| `Scenario` | `scenarios` | 16 | Geschäftsszenario. |
+| `ScenarioAssumption` | `scenario_assumptions` | 10 | Eine Annahme eines Szenarios. |
+| `RiskEntry` | `risk_entries` | 28 | Risikoeintrag. |
 | `ControlEntry` | `control_entries` | 20 | – |
-| `CorrectiveAction` | `corrective_actions` | 22 | – |
-| `ManagedDocument` | `managed_documents` | 23 | – |
+| `CorrectiveAction` | `corrective_actions` | 22 | Massnahme (CAPA). |
+| `ManagedDocument` | `managed_documents` | 23 | Dokument in der Ablage. |
 | `DocumentVersion` | `document_versions` | 11 | – |
-| `KnowledgeArticle` | `knowledge_articles` | 21 | – |
-| `Competitor` | `competitors` | 22 | – |
-| `MarketInsight` | `market_insights` | 16 | – |
-| `AnalysisBoard` | `analysis_boards` | 16 | – |
+| `KnowledgeArticle` | `knowledge_articles` | 21 | Wissensartikel — Abläufe, Schulungsunterlagen, Richtlinien, FAQ. |
+| `Competitor` | `competitors` | 22 | Wettbewerber. |
+| `MarketInsight` | `market_insights` | 16 | Marktbeobachtung — eine Feststellung mit Quelle und Verfallsdatum. |
+| `AnalysisBoard` | `analysis_boards` | 16 | Analysetafel mit Stichtag. |
 | `AnalysisEntry` | `analysis_entries` | 8 | – |
-| `Meeting` | `meetings` | 19 | – |
+| `Meeting` | `meetings` | 19 | Sitzung. |
 | `MeetingParticipant` | `meeting_participants` | 6 | – |
-| `ReportSchedule` | `report_schedules` | 15 | – |
-| `ReportRun` | `report_runs` | 16 | – |
+| `ReportSchedule` | `report_schedules` | 15 | Zeitplan eines wiederkehrenden Berichts. |
+| `ReportRun` | `report_runs` | 16 | Ein erzeugter Bericht. |
 
 ## Aufzählungstypen
 
@@ -1666,7 +1667,7 @@ exakte TypeScript-Typen.
 | Typ | Werte |
 | --- | --- |
 | `Locale` | `DE`, `EN`, `FR`, `IT` |
-| `UserRole` |  |
+| `UserRole` | `SUPER_ADMIN`, `ADMIN`, `MANAGER`, `EMPLOYEE`, `CUSTOMER` |
 | `UserStatus` | `PENDING`, `ACTIVE`, `SUSPENDED`, `DISABLED` |
 | `CustomerType` | `PRIVATE`, `BUSINESS` |
 | `LeadStatus` | `NEW`, `CONTACTED`, `QUALIFIED`, `PROPOSAL`, `WON`, `LOST` |
@@ -1675,7 +1676,7 @@ exakte TypeScript-Typen.
 | `ServiceKind` | `OFFICE_CLEANING`, `MOVE_OUT_CLEANING`, `RESIDENTIAL_CLEANING`, `WINDOW_CLEANING`, `CONSTRUCTION_CLEANING`, `BUILDING_MAINTENANCE`, `SPECIAL` |
 | `PricingModel` | `PER_HOUR`, `PER_SQM`, `FLAT`, `PER_UNIT`, `ON_REQUEST` |
 | `Frequency` | `ONCE`, `WEEKLY`, `BIWEEKLY`, `MONTHLY`, `QUARTERLY`, `SEMIANNUAL`, `ANNUAL`, `CUSTOM` |
-| `BookingStatus` | `DRAFT`, `CONFIRMED`, `IN_PROGRESS`, `COMPLETED`, `CANCELLED`, `NO_SHOW` |
+| `BookingStatus` | `DRAFT`, `PENDING`, `CONFIRMED`, `IN_PROGRESS`, `COMPLETED`, `CANCELLED`, `NO_SHOW` |
 | `QuoteStatus` | `DRAFT`, `SENT`, `VIEWED`, `ACCEPTED`, `REJECTED`, `EXPIRED`, `CONVERTED` |
 | `JobStatus` | `UNASSIGNED`, `SCHEDULED`, `DISPATCHED`, `EN_ROUTE`, `IN_PROGRESS`, `ON_HOLD`, `COMPLETED`, `VERIFIED`, `CANCELLED` |
 | `JobPhotoType` | `BEFORE`, `AFTER`, `DAMAGE`, `DOCUMENT`, `OTHER` |
@@ -1724,24 +1725,24 @@ exakte TypeScript-Typen.
 | `CtaSlot` | `HEADER`, `HERO_PRIMARY`, `HERO_SECONDARY`, `SECTION_BANNER`, `FOOTER`, `MOBILE_BAR` |
 | `CtaStyle` | `PRIMARY`, `SECONDARY`, `OUTLINE`, `GHOST`, `ACCENT`, `SUCCESS`, `CUSTOM` |
 | `NavLocation` | `HEADER`, `HEADER_PANEL`, `FOOTER_SERVICES`, `FOOTER_COMPANY`, `FOOTER_LEGAL` |
-| `KpiUnit` | `DAYS`, `HOURS` |
+| `KpiUnit` | `CURRENCY`, `PERCENT`, `COUNT`, `DAYS`, `HOURS`, `RATIO` |
 | `KpiDirection` | `UP_IS_GOOD`, `DOWN_IS_GOOD` |
 | `KpiPeriod` | `DAY`, `WEEK`, `MONTH`, `QUARTER`, `YEAR` |
 | `KpiSource` | `DERIVED`, `MANUAL` |
-| `ObjectiveHorizon` |  |
+| `ObjectiveHorizon` | `STRATEGY`, `OBJECTIVE`, `INITIATIVE` |
 | `ObjectiveLevel` | `COMPANY`, `DEPARTMENT`, `PERSONAL` |
 | `ObjectiveStatus` | `DRAFT`, `ACTIVE`, `AT_RISK`, `ACHIEVED`, `MISSED`, `CANCELLED` |
 | `BudgetStatus` | `DRAFT`, `APPROVED`, `CLOSED` |
 | `InvestmentStatus` | `PLANNED`, `APPROVED`, `ORDERED`, `ACTIVE`, `DISPOSED`, `CANCELLED` |
-| `DepreciationMethod` | `NONE` |
+| `DepreciationMethod` | `NONE`, `STRAIGHT_LINE`, `DECLINING` |
 | `ScenarioKind` | `BEST`, `EXPECTED`, `WORST` |
 | `RiskCategory` | `FINANCIAL`, `OPERATIONAL`, `PERSONNEL`, `LEGAL`, `DATA_PROTECTION`, `IT_SECURITY`, `REPUTATION`, `MARKET`, `ENVIRONMENT` |
 | `RiskStatus` | `IDENTIFIED`, `ASSESSED`, `MITIGATING`, `ACCEPTED`, `CLOSED` |
-| `ControlKind` |  |
+| `ControlKind` | `SOP`, `QUALITY_STANDARD`, `COMPLIANCE`, `CONTINUITY` |
 | `ControlStatus` | `DRAFT`, `ACTIVE`, `DUE`, `NON_COMPLIANT`, `RETIRED` |
-| `ActionKind` |  |
+| `ActionKind` | `CORRECTIVE`, `PREVENTIVE`, `IMPROVEMENT` |
 | `DocumentCategory` | `BUSINESS_PLAN`, `CONTRACT`, `INSURANCE`, `EMPLOYEE`, `CERTIFICATE`, `LICENSE`, `SUPPLIER`, `TAX`, `LEGAL`, `POLICY`, `OTHER` |
-| `DocumentVisibility` |  |
+| `DocumentVisibility` | `MANAGEMENT`, `OPERATIONS`, `STAFF`, `EMPLOYEE_PRIVATE` |
 | `ArticleStatus` | `DRAFT`, `PUBLISHED`, `ARCHIVED` |
 | `InsightKind` | `INDUSTRY`, `CUSTOMER`, `COMPETITOR`, `TECHNOLOGY`, `ECONOMY`, `LEGAL`, `ENVIRONMENT` |
 | `AnalysisKind` | `SWOT`, `PESTEL` |
@@ -1753,7 +1754,7 @@ exakte TypeScript-Typen.
 | `ContractRenewalType` | `NONE`, `AUTOMATIC`, `MANUAL` |
 | `ContractBillingCycle` | `PER_VISIT`, `MONTHLY`, `QUARTERLY`, `SEMIANNUAL`, `ANNUAL` |
 | `ContractPricingModel` | `FIXED_PERIOD`, `FIXED_PER_VISIT`, `HOURLY`, `UNIT_BASED`, `CUSTOM` |
-| `ContractVersionStatus` | `DRAFT`, `ACTIVE`, `SUPERSEDED` |
+| `ContractVersionStatus` | `DRAFT`, `ACTIVE`, `SUPERSEDED`, `DISCARDED` |
 | `ContractAmendmentType` | `SCOPE`, `PRICE`, `FREQUENCY`, `TERM`, `SLA`, `PAYMENT_TERMS`, `INDEXATION`, `OTHER` |
 | `ContractAmendmentStatus` | `DRAFT`, `REVIEW`, `APPROVED`, `EFFECTIVE`, `REJECTED` |
 | `ContractPriceAdjustmentStatus` | `PLANNED`, `APPROVED`, `APPLIED`, `REJECTED` |
