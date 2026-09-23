@@ -168,6 +168,17 @@ export interface ResourceFormProps {
    * Formular nicht direkt liefert. Läuft *nach* `buildPayload` und `extra`.
    */
   transform?: (payload: FieldValues) => FieldValues;
+  /**
+   * Wird bei jeder Eingabe mit Feldname und neuem Wert gerufen — für Felder,
+   * deren Auswahl von einem anderen abhängt (Objekte der gewählten
+   * Kundschaft).
+   *
+   * Nicht `transform` dafür missbrauchen: `transform` läuft erst beim Senden.
+   * Die Vertragsmaske tat genau das, und die Objektliste blieb leer, bis
+   * jemand einmal auf „Vertrag anlegen" geklickt hatte (gefunden von der
+   * Browserreihe am 2026-09-23).
+   */
+  onFieldChange?: (name: string, value: string | boolean) => void;
 }
 
 export function ResourceForm({
@@ -183,6 +194,7 @@ export function ResourceForm({
   onSuccess,
   className,
   transform,
+  onFieldChange,
 }: ResourceFormProps) {
   const router = useRouter();
   const editing = method !== 'POST';
@@ -192,8 +204,10 @@ export function ResourceForm({
   const [saving, setSaving] = React.useState(false);
   const id = React.useId();
 
-  const set = (name: string, value: string | boolean) =>
+  const set = (name: string, value: string | boolean) => {
     setState((s) => ({ ...s, [name]: value }));
+    onFieldChange?.(name, value);
+  };
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();

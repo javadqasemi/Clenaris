@@ -208,10 +208,12 @@ export function ContractForm({
       submitLabel="Vertrag anlegen"
       successMessage="Der Vertragsentwurf steht. In Kraft tritt er erst, wenn jemand ihn aktiviert."
       redirectTo="/admin/vertraege/{id}"
+      // Die Kundschaft für die Objektauswahl mitverfolgen — bei der Eingabe,
+      // nicht erst beim Senden (siehe `onFieldChange` in `ResourceForm`).
+      onFieldChange={(name, wert) => {
+        if (name === 'customerId') setKundeId(String(wert));
+      }}
       transform={(werte) => {
-        // Die Kundschaft für die Objektauswahl mitverfolgen.
-        const gewaehlt = String(werte.customerId ?? '');
-        if (gewaehlt !== kundeId) setKundeId(gewaehlt);
 
         const zahl = (name: string) =>
           werte[name] === undefined || werte[name] === null || werte[name] === ''
