@@ -137,6 +137,22 @@ jobs:
         # Auslieferung, prüft nicht das, was ausgeliefert wird.
         run: npm ci --no-audit --no-fund
 
+      - name: React-Hydrationskorrektur ist angewendet
+        # `postinstall` wendet die Korrektur an (docs/HYDRATION.md §16). Diese
+        # Stufe sagt es noch einmal ausdrücklich und scheitert, wenn eine neue
+        # Next-Fassung die korrigierte Stelle verändert hat — dann ist die
+        # Korrektur neu zu bewerten, nicht blind zu übernehmen
+        # (docs/LIEFERKETTE.md, „Next aktualisieren").
+        run: node scripts/react-hydrationskorrektur.mjs --pruefen
+
+      - name: Keine kritische Sicherheitslücke in den Laufzeitabhängigkeiten
+        # Nur `critical` und nur, was ausgeliefert wird (`--omit=dev`). Die
+        # bekannten `high`/`moderate`-Befunde sind in docs/LIEFERKETTE.md
+        # einzeln bewertet; eine Schwelle darunter wäre von Anfang an rot und
+        # würde abgeschaltet. Eine *neue* kritische Lücke hält die
+        # Auslieferung an, bis jemand sie bewertet hat.
+        run: npm audit --omit=dev --audit-level=critical
+
       # -- Statische Prüfungen zuerst: Sie brauchen keine Datenbank und
       #    scheitern in Sekunden statt in Minuten. -------------------------
       - name: Linter
