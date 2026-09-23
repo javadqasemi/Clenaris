@@ -14,7 +14,7 @@ import {
   paymentReminderEmail,
 } from '@/lib/email/templates';
 import { smsTemplates } from '@/lib/sms/client';
-import { renderInvoicePdf } from '@/lib/pdf/render';
+import { renderCreditNotePdf, renderInvoicePdf } from '@/lib/pdf/render';
 import { buildQrReference } from '@/lib/pdf/swiss-qr';
 import type {
   CreateInvoiceInput,
@@ -762,8 +762,56 @@ export async function createCreditNote(params: {
       0,
     ),
   );
+  const grossTotal = round2(netTotal + vatAmount);
+  if (grossTotal <= 0) throw new BusinessRuleError('Eine Gutschrift über null Franken ist keine.');
+
+  /**
+   * Bis 2026-09-23 prüfte diese Funktion nichts — und hatte keinen Aufrufer:
+   * Der Storno verwies für teilweise bezahlte Rechnungen auf eine Gutschrift,
+   * die sich nirgends erstellen liess. Jetzt, mit Route und Oberfläche:
+   * Kundschaft der Organisation; eine Bezugsrechnung muss ausgestellt, nicht
+   * storniert und von derselben Kundschaft sein; und über alle Gutschriften
+   * hinweg wird nie mehr gutgeschrieben, als die Rechnung betrug.
+   */
+  const kunde = await prisma.customer.findFirst({
+    where: { id: params.customerId, organizationId: params.organizationId },
+    select: { id: true },
+  });
+  if (!kunde) throw new NotFoundError('Kundschaft');
 
   const note = await prisma.$transaction(async (tx) => {
+    if (params.invoiceId) {
+      // Zeilensperre: Zwei gleichzeitige Gutschriften dürfen zusammen die Rechnung nicht übersteigen.
+      await tx.$queryRaw`SELECT "id" FROM "invoices" WHERE "id" = ${params.invoiceId} FOR UPDATE`;
+      const rechnung = await tx.invoice.findFirst({
+        where: { id: params.invoiceId, organizationId: params.organizationId, deletedAt: null },
+        select: { id: true, number: true, status: true, customerId: true, grossTotal: true, balance: true },
+      });
+      if (!rechnung) throw new NotFoundError('Rechnung');
+      if (rechnung.customerId !== params.customerId) {
+        throw new BusinessRuleError('Die Gutschrift gehört zur Kundschaft der Rechnung.');
+      }
+      if (rechnung.status === 'DRAFT' || rechnung.status === 'CANCELLED') {
+        throw new BusinessRuleError('Gutgeschrieben wird nur auf eine ausgestellte, nicht stornierte Rechnung.');
+      }
+      const bisher = await tx.creditNote.aggregate({ where: { invoiceId: rechnung.id }, _sum: { grossTotal: true } });
+      const rest = round2(toNumber(rechnung.grossTotal) - toNumber(bisher._sum.grossTotal));
+      if (grossTotal > rest + 0.004) {
+        throw new BusinessRuleError(
+          `Auf Rechnung ${rechnung.number} kann höchstens noch CHF ${rest.toFixed(2)} gutgeschrieben werden.`,
+        );
+      }
+      /**
+       * Der offene Posten sinkt um die Gutschrift — sonst mahnte der Betrieb
+       * einen Betrag, den er selbst gutgeschrieben hat. Der Status bleibt: Eine
+       * gutgeschriebene Rechnung ist nicht „bezahlt".
+       */
+      await tx.invoice.update({
+        where: { id: rechnung.id },
+        data: { balance: Math.max(0, round2(toNumber(rechnung.balance) - grossTotal)) },
+      });
+    }
+
     const { number } = await nextNumber(tx, params.organizationId, 'credit_note');
 
     return tx.creditNote.create({
@@ -776,11 +824,14 @@ export async function createCreditNote(params: {
         issueDate: params.issueDate ?? new Date(),
         netTotal,
         vatAmount,
-        grossTotal: round2(netTotal + vatAmount),
+        grossTotal,
         items: params.items as unknown as Prisma.InputJsonValue,
       },
     });
   });
+
+  // Das PDF gleich erzeugen — ein Beleg ohne Dokument ist keiner, den man versenden kann.
+  await renderCreditNotePdf(note.id).catch((error) => log.error('Gutschrift-PDF fehlgeschlagen', { error }));
 
   await audit.created({
     organizationId: params.organizationId,
@@ -791,6 +842,22 @@ export async function createCreditNote(params: {
   });
 
   return note;
+}
+
+export async function listCreditNotes(params: { organizationId: string; customerId?: string; invoiceId?: string }) {
+  return prisma.creditNote.findMany({
+    where: {
+      organizationId: params.organizationId,
+      ...(params.customerId ? { customerId: params.customerId } : {}),
+      ...(params.invoiceId ? { invoiceId: params.invoiceId } : {}),
+    },
+    orderBy: { issueDate: 'desc' },
+    take: 500,
+    include: {
+      customer: { select: { id: true, number: true, companyName: true, firstName: true, lastName: true } },
+      invoice: { select: { id: true, number: true } },
+    },
+  });
 }
 
 // ---------------------------------------------------------------------------

@@ -17,6 +17,8 @@ import { Alert } from '@/components/ui/primitives';
 import { DetailRow, DetailSection, PageHeader } from '@/components/app/page-parts';
 import { PdfViewer } from '@/components/app/pdf-viewer';
 import { InvoiceActions } from '@/features/admin/invoice-actions';
+import { FormDialog } from '@/components/app/resource-form';
+import { creditNoteFields } from '@/features/admin/finance-fields';
 
 export const metadata: Metadata = {
   title: 'Rechnung',
@@ -365,12 +367,36 @@ export default async function AdminInvoiceDetailPage({
             </DetailSection>
           ) : null}
 
-          {invoice.creditNotes.length > 0 ? (
-            <DetailSection title="Gutschriften">
+          {/*
+            Gutschriften (Wave 13): Bis 2026-09-23 wurden sie hier nur
+            aufgelistet — erstellen liess sich keine, obwohl der Storno einer
+            teilweise bezahlten Rechnung genau darauf verweist.
+          */}
+          {invoice.creditNotes.length > 0 || (!isDraft && invoice.status !== 'CANCELLED' && can(session.role, 'creditnote:create')) ? (
+            <DetailSection
+              title="Gutschriften"
+              action={
+                !isDraft && invoice.status !== 'CANCELLED' && can(session.role, 'creditnote:create') ? (
+                  <FormDialog
+                    title="Gutschrift ausstellen"
+                    description="Nummer aus dem lückenlosen Nummernkreis; danach unveränderlich. Der offene Posten sinkt um den Bruttobetrag."
+                    triggerLabel="Gutschrift"
+                    triggerVariant="outline"
+                    triggerSize="sm"
+                    endpoint={`/api/invoices/${invoice.id}/credit-note`}
+                    successMessage="Gutschrift ausgestellt."
+                    fields={creditNoteFields()}
+                    values={{ quantity: 1, vatRate: 8.1 }}
+                  />
+                ) : null
+              }
+            >
               <ul className="protocol-list">
                 {invoice.creditNotes.map((note) => (
                   <li key={note.id} className="flex items-center justify-between gap-3 py-3">
-                    <span className="text-sm tabular-nums">{note.number}</span>
+                    <a href={`/api/credit-notes/${note.id}/pdf`} className="text-sm tabular-nums hover:text-primary" download>
+                      {note.number}
+                    </a>
                     <span className="text-sm tabular-nums text-muted-foreground">
                       {formatCurrency(toNumber(note.grossTotal))}
                     </span>

@@ -27,6 +27,7 @@ import { BI_ROUTES } from './openapi-routes-bi';
 import { CONTRACT_ROUTES } from './openapi-routes-vertraege';
 import { QUALITY_ROUTES } from './openapi-routes-qualitaet';
 import { BETRIEB_ROUTES } from './openapi-routes-betrieb';
+import { FINANZ_ROUTES } from './openapi-routes-finanzen';
 
 /**
  * Registrierung aller REST-Endpunkte.
@@ -4013,7 +4014,9 @@ export const ROUTES: RouteDoc[] = [
       'Nur von Hand erfasste Zahlungen. Was über Stripe oder Datatrans hereinkam, ist beim ' +
       'Zahlungsanbieter eine Tatsache; die Zeile zu entfernen hiesse, die eigene Buchhaltung ' +
       'gegen den Kontoauszug laufen zu lassen. Der offene Posten der Rechnung wird in derselben ' +
-      'Transaktion zurückgesetzt — sonst bliebe sie als bezahlt stehen, obwohl kein Geld da ist.',
+      'Transaktion zurückgesetzt — sonst bliebe sie als bezahlt stehen, obwohl kein Geld da ist. ' +
+      'Seit Wave 13 bleibt die Zeile als `CANCELLED` stehen (Storno statt Löschen); die Datenbank ' +
+      'verweigert das Löschen von Zahlungen. Eine bereits stornierte Zahlung: 422.',
     guard: perm('all', 'payment:delete'),
     rateLimit: 'apiWrite',
     params: q.idParam,
@@ -4434,4 +4437,9 @@ export const ROUTES: RouteDoc[] = [
   //  Betrieb (Wave 11): Reklamationen, Material, Geräte
   // -------------------------------------------------------------------------
   ...BETRIEB_ROUTES,
+
+  // -------------------------------------------------------------------------
+  //  Gutschriften (Wave 13)
+  // -------------------------------------------------------------------------
+  ...FINANZ_ROUTES,
 ];

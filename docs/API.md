@@ -5,7 +5,7 @@
 > Quelle, aus der sowohl diese Referenz als auch die Laufzeitvalidierung
 > stammen.
 
-Stand: 504 Endpunkte. Die maschinenlesbare Fassung liegt in
+Stand: 508 Endpunkte. Die maschinenlesbare Fassung liegt in
 [`openapi.yaml`](./openapi.yaml) bzw. [`openapi.json`](./openapi.json).
 
 ## Grundlagen
@@ -4360,12 +4360,92 @@ Familie.
 
 ### `DELETE /api/payments/{id}`
 
-**Zahlung stornieren.** Nur von Hand erfasste Zahlungen. Was über Stripe oder Datatrans hereinkam, ist beim Zahlungsanbieter eine Tatsache; die Zeile zu entfernen hiesse, die eigene Buchhaltung gegen den Kontoauszug laufen zu lassen. Der offene Posten der Rechnung wird in derselben Transaktion zurückgesetzt — sonst bliebe sie als bezahlt stehen, obwohl kein Geld da ist.
+**Zahlung stornieren.** Nur von Hand erfasste Zahlungen. Was über Stripe oder Datatrans hereinkam, ist beim Zahlungsanbieter eine Tatsache; die Zeile zu entfernen hiesse, die eigene Buchhaltung gegen den Kontoauszug laufen zu lassen. Der offene Posten der Rechnung wird in derselben Transaktion zurückgesetzt — sonst bliebe sie als bezahlt stehen, obwohl kein Geld da ist. Seit Wave 13 bleibt die Zeile als `CANCELLED` stehen (Storno statt Löschen); die Datenbank verweigert das Löschen von Zahlungen. Eine bereits stornierte Zahlung: 422.
 
 - **Zugriff:** Erfordert die Berechtigung: `payment:delete`.
 - **Rate-Limit-Klasse:** `apiWrite`
 - **Erfolg:** 204
 - **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+### `GET /api/credit-notes`
+
+**Gutschriften.** Optional je Kundschaft oder Rechnung.
+
+- **Zugriff:** Erfordert die Berechtigung: `creditnote:read`.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 429, 500
+
+**Query-Parameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `customerId` | string | – | min. 1 Zeichen |
+| `invoiceId` | string | – | min. 1 Zeichen |
+
+### `POST /api/credit-notes`
+
+**Gutschrift ausstellen.** Nummer aus dem lückenlosen Nummernkreis in derselben Transaktion. Mit Bezugsrechnung: gleiche Kundschaft, ausgestellt und nicht storniert, über alle Gutschriften nie mehr als der Rechnungsbetrag (422); der offene Posten sinkt entsprechend. Danach unveränderlich.
+
+- **Zugriff:** Erfordert die Berechtigung: `creditnote:create`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 422, 429, 500
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `invoiceId` | string | – | min. 1 Zeichen |
+| `customerId` | string | ja | min. 1 Zeichen |
+| `reason` | string | ja | min. 3 Zeichen, max. 500 Zeichen |
+| `issueDate` | string | – | – |
+| `items` | object[] | ja | min. 1 Einträge, max. 100 Einträge |
+| `items[].name` | string | ja | min. 2 Zeichen, max. 200 Zeichen |
+| `items[].quantity` | number | – | ≥ 0.01, ≤ 10000, Standard `1` |
+| `items[].unit` | string | – | max. 20 Zeichen, Standard `"Stk."` |
+| `items[].unitPrice` | number | ja | ≥ 0, ≤ 9999999 |
+| `items[].vatRate` | number | – | ≥ 0, ≤ 30, Standard `8.1` |
+
+### `POST /api/invoices/{id}/credit-note`
+
+**Gutschrift zu einer Rechnung.** Eine Zeile, Kundschaft aus der Rechnung; dieselben Regeln wie `POST /api/credit-notes`.
+
+- **Zugriff:** Erfordert die Berechtigung: `creditnote:create`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `reason` | string | ja | min. 3 Zeichen, max. 500 Zeichen |
+| `name` | string | ja | min. 2 Zeichen, max. 200 Zeichen |
+| `quantity` | number | – | ≥ 0.01, ≤ 10000, Standard `1` |
+| `unitPrice` | number | ja | ≥ 0, ≤ 9999999 |
+| `vatRate` | number | – | ≥ 0, ≤ 30, Standard `8.1` |
+
+### `GET /api/credit-notes/{id}/pdf`
+
+**Gutschrift als PDF.** Gerendert aus den unveränderlichen Daten der Gutschrift.
+
+- **Zugriff:** Erfordert die Berechtigung: `creditnote:read`.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200 (`application/pdf`)
+- **Mögliche Fehler:** 400, 401, 403, 404, 429, 500
 
 **Pfadparameter**
 

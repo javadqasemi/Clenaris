@@ -92,6 +92,26 @@ export const createCreditNoteSchema = z.object({
 });
 export type CreateCreditNoteInput = z.infer<typeof createCreditNoteSchema>;
 
+/**
+ * Gutschrift zu einer Rechnung — eine Zeile, Kundschaft aus der Rechnung.
+ * Der Regelfall im Büro („CHF 80 wegen verspätetem Einsatz"); die volle
+ * Schnittstelle mit mehreren Positionen ist `createCreditNoteSchema`.
+ * `unitPrice` ist netto; die MWST rechnet der Server.
+ */
+export const invoiceCreditNoteSchema = z.object({
+  reason: z.string().trim().min(3, 'Bitte geben Sie einen Grund an.').max(500),
+  name: z.string().trim().min(2).max(200),
+  quantity: z.number().min(0.01).max(10000).default(1),
+  unitPrice: moneySchema.refine((v) => v > 0, 'Der Betrag muss grösser als 0 sein.'),
+  vatRate: z.number().min(0).max(30).default(8.1),
+});
+export type InvoiceCreditNoteInput = z.infer<typeof invoiceCreditNoteSchema>;
+
+export const creditNoteQuerySchema = z.object({
+  customerId: cuidSchema.optional(),
+  invoiceId: cuidSchema.optional(),
+});
+
 export const createExpenseSchema = z.object({
   supplierId: cuidSchema.optional(),
   category: z.enum([

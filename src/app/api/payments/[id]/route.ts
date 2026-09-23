@@ -70,6 +70,14 @@ export const PATCH = defineRoute({
  * hiesse, die eigene Buchhaltung gegen den Kontoauszug laufen zu lassen. Eine
  * fehlgeleitete Zahlung des Anbieters wird dort erstattet.
  *
+ * **Storno statt Löschen (Wave 13, 2026-09-23).** Bis hierher verschwand die
+ * Zeile; der Saldo stimmte danach, aber niemand konnte mehr sehen, dass hier
+ * einmal eine Zahlung verbucht war. Jetzt wird sie `CANCELLED` und bleibt —
+ * der Saldo zählt ohnehin nur `SUCCEEDED`. Die Datenbank verweigert das
+ * Löschen von Zahlungen (Trigger `zahlung_unveraenderlich`). Die Methode
+ * bleibt DELETE, weil sich für den Aufrufer nichts ändert: Die Zahlung zählt
+ * nicht mehr.
+ *
  * Der offene Posten der Rechnung wird in derselben Transaktion zurückgesetzt —
  * sonst bliebe die Rechnung als bezahlt stehen, obwohl kein Geld da ist.
  */
@@ -93,9 +101,33 @@ export const DELETE = defineRoute({
     }
 
     const amount = toNumber(payment.amount);
+    if (payment.status === 'CANCELLED') {
+      throw new BusinessRuleError('Diese Zahlung ist bereits storniert.');
+    }
 
     await prisma.$transaction(async (tx) => {
-      await tx.payment.delete({ where: { id: params.id } });
+      await tx.payment.update({
+        where: { id: params.id },
+        data: {
+          status: 'CANCELLED',
+          note: [payment.note, `Storniert am ${new Date().toISOString().slice(0, 10)}`].filter(Boolean).join('\n'),
+        },
+      });
+
+      /**
+       * Der Kundenwert wurde beim Verbuchen erhöht (`recordPayment`); ein
+       * Storno nimmt ihn zurück. Bis 2026-09-23 blieb er stehen, und eine
+       * irrtümlich verbuchte und stornierte Zahlung machte die Kundschaft
+       * dauerhaft „wertvoller".
+       */
+      if (payment.status === 'SUCCEEDED') {
+        // Dieselbe Akte wie beim Erhöhen: die Kundschaft der Rechnung, sonst die der Zahlung.
+        const kunde =
+          (payment.invoiceId
+            ? (await tx.invoice.findUnique({ where: { id: payment.invoiceId }, select: { customerId: true } }))?.customerId
+            : null) ?? payment.customerId;
+        if (kunde) await tx.customer.update({ where: { id: kunde }, data: { lifetimeValue: { decrement: amount } } });
+      }
 
       if (payment.invoiceId && payment.status === 'SUCCEEDED') {
         const paid = await tx.payment.aggregate({
@@ -109,6 +141,9 @@ export const DELETE = defineRoute({
           where: { id: payment.invoiceId },
           data: {
             balance,
+            // Bis 2026-09-23 blieb `paidAmount` nach einem Storno auf dem alten Wert
+            // stehen, während der Saldo stimmte — zwei Zahlen, die einander widersprachen.
+            paidAmount: Math.round(toNumber(paid._sum.amount) * 100) / 100,
             // Zurück auf „versendet", sobald wieder etwas offen ist.
             status: balance <= 0 ? 'PAID' : balance < gross ? 'PARTIALLY_PAID' : 'SENT',
             paidAt: balance <= 0 ? undefined : null,

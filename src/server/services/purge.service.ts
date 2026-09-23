@@ -423,6 +423,17 @@ export async function runPurge(params: {
   await prisma
     .$transaction(
     async (tx) => {
+      /**
+       * Die Unveränderlichkeitstrigger der Finanzbelege (Wave 13) verweigern
+       * das Löschen ausgestellter Rechnungen, Gutschriften, Mahnungen und
+       * Zahlungen. Die Datenbereinigung ist der eine, ausdrückliche Weg, das
+       * doch zu tun — für Demo- und Testbestände, als Systemverantwortung,
+       * mit Protokolleintrag. Die Freigabe gilt nur für diese Transaktion
+       * (`SET LOCAL`) und verlangt keine Superuser-Rolle, anders als
+       * `session_replication_role`, die in der Produktion nicht zur Verfügung
+       * steht.
+       */
+      await tx.$executeRawUnsafe(`SET LOCAL clenaris.bereinigung = 'on'`);
       for (const area of selected) {
         const deleted: PurgeResultArea['deleted'] = [];
         for (const step of area.steps) {
