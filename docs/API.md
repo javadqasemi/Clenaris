@@ -5,7 +5,7 @@
 > Quelle, aus der sowohl diese Referenz als auch die Laufzeitvalidierung
 > stammen.
 
-Stand: 519 Endpunkte. Die maschinenlesbare Fassung liegt in
+Stand: 522 Endpunkte. Die maschinenlesbare Fassung liegt in
 [`openapi.yaml`](./openapi.yaml) bzw. [`openapi.json`](./openapi.json).
 
 ## Grundlagen
@@ -6537,6 +6537,22 @@ Familie.
 - **Erfolg:** 200
 - **Mögliche Fehler:** 422, 500
 
+### `POST /api/webhooks/resend`
+
+**Resend-Zustellmeldungen.** Svix-Signatur gegen den Rohtext, Zeitstempel höchstens fünf Minuten alt; ohne `RESEND_WEBHOOK_SECRET` 503, ungültige Signatur 401. Aktualisiert das E-Mail-Protokoll über die Anbieterkennung — ordnungsfest und idempotent (ein Abprall überschreibt eine Zustellung, eine späte „gesendet"-Meldung nicht). Fehler beim Verarbeiten: 500.
+
+- **Zugriff:** Öffentlich — keine Anmeldung nötig.
+- **Erfolg:** 200
+- **Mögliche Fehler:** 422, 500
+
+### `POST /api/webhooks/twilio`
+
+**Twilio-Zustellmeldungen.** Status-Callback für SMS. Signatur `X-Twilio-Signature` über die öffentliche Adresse und die Formularfelder, geprüft mit `TWILIO_AUTH_TOKEN`; ohne Token 503, ungültig 401.
+
+- **Zugriff:** Öffentlich — keine Anmeldung nötig.
+- **Erfolg:** 200
+- **Mögliche Fehler:** 422, 500
+
 ## Betrieb
 
 ### `GET /api/service-areas`
@@ -7160,6 +7176,24 @@ Familie.
 | --- | --- | --- | --- |
 | `body` | string | ja | min. 10 Zeichen, max. 480 Zeichen |
 | `active` | boolean | – | – |
+
+### `GET /api/communication/logs`
+
+**Zustellprotokoll.** E-Mail oder SMS mit Status laut Anbieter, Zustell- und Öffnungszeitpunkt; ohne Inhalt.
+
+- **Zugriff:** Erfordert die Berechtigung: `template:read`.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 429, 500
+
+**Query-Parameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `kanal` | string | – | `email` \| `sms`, Standard `"email"` |
+| `status` | string | – | max. 40 Zeichen |
+| `suche` | string | – | max. 120 Zeichen |
+| `tage` | integer | – | ≥ 1, ≤ 365, Standard `30` |
 
 ## Führung: Kennzahlen
 

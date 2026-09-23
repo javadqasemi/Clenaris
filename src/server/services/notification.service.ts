@@ -44,6 +44,8 @@ export interface NotifyInput {
 
   entity?: string;
   entityId?: string;
+  /** Schlüssel der Vorlage — landet im E-Mail-Protokoll und macht Versände wiederauffindbar. */
+  templateKey?: string;
   /** Marketing-Nachrichten nur mit Einwilligung. */
   isMarketing?: boolean;
 }
@@ -118,6 +120,10 @@ export async function notify(input: NotifyInput): Promise<Zustellung> {
         subject: input.emailContent.subject,
         html: input.emailContent.html,
         attachments: input.emailAttachments,
+        // Bis 2026-09-23 fehlte der Schlüssel hier: Jede E-Mail über `notify()`
+        // stand ohne Vorlagenschlüssel im Protokoll, und Prüfungen wie „nur eine
+        // Bewertungsbitte je Buchung" konnten nie greifen.
+        templateKey: input.templateKey,
         entity: input.entity,
         entityId: input.entityId,
       })
@@ -141,7 +147,7 @@ export async function notify(input: NotifyInput): Promise<Zustellung> {
         entityId: input.entityId,
       })
         .then((r) => {
-          zustellung.sms = r.ok ? { ok: true } : { ok: false, fehler: 'SMS-Versand fehlgeschlagen' };
+          zustellung.sms = r.ok ? { ok: true } : { ok: false, fehler: r.error ?? 'SMS-Versand fehlgeschlagen' };
         })
         .catch((fehler: unknown) => {
           zustellung.sms = { ok: false, fehler: fehler instanceof Error ? fehler.message : String(fehler) };

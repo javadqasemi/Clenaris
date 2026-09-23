@@ -40,6 +40,7 @@ import { join } from 'node:path';
 import { config } from 'dotenv';
 
 import { databaseNameOf, istTestdatenbank } from '../prisma/seed-guard';
+import { PRUEF_RESEND_GEHEIMNIS } from '../tests/helpers/webhooks';
 
 // `.env` nur, um `DATABASE_URL` abzuleiten — `next start` liest sie ohnehin selbst.
 config();
@@ -92,6 +93,13 @@ function main(): void {
       DIRECT_URL: testUrl,
       TRUSTED_PROXY_MODE: 'NONE',
       CLENARIS_TEST_CACHE_DIR: cacheDir,
+      /**
+       * Ein festes Webhook-Geheimnis nur für die Prüfreihe (Wave 14): So lässt
+       * sich die Signaturprüfung von `/api/webhooks/resend` mit einer echten,
+       * gültigen Signatur prüfen — und mit einer falschen. Dasselbe Geheimnis
+       * steht in `tests/helpers/webhooks.ts`. Es verlässt die Testumgebung nie.
+       */
+      RESEND_WEBHOOK_SECRET: PRUEF_RESEND_GEHEIMNIS,
     },
   });
   const beenden = () => kind.kill();

@@ -4,7 +4,7 @@
 > Diagramme sind damit nie älter als das Schema. Prosa und Bereichseinteilung
 > stehen in `scripts/generate-erd.ts`.
 
-**143 Modelle, 111 Aufzählungstypen, 2777 Felder.**
+**143 Modelle, 111 Aufzählungstypen, 2781 Felder.**
 PostgreSQL 16+; alle Zeitstempel als `timestamptz` in UTC, Anzeige in Europe/Zurich.
 
 ## Vier Entscheidungen, die das ganze Schema prägen
@@ -1290,8 +1290,8 @@ erDiagram
 | `Notification` | `notifications` | 13 | In-App-, E-Mail- oder SMS-Meldung an eine Person, mit Zustellstand. |
 | `EmailTemplate` | `email_templates` | 11 | E-Mail-Vorlage je Sprache, mit Platzhaltern. |
 | `SmsTemplate` | `sms_templates` | 7 | SMS-Vorlage je Sprache. |
-| `EmailLog` | `email_logs` | 13 | Protokoll jedes E-Mail-Versands inkl. Öffnungen und Zustellfehlern. |
-| `SmsLog` | `sms_logs` | 11 | Protokoll jedes SMS-Versands inkl. Kosten. |
+| `EmailLog` | `email_logs` | 15 | Protokoll jedes E-Mail-Versands inkl. Öffnungen und Zustellfehlern. |
+| `SmsLog` | `sms_logs` | 13 | Protokoll jedes SMS-Versands inkl. Kosten. |
 | `Automation` | `automations` | 13 | Regel aus Auslöser und Aktionen, als Daten statt als Code. |
 | `AutomationAction` | `automation_actions` | 6 | Einzelne Aktion einer Regel, mit Verzögerung und Reihenfolge. |
 | `AutomationRun` | `automation_runs` | 13 | Ausführung einer Regel mit Ergebnis — macht Automatisierungen nachvollziehbar. |

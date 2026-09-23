@@ -3,7 +3,7 @@ import 'server-only';
 import twilio from 'twilio';
 import { prisma } from '@/lib/db';
 import { hasIntegration, serverEnv } from '@/lib/env';
-import { normalizePhone } from '@/lib/utils';
+import { absoluteUrl, normalizePhone } from '@/lib/utils';
 import { logger } from '@/lib/logger';
 
 const log = logger('sms');
@@ -32,7 +32,7 @@ export interface SendSmsInput {
   entityId?: string;
 }
 
-export async function sendSms(input: SendSmsInput): Promise<{ ok: boolean; id?: string }> {
+export async function sendSms(input: SendSmsInput): Promise<{ ok: boolean; id?: string; error?: string }> {
   const to = normalizePhone(input.to);
   // Twilio zählt 160 Zeichen pro Segment (70 bei Unicode). Wir kürzen defensiv.
   const body = input.body.slice(0, 640);
@@ -62,6 +62,8 @@ export async function sendSms(input: SendSmsInput): Promise<{ ok: boolean; id?: 
       ...(env.TWILIO_MESSAGING_SERVICE_SID
         ? { messagingServiceSid: env.TWILIO_MESSAGING_SERVICE_SID }
         : { from: env.TWILIO_FROM_NUMBER }),
+      // Zustellmeldungen (Wave 14): Twilio ruft diesen Endpunkt mit dem Status auf.
+      statusCallback: absoluteUrl('/api/webhooks/twilio'),
     });
 
     await prisma.smsLog
@@ -75,7 +77,8 @@ export async function sendSms(input: SendSmsInput): Promise<{ ok: boolean; id?: 
       .create({ data: { ...logBase, status: 'failed', error: message.slice(0, 500) } })
       .catch(() => undefined);
     log.error('Versand fehlgeschlagen', { error: message });
-    return { ok: false };
+    // Den Grund zurückgeben — bis 2026-09-23 meldete `notify()` nur „fehlgeschlagen".
+    return { ok: false, error: message.slice(0, 200) };
   }
 }
 

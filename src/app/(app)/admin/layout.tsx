@@ -129,6 +129,8 @@ export default async function AdminLayout({ children }: { children: React.ReactN
         { href: '/admin/leads', label: 'Leads', icon: 'leads', badge: openLeads, permission: 'lead:read' },
         { href: '/admin/kunden', label: 'Kunden', icon: 'customers', permission: 'customer:read' },
         { href: '/admin/nachrichten', label: 'Nachrichten', icon: 'messages', badge: unreadMessages, permission: 'message:read' },
+        // Wave 14: was hinausging und was ankam — E-Mail und SMS mit Zustellstatus.
+        { href: '/admin/kommunikation', label: 'Zustellprotokoll', icon: 'protocol', permission: 'template:read' },
         { href: '/admin/objekte', label: 'Objekte', icon: 'building', permission: 'property:read' },
         { href: '/admin/aufgaben', label: 'Aufgaben', icon: 'tasks', permission: 'task:read' },
       ],

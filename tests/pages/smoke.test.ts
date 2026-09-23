@@ -47,6 +47,8 @@ const PAGES: Record<'admin' | 'employee' | 'customer', string[]> = {
     '/admin/lohn',
     '/admin/lohn?jahr=2021&monat=3',
     '/admin/besichtigungen',
+    '/admin/kommunikation',
+    '/admin/kommunikation?kanal=sms',
     '/admin/reklamationen',
     '/admin/reklamationen?alle=1',
     '/admin/material',

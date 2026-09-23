@@ -65,6 +65,12 @@ const serverSchema = z.object({
     .transform((v) => v === 'true'),
 
   RESEND_API_KEY: z.string().optional(),
+  /**
+   * Signaturgeheimnis der Resend-Webhooks (`whsec_…`, Svix). Ohne es nimmt
+   * `/api/webhooks/resend` keine Zustellmeldungen an (503) — eine ungeprüfte
+   * Meldung könnte jede Zustellung als „zugestellt" markieren.
+   */
+  RESEND_WEBHOOK_SECRET: z.string().optional(),
   EMAIL_FROM: z.string().default('Clenaris <noreply@clenaris.ch>'),
   EMAIL_REPLY_TO: z.string().optional(),
   EMAIL_BCC_ARCHIVE: z.string().optional(),

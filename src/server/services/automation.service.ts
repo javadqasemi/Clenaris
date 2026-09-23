@@ -224,11 +224,22 @@ export async function requestReviews(organizationId: string): Promise<number> {
   let sent = 0;
 
   for (const booking of bookings) {
-    // Doppelte Anfragen verhindern: nur eine Bitte pro Buchung.
-    const alreadyAsked = await prisma.emailLog.findFirst({
-      where: { entity: 'Booking', entityId: booking.id, templateKey: 'review_request' },
-    });
-    if (alreadyAsked) continue;
+    /**
+     * Doppelte Anfragen verhindern: nur eine Bitte pro Buchung.
+     *
+     * Bis 2026-09-23 griff diese Prüfung nie — `notify()` gab den
+     * Vorlagenschlüssel nicht an das E-Mail-Protokoll weiter, und die Suche
+     * nach `review_request` fand nichts. Wer keine E-Mails wünscht, bekam
+     * zudem gar keine Protokollzeile. Geprüft wird deshalb beides: das
+     * E-Mail-Protokoll und die Mitteilung im Konto, deren Verweis je Buchung
+     * eindeutig ist.
+     */
+    const bewertungsLink = `/konto/bewertungen/neu?buchung=${booking.id}`;
+    const [perMail, imKonto] = await Promise.all([
+      prisma.emailLog.findFirst({ where: { entity: 'Booking', entityId: booking.id, templateKey: 'review_request' }, select: { id: true } }),
+      prisma.notification.findFirst({ where: { link: bewertungsLink }, select: { id: true } }),
+    ]);
+    if (perMail || imKonto) continue;
 
     await notify({
       userId: booking.customer.user?.id ?? null,
@@ -236,14 +247,15 @@ export async function requestReviews(organizationId: string): Promise<number> {
       channels: ['IN_APP', 'EMAIL'],
       title: 'Wie war unsere Reinigung?',
       body: 'Ihre Rückmeldung dauert eine Minute und hilft uns weiter.',
-      link: `/konto/bewertungen/neu?buchung=${booking.id}`,
+      link: bewertungsLink,
       emailContent: reviewRequestEmail({
         firstName: booking.customer.firstName,
         serviceName: booking.items[0]?.name ?? 'Reinigung',
-        reviewUrl: absoluteUrl(`/konto/bewertungen/neu?buchung=${booking.id}`),
+        reviewUrl: absoluteUrl(bewertungsLink),
       }),
       entity: 'Booking',
       entityId: booking.id,
+      templateKey: 'review_request',
     });
 
     sent++;

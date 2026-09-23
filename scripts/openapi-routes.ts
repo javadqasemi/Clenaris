@@ -29,6 +29,7 @@ import { QUALITY_ROUTES } from './openapi-routes-qualitaet';
 import { BETRIEB_ROUTES } from './openapi-routes-betrieb';
 import { FINANZ_ROUTES } from './openapi-routes-finanzen';
 import { VERKAUF_ROUTES } from './openapi-routes-verkauf';
+import { KOMMUNIKATION_ROUTES } from './openapi-routes-kommunikation';
 
 /**
  * Registrierung aller REST-Endpunkte.
@@ -4448,4 +4449,9 @@ export const ROUTES: RouteDoc[] = [
   //  Besichtigung / Objektaufnahme (Wave 12)
   // -------------------------------------------------------------------------
   ...VERKAUF_ROUTES,
+
+  // -------------------------------------------------------------------------
+  //  Zustellstatus (Wave 14)
+  // -------------------------------------------------------------------------
+  ...KOMMUNIKATION_ROUTES,
 ];

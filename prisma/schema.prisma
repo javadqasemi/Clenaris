@@ -3262,12 +3262,18 @@ model EmailLog {
   error       String?
   openedAt    DateTime? @db.Timestamptz(6)
   clickedAt   DateTime? @db.Timestamptz(6)
+  /// Zustellung laut Anbieter (Wave 14) — erst über den Webhook bekannt.
+  deliveredAt DateTime? @db.Timestamptz(6)
+  /// Zeitpunkt der letzten Statusänderung durch den Anbieter.
+  statusAt    DateTime? @db.Timestamptz(6)
   entity      String?
   entityId    String?
   createdAt   DateTime  @default(now()) @db.Timestamptz(6)
 
   @@index([to])
   @@index([entity, entityId])
+  @@index([providerId])
+  @@index([createdAt])
   @@map("email_logs")
 }
 
@@ -3283,9 +3289,15 @@ model SmsLog {
   cost       Decimal? @db.Decimal(10, 4)
   entity     String?
   entityId   String?
+  /// Zustellung laut Anbieter (Wave 14).
+  deliveredAt DateTime? @db.Timestamptz(6)
+  statusAt    DateTime? @db.Timestamptz(6)
   createdAt  DateTime @default(now()) @db.Timestamptz(6)
 
   @@index([to])
+  @@index([providerId])
+  @@index([entity, entityId])
+  @@index([createdAt])
   @@map("sms_logs")
 }
 

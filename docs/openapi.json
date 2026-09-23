@@ -67888,6 +67888,213 @@
           }
         }
       }
+    },
+    "/api/webhooks/resend": {
+      "post": {
+        "tags": [
+          "System"
+        ],
+        "summary": "Resend-Zustellmeldungen",
+        "description": "Svix-Signatur gegen den Rohtext, Zeitstempel höchstens fünf Minuten alt; ohne `RESEND_WEBHOOK_SECRET` 503, ungültige Signatur 401. Aktualisiert das E-Mail-Protokoll über die Anbieterkennung — ordnungsfest und idempotent (ein Abprall überschreibt eine Zustellung, eine späte „gesendet\"-Meldung nicht). Fehler beim Verarbeiten: 500.\n\n**Zugriff:** Öffentlich — keine Anmeldung nötig.",
+        "operationId": "postWebhooksResend",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Erfolg",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SuccessEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "BUSINESS_RULE — fachlich nicht zulässig, etwa eine bereits ausgestellte Rechnung ändern.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/webhooks/twilio": {
+      "post": {
+        "tags": [
+          "System"
+        ],
+        "summary": "Twilio-Zustellmeldungen",
+        "description": "Status-Callback für SMS. Signatur `X-Twilio-Signature` über die öffentliche Adresse und die Formularfelder, geprüft mit `TWILIO_AUTH_TOKEN`; ohne Token 503, ungültig 401.\n\n**Zugriff:** Öffentlich — keine Anmeldung nötig.",
+        "operationId": "postWebhooksTwilio",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Erfolg",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SuccessEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "BUSINESS_RULE — fachlich nicht zulässig, etwa eine bereits ausgestellte Rechnung ändern.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/communication/logs": {
+      "get": {
+        "tags": [
+          "Kommunikation"
+        ],
+        "summary": "Zustellprotokoll",
+        "description": "E-Mail oder SMS mit Status laut Anbieter, Zustell- und Öffnungszeitpunkt; ohne Inhalt.\n\n**Zugriff:** Erfordert die Berechtigung: `template:read`.\n\n**Rate-Limit-Klasse:** `apiRead`",
+        "operationId": "getCommunicationLogs",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "kanal",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "email",
+                "sms"
+              ],
+              "default": "email"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 40
+            }
+          },
+          {
+            "name": "suche",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 120
+            }
+          },
+          {
+            "name": "tage",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 365,
+              "default": 30
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Erfolg",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SuccessEnvelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHORIZED — keine oder abgelaufene Sitzung.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN — angemeldet, aber ohne die nötige Berechtigung.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
