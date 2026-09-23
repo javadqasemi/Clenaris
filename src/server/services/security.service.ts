@@ -7,7 +7,7 @@ import { prisma } from '@/lib/db';
 import { NotFoundError } from '@/lib/errors';
 import { SECURITY_EVENTS, type SecurityEventKind } from '@/lib/security/events';
 import { recordSecurityEvent } from '@/lib/security/record';
-import { scannerEingerichtet } from '@/lib/security/malware';
+import { getScanner, scannerEingerichtet } from '@/lib/security/malware';
 
 /**
  * Das Sicherheitszentrum — die Lesesicht.
@@ -58,7 +58,18 @@ export interface SicherheitsUeberblick {
   zweitfaktorAnteil: number;
   aktiveKonten: number;
   kontenMitZweitfaktor: number;
-  scanner: { eingerichtet: boolean; art: 'clamav' | 'test' | 'keiner' };
+  scanner: {
+    eingerichtet: boolean;
+    art: 'clamav' | 'test' | 'keiner';
+    /**
+     * Bei ClamAV: antwortet der Dienst gerade (`zPING`), und in welcher
+     * Version. Bis 2026-09-23 zeigte die Übersicht nur „eingerichtet" — ein
+     * gesetztes `CLAMAV_HOST` auf einen Dienst, der nicht läuft, sah aus wie
+     * ein funktionierender Prüfer (RB-013).
+     */
+    erreichbar: boolean | null;
+    version: string | null;
+  };
 }
 
 export async function getSicherheitsUeberblick(
@@ -131,8 +142,16 @@ export async function getSicherheitsUeberblick(
     kontenMitZweitfaktor,
     zweitfaktorAnteil:
       aktiveKonten === 0 ? 0 : Math.round((kontenMitZweitfaktor / aktiveKonten) * 100),
-    scanner: scannerEingerichtet(),
+    scanner: await scannerZustand(),
   };
+}
+
+async function scannerZustand(): Promise<SicherheitsUeberblick['scanner']> {
+  const grund = scannerEingerichtet();
+  if (grund.art !== 'clamav') return { ...grund, erreichbar: null, version: null };
+  const scanner = getScanner();
+  const [zustand, version] = await Promise.all([scanner?.health(), scanner?.version()]);
+  return { ...grund, erreichbar: zustand?.erreichbar ?? false, version: version ?? null };
 }
 
 // ---------------------------------------------------------------------------
