@@ -1010,21 +1010,34 @@ export async function generatePayslip(params: {
   return payslip;
 }
 
-/** Einsatzplan einer Person für das Mitarbeiterportal. */
+/**
+ * Einsatzplan einer Person für das Mitarbeiterportal.
+ *
+ * `take` begrenzt die Liste, `gesamt` nennt trotzdem die volle Zahl. Die
+ * Einsatzliste des Portals zeigte ohne Grenze 60 Tage vollständig — bei einer
+ * dicht verplanten Person (im Prüfbestand 317 Einsätze) wurden das 1.4 MB HTML
+ * und 300 ms statt der sonst üblichen 30 ms (Wave 19, `docs/LEISTUNG.md`).
+ * Auf dem Telefon, für das die Seite gebaut ist, zählt beides doppelt.
+ */
 export async function getEmployeeSchedule(params: {
   employeeId: string;
   from: Date;
   to: Date;
+  take?: number;
+  /** Neueste zuerst — für die Liste erledigter Einsätze. */
+  absteigend?: boolean;
 }) {
-  const [jobs, absences, openEntry] = await Promise.all([
+  const where: Prisma.JobWhereInput = {
+    deletedAt: null,
+    status: { notIn: ['CANCELLED'] },
+    scheduledStart: { gte: params.from, lte: params.to },
+    assignments: { some: { employeeId: params.employeeId } },
+  };
+  const [jobs, absences, openEntry, gesamt] = await Promise.all([
     prisma.job.findMany({
-      where: {
-        deletedAt: null,
-        status: { notIn: ['CANCELLED'] },
-        scheduledStart: { gte: params.from, lte: params.to },
-        assignments: { some: { employeeId: params.employeeId } },
-      },
-      orderBy: { scheduledStart: 'asc' },
+      where,
+      take: params.take,
+      orderBy: { scheduledStart: params.absteigend ? 'desc' : 'asc' },
       include: {
         customer: { select: { firstName: true, lastName: true, companyName: true, phone: true } },
         address: true,
@@ -1054,6 +1067,7 @@ export async function getEmployeeSchedule(params: {
       where: { employeeId: params.employeeId, endedAt: null },
       include: { job: { select: { id: true, number: true, title: true } } },
     }),
+    params.take === undefined ? null : prisma.job.count({ where }),
   ]);
 
   return {
@@ -1061,6 +1075,7 @@ export async function getEmployeeSchedule(params: {
       ...job,
       checklistDone: job.checklist.filter((item) => item.done).length,
     })),
+    gesamt: gesamt ?? jobs.length,
     absences,
     activeTimeEntry: openEntry,
   };

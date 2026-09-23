@@ -94,6 +94,7 @@ const PAGES: Record<'admin' | 'employee' | 'customer', string[]> = {
   employee: [
     '/portal',
     '/portal/einsaetze',
+    '/portal/einsaetze?alle=1',
     '/portal/kalender',
     '/portal/zeiterfassung',
     '/portal/abwesenheiten',
