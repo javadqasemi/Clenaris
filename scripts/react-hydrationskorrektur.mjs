@@ -1,86 +1,112 @@
 /**
  * RB-001 — Rückportierung einer React-Korrektur in die von Next mitgelieferte
- * React-Fassung.
+ * React-Fassung. Eine **befristete Verträglichkeitslösung**, keine
+ * Dauereinrichtung (Entfernungskriterium unten).
  *
- *   node scripts/react-hydrationskorrektur.mjs          # anwenden (idempotent)
+ *   node scripts/react-hydrationskorrektur.mjs          # prüfen und, wo nötig, anwenden
  *   node scripts/react-hydrationskorrektur.mjs --pruefen # nur prüfen, Exit 1 wenn offen
  *
  * ---------------------------------------------------------------------------
  *  Der Fehler
  * ---------------------------------------------------------------------------
  *
- * Next 15.5 bringt React als eigene Kopie mit
- * (`next/dist/compiled/react-dom`, `19.2.0-canary-0bdb9206-20250818`). Diese
- * Fassung setzt den Hydrationszeiger nicht zurück, wenn sie ein angehaltenes
- * Host-Element **wiederabspielt** (`replaySuspendedUnitOfWork`, Fall 5):
+ * Next 15.5 bringt React als eigene Kopie mit (`next/dist/compiled/react-dom*`).
+ * In den Fassungen `19.2.0-canary-0bdb9206-20250818` und
+ * `19.2.0-experimental-0bdb9206-20250818` — mitgeliefert von Next 15.5.25
+ * **und** 15.5.26 — setzt `replaySuspendedUnitOfWork` (Fall 5) den
+ * Hydrationszeiger nicht zurück, wenn ein angehaltenes Host-Element
+ * wiederabgespielt wird:
  *
  *   beginWork(<main>) beansprucht <main>, der Zeiger rückt aufs erste Kind;
  *   ein Kind ist ein noch nicht aufgelöster Flight-Chunk → React hält an;
  *   ist der Chunk beim Weitermachen erfüllt, ruft React beginWork(<main>)
- *   erneut auf — und vergleicht das erste Kind mit „main" → #418, der ganze
- *   Baum wird im Browser neu gebaut.
+ *   erneut auf — und vergleicht das erste Kind mit „main" → #418.
  *
- * In der Anwendung trifft das `<main id="inhalt">` des App-Rahmens: Sein Kind
- * ist das `LayoutRouter`-Element des Segments, das die Fehlergrenze
- * (`error.tsx`) als Client-Referenz trägt. Lädt deren Chunk noch, liefert
- * Flight das Element als `lazy`. Der Nachweis steht in `docs/HYDRATION.md`
- * §16, der deterministische Test in `tests/e2e/hydration-wiederholung.spec.ts`.
+ * Nachweis: `docs/HYDRATION.md` §16; deterministischer Test:
+ * `tests/e2e/hydration-wiederholung.spec.ts` (scheitert ohne diese Korrektur,
+ * geprüft mit Next 15.5.25 und 15.5.26).
  *
  * ---------------------------------------------------------------------------
- *  Die Korrektur
+ *  Die Korrektur — und wann sie angewandt wird
  * ---------------------------------------------------------------------------
  *
- * Wörtlich die Zeilen, mit denen React 19.3.0 den Fall behebt (verglichen mit
- * `react-dom@19.3.0` und `react-dom@19.3.0-canary-8b0da1c6-20260922`): Ist das
- * wiederabgespielte Element der aktuelle Hydrationselternteil, geht der
- * Zeiger auf das Element selbst zurück, bevor `beginWork` erneut läuft.
+ * Wörtlich die Zeilen aus React 19.3.0 (`react-dom@19.3.0`,
+ * `19.3.0-canary-8b0da1c6-20260922`). Angewandt wird **nur**, wenn alles
+ * zutrifft:
  *
- * **Warum eine Rückportierung und kein Versionssprung.** Next 15.5.26, die
- * letzte Fassung der 15er-Reihe, bringt dieselbe fehlerhafte React-Kopie mit.
- * Die Korrektur gibt es erst mit Next 16 — ein Hauptversionssprung mit
- * eigenen Brüchen, der nicht in eine Fehlerbehebung gehört.
+ *  • die React-Fassung der Datei steht in `BETROFFENE_FASSUNGEN`;
+ *  • der erwartete Originalausschnitt steht **genau einmal** in der Datei —
+ *    wörtlich, mit Einzug und Variablenname (Produktions- und
+ *    Entwicklungsbau unterscheiden sich darin);
+ *  • die Korrektur steht noch nicht darin.
  *
- * **Warum ein Skript und kein `patch-package`.** Keine neue Abhängigkeit, und
- * das Verhalten bei Abweichungen ist ausdrücklich: Findet das Skript die
- * erwartete Stelle nicht, **bricht es ab** (Exit 1) — Installation und Bau
- * scheitern, statt eine unkorrigierte Fassung auszuliefern. Bringt eine
- * künftige Next-Fassung die Korrektur selbst mit, erkennt das Skript das und
- * tut nichts.
+ * Ersetzt wird genau diese eine Stelle, keine freie Textersetzung. Jeder
+ * andere Zustand endet mit Exit 1 (fail-closed): unbekannte Fassung ohne
+ * Korrektur, Ausschnitt null- oder mehrfach, Original und Korrektur
+ * zugleich. Eine unbekannte Fassung, die die Korrektur schon selbst
+ * enthält, gilt als erledigt.
+ *
+ * **Lebenszyklus** (`package.json`): `postinstall` (nach `npm ci`), `build`
+ * (bevor das Bündel entsteht — fängt auch `npm install <paket>` ab, das die
+ * Lebenszyklusskripte des Projekts **nicht** ausführt, gemessen beim Update
+ * auf 15.5.26) und `dev` (übersetzt direkt aus `node_modules`). **Kein**
+ * Aufruf beim reinen Serverstart: `next start` / `start:built` / PM2 lesen
+ * nur das fertige Bündel, und das Skript schreibt ohnehin nur, wenn die
+ * Korrektur fehlt.
+ *
+ * **Entfernungskriterium:** Sobald eine Next-Fassung eine React-Fassung mit
+ * der Korrektur mitbringt (voraussichtlich erst Next 16), meldet
+ * `--pruefen` für jede Datei „Korrektur bereits enthalten". Dann: dieses
+ * Skript und seine drei Aufrufe in `package.json` entfernen; der
+ * Regressionstest bleibt und muss weiter grün sein.
  */
 
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-// Ausgabe direkt auf die Standardkanäle: ein Kommandozeilenwerkzeug, kein Anwendungscode.
 const melden = (zeile) => process.stdout.write(`${zeile}\n`);
 const warnen = (zeile) => process.stderr.write(`${zeile}\n`);
 
 const pruefenAllein = process.argv.includes('--pruefen');
 const WURZEL = join(process.cwd(), 'node_modules', 'next', 'dist', 'compiled');
 
-/** Erkennungszeichen der Korrektur — bei uns wie bei React 19.3. */
-const KORRIGIERT = /fiber === hydrationParentFiber &&\s*\(isHydrating\s*\?\s*\(popToNextHostParent\(fiber\)/;
+/** Nur diese React-Fassungen werden verändert — geprüft, dass sie den Fehler haben. */
+const BETROFFENE_FASSUNGEN = new Set([
+  '19.2.0-canary-0bdb9206-20250818',
+  '19.2.0-experimental-0bdb9206-20250818',
+]);
 
 /**
- * Die fehlerhafte Stelle: Fall 5 ruft nur `resetHooksOnUnwind` und fällt dann
- * in `default` durch. Die Variable heisst im Produktionsbau `next`, im
- * Entwicklungsbau `unitOfWork`.
+ * Die beiden Bauformen: Produktion/Profiling (`replaySuspendedUnitOfWork`,
+ * Variable `next`, `case 5:` mit vier Leerzeichen Einzug) und Entwicklung
+ * (`replayBeginWork`, Variable `unitOfWork`, acht Leerzeichen).
  */
-const FEHLERHAFT = /(case 5:\n(\s*)resetHooksOnUnwind\((\w+)\);\n)(\s*default:)/;
+const FORMEN = [
+  { variable: 'next', einzug: '    ' },
+  { variable: 'unitOfWork', einzug: '        ' },
+].map(({ variable, einzug }) => {
+  const innen = `${einzug}  `;
+  const original = `${einzug}case 5:\n${innen}resetHooksOnUnwind(${variable});\n${einzug}default:`;
+  const korrigiert =
+    `${einzug}case 5:\n` +
+    `${innen}resetHooksOnUnwind(${variable});\n` +
+    `${innen}var fiber = ${variable};\n` +
+    `${innen}fiber === hydrationParentFiber &&\n` +
+    `${innen}  (isHydrating\n` +
+    `${innen}    ? (popToNextHostParent(fiber),\n` +
+    `${innen}      5 === fiber.tag &&\n` +
+    `${innen}        null != fiber.stateNode &&\n` +
+    `${innen}        (nextHydratableInstance = fiber.stateNode))\n` +
+    `${innen}    : (popToNextHostParent(fiber), (isHydrating = !0)));\n` +
+    `${einzug}default:`;
+  return { variable, original, korrigiert };
+});
 
-function korrektur(einzug, variable) {
-  return [
-    `${einzug}var fiber = ${variable};`,
-    `${einzug}fiber === hydrationParentFiber &&`,
-    `${einzug}  (isHydrating`,
-    `${einzug}    ? (popToNextHostParent(fiber),`,
-    `${einzug}      5 === fiber.tag &&`,
-    `${einzug}        null != fiber.stateNode &&`,
-    `${einzug}        (nextHydratableInstance = fiber.stateNode))`,
-    `${einzug}    : (popToNextHostParent(fiber), (isHydrating = !0)));`,
-    '',
-  ].join('\n');
-}
+/** Die Korrektur, unabhängig vom Einzug — auch in einer künftigen React-Fassung. */
+const KORREKTUR_ERKENNUNG =
+  /fiber === hydrationParentFiber &&\s*\(isHydrating\s*\?\s*\(popToNextHostParent\(fiber\),\s*5 === fiber\.tag &&\s*null != fiber\.stateNode &&\s*\(nextHydratableInstance = fiber\.stateNode\)\)/g;
+
+const anzahl = (text, teil) => text.split(teil).length - 1;
 
 /** Alle React-DOM-Kopien in Next, die den Arbeitszyklus enthalten. */
 function ziele() {
@@ -94,50 +120,54 @@ function ziele() {
         .filter((f) => /^react-dom-(client|profiling)\.[a-z]+\.js$/.test(f))
         .map((f) => join(cjs, f));
     })
-    .filter((pfad) => {
-      const quelle = readFileSync(pfad, 'utf8');
-      return quelle.includes('function replaySuspendedUnitOfWork');
-    });
+    .filter((pfad) => readFileSync(pfad, 'utf8').includes('function replaySuspendedUnitOfWork'));
+}
+
+function abbrechen(kurz, grund) {
+  warnen(`✗ ${kurz}: ${grund}`);
+  warnen('  React-Hydrationskorrektur abgebrochen (fail-closed) — docs/HYDRATION.md §16.');
+  process.exit(1);
 }
 
 function main() {
   const dateien = ziele();
-  if (dateien.length === 0) {
-    warnen('✗ React-Hydrationskorrektur: keine React-Kopie unter node_modules/next/dist/compiled gefunden.');
-    process.exit(1);
-  }
+  if (dateien.length === 0) abbrechen('node_modules/next', 'keine React-Kopie unter next/dist/compiled gefunden.');
 
   let offen = 0;
   for (const pfad of dateien) {
     const kurz = pfad.slice(WURZEL.length + 1);
     const quelle = readFileSync(pfad, 'utf8');
-    const start = quelle.indexOf('function replaySuspendedUnitOfWork');
-    // Der Entwicklungsbau lagert den Fall in `replayBeginWork` aus.
-    const bereichStart = quelle.includes('function replayBeginWork') ? quelle.indexOf('function replayBeginWork') : start;
-    const bereich = quelle.slice(bereichStart, bereichStart + 2500);
+    const fassung = /exports\.version = "([^"]+)"/.exec(quelle)?.[1] ?? 'unbekannt';
+    const korrekturen = (quelle.match(KORREKTUR_ERKENNUNG) ?? []).length;
+    const treffer = FORMEN.map((f) => ({ ...f, n: anzahl(quelle, f.original) })).filter((f) => f.n > 0);
 
-    if (KORRIGIERT.test(bereich)) {
-      melden(`✓ ${kurz}: korrigiert`);
+    if (korrekturen === 1 && treffer.length === 0) {
+      melden(`✓ ${kurz} (${fassung}): ${BETROFFENE_FASSUNGEN.has(fassung) ? 'korrigiert' : 'Korrektur bereits enthalten'}`);
       continue;
     }
-    const treffer = FEHLERHAFT.exec(bereich);
-    if (!treffer) {
-      warnen(
-        `✗ ${kurz}: erwartete Stelle nicht gefunden. Die React-Fassung in Next hat sich geändert — ` +
-          'prüfen, ob sie die Korrektur selbst enthält, und dieses Skript anpassen (docs/HYDRATION.md §16).',
-      );
-      process.exit(1);
+    if (korrekturen > 1) abbrechen(kurz, `Korrektur ${korrekturen}-mal enthalten.`);
+    if (korrekturen === 1) abbrechen(kurz, 'Korrektur und ursprünglicher Ausschnitt zugleich vorhanden.');
+    if (!BETROFFENE_FASSUNGEN.has(fassung)) {
+      abbrechen(kurz, `unbekannte React-Fassung ${fassung} ohne erkennbare Korrektur — prüfen, bevor etwas verändert wird.`);
+    }
+    if (treffer.length !== 1 || treffer[0].n !== 1) {
+      abbrechen(kurz, `erwarteter Originalausschnitt ${treffer.length === 0 ? 'nicht gefunden' : 'nicht eindeutig'}.`);
     }
     if (pruefenAllein) {
-      warnen(`✗ ${kurz}: Korrektur fehlt`);
+      warnen(`✗ ${kurz} (${fassung}): Korrektur fehlt`);
       offen += 1;
       continue;
     }
-    const [ganz, kopf, einzug, variable, rest] = treffer;
-    const neu = `${kopf}${korrektur(einzug, variable)}${rest}`;
-    const ergebnis = quelle.slice(0, bereichStart) + bereich.replace(ganz, neu) + quelle.slice(bereichStart + bereich.length);
-    writeFileSync(pfad, ergebnis, 'utf8');
-    melden(`✓ ${kurz}: Korrektur eingesetzt`);
+
+    const { original, korrigiert } = treffer[0];
+    const stelle = quelle.indexOf(original);
+    const neu = quelle.slice(0, stelle) + korrigiert + quelle.slice(stelle + original.length);
+    // Nachkontrolle, bevor geschrieben wird: genau eine Korrektur, kein Original mehr.
+    if ((neu.match(KORREKTUR_ERKENNUNG) ?? []).length !== 1 || anzahl(neu, original) !== 0) {
+      abbrechen(kurz, 'Nachkontrolle der Ersetzung fehlgeschlagen — nichts geschrieben.');
+    }
+    writeFileSync(pfad, neu, 'utf8');
+    melden(`✓ ${kurz} (${fassung}): Korrektur eingesetzt`);
   }
   if (offen > 0) process.exit(1);
 }

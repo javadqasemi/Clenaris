@@ -9,9 +9,9 @@
   "scripts": {
     "dev": "node scripts/react-hydrationskorrektur.mjs && tsx scripts/copy-pdfjs-assets.ts && next dev --turbo",
     "pdfjs:assets": "tsx scripts/copy-pdfjs-assets.ts",
-    "dev:webpack": "next dev",
+    "dev:webpack": "node scripts/react-hydrationskorrektur.mjs && next dev",
     "build": "prisma generate && node scripts/react-hydrationskorrektur.mjs && tsx scripts/copy-pdfjs-assets.ts && next build",
-    "start": "node scripts/react-hydrationskorrektur.mjs && tsx scripts/copy-pdfjs-assets.ts && next build && next start",
+    "start": "npm run build && next start",
     "start:built": "next start",
     "lint": "eslint src scripts tests prisma --ext .ts,.tsx",
     "typecheck": "tsc --noEmit",
