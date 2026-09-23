@@ -5,6 +5,7 @@ import { BusinessRuleError } from '@/lib/errors';
 import { optimizeRoute, type RouteStop } from '@/lib/ai/features';
 import { dispatchSuggestSchema } from '@/lib/validation/ai';
 import { getOrganization, getOrganizationId } from '@/server/services/organization.service';
+import { protokolliereKiNutzung } from '@/server/services/ai-governance.service';
 
 export const runtime = 'nodejs';
 export const maxDuration = 120;
@@ -23,7 +24,7 @@ export const POST = defineRoute({
   permissions: ['ai:use', 'job:dispatch'],
   body: dispatchSuggestSchema,
   rateLimit: 'aiGenerate',
-  handler: async ({ body }) => {
+  handler: async ({ body, session, ip }) => {
     const organizationId = await getOrganizationId();
     const org = await getOrganization();
 
@@ -90,6 +91,8 @@ export const POST = defineRoute({
       ),
       stops,
     });
+
+    await protokolliereKiNutzung({ organizationId, userId: session.id, funktion: 'Routenplanung', ip });
 
     // Die Job-Nummern anreichern, damit die Oberfläche lesbare Bezüge zeigt.
     const numbersById = new Map(jobs.map((job) => [job.id, job.number]));

@@ -1,6 +1,7 @@
 import 'server-only';
 
 import { generateStructured, generateText, type Effort } from './client';
+import { kuerzel, mitPlatzhaltern, platzhalterZurueck } from './governance';
 
 /**
  * KI-Funktionen der Plattform.
@@ -151,20 +152,28 @@ export async function writeEmail(params: {
   tone: EmailTone;
   senderName: string;
 }): Promise<{ subject: string; body: string }> {
-  return generateStructured<{ subject: string; body: string }>({
+  /**
+   * Namen als Platzhalter (Wave 15): Das Modell formuliert die Anrede mit
+   * `{{EMPFAENGER}}` und die Grussformel mit `{{ABSENDER}}`; die Namen setzt
+   * erst der eigene Prozess ein. Auch im Kontext werden sie ersetzt — dort
+   * stehen sie oft ein zweites Mal.
+   */
+  const namen = { EMPFAENGER: params.recipientName, ABSENDER: params.senderName };
+  const entwurf = await generateStructured<{ subject: string; body: string }>({
     system: `${SWISS_CONTEXT}
 
 Du formulierst E-Mails im Namen der Reinigungsfirma. Halte dich kurz: maximal 200 Wörter.
 Struktur: Anrede, Kernaussage im ersten Absatz, Details, klarer nächster Schritt, Grussformel mit dem Namen der absendenden Person.
-Erfinde keine Zahlen, Termine oder Zusagen, die nicht im Kontext stehen.`,
-    prompt: `Zweck: ${params.purpose}
-Empfänger: ${params.recipientName}
+Erfinde keine Zahlen, Termine oder Zusagen, die nicht im Kontext stehen.
+Namen sind durch Platzhalter ersetzt: Verwende {{EMPFAENGER}} für die angeschriebene Person und {{ABSENDER}} für die absendende Person, unverändert.`,
+    prompt: `Zweck: ${mitPlatzhaltern(params.purpose, namen)}
+Empfänger: {{EMPFAENGER}}
 Tonalität: ${params.tone}
-Absender: ${params.senderName}
+Absender: {{ABSENDER}}
 
 Kontext:
 """
-${params.context.slice(0, 4000)}
+${mitPlatzhaltern(params.context.slice(0, 4000), namen)}
 """`,
     schema: {
       type: 'object',
@@ -181,6 +190,7 @@ ${params.context.slice(0, 4000)}
     effort: 'low',
     maxTokens: 2_000,
   });
+  return { subject: platzhalterZurueck(entwurf.subject, namen), body: platzhalterZurueck(entwurf.body, namen) };
 }
 
 // ---------------------------------------------------------------------------
@@ -252,31 +262,43 @@ export async function generateJobReport(params: {
   materials: { name: string; quantity: number; unit: string }[];
   notes?: string | null;
 }): Promise<string> {
-  return generateText({
+  /**
+   * Kunden- und Teamnamen als Platzhalter (Wave 15) — der Bericht braucht
+   * sie im Ergebnis, das Modell nicht zum Formulieren. Auch in Checkliste
+   * und Notizen werden sie ersetzt.
+   */
+  const namen: Record<string, string> = { KUNDE: params.customerName };
+  params.crew.forEach((name, i) => {
+    namen[`TEAM_${i + 1}`] = name;
+  });
+  const schutz = (t: string) => mitPlatzhaltern(t, namen);
+  const bericht = await generateText({
     system: `${SWISS_CONTEXT}
 
 Du schreibst Einsatzberichte für Kundinnen und Kunden. Sachlich, vollständig, ohne Werbesprache.
 Struktur: Einleitungssatz, ausgeführte Arbeiten als Liste, verwendete Materialien, Bemerkungen, Abschlusssatz.
-Erwähne nicht erledigte Checklistenpunkte transparent mit Begründung, sofern eine vorliegt.`,
+Erwähne nicht erledigte Checklistenpunkte transparent mit Begründung, sofern eine vorliegt.
+Namen sind durch Platzhalter wie {{KUNDE}} oder {{TEAM_1}} ersetzt — verwende sie unverändert.`,
     prompt: `Erstelle den Einsatzbericht.
 
 Auftrag: ${params.jobNumber}
-Kunde: ${params.customerName}
+Kunde: {{KUNDE}}
 Leistung: ${params.serviceName}
 Datum: ${params.date}
 Dauer: ${Math.round(params.durationMinutes / 60 * 10) / 10} Stunden
-Team: ${params.crew.join(', ')}
+Team: ${params.crew.map((_, i) => `{{TEAM_${i + 1}}}`).join(', ')}
 
 Checkliste:
-${params.checklist.map((c) => `- [${c.done ? 'x' : ' '}] ${c.label}${c.note ? ` — ${c.note}` : ''}`).join('\n')}
+${params.checklist.map((c) => `- [${c.done ? 'x' : ' '}] ${schutz(c.label)}${c.note ? ` — ${schutz(c.note)}` : ''}`).join('\n')}
 
 Material:
 ${params.materials.length ? params.materials.map((m) => `- ${m.quantity} ${m.unit} ${m.name}`).join('\n') : '- keines'}
 
-Interne Notizen: ${params.notes ?? 'keine'}`,
+Interne Notizen: ${params.notes ? schutz(params.notes) : 'keine'}`,
     effort: 'low',
     maxTokens: 2_000,
   });
+  return platzhalterZurueck(bericht, namen);
 }
 
 // ---------------------------------------------------------------------------
@@ -341,7 +363,21 @@ export async function optimizeRoute(params: {
   /** Vorab per Distance-Matrix ermittelte Fahrzeiten in Minuten. */
   travelMatrix?: Record<string, Record<string, number>>;
 }): Promise<RoutePlan> {
-  return generateStructured<RoutePlan>({
+  /**
+   * Kürzel statt Datenbankkennungen (Wave 15) — dasselbe Verfahren wie bei
+   * der Personaldisposition. Die Adressen bleiben: Ohne sie gibt es keine
+   * Route. Ein Kürzel, das das Modell erfindet, wird verworfen.
+   */
+  const k = kuerzel(params.stops.map((s) => s.jobId), 'E');
+  const matrix = params.travelMatrix
+    ? Object.fromEntries(
+        Object.entries(params.travelMatrix).map(([von, ziele]) => [
+          params.stops.some((s) => s.jobId === von) ? k.hin(von) : von,
+          Object.fromEntries(Object.entries(ziele).map(([nach, min]) => [params.stops.some((s) => s.jobId === nach) ? k.hin(nach) : nach, min])),
+        ]),
+      )
+    : undefined;
+  const roh = await generateStructured<RoutePlan>({
     system: `${SWISS_CONTEXT}
 
 Du planst Tagesrouten für Reinigungsteams im Kanton Bern.
@@ -356,11 +392,11 @@ Einsätze:
 ${params.stops
   .map(
     (s) =>
-      `- ${s.jobNumber} (ID ${s.jobId}): ${s.address}, Fenster ${s.earliestStart}–${s.latestStart}, Dauer ${s.durationMinutes} Min., Priorität ${s.priority}`,
+      `- ${k.hin(s.jobId)}: ${s.address}, Fenster ${s.earliestStart}–${s.latestStart}, Dauer ${s.durationMinutes} Min., Priorität ${s.priority}`,
   )
   .join('\n')}
 
-${params.travelMatrix ? `Fahrzeitmatrix (Minuten):\n${JSON.stringify(params.travelMatrix)}` : 'Keine Fahrzeitmatrix verfügbar.'}`,
+${matrix ? `Fahrzeitmatrix (Minuten):\n${JSON.stringify(matrix)}` : 'Keine Fahrzeitmatrix verfügbar.'}`,
     schema: {
       type: 'object',
       additionalProperties: false,
@@ -385,9 +421,16 @@ ${params.travelMatrix ? `Fahrzeitmatrix (Minuten):\n${JSON.stringify(params.trav
       },
     },
     toolName: 'route_planen',
-    toolDescription: 'Erstellt eine optimierte Einsatzreihenfolge mit Startzeiten.',
+    toolDescription: 'Erstellt eine optimierte Einsatzreihenfolge mit Startzeiten. Einsätze sind durch Kürzel (E1, E2 …) bezeichnet; verwende nur diese.',
     effort: 'high',
   });
+  return {
+    ...roh,
+    order: roh.order.flatMap((o) => {
+      const jobId = k.zurueck(o.jobId);
+      return jobId ? [{ ...o, jobId }] : [];
+    }),
+  };
 }
 
 // ---------------------------------------------------------------------------

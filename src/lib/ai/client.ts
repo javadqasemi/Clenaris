@@ -5,6 +5,8 @@ import { hasIntegration, serverEnv } from '@/lib/env';
 import { IntegrationError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
 
+import { ausgangsfilter, summeErsetzungen } from './governance';
+
 const log = logger('ai');
 
 /**
@@ -53,6 +55,29 @@ export interface GenerateOptions {
   temperatureHint?: never;
 }
 
+/**
+ * Der Ausgangsfilter (Wave 15): Jede Anfrage verlässt den Prozess nur nach
+ * `ausgangsfilter` — E-Mail-Adressen, Telefonnummern, IBAN, AHV-Nummern und
+ * Datenbankkennungen werden ersetzt, bevor sie beim Auftragsverarbeiter
+ * ankommen. Geprotokolliert wird, **wie oft** ersetzt wurde, nie **was**.
+ *
+ * Der Systemtext bleibt ungefiltert: Er stammt aus dem Code (und aus dem
+ * Katalog, etwa Leistungsnamen und Öffnungszeiten), nicht von Personen.
+ */
+function gefiltert(prompt: string, history: Anthropic.MessageParam[] | undefined) {
+  const p = ausgangsfilter(prompt);
+  const summen: Record<string, number>[] = [p.ersetzungen];
+  const verlauf = (history ?? []).map((m) => {
+    if (typeof m.content !== 'string') return m;
+    const f = ausgangsfilter(m.content);
+    summen.push(f.ersetzungen);
+    return { ...m, content: f.text };
+  });
+  const ersetzungen = summeErsetzungen(...summen);
+  if (Object.keys(ersetzungen).length > 0) log.info('KI-Ausgangsfilter hat ersetzt', { ersetzungen });
+  return { prompt: p.text, history: verlauf };
+}
+
 /** Extrahiert den Text aus einer Antwort und prüft auf Ablehnung. */
 function assertNoRefusal(message: Anthropic.Message): string {
   if (message.stop_reason === 'refusal') {
@@ -80,6 +105,7 @@ function assertNoRefusal(message: Anthropic.Message): string {
  * (Offertentexte, Berichte) nicht in HTTP-Timeouts laufen.
  */
 export async function generateText(options: GenerateOptions): Promise<string> {
+  const f = gefiltert(options.prompt, options.history);
   const stream = anthropic().messages.stream({
     model: modelFor(options.tier ?? 'smart'),
     max_tokens: options.maxTokens ?? 8_000,
@@ -87,8 +113,8 @@ export async function generateText(options: GenerateOptions): Promise<string> {
     thinking: { type: 'adaptive' },
     output_config: { effort: options.effort ?? 'medium' },
     messages: [
-      ...(options.history ?? []),
-      { role: 'user', content: options.prompt },
+      ...f.history,
+      { role: 'user', content: f.prompt },
     ],
   });
 
@@ -112,6 +138,7 @@ export async function generateStructured<T>(params: {
   effort?: Effort;
   maxTokens?: number;
 }): Promise<T> {
+  const f = gefiltert(params.prompt, undefined);
   const message = await anthropic().messages.create({
     model: modelFor(params.tier ?? 'smart'),
     max_tokens: params.maxTokens ?? 8_000,
@@ -126,7 +153,7 @@ export async function generateStructured<T>(params: {
         strict: true,
       },
     ],
-    messages: [{ role: 'user', content: params.prompt }],
+    messages: [{ role: 'user', content: f.prompt }],
   });
 
   if (message.stop_reason === 'refusal') {
@@ -154,6 +181,7 @@ export function streamText(options: GenerateOptions): ReadableStream<Uint8Array>
   return new ReadableStream({
     async start(controller) {
       try {
+        const f = gefiltert(options.prompt, options.history);
         const stream = anthropic().messages.stream({
           model: modelFor(options.tier ?? 'fast'),
           max_tokens: options.maxTokens ?? 2_000,
@@ -161,8 +189,8 @@ export function streamText(options: GenerateOptions): ReadableStream<Uint8Array>
           thinking: { type: 'adaptive' },
           output_config: { effort: options.effort ?? 'low' },
           messages: [
-            ...(options.history ?? []),
-            { role: 'user', content: options.prompt },
+            ...f.history,
+            { role: 'user', content: f.prompt },
           ],
         });
 

@@ -2,6 +2,7 @@ import { defineRoute } from '@/lib/api/handler';
 import { ok } from '@/lib/api/response';
 import { writeEmail } from '@/lib/ai/features';
 import { emailDraftSchema } from '@/lib/validation/ai';
+import { protokolliereKiNutzung } from '@/server/services/ai-governance.service';
 
 export const runtime = 'nodejs';
 export const maxDuration = 60;
@@ -16,7 +17,7 @@ export const POST = defineRoute({
   permissions: ['ai:use'],
   body: emailDraftSchema,
   rateLimit: 'aiGenerate',
-  handler: async ({ body, session }) => {
+  handler: async ({ body, session, ip }) => {
     const result = await writeEmail({
       purpose: body.purpose,
       recipientName: body.recipientName,
@@ -24,6 +25,7 @@ export const POST = defineRoute({
       tone: body.tone,
       senderName: session.name,
     });
+    await protokolliereKiNutzung({ organizationId: session.organizationId, userId: session.id, funktion: 'E-Mail-Entwurf', ip });
 
     return ok(result);
   },

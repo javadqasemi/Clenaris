@@ -2,6 +2,7 @@ import { defineRoute } from '@/lib/api/handler';
 import { ok } from '@/lib/api/response';
 import { translate } from '@/lib/ai/features';
 import { translateSchema } from '@/lib/validation/ai';
+import { protokolliereKiNutzung } from '@/server/services/ai-governance.service';
 
 export const runtime = 'nodejs';
 export const maxDuration = 60;
@@ -17,12 +18,13 @@ export const POST = defineRoute({
   permissions: ['ai:use'],
   body: translateSchema,
   rateLimit: 'aiGenerate',
-  handler: async ({ body }) => {
+  handler: async ({ body, session, ip }) => {
     const text = await translate({
       text: body.text,
       targetLocale: body.targetLocale,
       preserveFormatting: body.preserveFormatting,
     });
+    await protokolliereKiNutzung({ organizationId: session.organizationId, userId: session.id, funktion: 'Übersetzung', ip });
 
     return ok({ text });
   },

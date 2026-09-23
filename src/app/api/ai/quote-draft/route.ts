@@ -4,6 +4,7 @@ import { prisma, toNumber } from '@/lib/db';
 import { generateQuoteDraft } from '@/lib/ai/features';
 import { quoteDraftSchema } from '@/lib/validation/ai';
 import { getOrganizationId } from '@/server/services/organization.service';
+import { protokolliereKiNutzung } from '@/server/services/ai-governance.service';
 
 export const runtime = 'nodejs';
 export const maxDuration = 120;
@@ -21,7 +22,7 @@ export const POST = defineRoute({
   permissions: ['ai:use', 'quote:create'],
   body: quoteDraftSchema,
   rateLimit: 'aiGenerate',
-  handler: async ({ body }) => {
+  handler: async ({ body, session, ip }) => {
     const organizationId = await getOrganizationId();
 
     // Kontext aus den Stammdaten anreichern, damit das Modell nicht raten muss.
@@ -69,6 +70,7 @@ export const POST = defineRoute({
       hourlyRate: toNumber(service?.hourlyRate) || 62,
       city: customer?.addresses[0]?.city ?? lead?.city ?? null,
     });
+    await protokolliereKiNutzung({ organizationId, userId: session.id, funktion: 'Offertentwurf', ip });
 
     return ok(draft);
   },

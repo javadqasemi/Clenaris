@@ -3,6 +3,7 @@ import { ok } from '@/lib/api/response';
 import { biAssistantSchema } from '@/lib/validation/bi-ai';
 import { runAssistant } from '@/server/services/bi-assistant.service';
 import { getOrganizationId } from '@/server/services/organization.service';
+import { protokolliereKiNutzung } from '@/server/services/ai-governance.service';
 
 export const runtime = 'nodejs';
 export const maxDuration = 120;
@@ -18,5 +19,10 @@ export const POST = defineRoute({
   permissions: ['cockpit:view', 'ai:use'],
   body: biAssistantSchema,
   rateLimit: 'aiGenerate',
-  handler: async ({ body, session }) => ok(await runAssistant(session, await getOrganizationId(), body)),
+  handler: async ({ body, session, ip }) => {
+    const organizationId = await getOrganizationId();
+    const antwort = await runAssistant(session, organizationId, body);
+    await protokolliereKiNutzung({ organizationId, userId: session.id, funktion: 'Führungsassistent', ip });
+    return ok(antwort);
+  },
 });
