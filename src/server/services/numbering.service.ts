@@ -28,7 +28,8 @@ export type SequenceScope =
   | 'contract'
   | 'quality'
   | 'complaint'
-  | 'equipment';
+  | 'equipment'
+  | 'site_visit';
 
 const PREFIX_FIELD: Record<SequenceScope, string> = {
   invoice: 'invoiceNumberPrefix',
@@ -43,6 +44,7 @@ const PREFIX_FIELD: Record<SequenceScope, string> = {
   quality: '',
   complaint: '',
   equipment: '',
+  site_visit: '',
 };
 
 const STATIC_PREFIX: Partial<Record<SequenceScope, string>> = {
@@ -63,6 +65,8 @@ const STATIC_PREFIX: Partial<Record<SequenceScope, string>> = {
   complaint: 'REK',
   /** Inventarnummer eines Geräts (Wave 11). */
   equipment: 'GR',
+  /** Besichtigung / Objektaufnahme (Wave 12). */
+  site_visit: 'BES',
 };
 
 export interface NextNumberResult {

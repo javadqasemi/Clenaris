@@ -5,7 +5,7 @@
 > Quelle, aus der sowohl diese Referenz als auch die Laufzeitvalidierung
 > stammen.
 
-Stand: 508 Endpunkte. Die maschinenlesbare Fassung liegt in
+Stand: 519 Endpunkte. Die maschinenlesbare Fassung liegt in
 [`openapi.yaml`](./openapi.yaml) bzw. [`openapi.json`](./openapi.json).
 
 ## Grundlagen
@@ -2271,6 +2271,251 @@ Familie.
 | Feld | Typ | Pflicht | Regeln |
 | --- | --- | --- | --- |
 | `id` | string | ja | min. 1 Zeichen |
+
+### `GET /api/site-visits`
+
+**Besichtigungen.** Optional je Status, Anfrage oder Kundschaft.
+
+- **Zugriff:** Erfordert die Berechtigung: `quote:read`.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 429, 500
+
+**Query-Parameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `status` | string | – | `PLANNED` \| `DONE` \| `CANCELLED` |
+| `leadId` | string | – | min. 1 Zeichen, max. 64 Zeichen |
+| `customerId` | string | – | min. 1 Zeichen, max. 64 Zeichen |
+
+### `POST /api/site-visits`
+
+**Besichtigung planen.** Zu einer Anfrage oder Kundschaft; alle Bezüge müssen der Organisation gehören (404/422).
+
+- **Zugriff:** Erfordert die Berechtigung: `quote:create`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 422, 429, 500
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `leadId` | string | – | min. 1 Zeichen, max. 64 Zeichen |
+| `customerId` | string | – | min. 1 Zeichen, max. 64 Zeichen |
+| `propertyId` | string | – | min. 1 Zeichen, max. 64 Zeichen |
+| `scheduledAt` | string | ja | date-time |
+| `assessorId` | string | – | min. 1 Zeichen, max. 64 Zeichen |
+| `propertyKind` | string | – | `APARTMENT` \| `HOUSE` \| `OFFICE` \| `COMMERCIAL` \| `INDUSTRIAL` \| `CONSTRUCTION_SITE` \| `PRACTICE` \| `RESTAURANT` \| `SCHOOL` \| `OTHER`, Standard `"OFFICE"` |
+| `hasPets` | boolean | – | Standard `false` |
+| `accessNotes` | string | – | max. 2000 Zeichen |
+| `street` | string | – | max. 160 Zeichen |
+| `postalCode` | string | – | – |
+| `city` | string | – | max. 80 Zeichen |
+
+### `GET /api/site-visits/{id}`
+
+**Eine Besichtigung.** Mit Flächen, Leistungen und der letzten Berechnung.
+
+- **Zugriff:** Erfordert die Berechtigung: `quote:read`.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+### `PATCH /api/site-visits/{id}`
+
+**Besichtigung ändern.** Nicht mehr nach der Offerte (422); verwirft die gespeicherte Berechnung.
+
+- **Zugriff:** Erfordert die Berechtigung: `quote:update`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `scheduledAt` | string | – | date-time |
+| `assessorId` | string | – | min. 1 Zeichen, max. 64 Zeichen |
+| `propertyKind` | string | – | `APARTMENT` \| `HOUSE` \| `OFFICE` \| `COMMERCIAL` \| `INDUSTRIAL` \| `CONSTRUCTION_SITE` \| `PRACTICE` \| `RESTAURANT` \| `SCHOOL` \| `OTHER` |
+| `hasPets` | boolean | – | – |
+| `accessNotes` | string | – | max. 2000 Zeichen |
+| `findings` | string | – | max. 8000 Zeichen |
+| `street` | string | – | max. 160 Zeichen |
+| `postalCode` | string | – | – |
+| `city` | string | – | max. 80 Zeichen |
+
+### `PUT /api/site-visits/{id}/areas`
+
+**Flächen aufnehmen.** Als Ganzes; Leistungen aus dem aktiven Katalog, Zusatzleistungen nur die der Leistung. Kein Preisfeld.
+
+- **Zugriff:** Erfordert die Berechtigung: `quote:update`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `areas` | object[] | ja | min. 1 Einträge, max. 50 Einträge |
+| `areas[].label` | string | ja | min. 1 Zeichen, max. 120 Zeichen |
+| `areas[].serviceId` | string | ja | min. 1 Zeichen, max. 64 Zeichen |
+| `areas[].squareMeters` | integer | – | ≥ 1, ≤ 100000 |
+| `areas[].rooms` | number | – | ≥ 0.5, ≤ 500 |
+| `areas[].bathrooms` | integer | – | ≥ 0, ≤ 200 |
+| `areas[].windows` | integer | – | ≥ 0, ≤ 5000 |
+| `areas[].frequency` | string | – | `ONCE` \| `WEEKLY` \| `BIWEEKLY` \| `MONTHLY` \| `QUARTERLY` \| `SEMIANNUAL` \| `ANNUAL`, Standard `"ONCE"` |
+| `areas[].extras` | object[] | – | max. 30 Einträge, Standard `[]` |
+| `areas[].manualHours` | number | – | ≥ 0.25, ≤ 500 |
+| `areas[].note` | string | – | max. 1000 Zeichen |
+
+### `POST /api/site-visits/{id}/areas`
+
+**Eine Fläche anhängen.** Dieselben Prüfungen wie beim Setzen aller Flächen.
+
+- **Zugriff:** Erfordert die Berechtigung: `quote:update`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `label` | string | ja | min. 1 Zeichen, max. 120 Zeichen |
+| `serviceId` | string | ja | min. 1 Zeichen, max. 64 Zeichen |
+| `squareMeters` | integer | – | ≥ 1, ≤ 100000 |
+| `rooms` | number | – | ≥ 0.5, ≤ 500 |
+| `bathrooms` | integer | – | ≥ 0, ≤ 200 |
+| `windows` | integer | – | ≥ 0, ≤ 5000 |
+| `frequency` | string | – | `ONCE` \| `WEEKLY` \| `BIWEEKLY` \| `MONTHLY` \| `QUARTERLY` \| `SEMIANNUAL` \| `ANNUAL`, Standard `"ONCE"` |
+| `extras` | object[] | – | max. 30 Einträge, Standard `[]` |
+| `extras[].extraId` | string | ja | min. 1 Zeichen, max. 64 Zeichen |
+| `extras[].quantity` | integer | ja | ≥ 1, ≤ 100 |
+| `manualHours` | number | – | ≥ 0.25, ≤ 500 |
+| `note` | string | – | max. 1000 Zeichen |
+
+### `DELETE /api/site-visits/{id}/areas/{areaId}`
+
+**Eine Fläche entfernen.** Nicht nach der Offerte (422); verwirft die gespeicherte Berechnung.
+
+- **Zugriff:** Erfordert die Berechtigung: `quote:update`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen, max. 64 Zeichen |
+| `areaId` | string | ja | min. 1 Zeichen, max. 64 Zeichen |
+
+### `POST /api/site-visits/{id}/complete`
+
+**Besichtigung abschliessen.** Mindestens eine Fläche (422).
+
+- **Zugriff:** Erfordert die Berechtigung: `quote:update`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `findings` | string | – | max. 8000 Zeichen |
+
+### `POST /api/site-visits/{id}/cancel`
+
+**Besichtigung absagen.** Mit Grund; nicht nach der Offerte.
+
+- **Zugriff:** Erfordert die Berechtigung: `quote:update`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `reason` | string | ja | min. 3 Zeichen, max. 500 Zeichen |
+
+### `POST /api/site-visits/{id}/calculate`
+
+**Besichtigung berechnen.** Jede Fläche durch dieselbe Preisberechnung wie die Online-Buchung; Ergebnis als Vorschau festgehalten.
+
+- **Zugriff:** Erfordert die Berechtigung: `quote:update`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+### `POST /api/site-visits/{id}/quote`
+
+**Offerte aus Besichtigung.** Neu gerechnet, eine Position je Fläche, Preise aus der Berechnung; höchstens eine Offerte je Besichtigung, „Preis auf Anfrage" wird nicht geraten (422).
+
+- **Zugriff:** Erfordert die Berechtigung: `quote:create`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `title` | string | – | min. 3 Zeichen, max. 200 Zeichen |
+| `validDays` | integer | – | ≥ 1, ≤ 180, Standard `30` |
+| `introText` | string | – | max. 4000 Zeichen |
 
 ## Einsätze
 

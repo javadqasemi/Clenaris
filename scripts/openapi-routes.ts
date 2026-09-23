@@ -28,6 +28,7 @@ import { CONTRACT_ROUTES } from './openapi-routes-vertraege';
 import { QUALITY_ROUTES } from './openapi-routes-qualitaet';
 import { BETRIEB_ROUTES } from './openapi-routes-betrieb';
 import { FINANZ_ROUTES } from './openapi-routes-finanzen';
+import { VERKAUF_ROUTES } from './openapi-routes-verkauf';
 
 /**
  * Registrierung aller REST-Endpunkte.
@@ -4442,4 +4443,9 @@ export const ROUTES: RouteDoc[] = [
   //  Gutschriften (Wave 13)
   // -------------------------------------------------------------------------
   ...FINANZ_ROUTES,
+
+  // -------------------------------------------------------------------------
+  //  Besichtigung / Objektaufnahme (Wave 12)
+  // -------------------------------------------------------------------------
+  ...VERKAUF_ROUTES,
 ];

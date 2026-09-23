@@ -240,6 +240,8 @@ const DOMAINS: Domain[] = [
       'BookingExtra',
       'Quote',
       'QuoteItem',
+      'SiteVisit',
+      'SiteVisitArea',
       'Job',
       'JobAssignment',
       'JobChecklistItem',

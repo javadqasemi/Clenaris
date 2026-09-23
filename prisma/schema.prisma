@@ -537,6 +537,7 @@ model Organization {
   withholdingTaxRates   WithholdingTaxRate[]
   salaryCertificates    SalaryCertificate[]
   complaints            Complaint[]
+  siteVisits            SiteVisit[]
   materials             Material[]
   stockMovements        StockMovement[]
   equipment             Equipment[]
@@ -735,6 +736,7 @@ model User {
   qualityInspections QualityInspection[] @relation("QualityInspector")
   complaintsAssigned Complaint[]         @relation("ComplaintAssignee")
   complaintsReported Complaint[]         @relation("ComplaintReporter")
+  siteVisitsAssessed SiteVisit[]         @relation("SiteVisitAssessor")
 
   @@index([organizationId, role])
   @@index([organizationId, status])
@@ -1167,6 +1169,7 @@ model Lead {
   tasks        Task[]
   quotes       Quote[]
   tags         LeadTag[]
+  siteVisits   SiteVisit[]
 
   @@unique([organizationId, number])
   @@index([organizationId, status])
@@ -1265,6 +1268,7 @@ model Customer {
   payments       Payment[]
   contracts      Contract[]
   complaints     Complaint[]
+  siteVisits     SiteVisit[]
 
   @@unique([organizationId, number])
   @@index([organizationId, email])
@@ -1415,6 +1419,7 @@ model Property {
   contracts Contract[]
   qualityInspections QualityInspection[]
   complaints         Complaint[]
+  siteVisits         SiteVisit[]
 
   @@index([customerId])
   @@map("properties")
@@ -1669,6 +1674,7 @@ model Service {
   quoteItems   QuoteItem[]
   jobs         Job[]
   contractServices ContractService[]
+  siteVisitAreas   SiteVisitArea[]
 
   @@unique([organizationId, slug])
   @@index([organizationId, active])
@@ -1979,6 +1985,8 @@ model Quote {
   files      FileAsset[]
   activities Activity[]
   contracts  Contract[]
+  /// Die Besichtigung, aus der die Offerte entstand (Wave 12).
+  siteVisit  SiteVisit?
 
   @@unique([organizationId, number])
   @@index([organizationId, status])
@@ -6768,6 +6776,95 @@ model Equipment {
   @@index([organizationId, status])
   @@index([organizationId, nextMaintenanceOn])
   @@map("equipment")
+}
+
+// ===========================================================================
+//  VERKAUF: BESICHTIGUNG / OBJEKTAUFNAHME (Wave 12, 2026-09-23)
+// ===========================================================================
+
+enum SiteVisitStatus {
+  PLANNED
+  DONE
+  CANCELLED
+}
+
+/// Besichtigung vor Ort — die Grundlage einer Offerte für ein Objekt, das man
+/// gesehen haben muss (Büro, Praxis, Treppenhaus).
+///
+/// **Gerechnet wird nur auf dem Server.** Die Flächen und Leistungen der
+/// Aufnahme gehen durch dieselbe Preisberechnung wie die Online-Buchung
+/// (`calculatePrice`); die Offerte übernimmt deren Ergebnis, nie einen Preis
+/// aus dem Formular. `calculation` ist die letzte Berechnung als
+/// Momentaufnahme — beim Erstellen der Offerte wird trotzdem neu gerechnet.
+model SiteVisit {
+  id             String          @id @default(cuid())
+  organizationId String
+  number         String
+  status         SiteVisitStatus @default(PLANNED)
+
+  leadId     String?
+  customerId String?
+  propertyId String?
+
+  scheduledAt DateTime  @db.Timestamptz(6)
+  performedAt DateTime? @db.Timestamptz(6)
+  assessorId  String?
+
+  propertyKind PropertyKind @default(OFFICE)
+  /// Adresse, falls es (noch) kein Objekt gibt — etwa bei einer Anfrage.
+  street     String?
+  postalCode String?
+  city       String?
+  hasPets    Boolean @default(false)
+
+  accessNotes String?
+  findings    String?
+
+  calculation  Json?
+  calculatedAt DateTime? @db.Timestamptz(6)
+  /// Die daraus erstellte Offerte — höchstens eine je Besichtigung.
+  quoteId      String?   @unique
+
+  cancelledReason String?
+  createdById     String?
+  createdAt       DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt       DateTime @updatedAt @db.Timestamptz(6)
+
+  organization Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  lead         Lead?           @relation(fields: [leadId], references: [id], onDelete: SetNull)
+  customer     Customer?       @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  property     Property?       @relation(fields: [propertyId], references: [id], onDelete: SetNull)
+  assessor     User?           @relation("SiteVisitAssessor", fields: [assessorId], references: [id], onDelete: SetNull)
+  quote        Quote?          @relation(fields: [quoteId], references: [id], onDelete: SetNull)
+  areas        SiteVisitArea[]
+
+  @@unique([organizationId, number])
+  @@index([organizationId, status, scheduledAt])
+  @@map("site_visits")
+}
+
+/// Eine aufgenommene Fläche mit der Leistung, die dort erbracht werden soll.
+model SiteVisitArea {
+  id          String    @id @default(cuid())
+  siteVisitId String
+  position    Int
+  label       String
+  serviceId   String
+  squareMeters Int?
+  rooms        Decimal?  @db.Decimal(4, 1)
+  bathrooms    Int?
+  windows      Int?
+  frequency    Frequency @default(ONCE)
+  /// `[{ extraId, quantity }]` — geprüft gegen die Zusatzleistungen der Leistung.
+  extras       Json      @default("[]")
+  manualHours  Decimal?  @db.Decimal(6, 2)
+  note         String?
+
+  siteVisit SiteVisit @relation(fields: [siteVisitId], references: [id], onDelete: Cascade)
+  service   Service   @relation(fields: [serviceId], references: [id], onDelete: Restrict)
+
+  @@unique([siteVisitId, position])
+  @@map("site_visit_areas")
 }
 
 /// Eine durchgeführte Wartung — Beleg, nicht änderbar (Trigger).

@@ -4,7 +4,7 @@
 > Diagramme sind damit nie älter als das Schema. Prosa und Bereichseinteilung
 > stehen in `scripts/generate-erd.ts`.
 
-**141 Modelle, 110 Aufzählungstypen, 2724 Felder.**
+**143 Modelle, 111 Aufzählungstypen, 2777 Felder.**
 PostgreSQL 16+; alle Zeitstempel als `timestamptz` in UTC, Anzeige in Europe/Zurich.
 
 ## Vier Entscheidungen, die das ganze Schema prägen
@@ -40,7 +40,7 @@ flowchart LR
   signatur["Elektronische Unterzeichnung<br/><small>5 Modelle</small>"]
   crm["CRM<br/><small>13 Modelle</small>"]
   katalog["Leistungskatalog und Preislogik<br/><small>6 Modelle</small>"]
-  auftrag["Buchung, Offerte, Einsatz<br/><small>14 Modelle</small>"]
+  auftrag["Buchung, Offerte, Einsatz<br/><small>16 Modelle</small>"]
   vertraege["Verträge und Einsatzpläne<br/><small>10 Modelle</small>"]
   personal["Personal und Zeit<br/><small>16 Modelle</small>"]
   finanzen["Finanzen<br/><small>8 Modelle</small>"]
@@ -125,7 +125,7 @@ erDiagram
 
 | Modell | Tabelle | Felder | Zweck |
 | --- | --- | --- | --- |
-| `Organization` | `organizations` | 124 | Mandant — Firmendaten, Bankverbindung, Erscheinungsbild. Wurzel fast aller Beziehungen. |
+| `Organization` | `organizations` | 125 | Mandant — Firmendaten, Bankverbindung, Erscheinungsbild. Wurzel fast aller Beziehungen. |
 | `NumberSequence` | `number_sequences` | 6 | Fortlaufende, lückenlose Belegnummern (Schweizer Buchhaltungsanforderung). |
 | `OpeningHours` | `opening_hours` | 7 | Öffnungszeiten je Wochentag; Grundlage der buchbaren Zeitfenster. |
 | `Holiday` | `holidays` | 7 | Feiertage und Betriebsferien. Sperren Termine und zählen nicht als Abwesenheitstage. |
@@ -228,7 +228,7 @@ erDiagram
 
 | Modell | Tabelle | Felder | Zweck |
 | --- | --- | --- | --- |
-| `User` | `users` | 59 | Benutzerkonto mit Rolle und Anmeldedaten. Passwörter als Argon2id-Hash. |
+| `User` | `users` | 60 | Benutzerkonto mit Rolle und Anmeldedaten. Passwörter als Argon2id-Hash. |
 | `RefreshToken` | `refresh_tokens` | 10 | Rotierender Refresh-Token. Gespeichert wird nur der SHA-256-Hash plus Familien-ID zur Erkennung von Wiederverwendung. |
 | `VerificationToken` | `verification_tokens` | 9 | Einmaltoken für E-Mail-Bestätigung, Passwortreset und Einladung. |
 | `PublicAccessToken` | `public_access_tokens` | 15 | Ein Schluessel fuer genau eine Sache, ohne Anmeldung. |
@@ -449,12 +449,12 @@ erDiagram
 
 | Modell | Tabelle | Felder | Zweck |
 | --- | --- | --- | --- |
-| `Lead` | `leads` | 39 | Anfrage vor der Kundenbeziehung, mit Herkunft, Bewertung und Pipeline-Stufe. |
-| `Customer` | `customers` | 59 | Kundendatensatz mit Konditionen, Umsatz und Zahlungsverhalten. |
+| `Lead` | `leads` | 40 | Anfrage vor der Kundenbeziehung, mit Herkunft, Bewertung und Pipeline-Stufe. |
+| `Customer` | `customers` | 60 | Kundendatensatz mit Konditionen, Umsatz und Zahlungsverhalten. |
 | `Contact` | `contacts` | 13 | Ansprechperson bei Geschäftskundschaft. |
 | `Address` | `addresses` | 25 | Adresse einer Kundschaft — Einsatz-, Rechnungs- oder Standardadresse. |
 | `Building` | `buildings` | 18 | Liegenschaft mit mehreren Objekten, etwa eine Überbauung. |
-| `Property` | `properties` | 33 | Konkretes Reinigungsobjekt: Fläche, Zimmer, Zugang, Schlüsseldepot. |
+| `Property` | `properties` | 34 | Konkretes Reinigungsobjekt: Fläche, Zimmer, Zugang, Schlüsseldepot. |
 | `PipelineStage` | `pipeline_stages` | 10 | Stufe im Vertriebstrichter, frei benennbar. |
 | `Tag` | `tags` | 7 | Frei vergebbares Etikett für Kundschaft und Anfragen. |
 | `LeadTag` | `lead_tags` | 4 | Zuordnung Etikett ↔ Anfrage. |
@@ -532,7 +532,7 @@ erDiagram
 | Modell | Tabelle | Felder | Zweck |
 | --- | --- | --- | --- |
 | `ServiceCategory` | `service_categories` | 13 | Gruppierung des Leistungskatalogs für Website und Navigation. |
-| `Service` | `services` | 43 | Angebotene Leistung mit Preismodell, Dauerkennzahlen und SEO-Angaben. |
+| `Service` | `services` | 44 | Angebotene Leistung mit Preismodell, Dauerkennzahlen und SEO-Angaben. |
 | `ServiceExtra` | `service_extras` | 15 | Zubuchbare Zusatzleistung, etwa Backofen oder Balkon. |
 | `ServiceExtraOnService` | `service_extras_on_services` | 4 | Welcher Zusatz ist zu welcher Leistung buchbar. |
 | `PriceRule` | `price_rules` | 9 | Multiplikatoren und Zuschläge, die die Preis-Engine anwendet. |
@@ -674,6 +674,26 @@ erDiagram
     EquipmentStatus status
     String assignedEmployeeId
   }
+  SiteVisit {
+    String id PK
+    String organizationId
+    String number
+    SiteVisitStatus status
+    String leadId
+    String customerId
+    String propertyId
+    DateTime scheduledAt
+  }
+  SiteVisitArea {
+    String id PK
+    String siteVisitId
+    Int position
+    String label
+    String serviceId
+    Int squareMeters
+    Decimal rooms
+    Int bathrooms
+  }
   EquipmentMaintenance {
     String id PK
     String equipmentId
@@ -689,6 +709,7 @@ erDiagram
   Booking ||--o{ BookingItem : "booking"
   Booking ||--o{ BookingExtra : "booking"
   Booking |o--o{ Quote : "booking"
+  SiteVisit |o--o{ Quote : "siteVisit"
   Quote ||--o{ QuoteItem : "quote"
   Booking |o--o{ Job : "booking"
   Job ||--o{ JobAssignment : "job"
@@ -699,6 +720,8 @@ erDiagram
   Material ||--o{ StockMovement : "material"
   Job |o--o{ StockMovement : "job"
   MaterialUsage |o--|| StockMovement : "materialUsage"
+  Quote |o--|| SiteVisit : "quote"
+  SiteVisit ||--o{ SiteVisitArea : "siteVisit"
   Equipment ||--o{ EquipmentMaintenance : "equipment"
 ```
 
@@ -707,8 +730,10 @@ erDiagram
 | `Booking` | `bookings` | 61 | Vereinbarung mit der Kundschaft: Termin, Objekt, Leistungen und Preis als Momentaufnahme. |
 | `BookingItem` | `booking_items` | 14 | Leistungsposition einer Buchung, mit Preis zum Buchungszeitpunkt. |
 | `BookingExtra` | `booking_extras` | 10 | Gebuchte Zusatzleistung mit Menge und Preis. |
-| `Quote` | `quotes` | 49 | Offerte mit Positionen, Gültigkeit, Magic-Link-Token und elektronischer Signatur. |
+| `Quote` | `quotes` | 50 | Offerte mit Positionen, Gültigkeit, Magic-Link-Token und elektronischer Signatur. |
 | `QuoteItem` | `quote_items` | 15 | Offertposition; optionale Positionen zählen nicht ins Total. |
+| `SiteVisit` | `site_visits` | 31 | Besichtigung vor Ort — die Grundlage einer Offerte für ein Objekt, das man |
+| `SiteVisitArea` | `site_visit_areas` | 15 | Eine aufgenommene Fläche mit der Leistung, die dort erbracht werden soll. |
 | `Job` | `jobs` | 63 | Ausführung durch das Team: Termin, Zuteilung, Checkliste, Abschluss, Kosten. |
 | `JobAssignment` | `job_assignments` | 11 | Zuteilung einer Person zu einem Einsatz, samt Zu- oder Absage. |
 | `JobChecklistItem` | `job_checklist_items` | 11 | Prüfpunkt des Abnahmeprotokolls, mit Vermerk wer wann abgehakt hat. |
@@ -1932,6 +1957,7 @@ exakte TypeScript-Typen.
 | `ComplaintChannel` | `PHONE`, `EMAIL`, `PORTAL`, `ON_SITE`, `OTHER` |
 | `StockMovementKind` | `RECEIPT`, `ISSUE`, `RETURN`, `ADJUSTMENT` |
 | `EquipmentStatus` | `AVAILABLE`, `IN_USE`, `MAINTENANCE`, `RETIRED` |
+| `SiteVisitStatus` | `PLANNED`, `DONE`, `CANCELLED` |
 
 ## Migrationen
 

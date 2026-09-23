@@ -2,7 +2,7 @@ import 'server-only';
 
 import type { Prisma, Quote } from '@prisma/client';
 
-import { prisma, toNumber } from '@/lib/db';
+import { prisma, toNumber, type Tx } from '@/lib/db';
 import { BusinessRuleError, NotFoundError } from '@/lib/errors';
 import { absoluteUrl, round2 } from '@/lib/utils';
 import { orderByFor, resolveSort, type SortOrder } from '@/lib/sort';
@@ -131,6 +131,92 @@ export function computeQuoteTotals(
 //  CRUD
 // ---------------------------------------------------------------------------
 
+/**
+ * Kundschaft, Anfrage und Objekt einer Offerte gehören der Organisation —
+ * und das Objekt der Kundschaft.
+ *
+ * Bis 2026-09-23 übernahm `createQuote` die drei Kennungen ungeprüft. Eine
+ * Kennung aus einer anderen Organisation (oder ein Objekt einer anderen
+ * Kundschaft) ergab eine Offerte, die auf fremde Daten zeigt; ihr PDF hätte
+ * fremde Adressen gedruckt. Die Prüfung steht in der Abfrage (404), wie
+ * überall sonst.
+ */
+async function pruefeOffertBezug(tx: Tx, organizationId: string, input: Pick<CreateQuoteInput, 'customerId' | 'leadId' | 'propertyId'>) {
+  if (input.customerId) {
+    const k = await tx.customer.findFirst({ where: { id: input.customerId, organizationId }, select: { id: true } });
+    if (!k) throw new NotFoundError('Kunde');
+  }
+  if (input.leadId) {
+    const l = await tx.lead.findFirst({ where: { id: input.leadId, organizationId }, select: { id: true } });
+    if (!l) throw new NotFoundError('Lead');
+  }
+  if (input.propertyId) {
+    const o = await tx.property.findFirst({
+      where: {
+        id: input.propertyId,
+        customer: { organizationId },
+        ...(input.customerId ? { customerId: input.customerId } : {}),
+      },
+      select: { id: true },
+    });
+    if (!o) throw new NotFoundError('Objekt');
+  }
+}
+
+/**
+ * Die Offerte in einer bestehenden Transaktion anlegen — für Aufrufer, die
+ * im selben Schritt noch etwas anderes festhalten müssen (die Besichtigung,
+ * aus der die Offerte entsteht). Lead-Status und Protokoll übernimmt der
+ * Aufrufer.
+ */
+export async function createQuoteTx(
+  tx: Tx,
+  params: { organizationId: string; input: CreateQuoteInput; actorId: string },
+): Promise<Quote> {
+  await pruefeOffertBezug(tx, params.organizationId, params.input);
+  const totals = computeQuoteTotals(params.input.items, params.input.discountType, params.input.discountValue);
+  const { number } = await nextNumber(tx, params.organizationId, 'quote');
+  return tx.quote.create({
+    data: {
+      organizationId: params.organizationId,
+      number,
+      customerId: params.input.customerId ?? null,
+      leadId: params.input.leadId ?? null,
+      propertyId: params.input.propertyId ?? null,
+      title: params.input.title,
+      status: 'DRAFT',
+      validUntil: params.input.validUntil,
+      introText: params.input.introText ?? null,
+      outroText: params.input.outroText ?? null,
+      terms: params.input.terms ?? defaultTerms(),
+      internalNote: params.input.internalNote ?? null,
+      discountType: params.input.discountType ?? null,
+      discountValue: params.input.discountValue,
+      discountAmount: totals.discountAmount,
+      subtotal: totals.subtotal,
+      netTotal: totals.netTotal,
+      vatAmount: totals.vatAmount,
+      grossTotal: totals.grossTotal,
+      createdById: params.actorId,
+      items: {
+        create: totals.items.map((item) => ({
+          serviceId: item.serviceId ?? null,
+          name: item.name,
+          description: item.description ?? null,
+          quantity: item.quantity,
+          unit: item.unit,
+          unitPrice: item.unitPrice,
+          discount: item.discount ?? 0,
+          vatRate: item.vatRate,
+          lineTotal: item.lineTotal,
+          position: item.position,
+          optional: item.optional ?? false,
+        })),
+      },
+    },
+  });
+}
+
 export async function createQuote(params: {
   organizationId: string;
   input: CreateQuoteInput;
@@ -143,6 +229,7 @@ export async function createQuote(params: {
   );
 
   const quote = await prisma.$transaction(async (tx) => {
+    await pruefeOffertBezug(tx, params.organizationId, params.input);
     const { number } = await nextNumber(tx, params.organizationId, 'quote');
 
     return tx.quote.create({

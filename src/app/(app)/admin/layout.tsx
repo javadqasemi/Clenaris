@@ -100,6 +100,8 @@ export default async function AdminLayout({ children }: { children: React.ReactN
         { href: '/admin/buchungen', label: 'Buchungen', icon: 'bookings', badge: pendingBookings, permission: 'booking:read' },
         { href: '/admin/einsaetze', label: 'Einsätze', icon: 'jobs', badge: unassignedJobs, permission: 'job:read' },
         { href: '/admin/offerten', label: 'Offerten', icon: 'quotes', permission: 'quote:read' },
+        // Wave 12: die Vorstufe der Offerte für Objekte, die man gesehen haben muss.
+        { href: '/admin/besichtigungen', label: 'Besichtigungen', icon: 'checklist', permission: 'quote:read' },
         /*
           Verträge stehen bei der Auftragsabwicklung und nicht bei der
           Kundschaft: Ein Vertrag ist hier kein Stammdatum, sondern der
