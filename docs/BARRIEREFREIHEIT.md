@@ -18,6 +18,12 @@ Browser (Chromium, gegen den Testserver) und prüft die Regeln mit den Tags
 | Verwaltung | `/admin`, `/admin/rechnungen`, `/admin/lohn`, `/admin/suche?q=Reinigung`, `/admin/reklamationen`, `/admin/besichtigungen` |
 | Portal / Konto | `/portal`, `/portal/lohn`, `/konto`, `/konto/reklamationen` |
 
+Gemessen wird erst, wenn die Seite ruhig ist: auf den Seiten des
+`(public)`-Rahmens nach dem Erscheinen des Cookie-Banners (800 ms nach dem
+Laden, 500 ms Einblenden — es wird damit immer mitgeprüft), überall nach dem
+Ende aller endlichen Animationen. Ohne das mass axe in 2 von 10 vollen Läufen
+das halb eingeblendete Banner (2.5 : 1) — ein Messfehler, kein Seitenfehler.
+
 Verstösse der Stufe `critical` oder `serious` lassen den Fall scheitern;
 `moderate`/`minor` liegen als JSON-Anhang im Playwright-Bericht. Die Schwelle
 ist bewusst so gezogen: Eine Reihe, die bei jedem Hinweis rot wird, wird
