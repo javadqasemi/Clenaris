@@ -87,6 +87,19 @@ export function movementFields(): FieldSpec[] {
   ];
 }
 
+/**
+ * Entnahme für einen Einsatz. Nur Material und Menge: Bezeichnung und Preis
+ * kommen serverseitig aus dem Materialstamm, damit die Nachkalkulation nicht
+ * vom Formular abhängt.
+ */
+export function jobIssueFields(materialien: Option[]): FieldSpec[] {
+  return [
+    { name: 'materialId', label: 'Material', type: 'select', options: materialien, required: true },
+    { name: 'quantity', label: 'Menge', type: 'number', step: 0.5, min: 0.5, required: true, half: true },
+    { name: 'billable', label: 'Der Kundschaft verrechnen', type: 'checkbox' },
+  ];
+}
+
 export function equipmentFields(): FieldSpec[] {
   return [
     { name: 'name', label: 'Bezeichnung', required: true },

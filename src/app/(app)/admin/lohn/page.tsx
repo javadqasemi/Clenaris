@@ -5,9 +5,9 @@ import { AlertTriangle, Download, FileText, Wallet } from 'lucide-react';
 import { requirePermission } from '@/lib/auth/session';
 import { can } from '@/lib/auth/rbac';
 import { prisma, toNumber } from '@/lib/db';
-import { formatCurrency, formatDate } from '@/lib/utils';
+import { formatCurrency, formatDate, formatDateTime } from '@/lib/utils';
 import { getOrganizationId } from '@/server/services/organization.service';
-import { listPayslips } from '@/server/services/payroll.service';
+import { listPayslips, monatsfenster } from '@/server/services/payroll.service';
 import { ART_BESCHRIFTUNG, listPayrollRates } from '@/server/services/payroll-rates.service';
 import { listPayrollItems, listWithholdingProfiles } from '@/server/services/payroll-stamm.service';
 import { listSalaryCertificates } from '@/server/services/salary-certificate.service';
@@ -60,8 +60,12 @@ export default async function PayrollPage({ searchParams }: { searchParams: Prom
 
   const darfRechnen = can(session.role, 'payslip:create');
   const darfVeroeffentlichen = can(session.role, 'payslip:publish');
+  const darfFreigeben = can(session.role, 'timetracking:approve');
+  // Dasselbe Fenster wie der Lohnlauf — sonst gäbe die Seite Zeiten frei, die
+  // der Lauf einem anderen Monat zurechnet.
+  const fenster = monatsfenster(jahr, monat);
 
-  const [abrechnungen, saetze, positionen, qstProfile, ausweise, personal] = await Promise.all([
+  const [abrechnungen, saetze, positionen, qstProfile, ausweise, personal, offeneZeiten] = await Promise.all([
     listPayslips({ organizationId, year: jahr, month: monat }),
     darfRechnen ? listPayrollRates({ organizationId, year: jahr }) : Promise.resolve([]),
     darfRechnen ? listPayrollItems({ organizationId, year: jahr, month: monat }) : Promise.resolve([]),
@@ -72,6 +76,28 @@ export default async function PayrollPage({ searchParams }: { searchParams: Prom
       select: { id: true, employeeNumber: true, active: true, user: { select: { firstName: true, lastName: true } } },
       orderBy: { employeeNumber: 'asc' },
     }),
+    darfFreigeben
+      ? prisma.timeEntry.findMany({
+          where: {
+            approved: false,
+            endedAt: { not: null },
+            startedAt: { gte: fenster.von, lt: fenster.bis },
+            employee: { organizationId },
+          },
+          orderBy: { startedAt: 'asc' },
+          // Die Obergrenze des Freigabe-Endpunkts; mehr wäre ein Knopf, der
+          // mit 422 antwortet.
+          take: 200,
+          select: {
+            id: true,
+            startedAt: true,
+            minutes: true,
+            manual: true,
+            job: { select: { number: true } },
+            employee: { select: { user: { select: { firstName: true, lastName: true } } } },
+          },
+        })
+      : Promise.resolve([]),
   ]);
   const personen = personal.map((p) => ({
     value: p.id,
@@ -148,6 +174,60 @@ export default async function PayrollPage({ searchParams }: { searchParams: Prom
           </div>
         ))}
       </div>
+
+      {/*
+        Nur freigegebene Zeiten zählen im Lohnlauf. Die Freigabe hatte seit
+        Wave 8 einen Endpunkt und keine Oberfläche (Merkmalsprüfung, Wave 23) —
+        wer den Monat rechnen wollte, bekam „offene Zeiten gemeldet statt
+        bezahlt" und keinen Weg, sie freizugeben.
+      */}
+      {darfFreigeben && offeneZeiten.length > 0 ? (
+        <DetailSection
+          title="Offene Zeiten"
+          description={`${offeneZeiten.length}${offeneZeiten.length === 200 ? ' (die ersten 200)' : ''} abgeschlossene Erfassung(en) in ${monatsname(monat)} ${jahr} sind nicht freigegeben und zählen im Lohnlauf nicht. Laufende Erfassungen erscheinen erst nach dem Ausstempeln.`}
+          body="flush"
+          action={
+            <ActionButton
+              endpoint="/api/time/approve"
+              body={{ entryIds: offeneZeiten.map((z) => z.id) }}
+              label={`${offeneZeiten.length} freigeben`}
+              confirmTitle="Zeiten freigeben"
+              confirm="Freigegebene Zeiten sind eingefroren: Korrigieren und Löschen gehen erst wieder, wenn die Freigabe aufgehoben wird. Danach den Monat neu rechnen."
+              successMessage="Zeiten freigegeben."
+              size="sm"
+            />
+          }
+        >
+          <ListCard>
+            <TableScroll>
+              <table className="data-table">
+                <caption className="sr-only">Offene Zeiten {monatsname(monat)} {jahr}</caption>
+                <thead>
+                  <tr>
+                    <th scope="col">Person</th>
+                    <th scope="col">Beginn</th>
+                    <th scope="col" className="text-right">Minuten</th>
+                    <th scope="col">Einsatz</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {offeneZeiten.map((z) => (
+                    <tr key={z.id}>
+                      <td>
+                        {z.employee.user.firstName} {z.employee.user.lastName}
+                        {z.manual ? <Badge size="sm" variant="outline" className="ml-2">nachgetragen</Badge> : null}
+                      </td>
+                      <td className="tabular-nums">{formatDateTime(z.startedAt)}</td>
+                      <td className="num">{z.minutes}</td>
+                      <td className="text-muted-foreground">{z.job?.number ?? '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </TableScroll>
+          </ListCard>
+        </DetailSection>
+      ) : null}
 
       <DetailSection
         title="Abrechnungen"

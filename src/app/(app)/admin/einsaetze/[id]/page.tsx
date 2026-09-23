@@ -29,6 +29,8 @@ import { JobTeamEditor } from '@/features/admin/job-team-editor';
 import { JobCostingEditor } from '@/features/admin/job-costing-editor';
 import { JobMaterialsEditor } from '@/features/admin/job-materials-editor';
 import { JobPhotos } from '@/features/admin/job-photos';
+import { FormDialog } from '@/components/app/resource-form';
+import { jobIssueFields } from '@/features/admin/betrieb-fields';
 
 export const metadata: Metadata = {
   title: 'Einsatz',
@@ -111,6 +113,17 @@ export default async function AdminJobDetailPage({
         ' ',
       )
     : null;
+
+  // Nur mit `inventory:manage` — dieselbe Berechtigung wie der Endpunkt.
+  const lagerMaterial = can(session.role, 'inventory:manage')
+    ? (
+        await prisma.material.findMany({
+          where: { organizationId, active: true },
+          orderBy: { name: 'asc' },
+          select: { id: true, sku: true, name: true, unit: true },
+        })
+      ).map((m) => ({ value: m.id, label: `${m.name} (${m.sku}, ${m.unit})` }))
+    : [];
 
   const doneCount = job.checklist.filter((item) => item.done).length;
   const progress = job.checklist.length > 0 ? (doneCount / job.checklist.length) * 100 : 0;
@@ -319,8 +332,37 @@ export default async function AdminJobDetailPage({
                   ? 'Menge mal Stückpreis ergibt den Materialaufwand der Nachkalkulation.'
                   : undefined
               }
+              action={
+                /*
+                  Die Lagerentnahme hatte seit Wave 11 einen Endpunkt, aber
+                  keinen Knopf (Merkmalsprüfung, Wave 23). Sie bucht in einem
+                  Zug die Verbrauchszeile, die Entnahme im Lager und den
+                  Materialaufwand. Nach der Vor-Ort-Abnahme antwortet der
+                  Endpunkt 422 — der Knopf fragt deshalb nicht selbst nach dem
+                  Status, sondern zeigt die Meldung des Servers.
+                */
+                lagerMaterial.length > 0 ? (
+                  <FormDialog
+                    title="Material aus dem Lager entnehmen"
+                    triggerLabel="Aus dem Lager"
+                    triggerVariant="outline"
+                    triggerSize="sm"
+                    endpoint={`/api/jobs/${job.id}/material-issue`}
+                    successMessage="Entnahme gebucht."
+                    fields={jobIssueFields(lagerMaterial)}
+                    values={{ billable: false }}
+                  />
+                ) : undefined
+              }
             >
               <JobMaterialsEditor
+                // Der Editor übernimmt die Zeilen einmal in seinen Zustand.
+                // Nach einer Lagerentnahme lädt die Seite neu, der Zustand
+                // bliebe aber alt — die neue Zeile erschien erst nach einem
+                // harten Neuladen (gefunden von `wave23-masken.spec.ts`). Der
+                // Schlüssel aus den Zeilenkennungen baut ihn neu auf, sobald
+                // sich der Bestand auf dem Server geändert hat.
+                key={job.materials.map((material) => material.id).join(',')}
                 jobId={job.id}
                 readOnly={!canEdit}
                 materials={job.materials.map((material) => ({

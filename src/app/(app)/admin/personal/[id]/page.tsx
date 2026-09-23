@@ -31,6 +31,9 @@ import {
 } from '@/lib/utils';
 import { getOrganizationId } from '@/server/services/organization.service';
 import { getEmployeeDetail, getVacationBalance } from '@/server/services/employee.service';
+import { getPayrollProfile } from '@/server/services/payroll-stamm.service';
+import { DREIZEHNTER_ARTEN, payrollProfileFields } from '@/features/admin/payroll-fields';
+import { FormDialog } from '@/components/app/resource-form';
 import { documentVisibilityWhere } from '@/server/services/document.service';
 import { Badge, StatusBadge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -113,7 +116,7 @@ export default async function StaffDetailPage({
     throw error;
   }
 
-  const [vacation, documents, logins] = await Promise.all([
+  const [vacation, documents, logins, lohnprofil] = await Promise.all([
     getVacationBalance(employee.id, new Date().getFullYear()),
     prisma.managedDocument.findMany({
       where: {
@@ -139,6 +142,9 @@ export default async function StaffDetailPage({
           select: { id: true, createdAt: true, ip: true, userAgent: true },
         })
       : Promise.resolve([]),
+    // Dieselbe Schranke wie der Endpunkt: `payslip:create`, nicht die Akte —
+    // die Betriebsleitung liest die Akte, aber keine Lohnvereinbarungen.
+    canSeeWages ? getPayrollProfile(organizationId, employee.id) : Promise.resolve(null),
   ]);
 
   const name = fullName(employee.user.firstName, employee.user.lastName);
@@ -451,6 +457,55 @@ export default async function StaffDetailPage({
           </DetailSection>
         )}
       </div>
+
+      {/*
+        Die Lohnvereinbarungen hatten Endpunkt, Dienst und sogar fertige
+        Feldliste (`payrollProfileFields`) — aber keine Stelle, an der man sie
+        setzen konnte (Merkmalsprüfung, Wave 23). Ohne sie rechnet der Lohnlauf
+        jede Person mit „kein 13., keine Entschädigung". Sie stehen hier und
+        nicht auf der Lohnseite, weil sie zur Person gehören und nicht zum Monat.
+      */}
+      {lohnprofil ? (
+        <DetailSection
+          title="Lohnvereinbarungen"
+          description="13. Monatslohn, Ferien- und Feiertagsentschädigung. Eine Änderung markiert unveröffentlichte Abrechnungen dieser Person als veraltet."
+          action={
+            <FormDialog
+              title="Lohnvereinbarungen"
+              triggerLabel="Bearbeiten"
+              triggerVariant="outline"
+              triggerSize="sm"
+              plainTrigger
+              endpoint={`/api/payroll/profiles/${employee.id}`}
+              method="PUT"
+              submitLabel="Änderungen speichern"
+              successMessage="Vereinbarungen gespeichert."
+              fields={payrollProfileFields()}
+              values={{
+                thirteenthMode: lohnprofil.thirteenthMode,
+                thirteenthPayoutMonth: lohnprofil.thirteenthPayoutMonth,
+                vacationPayInWage: lohnprofil.vacationPayInWage,
+                holidayPayPct: lohnprofil.holidayPayPct === null ? undefined : toNumber(lohnprofil.holidayPayPct),
+                note: lohnprofil.note ?? undefined,
+              }}
+            />
+          }
+        >
+          <dl className="protocol-list">
+            <DetailRow label="13. Monatslohn">
+              {DREIZEHNTER_ARTEN.find((a) => a.value === lohnprofil.thirteenthMode)?.label ?? lohnprofil.thirteenthMode}
+              {lohnprofil.thirteenthMode === 'NONE' ? null : `, Auszahlung im Monat ${lohnprofil.thirteenthPayoutMonth}`}
+            </DetailRow>
+            <DetailRow label="Ferienentschädigung">
+              {lohnprofil.vacationPayInWage ? 'mit dem Stundenlohn' : 'nicht mit dem Lohn'}
+            </DetailRow>
+            <DetailRow label="Feiertagsentschädigung">
+              {lohnprofil.holidayPayPct === null ? '—' : `${toNumber(lohnprofil.holidayPayPct)} %`}
+            </DetailRow>
+            {lohnprofil.note ? <DetailRow label="Notiz">{lohnprofil.note}</DetailRow> : null}
+          </dl>
+        </DetailSection>
+      ) : null}
 
       {employee.notes || canEdit ? (
         <DetailSection title="Interne Notizen" description="Nur für die Personalverwaltung sichtbar.">
