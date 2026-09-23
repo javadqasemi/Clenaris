@@ -93,6 +93,78 @@ export interface BeitragsSaetze {
 }
 
 /**
+ * Die Arbeitgebersätze — seit Wave 9 (2026-09-23) aus den versionierten
+ * Satzversionen (`PayrollRate.employerPct`). Nicht Teil der Auszahlung, aber
+ * der Lohnkosten und der Abrechnung mit den Kassen.
+ *
+ * Wie bei den Arbeitnehmersätzen: Prozent **in Prozent**, und kein Wert steht
+ * hier im Code. Der Dienst reicht, was in der Datenbank steht.
+ */
+export interface ArbeitgeberSaetze {
+  ahvIvEo: number;
+  alv: number;
+  alvUeberGrenze: number;
+  /** Nichtberufsunfall — falls der Betrieb einen Teil trägt. */
+  uvgNbu: number;
+  /** Berufsunfall. */
+  uvgBu: number;
+  ktg: number;
+  /** Familienausgleichskasse, in Prozent des AHV-Lohns. */
+  fak: number;
+  /** Verwaltungskosten der Ausgleichskasse, in Prozent der AHV/IV/EO-Beiträge (beider Seiten). */
+  vk: number;
+}
+
+export interface ArbeitgeberBeitraege {
+  ahvIvEo: number;
+  alv: number;
+  uvg: number;
+  ktg: number;
+  fak: number;
+  vk: number;
+  bvg: number;
+  summe: number;
+}
+
+/**
+ * Die Arbeitgeberbeiträge eines Monats — dieselben Grundlagen wie die
+ * Arbeitnehmerseite, je Beitragsart gerundet.
+ *
+ * **VK ist ein Prozentsatz der Beiträge, nicht des Lohns.** Die
+ * Verwaltungskosten der Ausgleichskasse bemessen sich an den AHV/IV/EO-
+ * Beiträgen beider Seiten — der häufigste Fehler beim Nachbauen ist, sie auf
+ * den Lohn zu rechnen.
+ *
+ * **BVG:** der Rest der Altersgutschrift nach dem Arbeitnehmeranteil. Der
+ * koordinierte Lohn und der Satz kommen aus derselben Rechnung wie auf der
+ * Arbeitnehmerseite (`beitraege.herleitung`), damit beide Seiten nie
+ * auseinanderlaufen.
+ */
+export function berechneArbeitgeberbeitraege(
+  grundlage: BeitragsGrundlage,
+  saetze: BeitragsSaetze,
+  arbeitgeber: ArbeitgeberSaetze,
+  arbeitnehmer: Beitraege,
+): ArbeitgeberBeitraege {
+  const brutto = Math.max(0, grundlage.bruttoMonat);
+  const ahvIvEo = rappen(brutto * (arbeitgeber.ahvIvEo / 100));
+  const alv = rappen(
+    arbeitnehmer.herleitung.alvPflichtigerMonatslohn * (arbeitgeber.alv / 100) +
+      arbeitnehmer.herleitung.alvUeberGrenzeMonatslohn * (arbeitgeber.alvUeberGrenze / 100),
+  );
+  const uvg = rappen(brutto * ((arbeitgeber.uvgNbu + arbeitgeber.uvgBu) / 100));
+  const ktg = rappen(brutto * (arbeitgeber.ktg / 100));
+  const fak = rappen(brutto * (arbeitgeber.fak / 100));
+  const vk = rappen((arbeitnehmer.ahvIv + ahvIvEo) * (arbeitgeber.vk / 100));
+  const bvgJahrGesamt =
+    arbeitnehmer.herleitung.bvgKoordinierterJahreslohn * (arbeitnehmer.herleitung.bvgSatzGesamt / 100);
+  const bvg = arbeitnehmer.herleitung.bvgVersichert
+    ? rappen((bvgJahrGesamt / 12) * ((100 - saetze.bvgAnteilArbeitnehmer) / 100))
+    : 0;
+  return { ahvIvEo, alv, uvg, ktg, fak, vk, bvg, summe: rappen(ahvIvEo + alv + uvg + ktg + fak + vk + bvg) };
+}
+
+/**
  * Die gesetzlichen Werte für 2026.
  *
  * **Eine Vorbelegung, keine Wahrheit.** Sie stehen hier, damit ein Betrieb
