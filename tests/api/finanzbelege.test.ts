@@ -151,7 +151,9 @@ describe('Zahlungen: Storno statt Löschen', () => {
     const r = await db.invoice.findUnique({ where: { id: rechnungId }, select: { balance: true, paidAmount: true, grossTotal: true, status: true } });
     assert.equal(Number(r!.balance), Number(r!.grossTotal));
     assert.equal(Number(r!.paidAmount), 0);
-    assert.equal(r!.status, 'SENT');
+    // Zurück auf den Stand vor dem Geld. Die Rechnung wurde ausgestellt, aber
+    // nie versendet — bis Wave 24 hiess es hier pauschal `SENT`.
+    assert.equal(r!.status, 'ISSUED');
     const wertNachher = Number((await db.customer.findUnique({ where: { id: kundeId }, select: { lifetimeValue: true } }))!.lifetimeValue);
     assert.equal(Math.round((wertVorher - wertNachher) * 100) / 100, 50);
     assert.equal((await del(`/api/payments/${zahlungId}`, { jar: jars.admin })).status, 422, 'ein zweiter Storno');
@@ -189,6 +191,29 @@ describe('Gutschriften', () => {
     assert.equal(Buffer.from(await pdf.arrayBuffer()).subarray(0, 4).toString(), '%PDF');
     await assert.rejects(db.creditNote.update({ where: { id: data(g).id }, data: { grossTotal: 1 } }), /unveränderlich/);
     await assert.rejects(db.creditNote.delete({ where: { id: data(g).id } }), /nicht gelöscht/);
+  });
+
+  /**
+   * Wave 24: Verbuchen und Storno rechneten den Saldo als `Brutto − bezahlt`
+   * und vergassen die Gutschrift. Wer nach der Gutschrift den Rest bezahlte,
+   * behielt einen offenen Posten in Höhe der Gutschrift und wurde gemahnt.
+   */
+  it('Rest nach einer Gutschrift bezahlen ergibt „bezahlt", der Storno danach berücksichtigt die Gutschrift', async () => {
+    const db = testDb()!;
+    const rest = Math.round((gross - 20 - 32.43) * 100) / 100;
+    const zahlung = await post('/api/invoices/' + rechnungId + '/payments', { amount: rest, reference: MARKE }, { jar: jars.admin });
+    assert.ok([200, 201].includes(zahlung.status), JSON.stringify(zahlung.payload));
+    const bezahlt = await db.invoice.findUniqueOrThrow({ where: { id: rechnungId }, select: { balance: true, paidAmount: true, status: true } });
+    assert.equal(Number(bezahlt.balance), 0, 'kein Saldo in Höhe der Gutschrift');
+    assert.equal(bezahlt.status, 'PAID');
+    assert.equal(Number(bezahlt.paidAmount), Math.round((20 + rest) * 100) / 100);
+
+    const letzte = await db.payment.findFirstOrThrow({ where: { invoiceId: rechnungId, status: 'SUCCEEDED' }, orderBy: { createdAt: 'desc' }, select: { id: true } });
+    assert.equal((await del(`/api/payments/${letzte.id}`, { jar: jars.admin })).status, 204);
+    const zurueck = await db.invoice.findUniqueOrThrow({ where: { id: rechnungId }, select: { balance: true, paidAmount: true, status: true } });
+    assert.equal(Number(zurueck.balance), rest, 'offen ist der Rest, nicht Rest plus Gutschrift');
+    assert.equal(Number(zurueck.paidAmount), 20);
+    assert.equal(zurueck.status, 'PARTIALLY_PAID');
   });
 
   it('nie mehr gutschreiben, als die Rechnung betrug', async () => {

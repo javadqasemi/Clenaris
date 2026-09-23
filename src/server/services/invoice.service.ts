@@ -503,6 +503,76 @@ export async function sendInvoice(params: {
 //  Zahlungen
 // ---------------------------------------------------------------------------
 
+/** Rundungstoleranz: Ab höchstens 5 Rappen Rest gilt eine Rechnung als bezahlt. */
+const BEZAHLT_TOLERANZ = 0.05;
+
+/**
+ * Bezahlter Betrag, offener Posten und Zahlstatus einer Rechnung — aus den
+ * Belegen gebildet, nicht fortgeschrieben.
+ *
+ * **Warum eine Funktion für drei Wege.** Verbuchen, Stornieren und Gutschrift
+ * rechneten den Saldo je selbst — und zwei davon falsch: Verbuchen und Storno
+ * setzten `balance = grossTotal − bezahlt` und vergassen die Gutschriften, die
+ * seit Wave 13 den Saldo senken. Auf einer Rechnung über 100 mit einer
+ * Gutschrift von 30 liess die Zahlung der restlichen 70 einen Saldo von 30
+ * stehen, die Rechnung blieb „teilweise bezahlt" und wäre gemahnt worden.
+ * Gefunden bei der Integritätsprüfung (Wave 24,
+ * `scripts/datenintegritaet.ts`), die genau diese Gleichung prüft.
+ *
+ * Verbuchen las ausserdem den bezahlten Betrag **vor** der Transaktion und
+ * schrieb ihn als Summe zurück — zwei gleichzeitige Zahlungen hätten einander
+ * überschrieben. Hier sperrt die Zeile, und die Summe kommt aus den
+ * Zahlungen selbst.
+ *
+ * Der Status folgt dem Geld, nicht der Gutschrift: `PAID` nur, wenn Geld
+ * geflossen ist und nichts mehr offen ist. Eine vollständig gutgeschriebene
+ * Rechnung ist nicht bezahlt — ihr Saldo ist 0, der Status bleibt. Stornierte
+ * und abgeschriebene Rechnungen behalten ihren Status und ihren Saldo 0.
+ *
+ * Muss in der Transaktion des auslösenden Belegs laufen.
+ */
+export async function saldoNeuBilden(tx: Prisma.TransactionClient, invoiceId: string): Promise<Invoice> {
+  await tx.$queryRaw`SELECT "id" FROM "invoices" WHERE "id" = ${invoiceId} FOR UPDATE`;
+  const rechnung = await tx.invoice.findUniqueOrThrow({
+    where: { id: invoiceId },
+    select: { grossTotal: true, status: true, sentAt: true, paidAt: true },
+  });
+  const [zahlungen, gutschriften] = await Promise.all([
+    tx.payment.aggregate({ where: { invoiceId, status: 'SUCCEEDED' }, _sum: { amount: true } }),
+    tx.creditNote.aggregate({ where: { invoiceId }, _sum: { grossTotal: true } }),
+  ]);
+  const bezahlt = round2(toNumber(zahlungen._sum.amount));
+  const gutgeschrieben = round2(toNumber(gutschriften._sum.grossTotal));
+  const offen = round2(toNumber(rechnung.grossTotal) - bezahlt - gutgeschrieben);
+
+  if (rechnung.status === 'CANCELLED' || rechnung.status === 'WRITTEN_OFF') {
+    return tx.invoice.update({ where: { id: invoiceId }, data: { paidAmount: bezahlt, balance: 0 } });
+  }
+
+  const voll = bezahlt > 0 && offen <= BEZAHLT_TOLERANZ;
+  const status: Invoice['status'] = voll
+    ? 'PAID'
+    : bezahlt > 0
+      ? 'PARTIALLY_PAID'
+      : rechnung.status === 'PAID' || rechnung.status === 'PARTIALLY_PAID'
+        ? // Nach einem Storno ohne verbleibende Zahlung: zurück auf den Stand
+          // vor dem Geld. „Überfällig" setzt der Tageslauf wieder, wenn es zutrifft.
+          rechnung.sentAt
+          ? 'SENT'
+          : 'ISSUED'
+        : rechnung.status;
+
+  return tx.invoice.update({
+    where: { id: invoiceId },
+    data: {
+      paidAmount: bezahlt,
+      balance: Math.max(0, offen),
+      status,
+      paidAt: voll ? (rechnung.paidAt ?? new Date()) : null,
+    },
+  });
+}
+
 export async function recordPayment(params: {
   organizationId: string;
   invoiceId: string;
@@ -531,9 +601,6 @@ export async function recordPayment(params: {
   }
 
   const amount = round2(params.input.amount);
-  const newPaid = round2(toNumber(invoice.paidAmount) + amount);
-  const newBalance = round2(toNumber(invoice.grossTotal) - newPaid);
-  const fullyPaid = newBalance <= 0.05; // Rundungstoleranz von 5 Rappen
 
   const updated = await prisma.$transaction(async (tx) => {
     await tx.payment.create({
@@ -552,15 +619,7 @@ export async function recordPayment(params: {
       },
     });
 
-    const result = await tx.invoice.update({
-      where: { id: invoice.id },
-      data: {
-        paidAmount: newPaid,
-        balance: Math.max(0, newBalance),
-        status: fullyPaid ? 'PAID' : 'PARTIALLY_PAID',
-        paidAt: fullyPaid ? new Date() : null,
-      },
-    });
+    const result = await saldoNeuBilden(tx, invoice.id);
 
     // Kundenwert (Lifetime Value) fortschreiben.
     await tx.customer.update({
@@ -570,6 +629,7 @@ export async function recordPayment(params: {
 
     return result;
   });
+  const fullyPaid = updated.status === 'PAID';
 
   if (fullyPaid) {
     await notify({
@@ -581,7 +641,7 @@ export async function recordPayment(params: {
       emailContent: paymentReceivedEmail({
         firstName: invoice.customer.firstName,
         invoiceNumber: invoice.number,
-        amount: newPaid,
+        amount: toNumber(updated.paidAmount),
       }),
       entity: 'Invoice',
       entityId: invoice.id,
@@ -801,20 +861,11 @@ export async function createCreditNote(params: {
           `Auf Rechnung ${rechnung.number} kann höchstens noch CHF ${rest.toFixed(2)} gutgeschrieben werden.`,
         );
       }
-      /**
-       * Der offene Posten sinkt um die Gutschrift — sonst mahnte der Betrieb
-       * einen Betrag, den er selbst gutgeschrieben hat. Der Status bleibt: Eine
-       * gutgeschriebene Rechnung ist nicht „bezahlt".
-       */
-      await tx.invoice.update({
-        where: { id: rechnung.id },
-        data: { balance: Math.max(0, round2(toNumber(rechnung.balance) - grossTotal)) },
-      });
     }
 
     const { number } = await nextNumber(tx, params.organizationId, 'credit_note');
 
-    return tx.creditNote.create({
+    const gutschrift = await tx.creditNote.create({
       data: {
         organizationId: params.organizationId,
         number,
@@ -828,6 +879,12 @@ export async function createCreditNote(params: {
         items: params.items as unknown as Prisma.InputJsonValue,
       },
     });
+
+    // Der offene Posten sinkt um die Gutschrift — sonst mahnte der Betrieb
+    // einen Betrag, den er selbst gutgeschrieben hat. Gebildet wie bei jeder
+    // Zahlung, damit alle drei Wege dieselbe Gleichung benutzen.
+    if (params.invoiceId) await saldoNeuBilden(tx, params.invoiceId);
+    return gutschrift;
   });
 
   // Das PDF gleich erzeugen — ein Beleg ohne Dokument ist keiner, den man versenden kann.

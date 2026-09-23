@@ -5,6 +5,7 @@ import { audit, diff } from '@/lib/audit';
 import { BusinessRuleError, NotFoundError } from '@/lib/errors';
 import { updatePaymentSchema } from '@/lib/validation/finance';
 import { getOrganizationId } from '@/server/services/organization.service';
+import { saldoNeuBilden } from '@/server/services/invoice.service';
 
 export const runtime = 'nodejs';
 
@@ -129,26 +130,14 @@ export const DELETE = defineRoute({
         if (kunde) await tx.customer.update({ where: { id: kunde }, data: { lifetimeValue: { decrement: amount } } });
       }
 
+      /**
+       * Saldo, bezahlter Betrag und Status aus den Belegen neu bilden — mit
+       * den Gutschriften. Bis Wave 24 rechnete der Storno hier selbst
+       * `grossTotal − bezahlt` und setzte damit eine gutgeschriebene Summe
+       * wieder als offen (`saldoNeuBilden` im Rechnungsdienst).
+       */
       if (payment.invoiceId && payment.status === 'SUCCEEDED') {
-        const paid = await tx.payment.aggregate({
-          where: { invoiceId: payment.invoiceId, status: 'SUCCEEDED' },
-          _sum: { amount: true },
-        });
-        const gross = toNumber(payment.invoice?.grossTotal ?? 0);
-        const balance = Math.round((gross - toNumber(paid._sum.amount)) * 100) / 100;
-
-        await tx.invoice.update({
-          where: { id: payment.invoiceId },
-          data: {
-            balance,
-            // Bis 2026-09-23 blieb `paidAmount` nach einem Storno auf dem alten Wert
-            // stehen, während der Saldo stimmte — zwei Zahlen, die einander widersprachen.
-            paidAmount: Math.round(toNumber(paid._sum.amount) * 100) / 100,
-            // Zurück auf „versendet", sobald wieder etwas offen ist.
-            status: balance <= 0 ? 'PAID' : balance < gross ? 'PARTIALLY_PAID' : 'SENT',
-            paidAt: balance <= 0 ? undefined : null,
-          },
-        });
+        await saldoNeuBilden(tx, payment.invoiceId);
       }
     });
 
