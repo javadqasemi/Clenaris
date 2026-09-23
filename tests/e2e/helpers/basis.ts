@@ -2,6 +2,7 @@ import { test as basis } from '@playwright/test';
 
 import { resetRateLimits } from '../../helpers/rate-limit';
 import { diagnoseAnhaengen } from './diagnose';
+import { MUTATIONS_BEOBACHTER } from './mutations-beobachter';
 
 /**
  * Der gemeinsame Testrahmen der Browser-Reihe.
@@ -55,6 +56,9 @@ export const test = basis.extend({
      * Terminal zu verschwinden.
      */
     const diagnose = diagnoseAnhaengen(context, testInfo);
+    // Die Reihenfolge der DOM-Veränderungen ab dem ersten Skript — sie gehört
+    // zum Befund, wenn es knallt (`mutations-beobachter.ts`).
+    await context.addInitScript(MUTATIONS_BEOBACHTER);
 
     // `use` ist hier Playwrights Übergabefunktion für eine Testvorrichtung,
     // kein React-Hook. Die Regel erkennt nur den Namen und liegt deshalb falsch.

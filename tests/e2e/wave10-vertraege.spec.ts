@@ -1,47 +1,59 @@
 import type { Page } from '@playwright/test';
 
-import { patch, post } from '../helpers/client';
+import { data, del, patch, post } from '../helpers/client';
 import { letzteMail, linksIn } from '../helpers/mail';
 import { testDb } from '../helpers/testdb';
 
 import { expect, test } from './helpers/basis';
-import { imBrowserAnmelden, konsoleUeberwachen, unterschriftZeichnen } from './helpers/browser';
+import { imBrowserAnmelden, unterschriftZeichnen } from './helpers/browser';
 import {
   frischAnmelden,
+  offerteAnlegen,
   pfadVon,
   stammdatenLesen,
+  versendenUndLinkLesen,
   vertragAufraeumen,
   vertragsentwurfAnlegen,
   type Stammdaten,
 } from './helpers/bestand';
 
 /**
- * Wave 10 im echten Browser — der Vertrag von der Fassung bis zur Rechnung.
+ * Verträge im echten Browser — sechs Wege von der Offerte bis zur Rechnung.
  *
  * ---------------------------------------------------------------------------
  *  Was hier geprüft wird und was ausdrücklich nicht
  * ---------------------------------------------------------------------------
  *
- * Die Fachregeln stehen in `tests/api/vertraege.test.ts` und im reinen
- * Rechenkern: dass eine geltende Fassung unveränderlich ist, dass zwei
- * gleichzeitige Abrechnungen eine Rechnung ergeben, welche Kalendertage eine
- * Regel trifft. Nichts davon wird hier wiederholt — über HTTP ist es schneller
+ * Die Fachregeln stehen in `tests/api/vertraege.test.ts`,
+ * `tests/api/vertraege-integritaet.test.ts` und im reinen Rechenkern: welche
+ * Kalendertage eine Regel trifft, dass zwei gleichzeitige Abrechnungen eine
+ * Rechnung ergeben, dass die Datenbank eine angenommene Fassung verweigert.
+ * Nichts davon wird hier in der Breite wiederholt — über HTTP ist es schneller
  * und schärfer zu prüfen.
  *
  * Was hier hinzukommt, ist die Frage, die eine HTTP-Reihe **nicht** beantwortet
- * und die in diesem Projekt schon dreimal falsch beantwortet war:
+ * und die in diesem Projekt schon mehrmals falsch beantwortet war:
  *
  *   **Gibt es die Maske wirklich, schreibt sie in dieselbe Datenbank, und
  *   erscheint das Ergebnis danach auf der Seite?**
  *
- * Deshalb läuft alles, worüber hier eine Aussage getroffen wird, über die
- * Oberfläche: Der Einsatzplan entsteht im Dialog, die Inkraftsetzung an der
- * Schaltfläche, die Unterschrift auf dem Canvas, die Rechnung im Formular. Nur
- * die Vorbereitung — Vertragsentwurf mit erster Fassung — kommt über die
- * Schnittstelle.
+ * Deshalb läuft jede Handlung, über die eine Aussage getroffen wird, über die
+ * Oberfläche. Nur die Vorbereitung — Vertragsentwurf, ein Einsatzplan für die
+ * Fälle, in denen er nicht Gegenstand ist — kommt über die Schnittstelle.
  *
  * Geprüft wird jeweils gegen die **Datenbank**, nicht gegen eine Meldung im
  * Bild: Ein grüner Hinweis ist kein Beweis, dass etwas gespeichert wurde.
+ *
+ * ---------------------------------------------------------------------------
+ *  Die sechs Wege (Stabilisierung vom 2026-09-23, Phase M)
+ * ---------------------------------------------------------------------------
+ *
+ *  A  Offerte angenommen → Vertrag aus der Offerte → Plan → in Kraft → Einsätze
+ *  B  Änderungsantrag → Freigabe → Fassung 2 → in Kraft zum Stichtag
+ *  C  V1 → V2 → V3: keine doppelten Einsätze, jede Periode bei ihrer Fassung
+ *  D  Abrechnung einer vergangenen Periode nach der **damals** geltenden Fassung
+ *  E  Unterzeichnung: angenommen, eingefroren, nicht mehr stornierbar
+ *  F  Pause und Wiederaufnahme: abgesagt in der Pause, nichts in der Vergangenheit
  */
 
 const db = testDb();
@@ -52,6 +64,7 @@ let stamm: Stammdaten;
 
 /** Was dieser Lauf angelegt hat. */
 const angelegteVertraege: string[] = [];
+const angelegteOfferten: string[] = [];
 
 test.beforeAll(async () => {
   adminJar = await frischAnmelden('admin');
@@ -61,23 +74,73 @@ test.beforeAll(async () => {
 
 test.afterAll(async () => {
   for (const id of angelegteVertraege) await vertragAufraeumen(id, adminJar);
+  for (const id of angelegteOfferten) await del(`/api/quotes/${id}`, { jar: adminJar }).catch(() => undefined);
 });
 
+// ---------------------------------------------------------------------------
+//  Helfer
+// ---------------------------------------------------------------------------
+
+const TAG_MS = 86_400_000;
+
+/**
+ * Der Kalendertag in Zürich als `JJJJ-MM-TT`.
+ *
+ * Nicht `toISOString().slice(0, 10)`: Das ist der Tag in UTC, und zwischen
+ * Mitternacht und zwei Uhr Schweizer Zeit ist das der Vortag. Ein Fall, der
+ * „morgen" meint und kurz nach Mitternacht „heute" schickt, prüft eine
+ * andere Regel — genau die Grenze, die RB-008 betraf.
+ */
+function zuercherTag(versatzTage = 0): string {
+  return new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Zurich' }).format(
+    new Date(Date.now() + versatzTage * TAG_MS),
+  );
+}
+
+/** Beginn eines Zürcher Kalendertags als Zeitpunkt. */
+function zuercherMitternacht(tag: string): Date {
+  // Mittag UTC liegt sicher im gleichen Zürcher Tag; von dort auf 00:00 zurück.
+  const mittag = new Date(`${tag}T12:00:00Z`);
+  const stunde = Number(
+    new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/Zurich', hour: '2-digit', hourCycle: 'h23' }).format(mittag),
+  );
+  return new Date(mittag.getTime() - stunde * 3_600_000);
+}
+
 async function neuerEntwurf(ueber: { startDate?: string; baseAmount?: number } = {}) {
-  const vertrag = await vertragsentwurfAnlegen(stamm, adminJar, ueber);
+  const vertrag = await vertragsentwurfAnlegen(stamm, adminJar, { startDate: zuercherTag(1), ...ueber });
   angelegteVertraege.push(vertrag.id);
   return vertrag;
 }
 
 /**
+ * Ein täglicher Einsatzplan über die Schnittstelle — für die Fälle, in denen
+ * nicht der Plan Gegenstand ist. Der Dialog selbst ist in Fall A geprüft.
+ */
+async function taeglicherPlan(serviceId: string, ab: string): Promise<void> {
+  const antwort = await post(
+    `/api/contract-services/${serviceId}/schedules`,
+    {
+      frequency: 'WEEKLY',
+      interval: 1,
+      weekdays: [0, 1, 2, 3, 4, 5, 6],
+      startMinute: 360,
+      endMinute: 480,
+      effectiveFrom: ab,
+      holidayHandling: 'IGNORE',
+      active: true,
+    },
+    { jar: adminJar },
+  );
+  expect(antwort.status, antwort.text).toBe(201);
+}
+
+/**
  * Anmelden über die Maske — die Browserreihe teilt keine Sitzung mit der
- * HTTP-Reihe.
- *
- * Über den gemeinsamen Helfer, nicht von Hand: Der erste Entwurf tippte die
- * Zugangsdaten aus und nahm für die Administration das Demopasswort der
- * übrigen Konten. Alle fünf Fälle scheiterten mit „Zeitüberschreitung beim
- * Warten auf /admin" — eine Meldung, die nach einem Fehler der Anwendung
- * aussieht und keiner war.
+ * HTTP-Reihe. Über den gemeinsamen Helfer, nicht von Hand: Ein früherer
+ * Entwurf tippte die Zugangsdaten aus und nahm für die Administration das
+ * falsche Passwort; alle Fälle scheiterten mit einer Meldung, die nach einem
+ * Fehler der Anwendung aussah.
  */
 async function alsAdminAnmelden(page: Page): Promise<void> {
   await imBrowserAnmelden(page, 'admin', /\/admin/);
@@ -88,10 +151,9 @@ async function alsAdminAnmelden(page: Page): Promise<void> {
  * Beschriftung im Dialog.
  *
  * `ActionButton` beschriftet die bestätigende Schaltfläche mit **derselben**
- * Beschriftung wie den Auslöser — „In Kraft setzen" fragt mit „In Kraft
- * setzen". Das ist gute Praxis (die Bestätigung nennt die Handlung, nicht ein
- * nichtssagendes „OK"), macht aber eine Auswahl über den Namen allein
- * mehrdeutig. Deshalb wird die zweite ausdrücklich im Dialog gesucht.
+ * Beschriftung wie den Auslöser. Das ist gute Praxis (die Bestätigung nennt
+ * die Handlung, nicht ein nichtssagendes „OK"), macht aber eine Auswahl über
+ * den Namen allein mehrdeutig. Deshalb wird die zweite im Dialog gesucht.
  */
 async function handlungBestaetigen(page: Page, beschriftung: string, notiz?: string): Promise<void> {
   await page.getByRole('button', { name: beschriftung, exact: true }).first().click();
@@ -102,107 +164,419 @@ async function handlungBestaetigen(page: Page, beschriftung: string, notiz?: str
   await expect(dialog).toBeHidden({ timeout: 25_000 });
 }
 
+const genau = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/**
+ * Ein Formularfeld über seine Beschriftung — genau, aber mit dem Sternchen
+ * der Pflichtfelder. Das Sternchen ist `aria-hidden`, Playwrights
+ * Beschriftungsvergleich liest den Text des `<label>` aber trotzdem mit;
+ * `exact: true` fand „Grund" deshalb nie, weil dort „Grund*" steht.
+ */
+function feld(scope: Page | ReturnType<Page['getByRole']>, beschriftung: string) {
+  return scope.getByLabel(new RegExp(`^${genau(beschriftung)}\\s*\\*?$`));
+}
+
+/**
+ * Eine Radix-Auswahl über ihre Beschriftung bedienen. Ein Text wird **genau**
+ * verglichen — ein Teilvergleich träfe bei „Büro" auch „Büro Nord".
+ */
+async function auswaehlen(page: Page, beschriftung: string, option: RegExp | string): Promise<void> {
+  await feld(page, beschriftung).click();
+  const name = typeof option === 'string' ? new RegExp(`^${genau(option)}$`) : option;
+  await page.getByRole('option', { name }).click();
+}
+
+async function vertragsstatus(id: string) {
+  return (await db!.contract.findUniqueOrThrow({ where: { id }, select: { status: true } })).status;
+}
+
+async function inKraftSetzen(page: Page, id: string): Promise<void> {
+  await handlungBestaetigen(page, 'In Kraft setzen');
+  await expect.poll(() => vertragsstatus(id), { timeout: 20_000 }).toBe('ACTIVE');
+}
+
+/**
+ * Die Kernzusage gegen Doppelungen, an der Datenbank gezählt: Je Serie und
+ * Kalendertag höchstens **ein** nicht abgesagter Einsatz — über alle
+ * Fassungen hinweg.
+ */
+async function keineDoppeltenEinsaetze(contractId: string): Promise<void> {
+  const zeilen = await db!.job.findMany({
+    where: { contractId, status: { not: 'CANCELLED' }, deletedAt: null },
+    select: { seriesKey: true, scheduleDate: true },
+  });
+  const schluessel = zeilen.map((z) => `${z.seriesKey}|${z.scheduleDate?.toISOString().slice(0, 10)}`);
+  expect(new Set(schluessel).size, 'Ein Termin einer Serie existiert doppelt.').toBe(schluessel.length);
+}
+
 // ---------------------------------------------------------------------------
-//  A — Entwurf → Einsatzplan → in Kraft → Einsätze
+//  A — Offerte → Vertrag → Plan → in Kraft → Einsätze
 // ---------------------------------------------------------------------------
 
-test('A: Einsatzplan im Dialog, Inkraftsetzung, Einsätze mit ihrer Fassung', async ({ page }) => {
-  const konsole = konsoleUeberwachen(page);
-  const vertrag = await neuerEntwurf();
+test('A: aus der angenommenen Offerte — Vertrag in der Maske, Plan im Dialog, Einsätze mit ihrer Fassung', async ({
+  page,
+  context,
+}) => {
+  // --- Die Kundschaft nimmt die Offerte an, im Browser, ohne Anmeldung -----
+  const offerte = await offerteAnlegen(adminJar, stamm.customerId);
+  angelegteOfferten.push(offerte.id);
+  const offertPfad = pfadVon(await versendenUndLinkLesen(offerte.id, adminJar));
+
+  const kunde = await context.newPage();
+  await kunde.goto(offertPfad);
+  await kunde.getByRole('button', { name: 'Offerte annehmen' }).click();
+  await expect(kunde.getByRole('dialog')).toBeVisible();
+  await kunde.getByRole('button', { name: 'Weiter zur Unterzeichnung' }).click();
+  await kunde.waitForURL(/\/signieren\/s\/[0-9a-f]{32}$/, { timeout: 30_000 });
+  await expect(kunde.locator('[data-pdf-viewer] canvas').first()).toBeVisible({ timeout: 30_000 });
+  await kunde.getByRole('checkbox').click();
+  await kunde.locator('#sig-name').fill('Nicole Wyss');
+  await kunde.getByRole('radio', { name: 'Tippen' }).click();
+  await kunde.getByRole('button', { name: 'Verbindlich elektronisch unterzeichnen' }).click();
+  await expect
+    .poll(async () => (await db!.quote.findUniqueOrThrow({ where: { id: offerte.id } })).status, { timeout: 30_000 })
+    .toBe('ACCEPTED');
+  await kunde.close();
+
+  // --- Der Vertrag entsteht in der Maske, mit der Offerte als Herkunft ----
+  const kundschaft = await db!.customer.findUniqueOrThrow({
+    where: { id: stamm.customerId },
+    select: { number: true },
+  });
+  const objekt = await db!.property.findUniqueOrThrow({ where: { id: stamm.propertyId }, select: { label: true } });
+  const titel = `Browserprüfung A ${Date.now()}`;
 
   await alsAdminAnmelden(page);
-  await page.goto(`/admin/vertraege/${vertrag.id}`);
-  await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
+  await page.goto('/admin/vertraege/neu');
+  await auswaehlen(page, 'Kundschaft', new RegExp(`\\(${kundschaft.number}\\)$`));
+  await auswaehlen(page, 'Objekt', objekt.label);
+  await auswaehlen(page, 'Aus Offerte', new RegExp(`^${offerte.number} — `));
+  await feld(page, 'Bezeichnung').fill(titel);
+  await feld(page, 'Beginn').fill(zuercherTag(1));
+  await feld(page, 'Betrag').fill('1200');
+  await feld(page, 'Begründung der Fassung').fill('Erstfassung nach angenommener Offerte');
+  await feld(page, 'Bezeichnung auf dem Vertrag').fill('Unterhaltsreinigung Büro');
+  await page.getByRole('button', { name: 'Vertrag anlegen' }).click();
+  await page.waitForURL(/\/admin\/vertraege\/(?!neu)[a-z0-9]+$/, { timeout: 30_000 });
 
-  // --- Der Einsatzplan entsteht im Dialog, nicht über die Schnittstelle ----
+  const vertrag = await db!.contract.findFirstOrThrow({
+    where: { title: titel },
+    select: { id: true, quoteId: true, status: true, versions: { select: { id: true } } },
+  });
+  angelegteVertraege.push(vertrag.id);
+  expect(vertrag.quoteId, 'Der Vertrag kennt seine Offerte.').toBe(offerte.id);
+  expect(vertrag.status).toBe('DRAFT');
+  const versionId = vertrag.versions[0]!.id;
+
+  // --- Der Einsatzplan entsteht im Dialog ---------------------------------
   await page.getByRole('button', { name: 'Plan anlegen' }).first().click();
   const dialog = page.getByRole('dialog');
   await expect(dialog).toBeVisible();
-
-  // Montag und Mittwoch — Wochentage sind Kästchen, keine Zahlenliste.
+  // Montag ist vorbelegt; angeklickt wird Mo (ab) und Mi (an).
   await dialog.getByText('Mo', { exact: true }).click();
   await dialog.getByText('Mi', { exact: true }).click();
   await dialog.getByRole('button', { name: 'Plan anlegen' }).click();
   await expect(dialog).toBeHidden({ timeout: 15_000 });
 
-  /*
-    Gegen die Datenbank, nicht gegen den Hinweis im Bild: Ob der Dialog
-    geschrieben hat, sagt allein die Zeile.
-  */
   const plaene = await db!.serviceSchedule.findMany({
-    where: { contractService: { contractVersionId: vertrag.versionId } },
-    select: { frequency: true, weekdays: true, startMinute: true, endMinute: true, active: true },
+    where: { contractService: { contractVersionId: versionId } },
+    select: { frequency: true, weekdays: true, startMinute: true, active: true, seriesKey: true },
   });
   expect(plaene.length, 'Der Dialog hat keinen Einsatzplan angelegt.').toBe(1);
   expect(plaene[0]!.frequency).toBe('WEEKLY');
-  // Montag ist bereits vorbelegt; angeklickt wurde Mo (ab) und Mi (an).
   expect(plaene[0]!.weekdays.sort()).toEqual([3]);
   expect(plaene[0]!.startMinute).toBe(360);
-  expect(plaene[0]!.active).toBe(true);
+  expect(plaene[0]!.seriesKey, 'Jeder Plan trägt ab dem Anlegen eine Serienkennung.').toBeTruthy();
 
-  // --- In Kraft setzen -----------------------------------------------------
-  await handlungBestaetigen(page, 'In Kraft setzen');
+  // --- In Kraft setzen und planen -----------------------------------------
+  await inKraftSetzen(page, vertrag.id);
+  const inKraft = await db!.contract.findUniqueOrThrow({ where: { id: vertrag.id }, select: { number: true } });
+  expect(inKraft.number, 'Die Vertragsnummer entsteht beim Aktivieren.').toMatch(/^VT-/);
 
+  await page.reload();
+  await handlungBestaetigen(page, 'Jetzt planen');
+  await expect.poll(() => db!.job.count({ where: { contractId: vertrag.id } }), { timeout: 30_000 }).toBeGreaterThan(0);
+
+  const einsaetze = await db!.job.findMany({
+    where: { contractId: vertrag.id },
+    select: { contractVersionId: true, scheduledStart: true, seriesKey: true },
+  });
+  expect(einsaetze.every((e) => e.contractVersionId === versionId)).toBe(true);
+  expect(einsaetze.every((e) => e.seriesKey === plaene[0]!.seriesKey)).toBe(true);
+  // Nur Mittwoche — in Zürich gezählt.
+  const wochentage = new Set(
+    einsaetze.map((e) => new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/Zurich', weekday: 'short' }).format(e.scheduledStart)),
+  );
+  expect([...wochentage]).toEqual(['Wed']);
+  await keineDoppeltenEinsaetze(vertrag.id);
+
+  await page.reload();
+  await expect(page.getByRole('cell', { name: 'Version 1' }).first()).toBeVisible();
+});
+
+// ---------------------------------------------------------------------------
+//  B — Änderungsantrag → Fassung 2 → in Kraft zum Stichtag
+// ---------------------------------------------------------------------------
+
+test('B: Antrag, Freigabe, Übernahme, Fassung 2 in Kraft — Einsätze davor bleiben bei Fassung 1', async ({ page }) => {
+  const vertrag = await neuerEntwurf();
+  await taeglicherPlan(vertrag.serviceId, zuercherTag(1));
+
+  await alsAdminAnmelden(page);
+  await page.goto(`/admin/vertraege/${vertrag.id}`);
+  await inKraftSetzen(page, vertrag.id);
+  await page.reload();
+  await handlungBestaetigen(page, 'Jetzt planen');
+  await expect.poll(() => db!.job.count({ where: { contractId: vertrag.id } }), { timeout: 30_000 }).toBeGreaterThan(20);
+
+  // --- Der Antrag: gestellt von der Betriebsleitung ------------------------
+  const stichtag = zuercherTag(8);
+  const antrag = await post(
+    `/api/contracts/${vertrag.id}/amendments`,
+    { type: 'PRICE', title: 'Preisanpassung zur Browserprüfung', reason: 'Gestiegene Materialkosten', effectiveFrom: stichtag },
+    { jar: managerJar },
+  );
+  expect(antrag.status, antrag.text).toBe(201);
+
+  // Wer beantragt hat (Betriebsleitung), gibt nicht frei; hier entscheidet
+  // die Administration — über die Maske.
+  await page.reload();
+  await page.getByRole('button', { name: 'Freigeben' }).first().click();
   await expect
-    .poll(async () => (await db!.contract.findUniqueOrThrow({ where: { id: vertrag.id } })).status, {
+    .poll(() => db!.contractAmendment.count({ where: { contractId: vertrag.id, status: 'APPROVED' } }), { timeout: 20_000 })
+    .toBe(1);
+
+  await page.reload();
+  await page.getByRole('button', { name: 'Übernehmen', exact: true }).first().click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog).toBeVisible();
+  await feld(dialog, 'Gültig ab').fill(stichtag);
+  await feld(dialog, 'Betrag').fill('1500');
+  await dialog.getByRole('button', { name: 'Versionsentwurf erzeugen' }).click();
+  await expect(dialog).toBeHidden({ timeout: 25_000 });
+  await expect.poll(() => db!.contractVersion.count({ where: { contractId: vertrag.id } }), { timeout: 20_000 }).toBe(2);
+
+  // Der Entwurf gilt noch nicht — verfassen und in Kraft setzen sind zwei Entscheidungen.
+  const vorher = await db!.contractVersion.findMany({ where: { contractId: vertrag.id }, orderBy: { versionNumber: 'asc' } });
+  expect(vorher.map((v) => v.status)).toEqual(['ACTIVE', 'DRAFT']);
+
+  // --- Fassung 2 in Kraft setzen, an der Schaltfläche ----------------------
+  await page.reload();
+  await handlungBestaetigen(page, 'Fassung 2 in Kraft setzen');
+  await expect
+    .poll(async () => (await db!.contractVersion.findUniqueOrThrow({ where: { id: vorher[1]!.id } })).status, {
       timeout: 20_000,
     })
     .toBe('ACTIVE');
 
-  const inKraft = await db!.contract.findUniqueOrThrow({ where: { id: vertrag.id } });
-  expect(inKraft.number, 'Die Vertragsnummer entsteht beim Aktivieren.').toMatch(/^VT-/);
-
-  // --- Einsätze erzeugen ---------------------------------------------------
-  await page.reload();
-  await handlungBestaetigen(page, 'Jetzt planen');
-
-  await expect
-    .poll(async () => db!.job.count({ where: { contractId: vertrag.id } }), { timeout: 30_000 })
-    .toBeGreaterThan(0);
+  const nachher = await db!.contractVersion.findMany({ where: { contractId: vertrag.id }, orderBy: { versionNumber: 'asc' } });
+  expect(nachher[0]!.status).toBe('SUPERSEDED');
+  expect(nachher[0]!.effectiveUntil?.toISOString().slice(0, 10), 'Fassung 1 endet am Stichtag.').toBe(stichtag);
+  expect(Number(nachher[0]!.baseAmount), 'Die abgelöste Fassung bleibt, wie sie war.').toBe(1200);
+  expect(Number(nachher[1]!.baseAmount)).toBe(1500);
 
   /*
-    Jeder Einsatz trägt die Fassung, unter der er entstand. Ohne diese
-    Zuordnung wäre nach der ersten Preisanpassung nicht mehr beantwortbar,
-    unter welchen Konditionen er erbracht wurde.
+    Der Kern: Offene Einsätze vor dem Stichtag bleiben bei Fassung 1, ab dem
+    Stichtag gehören sie Fassung 2 — und es gibt keinen Termin doppelt.
   */
-  const einsaetze = await db!.job.findMany({
-    where: { contractId: vertrag.id },
-    select: { contractVersionId: true },
+  const grenze = zuercherMitternacht(stichtag);
+  const offene = await db!.job.findMany({
+    where: { contractId: vertrag.id, status: { not: 'CANCELLED' } },
+    select: { scheduledStart: true, contractVersionId: true },
   });
-  expect(einsaetze.every((e) => e.contractVersionId === vertrag.versionId)).toBe(true);
+  const davor = offene.filter((j) => j.scheduledStart < grenze);
+  const ab = offene.filter((j) => j.scheduledStart >= grenze);
+  expect(davor.length).toBeGreaterThan(0);
+  expect(ab.length).toBeGreaterThan(0);
+  expect(davor.every((j) => j.contractVersionId === vertrag.versionId), 'Vor dem Stichtag: Fassung 1.').toBe(true);
+  expect(ab.every((j) => j.contractVersionId === nachher[1]!.id), 'Ab dem Stichtag: Fassung 2.').toBe(true);
+  await keineDoppeltenEinsaetze(vertrag.id);
 
-  // Und die Seite zeigt es auch.
+  // Und die Seite zeigt beide.
   await page.reload();
   await expect(page.getByRole('cell', { name: 'Version 1' }).first()).toBeVisible();
-
-  konsole.keineFehler();
 });
 
 // ---------------------------------------------------------------------------
-//  D — Unterzeichnung: eine Fassung, danach eingefroren
+//  C — V1 → V2 → V3
 // ---------------------------------------------------------------------------
 
-test('D: Fassung zur Unterschrift, im Browser angenommen, danach unveränderlich', async ({ page }) => {
+test('C: drei Fassungen nacheinander — jeder Termin genau einmal, jeder bei seiner Fassung', async ({ page }) => {
+  const vertrag = await neuerEntwurf();
+  await taeglicherPlan(vertrag.serviceId, zuercherTag(1));
+
+  await alsAdminAnmelden(page);
+  await page.goto(`/admin/vertraege/${vertrag.id}`);
+  await inKraftSetzen(page, vertrag.id);
+  await page.reload();
+  await handlungBestaetigen(page, 'Jetzt planen');
+  await expect.poll(() => db!.job.count({ where: { contractId: vertrag.id } }), { timeout: 30_000 }).toBeGreaterThan(20);
+
+  const fassung = async (nummer: number, stichtag: string, betrag: number) => {
+    // Der Entwurf über die Schnittstelle, die Inkraftsetzung an der Schaltfläche.
+    const angelegt = await post<{ data: { id: string } }>(
+      `/api/contracts/${vertrag.id}/versions`,
+      {
+        version: {
+          effectiveFrom: stichtag,
+          reason: `Fassung ${nummer} der Browserprüfung`,
+          billingCycle: 'MONTHLY',
+          paymentTermDays: 30,
+          pricingModel: 'FIXED_PERIOD',
+          baseAmount: betrag,
+          vatRate: 8.1,
+          noticePeriodDays: 90,
+          renewalType: 'NONE',
+        },
+      },
+      { jar: adminJar },
+    );
+    expect(angelegt.status, angelegt.text).toBe(201);
+    await page.reload();
+    await handlungBestaetigen(page, `Fassung ${nummer} in Kraft setzen`);
+    await expect
+      .poll(async () => (await db!.contractVersion.findUniqueOrThrow({ where: { id: data(angelegt).id } })).status, {
+        timeout: 20_000,
+      })
+      .toBe('ACTIVE');
+    return data(angelegt).id;
+  };
+
+  const v2Tag = zuercherTag(10);
+  const v3Tag = zuercherTag(20);
+  const v2 = await fassung(2, v2Tag, 1400);
+  const v3 = await fassung(3, v3Tag, 1600);
+
+  const fassungen = await db!.contractVersion.findMany({
+    where: { contractId: vertrag.id },
+    orderBy: { versionNumber: 'asc' },
+    select: { status: true, effectiveFrom: true, effectiveUntil: true, baseAmount: true },
+  });
+  expect(fassungen.map((f) => f.status)).toEqual(['SUPERSEDED', 'SUPERSEDED', 'ACTIVE']);
+  expect(fassungen.map((f) => Number(f.baseAmount))).toEqual([1200, 1400, 1600]);
+  expect(fassungen[0]!.effectiveUntil?.toISOString().slice(0, 10)).toBe(v2Tag);
+  expect(fassungen[1]!.effectiveUntil?.toISOString().slice(0, 10)).toBe(v3Tag);
+
+  // Eine Serie über alle drei Fassungen — die stabile Identität (RB-004).
+  const serien = await db!.serviceSchedule.findMany({
+    where: { contractService: { version: { contractId: vertrag.id } } },
+    select: { seriesKey: true },
+  });
+  expect(serien.length).toBe(3);
+  expect(new Set(serien.map((s) => s.seriesKey)).size, 'Der Plan behält seine Serie über die Fassungen.').toBe(1);
+
+  const g2 = zuercherMitternacht(v2Tag);
+  const g3 = zuercherMitternacht(v3Tag);
+  const offene = await db!.job.findMany({
+    where: { contractId: vertrag.id, status: { not: 'CANCELLED' } },
+    select: { scheduledStart: true, contractVersionId: true },
+  });
+  for (const j of offene) {
+    const erwartet = j.scheduledStart < g2 ? vertrag.versionId : j.scheduledStart < g3 ? v2 : v3;
+    expect(j.contractVersionId, `Einsatz am ${j.scheduledStart.toISOString()} bei der falschen Fassung`).toBe(erwartet);
+  }
+  await keineDoppeltenEinsaetze(vertrag.id);
+
+  // Die abgelösten Fassungen weist schon die Datenbank ab, nicht erst der Dienst.
+  await expect(
+    db!.$executeRawUnsafe(`UPDATE contract_versions SET "baseAmount" = 1 WHERE id = $1`, vertrag.versionId),
+  ).rejects.toThrow();
+});
+
+// ---------------------------------------------------------------------------
+//  D — Abrechnung nach der damals geltenden Fassung
+// ---------------------------------------------------------------------------
+
+test('D: vergangene Periode abrechnen — nach Fassung 1, obwohl Fassung 2 inzwischen gilt; der zweite Klick erzeugt nichts', async ({
+  page,
+}) => {
+  // Beginn weit zurück, sonst gibt es keine abgeschlossene Periode.
+  const vertrag = await neuerEntwurf({ startDate: zuercherTag(-200) });
+
+  await alsAdminAnmelden(page);
+  await page.goto(`/admin/vertraege/${vertrag.id}`);
+  await inKraftSetzen(page, vertrag.id);
+
+  // Fassung 2 mit höherem Preis gilt ab morgen.
+  const v2 = await post<{ data: { id: string } }>(
+    `/api/contracts/${vertrag.id}/versions`,
+    {
+      version: {
+        effectiveFrom: zuercherTag(1),
+        reason: 'Neuer Preis ab morgen',
+        billingCycle: 'MONTHLY',
+        paymentTermDays: 30,
+        pricingModel: 'FIXED_PERIOD',
+        baseAmount: 1500,
+        vatRate: 8.1,
+        noticePeriodDays: 90,
+        renewalType: 'NONE',
+      },
+    },
+    { jar: adminJar },
+  );
+  expect(v2.status, v2.text).toBe(201);
+  await page.reload();
+  await handlungBestaetigen(page, 'Fassung 2 in Kraft setzen');
+  await expect
+    .poll(async () => (await db!.contractVersion.findUniqueOrThrow({ where: { id: data(v2).id } })).status, {
+      timeout: 20_000,
+    })
+    .toBe('ACTIVE');
+
+  const abrechnen = async () => {
+    await page.getByRole('button', { name: 'Periode abrechnen' }).click();
+    const dialog = page.getByRole('dialog');
+    await expect(dialog).toBeVisible();
+    await dialog.getByRole('button', { name: 'Rechnung erzeugen' }).click();
+    await expect(dialog).toBeHidden({ timeout: 20_000 });
+  };
+
+  await page.reload();
+  await abrechnen();
+  await expect
+    .poll(() => db!.invoice.count({ where: { contractId: vertrag.id, deletedAt: null } }), { timeout: 20_000 })
+    .toBe(1);
+
+  const rechnung = await db!.invoice.findFirstOrThrow({
+    where: { contractId: vertrag.id },
+    select: { contractVersionId: true, contractPeriodStart: true, contractPeriodEnd: true, grossTotal: true },
+  });
+  expect(rechnung.contractVersionId, 'Die vergangene Periode lief unter Fassung 1.').toBe(vertrag.versionId);
+  expect(Number(rechnung.grossTotal), '1200 + 8.1 % — nicht der neue Preis.').toBeCloseTo(1297.2, 2);
+  expect(rechnung.contractPeriodStart, 'Die Periode ist kanonisch, nicht frei gewählt.').toBeTruthy();
+  expect(rechnung.contractPeriodEnd, 'Das Periodenende steht fest (RB-011).').toBeTruthy();
+
+  // Derselbe Weg ein zweites Mal — und es bleibt bei einer Rechnung.
+  await page.reload();
+  await abrechnen();
+  expect(await db!.invoice.count({ where: { contractId: vertrag.id, deletedAt: null } })).toBe(1);
+
+  await page.reload();
+  await expect(page.getByRole('heading', { name: 'Abrechnung' })).toBeVisible();
+  await expect(page.getByRole('cell', { name: 'Version 1' }).first()).toBeVisible();
+});
+
+// ---------------------------------------------------------------------------
+//  E — Unterzeichnung: eine Fassung, danach eingefroren
+// ---------------------------------------------------------------------------
+
+test('E: Fassung zur Unterschrift, im Browser angenommen, danach unveränderlich und nicht stornierbar', async ({ page }) => {
   const vertrag = await neuerEntwurf();
 
   await alsAdminAnmelden(page);
   await page.goto(`/admin/vertraege/${vertrag.id}`);
-
   await handlungBestaetigen(page, 'Zur Unterschrift senden');
 
   await expect
-    .poll(
-      async () =>
-        db!.signatureRequest.count({
-          where: { contractVersionId: vertrag.versionId, status: 'PENDING' },
-        }),
-      { timeout: 25_000 },
-    )
+    .poll(() => db!.signatureRequest.count({ where: { contractVersionId: vertrag.versionId, status: 'PENDING' } }), {
+      timeout: 25_000,
+    })
     .toBe(1);
 
   const vorgang = await db!.signatureRequest.findFirstOrThrow({
     where: { contractVersionId: vertrag.versionId },
-    select: { id: true, publicId: true, originalDocumentHash: true, consentVersion: true, ceremonyMode: true },
+    select: { id: true, originalDocumentHash: true, consentVersion: true, ceremonyMode: true },
   });
   expect(vorgang.consentVersion, 'Eigener Zustimmungstext je Quelle.').toBe('vertrag-v1');
   expect(vorgang.ceremonyMode).toBe('REMOTE_LINK');
@@ -222,7 +596,6 @@ test('D: Fassung zur Unterschrift, im Browser angenommen, danach unveränderlich
   const kundenSeite = await page.context().newPage();
   await kundenSeite.goto(pfadVon(signLink!) + new URL(signLink!).hash);
   await kundenSeite.waitForURL(/\/signieren\/s\/[0-9a-f]{32}$/, { timeout: 30_000 });
-
   await expect(kundenSeite.locator('[data-pdf-viewer] canvas').first()).toBeVisible({ timeout: 30_000 });
   await kundenSeite.getByRole('checkbox').click();
   await kundenSeite.locator('#sig-name').fill('Maria Beispiel');
@@ -231,12 +604,11 @@ test('D: Fassung zur Unterschrift, im Browser angenommen, danach unveränderlich
 
   await expect
     .poll(
-      async () =>
-        (await db!.signatureRequest.findUniqueOrThrow({ where: { id: vorgang.id }, select: { status: true } }))
-          .status,
+      async () => (await db!.signatureRequest.findUniqueOrThrow({ where: { id: vorgang.id }, select: { status: true } })).status,
       { timeout: 60_000 },
     )
     .toBe('COMPLETED');
+  await kundenSeite.close();
 
   // --- Die Kopplung: Vorgang abgeschlossen ⇔ Fassung angenommen -----------
   const fassung = await db!.contractVersion.findUniqueOrThrow({
@@ -246,37 +618,24 @@ test('D: Fassung zur Unterschrift, im Browser angenommen, danach unveränderlich
   expect(fassung.acceptedAt, 'Abgeschlossen, aber nichts geschehen — genau das darf es nicht geben.').toBeTruthy();
   expect(fassung.acceptedRequestId, 'Der Beweis zeigt eindeutig auf diese Fassung.').toBe(vorgang.id);
   expect(fassung.status, 'Die Annahme setzt den Vertrag nicht selbst in Kraft.').toBe('DRAFT');
+  expect(await vertragsstatus(vertrag.id)).toBe('OFFERED');
 
-  const vertragDanach = await db!.contract.findUniqueOrThrow({ where: { id: vertrag.id } });
-  expect(vertragDanach.status).toBe('OFFERED');
-
-  // --- Und die Fassung ist danach eingefroren ------------------------------
-  await kundenSeite.close();
+  // --- Eingefroren: keine Maske, und der Dienst weist ab -------------------
   await page.reload();
-  await expect(
-    page.getByText('Elektronisch angenommen am', { exact: false }).first(),
-    'Die Annahme steht an der Fassung, nicht am Vertragskopf.',
-  ).toBeVisible();
-  await expect(
-    page.getByRole('button', { name: 'Entwurf bearbeiten' }),
-    'Eine angenommene Fassung bietet keine Maske zum Ändern an.',
-  ).toHaveCount(0);
+  await expect(page.getByText('Elektronisch angenommen am', { exact: false }).first()).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Entwurf bearbeiten' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Plan anlegen' }), 'Ein angenommener Plan ist kein freier Entwurf.').toHaveCount(0);
 
   /*
-    Nicht nur die Schaltfläche fehlt — der Dienst weist es ab. Eine
-    Einschränkung, die nur die Anzeige betrifft, wäre auf der Leitung
-    wirkungslos, und genau das ist hier die Aussage.
-
     Über den HTTP-Klienten mit dem Cookie-Glas, nicht über `page.request`:
-    Playwrights APIRequestContext ist ein eigener HTTP-Stapel in Node und
-    filtert `Secure`-Cookies nach Schema. Eine Anfrage von dort käme
-    unangemeldet an und ergäbe 401 statt 422 — der Fall hätte dann bewiesen,
-    dass eine Sperre greift, die gar nicht geprüft wurde.
+    Playwrights APIRequestContext filtert `Secure`-Cookies nach Schema und
+    käme unangemeldet an — 401 statt 422, und der Fall hätte eine Sperre
+    „bewiesen", die gar nicht geprüft wurde.
   */
-  const versuch = await patch(
+  const aenderung = await patch(
     `/api/contracts/${vertrag.id}/versions/${vertrag.versionId}`,
     {
-      effectiveFrom: new Date().toISOString().slice(0, 10),
+      effectiveFrom: zuercherTag(1),
       reason: 'Heimliche Änderung nach der Unterschrift',
       billingCycle: 'MONTHLY',
       paymentTermDays: 30,
@@ -288,244 +647,89 @@ test('D: Fassung zur Unterschrift, im Browser angenommen, danach unveränderlich
     },
     { jar: adminJar },
   );
-  expect(versuch.status, 'Eine angenommene Fassung lässt sich nicht mehr ändern.').toBe(422);
+  expect(aenderung.status, 'Eine angenommene Fassung lässt sich nicht mehr ändern.').toBe(422);
 
-  const unveraendert = await db!.contractVersion.findUniqueOrThrow({
+  // RB-003: Ein Vertrag mit angenommener Fassung wird nicht still storniert.
+  const storno = await post(`/api/contracts/${vertrag.id}/cancel`, { reason: 'Versuch nach der Annahme' }, { jar: adminJar });
+  expect(storno.status, 'Die Kundschaft hat zugestimmt — Stornieren ist kein Weg daran vorbei.').toBe(422);
+  expect(await vertragsstatus(vertrag.id)).toBe('OFFERED');
+
+  // Und die angenommene Fassung tritt an der Schaltfläche in Kraft.
+  await inKraftSetzen(page, vertrag.id);
+  const inKraft = await db!.contractVersion.findUniqueOrThrow({
     where: { id: vertrag.versionId },
-    select: { baseAmount: true },
+    select: { status: true, baseAmount: true, acceptedRequestId: true },
   });
-  expect(Number(unveraendert.baseAmount)).toBe(1200);
+  expect(inKraft.status).toBe('ACTIVE');
+  expect(Number(inKraft.baseAmount)).toBe(1200);
+  expect(inKraft.acceptedRequestId).toBe(vorgang.id);
 });
 
 // ---------------------------------------------------------------------------
-//  C — Abrechnung: eine Periode, eine Rechnung
+//  F — Pause und Wiederaufnahme
 // ---------------------------------------------------------------------------
 
-test('C: Periode im Formular abrechnen — der zweite Klick erzeugt keine zweite Rechnung', async ({ page }) => {
-  // Beginn weit in der Vergangenheit, sonst gibt es keine abgeschlossene Periode.
-  const vertrag = await neuerEntwurf({ startDate: new Date(Date.now() - 200 * 86_400_000).toISOString().slice(0, 10) });
-
-  await alsAdminAnmelden(page);
-  await page.goto(`/admin/vertraege/${vertrag.id}`);
-  await handlungBestaetigen(page, 'In Kraft setzen');
-  await expect
-    .poll(async () => (await db!.contract.findUniqueOrThrow({ where: { id: vertrag.id } })).status, {
-      timeout: 20_000,
-    })
-    .toBe('ACTIVE');
-
-  await page.reload();
-
-  const abrechnen = async () => {
-    await page.getByRole('button', { name: 'Periode abrechnen' }).click();
-    const dialog = page.getByRole('dialog');
-    await expect(dialog).toBeVisible();
-    await dialog.getByRole('button', { name: 'Rechnung erzeugen' }).click();
-    await expect(dialog).toBeHidden({ timeout: 20_000 });
-  };
-
-  await abrechnen();
-  await expect
-    .poll(async () => db!.invoice.count({ where: { contractId: vertrag.id, deletedAt: null } }), { timeout: 20_000 })
-    .toBe(1);
-
-  const erste = await db!.invoice.findFirstOrThrow({
-    where: { contractId: vertrag.id },
-    select: { id: true, contractVersionId: true, contractPeriodStart: true, grossTotal: true },
-  });
-  expect(erste.contractVersionId, 'Die Rechnung trägt die Fassung, unter der sie entstand.').toBe(vertrag.versionId);
-  expect(erste.contractPeriodStart, 'Die Periode ist kanonisch, nicht frei gewählt.').toBeTruthy();
-  expect(Number(erste.grossTotal)).toBeCloseTo(1297.2, 2);
-
-  // Derselbe Weg ein zweites Mal — und es bleibt bei einer Rechnung.
-  await page.reload();
-  await abrechnen();
-
-  const anzahl = await db!.invoice.count({ where: { contractId: vertrag.id, deletedAt: null } });
-  expect(anzahl, 'Eine Periode, eine Rechnung — auch bei zwei Durchgängen durch die Maske.').toBe(1);
-
-  // Und die Seite führt sie auf, mit Zeitraum und Fassung.
-  await page.reload();
-  await expect(page.getByRole('heading', { name: 'Abrechnung' })).toBeVisible();
-  await expect(page.getByRole('cell', { name: 'Version 1' }).first()).toBeVisible();
-});
-
-// ---------------------------------------------------------------------------
-//  B — Änderungsantrag: neue Fassung, alte Einsätze bleiben bei ihrer
-// ---------------------------------------------------------------------------
-
-test('B: Antrag, Freigabe, neue Fassung — bestehende Einsätze behalten Fassung 1', async ({ page }) => {
+test('F: Pause sagt geplante Einsätze ab, Fortsetzen plant ab heute — nichts in der Vergangenheit, nichts doppelt', async ({
+  page,
+}) => {
   const vertrag = await neuerEntwurf();
-
-  // Vorbereitung bis zum laufenden Vertrag mit Einsätzen — über die Maske
-  // wäre das eine Wiederholung von Fall A.
-  await alsAdminAnmelden(page);
-  await page.goto(`/admin/vertraege/${vertrag.id}`);
-  await handlungBestaetigen(page, 'In Kraft setzen');
-  await expect
-    .poll(async () => (await db!.contract.findUniqueOrThrow({ where: { id: vertrag.id } })).status, {
-      timeout: 20_000,
-    })
-    .toBe('ACTIVE');
-
-  const alterEinsatz = await db!.job.create({
-    data: {
-      organizationId: (await db!.contract.findUniqueOrThrow({ where: { id: vertrag.id } })).organizationId,
-      number: `BR-${Date.now()}`,
-      customerId: stamm.customerId,
-      addressId: stamm.addressId,
-      propertyId: stamm.propertyId,
-      serviceId: stamm.serviceId,
-      contractId: vertrag.id,
-      contractVersionId: vertrag.versionId,
-      title: 'Einsatz unter Fassung 1',
-      scheduledStart: new Date(Date.now() + 3 * 86_400_000),
-      scheduledEnd: new Date(Date.now() + 3 * 86_400_000 + 7_200_000),
-      estimatedMin: 120,
-    },
-    select: { id: true },
-  });
-
-  // --- Der Antrag: gestellt von der Betriebsleitung ------------------------
-  const antrag = await post(
-    `/api/contracts/${vertrag.id}/amendments`,
-    {
-      type: 'PRICE',
-      title: 'Preisanpassung zur Browserprüfung',
-      reason: 'Gestiegene Materialkosten',
-      effectiveFrom: new Date(Date.now() + 7 * 86_400_000).toISOString().slice(0, 10),
-    },
-    { jar: managerJar },
-  );
-  expect(antrag.status, antrag.text).toBe(201);
-
-  /*
-    Freigabe und Wirksamwerden laufen über die Maske — das ist die Aussage
-    dieses Falls. Wer beantragt hat (Betriebsleitung), gibt nicht frei; hier
-    entscheidet die Administration.
-  */
-  await page.reload();
-  await page.getByRole('button', { name: 'Freigeben' }).first().click();
-  await expect
-    .poll(async () => db!.contractAmendment.count({ where: { contractId: vertrag.id, status: 'APPROVED' } }), {
-      timeout: 20_000,
-    })
-    .toBe(1);
-
-  await page.reload();
-  await page.getByRole('button', { name: 'Wirksam machen' }).first().click();
-  const dialog = page.getByRole('dialog');
-  await expect(dialog).toBeVisible();
-  await dialog.getByLabel('Betrag').fill('1500');
-  await dialog.getByRole('button', { name: 'Neue Fassung erzeugen' }).click();
-  await expect(dialog).toBeHidden({ timeout: 25_000 });
-
-  await expect
-    .poll(async () => db!.contractVersion.count({ where: { contractId: vertrag.id } }), { timeout: 20_000 })
-    .toBe(2);
-
-  const fassungen = await db!.contractVersion.findMany({
-    where: { contractId: vertrag.id },
-    orderBy: { versionNumber: 'asc' },
-    select: { id: true, versionNumber: true, status: true, baseAmount: true },
-  });
-  /*
-    Die neue Fassung entsteht als **Entwurf**, nicht als sofortige Umstellung
-    — dieselbe Trennung wie überall im Modul: verfassen und in Kraft setzen
-    sind zwei Entscheidungen mit zwei Rechten. Wirksam wird sie über
-    `/activate` mit dem Stichtag.
-  */
-  expect(fassungen[0]!.status, 'Die geltende Fassung bleibt geltend, bis jemand umstellt.').toBe('ACTIVE');
-  expect(fassungen[1]!.status).toBe('DRAFT');
-  expect(Number(fassungen[1]!.baseAmount)).toBe(1500);
-
-  /*
-    Der Kern der Aussage: Der bereits disponierte Einsatz zeigt weiter auf
-    Fassung 1. Löste er dynamisch auf „die derzeit geltende" auf, wäre jede
-    Nachkalkulation nach der ersten Preisanpassung falsch.
-  */
-  const unveraendert = await db!.job.findUniqueOrThrow({
-    where: { id: alterEinsatz.id },
-    select: { contractVersionId: true },
-  });
-  expect(unveraendert.contractVersionId).toBe(vertrag.versionId);
-  expect(unveraendert.contractVersionId).not.toBe(fassungen[1]!.id);
-
-  await db!.job.delete({ where: { id: alterEinsatz.id } }).catch(() => undefined);
-});
-
-// ---------------------------------------------------------------------------
-//  E — Pause: keine Einsätze in der Ruhezeit, danach wieder
-// ---------------------------------------------------------------------------
-
-test('E: Pausieren hält den Planer an, Fortsetzen lässt ihn weiterplanen', async ({ page }) => {
-  const vertrag = await neuerEntwurf();
+  await taeglicherPlan(vertrag.serviceId, zuercherTag(1));
 
   await alsAdminAnmelden(page);
   await page.goto(`/admin/vertraege/${vertrag.id}`);
-
-  // Einsatzplan über die Maske, damit überhaupt etwas zu planen ist.
-  await page.getByRole('button', { name: 'Plan anlegen' }).first().click();
-  const planDialog = page.getByRole('dialog');
-  await expect(planDialog).toBeVisible();
-  await planDialog.getByRole('button', { name: 'Plan anlegen' }).click();
-  await expect(planDialog).toBeHidden({ timeout: 15_000 });
-
-  await handlungBestaetigen(page, 'In Kraft setzen');
-  await expect
-    .poll(async () => (await db!.contract.findUniqueOrThrow({ where: { id: vertrag.id } })).status, {
-      timeout: 20_000,
-    })
-    .toBe('ACTIVE');
-
-  // --- Pausieren -----------------------------------------------------------
-  await page.reload();
-  await handlungBestaetigen(page, 'Pausieren', 'Bauarbeiten im Gebäude');
-
-  await expect
-    .poll(async () => (await db!.contract.findUniqueOrThrow({ where: { id: vertrag.id } })).status, {
-      timeout: 20_000,
-    })
-    .toBe('PAUSED');
-
-  /*
-    In der Pause gibt es nichts zu planen — und die Schaltfläche behauptet es
-    auch nicht. Eine ausgegraute wäre ehrlicher als eine, die 422 antwortet;
-    eine, die gar nicht da ist, ist die ehrlichste.
-  */
-  await page.reload();
-  await expect(page.getByRole('button', { name: 'Jetzt planen' })).toHaveCount(0);
-
-  const vorher = await db!.job.count({ where: { contractId: vertrag.id } });
-
-  /*
-    Und der Planer erzeugt auch dann nichts, wenn ihn jemand an der Oberfläche
-    vorbei anstösst — über den HTTP-Klienten, nicht über `page.request`
-    (dessen eigener Stapel schickt die `Secure`-Cookies nicht und ergäbe 401).
-  */
-  const waehrendPause = await post(
-    `/api/contracts/${vertrag.id}/schedule`,
-    { bis: new Date(Date.now() + 60 * 86_400_000).toISOString().slice(0, 10) },
-    { jar: adminJar },
-  );
-  expect([200, 422]).toContain(waehrendPause.status);
-  expect(
-    await db!.job.count({ where: { contractId: vertrag.id } }),
-    'Während der Pause entstehen keine Einsätze.',
-  ).toBe(vorher);
-
-  // --- Fortsetzen ----------------------------------------------------------
-  await page.getByRole('button', { name: 'Fortsetzen' }).click();
-  await expect
-    .poll(async () => (await db!.contract.findUniqueOrThrow({ where: { id: vertrag.id } })).status, {
-      timeout: 20_000,
-    })
-    .toBe('ACTIVE');
-
+  await inKraftSetzen(page, vertrag.id);
   await page.reload();
   await handlungBestaetigen(page, 'Jetzt planen');
+  await expect.poll(() => db!.job.count({ where: { contractId: vertrag.id } }), { timeout: 30_000 }).toBeGreaterThan(20);
 
-  await expect
-    .poll(async () => db!.job.count({ where: { contractId: vertrag.id } }), { timeout: 30_000 })
-    .toBeGreaterThan(vorher);
+  // --- Pausieren im Dialog: Beginn heute (vorbelegt), Ende in 14 Tagen -----
+  const pauseEnde = zuercherTag(14);
+  await page.reload();
+  await page.getByRole('button', { name: 'Pausieren', exact: true }).first().click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog).toBeVisible();
+  await feld(dialog, 'Bis und mit').fill(pauseEnde);
+  await feld(dialog, 'Grund').fill('Bauarbeiten im Gebäude');
+  await dialog.getByRole('button', { name: 'Pausieren', exact: true }).click();
+  await expect(dialog).toBeHidden({ timeout: 20_000 });
+  await expect.poll(() => vertragsstatus(vertrag.id), { timeout: 20_000 }).toBe('PAUSED');
+
+  /*
+    RB-007: Die Pause wirkt auf das, was schon geplant ist. Vorher hielt sie
+    nur den Planer an, und das Team fuhr vor eine verschlossene Tür.
+  */
+  const nachPauseEnde = zuercherMitternacht(zuercherTag(15));
+  const inDerPause = await db!.job.count({
+    where: { contractId: vertrag.id, status: { not: 'CANCELLED' }, scheduledStart: { lt: nachPauseEnde } },
+  });
+  expect(inDerPause, 'In der Pause steht kein offener Einsatz mehr.').toBe(0);
+  const danach = await db!.job.count({
+    where: { contractId: vertrag.id, status: { not: 'CANCELLED' }, scheduledStart: { gte: nachPauseEnde } },
+  });
+  expect(danach, 'Nach dem Ende der Pause bleibt der Plan stehen.').toBeGreaterThan(0);
+
+  await page.reload();
+  await expect(page.getByRole('button', { name: 'Jetzt planen' }), 'In der Pause gibt es nichts zu planen.').toHaveCount(0);
+
+  // --- Fortsetzen ----------------------------------------------------------
+  const fortgesetztAb = new Date();
+  await handlungBestaetigen(page, 'Fortsetzen');
+  await expect.poll(() => vertragsstatus(vertrag.id), { timeout: 20_000 }).toBe('ACTIVE');
+
+  /*
+    RB-008: Ab heute in Zürich, nicht ab der Pause. Was nach dem Fortsetzen
+    entstand, liegt nicht vor heute — und was in der Pause abgesagt wurde,
+    kommt ab heute wieder, ohne Doppel.
+  */
+  const heute = zuercherMitternacht(zuercherTag(0));
+  const neu = await db!.job.findMany({
+    where: { contractId: vertrag.id, status: { not: 'CANCELLED' }, createdAt: { gte: fortgesetztAb } },
+    select: { scheduledStart: true },
+  });
+  expect(neu.length, 'Das Fortsetzen hat die Tage der Pause ab heute wieder geplant.').toBeGreaterThan(0);
+  expect(
+    neu.filter((j) => j.scheduledStart < heute).length,
+    'Kein Einsatz in der Vergangenheit.',
+  ).toBe(0);
+  await keineDoppeltenEinsaetze(vertrag.id);
 });

@@ -152,6 +152,12 @@ export interface Umgebungsabzug {
   /** Wie weit React gekommen ist: Zahl der bereits eingehängten Reaktionswurzeln. */
   reactWurzeln: number;
   bildschirmfoto: string | null;
+  /**
+   * Die Veränderungen am DOM seit dem ersten Skript, in ihrer Reihenfolge —
+   * aus `MUTATIONS_BEOBACHTER`. Der Endzustand zeigt nur Folgen, die
+   * Reihenfolge zeigt die Ursache (§13.1 in `docs/HYDRATION.md`).
+   */
+  mutationen: unknown[];
 }
 
 export interface Diagnose {
@@ -178,6 +184,7 @@ export function diagnoseAnhaengen(context: BrowserContext, testInfo: TestInfo): 
   const misslungen: string[] = [];
   const abzuege: Array<Promise<Umgebungsabzug | null>> = [];
   let letztesDokument: Promise<{ adresse: string; html: string } | null> = Promise.resolve(null);
+  let dokumentBeimFehler: Promise<{ adresse: string; html: string } | null> | null = null;
 
   const aufnehmen = (page: Page, art: Befund['art'], text: string, ort?: string, stapel?: string) => {
     const roh = redigieren(text);
@@ -195,7 +202,15 @@ export function diagnoseAnhaengen(context: BrowserContext, testInfo: TestInfo): 
     // Der Abzug muss **jetzt** entstehen, nicht am Ende des Falls: Bis dahin
     // hat React den verworfenen Teilbaum längst neu aufgebaut und der
     // Unterschied ist weg.
-    if (treffer) abzuege.push(umgebungAbziehen(page, testInfo, befunde.length));
+    if (treffer) {
+      abzuege.push(umgebungAbziehen(page, testInfo, befunde.length));
+      // Ebenso das Dokument: Bis zum Ende des Falls lädt die Seite oft noch
+      // mehrmals neu, und das „letzte" HTML gehört dann zu einem anderen
+      // Aufruf mit anderem Datenstand. Am 2026-09-23 zeigte das DOM des
+      // Fehlers „Freigeben", das mitgeschriebene HTML schon „Übernehmen" —
+      // zwei Zustände, die sich nicht gegenüberstellen liessen.
+      if (!dokumentBeimFehler) dokumentBeimFehler = letztesDokument;
+    }
   };
 
   const seiteBeobachten = (page: Page) => {
@@ -256,7 +271,7 @@ export function diagnoseAnhaengen(context: BrowserContext, testInfo: TestInfo): 
       if (treffer.length === 0) return;
 
       const gesammelt = (await Promise.all(abzuege)).filter((a): a is Umgebungsabzug => a !== null);
-      const dokument = await letztesDokument;
+      const dokument = await (dokumentBeimFehler ?? letztesDokument);
       const bericht = {
         fall: info.title,
         datei: info.file.replace(/\\/g, '/').split('/').slice(-1)[0],
@@ -364,6 +379,7 @@ async function umgebungAbziehen(
       reactWurzeln: [document.documentElement, document.body].filter((el) =>
         el ? Object.keys(el).some((schluessel) => schluessel.startsWith('__reactContainer$')) : false,
       ).length,
+      mutationen: ((window as unknown as { __hydrationsMutationen?: unknown[] }).__hydrationsMutationen ?? []).slice(0, 400),
     }));
 
     let bildschirmfoto: string | null = null;
@@ -387,6 +403,7 @@ async function umgebungAbziehen(
       nutzlastbloecke: abzug.nutzlastbloecke,
       reactWurzeln: abzug.reactWurzeln,
       bildschirmfoto,
+      mutationen: abzug.mutationen,
     };
   } catch {
     // Die Seite kann in genau diesem Moment navigieren oder schliessen.
