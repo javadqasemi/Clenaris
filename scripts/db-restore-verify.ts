@@ -73,6 +73,29 @@ const TABELLEN = [
   'device_handoff_sessions',
   'stored_files',
   'file_assets',
+  /*
+    Seit Wave 21: die Belege, die das Gesetz aufbewahren lässt (Art. 958f OR,
+    zehn Jahre), und die Tabellen, die per Trigger nur anwachsen dürfen. Genau
+    bei ihnen wäre ein stilles Fehlen am teuersten — und die Trigger machen
+    das Zurückspielen erst interessant: `pg_restore` muss die Daten laden,
+    *bevor* es die Sperrtrigger anlegt, sonst scheitert es an ihnen. Die
+    Liste davor stammte aus Gate 4 und kannte weder Finanzen noch Lohn.
+  */
+  'invoices',
+  'invoice_items',
+  'payments',
+  'credit_notes',
+  'payslips',
+  'payslip_lines',
+  'salary_certificates',
+  'contracts',
+  'contract_versions',
+  'complaints',
+  'stock_movements',
+  'equipment_maintenances',
+  'site_visits',
+  'signature_events',
+  'audit_logs',
 ];
 
 async function zaehlen(url: string): Promise<Record<string, number | string>> {
@@ -89,6 +112,25 @@ async function zaehlen(url: string): Promise<Record<string, number | string>> {
         ergebnis[t] = 'Tabelle fehlt';
       }
     }
+    /*
+      Gleiche Zeilen beweisen nicht, dass die *Schranken* mitgekommen sind:
+      die Sperrtrigger (Finanzbelege, Lohn, Signaturereignisse) und die
+      Teilindizes (eine offene Annahme je Offerte, …) stehen in handgeschriebenem
+      SQL der Migrationen, nicht im Prisma-Schema. Eine Wiederherstellung ohne
+      sie liefe — und nähme stillschweigend Änderungen an, die sonst die
+      Datenbank verweigert. Deshalb werden sie mitgezählt, mit Namen gebildet,
+      damit eine Abweichung nicht nur eine Zahl ist.
+    */
+    const trigger = await prisma.$queryRawUnsafe<{ n: number; namen: string }[]>(
+      `SELECT count(*)::int AS n, coalesce(md5(string_agg(tgname, ',' ORDER BY tgname)), '') AS namen
+         FROM pg_trigger WHERE NOT tgisinternal`,
+    );
+    ergebnis['(Trigger)'] = `${trigger[0]?.n ?? 0}/${(trigger[0]?.namen ?? '').slice(0, 8)}`;
+    const teilindizes = await prisma.$queryRawUnsafe<{ n: number; namen: string }[]>(
+      `SELECT count(*)::int AS n, coalesce(md5(string_agg(indexname, ',' ORDER BY indexname)), '') AS namen
+         FROM pg_indexes WHERE schemaname = 'public' AND indexdef ILIKE '% WHERE %'`,
+    );
+    ergebnis['(Teilindizes)'] = `${teilindizes[0]?.n ?? 0}/${(teilindizes[0]?.namen ?? '').slice(0, 8)}`;
   } finally {
     await prisma.$disconnect();
   }
@@ -170,12 +212,12 @@ async function main(): Promise<void> {
     console.log('');
     console.log('  Tabelle                      Quelle   Wiederhergestellt');
     let abweichungen = 0;
-    for (const t of TABELLEN) {
+    for (const t of [...TABELLEN, '(Trigger)', '(Teilindizes)']) {
       const a = ausQuelle[t];
       const b = ausZiel[t];
       const gleich = String(a) === String(b);
       if (!gleich) abweichungen++;
-      console.log(`  ${gleich ? ' ' : '✗'} ${t.padEnd(26)} ${String(a).padStart(7)}   ${String(b).padStart(7)}`);
+      console.log(`  ${gleich ? ' ' : '✗'} ${t.padEnd(26)} ${String(a).padStart(11)}   ${String(b).padStart(11)}`);
     }
 
     if (abweichungen > 0) {
