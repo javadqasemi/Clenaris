@@ -115,6 +115,10 @@ export default async function AdminLayout({ children }: { children: React.ReactN
           erreicht wurde. Sie gehört zu der Arbeit, die sie beurteilt.
         */
         { href: '/admin/qualitaet', label: 'Qualität', icon: 'quality', permission: 'quality:read' },
+        // Wave 11: Reklamationen neben der Qualität — beide messen, ob die Zusage gehalten wurde.
+        { href: '/admin/reklamationen', label: 'Reklamationen', icon: 'messages', permission: 'complaint:read' },
+        { href: '/admin/material', label: 'Material', icon: 'checklist', permission: 'inventory:read' },
+        { href: '/admin/geraete', label: 'Geräte', icon: 'actions', permission: 'equipment:read' },
       ],
     },
     {

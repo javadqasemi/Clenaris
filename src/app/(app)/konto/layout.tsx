@@ -80,6 +80,7 @@ export default async function AccountLayout({ children }: { children: React.Reac
         { href: '/konto/objekte', label: 'Meine Objekte', icon: 'building' },
         { href: '/konto/nachrichten', label: 'Nachrichten', icon: 'messages', badge: unreadMessages },
         { href: '/konto/bewertungen', label: 'Bewertungen', icon: 'reviews' },
+        { href: '/konto/reklamationen', label: 'Reklamationen', icon: 'quality' },
       ],
     },
   ];
