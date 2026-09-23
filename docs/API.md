@@ -5,7 +5,7 @@
 > Quelle, aus der sowohl diese Referenz als auch die Laufzeitvalidierung
 > stammen.
 
-Stand: 458 Endpunkte. Die maschinenlesbare Fassung liegt in
+Stand: 460 Endpunkte. Die maschinenlesbare Fassung liegt in
 [`openapi.yaml`](./openapi.yaml) bzw. [`openapi.json`](./openapi.json).
 
 ## Grundlagen
@@ -8300,6 +8300,7 @@ Familie.
 | `version.terms` | string | – | max. 20000 Zeichen |
 | `version.internalNote` | string | – | max. 4000 Zeichen |
 | `services` | object[] | – | max. 100 Einträge |
+| `services[].id` | union | – | – |
 | `services[].serviceId` | union | – | – |
 | `services[].label` | string | ja | min. 2 Zeichen, max. 160 Zeichen |
 | `services[].description` | string | – | max. 2000 Zeichen |
@@ -8389,7 +8390,7 @@ Familie.
 
 ### `POST /api/contracts/{id}/activate`
 
-**In Kraft setzen.** Nummer, geltende Version und Zustand entstehen in **einer** Transaktion. Sie auseinanderzuziehen hiesse, einen Moment zuzulassen, in dem ein Vertrag aktiv ist und keine Version hat — und in dem eine Abrechnung mit null rechnet. Ein Vertrag ohne Leistungen wird abgewiesen (422), ebenso jeder Übergang, den der Zustandsautomat nicht kennt. Eigene Berechtigung: Die Betriebsleitung hat sie ausdrücklich nicht.
+**In Kraft setzen, Pause oder Kündigung zurücknehmen.** **Erstmals:** Nummer, geltende Fassung und Zustand entstehen in **einer** Transaktion. Der Stichtag ist der der Fassung; ein abweichender nur an einer freien Fassung — an einer angenommenen steht er im unterschriebenen Dokument (422). **Aus Pause:** wie `/resume`. **Aus Kündigung:** die Kündigung wird zurückgenommen. In keinem Fall wird eine Fassung, die schon galt, verändert — bis 2026-09-23 setzte dieser Weg beide Gültigkeiten auf den Vertragsbeginn. Den Wechsel auf eine Folgefassung macht `/versions/{versionId}/activate`. Eigene Berechtigung: Die Betriebsleitung hat sie ausdrücklich nicht.
 
 - **Zugriff:** Erfordert die Berechtigung: `contract:activate`.
 - **Rate-Limit-Klasse:** `apiWrite`
@@ -8411,7 +8412,7 @@ Familie.
 
 ### `POST /api/contracts/{id}/pause`
 
-**Aussetzen.** Der Vertrag besteht weiter, es wird nur in einem Zeitraum nicht geleistet — Bauarbeiten, Leerstand, Saison. Wirkung hat es beim Serienplaner, der in diesem Fenster keine Einsätze mehr erzeugt.
+**Aussetzen.** Der Vertrag besteht weiter, es wird nur in einem Zeitraum nicht geleistet — Bauarbeiten, Leerstand, Saison. Beginn frühestens heute (422). Bereits geplante offene Einsätze im Zeitraum werden **abgesagt**; der Planer erzeugt darin keine neuen. Mit Enddatum setzt der nächtliche Lauf den Vertrag am Tag danach von selbst fort.
 
 - **Zugriff:** Erfordert die Berechtigung: `contract:activate`.
 - **Rate-Limit-Klasse:** `apiWrite`
@@ -8434,7 +8435,7 @@ Familie.
 
 ### `POST /api/contracts/{id}/resume`
 
-**Pause beenden.** Kein Rumpf: Es gibt genau eine mögliche Wirkung. Ein Datum entgegenzunehmen lüde dazu ein, die Pause rückwirkend zu verkürzen — und die Einsätze, die in dieser Zeit nicht erzeugt wurden, entstünden dadurch nicht.
+**Pause beenden.** Kein Rumpf: Es gibt genau eine mögliche Wirkung. Geplant wird **ab heute** — Tage der Pause, die vorbei sind, werden nicht nachgeholt. Bis 2026-09-23 erzeugte der nächste Lauf Einsätze für das ganze Pausenfenster, rückwirkend.
 
 - **Zugriff:** Erfordert die Berechtigung: `contract:activate`.
 - **Rate-Limit-Klasse:** `apiWrite`
@@ -8580,6 +8581,7 @@ Familie.
 | `version.terms` | string | – | max. 20000 Zeichen |
 | `version.internalNote` | string | – | max. 4000 Zeichen |
 | `services` | object[] | – | max. 100 Einträge |
+| `services[].id` | union | – | – |
 | `services[].serviceId` | union | – | – |
 | `services[].label` | string | ja | min. 2 Zeichen, max. 160 Zeichen |
 | `services[].description` | string | – | max. 2000 Zeichen |
@@ -8639,6 +8641,45 @@ Familie.
 | `terms` | string | – | max. 20000 Zeichen |
 | `internalNote` | string | – | max. 4000 Zeichen |
 
+### `DELETE /api/contracts/{id}/versions/{versionId}`
+
+**Versionsentwurf verwerfen.** Der Entwurf wird `DISCARDED`, nicht gelöscht — ein zurückgezogener Signaturvorgang zeigt auf ihn und ist ein Beleg. Eine laufende Unterzeichnung wird in derselben Transaktion abgebrochen. Abgewiesen (422): eine Fassung, die gilt oder galt; eine angenommene; die erste Fassung eines Entwurfs. Ohne diesen Weg blockierte ein ungewollter Entwurf jede weitere Änderung.
+
+- **Zugriff:** Erfordert die Berechtigung: `contract:version`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+| `versionId` | string | ja | min. 1 Zeichen |
+
+### `POST /api/contracts/{id}/versions/{versionId}/activate`
+
+**Folgefassung in Kraft setzen (Fassung wechseln).** V1 aktiv → V2 Entwurf → V2 aktiv, V1 abgelöst — beliebig fortsetzbar. In einer Transaktion hinter der Sperre des Vertragskopfs; genau eine Fassung gilt (Teilindex). Der Stichtag liegt nicht vor heute und nach dem Beginn der geltenden Fassung; die bisherige endet an ihm und bleibt sonst unverändert (Trigger). Danach werden offene Einsätze ab dem Stichtag umgestellt oder abgesagt und fehlende angelegt; Einsätze davor bleiben bei der bisherigen Fassung. Abgewiesen (422): laufende Unterzeichnung, abweichender Stichtag an einer angenommenen Fassung, keine Leistungen, Vertrag läuft nicht.
+
+- **Zugriff:** Erfordert die Berechtigung: `contract:activate`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+| `versionId` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `effectiveFrom` | string | – | – |
+| `note` | string | – | max. 1000 Zeichen |
+
 ### `PUT /api/contracts/{id}/versions/{versionId}/services`
 
 **Leistungsumfang setzen.** **`PUT` und als Ganzes** — dieselbe Entscheidung wie bei Qualifikationen und Arbeitszeiten: `PATCH` verspricht eine Teiländerung, und wer das erwartet, schickt eine Position und verliert die anderen. Nur auf einem Entwurf möglich; an den Leistungen einer geltenden Fassung hängen Einsatzpläne und Einsätze.
@@ -8660,6 +8701,7 @@ Familie.
 | Feld | Typ | Pflicht | Regeln |
 | --- | --- | --- | --- |
 | `services` | object[] | ja | max. 100 Einträge |
+| `services[].id` | union | – | – |
 | `services[].serviceId` | union | – | – |
 | `services[].label` | string | ja | min. 2 Zeichen, max. 160 Zeichen |
 | `services[].description` | string | – | max. 2000 Zeichen |
@@ -8887,6 +8929,7 @@ Familie.
 | `version.terms` | string | – | max. 20000 Zeichen |
 | `version.internalNote` | string | – | max. 4000 Zeichen |
 | `services` | object[] | – | max. 100 Einträge |
+| `services[].id` | union | – | – |
 | `services[].serviceId` | union | – | – |
 | `services[].label` | string | ja | min. 2 Zeichen, max. 160 Zeichen |
 | `services[].description` | string | – | max. 2000 Zeichen |

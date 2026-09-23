@@ -1,46 +1,55 @@
 import 'server-only';
 
-import { abrechnungsperiode, alsTag, plusTage, type Abrechnungszyklus } from '@/lib/contracts/serie';
+import {
+  alsTag,
+  plusTage,
+  vertragsperiode,
+  zuercherHeute,
+  type Abrechnungszyklus,
+  type FassungZeitraum,
+  type Vertragsperiode,
+} from '@/lib/contracts/serie';
 import { isUniqueConstraintError, prisma, toNumber } from '@/lib/db';
 import { BusinessRuleError, NotFoundError } from '@/lib/errors';
 
-import { aktiveVersion, contractBillingBasis } from './contract.service';
+import { contractBillingBasis } from './contract.service';
 import { createInvoice } from './invoice.service';
 
 /**
  * Rechnungen aus einem Vertrag.
  *
  * ---------------------------------------------------------------------------
- *  Die Zusicherung
+ *  Die Zusicherungen
  * ---------------------------------------------------------------------------
  *
- * **Eine Periode, eine Rechnung.** Nicht als Prüfung im Code, sondern als
- * Teilindex in der Datenbank:
+ * **1. Kein Zeitraum wird zweimal abgerechnet.** Nicht als Prüfung im Code,
+ * sondern in der Datenbank, und seit 2026-09-23 doppelt:
  *
- * ```sql
- * CREATE UNIQUE INDEX "invoices_vertragsperiode_einmal"
- *   ON "invoices" ("contractId", "contractPeriodStart")
- *   WHERE "contractId" IS NOT NULL AND "status" <> 'CANCELLED' AND "deletedAt" IS NULL;
- * ```
+ *  • `invoices_vertragsperiode_einmal` — Teilindex über den Periodenbeginn.
+ *  • `invoices_vertragsperiode_ueberlappungsfrei` — Ausschlussbedingung über
+ *    den Zeitraum `[contractPeriodStart, contractPeriodEnd)`. Sie ist die
+ *    eigentliche Zusicherung: Der Teilindex allein sah einen Zykluswechsel
+ *    nicht — „Januar" und „1. Quartal" beginnen am selben Tag, „Februar"
+ *    aber nicht, und Februar und März liessen sich zusätzlich zum Quartal
+ *    abrechnen (RB-008).
  *
  * Dieselbe Überlegung wie beim Serienplaner: Zwischen „gibt es schon eine
  * Rechnung?" und `INSERT` liegt ein Moment, und ein zweiter Lauf, ein
  * Wiederholungsversuch nach einem Abbruch oder ein zweiter Klick passt genau
- * hinein. Der Dienst prüft deshalb zwar zuerst — das erspart im Normalfall
- * eine vergebliche Transaktion —, verlässt sich aber auf den Index und wertet
- * dessen Verstoss als „war schon da". Eine Prüfung allein wäre eine Wette auf
- * die Zeit.
+ * hinein. Der Dienst prüft deshalb zwar zuerst, verlässt sich aber auf die
+ * Datenbank und wertet einen Verstoss als „war schon da".
  *
- * **Storniert zählt nicht mit.** Eine zurückgenommene Rechnung darf die
- * Periode nicht für immer blockieren, sonst liesse sich ein Fehler nie
- * korrigieren. Daher der Teilindex und kein gewöhnlicher.
+ * **2. Jeder Zeitraum mit der Fassung, die damals galt.** Die Periode entsteht
+ * aus dem Stichtag und der an diesem Tag geltenden Fassung
+ * (`vertragsperiode`), mit deren Zyklus und Preis. Wechselt die Fassung
+ * innerhalb einer Periode, wird an der Grenze geschnitten; eine spätere
+ * Fassung ändert an einem früheren Zeitraum nichts. Bis 2026-09-23 rechnete
+ * jede Periode mit der **aktuellen** Fassung.
  *
- * **Die Periode ist kanonisch.** Sie entsteht aus dem Abrechnungszyklus der
- * geltenden Vertragsversion und einem Stichtag; zwei Stichtage im selben Monat
- * ergeben dieselbe Periode. Ein frei wählbarer Zeitraum wäre kein Schlüssel:
- * Man könnte beliebig viele sich überlappende „Perioden" bilden und jede
- * einzeln fakturieren — genau die Doppelabrechnung, die hier ausgeschlossen
- * sein soll.
+ * **3. Storniert zählt nicht mit.** Eine zurückgenommene Rechnung gibt ihren
+ * Zeitraum frei, sonst liesse sich ein Fehler nie korrigieren. Eine
+ * Gutschrift ohne Storno lässt ihn belegt — sie korrigiert einen Betrag,
+ * nicht die Frage, ob der Zeitraum abgerechnet ist.
  *
  * ---------------------------------------------------------------------------
  *  Was hier nicht passiert
@@ -48,14 +57,8 @@ import { createInvoice } from './invoice.service';
  *
  * Der Beleg entsteht nicht hier, sondern über `createInvoice`. Nummernkreis,
  * QR-Referenz, Summenrechnung und Audit-Eintrag bleiben damit an einer
- * Stelle; dieser Dienst steuert nur bei, *was* abzurechnen ist und *zu
- * welcher Periode* es gehört. Eine zweite Belegerzeugung neben der
- * bestehenden wäre ein zweiter Nummernkreis mit eigenen Lücken.
- *
- * Eine **ausgestellte** Rechnung wird nie verändert. Korrekturen laufen über
- * Gutschrift und Stornierung — dieselbe Regel wie im ganzen Finanzteil. Der
- * Vertrag darf sich danach beliebig ändern; die Rechnung trägt die Version,
- * unter der sie entstanden ist, und bleibt nachrechenbar.
+ * Stelle. Eine **ausgestellte** Rechnung wird nie verändert; Korrekturen
+ * laufen über Gutschrift und Stornierung.
  */
 
 export interface Vertragsrechnung {
@@ -74,9 +77,45 @@ export interface Vertragsrechnung {
   brutto: number;
 }
 
-/** Ein Tag vor heute — liegt also in der vorigen Periode. */
+/** Ein Tag vor heute in Zürich — liegt also in der vorigen Periode. */
 function vorigerTag(): Date {
-  return plusTage(alsTag(new Date()), -1);
+  return plusTage(zuercherHeute(), -1);
+}
+
+/** Die Fassungen eines Vertrags, die je galten, in der Form der Periodenrechnung. */
+function geltendeFassungen(
+  versionen: ReadonlyArray<{
+    id: string;
+    versionNumber: number;
+    status: string;
+    billingCycle: string;
+    effectiveFrom: Date;
+    effectiveUntil: Date | null;
+  }>,
+): FassungZeitraum[] {
+  return versionen
+    .filter((v) => v.status === 'ACTIVE' || v.status === 'SUPERSEDED')
+    .map((v) => ({
+      id: v.id,
+      versionNumber: v.versionNumber,
+      billingCycle: v.billingCycle as Abrechnungszyklus,
+      effectiveFrom: v.effectiveFrom,
+      effectiveUntil: v.effectiveUntil,
+    }));
+}
+
+function vertragsEndeExklusiv(vertrag: { endDate: Date | null; terminationEffectiveAt: Date | null }): Date | null {
+  const ende = [vertrag.terminationEffectiveAt, vertrag.endDate]
+    .filter((d): d is Date => !!d)
+    .map(alsTag)
+    .reduce<Date | null>((a, b) => (a && a < b ? a : b), null);
+  return ende ? plusTage(ende, 1) : null;
+}
+
+/** Ist der Fehler die Überlappungssperre der Rechnungen (SQLSTATE 23P01)? */
+function istUeberlappung(error: unknown): boolean {
+  const text = error instanceof Error ? error.message : String(error);
+  return text.includes('invoices_vertragsperiode_ueberlappungsfrei') || text.includes('23P01');
 }
 
 /**
@@ -103,9 +142,6 @@ export async function createContractInvoice(params: {
   });
   if (!vertrag) throw new NotFoundError('Vertrag');
 
-  const geltend = aktiveVersion(vertrag.versions);
-  if (!geltend) throw new BusinessRuleError('Der Vertrag hat keine geltende Fassung.');
-
   /**
    * Ein Entwurf wird nicht fakturiert.
    *
@@ -115,15 +151,21 @@ export async function createContractInvoice(params: {
    * werden — die letzte Periode wird naturgemäss nach dem Ende fakturiert.
    */
   if (!['ACTIVE', 'PAUSED', 'NOTICE_GIVEN', 'ENDED'].includes(vertrag.status)) {
-    throw new BusinessRuleError(
-      'Nur ein Vertrag, der in Kraft ist oder war, lässt sich abrechnen.',
-    );
+    throw new BusinessRuleError('Nur ein Vertrag, der in Kraft ist oder war, lässt sich abrechnen.');
   }
 
-  const periode = abrechnungsperiode(
-    geltend.billingCycle as Abrechnungszyklus,
-    params.stichtag ?? vorigerTag(),
-  );
+  const stichtag = alsTag(params.stichtag ?? vorigerTag());
+  const periode = vertragsperiode({
+    fassungen: geltendeFassungen(vertrag.versions),
+    stichtag,
+    vertragsBeginn: vertrag.startDate,
+    vertragsEndeExklusiv: vertragsEndeExklusiv(vertrag),
+  });
+  if (!periode) {
+    throw new BusinessRuleError(
+      `Am ${stichtag.toISOString().slice(0, 10)} galt keine Fassung dieses Vertrags — vor Beginn, nach Ende oder in einer Lücke gibt es nichts abzurechnen.`,
+    );
+  }
 
   const bestehend = await vorhandeneRechnung(vertrag.id, periode);
   if (bestehend) return bestehend;
@@ -133,6 +175,8 @@ export async function createContractInvoice(params: {
     contractId: vertrag.id,
     von: periode.start,
     bis: periode.endeExklusiv,
+    versionId: periode.fassung.id,
+    anteil: periode.anteil,
   });
 
   if (grundlage.netto <= 0) {
@@ -141,34 +185,30 @@ export async function createContractInvoice(params: {
     );
   }
 
-  const ausstellung = alsTag(new Date());
+  const fassung = vertrag.versions.find((v) => v.id === periode.fassung.id)!;
+  const ausstellung = zuercherHeute();
 
-  try {
-    const rechnung = await createInvoice({
-      organizationId: params.organizationId,
-      actorId: params.actorId,
-      vertrag: {
-        contractId: vertrag.id,
-        contractVersionId: geltend.id,
-        contractPeriodStart: periode.start,
-      },
-      input: {
-        customerId: vertrag.customerId,
-        issueDate: ausstellung,
-        dueDate: plusTage(ausstellung, geltend.paymentTermDays),
-        periodFrom: periode.start,
-        periodTo: plusTage(periode.endeExklusiv, -1),
-        /**
-         * Die Herkunft steht auf dem Beleg, nicht nur im Protokoll. Eine
-         * Vertragsrechnung ohne Hinweis auf Vertrag, Fassung und Zeitraum
-         * erzeugt eine Rückfrage je Monat — und lässt sich nach einer
-         * Preisanpassung nicht mehr einordnen.
-         */
-        introText: `${vertrag.title} · Vertrag ${vertrag.number ?? '—'} · Fassung ${geltend.versionNumber} · Zeitraum ${periode.label}`,
-        notes: grundlage.herleitung,
-        discountAmount: 0,
-        issueImmediately: params.sofortAusstellen ?? false,
-        items: [
+  /**
+   * Die Positionen verweisen auf die Einsätze, aus denen sie entstehen.
+   *
+   * Bei Abrechnung je Einsatz eine Zeile je Einsatz mit `jobId` — die Frage
+   * „welche Reinigungen stehen auf dieser Rechnung" ist dann eine Abfrage,
+   * keine Rekonstruktion. Bei einer Pauschale eine Zeile; die Einsätze des
+   * Zeitraums stehen in der Herleitung.
+   */
+  const positionen =
+    grundlage.pricingModel === 'FIXED_PER_VISIT' && grundlage.positionen.length > 0
+      ? grundlage.positionen.map((einsatz) => ({
+          jobId: einsatz.jobId,
+          name: `Einsatz ${einsatz.number} vom ${einsatz.scheduledStart.toISOString().slice(0, 10)}`,
+          description: `${vertrag.title} · Fassung ${fassung.versionNumber}`,
+          quantity: 1,
+          unit: 'Einsatz',
+          unitPrice: toNumber(fassung.baseAmount),
+          discount: 0,
+          vatRate: grundlage.mwstSatz,
+        }))
+      : [
           {
             name: `${vertrag.title} — ${periode.label}`,
             description: grundlage.herleitung,
@@ -178,7 +218,35 @@ export async function createContractInvoice(params: {
             discount: 0,
             vatRate: grundlage.mwstSatz,
           },
-        ],
+        ];
+
+  try {
+    const rechnung = await createInvoice({
+      organizationId: params.organizationId,
+      actorId: params.actorId,
+      vertrag: {
+        contractId: vertrag.id,
+        contractVersionId: fassung.id,
+        contractPeriodStart: periode.start,
+        contractPeriodEnd: periode.endeExklusiv,
+      },
+      input: {
+        customerId: vertrag.customerId,
+        issueDate: ausstellung,
+        dueDate: plusTage(ausstellung, fassung.paymentTermDays),
+        periodFrom: periode.start,
+        periodTo: plusTage(periode.endeExklusiv, -1),
+        /**
+         * Die Herkunft steht auf dem Beleg, nicht nur im Protokoll. Eine
+         * Vertragsrechnung ohne Hinweis auf Vertrag, Fassung und Zeitraum
+         * erzeugt eine Rückfrage je Monat — und lässt sich nach einer
+         * Preisanpassung nicht mehr einordnen.
+         */
+        introText: `${vertrag.title} · Vertrag ${vertrag.number ?? '—'} · Fassung ${fassung.versionNumber} · Zeitraum ${periode.label}`,
+        notes: grundlage.herleitung,
+        discountAmount: 0,
+        issueImmediately: params.sofortAusstellen ?? false,
+        items: positionen,
       },
     });
 
@@ -191,30 +259,32 @@ export async function createContractInvoice(params: {
       periodEnd: plusTage(periode.endeExklusiv, -1),
       periodLabel: periode.label,
       contractId: vertrag.id,
-      contractVersionId: geltend.id,
-      versionNumber: geltend.versionNumber,
+      contractVersionId: fassung.id,
+      versionNumber: fassung.versionNumber,
       netto: toNumber(rechnung.netTotal),
       brutto: toNumber(rechnung.grossTotal),
     };
   } catch (error) {
     /**
-     * Der Index hat zugeschlagen: Ein gleichzeitiger Lauf war schneller.
-     * Das ist kein Fehler, sondern das gewünschte Ergebnis — zurückgegeben
-     * wird die Rechnung des anderen Laufs.
+     * Index oder Ausschlussbedingung hat zugeschlagen.
+     *
+     * Derselbe Zeitraum: Ein gleichzeitiger Lauf war schneller — seine
+     * Rechnung ist das gewünschte Ergebnis. Ein **überlappender** anderer
+     * Zeitraum (nach einem Zykluswechsel): Das ist keine Wiederholung,
+     * sondern eine Doppelabrechnung, und sie wird abgewiesen.
      */
-    if (!isUniqueConstraintError(error)) throw error;
+    if (!isUniqueConstraintError(error) && !istUeberlappung(error)) throw error;
 
     const andere = await vorhandeneRechnung(vertrag.id, periode);
-    if (!andere) throw error;
-    return andere;
+    if (andere) return andere;
+    throw new BusinessRuleError(
+      `Der Zeitraum ${periode.label} überschneidet sich mit einer bereits abgerechneten Periode. Eine Doppelabrechnung wird nicht erzeugt; eine falsche Rechnung wird storniert und neu erstellt.`,
+    );
   }
 }
 
-/** Die nicht stornierte Rechnung dieser Periode, falls es sie gibt. */
-async function vorhandeneRechnung(
-  contractId: string,
-  periode: { start: Date; endeExklusiv: Date; label: string },
-): Promise<Vertragsrechnung | null> {
+/** Die nicht stornierte Rechnung genau dieses Zeitraums, falls es sie gibt. */
+async function vorhandeneRechnung(contractId: string, periode: Vertragsperiode): Promise<Vertragsrechnung | null> {
   const treffer = await prisma.invoice.findFirst({
     where: {
       contractId,
@@ -228,10 +298,16 @@ async function vorhandeneRechnung(
       status: true,
       netTotal: true,
       grossTotal: true,
+      contractPeriodEnd: true,
       contractVersion: { select: { id: true, versionNumber: true } },
     },
   });
   if (!treffer) return null;
+  // Gleicher Beginn, aber anderes Ende: kein Treffer derselben Periode,
+  // sondern eine Überschneidung — die meldet der Aufrufer als solche.
+  if (treffer.contractPeriodEnd && treffer.contractPeriodEnd.getTime() !== periode.endeExklusiv.getTime()) {
+    return null;
+  }
 
   return {
     invoiceId: treffer.id,
@@ -251,7 +327,7 @@ async function vorhandeneRechnung(
 
 /**
  * Die Abrechnungsübersicht eines Vertrags: welche Perioden fakturiert sind und
- * welche offen.
+ * welche offen — jede mit der Fassung, die damals galt.
  *
  * Beantwortet die Frage, die im Monatsabschluss gestellt wird — „was fehlt
  * noch" — ohne dass jemand die Rechnungsliste nach Verträgen durchsehen muss.
@@ -268,33 +344,32 @@ export async function contractBillingOverview(params: {
   });
   if (!vertrag) throw new NotFoundError('Vertrag');
 
-  const geltend = aktiveVersion(vertrag.versions);
-  if (!geltend) throw new BusinessRuleError('Der Vertrag hat keine geltende Fassung.');
+  const fassungen = geltendeFassungen(vertrag.versions);
+  const aktuell = vertrag.versions.find((v) => v.status === 'ACTIVE') ?? vertrag.versions.find((v) => v.status === 'SUPERSEDED');
+  if (!aktuell) throw new BusinessRuleError('Der Vertrag hat keine Fassung, die gegolten hätte.');
 
-  const zyklus = geltend.billingCycle as Abrechnungszyklus;
   const anzahl = Math.min(Math.max(params.perioden ?? 6, 1), 36);
+  const ende = vertragsEndeExklusiv(vertrag);
 
   const rechnungen = await prisma.invoice.findMany({
-    where: { contractId: vertrag.id, deletedAt: null },
+    where: { contractId: vertrag.id, deletedAt: null, status: { not: 'CANCELLED' } },
     select: {
       id: true,
       number: true,
       status: true,
       contractPeriodStart: true,
+      contractPeriodEnd: true,
       grossTotal: true,
       contractVersion: { select: { versionNumber: true } },
     },
   });
-  const nachPeriode = new Map(
-    rechnungen
-      .filter((r) => r.contractPeriodStart && r.status !== 'CANCELLED')
-      .map((r) => [r.contractPeriodStart!.toISOString().slice(0, 10), r]),
-  );
 
   const zeilen: Array<{
     periodStart: Date;
     periodEnd: Date;
     label: string;
+    versionNumber: number;
+    anteil: number;
     invoice: {
       id: string;
       number: string;
@@ -306,16 +381,30 @@ export async function contractBillingOverview(params: {
 
   let stichtag = vorigerTag();
   for (let i = 0; i < anzahl; i++) {
-    const periode = abrechnungsperiode(zyklus, stichtag);
+    const periode = vertragsperiode({
+      fassungen,
+      stichtag,
+      vertragsBeginn: vertrag.startDate,
+      vertragsEndeExklusiv: ende,
+    });
     // Vor dem Vertragsbeginn gibt es nichts abzurechnen — die Übersicht endet
     // dort, statt leere Zeilen bis zur Kontogründung aufzuzählen.
-    if (periode.endeExklusiv <= alsTag(vertrag.startDate)) break;
+    if (!periode) break;
 
-    const treffer = nachPeriode.get(periode.start.toISOString().slice(0, 10));
+    // Eine Rechnung, die diesen Zeitraum abdeckt — auch eine aus einem
+    // früheren, längeren Zyklus. Offen ist nur, was keine Rechnung berührt.
+    const treffer = rechnungen.find(
+      (r) =>
+        r.contractPeriodStart &&
+        r.contractPeriodStart < periode.endeExklusiv &&
+        (r.contractPeriodEnd ?? plusTage(r.contractPeriodStart, 1)) > periode.start,
+    );
     zeilen.push({
       periodStart: periode.start,
       periodEnd: plusTage(periode.endeExklusiv, -1),
       label: periode.label,
+      versionNumber: periode.fassung.versionNumber,
+      anteil: periode.anteil,
       invoice: treffer
         ? {
             id: treffer.id,
@@ -332,9 +421,9 @@ export async function contractBillingOverview(params: {
   return {
     contractId: vertrag.id,
     contractNumber: vertrag.number,
-    billingCycle: zyklus,
-    currency: geltend.currency,
-    versionNumber: geltend.versionNumber,
+    billingCycle: aktuell.billingCycle,
+    currency: aktuell.currency,
+    versionNumber: aktuell.versionNumber,
     startDate: vertrag.startDate,
     perioden: zeilen,
   };

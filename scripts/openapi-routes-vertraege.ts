@@ -122,13 +122,16 @@ export const CONTRACT_ROUTES: RouteDoc[] = [
     method: 'post',
     path: '/api/contracts/{id}/activate',
     tag: 'Verträge',
-    summary: 'In Kraft setzen',
+    summary: 'In Kraft setzen, Pause oder Kündigung zurücknehmen',
     description:
-      'Nummer, geltende Version und Zustand entstehen in **einer** Transaktion. Sie ' +
-      'auseinanderzuziehen hiesse, einen Moment zuzulassen, in dem ein Vertrag aktiv ist und ' +
-      'keine Version hat — und in dem eine Abrechnung mit null rechnet. Ein Vertrag ohne ' +
-      'Leistungen wird abgewiesen (422), ebenso jeder Übergang, den der Zustandsautomat nicht ' +
-      'kennt. Eigene Berechtigung: Die Betriebsleitung hat sie ausdrücklich nicht.',
+      '**Erstmals:** Nummer, geltende Fassung und Zustand entstehen in **einer** Transaktion. ' +
+      'Der Stichtag ist der der Fassung; ein abweichender nur an einer freien Fassung — an einer ' +
+      'angenommenen steht er im unterschriebenen Dokument (422). **Aus Pause:** wie `/resume`. ' +
+      '**Aus Kündigung:** die Kündigung wird zurückgenommen. In keinem Fall wird eine Fassung, ' +
+      'die schon galt, verändert — bis 2026-09-23 setzte dieser Weg beide Gültigkeiten auf den ' +
+      'Vertragsbeginn. Den Wechsel auf eine Folgefassung macht ' +
+      '`/versions/{versionId}/activate`. Eigene Berechtigung: Die Betriebsleitung hat sie ' +
+      'ausdrücklich nicht.',
     guard: perm('all', 'contract:activate'),
     rateLimit: 'apiWrite',
     params: idParam,
@@ -141,8 +144,9 @@ export const CONTRACT_ROUTES: RouteDoc[] = [
     summary: 'Aussetzen',
     description:
       'Der Vertrag besteht weiter, es wird nur in einem Zeitraum nicht geleistet — ' +
-      'Bauarbeiten, Leerstand, Saison. Wirkung hat es beim Serienplaner, der in diesem Fenster ' +
-      'keine Einsätze mehr erzeugt.',
+      'Bauarbeiten, Leerstand, Saison. Beginn frühestens heute (422). Bereits geplante offene ' +
+      'Einsätze im Zeitraum werden **abgesagt**; der Planer erzeugt darin keine neuen. Mit ' +
+      'Enddatum setzt der nächtliche Lauf den Vertrag am Tag danach von selbst fort.',
     guard: perm('all', 'contract:activate'),
     rateLimit: 'apiWrite',
     params: idParam,
@@ -154,9 +158,9 @@ export const CONTRACT_ROUTES: RouteDoc[] = [
     tag: 'Verträge',
     summary: 'Pause beenden',
     description:
-      'Kein Rumpf: Es gibt genau eine mögliche Wirkung. Ein Datum entgegenzunehmen lüde dazu ' +
-      'ein, die Pause rückwirkend zu verkürzen — und die Einsätze, die in dieser Zeit nicht ' +
-      'erzeugt wurden, entstünden dadurch nicht.',
+      'Kein Rumpf: Es gibt genau eine mögliche Wirkung. Geplant wird **ab heute** — Tage der ' +
+      'Pause, die vorbei sind, werden nicht nachgeholt. Bis 2026-09-23 erzeugte der nächste ' +
+      'Lauf Einsätze für das ganze Pausenfenster, rückwirkend.',
     guard: perm('all', 'contract:activate'),
     rateLimit: 'apiWrite',
     params: idParam,
@@ -253,6 +257,39 @@ export const CONTRACT_ROUTES: RouteDoc[] = [
     rateLimit: 'apiWrite',
     params: versionParams,
     body: vertrag.contractVersionSchema,
+  },
+  {
+    method: 'delete',
+    path: '/api/contracts/{id}/versions/{versionId}',
+    tag: 'Verträge',
+    summary: 'Versionsentwurf verwerfen',
+    description:
+      'Der Entwurf wird `DISCARDED`, nicht gelöscht — ein zurückgezogener Signaturvorgang zeigt ' +
+      'auf ihn und ist ein Beleg. Eine laufende Unterzeichnung wird in derselben Transaktion ' +
+      'abgebrochen. Abgewiesen (422): eine Fassung, die gilt oder galt; eine angenommene; die ' +
+      'erste Fassung eines Entwurfs. Ohne diesen Weg blockierte ein ungewollter Entwurf jede ' +
+      'weitere Änderung.',
+    guard: perm('all', 'contract:version'),
+    rateLimit: 'apiWrite',
+    params: versionParams,
+  },
+  {
+    method: 'post',
+    path: '/api/contracts/{id}/versions/{versionId}/activate',
+    tag: 'Verträge',
+    summary: 'Folgefassung in Kraft setzen (Fassung wechseln)',
+    description:
+      'V1 aktiv → V2 Entwurf → V2 aktiv, V1 abgelöst — beliebig fortsetzbar. In einer ' +
+      'Transaktion hinter der Sperre des Vertragskopfs; genau eine Fassung gilt (Teilindex). Der ' +
+      'Stichtag liegt nicht vor heute und nach dem Beginn der geltenden Fassung; die bisherige ' +
+      'endet an ihm und bleibt sonst unverändert (Trigger). Danach werden offene Einsätze ab dem ' +
+      'Stichtag umgestellt oder abgesagt und fehlende angelegt; Einsätze davor bleiben bei der ' +
+      'bisherigen Fassung. Abgewiesen (422): laufende Unterzeichnung, abweichender Stichtag an ' +
+      'einer angenommenen Fassung, keine Leistungen, Vertrag läuft nicht.',
+    guard: perm('all', 'contract:activate'),
+    rateLimit: 'apiWrite',
+    params: versionParams,
+    body: vertrag.contractActivateSchema,
   },
   {
     method: 'put',

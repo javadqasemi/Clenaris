@@ -10,7 +10,10 @@ import {
   serientage,
   tagSchluessel,
   termine,
+  vertragsperiode,
+  zuercherHeute,
   zuercherZeitpunkt,
+  type FassungZeitraum,
   type Serienregel,
 } from '../../src/lib/contracts/serie';
 
@@ -438,6 +441,123 @@ describe('Serien-Rechenkern der Verträge', () => {
 
     it('plusTage rechnet über Monatsgrenzen', () => {
       assert.equal(tagSchluessel(plusTage(tag('2026-10-30'), 5)), '2026-11-04');
+    });
+  });
+
+  /**
+   * RB-008 — die Periode trägt die Fassung, die an ihrem Stichtag galt.
+   *
+   * Bis 2026-09-23 rechnete jede Periode mit der aktuellen Fassung, und ein
+   * Zykluswechsel liess Perioden überlappen. Der reine Kern bestimmt jetzt
+   * Fassung, Grenzen und Zeitanteil; die Datenbank verhindert zusätzlich jede
+   * Überlappung.
+   */
+  describe('Vertragsperiode — Fassung und Grenzen', () => {
+    const v1: FassungZeitraum = {
+      id: 'v1',
+      versionNumber: 1,
+      billingCycle: 'MONTHLY',
+      effectiveFrom: tag('2026-01-01'),
+      effectiveUntil: tag('2026-03-15'),
+    };
+    const v2: FassungZeitraum = {
+      id: 'v2',
+      versionNumber: 2,
+      billingCycle: 'QUARTERLY',
+      effectiveFrom: tag('2026-03-15'),
+      effectiveUntil: null,
+    };
+    const periode = (stichtag: string) =>
+      vertragsperiode({
+        fassungen: [v1, v2],
+        stichtag: tag(stichtag),
+        vertragsBeginn: tag('2026-01-01'),
+        vertragsEndeExklusiv: null,
+      });
+
+    it('Januar unter V1 bleibt Januar unter V1 — auch wenn heute V2 gilt', () => {
+      const januar = periode('2026-01-20')!;
+      assert.equal(januar.fassung.id, 'v1');
+      assert.equal(tagSchluessel(januar.start), '2026-01-01');
+      assert.equal(tagSchluessel(januar.endeExklusiv), '2026-02-01');
+      assert.equal(januar.anteil, 1);
+      assert.equal(januar.gekuerzt, false);
+    });
+
+    it('der Wechselmonat wird an der Fassungsgrenze geschnitten — beide Seiten', () => {
+      const vorher = periode('2026-03-10')!;
+      assert.equal(vorher.fassung.id, 'v1');
+      assert.equal(tagSchluessel(vorher.start), '2026-03-01');
+      assert.equal(tagSchluessel(vorher.endeExklusiv), '2026-03-15');
+      assert.equal(vorher.gekuerzt, true);
+      assert.equal(vorher.anteil, 14 / 31);
+
+      const nachher = periode('2026-03-20')!;
+      assert.equal(nachher.fassung.id, 'v2');
+      assert.equal(tagSchluessel(nachher.start), '2026-03-15', 'Das Quartal unter V2 beginnt am Stichtag');
+      assert.equal(tagSchluessel(nachher.endeExklusiv), '2026-04-01');
+      assert.equal(nachher.anteil, 17 / 90);
+    });
+
+    it('die Zeiträume beider Seiten überlappen nicht und lassen keine Lücke', () => {
+      const vorher = periode('2026-03-10')!;
+      const nachher = periode('2026-03-20')!;
+      assert.equal(vorher.endeExklusiv.getTime(), nachher.start.getTime());
+    });
+
+    it('nach dem Wechsel: volle Quartale unter V2', () => {
+      const q2 = periode('2026-05-05')!;
+      assert.equal(q2.fassung.id, 'v2');
+      assert.equal(tagSchluessel(q2.start), '2026-04-01');
+      assert.equal(tagSchluessel(q2.endeExklusiv), '2026-07-01');
+      assert.equal(q2.anteil, 1);
+    });
+
+    it('vor dem Vertragsbeginn und nach dem Ende gibt es keine Periode', () => {
+      assert.equal(periode('2025-12-31'), null);
+      const mitEnde = vertragsperiode({
+        fassungen: [v1],
+        stichtag: tag('2026-02-20'),
+        vertragsBeginn: tag('2026-01-01'),
+        vertragsEndeExklusiv: tag('2026-02-15'),
+      });
+      assert.equal(mitEnde, null, 'Nach dem letzten Leistungstag nichts');
+      const letzte = vertragsperiode({
+        fassungen: [v1],
+        stichtag: tag('2026-02-10'),
+        vertragsBeginn: tag('2026-01-01'),
+        vertragsEndeExklusiv: tag('2026-02-15'),
+      })!;
+      assert.equal(tagSchluessel(letzte.endeExklusiv), '2026-02-15', 'Die letzte Periode endet mit dem Vertrag');
+      assert.equal(letzte.anteil, 14 / 28);
+    });
+
+    it('in einem Schaltjahr hat der Februar 29 Tage', () => {
+      const februar = vertragsperiode({
+        fassungen: [{ ...v1, effectiveFrom: tag('2028-01-01'), effectiveUntil: tag('2028-02-15') }],
+        stichtag: tag('2028-02-01'),
+        vertragsBeginn: tag('2028-01-01'),
+        vertragsEndeExklusiv: null,
+      })!;
+      assert.equal(februar.anteil, 14 / 29);
+    });
+  });
+
+  describe('Heute in Zürich', () => {
+    it('kurz nach Mitternacht Ortszeit ist in UTC noch gestern — Zürich zählt', () => {
+      // 2026-07-15 00:30 Zürich (Sommerzeit) = 2026-07-14 22:30 UTC
+      assert.equal(tagSchluessel(zuercherHeute(new Date('2026-07-14T22:30:00Z'))), '2026-07-15');
+      // 2026-01-15 00:30 Zürich (Winterzeit) = 2026-01-14 23:30 UTC
+      assert.equal(tagSchluessel(zuercherHeute(new Date('2026-01-14T23:30:00Z'))), '2026-01-15');
+      // Mittag: kein Unterschied
+      assert.equal(tagSchluessel(zuercherHeute(new Date('2026-01-15T12:00:00Z'))), '2026-01-15');
+    });
+
+    it('über die Umstellungsnächte hinweg', () => {
+      // 29.03.2026: 02:00 → 03:00. 00:30 UTC = 01:30 MEZ, noch der 29.
+      assert.equal(tagSchluessel(zuercherHeute(new Date('2026-03-29T00:30:00Z'))), '2026-03-29');
+      // 25.10.2026: 03:00 → 02:00. 22:30 UTC am 24. = 00:30 MESZ am 25.
+      assert.equal(tagSchluessel(zuercherHeute(new Date('2026-10-24T22:30:00Z'))), '2026-10-25');
     });
   });
 });

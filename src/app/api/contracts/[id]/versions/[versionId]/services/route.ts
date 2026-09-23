@@ -1,14 +1,10 @@
-import { z } from 'zod';
-
 import { defineRoute } from '@/lib/api/handler';
 import { ok } from '@/lib/api/response';
-import { contractServicesReplaceSchema } from '@/lib/validation/contracts';
+import { contractServicesReplaceSchema, contractVersionParams as versionParams } from '@/lib/validation/contracts';
 import { replaceContractServices } from '@/server/services/contract.service';
 import { getOrganizationId } from '@/server/services/organization.service';
 
 export const runtime = 'nodejs';
-
-const versionParams = z.object({ id: z.string().min(1), versionId: z.string().min(1) });
 
 /**
  * PUT /api/contracts/{id}/versions/{versionId}/services — den

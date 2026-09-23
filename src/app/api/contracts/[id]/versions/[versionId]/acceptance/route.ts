@@ -1,14 +1,11 @@
-import { z } from 'zod';
-
 import { defineRoute } from '@/lib/api/handler';
 import { created, ok } from '@/lib/api/response';
 import { requestContext } from '@/lib/http/request-context';
+import { contractVersionParams as versionParams } from '@/lib/validation/contracts';
 import { startContractAcceptance, withdrawContractAcceptance } from '@/server/services/contract.service';
 import { getOrganizationId } from '@/server/services/organization.service';
 
 export const runtime = 'nodejs';
-
-const versionParams = z.object({ id: z.string().min(1), versionId: z.string().min(1) });
 
 /**
  * POST /api/contracts/{id}/versions/{versionId}/acceptance — die Fassung zur

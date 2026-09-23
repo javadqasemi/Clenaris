@@ -260,7 +260,14 @@ describe('Verträge', () => {
       assert.ok(data(kuendigung).terminationEffectiveAt, 'Das Wirkungsdatum wird gerechnet');
     });
 
-    it('beendet und legt dabei die Einsatzpläne still', async () => {
+    /**
+     * Bis 2026-09-23 legte das Ende die Einsatzpläne **aller** Fassungen
+     * still — ein Schreibzugriff auf die Konditionen geltender und abgelöster
+     * Fassungen, den der Trigger `service_schedules_unveraenderlich` heute
+     * verweigert. Was das Ende wirklich leisten muss: Nach ihm wird nichts
+     * mehr geplant, und bereits geplante Einsätze danach werden abgesagt.
+     */
+    it('beendet, sagt geplante Einsätze danach ab und lässt die Pläne als Beleg stehen', async () => {
       const id = await neuerEntwurf();
 
       // Der Plan entsteht **vor** der Aktivierung: Auf einer geltenden Fassung
@@ -271,20 +278,36 @@ describe('Verträge', () => {
       const leistung = data(akte).versions[0]!.services[0]!.id;
       const plan = await post<{ data: { id: string } }>(
         `/api/contract-services/${leistung}/schedules`,
-        { frequency: 'WEEKLY', weekdays: [1], effectiveFrom: tagIn(1), startMinute: 360, endMinute: 600 },
+        { frequency: 'WEEKLY', weekdays: [1, 3], effectiveFrom: tagIn(1), startMinute: 360, endMinute: 600 },
         { jar: jars.admin },
       );
       assert.equal(plan.status, 201, JSON.stringify(plan.payload));
 
       await post(`/api/contracts/${id}/activate`, {}, { jar: jars.admin });
+      const lauf = await post<{ data: { angelegt: number } }>(`/api/contracts/${id}/schedule`, { bis: tagIn(28) }, {
+        jar: jars.admin,
+      });
+      assert.ok(data(lauf).angelegt > 0, 'Vor dem Ende gibt es geplante Einsätze');
 
       const ende = await post<{ data: { status: string } }>(
         `/api/contracts/${id}/end`,
         { reason: 'Prüfreihe' },
         { jar: jars.admin },
       );
-      assert.equal(ende.status, 200);
+      assert.equal(ende.status, 200, JSON.stringify(ende.payload));
       assert.equal(data(ende).status, 'ENDED');
+
+      const einsaetze = await get<{ data: { status: string; scheduledStart: string }[] }>(
+        `/api/jobs?contractId=${id}&pageSize=100`,
+        { jar: jars.admin },
+      );
+      const morgen = new Date(`${tagIn(1)}T00:00:00Z`).getTime();
+      const danach = data(einsaetze).filter((j) => new Date(j.scheduledStart).getTime() >= morgen);
+      assert.ok(danach.length > 0);
+      assert.ok(
+        danach.every((j) => j.status === 'CANCELLED'),
+        'Nach dem Ende verlangt der Vertrag nichts mehr — geplante Einsätze sind abgesagt',
+      );
 
       const nachher = await get<{ data: { versions: { services: { schedules: { active: boolean }[] }[] }[] } }>(
         `/api/contracts/${id}`,
@@ -292,10 +315,12 @@ describe('Verträge', () => {
       );
       const plaene = data(nachher).versions.flatMap((v) => v.services.flatMap((s) => s.schedules));
       assert.ok(plaene.length > 0, 'Der Plan bleibt lesbar');
-      assert.ok(
-        plaene.every((p) => p.active === false),
-        'Mit dem Ende laufen die Serien aus — sonst plante der Nachtlauf weiter',
-      );
+      assert.ok(plaene.every((p) => p.active === true), 'Die Konditionen der Fassung bleiben, wie sie vereinbart waren');
+
+      const nochmal = await post<{ data: { angelegt: number } }>(`/api/contracts/${id}/schedule`, { bis: tagIn(28) }, {
+        jar: jars.admin,
+      });
+      assert.equal(data(nochmal).angelegt, 0, 'Ein beendeter Vertrag plant nicht');
     });
 
     it('weist unzulässige Übergänge ab (422) — beendet ist beendet', async () => {
@@ -648,12 +673,13 @@ describe('Verträge', () => {
         'Alle Einsätze des ersten Laufs zeigen auf Version 1',
       );
 
-      // Zweite Fassung anlegen und in Kraft setzen.
+      // Zweite Fassung anlegen und in Kraft setzen — ab Tag 8.
+      const stichtag = tagIn(8);
       const neueVersion = await post<{ data: { id: string; versionNumber: number } }>(
         `/api/contracts/${id}/versions`,
         {
           version: {
-            effectiveFrom: tagIn(1),
+            effectiveFrom: stichtag,
             reason: 'Preisanpassung — die alten Einsätze dürfen davon nichts merken',
             billingCycle: 'MONTHLY',
             paymentTermDays: 30,
@@ -670,26 +696,37 @@ describe('Verträge', () => {
       const v2 = data(neueVersion).id;
 
       const aktivieren = await post(`/api/contracts/${id}/activate`, {}, { jar: jars.admin });
-      assert.equal(aktivieren.status, 422, 'Ein aktiver Vertrag wird nicht zweimal aktiviert');
+      assert.equal(aktivieren.status, 422, 'Ein aktiver Vertrag wird nicht zweimal erstmals aktiviert');
 
       /**
-       * Der vorgesehene Weg für das Wirksamwerden ist heute das Aktivieren
-       * aus einem nicht-aktiven Zustand. Für diese Prüfung genügt, dass die
-       * **alten** Einsätze unverändert auf Version 1 zeigen — auch nachdem
-       * eine zweite Fassung existiert und der Planer erneut gelaufen ist.
+       * Bis 2026-09-23 endete dieser Test hier: V2 liess sich an einem
+       * laufenden Vertrag nicht in Kraft setzen, und die Hälfte seines Titels
+       * wurde nie geprüft. Jetzt gibt es den Weg — und die Zusage wird
+       * vollständig gemessen.
        */
+      const wechsel = await post(`/api/contracts/${id}/versions/${v2}/activate`, {}, { jar: jars.admin });
+      assert.equal(wechsel.status, 200, JSON.stringify(wechsel.payload));
       await post(`/api/contracts/${id}/schedule`, { bis: tagIn(35) }, { jar: jars.admin });
 
-      const nachher = await get<{ data: { id: string; contractVersionId: string }[] }>(
-        `/api/jobs?contractId=${id}&pageSize=100`,
-        { jar: jars.admin },
-      );
-      const unveraendert = data(nachher).filter((j) => alteIds.includes(j.id));
-      assert.equal(unveraendert.length, alteIds.length, 'Kein alter Einsatz ist verschwunden');
+      const nachher = await get<{
+        data: { id: string; contractVersionId: string; status: string; scheduledStart: string }[];
+      }>(`/api/jobs?contractId=${id}&pageSize=100`, { jar: jars.admin });
+      const grenze = new Date(`${stichtag}T00:00:00Z`).getTime() - 2 * 3_600_000; // Mitternacht Zürich
+      const geltend = data(nachher).filter((j) => j.status !== 'CANCELLED');
+
+      const vorStichtag = geltend.filter((j) => new Date(j.scheduledStart).getTime() < grenze);
+      const abStichtag = geltend.filter((j) => new Date(j.scheduledStart).getTime() >= grenze);
+      assert.ok(vorStichtag.length > 0 && abStichtag.length > 0, 'Es gibt Einsätze vor und nach dem Stichtag');
+      assert.ok(vorStichtag.every((j) => j.contractVersionId === v1), 'Vor dem Stichtag bleibt es Version 1');
+      assert.ok(abStichtag.every((j) => j.contractVersionId === v2), 'Ab dem Stichtag gilt Version 2 — auch für umgestellte');
       assert.ok(
-        unveraendert.every((j) => j.contractVersionId === v1),
-        'Kein alter Einsatz wurde auf die neue Fassung umgehängt',
+        vorStichtag.every((j) => alteIds.includes(j.id)),
+        'Vor dem Stichtag ist kein Einsatz neu entstanden oder verschwunden',
       );
+
+      // Kein Termin doppelt: Je Beginnzeit genau ein geltender Einsatz.
+      const beginne = geltend.map((j) => j.scheduledStart);
+      assert.equal(new Set(beginne).size, beginne.length, 'Derselbe Termin existiert nicht zweimal');
       assert.notEqual(v1, v2);
     });
 
@@ -707,12 +744,20 @@ describe('Verträge', () => {
       );
       await post(`/api/contracts/${id}/activate`, {}, { jar: jars.admin });
 
+      // Ab Tag 1: Die Grundlage nimmt die Fassung, die am ersten Tag des
+      // Zeitraums galt — und die gilt erst ab morgen. Ein Zeitraum ab heute
+      // hätte keine Fassung und wird abgewiesen.
       const grundlage = await get<{ data: { contractVersionId: string; positionen: unknown[] } }>(
-        `/api/contracts/${id}/billing-basis?von=${tagIn(0)}&bis=${tagIn(30)}`,
+        `/api/contracts/${id}/billing-basis?von=${tagIn(1)}&bis=${tagIn(30)}`,
         { jar: jars.admin },
       );
-      assert.equal(grundlage.status, 200);
+      assert.equal(grundlage.status, 200, JSON.stringify(grundlage.payload));
       assert.equal(data(grundlage).contractVersionId, v1, 'Die Summe ist einer Fassung zugeordnet');
+
+      const vorBeginn = await get(`/api/contracts/${id}/billing-basis?von=${tagIn(0)}&bis=${tagIn(30)}`, {
+        jar: jars.admin,
+      });
+      assert.equal(vorBeginn.status, 422, 'Vor dem Beginn galt keine Fassung');
     });
   });
 
@@ -846,13 +891,19 @@ describe('Verträge', () => {
       assert.equal(data(lauf).angelegt, 0, 'Ein pausierter Vertrag erzeugt keine Einsätze');
     });
 
-    it('nimmt eine Ausnahme entgegen und lässt den Termin entfallen', async () => {
+    /**
+     * Bis 2026-09-23 prüfte dieser Fall nur einen Probelauf **vor** der
+     * Planung — und bestand deshalb, obwohl eine Ausnahme auf bereits
+     * geplante Einsätze keine Wirkung hatte (RB-007). Jetzt wird zuerst
+     * geplant und danach gemessen, was mit dem geplanten Einsatz geschieht.
+     */
+    it('eine Ausnahme sagt den bereits geplanten Einsatz ab', async () => {
       const { id, planId } = await vertragMitSerie();
-      const probeVorher = await post<{ data: { angelegt: number } }>(
-        `/api/contracts/${id}/schedule`,
-        { bis: tagIn(28), probelauf: true },
-        { jar: jars.admin },
-      );
+      await post(`/api/contracts/${id}/schedule`, { bis: tagIn(28) }, { jar: jars.admin });
+      const vorher = await get<{ data: { status: string }[] }>(`/api/jobs?contractId=${id}&pageSize=100`, {
+        jar: jars.admin,
+      });
+      const geplantVorher = data(vorher).filter((j) => j.status !== 'CANCELLED').length;
 
       // Den ersten Termin der Serie heraussuchen und aussetzen.
       const ersterMontag = (() => {
@@ -870,16 +921,19 @@ describe('Verträge', () => {
       );
       assert.equal(ausnahme.status, 201, JSON.stringify(ausnahme.payload));
 
-      const probeNachher = await post<{ data: { angelegt: number } }>(
-        `/api/contracts/${id}/schedule`,
-        { bis: tagIn(28), probelauf: true },
+      const nachher = await get<{ data: { status: string; scheduledStart: string }[] }>(
+        `/api/jobs?contractId=${id}&pageSize=100`,
         { jar: jars.admin },
       );
-      assert.equal(
-        data(probeNachher).angelegt,
-        data(probeVorher).angelegt - 1,
-        'Genau ein Termin entfällt',
-      );
+      const amMontag = data(nachher).filter((j) => j.scheduledStart.slice(0, 10) === ersterMontag);
+      assert.equal(amMontag.length, 1, 'Der Einsatz des Tages bleibt als Zeile bestehen');
+      assert.equal(amMontag[0]!.status, 'CANCELLED', 'Er ist abgesagt');
+
+      // Der Abgleich plant danach bis zum Horizont; bis Tag 28 fehlt genau einer.
+      const bisTag28 = data(nachher).filter(
+        (j) => j.status !== 'CANCELLED' && j.scheduledStart.slice(0, 10) <= tagIn(28),
+      ).length;
+      assert.equal(bisTag28, geplantVorher - 1, 'Genau ein Termin entfällt');
     });
   });
 
@@ -1046,7 +1100,7 @@ describe('Verträge', () => {
 
       const grundlage = await get<{
         data: { netto: number; mwst: number; brutto: number; versionNumber: number; herleitung: string };
-      }>(`/api/contracts/${id}/billing-basis?von=${tagIn(0)}&bis=${tagIn(30)}`, { jar: jars.admin });
+      }>(`/api/contracts/${id}/billing-basis?von=${tagIn(1)}&bis=${tagIn(30)}`, { jar: jars.admin });
 
       assert.equal(grundlage.status, 200, JSON.stringify(grundlage.payload));
       assert.equal(data(grundlage).netto, 1200, 'Pauschale je Periode');

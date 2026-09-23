@@ -3,7 +3,15 @@ import 'server-only';
 import type { ContractStatus, Prisma } from '@prisma/client';
 
 import { audit } from '@/lib/audit';
-import { alsTag, kuendigungsfrist, kuendigungswirkung, plusMonate } from '@/lib/contracts/serie';
+import {
+  alsTag,
+  kuendigungsfrist,
+  kuendigungswirkung,
+  plusMonate,
+  plusTage,
+  tagSchluessel,
+  zuercherHeute,
+} from '@/lib/contracts/serie';
 import type { SessionUser } from '@/lib/auth/session';
 import { prisma, toNumber, type Tx } from '@/lib/db';
 import { BusinessRuleError, NotFoundError } from '@/lib/errors';
@@ -18,9 +26,12 @@ import type {
 import {
   assertFassungAnnehmbar,
   cancelActiveContractAcceptanceInTx,
+  cancelAllContractAcceptancesInTx,
   fassungIstGebunden,
+  vertragSperren,
   vertragsannahmeLaeuftAb,
 } from './contract-acceptance.service';
+import { einsaetzeAbgleichen } from './contract-schedule.service';
 import { nextNumber } from './numbering.service';
 import type { AnfrageKontext } from './signature-events';
 import {
@@ -90,6 +101,26 @@ export const ERLAUBTE_UEBERGAENGE: Record<ContractStatus, readonly ContractStatu
 
 /** Zustände, ab denen ein Vertrag als Beleg gilt und nicht mehr löschbar ist. */
 const BELEGZUSTAENDE: readonly ContractStatus[] = ['ACTIVE', 'PAUSED', 'NOTICE_GIVEN', 'ENDED'];
+
+/**
+ * **Eine angenommene Fassung macht den Vertrag unwiderruflich** — weder
+ * annullieren noch als Entwurf löschen.
+ *
+ * Die Kundschaft hat zugestimmt; still verschwinden darf die Zusage nicht.
+ * Der Weg ist Inkraftsetzen und Kündigen, beides mit Protokoll. Damit gilt
+ * die Zusicherung aus RB-005 ohne Zeitvergleich: Es gibt keinen Vertrag, der
+ * storniert oder gelöscht ist und zugleich eine angenommene Fassung trägt.
+ * Hinter `vertragSperren` gelesen — eine Annahme, die gleichzeitig abschliesst,
+ * wartet auf die Sperre oder wird hier gesehen.
+ */
+async function keineAngenommeneFassung(tx: Tx, contractId: string, was: 'annullieren' | 'löschen'): Promise<void> {
+  const angenommen = await tx.contractVersion.count({ where: { contractId, acceptedAt: { not: null } } });
+  if (angenommen > 0) {
+    throw new BusinessRuleError(
+      `Die Kundschaft hat eine Fassung dieses Vertrags angenommen. Er lässt sich nicht mehr ${was} — setzen Sie ihn in Kraft und kündigen Sie ihn, wenn er nicht gelten soll.`,
+    );
+  }
+}
 
 function pruefeUebergang(von: ContractStatus, nach: ContractStatus): void {
   if (von === nach) {
@@ -250,6 +281,26 @@ export async function updateContract(params: {
 }) {
   const vorher = await ladeVertrag(params.organizationId, params.contractId);
 
+  /**
+   * **Der Einsatzort eines laufenden Vertrags ändert sich nicht am Kopf.**
+   *
+   * Der Kopf trägt die Identität und bleibt pflegbar — Titel, Zuständige,
+   * Kostenstelle. Das Objekt aber bestimmt, wohin jeder künftige Einsatz
+   * geht, und es steht im unterschriebenen Dokument. Bis 2026-09-23 liess es
+   * sich an einem aktiven Vertrag still umhängen; der nächste Planerlauf
+   * schickte das Team dann an eine andere Adresse, ohne dass eine Fassung
+   * entstand. Solange der Vertrag nicht in Kraft war, bleibt es frei.
+   */
+  if (
+    params.input.propertyId !== undefined &&
+    (params.input.propertyId ?? null) !== vorher.propertyId &&
+    BELEGZUSTAENDE.includes(vorher.status)
+  ) {
+    throw new BusinessRuleError(
+      'Das Objekt eines Vertrags, der in Kraft ist oder war, lässt sich nicht ändern. Ein anderer Einsatzort ist eine Vertragsänderung.',
+    );
+  }
+
   const aktualisiert = await prisma.contract.update({
     where: { id: vorher.id },
     data: {
@@ -289,15 +340,32 @@ export async function deleteContractDraft(params: {
 }) {
   const vertrag = await ladeVertrag(params.organizationId, params.contractId);
 
-  if (BELEGZUSTAENDE.includes(vertrag.status)) {
-    throw new BusinessRuleError(
+  const nichtLoeschbar = () =>
+    new BusinessRuleError(
       'Ein Vertrag, der in Kraft war, lässt sich nicht löschen. Beenden Sie ihn stattdessen — er bleibt als Beleg bestehen.',
     );
-  }
+  if (BELEGZUSTAENDE.includes(vertrag.status)) throw nichtLoeschbar();
 
-  await prisma.contract.update({
-    where: { id: vertrag.id },
-    data: { deletedAt: new Date() },
+  /**
+   * In einer Transaktion mit dem Abbruch aller offenen Annahmevorgänge und
+   * hinter der Sperre des Vertragskopfs. Bis 2026-09-23 blieb der Link der
+   * Kundschaft nach dem Verwerfen gültig, und eine Unterschrift darauf schloss
+   * ab. Der Zustand wird unter der Sperre neu gelesen: Zwischen dem Laden oben
+   * und hier kann eine Annahme abgeschlossen oder der Vertrag aktiviert worden
+   * sein.
+   */
+  await prisma.$transaction(async (tx) => {
+    const gesperrt = await vertragSperren(tx, { contractId: vertrag.id });
+    if (!gesperrt || gesperrt.deletedAt) throw new NotFoundError('Vertrag nicht gefunden.');
+    if ((BELEGZUSTAENDE as readonly string[]).includes(gesperrt.status)) throw nichtLoeschbar();
+    await keineAngenommeneFassung(tx, vertrag.id, 'löschen');
+
+    await tx.contract.update({ where: { id: vertrag.id }, data: { deletedAt: new Date() } });
+    await cancelAllContractAcceptancesInTx(tx, {
+      contractId: vertrag.id,
+      reason: 'version_discarded',
+      cancelledById: params.actorId,
+    });
   });
 
   await audit.deleted({
@@ -392,9 +460,8 @@ async function versionAnlegen(
  * Fassung galt — genau das, was die Versionierung verhindern soll.
  *
  * Die Einsatzpläne werden mitkopiert, damit der Planer nach dem Wirksamwerden
- * weiterarbeiten kann. `generatedUntil` wird dabei **übernommen**: Der neue
- * Plan soll nicht rückwirkend Einsätze erzeugen, die unter der alten Fassung
- * bereits geplant sind.
+ * weiterarbeiten kann — mit derselben **Linie** (`seriesKey`), damit ein
+ * Termin unter beiden Fassungen derselbe bleibt (`leistungenKopieren`).
  */
 export async function createContractVersion(params: {
   organizationId: string;
@@ -449,7 +516,7 @@ export async function createContractVersion(params: {
 async function leistungenKopieren(tx: Tx, vonVersionId: string, nachVersionId: string): Promise<void> {
   const leistungen = await tx.contractService.findMany({
     where: { contractVersionId: vonVersionId },
-    include: { schedules: true },
+    include: { schedules: { include: { exceptions: true } } },
     orderBy: { position: 'asc' },
   });
 
@@ -473,6 +540,7 @@ async function leistungenKopieren(tx: Tx, vonVersionId: string, nachVersionId: s
       },
     });
 
+    const heute = zuercherHeute();
     for (const plan of leistung.schedules) {
       await tx.serviceSchedule.create({
         data: {
@@ -486,10 +554,41 @@ async function leistungenKopieren(tx: Tx, vonVersionId: string, nachVersionId: s
           effectiveFrom: plan.effectiveFrom,
           effectiveUntil: plan.effectiveUntil,
           holidayHandling: plan.holidayHandling,
-          // Bewusst übernommen: Was unter der alten Fassung bereits geplant
-          // ist, soll der neue Plan nicht noch einmal erzeugen.
-          generatedUntil: plan.generatedUntil,
+          /**
+           * **Die Linie wird übernommen, die Marke nicht.**
+           *
+           * `seriesKey` ist die fachliche Identität der Serie: Derselbe Termin
+           * behält unter der neuen Fassung denselben Schlüssel, und der
+           * eindeutige Index `jobs_serientermin_einmal` verhindert, dass er ein
+           * zweites Mal entsteht.
+           *
+           * `generatedUntil` wurde bis 2026-09-23 **mitkopiert** — zum
+           * Zeitpunkt, an dem der Entwurf entstand. Bis zum Inkrafttreten
+           * schob der Nachtlauf die Marke der alten Serie weiter; die Kopie
+           * begann dann an einer veralteten Stelle, mit neuer Kennung, und
+           * erzeugte Tage ein zweites Mal (RB-003). Heute bestimmt die Marke
+           * nicht mehr, ab wann geplant wird; sie beginnt leer.
+           */
+          seriesKey: plan.seriesKey,
+          generatedUntil: null,
           active: plan.active,
+          /**
+           * Ausnahmen für künftige Tage gehen mit. Ohne sie würde ein
+           * abgesagter Termin unter der neuen Fassung wieder geplant, obwohl
+           * niemand die Absage zurückgenommen hat. Vergangene Ausnahmen sind
+           * Geschichte der alten Fassung und bleiben dort.
+           */
+          exceptions: {
+            create: plan.exceptions
+              .filter((a) => alsTag(a.originalDate) >= heute)
+              .map((a) => ({
+                kind: a.kind,
+                originalDate: a.originalDate,
+                newDate: a.newDate,
+                reason: a.reason,
+                createdById: a.createdById,
+              })),
+          },
         },
       });
     }
@@ -602,27 +701,40 @@ export async function replaceContractServices(params: {
   await assertFassungFrei(version.id);
 
   await prisma.$transaction(async (tx) => {
-    // Löscht über `onDelete: Cascade` auch die Einsatzpläne der Positionen.
-    await tx.contractService.deleteMany({ where: { contractVersionId: version.id } });
-    if (params.services.length > 0) {
-      await tx.contractService.createMany({
-        data: params.services.map((leistung, index) => ({
-          contractVersionId: version.id,
-          serviceId: leistung.serviceId ?? null,
-          label: leistung.label,
-          description: leistung.description ?? null,
-          buildingId: leistung.buildingId ?? null,
-          zone: leistung.zone ?? null,
-          estimatedMinutes: leistung.estimatedMinutes,
-          requiredCrewSize: leistung.requiredCrewSize,
-          requiredSkills: leistung.requiredSkills,
-          qualityRequirement: leistung.qualityRequirement ?? null,
-          specialInstructions: leistung.specialInstructions ?? null,
-          materialsBy: leistung.materialsBy,
-          quantity: leistung.quantity ?? null,
-          position: leistung.position || index,
-        })),
-      });
+    const bestehend = new Set(
+      (await tx.contractService.findMany({ where: { contractVersionId: version.id }, select: { id: true } })).map(
+        (zeile) => zeile.id,
+      ),
+    );
+    const behalten = new Set(params.services.map((l) => l.id).filter((id): id is string => !!id && bestehend.has(id)));
+
+    // Entfernt nur, was nicht mehr genannt ist — samt dessen Einsatzplan
+    // über die Kaskade. Genannte Zeilen behalten ihren Plan.
+    await tx.contractService.deleteMany({
+      where: { contractVersionId: version.id, id: { notIn: [...behalten] } },
+    });
+
+    for (const [index, leistung] of params.services.entries()) {
+      const daten = {
+        serviceId: leistung.serviceId ?? null,
+        label: leistung.label,
+        description: leistung.description ?? null,
+        buildingId: leistung.buildingId ?? null,
+        zone: leistung.zone ?? null,
+        estimatedMinutes: leistung.estimatedMinutes,
+        requiredCrewSize: leistung.requiredCrewSize,
+        requiredSkills: leistung.requiredSkills,
+        qualityRequirement: leistung.qualityRequirement ?? null,
+        specialInstructions: leistung.specialInstructions ?? null,
+        materialsBy: leistung.materialsBy,
+        quantity: leistung.quantity ?? null,
+        position: leistung.position || index,
+      };
+      if (leistung.id && behalten.has(leistung.id)) {
+        await tx.contractService.update({ where: { id: leistung.id }, data: daten });
+      } else {
+        await tx.contractService.create({ data: { ...daten, contractVersionId: version.id } });
+      }
     }
   });
 
@@ -830,12 +942,32 @@ export async function withdrawContractAcceptance(params: {
 // ---------------------------------------------------------------------------
 
 /**
- * Den Vertrag in Kraft setzen.
+ * Den Vertrag in Kraft setzen — **erstmals**, oder aus Pause bzw. Kündigung
+ * zurück.
  *
- * Alles, was danach gilt, entsteht hier in **einer** Transaktion: die Nummer,
- * die geltende Version, der Zustand. Die drei Dinge auseinanderzuziehen hiesse,
- * einen Zwischenzustand zu erlauben, in dem ein Vertrag aktiv ist und keine
- * Version hat — und in dem eine Abrechnung mit null rechnet.
+ * Bis 2026-09-23 tat diese Handlung drei Dinge in einem, und zwei davon
+ * falsch (RB-002, RB-004):
+ *
+ *  • Aus PAUSED oder NOTICE_GIVEN heraus löste sie die geltende Fassung ab
+ *    und setzte **beide** Gültigkeiten auf den Vertragsbeginn. Fassung 1
+ *    hatte danach einen leeren Zeitraum, und jede Frage „was galt am 3. März"
+ *    fand Fassung 2 — für die ganze Vergangenheit.
+ *  • Einen Fassungswechsel an einem laufenden Vertrag konnte sie gar nicht:
+ *    ACTIVE → ACTIVE ist kein Übergang. Nach dem ersten Änderungsantrag war
+ *    jeder Vertrag für weitere Fassungen blockiert.
+ *
+ * Jetzt gibt es zwei Handlungen mit je einer Bedeutung. Diese hier ändert
+ * den **Lebenslauf** und fasst keine Fassung an, die schon galt:
+ *
+ *  • *Erstmals* (Entwurf, in Prüfung, offeriert): Der Entwurf wird geltend,
+ *    die Nummer entsteht — in einer Transaktion. `effectiveFrom` ist der
+ *    vereinbarte Stichtag der Fassung; ein abweichender lässt sich nur setzen,
+ *    solange die Fassung nicht angenommen ist oder in Unterzeichnung steht —
+ *    er steht im unterschriebenen Dokument.
+ *  • *Pausiert* → wie `resumeContract`.
+ *  • *Gekündigt* → die Kündigung wird zurückgenommen; die Fassungen bleiben.
+ *
+ * Den Wechsel auf eine Folgefassung macht `activateContractVersion`.
  */
 export async function activateContract(params: {
   organizationId: string;
@@ -848,54 +980,53 @@ export async function activateContract(params: {
   const vertrag = await ladeVertrag(params.organizationId, params.contractId);
   pruefeUebergang(vertrag.status, 'ACTIVE');
 
+  if (vertrag.status === 'PAUSED') {
+    return resumeContract(params);
+  }
+  if (vertrag.status === 'NOTICE_GIVEN') {
+    return withdrawNotice(params);
+  }
+
   const entwurf = vertrag.versions.find((v) => v.status === 'DRAFT');
-  const bisher = aktiveVersion(vertrag.versions);
-  if (!entwurf && !bisher) {
+  if (!entwurf) {
     throw new BusinessRuleError('Der Vertrag hat keine Fassung, die in Kraft gesetzt werden könnte.');
   }
 
-  const leistungen = entwurf
-    ? await prisma.contractService.count({ where: { contractVersionId: entwurf.id } })
-    : 1;
-  if (entwurf && leistungen === 0) {
+  const leistungen = await prisma.contractService.count({ where: { contractVersionId: entwurf.id } });
+  if (leistungen === 0) {
     throw new BusinessRuleError(
       'Ein Vertrag ohne Leistungen kann nicht in Kraft treten — er erzeugt keine Einsätze und keine Abrechnung.',
     );
   }
 
-  const gueltigAb = params.effectiveFrom ? alsTag(params.effectiveFrom) : alsTag(vertrag.startDate);
+  const gueltigAb = await stichtagDerFassung(entwurf, params.effectiveFrom);
 
   const ergebnis = await prisma.$transaction(async (tx) => {
-    let nummer = vertrag.number;
-    if (!nummer) {
-      nummer = (await nextNumber(tx, params.organizationId, 'contract')).number;
-    }
+    const gesperrt = await vertragSperren(tx, { contractId: vertrag.id });
+    if (!gesperrt || gesperrt.deletedAt) throw new NotFoundError('Vertrag nicht gefunden.');
+    pruefeUebergang(gesperrt.status as ContractStatus, 'ACTIVE');
 
-    if (entwurf) {
-      if (bisher) {
-        await tx.contractVersion.update({
-          where: { id: bisher.id },
-          data: { status: 'SUPERSEDED', effectiveUntil: gueltigAb },
-        });
-      }
-      await tx.contractVersion.update({
-        where: { id: entwurf.id },
-        data: { status: 'ACTIVE', effectiveFrom: gueltigAb },
-      });
-    }
+    const nummer = vertrag.number ?? (await nextNumber(tx, params.organizationId, 'contract')).number;
 
-    const geltend = entwurf ?? bisher!;
-    const frist = kuendigungsfrist(vertrag.endDate, geltend.noticePeriodDays);
+    // Der Stichtag zuerst, solange die Fassung noch Entwurf ist — der Trigger
+    // lässt `effectiveFrom` an einer geltenden Fassung nicht mehr zu.
+    if (gueltigAb.getTime() !== alsTag(entwurf.effectiveFrom).getTime()) {
+      await tx.contractVersion.update({ where: { id: entwurf.id }, data: { effectiveFrom: gueltigAb } });
+    }
+    const aktiviert = await tx.contractVersion.updateMany({
+      where: { id: entwurf.id, status: 'DRAFT' },
+      data: { status: 'ACTIVE' },
+    });
+    if (aktiviert.count !== 1) {
+      throw new BusinessRuleError('Die Fassung hat sich inzwischen geändert. Bitte die Seite neu laden.');
+    }
 
     return tx.contract.update({
       where: { id: vertrag.id },
       data: {
         status: 'ACTIVE',
         number: nummer,
-        noticeDeadline: frist,
-        pausedFrom: null,
-        pausedUntil: null,
-        pauseReason: null,
+        noticeDeadline: kuendigungsfrist(vertrag.endDate, entwurf.noticePeriodDays),
       },
     });
   });
@@ -905,12 +1036,286 @@ export async function activateContract(params: {
     userId: params.actorId,
     entity: 'Contract',
     entityId: vertrag.id,
-    summary: `Vertrag ${ergebnis.number} in Kraft gesetzt${params.note ? ` — ${params.note}` : ''}`,
+    summary: `Vertrag ${ergebnis.number} in Kraft gesetzt, Fassung ${entwurf.versionNumber} ab ${tagSchluessel(gueltigAb)}${params.note ? ` — ${params.note}` : ''}`,
     changes: { status: { from: vertrag.status, to: 'ACTIVE' } },
     ip: params.ip,
   });
 
   return ergebnis;
+}
+
+/**
+ * Der Stichtag, zu dem eine Fassung gilt.
+ *
+ * Ohne Angabe der, den die Fassung trägt — er ist Teil dessen, was vereinbart
+ * wurde. Eine abweichende Angabe nur, solange die Fassung frei ist; an einer
+ * angenommenen oder in Unterzeichnung befindlichen Fassung wäre sie eine
+ * Änderung am unterschriebenen Dokument (RB-006).
+ */
+async function stichtagDerFassung(
+  fassung: { id: string; effectiveFrom: Date },
+  gewuenscht: Date | undefined,
+): Promise<Date> {
+  const vereinbart = alsTag(fassung.effectiveFrom);
+  if (!gewuenscht || alsTag(gewuenscht).getTime() === vereinbart.getTime()) return vereinbart;
+  const bindung = await fassungIstGebunden(fassung.id);
+  if (bindung) {
+    throw new BusinessRuleError(
+      `Diese Fassung ${bindung === 'ANGENOMMEN' ? 'wurde angenommen' : 'liegt zur Unterzeichnung vor'} und gilt ab ${tagSchluessel(vereinbart)}. Ein anderer Stichtag wäre eine Änderung am unterschriebenen Dokument.`,
+    );
+  }
+  return alsTag(gewuenscht);
+}
+
+/**
+ * **Fassung wechseln** — eine Folgefassung an einem laufenden Vertrag in
+ * Kraft setzen.
+ *
+ * Der Weg „V1 aktiv → Änderung → V2 Entwurf → (Annahme) → V2 aktiv, V1
+ * abgelöst", beliebig oft fortsetzbar: V2 → V3 → … Bis 2026-09-23 gab es
+ * ihn nicht (RB-002).
+ *
+ * Was hier zugesichert wird:
+ *
+ *  • **Genau eine gilt.** Alte Fassung SUPERSEDED mit `effectiveUntil` =
+ *    Stichtag, neue ACTIVE — in einer Transaktion, hinter der Sperre des
+ *    Vertragskopfs, und zusätzlich durch den Teilindex
+ *    `contract_versions_eine_aktive`.
+ *  • **Die Vergangenheit bleibt.** Der Stichtag liegt nicht vor heute und
+ *    nach dem Beginn der bisherigen Fassung. Die bisherige behält ihren
+ *    ganzen Zeitraum bis zum Stichtag; nichts an ihr ändert sich ausser
+ *    Zustand und Gültigkeitsende (Trigger `contract_versions_unveraenderlich`).
+ *  • **Keine halbe Unterschrift.** Läuft ein Annahmevorgang für die neue
+ *    Fassung, wird erst abgeschlossen oder zurückgezogen. Eine angenommene
+ *    Fassung gilt zu ihrem vereinbarten Stichtag.
+ *  • **Die Einsätze folgen.** Offene Einsätze ab dem Stichtag werden auf die
+ *    neue Fassung umgestellt oder abgesagt, fehlende angelegt
+ *    (`einsaetzeAbgleichen`). Einsätze vor dem Stichtag bleiben bei der alten
+ *    Fassung — sie wurden unter ihr erbracht.
+ */
+export async function activateContractVersion(params: {
+  organizationId: string;
+  contractId: string;
+  versionId: string;
+  actorId: string;
+  ip?: string | null;
+  effectiveFrom?: Date;
+  note?: string;
+}) {
+  const vertrag = await ladeVertrag(params.organizationId, params.contractId);
+  if (!['ACTIVE', 'PAUSED', 'NOTICE_GIVEN'].includes(vertrag.status)) {
+    throw new BusinessRuleError(
+      vertrag.status === 'ENDED' || vertrag.status === 'CANCELLED'
+        ? 'Ein beendeter oder stornierter Vertrag bekommt keine neue Fassung mehr.'
+        : 'Der Vertrag ist noch nicht in Kraft. Die erste Fassung setzt „In Kraft setzen" wirksam.',
+    );
+  }
+
+  const neu = vertrag.versions.find((v) => v.id === params.versionId);
+  if (!neu) throw new NotFoundError('Vertragsversion nicht gefunden.');
+  if (neu.status !== 'DRAFT') {
+    throw new BusinessRuleError(
+      neu.status === 'ACTIVE' ? 'Diese Fassung gilt bereits.' : 'Eine abgelöste Fassung kehrt nicht zurück.',
+    );
+  }
+  const bisher = aktiveVersion(vertrag.versions);
+  if (!bisher) throw new BusinessRuleError('Der Vertrag hat keine geltende Fassung, die abgelöst werden könnte.');
+
+  if (!neu.acceptedAt && (await fassungIstGebunden(neu.id)) === 'IN_UNTERZEICHNUNG') {
+    throw new BusinessRuleError(
+      'Diese Fassung liegt zur Unterzeichnung vor. Warten Sie die Annahme ab oder ziehen Sie den Vorgang zurück.',
+    );
+  }
+
+  const leistungen = await prisma.contractService.count({ where: { contractVersionId: neu.id } });
+  if (leistungen === 0) {
+    throw new BusinessRuleError('Eine Fassung ohne Leistungen kann nicht in Kraft treten.');
+  }
+
+  const stichtag = await stichtagDerFassung(neu, params.effectiveFrom);
+  const heute = zuercherHeute();
+  if (stichtag < heute) {
+    throw new BusinessRuleError(
+      `Eine neue Fassung gilt frühestens ab heute (${tagSchluessel(heute)}). Rückwirkend liesse sie bereits erbrachte und abgerechnete Leistungen unter anderen Konditionen erscheinen.`,
+    );
+  }
+  if (stichtag <= alsTag(bisher.effectiveFrom)) {
+    throw new BusinessRuleError(
+      `Die neue Fassung muss nach dem Beginn der geltenden (${tagSchluessel(alsTag(bisher.effectiveFrom))}) wirksam werden.`,
+    );
+  }
+  if (vertrag.endDate && stichtag > alsTag(vertrag.endDate)) {
+    throw new BusinessRuleError('Der Stichtag liegt nach dem Vertragsende.');
+  }
+
+  await prisma.$transaction(async (tx) => {
+    const gesperrt = await vertragSperren(tx, { contractId: vertrag.id });
+    if (!gesperrt || gesperrt.deletedAt || !['ACTIVE', 'PAUSED', 'NOTICE_GIVEN'].includes(gesperrt.status)) {
+      throw new BusinessRuleError('Der Vertrag hat sich inzwischen geändert. Bitte die Seite neu laden.');
+    }
+
+    const abgeloest = await tx.contractVersion.updateMany({
+      where: { id: bisher.id, status: 'ACTIVE' },
+      data: { status: 'SUPERSEDED', effectiveUntil: stichtag },
+    });
+    if (abgeloest.count !== 1) {
+      throw new BusinessRuleError('Die geltende Fassung hat sich inzwischen geändert. Bitte die Seite neu laden.');
+    }
+    if (stichtag.getTime() !== alsTag(neu.effectiveFrom).getTime()) {
+      await tx.contractVersion.update({ where: { id: neu.id }, data: { effectiveFrom: stichtag } });
+    }
+    const aktiviert = await tx.contractVersion.updateMany({
+      where: { id: neu.id, status: 'DRAFT' },
+      data: { status: 'ACTIVE' },
+    });
+    if (aktiviert.count !== 1) {
+      throw new BusinessRuleError('Die Fassung hat sich inzwischen geändert. Bitte die Seite neu laden.');
+    }
+
+    await tx.contract.update({
+      where: { id: vertrag.id },
+      data: { noticeDeadline: kuendigungsfrist(vertrag.endDate, neu.noticePeriodDays) },
+    });
+  });
+
+  await audit.updated({
+    organizationId: params.organizationId,
+    userId: params.actorId,
+    entity: 'Contract',
+    entityId: vertrag.id,
+    summary: `Vertrag ${vertrag.number ?? vertrag.title}: Fassung ${neu.versionNumber} gilt ab ${tagSchluessel(stichtag)}, Fassung ${bisher.versionNumber} abgelöst${params.note ? ` — ${params.note}` : ''}`,
+    changes: {
+      geltendeFassung: { from: bisher.versionNumber, to: neu.versionNumber },
+      stichtag: tagSchluessel(stichtag),
+    },
+    ip: params.ip,
+  });
+
+  const abgleich = await einsaetzeAbgleichen({
+    organizationId: params.organizationId,
+    contractId: vertrag.id,
+    ab: stichtag,
+    actorId: params.actorId,
+    ip: params.ip,
+    grund: `Fassung ${neu.versionNumber} ab ${tagSchluessel(stichtag)}`,
+  });
+
+  return { contractId: vertrag.id, versionId: neu.id, versionNumber: neu.versionNumber, stichtag, abgleich };
+}
+
+/**
+ * Einen Versionsentwurf verwerfen.
+ *
+ * Ohne diese Handlung blieb ein Entwurf, den niemand mehr wollte, für immer
+ * stehen — und weil es je Vertrag nur einen gibt, war der Vertrag für jede
+ * weitere Änderung blockiert.
+ *
+ * Nicht verwerfbar ist eine **angenommene** Fassung: Die Kundschaft hat ihr
+ * zugestimmt; sie verschwindet nicht still aus der Akte. Eine laufende
+ * Unterzeichnung wird mit dem Verwerfen abgebrochen, in derselben
+ * Transaktion.
+ *
+ * Verworfen heisst `DISCARDED`, nicht gelöscht: Ein zurückgezogener
+ * Signaturvorgang zeigt auf die Fassung (`ON DELETE RESTRICT`) und ist ein
+ * Beleg. Die Fassung bleibt lesbar und erzeugt nie etwas.
+ */
+export async function discardContractVersion(params: {
+  organizationId: string;
+  contractId: string;
+  versionId: string;
+  actorId: string;
+  ip?: string | null;
+}) {
+  const version = await ladeVersion(params.organizationId, params.contractId, params.versionId);
+  if (version.status !== 'DRAFT') {
+    throw new BusinessRuleError('Nur ein Versionsentwurf lässt sich verwerfen. Eine Fassung, die galt, bleibt als Beleg.');
+  }
+  if (version.acceptedAt) {
+    throw new BusinessRuleError(
+      'Diese Fassung wurde von der Kundschaft angenommen und lässt sich nicht verwerfen. Sie bleibt als Beleg in der Akte.',
+    );
+  }
+  if (version.versionNumber === 1) {
+    throw new BusinessRuleError('Die erste Fassung gehört zum Vertragsentwurf. Verwerfen Sie stattdessen den Entwurf.');
+  }
+
+  await prisma.$transaction(async (tx) => {
+    const gesperrt = await vertragSperren(tx, { contractId: params.contractId });
+    if (!gesperrt || gesperrt.deletedAt) throw new NotFoundError('Vertrag nicht gefunden.');
+
+    await cancelActiveContractAcceptanceInTx(tx, {
+      contractVersionId: version.id,
+      reason: 'version_discarded',
+      cancelledById: params.actorId,
+    });
+    const verworfen = await tx.contractVersion.updateMany({
+      where: { id: version.id, status: 'DRAFT', acceptedAt: null },
+      data: { status: 'DISCARDED' },
+    });
+    if (verworfen.count !== 1) {
+      throw new BusinessRuleError('Die Fassung hat sich inzwischen geändert. Bitte die Seite neu laden.');
+    }
+  });
+
+  await audit.deleted({
+    organizationId: params.organizationId,
+    userId: params.actorId,
+    entity: 'ContractVersion',
+    entityId: version.id,
+    summary: `Versionsentwurf ${version.versionNumber} verworfen`,
+    ip: params.ip,
+  });
+}
+
+/**
+ * Eine Kündigung zurücknehmen — der Vertrag läuft weiter wie zuvor.
+ *
+ * Eigener Lebenslaufschritt mit eigenem Protokolleintrag. Die Fassungen
+ * bleiben unberührt; der Planer plant wieder über das Wirkungsdatum hinaus.
+ */
+async function withdrawNotice(params: {
+  organizationId: string;
+  contractId: string;
+  actorId: string;
+  ip?: string | null;
+  note?: string;
+}) {
+  const vertrag = await ladeVertrag(params.organizationId, params.contractId);
+  pruefeUebergang(vertrag.status, 'ACTIVE');
+  const geltend = aktiveVersion(vertrag.versions);
+
+  const aktualisiert = await prisma.contract.update({
+    where: { id: vertrag.id },
+    data: {
+      status: 'ACTIVE',
+      noticeGivenAt: null,
+      noticeGivenBy: null,
+      terminationEffectiveAt: null,
+      terminationReason: null,
+      noticeDeadline: geltend ? kuendigungsfrist(vertrag.endDate, geltend.noticePeriodDays) : vertrag.noticeDeadline,
+    },
+  });
+
+  await audit.updated({
+    organizationId: params.organizationId,
+    userId: params.actorId,
+    entity: 'Contract',
+    entityId: vertrag.id,
+    summary: `Kündigung von Vertrag ${vertrag.number ?? vertrag.title} zurückgenommen${params.note ? ` — ${params.note}` : ''}`,
+    changes: { status: { from: 'NOTICE_GIVEN', to: 'ACTIVE' } },
+    ip: params.ip,
+  });
+
+  await einsaetzeAbgleichen({
+    organizationId: params.organizationId,
+    contractId: vertrag.id,
+    ab: zuercherHeute(),
+    actorId: params.actorId,
+    ip: params.ip,
+    grund: 'Kündigung zurückgenommen',
+  });
+
+  return aktualisiert;
 }
 
 export async function pauseContract(params: {
@@ -925,14 +1330,26 @@ export async function pauseContract(params: {
   const vertrag = await ladeVertrag(params.organizationId, params.contractId);
   pruefeUebergang(vertrag.status, 'PAUSED');
 
+  /**
+   * Eine Pause wirkt ab heute oder später, nie rückwirkend.
+   *
+   * Rückwirkend hiesse: Einsätze, die schon geleistet wurden, lägen in einer
+   * „Pause" — und die Abrechnung nach Einsätzen fragte, ob sie zählen. Und
+   * das Ende liegt nach dem Beginn, sonst wäre es keine Pause.
+   */
+  const heute = zuercherHeute();
+  const von = alsTag(params.pausedFrom);
+  const bis = params.pausedUntil ? alsTag(params.pausedUntil) : null;
+  if (von < heute) {
+    throw new BusinessRuleError(`Eine Pause beginnt frühestens heute (${tagSchluessel(heute)}).`);
+  }
+  if (bis && bis < von) {
+    throw new BusinessRuleError('Das Ende der Pause liegt vor ihrem Beginn.');
+  }
+
   const aktualisiert = await prisma.contract.update({
     where: { id: vertrag.id },
-    data: {
-      status: 'PAUSED',
-      pausedFrom: alsTag(params.pausedFrom),
-      pausedUntil: params.pausedUntil ? alsTag(params.pausedUntil) : null,
-      pauseReason: params.reason,
-    },
+    data: { status: 'PAUSED', pausedFrom: von, pausedUntil: bis, pauseReason: params.reason },
   });
 
   await audit.updated({
@@ -940,8 +1357,25 @@ export async function pauseContract(params: {
     userId: params.actorId,
     entity: 'Contract',
     entityId: vertrag.id,
-    summary: `Vertrag ${vertrag.number ?? vertrag.title} pausiert — ${params.reason}`,
+    summary:
+      `Vertrag ${vertrag.number ?? vertrag.title} pausiert ab ${tagSchluessel(von)}` +
+      `${bis ? ` bis ${tagSchluessel(bis)}` : ' (unbefristet)'} — ${params.reason}`,
     ip: params.ip,
+  });
+
+  /**
+   * Die Pause wirkt auf bereits geplante Einsätze. Bis 2026-09-23 hielt sie
+   * nur den Planer an; die 60 Tage, die er schon erzeugt hatte, blieben
+   * stehen, und das Team fuhr vor eine verschlossene Tür (RB-007). Vor der
+   * Pause liegende Termine bleiben; danach plant der Planer wieder.
+   */
+  await einsaetzeAbgleichen({
+    organizationId: params.organizationId,
+    contractId: vertrag.id,
+    ab: von,
+    actorId: params.actorId,
+    ip: params.ip,
+    grund: `Pause ab ${tagSchluessel(von)}`,
   });
 
   return aktualisiert;
@@ -955,6 +1389,9 @@ export async function resumeContract(params: {
 }) {
   const vertrag = await ladeVertrag(params.organizationId, params.contractId);
   pruefeUebergang(vertrag.status, 'ACTIVE');
+  if (vertrag.status !== 'PAUSED') {
+    throw new BusinessRuleError('Fortsetzen lässt sich nur ein pausierter Vertrag.');
+  }
 
   const aktualisiert = await prisma.contract.update({
     where: { id: vertrag.id },
@@ -967,7 +1404,23 @@ export async function resumeContract(params: {
     entity: 'Contract',
     entityId: vertrag.id,
     summary: `Vertrag ${vertrag.number ?? vertrag.title} wieder aufgenommen`,
+    changes: { status: { from: 'PAUSED', to: 'ACTIVE' } },
     ip: params.ip,
+  });
+
+  /**
+   * **Ab heute, nicht ab der Pause.** Bis 2026-09-23 plante der nächste Lauf
+   * ab seiner Fortschrittsmarke — also für das ganze Pausenfenster,
+   * rückwirkend. Der Abgleich setzt die Untergrenze auf heute in Zürich; was
+   * in der Pause lag und vorbei ist, bleibt ungeplant.
+   */
+  await einsaetzeAbgleichen({
+    organizationId: params.organizationId,
+    contractId: vertrag.id,
+    ab: zuercherHeute(),
+    actorId: params.actorId,
+    ip: params.ip,
+    grund: 'Vertrag fortgesetzt',
   });
 
   return aktualisiert;
@@ -1013,7 +1466,10 @@ export async function giveNotice(params: {
     where: { id: vertrag.id },
     data: {
       status: 'NOTICE_GIVEN',
-      noticeGivenAt: new Date(),
+      // Der Tag, an dem gekündigt wurde — nicht der, an dem es jemand
+      // erfasst hat. Bis 2026-09-23 stand hier `new Date()`, und eine
+      // nachgetragene Kündigung trug das falsche Datum.
+      noticeGivenAt: gekuendigtAm,
       noticeGivenBy: params.noticeGivenBy,
       terminationEffectiveAt: wirkung,
       terminationReason: params.reason ?? null,
@@ -1025,8 +1481,19 @@ export async function giveNotice(params: {
     userId: params.actorId,
     entity: 'Contract',
     entityId: vertrag.id,
-    summary: `Kündigung erfasst (${params.noticeGivenBy === 'CUSTOMER' ? 'Kundschaft' : 'Firma'}), Wirkung ${wirkung.toISOString().slice(0, 10)}`,
+    summary: `Kündigung erfasst (${params.noticeGivenBy === 'CUSTOMER' ? 'Kundschaft' : 'Firma'}) am ${tagSchluessel(gekuendigtAm)}, Wirkung ${tagSchluessel(wirkung)}`,
     ip: params.ip,
+  });
+
+  // Nach der Wirkung verlangt der Vertrag nichts mehr — bereits geplante
+  // Einsätze dahinter werden abgesagt.
+  await einsaetzeAbgleichen({
+    organizationId: params.organizationId,
+    contractId: vertrag.id,
+    ab: plusTage(wirkung, 1),
+    actorId: params.actorId,
+    ip: params.ip,
+    grund: `Kündigung, Wirkung ${tagSchluessel(wirkung)}`,
   });
 
   return aktualisiert;
@@ -1044,28 +1511,34 @@ export async function endContract(params: {
 
   const heute = alsTag(new Date());
 
-  const aktualisiert = await prisma.$transaction(async (tx) => {
-    /**
-     * Mit dem Ende laufen die Serien aus.
-     *
-     * Ohne diesen Schritt erzeugte der nächtliche Planer weiter Einsätze für
-     * einen beendeten Vertrag — und niemand sähe es, bis jemand vor einer
-     * verschlossenen Tür steht. Die Pläne werden nicht gelöscht: Sie sind Teil
-     * der Vertragsversion und bleiben lesbar.
-     */
-    await tx.serviceSchedule.updateMany({
-      where: { contractService: { version: { contractId: vertrag.id } }, active: true },
-      data: { active: false, effectiveUntil: vertrag.terminationEffectiveAt ?? heute },
-    });
+  /**
+   * Mit dem Ende verlangt der Vertrag nichts mehr.
+   *
+   * Bis 2026-09-23 wurden dazu die Einsatzpläne **aller** Fassungen
+   * stillgelegt (`active: false`, `effectiveUntil`) — ein Schreibzugriff auf
+   * die Konditionen geltender und abgelöster Fassungen, den der Trigger
+   * `service_schedules_unveraenderlich` jetzt verweigert. Er war auch unnötig:
+   * Der Planer plant für einen beendeten Vertrag nichts
+   * (`solltermine`). Stattdessen werden bereits geplante Einsätze nach dem
+   * Ende abgesagt.
+   */
+  const ende = vertrag.terminationEffectiveAt ?? vertrag.endDate ?? heute;
+  const aktualisiert = await prisma.contract.update({
+    where: { id: vertrag.id },
+    data: {
+      status: 'ENDED',
+      endDate: ende,
+      terminationReason: params.reason ?? vertrag.terminationReason,
+    },
+  });
 
-    return tx.contract.update({
-      where: { id: vertrag.id },
-      data: {
-        status: 'ENDED',
-        endDate: vertrag.terminationEffectiveAt ?? vertrag.endDate ?? heute,
-        terminationReason: params.reason ?? vertrag.terminationReason,
-      },
-    });
+  await einsaetzeAbgleichen({
+    organizationId: params.organizationId,
+    contractId: vertrag.id,
+    ab: plusTage(alsTag(ende), 1),
+    actorId: params.actorId,
+    ip: params.ip,
+    grund: `Vertrag beendet per ${tagSchluessel(alsTag(ende))}`,
   });
 
   await audit.updated({
@@ -1090,9 +1563,31 @@ export async function cancelContract(params: {
   const vertrag = await ladeVertrag(params.organizationId, params.contractId);
   pruefeUebergang(vertrag.status, 'CANCELLED');
 
-  const aktualisiert = await prisma.contract.update({
-    where: { id: vertrag.id },
-    data: { status: 'CANCELLED', terminationReason: params.reason ?? null },
+  /**
+   * Stornieren und Unterschreiben serialisieren sich über die Sperre des
+   * Vertragskopfs (`vertragSperren`). Gewinnt die Stornierung, findet die
+   * Annahme danach „storniert" vor und schliesst nicht ab; gewinnt die
+   * Annahme, sieht die Stornierung „offeriert" mit angenommener Fassung —
+   * das ist der zulässige Hergang „angenommen, danach verworfen". Was nie
+   * entsteht, ist ein stornierter Vertrag mit einer **danach** angenommenen
+   * Fassung (RB-005).
+   */
+  const aktualisiert = await prisma.$transaction(async (tx) => {
+    const gesperrt = await vertragSperren(tx, { contractId: vertrag.id });
+    if (!gesperrt || gesperrt.deletedAt) throw new NotFoundError('Vertrag nicht gefunden.');
+    pruefeUebergang(gesperrt.status as ContractStatus, 'CANCELLED');
+    await keineAngenommeneFassung(tx, vertrag.id, 'annullieren');
+
+    const storniert = await tx.contract.update({
+      where: { id: vertrag.id },
+      data: { status: 'CANCELLED', terminationReason: params.reason ?? null },
+    });
+    await cancelAllContractAcceptancesInTx(tx, {
+      contractId: vertrag.id,
+      reason: 'contract_cancelled',
+      cancelledById: params.actorId,
+    });
+    return storniert;
   });
 
   await audit.updated({
@@ -1181,6 +1676,20 @@ export async function contractBillingBasis(params: {
   contractId: string;
   von: Date;
   bis: Date;
+  /**
+   * Die Fassung, unter der dieser Zeitraum abgerechnet wird. Ohne Angabe die,
+   * die am **ersten Tag des Zeitraums** galt — nicht die heute geltende. Bis
+   * 2026-09-23 war es die heute geltende, und wer im April den Januar
+   * abrechnete, bekam den Aprilpreis (RB-008).
+   */
+  versionId?: string;
+  /**
+   * Zeitlicher Anteil an der vollen Periode (0 < anteil ≤ 1), wenn der
+   * Zeitraum an einer Fassungs- oder Vertragsgrenze gekürzt ist. Betrifft
+   * nur Pauschalen; nach Einsätzen, Stunden oder Einheiten wird ohnehin
+   * gezählt, was im Zeitraum lag.
+   */
+  anteil?: number;
 }) {
   const vertrag = await prisma.contract.findFirst({
     where: { id: params.contractId, organizationId: params.organizationId, deletedAt: null },
@@ -1188,8 +1697,19 @@ export async function contractBillingBasis(params: {
   });
   if (!vertrag) throw new NotFoundError('Vertrag nicht gefunden.');
 
-  const geltend = aktiveVersion(vertrag.versions);
-  if (!geltend) throw new BusinessRuleError('Der Vertrag hat keine geltende Fassung.');
+  const beginn = alsTag(params.von);
+  const geltend = params.versionId
+    ? vertrag.versions.find((v) => v.id === params.versionId)
+    : vertrag.versions.find(
+        (v) =>
+          (v.status === 'ACTIVE' || v.status === 'SUPERSEDED') &&
+          alsTag(v.effectiveFrom) <= beginn &&
+          (!v.effectiveUntil || beginn < alsTag(v.effectiveUntil)),
+      );
+  if (!geltend) {
+    throw new BusinessRuleError(`Am ${tagSchluessel(beginn)} galt keine Fassung dieses Vertrags.`);
+  }
+  const anteil = Math.min(1, Math.max(0, params.anteil ?? 1));
 
   const einsaetze = await prisma.job.findMany({
     where: {
@@ -1199,10 +1719,21 @@ export async function contractBillingBasis(params: {
       deletedAt: null,
     },
     select: { id: true, number: true, contractVersionId: true, scheduledStart: true, estimatedMin: true },
+    orderBy: { scheduledStart: 'asc' },
   });
 
   const stunden = await prisma.timeEntry.aggregate({
-    where: { job: { contractId: vertrag.id, scheduledStart: { gte: params.von, lt: params.bis } }, approved: true },
+    where: {
+      // Abgesagte und gelöschte Einsätze zählen nicht — auch wenn jemand
+      // darauf Zeit erfasst hat. Das gehört geklärt, nicht verrechnet.
+      job: {
+        contractId: vertrag.id,
+        scheduledStart: { gte: params.von, lt: params.bis },
+        status: { not: 'CANCELLED' },
+        deletedAt: null,
+      },
+      approved: true,
+    },
     _sum: { minutes: true },
   });
   const freigegebeneMinuten = stunden._sum.minutes ?? 0;
@@ -1212,8 +1743,11 @@ export async function contractBillingBasis(params: {
 
   switch (geltend.pricingModel) {
     case 'FIXED_PERIOD':
-      netto = toNumber(geltend.baseAmount);
-      herleitung = `Pauschale je Periode (${geltend.billingCycle})`;
+      netto = toNumber(geltend.baseAmount) * anteil;
+      herleitung =
+        anteil < 1
+          ? `Pauschale je Periode (${geltend.billingCycle}) ${toNumber(geltend.baseAmount).toFixed(2)} × ${(anteil * 100).toFixed(2)} % Zeitanteil (Kalendertage)`
+          : `Pauschale je Periode (${geltend.billingCycle})`;
       break;
     case 'FIXED_PER_VISIT':
       netto = toNumber(geltend.baseAmount) * einsaetze.length;
@@ -1229,13 +1763,17 @@ export async function contractBillingBasis(params: {
         _sum: { quantity: true },
       });
       const gesamtmenge = toNumber(menge._sum.quantity);
-      netto = gesamtmenge * toNumber(geltend.unitPrice ?? 0);
-      herleitung = `${gesamtmenge} ${geltend.unitLabel ?? 'Einheiten'} × ${toNumber(geltend.unitPrice ?? 0).toFixed(4)}`;
+      netto = gesamtmenge * toNumber(geltend.unitPrice ?? 0) * anteil;
+      herleitung =
+        `${gesamtmenge} ${geltend.unitLabel ?? 'Einheiten'} × ${toNumber(geltend.unitPrice ?? 0).toFixed(4)}` +
+        (anteil < 1 ? ` × ${(anteil * 100).toFixed(2)} % Zeitanteil (Kalendertage)` : '');
       break;
     }
     default:
-      netto = toNumber(geltend.baseAmount);
-      herleitung = 'Abweichende Vereinbarung — Betrag aus der Vertragsversion';
+      netto = toNumber(geltend.baseAmount) * anteil;
+      herleitung =
+        'Abweichende Vereinbarung — Betrag aus der Vertragsversion' +
+        (anteil < 1 ? `, ${(anteil * 100).toFixed(2)} % Zeitanteil (Kalendertage)` : '');
   }
 
   const mwstSatz = toNumber(geltend.vatRate);

@@ -1,14 +1,10 @@
-import { z } from 'zod';
-
 import { defineRoute } from '@/lib/api/handler';
 import { ok } from '@/lib/api/response';
-import { contractVersionSchema } from '@/lib/validation/contracts';
-import { updateContractVersion } from '@/server/services/contract.service';
+import { contractVersionParams as versionParams, contractVersionSchema } from '@/lib/validation/contracts';
+import { discardContractVersion, updateContractVersion } from '@/server/services/contract.service';
 import { getOrganizationId } from '@/server/services/organization.service';
 
 export const runtime = 'nodejs';
-
-const versionParams = z.object({ id: z.string().min(1), versionId: z.string().min(1) });
 
 /**
  * PATCH /api/contracts/{id}/versions/{versionId} — einen Versionsentwurf
@@ -39,4 +35,32 @@ export const PATCH = defineRoute({
         input: body,
       }),
     ),
+});
+
+/**
+ * DELETE /api/contracts/{id}/versions/{versionId} — einen Versionsentwurf
+ * verwerfen.
+ *
+ * Er wird nicht gelöscht, sondern `DISCARDED`: Ein zurückgezogener
+ * Signaturvorgang zeigt auf ihn und ist ein Beleg. Abgewiesen (422): eine
+ * Fassung, die gilt oder galt, eine angenommene Fassung, und die erste
+ * Fassung eines Entwurfs — dafür wird der Vertragsentwurf verworfen.
+ *
+ * Ohne diesen Weg blieb ein ungewollter Entwurf für immer stehen und
+ * blockierte jede weitere Änderung des Vertrags.
+ */
+export const DELETE = defineRoute({
+  permissions: ['contract:version'],
+  params: versionParams,
+  rateLimit: 'apiWrite',
+  handler: async ({ params, session, ip }) => {
+    await discardContractVersion({
+      organizationId: await getOrganizationId(),
+      contractId: params.id,
+      versionId: params.versionId,
+      actorId: session.id,
+      ip,
+    });
+    return ok({ verworfen: true });
+  },
 });

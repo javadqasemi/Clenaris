@@ -438,6 +438,116 @@ export function vorherigePeriode(zyklus: Abrechnungszyklus, stichtag: Date): Abr
   return abrechnungsperiode(zyklus, plusTage(laufend.start, -1));
 }
 
+/** Eine Fassung, soweit die Periodenrechnung sie braucht. */
+export interface FassungZeitraum {
+  id: string;
+  versionNumber: number;
+  billingCycle: Abrechnungszyklus;
+  effectiveFrom: Date;
+  /** Erster Tag, an dem sie **nicht** mehr gilt; `null` = gilt fort. */
+  effectiveUntil: Date | null;
+}
+
+export interface Vertragsperiode extends Abrechnungsperiode {
+  /** Die Fassung, die in diesem Zeitraum galt. */
+  fassung: FassungZeitraum;
+  /** Die volle kanonische Periode, aus der dieser Zeitraum geschnitten ist. */
+  kanonisch: Abrechnungsperiode;
+  /** Anteil an der kanonischen Periode in Kalendertagen, 0 < anteil ≤ 1. */
+  anteil: number;
+  /** true, wenn der Zeitraum an einer Fassungs- oder Vertragsgrenze gekürzt ist. */
+  gekuerzt: boolean;
+}
+
+/**
+ * Die abzurechnende Periode zu einem Stichtag — **mit der Fassung, die damals
+ * galt**.
+ *
+ * Bis 2026-09-23 wurde jede Periode mit der *aktuellen* Fassung gerechnet:
+ * Wer im April den Januar nachfakturierte, bekam den Aprilpreis. Die Fassung
+ * wird deshalb am Stichtag bestimmt, nicht heute, und eine spätere Fassung
+ * ändert an einem früheren Zeitraum nichts.
+ *
+ * **Gekürzt an Fassungsgrenzen.** Wechselt die Fassung innerhalb einer
+ * kanonischen Periode — etwa ein neuer Preis ab 15. Februar bei
+ * Quartalsabrechnung —, gehört der Zeitraum vor dem Wechsel zur alten, der
+ * danach zur neuen Fassung, jeweils mit dem Zyklus der betroffenen Fassung.
+ * Ohne diesen Schnitt wäre ein Quartal unter zwei Preisen eine Rechnung zum
+ * einen Preis, oder es entstünden zwei Rechnungen über denselben Zeitraum.
+ * Dasselbe gilt für Vertragsbeginn und -ende.
+ *
+ * `anteil` ist der zeitliche Anteil in Kalendertagen. Eine Pauschale je
+ * Periode wird damit anteilig verrechnet — eine Annahme, die offen auf dem
+ * Beleg steht, keine Auslegung des Vertrags.
+ *
+ * Gibt `null` zurück, wenn am Stichtag keine Fassung galt.
+ */
+export function vertragsperiode(params: {
+  fassungen: readonly FassungZeitraum[];
+  stichtag: Date;
+  vertragsBeginn: Date;
+  /** Letzter Leistungstag + 1, oder `null` bei unbefristeten Verträgen. */
+  vertragsEndeExklusiv: Date | null;
+}): Vertragsperiode | null {
+  const tag = alsTag(params.stichtag);
+  if (tag < alsTag(params.vertragsBeginn)) return null;
+  if (params.vertragsEndeExklusiv && tag >= alsTag(params.vertragsEndeExklusiv)) return null;
+
+  const fassung = params.fassungen.find(
+    (f) => alsTag(f.effectiveFrom) <= tag && (!f.effectiveUntil || tag < alsTag(f.effectiveUntil)),
+  );
+  if (!fassung) return null;
+
+  const kanonisch = abrechnungsperiode(fassung.billingCycle, tag);
+  const untergrenzen = [kanonisch.start, alsTag(fassung.effectiveFrom), alsTag(params.vertragsBeginn)];
+  const obergrenzen = [kanonisch.endeExklusiv];
+  if (fassung.effectiveUntil) obergrenzen.push(alsTag(fassung.effectiveUntil));
+  if (params.vertragsEndeExklusiv) obergrenzen.push(alsTag(params.vertragsEndeExklusiv));
+
+  const start = untergrenzen.reduce((a, b) => (a > b ? a : b));
+  const endeExklusiv = obergrenzen.reduce((a, b) => (a < b ? a : b));
+
+  const tageKanonisch = Math.round((kanonisch.endeExklusiv.getTime() - kanonisch.start.getTime()) / TAG_MS);
+  const tage = Math.round((endeExklusiv.getTime() - start.getTime()) / TAG_MS);
+  const gekuerzt = start.getTime() !== kanonisch.start.getTime() || endeExklusiv.getTime() !== kanonisch.endeExklusiv.getTime();
+
+  return {
+    start,
+    endeExklusiv,
+    label: gekuerzt
+      ? `${kanonisch.label} (${tagSchluessel(start)} bis ${tagSchluessel(plusTage(endeExklusiv, -1))})`
+      : kanonisch.label,
+    fassung,
+    kanonisch,
+    anteil: tageKanonisch > 0 ? tage / tageKanonisch : 1,
+    gekuerzt,
+  };
+}
+
+// ---------------------------------------------------------------------------
+//  Heute, in Zürich
+// ---------------------------------------------------------------------------
+
+const zuercherDatum = new Intl.DateTimeFormat('en-CA', {
+  timeZone: 'Europe/Zurich',
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+});
+
+/**
+ * Der heutige Kalendertag **in Zürich**, als UTC-Mitternacht.
+ *
+ * `alsTag(new Date())` wäre der UTC-Tag: zwischen Mitternacht und 01:00
+ * (Winter) bzw. 02:00 (Sommer) Ortszeit noch gestern. Für den Planer ist das
+ * die Grenze „nichts in der Vergangenheit anlegen" — sie darf nicht davon
+ * abhängen, in welcher Zeitzone der Server läuft.
+ */
+export function zuercherHeute(jetzt: Date = new Date()): Date {
+  const [jahr, monat, tag] = zuercherDatum.format(jetzt).split('-').map(Number);
+  return new Date(Date.UTC(jahr!, monat! - 1, tag!));
+}
+
 // ---------------------------------------------------------------------------
 //  Fristen
 // ---------------------------------------------------------------------------

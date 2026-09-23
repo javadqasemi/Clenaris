@@ -54254,6 +54254,16 @@
                     "items": {
                       "type": "object",
                       "properties": {
+                        "id": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "const": ""
+                            }
+                          ]
+                        },
                         "serviceId": {
                           "anyOf": [
                             {
@@ -54910,8 +54920,8 @@
         "tags": [
           "Verträge"
         ],
-        "summary": "In Kraft setzen",
-        "description": "Nummer, geltende Version und Zustand entstehen in **einer** Transaktion. Sie auseinanderzuziehen hiesse, einen Moment zuzulassen, in dem ein Vertrag aktiv ist und keine Version hat — und in dem eine Abrechnung mit null rechnet. Ein Vertrag ohne Leistungen wird abgewiesen (422), ebenso jeder Übergang, den der Zustandsautomat nicht kennt. Eigene Berechtigung: Die Betriebsleitung hat sie ausdrücklich nicht.\n\n**Zugriff:** Erfordert die Berechtigung: `contract:activate`.\n\n**Rate-Limit-Klasse:** `apiWrite`",
+        "summary": "In Kraft setzen, Pause oder Kündigung zurücknehmen",
+        "description": "**Erstmals:** Nummer, geltende Fassung und Zustand entstehen in **einer** Transaktion. Der Stichtag ist der der Fassung; ein abweichender nur an einer freien Fassung — an einer angenommenen steht er im unterschriebenen Dokument (422). **Aus Pause:** wie `/resume`. **Aus Kündigung:** die Kündigung wird zurückgenommen. In keinem Fall wird eine Fassung, die schon galt, verändert — bis 2026-09-23 setzte dieser Weg beide Gültigkeiten auf den Vertragsbeginn. Den Wechsel auf eine Folgefassung macht `/versions/{versionId}/activate`. Eigene Berechtigung: Die Betriebsleitung hat sie ausdrücklich nicht.\n\n**Zugriff:** Erfordert die Berechtigung: `contract:activate`.\n\n**Rate-Limit-Klasse:** `apiWrite`",
         "operationId": "postContractsByIdActivate",
         "security": [
           {
@@ -55039,7 +55049,7 @@
           "Verträge"
         ],
         "summary": "Aussetzen",
-        "description": "Der Vertrag besteht weiter, es wird nur in einem Zeitraum nicht geleistet — Bauarbeiten, Leerstand, Saison. Wirkung hat es beim Serienplaner, der in diesem Fenster keine Einsätze mehr erzeugt.\n\n**Zugriff:** Erfordert die Berechtigung: `contract:activate`.\n\n**Rate-Limit-Klasse:** `apiWrite`",
+        "description": "Der Vertrag besteht weiter, es wird nur in einem Zeitraum nicht geleistet — Bauarbeiten, Leerstand, Saison. Beginn frühestens heute (422). Bereits geplante offene Einsätze im Zeitraum werden **abgesagt**; der Planer erzeugt darin keine neuen. Mit Enddatum setzt der nächtliche Lauf den Vertrag am Tag danach von selbst fort.\n\n**Zugriff:** Erfordert die Berechtigung: `contract:activate`.\n\n**Rate-Limit-Klasse:** `apiWrite`",
         "operationId": "postContractsByIdPause",
         "security": [
           {
@@ -55176,7 +55186,7 @@
           "Verträge"
         ],
         "summary": "Pause beenden",
-        "description": "Kein Rumpf: Es gibt genau eine mögliche Wirkung. Ein Datum entgegenzunehmen lüde dazu ein, die Pause rückwirkend zu verkürzen — und die Einsätze, die in dieser Zeit nicht erzeugt wurden, entstünden dadurch nicht.\n\n**Zugriff:** Erfordert die Berechtigung: `contract:activate`.\n\n**Rate-Limit-Klasse:** `apiWrite`",
+        "description": "Kein Rumpf: Es gibt genau eine mögliche Wirkung. Geplant wird **ab heute** — Tage der Pause, die vorbei sind, werden nicht nachgeholt. Bis 2026-09-23 erzeugte der nächste Lauf Einsätze für das ganze Pausenfenster, rückwirkend.\n\n**Zugriff:** Erfordert die Berechtigung: `contract:activate`.\n\n**Rate-Limit-Klasse:** `apiWrite`",
         "operationId": "postContractsByIdResume",
         "security": [
           {
@@ -55978,6 +55988,16 @@
                     "items": {
                       "type": "object",
                       "properties": {
+                        "id": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "const": ""
+                            }
+                          ]
+                        },
                         "serviceId": {
                           "anyOf": [
                             {
@@ -56432,6 +56452,258 @@
             }
           }
         }
+      },
+      "delete": {
+        "tags": [
+          "Verträge"
+        ],
+        "summary": "Versionsentwurf verwerfen",
+        "description": "Der Entwurf wird `DISCARDED`, nicht gelöscht — ein zurückgezogener Signaturvorgang zeigt auf ihn und ist ein Beleg. Eine laufende Unterzeichnung wird in derselben Transaktion abgebrochen. Abgewiesen (422): eine Fassung, die gilt oder galt; eine angenommene; die erste Fassung eines Entwurfs. Ohne diesen Weg blockierte ein ungewollter Entwurf jede weitere Änderung.\n\n**Zugriff:** Erfordert die Berechtigung: `contract:version`.\n\n**Rate-Limit-Klasse:** `apiWrite`",
+        "operationId": "deleteContractsByIdVersionsByVersionId",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "name": "versionId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Erfolg",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SuccessEnvelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHORIZED — keine oder abgelaufene Sitzung.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN — angemeldet, aber ohne die nötige Berechtigung.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NOT_FOUND — nicht vorhanden, oder für diese Sitzung nicht sichtbar.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "BUSINESS_RULE — fachlich nicht zulässig, etwa eine bereits ausgestellte Rechnung ändern.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/contracts/{id}/versions/{versionId}/activate": {
+      "post": {
+        "tags": [
+          "Verträge"
+        ],
+        "summary": "Folgefassung in Kraft setzen (Fassung wechseln)",
+        "description": "V1 aktiv → V2 Entwurf → V2 aktiv, V1 abgelöst — beliebig fortsetzbar. In einer Transaktion hinter der Sperre des Vertragskopfs; genau eine Fassung gilt (Teilindex). Der Stichtag liegt nicht vor heute und nach dem Beginn der geltenden Fassung; die bisherige endet an ihm und bleibt sonst unverändert (Trigger). Danach werden offene Einsätze ab dem Stichtag umgestellt oder abgesagt und fehlende angelegt; Einsätze davor bleiben bei der bisherigen Fassung. Abgewiesen (422): laufende Unterzeichnung, abweichender Stichtag an einer angenommenen Fassung, keine Leistungen, Vertrag läuft nicht.\n\n**Zugriff:** Erfordert die Berechtigung: `contract:activate`.\n\n**Rate-Limit-Klasse:** `apiWrite`",
+        "operationId": "postContractsByIdVersionsByVersionIdActivate",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "name": "versionId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "effectiveFrom": {
+                    "type": "string",
+                    "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                  },
+                  "note": {
+                    "type": "string",
+                    "maxLength": 1000
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Erfolg",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SuccessEnvelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHORIZED — keine oder abgelaufene Sitzung.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN — angemeldet, aber ohne die nötige Berechtigung.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NOT_FOUND — nicht vorhanden, oder für diese Sitzung nicht sichtbar.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "BUSINESS_RULE — fachlich nicht zulässig, etwa eine bereits ausgestellte Rechnung ändern.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/api/contracts/{id}/versions/{versionId}/services": {
@@ -56479,6 +56751,16 @@
                     "items": {
                       "type": "object",
                       "properties": {
+                        "id": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "const": ""
+                            }
+                          ]
+                        },
                         "serviceId": {
                           "anyOf": [
                             {
@@ -57890,6 +58172,16 @@
                     "items": {
                       "type": "object",
                       "properties": {
+                        "id": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "const": ""
+                            }
+                          ]
+                        },
                         "serviceId": {
                           "anyOf": [
                             {

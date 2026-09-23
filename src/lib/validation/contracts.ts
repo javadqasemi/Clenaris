@@ -196,6 +196,11 @@ export const contractVersionSchema = z
 // ---------------------------------------------------------------------------
 
 export const contractServiceSchema = z.object({
+  /**
+   * Kennung einer bestehenden Position desselben Entwurfs. Mit ihr bleibt die
+   * Zeile erhalten — samt ihrem Einsatzplan. Ohne sie entsteht eine neue.
+   */
+  id: optionalCuid,
   serviceId: optionalCuid,
   label: z.string().trim().min(2, 'Bitte geben Sie eine Bezeichnung an.').max(160),
   description: z.string().trim().max(2000).optional(),
@@ -212,11 +217,15 @@ export const contractServiceSchema = z.object({
 });
 
 /**
- * Der Leistungsumfang wird als Ganzes ersetzt, nicht Zeile für Zeile
- * abgeglichen — dieselbe Entscheidung wie bei Qualifikationen und
- * Arbeitszeiten in Wave 7, und aus demselben Grund: An den Zeilen hängt
- * nichts, was ihre Kennung braucht, solange sie zu einem **Entwurf** gehören.
- * Ist die Version aktiv, verweigert der Dienst die Änderung ohnehin.
+ * Der Leistungsumfang wird als Ganzes geschickt — aber seit 2026-09-23 nicht
+ * mehr als Ganzes **ersetzt**. Die Annahme von Wave 10, an den Zeilen eines
+ * Entwurfs hänge nichts, stimmte nicht: Ein Versionsentwurf trägt die
+ * kopierten Einsatzpläne seiner Vorgängerin, und das Löschen der Zeilen nahm
+ * sie über die Kaskade mit. Wer einer Folgefassung eine Leistung hinzufügte,
+ * verlor die Frequenz aller bestehenden. Deshalb: Positionen mit `id` bleiben
+ * (und werden geändert), fehlende werden entfernt, neue angelegt.
+ * Ist die Version aktiv oder gebunden, verweigert der Dienst die Änderung
+ * ohnehin.
  */
 export const contractServicesReplaceSchema = z.object({
   services: z.array(contractServiceSchema).max(100, 'Höchstens 100 Positionen je Version.'),
@@ -304,10 +313,23 @@ export const scheduleGenerateSchema = z.object({
 // ---------------------------------------------------------------------------
 
 export const contractActivateSchema = z.object({
-  /** Ohne Angabe gilt der Vertragsbeginn. */
+  /**
+   * Ohne Angabe gilt der Stichtag, den die Fassung trägt. Eine abweichende
+   * Angabe nur an einer freien Fassung — an einer angenommenen steht der
+   * Stichtag im unterschriebenen Dokument.
+   */
   effectiveFrom: dateOnlySchema.optional(),
   note: z.string().trim().max(1000).optional(),
 });
+
+/**
+ * Pfad `…/contracts/{id}/versions/{versionId}`.
+ *
+ * Stand bis 2026-09-23 zweimal wortgleich **in** den Routendateien — gegen
+ * die Regel, dass jedes Schema hier liegt und damit auch in der OpenAPI-
+ * Beschreibung dasselbe ist.
+ */
+export const contractVersionParams = z.object({ id: z.string().min(1), versionId: z.string().min(1) });
 
 export const contractPauseSchema = z
   .object({

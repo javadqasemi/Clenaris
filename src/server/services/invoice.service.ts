@@ -121,8 +121,10 @@ export async function createInvoice(params: {
   vertrag?: {
     contractId: string;
     contractVersionId: string;
-    /** Kanonischer Periodenbeginn — der Schlüssel gegen Doppelabrechnung. */
+    /** Periodenbeginn — zusammen mit dem Ende der Schlüssel gegen Doppelabrechnung. */
     contractPeriodStart: Date;
+    /** Erster Tag nach der Periode; die Ausschlussbedingung verhindert Überlappung. */
+    contractPeriodEnd: Date;
   };
 }): Promise<Invoice> {
   const customer = await prisma.customer.findFirst({
@@ -162,6 +164,7 @@ export async function createInvoice(params: {
         contractId: params.vertrag?.contractId ?? null,
         contractVersionId: params.vertrag?.contractVersionId ?? null,
         contractPeriodStart: params.vertrag?.contractPeriodStart ?? null,
+        contractPeriodEnd: params.vertrag?.contractPeriodEnd ?? null,
         status: params.input.issueImmediately ? 'ISSUED' : 'DRAFT',
         issueDate,
         dueDate,

@@ -218,7 +218,7 @@ export async function applyAmendment(params: {
     userId: params.actorId,
     entity: 'ContractAmendment',
     entityId: antrag.id,
-    summary: `Änderungsantrag „${antrag.title}" wirksam gemacht — Version ${version.versionNumber} angelegt`,
+    summary: `Änderungsantrag „${antrag.title}" übernommen — Versionsentwurf ${version.versionNumber} angelegt; wirksam mit „Fassung in Kraft setzen"`,
     ip: params.ip,
   });
 
@@ -398,9 +398,15 @@ export async function applyPriceAdjustment(params: {
     },
   });
 
+  /**
+   * `contractVersionId` bleibt die **Ausgangsfassung**; das Ergebnis steht in
+   * `resultVersionId`. Bis 2026-09-23 wurde die Ausgangsfassung hier
+   * überschrieben, und die Frage „auf welchen Preis bezog sich +3 %" hatte
+   * danach keine Antwort mehr.
+   */
   const aktualisiert = await prisma.contractPriceAdjustment.update({
     where: { id: anpassung.id },
-    data: { status: 'APPLIED', appliedAt: new Date(), contractVersionId: version.id },
+    data: { status: 'APPLIED', appliedAt: new Date(), resultVersionId: version.id },
   });
 
   await audit.updated({
@@ -408,7 +414,7 @@ export async function applyPriceAdjustment(params: {
     userId: params.actorId,
     entity: 'ContractPriceAdjustment',
     entityId: anpassung.id,
-    summary: `Preisanpassung wirksam gemacht — Version ${version.versionNumber} angelegt`,
+    summary: `Preisanpassung übernommen — Versionsentwurf ${version.versionNumber} angelegt; wirksam mit „Fassung in Kraft setzen"`,
     ip: params.ip,
   });
 
