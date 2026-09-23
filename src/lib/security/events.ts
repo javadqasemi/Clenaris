@@ -243,6 +243,38 @@ export const SECURITY_EVENTS = {
     severity: 'INFO',
     label: 'Sicherheitsereignis bestätigt',
   },
+
+  // --- Geplante Läufe (RB-014) ---------------------------------------------
+  //
+  // Der Betriebszustand der Einrichtungen, auf die Sicherheit und Betrieb
+  // sich verlassen: Der Nachtlauf schliesst Signaturvorgänge, prüft Dateien
+  // nach und plant Einsätze. Fällt er aus, merkt es niemand — bis jemand vor
+  // einer verschlossenen Tür steht.
+
+  /** Ein Lauf mit mindestens einer gescheiterten Teilaufgabe. */
+  CRON_FAILED: {
+    category: 'SYSTEM',
+    severity: 'WARNING',
+    label: 'Geplanter Lauf mit Fehlern',
+  },
+  /** Drei Läufe in Folge mit Fehlern — keine Störung mehr, sondern ein Zustand. */
+  CRON_FAILED_REPEATEDLY: {
+    category: 'SYSTEM',
+    severity: 'CRITICAL',
+    label: 'Geplanter Lauf scheitert wiederholt',
+  },
+  /** Ein Lauf ist ausgeblieben — der Aufrufer (Crontab, Plattform) läuft nicht. */
+  CRON_MISSED: {
+    category: 'SYSTEM',
+    severity: 'CRITICAL',
+    label: 'Geplanter Lauf ausgeblieben',
+  },
+  /** Ein Lauf brauchte mehr als vier Fünftel seiner Zeitgrenze. */
+  CRON_SLOW: {
+    category: 'SYSTEM',
+    severity: 'WARNING',
+    label: 'Geplanter Lauf nahe an der Zeitgrenze',
+  },
 } as const satisfies Record<string, EreignisArt>;
 
 export type SecurityEventKind = keyof typeof SECURITY_EVENTS;

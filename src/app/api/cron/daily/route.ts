@@ -15,6 +15,7 @@ import { runSignatureNightly } from '@/server/services/signature.service';
 import { runScanNachlauf } from '@/server/services/file.service';
 import { runDueAutomations } from '@/server/services/automation-engine.service';
 import { runContractScheduling } from '@/server/services/contract-schedule.service';
+import { mitUeberwachung } from '@/server/services/cron-monitor.service';
 import { purgeExpiredUploads } from '@/lib/storage';
 import { logger } from '@/lib/logger';
 
@@ -27,12 +28,15 @@ export const maxDuration = 300;
  * GET /api/cron/daily — einmal täglich um 06:00 Uhr (siehe vercel.json).
  *
  * Architekturentscheid: Ein Endpunkt für alle Tagesaufgaben statt sechs
- * einzelner Cron-Einträge. Die Aufgaben sind kurz, laufen sequenziell und
- * teilen sich denselben Kontext; ein einziger Lauf ist einfacher zu
+ * einzelner Cron-Einträge. Die Aufgaben sind kurz, laufen **nebeneinander**
+ * (`Promise.allSettled`; bis 2026-09-23 stand hier fälschlich „sequenziell")
+ * und teilen sich denselben Kontext; ein einziger Lauf ist einfacher zu
  * überwachen und günstiger.
  *
  * Jede Teilaufgabe ist gekapselt: schlägt eine fehl, laufen die übrigen
- * trotzdem. Das Ergebnis meldet, was gelungen ist und was nicht.
+ * trotzdem. Das Ergebnis meldet, was gelungen ist und was nicht — und seit
+ * RB-014 auch der Statuscode: 500, sobald eine Teilaufgabe gescheitert ist,
+ * dazu ein `CronRun` mit Dauer und Zusammenfassung.
  */
 export const GET = defineCronRoute({
   handler: async () => {
@@ -92,8 +96,9 @@ export const GET = defineCronRoute({
        * Serienplanung der Verträge — Einsätze für die nächsten sechzig Tage.
        *
        * Der Lauf ist idempotent bis in die Datenbank hinein
-       * (`@@unique([serviceScheduleId, scheduleDate])`), also unbedenklich,
-       * wenn er zweimal läuft oder nach einem Abbruch wiederholt wird.
+       * (`jobs_serientermin_einmal`), also unbedenklich, wenn er zweimal
+       * läuft oder nach einem Abbruch wiederholt wird. Er setzt auch Verträge
+       * fort, deren vereinbarte Pause abgelaufen ist.
        * Umgekehrt ist er die einzige Stelle, an der die Einsätze eines
        * laufenden Vertrags von selbst entstehen: Ohne ihn stünde ein Vertrag
        * aktiv in der Liste, und niemand käme putzen.
@@ -105,32 +110,23 @@ export const GET = defineCronRoute({
       { name: 'vertragsplanung', lauf: () => runContractScheduling(organizationId) },
     ];
 
-    const results = await Promise.allSettled(aufgaben.map((a) => a.lauf()));
-
-    const summary: Record<string, unknown> = {};
-    const failures: string[] = [];
-
-    results.forEach((result, index) => {
-      const name = aufgaben[index].name;
-      if (result.status === 'fulfilled') {
-        summary[name] = result.value;
-      } else {
-        failures.push(name);
-        summary[name] = { error: String(result.reason) };
-        log.error('Teilaufgabe fehlgeschlagen', { task: name, error: result.reason });
-      }
-    });
+    const ergebnis = await mitUeberwachung({ organizationId, job: 'daily', aufgaben });
 
     log.info('Lauf abgeschlossen', {
       durationMs: Date.now() - startedAt,
-      failures: failures.length,
+      failures: ergebnis.failed,
     });
 
-    return Response.json({
-      ok: failures.length === 0,
-      durationMs: Date.now() - startedAt,
-      failures,
-      summary,
-    });
+    return Response.json(
+      {
+        ok: ergebnis.status === 'SUCCESS',
+        runId: ergebnis.runId,
+        status: ergebnis.status,
+        durationMs: ergebnis.durationMs,
+        failures: ergebnis.fehlgeschlagen,
+        summary: ergebnis.zusammenfassung,
+      },
+      { status: ergebnis.status === 'SUCCESS' ? 200 : 500 },
+    );
   },
 });

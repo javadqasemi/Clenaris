@@ -526,6 +526,7 @@ model Organization {
   tags              Tag[]
   auditLogs         AuditLog[]
   securityEvents    SecurityEvent[]
+  cronRuns          CronRun[]
   payrollSettings   PayrollSetting[]
   numberSequences   NumberSequence[]
   files             FileAsset[]
@@ -1021,6 +1022,49 @@ model SecurityEvent {
   @@index([organizationId, category, occurredAt])
   @@index([userId, occurredAt])
   @@map("security_events")
+}
+
+enum CronRunStatus {
+  RUNNING
+  /// Alle Teilaufgaben gelungen.
+  SUCCESS
+  /// Einige gelungen, einige gescheitert.
+  PARTIAL
+  /// Keine gelungen, oder der Lauf selbst brach ab.
+  FAILED
+}
+
+/// Ein Lauf eines geplanten Auftrags (`/api/cron/hourly`, `/api/cron/daily`).
+///
+/// Bis 2026-09-23 hinterliess ein Lauf nur eine Logzeile. Ob der Nachtlauf
+/// gestern überhaupt lief, wie lange er dauerte und seit wann eine Teilaufgabe
+/// scheitert, liess sich nicht beantworten — und die Antwort des Endpunkts war
+/// 200, auch wenn jede Teilaufgabe gescheitert war (RB-014). Die Zeile hier ist
+/// die Grundlage der Anzeige im Sicherheitszentrum, der Alarme und von
+/// `/api/cron/status`.
+///
+/// **Keine Geheimnisse, keine Personendaten** in `details` und `error`:
+/// Zusammenfassungen je Teilaufgabe, über `wertSchwaerzen` geschrieben.
+model CronRun {
+  id             String        @id @default(cuid())
+  organizationId String
+  /// Der Auftrag, stabil: `hourly`, `daily`.
+  job            String
+  status         CronRunStatus @default(RUNNING)
+  startedAt      DateTime      @default(now()) @db.Timestamptz(6)
+  finishedAt     DateTime?     @db.Timestamptz(6)
+  durationMs     Int?
+  /// Teilaufgaben, die gelungen sind.
+  processed      Int           @default(0)
+  /// Teilaufgaben, die gescheitert sind.
+  failed         Int           @default(0)
+  details        Json?
+  error          String?
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, job, startedAt])
+  @@map("cron_runs")
 }
 
 // ===========================================================================

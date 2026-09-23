@@ -1,5 +1,7 @@
-import { describe, it, before } from 'node:test';
+import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
+
+import { testDb, testDbGrund, testDbSchliessen } from '../helpers/testdb';
 
 import { routenVorlage } from '../../src/lib/observability/context';
 import {
@@ -392,5 +394,83 @@ describe('Der Kennzahlenendpunkt', () => {
 
     // In der Kopfzeile steht sie trotzdem — dort gehört sie immer hin.
     assert.match(antwort.headers.get('x-request-id') ?? '', /^[0-9a-f-]{36}$/);
+  });
+});
+
+// ===========================================================================
+//  RB-014 — geplante Läufe: Protokoll, Zustand, Alarm
+// ===========================================================================
+
+describe('RB-014 — Überwachung der geplanten Läufe', () => {
+  const secret = process.env.CRON_SECRET ?? 'dev-cron-secret';
+  const mitGeheimnis = { headers: { authorization: `Bearer ${secret}` } };
+  const db = testDb();
+
+  after(async () => {
+    await testDbSchliessen();
+  });
+
+  it('jeder Lauf hinterlässt ein Protokoll — mit Dauer, Teilaufgaben und ehrlichem Statuscode', async (t) => {
+    if (!db) return t.skip(`kein Zugang zur Testdatenbank: ${testDbGrund()}`);
+    const vorher = new Date();
+    const antwort = await get<{ ok: boolean; runId: string; status: string }>('/api/cron/hourly', mitGeheimnis);
+    assert.ok([200, 500].includes(antwort.status), `HTTP ${antwort.status}`);
+    const rumpf = antwort.payload!;
+    // Der Statuscode sagt dasselbe wie der Rumpf — bis 2026-09-23 war er
+    // immer 200.
+    assert.equal(antwort.status === 200, rumpf.ok, 'Statuscode und Ergebnis stimmen überein');
+
+    const lauf = await db.cronRun.findUniqueOrThrow({ where: { id: rumpf.runId } });
+    assert.equal(lauf.job, 'hourly');
+    assert.ok(lauf.startedAt >= new Date(vorher.getTime() - 1000));
+    assert.ok(lauf.finishedAt, 'Der Lauf ist abgeschlossen');
+    assert.ok((lauf.durationMs ?? -1) >= 0);
+    assert.equal(lauf.processed + lauf.failed, 3, 'Drei Teilaufgaben');
+    assert.notEqual(lauf.status, 'RUNNING');
+  });
+
+  it('der Statusendpunkt verlangt das Geheimnis und nennt keine Inhalte', async () => {
+    assert.equal((await get('/api/cron/status')).status, 401);
+    const antwort = await get<{ gesund: boolean; auftraege: { job: string; letzterLauf: string | null }[] }>(
+      '/api/cron/status',
+      mitGeheimnis,
+    );
+    assert.ok([200, 503].includes(antwort.status));
+    assert.deepEqual(antwort.payload!.auftraege.map((a) => a.job).sort(), ['daily', 'hourly']);
+    assert.doesNotMatch(antwort.text, /@|IBAN|password/i, 'Nur Zeitpunkte und Zahlen');
+  });
+
+  /**
+   * Ein ausgebliebener Nachtlauf: Die Läufe werden in der Zeit zurückgesetzt,
+   * als wäre der letzte vor 30 Stunden gewesen. Danach muss der Statuscode
+   * 503 sein, ein Alarm im Sicherheitsprotokoll stehen — und ein zweiter
+   * Aufruf darf keinen zweiten Alarm erzeugen.
+   */
+  it('ein ausgebliebener Lauf ergibt 503 und genau einen Alarm', async (t) => {
+    if (!db) return t.skip(`kein Zugang zur Testdatenbank: ${testDbGrund()}`);
+    const org = await db.organization.findFirstOrThrow({ select: { id: true } });
+    const neu = await db.cronRun.create({
+      data: { organizationId: org.id, job: 'daily', status: 'SUCCESS', startedAt: new Date(), finishedAt: new Date(), durationMs: 1 },
+    });
+    const alle = await db.cronRun.findMany({ where: { job: 'daily' }, select: { id: true, startedAt: true } });
+    const verschiebung = 30 * 3_600_000;
+    try {
+      for (const r of alle) {
+        await db.cronRun.update({ where: { id: r.id }, data: { startedAt: new Date(r.startedAt.getTime() - verschiebung) } });
+      }
+      const seit = new Date();
+      const erste = await get('/api/cron/status', mitGeheimnis);
+      assert.equal(erste.status, 503, 'Ein überfälliger Auftrag macht den Zustand ungesund');
+      const zweite = await get('/api/cron/status', mitGeheimnis);
+      assert.equal(zweite.status, 503);
+      const alarme = await db.securityEvent.count({ where: { kind: 'CRON_MISSED', occurredAt: { gte: seit } } });
+      assert.equal(alarme, 1, 'Ein Alarm je Überfälligkeit, nicht je Abfrage');
+    } finally {
+      for (const r of alle) {
+        await db.cronRun.update({ where: { id: r.id }, data: { startedAt: r.startedAt } }).catch(() => undefined);
+      }
+      await db.cronRun.delete({ where: { id: neu.id } }).catch(() => undefined);
+      await db.securityEvent.deleteMany({ where: { kind: 'CRON_MISSED', context: { path: ['job'], equals: 'daily' } } });
+    }
   });
 });

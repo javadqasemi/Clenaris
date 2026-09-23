@@ -3824,8 +3824,9 @@ export const ROUTES: RouteDoc[] = [
     tag: 'System',
     summary: 'Stündliche Aufgaben',
     description:
-      'Terminerinnerungen 24 h und 2 h vorher, fällige Aufgabenerinnerungen. Authentifiziert ' +
-      'über `Authorization: Bearer $CRON_SECRET`.',
+      'Terminerinnerungen 24 h und 2 h vorher, zeitbezogene Auslöser der Automatisierung und ' +
+      'fällige Läufe. Authentifiziert über `Authorization: Bearer $CRON_SECRET`. Jeder Lauf ' +
+      'hinterlässt ein `CronRun`; **500**, sobald eine Teilaufgabe gescheitert ist.',
     guard: { kind: 'cron' },
   },
   {
@@ -3835,7 +3836,19 @@ export const ROUTES: RouteDoc[] = [
     summary: 'Tägliche Aufgaben',
     description:
       'Mahnläufe, ablaufende Offerten, Wiederholungsbuchungen, Bewertungsanfragen, ' +
-      'Geburtstagsgrüsse, Automatisierungen.',
+      'Geburtstagsgrüsse, Automatisierungen, Vertragsplanung, Nachläufe. Jeder Lauf hinterlässt ' +
+      'ein `CronRun`; **500**, sobald eine Teilaufgabe gescheitert ist.',
+    guard: { kind: 'cron' },
+  },
+  {
+    method: 'get',
+    path: '/api/cron/status',
+    tag: 'System',
+    summary: 'Zustand der geplanten Läufe',
+    description:
+      'Für eine Überwachung von aussen: 200, wenn jeder Auftrag frisch ist, keiner hängt und keiner ' +
+      'wiederholt scheitert; sonst **503**. Bleiben stündlicher und nächtlicher Lauf beide aus, ' +
+      'meldet von innen niemand etwas — diese Adresse schon. Zeitpunkte und Zahlen, keine Inhalte.',
     guard: { kind: 'cron' },
   },
   {

@@ -18,6 +18,7 @@ import {
   TableScroll,
 } from '@/components/app/page-parts';
 import { getOrganizationId } from '@/server/services/organization.service';
+import { cronZustand, FEHLER_IN_FOLGE_ALARM } from '@/server/services/cron-monitor.service';
 import {
   getSicherheitsUeberblick,
   listAuffaelligeKonten,
@@ -94,7 +95,7 @@ export default async function SicherheitPage({
   const organizationId = await getOrganizationId();
   const seite = Math.max(1, Number(params.seite) || 1);
 
-  const [ueberblick, ereignisse, konten] = await Promise.all([
+  const [ueberblick, ereignisse, konten, laeufe] = await Promise.all([
     getSicherheitsUeberblick(organizationId),
     listSecurityEvents({
       organizationId,
@@ -105,6 +106,7 @@ export default async function SicherheitPage({
       proSeite: 50,
     }),
     listAuffaelligeKonten(organizationId),
+    cronZustand(organizationId),
   ]);
 
   const seiten = Math.max(1, Math.ceil(ereignisse.gesamt / ereignisse.proSeite));
@@ -194,6 +196,13 @@ export default async function SicherheitPage({
           <code className="mx-1 font-mono text-2xs">CLAMAV_HOST</code>; die Betriebsanleitung steht
           in <code className="font-mono text-2xs">docs/MALWARE_PROTECTION.md</code>.
         </Alert>
+      ) : ueberblick.scanner.art === 'clamav' && ueberblick.scanner.erreichbar === false ? (
+        <Alert variant="destructive">
+          <strong>ClamAV ist eingerichtet, antwortet aber nicht.</strong> Neue Dateien bekommen keinen
+          Befund und bleiben gesperrt, bis der Dienst wieder erreichbar ist; der Nachtlauf prüft sie
+          dann nach. Prüfen: läuft <code className="font-mono text-2xs">clamd</code>, stimmen
+          <code className="mx-1 font-mono text-2xs">CLAMAV_HOST</code>/<code className="font-mono text-2xs">CLAMAV_PORT</code>?
+        </Alert>
       ) : ueberblick.scanner.art === 'test' ? (
         <Alert variant="warning">
           Es läuft der <strong>Testprüfer</strong>. Er erkennt ausschliesslich die genormte
@@ -201,6 +210,75 @@ export default async function SicherheitPage({
           starten.
         </Alert>
       ) : null}
+
+      {/*
+        Die geplanten Läufe (RB-014). Auf ihnen hängen der Abschluss von
+        Signaturvorgängen, die Nachprüfung von Dateien, die Serienplanung und
+        die Automatisierungen. Bis 2026-09-23 war nirgends zu sehen, ob sie
+        liefen.
+      */}
+      <ListCard>
+        <div className="px-6 pt-5">
+          <h2 className="font-display text-title">Geplante Läufe</h2>
+          <p className="text-meta text-muted-foreground">
+            Stündlich und nächtlich. Von aussen überwachbar über <code className="font-mono text-2xs">/api/cron/status</code>.
+          </p>
+        </div>
+        <TableScroll>
+          <table className="data-table">
+            <caption className="sr-only">Zustand der geplanten Läufe</caption>
+            <thead>
+              <tr>
+                <th scope="col">Auftrag</th>
+                <th scope="col">Zustand</th>
+                <th scope="col">Letzter Erfolg</th>
+                <th scope="col">Letzter Fehler</th>
+                <th scope="col" className="text-right">Dauer</th>
+                <th scope="col" className="text-right">Teilaufgaben</th>
+                <th scope="col">Nächster erwartet</th>
+              </tr>
+            </thead>
+            <tbody>
+              {laeufe.map((lauf) => {
+                const problem = lauf.ueberfaellig || lauf.haengt || lauf.fehlerInFolge >= FEHLER_IN_FOLGE_ALARM;
+                return (
+                  <tr key={lauf.job}>
+                    <td className="font-medium">{lauf.job === 'hourly' ? 'Stündlich' : 'Nächtlich'}</td>
+                    <td>
+                      <Badge variant={problem ? 'destructive' : lauf.fehlerInFolge > 0 ? 'warning' : 'neutral'}>
+                        {!lauf.letzterLauf
+                          ? 'Noch nie gelaufen'
+                          : lauf.ueberfaellig
+                            ? 'Ausgeblieben'
+                            : lauf.haengt
+                              ? 'Hängt'
+                              : lauf.fehlerInFolge > 0
+                                ? `${lauf.fehlerInFolge} Fehler in Folge`
+                                : 'In Ordnung'}
+                      </Badge>
+                    </td>
+                    <td className="tabular-nums text-muted-foreground">
+                      {lauf.letzterErfolg ? formatDateTime(lauf.letzterErfolg) : '—'}
+                    </td>
+                    <td className="tabular-nums text-muted-foreground">
+                      {lauf.letzterFehler ? formatDateTime(lauf.letzterFehler) : '—'}
+                    </td>
+                    <td className="num text-muted-foreground">
+                      {lauf.letzteDauerMs !== null ? `${(lauf.letzteDauerMs / 1000).toFixed(1)} s` : '—'}
+                    </td>
+                    <td className="num text-muted-foreground">
+                      {lauf.verarbeitet !== null ? `${lauf.verarbeitet} gelungen · ${lauf.fehlgeschlagen ?? 0} gescheitert` : '—'}
+                    </td>
+                    <td className="tabular-nums text-muted-foreground">
+                      {lauf.naechsterErwartet ? formatDateTime(lauf.naechsterErwartet) : '—'}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </TableScroll>
+      </ListCard>
 
       {(ueberblick.dateienInQuarantaene > 0 || ueberblick.dateienOhneBefund > 0) && (
         <Alert variant={ueberblick.dateienInQuarantaene > 0 ? 'destructive' : 'warning'}>

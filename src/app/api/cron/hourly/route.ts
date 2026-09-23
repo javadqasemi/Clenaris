@@ -1,7 +1,8 @@
 import { defineCronRoute } from '@/lib/api/handler';
 import { getOrganizationId } from '@/server/services/organization.service';
 import { sendBookingReminders, sendCrewReminders } from '@/server/services/automation.service';
-import { runDueAutomations } from '@/server/services/automation-engine.service';
+import { emitZeitbezogeneAusloeser, runDueAutomations } from '@/server/services/automation-engine.service';
+import { mitUeberwachung } from '@/server/services/cron-monitor.service';
 
 export const runtime = 'nodejs';
 export const maxDuration = 120;
@@ -13,50 +14,56 @@ export const maxDuration = 120;
  * Kundschaft, 2 Stunden vorher an Kundschaft und Team. Ein stündlicher Takt
  * genügt, weil die Zeitfenster grosszügig gewählt sind (20–28 bzw. 1–3
  * Stunden) — so fällt keine Erinnerung durch, auch wenn ein Lauf ausfällt.
+ *
+ * **Protokolliert und mit ehrlichem Statuscode** (seit 2026-09-23, RB-014):
+ * Jeder Lauf hinterlässt ein `CronRun`; scheitert eine Teilaufgabe, antwortet
+ * der Endpunkt mit 500, damit der Aufrufer (`curl -f` in der Crontab, die
+ * Plattform) den Fehler sieht. Bis dahin war die Antwort 200, auch wenn jede
+ * Teilaufgabe gescheitert war.
  */
 export const GET = defineCronRoute({
   handler: async () => {
     const organizationId = await getOrganizationId();
-    const startedAt = Date.now();
 
-    const [customerReminders, crewReminders, automatisierungen] = await Promise.allSettled([
-      sendBookingReminders(organizationId),
-      sendCrewReminders(organizationId),
-      /**
-       * Die fälligen Automatisierungen.
-       *
-       * **Stündlich und nicht minütlich**, weil `delayMinutes` in Minuten
-       * gerechnet wird und eine Regel mit „nach 5 Minuten" damit bis zu einer
-       * Stunde wartet. Das ist die bewusste Grenze dieser Bauart: Sie kommt
-       * ohne eigenen Arbeitsprozess und ohne Warteschlangendienst aus, und
-       * der Preis ist die Genauigkeit. Für „Erinnerung 24 Stunden vorher"
-       * und „Nachfassen in drei Tagen" — also für das, wofür Regeln in einem
-       * Reinigungsbetrieb da sind — ist eine Stunde ohne Bedeutung.
-       *
-       * Wer Minutengenauigkeit braucht, braucht einen Arbeitsprozess, und
-       * das ist eine Betriebsentscheidung.
-       */
-      runDueAutomations({ organizationId, limit: 200 }),
-    ]);
-
-    return Response.json({
-      ok:
-        customerReminders.status === 'fulfilled' &&
-        crewReminders.status === 'fulfilled' &&
-        automatisierungen.status === 'fulfilled',
-      durationMs: Date.now() - startedAt,
-      customerReminders:
-        customerReminders.status === 'fulfilled'
-          ? customerReminders.value
-          : { error: String(customerReminders.reason) },
-      crewReminders:
-        crewReminders.status === 'fulfilled'
-          ? { sent: crewReminders.value }
-          : { error: String(crewReminders.reason) },
-      automatisierungen:
-        automatisierungen.status === 'fulfilled'
-          ? automatisierungen.value
-          : { error: String(automatisierungen.reason) },
+    const ergebnis = await mitUeberwachung({
+      organizationId,
+      job: 'hourly',
+      aufgaben: [
+        { name: 'customerReminders', lauf: () => sendBookingReminders(organizationId) },
+        { name: 'crewReminders', lauf: async () => ({ sent: await sendCrewReminders(organizationId) }) },
+        {
+          /**
+           * Die Automatisierungen: zuerst die zeitbezogenen Auslöser melden
+           * (Erinnerung, Fälligkeit, Geburtstag — bis 2026-09-23 entstanden
+           * sie nie, RB-012), dann die fälligen Läufe ausführen. Nacheinander,
+           * damit ein eben gemeldeter Lauf, der sofort fällig ist, im selben
+           * Takt ausgeführt wird.
+           *
+           * **Stündlich und nicht minütlich**, weil `delayMinutes` in Minuten
+           * gerechnet wird und eine Regel mit „nach 5 Minuten" damit bis zu
+           * einer Stunde wartet. Das ist die bewusste Grenze dieser Bauart:
+           * Sie kommt ohne eigenen Arbeitsprozess und ohne
+           * Warteschlangendienst aus, und der Preis ist die Genauigkeit.
+           */
+          name: 'automatisierungen',
+          lauf: async () => ({
+            ausgeloest: await emitZeitbezogeneAusloeser({ organizationId }),
+            ausgefuehrt: await runDueAutomations({ organizationId, limit: 200 }),
+          }),
+        },
+      ],
     });
+
+    return Response.json(
+      {
+        ok: ergebnis.status === 'SUCCESS',
+        runId: ergebnis.runId,
+        status: ergebnis.status,
+        durationMs: ergebnis.durationMs,
+        failures: ergebnis.fehlgeschlagen,
+        summary: ergebnis.zusammenfassung,
+      },
+      { status: ergebnis.status === 'SUCCESS' ? 200 : 500 },
+    );
   },
 });

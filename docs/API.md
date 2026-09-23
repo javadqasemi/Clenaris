@@ -5,7 +5,7 @@
 > Quelle, aus der sowohl diese Referenz als auch die Laufzeitvalidierung
 > stammen.
 
-Stand: 460 Endpunkte. Die maschinenlesbare Fassung liegt in
+Stand: 461 Endpunkte. Die maschinenlesbare Fassung liegt in
 [`openapi.yaml`](./openapi.yaml) bzw. [`openapi.json`](./openapi.json).
 
 ## Grundlagen
@@ -5777,7 +5777,7 @@ Familie.
 
 ### `GET /api/cron/hourly`
 
-**Stündliche Aufgaben.** Terminerinnerungen 24 h und 2 h vorher, fällige Aufgabenerinnerungen. Authentifiziert über `Authorization: Bearer $CRON_SECRET`.
+**Stündliche Aufgaben.** Terminerinnerungen 24 h und 2 h vorher, zeitbezogene Auslöser der Automatisierung und fällige Läufe. Authentifiziert über `Authorization: Bearer $CRON_SECRET`. Jeder Lauf hinterlässt ein `CronRun`; **500**, sobald eine Teilaufgabe gescheitert ist.
 
 - **Zugriff:** Nur für den Scheduler: `Authorization: Bearer $CRON_SECRET`.
 - **Erfolg:** 200
@@ -5785,7 +5785,15 @@ Familie.
 
 ### `GET /api/cron/daily`
 
-**Tägliche Aufgaben.** Mahnläufe, ablaufende Offerten, Wiederholungsbuchungen, Bewertungsanfragen, Geburtstagsgrüsse, Automatisierungen.
+**Tägliche Aufgaben.** Mahnläufe, ablaufende Offerten, Wiederholungsbuchungen, Bewertungsanfragen, Geburtstagsgrüsse, Automatisierungen, Vertragsplanung, Nachläufe. Jeder Lauf hinterlässt ein `CronRun`; **500**, sobald eine Teilaufgabe gescheitert ist.
+
+- **Zugriff:** Nur für den Scheduler: `Authorization: Bearer $CRON_SECRET`.
+- **Erfolg:** 200
+- **Mögliche Fehler:** 401, 500
+
+### `GET /api/cron/status`
+
+**Zustand der geplanten Läufe.** Für eine Überwachung von aussen: 200, wenn jeder Auftrag frisch ist, keiner hängt und keiner wiederholt scheitert; sonst **503**. Bleiben stündlicher und nächtlicher Lauf beide aus, meldet von innen niemand etwas — diese Adresse schon. Zeitpunkte und Zahlen, keine Inhalte.
 
 - **Zugriff:** Nur für den Scheduler: `Authorization: Bearer $CRON_SECRET`.
 - **Erfolg:** 200

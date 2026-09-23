@@ -194,6 +194,61 @@ Unverändert seit Gate 3, hier der Vollständigkeit halber:
 
 ---
 
+## 6a. Geplante Läufe (`cron_runs`, `GET /api/cron/status`)
+
+**Der Befund (RB-014):** `/api/cron/hourly` und `/api/cron/daily` antworteten
+mit 200, auch wenn jede Teilaufgabe gescheitert war — ein `curl -f` in der
+Crontab schlug nie an. Ob ein Lauf überhaupt stattfand, stand nur in einer
+Logzeile. Auf diesen Läufen hängen Signaturabschlüsse, Dateinachprüfung,
+Serienplanung der Verträge und die Automatisierungen.
+
+**Was jetzt gilt** (`cron-monitor.service.ts`):
+
+- **Ein Protokoll je Lauf** (`CronRun`), angelegt *vor* dem ersten Schritt —
+  ein Lauf, der mittendrin abbricht, bleibt als `RUNNING` sichtbar und wird
+  nach seiner Zeitgrenze als „hängt" gewertet. Festgehalten: Beginn, Ende,
+  Dauer, gelungene und gescheiterte Teilaufgaben, eine geschwärzte
+  Zusammenfassung je Teilaufgabe (`wertSchwaerzen`, Fehlertexte über
+  `freitextSchwaerzen`, gekürzt auf 300 Zeichen).
+- **Der Statuscode sagt die Wahrheit.** Ein Lauf, der nicht `SUCCESS` ist,
+  antwortet 500. Die Teilaufgaben laufen weiterhin nebeneinander, eine
+  gescheiterte hält die anderen nicht auf.
+- **Zustand je Auftrag**: letzter Erfolg, letzter Fehler, Dauer, verarbeitet /
+  gescheitert, nächster erwarteter Lauf, Fehler in Folge, überfällig, hängt —
+  sichtbar im Sicherheitszentrum (`/admin/sicherheit`, „Geplante Läufe").
+
+| Auftrag | Takt | Zeitgrenze | Überfällig nach |
+|---|---|---|---|
+| `hourly` | 60 min | 120 s | 150 min |
+| `daily` | 24 h | 300 s | 26 h |
+
+**Alarme** gehen ins Sicherheitsprotokoll (Kategorie SYSTEM), bei den
+schweren zusätzlich als Benachrichtigung an alle mit `security:read` und —
+falls gesetzt — an `ALERT_WEBHOOK_URL`:
+
+| Art | Wann | Benachrichtigung |
+|---|---|---|
+| `CRON_FAILED` | ein Lauf endet `PARTIAL` oder `FAILED` | nein |
+| `CRON_FAILED_REPEATEDLY` | drei abgeschlossene Läufe in Folge nicht erfolgreich | ja |
+| `CRON_SLOW` | Dauer über 80 % der Zeitgrenze | nein |
+| `CRON_MISSED` | der jeweils andere Auftrag ist überfällig — einmal je Ausfall | ja |
+
+**Ausgebliebene Läufe erkennt man von innen nur halb.** Der stündliche Lauf
+prüft den täglichen und umgekehrt; bleiben *beide* aus, meldet niemand etwas.
+Dafür gibt es `GET /api/cron/status` (Bearer `CRON_SECRET`): 200, solange
+alles gesund ist, **503**, sobald ein Auftrag überfällig ist, hängt oder
+dreimal in Folge scheitert. Ein externer Überwachungsdienst fragt ihn ab —
+welcher, ist eine Betriebsentscheidung und gehört ins Runbook, nicht in den
+Code. Ohne diesen Dienst bleibt ein vollständiger Ausfall des Schedulers
+unbemerkt; das steht so im Abschlussbericht.
+
+**Der Webhook** nimmt nur `https://`, wartet höchstens fünf Sekunden, folgt
+keiner Umleitung und bekommt Art, Auftrag, Satz und Zeitpunkt — nichts, was
+nicht auch im Sicherheitszentrum stünde. Ein scheiternder Alarm macht den Lauf
+nicht nachträglich rot.
+
+---
+
 ## 7. Was bewusst fehlt
 
 | Punkt | Wohin | Warum |
@@ -216,4 +271,6 @@ Unverändert seit Gate 3, hier der Vollständigkeit halber:
 | `src/lib/logger.ts` | Zieht die Kennung selbst aus dem Kontext |
 | `src/lib/api/response.ts` | Kennung im Rumpf einer 500er-Antwort |
 | `src/app/api/metrics/route.ts` | Der Endpunkt |
+| `src/server/services/cron-monitor.service.ts` | Protokoll, Zustand und Alarme der geplanten Läufe |
+| `src/app/api/cron/status/route.ts` | Zustand der Läufe für einen externen Überwachungsdienst |
 | `tests/api/beobachtbarkeit.test.ts` | 23 Prüfungen — Registrierung direkt, Verdrahtung über HTTP |

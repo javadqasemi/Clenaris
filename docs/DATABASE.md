@@ -4,7 +4,7 @@
 > Diagramme sind damit nie älter als das Schema. Prosa und Bereichseinteilung
 > stehen in `scripts/generate-erd.ts`.
 
-**128 Modelle, 96 Aufzählungstypen, 2467 Felder.**
+**129 Modelle, 97 Aufzählungstypen, 2480 Felder.**
 PostgreSQL 16+; alle Zeitstempel als `timestamptz` in UTC, Anzeige in Europe/Zurich.
 
 ## Vier Entscheidungen, die das ganze Schema prägen
@@ -36,7 +36,7 @@ Beleg so lesbar, wie er ausgestellt wurde.
 ```mermaid
 flowchart LR
   stammdaten["Mandant und Stammdaten<br/><small>6 Modelle</small>"]
-  identitaet["Identität und Zugriff<br/><small>7 Modelle</small>"]
+  identitaet["Identität und Zugriff<br/><small>8 Modelle</small>"]
   signatur["Elektronische Unterzeichnung<br/><small>5 Modelle</small>"]
   crm["CRM<br/><small>13 Modelle</small>"]
   katalog["Leistungskatalog und Preislogik<br/><small>6 Modelle</small>"]
@@ -125,7 +125,7 @@ erDiagram
 
 | Modell | Tabelle | Felder | Zweck |
 | --- | --- | --- | --- |
-| `Organization` | `organizations` | 114 | Mandant — Firmendaten, Bankverbindung, Erscheinungsbild. Wurzel fast aller Beziehungen. |
+| `Organization` | `organizations` | 115 | Mandant — Firmendaten, Bankverbindung, Erscheinungsbild. Wurzel fast aller Beziehungen. |
 | `NumberSequence` | `number_sequences` | 6 | Fortlaufende, lückenlose Belegnummern (Schweizer Buchhaltungsanforderung). |
 | `OpeningHours` | `opening_hours` | 7 | Öffnungszeiten je Wochentag; Grundlage der buchbaren Zeitfenster. |
 | `Holiday` | `holidays` | 7 | Feiertage und Betriebsferien. Sperren Termine und zählen nicht als Abwesenheitstage. |
@@ -208,6 +208,16 @@ erDiagram
     String summary
     Json context
   }
+  CronRun {
+    String id PK
+    String organizationId
+    String job
+    CronRunStatus status
+    DateTime startedAt
+    DateTime finishedAt
+    Int durationMs
+    Int processed
+  }
   User ||--o{ RefreshToken : "user"
   User |o--o{ VerificationToken : "user"
   User ||--o{ Consent : "user"
@@ -225,6 +235,7 @@ erDiagram
 | `Consent` | `consents` | 9 | Nachweis erteilter und widerrufener Einwilligungen mit Zeitpunkt und IP. |
 | `AuditLog` | `audit_logs` | 13 | Prüfprotokoll aller ändernden Vorgänge — wer, wann, was, vorher/nachher. |
 | `SecurityEvent` | `security_events` | 17 | Sicherheitsereignisse — der Strom, den das Sicherheitszentrum liest. |
+| `CronRun` | `cron_runs` | 12 | Ein Lauf eines geplanten Auftrags (`/api/cron/hourly`, `/api/cron/daily`). |
 
 ## Elektronische Unterzeichnung
 
@@ -1708,6 +1719,7 @@ exakte TypeScript-Typen.
 | `PublicTokenPurpose` | `QUOTE_VIEW`, `QUOTE_RESPOND`, `INVOICE_VIEW`, `INVOICE_PAY`, `BOOKING_MANAGE`, `DOCUMENT_VIEW`, `SIGNATURE_ACCESS`, `SIGNATURE_OTP`, `SIGNATURE_RESULT_VIEW` |
 | `SecuritySeverity` | `INFO`, `WARNING`, `CRITICAL` |
 | `SecurityCategory` | `AUTHENTICATION`, `SESSION`, `ACCESS`, `PUBLIC_LINK`, `FILE`, `SYSTEM` |
+| `CronRunStatus` | `RUNNING`, `SUCCESS`, `PARTIAL`, `FAILED` |
 | `StorageDriver` | `LOCAL`, `SUPABASE` |
 | `FileProvenance` | `USER_UPLOAD`, `SYSTEM_GENERATED`, `TRUSTED_IMPORT`, `LEGACY_UNSCANNED` |
 | `FileScanStatus` | `PENDING`, `SCANNING`, `CLEAN`, `INFECTED`, `ERROR`, `QUARANTINED` |
