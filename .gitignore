@@ -85,3 +85,7 @@ logs/
 # gelöscht; stehen sie hier, können sie nie versehentlich verfolgt werden.
 .env.incoming
 .env.tmp.*
+# Release-Artefakte (Production V2, scripts/release-artefakt.ts) — sie
+# enthalten `node_modules` und gehören in die CI-Ablage, nicht ins Repository.
+release/
+RELEASE.json
