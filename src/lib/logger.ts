@@ -23,6 +23,8 @@
  *    und Ursache aus — aber nur hier, nie an die Kundschaft.
  */
 
+import { istSensiblerSchluessel } from './sensitive-fields';
+
 const LEVELS = { debug: 10, info: 20, warn: 30, error: 40, silent: 100 } as const;
 
 export type LogLevel = keyof typeof LEVELS;
@@ -43,9 +45,23 @@ const AHV = /\b756\.\d{4}\.\d{4}\.\d{2}\b/g;
 /** Lange zufällige Zeichenketten — Token, Schlüssel, Signaturen. */
 const TOKEN = /\b[A-Za-z0-9_-]{32,}\b/g;
 
-/** Schlüssel, deren Wert unabhängig vom Inhalt nie im Protokoll erscheint. */
-const SECRET_KEYS =
-  /^(password|passwort|token|secret|authorization|cookie|apiKey|api_key|signature|refreshToken|accessToken|iban|ahvNumber)$/i;
+/**
+ * Schlüssel, deren Wert unabhängig vom Inhalt nie im Protokoll erscheint.
+ *
+ * `signature` bleibt hier zusätzlich zur gemeinsamen Regel stehen: Im Logger
+ * ist es der Signaturkopf eines Webhooks, also ein Geheimnis. Im
+ * Prüfprotokoll wäre dasselbe Wort zu breit. `hourlyRate` ebenso: Der Logger
+ * kennt keine Entität und kann Lohn und Katalogpreis nicht unterscheiden; ein
+ * maskierter Katalogpreis in einer Fehlermeldung kostet nichts. Alles Übrige entscheidet
+ * `istSensiblerSchluessel` — dieselbe Regel wie im Prüfprotokoll, damit ein
+ * Lohnbetrag nicht über eine Fehlermeldung hinausgeht, die das Prüfprotokoll
+ * zurückhält.
+ */
+const SECRET_KEYS = /^(signature|hourlyRate)$/i;
+
+function geheimerSchluessel(key: string): boolean {
+  return SECRET_KEYS.test(key) || istSensiblerSchluessel(key);
+}
 
 export function redact(value: string): string {
   return value
@@ -77,7 +93,7 @@ function scrub(value: unknown, depth = 0): unknown {
   if (typeof value === 'object') {
     const out: Record<string, unknown> = {};
     for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
-      out[key] = SECRET_KEYS.test(key) ? '[maskiert]' : scrub(item, depth + 1);
+      out[key] = geheimerSchluessel(key) ? '[maskiert]' : scrub(item, depth + 1);
     }
     return out;
   }

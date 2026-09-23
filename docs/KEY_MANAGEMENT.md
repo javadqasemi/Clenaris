@@ -129,6 +129,46 @@ verschlüsselt in der Spalte liegt, und dass die Aggregation über `hourlyRate`
 weiterhin in der Datenbank läuft. Wer die Entscheidung umdreht, bricht diese
 Prüfungen und muss sich erklären.
 
+### 3.5 Die Lücke daneben: das Prüfprotokoll (RB-010, 2026-09-23)
+
+Die Entscheidung in 3.4 setzt voraus, dass Lohnbeträge **nur** in ihren
+Spalten stehen. Das stimmte nicht: `updateEmployee` schrieb die vollständige
+Eingabe nach `audit_logs.changes`. Die Schwärzungsliste war exakt und kannte
+`hourlyRate`, `monthlySalary`, `birthday`, die Notfallkontakte, Wohnadresse
+und internen Notizen nicht; ab der fünften Ebene liess `redact()` den Wert
+ohnehin ungefiltert durch.
+
+**Behoben** durch eine gemeinsame Regel in `src/lib/sensitive-fields.ts`,
+die Prüfprotokoll, Sicherheitsprotokoll und Logger gleichermassen benutzen:
+
+- Teilwort-Muster für ganze Familien (`salary`, `birth`, `emergency`,
+  `token`, `iban`, `ahvnumber` …), unabhängig von der Schreibweise.
+- Felder, die nur in einer Entität Personendaten sind (`Employee.city`,
+  `Payslip.alv`). `PayrollSetting.alv` ist ein Satz und bleibt sichtbar.
+- Zu tief Verschachteltes wird gekürzt, nicht durchgelassen.
+- IBAN, AHV-Nummer und JWT werden auch in der Zusammenfassung ersetzt.
+
+Sichtbar bleibt der **Schlüssel**: Das Protokoll zeigt, dass sich
+`monthlySalary` geändert hat, nicht den Betrag.
+`tests/api/protokoll-schwaerzung.test.ts` prüft die Regel und den echten
+Weg bis in die Tabelle.
+
+**Altbestand.** Einträge vor der Behebung enthalten die Werte weiterhin.
+Die Bereinigung ist vorbereitet, aber **nicht ausgeführt**:
+
+1. Trockenlauf in der Zielumgebung: `npx tsx scripts/audit-bereinigung.ts`
+   zählt die betroffenen Einträge je Entität und schreibt nichts.
+2. Freigabe durch die für Datenschutz verantwortliche Person. Ein
+   Prüfprotokoll zu ändern ist ein Eingriff in einen Beleg.
+3. Sicherung der Datenbank (`scripts/db-backup.ts`).
+4. `npx tsx scripts/audit-bereinigung.ts --anwenden` ersetzt die Werte in
+   `changes` (und IBAN/AHV/JWT in `summary`). Wer, wann, was bleibt. Die
+   Bereinigung protokolliert sich selbst mit der Zahl der Einträge.
+5. Zweiter Trockenlauf: muss „Betroffen: 0" melden.
+
+Offen bleibt die Sicherung: Ein Backup von vor der Bereinigung enthält die
+Werte weiterhin und läuft erst mit seiner Aufbewahrungsfrist aus.
+
 ---
 
 ## 4. Das Format
