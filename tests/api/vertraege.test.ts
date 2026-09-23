@@ -1187,6 +1187,52 @@ describe('Verträge', () => {
       assert.equal(gedeckt!.label, data(antwort).periodLabel);
     });
 
+    /**
+     * Ohne Stichtag die **abgeschlossene** Periode, nie die laufende.
+     *
+     * Bis 2026-09-23 war der Vorgabetag „gestern" — an jedem Tag ausser dem
+     * ersten einer Periode also die laufende. Mit einem Fassungswechsel zu
+     * morgen fakturierte das den angebrochenen Monat anteilig (1200 × 23/30),
+     * obwohl die Maske „die vorige" verspricht. Gefunden von der Browserreihe.
+     */
+    it('rechnet ohne Stichtag die zuletzt abgeschlossene Periode ab — auch mit einer Fassung ab morgen', async () => {
+      const id = await abrechenbarerVertrag();
+      const neu = await post<{ data: { id: string } }>(
+        `/api/contracts/${id}/versions`,
+        {
+          version: {
+            effectiveFrom: tagIn(1),
+            reason: 'Neuer Preis ab morgen',
+            billingCycle: 'MONTHLY',
+            paymentTermDays: 30,
+            pricingModel: 'FIXED_PERIOD',
+            baseAmount: 1500,
+            vatRate: 8.1,
+            noticePeriodDays: 90,
+            renewalType: 'NONE',
+          },
+        },
+        { jar: jars.admin },
+      );
+      assert.equal(neu.status, 201, JSON.stringify(neu.payload));
+      const aktiv = await post(`/api/contracts/${id}/versions/${data(neu).id}/activate`, {}, { jar: jars.admin });
+      assert.equal(aktiv.status, 200, JSON.stringify(aktiv.payload));
+
+      const antwort = await post<{ data: { invoiceId: string; netto: number; versionNumber: number; periodEnd: string } }>(
+        `/api/contracts/${id}/invoices`,
+        {},
+        { jar: jars.admin },
+      );
+      assert.equal(antwort.status, 201, JSON.stringify(antwort.payload));
+      merke(data(antwort));
+      assert.equal(data(antwort).netto, 1200, 'Eine volle Periode, kein angebrochener Monat');
+      assert.equal(data(antwort).versionNumber, 1, 'Unter der Fassung, die damals galt');
+      assert.ok(
+        String(data(antwort).periodEnd).slice(0, 10) < tagIn(0),
+        `Die Periode endet vor heute, nicht erst in der Zukunft (${data(antwort).periodEnd})`,
+      );
+    });
+
     it('legt beim zweiten Aufruf nichts an — dieselbe Rechnung, 200 statt 201', async () => {
       const id = await abrechenbarerVertrag();
 

@@ -77,9 +77,35 @@ export interface Vertragsrechnung {
   brutto: number;
 }
 
-/** Ein Tag vor heute in Zürich — liegt also in der vorigen Periode. */
-function vorigerTag(): Date {
-  return plusTage(zuercherHeute(), -1);
+/**
+ * Ein Tag in der **zuletzt abgeschlossenen** Periode.
+ *
+ * Bis 2026-09-23 stand hier „gestern" — mit dem Kommentar, gestern liege in
+ * der vorigen Periode. Das stimmt nur am ersten Tag einer Periode. An jedem
+ * anderen Tag liegt gestern in der **laufenden**, und „Periode abrechnen"
+ * ohne Stichtag fakturierte einen angebrochenen Monat: am 23. September den
+ * September, und nach einem Fassungswechsel zum 24. anteilig 23/30 — obwohl
+ * die Maske „die vorige" verspricht. Gefunden von der Browserreihe (Fall D).
+ *
+ * Jetzt: die Periode, in der heute liegt, bestimmen und den Tag davor nehmen.
+ * Schneidet ein Fassungswechsel die laufende Periode, ist ihr Beginn der
+ * Stichtag der neuen Fassung, und der Tag davor liegt im abgeschlossenen
+ * Stück der alten — genau das, was als Nächstes fällig ist. Gilt heute keine
+ * Fassung (Vertrag beendet), ist gestern der richtige Tag: Die letzte Periode
+ * ist dann abgeschlossen.
+ */
+function tagDerLetztenAbgeschlossenenPeriode(
+  fassungen: FassungZeitraum[],
+  vertrag: { startDate: Date; endDate: Date | null; terminationEffectiveAt: Date | null },
+): Date {
+  const heute = zuercherHeute();
+  const laufend = vertragsperiode({
+    fassungen,
+    stichtag: heute,
+    vertragsBeginn: vertrag.startDate,
+    vertragsEndeExklusiv: vertragsEndeExklusiv(vertrag),
+  });
+  return plusTage(laufend ? laufend.start : heute, -1);
 }
 
 /** Die Fassungen eines Vertrags, die je galten, in der Form der Periodenrechnung. */
@@ -154,9 +180,10 @@ export async function createContractInvoice(params: {
     throw new BusinessRuleError('Nur ein Vertrag, der in Kraft ist oder war, lässt sich abrechnen.');
   }
 
-  const stichtag = alsTag(params.stichtag ?? vorigerTag());
+  const fassungen = geltendeFassungen(vertrag.versions);
+  const stichtag = alsTag(params.stichtag ?? tagDerLetztenAbgeschlossenenPeriode(fassungen, vertrag));
   const periode = vertragsperiode({
-    fassungen: geltendeFassungen(vertrag.versions),
+    fassungen,
     stichtag,
     vertragsBeginn: vertrag.startDate,
     vertragsEndeExklusiv: vertragsEndeExklusiv(vertrag),
@@ -379,7 +406,9 @@ export async function contractBillingOverview(params: {
     } | null;
   }> = [];
 
-  let stichtag = vorigerTag();
+  // Ab der zuletzt abgeschlossenen Periode rückwärts: Die laufende ist nicht
+  // „offen", sondern noch nicht fällig, und stünde sonst oben als Lücke da.
+  let stichtag = tagDerLetztenAbgeschlossenenPeriode(fassungen, vertrag);
   for (let i = 0; i < anzahl; i++) {
     const periode = vertragsperiode({
       fassungen,
