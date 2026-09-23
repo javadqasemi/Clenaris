@@ -35,9 +35,42 @@ interface Verstoss {
   nodes: { target: string[]; kontrast?: string }[];
 }
 
-async function pruefe(page: Page, pfad: string, testInfo: { attach: (name: string, opts: { body: string; contentType: string }) => Promise<void> }) {
+/**
+ * Warten, bis die Seite ruhig ist — sonst misst axe Zwischenbilder.
+ *
+ * Gefunden in der Schlussprüfung (2 von 10 vollen Läufen rot): Das
+ * Cookie-Banner erscheint 800 ms nach dem Laden und blendet in 500 ms ein.
+ * `networkidle` fiel mal davor, mal mitten hinein; im zweiten Fall mass axe
+ * den halb durchsichtigen Link mit 2.5 : 1 statt seiner echten Farbe. Der
+ * Fehler lag in der Messung, nicht in der Seite — und eine Reihe, die zufällig
+ * rot wird, wird abgeschaltet.
+ *
+ * Deshalb: auf öffentlichen Seiten erst das Banner abwarten (es gehört zur
+ * Seite und wird mitgeprüft), dann alle *endlichen* laufenden Animationen.
+ * Unendliche (Laufband, Puls) enden nie und werden übersprungen.
+ */
+async function ruhigWarten(page: Page, mitBanner: boolean): Promise<void> {
+  if (mitBanner) {
+    await page.locator('[role="dialog"][aria-labelledby="cookie-title"]').waitFor({ state: 'visible', timeout: 10_000 });
+  }
+  await page.evaluate(async () => {
+    const endliche = document.getAnimations().filter((a) => {
+      const zeit = a.effect?.getComputedTiming();
+      return a.playState === 'running' && zeit !== undefined && zeit.endTime !== Infinity;
+    });
+    await Promise.all(endliche.map((a) => a.finished.catch(() => undefined)));
+  });
+}
+
+async function pruefe(
+  page: Page,
+  pfad: string,
+  testInfo: { attach: (name: string, opts: { body: string; contentType: string }) => Promise<void> },
+  mitBanner = false,
+) {
   await page.goto(pfad);
   await page.waitForLoadState('networkidle');
+  await ruhigWarten(page, mitBanner);
   await page.addScriptTag({ path: AXE });
   const verstoesse = await page.evaluate(async () => {
     type Roh = Omit<Verstoss, 'nodes'> & { nodes: { target: string[]; any: { data?: { fgColor?: string; bgColor?: string; contrastRatio?: number } }[] }[] };
@@ -67,7 +100,9 @@ test.describe('Barrierefreiheit (axe, WCAG 2.1 A/AA)', () => {
   test('öffentliche Seiten', async ({ page }, testInfo) => {
     const befunde: string[] = [];
     for (const pfad of OEFFENTLICH) {
-      const { schwer } = await pruefe(page, pfad, testInfo);
+      // Ohne Entscheidung erscheint das Cookie-Banner auf jeder Seite des
+      // `(public)`-Rahmens — nicht auf der Anmeldung, die hat einen eigenen.
+      const { schwer } = await pruefe(page, pfad, testInfo, !pfad.startsWith('/auth/'));
       for (const v of schwer) befunde.push(zeile(pfad, v));
     }
     expect(befunde, befunde.join('\n')).toEqual([]);
