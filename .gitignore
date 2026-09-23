@@ -78,7 +78,12 @@ public/pdfjs/
 # Protokolle der Auslieferung und von PM2 entstehen auf dem Server bei jedem
 # Lauf. Sie gehören zum Betrieb, nicht zum Quelltext — und ein Protokoll im
 # Repository wäre beim nächsten `git reset --hard` ohnehin weg.
-logs/
+#
+# Verankert (`/logs/`), nicht `logs/`: Das unverankerte Muster traf jedes
+# Verzeichnis dieses Namens — auch `src/app/api/communication/logs/`. Die
+# Route aus Wave 14 lag deshalb nur örtlich; im Repository fehlte sie, und
+# erst ein sauberer Bau aus `git archive` fiel darüber (Wave 25).
+/logs/
 # Gesicherte Builds und die Sperrdatei der Auslieferung.
 .deploy/
 # Zwischenstufen der Secret-Übertragung. Sie werden nach dem Zusammenführen
