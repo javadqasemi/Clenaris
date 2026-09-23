@@ -3,6 +3,7 @@ import 'server-only';
 import type { Prisma } from '@prisma/client';
 
 import { audit } from '@/lib/audit';
+import { zurichParts } from '@/lib/bi/periods';
 import { prisma, toNumber, type Tx } from '@/lib/db';
 import { BusinessRuleError, NotFoundError } from '@/lib/errors';
 import { round2 } from '@/lib/utils';
@@ -50,6 +51,38 @@ import { round2 } from '@/lib/utils';
  *    die Nachkalkulation auseinanderlaufen — und zwar still, weil niemand die
  *    beiden Zahlen nebeneinander sieht.
  */
+
+/**
+ * **5. Ein abgerechneter Monat ist abgeschlossen** (seit 2026-09-23).
+ *
+ * Ist die Lohnabrechnung eines Monats veröffentlicht, ändert sich an seinen
+ * Zeiten nichts mehr: keine Freigabe aufheben, keine späte Freigabe, keine
+ * Nacherfassung. Bis dahin liess sich eine Zeit im bezahlten Monat wieder
+ * öffnen und ändern — und der veröffentlichte Beleg stimmte danach nicht mehr
+ * mit der Zeiterfassung überein, ohne dass es jemand bemerkte. Was nachträglich
+ * auffällt, wird im Folgemonat korrigiert; dafür ist die Korrektur da, nicht
+ * das Umschreiben der Grundlage.
+ *
+ * Der Monat ist der **Zürcher** Kalendermonat — derselbe wie im Lohnlauf.
+ */
+async function lohnmonatVeroeffentlicht(employeeId: string, zeitpunkt: Date): Promise<boolean> {
+  const teile = zurichParts(zeitpunkt);
+  const abrechnung = await prisma.payslip.findUnique({
+    where: { employeeId_year_month: { employeeId, year: teile.year, month: teile.month } },
+    select: { published: true },
+  });
+  return abrechnung?.published === true;
+}
+
+async function lohnmonatOffen(employeeId: string, zeitpunkt: Date, was: string): Promise<void> {
+  if (await lohnmonatVeroeffentlicht(employeeId, zeitpunkt)) {
+    const teile = zurichParts(zeitpunkt);
+    throw new BusinessRuleError(
+      `Die Lohnabrechnung ${String(teile.month).padStart(2, '0')}/${teile.year} ist veröffentlicht. ` +
+        `In diesem Monat lässt sich ${was} nicht mehr — Abweichungen werden im Folgemonat korrigiert.`,
+    );
+  }
+}
 
 /** Obergrenze für eine einzelne Erfassung. */
 export const MAX_MINUTEN = 24 * 60;
@@ -283,6 +316,7 @@ export async function createManualTimeEntry(params: {
     select: { id: true, employeeNumber: true, hourlyRate: true, monthlySalary: true },
   });
   if (!employee) throw new NotFoundError('Mitarbeitende/r');
+  await lohnmonatOffen(employee.id, params.input.startedAt, 'keine Zeit mehr nacherfassen');
 
   const minutes = berechneMinuten(
     params.input.startedAt,
@@ -498,10 +532,18 @@ export async function approveTimeEntries(params: {
       id: { in: params.entryIds },
       employee: { organizationId: params.organizationId },
     },
-    select: { id: true, endedAt: true, approved: true },
+    select: { id: true, endedAt: true, approved: true, employeeId: true, startedAt: true },
   });
 
-  const geeignet = eintraege.filter((e) => e.endedAt !== null && !e.approved).map((e) => e.id);
+  // Eine Zeit in einem Monat mit veröffentlichter Abrechnung wird nicht mehr
+  // nachträglich freigegeben — sie gehört in eine Korrektur des Folgemonats.
+  const gesperrt = new Set<string>();
+  for (const e of eintraege) {
+    if (await lohnmonatVeroeffentlicht(e.employeeId, e.startedAt)) gesperrt.add(e.id);
+  }
+  const geeignet = eintraege
+    .filter((e) => e.endedAt !== null && !e.approved && !gesperrt.has(e.id))
+    .map((e) => e.id);
 
   if (geeignet.length === 0) {
     return { freigegeben: 0, uebersprungen: eintraege.length };
@@ -551,6 +593,7 @@ export async function reopenTimeEntry(params: {
   if (!eintrag.approved) {
     throw new BusinessRuleError('Diese Zeit ist nicht freigegeben.');
   }
+  await lohnmonatOffen(eintrag.employeeId, eintrag.startedAt, 'die Freigabe aufheben');
 
   await prisma.timeEntry.update({
     where: { id: eintrag.id },

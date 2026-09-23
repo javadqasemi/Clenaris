@@ -62,13 +62,13 @@ export default async function PayslipsPage() {
         <EmptyState
           icon={<Wallet aria-hidden />}
           title="Noch keine Abrechnungen"
-          description="Sobald die erste Lohnabrechnung freigegeben ist, findest du sie hier — inklusive PDF zum Herunterladen."
+          description="Sobald die erste Lohnabrechnung freigegeben ist, findest du sie hier."
         />
       ) : (
         <>
           <Alert variant="info">
-            Bruttolohn {currentYear}: <strong>{formatCurrency(yearTotal)}</strong>. Der
-            Lohnausweis für die Steuererklärung kommt jeweils im Januar per Post.
+            Bruttolohn {currentYear}: <strong>{formatCurrency(yearTotal)}</strong>. Den
+            Lohnausweis für die Steuererklärung stellt der Betrieb separat aus.
           </Alert>
 
           <ListCard>
@@ -95,11 +95,15 @@ export default async function PayslipsPage() {
                 </thead>
                 <tbody>
                   {payslips.map((slip) => {
+                    // KTG gehört dazu. Bis 2026-09-23 fehlte es hier, und
+                    // sobald ein Betrieb Krankentaggeld abzog, ergab Brutto
+                    // minus Abzüge nicht mehr den ausgewiesenen Nettolohn.
                     const deductions =
                       toNumber(slip.ahvIv) +
                       toNumber(slip.alv) +
                       toNumber(slip.bvg) +
                       toNumber(slip.uvg) +
+                      toNumber(slip.ktg) +
                       toNumber(slip.otherDeductions);
 
                     return (
@@ -136,8 +140,9 @@ export default async function PayslipsPage() {
           </ListCard>
 
           <p className="text-sm leading-relaxed text-muted-foreground">
-            Die Abzüge umfassen AHV/IV/EO, ALV, Nichtberufsunfall und die berufliche Vorsorge
-            (BVG). Fragen zur Abrechnung beantwortet die Betriebsleitung.
+            Die Abzüge umfassen AHV/IV/EO, ALV, Nichtberufsunfall, die berufliche Vorsorge
+            (BVG) und, falls versichert, das Krankentaggeld (KTG). Fragen zur Abrechnung
+            beantwortet die Betriebsleitung.
           </p>
         </>
       )}

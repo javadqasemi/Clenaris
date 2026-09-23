@@ -1,4 +1,4 @@
-import { describe, it, before } from 'node:test';
+import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
@@ -12,6 +12,11 @@ import {
 } from '../../src/lib/payroll/beitraege';
 import { get, post, patch, del, data, requireServer } from '../helpers/client';
 import { loginAll, type AccountName } from '../helpers/accounts';
+import { testDb, testDbSchliessen } from '../helpers/testdb';
+
+after(async () => {
+  await testDbSchliessen();
+});
 
 /**
  * Wave 9 — Lohnabrechnung.
@@ -396,6 +401,132 @@ describe('Lohnlauf', () => {
       ['AKTUALISIERT', 'UEBERSPRUNGEN'].includes(status),
       `erwartet AKTUALISIERT oder UEBERSPRUNGEN, kam ${status}`,
     );
+  });
+
+  // -------------------------------------------------------------------------
+  //  Korrekturen vom 2026-09-23
+  // -------------------------------------------------------------------------
+
+  /** Mitternacht in Zürich als Zeitpunkt — Sommer +2 h, Winter +1 h. */
+  const zuercherMitternacht = (jahr: number, monat0: number, tag: number) => {
+    const versuch = Date.UTC(jahr, monat0, tag);
+    const teile = new Intl.DateTimeFormat('en-US', {
+      timeZone: 'Europe/Zurich',
+      hour12: false,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+    }).formatToParts(new Date(versuch));
+    const f = Object.fromEntries(teile.filter((p) => p.type !== 'literal').map((p) => [p.type, Number(p.value)]));
+    const gesehen = Date.UTC(f.year!, f.month! - 1, f.day!, f.hour === 24 ? 0 : f.hour!, f.minute!);
+    return new Date(versuch - (gesehen - versuch));
+  };
+
+  const stundenIm = async (jahr: number, monat: number): Promise<number> => {
+    const lauf = await post<{ data: { ergebnisse: { employeeId: string; status: string; payslipId?: string }[] } }>(
+      '/api/payroll/run',
+      { year: jahr, month: monat, employeeIds: [employeeId] },
+      { jar: jars.admin },
+    );
+    assert.equal(lauf.status, 200, JSON.stringify(lauf.payload));
+    const e = data(lauf).ergebnisse.find((x) => x.employeeId === employeeId);
+    if (!e?.payslipId) return 0;
+    const detail = await get<{ data: { hours: number } }>(`/api/payroll/payslips/${e.payslipId}`, { jar: jars.admin });
+    return Number(data(detail).hours);
+  };
+
+  /**
+   * Bis 2026-09-23 lief das Monatsfenster in UTC. Eine Schicht, die am 1. um
+   * 00:30 Ortszeit begann, lag in UTC am letzten Tag des Vormonats und wurde
+   * dort bezahlt.
+   */
+  it('eine Schicht ab 00:30 am Monatsersten zählt zum neuen Monat (Zürich, nicht UTC)', async () => {
+    const jetzt = new Date();
+    const monatsbeginn = new Date(Date.UTC(jetzt.getUTCFullYear(), jetzt.getUTCMonth() - 5, 1));
+    const jahr = monatsbeginn.getUTCFullYear();
+    const monat = monatsbeginn.getUTCMonth() + 1;
+    const vorher = new Date(Date.UTC(jahr, monat - 2, 1));
+
+    const altVormonat = await stundenIm(vorher.getUTCFullYear(), vorher.getUTCMonth() + 1);
+    const altMonat = await stundenIm(jahr, monat);
+
+    const start = new Date(zuercherMitternacht(jahr, monat - 1, 1).getTime() + 30 * 60_000);
+    const erfasst = await post<{ data: { id: string } }>(
+      '/api/time',
+      { employeeId, startedAt: start.toISOString(), endedAt: new Date(start.getTime() + 2 * 3_600_000).toISOString(), breakMin: 0 },
+      { jar: jars.admin },
+    );
+    assert.equal(erfasst.status, 201, JSON.stringify(erfasst.payload));
+    zeiten.push(data(erfasst).id);
+    assert.notEqual(start.getUTCMonth() + 1, monat, 'In UTC liegt der Beginn noch im Vormonat — genau der Fall');
+    await post('/api/time/approve', { entryIds: [data(erfasst).id] }, { jar: jars.admin });
+
+    assert.equal(await stundenIm(vorher.getUTCFullYear(), vorher.getUTCMonth() + 1), altVormonat, 'Der Vormonat bekommt die Schicht nicht');
+    assert.equal(await stundenIm(jahr, monat), altMonat + 2, 'Der neue Monat bekommt sie');
+  });
+
+  /**
+   * Bis 2026-09-23 liess sich eine Zeit im bereits veröffentlichten Monat
+   * wieder öffnen, ändern und erneut freigeben — und der Beleg stimmte nicht
+   * mehr mit der Zeiterfassung überein.
+   */
+  it('eine veröffentlichte Abrechnung schliesst den Monat', async () => {
+    const jetzt = new Date();
+    const monatsbeginn = new Date(Date.UTC(jetzt.getUTCFullYear(), jetzt.getUTCMonth() - 7, 1));
+    const jahr = monatsbeginn.getUTCFullYear();
+    const monat = monatsbeginn.getUTCMonth() + 1;
+    const um = (tag: number) => new Date(Date.UTC(jahr, monat - 1, tag, 8));
+    const erfassen = async (tag: number) => {
+      const antwort = await post<{ data: { id: string } }>(
+        '/api/time',
+        { employeeId, startedAt: um(tag).toISOString(), endedAt: new Date(um(tag).getTime() + 3 * 3_600_000).toISOString(), breakMin: 0 },
+        { jar: jars.admin },
+      );
+      assert.equal(antwort.status, 201, JSON.stringify(antwort.payload));
+      return data(antwort).id;
+    };
+
+    const bezahlt = await erfassen(10);
+    const spaet = await erfassen(11);
+    await post('/api/time/approve', { entryIds: [bezahlt] }, { jar: jars.admin });
+
+    const lauf = await post<{ data: { ergebnisse: { employeeId: string; payslipId?: string }[] } }>(
+      '/api/payroll/run',
+      { year: jahr, month: monat, employeeIds: [employeeId] },
+      { jar: jars.admin },
+    );
+    const payslipId = data(lauf).ergebnisse.find((e) => e.employeeId === employeeId)?.payslipId;
+    assert.ok(payslipId, JSON.stringify(lauf.payload));
+    const veroeffentlicht = await post('/api/payroll/publish', { payslipIds: [payslipId] }, { jar: jars.admin });
+    assert.equal(veroeffentlicht.status, 200, JSON.stringify(veroeffentlicht.payload));
+
+    try {
+      assert.equal((await post(`/api/time/${bezahlt}/reopen`, undefined, { jar: jars.admin })).status, 422, 'Die bezahlte Zeit bleibt freigegeben');
+      const spaeteFreigabe = await post<{ data: { freigegeben: number } }>('/api/time/approve', { entryIds: [spaet] }, { jar: jars.admin });
+      assert.equal(data(spaeteFreigabe).freigegeben, 0, 'Eine späte Freigabe ändert den bezahlten Monat nicht');
+      const nacherfasst = await post(
+        '/api/time',
+        { employeeId, startedAt: um(12).toISOString(), endedAt: new Date(um(12).getTime() + 3_600_000).toISOString(), breakMin: 0 },
+        { jar: jars.admin },
+      );
+      assert.equal(nacherfasst.status, 422, 'Keine Nacherfassung im abgeschlossenen Monat');
+
+      const zweiterLauf = await post<{ data: { ergebnisse: { employeeId: string; status: string }[] } }>(
+        '/api/payroll/run',
+        { year: jahr, month: monat, employeeIds: [employeeId] },
+        { jar: jars.admin },
+      );
+      assert.equal(data(zweiterLauf).ergebnisse.find((e) => e.employeeId === employeeId)?.status, 'UEBERSPRUNGEN');
+    } finally {
+      // Aufräumen an der Anwendung vorbei — sie lässt es zu Recht nicht zu.
+      const db = testDb();
+      if (db) {
+        await db.timeEntry.deleteMany({ where: { id: { in: [bezahlt, spaet] } } });
+        await db.payslip.delete({ where: { id: payslipId } }).catch(() => undefined);
+      }
+    }
   });
 
   // -------------------------------------------------------------------------

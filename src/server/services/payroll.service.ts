@@ -3,7 +3,8 @@ import 'server-only';
 import type { Prisma } from '@prisma/client';
 
 import { audit } from '@/lib/audit';
-import { prisma, toNumber } from '@/lib/db';
+import { zurichMidnight } from '@/lib/bi/periods';
+import { isUniqueConstraintError, prisma, toNumber } from '@/lib/db';
 import { BusinessRuleError, NotFoundError } from '@/lib/errors';
 import {
   SAETZE_2026,
@@ -221,12 +222,40 @@ export async function updatePayrollSettings(params: {
 //  Bruttolohn
 // ---------------------------------------------------------------------------
 
-/** Erster und letzter Moment eines Abrechnungsmonats, in UTC. */
-function monatsfenster(year: number, month: number): { von: Date; bis: Date } {
+/**
+ * Erster und erster **nicht mehr** zugehöriger Moment eines Abrechnungsmonats
+ * — Mitternacht in Zürich, nicht in UTC.
+ *
+ * Bis 2026-09-23 stand hier UTC. Eine Schicht, die am 1. um 00:30 Ortszeit
+ * begann, lag in UTC noch am letzten Tag des Vormonats (22:30 bzw. 23:30) und
+ * wurde dem falschen Monat zugerechnet — für Nachtreinigung, die in diesem
+ * Gewerbe üblich ist, kein Randfall.
+ */
+export function monatsfenster(year: number, month: number): { von: Date; bis: Date } {
   return {
-    von: new Date(Date.UTC(year, month - 1, 1, 0, 0, 0)),
-    bis: new Date(Date.UTC(year, month, 1, 0, 0, 0)),
+    von: zurichMidnight(year, month - 1, 1),
+    bis: zurichMidnight(month === 12 ? year + 1 : year, month === 12 ? 0 : month, 1),
   };
+}
+
+/**
+ * Der Lohnsatz, der **an einem Tag** galt — aus der Lohnhistorie.
+ *
+ * Bis 2026-09-23 rechnete jeder Lauf mit dem **heutigen** Satz der
+ * Personalakte. Wer eine Abrechnung für einen früheren Monat neu erzeugte,
+ * nachdem jemand eine Lohnerhöhung eingetragen hatte, bekam den neuen Lohn
+ * für den alten Monat. Die Historie (`SalaryRecord`, `validFrom`) wird bei
+ * jeder Lohnänderung geschrieben; sie ist die Quelle. Ohne Eintrag gilt der
+ * Satz der Personalakte — der Stand, bevor es eine Historie gab.
+ */
+function satzAm<
+  T extends { validFrom: Date; hourlyRate: Prisma.Decimal | null; monthlySalary: Prisma.Decimal | null; workloadPct: number },
+>(historie: readonly T[], tag: Date): T | null {
+  let treffer: T | null = null;
+  for (const eintrag of historie) {
+    if (eintrag.validFrom.getTime() <= tag.getTime()) treffer = eintrag;
+  }
+  return treffer;
 }
 
 export interface BruttoErgebnis {
@@ -259,21 +288,28 @@ export async function ermittleBrutto(params: {
 }): Promise<BruttoErgebnis> {
   const employee = await prisma.employee.findUniqueOrThrow({
     where: { id: params.employeeId },
-    select: { hourlyRate: true, monthlySalary: true, workloadPct: true },
+    select: {
+      hourlyRate: true,
+      monthlySalary: true,
+      workloadPct: true,
+      salaryHistory: {
+        orderBy: { validFrom: 'asc' },
+        select: { validFrom: true, hourlyRate: true, monthlySalary: true, workloadPct: true },
+      },
+    },
   });
 
   const { von, bis } = monatsfenster(params.year, params.month);
 
   const [freigegeben, offen] = await Promise.all([
-    prisma.timeEntry.aggregate({
+    prisma.timeEntry.findMany({
       where: {
         employeeId: params.employeeId,
         approved: true,
         endedAt: { not: null },
         startedAt: { gte: von, lt: bis },
       },
-      _sum: { minutes: true },
-      _count: { _all: true },
+      select: { startedAt: true, minutes: true, hourlyRate: true },
     }),
     prisma.timeEntry.count({
       where: {
@@ -285,25 +321,53 @@ export async function ermittleBrutto(params: {
     }),
   ]);
 
-  const minuten = freigegeben._sum.minutes ?? 0;
+  const minuten = freigegeben.reduce((summe, e) => summe + (e.minutes ?? 0), 0);
   const stunden = round2(minuten / 60);
 
-  const monatslohn = toNumber(employee.monthlySalary);
-  const stundensatz = toNumber(employee.hourlyRate);
+  /**
+   * Monatslohn und Pensum: der Stand am **letzten Tag** des Monats. Eine
+   * Erhöhung zum Monatsersten gilt damit für den ganzen Monat — die übliche
+   * Vereinbarung. Eine unterjährige Änderung mitten im Monat anteilig zu
+   * rechnen, ist eine Frage des Arbeitsvertrags und steht als offener Punkt in
+   * `docs/PAYROLL.md`.
+   */
+  const stand = satzAm(employee.salaryHistory, new Date(bis.getTime() - 1));
+  const monatslohn = toNumber(stand ? stand.monthlySalary : employee.monthlySalary);
+  const pensum = stand?.workloadPct ?? employee.workloadPct;
+  const stundensatzJetzt = toNumber(stand ? stand.hourlyRate : employee.hourlyRate);
 
   if (monatslohn > 0) {
-    const brutto = round2(monatslohn * (employee.workloadPct / 100));
+    const brutto = round2(monatslohn * (pensum / 100));
     return {
       brutto,
       stunden,
       basis: 'MONTHLY',
-      erfassungen: freigegeben._count._all,
+      erfassungen: freigegeben.length,
       offeneErfassungen: offen,
       hochrechnungJahr: round2(brutto * 12),
     };
   }
 
-  const brutto = round2(stunden * stundensatz);
+  /**
+   * Stundenlohn **je Erfassung**: der Satz der Lohnhistorie am Tag der
+   * Erfassung; gibt es dort keinen, der bei der Erfassung festgehaltene
+   * (`TimeEntry.hourlyRate`); sonst der der Personalakte. Eine Erhöhung zum
+   * 15. bezahlt die ersten zwei Wochen zum alten Satz.
+   *
+   * Die Historie geht dem Schnappschuss vor, weil sie auch **rückwirkend**
+   * gepflegt wird: Eine Erhöhung, die im Oktober mit Wirkung ab September
+   * eingetragen wird, muss für die Septemberstunden gelten, obwohl diese mit
+   * dem alten Satz erfasst wurden.
+   */
+  const brutto = round2(
+    freigegeben.reduce((summe, e) => {
+      const ausHistorie = satzAm(employee.salaryHistory, e.startedAt)?.hourlyRate ?? null;
+      const satz = toNumber(ausHistorie ?? e.hourlyRate ?? employee.hourlyRate);
+      return summe + ((e.minutes ?? 0) / 60) * satz;
+    }, 0),
+  );
+  const stundensatz = stundensatzJetzt;
+  const employeeWorkload = pensum;
 
   /**
    * Die Jahreshochrechnung bei Stundenlohn.
@@ -318,14 +382,14 @@ export async function ermittleBrutto(params: {
    * Genau zu rechnen verlangte eine laufende Jahressumme mit rückwirkender
    * Korrektur — das ist Treuhandarbeit und steht so in `docs/PAYROLL.md`.
    */
-  const wochenstunden = 42 * (employee.workloadPct / 100);
+  const wochenstunden = 42 * (employeeWorkload / 100);
   const hochrechnungJahr = round2(wochenstunden * 52 * stundensatz);
 
   return {
     brutto,
     stunden,
     basis: 'HOURLY',
-    erfassungen: freigegeben._count._all,
+    erfassungen: freigegeben.length,
     offeneErfassungen: offen,
     hochrechnungJahr,
   };
@@ -495,23 +559,56 @@ export async function generatePayslips(params: {
       } as unknown as Prisma.InputJsonValue,
     };
 
-    const payslip = await prisma.payslip.upsert({
-      where: {
-        employeeId_year_month: {
+    /**
+     * **Nie über eine veröffentlichte Abrechnung.** Bis 2026-09-23 stand hier
+     * ein `upsert` — und ein Veröffentlichen, das zwischen der Prüfung oben
+     * und diesem Schreiben geschah, wurde still überschrieben. Jetzt steht
+     * `published: false` in der Bedingung des Schreibens selbst; trifft es
+     * keine Zeile, hat jemand anderes gerade veröffentlicht, und die
+     * Abrechnung bleibt, wie sie veröffentlicht wurde.
+     */
+    let payslipId: string;
+    if (vorhanden) {
+      const geaendert = await prisma.payslip.updateMany({
+        where: { id: vorhanden.id, published: false },
+        data: daten,
+      });
+      if (geaendert.count === 0) {
+        ergebnisse.push({
           employeeId: employee.id,
-          year: params.year,
-          month: params.month,
-        },
-      },
-      create: { employeeId: employee.id, year: params.year, month: params.month, ...daten },
-      update: daten,
-      select: { id: true },
-    });
+          employeeNumber: employee.employeeNumber,
+          payslipId: vorhanden.id,
+          status: 'UEBERSPRUNGEN',
+          grund: 'Inzwischen veröffentlicht — eine veröffentlichte Abrechnung ist unveränderlich.',
+        });
+        continue;
+      }
+      payslipId = vorhanden.id;
+    } else {
+      try {
+        payslipId = (
+          await prisma.payslip.create({
+            data: { employeeId: employee.id, year: params.year, month: params.month, ...daten },
+            select: { id: true },
+          })
+        ).id;
+      } catch (error) {
+        // Ein gleichzeitiger Lauf war schneller — seine Abrechnung gilt.
+        if (!isUniqueConstraintError(error)) throw error;
+        ergebnisse.push({
+          employeeId: employee.id,
+          employeeNumber: employee.employeeNumber,
+          status: 'UEBERSPRUNGEN',
+          grund: 'Ein gleichzeitiger Lauf hat diese Abrechnung eben erzeugt.',
+        });
+        continue;
+      }
+    }
 
     ergebnisse.push({
       employeeId: employee.id,
       employeeNumber: employee.employeeNumber,
-      payslipId: payslip.id,
+      payslipId,
       status: vorhanden ? 'AKTUALISIERT' : 'ERSTELLT',
       brutto: brutto.brutto,
       netto,
