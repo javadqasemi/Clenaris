@@ -4,7 +4,7 @@ import { createHash, randomBytes } from 'node:crypto';
 
 import { data, del, get, post, requireServer } from '../helpers/client';
 import { loginAll, type AccountName } from '../helpers/accounts';
-import { testDb, testDbGrund, testDbSchliessen } from '../helpers/testdb';
+import { eigeneOrganisationId, testDb, testDbGrund, testDbSchliessen } from '../helpers/testdb';
 
 /**
  * Links, die ohne Anmeldung funktionieren — Verhalten über HTTP.
@@ -127,8 +127,8 @@ describe('Öffentliche Links — Bindung, Rennen, Altbestand', () => {
     customerId = objekte[0]!.customer.id;
 
     if (db) {
-      const org = await db.organization.findFirst({ select: { id: true } });
-      organizationId = org?.id ?? '';
+      // Über den Slug, nicht „die erste": Die Testdatenbank kennt seit Wave 9 eine fremde Organisation.
+      organizationId = (await eigeneOrganisationId()) ?? '';
     }
   });
 

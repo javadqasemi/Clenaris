@@ -1,302 +1,317 @@
 # Lohnabrechnung
 
-> Stand: 21. September 2026 (Wave 9).
+> Stand: 23. September 2026 (Wave 9, technischer Ausbau).
+> **Keine Aussage „Swiss Payroll compliant".** Die Rechnung ist technisch
+> geprüft; Sätze, Tarife, Ziffernzuordnung und Konventionen sind fachlich
+> **nicht** bestätigt (§11).
 
 ---
 
-## 1. Was das ist — und was es nicht ist
+## 1. Statusinventar
 
-Die **monatliche Beitragsrechnung**: Bruttolohn aus freigegebenen Zeiten oder
-Monatslohn, davon AHV/IV/EO, ALV, BVG, UVG und wahlweise Krankentaggeld, daraus
-der Nettolohn. Genug für eine nachvollziehbare Lohnabrechnung im
-Reinigungsgewerbe und als Grundlage für die Abrechnung mit der
-Ausgleichskasse.
+Begriffe: **IMPLEMENTED** = Ablauf funktioniert Ende zu Ende und ist mit
+Prüfungen belegt · **PARTIAL** = funktioniert mit benannten Lücken ·
+**MISSING** = fehlt · **EXTERNAL VERIFICATION REQUIRED** = technisch
+umgesetzt, fachlich/extern zu bestätigen.
 
-**Keine Lohnbuchhaltung.** Bewusst nicht enthalten:
-
-| Fehlt | Warum |
-|---|---|
-| Quellensteuer | Tarife je Kanton, Zivilstand, Konfession und Kinderzahl, monatlich oder jährlich abgerechnet — ein eigenes System |
-| Kinder- und Ausbildungszulagen | Kantonal geregelt, an Bewilligungen gebunden |
-| 13. Monatslohn, Ferien- und Feiertagsentschädigung | Ergeben sich aus Vertrag und GAV, nicht aus einem Satz |
-| Naturalleistungen, Spesen | Bewertungsfragen mit eigenen Regeln |
-| Lohnausweis, Jahresabschluss | Formularpflichten mit eigenen Fristen |
-
-**Eine halbe Umsetzung wäre gefährlicher als keine**: Sie sieht aus wie eine
-vollständige Abrechnung. Was hier fehlt, gehört zur Treuhand — und dieser
-Abschnitt steht da, damit niemand das Gegenteil annimmt.
-
----
-
-## 2. Der Befund, der die Wave ausgelöst hat
-
-`Payslip` stand seit der ersten Migration im Schema — samt Spalten für AHV,
-ALV, BVG und UVG. Zwei Seiten lesen daraus (`/portal/lohn` und die
-Personalakte), `payslip:create` war an Rollen vergeben.
-
-**Es gab keinen Codepfad, der je eine Abrechnung erzeugt hätte.**
-
-Dasselbe Muster wie bei den Automatisierungen (Wave 6) und der Zeiterfassung
-(Wave 8): Felder und Berechtigungen, die eine Zusage machen, die das System
-nicht einlöst.
-
----
-
-## 3. Die Sätze
-
-**Sie stehen nicht im Code.** Die Versuchung ist, `AHV = 5.3` als Konstante zu
-schreiben. Das wäre für genau ein Jahr richtig und danach falsch — und zwar
-still: Eine Lohnabrechnung mit dem Satz des Vorjahres sieht aus wie eine
-Lohnabrechnung.
-
-Drei Dinge ändern sich unabhängig voneinander:
-
-- **jährlich** — AHV/IV/EO und die ALV-Grenze, vom Bund festgelegt,
-- **je Betrieb** — der UVG-Satz, nach Branche und Schadenerfahrung, im Vertrag
-  mit der Versicherung,
-- **je Vorsorgeeinrichtung** — der BVG-Plan, oft über dem Gesetzesminimum.
-
-`PayrollSetting` hält sie je Organisation **und Jahr**. Alte Zeilen bleiben
-stehen: Eine nachträgliche Korrektur einer Abrechnung von 2025 muss mit den
-Sätzen von 2025 rechnen. Sie zu überschreiben hiesse, die Vergangenheit
-umzuschreiben.
-
-### Die Vorbelegung für 2026
-
-| Satz | Wert | Herkunft |
+| Punkt | Status | Beleg / Lücke |
 |---|---|---|
-| AHV/IV/EO (Arbeitnehmeranteil) | 5,3 % | gesetzlich |
-| ALV bis 148 200 CHF/Jahr | 1,1 % | gesetzlich |
-| ALV darüber | 0 % | Solidaritätsbeitrag seit 2023 aufgehoben |
-| UVG Nichtberufsunfall | 1,6 % | **Annahme** — steht im Versicherungsvertrag |
-| Krankentaggeld | 0 % | **Annahme** — je nach GAV vorgeschrieben |
-| BVG Eintrittsschwelle | 22 680 CHF | gesetzlich |
-| BVG Koordinationsabzug | 26 460 CHF | gesetzlich |
-| BVG Mindestkoordiniert | 3 780 CHF | gesetzlich |
-| BVG Obergrenze | 90 720 CHF | gesetzlich |
-| Altersgutschriften | 7 / 10 / 15 / 18 % ab 25 / 35 / 45 / 55 | gesetzliches Minimum |
-| Arbeitnehmeranteil BVG | 50 % | gesetzliches Maximum (Art. 66 BVG) |
-
-> **Eine Vorbelegung, keine Wahrheit.** Sie steht da, damit ein Betrieb nicht
-> bei null anfängt — nicht, damit sie ungeprüft übernommen wird. Solange
-> niemand die Sätze bestätigt hat, meldet jeder Lohnlauf
-> `saetzeGeprueft: false`.
-
-`bvgAnteilArbeitnehmer` ist auf 50 % gedeckelt: Gesetzlich trägt der Betrieb
-mindestens die Hälfte der Altersgutschrift. Ein höherer Wert wäre kein
-Tippfehler, den man durchlassen sollte — er stünde auf jeder Abrechnung des
-Jahres.
-
----
-
-## 4. Die Rechnung
-
-`src/lib/payroll/beitraege.ts` — rein, ohne Datenbank, mit festen Zahlen
-prüfbar (wie `lib/bi/math.ts`).
-
-### Der koordinierte Lohn
-
-Die Reihenfolge ist gesetzlich und nicht beliebig:
-
-1. Unter der **Eintrittsschwelle** besteht keine Versicherungspflicht.
-2. Der Lohn wird bei der **Obergrenze** gekappt.
-3. Davon wird der **Koordinationsabzug** abgezogen (der Teil, den bereits die
-   AHV deckt).
-4. Was übrig bleibt, wird auf den **Mindestbetrag** angehoben.
-
-**Schritt 4 wird beim Nachbauen am häufigsten vergessen**, und der Fehler
-trifft genau die Teilzeitstellen, die in diesem Gewerbe die Mehrheit sind: Ohne
-ihn fiele jemand knapp über der Schwelle auf fast null.
-
-### Das Alter
-
-Am **31. Dezember des Abrechnungsjahres**, nicht am Stichtag. Die
-BVG-Altersbänder wechseln auf den 1. Januar nach dem Geburtstag; am Stichtag zu
-rechnen liesse den Satz mitten im Jahr springen.
-
-**Ohne Geburtsdatum wird nichts abgezogen.** Ein geratener Satz wäre ein
-falscher Lohn; die fehlende Angabe ist eine Lücke in der Personalakte und
-gehört dort behoben. Die Herleitung sagt das auch so.
-
-### Rundung
-
-**Je Beitragsart, nicht erst am Ende.** Der einzelne Abzug erscheint auf der
-Abrechnung, und eine Summe, die sich aus den angezeigten Zeilen nicht
-nachrechnen lässt, erzeugt eine Rückfrage je Monat und je Person.
-
-### Zwei bewusste Vereinfachungen
-
-**Die ALV-Grenze wird durch zwölf geteilt.** Die genaue Handhabung wäre eine
-laufende Jahressumme mit rückwirkender Korrektur. Der Unterschied zeigt sich
-nur bei sehr hohen, stark schwankenden Löhnen; im Reinigungsgewerbe tritt der
-Fall nicht auf. Dass er bestünde, steht im Code.
-
-**Die Jahreshochrechnung bei Stundenlohn kommt aus dem Pensum**, nicht aus
-`Monatslohn × 12`. Bei schwankenden Stunden wäre Letzteres im Spitzenmonat zu
-hoch und im schwachen zu tief, und der koordinierte Lohn spränge von Monat zu
-Monat — mit ihm der BVG-Abzug. Gerechnet wird mit dem vereinbarten Pensum auf
-eine 42-Stunden-Woche. Der Wert ist eine Annahme und steht als solche in
-`breakdown`.
+| Lohnlauf je Monat (idempotent, gleichzeitige Läufe) | IMPLEMENTED | `generatePayslips`; Prüfung „zwei gleichzeitige Läufe" |
+| Payslip mit Zeilen (`PayslipLine`) | IMPLEMENTED | Zeilen je Bestandteil, Lohnausweis-Ziffer je Zeile |
+| Beitragsrechnung AN: AHV/IV/EO, ALV, UVG-NBU, KTG, BVG | IMPLEMENTED · Sätze EXTERNAL VERIFICATION REQUIRED | `beitraege.ts`, Prüfungen mit festen Zahlen |
+| AHV, IV, EO | IMPLEMENTED (zusammen als ein Satz) · EXTERNAL | Satzversion `AHV_IV_EO` |
+| ALV (bis Grenze / darüber) | IMPLEMENTED · EXTERNAL | Grenze durch 12 (§5) |
+| BVG | IMPLEMENTED · Plan EXTERNAL | koordinierter Lohn, Altersbänder, Art. 66 BVG |
+| UVG-BU / NBU | IMPLEMENTED · EXTERNAL | NBU Arbeitnehmende, BU Betrieb |
+| KTG | IMPLEMENTED · EXTERNAL | AN- und AG-Anteil je Version |
+| Arbeitgeberbeiträge (AHV, ALV, UVG, KTG, FAK, VK, BVG) | IMPLEMENTED · EXTERNAL | informative Zeilen, `employerContributions` |
+| Versionierte, stichtagsbezogene Sätze mit Herkunft und Prüfstand | IMPLEMENTED | `PayrollRate`, Ausschlussbedingung, Trigger |
+| Historische Abrechnung reproduzierbar | IMPLEMENTED | Momentaufnahme `satzversionen` + gesperrte Versionen + PDF-Bytes |
+| Quellensteuer | IMPLEMENTED (Grenze/Motor) · **EXTERNAL VERIFICATION REQUIRED** | Profil, Tarifimport, Prüfung, Handeingabe; **keine Tarife mitgeliefert** |
+| Zulagen (beitragspflichtig) / Familienzulagen | IMPLEMENTED · Einstufung EXTERNAL | `PayrollItem` ALLOWANCE / FAMILY_ALLOWANCE |
+| Überstunden | IMPLEMENTED | Stunden × Ansatz × Zuschlag, vom Server gerechnet |
+| 13. Monatslohn (keiner/jährlich/anteilig/monatlich, Auszahlungsmonat) | IMPLEMENTED · Vertragsauslegung EXTERNAL | Ein-/Austritt, Lohnänderung, unbezahlter Urlaub, Korrektur |
+| Ferienentschädigung (Stundenlohn) | IMPLEMENTED · EXTERNAL | aus Ferientagen der Akte (w/(52−w)) |
+| Feiertagsentschädigung (Stundenlohn) | IMPLEMENTED · EXTERNAL | vertraglicher Prozentsatz je Person |
+| Spesen | IMPLEMENTED | nicht beitragspflichtig, nicht steuerbar |
+| Korrekturen | IMPLEMENTED | CORRECTION (±, beitragspflichtig), NET_CORRECTION (±), Verweis auf korrigierte Abrechnung |
+| Unbezahlter Urlaub | IMPLEMENTED · Werktage-Konvention EXTERNAL | bewilligte `UNPAID`-Abwesenheiten |
+| Ein-/Austritt, Lohnänderung im Monat | IMPLEMENTED · Kalendertage-Konvention EXTERNAL | vorher: immer voller Monatslohn, Ausgetretene fehlten |
+| Sperre (Locking) | IMPLEMENTED | Dienst + Trigger auf Abrechnung, Zeilen, Positionen, Sätze |
+| Veröffentlichen | IMPLEMENTED | Prüfung, Bestätigung ungeprüfter Sätze, `updatedAt`-Bedingung |
+| Payslip-PDF | IMPLEMENTED | einmal beim Veröffentlichen, gespeichert, Prüfsumme |
+| Mitarbeiterportal | IMPLEMENTED | `/portal/lohn`: veröffentlichte Abrechnungen, PDF, Lohnausweis-Aufstellungen |
+| Verwaltungsoberfläche | IMPLEMENTED | `/admin/lohn`, `/admin/lohn/[id]` |
+| Lohnausweis | PARTIAL · **EXTERNAL VERIFICATION REQUIRED** | Aufstellung (Ziffern 1, 7, 8, 9, 10.1, 11, 12, 13.1.1); **nicht** Formular 11 |
+| Naturalleistungen, Kantine, Fahrten, Aussendienst | MISSING | Ziffern 2, 3–6, 13.2, 15 des Formulars |
+| Jahresabrechnung Ausgleichskasse, ELM/Swissdec | MISSING | eigene Pflicht, eigenes Format |
+| Quellensteuer-Jahreskorrektur (Tarif mit Jahresabgleich, Kantone mit Jahresmodell) | MISSING | nur Monatsmodell |
 
 ---
 
-## 5. Der Bruttolohn
+## 2. Die Sätze: Versionen statt Jahreszeilen
 
-| Anstellung | Grundlage |
+`PayrollRate` — je Organisation und **Beitragsart** (`AHV_IV_EO`, `ALV`,
+`ALV_SOLIDARITY`, `UVG_NBU`, `UVG_BU`, `KTG`, `FAK`, `VK`, `BVG`) Versionen
+mit `validFrom`/`validUntil` (einschliesslich), Arbeitnehmer- und
+Arbeitgeberanteil, Schwellen (`thresholdMin`/`thresholdMax`), Parametern
+(BVG: Eintrittsschwelle, Koordinationsabzug, Mindest- und Obergrenze,
+Altersbänder), **Herkunft** (`source`, `reference`) und **Prüfstand**
+(`verification`, `verifiedAt`, `verifiedById`, `verificationNote`).
+
+- **Keine Überschneidung je Art** — Ausschlussbedingung
+  `payroll_rates_ueberlappungsfrei` (btree_gist, `daterange … '[]'`).
+- **Gerechnet wird mit der Version am letzten Tag des Monats.** Die
+  Abrechnung speichert die Kennungen (`rateVersionIds`) und eine
+  Momentaufnahme (`breakdown.satzversionen`).
+- **Unveränderlich, sobald benutzt.** Hat eine veröffentlichte Abrechnung mit
+  einer Version gerechnet, lehnt der Dienst Wertänderungen ab, und der Trigger
+  `payroll_rates_unveraenderlich` verweigert sie ebenfalls. Erlaubt bleiben
+  Prüfvermerk und Ende. Eine neue Version darf eine benutzte Vorgängerin nur
+  nach deren letztem veröffentlichten Monat schliessen.
+- **Fehlt eine Version**, legt der Lauf eine **ungeprüfte** an: Werte der
+  vorigen Version, sonst die Vorbelegung (`SAETZE_2026`, für UVG-BU, FAK und
+  VK **0** — ein unbekannter Satz wird nicht geraten). Die Migration hat die
+  alten Jahreszeilen (`PayrollSetting`) als ungeprüfte Versionen übernommen;
+  `PayrollSetting` wird nicht mehr geschrieben.
+- **Veröffentlichen mit ungeprüften Sätzen** verlangt die ausdrückliche
+  Bestätigung `trotzUngepruefterSaetze: true` (sonst 422) und steht so im
+  Prüfprotokoll. Das PDF trägt dann einen Hinweis.
+
+Endpunkte: `GET/POST /api/payroll/rates`, `PATCH /api/payroll/rates/:id`,
+`POST /api/payroll/rates/:id/verify`. `/api/payroll/settings` ist entfallen.
+
+---
+
+## 3. Die Rechnung
+
+`src/lib/payroll/beitraege.ts` (Beiträge) und
+`src/lib/payroll/lohnbestandteile.ts` (Zeilen) — rein, ohne Datenbank,
+geprüft in `tests/api/lohnbestandteile.test.ts` und
+`tests/api/lohnabrechnung.test.ts`.
+
+```
+  Grundlohn (anteilig nach Kalendertagen)      EARNING
+− unbezahlter Urlaub                           EARNING (negativ)
++ Überstunden, Zulagen, Korrekturen            EARNING
++ Ferien-/Feiertagsentschädigung (Stundenlohn) EARNING
++ 13. Monatslohn                               EARNING
+= Bruttolohn  → AHV/IV/EO, ALV, UVG-NBU, KTG, BVG
+− Quellensteuer (Tarif oder von Hand)          DEDUCTION
+− andere Abzüge                                DEDUCTION
++ Spesen, Familienzulagen, Netto-Korrekturen   PAYMENT
+= Auszahlung
+  Arbeitgeberbeiträge                          EMPLOYER (informativ)
+```
+
+**Koordinierter Lohn, Alter, Rundung** — unverändert: Eintrittsschwelle →
+Obergrenze → Koordinationsabzug → Mindestbetrag; Alter am 31. Dezember; ohne
+Geburtsdatum kein BVG-Abzug; Rundung je Beitragsart auf Rappen.
+
+**Jahreslohn für ALV-Grenze und BVG:** Monatslohn am Monatsende × 12, × 13
+wenn ein 13. vereinbart ist; Stundenlohn: Pensum auf 42-Stunden-Woche × 52 ×
+Ansatz. Beides Annahmen, in der Herleitung festgehalten.
+
+---
+
+## 4. Grundlohn, Ein- und Austritt, Lohnänderung
+
+- **Monatslohn nach Kalendertagen:** Jeder angestellte Tag zählt mit dem
+  Lohn (× Pensum), der an ihm galt, als `1 / Tage im Monat`. Eintritt am 20.
+  April = 11/30; Lohnänderung am 16. = zwei Abschnitte. **Vorher** zahlte der
+  Lauf immer einen ganzen Monatslohn zum Stand des Monatsletzten.
+- **Wer im Monat austritt, wird abgerechnet.** Vorher schloss der Lauf
+  `active = false` aus — der Austrittsmonat fehlte. Nach dem Austrittsmonat
+  erscheint die Person nicht mehr, ausser es gibt offene Positionen (Korrektur
+  nach dem Austritt).
+- **Stundenlohn:** freigegebene Erfassungen × Satz der Lohnhistorie am
+  Zürcher Kalendertag der Arbeit (sonst Schnappschuss, sonst Akte). Im Monat
+  eines Wechsels zwischen Stunden- und Monatslohn werden Stunden an Tagen ohne
+  Monatslohn als eigene Grundlohnzeile bezahlt.
+- **Unbezahlter Urlaub:** bewilligte `UNPAID`-Abwesenheiten, Werktage Mo–Fr
+  im Anstellungszeitraum (halber Tag = 0,5); Abzug = Monatslohn ÷ Werktage
+  des Monats × Tage. Feiertage werden dabei nicht ausgenommen.
+- **Monatsgrenze** ist Mitternacht in Zürich.
+
+---
+
+## 5. Positionen, Korrekturen, 13. Monatslohn
+
+`PayrollItem` (`/api/payroll/items`) — je Person und Monat:
+
+| Art | Wirkung |
 |---|---|
-| **Monatslohn** | `monthlySalary × workloadPct / 100`. Auch in einem Monat mit wenigen Einsätzen — die Zeiterfassung dient dort der Planung und der Nachkalkulation, nicht der Lohnberechnung. Die Stunden werden trotzdem ausgewiesen |
-| **Stundenlohn** | Summe der **freigegebenen** Erfassungen × Stundenansatz |
+| `OVERTIME` | Stunden × Ansatz × (1 + Zuschlag) — **Betrag rechnet der Server**; ein mitgeschickter Betrag wird abgewiesen |
+| `ALLOWANCE` | beitragspflichtige Zulage |
+| `FAMILY_ALLOWANCE` | Auszahlung, nicht AHV-pflichtig, steuerbar (Ziffer 7) |
+| `EXPENSE` | Spesen — weder beitragspflichtig noch steuerbar (Ziffer 13.1.1) |
+| `CORRECTION` | ± beitragspflichtiger Lohn |
+| `NET_CORRECTION` | ± Auszahlung ohne Beiträge |
+| `DEDUCTION` | Abzug (Vorschuss, Pfändung) |
+| `WITHHOLDING_TAX_MANUAL` | Quellensteuer von Hand, ersetzt den Tarif; höchstens eine je Monat (Teilindex) |
 
-> **Nur freigegebene Zeiten zählen.** Das ist der Ertrag aus Wave 8 und die
-> wichtigste Regel: Eine Abrechnung, die offene Zeiten mitnimmt, zahlt Stunden
-> aus, die niemand geprüft hat. Offene werden gezählt und in der Antwort
-> gemeldet — nicht bezahlt.
+- **Nicht in einen veröffentlichten Monat** (422). Eine Korrektur gehört in
+  einen **späteren** offenen Monat und verweist mit `correctsPayslipId` auf die
+  korrigierte Abrechnung.
+- Eine eingeflossene Position einer veröffentlichten Abrechnung ist
+  unveränderlich (Dienst und Trigger `payroll_items_unveraenderlich`).
 
-**Der Satz des Tages, nicht der von heute** (RB-009, 2026-09-23). Der
-Stundenansatz einer Erfassung kommt aus der **Lohnhistorie** am Tag der
-Arbeit, danach aus dem Schnappschuss der Zeiterfassung, erst zuletzt aus dem
-aktuellen Satz. Beim Monatslohn gilt der Stand am Monatsende. Vorher rechnete
-ein Lauf für den August nach einer Lohnerhöhung im September rückwirkend mit
-dem neuen Satz.
+**13. Monatslohn** (`EmployeePayrollProfile`, `/api/payroll/profiles/:id`) —
+**vertraglich, nie als gesetzliche Pflicht dargestellt**:
 
-**Der Monat endet um Mitternacht in Zürich**, nicht in UTC. Stunden vom 1.
-zwischen 00:00 und 02:00 (Sommerzeit) landeten im Vormonat.
+| Art | Rechnung |
+|---|---|
+| `NONE` | keiner |
+| `MONTHLY` | jeden Monat 1/12 des Grundlohns (nach unbezahltem Urlaub) |
+| `PRO_RATA` | im Auszahlungsmonat oder Austrittsmonat 1/12 der Jahresgrundlöhne − bereits Ausgerichtetes |
+| `ANNUAL` | im Auszahlungsmonat ein Monatslohn, bei unterjähriger Anstellung nach Kalendertagen; beim Austritt anteilig; ohne Monatslohn wie `PRO_RATA`; nie doppelt |
 
-**Ein veröffentlichter Monat ist zu.** Der Lauf schreibt nur noch
-unveröffentlichte Abrechnungen (`updateMany … published: false`, sonst
-`create` mit Behandlung des Wettlaufs), und in einem veröffentlichten Monat
-lassen sich Zeiten weder erfassen noch freigeben noch wieder öffnen. Vorher
-überschrieb ein zweiter Lauf eine bereits sichtbare Abrechnung.
-
-**Das Lohnportal** zeigt KTG bei den Abzügen, wo er abgezogen wird (vorher
-fehlte er in der Aufstellung, und die Summe der Zeilen ergab nicht den
-Nettolohn). Das Versprechen eines PDFs und eine Aussage zum Lohnausweis sind
-entfernt — es gibt beides nicht. **Clenaris ist damit nicht „Swiss Payroll
-compliant"** und behauptet es nicht; §9a gilt unverändert.
-
----
-
-## 6. Der Ablauf
-
-```
-1. Zeiten freigeben            POST /api/time/approve
-2. Sätze prüfen                GET/PATCH /api/payroll/settings?year=…
-3. Lohnlauf                    POST /api/payroll/run
-4. Ergebnis prüfen             GET /api/payroll/payslips?year=…&month=…
-5. Veröffentlichen             POST /api/payroll/publish
-```
-
-**Schritt 1 vor Schritt 3** ist die Kontrolle, nicht die Reihenfolge einer
-Bequemlichkeit.
-
-**Ein laufender Monat wird abgewiesen** (422). Der Fall dahinter: Am 12. einen
-Lauf starten, weil man „schon mal schauen" will — das Ergebnis sähe aus wie
-eine Abrechnung und wäre um zwei Drittel zu tief, und ein späterer Lauf
-überschriebe es stillschweigend. Wer die Zwischenzahl braucht, nimmt die
-Zeiterfassung.
-
-**Der Lauf ist idempotent** je Person und Monat. Ein zweiter Lauf überschreibt
-die noch nicht veröffentlichten Abrechnungen und lässt die veröffentlichten
-unberührt — genau das ist der Nachlauf, wenn eine vergessene Zeit nachträglich
-freigegeben wurde.
-
-**Veröffentlichen ist endgültig.** Ab da ist die Abrechnung sichtbar und
-unveränderlich — dieselbe Schwelle wie beim Ausstellen einer Rechnung. **Es
-gibt kein Zurücknehmen:** Eine Abrechnung, die wieder verschwindet, ist
-schlimmer als eine falsche, die korrigiert wird. Korrekturen laufen über die
-Abrechnung des Folgemonats.
+Ein-/Austritt, Lohnänderung und unbezahlter Urlaub sind in `PRO_RATA` von
+selbst berücksichtigt, weil sie in den Grundlöhnen stehen. Korrekturen des
+Grundlohns fliessen nicht in die 13.-Basis (nur `BASE`/`UNPAID_LEAVE`).
 
 ---
 
-## 7. Die Herleitung
+## 6. Quellensteuer — Motor und Grenze
 
-`Payslip.breakdown` hält als **Momentaufnahme** fest:
+**Clenaris liefert keine Tarife und rechnet keinen Satz ohne Quelle.**
 
-- die angewandten Sätze (vollständig),
-- das Alter, mit dem gerechnet wurde,
-- den koordinierten Jahreslohn und den BVG-Altersband-Satz,
-- die Zahl der berücksichtigten und der offenen Erfassungen,
-- die Jahreshochrechnung.
+- `WithholdingTaxProfile`: Kanton, Tarifcode, Kirchensteuer, Kinder, mit
+  Gültigkeit; keine Überschneidung (Ausschlussbedingung). Konfession und
+  Kinderzahl sind im Prüfprotokoll geschwärzt.
+- `WithholdingTaxRate`: Tarifzeilen je Kanton/Jahr/Tarif/Einkommensstufe,
+  **nur eingelesen** (`POST /api/payroll/withholding/rates`, `source`
+  Pflicht, ungeprüft, stapelweise bestätigbar), nie überschrieben.
+- **Rechnung:** Profil am letzten angestellten Tag des Monats → Tarifzeile
+  nach steuerbarem Monatseinkommen (Lohn + Familienzulagen, ohne Spesen) →
+  Satz × Bemessung. Herkunft (`satzId`, Quelle) in der Herleitung.
+- **Ohne Tarifzeile:** keine Quellensteuer, sondern `reviewRequired` mit
+  Begründung. Veröffentlicht wird erst nach Prüfung (Notiz Pflicht) oder mit
+  einer von Hand erfassten Quellensteuer.
+- **Nach dem Veröffentlichen:** Profilinhalte im Zeitraum sind gesperrt; ein
+  Tarifwechsel ist ein neues Profil ab dem Wechseltag.
+- Ein ungeprüfter Tarif zählt wie ein ungeprüfter Beitragssatz
+  (`unverifiedRates`).
 
-Dieselbe Überlegung wie bei der Empfängeradresse einer Rechnung: Ändert sich
-ein Satz im nächsten Jahr, bleibt die alte Abrechnung nachvollziehbar.
-
-Und der eigentliche Zweck: **Eine Lohnabrechnung, bei der sich der BVG-Abzug
-nicht nachrechnen lässt, erzeugt genau eine Rückfrage je Monat und je Person.**
+**Nicht umgesetzt:** Jahresmodell (GE, VD, VS, FR, TI), rückwirkende
+Tarifkorrektur, Abrechnung mit der Steuerverwaltung, Satzbestimmungslohn bei
+mehreren Arbeitgebern.
 
 ---
 
-## 8. Wer was darf
+## 7. Veraltete Abrechnungen
+
+Eine berechnete, **unveröffentlichte** Abrechnung wird als veraltet markiert
+(`reviewRequired`, Grund beginnt mit „Grundlagen seit der Berechnung
+geändert"), wenn sich danach etwas ändert, das sie trägt: Lohnposition,
+Lohnvereinbarung, Quellensteuerprofil oder -tarif, Satzversion, Lohnstamm,
+Ein-/Austritt, Zeitfreigabe oder deren Aufhebung, bewilligter unbezahlter
+Urlaub. **Eine veraltete Abrechnung wird nicht „freigegeben", sondern neu
+gerechnet** (422 auf die Prüffreigabe); der nächste Lauf setzt die Markierung
+zurück. Ohne diese Regel würde die alte Zahl veröffentlicht.
+
+---
+
+## 8. Veröffentlichen, PDF, Unveränderlichkeit
+
+1. Offene Prüfungen → übersprungen mit Grund.
+2. Ungeprüfte Sätze → nur mit `trotzUngepruefterSaetze: true`.
+3. PDF aus den gespeicherten Zeilen rendern (`PayslipDocument`), ablegen
+   (`<org>/payroll/payslips/<id>.pdf`), als `FileAsset` im Bereich `PAYROLL`
+   registrieren (nicht öffentlich, `uploadedById` leer, Herkunft
+   `SYSTEM_GENERATED`), Prüfsumme festhalten.
+4. **Bedingtes Schreiben** `published=false AND updatedAt=<gelesen>` — ein
+   Nachlauf zwischen Lesen und Veröffentlichen hängt kein PDF alter Zeilen an
+   neue Zeilen.
+
+**Herunterladen** (`/api/payroll/payslips/:id/pdf`): gespeicherte Bytes,
+Prüfsummenvergleich, kein Neurendern; jeder Abruf im Prüfprotokoll.
+Mitarbeitende nur die eigene veröffentlichte (Bedingung in der Abfrage, sonst
+404). Über den allgemeinen Dateiweg ist `PAYROLL` nur mit `payslip:read_all`
+lesbar; die Mediathek zeigt Lohndokumente nicht und kann Signatur- und
+Lohnbelege weder löschen noch umordnen.
+
+**Datenbank-Trigger** (Migration `20260923130000_lohn_ausbau`):
+`payslips_unveraenderlich`, `payslip_lines_unveraenderlich`,
+`payroll_items_unveraenderlich`, `payroll_rates_unveraenderlich`,
+`salary_certificates_unveraenderlich`. Kaskaden aus dem Löschen einer ganzen
+Personalakte sind erlaubt (`pg_trigger_depth() > 1`).
+
+---
+
+## 9. Lohnausweis-Aufstellung
+
+`SalaryCertificate` (`/api/payroll/certificates`): Verdichtung der
+**veröffentlichten** Abrechnungen eines Jahres auf die Ziffern 1, 7, 8, 9,
+10.1, 11, 12 und 13.1.1 (Zuordnung je Zeile in `certificateField`, Tabelle
+`LOHNAUSWEIS_ZIFFER`). Entwurf wird bei jedem Erstellen neu verdichtet;
+**Abschliessen** erzeugt das PDF und macht die Version unveränderlich; eine
+Korrektur ist eine neue Version. Mitarbeitende sehen nur eigene
+abgeschlossene Aufstellungen.
+
+**Das ist nicht das amtliche Formular 11.** Das PDF sagt es auf der ersten
+Seite. Nicht erfasst: Naturalleistungen, Kantine, Fahrkosten, Aussendienst,
+Bemerkungen (Ziffer 15), Kapitalleistungen, Beteiligungen.
+
+---
+
+## 10. Wer was darf
 
 | Berechtigung | Erlaubt | Rollen |
 |---|---|---|
-| `payslip:read_own` | Die eigene Abrechnung — **nur veröffentlichte** | alle Angestellten |
-| `payslip:create` | Lohnlauf; Lohn, AHV-Nummer und IBAN in der Personalakte | ADMIN, SUPER_ADMIN |
-| `payslip:read_all` | Alle Abrechnungen ansehen | ADMIN, SUPER_ADMIN |
-| `payslip:publish` | Veröffentlichen, Sätze pflegen | ADMIN, SUPER_ADMIN |
+| `payslip:read_own` | eigene **veröffentlichte** Abrechnungen, eigenes PDF, eigene abgeschlossene Lohnausweis-Aufstellungen | Angestellte |
+| `payslip:create` | Lauf, Positionen, Lohnvereinbarungen, Quellensteuerprofile, Aufstellung verdichten, Sätze/Tarife lesen | ADMIN, SUPER_ADMIN |
+| `payslip:read_all` | alle Abrechnungen, `/admin/lohn`, Dateiweg `PAYROLL` | ADMIN, SUPER_ADMIN |
+| `payslip:publish` | Veröffentlichen, Prüfung freigeben, Satzversionen anlegen/ändern/bestätigen, Tarife einlesen/bestätigen, Aufstellung abschliessen | ADMIN, SUPER_ADMIN |
 
-**Die Betriebsleitung hat keines davon.** Sie gibt Zeiten frei
-(`timetracking:approve`) und sieht keine Löhne — das ist der bestehende
-Entscheid aus der Personalakte und bleibt so.
+**Die Betriebsleitung hat keines davon.** Alle Abfragen filtern nach
+`organizationId`; die Prüfreihe belegt mit einer fremden Organisation, dass
+deren Sätze, Tarife und Positionen weder gezeigt noch verrechnet werden.
 
-**Eine unveröffentlichte Abrechnung existiert für die eigene Person nicht**
-(404, nicht 403). Sie ist ein Entwurf und kann sich noch ändern; eine Zahl,
-die sich ändert, nachdem jemand sie gesehen hat, ist schlimmer als keine Zahl.
-Die Einschränkung steht in der Prisma-`where`-Klausel, nicht in einer Prüfung
-danach.
-
----
-
-## 9. Offen
-
-| Punkt | Warum noch nicht |
-|---|---|
-| **PDF der Abrechnung** | `Payslip.pdfUrl` steht im Schema und bleibt leer. Ein Lohnausweis hat formale Anforderungen, die über ein Rendering hinausgehen; die Zahlen sind über die Schnittstelle vollständig verfügbar |
-| **Maske in der Verwaltung** | Der Lauf ist heute nur über die Schnittstelle zu starten |
-| **Arbeitgeberbeiträge** | Für die Abrechnung mit der Ausgleichskasse nötig, für den Nettolohn nicht. Eigene Rechnung mit eigenen Sätzen |
-| **Quellensteuer und Zulagen** | Siehe Abschnitt 1 — Treuhand |
-| **13. Monatslohn, Ferien- und Feiertagsentschädigung** | Ergeben sich aus Vertrag und GAV, nicht aus einem Satz — siehe Abschnitt 1 |
-| **Lohnausweis und Jahresabschluss** | Formularpflichten mit eigenen Fristen — siehe Abschnitt 1 |
+**Prüfprotokoll:** Beträge, Bezeichnungen und Notizen von Positionen, die
+Quellensteuerdaten (Kanton, Tarif, Kirchensteuer, Kinder), die
+Lohnvereinbarungen und die Felder der Aufstellung sind je Entität geschwärzt
+(`src/lib/sensitive-fields.ts`).
 
 ---
 
-## 9a. Fachliche Prüfung — ausdrücklich ausstehend
+## 11. Fachliche Prüfung — EXTERNAL VERIFICATION REQUIRED
 
-> **Diese Wave ist und bleibt bis auf Weiteres als PARTIAL eingestuft.**
+Technisch geprüft ist, dass die Rechnung tut, was hier steht. **Nicht**
+geprüft — und vor produktivem Einsatz durch Treuhand, Ausgleichskasse,
+Versicherer bzw. Steuerverwaltung zu bestätigen:
 
-Was hier steht, ist eine **technisch geprüfte Rechnung mit fachlich
-ungeprüften Sätzen.** Der Unterschied ist wichtig genug, um ihn auszuschreiben:
+1. alle Beitragssätze, Schwellen und Grenzen je Jahr (AHV/IV/EO, ALV, UVG-BU/NBU, KTG, FAK, VK, BVG-Plan);
+2. Quellensteuertarife je Kanton/Jahr — und dass das Monatsmodell für die betroffenen Kantone genügt;
+3. Kalendertage als Anteilskonvention bei Ein-/Austritt und Lohnänderung (Alternative: 30er-Monat);
+4. Werktage-Konvention beim unbezahlten Urlaub (Feiertage nicht ausgenommen);
+5. Einstufung der Familienzulagen (nicht AHV-pflichtig, steuerbar) und der Zulagenarten;
+6. Ferienentschädigung w/(52−w) und Feiertagsprozentsatz gemäss GAV;
+7. Auslegung des 13. Monatslohns je Arbeitsvertrag, insbesondere beim Austritt;
+8. ALV-Grenze monatlich durch 12 statt laufender Jahressumme;
+9. Zuordnung der Zeilen zu den Lohnausweis-Ziffern.
 
-- Die Rechnung selbst ist gegen feste Zahlen geprüft
-  (`tests/api/lohnabrechnung.test.ts`): koordinierter Lohn in allen vier
-  Fällen, Altersbänder ab ihrem Anfang, ALV-Grenze auf den Monat,
-  Art. 66 BVG (über 50 % Arbeitnehmeranteil wird abgewiesen). Diese Prüfungen
-  belegen, dass die Formeln das tun, was in diesem Dokument steht.
-- Sie belegen **nicht**, dass die hinterlegten Prozentsätze, Eintrittsschwellen
-  und Grenzbeträge den geltenden Werten entsprechen. Beitragssätze ändern sich
-  von Jahr zu Jahr; der Wert im Seed ist ein Startwert, kein Nachweis.
-- Kein Treuhandbüro und keine Ausgleichskasse hat diese Umsetzung bisher
-  angesehen.
-
-**Vor dem produktiven Einsatz sind daher extern zu bestätigen:** AHV/IV/EO-,
-ALV- und UVG-Sätze, die BVG-Eintrittsschwelle, der Koordinationsabzug, die
-Ober- und Untergrenze des koordinierten Lohns, die Altersgutschriftsbänder und
-die ALV-Höchstgrenze — jeweils für das Abrechnungsjahr und für den Kanton
-Bern.
-
-Bis dahin gilt für jede Aussage über dieses Modul: **keine vollständige
-Schweizer Lohnbuchhaltung**, sondern eine nachvollziehbare Beitragsrechnung,
-deren Sätze konfiguriert und deren Richtigkeit von aussen zu bestätigen ist.
+Bis dahin: **keine vollständige Schweizer Lohnbuchhaltung und keine
+Konformitätsaussage**, sondern eine nachvollziehbare, versionierte,
+unveränderlich abgeschlossene Abrechnung mit ausgewiesener Herkunft jedes
+Satzes.
 
 ---
 
-## 10. Wo was steht
+## 12. Wo was steht
 
 | Datei | Inhalt |
 |---|---|
-| `src/lib/payroll/beitraege.ts` | Die Rechnung — rein, direkt prüfbar |
-| `src/server/services/payroll.service.ts` | Bruttolohn, Lauf, Veröffentlichen, Lesen |
-| `src/lib/validation/payroll.ts` | Schemata — **kein Feld für einen Betrag** |
-| `src/app/api/payroll/**` | Sechs Endpunkte |
-| `prisma/schema.prisma` | `PayrollSetting`, erweiterter `Payslip` |
-| `tests/api/lohnabrechnung.test.ts` | 26 Prüfungen — Rechnung mit festen Zahlen, Ablauf über HTTP |
+| `src/lib/payroll/beitraege.ts` | Beiträge AN/AG — rein |
+| `src/lib/payroll/lohnbestandteile.ts` | Zeilen, 13., Quellensteuer, Auszahlung — rein |
+| `src/server/services/payroll.service.ts` | Lauf, Prüfung, Veröffentlichen, PDF, Lesen |
+| `src/server/services/payroll-rates.service.ts` | Satzversionen |
+| `src/server/services/payroll-stamm.service.ts` | Vereinbarungen, Positionen, Quellensteuer |
+| `src/server/services/payroll-veraltet.ts` | Veraltet-Markierung |
+| `src/server/services/salary-certificate.service.ts` | Lohnausweis-Aufstellung |
+| `src/lib/pdf/payroll-documents.tsx` | PDF-Dokumente |
+| `src/app/api/payroll/**` | 27 Operationen |
+| `src/app/(app)/admin/lohn/**`, `src/app/(app)/portal/lohn` | Oberflächen |
+| `prisma/migrations/20260923130000_lohn_ausbau` | Modelle, Ausschlussbedingungen, Teilindex, Trigger, Übernahme der Jahreszeilen |
+| `tests/api/lohnbestandteile.test.ts` | 24 Prüfungen der reinen Rechnung |
+| `tests/api/lohnabrechnung.test.ts` | Beitragsrechnung und Ablauf über HTTP (50 Prüfungen) |

@@ -182,6 +182,8 @@ export default async function AdminLayout({ children }: { children: React.ReactN
       label: 'Betrieb',
       items: [
         { href: '/admin/personal', label: 'Mitarbeitende', icon: 'staff', badge: openAbsences, permission: 'employee:read' },
+        // Nur mit Einsicht in alle Abrechnungen — die Betriebsleitung hat bewusst keinen Lohneinblick.
+        { href: '/admin/lohn', label: 'Lohn', icon: 'expenses', permission: 'payslip:read_all' },
         { href: '/admin/einstellungen', label: 'Einstellungen', icon: 'settings', permission: 'settings:read' },
       ],
     },

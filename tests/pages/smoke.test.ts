@@ -44,6 +44,8 @@ const PAGES: Record<'admin' | 'employee' | 'customer', string[]> = {
     '/admin/personal',
     '/admin/personal/neu',
     '/admin/personal/bewerbungen',
+    '/admin/lohn',
+    '/admin/lohn?jahr=2021&monat=3',
     '/admin/marketing',
     '/admin/blog',
     '/admin/bewertungen',
@@ -228,6 +230,19 @@ describe('Rauchtest', { concurrency: 1 }, async () => {
       const response = await get(`/konto/offerten/${id}`, { jar: jars.customer });
       assert.ok(response.status >= 200 && response.status < 400, `HTTP ${response.status}`);
       assert.ok(response.text.includes('data-pdf-viewer-mount'), 'Dokumentansicht fehlt');
+    });
+
+    /**
+     * Die Abrechnungsliste liefert eine Hülle (`{ eintraege, summe… }`), und
+     * der Demobestand hat nicht zwingend eine Abrechnung — ohne Beispiel wird
+     * der Fall übersprungen, wie bei der Offertansicht der Kundschaft.
+     */
+    it('/admin/lohn/:id', async () => {
+      const liste = await get<{ data: { eintraege: { id: string }[] } }>('/api/payroll/payslips', { jar: jars.admin });
+      const id = liste.payload?.data?.eintraege?.[0]?.id ?? null;
+      if (!id) return;
+      const response = await get(`/admin/lohn/${id}`, { jar: jars.admin });
+      assert.ok(response.status >= 200 && response.status < 400, `HTTP ${response.status}`);
     });
 
     it('/admin/offerten/:id/bearbeiten', async () => {

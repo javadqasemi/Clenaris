@@ -40,6 +40,8 @@ const SCOPE_LABELS: Record<FileScope, string> = {
   MEETING: 'Sitzung',
   REPORT: 'Bericht',
   SIGNATURE: 'Unterzeichnung',
+  // Erscheint in der Mediathek nicht (siehe `listMedia`); der Eintrag hält nur den Typ vollständig.
+  PAYROLL: 'Lohn',
 };
 
 /**
@@ -104,7 +106,7 @@ export default async function MediaPage({
             {
               param: 'bereich',
               label: 'Bereich',
-              options: (Object.keys(SCOPE_LABELS) as FileScope[]).map((scope) => ({
+              options: (Object.keys(SCOPE_LABELS) as FileScope[]).filter((scope) => scope !== 'PAYROLL').map((scope) => ({
                 value: scope,
                 label: SCOPE_LABELS[scope],
               })),

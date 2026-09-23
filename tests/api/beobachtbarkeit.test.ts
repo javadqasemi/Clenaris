@@ -1,7 +1,7 @@
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { testDb, testDbGrund, testDbSchliessen } from '../helpers/testdb';
+import { eigeneOrganisationId, testDb, testDbGrund, testDbSchliessen } from '../helpers/testdb';
 
 import { routenVorlage } from '../../src/lib/observability/context';
 import {
@@ -448,7 +448,8 @@ describe('RB-014 — Überwachung der geplanten Läufe', () => {
    */
   it('ein ausgebliebener Lauf ergibt 503 und genau einen Alarm', async (t) => {
     if (!db) return t.skip(`kein Zugang zur Testdatenbank: ${testDbGrund()}`);
-    const org = await db.organization.findFirstOrThrow({ select: { id: true } });
+    // Über den Slug: Seit Wave 9 kennt die Testdatenbank eine fremde Organisation.
+    const org = { id: (await eigeneOrganisationId())! };
     const neu = await db.cronRun.create({
       data: { organizationId: org.id, job: 'daily', status: 'SUCCESS', startedAt: new Date(), finishedAt: new Date(), durationMs: 1 },
     });

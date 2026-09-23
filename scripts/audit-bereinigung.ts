@@ -101,7 +101,11 @@ async function main(): Promise<void> {
     }
 
     if (betroffen > 0) {
-      const organisation = await prisma.organization.findFirst({ select: { id: true } });
+      // Über den Slug wie `getOrganizationId()` — „die erste" trifft bei mehr als einer Organisation die falsche.
+      const organisation = await prisma.organization.findFirst({
+        where: { slug: process.env.ORGANIZATION_SLUG ?? 'clenaris' },
+        select: { id: true },
+      });
       if (organisation) {
         await prisma.auditLog.create({
           data: {

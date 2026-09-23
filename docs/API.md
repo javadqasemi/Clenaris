@@ -5,7 +5,7 @@
 > Quelle, aus der sowohl diese Referenz als auch die Laufzeitvalidierung
 > stammen.
 
-Stand: 461 Endpunkte. Die maschinenlesbare Fassung liegt in
+Stand: 482 Endpunkte. Die maschinenlesbare Fassung liegt in
 [`openapi.yaml`](./openapi.yaml) bzw. [`openapi.json`](./openapi.json).
 
 ## Grundlagen
@@ -3163,7 +3163,7 @@ Familie.
 
 ### `POST /api/payroll/publish`
 
-**Abrechnungen veröffentlichen.** Macht sie unter `/portal/lohn` sichtbar und **unveränderlich** — dieselbe Schwelle wie beim Ausstellen einer Rechnung. **Es gibt kein Zurücknehmen:** Eine Abrechnung, die wieder verschwindet, ist schlimmer als eine falsche, die korrigiert wird. Korrekturen laufen über die Abrechnung des Folgemonats. Eigene Berechtigung, weil Erstellen ein wiederholbarer Rechenlauf ist und Veröffentlichen endgültig.
+**Abrechnungen veröffentlichen.** Macht sie unter `/portal/lohn` sichtbar und **unveränderlich** — dieselbe Schwelle wie beim Ausstellen einer Rechnung. **Es gibt kein Zurücknehmen:** Eine Abrechnung, die wieder verschwindet, ist schlimmer als eine falsche, die korrigiert wird. Korrekturen laufen über die Abrechnung des Folgemonats. Eigene Berechtigung, weil Erstellen ein wiederholbarer Rechenlauf ist und Veröffentlichen endgültig. Erzeugt je Abrechnung das PDF (einmal, mit Prüfsumme). Offene Prüfungen werden übersprungen und gemeldet; mit ungeprüften Sätzen nur mit `trotzUngepruefterSaetze: true`, sonst 422.
 
 - **Zugriff:** Erfordert die Berechtigung: `payslip:publish`.
 - **Rate-Limit-Klasse:** `apiWrite`
@@ -3175,6 +3175,7 @@ Familie.
 | Feld | Typ | Pflicht | Regeln |
 | --- | --- | --- | --- |
 | `payslipIds` | string[] | ja | min. 1 Einträge, max. 500 Einträge |
+| `trotzUngepruefterSaetze` | boolean | – | – |
 
 ### `GET /api/payroll/payslips`
 
@@ -3209,9 +3210,45 @@ Familie.
 | --- | --- | --- | --- |
 | `id` | string | ja | min. 1 Zeichen |
 
-### `GET /api/payroll/settings`
+### `GET /api/payroll/payslips/{id}/pdf`
 
-**Beitragssätze eines Jahres.** Legt sie an, wenn es sie noch nicht gibt — mit den gesetzlichen Vorgaben und, sofern vorhanden, den betriebsabhängigen Sätzen des Vorjahres.
+**Abrechnung als PDF.** Das beim Veröffentlichen erzeugte PDF — gespeicherte Bytes nach Prüfsummenvergleich, nichts wird neu gerechnet. Mit `payslip:read_own` nur die eigene veröffentlichte Abrechnung (Bedingung in der Abfrage). Jeder Abruf wird protokolliert.
+
+- **Zugriff:** Erfordert eine der Berechtigungen: `payslip:read_own`, `payslip:read_all`.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200 (`application/pdf`)
+- **Mögliche Fehler:** 400, 401, 403, 404, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+### `POST /api/payroll/payslips/{id}/review`
+
+**Prüfung einer Abrechnung freigeben.** Für Abrechnungen mit `reviewRequired` (etwa Quellensteuer ohne Tarif). Notiz ist Pflicht. Eine veraltete Abrechnung (Grundlagen seit der Berechnung geändert) wird nicht freigegeben, sondern neu gerechnet (422).
+
+- **Zugriff:** Erfordert die Berechtigung: `payslip:publish`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `note` | string | ja | min. 3 Zeichen, max. 500 Zeichen |
+
+### `GET /api/payroll/rates`
+
+**Satzversionen der Sozialbeiträge.** Je Beitragsart Versionen mit Gültigkeit, Arbeitnehmer- und Arbeitgeberanteil, Schwellen, Herkunft (`source`, `reference`) und Prüfstand. `benutzt: true` heisst: in eine veröffentlichte Abrechnung eingeflossen und damit unveränderlich. Ersetzt `/api/payroll/settings`.
 
 - **Zugriff:** Erfordert die Berechtigung: `payslip:create`.
 - **Rate-Limit-Klasse:** `apiRead`
@@ -3222,41 +3259,409 @@ Familie.
 
 | Feld | Typ | Pflicht | Regeln |
 | --- | --- | --- | --- |
-| `year` | integer | ja | ≥ 2020, ≤ 2100 |
+| `year` | integer | – | ≥ 2020, ≤ 2100 |
+| `code` | string | – | `AHV_IV_EO` \| `ALV` \| `ALV_SOLIDARITY` \| `UVG_NBU` \| `UVG_BU` \| `KTG` \| `FAK` \| `VK` \| `BVG` |
 
-### `PATCH /api/payroll/settings`
+### `POST /api/payroll/rates`
 
-**Beitragssätze pflegen.** Wer hier eine Zahl ändert, ändert den Nettolohn **aller** Mitarbeitenden für ein ganzes Jahr — deshalb eine eigene Berechtigung. `bvgAnteilArbeitnehmer` ist auf 50 % gedeckelt: Gesetzlich trägt der Betrieb mindestens die Hälfte der Altersgutschrift (Art. 66 BVG). Alte Jahre bleiben unberührt — eine Korrektur für 2025 muss mit den Sätzen von 2025 rechnen.
+**Neue Satzversion.** Die Vorgängerin wird am Vortag geschlossen, aber nie so, dass ein veröffentlichter Monat seine Version verlöre. `source` ist Pflicht; eine neue Version ist ungeprüft. BVG: Arbeitnehmeranteil höchstens 50 % (Art. 66 BVG), Schwellen und Altersbänder in `parameters`.
 
 - **Zugriff:** Erfordert die Berechtigung: `payslip:publish`.
 - **Rate-Limit-Klasse:** `apiWrite`
 - **Erfolg:** 200
 - **Mögliche Fehler:** 400, 401, 403, 422, 429, 500
 
-**Query-Parameter**
+**Anfragekörper**
 
 | Feld | Typ | Pflicht | Regeln |
 | --- | --- | --- | --- |
-| `year` | integer | ja | ≥ 2020, ≤ 2100 |
+| `code` | string | ja | `AHV_IV_EO` \| `ALV` \| `ALV_SOLIDARITY` \| `UVG_NBU` \| `UVG_BU` \| `KTG` \| `FAK` \| `VK` \| `BVG` |
+| `validFrom` | string | ja | – |
+| `validUntil` | string | – | – |
+| `source` | string | ja | min. 3 Zeichen, max. 300 Zeichen |
+| `employeePct` | number | – | ≥ 0, ≤ 100 |
+| `employerPct` | number | – | ≥ 0, ≤ 100 |
+| `thresholdMin` | number | – | ≥ 0, ≤ 1000000 |
+| `thresholdMax` | number | – | ≥ 0, ≤ 1000000 |
+| `parameters` | object | – | – |
+| `parameters.eintrittsschwelle` | number | ja | ≥ 0, ≤ 1000000 |
+| `parameters.koordinationsabzug` | number | ja | ≥ 0, ≤ 1000000 |
+| `parameters.mindestKoordiniert` | number | ja | ≥ 0, ≤ 1000000 |
+| `parameters.obergrenze` | number | ja | ≥ 0, ≤ 1000000 |
+| `parameters.baender` | object[] | ja | min. 1 Einträge, max. 10 Einträge |
+| `reference` | string | – | max. 300 Zeichen |
+
+### `PATCH /api/payroll/rates/{id}`
+
+**Satzversion ändern.** Nur solange keine veröffentlichte Abrechnung mit ihr gerechnet wurde (sonst 422; die Datenbank verweigert es ebenfalls). Setzt den Prüfstand zurück und markiert berechnete, unveröffentlichte Abrechnungen als veraltet.
+
+- **Zugriff:** Erfordert die Berechtigung: `payslip:publish`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen, max. 64 Zeichen |
 
 **Anfragekörper**
 
 | Feld | Typ | Pflicht | Regeln |
 | --- | --- | --- | --- |
-| `ahvIvEo` | number | – | ≥ 0, ≤ 100 |
-| `alv` | number | – | ≥ 0, ≤ 100 |
-| `alvGrenzeJahr` | number | – | ≥ 0, ≤ 1000000 |
-| `alvUeberGrenze` | number | – | ≥ 0, ≤ 100 |
-| `uvgNbu` | number | – | ≥ 0, ≤ 100 |
-| `ktg` | number | – | ≥ 0, ≤ 100 |
-| `bvgEintrittsschwelle` | number | – | ≥ 0, ≤ 1000000 |
-| `bvgKoordinationsabzug` | number | – | ≥ 0, ≤ 1000000 |
-| `bvgMindestKoordiniert` | number | – | ≥ 0, ≤ 1000000 |
-| `bvgObergrenze` | number | – | ≥ 0, ≤ 1000000 |
-| `bvgAnteilArbeitnehmer` | number | – | ≥ 0, ≤ 50 |
-| `bvgSaetze` | object[] | – | min. 1 Einträge, max. 10 Einträge |
-| `bvgSaetze[].abAlter` | integer | ja | ≥ 16, ≤ 75 |
-| `bvgSaetze[].satz` | number | ja | ≥ 0, ≤ 100 |
+| `source` | string | – | min. 3 Zeichen, max. 300 Zeichen |
+| `employeePct` | number | – | ≥ 0, ≤ 100 |
+| `employerPct` | number | – | ≥ 0, ≤ 100 |
+| `thresholdMin` | number | – | ≥ 0, ≤ 1000000 |
+| `thresholdMax` | number | – | ≥ 0, ≤ 1000000 |
+| `parameters` | object | – | – |
+| `parameters.eintrittsschwelle` | number | ja | ≥ 0, ≤ 1000000 |
+| `parameters.koordinationsabzug` | number | ja | ≥ 0, ≤ 1000000 |
+| `parameters.mindestKoordiniert` | number | ja | ≥ 0, ≤ 1000000 |
+| `parameters.obergrenze` | number | ja | ≥ 0, ≤ 1000000 |
+| `parameters.baender` | object[] | ja | min. 1 Einträge, max. 10 Einträge |
+| `reference` | string | – | max. 300 Zeichen |
+
+### `POST /api/payroll/rates/{id}/verify`
+
+**Satzversion als geprüft bestätigen.** Vermerk, wer bestätigt hat und worauf gestützt. Eine Aussage der bestätigenden Person — das System prüft keinen Satz gegen eine amtliche Quelle.
+
+- **Zugriff:** Erfordert die Berechtigung: `payslip:publish`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen, max. 64 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `note` | string | ja | min. 3 Zeichen, max. 500 Zeichen |
+
+### `GET /api/payroll/profiles/{employeeId}`
+
+**Lohnvereinbarungen einer Person.** 13. Monatslohn (keiner, jährlich, anteilig, monatlich), Ferien- und Feiertagsentschädigung. Ohne Eintrag: nichts vereinbart erfasst — keine Aussage über die Rechtslage.
+
+- **Zugriff:** Erfordert die Berechtigung: `payslip:create`.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `employeeId` | string | ja | – |
+
+### `PUT /api/payroll/profiles/{employeeId}`
+
+**Lohnvereinbarungen setzen.** Ganzheitlich. Berechnete, unveröffentlichte Abrechnungen der Person werden als veraltet markiert.
+
+- **Zugriff:** Erfordert die Berechtigung: `payslip:create`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `employeeId` | string | ja | – |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `thirteenthMode` | string | ja | `NONE` \| `ANNUAL` \| `PRO_RATA` \| `MONTHLY` |
+| `thirteenthPayoutMonth` | integer | – | ≥ 1, ≤ 12, Standard `12` |
+| `vacationPayInWage` | boolean | – | Standard `false` |
+| `holidayPayPct` | number | – | ≥ 0, ≤ 20 |
+| `note` | string | – | max. 500 Zeichen |
+
+### `GET /api/payroll/items`
+
+**Lohnpositionen.** Überstunden, Zulagen, Familienzulagen, Spesen, Korrekturen, Abzüge und Quellensteuer von Hand.
+
+- **Zugriff:** Erfordert die Berechtigung: `payslip:create`.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 429, 500
+
+**Query-Parameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `year` | integer | – | ≥ 2020, ≤ 2100 |
+| `month` | integer | – | ≥ 1, ≤ 12 |
+| `employeeId` | string | – | – |
+
+### `POST /api/payroll/items`
+
+**Lohnposition erfassen.** Überstunden: Betrag rechnet der Server (Stunden × Ansatz × Zuschlag). Nur Korrekturen dürfen negativ sein. Nicht in einen veröffentlichten Monat (422) — eine Korrektur gehört in einen offenen Monat und verweist auf die korrigierte Abrechnung.
+
+- **Zugriff:** Erfordert die Berechtigung: `payslip:create`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 422, 429, 500
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `employeeId` | string | ja | – |
+| `year` | integer | ja | ≥ 2020, ≤ 2100 |
+| `month` | integer | ja | ≥ 1, ≤ 12 |
+| `type` | string | ja | `OVERTIME` \| `ALLOWANCE` \| `FAMILY_ALLOWANCE` \| `EXPENSE` \| `CORRECTION` \| `NET_CORRECTION` \| `DEDUCTION` \| `WITHHOLDING_TAX_MANUAL` |
+| `label` | string | ja | min. 2 Zeichen, max. 120 Zeichen |
+| `quantity` | number | – | ≥ 0, ≤ 744 |
+| `rate` | number | – | ≥ 0, ≤ 1000000 |
+| `surchargePct` | number | – | ≥ 0, ≤ 200 |
+| `amount` | number | – | ≥ -1000000, ≤ 1000000 |
+| `note` | string | – | max. 500 Zeichen |
+| `correctsPayslipId` | string | – | – |
+
+### `PATCH /api/payroll/items/{id}`
+
+**Lohnposition ändern.** Nur solange sie in keine veröffentlichte Abrechnung eingeflossen ist.
+
+- **Zugriff:** Erfordert die Berechtigung: `payslip:create`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen, max. 64 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `label` | string | – | min. 2 Zeichen, max. 120 Zeichen |
+| `quantity` | number | – | ≥ 0, ≤ 744 |
+| `rate` | number | – | ≥ 0, ≤ 1000000 |
+| `surchargePct` | number | – | ≥ 0, ≤ 200 |
+| `amount` | number | – | ≥ -1000000, ≤ 1000000 |
+| `note` | string | – | max. 500 Zeichen |
+
+### `DELETE /api/payroll/items/{id}`
+
+**Lohnposition entfernen.** Ausblenden (`deletedAt`), nur solange nicht veröffentlicht.
+
+- **Zugriff:** Erfordert die Berechtigung: `payslip:create`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen, max. 64 Zeichen |
+
+### `GET /api/payroll/withholding/profiles`
+
+**Quellensteuerprofile.** Kanton, Tarifcode, Kirchensteuer, Kinder — mit Gültigkeit. Im Prüfprotokoll geschwärzt.
+
+- **Zugriff:** Erfordert die Berechtigung: `payslip:create`.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 429, 500
+
+**Query-Parameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `employeeId` | string | – | – |
+
+### `POST /api/payroll/withholding/profiles`
+
+**Quellensteuerprofil erfassen.** Überschneidungen je Person verweigert die Datenbank (422).
+
+- **Zugriff:** Erfordert die Berechtigung: `payslip:create`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 422, 429, 500
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `employeeId` | string | ja | – |
+| `validFrom` | string | ja | – |
+| `validUntil` | string | – | – |
+| `canton` | string | ja | – |
+| `tariffCode` | string | ja | – |
+| `churchTax` | boolean | – | Standard `false` |
+| `children` | integer | – | ≥ 0, ≤ 20, Standard `0` |
+| `note` | string | – | max. 500 Zeichen |
+
+### `PATCH /api/payroll/withholding/profiles/{id}`
+
+**Quellensteuerprofil ändern.** Mit veröffentlichter Abrechnung im Zeitraum nur Ende und Notiz — ein Tarifwechsel ist ein neues Profil ab dem Wechseltag.
+
+- **Zugriff:** Erfordert die Berechtigung: `payslip:create`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen, max. 64 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `validUntil` | string | – | – |
+| `canton` | string | – | – |
+| `tariffCode` | string | – | – |
+| `churchTax` | boolean | – | – |
+| `children` | integer | – | ≥ 0, ≤ 20 |
+| `note` | string | – | max. 500 Zeichen |
+
+### `DELETE /api/payroll/withholding/profiles/{id}`
+
+**Quellensteuerprofil entfernen.** Nur ohne veröffentlichte Abrechnung im Zeitraum; sonst beenden statt löschen.
+
+- **Zugriff:** Erfordert die Berechtigung: `payslip:create`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen, max. 64 Zeichen |
+
+### `GET /api/payroll/withholding/rates`
+
+**Eingelesene Quellensteuertarife.** Tarifzeilen und Importstapel mit Quelle und Prüfstand.
+
+- **Zugriff:** Erfordert die Berechtigung: `payslip:create`.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 429, 500
+
+**Query-Parameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `canton` | string | – | – |
+| `year` | integer | – | ≥ 2020, ≤ 2100 |
+| `tariffCode` | string | – | – |
+
+### `POST /api/payroll/withholding/rates`
+
+**Quellensteuertarif einlesen.** Clenaris liefert keine Tarife mit. Zeilen aus der Datei der kantonalen Steuerverwaltung, `source` Pflicht, eingelesen ungeprüft; bestehende Stufen werden nicht überschrieben (422).
+
+- **Zugriff:** Erfordert die Berechtigung: `payslip:publish`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 422, 429, 500
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `canton` | string | ja | – |
+| `year` | integer | ja | ≥ 2020, ≤ 2100 |
+| `source` | string | ja | min. 3 Zeichen, max. 300 Zeichen |
+| `reference` | string | – | max. 300 Zeichen |
+| `rows` | object[] | ja | min. 1 Einträge, max. 5000 Einträge |
+| `rows[].tariffCode` | string | ja | – |
+| `rows[].incomeFrom` | number | ja | ≥ 0, ≤ 1000000 |
+| `rows[].incomeTo` | number | – | ≥ 0, ≤ 1000000 |
+| `rows[].ratePct` | number | ja | ≥ 0, ≤ 100 |
+
+### `POST /api/payroll/withholding/rates/verify`
+
+**Tarifstapel als geprüft bestätigen.** Abgleich mit der Quelle, mit Vermerk.
+
+- **Zugriff:** Erfordert die Berechtigung: `payslip:publish`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 422, 429, 500
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `importBatch` | string | ja | min. 1 Zeichen, max. 64 Zeichen |
+| `note` | string | ja | min. 3 Zeichen, max. 500 Zeichen |
+
+### `GET /api/payroll/certificates`
+
+**Lohnausweis-Aufstellungen.** Verdichtung veröffentlichter Abrechnungen auf die Ziffern des Lohnausweises — **nicht** das amtliche Formular 11. Mit `payslip:read_own` nur die eigenen abgeschlossenen.
+
+- **Zugriff:** Erfordert eine der Berechtigungen: `payslip:read_own`, `payslip:read_all`.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 429, 500
+
+**Query-Parameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `employeeId` | string | – | – |
+| `year` | integer | – | ≥ 2020, ≤ 2100 |
+
+### `POST /api/payroll/certificates`
+
+**Lohnausweis-Aufstellung verdichten.** Erstellt oder erneuert den Entwurf eines Jahres. Ohne veröffentlichte Abrechnung 422.
+
+- **Zugriff:** Erfordert die Berechtigung: `payslip:create`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 422, 429, 500
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `employeeId` | string | ja | – |
+| `year` | integer | ja | ≥ 2020, ≤ 2100 |
+
+### `POST /api/payroll/certificates/{id}/finalize`
+
+**Lohnausweis-Aufstellung abschliessen.** PDF erzeugen, ablegen, unveränderlich machen. Eine Korrektur danach ist eine neue Version.
+
+- **Zugriff:** Erfordert die Berechtigung: `payslip:publish`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen, max. 64 Zeichen |
+
+### `GET /api/payroll/certificates/{id}/pdf`
+
+**Lohnausweis-Aufstellung als PDF.** Gespeicherte Bytes mit Prüfsummenvergleich; für die eigene Person nur der eigene, abgeschlossene.
+
+- **Zugriff:** Erfordert eine der Berechtigungen: `payslip:read_own`, `payslip:read_all`.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200 (`application/pdf`)
+- **Mögliche Fehler:** 400, 401, 403, 404, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen, max. 64 Zeichen |
 
 ### `GET /api/time`
 

@@ -4,7 +4,7 @@
 > Diagramme sind damit nie älter als das Schema. Prosa und Bereichseinteilung
 > stehen in `scripts/generate-erd.ts`.
 
-**129 Modelle, 97 Aufzählungstypen, 2480 Felder.**
+**136 Modelle, 104 Aufzählungstypen, 2617 Felder.**
 PostgreSQL 16+; alle Zeitstempel als `timestamptz` in UTC, Anzeige in Europe/Zurich.
 
 ## Vier Entscheidungen, die das ganze Schema prägen
@@ -42,7 +42,7 @@ flowchart LR
   katalog["Leistungskatalog und Preislogik<br/><small>6 Modelle</small>"]
   auftrag["Buchung, Offerte, Einsatz<br/><small>10 Modelle</small>"]
   vertraege["Verträge und Einsatzpläne<br/><small>9 Modelle</small>"]
-  personal["Personal und Zeit<br/><small>9 Modelle</small>"]
+  personal["Personal und Zeit<br/><small>16 Modelle</small>"]
   finanzen["Finanzen<br/><small>8 Modelle</small>"]
   kommunikation["Kommunikation und Automatisierung<br/><small>10 Modelle</small>"]
   marketing["Marketing und Inhalte<br/><small>13 Modelle</small>"]
@@ -125,7 +125,7 @@ erDiagram
 
 | Modell | Tabelle | Felder | Zweck |
 | --- | --- | --- | --- |
-| `Organization` | `organizations` | 115 | Mandant — Firmendaten, Bankverbindung, Erscheinungsbild. Wurzel fast aller Beziehungen. |
+| `Organization` | `organizations` | 120 | Mandant — Firmendaten, Bankverbindung, Erscheinungsbild. Wurzel fast aller Beziehungen. |
 | `NumberSequence` | `number_sequences` | 6 | Fortlaufende, lückenlose Belegnummern (Schweizer Buchhaltungsanforderung). |
 | `OpeningHours` | `opening_hours` | 7 | Öffnungszeiten je Wochentag; Grundlage der buchbaren Zeitfenster. |
 | `Holiday` | `holidays` | 7 | Feiertage und Betriebsferien. Sperren Termine und zählen nicht als Abwesenheitstage. |
@@ -885,24 +885,108 @@ erDiagram
     Decimal ahvIv
     Decimal alv
   }
+  PayrollRate {
+    String id PK
+    String organizationId
+    PayrollRateCode code
+    DateTime validFrom
+    DateTime validUntil
+    Decimal employeePct
+    Decimal employerPct
+    Decimal thresholdMin
+  }
+  EmployeePayrollProfile {
+    String id PK
+    String employeeId UK
+    ThirteenthSalaryMode thirteenthMode
+    Int thirteenthPayoutMonth
+    Boolean vacationPayInWage
+    Decimal holidayPayPct
+    String note
+    String updatedById
+  }
+  PayrollItem {
+    String id PK
+    String organizationId
+    String employeeId
+    Int year
+    Int month
+    PayrollItemType type
+    String label
+    Decimal quantity
+  }
+  PayslipLine {
+    String id PK
+    String payslipId
+    Int position
+    PayslipLineType type
+    PayslipLineKind kind
+    String label
+    Decimal quantity
+    Decimal rate
+  }
+  WithholdingTaxProfile {
+    String id PK
+    String organizationId
+    String employeeId
+    DateTime validFrom
+    DateTime validUntil
+    String canton
+    String tariffCode
+    Boolean churchTax
+  }
+  WithholdingTaxRate {
+    String id PK
+    String organizationId
+    String canton
+    Int year
+    String tariffCode
+    Decimal incomeFrom
+    Decimal incomeTo
+    Decimal ratePct
+  }
+  SalaryCertificate {
+    String id PK
+    String organizationId
+    String employeeId
+    Int year
+    Int version
+    SalaryCertificateStatus status
+    DateTime periodFrom
+    DateTime periodTo
+  }
   Employee ||--o{ TimeEntry : "employee"
   Employee ||--o{ GpsEvent : "employee"
+  EmployeePayrollProfile |o--o{ Employee : "payrollProfile"
   Employee ||--o{ SalaryRecord : "employee"
   Employee ||--o{ EmployeeSkill : "employee"
   Employee ||--o{ Availability : "employee"
   Employee ||--o{ Absence : "employee"
   Employee ||--o{ Payslip : "employee"
+  Employee ||--|| EmployeePayrollProfile : "employee"
+  Employee ||--o{ PayrollItem : "employee"
+  Payslip |o--o{ PayrollItem : "payslip"
+  Payslip ||--o{ PayslipLine : "payslip"
+  Employee ||--o{ WithholdingTaxProfile : "employee"
+  Employee ||--o{ SalaryCertificate : "employee"
 ```
 
 | Modell | Tabelle | Felder | Zweck |
 | --- | --- | --- | --- |
-| `Employee` | `employees` | 48 | Personalstammdaten inkl. Schweizer Angaben (AHV, Bewilligung, Pensum). |
+| `Employee` | `employees` | 52 | Personalstammdaten inkl. Schweizer Angaben (AHV, Bewilligung, Pensum). |
 | `EmployeeSkill` | `employee_skills` | 6 | Qualifikation mit Stufe und Zertifikatsablauf. |
 | `SalaryRecord` | `salary_records` | 10 | Lohnhistorie: jede Änderung von Ansatz, Monatslohn oder Pensum als eigene |
 | `Availability` | `availabilities` | 6 | Regelmässige Verfügbarkeit je Wochentag. |
 | `Absence` | `absences` | 15 | Ferien, Krankheit, Militär und weitere Abwesenheiten mit Bewilligungsstand. |
-| `Payslip` | `payslips` | 22 | – |
+| `Payslip` | `payslips` | 36 | – |
+| `PayslipLine` | `payslip_lines` | 13 | Eine Zeile der Abrechnung — Momentaufnahme, unveränderlich nach dem Veröffentlichen. |
 | `PayrollSetting` | `payroll_settings` | 18 | Lohnabrechnung mit AHV/IV/EO, ALV, BVG und UVG. Erst sichtbar, wenn freigegeben. |
+| `PayrollRate` | `payroll_rates` | 20 | Eine Version eines Beitragssatzes mit Gültigkeitszeitraum. |
+| `EmployeePayrollProfile` | `employee_payroll_profiles` | 11 | Lohnbezogene Vereinbarungen einer Person — nur über die Lohnschnittstelle |
+| `PayrollItem` | `payroll_items` | 21 | – |
+| `WithholdingTaxProfile` | `withholding_tax_profiles` | 15 | Quellensteuerpflicht einer Person — mit Gültigkeitszeitraum. |
+| `WithholdingTaxRate` | `withholding_tax_rates` | 15 | Eine Zeile eines Quellensteuertarifs — **nur aus einer Quelle eingelesen, |
+| `SalaryCertificate` | `salary_certificates` | 19 | Aufstellung für den Lohnausweis eines Jahres — aus veröffentlichten |
 | `TimeEntry` | `time_entries` | 16 | Erfasste Arbeitszeit je Einsatz — Grundlage der Lohnverarbeitung. |
 | `GpsEvent` | `gps_events` | 12 | An- und Abfahrt mit Koordinaten, als Nachweis bei Objekten ohne Ansprechperson. |
 
@@ -1713,13 +1797,20 @@ exakte TypeScript-Typen.
 | `AutomationTrigger` | `BOOKING_CREATED`, `BOOKING_CONFIRMED`, `BOOKING_REMINDER_24H`, `BOOKING_REMINDER_2H`, `BOOKING_COMPLETED`, `BOOKING_CANCELLED`, `QUOTE_SENT`, `QUOTE_ACCEPTED`, `QUOTE_EXPIRING`, `INVOICE_ISSUED`, `INVOICE_DUE_SOON`, `INVOICE_OVERDUE`, `JOB_ASSIGNED`, `JOB_COMPLETED`, `CUSTOMER_BIRTHDAY`, `REVIEW_REQUEST`, `LEAD_CREATED`, `LEAD_IDLE`, `TASK_DUE`, `RECURRING_BOOKING_GENERATE` |
 | `AutomationActionType` | `SEND_EMAIL`, `SEND_SMS`, `CREATE_TASK`, `CREATE_NOTIFICATION`, `UPDATE_STATUS`, `WEBHOOK`, `AI_GENERATE` |
 | `AutomationRunStatus` | `PENDING`, `RUNNING`, `SUCCESS`, `FAILED`, `SKIPPED` |
-| `FileScope` | `BOOKING`, `QUOTE`, `INVOICE`, `JOB`, `CUSTOMER`, `EMPLOYEE`, `PROPERTY`, `BLOG`, `GALLERY`, `APPLICATION`, `EXPENSE`, `MESSAGE`, `OTHER`, `OBJECTIVE`, `INVESTMENT`, `RISK`, `CONTROL`, `DOCUMENT`, `ARTICLE`, `MEETING`, `REPORT`, `SIGNATURE` |
+| `FileScope` | `BOOKING`, `QUOTE`, `INVOICE`, `JOB`, `CUSTOMER`, `EMPLOYEE`, `PROPERTY`, `BLOG`, `GALLERY`, `APPLICATION`, `EXPENSE`, `MESSAGE`, `OTHER`, `OBJECTIVE`, `INVESTMENT`, `RISK`, `CONTROL`, `DOCUMENT`, `ARTICLE`, `MEETING`, `REPORT`, `SIGNATURE`, `PAYROLL` |
 | `AuditAction` | `CREATE`, `UPDATE`, `DELETE`, `LOGIN`, `LOGIN_FAILED`, `LOGOUT`, `PASSWORD_RESET`, `PERMISSION_CHANGE`, `EXPORT`, `IMPORT`, `PAYMENT`, `ACCESS_DENIED` |
 | `ConsentType` | `MARKETING_EMAIL`, `MARKETING_SMS`, `ANALYTICS`, `TERMS`, `PRIVACY`, `DATA_PROCESSING` |
 | `PublicTokenPurpose` | `QUOTE_VIEW`, `QUOTE_RESPOND`, `INVOICE_VIEW`, `INVOICE_PAY`, `BOOKING_MANAGE`, `DOCUMENT_VIEW`, `SIGNATURE_ACCESS`, `SIGNATURE_OTP`, `SIGNATURE_RESULT_VIEW` |
 | `SecuritySeverity` | `INFO`, `WARNING`, `CRITICAL` |
 | `SecurityCategory` | `AUTHENTICATION`, `SESSION`, `ACCESS`, `PUBLIC_LINK`, `FILE`, `SYSTEM` |
 | `CronRunStatus` | `RUNNING`, `SUCCESS`, `PARTIAL`, `FAILED` |
+| `PayrollRateCode` | `AHV_IV_EO`, `ALV`, `ALV_SOLIDARITY`, `UVG_NBU`, `UVG_BU`, `KTG`, `FAK`, `VK`, `BVG` |
+| `PayrollVerification` | `UNGEPRUEFT`, `GEPRUEFT` |
+| `ThirteenthSalaryMode` | `NONE`, `ANNUAL`, `PRO_RATA`, `MONTHLY` |
+| `PayrollItemType` | `OVERTIME`, `ALLOWANCE`, `FAMILY_ALLOWANCE`, `EXPENSE`, `CORRECTION`, `NET_CORRECTION`, `DEDUCTION`, `WITHHOLDING_TAX_MANUAL` |
+| `PayslipLineType` | `BASE`, `UNPAID_LEAVE`, `OVERTIME`, `ALLOWANCE`, `FAMILY_ALLOWANCE`, `VACATION_PAY`, `HOLIDAY_PAY`, `THIRTEENTH`, `CORRECTION`, `EXPENSE`, `NET_CORRECTION`, `AHV_IV_EO`, `ALV`, `BVG`, `UVG_NBU`, `KTG`, `WITHHOLDING_TAX`, `DEDUCTION`, `EMPLOYER` |
+| `PayslipLineKind` | `EARNING`, `PAYMENT`, `DEDUCTION`, `EMPLOYER` |
+| `SalaryCertificateStatus` | `DRAFT`, `FINAL` |
 | `StorageDriver` | `LOCAL`, `SUPABASE` |
 | `FileProvenance` | `USER_UPLOAD`, `SYSTEM_GENERATED`, `TRUSTED_IMPORT`, `LEGACY_UNSCANNED` |
 | `FileScanStatus` | `PENDING`, `SCANNING`, `CLEAN`, `INFECTED`, `ERROR`, `QUARANTINED` |
