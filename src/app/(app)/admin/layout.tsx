@@ -91,6 +91,8 @@ export default async function AdminLayout({ children }: { children: React.ReactN
     {
       items: [
         { href: '/admin', label: 'Übersicht', icon: 'dashboard', exact: true, permission: 'dashboard:view' },
+        // Wave 17: globale Suche — jeder Bereich nur mit seiner Leseberechtigung.
+        { href: '/admin/suche', label: 'Suche', icon: 'search', permission: 'dashboard:view' },
         { href: '/admin/kalender', label: 'Einsatzkalender', icon: 'calendar', permission: 'job:read' },
       ],
     },

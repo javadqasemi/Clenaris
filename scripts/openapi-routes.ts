@@ -30,6 +30,7 @@ import { BETRIEB_ROUTES } from './openapi-routes-betrieb';
 import { FINANZ_ROUTES } from './openapi-routes-finanzen';
 import { VERKAUF_ROUTES } from './openapi-routes-verkauf';
 import { KOMMUNIKATION_ROUTES } from './openapi-routes-kommunikation';
+import { SUCHE_ROUTES } from './openapi-routes-suche';
 
 /**
  * Registrierung aller REST-Endpunkte.
@@ -4454,4 +4455,9 @@ export const ROUTES: RouteDoc[] = [
   //  Zustellstatus (Wave 14)
   // -------------------------------------------------------------------------
   ...KOMMUNIKATION_ROUTES,
+
+  // -------------------------------------------------------------------------
+  //  Globale Suche (Wave 17)
+  // -------------------------------------------------------------------------
+  ...SUCHE_ROUTES,
 ];

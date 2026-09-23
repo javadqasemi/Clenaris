@@ -5,7 +5,7 @@
 > Quelle, aus der sowohl diese Referenz als auch die Laufzeitvalidierung
 > stammen.
 
-Stand: 522 Endpunkte. Die maschinenlesbare Fassung liegt in
+Stand: 523 Endpunkte. Die maschinenlesbare Fassung liegt in
 [`openapi.yaml`](./openapi.yaml) bzw. [`openapi.json`](./openapi.json).
 
 ## Grundlagen
@@ -6552,6 +6552,21 @@ Familie.
 - **Zugriff:** Öffentlich — keine Anmeldung nötig.
 - **Erfolg:** 200
 - **Mögliche Fehler:** 422, 500
+
+### `GET /api/search`
+
+**Globale Suche.** Über die Bereiche, die die Rolle lesen darf, je höchstens fünf Treffer. Jeder Bereich nur mit seiner Leseberechtigung, die Organisation in jeder Abfrage, keine sensiblen Felder als Treffergrund (kein Lohn, keine IBAN, keine AHV-Nummer, keine Notizen). Mindestens zwei Zeichen.
+
+- **Zugriff:** Erfordert die Berechtigung: `dashboard:view`.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 429, 500
+
+**Query-Parameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `q` | string | ja | min. 2 Zeichen, max. 80 Zeichen |
 
 ## Betrieb
 

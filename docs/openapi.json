@@ -68095,6 +68095,95 @@
           }
         }
       }
+    },
+    "/api/search": {
+      "get": {
+        "tags": [
+          "System"
+        ],
+        "summary": "Globale Suche",
+        "description": "Über die Bereiche, die die Rolle lesen darf, je höchstens fünf Treffer. Jeder Bereich nur mit seiner Leseberechtigung, die Organisation in jeder Abfrage, keine sensiblen Felder als Treffergrund (kein Lohn, keine IBAN, keine AHV-Nummer, keine Notizen). Mindestens zwei Zeichen.\n\n**Zugriff:** Erfordert die Berechtigung: `dashboard:view`.\n\n**Rate-Limit-Klasse:** `apiRead`",
+        "operationId": "getSearch",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 2,
+              "maxLength": 80
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Erfolg",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SuccessEnvelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHORIZED — keine oder abgelaufene Sitzung.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN — angemeldet, aber ohne die nötige Berechtigung.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
