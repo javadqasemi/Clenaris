@@ -196,7 +196,10 @@ export function StatStrip({
 
 export function Stars({ rating, className }: { rating: number; className?: string }) {
   return (
-    <div className={cn('flex items-center gap-0.5', className)} aria-label={`${rating} von 5 Sternen`}>
+    // `role="img"`: Ein `aria-label` auf einem rollenlosen `div` ist nach ARIA
+    // verboten und wird von Screenreadern verschluckt — die Bewertung wäre
+    // dann nur fünf stumme Sterne (axe: aria-prohibited-attr).
+    <div role="img" className={cn('flex items-center gap-0.5', className)} aria-label={`${rating} von 5 Sternen`}>
       {Array.from({ length: 5 }).map((_, index) => (
         <Star
           key={index}

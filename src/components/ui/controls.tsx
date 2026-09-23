@@ -37,7 +37,9 @@ const SelectTrigger = React.forwardRef<
     className={cn(
       'flex h-11 w-full items-center justify-between gap-2 rounded-xl border border-input bg-card px-3.5 py-2 text-sm',
       'transition-[border-color,box-shadow] duration-200',
-      'data-[placeholder]:text-muted-foreground/80',
+      // Volle Deckkraft: Der Platzhalter einer Auswahl ist echter Text im
+      // Knopf und braucht 4.5 : 1 — mit /80 lag er bei 3.7 (axe, Wave 18).
+      'data-[placeholder]:text-muted-foreground',
       'focus:outline-none focus:border-primary focus:ring-4 focus:ring-primary/12',
       'disabled:cursor-not-allowed disabled:bg-muted disabled:opacity-70',
       '[&>span]:line-clamp-1 [&>span]:text-left',

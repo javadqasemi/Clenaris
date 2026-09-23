@@ -80,6 +80,20 @@ const AvatarFallback = React.forwardRef<
 AvatarFallback.displayName = 'AvatarFallback';
 
 /**
+ * Eine Hex-Farbe auf 55 % ihrer Helligkeit. Mit 55 % erreicht selbst ein
+ * helles Gelb (#FAB005) auf seiner eigenen 12-%-Tönung 5 : 1; alles Dunklere
+ * liegt darüber. Was kein sechsstelliges Hex ist, bleibt, wie es ist — die
+ * Tönung daneben setzt dasselbe Format ohnehin voraus.
+ */
+function abgedunkelt(farbe: string): string {
+  const m = /^#([0-9a-f]{6})$/i.exec(farbe);
+  if (!m) return farbe;
+  const n = parseInt(m[1]!, 16);
+  const kanal = (verschiebung: number) => Math.round(((n >> verschiebung) & 0xff) * 0.55);
+  return `rgb(${kanal(16)}, ${kanal(8)}, ${kanal(0)})`;
+}
+
+/**
  * Personen-Avatar mit deterministischer Farbe aus dem Namen — ohne Bild sieht
  * jede Person trotzdem eindeutig aus.
  */
@@ -105,7 +119,11 @@ export function PersonAvatar({
     <Avatar size={size} className={className}>
       {src ? <AvatarImage src={src} alt={name} /> : null}
       <AvatarFallback
-        style={{ backgroundColor: `${background}1F`, color: background }}
+        // Die Initialen stehen auf einer Tönung *derselben* Farbe. In voller
+        // Stärke erreichten Orange und Grün darauf nur 3 : 1 (axe, Wave 18) —
+        // lesbar für gute Augen, nicht nach WCAG. Abgedunkelt bleibt der Ton
+        // erkennbar, und das gilt auch für eine frei gewählte Personalfarbe.
+        style={{ backgroundColor: `${background}1F`, color: abgedunkelt(background) }}
         // Die Initialen müssen mit dem Kreis wachsen — bei `xl` sähe die
         // Vorgabegrösse aus wie ein Druckfehler in der Mitte einer Fläche.
         className={size === 'xl' ? 'text-2xl' : size === 'lg' ? 'text-sm' : undefined}

@@ -23,7 +23,8 @@ const STATUS_LABEL: Record<string, { label: string; variant: 'success' | 'warnin
 
 function Stars({ rating }: { rating: number }) {
   return (
-    <span className="flex gap-0.5" aria-label={`${rating} von 5 Sternen`}>
+    // `role="img"` — ohne Rolle ist `aria-label` auf einem `span` unzulässig.
+    <span role="img" className="flex gap-0.5" aria-label={`${rating} von 5 Sternen`}>
       {[1, 2, 3, 4, 5].map((value) => (
         <Star
           key={value}

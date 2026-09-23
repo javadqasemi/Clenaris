@@ -22,7 +22,10 @@ const Input = React.forwardRef<HTMLInputElement, InputProps>(
         className={cn(
           'flex h-11 w-full rounded-xl border bg-card px-3.5 py-2 text-sm text-foreground',
           'transition-[border-color,box-shadow] duration-200',
-          'placeholder:text-muted-foreground/70',
+          // Platzhalter fallen unter WCAG 1.4.3 wie jeder Text; mit /70 lagen
+          // sie bei rund 3 : 1. axe misst sie nicht — die Auswahl daneben
+          // schon, und zwei Grautöne für dieselbe Rolle wären ein Widerspruch.
+          'placeholder:text-muted-foreground',
           'focus-visible:outline-none focus-visible:border-primary focus-visible:ring-4 focus-visible:ring-primary/12',
           'disabled:cursor-not-allowed disabled:bg-muted disabled:opacity-70',
           'file:border-0 file:bg-transparent file:text-sm file:font-medium',
@@ -48,11 +51,15 @@ const Input = React.forwardRef<HTMLInputElement, InputProps>(
           </span>
         ) : null}
         {field}
+        {/*
+          Anders als links ist das rechte Icon oft bedienbar (Passwort
+          anzeigen). `aria-hidden` auf der Hülle hätte die Schaltfläche vor dem
+          Screenreader versteckt, obwohl sie per Tab erreichbar bleibt — ein
+          fokussierbares Element ohne Namen (axe: aria-hidden-focus). Ein rein
+          schmückendes Icon ist als lucide-SVG ohnehin selbst `aria-hidden`.
+        */}
         {endIcon ? (
-          <span
-            className="absolute right-3.5 top-1/2 -translate-y-1/2 text-muted-foreground [&_svg]:size-4"
-            aria-hidden
-          >
+          <span className="absolute right-3.5 top-1/2 -translate-y-1/2 text-muted-foreground [&_svg]:size-4">
             {endIcon}
           </span>
         ) : null}
@@ -78,7 +85,7 @@ const Textarea = React.forwardRef<
     className={cn(
       'flex w-full rounded-xl border bg-card px-3.5 py-3 text-sm text-foreground',
       'transition-[border-color,box-shadow] duration-200',
-      'placeholder:text-muted-foreground/70',
+      'placeholder:text-muted-foreground',
       'focus-visible:outline-none focus-visible:border-primary focus-visible:ring-4 focus-visible:ring-primary/12',
       'disabled:cursor-not-allowed disabled:bg-muted disabled:opacity-70',
       invalid ? 'border-destructive focus-visible:ring-destructive/15' : 'border-input',

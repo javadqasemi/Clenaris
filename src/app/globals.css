@@ -64,7 +64,12 @@
 
     --success: 156 47% 33%;
     --success-foreground: 156 40% 97%;
-    --warning: 36 100% 35%;
+    /*
+       Warnung als *Schrift* auf hellem Grund braucht 4.5 : 1. 35 % Helligkeit
+       lag bei 4.2 auf Weiss und unter 4 auf der Seitenfläche (axe, Wave 18);
+       28 % hält den Bernstein-Ton und trägt auch noch `text-warning/90`.
+    */
+    --warning: 36 100% 28%;
     --warning-foreground: 40 60% 98%;
     --info: 200 70% 35%;
     --info-foreground: 200 40% 98%;
