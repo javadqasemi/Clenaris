@@ -158,6 +158,8 @@ export interface Umgebungsabzug {
    * Reihenfolge zeigt die Ursache (§13.1 in `docs/HYDRATION.md`).
    */
   mutationen: unknown[];
+  /** Die Kinder von `<head>` im Fehlermoment, je als leere Hülle (Tag + Attribute). */
+  kopf: string[];
 }
 
 export interface Diagnose {
@@ -379,7 +381,17 @@ async function umgebungAbziehen(
       reactWurzeln: [document.documentElement, document.body].filter((el) =>
         el ? Object.keys(el).some((schluessel) => schluessel.startsWith('__reactContainer$')) : false,
       ).length,
-      mutationen: ((window as unknown as { __hydrationsMutationen?: unknown[] }).__hydrationsMutationen ?? []).slice(0, 400),
+      // Vollständig, nicht die ersten paar hundert: Die Einträge des Parsers
+      // allein füllen 400, und der Hydrationsfehler stand dahinter.
+      mutationen: ((window as unknown as { __hydrationsMutationen?: unknown[] }).__hydrationsMutationen ?? []).slice(0, 6000),
+      // `<head>` ohne Skriptinhalte — der Abzug des DOM umfasst nur `<body>`,
+      // und nach dem Fehler entfernt React dort Knoten.
+      kopf: document.head
+        ? [...document.head.children].map((el) => {
+            const kopie = el.cloneNode(false) as Element;
+            return kopie.outerHTML.slice(0, 200);
+          })
+        : [],
     }));
 
     let bildschirmfoto: string | null = null;
@@ -404,6 +416,7 @@ async function umgebungAbziehen(
       reactWurzeln: abzug.reactWurzeln,
       bildschirmfoto,
       mutationen: abzug.mutationen,
+      kopf: abzug.kopf.map((zeile) => redigieren(zeile)),
     };
   } catch {
     // Die Seite kann in genau diesem Moment navigieren oder schliessen.

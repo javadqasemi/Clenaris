@@ -56,9 +56,19 @@ export const test = basis.extend({
      * Terminal zu verschwinden.
      */
     const diagnose = diagnoseAnhaengen(context, testInfo);
-    // Die Reihenfolge der DOM-Veränderungen ab dem ersten Skript — sie gehört
-    // zum Befund, wenn es knallt (`mutations-beobachter.ts`).
-    await context.addInitScript(MUTATIONS_BEOBACHTER);
+    /**
+     * Die Reihenfolge der DOM-Veränderungen ab dem ersten Skript — **nur auf
+     * Anforderung** (`E2E_MUTATIONEN=1`).
+     *
+     * Gemessen am 2026-09-23: mit dem Beobachter an jedem Fall 5 von 5 Läufen
+     * rot, ohne ihn 3 von 5 (dieselbe Quote wie im Audit). Eine Tendenz, kein
+     * Beweis — aber der Beobachter arbeitet bei jeder Einfügung des Parsers
+     * und verschiebt damit das Zeitfenster, in dem der Fehler entsteht. Für
+     * die Untersuchung ist das erwünscht (mehr Treffer), für die
+     * Freigabeprüfung darf es das Ergebnis nicht färben — die Reihe soll das
+     * Produkt messen, nicht das Messgerät.
+     */
+    if (process.env.E2E_MUTATIONEN === '1') await context.addInitScript(MUTATIONS_BEOBACHTER);
 
     // `use` ist hier Playwrights Übergabefunktion für eine Testvorrichtung,
     // kein React-Hook. Die Regel erkennt nur den Namen und liegt deshalb falsch.
