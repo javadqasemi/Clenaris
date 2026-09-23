@@ -720,4 +720,47 @@ describe('RB-012 — vom zeitbezogenen Auslöser bis zur ausgeführten Aktion', 
     await stuendlich();
     assert.equal(await db.automationRun.count({ where: eigene }), 2, 'Je Aufgabe genau ein Lauf');
   });
+
+  /**
+   * Ein Lauf, dessen Prozess mittendrin starb, stand für immer auf RUNNING —
+   * der Scheduler sucht nur PENDING. Jetzt nimmt ihn der nächste Takt wieder
+   * auf; ohne übrige Versuche endet er als FAILED mit Grund.
+   */
+  it('nimmt hängende Läufe wieder auf — und gibt sie nach dem letzten Versuch als FAILED auf', async (t) => {
+    const db = testDb();
+    if (!db) return t.skip(`kein Zugang zur Testdatenbank: ${testDbGrund()}`);
+    assert.ok(regelId, 'Die Regel aus dem vorigen Fall fehlt');
+
+    const vorlage = await db.automationRun.findFirst({ where: { automationId: regelId }, select: { entity: true } });
+    assert.ok(vorlage, 'Kein Lauf als Vorlage');
+    const langeHer = new Date(Date.now() - 2 * 3_600_000);
+    const anlegen = (entityId: string, attempts: number) =>
+      db.automationRun.create({
+        data: {
+          automationId: regelId,
+          entity: vorlage.entity,
+          entityId,
+          status: 'RUNNING',
+          startedAt: langeHer,
+          scheduledFor: langeHer,
+          attempts,
+        },
+        select: { id: true },
+      });
+    const nochVersuche = await anlegen(`haengt-${Date.now()}-a`, 1);
+    const erschoepft = await anlegen(`haengt-${Date.now()}-b`, 3);
+
+    await stuendlich();
+
+    const a = await db.automationRun.findUniqueOrThrow({ where: { id: nochVersuche.id } });
+    const b = await db.automationRun.findUniqueOrThrow({ where: { id: erschoepft.id } });
+    assert.notEqual(a.status, 'RUNNING', 'Der hängende Lauf wurde wieder aufgenommen');
+    // Der Vorgang existiert nicht (erfundene Kennung) — also SKIPPED nach der
+    // Wiederaufnahme, aber nicht mehr RUNNING und nicht still liegen geblieben.
+    assert.ok(['PENDING', 'SKIPPED'].includes(a.status), `Status ${a.status}`);
+    assert.equal(b.status, 'FAILED', 'Ohne übrige Versuche endet er sichtbar');
+    assert.match(b.error ?? '', /Abgebrochen/);
+
+    await db.automationRun.deleteMany({ where: { id: { in: [nochVersuche.id, erschoepft.id] } } });
+  });
 });

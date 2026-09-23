@@ -544,6 +544,8 @@ export async function runDueAutomations(params: {
     wiederholen: 0,
   };
 
+  await haengendeLaeufeFreigeben(params.organizationId);
+
   const faellige = await prisma.automationRun.findMany({
     where: {
       status: 'PENDING',
@@ -562,6 +564,37 @@ export async function runDueAutomations(params: {
   }
 
   return ergebnis;
+}
+
+/**
+ * Ab wann ein RUNNING als abgebrochen gilt. Ein Lauf braucht Sekunden; der
+ * Scheduler selbst hat zwei Minuten (`maxDuration` der stündlichen Route).
+ * Dreissig Minuten sind damit sicher jenseits jedes lebenden Laufs.
+ */
+const HAENGT_NACH_MINUTEN = 30;
+
+/**
+ * Hängende Läufe wieder aufnehmen.
+ *
+ * Bricht der Prozess mitten in einem Lauf ab (Neustart, Speicher, Zeitlimit
+ * der Plattform), bleibt die Zeile auf RUNNING — und `runDueAutomations`
+ * sucht nur PENDING. Bis 2026-09-23 blieb ein solcher Lauf für immer liegen,
+ * ohne Fehler und ohne Wiederholung (RB-012). Jetzt kommt er zurück in die
+ * Warteschlange, solange Versuche übrig sind; sonst endet er als FAILED mit
+ * Grund. Über `updateMany` mit Bedingung, damit zwei gleichzeitige
+ * Scheduler denselben Lauf nicht zweimal freigeben.
+ */
+async function haengendeLaeufeFreigeben(organizationId: string): Promise<void> {
+  const grenze = new Date(Date.now() - HAENGT_NACH_MINUTEN * 60_000);
+  const bereich = { status: 'RUNNING' as const, startedAt: { lt: grenze }, automation: { organizationId } };
+  await prisma.automationRun.updateMany({
+    where: { ...bereich, attempts: { lt: MAX_VERSUCHE } },
+    data: { status: 'PENDING', scheduledFor: new Date(), error: 'Abgebrochen — Lauf wurde nicht beendet, neuer Versuch' },
+  });
+  await prisma.automationRun.updateMany({
+    where: { ...bereich, attempts: { gte: MAX_VERSUCHE } },
+    data: { status: 'FAILED', finishedAt: new Date(), error: 'Abgebrochen — keine Versuche mehr übrig' },
+  });
 }
 
 type Ausgang = 'erfolgreich' | 'uebersprungen' | 'gescheitert' | 'wiederholen';
@@ -847,7 +880,20 @@ async function sendeNachricht(params: {
     return { ergebnis: 'uebersprungen', grund: 'Kein Empfänger mit Benutzerkonto.' };
   }
 
+  /**
+   * Gezählt wird, was **tatsächlich** hinausging. Bis 2026-09-23 zählte jeder
+   * Empfänger als versandt — auch bei abgelehnter Zustellung, abbestellten
+   * E-Mails oder fehlender Adresse —, und der Lauf stand als SUCCESS im
+   * Protokoll (RB-012). Jetzt:
+   *
+   *  • ein Zustellfehler macht die Aktion zum Fehler → Wiederholung nach der
+   *    Wartezeit, nach drei Versuchen FAILED;
+   *  • ist niemand erreichbar (keine Adresse, abbestellt), wird
+   *    übersprungen — ein erneuter Versuch änderte daran nichts.
+   */
   let versandt = 0;
+  let nichtErreichbar = 0;
+  const zustellfehler: string[] = [];
   const fehlend = new Set<string>();
 
   for (const userId of konten) {
@@ -860,7 +906,7 @@ async function sendeNachricht(params: {
       betreff.fehlendePlatzhalter.forEach((p) => fehlend.add(p));
       html.fehlendePlatzhalter.forEach((p) => fehlend.add(p));
 
-      await notify({
+      const zustellung = await notify({
         userId,
         channels: ['EMAIL'],
         title: betreff.text,
@@ -869,12 +915,15 @@ async function sendeNachricht(params: {
         entity: params.nutzlast.entity,
         entityId: params.nutzlast.entityId,
       });
+      if (!zustellung.email) nichtErreichbar += 1;
+      else if (zustellung.email.ok) versandt += 1;
+      else zustellfehler.push(zustellung.email.fehler ?? 'E-Mail nicht zugestellt');
     } else {
       const v = vorlage as { body: string };
       const sms = fuelleVorlage(v.body, params.nutzlast);
       sms.fehlendePlatzhalter.forEach((p) => fehlend.add(p));
 
-      await notify({
+      const zustellung = await notify({
         userId,
         channels: ['SMS'],
         title: '',
@@ -883,13 +932,31 @@ async function sendeNachricht(params: {
         entity: params.nutzlast.entity,
         entityId: params.nutzlast.entityId,
       });
+      if (!zustellung.sms) nichtErreichbar += 1;
+      else if (zustellung.sms.ok) versandt += 1;
+      else zustellfehler.push(zustellung.sms.fehler ?? 'SMS nicht zugestellt');
     }
-    versandt += 1;
+  }
+
+  if (zustellfehler.length > 0) {
+    // Die Meldung des Anbieters, gekürzt — keine Adresse, kein Inhalt.
+    return {
+      ergebnis: 'fehler',
+      grund: `${zustellfehler.length} von ${konten.length} Nachrichten nicht zugestellt: ${zustellfehler[0]!.slice(0, 200)}`,
+      versandt,
+    };
+  }
+  if (versandt === 0) {
+    return {
+      ergebnis: 'uebersprungen',
+      grund: `Kein Empfänger erreichbar (${nichtErreichbar} ohne Adresse oder abbestellt).`,
+    };
   }
 
   return {
     ergebnis: 'ok',
     versandt,
+    ...(nichtErreichbar > 0 ? { nichtErreichbar } : {}),
     // Für die Vorlagenpflege sichtbar, bevor es der Kundschaft auffällt.
     ...(fehlend.size > 0 ? { fehlendePlatzhalter: [...fehlend] } : {}),
   };
