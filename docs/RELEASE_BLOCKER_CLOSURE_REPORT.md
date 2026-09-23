@@ -366,3 +366,47 @@ React `<head>` neu aufbaute.
 Weiterhin grün: typecheck, lint, `prisma validate`, `npm run docs`, sauberer
 Produktionsbau; `npm test` 1259 Tests, 1258 bestanden, 0 fehlgeschlagen,
 1 übersprungen (datenabhängig).
+
+---
+
+## 8. Nachtrag: Next.js-Sicherheitsupdate 15.5.26 (2026-09-23)
+
+| | |
+|---|---|
+| **Next vorher / nachher** | 15.5.25 → **15.5.26** (Maintenance-LTS, nur `next`, `@next/env`, `@next/swc-*`) |
+| **Internes React vorher / nachher** | `19.2.0-canary-0bdb9206-20250818` → unverändert |
+| **Hydrationskorrektur weiterhin nötig** | **Ja** — der deterministische Test scheitert gegen das ungepatchte 15.5.26 |
+| **Korrektur angepasst** | engere Bedingungen: bekannte Fassung, Ausschnitt genau einmal, Nachkontrolle, fail-closed; 9 Zustandstests |
+| **Lebenszyklus** | `postinstall`, `build`, `dev`, `dev:webpack`; kein Aufruf beim reinen Serverstart |
+| **Sauberes `npm ci`** | im eigenen Worktree: `npm ci` → Korrektur → Bau → Start → Health 200 |
+| **RB-001** | bleibt **geschlossen** (Messung unten) |
+
+| Prüfung (Next 15.5.26) | Ergebnis |
+|---|---|
+| typecheck, lint, `prisma validate`, `npm run docs` | grün |
+| Sauberer Produktionsbau | grün |
+| `npm test` (inkl. Sicherheitsreihen und 9 neuer Zustandstests) | 1268 Tests, 1267 bestanden, 0 fehlgeschlagen, 1 übersprungen (datenabhängig) |
+| Deterministischer Hydrationstest | grün (ohne Korrektur: rot) |
+| Browserreihe, 10 Läufe in Folge, `retries: 0` | 10/10, je 27/27 |
+| Stressreihe | 5/5, je 27/27 |
+| #418 / `pageerror` / `console.error` | 0 / 0 / 0 |
+
+### `npm audit` nach dem Update (kein `audit fix --force`)
+
+| Paket | Schwere | direkt/transitiv | Laufzeit/Entwicklung | erreichbar? | Behebung |
+|---|---|---|---|---|---|
+| `postcss@8.4.31` (in `next`) — GHSA-qx2v-qp2m-jg93, GHSA-6g55-p6wh-862q u. a. | high | transitiv (via `next`) | Bau: Nexts CSS-Verarbeitung | **nein** — verarbeitet nur eigenes CSS (Tailwind-Ausgabe), keine fremden Stylesheets oder `sourceMappingURL` aus Nutzereingaben | nur mit `next@16` (Hauptversion) |
+| `next` (Meldung wegen `postcss`) | moderate | direkt | — | wie oben | `next@16` (Hauptversion) |
+| `deepmerge-ts@7.1.5` — GHSA-ggr8-5vv4-36mx | high | transitiv (`prisma` → `@prisma/config`) | Entwicklung/CLI | **nein** — führt nur eigene Prisma-Konfiguration zusammen | keine in 6.x (auch `@prisma/config@7.10.0` nutzt 7.1.5); Prisma-Hauptversion |
+| `@prisma/config`, `prisma` (Meldung wegen `deepmerge-ts`) | high | `prisma` direkt | Entwicklung/CLI | wie oben | wie oben |
+| `uuid@8.3.2` — GHSA-w5hq-g745-h8pq | moderate | transitiv (`exceljs`) | Laufzeit (Berichtsexport) | **nein** — `exceljs` nutzt nur `uuid.v4()`; betroffen sind v3/v5/v6 mit `buf` | nur `exceljs@3.4.0` (Rückschritt, bricht) |
+
+Das oberste `postcss@8.5.28` (Tailwind, Autoprefixer) ist nicht betroffen.
+**Keine neuen Sicherheitsblocker** für die Laufzeit; die Befunde gehören zu
+einem späteren Hauptversionsschritt (Next 16, Prisma 7/8).
+
+**Secret Scan:** `scripts/ci-secret-scan.sh` braucht `bash`. Lokal ist nur
+der WSL-Starter ohne installierte Distribution vorhanden — der Scan lief
+**nicht** und gilt **nicht** als bestanden. Er läuft in der CI. Ersatzweise
+Mustersuche über die geänderten Dateien (Schlüsselformate, Verbindungs-
+zeichenfolgen): ohne Befund — kein gleichwertiger Ersatz.

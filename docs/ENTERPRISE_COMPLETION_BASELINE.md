@@ -1285,6 +1285,17 @@ Cause, Fix, Tests und Commits: [`RELEASE_BLOCKER_CLOSURE_REPORT.md`](RELEASE_BLO
   (RB-009, RB-013, RB-014 extern, RB-015).
 - **Prüfstand:** typecheck, lint, `prisma validate`, `npm run docs` grün;
   HTTP-Reihe 1258 Tests, 0 Fehler, 1 datenabhängig übersprungen.
+- **Nachtrag Sicherheitsupdate:** Next 15.5.25 → **15.5.26** (Maintenance-LTS).
+  Die mitgelieferte React-Fassung ist unverändert
+  (`19.2.0-canary-0bdb9206-20250818`); die Hydrationskorrektur bleibt nötig
+  (Test scheitert gegen das ungepatchte 15.5.26) und ist enger geworden:
+  bekannte Fassung, Ausschnitt genau einmal, fail-closed. Sauberes `npm ci`
+  im eigenen Worktree bis zum Start bewiesen. `npm audit`: 4 high, 3 moderate,
+  keiner zur Laufzeit erreichbar, Behebung nur über Hauptversionen
+  (`RELEASE_BLOCKER_CLOSURE_REPORT.md` §8). Secret Scan lokal nicht
+  ausführbar (kein bash), nicht als bestanden gewertet.
+  Hydration nach dem Update: 10/10 Läufe je 27/27, Stress 5/5, 0 × #418;
+  `npm test` 1268 Tests, 0 Fehler.
 
 ---
 

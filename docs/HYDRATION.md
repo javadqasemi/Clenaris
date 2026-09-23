@@ -994,3 +994,56 @@ React-Fassung die Korrektur enthält; dann Skript und Aufruf entfernen.
 **Hydrationstor: bestanden.** Wave 9.1 ist damit abgeschlossen; §14 („Was
 bleibt") ist durch diesen Abschnitt erledigt.
 
+### 16.7 Next 15.5.26 (Sicherheitsupdate) — die Korrektur neu bewertet
+
+| | vorher | nachher |
+|---|---|---|
+| Next | 15.5.25 | **15.5.26** |
+| React der Anwendung (`react`, `react-dom`) | 19.0.0 | 19.0.0 |
+| React im App Router (`next/dist/compiled/react-dom`) | `19.2.0-canary-0bdb9206-20250818` | `19.2.0-canary-0bdb9206-20250818` (unverändert) |
+| React experimentell (`react-dom-experimental`) | `19.2.0-experimental-0bdb9206-20250818` | unverändert |
+| Korrektur weiterhin nötig | ja | **ja** |
+
+**Nachweis statt Annahme.** Nach `npm install next@15.5.26` lagen die frischen
+React-Kopien **ungepatcht** vor (`npm install <paket>` führt die
+Lebenszyklusskripte des Projekts nicht aus). Gegen diesen Zustand scheiterte
+der deterministische Test wie vor RB-001: `wiederabspielen:5:main`,
+`abweichung:main`. Erst nach der Korrektur ist er grün.
+
+**Die Korrektur ist enger geworden** (`scripts/react-hydrationskorrektur.mjs`):
+
+- verändert nur die zwei bekannten betroffenen Fassungen;
+- der Originalausschnitt muss wörtlich und **genau einmal** in der Datei
+  stehen; ersetzt wird nur diese Stelle, mit Nachkontrolle vor dem Schreiben;
+- bereits korrigiert — auch durch eine künftige React-Fassung — wird erkannt;
+- jeder andere Zustand bricht ab, ohne zu schreiben.
+
+`tests/api/react-hydrationskorrektur.test.ts` prüft alle neun Zustände in
+einem Wegwerfverzeichnis.
+
+**Lebenszyklus nach der Prüfung:** `postinstall`, `build`, `dev`,
+`dev:webpack`. `npm start` baut über `npm run build`. Der reine Serverstart
+(`next start`, `start:built`, PM2 in `ecosystem.config.js`) verändert **keine**
+Framework-Dateien — er liest nur das fertige Bündel.
+
+**Sauber installiert nachgewiesen:** In einem eigenen `git worktree`
+(ohne `node_modules`) lief `npm ci` → `postinstall` (Prisma + Korrektur,
+8 Dateien) → `--pruefen` grün → `npm run build` → `next start` → Health 200.
+Im ausgelieferten Client-Bündel steht die Korrektur genau einmal
+(`case 5:…r===rP&&(rL?(rM(r),5===r.tag&&null!=r.stateNode&&(rN=r.stateNode))…`).
+
+**Nicht betroffen:** Das separat installierte `react-dom@19.0.0` hat dieselbe
+Stelle, treibt aber nur die Rückfallseiten des Pages Routers (`_app`,
+`_document`, `_error`, statische 404/500). Es gibt dort keine Flight-Chunks,
+also keinen `lazy`-Knoten, der den Fehler auslösen könnte. Unverändert
+gelassen.
+
+**Entfernungskriterium:** Meldet `node scripts/react-hydrationskorrektur.mjs
+--pruefen` nach einem Next-Update für jede Datei „Korrektur bereits
+enthalten", werden das Skript und seine vier Aufrufe in `package.json`
+entfernt. Der Regressionstest bleibt.
+
+**Gemessen mit Next 15.5.26 und Korrektur:** deterministischer Test grün;
+Browserreihe 10 von 10 Läufen je 27/27; Stressreihe 5 von 5 je 27/27;
+0 × #418, 0 `pageerror`, 0 `console.error`. RB-001 bleibt geschlossen.
+
