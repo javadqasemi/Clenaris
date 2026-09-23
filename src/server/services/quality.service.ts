@@ -102,7 +102,9 @@ async function massstab(contractId: string | undefined, stichtag: Date) {
     (v) =>
       v.effectiveFrom.getTime() <= stichtag.getTime() &&
       (v.effectiveUntil === null || v.effectiveUntil.getTime() > stichtag.getTime()) &&
-      v.status !== 'DRAFT',
+      // Nur Fassungen, die tatsächlich galten. Ein Entwurf oder ein
+      // verworfener Entwurf trägt ein `effectiveFrom`, hat aber nie gegolten.
+      (v.status === 'ACTIVE' || v.status === 'SUPERSEDED'),
   );
 
   /*
@@ -141,6 +143,81 @@ function ergebnisfelder(items: { points: number; maxPoints: number; weight: numb
   };
 }
 
+/**
+ * Gehören Vertrag, Objekt, Einsatz und prüfende Person zusammen — und zu
+ * dieser Organisation?
+ *
+ * RB-011 aus dem Audit vom 2026-09-23. Geprüft wurden bis dahin nur Vertrag
+ * und Vorgängerbegehung. Objekt, Einsatz und Prüfer gingen ungeprüft in die
+ * Zeile — und die Kundensicht zeigt eine abgeschlossene Begehung jeder
+ * Kundschaft, der der Vertrag **oder** das Objekt gehört
+ * (`qualityVisibilityWhere`). Ein Vertrag von Kundschaft A mit einem Objekt
+ * von Kundschaft B hätte das Ergebnis also Kundschaft B gezeigt: eine
+ * Offenlegung über Kundengrenzen, entstanden aus einem Tippfehler im Büro.
+ *
+ * Deshalb hier, im Dienst und nicht in der Maske:
+ *
+ *  • Das Objekt gehört einer Kundschaft dieser Organisation — und, wenn ein
+ *    Vertrag angegeben ist, **derselben** Kundschaft wie der Vertrag.
+ *  • Der Einsatz gehört dieser Organisation und, wenn angegeben, zu diesem
+ *    Vertrag bzw. diesem Objekt.
+ *  • Die prüfende Person ist ein Konto dieser Organisation und keine
+ *    Kundschaft.
+ */
+async function zugehoerigkeitPruefen(params: {
+  organizationId: string;
+  contractId?: string | null;
+  propertyId?: string | null;
+  jobId?: string | null;
+  inspectorId?: string | null;
+}): Promise<void> {
+  const vertrag = params.contractId
+    ? await prisma.contract.findFirst({
+        where: { id: params.contractId, organizationId: params.organizationId, deletedAt: null },
+        select: { id: true, customerId: true, propertyId: true },
+      })
+    : null;
+  if (params.contractId && !vertrag) throw new NotFoundError('Vertrag');
+
+  if (params.propertyId) {
+    const objekt = await prisma.property.findFirst({
+      where: { id: params.propertyId, customer: { organizationId: params.organizationId } },
+      select: { id: true, customerId: true },
+    });
+    if (!objekt) throw new NotFoundError('Objekt');
+    if (vertrag && objekt.customerId !== vertrag.customerId) {
+      throw new BusinessRuleError(
+        'Das Objekt gehört nicht der Kundschaft dieses Vertrags. Eine Begehung verbindet nur Vertrag und Objekt derselben Kundschaft.',
+      );
+    }
+  }
+
+  if (params.jobId) {
+    const einsatz = await prisma.job.findFirst({
+      where: { id: params.jobId, organizationId: params.organizationId, deletedAt: null },
+      select: { id: true, contractId: true, propertyId: true, customerId: true },
+    });
+    if (!einsatz) throw new NotFoundError('Einsatz');
+    if (vertrag && einsatz.contractId !== vertrag.id && einsatz.customerId !== vertrag.customerId) {
+      throw new BusinessRuleError('Der Einsatz gehört nicht zu diesem Vertrag.');
+    }
+    if (params.propertyId && einsatz.propertyId && einsatz.propertyId !== params.propertyId) {
+      throw new BusinessRuleError('Der Einsatz fand an einem anderen Objekt statt.');
+    }
+  }
+
+  if (params.inspectorId) {
+    const person = await prisma.user.findFirst({
+      where: { id: params.inspectorId, organizationId: params.organizationId, deletedAt: null },
+      select: { role: true },
+    });
+    if (!person) throw new NotFoundError('Prüfende Person');
+    if (person.role === 'CUSTOMER') {
+      throw new BusinessRuleError('Eine Begehung führt eine Person aus dem Betrieb durch, keine Kundschaft.');
+    }
+  }
+}
+
 export async function createInspection(params: {
   organizationId: string;
   actorId: string;
@@ -149,20 +226,28 @@ export async function createInspection(params: {
 }) {
   const { input } = params;
 
-  if (input.contractId) {
-    const vertrag = await prisma.contract.findFirst({
-      where: { id: input.contractId, organizationId: params.organizationId, deletedAt: null },
-      select: { id: true },
-    });
-    if (!vertrag) throw new NotFoundError('Vertrag');
-  }
+  await zugehoerigkeitPruefen({
+    organizationId: params.organizationId,
+    contractId: input.contractId,
+    propertyId: input.propertyId,
+    jobId: input.jobId,
+    inspectorId: input.inspectorId,
+  });
 
   if (input.followUpOfId) {
     const vorgaenger = await prisma.qualityInspection.findFirst({
       where: { id: input.followUpOfId, organizationId: params.organizationId, deletedAt: null },
-      select: { id: true, status: true, followUp: { select: { id: true } } },
+      select: { id: true, status: true, contractId: true, propertyId: true, followUp: { select: { id: true } } },
     });
     if (!vorgaenger) throw new NotFoundError('Begehung');
+    // Eine Nachkontrolle kontrolliert denselben Gegenstand nach — nicht einen
+    // anderen Vertrag oder ein anderes Objekt.
+    if (
+      (vorgaenger.contractId ?? null) !== (input.contractId ?? null) ||
+      (vorgaenger.propertyId && input.propertyId && vorgaenger.propertyId !== input.propertyId)
+    ) {
+      throw new BusinessRuleError('Eine Nachkontrolle gilt demselben Vertrag und Objekt wie die erste Begehung.');
+    }
     /*
       Eine Nachkontrolle zu einem Entwurf ergibt keinen Sinn: Solange die
       erste noch änderbar ist, korrigiert man sie, statt sie nachzuholen.
@@ -225,6 +310,9 @@ export async function updateInspection(params: {
 }) {
   const begehung = await ladeBegehung(params.organizationId, params.inspectionId);
   assertEntwurf(begehung.status, 'ändern');
+  if (params.input.inspectorId) {
+    await zugehoerigkeitPruefen({ organizationId: params.organizationId, inspectorId: params.input.inspectorId });
+  }
 
   const stichtag = params.input.inspectedAt ?? begehung.inspectedAt;
   /*
@@ -325,14 +413,27 @@ export async function completeInspection(params: {
   const abgeschlossen = await prisma.$transaction(async (tx) => {
     const { number } = await nextNumber(tx, params.organizationId, 'quality', begehung.inspectedAt);
 
-    return tx.qualityInspection.update({
-      where: { id: begehung.id },
+    /**
+     * Der Zustand steht in der `where`-Klausel, nicht nur in der Prüfung
+     * oben. Zwei gleichzeitige Abschlüsse lasen beide „Entwurf", und bis
+     * 2026-09-23 schrieben beide — mit zwei Nummern aus dem Nummernkreis für
+     * eine Begehung. Jetzt trifft der zweite keine Zeile, und seine
+     * Transaktion rollt samt Nummer zurück.
+     */
+    const gesetzt = await tx.qualityInspection.updateMany({
+      where: { id: begehung.id, status: 'DRAFT' },
       data: {
         status: 'COMPLETED',
         number,
         completedAt: jetzt,
         note: params.note ?? begehung.note,
       },
+    });
+    if (gesetzt.count !== 1) {
+      throw new BusinessRuleError('Diese Begehung wurde inzwischen abgeschlossen oder verworfen.');
+    }
+    return tx.qualityInspection.findUniqueOrThrow({
+      where: { id: begehung.id },
       include: { items: { orderBy: { position: 'asc' } } },
     });
   });
