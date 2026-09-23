@@ -3,18 +3,33 @@ import 'server-only';
 import type { Prisma } from '@prisma/client';
 
 import { audit } from '@/lib/audit';
-import { zurichMidnight } from '@/lib/bi/periods';
+import { toDateOnly, zurichMidnight } from '@/lib/bi/periods';
+import { sha256Hex } from '@/lib/crypto';
 import { isUniqueConstraintError, prisma, toNumber } from '@/lib/db';
 import { BusinessRuleError, NotFoundError } from '@/lib/errors';
+import { logger } from '@/lib/logger';
+import { alterImJahr, rappen } from '@/lib/payroll/beitraege';
 import {
-  SAETZE_2026,
-  alterImJahr,
-  berechneBeitraege,
-  rappen,
-  type BeitragsSaetze,
-} from '@/lib/payroll/beitraege';
+  ermittleLohnteil,
+  monatslohnAnteilig,
+  schliesseAbrechnungAb,
+  tageImMonat,
+  werktage,
+  type Abrechnung,
+  type AbrechnungsEingabe,
+  type DreizehnterGrundlage,
+  type Lohnabschnitt,
+  type Position,
+  type QuellensteuerGrundlage,
+} from '@/lib/payroll/lohnbestandteile';
+import { renderPayslipPdf } from '@/lib/pdf/render';
+import { readLocalBytes, readStoredBytes, uploadBuffer } from '@/lib/storage';
 import { round2 } from '@/lib/utils';
-import type { PayrollSettingsInput } from '@/lib/validation/payroll';
+
+import { letzterTagDesMonats, saetzeZumStichtag } from './payroll-rates.service';
+import { VERALTET_PRAEFIX } from './payroll-veraltet';
+
+const log = logger('payroll');
 
 /**
  * Lohnabrechnung.
@@ -24,202 +39,46 @@ import type { PayrollSettingsInput } from '@/lib/validation/payroll';
  * ---------------------------------------------------------------------------
  *
  * `Payslip` stand seit der ersten Migration im Schema — samt Spalten für AHV,
- * ALV, BVG und UVG. Zwei Seiten lesen daraus (`/portal/lohn` und die
- * Personalakte), `payslip:create` ist an Rollen vergeben.
- *
- * **Es gab keinen Codepfad, der je eine Abrechnung erzeugt hätte.** Dasselbe
- * Muster wie bei den Automatisierungen und der Zeiterfassung: Felder und
- * Berechtigungen, die eine Zusage machen, die das System nicht einlöst.
+ * ALV, BVG und UVG. **Es gab keinen Codepfad, der je eine Abrechnung erzeugt
+ * hätte.** Wave 9 hat den Lauf gebaut; der Ausbau vom 2026-09-23 macht aus
+ * zwei Zahlen (Brutto, Sozialabzüge) eine Abrechnung in Zeilen.
  *
  * ---------------------------------------------------------------------------
  *  Die Regeln
  * ---------------------------------------------------------------------------
  *
- * **Nur freigegebene Zeiten zählen.** Das ist der Ertrag aus Wave 8 und die
- * wichtigste Regel dieses Dienstes: Eine Lohnabrechnung, die offene Zeiten
- * mitnimmt, zahlt Stunden aus, die niemand geprüft hat. Wer den Monat
- * abrechnen will, gibt vorher frei — die Reihenfolge ist keine Bequemlichkeit,
- * sondern die Kontrolle.
+ * **Nur freigegebene Zeiten zählen.** Eine Lohnabrechnung, die offene Zeiten
+ * mitnimmt, zahlt Stunden aus, die niemand geprüft hat.
  *
- * **Eine veröffentlichte Abrechnung ist unveränderlich.** Sie ist bei der
- * angestellten Person angekommen und Grundlage der Auszahlung — dieselbe
- * Überlegung wie bei einer ausgestellten Rechnung. Korrekturen laufen über
- * eine Abrechnung des Folgemonats, nicht über eine stille Änderung.
+ * **Monatslohn nach Kalendertagen.** Eintritt am 20., Austritt am 10., eine
+ * Lohnerhöhung am 16.: Jeder Tag zählt mit dem Lohn, der an ihm galt. Bis
+ * 2026-09-23 zahlte der Lauf immer einen ganzen Monatslohn zum Stand des
+ * Monatsletzten — und liess wer im Monat ausgetreten war (`active=false`)
+ * ganz weg.
  *
- * **Die Sätze werden als Momentaufnahme mitgeschrieben.** `breakdown` enthält
- * die angewandten Sätze, den koordinierten Jahreslohn und den
- * BVG-Altersband-Satz. Ändert sich ein Satz im nächsten Jahr, bleibt die alte
- * Abrechnung nachvollziehbar — dieselbe Überlegung wie bei der
- * Empfängeradresse einer Rechnung.
+ * **Eine veröffentlichte Abrechnung ist unveränderlich** — im Dienst, und seit
+ * der Migration `20260923130000_lohn_ausbau` auch in der Datenbank (Trigger
+ * auf Abrechnung, Zeilen und eingeflossenen Positionen). Korrekturen laufen
+ * über eine Position in einem späteren Monat.
+ *
+ * **Sätze mit Herkunft.** Gerechnet wird mit den Satzversionen, die am
+ * Monatsletzten gelten (`payroll-rates.service.ts`). Die Abrechnung merkt sich
+ * deren Kennungen; ab dem Veröffentlichen sind diese Versionen gesperrt.
+ * Ungeprüfte Sätze verhindern das Veröffentlichen nicht, verlangen aber eine
+ * ausdrückliche Bestätigung.
+ *
+ * **Quellensteuer nie geraten.** Gerechnet wird sie nur aus einer eingelesenen
+ * Tarifzeile oder von Hand. Fehlt beides bei einer quellensteuerpflichtigen
+ * Person, wird die Abrechnung zur Prüfung markiert und lässt sich erst nach
+ * dieser Prüfung veröffentlichen.
  *
  * **Idempotent je Person und Monat.** `@@unique([employeeId, year, month])`.
- * Ein zweiter Lauf über denselben Monat überschreibt die noch nicht
- * veröffentlichten Abrechnungen mit dem aktuellen Stand und lässt die
- * veröffentlichten unberührt.
+ * Ein zweiter Lauf schreibt die unveröffentlichten Abrechnungen neu und lässt
+ * die veröffentlichten unberührt.
  */
 
 // ---------------------------------------------------------------------------
-//  Sätze
-// ---------------------------------------------------------------------------
-
-function alsSaetze(zeile: {
-  ahvIvEo: Prisma.Decimal;
-  alv: Prisma.Decimal;
-  alvGrenzeJahr: Prisma.Decimal;
-  alvUeberGrenze: Prisma.Decimal;
-  uvgNbu: Prisma.Decimal;
-  ktg: Prisma.Decimal;
-  bvgEintrittsschwelle: Prisma.Decimal;
-  bvgKoordinationsabzug: Prisma.Decimal;
-  bvgMindestKoordiniert: Prisma.Decimal;
-  bvgObergrenze: Prisma.Decimal;
-  bvgSaetze: Prisma.JsonValue;
-  bvgAnteilArbeitnehmer: Prisma.Decimal;
-}): BeitragsSaetze {
-  /**
-   * Die Altersbänder liegen als Json in der Spalte und werden hier geprüft,
-   * nicht geglaubt. Ein kaputter Eintrag — von Hand geschrieben, aus einer
-   * Migration, aus einem Import — ergäbe sonst einen BVG-Abzug von null, und
-   * das fiele erst der betroffenen Person auf.
-   */
-  const roh = Array.isArray(zeile.bvgSaetze) ? zeile.bvgSaetze : [];
-  const baender = roh
-    .filter(
-      (e): e is { abAlter: number; satz: number } =>
-        typeof e === 'object' &&
-        e !== null &&
-        typeof (e as { abAlter?: unknown }).abAlter === 'number' &&
-        typeof (e as { satz?: unknown }).satz === 'number',
-    )
-    .sort((a, b) => a.abAlter - b.abAlter);
-
-  return {
-    ahvIvEo: toNumber(zeile.ahvIvEo),
-    alv: toNumber(zeile.alv),
-    alvGrenzeJahr: toNumber(zeile.alvGrenzeJahr),
-    alvUeberGrenze: toNumber(zeile.alvUeberGrenze),
-    uvgNbu: toNumber(zeile.uvgNbu),
-    ktg: toNumber(zeile.ktg),
-    bvgEintrittsschwelle: toNumber(zeile.bvgEintrittsschwelle),
-    bvgKoordinationsabzug: toNumber(zeile.bvgKoordinationsabzug),
-    bvgMindestKoordiniert: toNumber(zeile.bvgMindestKoordiniert),
-    bvgObergrenze: toNumber(zeile.bvgObergrenze),
-    bvgSaetze: baender.length > 0 ? baender : SAETZE_2026.bvgSaetze,
-    bvgAnteilArbeitnehmer: toNumber(zeile.bvgAnteilArbeitnehmer),
-  };
-}
-
-/**
- * Die Sätze eines Jahres holen — und anlegen, wenn es sie noch nicht gibt.
- *
- * **Warum angelegt und nicht abgelehnt.** Die Alternative wäre, den ersten
- * Abrechnungslauf eines Jahres mit „bitte zuerst die Sätze erfassen"
- * abzuweisen. Das klingt gründlicher und ist es nicht: Es verschiebt die
- * Arbeit an den ungünstigsten Moment (Monatsende, Abrechnung läuft) und
- * erzeugt dort den Druck, irgendetwas einzutragen.
- *
- * Angelegt werden die gesetzlichen Vorgaben. Die betriebsabhängigen Sätze —
- * UVG und der BVG-Plan — sind darin **Annahmen**, und die Antwort jedes
- * Abrechnungslaufs sagt das auch (`saetzeGeprueft: false`), solange sie
- * niemand bestätigt hat.
- */
-export async function getOrCreatePayrollSettings(organizationId: string, year: number) {
-  const vorhanden = await prisma.payrollSetting.findUnique({
-    where: { organizationId_year: { organizationId, year } },
-  });
-  if (vorhanden) return vorhanden;
-
-  const vorjahr = await prisma.payrollSetting.findUnique({
-    where: { organizationId_year: { organizationId, year: year - 1 } },
-  });
-
-  /**
-   * Das Vorjahr als Vorlage, wenn es eines gibt — die betriebsabhängigen
-   * Sätze (UVG, BVG-Plan) ändern sich selten, die gesetzlichen jährlich. Wer
-   * vom Vorjahr abschreibt, übernimmt wenigstens den richtigen UVG-Satz und
-   * muss nur die gesetzlichen prüfen.
-   */
-  return prisma.payrollSetting.create({
-    data: {
-      organizationId,
-      year,
-      ...(vorjahr
-        ? {
-            uvgNbu: vorjahr.uvgNbu,
-            ktg: vorjahr.ktg,
-            bvgSaetze: vorjahr.bvgSaetze as Prisma.InputJsonValue,
-            bvgAnteilArbeitnehmer: vorjahr.bvgAnteilArbeitnehmer,
-          }
-        : {}),
-    },
-  });
-}
-
-export async function updatePayrollSettings(params: {
-  organizationId: string;
-  year: number;
-  actorId: string;
-  ip?: string | null;
-  /**
-   * Der Typ kommt aus dem Zod-Schema und nicht aus einer eigenen Deklaration.
-   * Eine zweite Beschreibung derselben Felder wäre eine, die beim nächsten
-   * neuen Satz einseitig gepflegt wird — und an dieser Stelle hiesse das: ein
-   * Satz, den die Validierung annimmt und der Dienst stillschweigend fallen
-   * lässt.
-   */
-  input: PayrollSettingsInput;
-}) {
-  const vorher = await getOrCreatePayrollSettings(params.organizationId, params.year);
-
-  const daten: Prisma.PayrollSettingUpdateInput = {};
-  for (const feld of [
-    'ahvIvEo',
-    'alv',
-    'alvGrenzeJahr',
-    'alvUeberGrenze',
-    'uvgNbu',
-    'ktg',
-    'bvgEintrittsschwelle',
-    'bvgKoordinationsabzug',
-    'bvgMindestKoordiniert',
-    'bvgObergrenze',
-    'bvgAnteilArbeitnehmer',
-  ] as const) {
-    const wert = params.input[feld];
-    if (typeof wert === 'number') {
-      (daten as Record<string, unknown>)[feld] = wert;
-    }
-  }
-
-  if (params.input.bvgSaetze) {
-    daten.bvgSaetze = params.input.bvgSaetze as unknown as Prisma.InputJsonValue;
-  }
-
-  const nachher = await prisma.payrollSetting.update({
-    where: { id: vorher.id },
-    data: daten,
-  });
-
-  await audit.updated({
-    organizationId: params.organizationId,
-    userId: params.actorId,
-    entity: 'PayrollSetting',
-    entityId: nachher.id,
-    summary: `Beitragssätze ${params.year} geändert`,
-    changes: Object.fromEntries(
-      Object.entries(daten).map(([k, v]) => [
-        k,
-        { from: (vorher as unknown as Record<string, unknown>)[k], to: v },
-      ]),
-    ),
-    ip: params.ip,
-  });
-
-  return nachher;
-}
-
-// ---------------------------------------------------------------------------
-//  Bruttolohn
+//  Kalender
 // ---------------------------------------------------------------------------
 
 /**
@@ -227,9 +86,9 @@ export async function updatePayrollSettings(params: {
  * — Mitternacht in Zürich, nicht in UTC.
  *
  * Bis 2026-09-23 stand hier UTC. Eine Schicht, die am 1. um 00:30 Ortszeit
- * begann, lag in UTC noch am letzten Tag des Vormonats (22:30 bzw. 23:30) und
- * wurde dem falschen Monat zugerechnet — für Nachtreinigung, die in diesem
- * Gewerbe üblich ist, kein Randfall.
+ * begann, lag in UTC noch am letzten Tag des Vormonats und wurde dem falschen
+ * Monat zugerechnet — für Nachtreinigung, die in diesem Gewerbe üblich ist,
+ * kein Randfall.
  */
 export function monatsfenster(year: number, month: number): { von: Date; bis: Date } {
   return {
@@ -238,19 +97,16 @@ export function monatsfenster(year: number, month: number): { von: Date; bis: Da
   };
 }
 
+const tagDatum = (jahr: number, monat: number, tag: number) => new Date(Date.UTC(jahr, monat - 1, tag));
+
 /**
- * Der Lohnsatz, der **an einem Tag** galt — aus der Lohnhistorie.
+ * Der Lohnstand, der **an einem Tag** galt — aus der Lohnhistorie.
  *
- * Bis 2026-09-23 rechnete jeder Lauf mit dem **heutigen** Satz der
- * Personalakte. Wer eine Abrechnung für einen früheren Monat neu erzeugte,
- * nachdem jemand eine Lohnerhöhung eingetragen hatte, bekam den neuen Lohn
- * für den alten Monat. Die Historie (`SalaryRecord`, `validFrom`) wird bei
- * jeder Lohnänderung geschrieben; sie ist die Quelle. Ohne Eintrag gilt der
- * Satz der Personalakte — der Stand, bevor es eine Historie gab.
+ * Die Historie (`SalaryRecord`, `validFrom`) wird bei jeder Lohnänderung
+ * geschrieben und auch rückwirkend gepflegt; sie ist die Quelle. Ohne Eintrag
+ * gilt der Satz der Personalakte — der Stand, bevor es eine Historie gab.
  */
-function satzAm<
-  T extends { validFrom: Date; hourlyRate: Prisma.Decimal | null; monthlySalary: Prisma.Decimal | null; workloadPct: number },
->(historie: readonly T[], tag: Date): T | null {
+function satzAm<T extends { validFrom: Date }>(historie: readonly T[], tag: Date): T | null {
   let treffer: T | null = null;
   for (const eintrag of historie) {
     if (eintrag.validFrom.getTime() <= tag.getTime()) treffer = eintrag;
@@ -258,140 +114,315 @@ function satzAm<
   return treffer;
 }
 
-export interface BruttoErgebnis {
-  brutto: number;
+interface Lohnstand {
+  monthlySalary: Prisma.Decimal | null;
+  hourlyRate: Prisma.Decimal | null;
+  workloadPct: number;
+}
+
+function monatslohnVoll(stand: Lohnstand): number {
+  return round2(toNumber(stand.monthlySalary) * (stand.workloadPct / 100));
+}
+
+/** Angestellte Tage im Monat (1-basiert, einschliesslich) — oder `null`, wenn gar nicht angestellt. */
+export function anstellungImMonat(
+  hiredAt: Date,
+  terminatedAt: Date | null,
+  jahr: number,
+  monat: number,
+): { ersterTag: number; letzterTag: number } | null {
+  const beginn = tagDatum(jahr, monat, 1);
+  const ende = tagDatum(jahr, monat, tageImMonat(jahr, monat));
+  if (hiredAt.getTime() > ende.getTime()) return null;
+  if (terminatedAt && terminatedAt.getTime() < beginn.getTime()) return null;
+  return {
+    ersterTag: hiredAt.getTime() >= beginn.getTime() ? hiredAt.getUTCDate() : 1,
+    letzterTag: terminatedAt && terminatedAt.getTime() <= ende.getTime() ? terminatedAt.getUTCDate() : tageImMonat(jahr, monat),
+  };
+}
+
+// ---------------------------------------------------------------------------
+//  Eingaben einer Abrechnung sammeln
+// ---------------------------------------------------------------------------
+
+type Akte = Prisma.EmployeeGetPayload<{
+  select: {
+    id: true;
+    employeeNumber: true;
+    birthday: true;
+    hiredAt: true;
+    terminatedAt: true;
+    hourlyRate: true;
+    monthlySalary: true;
+    workloadPct: true;
+    vacationDaysPerYear: true;
+    salaryHistory: { select: { validFrom: true; hourlyRate: true; monthlySalary: true; workloadPct: true } };
+    payrollProfile: true;
+  };
+}>;
+
+const AKTE_SELECT = {
+  id: true,
+  employeeNumber: true,
+  birthday: true,
+  hiredAt: true,
+  terminatedAt: true,
+  hourlyRate: true,
+  monthlySalary: true,
+  workloadPct: true,
+  vacationDaysPerYear: true,
+  salaryHistory: {
+    orderBy: { validFrom: 'asc' },
+    select: { validFrom: true, hourlyRate: true, monthlySalary: true, workloadPct: true },
+  },
+  payrollProfile: true,
+} satisfies Prisma.EmployeeSelect;
+
+interface Grundlohn {
+  eingabe: AbrechnungsEingabe['grundlohn'];
   stunden: number;
-  basis: 'HOURLY' | 'MONTHLY';
-  /** Wie viele freigegebene Erfassungen eingeflossen sind. */
   erfassungen: number;
-  /** Wie viele Erfassungen im Monat **nicht** freigegeben waren. */
   offeneErfassungen: number;
   hochrechnungJahr: number;
+  basis: 'HOURLY' | 'MONTHLY';
+  monatslohnVollEnde: number | null;
 }
 
 /**
- * Den Bruttolohn eines Monats ermitteln.
- *
- * **Monatslohn hat Vorrang.** Wer einen Monatslohn hat, bekommt ihn — auch in
- * einem Monat mit wenigen Einsätzen. Die Zeiterfassung dient dort der
- * Einsatzplanung und der Nachkalkulation, nicht der Lohnberechnung. Die
- * Stunden werden trotzdem ausgewiesen, weil sie auf die Abrechnung gehören.
- *
- * **Bei Stundenlohn zählen nur freigegebene Erfassungen.** Die offenen werden
- * gezählt und gemeldet, aber nicht bezahlt — eine Abrechnung, die ungeprüfte
- * Stunden mitnimmt, ist keine Kontrolle mehr.
+ * Grundlohn des Monats: Monatslohn anteilig nach Kalendertagen, Stundenlohn
+ * aus freigegebenen Zeiten — und im Monat eines Wechsels beides.
  */
-export async function ermittleBrutto(params: {
-  employeeId: string;
-  year: number;
-  month: number;
-}): Promise<BruttoErgebnis> {
-  const employee = await prisma.employee.findUniqueOrThrow({
-    where: { id: params.employeeId },
-    select: {
-      hourlyRate: true,
-      monthlySalary: true,
-      workloadPct: true,
-      salaryHistory: {
-        orderBy: { validFrom: 'asc' },
-        select: { validFrom: true, hourlyRate: true, monthlySalary: true, workloadPct: true },
-      },
-    },
-  });
+async function ermittleGrundlohn(
+  akte: Akte,
+  jahr: number,
+  monat: number,
+  anstellung: { ersterTag: number; letzterTag: number } | null,
+): Promise<Grundlohn> {
+  const akteStand: Lohnstand = { monthlySalary: akte.monthlySalary, hourlyRate: akte.hourlyRate, workloadPct: akte.workloadPct };
+  const standAm = (tag: Date): Lohnstand => satzAm(akte.salaryHistory, tag) ?? akteStand;
 
-  const { von, bis } = monatsfenster(params.year, params.month);
+  // Monatslohn in Abschnitten — ein neuer Abschnitt an jedem Tag, an dem die Historie wechselt.
+  const abschnitte: Lohnabschnitt[] = [{ abTag: 1, monatslohnVoll: monatslohnVoll(standAm(tagDatum(jahr, monat, 1))) }];
+  for (const eintrag of akte.salaryHistory) {
+    if (eintrag.validFrom.getUTCFullYear() === jahr && eintrag.validFrom.getUTCMonth() + 1 === monat && eintrag.validFrom.getUTCDate() > 1) {
+      abschnitte.push({ abTag: eintrag.validFrom.getUTCDate(), monatslohnVoll: monatslohnVoll(eintrag) });
+    }
+  }
+  const monatlich = anstellung
+    ? monatslohnAnteilig({ jahr, monat, abschnitte, ersterTag: anstellung.ersterTag, letzterTag: anstellung.letzterTag })
+    : { betrag: 0, tage: 0, voll: false };
 
+  // Zeiten -----------------------------------------------------------------
+  const { von, bis } = monatsfenster(jahr, monat);
   const [freigegeben, offen] = await Promise.all([
     prisma.timeEntry.findMany({
-      where: {
-        employeeId: params.employeeId,
-        approved: true,
-        endedAt: { not: null },
-        startedAt: { gte: von, lt: bis },
-      },
+      where: { employeeId: akte.id, approved: true, endedAt: { not: null }, startedAt: { gte: von, lt: bis } },
       select: { startedAt: true, minutes: true, hourlyRate: true },
     }),
     prisma.timeEntry.count({
-      where: {
-        employeeId: params.employeeId,
-        approved: false,
-        endedAt: { not: null },
-        startedAt: { gte: von, lt: bis },
-      },
+      where: { employeeId: akte.id, approved: false, endedAt: { not: null }, startedAt: { gte: von, lt: bis } },
     }),
   ]);
 
-  const minuten = freigegeben.reduce((summe, e) => summe + (e.minutes ?? 0), 0);
-  const stunden = round2(minuten / 60);
+  let stunden = 0;
+  let stundenBezahlt = 0;
+  let stundenBetrag = 0;
+  for (const e of freigegeben) {
+    const h = (e.minutes ?? 0) / 60;
+    stunden += h;
+    /**
+     * Der Tag einer Erfassung ist der **Zürcher** Kalendertag ihres Beginns.
+     * An einem Tag mit Monatslohn sind die Stunden bereits bezahlt; sie
+     * erscheinen nur als Menge.
+     */
+    const tag = toDateOnly(e.startedAt);
+    const stand = standAm(tag);
+    if (toNumber(stand.monthlySalary) > 0) continue;
+    const ausHistorie = satzAm(akte.salaryHistory, tag)?.hourlyRate ?? null;
+    stundenBezahlt += h;
+    stundenBetrag += h * toNumber(ausHistorie ?? e.hourlyRate ?? akte.hourlyRate);
+  }
+  stunden = round2(stunden);
 
-  /**
-   * Monatslohn und Pensum: der Stand am **letzten Tag** des Monats. Eine
-   * Erhöhung zum Monatsersten gilt damit für den ganzen Monat — die übliche
-   * Vereinbarung. Eine unterjährige Änderung mitten im Monat anteilig zu
-   * rechnen, ist eine Frage des Arbeitsvertrags und steht als offener Punkt in
-   * `docs/PAYROLL.md`.
-   */
-  const stand = satzAm(employee.salaryHistory, new Date(bis.getTime() - 1));
-  const monatslohn = toNumber(stand ? stand.monthlySalary : employee.monthlySalary);
-  const pensum = stand?.workloadPct ?? employee.workloadPct;
-  const stundensatzJetzt = toNumber(stand ? stand.hourlyRate : employee.hourlyRate);
+  const letzterTag = anstellung ? tagDatum(jahr, monat, anstellung.letzterTag) : letzterTagDesMonats(jahr, monat);
+  const ende = standAm(letzterTag);
+  const vollEnde = monatslohnVoll(ende);
+  const mitDreizehntem = (akte.payrollProfile?.thirteenthMode ?? 'NONE') !== 'NONE';
 
-  if (monatslohn > 0) {
-    const brutto = round2(monatslohn * (pensum / 100));
+  if (monatlich.betrag > 0) {
     return {
-      brutto,
+      eingabe: {
+        art: 'MONTHLY',
+        betrag: monatlich.betrag,
+        tage: monatlich.tage,
+        voll: monatlich.voll,
+        monatslohnVoll: vollEnde > 0 ? vollEnde : Math.max(...abschnitte.map((a) => a.monatslohnVoll)),
+        stundenAnteil: stundenBetrag > 0 ? { betrag: rappen(stundenBetrag), stunden: round2(stundenBezahlt) } : undefined,
+      },
       stunden,
-      basis: 'MONTHLY',
       erfassungen: freigegeben.length,
       offeneErfassungen: offen,
-      hochrechnungJahr: round2(brutto * 12),
+      /**
+       * Jahreslohn für ALV-Grenze und BVG: der vertragliche Monatslohn zum
+       * Monatsende mal 12 — mal 13, wenn ein 13. Monatslohn vereinbart ist,
+       * weil er zum massgebenden Jahreslohn gehört.
+       */
+      hochrechnungJahr: round2(vollEnde * (mitDreizehntem ? 13 : 12)),
+      basis: 'MONTHLY',
+      monatslohnVollEnde: vollEnde > 0 ? vollEnde : null,
     };
   }
 
   /**
-   * Stundenlohn **je Erfassung**: der Satz der Lohnhistorie am Tag der
-   * Erfassung; gibt es dort keinen, der bei der Erfassung festgehaltene
-   * (`TimeEntry.hourlyRate`); sonst der der Personalakte. Eine Erhöhung zum
-   * 15. bezahlt die ersten zwei Wochen zum alten Satz.
-   *
-   * Die Historie geht dem Schnappschuss vor, weil sie auch **rückwirkend**
-   * gepflegt wird: Eine Erhöhung, die im Oktober mit Wirkung ab September
-   * eingetragen wird, muss für die Septemberstunden gelten, obwohl diese mit
-   * dem alten Satz erfasst wurden.
+   * Stundenlohn: Jahreshochrechnung mit dem vereinbarten Pensum auf eine
+   * 42-Stunden-Woche, nicht `brutto × 12` — sonst spränge der koordinierte
+   * Lohn und mit ihm der BVG-Abzug von Monat zu Monat. Eine Annahme, als
+   * solche in der Herleitung festgehalten.
    */
-  const brutto = round2(
-    freigegeben.reduce((summe, e) => {
-      const ausHistorie = satzAm(employee.salaryHistory, e.startedAt)?.hourlyRate ?? null;
-      const satz = toNumber(ausHistorie ?? e.hourlyRate ?? employee.hourlyRate);
-      return summe + ((e.minutes ?? 0) / 60) * satz;
-    }, 0),
-  );
-  const stundensatz = stundensatzJetzt;
-  const employeeWorkload = pensum;
-
-  /**
-   * Die Jahreshochrechnung bei Stundenlohn.
-   *
-   * **Nicht `brutto × 12`.** Bei schwankenden Stunden wäre das im Spitzenmonat
-   * zu hoch und im schwachen zu tief, und der koordinierte Lohn spränge von
-   * Monat zu Monat — mit ihm der BVG-Abzug. Gerechnet wird stattdessen mit dem
-   * vereinbarten Pensum auf eine 42-Stunden-Woche: eine Grösse, die sich nicht
-   * monatlich ändert.
-   *
-   * Der Wert ist eine Annahme und wird als solche in `breakdown` festgehalten.
-   * Genau zu rechnen verlangte eine laufende Jahressumme mit rückwirkender
-   * Korrektur — das ist Treuhandarbeit und steht so in `docs/PAYROLL.md`.
-   */
-  const wochenstunden = 42 * (employeeWorkload / 100);
-  const hochrechnungJahr = round2(wochenstunden * 52 * stundensatz);
-
+  const satz = toNumber(ende.hourlyRate ?? akte.hourlyRate);
   return {
-    brutto,
+    eingabe: { art: 'HOURLY', betrag: rappen(stundenBetrag), stunden: round2(stundenBezahlt) },
     stunden,
-    basis: 'HOURLY',
     erfassungen: freigegeben.length,
     offeneErfassungen: offen,
-    hochrechnungJahr,
+    hochrechnungJahr: round2(42 * (ende.workloadPct / 100) * 52 * satz),
+    basis: 'HOURLY',
+    monatslohnVollEnde: null,
+  };
+}
+
+/** Bewilligter unbezahlter Urlaub in Werktagen innerhalb der Anstellung im Monat. */
+async function unbezahlteTageIm(
+  employeeId: string,
+  jahr: number,
+  monat: number,
+  anstellung: { ersterTag: number; letzterTag: number },
+): Promise<number> {
+  const von = tagDatum(jahr, monat, anstellung.ersterTag);
+  const bis = tagDatum(jahr, monat, anstellung.letzterTag);
+  const abwesenheiten = await prisma.absence.findMany({
+    where: { employeeId, type: 'UNPAID', status: 'APPROVED', startDate: { lte: bis }, endDate: { gte: von } },
+    select: { startDate: true, endDate: true, halfDay: true },
+  });
+  let tage = 0;
+  for (const a of abwesenheiten) {
+    const beginn = a.startDate.getTime() > von.getTime() ? a.startDate : von;
+    const ende = a.endDate.getTime() < bis.getTime() ? a.endDate : bis;
+    tage += werktage(beginn, ende) * (a.halfDay ? 0.5 : 1);
+  }
+  return tage;
+}
+
+/** Was vom 13. Monatslohn in früheren Monaten schon geschehen ist. */
+async function dreizehnterKontext(
+  akte: Akte,
+  jahr: number,
+  monat: number,
+  monatslohnVollEnde: number | null,
+): Promise<DreizehnterGrundlage> {
+  const profil = akte.payrollProfile;
+  const art = profil?.thirteenthMode ?? 'NONE';
+  const leer: DreizehnterGrundlage = {
+    art,
+    auszahlungsmonat: profil?.thirteenthPayoutMonth ?? 12,
+    grundlohnBisherImJahr: 0,
+    bereitsAusbezahlt: 0,
+    monatslohnVoll: monatslohnVollEnde,
+    anstellungstageImJahr: 0,
+    tageImJahr: 0,
+    austrittImMonat: false,
+  };
+  if (art === 'NONE') return leer;
+
+  const frueher = await prisma.payslipLine.findMany({
+    where: {
+      payslip: { employeeId: akte.id, year: jahr, month: { lt: monat } },
+      type: { in: ['BASE', 'UNPAID_LEAVE', 'THIRTEENTH'] },
+    },
+    select: { type: true, amount: true },
+  });
+  const grundlohn = frueher.filter((z) => z.type !== 'THIRTEENTH').reduce((s, z) => s + toNumber(z.amount), 0);
+  const bereits = frueher.filter((z) => z.type === 'THIRTEENTH').reduce((s, z) => s + toNumber(z.amount), 0);
+
+  const jahresbeginn = tagDatum(jahr, 1, 1);
+  const jahresende = tagDatum(jahr, 12, 31);
+  const beginn = akte.hiredAt.getTime() > jahresbeginn.getTime() ? akte.hiredAt : jahresbeginn;
+  const ende = akte.terminatedAt && akte.terminatedAt.getTime() < jahresende.getTime() ? akte.terminatedAt : jahresende;
+  const anstellungstage = Math.max(0, Math.round((ende.getTime() - beginn.getTime()) / 86_400_000) + 1);
+  const tageImJahr = Math.round((jahresende.getTime() - jahresbeginn.getTime()) / 86_400_000) + 1;
+  const austritt =
+    akte.terminatedAt !== null && akte.terminatedAt.getUTCFullYear() === jahr && akte.terminatedAt.getUTCMonth() + 1 === monat;
+
+  return {
+    ...leer,
+    grundlohnBisherImJahr: rappen(grundlohn),
+    bereitsAusbezahlt: rappen(bereits),
+    anstellungstageImJahr: anstellungstage,
+    tageImJahr,
+    austrittImMonat: austritt,
+  };
+}
+
+/**
+ * Quellensteuer: Profil zum Stichtag → Tarifzeile nach Bemessung.
+ *
+ * **Keine Zeile, kein Satz.** Die Tarife der Kantone sind umfangreich und
+ * ändern jährlich; ein eingebauter Satz wäre ein erfundener. Ohne eingelesene
+ * Zeile entsteht `KEIN_TARIF`, und die Abrechnung wartet auf eine Prüfung
+ * oder eine von Hand erfasste Quellensteuer.
+ */
+async function quellensteuerFuer(
+  organizationId: string,
+  employeeId: string,
+  jahr: number,
+  stichtag: Date,
+  bemessung: number,
+): Promise<{ grundlage: QuellensteuerGrundlage; ungeprueft: boolean }> {
+  const profil = await prisma.withholdingTaxProfile.findFirst({
+    where: {
+      organizationId,
+      employeeId,
+      validFrom: { lte: stichtag },
+      OR: [{ validUntil: null }, { validUntil: { gte: stichtag } }],
+    },
+  });
+  if (!profil || bemessung <= 0) return { grundlage: { status: 'KEINE' }, ungeprueft: false };
+
+  const zeile = await prisma.withholdingTaxRate.findFirst({
+    where: {
+      organizationId,
+      canton: profil.canton,
+      year: jahr,
+      tariffCode: profil.tariffCode,
+      incomeFrom: { lte: bemessung },
+      OR: [{ incomeTo: null }, { incomeTo: { gt: bemessung } }],
+    },
+    orderBy: { incomeFrom: 'desc' },
+  });
+  if (!zeile) {
+    return {
+      grundlage: {
+        status: 'KEIN_TARIF',
+        tarif: profil.tariffCode,
+        kanton: profil.canton,
+        grund:
+          `Quellensteuerpflichtig (${profil.canton}, Tarif ${profil.tariffCode}), aber für ${jahr} ist keine Tarifzeile ` +
+          `für ein steuerbares Einkommen von CHF ${bemessung.toFixed(2)} eingelesen. Tarif einlesen oder die ` +
+          'Quellensteuer dieses Monats von Hand erfassen.',
+      },
+      ungeprueft: false,
+    };
+  }
+  return {
+    grundlage: {
+      status: 'SATZ',
+      satzPct: toNumber(zeile.ratePct),
+      tarif: profil.tariffCode,
+      kanton: profil.canton,
+      quelle: zeile.source,
+      satzId: zeile.id,
+    },
+    ungeprueft: zeile.verification !== 'GEPRUEFT',
   };
 }
 
@@ -408,14 +439,18 @@ export interface AbrechnungsErgebnis {
   brutto?: number;
   netto?: number;
   offeneErfassungen?: number;
+  pruefungErforderlich?: boolean;
 }
+
+class InzwischenVeroeffentlicht extends Error {}
 
 /**
  * Abrechnungen für einen Monat erzeugen.
  *
- * Läuft über alle aktiven Personalakten oder über eine Auswahl. **Wirft für
- * eine einzelne Person nicht**, sondern meldet sie als übersprungen: Ein Lauf
- * über dreissig Personen soll nicht an einer scheitern, bei der etwas fehlt.
+ * Läuft über alle Personen, die im Monat angestellt waren — **auch die im
+ * Monat ausgetretenen** — sowie über jede Person mit offenen Lohnpositionen
+ * dieses Monats (eine Korrektur nach dem Austritt). **Wirft für eine einzelne
+ * Person nicht**, sondern meldet sie als übersprungen.
  */
 export async function generatePayslips(params: {
   organizationId: string;
@@ -428,6 +463,7 @@ export async function generatePayslips(params: {
   jahr: number;
   monat: number;
   saetzeGeprueft: boolean;
+  ungepruefteSaetze: string[];
   ergebnisse: AbrechnungsErgebnis[];
 }> {
   if (params.month < 1 || params.month > 12) {
@@ -435,13 +471,9 @@ export async function generatePayslips(params: {
   }
 
   /**
-   * Ein Monat, der noch läuft, wird nicht abgerechnet.
-   *
-   * Der Fall, den das abfängt: Am 12. des Monats einen Lauf starten, weil man
-   * „schon mal schauen" will. Das Ergebnis sähe aus wie eine Abrechnung, wäre
-   * um zwei Drittel zu tief — und die Idempotenz sorgt dafür, dass ein
-   * späterer Lauf sie stillschweigend überschreibt. Wer die Zwischenzahl
-   * will, nimmt die Zeiterfassung.
+   * Ein Monat, der noch läuft, wird nicht abgerechnet. Am 12. „schon mal
+   * schauen" ergäbe etwas, das wie eine Abrechnung aussieht und um zwei
+   * Drittel zu tief ist.
    */
   const { bis } = monatsfenster(params.year, params.month);
   if (bis.getTime() > Date.now()) {
@@ -451,169 +483,53 @@ export async function generatePayslips(params: {
     );
   }
 
-  const settings = await getOrCreatePayrollSettings(params.organizationId, params.year);
-  const saetze = alsSaetze(settings);
+  const monatsbeginn = tagDatum(params.year, params.month, 1);
+  const monatsende = letzterTagDesMonats(params.year, params.month);
+  const saetze = await saetzeZumStichtag(params.organizationId, monatsende);
 
-  const employees = await prisma.employee.findMany({
+  const akten = await prisma.employee.findMany({
     where: {
       organizationId: params.organizationId,
-      active: true,
       ...(params.employeeIds?.length ? { id: { in: params.employeeIds } } : {}),
+      OR: [
+        {
+          hiredAt: { lte: monatsende },
+          OR: [{ terminatedAt: null }, { terminatedAt: { gte: monatsbeginn } }],
+          // Eine inaktive Akte ohne Austrittsdatum ist ein Altbestand — nicht abrechnen.
+          AND: [{ OR: [{ active: true }, { terminatedAt: { not: null } }] }],
+        },
+        { payrollItems: { some: { year: params.year, month: params.month, deletedAt: null, payslipId: null } } },
+      ],
     },
-    select: {
-      id: true,
-      employeeNumber: true,
-      birthday: true,
-      hourlyRate: true,
-      monthlySalary: true,
-      workloadPct: true,
-    },
+    select: AKTE_SELECT,
     orderBy: { employeeNumber: 'asc' },
   });
 
   const ergebnisse: AbrechnungsErgebnis[] = [];
-
-  for (const employee of employees) {
-    const vorhanden = await prisma.payslip.findUnique({
-      where: {
-        employeeId_year_month: {
-          employeeId: employee.id,
-          year: params.year,
-          month: params.month,
-        },
-      },
-      select: { id: true, published: true },
-    });
-
-    if (vorhanden?.published) {
-      ergebnisse.push({
-        employeeId: employee.id,
-        employeeNumber: employee.employeeNumber,
-        payslipId: vorhanden.id,
-        status: 'UEBERSPRUNGEN',
-        grund: 'Bereits veröffentlicht — eine veröffentlichte Abrechnung ist unveränderlich.',
-      });
-      continue;
-    }
-
-    const brutto = await ermittleBrutto({
-      employeeId: employee.id,
-      year: params.year,
-      month: params.month,
-    });
-
-    if (brutto.brutto <= 0) {
-      ergebnisse.push({
-        employeeId: employee.id,
-        employeeNumber: employee.employeeNumber,
-        status: 'UEBERSPRUNGEN',
-        grund:
-          brutto.basis === 'HOURLY'
-            ? brutto.offeneErfassungen > 0
-              ? `Kein freigegebener Lohn — ${brutto.offeneErfassungen} Erfassung(en) warten auf Freigabe.`
-              : 'Keine freigegebenen Stunden in diesem Monat.'
-            : 'Kein Lohn hinterlegt.',
-        offeneErfassungen: brutto.offeneErfassungen,
-      });
-      continue;
-    }
-
-    const alter = alterImJahr(employee.birthday, params.year);
-    const beitraege = berechneBeitraege(
-      { bruttoMonat: brutto.brutto, bruttoJahr: brutto.hochrechnungJahr, alter },
-      saetze,
-    );
-
-    const netto = rappen(brutto.brutto - beitraege.summe);
-
-    const daten = {
-      hours: brutto.stunden,
-      grossPay: brutto.brutto,
-      ahvIv: beitraege.ahvIv,
-      alv: beitraege.alv,
-      bvg: beitraege.bvg,
-      uvg: beitraege.uvg,
-      ktg: beitraege.ktg,
-      otherDeductions: 0,
-      netPay: netto,
-      basis: brutto.basis,
-      createdById: params.actorId,
-      /**
-       * Die Herleitung als Momentaufnahme. Ändert sich ein Satz im nächsten
-       * Jahr, bleibt diese Abrechnung nachvollziehbar.
-       */
-      breakdown: {
-        saetze,
-        alter,
-        erfassungen: brutto.erfassungen,
-        offeneErfassungen: brutto.offeneErfassungen,
-        hochrechnungJahr: brutto.hochrechnungJahr,
-        ...beitraege.herleitung,
-        /**
-         * Der Umweg über `unknown` ist nötig, weil `InputJsonValue` eine
-         * rekursive Vereinigung ist, in die TypeScript ein Objektliteral mit
-         * optionalen Feldern nicht direkt einordnet. Der Inhalt ist
-         * nachweislich Json — Zahlen, Zeichenketten, Wahrheitswerte und
-         * einfache Objekte — und die Zusicherung sagt genau das.
-         */
-      } as unknown as Prisma.InputJsonValue,
-    };
-
-    /**
-     * **Nie über eine veröffentlichte Abrechnung.** Bis 2026-09-23 stand hier
-     * ein `upsert` — und ein Veröffentlichen, das zwischen der Prüfung oben
-     * und diesem Schreiben geschah, wurde still überschrieben. Jetzt steht
-     * `published: false` in der Bedingung des Schreibens selbst; trifft es
-     * keine Zeile, hat jemand anderes gerade veröffentlicht, und die
-     * Abrechnung bleibt, wie sie veröffentlicht wurde.
-     */
-    let payslipId: string;
-    if (vorhanden) {
-      const geaendert = await prisma.payslip.updateMany({
-        where: { id: vorhanden.id, published: false },
-        data: daten,
-      });
-      if (geaendert.count === 0) {
+  for (const akte of akten) {
+    try {
+      ergebnisse.push(await abrechnenFuer(params, akte, saetze));
+    } catch (fehler) {
+      if (fehler instanceof InzwischenVeroeffentlicht) {
         ergebnisse.push({
-          employeeId: employee.id,
-          employeeNumber: employee.employeeNumber,
-          payslipId: vorhanden.id,
+          employeeId: akte.id,
+          employeeNumber: akte.employeeNumber,
           status: 'UEBERSPRUNGEN',
           grund: 'Inzwischen veröffentlicht — eine veröffentlichte Abrechnung ist unveränderlich.',
         });
         continue;
       }
-      payslipId = vorhanden.id;
-    } else {
-      try {
-        payslipId = (
-          await prisma.payslip.create({
-            data: { employeeId: employee.id, year: params.year, month: params.month, ...daten },
-            select: { id: true },
-          })
-        ).id;
-      } catch (error) {
-        // Ein gleichzeitiger Lauf war schneller — seine Abrechnung gilt.
-        if (!isUniqueConstraintError(error)) throw error;
+      if (isUniqueConstraintError(fehler)) {
         ergebnisse.push({
-          employeeId: employee.id,
-          employeeNumber: employee.employeeNumber,
+          employeeId: akte.id,
+          employeeNumber: akte.employeeNumber,
           status: 'UEBERSPRUNGEN',
           grund: 'Ein gleichzeitiger Lauf hat diese Abrechnung eben erzeugt.',
         });
         continue;
       }
+      throw fehler;
     }
-
-    ergebnisse.push({
-      employeeId: employee.id,
-      employeeNumber: employee.employeeNumber,
-      payslipId,
-      status: vorhanden ? 'AKTUALISIERT' : 'ERSTELLT',
-      brutto: brutto.brutto,
-      netto,
-      offeneErfassungen: brutto.offeneErfassungen,
-    });
   }
 
   await audit.created({
@@ -623,69 +539,532 @@ export async function generatePayslips(params: {
     summary:
       `Lohnlauf ${String(params.month).padStart(2, '0')}/${params.year}: ` +
       `${ergebnisse.filter((e) => e.status !== 'UEBERSPRUNGEN').length} Abrechnung(en), ` +
-      `${ergebnisse.filter((e) => e.status === 'UEBERSPRUNGEN').length} übersprungen`,
+      `${ergebnisse.filter((e) => e.status === 'UEBERSPRUNGEN').length} übersprungen` +
+      (saetze.ungeprueft.length > 0 ? `; ungeprüfte Sätze: ${saetze.ungeprueft.join(', ')}` : ''),
     ip: params.ip,
   });
 
   return {
     jahr: params.year,
     monat: params.month,
-    /**
-     * Solange niemand die Sätze bestätigt hat, sind die betriebsabhängigen
-     * Werte (UVG, BVG-Plan) Vorbelegungen. Die Antwort sagt das, statt es der
-     * Oberfläche zu überlassen.
-     */
-    saetzeGeprueft: settings.updatedAt.getTime() !== settings.createdAt.getTime(),
+    saetzeGeprueft: saetze.ungeprueft.length === 0,
+    ungepruefteSaetze: saetze.ungeprueft,
     ergebnisse,
   };
 }
 
-/**
- * Eine Abrechnung veröffentlichen.
- *
- * Damit wird sie für die angestellte Person sichtbar (`/portal/lohn`) und
- * **unveränderlich**. Das ist dieselbe Schwelle wie beim Ausstellen einer
- * Rechnung, und aus demselben Grund: Ab hier ist sie bei jemandem angekommen.
- *
- * Korrekturen laufen danach über eine Abrechnung des Folgemonats, nicht über
- * eine stille Änderung. Ein `unpublish` gibt es bewusst nicht — eine
- * Abrechnung, die wieder verschwindet, ist schlimmer als eine falsche, die
- * korrigiert wird.
- */
-export async function publishPayslips(params: {
-  organizationId: string;
-  payslipIds: string[];
-  actorId: string;
-  ip?: string | null;
-}): Promise<{ veroeffentlicht: number; uebersprungen: number }> {
-  const vorhanden = await prisma.payslip.findMany({
-    where: {
-      id: { in: params.payslipIds },
-      employee: { organizationId: params.organizationId },
-    },
-    select: { id: true, published: true, netPay: true },
+async function abrechnenFuer(
+  params: { organizationId: string; year: number; month: number; actorId: string },
+  akte: Akte,
+  saetze: Awaited<ReturnType<typeof saetzeZumStichtag>>,
+): Promise<AbrechnungsErgebnis> {
+  const { year: jahr, month: monat } = params;
+  const vorhanden = await prisma.payslip.findUnique({
+    where: { employeeId_year_month: { employeeId: akte.id, year: jahr, month: monat } },
+    select: { id: true, published: true },
   });
-
-  const offen = vorhanden.filter((p) => !p.published).map((p) => p.id);
-  if (offen.length === 0) {
-    return { veroeffentlicht: 0, uebersprungen: vorhanden.length };
+  if (vorhanden?.published) {
+    return {
+      employeeId: akte.id,
+      employeeNumber: akte.employeeNumber,
+      payslipId: vorhanden.id,
+      status: 'UEBERSPRUNGEN',
+      grund: 'Bereits veröffentlicht — eine veröffentlichte Abrechnung ist unveränderlich.',
+    };
   }
 
-  const treffer = await prisma.payslip.updateMany({
-    where: { id: { in: offen }, published: false },
-    data: { published: true, publishedAt: new Date() },
+  const anstellung = anstellungImMonat(akte.hiredAt, akte.terminatedAt, jahr, monat);
+  const grundlohn = await ermittleGrundlohn(akte, jahr, monat, anstellung);
+  const unbezahlt = anstellung && grundlohn.basis === 'MONTHLY' ? await unbezahlteTageIm(akte.id, jahr, monat, anstellung) : 0;
+
+  const positionenRoh = await prisma.payrollItem.findMany({
+    where: {
+      organizationId: params.organizationId,
+      employeeId: akte.id,
+      year: jahr,
+      month: monat,
+      deletedAt: null,
+      OR: [{ payslipId: null }, ...(vorhanden ? [{ payslipId: vorhanden.id }] : [])],
+    },
+    orderBy: { createdAt: 'asc' },
   });
+  const positionen: Position[] = positionenRoh.map((p) => ({
+    id: p.id,
+    type: p.type,
+    label: p.label,
+    quantity: p.quantity === null ? null : toNumber(p.quantity),
+    rate: p.rate === null ? null : toNumber(p.rate),
+    surchargePct: p.surchargePct === null ? null : toNumber(p.surchargePct),
+    amount: toNumber(p.amount),
+  }));
+
+  const profil = akte.payrollProfile;
+  const eingabe: AbrechnungsEingabe = {
+    jahr,
+    monat,
+    grundlohn: grundlohn.eingabe,
+    unbezahlteTage: unbezahlt,
+    werktageImMonat: werktage(tagDatum(jahr, monat, 1), letzterTagDesMonats(jahr, monat)),
+    positionen,
+    ferienImLohn: profil?.vacationPayInWage ?? false,
+    ferientageJeJahr: toNumber(akte.vacationDaysPerYear),
+    feiertagsanteilPct: profil?.holidayPayPct ? toNumber(profil.holidayPayPct) : null,
+    dreizehnter: await dreizehnterKontext(akte, jahr, monat, grundlohn.monatslohnVollEnde),
+    saetze: saetze.saetze,
+    arbeitgeber: saetze.arbeitgeber,
+    alter: alterImJahr(akte.birthday, jahr),
+    bruttoJahrHochrechnung: grundlohn.hochrechnungJahr,
+  };
+
+  const teil = ermittleLohnteil(eingabe);
+  const stichtag = anstellung ? tagDatum(jahr, monat, anstellung.letzterTag) : letzterTagDesMonats(jahr, monat);
+  const qst = await quellensteuerFuer(params.organizationId, akte.id, jahr, stichtag, teil.quellensteuerBemessung);
+  const abrechnung = schliesseAbrechnungAb(eingabe, teil, qst.grundlage);
+
+  if (abrechnung.brutto <= 0 && abrechnung.spesenUndZahlungen === 0 && positionen.length === 0) {
+    return {
+      employeeId: akte.id,
+      employeeNumber: akte.employeeNumber,
+      status: 'UEBERSPRUNGEN',
+      grund:
+        grundlohn.basis === 'HOURLY'
+          ? grundlohn.offeneErfassungen > 0
+            ? `Kein freigegebener Lohn — ${grundlohn.offeneErfassungen} Erfassung(en) warten auf Freigabe.`
+            : 'Keine freigegebenen Stunden in diesem Monat.'
+          : 'Kein Lohn hinterlegt.',
+      offeneErfassungen: grundlohn.offeneErfassungen,
+    };
+  }
+
+  const pruefgruende: string[] = [];
+  if (abrechnung.pruefungErforderlich && abrechnung.pruefungsgrund) pruefgruende.push(abrechnung.pruefungsgrund);
+  if (abrechnung.netto < 0) {
+    pruefgruende.push(`Die Auszahlung wäre negativ (CHF ${abrechnung.netto.toFixed(2)}) — Abzüge übersteigen den Lohn.`);
+  }
+
+  const payslipId = await schreibeAbrechnung({
+    vorhandenId: vorhanden?.id ?? null,
+    employeeId: akte.id,
+    jahr,
+    monat,
+    actorId: params.actorId,
+    abrechnung,
+    stunden: grundlohn.stunden,
+    basis: grundlohn.basis,
+    rateVersionIds: saetze.versionIds,
+    unverifiedRates: saetze.ungeprueft.length > 0 || qst.ungeprueft,
+    pruefgrund: pruefgruende.length > 0 ? pruefgruende.join(' ') : null,
+    itemIds: positionen.map((p) => p.id),
+    herleitung: {
+      ...abrechnung.herleitung,
+      saetze: saetze.saetze,
+      satzversionen: saetze.momentaufnahme,
+      alter: eingabe.alter,
+      erfassungen: grundlohn.erfassungen,
+      offeneErfassungen: grundlohn.offeneErfassungen,
+      hochrechnungJahr: grundlohn.hochrechnungJahr,
+      anstellung,
+      arbeitgeber: abrechnung.arbeitgeber,
+      quellensteuerSatzUngeprueft: qst.ungeprueft,
+    },
+  });
+
+  return {
+    employeeId: akte.id,
+    employeeNumber: akte.employeeNumber,
+    payslipId,
+    status: vorhanden ? 'AKTUALISIERT' : 'ERSTELLT',
+    brutto: abrechnung.brutto,
+    netto: abrechnung.netto,
+    offeneErfassungen: grundlohn.offeneErfassungen,
+    pruefungErforderlich: pruefgruende.length > 0,
+  };
+}
+
+/**
+ * Abrechnung, Zeilen und Positionsverknüpfung in **einer** Transaktion.
+ *
+ * **Nie über eine veröffentlichte Abrechnung.** `published: false` steht in
+ * der Bedingung des Schreibens selbst; trifft es keine Zeile, hat jemand
+ * anderes gerade veröffentlicht. Die Zeilen werden ersetzt, nicht ergänzt —
+ * ein zweiter Lauf ergibt dieselbe Abrechnung, nicht eine doppelte.
+ *
+ * Eine Neuberechnung setzt eine frühere Prüffreigabe zurück: Geprüft wurde
+ * eine andere Zahl.
+ */
+async function schreibeAbrechnung(p: {
+  vorhandenId: string | null;
+  employeeId: string;
+  jahr: number;
+  monat: number;
+  actorId: string;
+  abrechnung: Abrechnung;
+  stunden: number;
+  basis: 'HOURLY' | 'MONTHLY';
+  rateVersionIds: string[];
+  unverifiedRates: boolean;
+  pruefgrund: string | null;
+  itemIds: string[];
+  herleitung: Record<string, unknown>;
+}): Promise<string> {
+  const a = p.abrechnung;
+  const daten = {
+    hours: p.stunden,
+    grossPay: a.brutto,
+    ahvIv: a.beitraege.ahvIv,
+    alv: a.beitraege.alv,
+    bvg: a.beitraege.bvg,
+    uvg: a.beitraege.uvg,
+    ktg: a.beitraege.ktg,
+    otherDeductions: a.andereAbzuege,
+    withholdingTax: a.quellensteuer,
+    expenses: a.spesenUndZahlungen,
+    employerContributions: a.arbeitgeber.summe,
+    netPay: a.netto,
+    basis: p.basis,
+    createdById: p.actorId,
+    rateVersionIds: p.rateVersionIds,
+    unverifiedRates: p.unverifiedRates,
+    reviewRequired: p.pruefgrund !== null,
+    reviewReason: p.pruefgrund,
+    reviewResolvedAt: null,
+    reviewResolvedById: null,
+    reviewNote: null,
+    /**
+     * Die Herleitung als Momentaufnahme. Der Umweg über `unknown` ist nötig,
+     * weil `InputJsonValue` eine rekursive Vereinigung ist, in die TypeScript
+     * ein Objektliteral mit optionalen Feldern nicht direkt einordnet; der
+     * Inhalt ist nachweislich Json.
+     */
+    breakdown: p.herleitung as unknown as Prisma.InputJsonValue,
+  };
+
+  return prisma.$transaction(async (tx) => {
+    let id: string;
+    if (p.vorhandenId) {
+      const geaendert = await tx.payslip.updateMany({ where: { id: p.vorhandenId, published: false }, data: daten });
+      if (geaendert.count === 0) throw new InzwischenVeroeffentlicht();
+      id = p.vorhandenId;
+      await tx.payslipLine.deleteMany({ where: { payslipId: id } });
+      await tx.payrollItem.updateMany({ where: { payslipId: id }, data: { payslipId: null } });
+    } else {
+      id = (
+        await tx.payslip.create({
+          data: { employeeId: p.employeeId, year: p.jahr, month: p.monat, ...daten },
+          select: { id: true },
+        })
+      ).id;
+    }
+    await tx.payslipLine.createMany({
+      data: a.zeilen.map((z, i) => ({
+        payslipId: id,
+        position: i + 1,
+        type: z.type,
+        kind: z.kind,
+        label: z.label,
+        quantity: z.quantity,
+        rate: z.rate,
+        amount: z.amount,
+        taxable: z.taxable,
+        certificateField: z.certificateField,
+        sourceItemId: z.sourceItemId,
+      })),
+    });
+    if (p.itemIds.length > 0) {
+      await tx.payrollItem.updateMany({ where: { id: { in: p.itemIds }, payslipId: null }, data: { payslipId: id } });
+    }
+    return id;
+  });
+}
+
+// ---------------------------------------------------------------------------
+//  Prüfung
+// ---------------------------------------------------------------------------
+
+/**
+ * Eine zur Prüfung markierte Abrechnung freigeben — mit Notiz. Die Freigabe
+ * sagt: „Die Zahl ist so gewollt" (etwa: die Quellensteuer wird diesen Monat
+ * ausserhalb abgerechnet). Sie ändert keinen Betrag.
+ */
+export async function resolvePayslipReview(params: {
+  organizationId: string;
+  payslipId: string;
+  actorId: string;
+  note: string;
+  ip?: string | null;
+}) {
+  const abrechnung = await prisma.payslip.findFirst({
+    where: { id: params.payslipId, employee: { organizationId: params.organizationId } },
+    select: { id: true, published: true, reviewRequired: true, reviewReason: true, year: true, month: true },
+  });
+  if (!abrechnung) throw new NotFoundError('Lohnabrechnung');
+  if (abrechnung.published) throw new BusinessRuleError('Die Abrechnung ist bereits veröffentlicht.');
+  if (!abrechnung.reviewRequired) throw new BusinessRuleError('Diese Abrechnung ist nicht zur Prüfung markiert.');
+  if (abrechnung.reviewReason?.startsWith(VERALTET_PRAEFIX)) {
+    throw new BusinessRuleError('Die Grundlagen haben sich seit der Berechnung geändert. Bitte den Monat neu rechnen statt freigeben.');
+  }
+
+  const geaendert = await prisma.payslip.updateMany({
+    where: { id: abrechnung.id, published: false, reviewRequired: true },
+    data: { reviewResolvedAt: new Date(), reviewResolvedById: params.actorId, reviewNote: params.note },
+  });
+  if (geaendert.count === 0) throw new BusinessRuleError('Die Abrechnung hat sich eben geändert — bitte neu laden.');
 
   await audit.updated({
     organizationId: params.organizationId,
     userId: params.actorId,
     entity: 'Payslip',
-    summary: `${treffer.count} Lohnabrechnung(en) veröffentlicht`,
-    changes: { payslipIds: offen },
+    entityId: abrechnung.id,
+    summary: `Prüfung der Lohnabrechnung ${String(abrechnung.month).padStart(2, '0')}/${abrechnung.year} freigegeben`,
     ip: params.ip,
   });
+  return { id: abrechnung.id, reviewResolved: true };
+}
 
-  return { veroeffentlicht: treffer.count, uebersprungen: vorhanden.length - treffer.count };
+// ---------------------------------------------------------------------------
+//  Veröffentlichen
+// ---------------------------------------------------------------------------
+
+export interface VeroeffentlichungsErgebnis {
+  veroeffentlicht: number;
+  uebersprungen: number;
+  gruende: { payslipId: string; grund: string }[];
+}
+
+/**
+ * Abrechnungen veröffentlichen.
+ *
+ * Damit werden sie für die angestellte Person sichtbar und **unveränderlich**
+ * — dieselbe Schwelle wie beim Ausstellen einer Rechnung. Ein `unpublish`
+ * gibt es bewusst nicht.
+ *
+ * **Das PDF entsteht hier, einmal.** Aus den Zeilen der Abrechnung gerendert,
+ * abgelegt (Bereich `PAYROLL`, nicht öffentlich) und mit Prüfsumme an die
+ * Abrechnung gehängt — im selben bedingten Schreiben, das veröffentlicht.
+ * Beim Herunterladen wird nichts neu gerechnet.
+ *
+ * **Die Bedingung enthält `updatedAt`.** Ein Nachlauf zwischen dem Lesen der
+ * Zeilen und dem Veröffentlichen hätte sonst ein PDF der alten Zeilen an eine
+ * Abrechnung mit neuen Zeilen gehängt.
+ */
+export async function publishPayslips(params: {
+  organizationId: string;
+  payslipIds: string[];
+  actorId: string;
+  trotzUngepruefterSaetze?: boolean;
+  ip?: string | null;
+}): Promise<VeroeffentlichungsErgebnis> {
+  const kandidaten = await prisma.payslip.findMany({
+    where: { id: { in: params.payslipIds }, employee: { organizationId: params.organizationId } },
+    include: {
+      lines: { orderBy: { position: 'asc' } },
+      employee: {
+        select: {
+          employeeNumber: true,
+          street: true,
+          postalCode: true,
+          city: true,
+          user: { select: { firstName: true, lastName: true } },
+        },
+      },
+    },
+  });
+
+  const offen = kandidaten.filter((k) => !k.published);
+  const ungeprueft = offen.filter((k) => k.unverifiedRates);
+  if (ungeprueft.length > 0 && !params.trotzUngepruefterSaetze) {
+    throw new BusinessRuleError(
+      `${ungeprueft.length} Abrechnung(en) wurden mit ungeprüften Beitragssätzen gerechnet. ` +
+        'Sätze fachlich bestätigen und neu rechnen — oder das Veröffentlichen ausdrücklich bestätigen.',
+    );
+  }
+
+  const gruende: { payslipId: string; grund: string }[] = kandidaten
+    .filter((k) => k.published)
+    .map((k) => ({ payslipId: k.id, grund: 'Bereits veröffentlicht.' }));
+  let veroeffentlicht = 0;
+
+  for (const k of offen) {
+    if (k.reviewRequired && !k.reviewResolvedAt) {
+      gruende.push({ payslipId: k.id, grund: `Prüfung ausstehend: ${k.reviewReason ?? 'ohne Begründung'}` });
+      continue;
+    }
+    if (k.lines.length === 0) {
+      gruende.push({ payslipId: k.id, grund: 'Die Abrechnung hat keine Zeilen — bitte den Monat neu rechnen.' });
+      continue;
+    }
+
+    const jetzt = new Date();
+    const bytes = await renderPayslipPdf(params.organizationId, {
+      person: {
+        name: `${k.employee.user.firstName} ${k.employee.user.lastName}`,
+        employeeNumber: k.employee.employeeNumber,
+        street: k.employee.street,
+        postalCode: k.employee.postalCode,
+        city: k.employee.city,
+      },
+      year: k.year,
+      month: k.month,
+      publishedAt: jetzt,
+      lines: k.lines.map((z) => ({
+        kind: z.kind,
+        label: z.label,
+        quantity: z.quantity === null ? null : toNumber(z.quantity),
+        rate: z.rate === null ? null : toNumber(z.rate),
+        amount: toNumber(z.amount),
+      })),
+      grossPay: toNumber(k.grossPay),
+      netPay: toNumber(k.netPay),
+      hours: toNumber(k.hours),
+      unverifiedRates: k.unverifiedRates,
+    });
+    const { assetId, checksum } = await lohnPdfAblegen({
+      organizationId: params.organizationId,
+      path: `${params.organizationId}/payroll/payslips/${k.id}.pdf`,
+      filename: `Lohnabrechnung-${k.year}-${String(k.month).padStart(2, '0')}-${k.employee.employeeNumber}.pdf`,
+      bytes,
+    });
+
+    const treffer = await prisma.payslip.updateMany({
+      where: { id: k.id, published: false, updatedAt: k.updatedAt },
+      data: { published: true, publishedAt: jetzt, pdfFileId: assetId, pdfChecksum: checksum },
+    });
+    if (treffer.count === 0) {
+      gruende.push({ payslipId: k.id, grund: 'Die Abrechnung hat sich während des Veröffentlichens geändert — bitte erneut versuchen.' });
+      continue;
+    }
+    veroeffentlicht += 1;
+  }
+
+  if (veroeffentlicht > 0) {
+    await audit.updated({
+      organizationId: params.organizationId,
+      userId: params.actorId,
+      entity: 'Payslip',
+      summary:
+        `${veroeffentlicht} Lohnabrechnung(en) veröffentlicht` +
+        (ungeprueft.length > 0 ? ' — mit ausdrücklicher Bestätigung ungeprüfter Sätze' : ''),
+      changes: { payslipIds: offen.map((k) => k.id) },
+      ip: params.ip,
+    });
+  }
+
+  return { veroeffentlicht, uebersprungen: kandidaten.length - veroeffentlicht, gruende };
+}
+
+/**
+ * Ein erzeugtes Lohndokument ablegen und als privates `FileAsset` im Bereich
+ * `PAYROLL` registrieren — dasselbe Muster wie die Signaturartefakte.
+ *
+ * `uploadedById` bleibt leer: Wer ein Asset „hochgeladen" hat, darf es über
+ * den allgemeinen Dateiweg lesen. Hier hat niemand hochgeladen; der Zugriff
+ * entscheidet sich allein an `payslip:read_all` bzw. an der eigenen Abrechnung.
+ */
+export async function lohnPdfAblegen(p: {
+  organizationId: string;
+  path: string;
+  filename: string;
+  bytes: Buffer;
+}): Promise<{ assetId: string; checksum: string }> {
+  const stored = await uploadBuffer({
+    organizationId: p.organizationId,
+    path: p.path,
+    content: p.bytes,
+    contentType: 'application/pdf',
+    upsert: true,
+  });
+  const checksum = stored.checksum ?? sha256Hex(p.bytes);
+  const vorhanden = await prisma.fileAsset.findFirst({
+    where: { organizationId: p.organizationId, path: p.path, scope: 'PAYROLL' },
+    select: { id: true },
+  });
+  if (vorhanden) {
+    await prisma.fileAsset.update({
+      where: { id: vorhanden.id },
+      data: { url: stored.publicUrl, sizeBytes: p.bytes.byteLength, checksum, storedFileId: stored.storedFileId ?? null },
+    });
+    return { assetId: vorhanden.id, checksum };
+  }
+  const asset = await prisma.fileAsset.create({
+    data: {
+      organizationId: p.organizationId,
+      scope: 'PAYROLL',
+      path: p.path,
+      url: stored.publicUrl,
+      filename: p.filename,
+      mimeType: 'application/pdf',
+      sizeBytes: p.bytes.byteLength,
+      checksum,
+      isPublic: false,
+      storedFileId: stored.storedFileId ?? null,
+      uploadedById: null,
+      // Aus dem eigenen Renderer und eigenen Daten — kein fremder Inhalt.
+      provenance: 'SYSTEM_GENERATED',
+    },
+    select: { id: true },
+  });
+  return { assetId: asset.id, checksum };
+}
+
+/** Die gespeicherten Bytes eines Lohndokuments — mit Prüfsummenvergleich. */
+export async function lohnPdfLesen(organizationId: string, assetId: string, erwartet: string | null): Promise<Buffer> {
+  const asset = await prisma.fileAsset.findFirst({
+    where: { id: assetId, organizationId, scope: 'PAYROLL' },
+    select: { url: true, storedFile: { select: { id: true, path: true, driver: true } } },
+  });
+  if (!asset) throw new NotFoundError('Dokument');
+  let bytes: Buffer | null = null;
+  if (asset.storedFile) bytes = await readStoredBytes(asset.storedFile);
+  else {
+    const treffer = /^\/api\/files\/blob\/([A-Za-z0-9_-]+)$/.exec(asset.url);
+    bytes = treffer ? await readLocalBytes(treffer[1]!) : null;
+  }
+  if (!bytes) throw new NotFoundError('Dokument');
+  /**
+   * Weicht die Prüfsumme ab, wird **nicht** ausgeliefert. Eine veränderte
+   * Lohnabrechnung, die ausgeliefert wird, als wäre sie die veröffentlichte,
+   * ist schlimmer als ein Fehler, der gemeldet wird.
+   */
+  if (erwartet && sha256Hex(bytes) !== erwartet) {
+    log.error('Prüfsumme eines Lohndokuments weicht ab', { assetId });
+    throw new BusinessRuleError('Das gespeicherte Dokument stimmt nicht mit der veröffentlichten Fassung überein.');
+  }
+  return bytes;
+}
+
+/**
+ * Das PDF einer veröffentlichten Abrechnung. Wer nur die eigenen sehen darf,
+ * übergibt `employeeId`; die Bedingung steht in der Abfrage.
+ */
+export async function getPayslipPdf(params: {
+  organizationId: string;
+  payslipId: string;
+  employeeId?: string;
+  actorId: string;
+  ip?: string | null;
+}): Promise<{ bytes: Buffer; filename: string }> {
+  const abrechnung = await prisma.payslip.findFirst({
+    where: {
+      id: params.payslipId,
+      published: true,
+      employee: { organizationId: params.organizationId, ...(params.employeeId ? { id: params.employeeId } : {}) },
+    },
+    select: { id: true, year: true, month: true, pdfFileId: true, pdfChecksum: true, employee: { select: { employeeNumber: true } } },
+  });
+  if (!abrechnung || !abrechnung.pdfFileId) throw new NotFoundError('Lohnabrechnung');
+  const bytes = await lohnPdfLesen(params.organizationId, abrechnung.pdfFileId, abrechnung.pdfChecksum);
+  await audit.exported({
+    organizationId: params.organizationId,
+    userId: params.actorId,
+    entity: 'Payslip',
+    entityId: abrechnung.id,
+    summary: `Lohnabrechnung ${String(abrechnung.month).padStart(2, '0')}/${abrechnung.year} als PDF abgerufen`,
+    ip: params.ip,
+  });
+  return {
+    bytes,
+    filename: `Lohnabrechnung-${abrechnung.year}-${String(abrechnung.month).padStart(2, '0')}-${abrechnung.employee.employeeNumber}.pdf`,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -724,35 +1103,41 @@ export async function listPayslips(params: {
         uvg: true,
         ktg: true,
         otherDeductions: true,
+        withholdingTax: true,
+        expenses: true,
+        employerContributions: true,
         netPay: true,
         basis: true,
         published: true,
         publishedAt: true,
+        unverifiedRates: true,
+        reviewRequired: true,
+        reviewReason: true,
+        reviewResolvedAt: true,
+        pdfFileId: true,
         employee: {
-          select: {
-            id: true,
-            employeeNumber: true,
-            user: { select: { firstName: true, lastName: true } },
-          },
+          select: { id: true, employeeNumber: true, user: { select: { firstName: true, lastName: true } } },
         },
       },
     }),
-    prisma.payslip.aggregate({ where, _sum: { grossPay: true, netPay: true } }),
+    prisma.payslip.aggregate({ where, _sum: { grossPay: true, netPay: true, employerContributions: true } }),
   ]);
 
   return {
     eintraege,
     summeBrutto: toNumber(summe._sum.grossPay),
     summeNetto: toNumber(summe._sum.netPay),
+    summeArbeitgeber: toNumber(summe._sum.employerContributions),
   };
 }
 
 /**
- * Eine einzelne Abrechnung samt Herleitung.
+ * Eine einzelne Abrechnung samt Zeilen und Herleitung.
  *
- * Die Herleitung ist der Grund, warum es diesen Endpunkt gibt: Eine
- * Lohnabrechnung, bei der sich der BVG-Abzug nicht nachrechnen lässt, erzeugt
- * genau eine Rückfrage je Monat und je Person.
+ * Wer die eigene Abrechnung liest, sieht nur veröffentlichte. Eine
+ * unveröffentlichte ist ein Entwurf — sie kann sich noch ändern, und eine
+ * Zahl, die sich ändert, nachdem sie jemand gesehen hat, ist schlimmer als
+ * keine Zahl.
  */
 export async function getPayslip(params: {
   organizationId: string;
@@ -767,21 +1152,12 @@ export async function getPayslip(params: {
         organizationId: params.organizationId,
         ...(params.employeeId ? { id: params.employeeId } : {}),
       },
-      /**
-       * Wer die eigene Abrechnung liest, sieht nur veröffentlichte. Eine
-       * unveröffentlichte ist ein Entwurf — sie kann sich noch ändern, und
-       * eine Zahl, die sich ändert, nachdem sie jemand gesehen hat, ist
-       * schlimmer als keine Zahl.
-       */
       ...(params.employeeId ? { published: true } : {}),
     },
     include: {
+      lines: { orderBy: { position: 'asc' } },
       employee: {
-        select: {
-          id: true,
-          employeeNumber: true,
-          user: { select: { firstName: true, lastName: true } },
-        },
+        select: { id: true, employeeNumber: true, user: { select: { firstName: true, lastName: true } } },
       },
     },
   });

@@ -142,7 +142,26 @@ const ENTITAET_FELDER: Readonly<Record<string, ReadonlySet<string>>> = {
     'otherdeductions',
     'netpay',
     'breakdown',
+    'expenses',
+    'employercontributions',
+    'reviewreason',
+    'reviewnote',
   ]),
+  /**
+   * Lohnpositionen (Wave 9): Betrag, Stunden, Ansatz — und die Bezeichnung,
+   * weil dort „Lohnpfändung Betreibungsamt …" oder „Vorschuss Zahnarzt"
+   * stehen kann.
+   */
+  PayrollItem: new Set(['amount', 'quantity', 'rate', 'surchargepct', 'label', 'note']),
+  PayslipLine: new Set(['amount', 'quantity', 'rate', 'label']),
+  /**
+   * Quellensteuerprofil: Konfession (Kirchensteuer) ist ein besonders
+   * schützenswertes Personendatum (Art. 5 DSG), Kinderzahl und Tarif lassen
+   * auf Zivilstand und Familie schliessen.
+   */
+  WithholdingTaxProfile: new Set(['canton', 'tariffcode', 'churchtax', 'children', 'note']),
+  EmployeePayrollProfile: new Set(['holidaypaypct', 'thirteenthmode', 'note']),
+  SalaryCertificate: new Set(['fields']),
   SalaryRecord: new Set(['hourlyrate', 'workloadpct', 'reason']),
   TimeEntry: new Set(['hourlyrate']),
 };

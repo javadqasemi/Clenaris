@@ -5,6 +5,8 @@ import { getOrganizationId } from '@/server/services/organization.service';
 import { publishPayslips } from '@/server/services/payroll.service';
 
 export const runtime = 'nodejs';
+// Je Abrechnung ein PDF — ein ganzer Monat braucht mehr als die üblichen Sekunden.
+export const maxDuration = 120;
 
 /**
  * POST /api/payroll/publish — Abrechnungen veröffentlichen.
@@ -21,6 +23,12 @@ export const runtime = 'nodejs';
  * Eigene Berechtigung (`payslip:publish`), nicht `payslip:create`: Erstellen
  * ist ein Rechenlauf, den man wiederholen kann. Veröffentlichen ist
  * endgültig.
+ *
+ * Seit dem Ausbau vom 2026-09-23: Beim Veröffentlichen entsteht das PDF
+ * (einmal, gespeichert, mit Prüfsumme). Abrechnungen mit offener Prüfung
+ * werden übersprungen und mit Grund gemeldet. Mit ungeprüften
+ * Beitragssätzen wird nur veröffentlicht, wenn `trotzUngepruefterSaetze`
+ * ausdrücklich gesetzt ist — sonst 422.
  */
 export const POST = defineRoute({
   permissions: ['payslip:publish'],
@@ -31,6 +39,7 @@ export const POST = defineRoute({
       await publishPayslips({
         organizationId: await getOrganizationId(),
         payslipIds: body.payslipIds,
+        trotzUngepruefterSaetze: body.trotzUngepruefterSaetze,
         actorId: session.id,
         ip,
       }),

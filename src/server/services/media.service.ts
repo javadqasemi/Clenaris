@@ -42,10 +42,33 @@ export interface MediaFilter {
   pageSize: number;
 }
 
+/**
+ * Bereiche, deren Dateien die Mediathek nicht anfasst.
+ *
+ * Signaturartefakte und Lohndokumente sind **Belege mit Prüfsumme**: Die
+ * Abrechnung bzw. der Signaturvorgang zeigt auf genau diese Bytes. Sie in der
+ * Mediathek zu löschen hinterliesse eine veröffentlichte Lohnabrechnung ohne
+ * PDF; sie umzuordnen (`PAYROLL` → `GALLERY`) hätte den Zugriff von
+ * `payslip:read_all` auf `media:read` gelockert — und die Betriebsleitung
+ * hält `media:read`, aber bewusst keinen Lohneinblick. Aufgefallen beim
+ * Einführen des Bereichs `PAYROLL` (Wave 9, 2026-09-23); `SIGNATURE` hatte
+ * dieselbe Lücke seit Gate 4B.
+ */
+export const GESCHUETZTE_BEREICHE: readonly FileScope[] = ['SIGNATURE', 'PAYROLL'];
+
 export async function listMedia(filter: MediaFilter) {
   const where: Prisma.FileAssetWhereInput = {
     organizationId: filter.organizationId,
-    ...(filter.scope ? { scope: filter.scope } : {}),
+    /**
+     * Lohndokumente erscheinen gar nicht: Schon der Dateiname
+     * („Lohnabrechnung-2026-03-M0012.pdf") verrät, wer in welchem Monat
+     * abgerechnet wurde. Sie sind über die Lohnverwaltung erreichbar.
+     */
+    ...(filter.scope === 'PAYROLL'
+      ? { scope: { in: [] } }
+      : filter.scope
+        ? { scope: filter.scope }
+        : { scope: { not: 'PAYROLL' } }),
     ...(filter.imagesOnly ? { mimeType: { startsWith: 'image/' } } : {}),
     ...(filter.q ? { filename: { contains: filter.q, mode: 'insensitive' } } : {}),
   };
@@ -127,7 +150,10 @@ export async function deleteMedia({
   force?: boolean;
 }) {
   const file = await prisma.fileAsset.findFirst({ where: { id: fileId, organizationId } });
-  if (!file) throw new NotFoundError('Datei');
+  if (!file || file.scope === 'PAYROLL') throw new NotFoundError('Datei');
+  if (GESCHUETZTE_BEREICHE.includes(file.scope)) {
+    throw new BusinessRuleError('Signaturbelege werden nicht über die Mediathek gelöscht — sie sind Teil eines abgeschlossenen Vorgangs.');
+  }
 
   const links = attachmentsOf(file);
   if (links.length > 0 && !force) {
@@ -186,7 +212,10 @@ export async function updateMedia({
   scope?: FileScope;
 }) {
   const before = await prisma.fileAsset.findFirst({ where: { id: fileId, organizationId } });
-  if (!before) throw new NotFoundError('Datei');
+  if (!before || before.scope === 'PAYROLL') throw new NotFoundError('Datei');
+  if (GESCHUETZTE_BEREICHE.includes(before.scope) || (scope !== undefined && GESCHUETZTE_BEREICHE.includes(scope))) {
+    throw new BusinessRuleError('Signatur- und Lohnbelege lassen sich in der Mediathek weder umbenennen noch umordnen.');
+  }
 
   const file = await prisma.fileAsset.update({
     where: { id: fileId },

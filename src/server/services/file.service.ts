@@ -823,6 +823,17 @@ async function darfLesen(
     case 'ARTICLE':
     case 'MEETING':
       return can(rolle, 'document:read');
+    case 'PAYROLL':
+      /**
+       * Lohnabrechnungen und Lohnausweise. Über den allgemeinen Dateiweg nur
+       * mit Einsicht in **alle** Abrechnungen — ohne diesen Fall wäre die
+       * Datei unter `default` mit `media:read` gelandet, und das hält auch die
+       * Betriebsleitung, die bewusst keinen Lohneinblick hat. Die eigene
+       * Abrechnung holt die angestellte Person über
+       * `/api/payroll/payslips/:id/pdf`, wo die Eigentümerschaft in der
+       * Abfrage steht.
+       */
+      return can(rolle, 'payslip:read_all');
     case 'BLOG':
     case 'GALLERY':
       // Diese beiden sind öffentlich, wenn sie öffentlich sein sollen. Steht

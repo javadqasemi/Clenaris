@@ -21,6 +21,12 @@ import {
   type PdfRecipient,
   type QrSlipData,
 } from './documents';
+import {
+  PayslipDocument,
+  SalaryCertificateDocument,
+  type PayslipPdfProps,
+  type SalaryCertificatePdfProps,
+} from './payroll-documents';
 import { isQrIban, renderQrCode, splitStreet } from './swiss-qr';
 import {
   ABRECHNUNGSZYKLUS,
@@ -126,6 +132,34 @@ export async function renderEvidencePdf(
   const company = await loadCompany(organizationId);
   return Buffer.from(
     await renderToBuffer(React.createElement(EvidenceDocument, { ...props, company }) as never),
+  );
+}
+
+// ---------------------------------------------------------------------------
+//  Lohnabrechnung und Lohnausweis-Aufstellung
+// ---------------------------------------------------------------------------
+
+/**
+ * Wie beim Signaturprotokoll: ohne eigenen Datenbankzugriff auf die
+ * Abrechnung. Der Lohndienst übergibt die eingefrorenen Zeilen; hier wird nur
+ * gesetzt. Aufgerufen wird genau einmal, beim Veröffentlichen bzw.
+ * Abschliessen — ausgeliefert werden danach die gespeicherten Bytes.
+ */
+export async function renderPayslipPdf(
+  organizationId: string,
+  props: Omit<PayslipPdfProps, 'company'>,
+): Promise<Buffer> {
+  const company = await loadCompany(organizationId);
+  return Buffer.from(await renderToBuffer(React.createElement(PayslipDocument, { ...props, company }) as never));
+}
+
+export async function renderSalaryCertificatePdf(
+  organizationId: string,
+  props: Omit<SalaryCertificatePdfProps, 'company'>,
+): Promise<Buffer> {
+  const company = await loadCompany(organizationId);
+  return Buffer.from(
+    await renderToBuffer(React.createElement(SalaryCertificateDocument, { ...props, company }) as never),
   );
 }
 

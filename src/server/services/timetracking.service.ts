@@ -8,6 +8,8 @@ import { prisma, toNumber, type Tx } from '@/lib/db';
 import { BusinessRuleError, NotFoundError } from '@/lib/errors';
 import { round2 } from '@/lib/utils';
 
+import { markiereMonateVeraltet } from './payroll-veraltet';
+
 /**
  * Zeiterfassung — ansehen, korrigieren, freigeben.
  *
@@ -560,6 +562,17 @@ export async function approveTimeEntries(params: {
     data: { approved: true, approvedById: params.actorId },
   });
 
+  // Eine späte Freigabe in einem berechneten, noch offenen Monat ändert dessen Stundenlohn.
+  await markiereMonateVeraltet(
+    eintraege
+      .filter((e) => geeignet.includes(e.id))
+      .map((e) => {
+        const p = zurichParts(e.startedAt);
+        return { employeeId: e.employeeId, year: p.year, month: p.month };
+      }),
+    'Zeiten freigegeben',
+  );
+
   await audit.updated({
     organizationId: params.organizationId,
     userId: params.actorId,
@@ -599,6 +612,8 @@ export async function reopenTimeEntry(params: {
     where: { id: eintrag.id },
     data: { approved: false, approvedById: null },
   });
+  const teile = zurichParts(eintrag.startedAt);
+  await markiereMonateVeraltet([{ employeeId: eintrag.employeeId, year: teile.year, month: teile.month }], 'Freigabe aufgehoben');
 
   await audit.updated({
     organizationId: params.organizationId,

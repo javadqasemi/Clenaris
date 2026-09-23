@@ -3017,10 +3017,13 @@ export const ROUTES: RouteDoc[] = [
       'beim Ausstellen einer Rechnung. **Es gibt kein Zurücknehmen:** Eine Abrechnung, die ' +
       'wieder verschwindet, ist schlimmer als eine falsche, die korrigiert wird. Korrekturen ' +
       'laufen über die Abrechnung des Folgemonats. Eigene Berechtigung, weil Erstellen ein ' +
-      'wiederholbarer Rechenlauf ist und Veröffentlichen endgültig.',
+      'wiederholbarer Rechenlauf ist und Veröffentlichen endgültig. Erzeugt je Abrechnung das PDF ' +
+      '(einmal, mit Prüfsumme). Offene Prüfungen werden übersprungen und gemeldet; mit ungeprüften ' +
+      'Sätzen nur mit `trotzUngepruefterSaetze: true`, sonst 422.',
     guard: perm('all', 'payslip:publish'),
     rateLimit: 'apiWrite',
     body: payroll.payrollPublishSchema,
+    extraErrors: [422],
   },
   {
     method: 'get',
@@ -3053,31 +3056,282 @@ export const ROUTES: RouteDoc[] = [
   },
   {
     method: 'get',
-    path: '/api/payroll/settings',
+    path: '/api/payroll/payslips/{id}/pdf',
     tag: 'Personal',
-    summary: 'Beitragssätze eines Jahres',
+    summary: 'Abrechnung als PDF',
     description:
-      'Legt sie an, wenn es sie noch nicht gibt — mit den gesetzlichen Vorgaben und, sofern ' +
-      'vorhanden, den betriebsabhängigen Sätzen des Vorjahres.',
+      'Das beim Veröffentlichen erzeugte PDF — gespeicherte Bytes nach Prüfsummenvergleich, nichts ' +
+      'wird neu gerechnet. Mit `payslip:read_own` nur die eigene veröffentlichte Abrechnung ' +
+      '(Bedingung in der Abfrage). Jeder Abruf wird protokolliert.',
+    guard: perm('any', 'payslip:read_own', 'payslip:read_all'),
+    rateLimit: 'apiRead',
+    params: q.idParam,
+    produces: 'application/pdf',
+  },
+  {
+    method: 'post',
+    path: '/api/payroll/payslips/{id}/review',
+    tag: 'Personal',
+    summary: 'Prüfung einer Abrechnung freigeben',
+    description:
+      'Für Abrechnungen mit `reviewRequired` (etwa Quellensteuer ohne Tarif). Notiz ist Pflicht. ' +
+      'Eine veraltete Abrechnung (Grundlagen seit der Berechnung geändert) wird nicht freigegeben, ' +
+      'sondern neu gerechnet (422).',
+    guard: perm('all', 'payslip:publish'),
+    rateLimit: 'apiWrite',
+    params: q.idParam,
+    body: payroll.payslipReviewSchema,
+    extraErrors: [422],
+  },
+  {
+    method: 'get',
+    path: '/api/payroll/rates',
+    tag: 'Personal',
+    summary: 'Satzversionen der Sozialbeiträge',
+    description:
+      'Je Beitragsart Versionen mit Gültigkeit, Arbeitnehmer- und Arbeitgeberanteil, Schwellen, ' +
+      'Herkunft (`source`, `reference`) und Prüfstand. `benutzt: true` heisst: in eine ' +
+      'veröffentlichte Abrechnung eingeflossen und damit unveränderlich. Ersetzt ' +
+      '`/api/payroll/settings`.',
     guard: perm('all', 'payslip:create'),
     rateLimit: 'apiRead',
-    query: q.payrollYearQuery,
+    query: payroll.payrollRateQuerySchema,
+  },
+  {
+    method: 'post',
+    path: '/api/payroll/rates',
+    tag: 'Personal',
+    summary: 'Neue Satzversion',
+    description:
+      'Die Vorgängerin wird am Vortag geschlossen, aber nie so, dass ein veröffentlichter Monat ' +
+      'seine Version verlöre. `source` ist Pflicht; eine neue Version ist ungeprüft. BVG: ' +
+      'Arbeitnehmeranteil höchstens 50 % (Art. 66 BVG), Schwellen und Altersbänder in `parameters`.',
+    guard: perm('all', 'payslip:publish'),
+    rateLimit: 'apiWrite',
+    body: payroll.payrollRateCreateSchema,
+    extraErrors: [422],
   },
   {
     method: 'patch',
-    path: '/api/payroll/settings',
+    path: '/api/payroll/rates/{id}',
     tag: 'Personal',
-    summary: 'Beitragssätze pflegen',
+    summary: 'Satzversion ändern',
     description:
-      'Wer hier eine Zahl ändert, ändert den Nettolohn **aller** Mitarbeitenden für ein ganzes ' +
-      'Jahr — deshalb eine eigene Berechtigung. `bvgAnteilArbeitnehmer` ist auf 50 % gedeckelt: ' +
-      'Gesetzlich trägt der Betrieb mindestens die Hälfte der Altersgutschrift (Art. 66 BVG). ' +
-      'Alte Jahre bleiben unberührt — eine Korrektur für 2025 muss mit den Sätzen von 2025 ' +
-      'rechnen.',
+      'Nur solange keine veröffentlichte Abrechnung mit ihr gerechnet wurde (sonst 422; die ' +
+      'Datenbank verweigert es ebenfalls). Setzt den Prüfstand zurück und markiert berechnete, ' +
+      'unveröffentlichte Abrechnungen als veraltet.',
     guard: perm('all', 'payslip:publish'),
     rateLimit: 'apiWrite',
-    query: q.payrollYearQuery,
-    body: payroll.payrollSettingsSchema,
+    params: payroll.payrollIdParam,
+    body: payroll.payrollRateUpdateSchema,
+    extraErrors: [422],
+  },
+  {
+    method: 'post',
+    path: '/api/payroll/rates/{id}/verify',
+    tag: 'Personal',
+    summary: 'Satzversion als geprüft bestätigen',
+    description:
+      'Vermerk, wer bestätigt hat und worauf gestützt. Eine Aussage der bestätigenden Person — ' +
+      'das System prüft keinen Satz gegen eine amtliche Quelle.',
+    guard: perm('all', 'payslip:publish'),
+    rateLimit: 'apiWrite',
+    params: payroll.payrollIdParam,
+    body: payroll.payrollRateVerifySchema,
+  },
+  {
+    method: 'get',
+    path: '/api/payroll/profiles/{employeeId}',
+    tag: 'Personal',
+    summary: 'Lohnvereinbarungen einer Person',
+    description:
+      '13. Monatslohn (keiner, jährlich, anteilig, monatlich), Ferien- und Feiertagsentschädigung. ' +
+      'Ohne Eintrag: nichts vereinbart erfasst — keine Aussage über die Rechtslage.',
+    guard: perm('all', 'payslip:create'),
+    rateLimit: 'apiRead',
+    params: payroll.payrollEmployeeParam,
+  },
+  {
+    method: 'put',
+    path: '/api/payroll/profiles/{employeeId}',
+    tag: 'Personal',
+    summary: 'Lohnvereinbarungen setzen',
+    description: 'Ganzheitlich. Berechnete, unveröffentlichte Abrechnungen der Person werden als veraltet markiert.',
+    guard: perm('all', 'payslip:create'),
+    rateLimit: 'apiWrite',
+    params: payroll.payrollEmployeeParam,
+    body: payroll.payrollProfileSchema,
+  },
+  {
+    method: 'get',
+    path: '/api/payroll/items',
+    tag: 'Personal',
+    summary: 'Lohnpositionen',
+    description: 'Überstunden, Zulagen, Familienzulagen, Spesen, Korrekturen, Abzüge und Quellensteuer von Hand.',
+    guard: perm('all', 'payslip:create'),
+    rateLimit: 'apiRead',
+    query: payroll.payrollItemQuerySchema,
+  },
+  {
+    method: 'post',
+    path: '/api/payroll/items',
+    tag: 'Personal',
+    summary: 'Lohnposition erfassen',
+    description:
+      'Überstunden: Betrag rechnet der Server (Stunden × Ansatz × Zuschlag). Nur Korrekturen dürfen ' +
+      'negativ sein. Nicht in einen veröffentlichten Monat (422) — eine Korrektur gehört in einen ' +
+      'offenen Monat und verweist auf die korrigierte Abrechnung.',
+    guard: perm('all', 'payslip:create'),
+    rateLimit: 'apiWrite',
+    body: payroll.payrollItemCreateSchema,
+    extraErrors: [422],
+  },
+  {
+    method: 'patch',
+    path: '/api/payroll/items/{id}',
+    tag: 'Personal',
+    summary: 'Lohnposition ändern',
+    description: 'Nur solange sie in keine veröffentlichte Abrechnung eingeflossen ist.',
+    guard: perm('all', 'payslip:create'),
+    rateLimit: 'apiWrite',
+    params: payroll.payrollIdParam,
+    body: payroll.payrollItemUpdateSchema,
+    extraErrors: [422],
+  },
+  {
+    method: 'delete',
+    path: '/api/payroll/items/{id}',
+    tag: 'Personal',
+    summary: 'Lohnposition entfernen',
+    description: 'Ausblenden (`deletedAt`), nur solange nicht veröffentlicht.',
+    guard: perm('all', 'payslip:create'),
+    rateLimit: 'apiWrite',
+    params: payroll.payrollIdParam,
+    extraErrors: [422],
+  },
+  {
+    method: 'get',
+    path: '/api/payroll/withholding/profiles',
+    tag: 'Personal',
+    summary: 'Quellensteuerprofile',
+    description: 'Kanton, Tarifcode, Kirchensteuer, Kinder — mit Gültigkeit. Im Prüfprotokoll geschwärzt.',
+    guard: perm('all', 'payslip:create'),
+    rateLimit: 'apiRead',
+    query: payroll.withholdingProfileQuerySchema,
+  },
+  {
+    method: 'post',
+    path: '/api/payroll/withholding/profiles',
+    tag: 'Personal',
+    summary: 'Quellensteuerprofil erfassen',
+    description: 'Überschneidungen je Person verweigert die Datenbank (422).',
+    guard: perm('all', 'payslip:create'),
+    rateLimit: 'apiWrite',
+    body: payroll.withholdingProfileCreateSchema,
+    extraErrors: [422],
+  },
+  {
+    method: 'patch',
+    path: '/api/payroll/withholding/profiles/{id}',
+    tag: 'Personal',
+    summary: 'Quellensteuerprofil ändern',
+    description:
+      'Mit veröffentlichter Abrechnung im Zeitraum nur Ende und Notiz — ein Tarifwechsel ist ein ' +
+      'neues Profil ab dem Wechseltag.',
+    guard: perm('all', 'payslip:create'),
+    rateLimit: 'apiWrite',
+    params: payroll.payrollIdParam,
+    body: payroll.withholdingProfileUpdateSchema,
+    extraErrors: [422],
+  },
+  {
+    method: 'delete',
+    path: '/api/payroll/withholding/profiles/{id}',
+    tag: 'Personal',
+    summary: 'Quellensteuerprofil entfernen',
+    description: 'Nur ohne veröffentlichte Abrechnung im Zeitraum; sonst beenden statt löschen.',
+    guard: perm('all', 'payslip:create'),
+    rateLimit: 'apiWrite',
+    params: payroll.payrollIdParam,
+    extraErrors: [422],
+  },
+  {
+    method: 'get',
+    path: '/api/payroll/withholding/rates',
+    tag: 'Personal',
+    summary: 'Eingelesene Quellensteuertarife',
+    description: 'Tarifzeilen und Importstapel mit Quelle und Prüfstand.',
+    guard: perm('all', 'payslip:create'),
+    rateLimit: 'apiRead',
+    query: payroll.withholdingRateQuerySchema,
+  },
+  {
+    method: 'post',
+    path: '/api/payroll/withholding/rates',
+    tag: 'Personal',
+    summary: 'Quellensteuertarif einlesen',
+    description:
+      'Clenaris liefert keine Tarife mit. Zeilen aus der Datei der kantonalen Steuerverwaltung, ' +
+      '`source` Pflicht, eingelesen ungeprüft; bestehende Stufen werden nicht überschrieben (422).',
+    guard: perm('all', 'payslip:publish'),
+    rateLimit: 'apiWrite',
+    body: payroll.withholdingRateImportSchema,
+    extraErrors: [422],
+  },
+  {
+    method: 'post',
+    path: '/api/payroll/withholding/rates/verify',
+    tag: 'Personal',
+    summary: 'Tarifstapel als geprüft bestätigen',
+    description: 'Abgleich mit der Quelle, mit Vermerk.',
+    guard: perm('all', 'payslip:publish'),
+    rateLimit: 'apiWrite',
+    body: payroll.withholdingRateVerifySchema,
+  },
+  {
+    method: 'get',
+    path: '/api/payroll/certificates',
+    tag: 'Personal',
+    summary: 'Lohnausweis-Aufstellungen',
+    description:
+      'Verdichtung veröffentlichter Abrechnungen auf die Ziffern des Lohnausweises — **nicht** das ' +
+      'amtliche Formular 11. Mit `payslip:read_own` nur die eigenen abgeschlossenen.',
+    guard: perm('any', 'payslip:read_own', 'payslip:read_all'),
+    rateLimit: 'apiRead',
+    query: payroll.salaryCertificateQuerySchema,
+  },
+  {
+    method: 'post',
+    path: '/api/payroll/certificates',
+    tag: 'Personal',
+    summary: 'Lohnausweis-Aufstellung verdichten',
+    description: 'Erstellt oder erneuert den Entwurf eines Jahres. Ohne veröffentlichte Abrechnung 422.',
+    guard: perm('all', 'payslip:create'),
+    rateLimit: 'apiWrite',
+    body: payroll.salaryCertificateCreateSchema,
+    extraErrors: [422],
+  },
+  {
+    method: 'post',
+    path: '/api/payroll/certificates/{id}/finalize',
+    tag: 'Personal',
+    summary: 'Lohnausweis-Aufstellung abschliessen',
+    description: 'PDF erzeugen, ablegen, unveränderlich machen. Eine Korrektur danach ist eine neue Version.',
+    guard: perm('all', 'payslip:publish'),
+    rateLimit: 'apiWrite',
+    params: payroll.payrollIdParam,
+    extraErrors: [422],
+  },
+  {
+    method: 'get',
+    path: '/api/payroll/certificates/{id}/pdf',
+    tag: 'Personal',
+    summary: 'Lohnausweis-Aufstellung als PDF',
+    description: 'Gespeicherte Bytes mit Prüfsummenvergleich; für die eigene Person nur der eigene, abgeschlossene.',
+    guard: perm('any', 'payslip:read_own', 'payslip:read_all'),
+    rateLimit: 'apiRead',
+    params: payroll.payrollIdParam,
+    produces: 'application/pdf',
   },
   {
     method: 'get',

@@ -16,6 +16,7 @@ import type {
 import { nextNumber } from './numbering.service';
 import { inviteUser } from './auth.service';
 import { notify, notifyStaff } from './notification.service';
+import { markiereMonateVeraltet, markiereVeraltet, monateZwischen } from './payroll-veraltet';
 import { activeStaffWhere } from './profile.service';
 
 /**
@@ -312,6 +313,15 @@ export async function updateEmployee(params: {
 
     return result;
   });
+
+  /**
+   * Lohn, Pensum, Eintritt oder Austritt geändert: Eine schon berechnete,
+   * noch nicht veröffentlichte Abrechnung rechnete mit dem alten Stand und
+   * würde sonst mit ihm veröffentlicht (`payroll-veraltet.ts`).
+   */
+  if (salaryChanged || input.hiredAt !== undefined || input.terminatedAt !== undefined || leaving || returning) {
+    await markiereVeraltet({ employeeId: employee.id }, 'Lohnstamm oder Anstellung geändert');
+  }
 
   await audit.updated({
     organizationId: params.organizationId,
@@ -725,6 +735,14 @@ export async function decideAbsence(params: {
       decisionNote: params.note ?? null,
     },
   });
+
+  // Unbezahlter Urlaub mindert den Monatslohn — eine schon berechnete Abrechnung stimmt nicht mehr.
+  if (params.status === 'APPROVED' && absence.type === 'UNPAID') {
+    await markiereMonateVeraltet(
+      monateZwischen(absence.startDate, absence.endDate).map((m) => ({ employeeId: absence.employeeId, ...m })),
+      'unbezahlter Urlaub bewilligt',
+    );
+  }
 
   await notify({
     userId: absence.employee.user.id,
