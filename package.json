@@ -7,11 +7,11 @@
     "node": ">=20.11.0"
   },
   "scripts": {
-    "dev": "tsx scripts/copy-pdfjs-assets.ts && next dev --turbo",
+    "dev": "node scripts/react-hydrationskorrektur.mjs && tsx scripts/copy-pdfjs-assets.ts && next dev --turbo",
     "pdfjs:assets": "tsx scripts/copy-pdfjs-assets.ts",
     "dev:webpack": "next dev",
-    "build": "prisma generate && tsx scripts/copy-pdfjs-assets.ts && next build",
-    "start": "tsx scripts/copy-pdfjs-assets.ts && next build && next start",
+    "build": "prisma generate && node scripts/react-hydrationskorrektur.mjs && tsx scripts/copy-pdfjs-assets.ts && next build",
+    "start": "node scripts/react-hydrationskorrektur.mjs && tsx scripts/copy-pdfjs-assets.ts && next build && next start",
     "start:built": "next start",
     "lint": "eslint src scripts tests prisma --ext .ts,.tsx",
     "typecheck": "tsc --noEmit",
@@ -42,7 +42,7 @@
     "erd": "tsx scripts/generate-erd.ts",
     "audit:merkmale": "tsx scripts/feature-integrity.ts",
     "docs": "npm run openapi && npm run erd",
-    "postinstall": "prisma generate"
+    "postinstall": "prisma generate && node scripts/react-hydrationskorrektur.mjs"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"
