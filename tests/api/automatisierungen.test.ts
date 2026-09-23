@@ -607,3 +607,117 @@ describe('Wer Regeln anlegen darf', () => {
     assert.equal(antwort.status, 401);
   });
 });
+
+// ===========================================================================
+//  RB-012 — jeder Auslöser hat einen Erzeuger, und ein Lauf wird ausgeführt
+// ===========================================================================
+
+describe('RB-012 — kein Auslöser ohne Erzeuger', () => {
+  /**
+   * Bis 2026-09-23 bot die Oberfläche zwanzig Auslöser an; elf davon
+   * entstanden nie. Diese Prüfung liest den Quelltext: Jeder Auslöser der
+   * Liste muss entweder als `trigger: '…'` in einem Dienst gemeldet werden
+   * oder als zeitbezogene Regel in `automation-zeittrigger.service.ts`
+   * stehen. Ein neuer Auslöser ohne Erzeuger lässt diese Prüfung scheitern —
+   * genau dort, wo er sonst still wirkungslos wäre.
+   */
+  it('jeder angebotene Auslöser wird irgendwo erzeugt', async () => {
+    const { AUTOMATION_TRIGGERS } = await import('../../src/lib/validation/operations-admin');
+    const { readdirSync, readFileSync } = await import('node:fs');
+    const { join } = await import('node:path');
+    const dienste = join(__dirname, '..', '..', 'src', 'server', 'services');
+    const quelltext = readdirSync(dienste)
+      .filter((d) => d.endsWith('.ts'))
+      .map((d) => readFileSync(join(dienste, d), 'utf8'))
+      .join('\n');
+    const zeitregeln = readFileSync(join(dienste, 'automation-zeittrigger.service.ts'), 'utf8');
+    const zeitBlock = zeitregeln.slice(zeitregeln.indexOf('export const ZEITREGELN'), zeitregeln.indexOf('export const EREIGNIS_AUSLOESER'));
+
+    const ohneErzeuger = AUTOMATION_TRIGGERS.filter(
+      (t) => !quelltext.includes(`trigger: '${t}'`) && !new RegExp(`^\\s+${t}:`, 'm').test(zeitBlock),
+    );
+    assert.deepEqual(ohneErzeuger, [], `Auslöser ohne Erzeuger: ${ohneErzeuger.join(', ')}`);
+  });
+});
+
+describe('RB-012 — vom zeitbezogenen Auslöser bis zur ausgeführten Aktion', () => {
+  let regelId = '';
+  const aufgaben: string[] = [];
+
+  before(async () => {
+    await requireServer();
+    jars = await loginAll();
+  });
+
+  after(async () => {
+    if (regelId) await del(`/api/automations/${regelId}`, { jar: jars.admin }).catch(() => {});
+    for (const id of aufgaben) await del(`/api/tasks/${id}`, { jar: jars.admin }).catch(() => {});
+    await testDbSchliessen();
+  });
+
+  const cronSecret = () => process.env.CRON_SECRET ?? 'dev-cron-secret';
+  const stuendlich = () => get('/api/cron/hourly', { headers: { authorization: `Bearer ${cronSecret()}` } });
+
+  /**
+   * Der ganze Weg: Regel „Aufgabe wird fällig" → Aufgabe mit Frist in 30
+   * Minuten → stündlicher Lauf meldet sie mit der Frist als Bezug → der Lauf
+   * wird zur Frist fällig → ausgeführt. Und die Gegenprobe: Eine Aufgabe, die
+   * vor der Ausführung erledigt wird, erzeugt keine Aktion — der Anlass wird
+   * beim Ausführen noch einmal geprüft.
+   */
+  it('TASK_DUE: gemeldet mit Bezug auf die Frist, ausgeführt, und übersprungen, wenn der Anlass fehlt', async (t) => {
+    const db = testDb();
+    if (!db) return t.skip(`kein Zugang zur Testdatenbank: ${testDbGrund()}`);
+
+    const regel = await post<{ data: { id: string } }>(
+      '/api/automations',
+      {
+        name: `Frist-Prüfung ${Date.now()}`,
+        trigger: 'TASK_DUE',
+        delayMinutes: 0,
+        active: true,
+        actions: [{ type: 'CREATE_NOTIFICATION', config: { titel: 'Aufgabe fällig: {{titel}}', empfaenger: 'MANAGEMENT' } }],
+      },
+      { jar: jars.admin },
+    );
+    assert.equal(regel.status, 201, JSON.stringify(regel.payload));
+    regelId = data(regel).id;
+
+    const frist = new Date(Date.now() + 30 * 60_000);
+    const anlegen = async (titel: string) => {
+      const antwort = await post<{ data: { id: string } }>('/api/tasks', { title: titel, dueAt: frist.toISOString() }, { jar: jars.admin });
+      assert.equal(antwort.status, 201, JSON.stringify(antwort.payload));
+      aufgaben.push(data(antwort).id);
+      return data(antwort).id;
+    };
+    const offen = await anlegen(`Prüfreihe offen ${Date.now()}`);
+    const erledigt = await anlegen(`Prüfreihe erledigt ${Date.now()}`);
+
+    const erster = await stuendlich();
+    assert.ok([200, 500].includes(erster.status), `stündlicher Lauf: HTTP ${erster.status}`);
+
+    // Nur die eigenen Aufgaben zählen: Offene Aufgaben aus dem Demobestand,
+    // deren Frist im Suchfenster liegt, meldet der Lauf zu Recht ebenfalls.
+    const eigene = { automationId: regelId, entityId: { in: [offen, erledigt] } };
+    const laeufe = await db.automationRun.findMany({ where: eigene, orderBy: { entityId: 'asc' } });
+    assert.equal(laeufe.length, 2, 'Beide Aufgaben wurden gemeldet');
+    for (const lauf of laeufe) {
+      assert.equal(lauf.status, 'PENDING', 'Vor der Frist wird noch nicht ausgeführt');
+      assert.ok(Math.abs(lauf.scheduledFor.getTime() - frist.getTime()) < 60_000, 'Fällig zur Frist, nicht zum Suchlauf');
+    }
+
+    // Zeit vergehen lassen: die Läufe fällig machen; eine Aufgabe erledigen.
+    await db.automationRun.updateMany({ where: eigene, data: { scheduledFor: new Date(Date.now() - 60_000) } });
+    await db.task.update({ where: { id: erledigt }, data: { status: 'DONE', completedAt: new Date() } });
+
+    const zweiter = await stuendlich();
+    assert.ok([200, 500].includes(zweiter.status));
+    const nachher = await db.automationRun.findMany({ where: eigene });
+    assert.equal(nachher.find((l) => l.entityId === offen)?.status, 'SUCCESS', 'Die offene Aufgabe löst die Aktion aus');
+    assert.equal(nachher.find((l) => l.entityId === erledigt)?.status, 'SKIPPED', 'Die erledigte nicht mehr');
+
+    // Ein dritter Lauf meldet nichts doppelt.
+    await stuendlich();
+    assert.equal(await db.automationRun.count({ where: eigene }), 2, 'Je Aufgabe genau ein Lauf');
+  });
+});

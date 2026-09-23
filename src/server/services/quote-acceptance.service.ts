@@ -7,6 +7,7 @@ import { BusinessRuleError, NotFoundError } from '@/lib/errors';
 import { absoluteUrl } from '@/lib/utils';
 
 import { revokeTokensFor } from './access-token.service';
+import { emitAutomationTrigger } from './automation-engine.service';
 import { notifyStaff } from './notification.service';
 import { appendSignatureEvent, type AnfrageKontext } from './signature-events';
 
@@ -234,6 +235,13 @@ export async function afterQuoteAccepted(params: {
       adminUrl: absoluteUrl(`/admin/offerten/${quote.id}`),
     }),
   });
+
+  /**
+   * `QUOTE_ACCEPTED` — bis 2026-09-23 in der Oberfläche wählbar und nie
+   * gemeldet (RB-012). Hier, vom Gewinner des Übergangs und genau einmal;
+   * die Meldung wirft nie und hält die Annahme nicht auf.
+   */
+  await emitAutomationTrigger({ organizationId: quote.organizationId, trigger: 'QUOTE_ACCEPTED', entityId: quote.id });
 
   await audit.updated({
     organizationId: quote.organizationId,

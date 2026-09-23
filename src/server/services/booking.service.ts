@@ -1209,7 +1209,7 @@ export async function generateRecurringBookings(organizationId: string): Promise
       const end = new Date(cursor.getTime() + template.durationMin * 60_000);
       const instanceStart = new Date(cursor);
 
-      await prisma.$transaction(async (tx) => {
+      const instanzId = await prisma.$transaction(async (tx) => {
         const { number } = await nextNumber(tx, organizationId, 'booking');
 
         const instance = await tx.booking.create({
@@ -1277,7 +1277,15 @@ export async function generateRecurringBookings(organizationId: string): Promise
           where: { id: rule.id },
           data: { generatedUntil: instanceStart },
         });
+        return instance.id;
       });
+
+      /**
+       * `RECURRING_BOOKING_GENERATE` — bis 2026-09-23 wählbar und nie gemeldet
+       * (RB-012). Nach dem Commit, damit eine Regel nie eine Buchung sieht,
+       * die noch zurückrollen könnte; die Meldung wirft nie.
+       */
+      await emitAutomationTrigger({ organizationId, trigger: 'RECURRING_BOOKING_GENERATE', entityId: instanzId });
 
       created++;
       generated++;

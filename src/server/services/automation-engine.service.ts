@@ -13,6 +13,7 @@ import {
   type StatusZiel,
 } from '@/lib/validation/automation-config';
 
+import { ZEITREGELN } from './automation-zeittrigger.service';
 import { notify } from './notification.service';
 
 const log = logger('automation');
@@ -286,32 +287,36 @@ const LADER: Record<string, Lader> = {
     };
   },
 
+  /**
+   * Die Kennung kann ein Jahr tragen (`kundeId@2027`) — beim Geburtstag, der
+   * jährlich wiederkehrt und je Regel und Kennung nur einen Lauf bekommt.
+   */
   Customer: async (organizationId, id) => {
+    const [kundenId] = id.split('@');
     const k = await prisma.customer.findFirst({
-      where: { id, organizationId, deletedAt: null },
+      where: { id: kundenId, organizationId, deletedAt: null },
       ...kundeAuszug,
     });
     if (!k) return null;
-    return { entity: 'Customer', entityId: k.id, kunde: kunde(k) };
+    return { entity: 'Customer', entityId: id, kunde: kunde(k) };
   },
 
   /**
    * **`Task` trägt kein `organizationId`.** Das ist eine Eigenheit des
-   * bestehenden Schemas, keine Nachlässigkeit an dieser Stelle: Eine Aufgabe
-   * hängt über `customerId`, `leadId`, `jobId`, `objectiveId` oder
-   * `meetingId` an einem Vorgang, und der ist mandantengebunden. Der
-   * Parameter bleibt hier trotzdem in der Signatur, damit alle Lader gleich
-   * aussehen — und damit es auffällt, wenn `Task` später eine eigene Spalte
-   * bekommt.
+   * bestehenden Schemas: Eine Aufgabe hängt über `customerId`, `leadId`,
+   * `jobId`, `objectiveId` oder `meetingId` an einem Vorgang, und der ist
+   * mandantengebunden.
    *
-   * Vermerkt als bekannte Abweichung von der Regel „jede Abfrage schränkt auf
-   * `organizationId` ein" (`CLAUDE.md`). Sie zu beheben hiesse, eine
-   * benutzte Tabelle um eine Pflichtspalte zu erweitern und rückzufüllen;
-   * das gehört in eine eigene Wave, nicht als Nebenwirkung hierher.
+   * Bis 2026-09-23 lud dieser Lader deshalb **ohne** Einschränkung. Seit
+   * `TASK_DUE` tatsächlich ausgelöst wird, wäre das ein Weg, über eine Regel
+   * die Aufgabe einer anderen Organisation zu lesen. Eingegrenzt wird jetzt
+   * über die zuständige oder die erstellende Person, die beide einer
+   * Organisation angehören. Eine eigene Spalte bleibt die bessere Lösung und
+   * steht als offener Punkt in `docs/AUTOMATION.md`.
    */
-  Task: async (_organizationId, id) => {
-    const t = await prisma.task.findUnique({
-      where: { id },
+  Task: async (organizationId, id) => {
+    const t = await prisma.task.findFirst({
+      where: { id, OR: [{ assignee: { organizationId } }, { creator: { organizationId } }] },
       select: { id: true, title: true, status: true, dueAt: true, priority: true },
     });
     if (!t) return null;
@@ -359,6 +364,14 @@ export async function emitAutomationTrigger(params: {
   organizationId: string;
   trigger: AutomationTrigger;
   entityId: string;
+  /**
+   * Der Zeitpunkt, von dem die Verzögerung der Regel rechnet. Ohne Angabe:
+   * jetzt. Zeitbezogene Auslöser geben ihren Anlass an — bei der Erinnerung
+   * „24 Stunden vor dem Termin" genau diesen Zeitpunkt —, damit
+   * `delayMinutes: -60` eine Stunde davor bedeutet und nicht eine Stunde vor
+   * dem Suchlauf.
+   */
+  bezugszeit?: Date;
 }): Promise<AusloeseErgebnis> {
   const leer: AusloeseErgebnis = { geprueft: 0, angelegt: 0, vorhanden: 0 };
 
@@ -387,7 +400,10 @@ export async function emitAutomationTrigger(params: {
       const bedingungen = (regel.conditions ?? {}) as Record<string, unknown>;
       if (!bedingungenErfuellt(bedingungen, nutzlast)) continue;
 
-      const faellig = new Date(Date.now() + regel.delayMinutes * 60_000);
+      // Nie vor jetzt: Ein Anlass, dessen „davor" schon vorbei ist, läuft
+      // sofort und nicht gar nicht.
+      const bezug = (params.bezugszeit ?? new Date()).getTime();
+      const faellig = new Date(Math.max(Date.now(), bezug + regel.delayMinutes * 60_000));
 
       try {
         await prisma.automationRun.create({
@@ -420,6 +436,68 @@ export async function emitAutomationTrigger(params: {
     });
     return leer;
   }
+}
+
+/**
+ * Die zeitbezogenen Auslöser melden — stündlich aus dem Scheduler.
+ *
+ * Bis 2026-09-23 gab es diesen Lauf nicht, und neun Auslöser, die die
+ * Oberfläche anbot, entstanden nie (RB-012). Die Regeln, *welcher* Datensatz
+ * *wann* einen Anlass hat, stehen in `automation-zeittrigger.service.ts`.
+ *
+ * **Das Fenster.** Rückwärts 26 Stunden, damit ein ausgefallener Stundenlauf
+ * nichts verliert — der eindeutige Index der Läufe verhindert, dass ein
+ * Datensatz, der zweimal gefunden wird, zweimal läuft. Vorwärts so weit, wie
+ * die früheste Regel vorausgreift (`delayMinutes` negativ), plus eine Stunde
+ * bis zum nächsten Lauf.
+ *
+ * Gesucht wird nur für Auslöser, zu denen eine aktive Regel existiert: Ohne
+ * Regel wäre jede Abfrage verschwendet.
+ */
+export async function emitZeitbezogeneAusloeser(params: {
+  organizationId: string;
+  jetzt?: Date;
+}): Promise<Record<string, AusloeseErgebnis & { funde: number }>> {
+  const jetzt = params.jetzt ?? new Date();
+  const ergebnis: Record<string, AusloeseErgebnis & { funde: number }> = {};
+
+  const regeln = await prisma.automation.findMany({
+    where: { organizationId: params.organizationId, active: true, trigger: { in: Object.keys(ZEITREGELN) as AutomationTrigger[] } },
+    select: { trigger: true, delayMinutes: true },
+  });
+
+  const vorgriff = new Map<AutomationTrigger, number>();
+  for (const r of regeln) {
+    vorgriff.set(r.trigger, Math.max(vorgriff.get(r.trigger) ?? 0, -Math.min(r.delayMinutes, 0)));
+  }
+
+  for (const [trigger, minuten] of vorgriff) {
+    const regel = ZEITREGELN[trigger]!;
+    const von = new Date(jetzt.getTime() - 26 * 3_600_000);
+    const bis = new Date(jetzt.getTime() + (minuten + 60) * 60_000);
+    const summe: AusloeseErgebnis & { funde: number } = { geprueft: 0, angelegt: 0, vorhanden: 0, funde: 0 };
+    try {
+      const funde = await regel.finde(params.organizationId, von, bis);
+      summe.funde = funde.length;
+      for (const fund of funde) {
+        const e = await emitAutomationTrigger({
+          organizationId: params.organizationId,
+          trigger,
+          entityId: fund.entityId,
+          bezugszeit: fund.zeitpunkt,
+        });
+        summe.geprueft = e.geprueft;
+        summe.angelegt += e.angelegt;
+        summe.vorhanden += e.vorhanden;
+      }
+    } catch (fehler) {
+      // Ein Auslöser, der scheitert, hält die anderen nicht auf.
+      log.error('Zeitbezogener Auslöser konnte nicht gemeldet werden', { trigger, error: fehler });
+    }
+    ergebnis[trigger] = summe;
+  }
+
+  return ergebnis;
 }
 
 // ---------------------------------------------------------------------------
@@ -512,6 +590,7 @@ async function fuehreLaufAus(organizationId: string, runId: string): Promise<Aus
         select: {
           id: true,
           name: true,
+          trigger: true,
           conditions: true,
           organizationId: true,
           actions: { orderBy: { position: 'asc' }, select: { type: true, config: true } },
@@ -547,6 +626,18 @@ async function fuehreLaufAus(organizationId: string, runId: string): Promise<Aus
     await abschliessen(runId, 'SKIPPED', {
       grund: 'Die Bedingungen treffen zum Ausführungszeitpunkt nicht mehr zu.',
     });
+    return 'uebersprungen';
+  }
+
+  /**
+   * Zeitbezogene Auslöser prüfen ihren **Anlass** noch einmal: Ist die
+   * Buchung noch bestätigt, die Rechnung noch offen, die Anfrage noch
+   * unbearbeitet? Eine Regel ohne Bedingungen würde sonst an einen stornierten
+   * Termin erinnern.
+   */
+  const zeitregel = ZEITREGELN[lauf.automation.trigger];
+  if (zeitregel && !(await zeitregel.gilt(organizationId, lauf.entityId, new Date()))) {
+    await abschliessen(runId, 'SKIPPED', { grund: 'Der Anlass besteht zum Ausführungszeitpunkt nicht mehr.' });
     return 'uebersprungen';
   }
 

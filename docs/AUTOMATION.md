@@ -77,13 +77,52 @@ Angeschlossen sind die Zustandsübergänge, die es tatsächlich gibt:
 | `JOB_ASSIGNED` | `assignJob` |
 | `JOB_COMPLETED` | `completeJob` |
 | `LEAD_CREATED` | `createLead` und `createLeadFromContactForm` |
+| `QUOTE_ACCEPTED` | `afterQuoteAccepted` — nach der Annahme über den Signaturkern |
+| `RECURRING_BOOKING_GENERATE` | `booking.service`, nach jeder erzeugten Folgebuchung |
 
-Die übrigen Werte des Aufzählungstyps (`BOOKING_REMINDER_24H`,
-`QUOTE_EXPIRING`, `CUSTOMER_BIRTHDAY`, …) sind **noch nicht angeschlossen**.
-Sie bezeichnen keinen Zustandsübergang, sondern einen Zeitpunkt, und gehören
-damit in den Nachtlauf, der die fälligen Vorgänge sucht. Für die häufigsten
-davon gibt es bereits die fest verdrahteten Läufe in `automation.service.ts`;
-sie durch Regeln zu ersetzen wäre eine eigene Änderung mit eigenem Nachweis.
+### Die zeitbezogenen Auslöser
+
+Bis 2026-09-23 bot die Oberfläche elf Auslöser an, die **nichts** erzeugten
+(RB-012): Eine Regel „24 Stunden vor dem Termin erinnern" liess sich anlegen
+und aktivieren und lief nie — ohne Fehler, ohne Meldung. Neun davon hängen an
+einem Zeitpunkt, nicht an einem Klick, und entstehen seither im stündlichen
+Lauf (`emitZeitbezogeneAusloeser`, Regeln in
+`automation-zeittrigger.service.ts`):
+
+| Auslöser | Zeitpunkt je Datensatz | Gilt beim Ausführen noch, wenn … |
+|---|---|---|
+| `BOOKING_REMINDER_24H` / `_2H` | Termin minus 24 h / 2 h | die Buchung bestätigt ist und der Termin noch kommt |
+| `QUOTE_EXPIRING` | drei Tage vor Ablauf | die Offerte versandt oder angesehen und noch gültig ist |
+| `INVOICE_DUE_SOON` | drei Tage vor Fälligkeit | die Rechnung offen ist |
+| `INVOICE_OVERDUE` | Tag nach der Fälligkeit | die Rechnung offen ist |
+| `LEAD_IDLE` | 48 h nach Eingang | die Anfrage unbearbeitet ist |
+| `TASK_DUE` | Fälligkeit der Aufgabe | die Aufgabe nicht erledigt ist |
+| `REVIEW_REQUEST` | 24 h nach Abschluss | noch keine Bewertung da ist |
+| `CUSTOMER_BIRTHDAY` | Geburtstag im laufenden Jahr, 00:00 Zürich | ein Geburtsdatum noch erfasst ist (Kennung `kundeId@Jahr`) |
+
+Die Verzögerung der Regel rechnet **vom Zeitpunkt**, nicht vom Lauf:
+`scheduledFor = max(jetzt, Zeitpunkt + delayMinutes)`. Idempotent ist das über
+den eindeutigen Index Regel × Datensatz — der stündliche Lauf findet denselben
+Datensatz mehrmals, ein Lauf entsteht einmal. Beim Geburtstag trägt die
+Kennung das Jahr, sonst gratulierte der Betrieb genau einmal im Leben.
+
+Geprüft wird **zweimal**: beim Melden (liegt der Zeitpunkt im Fenster?) und
+beim Ausführen (die Spalte rechts). Ohne die zweite Prüfung ginge die
+Erinnerung an einen inzwischen stornierten Termin hinaus; so endet der Lauf
+als `SKIPPED` mit Grund.
+
+**Kein Auslöser ohne Erzeuger.** `tests/api/automatisierungen.test.ts` liest
+den Aufzählungstyp und sucht zu jedem Wert eine Regel in `ZEITREGELN` oder
+einen Aufruf von `emitAutomationTrigger` an der in `EREIGNIS_AUSLOESER`
+genannten Stelle. Ein neuer Wert ohne Erzeuger lässt die Prüfreihe scheitern.
+
+Die fest verdrahteten Tagesaufgaben in `automation.service.ts` bleiben
+daneben bestehen. Wer beides einschaltet, bekommt
+beides — eine Regel ersetzt sie nicht stillschweigend.
+
+**Aufgaben** haben keine eigene Organisationsspalte. Der Lader grenzt sie über
+die Organisation der zugewiesenen oder erstellenden Person ein — sonst läse
+eine Regel Aufgaben eines fremden Mandanten, sobald es mehr als einen gibt.
 
 **Der Auslöser steht immer ausserhalb der Transaktion** und nach allem, was
 fachlich dazugehört. Innerhalb sähe die Maschine den Datensatz nicht, denn sie
@@ -357,7 +396,7 @@ nicht falsch.
 
 | Takt | Was |
 |---|---|
-| **stündlich** (`/api/cron/hourly`) | Terminerinnerungen, fällige Automatisierungen (bis 200) |
+| **stündlich** (`/api/cron/hourly`) | Terminerinnerungen, zeitbezogene Auslöser melden, fällige Automatisierungen (bis 200) |
 | **täglich** (`/api/cron/daily`) | Die festen Tagesaufgaben, der Nachlauf der Dateiprüfung, fällige Automatisierungen (bis 500) |
 
 **Stündlich und nicht minütlich.** `delayMinutes` rechnet in Minuten, eine
@@ -404,6 +443,7 @@ zehntausend wäre selbst eine Störung.
 | `src/lib/automation/webhook.ts` | Adressprüfung und Aufruf |
 | `src/lib/validation/automation-config.ts` | Konfigurationsschema je Aktionsart, Erlaubnisliste der Statuswerte |
 | `src/server/services/automation-engine.service.ts` | Auslöser, Lader, Lauf, Aktionen |
+| `src/server/services/automation-zeittrigger.service.ts` | Zeitbezogene Auslöser: Zeitpunkt, Fenster, Gültigkeit beim Ausführen |
 | `src/server/services/automation.service.ts` | Die **festen** Tagesaufgaben (nicht die Regeln) |
 | `src/app/api/cron/*` | Die beiden Takte |
 | `tests/api/automatisierungen.test.ts` | 36 Prüfungen — Kern direkt, Maschine über HTTP samt Blick in `automation_runs` |
