@@ -273,7 +273,8 @@ Serienlauf später braucht — und der Index wiese dann den regulären Lauf ab
 statt der Falscheingabe.
 
 `GET /api/contracts/{id}/invoices` beantwortet die Frage des Monatsabschlusses:
-welche Perioden gedeckt sind und welche offen. Die Perioden entstehen aus dem
+welche Perioden gedeckt sind und welche offen — ab der zuletzt abgeschlossenen
+rückwärts; die laufende ist noch nicht fällig (§10a). Die Perioden entstehen aus dem
 Zyklus, nicht aus den vorhandenen Rechnungen — eine vergessene Periode wäre
 sonst unsichtbar, weil zu ihr eben kein Beleg existiert.
 
@@ -446,6 +447,68 @@ welche".
 Eine Fassung, die zur Unterzeichnung vorliegt oder angenommen wurde, zeigt
 statt der Masken einen Satz, der sagt warum. Ohne ihn sähe die greifende Sperre
 aus wie ein Fehler der Anwendung.
+
+---
+
+## 10a. Integrität nach der Stabilisierung vom 2026-09-23
+
+Die Freigabeprüfung vom 2026-09-23 fand in diesem Modul sieben Blocker
+(RB-002 bis RB-008). Was seither gilt — und wo die Grenze liegt:
+
+**Fassungswechsel V1 → V2 → V3.** `POST /api/contracts/{id}/versions/{versionId}/activate`
+setzt einen Versionsentwurf zu seinem Stichtag in Kraft: alte Fassung
+`SUPERSEDED` mit `effectiveUntil` = Stichtag, neue `ACTIVE`, in einer
+Transaktion hinter `SELECT … FOR UPDATE` auf dem Vertragskopf. Der Stichtag
+liegt nicht vor heute (Zürich) und nach dem Beginn der geltenden Fassung. Ein
+Entwurf, den niemand mehr will, wird **verworfen** (`DISCARDED`), nicht
+gelöscht — ein zurückgezogener Signaturvorgang zeigt auf ihn und ist Beleg.
+
+**Die Datenbank verweigert Änderungen an gebundenen Fassungen.** Trigger aus
+`20260923100000_vertragsintegritaet`:
+
+| Trigger | Was er verweigert |
+|---|---|
+| `contract_versions_unveraenderlich` | jede Änderung an einer Fassung, die nicht mehr frei ist (galt, angenommen, in Unterzeichnung) — ausser Zustand und `effectiveUntil` beim Ablösen |
+| `contract_services_unveraenderlich` | Einfügen, Ändern, Löschen von Leistungen einer gebundenen Fassung; Kaskaden aus dem Löschen eines Entwurfs sind erlaubt |
+| `service_schedules_unveraenderlich` | Änderungen an Einsatzplänen einer gebundenen Fassung — nur die Fortschrittsmarke `generatedUntil` darf wandern |
+
+*Grenze:* Wer als Superuser Trigger abschaltet (`ALTER TABLE … DISABLE
+TRIGGER`, `session_replication_role = replica`), umgeht sie. Das ist eine
+Betriebsfrage (Rollen, Zugriff auf die Datenbank), keine des Schemas.
+
+**Stabile Serienidentität.** Jeder Einsatzplan trägt `seriesKey`; eine neue
+Fassung kopiert ihn. Ein geplanter Termin ist eindeutig über
+`(contractId, seriesKey, scheduleDate)` — Teilindex `jobs_serientermin_einmal`,
+ohne abgesagte und gelöschte Einsätze. Vorher hing die Eindeutigkeit an der
+Kennung des Plans, und die wechselte mit jeder Fassung: doppelte Einsätze nach
+jedem Fassungswechsel; und ein abgesagter Termin blockierte seinen Schlüssel
+für immer.
+
+**Der Abgleich (`einsaetzeAbgleichen`).** Fassungswechsel, Pause,
+Wiederaufnahme, Kündigung und Ende gleichen die **offenen** Einsätze ab einem
+Tag mit dem Sollplan ab: umstellen, absagen (mit Entzug der Zuteilung),
+fehlende anlegen. Begonnene und erledigte Einsätze rührt er nie an. Die
+Untergrenze ist immer heute in Zürich — die Wiederaufnahme plant nichts in die
+Vergangenheit, auch nicht über eine Zeitumstellung hinweg.
+
+**Annahme fail-closed.** Eine Annahme wird im Finalizer nur übernommen, wenn der
+Vertrag noch annehmbar ist (`ANNAHME_ZULAESSIGE_VERTRAGSZUSTAENDE`), gelesen
+unter derselben Zeilensperre wie Stornieren und Löschen. Stornieren und Löschen
+brechen laufende Annahmen in derselben Transaktion ab. Ein Vertrag mit
+**angenommener** Fassung lässt sich nicht mehr stornieren oder löschen (422) —
+die Kundschaft hat zugestimmt, der Weg führt über Beenden oder Kündigen.
+
+**Abrechnung je Fassung.** Jede Periode rechnet mit der Fassung, die an ihrem
+Stichtag galt; ein Fassungswechsel mitten in der Periode schneidet sie.
+`invoices.contractPeriodEnd` und die Ausschlussbedingung
+`invoices_vertragsperiode_ueberlappungsfrei` (btree_gist) verhindern, dass
+sich Perioden nach einem Zykluswechsel überlappen. **Ohne Stichtag** gilt die
+zuletzt **abgeschlossene** Periode — bis 2026-09-23 war es die laufende (der
+Vorgabetag war „gestern"), gefunden von der Browserreihe.
+
+**Nachweis:** `tests/api/vertraege-integritaet.test.ts` (Regeln und Trigger
+über HTTP und SQL), `tests/e2e/wave10-vertraege.spec.ts` (Wege A–F im Browser,
+gegen die Datenbank geprüft).
 
 ---
 

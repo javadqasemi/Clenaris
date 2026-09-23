@@ -89,7 +89,7 @@ const TAG_MS = 86_400_000;
  * Nicht `toISOString().slice(0, 10)`: Das ist der Tag in UTC, und zwischen
  * Mitternacht und zwei Uhr Schweizer Zeit ist das der Vortag. Ein Fall, der
  * „morgen" meint und kurz nach Mitternacht „heute" schickt, prüft eine
- * andere Regel — genau die Grenze, die RB-008 betraf.
+ * andere Regel — genau die Grenze, an der RB-007 und RB-009 hingen.
  */
 function zuercherTag(versatzTage = 0): string {
   return new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Zurich' }).format(
@@ -457,7 +457,7 @@ test('C: drei Fassungen nacheinander — jeder Termin genau einmal, jeder bei se
   expect(fassungen[0]!.effectiveUntil?.toISOString().slice(0, 10)).toBe(v2Tag);
   expect(fassungen[1]!.effectiveUntil?.toISOString().slice(0, 10)).toBe(v3Tag);
 
-  // Eine Serie über alle drei Fassungen — die stabile Identität (RB-004).
+  // Eine Serie über alle drei Fassungen — die stabile Identität (RB-003).
   const serien = await db!.serviceSchedule.findMany({
     where: { contractService: { version: { contractId: vertrag.id } } },
     select: { seriesKey: true },
@@ -545,7 +545,7 @@ test('D: vergangene Periode abrechnen — nach Fassung 1, obwohl Fassung 2 inzwi
   expect(rechnung.contractVersionId, 'Die vergangene Periode lief unter Fassung 1.').toBe(vertrag.versionId);
   expect(Number(rechnung.grossTotal), '1200 + 8.1 % — nicht der neue Preis.').toBeCloseTo(1297.2, 2);
   expect(rechnung.contractPeriodStart, 'Die Periode ist kanonisch, nicht frei gewählt.').toBeTruthy();
-  expect(rechnung.contractPeriodEnd, 'Das Periodenende steht fest (RB-011).').toBeTruthy();
+  expect(rechnung.contractPeriodEnd, 'Das Periodenende steht fest (RB-008).').toBeTruthy();
 
   // Derselbe Weg ein zweites Mal — und es bleibt bei einer Rechnung.
   await page.reload();
@@ -649,7 +649,7 @@ test('E: Fassung zur Unterschrift, im Browser angenommen, danach unveränderlich
   );
   expect(aenderung.status, 'Eine angenommene Fassung lässt sich nicht mehr ändern.').toBe(422);
 
-  // RB-003: Ein Vertrag mit angenommener Fassung wird nicht still storniert.
+  // RB-005: Ein Vertrag mit angenommener Fassung wird nicht still storniert.
   const storno = await post(`/api/contracts/${vertrag.id}/cancel`, { reason: 'Versuch nach der Annahme' }, { jar: adminJar });
   expect(storno.status, 'Die Kundschaft hat zugestimmt — Stornieren ist kein Weg daran vorbei.').toBe(422);
   expect(await vertragsstatus(vertrag.id)).toBe('OFFERED');
@@ -717,7 +717,7 @@ test('F: Pause sagt geplante Einsätze ab, Fortsetzen plant ab heute — nichts 
   await expect.poll(() => vertragsstatus(vertrag.id), { timeout: 20_000 }).toBe('ACTIVE');
 
   /*
-    RB-008: Ab heute in Zürich, nicht ab der Pause. Was nach dem Fortsetzen
+    RB-007: Ab heute in Zürich, nicht ab der Pause. Was nach dem Fortsetzen
     entstand, liegt nicht vor heute — und was in der Pause abgesagt wurde,
     kommt ab heute wieder, ohne Doppel.
   */

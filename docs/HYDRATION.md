@@ -782,3 +782,88 @@ das Tor aber nicht.
 Zahl der `<script>`-Knoten unter `<body>` vor und nach der Hydration gemessen
 wird — dasselbe Vorgehen wie in §13.3, das dort in einer Messung entschieden
 hat; (b) `/portal` bauteilweise leeren, wie in §11 den Rahmen.
+
+---
+
+## 15. Stabilisierung vom 2026-09-23 — gemessen, eine Hypothese widerlegt, weiter offen
+
+**Ergebnis vorweg: RB-001 bleibt offen, Wave 9.1 bleibt FAIL.** Keine
+Wiederholungen, keine Filter, kein `waitForTimeout` — die Reihe blieb, wie
+sie ist.
+
+### 15.1 Werkzeuge, die jetzt im Repository liegen
+
+- `scripts/hydration-messung.ts` — N Ladevorgänge einer Seite, kalt (frischer
+  Kontext) oder `--warm` (ein Kontext, neu geladen), `--cpu N` (CDP-Drosselung),
+  und zwei Gegenexperimente zu den Kopfskripten. Keine Inhalte in den
+  Befunden. Der frühere Messweg lag nur im Arbeitsverzeichnis einer Sitzung.
+- `tests/e2e/helpers/mutations-beobachter.ts` — derselbe Beobachter für
+  Messskript und Browserreihe; in der Reihe nur mit `E2E_MUTATIONEN=1`
+  (§15.4).
+- `diagnose.ts` hält jetzt das HTML **desselben** Aufrufs fest (vorher das des
+  letzten Aufrufs im Fall — ein anderer Datenstand), die Kinder von `<head>`
+  im Fehlermoment und die vollständige Mitschrift.
+
+### 15.2 Was gemessen wurde
+
+| Messung | Ergebnis |
+|---|---|
+| `/portal/einsaetze/‹id›`, 100 kalt | 0 |
+| `/portal`, 200 kalt | 0 |
+| `/admin/vertraege/‹id›`, 150 kalt | 0 |
+| `/portal/einsaetze/‹id›`, 80 kalt, CPU ÷4 | 0 |
+| `/portal/einsaetze/‹id›`, 80 warm, CPU ÷4 | 0 |
+| Browserreihe, 10 Läufe in Folge, `retries: 0` | **2 von 10 grün**, 16 Fehlschläge, **alle #418** |
+| `e2e:stress`, 5 Läufe (frischer Server je Lauf) | **0 von 5 grün**, 17 Fehlschläge, **alle #418** |
+
+Isoliert tritt der Fehler nicht auf; in der Reihe fast in jedem Lauf. Betroffen
+sind `/portal/einsaetze/‹id›` (Gerätesperre, Abnahme) und `/admin/vertraege/‹id›`
+(Vertragswege B, C, D, F) — beides Seiten, die in der Reihe nach einer
+Handlung **neu geladen** werden.
+
+### 15.3 Was die Befunde zeigen
+
+1. **Der `<body>` wird vor dem Fehler nicht verändert.** Nach dem Parsen
+   keine Einfügung und keine Entfernung im Body bis zum Fehler.
+2. **Das DOM nach der Wiederherstellung gleicht dem ausgelieferten HTML
+   desselben Aufrufs Tag für Tag** — abgesehen von `next-route-announcer` und
+   dem Zähler der Glocke, die beide nach dem Einhängen entstehen. Der Client
+   rendert am Ende also dasselbe wie der Server.
+3. **Die einzigen Veränderungen vor dem Fehler liegen in `<head>`:** webpack
+   entfernt die ausgelieferten `<script async>` nach dem Laden, Sonner fügt
+   ein `<style>` ein. Unmittelbar nach dem Fehler entfernt React ein `<meta>`
+   aus `<head>`.
+
+### 15.4 Hypothese widerlegt: webpack und die Kopfskripte
+
+In beiden zuerst ausgewerteten Fehlern waren **alle** Kopfskripte vor `load`
+entfernt, in jedem sauberen Lauf lief das Entfernen über `load` hinaus. Das
+sah nach der Ursache aus. Das Gegenexperiment
+(`--skripte-frueh-entfernen`) entfernte jedes Kopfskript unmittelbar nach dem
+Laden: 28 Entfernungen vor `load` in jedem Ladevorgang, **0 Fehler in 30**.
+Damit ausgeschlossen — die dritte Sackgasse nach §9.3.
+
+**Nebenbefund:** Mit dem Beobachter an jedem Fall waren 5 von 5 Läufen rot,
+ohne ihn 3 von 5. Eine Tendenz, kein Beweis — aber sie passt zu §14.1: Wer den
+Hauptthread während des Parsens belastet, verschiebt das Zeitfenster.
+
+### 15.5 Stand und nächster Schritt
+
+Offen bleibt, **was** React beim ersten Durchgang anders sieht, wenn das
+Ergebnis danach gleich ist. Zwei Kandidaten, beide noch ungemessen:
+
+- ein Unterschied in `<head>` (React entfernt dort nach dem Fehler ein
+  `<meta>`; die Befunddateien enthalten jetzt `<head>` im Fehlermoment);
+- ein **vorübergehender** Unterschied im ersten Renderdurchgang, der sich im
+  selben Durchgang wieder angleicht.
+
+**Erste Auswertung von `<head>` im Fehlermoment** (zwölf Befunde aus den
+Gate-Läufen 6–10 und der Stressreihe): Alle `<meta>`, `<title>` und
+`<link rel="alternate|canonical|stylesheet">` sind vorhanden. Gegenüber dem
+ausgelieferten HTML fehlen nur die Chunk-Skripte (webpack, §15.4
+ausgeschlossen) und **in jedem Befund** `<link rel="preload" as="script">` der
+webpack-Laufzeit; hinzu kommt Sonners `<style>`. Der erste Kandidat ist damit
+schwächer geworden. Der fehlende Preload-Link ist der einzige noch ungeprüfte
+Unterschied in `<head>`; ob er auch in sauberen Läufen fehlt, ist die nächste
+Messung (Gegenprobe wie in §15.4).
+

@@ -1257,4 +1257,27 @@ Browser-Weg. Die Liste steht in `docs/VERTRAEGE.md` §11.
 
 ---
 
+## Stabilisierung und Release-Blocker (Stand 2026-09-23)
+
+Nach der Freigabeprüfung vom 2026-09-23 (15 blockierende Punkte) wurde keine
+neue Wave begonnen, sondern stabilisiert. Einzelheiten je Blocker, mit Root
+Cause, Fix, Tests und Commits: [`RELEASE_BLOCKER_CLOSURE_REPORT.md`](RELEASE_BLOCKER_CLOSURE_REPORT.md).
+
+- **Geschlossen (10):** RB-002 … RB-008 (Verträge: Fassungswechsel,
+  Serienidentität, Historie, Annahme fail-closed, Unveränderlichkeit in der
+  Datenbank, Abgleich der Einsätze, Abrechnung je Fassung), RB-010
+  (Prüfprotokoll), RB-011 (Qualität), RB-012 (Automatisierung). Dazu RB-016
+  und zwei neu gefundene Fehler (Standardperiode der Abrechnung,
+  Objektauswahl der Vertragsmaske).
+- **Weiterhin blockierend (5):** RB-001 Hydration (offen), RB-009 Lohn
+  (fachliche Prüfung extern), RB-013 ClamAV (Abnahme gegen echten clamd),
+  RB-014 (externer Überwachungsdienst), RB-015 Production V2.
+- **Gates:** Contract Gate **PASS** (Wege A–F im Browser). Hydration Gate
+  **FAIL** (2 von 10 Läufen grün, Stressreihe 0 von 5; alle Fehlschläge #418).
+  Die Waves 11–25 sind deshalb **nicht** begonnen.
+- **Prüfstand:** typecheck, lint, `prisma validate`, `npm run docs` grün;
+  HTTP-Reihe 1258 Tests, 0 Fehler, 1 datenabhängig übersprungen.
+
+---
+
 *Diese Datei wird nach jeder Wave fortgeschrieben.*

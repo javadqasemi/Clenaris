@@ -152,6 +152,28 @@ eine 42-Stunden-Woche. Der Wert ist eine Annahme und steht als solche in
 > aus, die niemand geprüft hat. Offene werden gezählt und in der Antwort
 > gemeldet — nicht bezahlt.
 
+**Der Satz des Tages, nicht der von heute** (RB-009, 2026-09-23). Der
+Stundenansatz einer Erfassung kommt aus der **Lohnhistorie** am Tag der
+Arbeit, danach aus dem Schnappschuss der Zeiterfassung, erst zuletzt aus dem
+aktuellen Satz. Beim Monatslohn gilt der Stand am Monatsende. Vorher rechnete
+ein Lauf für den August nach einer Lohnerhöhung im September rückwirkend mit
+dem neuen Satz.
+
+**Der Monat endet um Mitternacht in Zürich**, nicht in UTC. Stunden vom 1.
+zwischen 00:00 und 02:00 (Sommerzeit) landeten im Vormonat.
+
+**Ein veröffentlichter Monat ist zu.** Der Lauf schreibt nur noch
+unveröffentlichte Abrechnungen (`updateMany … published: false`, sonst
+`create` mit Behandlung des Wettlaufs), und in einem veröffentlichten Monat
+lassen sich Zeiten weder erfassen noch freigeben noch wieder öffnen. Vorher
+überschrieb ein zweiter Lauf eine bereits sichtbare Abrechnung.
+
+**Das Lohnportal** zeigt KTG bei den Abzügen, wo er abgezogen wird (vorher
+fehlte er in der Aufstellung, und die Summe der Zeilen ergab nicht den
+Nettolohn). Das Versprechen eines PDFs und eine Aussage zum Lohnausweis sind
+entfernt — es gibt beides nicht. **Clenaris ist damit nicht „Swiss Payroll
+compliant"** und behauptet es nicht; §9a gilt unverändert.
+
 ---
 
 ## 6. Der Ablauf
