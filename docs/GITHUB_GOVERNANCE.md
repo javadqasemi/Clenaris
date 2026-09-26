@@ -1,0 +1,246 @@
+# GitHub-Governance
+
+Stand 2026-09-27. Dieses Dokument beschreibt, wie das Repository
+`javadqasemi/Clenaris` auf GitHub abgesichert ist, was davon **tatsächlich
+eingestellt** ist und was **vorgeschlagen, aber nicht angewandt** ist.
+
+Nichts hier wurde von einer Prüfung oder einem Werkzeug verändert: Schutzregeln,
+Regelsätze, Sichtbarkeit, Secrets und Variablen sind so, wie die Inhaberschaft
+sie eingestellt hat. Die Einstellungen unten wurden **lesend** über die
+GitHub-API erhoben. Wo eine Aussage nicht aus dieser Abfrage stammt, steht es
+dabei.
+
+---
+
+## 1. Ist-Stand (lesend erhoben am 2026-09-27)
+
+| Bereich | Wert |
+|---|---|
+| Sichtbarkeit | **öffentlich** |
+| Standardzweig | `feature/crud-rbac-cta` — **nicht** `main` |
+| Schutz von `main` | keiner (`protected: false`; Schutz-API 404) |
+| Regelsätze (Repository) | keine (`/rulesets` → `[]`, `/rules/branches/main` → `[]`) |
+| Actions erlaubt | alle Aktionen |
+| `GITHUB_TOKEN`-Vorgabe | nur lesen; Workflows dürfen keine Pull Requests freigeben |
+| Forks | erlaubt; Läufe aus Forks von Erstbeitragenden brauchen eine Freigabe |
+| Secret Scanning / Push Protection | **aus** |
+| Dependabot-Sicherheitsupdates | **aus** |
+| Umgebung `production` | Zweigregel: nur `main`; Secrets `SERVER_HOST`, `SERVER_PORT`, `SERVER_SSH_KNOWN_HOSTS` — **kein** `SERVER_SSH_KEY`, **kein** `SERVER_USER` |
+| Repository-Variablen | keine — insbesondere `DEPLOY_ENABLED` nicht gesetzt |
+| Repository-Secrets | keine |
+
+Folge der letzten drei Zeilen: Der Auslieferungsauftrag wird übersprungen
+(`DEPLOY_ENABLED` fehlt), und selbst eingeschaltet scheiterte er an der
+ersten Stufe (Schlüssel und Benutzer fehlen), bevor eine Verbindung entsteht.
+
+---
+
+## 2. Vorgeschlagener Schutz für `main` — nicht angewandt
+
+**Empfohlen als Regelsatz** (Settings → Rules → Rulesets), nicht als
+klassische Zweigschutzregel: Ein Regelsatz ist als Ganzes sichtbar, lässt sich
+im Modus „Evaluate" erst beobachten und dann scharf schalten, und er gilt auch
+für Administratoren, solange niemand in die Umgehungsliste eingetragen ist.
+
+| Regel | Einstellung | Warum |
+|---|---|---|
+| Ziel | `refs/heads/main` | Nur der Zweig, der ausgeliefert wird |
+| Pull Request verlangt | ja | Kein direkter Push auf den Auslieferungszweig — der Push löst sonst eine Auslieferung aus, sobald `DEPLOY_ENABLED` gesetzt ist |
+| Erforderliche Prüfung | **`Prüfung`** (Auftrag `qualitaet`, Quelle GitHub Actions) | Der Name der Prüfung ist der `name:` des Auftrags, nicht seine ID. Ohne diese Regel ist ein roter Lauf nur eine Meinung |
+| Zweig muss aktuell sein | ja | Die Prüfung soll den Stand sehen, der nach dem Zusammenführen entsteht |
+| Force-Push sperren | ja | Umgeschriebene Geschichte auf `main` hebt die Zuordnung Lauf ↔ Commit auf, auf der der Health Check (`version` = Commit) aufbaut |
+| Löschen sperren | ja | |
+| Unterhaltungen aufgelöst | ja | Ein offener Einwand in der Durchsicht blockiert das Zusammenführen |
+| Lineare Geschichte | optional | Nicht nötig für die Sicherheit; eine Stilfrage |
+| Signierte Commits | nein (vorerst) | Heute wird über GitHub Desktop ohne Signaturschlüssel committet; die Regel sperrte die eigene Arbeit aus |
+| Umgehungsliste | leer | Eine Ausnahme für die Inhaberschaft macht jede Regel zur Empfehlung |
+
+### Freigaben (Approvals) — Optionen, keine Vorgabe
+
+Das Repository hat heute **eine** Person mit Schreibrecht. GitHub lässt die
+eigene Freigabe eines eigenen Pull Requests nicht zu.
+
+| Option | Folge |
+|---|---|
+| **0 Freigaben** + Prüfung `Prüfung` verpflichtend | **Empfohlen, solange eine Person pflegt.** Schutz kommt aus dem Tor, nicht aus einer Unterschrift. Kein Aussperren |
+| 1 Freigabe, Inhaberschaft in der Umgehungsliste | Sieht streng aus, ist es nicht: Jede Zusammenführung wäre eine Umgehung |
+| 1 Freigabe durch eine zweite Person | Richtig, sobald es eine zweite Person gibt. Dann zusätzlich: „Freigaben bei neuem Push verwerfen" und „letzter Push braucht eine Freigabe durch jemand anderen" |
+
+Für die Auslieferung selbst gibt es unabhängig davon die Umgebung
+`production`: Dort lässt sich eine **Freigabe vor der Auslieferung**
+einschalten (Required reviewers), ohne den Workflow zu ändern.
+
+### Regelsatz als Vorlage (nicht angewandt)
+
+```json
+{
+  "name": "main schützen",
+  "target": "branch",
+  "enforcement": "active",
+  "conditions": { "ref_name": { "include": ["refs/heads/main"], "exclude": [] } },
+  "bypass_actors": [],
+  "rules": [
+    { "type": "deletion" },
+    { "type": "non_fast_forward" },
+    {
+      "type": "pull_request",
+      "parameters": {
+        "required_approving_review_count": 0,
+        "dismiss_stale_reviews_on_push": true,
+        "require_code_owner_review": false,
+        "require_last_push_approval": false,
+        "required_review_thread_resolution": true
+      }
+    },
+    {
+      "type": "required_status_checks",
+      "parameters": {
+        "strict_required_status_checks_policy": true,
+        "required_status_checks": [{ "context": "Prüfung", "integration_id": 15368 }]
+      }
+    }
+  ]
+}
+```
+
+`integration_id` 15368 ist die GitHub-Actions-App. Vor dem Anwenden im
+Modus `evaluate` einen Pull Request durchlaufen lassen und in „Rule insights"
+nachsehen, ob die Prüfung unter genau diesem Namen erkannt wird.
+
+### Unterstützt der Plan das?
+
+- Der Plan des Kontos ist mit dem vorhandenen Zugang **nicht lesbar**
+  (`/user` liefert kein `plan`). Die folgende Aussage stützt sich deshalb auf
+  die dokumentierten Regeln von GitHub, nicht auf eine Abfrage:
+- **Öffentliches Repository:** Zweigschutz und Regelsätze sind in jedem Plan
+  verfügbar, auch in GitHub Free. Die Lese-Endpunkte antworten
+  entsprechend (`/rulesets` 200, leere Liste).
+- **Privates Repository:** In GitHub Free gibt es weder Zweigschutz noch
+  Regelsätze; dafür braucht es GitHub Pro (persönliches Konto) oder Team.
+  **Wer auf privat umstellt, verliert auf Free den Schutz von `main`.**
+
+### Standardzweig
+
+Der Standardzweig ist `feature/crud-rbac-cta`, ausgeliefert wird `main`.
+Empfehlung: `main` zum Standardzweig machen. Sonst zielen neue Pull Requests
+standardmässig auf einen Zweig ohne Tor, und Dependabot/Secret-Scanning-
+Meldungen beziehen sich auf den falschen Zweig. Entscheid der Inhaberschaft.
+
+---
+
+## 3. Sichtbarkeit — Entscheid der Inhaberschaft
+
+**Nicht verändert.** Die Abwägung:
+
+| | Öffentlich (heute) | Privat |
+|---|---|---|
+| Zweigschutz/Regelsätze auf Free | ja | **nein** (Pro/Team nötig) |
+| Secret Scanning, Push Protection | kostenlos verfügbar (heute **aus**) | nur mit GitHub Advanced Security |
+| Actions-Minuten | unbegrenzt auf Standardläufern | 2 000 Minuten/Monat auf Free; ein Lauf dieses Workflows dauert gut 20 Minuten |
+| Artefakte (Sicherheitsbericht, SBOM, bei Fehlschlag Server-Protokoll und Browserbericht) | für jedes angemeldete GitHub-Konto herunterladbar | nur mit Leserecht |
+| Offengelegt | Quelltext eines kommerziellen Produkts; Betriebsdokumentation mit Domain, Aufbau, früherer Serveradresse (u. a. `docs/NEXT_DEVELOPMENT_AUDIT.md`, `docs/DEPLOYMENT.md`, `ops/security-monitor/`), Liste akzeptierter Abhängigkeitsbefunde | nichts davon |
+
+**Empfehlung: privat, zusammen mit GitHub Pro**, damit der Schutz von `main`
+bleibt. Der Quelltext ist ein Geschäftsgut, und die Betriebsdokumentation
+beschreibt die Angriffsfläche genauer, als ein Fremder sie sonst kennte.
+Bleibt das Repository auf Free, ist **öffentlich mit Regelsatz** besser als
+**privat ohne** — dann aber Secret Scanning und Push Protection einschalten,
+denn beides ist für öffentliche Repositories kostenlos.
+
+Was eine Umstellung **nicht** leistet: Was bereits öffentlich war, ist
+kopiert — Forks, Klone, Archive. Eine Umstellung schützt ab dem Zeitpunkt der
+Umstellung, sie holt nichts zurück. Geheimnisse standen nach der
+Geheimnisprüfung (`scripts/ci-secret-scan.sh`, im CI bestanden) keine im
+verfolgten Bestand.
+
+---
+
+## 4. Workflow-Sicherheit (`.github/workflows/deploy.yml`)
+
+### Aktionen festlegen
+
+Jede fremde Aktion ist auf einen **Commit-Hash** festgelegt, mit dem
+Versions-Tag als Kommentar. Aufgelöst am 2026-09-26 über die GitHub-API; das
+schwebende `v4` und das genaue Tag zeigten jeweils auf denselben Commit, es
+läuft also derselbe Code wie vorher.
+
+| Aktion | Commit | Tag |
+|---|---|---|
+| `actions/checkout` | `11d5960a326750d5838078e36cf38b85af677262` | v4.4.0 |
+| `actions/setup-node` | `49933ea5288caeca8642d1e84afbd3f7d6820020` | v4.4.0 |
+| `actions/upload-artifact` | `ea165f8d65b6e75b540449e92b4886f43607fa02` | v4.6.2 |
+| `actions/cache` | `0057852bfaa89a56745cba8c7296529d2fc39830` | v4.3.0 |
+
+Aktualisieren: neues Tag über die API zu einem Commit auflösen (bei
+annotierten Tags das Tag-Objekt dereferenzieren), Hash **und** Kommentar
+ersetzen, Lauf abwarten. Neuere Hauptversionen (checkout v5+, setup-node v5+,
+upload-artifact v5+, cache v5+) gibt es; ein Wechsel ist eine eigene Änderung
+mit eigenem Lauf, nicht Teil einer Härtung. Empfehlung: Dependabot für
+`github-actions` einschalten, damit Hash-Aktualisierungen als Pull Request
+kommen.
+
+### Rechte
+
+- Workflow-weit `permissions: contents: read`; der Auftrag `qualitaet` erbt
+  genau das (Checkout). Artefakte und Zwischenspeicher laufen über den
+  Laufzeit-Token der Actions, nicht über `GITHUB_TOKEN`-Rechte.
+- Auftrag `auslieferung`: `permissions: {}` — er checkt nichts aus.
+- `actions/checkout` mit `persist-credentials: false`: kein Token bleibt in
+  `.git/config` liegen, wo jedes Skript der Prüfreihe — auch eine
+  kompromittierte Abhängigkeit aus `npm ci` — es lesen könnte.
+
+### Pull Requests aus fremder Hand
+
+| Frage | Befund |
+|---|---|
+| `pull_request_target` | nicht verwendet — der Code eines Pull Requests läuft nie mit Secrets |
+| Secrets im Qualitätstor | keine; nur Wegwerfwerte in der Auftragsumgebung |
+| Checkout fremden Codes mit erhöhten Rechten | nein; `pull_request` läuft mit Lesetoken |
+| Skript-Einschleusung über `${{ github.event.* }}`, Zweignamen, Titel | keine solchen Ausdrücke; seit 2026-09-26 steht **kein** `${{ }}` mehr im Text eines `run:`-Blocks — Werte kommen über `env:` |
+| Auslieferung aus einem Pull Request | ausgeschlossen (`github.event_name != 'pull_request'`), zusätzlich Umgebung `production` nur für `main` |
+| `workflow_run`-Ketten, die Artefakte eines Pull Requests weiterverarbeiten | keine — Artefakte aus Pull Requests werden nirgends ausgeführt oder ausgeliefert |
+| Läufe aus Forks | Erstbeitragende brauchen eine Freigabe (Repository-Einstellung, s. 1). Empfehlung bei öffentlichem Repository: „Require approval for all outside collaborators" |
+
+### Zwischenspeicher
+
+| Speicher | Schlüssel | Bewertung |
+|---|---|---|
+| `~/.npm` (`setup-node`, `cache: npm`) | Hash von `package-lock.json` | `npm ci` prüft jedes Paket gegen die `integrity`-Summe der Sperrdatei; ein vergifteter Zwischenspeicher scheitert daran. `node_modules` selbst wird **nicht** zwischengespeichert |
+| `.next/cache` (`actions/cache`) | Betriebssystem + Sperrdatei + Quelltext, mit Rückfallschlüsseln | Ein Pull Request liest Zwischenspeicher seines eigenen Zweigs und des Basis-/Standardzweigs, **schreibt** aber nur in den Bereich seines eigenen Merge-Refs — er kann den Speicher von `main` nicht vergiften (Zugriffsregeln von GitHub). Gebaut wird hier nur zur Prüfung; nichts aus diesem Bau wird ausgeliefert |
+| Prisma-Engines | nicht zwischengespeichert; bei `npm ci` geladen | Netzabhängigkeit (`binaries.prisma.sh`), siehe `PREPRODUCTION_READINESS.md` §1 |
+
+**Für Production V2 festzuhalten:** Sobald das CI das Artefakt baut, das
+ausgeliefert wird (`scripts/release-artefakt.ts`), soll dieser Bau **ohne**
+wiederhergestellten `.next/cache` laufen — oder nur mit exakt passendem
+Schlüssel aus `main`. Ein Bauzwischenspeicher fliesst in die Bündel ein, und
+ein ausgeliefertes Artefakt soll von nichts abhängen, was ein anderer Lauf
+hinterlassen hat.
+
+### Artefakte
+
+| Artefakt | Wann | Aufbewahrung | Inhalt und Bewertung |
+|---|---|---|---|
+| `sicherheitsbericht` | immer | 90 Tage | JSON der Sicherheitsprüfung + CycloneDX-Stückliste. Die Geheimnisprüfung meldet nur **Datei:Zeile**, nie einen Wert; `npm audit`-Befunde und Stückliste folgen aus der öffentlichen Sperrdatei. Keine Geheimnisse, keine Personendaten. 90 Tage, weil der Bericht der Nachweis zu einem Commit ist |
+| `feature-integrity-report` | immer | 14 Tage | Heuristik über den Quelltext; beratend |
+| `playwright-bericht` | nur bei Fehlschlag | 7 Tage | Bildschirmfotos und Spuren gegen **Demodaten** der Wegwerfdatenbank |
+| `server-log` | nur bei Fehlschlag | 7 Tage | Protokoll des Testservers; enthält nur Wegwerfwerte des Laufs |
+
+Bei öffentlichem Repository kann jedes angemeldete GitHub-Konto diese
+Artefakte laden. Das ist für den heutigen Inhalt vertretbar, und es ist ein
+weiterer Grund für „privat" in Abschnitt 3.
+
+---
+
+## 5. Auslieferung — fail-closed, überprüft am 2026-09-26
+
+1. Kein Pull Request löst sie aus.
+2. `vars.DEPLOY_ENABLED == 'true'` — nicht gesetzt, also übersprungen.
+3. Umgebung `production` — nur für `main`.
+4. `SERVER_SSH_KEY`, `SERVER_USER` fehlen in der Umgebung; die erste Stufe
+   bricht dann mit einer benannten Fehlermeldung ab.
+5. Kein Host im Workflow oder in `scripts/deploy.sh`: Das Ziel kommt
+   ausschliesslich aus `secrets.SERVER_HOST`, ohne Rückfall; die frühere
+   Serveradresse steht in keiner Zeile, die ausgeführt wird.
+6. `known_hosts` ist Pflicht; ohne passenden Eintrag keine Verbindung.
+
+Der Auftrag wurde in dieser Prüfung **nicht** ausgelöst.
