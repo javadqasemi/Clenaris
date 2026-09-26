@@ -94,3 +94,71 @@ Lauf der Integritätsprüfung gegen die Produktionsdatenbank.
 | App Code Ready | **Ja, mit benannten PARTIAL-Punkten** — kein offener interner Blocker für den heutigen Auslieferungsweg; die PARTIAL-Punkte (§1) sind Lücken im Umfang, keine Fehler |
 | External Verification Ready | **Ja** — jeder externe Punkt ist benannt, mit Verfahren und Dokument (§3) |
 | Production V2 Ready | **Nein** — V2-1 (intern) und V2-2…V2-6 (extern) offen |
+
+---
+
+## 6. Nachtrag 2026-09-26 — Stabilisierung, Scanplattform, Sicherheitsautomation
+
+Ausgangspunkt `b5b456b`. Kein Push, keine Auslieferung, keine DNS-Änderung,
+keine Produktionsmigration, kein Zugriff auf 2.29.18.45.
+
+### 6.1 Befunde der Stabilisierung (Phase A)
+
+| Nr. | Befund | Einordnung | Stand | Beleg |
+|---|---|---|---|---|
+| A1 | Rechnung aus dem Einsatz nahm nur die erste Buchungsposition — Pauschale, Zusätze, Anfahrt, Rabatte, Mindestbetrag fehlten | FEHLER | **behoben**: eine Herleitung (`rechnungsgrundlageAusBuchung`), Rechnung = Buchung | `buchung-integritaet.test.ts` |
+| A2 | Abgewiesene Gastbuchung hinterliess eine Kundenakte | FEHLER | **behoben**: Akte entsteht in der Buchungstransaktion | `buchung-integritaet.test.ts` |
+| A3 | Bearbeiten einer Buchung ohne Verfügbarkeitsprüfung | FEHLER | **behoben**: dieselbe Prüfung in der Transaktion hinter der Sperre; Übergehen protokolliert | `buchung-integritaet.test.ts` (inkl. Gleichzeitigkeit) |
+| — | Bewegliche Feiertage als jährlich wiederkehrend gespeichert | FEHLER | **behoben**: Seed + Datenmigration | `buchung-integritaet.test.ts` |
+| — | Erneuter Versand setzte eine angenommene Offerte auf SENT zurück (gefunden im Regressionslauf von `datenintegritaet`) | FEHLER | **behoben**: Versand nur aus DRAFT/SENT/VIEWED, sonst 422 | `offertannahme.test.ts` |
+| A4 | Einsatzfenster über Mitternacht | DEFINIERTE PRODUKTGRENZE | abgelehnt, begründet | `docs/VERFUEGBARKEIT.md` |
+| — | Fähigkeiten (Skills) bei der Zuteilung | FEHLENDE FUNKTION | offen | `docs/VERFUEGBARKEIT.md` |
+| — | Kapazität als Pool statt je Person | TECHNISCHE SCHULD | offen, zeitlich konservativ | `docs/VERFUEGBARKEIT.md` |
+| — | Rechnungsbeträge als `number` mit `round2` statt Decimal-Rechnung | TECHNISCHE SCHULD | offen | `docs/VERFUEGBARKEIT.md` |
+
+### 6.2 Neu
+
+| Bereich | Status | Beleg | Offen |
+|---|---|---|---|
+| Scanplattform (Kopfzeile, Kamera/Bild/Eingabe, Auflösen im Leserecht, Schnellaktionen über bestehende Endpunkte, unbekannte EAN → Artikel, Etiketten, Suche) | **COMPLETE + VERIFIED** (Einordnung, HTTP, Browser mit nachgebildeter Kamera) | `docs/SCANNER.md`, `docs/SECURITY_THREAT_MODEL_SCANNER.md`; `scan-kennung`, `scan`, `scan.spec.ts` | echte Kameraerkennung auf Geräten: **EXTERNAL** (Browserfunktion); Code-128-Etiketten, Nachbestellen, GS1-Elementstrings: FEHLENDE FUNKTION |
+| Sicherheitsstandard | **COMPLETE** | `docs/SECURITY_STANDARD.md` | — |
+| `npm run security:check`, `security:sbom`, CI-Schritt | **COMPLETE + VERIFIED** (örtlich; Geheimnisprüfung NICHT GEPRÜFT ohne Bash) | `docs/SECURITY_AUTOMATION.md` | Lauf im CI: **EXTERNAL** (kein Push) |
+| Berichtseingang und Anzeige in der Sicherheitszentrale | **COMPLETE + VERIFIED** | `sicherheitsberichte.test.ts` | — |
+| Sicherheitsupdates im Update Center | **COMPLETE + VERIFIED** | `release-center.test.ts` | — |
+| Vorlagen externe Überwachung `ops/security-monitor/` | **PARTIAL** — geschrieben, **nicht ausgeführt, nicht syntaxgeprüft** (keine Bash örtlich) | `ops/security-monitor/INSTALL.md` | Überwachungsrechner, `shellcheck`, Probelauf: **EXTERNAL** |
+
+### 6.3 Von der Sicherheitsautomation gefunden und behoben
+
+`GET /api/auth/session`, `POST /api/auth/logout`, `GET /api/handoff`,
+`GET /api/content/preview` ohne Kontingent; Namensprüfung vor
+`DROP DATABASE` in `setup-test-db.ts`. Details: `docs/SECURITY_AUTOMATION.md`.
+
+### 6.4 Schlussprüfung (2026-09-26)
+
+| Prüfung | Ergebnis |
+|---|---|
+| `tsc --noEmit`, `npm run lint`, `prisma validate` | Exit 0 |
+| `npm run docs` | 534 Endpunkte, Schutz übereinstimmend; 148 Modelle; keine Abweichung zum Repository |
+| Bau (`next build`, eigenes `NEXT_DIST_DIR` gegen die Testdatenbank) | erfolgreich. `prisma generate` meldet örtlich EPERM auf die DLL, solange der Entwicklungsserver läuft; Typen und Client werden trotzdem erzeugt |
+| Migrationen | 42; Entwicklungs- und Testdatenbank „up to date" (die neuen additiv über `db execute` + `resolve`; die Entwicklungsdatenbank bekam dabei auch die beiden Migrationen des Produktsprints) |
+| `npm test` | **1545 / 1547**, 0 fehlgeschlagen, 2 übersprungen (Blätterung ohne zweite Seite, datenabhängig, vorbestehend) |
+| — erster Regressionslauf | 1 fehlgeschlagen: `datenintegritaet` fand eine zurückgesetzte angenommene Offerte → Produktfehler, behoben (6.1) |
+| Browser-Reihe (`retries=0`) | **42 / 42** |
+| Stressreihe, 5 Läufe mit neu gestartetem Server | **5 / 5 grün**, je 42/42, 0 Hydrationsartefakte (auch vor Phase B: 5/5, je 39/39) |
+| Hydrationsregression | aktiv in Browser- und Stressreihe |
+| `npm run security:check` | 5 bestanden, 0 blockierend; Geheimnisprüfung und Sicherheitsreihen **NICHT GEPRÜFT** (keine Bash örtlich; Reihen laufen im vollen `npm test` mit) |
+| `npm audit --omit=dev` | 0 critical, 4 high, 3 moderate — alle bewertet bis 2026-12-31 |
+| `ops/security-monitor/*.sh` | **nicht ausgeführt, nicht syntaxgeprüft** |
+
+### 6.5 Urteil
+
+| Frage | Antwort |
+|---|---|
+| Interne Blocker aus dieser Mission (A1–A3) | **behoben und belegt** |
+| App Code Ready | **Ja, mit benannten PARTIAL-Punkten** (6.1 offene Schuld/Funktion, 6.2) |
+| External Verification Ready | **Ja** — CI-Lauf der Sicherheitsprüfung, Überwachungsrechner, Kameraerkennung auf Geräten und die Punkte aus §3 sind benannt |
+| Production V2 Ready | **Nein** — unverändert (§3) |
+
+Keine dieser Prüfungen beweist Fehlerfreiheit oder Sicherheit im absoluten
+Sinn; sie belegen die benannten Regeln (`docs/SECURITY_AUTOMATION.md`,
+„Was die Automatik nicht leistet").
