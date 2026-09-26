@@ -71,7 +71,14 @@ Auftrag „Prüfung":            grün, jede Stufe bestanden
 npm test:                     1567 / 1567, 0 übersprungen
 E2E:                          42 / 42, retries = 0
 SECRET SCAN:                  PASS — scripts/ci-secret-scan.sh mit echter Bash
-SECURITY:CHECK:               PASS — im CI alle Prüfungen ausgeführt (Bash vorhanden)
+SECURITY:CHECK:               6 von 6 Prüfungen der Stufe BESTANDEN, 0 blockierend
+                              (Geheimnisse, Abhängigkeiten, Muster, Migrationen,
+                              öffentliche Endpunkte, Repository). Die siebte,
+                              „Sicherheitsreihen der Prüfreihe", meldet die Stufe
+                              als NICHT GEPRÜFT — sie läuft dort nur mit
+                              --mit-tests; im CI laufen dieselben Reihen in der
+                              Stufe „Testreihe" (npm test, oben). Gesamtstatus der
+                              Stufe daher NICHT_GEPRUEFT, nicht „bestanden".
 HYDRATIONSKORREKTUR:          --pruefen OK
 AUFTRAG „Auslieferung":       übersprungen (pull_request; DEPLOY_ENABLED nicht gesetzt)
 ```
@@ -111,8 +118,23 @@ Zürcher Zeit, weil die Prüfungen „heute" in UTC rechneten, die Dienste in
 Zürich (`tests/helpers/datum.ts`). Behoben in den Prüfungen; das Produkt
 rechnete richtig.
 
-Ergebnis des CI-Laufs zu diesem Stand: im Pull Request #3 und im
-Abschlussbericht der Mission.
+**CI-Lauf 36277284445** am Stand `7e43ccc` (2026-09-26 22:45 UTC, also
+00:45 in Zürich): grün. `npm test` 1582 Fälle, 1581 bestanden,
+0 fehlgeschlagen, **1 übersprungen** — `betrieb.test.ts`, „eine verstrichene
+Frist ohne Reaktion ist verpasst", überspringt sich absichtlich zwischen 00:00
+und 03:00 Zürcher Zeit (der Fall braucht „vor zwei Stunden" am selben Tag wie
+die erste Vertragsfassung). Darunter alle Fälle aus
+`laufzeit-konfiguration.test.ts`, auch „Dasselbe Artefakt" mit zwei Instanzen.
+E2E 42/42, Geheimnisprüfung bestanden, `security:check` wie in Nachtrag A
+(6/6, Gesamtstatus NICHT_GEPRUEFT wegen der siebten Prüfung), Auslieferung
+übersprungen.
+
+Der Lauf davor (36277056624, Stand `09bdfc4`) hielt richtig an der
+Geheimnisprüfung an: Marker in der neuen Prüfung sahen wie Zugangsdaten aus.
+Behoben in der Prüfung (7e43ccc), die Geheimnisprüfung blieb unverändert.
+
+Dieser Dokumentstand selbst hat einen eigenen Lauf; die Nummer steht im
+Pull Request #3.
 
 ---
 
