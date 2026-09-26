@@ -423,6 +423,19 @@ const DOMAINS: Domain[] = [
       'ReportRun',
     ],
   },
+  {
+    key: 'versionen',
+    title: 'Versionsverwaltung',
+    purpose:
+      '`Release` beschreibt eine Clenaris-Version — Änderungsprotokoll, Migrationen, Ausfallzeit, ' +
+      'Prüfstufe —, produktweit und nach dem Eintragen unveränderlich; eingetragen wird sie nur über ' +
+      '`scripts/release-registrieren.ts`, nie über einen Endpunkt. `ReleaseRequest` ist die ' +
+      'Entscheidung eines Betriebs darüber (freigegeben, terminiert, storniert), höchstens ein ' +
+      'offener Auftrag je Version per partiellem Index. `ReleaseDeferral` hält das „Nicht jetzt" ' +
+      'fest. Ausgeführt wird von der Anwendung aus nichts: Den Auftrag liest ein externer, ' +
+      'vertrauenswürdiger Ausführer, der heute noch nicht existiert.',
+    models: ['Release', 'ReleaseRequest', 'ReleaseDeferral'],
+  },
 ];
 
 // ---------------------------------------------------------------------------

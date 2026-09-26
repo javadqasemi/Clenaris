@@ -283,6 +283,16 @@ const MANAGER_PERMISSIONS: Permission[] = [
  * die aus einem Grund zugeschlagen hat, und ein Ereignis zu bestätigen heisst,
  * es als angesehen zu erklären. Beides ist keine Betriebsführung.
  */
+/**
+ * `release:read` und `release:manage` (2026-09-26): die Versionsverwaltung.
+ *
+ * Wer eine neue Version freigibt, entscheidet über Ausfallzeit,
+ * Datenbankmigrationen und darüber, ob eine Sicherheitslücke offen bleibt —
+ * für alle, die mit dem System arbeiten. Das ist Systemverantwortung, nicht
+ * Betriebsführung. Auch das Lesen bleibt hier: Ein Änderungsprotokoll mit
+ * offenen Sicherheitskorrekturen beschreibt, wo das laufende System
+ * verwundbar ist.
+ */
 const SUPER_ADMIN_ONLY: Permission[] = [
   'role:assign',
   'audit:read',
@@ -290,6 +300,8 @@ const SUPER_ADMIN_ONLY: Permission[] = [
   'security:manage',
   'user:impersonate',
   'data:purge',
+  'release:read',
+  'release:manage',
 ];
 
 const ADMIN_PERMISSIONS: Permission[] = PERMISSIONS.filter(
@@ -392,7 +404,7 @@ export const ROLE_LABELS: Record<ActorRole, string> = {
 /** Ein Satz je Rolle — steht in der Rechtematrix über der Spalte. */
 export const ROLE_DESCRIPTIONS: Record<ActorRole, string> = {
   SUPER_ADMIN:
-    'Alles, plus Rollenvergabe, Prüfprotokoll, Kontoübernahme und Datenbereinigung. Für genau eine oder zwei Personen gedacht.',
+    'Alles, plus Rollenvergabe, Prüfprotokoll, Kontoübernahme, Datenbereinigung und Versionsfreigabe. Für genau eine oder zwei Personen gedacht.',
   ADMIN:
     'Führt den Betrieb vollständig und gestaltet Website, Katalog und Preise. Vergibt keine Rollen und sieht das Prüfprotokoll nicht.',
   MANAGER:
@@ -463,6 +475,8 @@ const PERMISSION_ROUTES: { prefix: string; permission: Permission }[] = [
   // Reine Handlungsmaske ohne Lesemodus: wer nicht löschen darf, soll die
   // Seite gar nicht sehen — sie antwortet mit 404, nicht mit 403.
   { prefix: '/admin/datenbereinigung', permission: 'data:purge' },
+  // Versionsverwaltung: dieselbe Klasse — für andere Rollen gibt es sie nicht.
+  { prefix: '/admin/updates', permission: 'release:read' },
   { prefix: '/admin/papierkorb', permission: 'booking:delete' },
   { prefix: '/admin/einstellungen', permission: 'settings:read' },
   /**

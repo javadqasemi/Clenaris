@@ -31,6 +31,7 @@ import { FINANZ_ROUTES } from './openapi-routes-finanzen';
 import { VERKAUF_ROUTES } from './openapi-routes-verkauf';
 import { KOMMUNIKATION_ROUTES } from './openapi-routes-kommunikation';
 import { SUCHE_ROUTES } from './openapi-routes-suche';
+import { VERSIONEN_ROUTES } from './openapi-routes-versionen';
 
 /**
  * Registrierung aller REST-Endpunkte.
@@ -4460,4 +4461,9 @@ export const ROUTES: RouteDoc[] = [
   //  Globale Suche (Wave 17)
   // -------------------------------------------------------------------------
   ...SUCHE_ROUTES,
+
+  // -------------------------------------------------------------------------
+  //  Versionsverwaltung (Produktsprint 2026-09-26)
+  // -------------------------------------------------------------------------
+  ...VERSIONEN_ROUTES,
 ];

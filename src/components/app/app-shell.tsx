@@ -36,6 +36,7 @@ import {
   MessageSquare,
   MousePointerClick,
   Newspaper,
+  PackageCheck,
   PenLine,
   PiggyBank,
   Presentation,
@@ -142,6 +143,7 @@ const NAV_ICONS = {
   tasks: ClipboardList,
   time: Timer,
   trash: Trash2,
+  updates: PackageCheck,
   user: UserRound,
   users: KeyRound,
   // Unternehmensführung

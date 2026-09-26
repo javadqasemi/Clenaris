@@ -579,6 +579,10 @@ model Organization {
   reportRuns        ReportRun[]
   qualityInspections QualityInspection[]
 
+  // Versionsverwaltung (Produktsprint 2026-09-26)
+  releaseRequests  ReleaseRequest[]
+  releaseDeferrals ReleaseDeferral[]
+
   @@map("organizations")
 }
 
@@ -6894,4 +6898,135 @@ model EquipmentMaintenance {
 
   @@index([equipmentId, performedOn])
   @@map("equipment_maintenances")
+}
+
+// ===========================================================================
+//  VERSIONSVERWALTUNG (Produktsprint 2026-09-26)
+//
+//  Drei Tabellen, zwei Welten: `Release` ist die Beschreibung einer Version
+//  (was sie bringt), `ReleaseRequest` die Entscheidung des Betriebs darüber
+//  (freigegeben, terminiert, storniert). Ausgeführt wird hier nichts — die
+//  Ausführung ist Sache eines vertrauenswürdigen Deployment-Werkzeugs
+//  ausserhalb der Anwendung (Production V2), das offene Aufträge liest. Die
+//  Begründung steht in `src/server/services/release.service.ts`.
+// ===========================================================================
+
+/// Einordnung einer Version für den Betrieb.
+enum ReleaseKind {
+  PATCH
+  MINOR
+  MAJOR
+  SECURITY
+}
+
+/// Schwere einer Sicherheitskorrektur — nur bei Versionen, die eine enthalten.
+enum ReleaseSeverity {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+/// Ergebnis der Prüfstufe (CI) für das Release-Artefakt.
+enum ReleaseCiStatus {
+  PASSED
+  FAILED
+  PENDING
+}
+
+/// Zustand eines Aktualisierungsauftrags. Bewusst ohne DEPLOYING/SUCCEEDED/
+/// FAILED: Solange es keinen Ausführer gibt, gäbe es keinen Weg in diese
+/// Zustände, und ein Zustand ohne Weg ist eine Behauptung.
+enum ReleaseRequestStatus {
+  APPROVED
+  SCHEDULED
+  CANCELLED
+}
+
+/// Eine Clenaris-Version mit ihrem Änderungsprotokoll — Metadaten, keine Ausführung.
+/// Produktweit, nicht je Mandant: Dieselbe Version ist für jeden Betrieb dieselbe.
+/// Unveränderlich nach dem Eintragen (`scripts/release-registrieren.ts` verweigert
+/// eine abweichende Neufassung derselben Versionsnummer).
+model Release {
+  id               String           @id @default(cuid())
+  /// Semantische Version ohne „v", etwa `1.1.0`.
+  version          String           @unique
+  releasedAt       DateTime         @db.Timestamptz(6)
+  kind             ReleaseKind
+  securitySeverity ReleaseSeverity?
+  summary          String
+  features         String[]         @default([])
+  fixes            String[]         @default([])
+  securityFixes    String[]         @default([])
+  uiChanges        String[]         @default([])
+  /// Namen der Datenbankmigrationen, die diese Version mitbringt.
+  migrations       String[]         @default([])
+  breakingChanges  String[]         @default([])
+  manualActions    String[]         @default([])
+  expectedDowntimeMinutes Int?
+  rollbackAvailable Boolean         @default(true)
+  ciStatus         ReleaseCiStatus  @default(PENDING)
+  compatibility    String?
+  commit           String?
+  artifactSha256   String?
+  artifactSizeBytes Int?
+  createdAt        DateTime         @default(now()) @db.Timestamptz(6)
+
+  requests  ReleaseRequest[]
+  deferrals ReleaseDeferral[]
+
+  @@index([releasedAt])
+  @@map("releases")
+}
+
+/// Die Entscheidung eines Betriebs über eine Version: freigegeben, terminiert, storniert.
+/// Höchstens ein offener Auftrag (APPROVED/SCHEDULED) je Organisation und Version —
+/// als partieller eindeutiger Index `release_requests_offen_einmal` in der Migration
+/// `20260926100000_versionsverwaltung`; Prisma kann ihn nicht ausdrücken.
+model ReleaseRequest {
+  id             String               @id @default(cuid())
+  organizationId String
+  releaseId      String
+  status         ReleaseRequestStatus
+  /// Stand beim Freigeben — die Frage „von welcher Version aus" beantwortet
+  /// später nicht der aktuelle Stand, sondern dieser.
+  fromVersion    String
+  toVersion      String
+  scheduledFor   DateTime?            @db.Timestamptz(6)
+
+  approvedById   String
+  approvedAt     DateTime             @db.Timestamptz(6)
+  scheduledById  String?
+  scheduledAt    DateTime?            @db.Timestamptz(6)
+  cancelledById  String?
+  cancelledAt    DateTime?            @db.Timestamptz(6)
+  cancelReason   String?
+
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  release      Release      @relation(fields: [releaseId], references: [id], onDelete: Restrict)
+
+  @@index([organizationId, status])
+  @@index([releaseId])
+  @@map("release_requests")
+}
+
+/// „Nicht jetzt" — eine Version bewusst zurückgestellt, bis zu einem Datum.
+/// Eigene Zeile statt eines Feldes am Auftrag: Zurückstellen ist keine
+/// Freigabe, und ein Auftrag ohne Freigabe wäre ein Widerspruch.
+model ReleaseDeferral {
+  id             String   @id @default(cuid())
+  organizationId String
+  releaseId      String
+  deferredById   String
+  deferredUntil  DateTime @db.Timestamptz(6)
+  createdAt      DateTime @default(now()) @db.Timestamptz(6)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  release      Release      @relation(fields: [releaseId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, releaseId, deferredUntil])
+  @@map("release_deferrals")
 }

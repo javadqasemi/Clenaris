@@ -8,6 +8,7 @@ import { AppShell } from '@/components/app/app-shell';
 import { filterNavigation, type GuardedNavGroup } from '@/lib/auth/navigation';
 import { getOrganizationId } from '@/server/services/organization.service';
 import { countDueReviews } from '@/server/services/insight.service';
+import { neuesteVerfuegbare } from '@/server/services/release.service';
 
 /**
  * Rahmen der Administration.
@@ -77,6 +78,12 @@ export default async function AdminLayout({ children }: { children: React.ReactN
       // Führungsbereich eine Handlung auslösen.
       countDueReviews(organizationId),
     ]);
+
+  // Nur für die Systemverantwortung abfragen — für alle anderen gibt es den
+  // Eintrag nicht, und eine Abfrage ohne Anzeige wäre verschenkte Zeit.
+  const updatesOffen = can(session.role, 'release:read')
+    ? (await neuesteVerfuegbare(organizationId)).anzahlOffen
+    : 0;
 
   /**
    * Die Navigation der Administration.
@@ -216,6 +223,9 @@ export default async function AdminLayout({ children }: { children: React.ReactN
         // Endgültiges Löschen ganzer Bereiche: nur die Systemverantwortung,
         // jeder Lauf steht im Prüfprotokoll darüber.
         { href: '/admin/datenbereinigung', label: 'Datenbereinigung', icon: 'eraser', permission: 'data:purge' },
+        // Versionsverwaltung — die Zahl nennt Versionen, über die noch nicht
+        // entschieden ist (verfügbar oder freigegeben ohne Ausführung).
+        { href: '/admin/updates', label: 'Updates', icon: 'updates', badge: updatesOffen, permission: 'release:read' },
       ],
     },
   ];
