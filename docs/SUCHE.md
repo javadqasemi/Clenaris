@@ -1,7 +1,8 @@
 # Globale Suche (Wave 17)
 
-Stand 2026-09-23. Status: **COMPLETE + VERIFIED** (`tests/api/suche.test.ts`,
-Rauchtest `/admin/suche`).
+Stand 2026-09-26. Status: **COMPLETE + VERIFIED** (`tests/api/suche.test.ts`,
+Rauchtest `/admin/suche`, Browserablauf A in
+`tests/e2e/produktsprint-2026-09-26.spec.ts`).
 
 ## Weg
 
@@ -10,6 +11,21 @@ Rauchtest `/admin/suche`).
 `src/server/services/search.service.ts`. Die Seite ist ein schlichtes
 GET-Formular, serverseitig gerendert — keine Clientsuche, die Treffer über den
 Draht schickt, die die Seite danach ausblendet.
+
+**Seit 2026-09-26 in der Kopfzeile** (`src/components/app/global-search.tsx`),
+nicht mehr als Eintrag in der Seitenleiste: Live-Suche beim Tippen, entprellt
+(250 ms), die vorige Anfrage wird per `AbortController` abgebrochen, sodass
+eine langsame Antwort nie eine neuere überschreibt. Combobox mit Listbox
+(`aria-activedescendant`), Pfeiltasten, Enter, Escape, Maus, `Strg`/`⌘`+`K`;
+auf dem Telefon als Dialog. Gruppiert nach Bereich, der Suchbegriff
+hervorgehoben. Enter ohne gewählte Zeile führt zur Vollansicht `/admin/suche`.
+Dieselbe Funktion, derselbe Endpunkt — keine zweite Suche.
+
+Neu durchsucht werden **Objekte** (über `propertyVisibilityWhere`),
+**Buchungen** (`booking:read`) und **Dokumente** (`document:read`, über
+`documentVisibilityWhere`). Datensatzbezogene Rechte brauchen ihre
+Sichtbarkeitsbedingung: `property:read` haben auch Mitarbeitende und
+Kundschaft, die Rolle allein beantwortet nicht, *welche* Objekte.
 
 ## Regeln
 

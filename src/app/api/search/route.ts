@@ -17,5 +17,5 @@ export const GET = defineRoute({
   query: globalSearchQuerySchema,
   rateLimit: 'apiRead',
   handler: async ({ query, session }) =>
-    ok(await globaleSuche({ organizationId: await getOrganizationId(), role: session.role, q: query.q })),
+    ok(await globaleSuche({ organizationId: await getOrganizationId(), session, q: query.q })),
 });

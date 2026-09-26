@@ -1,7 +1,10 @@
 import 'server-only';
 
-import { can, type ActorRole } from '@/lib/auth/rbac';
+import { can } from '@/lib/auth/rbac';
+import type { SessionUser } from '@/lib/auth/session';
 import { prisma } from '@/lib/db';
+import { documentVisibilityWhere } from '@/server/services/document.service';
+import { propertyVisibilityWhere } from '@/server/services/property.service';
 
 /**
  * Globale Suche (Wave 17, 2026-09-23).
@@ -22,6 +25,20 @@ import { prisma } from '@/lib/db';
  *    AHV-Nummer, die eine Person findet, verriete die Nummer.
  *  • **Höchstens fünf Treffer je Bereich**, neueste zuerst — eine Suche ist
  *    ein Sprung, keine Liste; die Liste hat der Bereich selbst.
+ *  • **Datensatzbezogene Rechte brauchen ihre Sichtbarkeitsbedingung.**
+ *    `property:read` besitzen Büro, Mitarbeitende *und* Kundschaft; welche
+ *    Objekte jemand sieht, entscheidet `propertyVisibilityWhere`, nicht die
+ *    Berechtigung. Dasselbe gilt für Dokumente (`documentVisibilityWhere`).
+ *    Deshalb bekommt die Suche die ganze Sitzung und nicht nur die Rolle:
+ *    Mit der Rolle allein hätte eine Mitarbeiterin über die Suche jedes Objekt
+ *    samt Adresse gefunden, das ihr die Objektliste zu Recht verschweigt.
+ *
+ *  Seit dem Produktsprint vom 2026-09-26 kommen Objekte, Buchungen und
+ *  Dokumente dazu — die drei Bereiche, nach denen im Büro am häufigsten
+ *  gefragt wird („die Buchung von Müller", „das Objekt an der
+ *  Bahnhofstrasse"). Die Reihenfolge der Aufgaben unten ist die Reihenfolge
+ *  der Gruppen in der Kopfzeilensuche: erst die Person, dann ihr Objekt, dann
+ *  die Vorgänge in der Reihenfolge, in der sie entstehen.
  */
 
 export interface Treffer {
@@ -34,11 +51,11 @@ export interface Treffer {
 
 const JE_BEREICH = 5;
 
-export async function globaleSuche(params: { organizationId: string; role: ActorRole; q: string }): Promise<{ q: string; treffer: Treffer[] }> {
+export async function globaleSuche(params: { organizationId: string; session: SessionUser; q: string }): Promise<{ q: string; treffer: Treffer[] }> {
   const q = params.q.trim();
   const enthaelt = { contains: q, mode: 'insensitive' as const };
   const org = params.organizationId;
-  const darf = (p: Parameters<typeof can>[1]) => can(params.role, p);
+  const darf = (p: Parameters<typeof can>[1]) => can(params.session.role, p);
   const aufgaben: Promise<Treffer[]>[] = [];
 
   if (darf('customer:read')) {
@@ -61,6 +78,91 @@ export async function globaleSuche(params: { organizationId: string; role: Actor
             titel: k.companyName ?? `${k.firstName} ${k.lastName}`,
             untertitel: k.number,
             link: `/admin/kunden/${k.id}`,
+          })),
+        ),
+    );
+  }
+  if (darf('property:read')) {
+    // Die Sichtbarkeit kommt aus derselben Funktion wie die Objektliste —
+    // Mitarbeitende finden nur Objekte mit eigenem Einsatz (siehe oben).
+    aufgaben.push(
+      prisma.property
+        .findMany({
+          where: {
+            AND: [
+              propertyVisibilityWhere(params.session, org),
+              {
+                OR: [
+                  { label: enthaelt },
+                  { address: { street: enthaelt } },
+                  { address: { city: enthaelt } },
+                  { address: { postalCode: enthaelt } },
+                  { customer: { companyName: enthaelt } },
+                  { customer: { lastName: enthaelt } },
+                ],
+              },
+            ],
+          },
+          select: {
+            id: true,
+            label: true,
+            customerId: true,
+            address: { select: { street: true, streetNo: true, postalCode: true, city: true } },
+            customer: { select: { companyName: true, firstName: true, lastName: true } },
+          },
+          orderBy: { createdAt: 'desc' },
+          take: JE_BEREICH,
+        })
+        .then((r) =>
+          r.map((o) => {
+            const kunde = o.customer.companyName ?? `${o.customer.firstName} ${o.customer.lastName}`;
+            const adresse = o.address
+              ? [`${o.address.street} ${o.address.streetNo ?? ''}`.trim(), `${o.address.postalCode} ${o.address.city}`].join(', ')
+              : null;
+            return {
+              art: 'Objekt',
+              id: o.id,
+              titel: `${kunde} — ${o.label}`,
+              untertitel: adresse,
+              // Objekte haben keine eigene Detailseite; sie stehen in der
+              // Kundenakte, und dorthin führt der Treffer.
+              link: `/admin/kunden/${o.customerId}`,
+            };
+          }),
+        ),
+    );
+  }
+  if (darf('booking:read')) {
+    aufgaben.push(
+      prisma.booking
+        .findMany({
+          where: {
+            organizationId: org,
+            deletedAt: null,
+            OR: [
+              { number: enthaelt },
+              { customer: { companyName: enthaelt } },
+              { customer: { lastName: enthaelt } },
+              { customer: { firstName: enthaelt } },
+              { items: { some: { name: enthaelt } } },
+            ],
+          },
+          select: {
+            id: true,
+            number: true,
+            scheduledStart: true,
+            customer: { select: { companyName: true, firstName: true, lastName: true } },
+          },
+          orderBy: { scheduledStart: 'desc' },
+          take: JE_BEREICH,
+        })
+        .then((r) =>
+          r.map((b) => ({
+            art: 'Buchung',
+            id: b.id,
+            titel: `${b.number} — ${b.customer.companyName ?? `${b.customer.firstName} ${b.customer.lastName}`}`,
+            untertitel: new Intl.DateTimeFormat('de-CH', { timeZone: 'Europe/Zurich', dateStyle: 'medium', timeStyle: 'short' }).format(b.scheduledStart),
+            link: `/admin/buchungen/${b.id}`,
           })),
         ),
     );
@@ -107,6 +209,28 @@ export async function globaleSuche(params: { organizationId: string; role: Actor
           take: JE_BEREICH,
         })
         .then((r) => r.map((i) => ({ art: 'Rechnung', id: i.id, titel: i.number, untertitel: i.billToCompany ?? i.billToName, link: `/admin/rechnungen/${i.id}` }))),
+    );
+  }
+  // Dokumente nur mit dem vollen Leserecht: `document:read_own` (Mitarbeitende)
+  // hat keinen Weg in die Dokumentenablage der Administration, ein Treffer
+  // dorthin wäre ein toter Link. Welche Dokumente die Rolle sieht, entscheidet
+  // `documentVisibilityWhere` — die Betriebsleitung findet keine Personalakten
+  // anderer Leute.
+  if (darf('document:read')) {
+    aufgaben.push(
+      prisma.managedDocument
+        .findMany({
+          where: {
+            AND: [
+              documentVisibilityWhere(params.session, org),
+              { OR: [{ title: enthaelt }, { tags: { has: q } }] },
+            ],
+          },
+          select: { id: true, title: true, category: true },
+          orderBy: { updatedAt: 'desc' },
+          take: JE_BEREICH,
+        })
+        .then((r) => r.map((d) => ({ art: 'Dokument', id: d.id, titel: d.title, untertitel: null, link: `/admin/fuehrung/dokumente/${d.id}` }))),
     );
   }
   if (darf('job:read')) {

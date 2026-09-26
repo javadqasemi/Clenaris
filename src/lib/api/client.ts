@@ -184,8 +184,14 @@ async function requestWithMeta<T, M = unknown>(
 }
 
 export const api = {
-  get: <T>(path: string, params?: Record<string, unknown>) =>
-    request<T>(path, { method: 'GET', params }),
+  /**
+   * `signal` ist für Abfragen, die veralten können, bevor sie antworten — die
+   * Live-Suche in der Kopfzeile bricht mit jedem Tastendruck die vorige
+   * Anfrage ab. Ohne Abbruch käme eine langsame Antwort auf „mü" unter
+   * Umständen *nach* der auf „müller" an und überschriebe sie.
+   */
+  get: <T>(path: string, params?: Record<string, unknown>, init?: { signal?: AbortSignal }) =>
+    request<T>(path, { method: 'GET', params, signal: init?.signal }),
 
   list: <T, M = PaginationMeta>(path: string, params?: Record<string, unknown>) =>
     requestWithMeta<T, M>(path, { method: 'GET', params }),

@@ -3,7 +3,7 @@ import { redirect } from 'next/navigation';
 import { prisma } from '@/lib/db';
 import { serverEnv } from '@/lib/env';
 import { getSession } from '@/lib/auth/session';
-import { guardForPath, homeRouteFor } from '@/lib/auth/rbac';
+import { can, guardForPath, homeRouteFor } from '@/lib/auth/rbac';
 import { AppShell } from '@/components/app/app-shell';
 import { filterNavigation, type GuardedNavGroup } from '@/lib/auth/navigation';
 import { getOrganizationId } from '@/server/services/organization.service';
@@ -91,8 +91,11 @@ export default async function AdminLayout({ children }: { children: React.ReactN
     {
       items: [
         { href: '/admin', label: 'Übersicht', icon: 'dashboard', exact: true, permission: 'dashboard:view' },
-        // Wave 17: globale Suche — jeder Bereich nur mit seiner Leseberechtigung.
-        { href: '/admin/suche', label: 'Suche', icon: 'search', permission: 'dashboard:view' },
+        // Die globale Suche (Wave 17) steht seit 2026-09-26 in der Kopfzeile
+        // und nicht mehr hier: Die Seitenleiste ist die Karte der Bereiche,
+        // die Suche ein Sprung quer dazu — und sie soll von jeder Seite aus
+        // ohne Umweg über eine eigene Suchseite erreichbar sein. Die Seite
+        // `/admin/suche` bleibt als Vollansicht aller Treffer bestehen.
         { href: '/admin/kalender', label: 'Einsatzkalender', icon: 'calendar', permission: 'job:read' },
       ],
     },
@@ -225,6 +228,9 @@ export default async function AdminLayout({ children }: { children: React.ReactN
       areaLabel="Administration"
       areaHref="/admin"
       settingsHref="/admin/einstellungen"
+      // Die Suche nur, wenn der Endpunkt sie beantwortet (`dashboard:view`);
+      // welche Bereiche sie durchsucht, entscheidet der Dienst je Recht.
+      search={can(session.role, 'dashboard:view')}
       sessionIdleSeconds={serverEnv().SESSION_IDLE_TTL}
       user={{
         id: session.id,

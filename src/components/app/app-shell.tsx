@@ -80,6 +80,7 @@ import {
   SheetTitle,
   SheetTrigger,
 } from '@/components/ui/overlays';
+import { GlobalSearch } from '@/components/app/global-search';
 import { NotificationPanel } from '@/components/app/notification-panel';
 import { NavigationProgress } from '@/components/app/navigation-progress';
 import { ThemeSync } from '@/features/account/appearance-form';
@@ -198,6 +199,7 @@ export function AppShell({
   areaLabel,
   areaHref,
   settingsHref,
+  search = false,
   sessionIdleSeconds = 900,
   children,
 }: {
@@ -206,6 +208,13 @@ export function AppShell({
   areaLabel: string;
   areaHref: string;
   settingsHref?: string;
+  /**
+   * Globale Suche in der Kopfzeile. Nur die Administration setzt sie: Der
+   * Endpunkt verlangt `dashboard:view`, und seine Treffer führen in
+   * `/admin/…` — im Portal und im Kundenbereich wäre jeder Treffer ein Link
+   * auf eine verschlossene Tür.
+   */
+  search?: boolean;
   /** Sekunden ohne Aktivität bis zur Abmeldung — aus `SESSION_IDLE_TTL`. */
   sessionIdleSeconds?: number;
   children: React.ReactNode;
@@ -428,6 +437,19 @@ export function AppShell({
 
             <Breadcrumbs navigation={navigation} pathname={pathname} areaHref={areaHref} areaLabel={areaLabel} />
           </div>
+
+          {/*
+            Die Suche steht in der Mitte der Kopfzeile, nicht in der
+            Seitenleiste: Sie ist auf jeder Seite derselbe Einstieg und auf
+            dem Telefon sonst erst hinter dem Schubfach erreichbar. `search`
+            kommt aus den Server-Eigenschaften — auf beiden Seiten derselbe
+            Wert, die Struktur bleibt beim Hydrieren gleich.
+          */}
+          {search ? (
+            <div className="flex min-w-0 flex-1 items-center justify-end md:justify-center">
+              <GlobalSearch />
+            </div>
+          ) : null}
 
           <div className="flex items-center gap-1.5">
             {/*

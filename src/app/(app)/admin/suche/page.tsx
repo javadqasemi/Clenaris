@@ -16,22 +16,27 @@ export const metadata: Metadata = {
 export const dynamic = 'force-dynamic';
 
 /**
- * Globale Suche (Wave 17). Ein schlichtes Formular ohne Client-Code — die
- * Seite rendert auf dem Server, die Treffer sind Links. Ein Suchfeld mit
- * Vorschlägen im Kopf der App wäre bequemer, brächte aber Client-Zustand in
- * jede Seite; die Hydrationsprüfung dieses Projekts ist teuer genug erkauft.
+ * Globale Suche (Wave 17) — die Vollansicht.
+ *
+ * Seit dem Produktsprint vom 2026-09-26 sucht man in der Kopfzeile, live
+ * während des Tippens (`src/components/app/global-search.tsx`). Diese Seite
+ * bleibt als Ziel von „Alle Treffer anzeigen" und als Weg ohne JavaScript:
+ * ein schlichtes Formular, auf dem Server gerendert, die Treffer sind Links.
+ * Der Einwand von damals — Client-Zustand in jeder Seite gefährde die
+ * Hydration — ist in der Kopfzeilensuche dadurch aufgefangen, dass ihre
+ * Struktur bis zur ersten Eingabe feststeht; Begründung dort.
  */
 export default async function SearchPage({ searchParams }: { searchParams: Promise<Record<string, string | undefined>> }) {
   const session = await requirePermission('dashboard:view');
   const params = await searchParams;
   const q = (params.q ?? '').trim().slice(0, 80);
-  const ergebnis = q.length >= 2 ? await globaleSuche({ organizationId: await getOrganizationId(), role: session.role, q }) : null;
+  const ergebnis = q.length >= 2 ? await globaleSuche({ organizationId: await getOrganizationId(), session, q }) : null;
   const gruppen = new Map<string, Treffer[]>();
   for (const t of ergebnis?.treffer ?? []) gruppen.set(t.art, [...(gruppen.get(t.art) ?? []), t]);
 
   return (
     <div className="space-y-6">
-      <PageHeader title="Suche" description="Kundschaft, Anfragen, Offerten, Rechnungen, Einsätze, Verträge, Personal und mehr — je nach Ihren Rechten." />
+      <PageHeader title="Suche" description="Kundschaft, Objekte, Buchungen, Offerten, Verträge, Einsätze, Rechnungen, Dokumente und mehr — je nach Ihren Rechten." />
       <form action="/admin/suche" method="get" role="search" className="flex max-w-xl gap-2">
         <label htmlFor="suche-q" className="sr-only">
           Suchbegriff

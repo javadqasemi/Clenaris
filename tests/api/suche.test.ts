@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 
 import { data, get, requireServer } from '../helpers/client';
 import { loginAll, type AccountName } from '../helpers/accounts';
-import { fremdeOrganisation, testDb, testDbSchliessen } from '../helpers/testdb';
+import { eigeneOrganisationId, fremdeOrganisation, testDb, testDbSchliessen } from '../helpers/testdb';
 
 /**
  * Wave 17 — globale Suche: findet, was die Rolle lesen darf, und nur das.
@@ -18,7 +18,10 @@ type Antwort = { data: { q: string; treffer: { art: string; id: string; titel: s
 let jars: Record<AccountName, string>;
 const RUN = Date.now();
 const FREMD = `Suchfremd${RUN}`;
+/** Bezeichnung eines Objekts, an dem kein Einsatz der Demo-Mitarbeiterin hängt. */
+const OBJEKT = `Suchobjekt${RUN}`;
 let fremdeKundschaft = '';
+let eigenesObjekt = '';
 
 before(async () => {
   await requireServer();
@@ -29,11 +32,24 @@ before(async () => {
     fremdeKundschaft = (
       await db.customer.create({ data: { organizationId: org, number: `K-SUCH-${RUN}`, firstName: 'Fremd', lastName: FREMD, email: `such.${RUN}@example.ch` } })
     ).id;
+    // Dasselbe Wort auch als Objekt der fremden Organisation — die Suche nach
+    // Objekten darf über die Kundschaft nicht in einen anderen Mandanten greifen.
+    await db.property.create({ data: { customerId: fremdeKundschaft, label: `${FREMD} Objekt` } });
+  }
+  if (db) {
+    const eigen = await eigeneOrganisationId();
+    const kunde = eigen ? await db.customer.findFirst({ where: { organizationId: eigen, deletedAt: null }, select: { id: true } }) : null;
+    if (kunde) eigenesObjekt = (await db.property.create({ data: { customerId: kunde.id, label: OBJEKT } })).id;
   }
 });
 
 after(async () => {
-  if (fremdeKundschaft) await testDb()?.customer.delete({ where: { id: fremdeKundschaft } }).catch(() => undefined);
+  const db = testDb();
+  if (eigenesObjekt) await db?.property.delete({ where: { id: eigenesObjekt } }).catch(() => undefined);
+  if (fremdeKundschaft) {
+    await db?.property.deleteMany({ where: { customerId: fremdeKundschaft } }).catch(() => undefined);
+    await db?.customer.delete({ where: { id: fremdeKundschaft } }).catch(() => undefined);
+  }
   await testDbSchliessen();
 });
 
@@ -75,6 +91,45 @@ describe('Globale Suche', () => {
     if (!fremdeKundschaft) return t.skip('keine fremde Organisation');
     const r = data(await get<Antwort>(`/api/search?q=${FREMD}`, { jar: jars.admin }));
     assert.equal(r.treffer.length, 0, JSON.stringify(r));
+  });
+
+  // --- Produktsprint 2026-09-26: Buchungen, Objekte, Dokumente -------------
+
+  it('findet eine Buchung über ihre Nummer', async () => {
+    const liste = data(await get<{ data: { id: string; number: string }[] }>('/api/bookings?pageSize=1', { jar: jars.admin }));
+    const buchung = liste[0];
+    assert.ok(buchung, 'keine Buchung im Demobestand');
+    const r = data(await get<Antwort>(`/api/search?q=${encodeURIComponent(buchung.number)}`, { jar: jars.admin }));
+    assert.ok(r.treffer.some((t) => t.art === 'Buchung' && t.id === buchung.id), JSON.stringify(r).slice(0, 300));
+  });
+
+  it('findet ein Objekt für das Büro — nicht aber für Mitarbeitende ohne Einsatz dort', async (t) => {
+    if (!eigenesObjekt) return t.skip('keine Testdatenbank');
+    const buero = data(await get<Antwort>(`/api/search?q=${OBJEKT}`, { jar: jars.admin }));
+    assert.ok(buero.treffer.some((x) => x.art === 'Objekt' && x.id === eigenesObjekt), JSON.stringify(buero));
+    // `property:read` besitzen auch Mitarbeitende — die Suche muss dieselbe
+    // Sichtbarkeitsbedingung anwenden wie die Objektliste.
+    const mitarbeitende = data(await get<Antwort>(`/api/search?q=${OBJEKT}`, { jar: jars.employee }));
+    assert.ok(!mitarbeitende.treffer.some((x) => x.id === eigenesObjekt), 'Mitarbeitende finden ein fremdes Objekt');
+  });
+
+  it('Objekte einer fremden Organisation bleiben unsichtbar', async (t) => {
+    if (!fremdeKundschaft) return t.skip('keine fremde Organisation');
+    const r = data(await get<Antwort>(`/api/search?q=${FREMD}`, { jar: jars.super }));
+    assert.equal(r.treffer.length, 0, JSON.stringify(r));
+  });
+
+  it('Mitarbeitende finden keine Buchungen und keine Dokumente', async () => {
+    const r = await get<Antwort>('/api/search?q=er', { jar: jars.employee });
+    assert.equal(r.status, 200);
+    const arten = new Set(data(r).treffer.map((x) => x.art));
+    for (const verboten of ['Buchung', 'Dokument']) assert.ok(!arten.has(verboten), `Mitarbeitende finden ${verboten}`);
+  });
+
+  it('eine leere Trefferliste ist eine Antwort, kein Fehler', async () => {
+    const r = await get<Antwort>(`/api/search?q=${encodeURIComponent(`nichts-${RUN}`)}`, { jar: jars.admin });
+    assert.equal(r.status, 200);
+    assert.deepEqual(data(r).treffer, []);
   });
 
   it('sensible Felder machen keinen Treffer (AHV-Nummer, IBAN)', async () => {
