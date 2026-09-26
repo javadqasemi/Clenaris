@@ -14,6 +14,8 @@ import {
 } from '@/lib/errors';
 import { enforceRateLimit, getClientIp, type RateLimitName } from '@/lib/rate-limit';
 import { logger } from '@/lib/logger';
+import { laufzeitUrsprung } from '@/lib/laufzeit-konfiguration';
+import { trustedProxyMode } from '@/lib/http/client-ip';
 import {
   mitAnfrageKontext,
   neueRequestId,
@@ -249,9 +251,10 @@ type NextRouteArgs = { params: Promise<any> };
  * behauptet. `null` als Herkunft (Sandbox-Rahmen, Weiterleitungsketten) gilt
  * als fremd.
  *
- * Erlaubt sind der Host der Anfrage selbst und der Host aus
- * `NEXT_PUBLIC_APP_URL` — letzterer, falls die Anwendung hinter einem Proxy
- * unter einem anderen Namen antwortet, als der Browser sie aufgerufen hat.
+ * Erlaubt sind der Host der Anfrage selbst und der Host aus `APP_URL`
+ * (`laufzeitUrsprung()`, Server-Umgebung, zur Laufzeit) — letzterer, falls
+ * die Anwendung hinter einem Proxy unter einem anderen Namen antwortet, als
+ * der Browser sie aufgerufen hat.
  */
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 
@@ -269,10 +272,22 @@ function assertTrustedOrigin(request: NextRequest): void {
   }
 
   const allowed = new Set<string>();
-  const requestHost = request.headers.get('x-forwarded-host') ?? request.headers.get('host');
+  // `X-Forwarded-Host` zählt nur, wenn ein Proxy davorsteht, dem die
+  // Anwendung ausdrücklich glaubt (`TRUSTED_PROXY_MODE`, wie bei der
+  // Client-Adresse). Ohne Proxy setzt diesen Kopf nur der Aufrufer selbst —
+  // und dann könnte er die vertraute Herkunft um einen beliebigen Host
+  // erweitern (V2-1, Phase 9, 2026-09-26). Ein Browser kann den Kopf
+  // quer über Herkünfte zwar nicht ohne Preflight setzen; die Regel „die
+  // vertraute Herkunft kommt nur aus der Server-Umgebung" soll aber nicht
+  // davon abhängen, welcher Klient anfragt.
+  const requestHost =
+    (trustedProxyMode() !== 'NONE' ? request.headers.get('x-forwarded-host') : null) ?? request.headers.get('host');
   if (requestHost) allowed.add(requestHost.split(',')[0]!.trim());
   try {
-    if (process.env.NEXT_PUBLIC_APP_URL) allowed.add(new URL(process.env.NEXT_PUBLIC_APP_URL).host);
+    // Zur Laufzeit aus der Server-Umgebung (V2-1) — bis 2026-09-26 stand hier
+    // `process.env.NEXT_PUBLIC_APP_URL`, beim Bau eingesetzt: Ein Artefakt aus
+    // dem CI hätte `localhost:3000` als vertraute Herkunft mitgebracht.
+    allowed.add(new URL(laufzeitUrsprung()).host);
   } catch {
     /* Eine ungültige App-URL scheitert an anderer Stelle lauter. */
   }

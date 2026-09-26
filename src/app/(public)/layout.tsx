@@ -1,5 +1,6 @@
 import { prisma } from '@/lib/db';
 import { jsonLd } from '@/lib/json-ld';
+import { SEITEN_URL } from '@/lib/seiten-url';
 import {
   getOrganizationId,
   getPublicCompanyInfo,
@@ -95,12 +96,14 @@ export default async function PublicLayout({ children }: { children: React.React
           __html: jsonLd({
             '@context': 'https://schema.org',
             '@type': 'HomeAndConstructionBusiness',
-            '@id': `${process.env.NEXT_PUBLIC_APP_URL}#organisation`,
+            // Kanonische Domain (Bauzeit, `src/lib/seiten-url.ts`) — diese
+            // Seite ist statisch vorgerendert.
+            '@id': `${SEITEN_URL}#organisation`,
             name: company.name,
             legalName: company.legalName ?? undefined,
             description:
               'Reinigungsfirma im Kanton Bern für Unterhaltsreinigung, Umzugsreinigung mit Abgabegarantie, Büroreinigung, Fensterreinigung, Baureinigung und Hauswartung.',
-            url: process.env.NEXT_PUBLIC_APP_URL,
+            url: SEITEN_URL,
             telephone: company.phone ?? undefined,
             email: company.email,
             priceRange: 'CHF 62–95 / Std.',

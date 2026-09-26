@@ -340,6 +340,20 @@ export const ROUTES: RouteDoc[] = [
   },
   {
     method: 'get',
+    path: '/api/public/runtime-config',
+    tag: 'Öffentlich',
+    summary: 'Öffentliche Laufzeitkonfiguration',
+    description:
+      'Was der Browser über diese Umgebung wissen darf — zur Laufzeit gelesen, nicht beim Bau eingesetzt ' +
+      '(V2-1): die Herkunft dieser Instanz (`appUrl`) und die Analyse-Kennungen in engem Format. Die ' +
+      'Felder stehen einzeln in `PublicRuntimeConfigSchema`; nie die Umgebung als Ganzes, nichts aus der ' +
+      'Anfrage. `Cache-Control: no-cache`. Eine ungültige Herkunft in der Umgebung ergibt 500 statt einer ' +
+      'erfundenen Antwort.',
+    guard: { kind: 'public' },
+    rateLimit: 'apiRead',
+  },
+  {
+    method: 'get',
     path: '/api/public/availability',
     tag: 'Öffentlich',
     summary: 'Freie Zeitfenster eines Tages (eine Leistung)',

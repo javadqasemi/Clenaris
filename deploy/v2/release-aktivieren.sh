@@ -64,11 +64,15 @@ log "Commit         : ${COMMIT}"
 log "Build-ID       : $(feld buildId)"
 log "Node (Bau)     : $(feld node), hier: $(node -v)"
 
-# Die beim Bau eingesetzte Adresse muss die dieses Servers sein —
-# `NEXT_PUBLIC_*` steht fest im Bündel, die `.env` ändert daran nichts mehr.
-SERVER_URL="$(grep -E '^NEXT_PUBLIC_APP_URL=' "${BASIS}/shared/.env" | tail -n1 | cut -d= -f2- | tr -d '"'"'")"
-[[ -n "$(feld appUrl)" && "$(feld appUrl)" == "${SERVER_URL}" ]] \
-  || fail "Artefakt gebaut für „$(feld appUrl)", Server ist „${SERVER_URL}"."
+# Seit V2-1 (2026-09-26) ist das Artefakt an keine Adresse gebunden: Die
+# Herkunft dieser Instanz kommt zur Laufzeit aus `APP_URL`. Bis dahin stand
+# hier ein Vergleich „gebaut für X, Server ist Y" — nötig, solange die
+# Adresse im Bündel festsass. Jetzt muss der Server sie nur **haben**; ohne
+# sie verweigert die Anwendung in der Produktion jeden absoluten Link.
+SERVER_URL="$(grep -E '^APP_URL=' "${BASIS}/shared/.env" | tail -n1 | cut -d= -f2- | tr -d '"'"'")"
+[[ -n "${SERVER_URL}" ]] || fail "APP_URL fehlt in ${BASIS}/shared/.env."
+log "APP_URL        : ${SERVER_URL} (Laufzeit)"
+log "Kanonisch      : $(feld seitenUrl) (Bauzeit, statische Website)"
 
 # Node muss in der Hauptversion übereinstimmen: node_modules enthält native
 # Teile (Prisma-Engine), die gegen die Bau-Umgebung gebaut sind.

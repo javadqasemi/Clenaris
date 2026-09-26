@@ -1,6 +1,6 @@
 import type { MetadataRoute } from 'next';
 
-import { clientEnv } from '@/lib/env';
+import { SEITEN_URL } from '@/lib/seiten-url';
 
 /**
  * robots.txt
@@ -12,7 +12,9 @@ import { clientEnv } from '@/lib/env';
  * landen, auch wenn ein Link versehentlich geteilt wird.
  */
 export default function robots(): MetadataRoute.Robots {
-  const base = clientEnv.NEXT_PUBLIC_APP_URL.replace(/\/$/, '');
+  // Kanonische Domain (Bauzeit, `src/lib/seiten-url.ts`). Eine Probeumgebung
+  // gehört ohnehin mit `X-Robots-Tag: noindex` hinter den Proxy.
+  const base = SEITEN_URL;
 
   return {
     rules: [

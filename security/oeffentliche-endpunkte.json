@@ -11,6 +11,7 @@
     { "weg": "POST /api/auth/2fa/verify", "begruendung": "Zweiter Anmeldeschritt mit Zwischentoken; login-Limit." },
     { "weg": "POST /api/public/pricing/estimate", "begruendung": "Preisrechnung der Website, keine Personendaten; priceEstimate-Limit." },
     { "weg": "GET /api/health", "begruendung": "Betriebsbereitschaft für Überwachung; keine Geheimnisse, keine Personendaten." },
+    { "weg": "GET /api/public/runtime-config", "begruendung": "Öffentliche Laufzeitkonfiguration (V2-1): nur die Felder aus PublicRuntimeConfigSchema — eigene Herkunft und Analyse-Kennungen in engem Format; nie process.env als Ganzes, nichts aus der Anfrage; apiRead-Limit." },
     { "weg": "GET /api/public/availability", "begruendung": "Freie Zeitfenster ohne Namen oder Adressen." },
     { "weg": "POST /api/public/availability", "begruendung": "Kalender für eine Leistungsauswahl, ohne Personendaten." },
     { "weg": "GET /api/public/service-areas/check", "begruendung": "Postleitzahl im Einsatzgebiet ja/nein." },

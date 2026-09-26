@@ -183,6 +183,15 @@ export const REGELN: Regel[] = [
     },
   },
   {
+    id: 'bauzeit-oeffentlich',
+    schwere: 'blockierend',
+    standard: 'C10',
+    frage:
+      '`process.env.NEXT_PUBLIC_…` wird beim Bau eingesetzt — in Client- und Server-Bündeln. Umgebungsabhängiges gehört in `src/lib/laufzeit-konfiguration.ts`; bewusst Bauzeitliches nur nach `src/lib/seiten-url.ts` (V2-1).',
+    gilt: (p) => anwendung(p) && p !== 'src/lib/seiten-url.ts',
+    muster: /process\.env\.NEXT_PUBLIC_|process\.env\[\s*['"`]NEXT_PUBLIC_/,
+  },
+  {
     id: 'rate-limit-fehlt',
     schwere: 'warnung',
     standard: 'C9',

@@ -1,6 +1,8 @@
 import { type ClassValue, clsx } from 'clsx';
 import { extendTailwindMerge } from 'tailwind-merge';
 
+import { laufzeitUrsprung } from '@/lib/laufzeit-konfiguration';
+
 /**
  * tailwind-merge kennt nur die Standard-Schriftgrössen. Die eigenen Stufen aus
  * `tailwind.config.ts` (`text-meta`, `text-body`, …) hielt es deshalb für
@@ -254,9 +256,14 @@ export function toQueryString(params: Record<string, unknown>): string {
   return qs ? `?${qs}` : '';
 }
 
+/**
+ * Absolute Adresse unter der Herkunft **dieser Instanz** — für Mails,
+ * Zahlungsrücksprünge, Signaturlinks, PDFs. Zur Laufzeit aus `APP_URL`
+ * (V2-1); vorher `process.env.NEXT_PUBLIC_APP_URL`, beim Bau eingesetzt.
+ * Nur auf dem Server aufzurufen.
+ */
 export function absoluteUrl(path: string): string {
-  const base = process.env.NEXT_PUBLIC_APP_URL ?? 'http://localhost:3000';
-  return `${base.replace(/\/$/, '')}/${path.replace(/^\//, '')}`;
+  return `${laufzeitUrsprung()}/${path.replace(/^\//, '')}`;
 }
 
 /** Datei-Grösse menschenlesbar. */

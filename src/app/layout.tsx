@@ -2,7 +2,7 @@ import type { Metadata, Viewport } from 'next';
 import { Archivo, Bricolage_Grotesque } from 'next/font/google';
 
 import { Providers } from '@/components/providers';
-import { clientEnv } from '@/lib/env';
+import { GOOGLE_SITE_VERIFICATION, SEITEN_URL } from '@/lib/seiten-url';
 
 import './globals.css';
 
@@ -29,7 +29,8 @@ const sans = Archivo({
 });
 
 export const metadata: Metadata = {
-  metadataBase: new URL(clientEnv.NEXT_PUBLIC_APP_URL),
+  // Kanonische Domain, bewusst zur Bauzeit — Begründung in `src/lib/seiten-url.ts`.
+  metadataBase: new URL(SEITEN_URL),
   title: {
     default: 'Clenaris — Reinigungsfirma in Bern',
     template: '%s | Clenaris',
@@ -52,7 +53,7 @@ export const metadata: Metadata = {
   openGraph: {
     type: 'website',
     locale: 'de_CH',
-    url: clientEnv.NEXT_PUBLIC_APP_URL,
+    url: SEITEN_URL,
     siteName: 'Clenaris',
     title: 'Clenaris — Reinigungsfirma in Bern',
     description:
@@ -68,8 +69,8 @@ export const metadata: Metadata = {
     follow: true,
     googleBot: { index: true, follow: true, 'max-image-preview': 'large', 'max-snippet': -1 },
   },
-  ...(clientEnv.NEXT_PUBLIC_GOOGLE_SITE_VERIFICATION
-    ? { verification: { google: clientEnv.NEXT_PUBLIC_GOOGLE_SITE_VERIFICATION } }
+  ...(GOOGLE_SITE_VERIFICATION
+    ? { verification: { google: GOOGLE_SITE_VERIFICATION } }
     : {}),
   alternates: {
     canonical: '/',

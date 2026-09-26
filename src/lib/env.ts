@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+import { mapsBrowserSchluessel, supabaseAdresse } from '@/lib/laufzeit-konfiguration';
+
 /**
  * Zentrale, typsichere Konfiguration.
  *
@@ -8,9 +10,9 @@ import { z } from 'zod';
  * beim Erzeugen statischer Seiten — ein harter Import-Time-Throw würde den Build
  * auf Vercel brechen, obwohl zur Laufzeit alle Secrets vorhanden sind.
  *
- * Client-seitig sind nur `NEXT_PUBLIC_*`-Werte sichtbar; `serverEnv` darf
- * ausschliesslich in Server Components, Route Handlers und Server Actions
- * verwendet werden.
+ * `serverEnv` darf ausschliesslich in Server Components, Route Handlers und
+ * Server Actions verwendet werden. Was je Umgebung verschieden ist und die
+ * Browser sehen dürfen, steht in `laufzeit-konfiguration.ts`.
  */
 
 const serverSchema = z.object({
@@ -95,27 +97,20 @@ const serverSchema = z.object({
    */
   SECURITY_REPORT_TOKEN: z.string().optional(),
 
+  /**
+   * Herkunft dieser Instanz (`https://clenaris.qasemi.ch`) — zur Laufzeit,
+   * für Links, Mails, Zahlungsrücksprünge und die Herkunftsprüfung. Geprüft
+   * und gelesen in `laufzeit-konfiguration.ts` (`ursprungAus`), dort mit
+   * Rückfall auf das ältere `NEXT_PUBLIC_APP_URL`.
+   */
+  APP_URL: z.string().optional(),
+
   COMPANY_NAME: z.string().default('Clenaris Reinigungen GmbH'),
   COMPANY_EMAIL: z.string().default('info@clenaris.ch'),
   COMPANY_PHONE: z.string().default('+41 31 000 00 00'),
 });
 
-const clientSchema = z.object({
-  NEXT_PUBLIC_APP_URL: z.string().url().default('http://localhost:3000'),
-  NEXT_PUBLIC_APP_NAME: z.string().default('Clenaris'),
-  NEXT_PUBLIC_DEFAULT_LOCALE: z.enum(['de', 'en', 'fr', 'it']).default('de'),
-  NEXT_PUBLIC_SUPABASE_URL: z.string().optional(),
-  NEXT_PUBLIC_SUPABASE_ANON_KEY: z.string().optional(),
-  NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY: z.string().optional(),
-  NEXT_PUBLIC_GOOGLE_MAPS_API_KEY: z.string().optional(),
-  NEXT_PUBLIC_GA_MEASUREMENT_ID: z.string().optional(),
-  NEXT_PUBLIC_GTM_ID: z.string().optional(),
-  NEXT_PUBLIC_FACEBOOK_PIXEL_ID: z.string().optional(),
-  NEXT_PUBLIC_GOOGLE_SITE_VERIFICATION: z.string().optional(),
-});
-
 export type ServerEnv = z.infer<typeof serverSchema>;
-export type ClientEnv = z.infer<typeof clientSchema>;
 
 let cachedServerEnv: ServerEnv | null = null;
 
@@ -134,23 +129,16 @@ export function serverEnv(): ServerEnv {
   return cachedServerEnv;
 }
 
-/**
- * Client-Konfiguration. Next.js ersetzt `process.env.NEXT_PUBLIC_*` zur Build-Zeit
- * statisch — deshalb müssen die Keys hier ausgeschrieben stehen.
+/*
+ * Hier stand bis 2026-09-26 `clientEnv`: jede `NEXT_PUBLIC_*`-Variable als
+ * `process.env.NEXT_PUBLIC_…` ausgeschrieben — und damit beim Bau fest
+ * eingesetzt, in Client- *und* Server-Bündeln. Ersetzt durch
+ * `laufzeit-konfiguration.ts` (zur Laufzeit, mit Freigabeliste für den
+ * Browser) und `seiten-url.ts` (bewusst Bauzeit, mit Begründung). Vier
+ * Variablen hatten keinen Verbraucher und sind entfallen:
+ * `NEXT_PUBLIC_APP_NAME`, `NEXT_PUBLIC_DEFAULT_LOCALE`,
+ * `NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`.
  */
-export const clientEnv: ClientEnv = clientSchema.parse({
-  NEXT_PUBLIC_APP_URL: process.env.NEXT_PUBLIC_APP_URL,
-  NEXT_PUBLIC_APP_NAME: process.env.NEXT_PUBLIC_APP_NAME,
-  NEXT_PUBLIC_DEFAULT_LOCALE: process.env.NEXT_PUBLIC_DEFAULT_LOCALE,
-  NEXT_PUBLIC_SUPABASE_URL: process.env.NEXT_PUBLIC_SUPABASE_URL,
-  NEXT_PUBLIC_SUPABASE_ANON_KEY: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
-  NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY: process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY,
-  NEXT_PUBLIC_GOOGLE_MAPS_API_KEY: process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY,
-  NEXT_PUBLIC_GA_MEASUREMENT_ID: process.env.NEXT_PUBLIC_GA_MEASUREMENT_ID,
-  NEXT_PUBLIC_GTM_ID: process.env.NEXT_PUBLIC_GTM_ID,
-  NEXT_PUBLIC_FACEBOOK_PIXEL_ID: process.env.NEXT_PUBLIC_FACEBOOK_PIXEL_ID,
-  NEXT_PUBLIC_GOOGLE_SITE_VERIFICATION: process.env.NEXT_PUBLIC_GOOGLE_SITE_VERIFICATION,
-});
 
 export const isProduction = process.env.NODE_ENV === 'production';
 export const isDevelopment = process.env.NODE_ENV === 'development';
@@ -167,13 +155,12 @@ export function hasIntegration(
     case 'twilio':
       return Boolean(process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN);
     case 'supabase':
-      return Boolean(
-        process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY,
-      );
+      // Zur Laufzeit gelesen (V2-1) — `process.env.NEXT_PUBLIC_…` würde beim Bau eingesetzt.
+      return Boolean(supabaseAdresse() && process.env.SUPABASE_SERVICE_ROLE_KEY);
     case 'redis':
       return Boolean(process.env.REDIS_URL);
     case 'maps':
-      return Boolean(process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY);
+      return Boolean(mapsBrowserSchluessel());
     case 'ai':
       return Boolean(process.env.ANTHROPIC_API_KEY);
     default:

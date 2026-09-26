@@ -5,7 +5,7 @@
 > Quelle, aus der sowohl diese Referenz als auch die Laufzeitvalidierung
 > stammen.
 
-Stand: 534 Endpunkte. Die maschinenlesbare Fassung liegt in
+Stand: 535 Endpunkte. Die maschinenlesbare Fassung liegt in
 [`openapi.yaml`](./openapi.yaml) bzw. [`openapi.json`](./openapi.json).
 
 ## Grundlagen
@@ -354,6 +354,15 @@ Familie.
 - **Rate-Limit-Klasse:** `apiRead`
 - **Erfolg:** 200
 - **Mögliche Fehler:** 429, 500, 503
+
+### `GET /api/public/runtime-config`
+
+**Öffentliche Laufzeitkonfiguration.** Was der Browser über diese Umgebung wissen darf — zur Laufzeit gelesen, nicht beim Bau eingesetzt (V2-1): die Herkunft dieser Instanz (`appUrl`) und die Analyse-Kennungen in engem Format. Die Felder stehen einzeln in `PublicRuntimeConfigSchema`; nie die Umgebung als Ganzes, nichts aus der Anfrage. `Cache-Control: no-cache`. Eine ungültige Herkunft in der Umgebung ergibt 500 statt einer erfundenen Antwort.
+
+- **Zugriff:** Öffentlich — keine Anmeldung nötig.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 429, 500
 
 ### `GET /api/public/availability`
 

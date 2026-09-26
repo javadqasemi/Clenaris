@@ -4,6 +4,7 @@ import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 
 import { hasIntegration, serverEnv } from '@/lib/env';
 import { ConfigurationError, IntegrationError } from '@/lib/errors';
+import { supabaseAdresse } from '@/lib/laufzeit-konfiguration';
 
 import { validateUpload, type SignedUploadTarget, type UploadProfile } from './profiles';
 import { buildStoragePath, createTicket } from './tickets';
@@ -27,7 +28,7 @@ function supabaseAdmin(): SupabaseClient {
     // ist derzeit nicht erreichbar") schickte auf die Suche nach einem
     // Netzproblem, das es nie gab.
     const missing = [
-      process.env.NEXT_PUBLIC_SUPABASE_URL ? null : 'NEXT_PUBLIC_SUPABASE_URL',
+      supabaseAdresse() ? null : 'NEXT_PUBLIC_SUPABASE_URL',
       process.env.SUPABASE_SERVICE_ROLE_KEY ? null : 'SUPABASE_SERVICE_ROLE_KEY',
     ].filter(Boolean);
 
@@ -38,7 +39,7 @@ function supabaseAdmin(): SupabaseClient {
     );
   }
   admin ??= createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    supabaseAdresse()!,
     serverEnv().SUPABASE_SERVICE_ROLE_KEY!,
     { auth: { persistSession: false, autoRefreshToken: false } },
   );
@@ -148,7 +149,8 @@ export async function uploadBuffer(params: {
 }
 
 export function getPublicUrl(path: string): string {
-  const base = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  // Zur Laufzeit (V2-1) — je Umgebung ein eigenes Supabase-Projekt ist denkbar.
+  const base = supabaseAdresse();
   if (!base) return path;
   return `${base}/storage/v1/object/public/${bucket()}/${path}`;
 }

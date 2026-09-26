@@ -1861,6 +1861,49 @@
         }
       }
     },
+    "/api/public/runtime-config": {
+      "get": {
+        "tags": [
+          "Öffentlich"
+        ],
+        "summary": "Öffentliche Laufzeitkonfiguration",
+        "description": "Was der Browser über diese Umgebung wissen darf — zur Laufzeit gelesen, nicht beim Bau eingesetzt (V2-1): die Herkunft dieser Instanz (`appUrl`) und die Analyse-Kennungen in engem Format. Die Felder stehen einzeln in `PublicRuntimeConfigSchema`; nie die Umgebung als Ganzes, nichts aus der Anfrage. `Cache-Control: no-cache`. Eine ungültige Herkunft in der Umgebung ergibt 500 statt einer erfundenen Antwort.\n\n**Zugriff:** Öffentlich — keine Anmeldung nötig.\n\n**Rate-Limit-Klasse:** `apiRead`",
+        "operationId": "getPublicRuntimeConfig",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Erfolg",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SuccessEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/public/availability": {
       "get": {
         "tags": [

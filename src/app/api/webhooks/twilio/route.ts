@@ -14,7 +14,7 @@ export const maxDuration = 30;
  * POST /api/webhooks/twilio — Zustellmeldungen für SMS (Status-Callback).
  *
  * Signatur `X-Twilio-Signature` über die **öffentliche** Adresse dieses
- * Endpunkts (`NEXT_PUBLIC_APP_URL` + Pfad) und die Formularfelder; geprüft mit
+ * Endpunkts (`APP_URL` + Pfad, zur Laufzeit) und die Formularfelder; geprüft mit
  * `TWILIO_AUTH_TOKEN`. Ohne Token kein Empfang (503). Die interne Adresse
  * hinter einem Proxy taugt nicht — Twilio signiert, was es aufgerufen hat.
  */

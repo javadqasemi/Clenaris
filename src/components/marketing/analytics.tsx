@@ -3,8 +3,10 @@
 import Script from 'next/script';
 import * as React from 'react';
 
-import { clientEnv } from '@/lib/env';
 import { hasConsent, onConsentChange, type ConsentState } from '@/lib/consent';
+import { PublicRuntimeConfigSchema, type PublicRuntimeConfig } from '@/lib/laufzeit-konfiguration';
+
+type Kennungen = PublicRuntimeConfig['analytics'];
 
 /**
  * Analyse- und Marketing-Skripte.
@@ -14,23 +16,50 @@ import { hasConsent, onConsentChange, type ConsentState } from '@/lib/consent';
  * DSGVO verlangen eine vorgängige Einwilligung für nicht notwendige Cookies;
  * die einzige technisch saubere Umsetzung ist, den Code gar nicht erst
  * auszuführen.
+ *
+ * **Kennungen zur Laufzeit (V2-1, 2026-09-26).** Bis dahin standen sie als
+ * `process.env.NEXT_PUBLIC_…` im Bündel — beim Bau eingesetzt. Eine
+ * Probeumgebung mit demselben Artefakt hätte an die Analyse der Produktion
+ * gemeldet, und ohne neuen Bau liess sich keine Kennung ändern. Jetzt holt
+ * die Komponente sie erst nach der Einwilligung von
+ * `/api/public/runtime-config` und prüft sie **auch hier** gegen das Schema:
+ * Sie werden in Skriptzeilen eingesetzt, und was nicht dem engen Format
+ * entspricht, wird nicht eingesetzt. Ohne Einwilligung keine Anfrage.
  */
 export function AnalyticsScripts() {
   const [consent, setConsent] = React.useState<ConsentState | null>(null);
+  const [kennungen, setKennungen] = React.useState<Kennungen | null>(null);
 
   React.useEffect(() => {
     setConsent(hasConsent());
     return onConsentChange(setConsent);
   }, []);
 
-  if (!consent?.analytics && !consent?.marketing) return null;
+  const benoetigt = Boolean(consent?.analytics || consent?.marketing);
+  React.useEffect(() => {
+    if (!benoetigt || kennungen) return;
+    const abbruch = new AbortController();
+    fetch('/api/public/runtime-config', { signal: abbruch.signal, credentials: 'omit' })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((antwort: { data?: unknown } | null) => {
+        const geprueft = PublicRuntimeConfigSchema.safeParse(antwort?.data);
+        // Ungültig oder nicht erreichbar: keine Skripte — geschlossen, nicht offen.
+        setKennungen(geprueft.success ? geprueft.data.analytics : {});
+      })
+      .catch(() => {
+        if (!abbruch.signal.aborted) setKennungen({});
+      });
+    return () => abbruch.abort();
+  }, [benoetigt, kennungen]);
+
+  if (!consent || !benoetigt || !kennungen) return null;
 
   return (
     <>
-      {consent.analytics && clientEnv.NEXT_PUBLIC_GA_MEASUREMENT_ID ? (
+      {consent.analytics && kennungen.gaMeasurementId ? (
         <>
           <Script
-            src={`https://www.googletagmanager.com/gtag/js?id=${clientEnv.NEXT_PUBLIC_GA_MEASUREMENT_ID}`}
+            src={`https://www.googletagmanager.com/gtag/js?id=${kennungen.gaMeasurementId}`}
             strategy="afterInteractive"
           />
           <Script id="ga-init" strategy="afterInteractive">
@@ -38,7 +67,7 @@ export function AnalyticsScripts() {
               window.dataLayer = window.dataLayer || [];
               function gtag(){dataLayer.push(arguments);}
               gtag('js', new Date());
-              gtag('config', '${clientEnv.NEXT_PUBLIC_GA_MEASUREMENT_ID}', {
+              gtag('config', '${kennungen.gaMeasurementId}', {
                 anonymize_ip: true,
                 cookie_flags: 'SameSite=Lax;Secure'
               });
@@ -47,19 +76,19 @@ export function AnalyticsScripts() {
         </>
       ) : null}
 
-      {consent.analytics && clientEnv.NEXT_PUBLIC_GTM_ID ? (
+      {consent.analytics && kennungen.gtmId ? (
         <Script id="gtm" strategy="afterInteractive">
           {`
             (function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
             new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
             j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
             'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);
-            })(window,document,'script','dataLayer','${clientEnv.NEXT_PUBLIC_GTM_ID}');
+            })(window,document,'script','dataLayer','${kennungen.gtmId}');
           `}
         </Script>
       ) : null}
 
-      {consent.marketing && clientEnv.NEXT_PUBLIC_FACEBOOK_PIXEL_ID ? (
+      {consent.marketing && kennungen.facebookPixelId ? (
         <Script id="meta-pixel" strategy="afterInteractive">
           {`
             !function(f,b,e,v,n,t,s)
@@ -70,7 +99,7 @@ export function AnalyticsScripts() {
             t.src=v;s=b.getElementsByTagName(e)[0];
             s.parentNode.insertBefore(t,s)}(window,document,'script',
             'https://connect.facebook.net/en_US/fbevents.js');
-            fbq('init', '${clientEnv.NEXT_PUBLIC_FACEBOOK_PIXEL_ID}');
+            fbq('init', '${kennungen.facebookPixelId}');
             fbq('track', 'PageView');
           `}
         </Script>

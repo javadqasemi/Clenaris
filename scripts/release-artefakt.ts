@@ -54,7 +54,7 @@ import { loadEnvConfig } from '@next/env';
 const WURZEL = resolve(__dirname, '..');
 
 // Dieselben `.env`-Dateien in derselben Reihenfolge wie `next build` — sonst
-// hielte das Manifest eine andere `appUrl` fest, als im Bündel steht.
+// hielte das Manifest eine andere `seitenUrl` fest, als im Bündel steht.
 loadEnvConfig(WURZEL, false);
 
 function argument(name: string, vorgabe = ''): string {
@@ -155,14 +155,14 @@ async function main(): Promise<void> {
     next: nextVersion,
     sperrdateiSha256: await sha256Datei(join(WURZEL, 'package-lock.json')),
     /*
-      `NEXT_PUBLIC_*` wird beim Bau in Server- *und* Client-Bündel
-      eingesetzt, nicht zur Laufzeit gelesen. Ein Artefakt gehört deshalb zu
-      genau der Adresse, für die es gebaut wurde — auf einem Server mit einer
-      anderen zeigten Magic Links, PDF-Verweise und die Sitemap woandershin.
-      Das Aktivierungsskript vergleicht diesen Wert mit der `.env` des
-      Servers und weist ab, was nicht passt (docs/PRODUCTION_V2.md, V2-1).
+      Seit V2-1 (2026-09-26) ist das Artefakt **nicht** mehr an eine Adresse
+      gebunden: Links, Mails, Zahlungen, Signaturen und die Herkunftsprüfung
+      lesen `APP_URL` zur Laufzeit (`src/lib/laufzeit-konfiguration.ts`).
+      Beim Bau fest steht nur die kanonische Domain der statisch
+      vorgerenderten Website (`src/lib/seiten-url.ts`) — ein Wert für alle
+      Umgebungen. Er steht hier zur Nachvollziehbarkeit, nicht als Bindung.
     */
-    appUrl: process.env.NEXT_PUBLIC_APP_URL ?? null,
+    seitenUrl: process.env.NEXT_PUBLIC_SITE_URL ?? process.env.NEXT_PUBLIC_APP_URL ?? null,
     reactKorrektur: 'geprueft',
     mitModulen: !ohneModule,
     // Ein Artefakt ohne Module, aus einem unsauberen Baum oder aus einem
