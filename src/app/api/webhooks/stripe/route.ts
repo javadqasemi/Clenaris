@@ -1,9 +1,11 @@
 import type Stripe from 'stripe';
+import type { Prisma } from '@prisma/client';
 
 import { prisma } from '@/lib/db';
 import { toErrorResponse } from '@/lib/api/response';
+import { ausRappen } from '@/lib/money';
 import { constructWebhookEvent, fromRappen } from '@/lib/payments/stripe';
-import { recordPayment } from '@/server/services/invoice.service';
+import { erstattungsstandUebernehmen, recordPayment } from '@/server/services/invoice.service';
 import { getOrganizationId } from '@/server/services/organization.service';
 import { logger } from '@/lib/logger';
 
@@ -23,8 +25,12 @@ export const maxDuration = 30;
  *     Prüfung könnte jeder beliebige Zahlungen melden.
  *  3. Der Rohtext des Bodys wird verwendet — `request.json()` würde die
  *     Signatur ungültig machen.
- *  4. Die Buchung ist idempotent: Stripe stellt Ereignisse mehrfach zu, und
- *     `providerPaymentId` ist in der Datenbank eindeutig.
+ *  4. Jede Wirkung ist idempotent: Stripe stellt Ereignisse mehrfach und in
+ *     beliebiger Reihenfolge zu. Zahlungen erkennt die eindeutige
+ *     `providerPaymentId`, jedes Ereignis der eindeutige Vermerk in
+ *     `ProviderWebhookEvent` (in derselben Transaktion wie seine Wirkung),
+ *     Erstattungen ihr Anbieterzeitpunkt (`refundSyncedAt`). Bis 2026-09-27
+ *     galt das nur für die Zahlung selbst.
  *  5. Fehler beim Verarbeiten führen zu einem 500 — dann wiederholt Stripe die
  *     Zustellung. Ein 200 auf einen Fehler würde die Zahlung verlieren.
  */
@@ -77,6 +83,10 @@ export async function POST(request: Request): Promise<Response> {
           data: { stripePaymentIntentId: String(session.payment_intent ?? '') },
         });
 
+        // Die Buchung selbst ist über `providerPaymentId` idempotent; der
+        // Ereignisvermerk hält die Zustellung nur fest (Nachvollziehbarkeit).
+        await ereignisVerbuchen(event, async () => 'uebernommen');
+
         log.info('Zahlung gebucht', { invoiceId });
         break;
       }
@@ -86,43 +96,22 @@ export async function POST(request: Request): Promise<Response> {
         const paymentIntentId = String(charge.payment_intent ?? '');
         if (!paymentIntentId) break;
 
-        const payment = await prisma.payment.findUnique({
-          where: { providerPaymentId: paymentIntentId },
-        });
-        if (!payment) break;
-
-        const refunded = fromRappen(charge.amount_refunded);
-
-        await prisma.$transaction(async (tx) => {
-          await tx.payment.update({
-            where: { id: payment.id },
-            data: {
-              status: refunded >= Number(payment.amount) ? 'REFUNDED' : 'PARTIALLY_REFUNDED',
-              refundedAmount: refunded,
-              refundedAt: new Date(),
-            },
-          });
-
-          if (payment.invoiceId) {
-            const invoice = await tx.invoice.findUniqueOrThrow({
-              where: { id: payment.invoiceId },
-            });
-            const paidAmount = Math.max(0, Number(invoice.paidAmount) - refunded);
-            const balance = Math.max(0, Number(invoice.grossTotal) - paidAmount);
-
-            await tx.invoice.update({
-              where: { id: invoice.id },
-              data: {
-                paidAmount,
-                balance,
-                status: balance > 0 ? 'PARTIALLY_PAID' : invoice.status,
-                paidAt: balance > 0 ? null : invoice.paidAt,
-              },
-            });
-          }
-        });
-
-        log.info('Rückerstattung verarbeitet', { paymentIntentId });
+        /*
+          `amount_refunded` ist der **kumulierte** Stand der Zahlung, kein
+          Zuwachs. Bis 2026-09-27 wurde er bei jedem Ereignis erneut vom
+          bezahlten Betrag abgezogen, und der Saldo entstand hier mit eigener
+          Rechnung. Jetzt wird der Stand übernommen (mit Anbieterzeitpunkt,
+          damit ein verspätetes älteres Ereignis nichts zurückdreht), und den
+          Saldo bildet `saldoNeuBilden` — dieselbe Rechnung wie überall.
+        */
+        const ergebnis = await ereignisVerbuchen(event, (tx) =>
+          erstattungsstandUebernehmen(tx, {
+            providerPaymentId: paymentIntentId,
+            kumuliert: ausRappen(charge.amount_refunded),
+            stand: new Date(event.created * 1000),
+          }),
+        );
+        log.info('Rückerstattung verarbeitet', { paymentIntentId, ergebnis });
         break;
       }
 
@@ -130,17 +119,31 @@ export async function POST(request: Request): Promise<Response> {
         const intent = event.data.object as Stripe.PaymentIntent;
         const invoiceId = intent.metadata?.invoiceId;
         if (!invoiceId) break;
+        const organizationId = await getOrganizationId();
 
-        await prisma.payment.create({
-          data: {
-            invoiceId,
-            amount: fromRappen(intent.amount),
-            method: 'CARD',
-            status: 'FAILED',
-            provider: 'stripe',
-            providerPaymentId: intent.id,
-            failureReason: intent.last_payment_error?.message ?? 'Zahlung fehlgeschlagen',
-          },
+        await ereignisVerbuchen(event, async (tx) => {
+          const rechnung = await tx.invoice.findFirst({ where: { id: invoiceId, organizationId }, select: { id: true, customerId: true } });
+          if (!rechnung) return 'unbekannt';
+          await tx.payment.create({
+            data: {
+              invoiceId: rechnung.id,
+              customerId: rechnung.customerId,
+              amount: ausRappen(intent.amount),
+              method: 'CARD',
+              status: 'FAILED',
+              provider: 'stripe',
+              /*
+                **Nicht** in `providerPaymentId`: Diese Spalte ist eindeutig und
+                bezeichnet die *gebuchte* Zahlung. Ein fehlgeschlagener
+                Versuch trägt dieselbe PaymentIntent-Kennung wie der spätere
+                erfolgreiche — stand sie hier, galt die erfolgreiche Zahlung
+                als „schon gebucht" und wurde nie verbucht (bis 2026-09-27).
+              */
+              reference: intent.id,
+              failureReason: intent.last_payment_error?.message ?? 'Zahlung fehlgeschlagen',
+            },
+          });
+          return 'uebernommen';
         });
 
         log.warn('Zahlung fehlgeschlagen', { invoiceId });
@@ -158,4 +161,28 @@ export async function POST(request: Request): Promise<Response> {
     log.error('Ereignisverarbeitung fehlgeschlagen', { event: event.type, error });
     return toErrorResponse(error);
   }
+}
+
+/**
+ * Ein Ereignis genau einmal wirken lassen (2026-09-27).
+ *
+ * Vermerk und Wirkung stehen in **einer** Transaktion: Der Vermerk
+ * (`ProviderWebhookEvent`, eindeutig je Anbieter und Kennung) entsteht mit
+ * `ON CONFLICT DO NOTHING`; trifft er eine vorhandene Zeile, ist das Ereignis
+ * schon verarbeitet, und die Wirkung entfällt. Scheitert die Wirkung, rollt
+ * der Vermerk mit zurück, und die nächste Zustellung versucht es neu — das
+ * ist Stripes Wiederholung, und sie soll wirken können.
+ */
+async function ereignisVerbuchen(
+  event: Stripe.Event,
+  wirkung: (tx: Prisma.TransactionClient) => Promise<string>,
+): Promise<string> {
+  return prisma.$transaction(async (tx) => {
+    const neu = await tx.providerWebhookEvent.createMany({
+      data: [{ provider: 'stripe', eventId: event.id, type: event.type }],
+      skipDuplicates: true,
+    });
+    if (neu.count === 0) return 'doppelt';
+    return wirkung(tx);
+  });
 }

@@ -1,8 +1,9 @@
 import 'server-only';
 
-import type { Invoice, PaymentMethod, Prisma } from '@prisma/client';
+import { Prisma, type Invoice, type PaymentMethod, type PaymentStatus } from '@prisma/client';
 
 import { prisma, toNumber } from '@/lib/db';
+import { aufRappen, geld, max0 } from '@/lib/money';
 import { BusinessRuleError, NotFoundError } from '@/lib/errors';
 import { absoluteUrl, round2 } from '@/lib/utils';
 import { orderByFor, resolveSort, type SortOrder } from '@/lib/sort';
@@ -597,7 +598,7 @@ export async function sendInvoice(params: {
 // ---------------------------------------------------------------------------
 
 /** Rundungstoleranz: Ab höchstens 5 Rappen Rest gilt eine Rechnung als bezahlt. */
-const BEZAHLT_TOLERANZ = 0.05;
+const BEZAHLT_TOLERANZ = new Prisma.Decimal('0.05');
 
 /**
  * Bezahlter Betrag, offener Posten und Zahlstatus einer Rechnung — aus den
@@ -630,22 +631,38 @@ export async function saldoNeuBilden(tx: Prisma.TransactionClient, invoiceId: st
     where: { id: invoiceId },
     select: { grossTotal: true, status: true, sentAt: true, paidAt: true },
   });
+  /*
+    Eingegangenes Geld ist jede Zahlung, die einmal eingegangen ist — auch
+    eine teilweise oder ganz erstattete —, abzüglich ihres **kumulierten**
+    Erstattungsstands (2026-09-27). Vorher zählte hier nur `SUCCEEDED`: Eine
+    Zahlung über 100 mit einer Teilerstattung über 10 (Status
+    `PARTIALLY_REFUNDED`) fiel ganz heraus, und die nächste Büro-Zahlung
+    oder Gutschrift schrieb den Saldo auf „alles offen" zurück — während der
+    Stripe-Webhook daneben mit eigener Rechnung einen anderen Stand gesetzt
+    hatte. Jetzt gibt es nur diese eine Rechnung, und der Webhook ruft sie auf.
+
+    Dezimal statt Gleitkomma (`src/lib/money.ts`): Summen und Differenzen
+    sind exakt, gerundet wird einmal, auf Rappen.
+  */
   const [zahlungen, gutschriften] = await Promise.all([
-    tx.payment.aggregate({ where: { invoiceId, status: 'SUCCEEDED' }, _sum: { amount: true } }),
+    tx.payment.aggregate({
+      where: { invoiceId, status: { in: EINGEGANGENE_ZAHLUNG } },
+      _sum: { amount: true, refundedAmount: true },
+    }),
     tx.creditNote.aggregate({ where: { invoiceId }, _sum: { grossTotal: true } }),
   ]);
-  const bezahlt = round2(toNumber(zahlungen._sum.amount));
-  const gutgeschrieben = round2(toNumber(gutschriften._sum.grossTotal));
-  const offen = round2(toNumber(rechnung.grossTotal) - bezahlt - gutgeschrieben);
+  const bezahlt = aufRappen(geld(zahlungen._sum.amount).minus(geld(zahlungen._sum.refundedAmount)));
+  const gutgeschrieben = aufRappen(gutschriften._sum.grossTotal);
+  const offen = aufRappen(geld(rechnung.grossTotal).minus(bezahlt).minus(gutgeschrieben));
 
   if (rechnung.status === 'CANCELLED' || rechnung.status === 'WRITTEN_OFF') {
     return tx.invoice.update({ where: { id: invoiceId }, data: { paidAmount: bezahlt, balance: 0 } });
   }
 
-  const voll = bezahlt > 0 && offen <= BEZAHLT_TOLERANZ;
+  const voll = bezahlt.greaterThan(0) && offen.lessThanOrEqualTo(BEZAHLT_TOLERANZ);
   const status: Invoice['status'] = voll
     ? 'PAID'
-    : bezahlt > 0
+    : bezahlt.greaterThan(0)
       ? 'PARTIALLY_PAID'
       : rechnung.status === 'PAID' || rechnung.status === 'PARTIALLY_PAID'
         ? // Nach einem Storno ohne verbleibende Zahlung: zurück auf den Stand
@@ -659,11 +676,69 @@ export async function saldoNeuBilden(tx: Prisma.TransactionClient, invoiceId: st
     where: { id: invoiceId },
     data: {
       paidAmount: bezahlt,
-      balance: Math.max(0, offen),
+      balance: max0(offen),
       status,
       paidAt: voll ? (rechnung.paidAt ?? new Date()) : null,
     },
   });
+}
+
+/** Zahlungen, deren Geld einmal eingegangen ist — auch wenn es teilweise oder ganz zurückging. */
+const EINGEGANGENE_ZAHLUNG: PaymentStatus[] = ['SUCCEEDED', 'PARTIALLY_REFUNDED', 'REFUNDED'];
+
+/**
+ * Den Erstattungsstand einer Anbieterzahlung übernehmen — idempotent und
+ * reihenfolgefest (2026-09-27).
+ *
+ * Der Anbieter meldet den **kumulierten** Stand (`amount_refunded`), nicht den
+ * Zuwachs. Genau so wird er gespeichert: als Stand. Dreimal dasselbe
+ * Ereignis ergibt dreimal denselben Stand; ein älteres Ereignis, das nach
+ * einem neueren eintrifft, wird an `refundSyncedAt` erkannt und übergangen.
+ * Der Saldo entsteht danach in `saldoNeuBilden` — derselben Rechnung wie für
+ * Büro-Zahlungen und Gutschriften.
+ *
+ * Vorher zog der Webhook den kumulierten Betrag bei jedem Ereignis erneut ab
+ * und rechnete den Saldo selbst: zwei Teilerstattungen über 10 und 20
+ * senkten den bezahlten Betrag um 40, eine erneute Zustellung um weitere 30.
+ *
+ * Läuft in der Transaktion des Aufrufers (Webhook), damit Ereignisvermerk und
+ * Wirkung zusammen bestehen oder zusammen zurückrollen.
+ */
+export async function erstattungsstandUebernehmen(
+  tx: Prisma.TransactionClient,
+  params: { providerPaymentId: string; kumuliert: Prisma.Decimal; stand: Date },
+): Promise<'uebernommen' | 'veraltet' | 'unbekannt'> {
+  const vorhanden = await tx.payment.findUnique({ where: { providerPaymentId: params.providerPaymentId }, select: { id: true } });
+  if (!vorhanden) return 'unbekannt';
+  // Zeile sperren: Zwei gleichzeitige Ereignisse derselben Zahlung dürfen
+  // nicht beide den alten Stand lesen.
+  await tx.$queryRaw`SELECT "id" FROM "payments" WHERE "id" = ${vorhanden.id} FOR UPDATE`;
+  const zahlung = await tx.payment.findUniqueOrThrow({ where: { id: vorhanden.id } });
+  if (zahlung.refundSyncedAt && zahlung.refundSyncedAt.getTime() > params.stand.getTime()) return 'veraltet';
+  if (!EINGEGANGENE_ZAHLUNG.includes(zahlung.status)) return 'unbekannt';
+
+  const betrag = geld(zahlung.amount);
+  // Mehr als die Zahlung kann nicht erstattet sein; ein solcher Wert wäre ein
+  // Anbieterfehler und wird auf den Zahlbetrag begrenzt.
+  const kumuliert = aufRappen(Prisma.Decimal.min(max0(params.kumuliert), betrag));
+  const zuwachs = kumuliert.minus(geld(zahlung.refundedAmount));
+
+  await tx.payment.update({
+    where: { id: zahlung.id },
+    data: {
+      refundedAmount: kumuliert,
+      refundSyncedAt: params.stand,
+      refundedAt: kumuliert.greaterThan(0) ? (zahlung.refundedAt ?? params.stand) : null,
+      status: kumuliert.greaterThanOrEqualTo(betrag) ? 'REFUNDED' : kumuliert.greaterThan(0) ? 'PARTIALLY_REFUNDED' : 'SUCCEEDED',
+    },
+  });
+
+  if (zahlung.invoiceId) await saldoNeuBilden(tx, zahlung.invoiceId);
+  // Der Kundenwert wuchs mit der Zahlung; er sinkt um das, was zurückging.
+  if (zahlung.customerId && !zuwachs.isZero()) {
+    await tx.customer.update({ where: { id: zahlung.customerId }, data: { lifetimeValue: { decrement: zuwachs } } });
+  }
+  return 'uebernommen';
 }
 
 export async function recordPayment(params: {
@@ -695,13 +770,32 @@ export async function recordPayment(params: {
 
   const amount = round2(params.input.amount);
 
-  const updated = await prisma.$transaction(async (tx) => {
+  /*
+    Zwei gleichzeitige Zustellungen derselben Anbieterzahlung sehen oben beide
+    „noch nicht gebucht". Die eindeutige `providerPaymentId` lässt dann genau
+    eine Buchung zu; die zweite scheitert mit P2002 — und das ist kein Fehler,
+    sondern die Antwort „schon gebucht". Vorher wurde daraus ein 500, und der
+    Anbieter stellte weiter zu.
+  */
+  let updated: Invoice;
+  try {
+    updated = await zahlungBuchen();
+  } catch (error) {
+    if (params.providerPaymentId && error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+      const aktuell = await prisma.invoice.findUniqueOrThrow({ where: { id: invoice.id } });
+      return { invoice: aktuell, fullyPaid: aktuell.status === 'PAID' };
+    }
+    throw error;
+  }
+
+  function zahlungBuchen() {
+    return prisma.$transaction(async (tx) => {
     await tx.payment.create({
       data: {
-        invoiceId: invoice.id,
-        customerId: invoice.customerId,
+        invoiceId: invoice!.id,
+        customerId: invoice!.customerId,
         amount,
-        currency: invoice.currency,
+        currency: invoice!.currency,
         method: params.input.method as PaymentMethod,
         status: 'SUCCEEDED',
         reference: params.input.reference ?? null,
@@ -712,16 +806,17 @@ export async function recordPayment(params: {
       },
     });
 
-    const result = await saldoNeuBilden(tx, invoice.id);
+    const result = await saldoNeuBilden(tx, invoice!.id);
 
     // Kundenwert (Lifetime Value) fortschreiben.
     await tx.customer.update({
-      where: { id: invoice.customerId },
+      where: { id: invoice!.customerId },
       data: { lifetimeValue: { increment: amount } },
     });
 
     return result;
-  });
+    });
+  }
   const fullyPaid = updated.status === 'PAID';
 
   if (fullyPaid) {

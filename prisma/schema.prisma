@@ -3142,7 +3142,14 @@ model Payment {
 
   paidAt         DateTime? @db.Timestamptz(6)
   refundedAt     DateTime? @db.Timestamptz(6)
+  /// Der **kumulierte** erstattete Betrag, wie der Anbieter ihn meldet — ein
+  /// Stand, kein Zuwachs. Der Saldo zählt jede eingegangene Zahlung mit
+  /// `amount − refundedAmount` (`saldoNeuBilden`).
   refundedAmount Decimal   @default(0) @db.Decimal(12, 2)
+  /// Zeitpunkt (laut Anbieter, `event.created`) des Erstattungsstands, der in
+  /// `refundedAmount` steht. Ein älteres Ereignis, das später zugestellt
+  /// wird, dreht den Stand damit nicht zurück (2026-09-27).
+  refundSyncedAt DateTime? @db.Timestamptz(6)
   failureReason  String?
 
   createdAt DateTime @default(now()) @db.Timestamptz(6)
@@ -3158,6 +3165,29 @@ model Payment {
   @@index([createdAt])
   @@index([paidAt])
   @@map("payments")
+}
+
+/// Verarbeitete Webhook-Ereignisse eines Zahlungsanbieters (2026-09-27).
+///
+/// Stripe stellt jedes Ereignis **mindestens** einmal zu — bei einer
+/// langsamen oder fehlerhaften Antwort mehrfach, in beliebiger Reihenfolge.
+/// Die Zeile entsteht in derselben Transaktion wie die Wirkung des
+/// Ereignisses; die Eindeutigkeit von (Anbieter, Ereigniskennung) macht die
+/// zweite Zustellung zu einem Konflikt, den PostgreSQL entscheidet, statt zu
+/// einer zweiten Buchung. Scheitert die Wirkung, rollt die Zeile mit zurück,
+/// und die nächste Zustellung versucht es erneut.
+///
+/// Ohne Organisation: Die Signatur gehört dem Anbieterkonto der Installation,
+/// nicht einem Mandanten; der Bezug steht an der Zahlung.
+model ProviderWebhookEvent {
+  id         String   @id @default(cuid())
+  provider   String
+  eventId    String
+  type       String
+  receivedAt DateTime @default(now()) @db.Timestamptz(6)
+
+  @@unique([provider, eventId])
+  @@map("provider_webhook_events")
 }
 
 /// Mahnstufe mit Versandzeitpunkt und Gebühr.

@@ -222,7 +222,12 @@ export function constructWebhookEvent(payload: string, signature: string): Strip
     throw new IntegrationError('Stripe', 'Webhook-Secret ist nicht konfiguriert.');
   }
   try {
-    return stripe().webhooks.constructEvent(payload, signature, secret);
+    // Statisch statt über den API-Klienten (2026-09-27): Die Signaturprüfung
+    // braucht nur das Webhook-Geheimnis, keinen API-Schlüssel. Über
+    // `stripe()` scheiterte sie ohne `STRIPE_SECRET_KEY` — eine Installation,
+    // die Zahlungen nur empfängt, oder die Prüfreihe mit signierten
+    // Ereignissen, konnte den Endpunkt nie erreichen.
+    return Stripe.webhooks.constructEvent(payload, signature, secret);
   } catch (error) {
     throw new IntegrationError(
       'Stripe',

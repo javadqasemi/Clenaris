@@ -317,11 +317,15 @@ const DOMAINS: Domain[] = [
       'Finanzbelege sind fortschreibend, nie überschreibend: eine ausgestellte `Invoice` ' +
       'wird nicht mehr geändert, Korrekturen laufen über `CreditNote`. Das verlangt die ' +
       'Aufbewahrungspflicht nach Art. 957a OR. `Payment.providerPaymentId` ist eindeutig — ' +
-      'daran erkennt der Stripe-Webhook eine bereits gebuchte Zahlung und bleibt idempotent.',
+      'daran erkennt der Stripe-Webhook eine bereits gebuchte Zahlung. `ProviderWebhookEvent` ' +
+      'hält jedes verarbeitete Anbieterereignis fest, in der Transaktion seiner Wirkung: Eine ' +
+      'erneute Zustellung bucht nichts zweimal. Erstattungen stehen als kumulierter Stand an der ' +
+      'Zahlung (`refundedAmount`, `refundSyncedAt`); den Saldo bildet allein `saldoNeuBilden`.',
     models: [
       'Invoice',
       'InvoiceItem',
       'Payment',
+      'ProviderWebhookEvent',
       'PaymentReminder',
       'CreditNote',
       'Supplier',

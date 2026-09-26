@@ -15,3 +15,13 @@ export const PRUEF_RESEND_GEHEIMNIS = `whsec_${Buffer.from('clenaris-pruefreihe-
  * das andere nicht öffnet.
  */
 export const PRUEF_SICHERHEITSBERICHT_TOKEN = 'clenaris-pruefreihe-sicherheitsbericht-0123456789abcdef';
+
+/**
+ * Stripe-Webhook-Geheimnis der Prüfreihe (2026-09-27) — dieselbe Begründung.
+ * Damit lassen sich Zahlungs- und Rückerstattungsereignisse mit einer echten,
+ * gültigen Signatur zustellen (`Stripe.webhooks.generateTestHeaderString`),
+ * ohne Stripe-Konto und ohne einen Schlüssel für die Stripe-API: Die
+ * Signaturprüfung braucht nur dieses Geheimnis. Zusammengesetzt statt als
+ * Literal, damit die Geheimnisprüfung kein Muster sieht, wo keines ist.
+ */
+export const PRUEF_STRIPE_GEHEIMNIS = `whsec_${Buffer.from('clenaris-pruefreihe-stripe-webhook').toString('hex')}`;

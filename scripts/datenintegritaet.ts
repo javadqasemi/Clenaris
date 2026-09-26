@@ -60,17 +60,20 @@ export const PRUEFUNGEN: Pruefung[] = [
   {
     schluessel: 'rechnung_bezahlt',
     art: 'fehler',
-    beschreibung: 'Bezahlter Betrag = Summe der erfolgreichen Zahlungen',
+    // Dieselbe Gleichung wie `saldoNeuBilden` (2026-09-27): eingegangenes
+    // Geld abzüglich des kumulierten Erstattungsstands. Vorher zählte hier nur
+    // SUCCEEDED, und jede erstattete Rechnung galt als Integritätsfehler.
+    beschreibung: 'Bezahlter Betrag = eingegangene Zahlungen abzüglich Erstattungen',
     sql: `SELECT i.id FROM invoices i
-          LEFT JOIN (SELECT "invoiceId", sum(amount) s FROM payments WHERE status = 'SUCCEEDED' GROUP BY 1) p ON p."invoiceId" = i.id
+          LEFT JOIN (SELECT "invoiceId", sum(amount - "refundedAmount") s FROM payments WHERE status IN ('SUCCEEDED', 'PARTIALLY_REFUNDED', 'REFUNDED') GROUP BY 1) p ON p."invoiceId" = i.id
           WHERE i.status <> 'DRAFT' AND abs(i."paidAmount" - coalesce(p.s, 0)) > 0.01`,
   },
   {
     schluessel: 'rechnung_saldo',
     art: 'fehler',
-    beschreibung: 'Offener Posten = max(0, Brutto − Zahlungen − Gutschriften); storniert/abgeschrieben: 0',
+    beschreibung: 'Offener Posten = max(0, Brutto − (Zahlungen − Erstattungen) − Gutschriften); storniert/abgeschrieben: 0',
     sql: `SELECT i.id FROM invoices i
-          LEFT JOIN (SELECT "invoiceId", sum(amount) s FROM payments WHERE status = 'SUCCEEDED' GROUP BY 1) p ON p."invoiceId" = i.id
+          LEFT JOIN (SELECT "invoiceId", sum(amount - "refundedAmount") s FROM payments WHERE status IN ('SUCCEEDED', 'PARTIALLY_REFUNDED', 'REFUNDED') GROUP BY 1) p ON p."invoiceId" = i.id
           LEFT JOIN (SELECT "invoiceId", sum("grossTotal") s FROM credit_notes GROUP BY 1) g ON g."invoiceId" = i.id
           WHERE i.status <> 'DRAFT' AND abs(i.balance -
             CASE WHEN i.status IN ('CANCELLED', 'WRITTEN_OFF') THEN 0

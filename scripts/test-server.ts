@@ -40,7 +40,7 @@ import { join } from 'node:path';
 import { config } from 'dotenv';
 
 import { databaseNameOf, istTestdatenbank } from '../prisma/seed-guard';
-import { PRUEF_RESEND_GEHEIMNIS, PRUEF_SICHERHEITSBERICHT_TOKEN } from '../tests/helpers/webhooks';
+import { PRUEF_RESEND_GEHEIMNIS, PRUEF_SICHERHEITSBERICHT_TOKEN, PRUEF_STRIPE_GEHEIMNIS } from '../tests/helpers/webhooks';
 
 // `.env` nur, um `DATABASE_URL` abzuleiten — `next start` liest sie ohnehin selbst.
 config();
@@ -102,6 +102,12 @@ function main(): void {
       RESEND_WEBHOOK_SECRET: PRUEF_RESEND_GEHEIMNIS,
       /** Berichtseingang der Sicherheitszentrale (`sicherheitsberichte.test.ts`). */
       SECURITY_REPORT_TOKEN: PRUEF_SICHERHEITSBERICHT_TOKEN,
+      /**
+       * Stripe-Ereignisse mit echter Signatur (`zahlungsbuch.test.ts`). Nur
+       * das Webhook-Geheimnis, **kein** API-Schlüssel: Die Zahlungsstrecke
+       * bleibt für alle anderen Prüfungen abgeschaltet, wie bisher.
+       */
+      STRIPE_WEBHOOK_SECRET: PRUEF_STRIPE_GEHEIMNIS,
     },
   });
   const beenden = () => kind.kill();

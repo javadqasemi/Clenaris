@@ -4,7 +4,7 @@
 > Diagramme sind damit nie älter als das Schema. Prosa und Bereichseinteilung
 > stehen in `scripts/generate-erd.ts`.
 
-**148 Modelle, 118 Aufzählungstypen, 2859 Felder.**
+**149 Modelle, 118 Aufzählungstypen, 2865 Felder.**
 PostgreSQL 16+; alle Zeitstempel als `timestamptz` in UTC, Anzeige in Europe/Zurich.
 
 ## Vier Entscheidungen, die das ganze Schema prägen
@@ -43,7 +43,7 @@ flowchart LR
   auftrag["Buchung, Offerte, Einsatz<br/><small>17 Modelle</small>"]
   vertraege["Verträge und Einsatzpläne<br/><small>10 Modelle</small>"]
   personal["Personal und Zeit<br/><small>16 Modelle</small>"]
-  finanzen["Finanzen<br/><small>8 Modelle</small>"]
+  finanzen["Finanzen<br/><small>9 Modelle</small>"]
   kommunikation["Kommunikation und Automatisierung<br/><small>10 Modelle</small>"]
   marketing["Marketing und Inhalte<br/><small>13 Modelle</small>"]
   redaktion["Redaktion<br/><small>6 Modelle</small>"]
@@ -1103,7 +1103,7 @@ erDiagram
 
 ## Finanzen
 
-Finanzbelege sind fortschreibend, nie überschreibend: eine ausgestellte `Invoice` wird nicht mehr geändert, Korrekturen laufen über `CreditNote`. Das verlangt die Aufbewahrungspflicht nach Art. 957a OR. `Payment.providerPaymentId` ist eindeutig — daran erkennt der Stripe-Webhook eine bereits gebuchte Zahlung und bleibt idempotent.
+Finanzbelege sind fortschreibend, nie überschreibend: eine ausgestellte `Invoice` wird nicht mehr geändert, Korrekturen laufen über `CreditNote`. Das verlangt die Aufbewahrungspflicht nach Art. 957a OR. `Payment.providerPaymentId` ist eindeutig — daran erkennt der Stripe-Webhook eine bereits gebuchte Zahlung. `ProviderWebhookEvent` hält jedes verarbeitete Anbieterereignis fest, in der Transaktion seiner Wirkung: Eine erneute Zustellung bucht nichts zweimal. Erstattungen stehen als kumulierter Stand an der Zahlung (`refundedAmount`, `refundSyncedAt`); den Saldo bildet allein `saldoNeuBilden`.
 
 ```mermaid
 erDiagram
@@ -1136,6 +1136,13 @@ erDiagram
     PaymentMethod method
     PaymentStatus status
     String reference
+  }
+  ProviderWebhookEvent {
+    String id PK
+    String provider
+    String eventId
+    String type
+    DateTime receivedAt
   }
   PaymentReminder {
     String id PK
@@ -1197,7 +1204,8 @@ erDiagram
 | --- | --- | --- | --- |
 | `Invoice` | `invoices` | 62 | Rechnung mit QR-Referenz und Empfänger-Momentaufnahme. Nach dem Ausstellen unveränderlich. |
 | `InvoiceItem` | `invoice_items` | 16 | Rechnungsposition mit Netto-, MWST- und Bruttobetrag. |
-| `Payment` | `payments` | 21 | Zahlungseingang. `providerPaymentId` ist eindeutig — daran bleibt der Webhook idempotent. |
+| `Payment` | `payments` | 22 | Zahlungseingang. `providerPaymentId` ist eindeutig — daran bleibt der Webhook idempotent. |
+| `ProviderWebhookEvent` | `provider_webhook_events` | 5 | Verarbeitete Webhook-Ereignisse eines Zahlungsanbieters (2026-09-27). |
 | `PaymentReminder` | `payment_reminders` | 8 | Mahnstufe mit Versandzeitpunkt und Gebühr. |
 | `CreditNote` | `credit_notes` | 17 | Gutschrift. Der einzige Weg, eine ausgestellte Rechnung zu korrigieren. |
 | `Supplier` | `suppliers` | 21 | Lieferant für Material, Fahrzeuge und Dienstleistungen. |
