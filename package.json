@@ -4,7 +4,7 @@
   "private": true,
   "description": "Clenaris — SaaS Plattform für Reinigungsfirmen (Kanton Bern, Schweiz)",
   "engines": {
-    "node": ">=20.11.0"
+    "node": ">=22.0.0"
   },
   "scripts": {
     "dev": "node scripts/react-hydrationskorrektur.mjs && tsx scripts/copy-pdfjs-assets.ts && next dev --turbo",

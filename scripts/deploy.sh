@@ -238,7 +238,7 @@ log "Protokoll:   ${LOG_FILE}"
 [[ "$(id -u)" -ne 0 ]] || fail "Diese Auslieferung läuft nicht als root. Legen Sie einen eigenen Dienstbenutzer an."
 
 require_command git  'Installieren Sie git.'
-require_command node 'Installieren Sie Node.js 20.11 oder neuer.'
+require_command node 'Installieren Sie Node.js 22 oder neuer.'
 require_command npm  'Gehört zu Node.js.'
 require_command pm2   'Installieren Sie PM2: npm install -g pm2'
 require_command curl  'Wird für den Health Check gebraucht.'
@@ -246,7 +246,9 @@ require_command flock 'Gehört zu util-linux und trägt die Sperre gegen gleichz
 require_command awk   'Wird für das Zusammenführen der Umgebungsdatei gebraucht.'
 
 node_major="$(node -p 'process.versions.node.split(".")[0]')"
-[[ "${node_major}" -ge 20 ]] || fail "Node ${node_major} ist zu alt. Die Anwendung verlangt mindestens 20.11."
+# 22 seit 2026-09-26: Geprüft wird nur noch mit Node 22 (örtlich und im CI,
+# `.nvmrc`); Node 20 ist seit April 2026 ohne Sicherheitsupdates.
+[[ "${node_major}" -ge 22 ]] || fail "Node ${node_major} ist zu alt. Die Anwendung verlangt mindestens 22."
 
 [[ -d "${APP_DIR}/.git" ]] || fail "${APP_DIR} ist kein Git-Repository."
 

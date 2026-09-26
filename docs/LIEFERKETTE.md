@@ -9,9 +9,14 @@ Rechners (Geheimnissuche, CI-Lauf).
 - **Sperrdatei** `package-lock.json` (lockfileVersion 3, mit
   `integrity`-Hashes); CI installiert mit `npm ci` — nur die Sperrdatei
   zählt.
-- **Node** `.nvmrc` = 20, `engines.node >= 20.11.0`. Entwickelt und gemessen
-  wurde hier mit Node 22.23 / npm 10.9 — der Unterschied ist bekannt, nicht
-  geprüft.
+- **Node** `.nvmrc` = **22**, `engines.node >= 22.0.0` (seit 2026-09-26;
+  vorher 20 / `>= 20.11.0`). Anlass: Der erste CI-Lauf auf Node 20 fand die
+  Prüfreihe nicht — `node --test` löst Glob-Muster wie
+  `"tests/**/*.test.ts"` erst ab Node 21 selbst auf. Entwickelt, gemessen und
+  vollständig geprüft wurde ausschliesslich mit Node 22.23 / npm 10.9; ein CI
+  auf 20 prüfte also eine Laufzeit, die nie verifiziert war — und Node 20 ist
+  seit April 2026 ohne Sicherheitsupdates. Der Produktionsserver (V2) braucht
+  dieselbe Hauptversion (V2-2).
 - **Keine `overrides`**, keine Git- oder Tarball-Abhängigkeiten.
 - **Eine bewusste Veränderung an `node_modules`:** die React-Korrektur
   (`scripts/react-hydrationskorrektur.mjs`, docs/HYDRATION.md §16), angewendet
