@@ -362,6 +362,13 @@ export const updateBookingSchema = z
 
     /** Grund der Änderung — landet in der Änderungsspur am Auftrag. */
     changeReason: z.string().trim().max(500).optional(),
+
+    /**
+     * Die Verfügbarkeitsprüfung bei Termin-, Dauer-, Team- oder
+     * Leistungsänderung ausdrücklich übergehen — wie `overrideCapacity` bei
+     * der Erfassung im Büro. Steht im Prüfprotokoll.
+     */
+    overrideCapacity: z.boolean().optional(),
   })
   .strict();
 export type UpdateBookingInput = z.infer<typeof updateBookingSchema>;

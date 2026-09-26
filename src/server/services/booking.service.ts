@@ -1051,7 +1051,58 @@ export async function updateBooking(params: {
     });
   }
 
+  /**
+   * Termin, Dauer, Team oder Leistungen geändert? Dann dieselbe Prüfung wie
+   * beim Anlegen (Befund A3, 2026-09-26).
+   *
+   * Vorher schrieb die Bearbeitungsmaske einen neuen Termin oder eine längere
+   * Dauer ohne jede Verfügbarkeitsprüfung — ein Einsatz liess sich auf
+   * 21:00–01:00 in ein Fenster bis 22:00 schieben oder auf einen Termin, an
+   * dem niemand frei ist. Geprüft wird nur, was noch Kapazität bindet
+   * (Entwurf, offen, bestätigt); die eigene Belegung zählt nicht mit. Das Büro
+   * ist wie beim Anlegen an Vorlauf und Horizont nicht gebunden und kann die
+   * Kapazitätsprüfung ausdrücklich übergehen — das steht dann im Protokoll.
+   */
+  const statusDanach = input.status && !['CANCELLED', 'CONFIRMED'].includes(input.status) ? input.status : booking.status;
+  const verfuegbarkeitBetroffen =
+    Boolean(data.scheduledStart || data.durationMin || data.crewSize || input.items) &&
+    ['DRAFT', 'PENDING', 'CONFIRMED'].includes(statusDanach);
+  const pufferMin = verfuegbarkeitBetroffen
+    ? Math.max(
+        0,
+        ...(
+          await prisma.service.findMany({
+            where: {
+              id: { in: (input.items ?? booking.items).map((i) => i.serviceId) },
+              organizationId: params.organizationId,
+            },
+            select: { bufferMinutes: true },
+          })
+        ).map((s) => s.bufferMinutes),
+      )
+    : 0;
+
   const updated = await prisma.$transaction(async (tx) => {
+    if (verfuegbarkeitBetroffen && !input.overrideCapacity) {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`buchung:${params.organizationId}`}))`;
+      const start = (data.scheduledStart as Date | undefined) ?? booking.scheduledStart;
+      const pruefung = await isSlotBookable({
+        organizationId: params.organizationId,
+        start,
+        durationMin: (data.durationMin as number | undefined) ?? booking.durationMin,
+        crewSize: (data.crewSize as number | undefined) ?? booking.crewSize,
+        bufferMin: pufferMin,
+        kanal: 'buero',
+        ohneBuchungId: booking.id,
+        db: tx,
+      });
+      if (!pruefung.ok) {
+        throw new BusinessRuleError(
+          `${pruefung.reason} Wer den Termin trotzdem so setzen will, übergeht die Kapazitätsprüfung ausdrücklich.`,
+        );
+      }
+    }
+
     if (input.items) {
       await tx.bookingItem.deleteMany({ where: { bookingId: booking.id } });
       await tx.bookingItem.createMany({
@@ -1149,7 +1200,9 @@ export async function updateBooking(params: {
     userId: params.actorId,
     entity: 'Booking',
     entityId: booking.id,
-    summary: `Buchung ${booking.number} bearbeitet`,
+    summary:
+      `Buchung ${booking.number} bearbeitet` +
+      (verfuegbarkeitBetroffen && input.overrideCapacity ? ' — Kapazitätsprüfung übergangen' : ''),
     changes,
   });
 
