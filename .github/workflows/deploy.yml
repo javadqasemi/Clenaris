@@ -115,8 +115,8 @@ jobs:
       # verweigert in der Produktion den Dienst, solange kein eigenes
       # Startpasswort gesetzt ist (siehe `prisma/seed.ts`) — richtig auf einem
       # echten System, hinderlich für Demodaten in einer Wegwerf-Datenbank.
-      # Der Build und der gestartete Server setzen `production` selbst, dort
-      # wo es zählt.
+      # Der Build (Stufe „Build", eigene `env`) und der gestartete Server
+      # (`NODE_ENV=production npx next start`) setzen `production` ausdrücklich.
       NODE_ENV: development
       NEXT_TELEMETRY_DISABLED: '1'
 
@@ -258,6 +258,17 @@ jobs:
         # eine Next-Anwendung mit App Router, Server Components und Route
         # Handlers im selben Baum. Ein getrennter «Backend-Build» existiert
         # nicht und liesse sich nur künstlich herstellen.
+        #
+        # `NODE_ENV: production` ausdrücklich für diese Stufe. Der Auftrag
+        # setzt `development` (wegen des Seeds, siehe oben), und `next build`
+        # übernimmt einen gesetzten Wert, statt ihn zu ersetzen: Mit
+        # `development` bricht der Bau beim Vorrendern von `/404` ab
+        # („<Html> should not be imported outside of pages/_document"). So
+        # geschehen im ersten Lauf dieses Zweigs (PR #3, Lauf 36270931878) und
+        # örtlich genau so nachgestellt. Die frühere Annahme hier, der Bau setze
+        # `production` selbst, war falsch.
+        env:
+          NODE_ENV: production
         run: npm run build
 
       - name: Anwendung starten
