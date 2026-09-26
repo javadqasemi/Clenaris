@@ -39,6 +39,7 @@ import { existsSync, statSync } from 'node:fs';
 import { PrismaClient } from '@prisma/client';
 
 import { verbindungAus, werkzeugPfad, type Verbindung } from './db-backup';
+import { melden } from './security/melden';
 
 /** Nur dieses Muster darf angelegt und gelöscht werden. */
 const ZIELMUSTER = /^clenaris_restore_verify_\d{10,}$/;
@@ -227,6 +228,16 @@ async function main(): Promise<void> {
     console.log('');
     console.log('  ✅  Wiederherstellung geprüft: alle Zeilenzahlen stimmen überein.');
     console.log('');
+    await melden(
+      {
+        quelle: 'BACKUP',
+        status: 'OK',
+        erstelltAm: new Date().toISOString(),
+        zusammenfassung: `Wiederherstellungsprobe bestanden: ${TABELLEN.length} Tabellen, Trigger und Teilindizes gleich.`,
+        kennzahlen: { wiederherstellungGeprueftAm: new Date().toISOString().slice(0, 10), wiederherstellungErgebnis: 'bestanden' },
+      },
+      (z) => console.log(`  ${z}`),
+    );
   } finally {
     if (angelegt) {
       // `WITH (FORCE)`: Prisma hält kurz nach dem Zählen noch Verbindungen.
@@ -241,10 +252,22 @@ async function main(): Promise<void> {
 }
 
 if (process.argv[1] && /db-restore-verify\.(ts|js)$/.test(process.argv[1])) {
-  main().catch((fehler) => {
+  main().catch(async (fehler) => {
+    const meldung = fehler instanceof Error ? fehler.message : String(fehler);
     console.error('');
-    console.error(`❌  ${fehler instanceof Error ? fehler.message : String(fehler)}`);
+    console.error(`❌  ${meldung}`);
     console.error('');
+    await melden(
+      {
+        quelle: 'BACKUP',
+        status: 'KRITISCH',
+        erstelltAm: new Date().toISOString(),
+        zusammenfassung: 'Wiederherstellungsprobe gescheitert — die Sicherung ist nicht nachweislich verwendbar.',
+        befunde: [{ titel: 'Wiederherstellungsprobe gescheitert', schwere: 'kritisch', details: meldung.slice(0, 1000) }],
+        kennzahlen: { wiederherstellungGeprueftAm: new Date().toISOString().slice(0, 10), wiederherstellungErgebnis: 'gescheitert' },
+      },
+      (z) => console.error(`  ${z}`),
+    );
     process.exit(1);
   });
 }

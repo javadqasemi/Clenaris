@@ -157,6 +157,7 @@ const DOMAINS: Domain[] = [
       // Laufprotokoll der geplanten Aufträge (RB-014) — Betriebszustand, wie
       // die Ereignisse der Kategorie SYSTEM, deshalb hier.
       'CronRun',
+      'SecurityReport',
     ],
   },
   {

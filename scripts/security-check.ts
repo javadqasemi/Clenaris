@@ -44,6 +44,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
+import { melden, type Meldung } from './security/melden';
 import { musterPruefen, type Unterdrueckung } from './security/muster';
 
 type Status = 'BESTANDEN' | 'BEFUND' | 'NICHT_GEPRUEFT' | 'FEHLER';
@@ -442,7 +443,7 @@ async function main() {
 
   const blockiert = pruefungen.some((p) => p.status === 'FEHLER' || p.befunde.some((b) => b.schwere === 'blockierend'));
   const ungeprueft = pruefungen.filter((p) => p.status === 'NICHT_GEPRUEFT');
-  const gesamt = blockiert ? 'KRITISCH' : pruefungen.some((p) => p.befunde.some((b) => b.schwere === 'warnung')) ? 'WARNUNG' : ungeprueft.length ? 'NICHT_GEPRUEFT' : 'OK';
+  const gesamt: Meldung['status'] = blockiert ? 'KRITISCH' : pruefungen.some((p) => p.befunde.some((b) => b.schwere === 'warnung')) ? 'WARNUNG' : ungeprueft.length ? 'NICHT_GEPRUEFT' : 'OK';
 
   const bericht = {
     quelle: 'SECURITY_CHECK' as const,
@@ -476,30 +477,9 @@ async function main() {
   console.log(`\n  Gesamt: ${gesamt}. Bericht: security-reports/security-check-${stempel}.json`);
   if (ungeprueft.length) console.log(`  Nicht geprüft ist nicht bestanden: ${ungeprueft.map((p) => p.titel).join('; ')}.`);
 
-  if (args.has('--melden')) await melden(bericht);
+  if (args.has('--melden')) await melden(bericht, (z) => console.log(`  ${z}`));
 
   process.exitCode = blockiert || (STRENG && ungeprueft.length > 0) ? 1 : 0;
-}
-
-/** Den Bericht an die Sicherheitszentrale senden (`POST /api/cron/security-report`). */
-async function melden(bericht: unknown) {
-  const ziel = process.env.SECURITY_REPORT_URL;
-  const token = process.env.SECURITY_REPORT_TOKEN;
-  if (!ziel || !token) {
-    console.log('  Melden: NICHT GESENDET — SECURITY_REPORT_URL und SECURITY_REPORT_TOKEN setzen.');
-    return;
-  }
-  if (!/^https:\/\//.test(ziel) && !/^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?\//.test(ziel)) {
-    console.log('  Melden: NICHT GESENDET — nur https (oder lokal http).');
-    return;
-  }
-  const r = await fetch(ziel, {
-    method: 'POST',
-    headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-    body: JSON.stringify(bericht),
-    signal: AbortSignal.timeout(15_000),
-  });
-  console.log(`  Melden: HTTP ${r.status}`);
 }
 
 void main();

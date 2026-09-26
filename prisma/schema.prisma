@@ -542,6 +542,7 @@ model Organization {
   stockMovements        StockMovement[]
   equipment             Equipment[]
   scanCodes             ScanCode[]
+  securityReports       SecurityReport[]
   numberSequences   NumberSequence[]
   files             FileAsset[]
   newsletter        NewsletterSubscriber[]
@@ -1097,6 +1098,59 @@ model CronRun {
 
   @@index([organizationId, job, startedAt])
   @@map("cron_runs")
+}
+
+enum SecurityReportSource {
+  /// `npm run security:check -- --melden` (CI oder Freigabe).
+  SECURITY_CHECK
+  /// Externer Überwachungsrechner: Erreichbarkeit, TLS, Kopfzeilen, Dateien.
+  EXTERNAL_MONITOR
+  /// ZAP-Grundprüfung (passiv) vom Überwachungsrechner.
+  ZAP_BASELINE
+  /// Abhängigkeits- und Betriebssystemprüfung auf dem Server.
+  DEPENDENCY_CHECK
+  /// Sicherung und Wiederherstellungsprobe.
+  BACKUP
+  /// Integritätsprüfung des Rechners (AIDE, Wazuh, Falco — sofern eingerichtet).
+  HOST_INTEGRITY
+}
+
+enum SecurityReportStatus {
+  OK
+  WARNUNG
+  KRITISCH
+  NICHT_GEPRUEFT
+}
+
+/// Bericht einer Prüfung, die **ausserhalb** der Anwendung läuft
+/// (Sicherheitsautomation, 2026-09-26).
+///
+/// Die Anwendung startet keine Prüfung und liest keine Datei eines Skripts;
+/// sie nimmt Berichte über `POST /api/cron/security-report` entgegen (eigenes
+/// Token `SECURITY_REPORT_TOKEN`), speichert sie und zeigt sie in der
+/// Sicherheitszentrale. So hängt die Anzeige nicht am Dateisystem genau des
+/// Rechners, den sie überwachen soll — und keine Browserroute kann eine Shell
+/// erreichen.
+///
+/// Alle Inhalte sind begrenzt (`securityReportSchema`) und werden als Text
+/// gezeigt. Aufbewahrt werden je Quelle die letzten 100 Berichte.
+model SecurityReport {
+  id             String               @id @default(cuid())
+  organizationId String
+  source         SecurityReportSource
+  status         SecurityReportStatus
+  version        String?
+  summary        String
+  /// `{ pruefungen, befunde, kennzahlen }` — so, wie validiert empfangen.
+  details        Json
+  /// Zeitpunkt laut Absender.
+  reportedAt     DateTime             @db.Timestamptz(6)
+  receivedAt     DateTime             @default(now()) @db.Timestamptz(6)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, source, receivedAt])
+  @@map("security_reports")
 }
 
 // ===========================================================================

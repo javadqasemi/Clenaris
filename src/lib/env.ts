@@ -87,6 +87,13 @@ const serverSchema = z.object({
   AI_MODEL_FAST: z.string().default('claude-haiku-4-5'),
 
   CRON_SECRET: z.string().optional(),
+  /**
+   * Token für den Berichtseingang der Sicherheitszentrale
+   * (`POST /api/cron/security-report`). Eigenes Geheimnis, nicht
+   * `CRON_SECRET` (siehe `defineCronRoute`). Ohne Wert nimmt der Eingang
+   * nichts an.
+   */
+  SECURITY_REPORT_TOKEN: z.string().optional(),
 
   COMPANY_NAME: z.string().default('Clenaris Reinigungen GmbH'),
   COMPANY_EMAIL: z.string().default('info@clenaris.ch'),

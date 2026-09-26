@@ -275,6 +275,16 @@ export const SECURITY_EVENTS = {
     severity: 'WARNING',
     label: 'Geplanter Lauf nahe an der Zeitgrenze',
   },
+  /**
+   * Ein Bericht von ausserhalb (security:check, externe Überwachung, ZAP,
+   * Sicherung) meldet „kritisch" — nur beim Wechsel in diesen Zustand, nicht
+   * bei jedem weiteren Bericht derselben Quelle (2026-09-26).
+   */
+  SECURITY_REPORT_CRITICAL: {
+    category: 'SYSTEM',
+    severity: 'CRITICAL',
+    label: 'Sicherheitsbericht meldet einen kritischen Befund',
+  },
 } as const satisfies Record<string, EreignisArt>;
 
 export type SecurityEventKind = keyof typeof SECURITY_EVENTS;

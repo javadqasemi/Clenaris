@@ -32,6 +32,7 @@ import { VERKAUF_ROUTES } from './openapi-routes-verkauf';
 import { KOMMUNIKATION_ROUTES } from './openapi-routes-kommunikation';
 import { SUCHE_ROUTES } from './openapi-routes-suche';
 import { SCAN_ROUTES } from './openapi-routes-scan';
+import * as sicherheitsbericht from '../src/lib/validation/security-report';
 import { VERSIONEN_ROUTES } from './openapi-routes-versionen';
 
 /**
@@ -4132,6 +4133,22 @@ export const ROUTES: RouteDoc[] = [
       'wiederholt scheitert; sonst **503**. Bleiben stündlicher und nächtlicher Lauf beide aus, ' +
       'meldet von innen niemand etwas — diese Adresse schon. Zeitpunkte und Zahlen, keine Inhalte.',
     guard: { kind: 'cron' },
+  },
+  {
+    method: 'post',
+    path: '/api/cron/security-report',
+    tag: 'System',
+    summary: 'Sicherheitsbericht entgegennehmen',
+    description:
+      'Bericht von security:check, externer Überwachung, ZAP-Grundprüfung oder Sicherung. Bearer ' +
+      '`SECURITY_REPORT_TOKEN` — ein eigenes Geheimnis, **nicht** `CRON_SECRET`. Höchstens 512 kB, alle ' +
+      'Felder begrenzt; ungültig 422, zu gross 400. Die Anwendung speichert und zeigt den Bericht in der ' +
+      'Sicherheitszentrale; sie führt nichts aus. Ein kritischer Bericht wird beim Wechsel in diesen ' +
+      'Zustand ein Sicherheitsereignis.',
+    guard: { kind: 'cron' },
+    body: sicherheitsbericht.securityReportSchema,
+    status: 201,
+    extraErrors: [400, 422],
   },
   {
     method: 'post',

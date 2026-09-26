@@ -445,6 +445,15 @@ function secretsMatch(provided: string, expected: string): boolean {
  */
 export function defineCronRoute(config: {
   handler: (request: NextRequest) => Promise<Response> | Response;
+  /**
+   * Welches Geheimnis das Bearer-Token prüft. Vorgabe `CRON_SECRET`.
+   *
+   * `SECURITY_REPORT_TOKEN` für den Berichtseingang der Sicherheitszentrale:
+   * Ein Überwachungsrechner, der Berichte senden darf, soll damit nicht auch
+   * die geplanten Läufe auslösen können — und umgekehrt. Ein gemeinsames
+   * Geheimnis hätte beide Rechte an denselben Rechner gebunden.
+   */
+  secretEnv?: 'CRON_SECRET' | 'SECURITY_REPORT_TOKEN';
 }) {
   return async (request: NextRequest): Promise<Response> => {
     /**
@@ -457,7 +466,7 @@ export function defineCronRoute(config: {
      */
     return mitBeobachtung(request, {}, async () => {
     try {
-      const secret = process.env.CRON_SECRET;
+      const secret = process.env[config.secretEnv ?? 'CRON_SECRET'];
       const provided = request.headers.get('authorization')?.replace(/^Bearer\s+/i, '');
       if (!secret || !provided || !secretsMatch(provided, secret)) {
         throw new UnauthorizedError('Ungültiges Cron-Token.');

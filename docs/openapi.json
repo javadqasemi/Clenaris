@@ -39681,6 +39681,233 @@
         }
       }
     },
+    "/api/cron/security-report": {
+      "post": {
+        "tags": [
+          "System"
+        ],
+        "summary": "Sicherheitsbericht entgegennehmen",
+        "description": "Bericht von security:check, externer Überwachung, ZAP-Grundprüfung oder Sicherung. Bearer `SECURITY_REPORT_TOKEN` — ein eigenes Geheimnis, **nicht** `CRON_SECRET`. Höchstens 512 kB, alle Felder begrenzt; ungültig 422, zu gross 400. Die Anwendung speichert und zeigt den Bericht in der Sicherheitszentrale; sie führt nichts aus. Ein kritischer Bericht wird beim Wechsel in diesen Zustand ein Sicherheitsereignis.\n\n**Zugriff:** Nur für den Scheduler: `Authorization: Bearer $CRON_SECRET`.",
+        "operationId": "postCronSecurityReport",
+        "security": [
+          {
+            "cronSecret": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "quelle": {
+                    "type": "string",
+                    "enum": [
+                      "SECURITY_CHECK",
+                      "EXTERNAL_MONITOR",
+                      "ZAP_BASELINE",
+                      "DEPENDENCY_CHECK",
+                      "BACKUP",
+                      "HOST_INTEGRITY"
+                    ]
+                  },
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "OK",
+                      "WARNUNG",
+                      "KRITISCH",
+                      "NICHT_GEPRUEFT"
+                    ]
+                  },
+                  "version": {
+                    "type": "string",
+                    "maxLength": 80
+                  },
+                  "erstelltAm": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "zusammenfassung": {
+                    "type": "string",
+                    "maxLength": 500,
+                    "minLength": 1
+                  },
+                  "pruefungen": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "maxLength": 60,
+                          "minLength": 1
+                        },
+                        "titel": {
+                          "type": "string",
+                          "maxLength": 160,
+                          "minLength": 1
+                        },
+                        "status": {
+                          "type": "string",
+                          "enum": [
+                            "BESTANDEN",
+                            "BEFUND",
+                            "NICHT_GEPRUEFT",
+                            "FEHLER"
+                          ]
+                        },
+                        "befunde": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 100000
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "titel",
+                        "status",
+                        "befunde"
+                      ]
+                    },
+                    "maxItems": 50,
+                    "default": []
+                  },
+                  "befunde": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "maxLength": 120
+                        },
+                        "titel": {
+                          "type": "string",
+                          "maxLength": 300,
+                          "minLength": 1
+                        },
+                        "schwere": {
+                          "type": "string",
+                          "enum": [
+                            "kritisch",
+                            "hoch",
+                            "mittel",
+                            "niedrig",
+                            "info"
+                          ]
+                        },
+                        "ort": {
+                          "type": "string",
+                          "maxLength": 300
+                        },
+                        "details": {
+                          "type": "string",
+                          "maxLength": 1000
+                        }
+                      },
+                      "required": [
+                        "titel",
+                        "schwere"
+                      ]
+                    },
+                    "maxItems": 200,
+                    "default": []
+                  },
+                  "kennzahlen": {
+                    "type": "object",
+                    "additionalProperties": {
+                      "anyOf": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "boolean"
+                        },
+                        {
+                          "type": "string",
+                          "maxLength": 120
+                        }
+                      ]
+                    },
+                    "default": {}
+                  }
+                },
+                "required": [
+                  "quelle",
+                  "status",
+                  "erstelltAm",
+                  "zusammenfassung"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Erfolg",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SuccessEnvelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHORIZED — keine oder abgelaufene Sitzung.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "CONFLICT — verstösst gegen eine Eindeutigkeitsregel.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "BUSINESS_RULE — fachlich nicht zulässig, etwa eine bereits ausgestellte Rechnung ändern.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/webhooks/stripe": {
       "post": {
         "tags": [

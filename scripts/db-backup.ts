@@ -46,6 +46,8 @@ import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, st
 import { homedir, platform } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 
+import { melden } from './security/melden';
+
 // ---------------------------------------------------------------------------
 //  Verbindung
 // ---------------------------------------------------------------------------
@@ -358,7 +360,7 @@ function argument(name: string, vorgabe = ''): string {
   return i >= 0 && process.argv[i + 1] ? process.argv[i + 1]! : vorgabe;
 }
 
-function main(): void {
+async function main(): Promise<void> {
   const url =
     process.env.BACKUP_DATABASE_URL?.trim() ||
     process.env.DIRECT_URL?.trim() ||
@@ -391,13 +393,37 @@ function main(): void {
     console.log(`BACKUP_DATEI=${ergebnis.datei}`);
     console.log(`BACKUP_SHA256=${ergebnis.sha256}`);
     console.log(`BACKUP_GROESSE=${ergebnis.groesse}`);
+
+    // An die Sicherheitszentrale (nur wenn eingerichtet). Kein Pfad, kein
+    // Hash, keine Verbindungsangabe — nur, dass und wie gross gesichert wurde.
+    await melden(
+      {
+        quelle: 'BACKUP',
+        status: 'OK',
+        version: commit || undefined,
+        erstelltAm: new Date().toISOString(),
+        zusammenfassung: `Sicherung (${grund}) erstellt und mit pg_restore --list gelesen.`,
+        kennzahlen: { backupAlterStunden: 0, backupGroesseMB: Math.round((ergebnis.groesse / 1024 / 1024) * 10) / 10, aufbewahrt: behalten },
+      },
+      (z) => console.log(`  ${z}`),
+    );
   } catch (fehler) {
     console.error('');
     console.error(`  ❌  ${fehler instanceof Error ? fehler.message : String(fehler)}`);
     console.error('      Ohne geprüfte Sicherung wird keine Migration ausgeführt.');
     console.error('');
+    await melden(
+      {
+        quelle: 'BACKUP',
+        status: 'KRITISCH',
+        erstelltAm: new Date().toISOString(),
+        zusammenfassung: `Sicherung (${grund}) gescheitert — ohne geprüfte Sicherung keine Migration.`,
+        befunde: [{ titel: 'Sicherung gescheitert', schwere: 'kritisch' }],
+      },
+      (z) => console.error(`  ${z}`),
+    );
     process.exit(1);
   }
 }
 
-if (process.argv[1] && /db-backup\.(ts|js)$/.test(process.argv[1])) main();
+if (process.argv[1] && /db-backup\.(ts|js)$/.test(process.argv[1])) void main();

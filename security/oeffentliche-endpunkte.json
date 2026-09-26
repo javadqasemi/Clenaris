@@ -43,6 +43,7 @@
     { "weg": "POST /api/webhooks/twilio", "begruendung": "X-Twilio-Signature über die öffentliche Adresse." },
     { "weg": "GET /api/cron/hourly", "begruendung": "Bearer CRON_SECRET, zeitkonstanter Vergleich." },
     { "weg": "GET /api/cron/daily", "begruendung": "Bearer CRON_SECRET, zeitkonstanter Vergleich." },
-    { "weg": "GET /api/cron/status", "begruendung": "Bearer CRON_SECRET; nur Zustand der Läufe." }
+    { "weg": "GET /api/cron/status", "begruendung": "Bearer CRON_SECRET; nur Zustand der Läufe." },
+    { "weg": "POST /api/cron/security-report", "begruendung": "Bearer SECURITY_REPORT_TOKEN (eigenes Geheimnis, nicht CRON_SECRET), zeitkonstant; Grösse vor dem Lesen begrenzt, Inhalt gegen securityReportSchema; speichert nur, führt nichts aus." }
   ]
 }

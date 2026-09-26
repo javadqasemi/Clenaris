@@ -5,7 +5,7 @@
 > Quelle, aus der sowohl diese Referenz als auch die Laufzeitvalidierung
 > stammen.
 
-Stand: 533 Endpunkte. Die maschinenlesbare Fassung liegt in
+Stand: 534 Endpunkte. Die maschinenlesbare Fassung liegt in
 [`openapi.yaml`](./openapi.yaml) bzw. [`openapi.json`](./openapi.json).
 
 ## Grundlagen
@@ -6582,6 +6582,36 @@ Familie.
 - **Zugriff:** Nur für den Scheduler: `Authorization: Bearer $CRON_SECRET`.
 - **Erfolg:** 200
 - **Mögliche Fehler:** 401, 500
+
+### `POST /api/cron/security-report`
+
+**Sicherheitsbericht entgegennehmen.** Bericht von security:check, externer Überwachung, ZAP-Grundprüfung oder Sicherung. Bearer `SECURITY_REPORT_TOKEN` — ein eigenes Geheimnis, **nicht** `CRON_SECRET`. Höchstens 512 kB, alle Felder begrenzt; ungültig 422, zu gross 400. Die Anwendung speichert und zeigt den Bericht in der Sicherheitszentrale; sie führt nichts aus. Ein kritischer Bericht wird beim Wechsel in diesen Zustand ein Sicherheitsereignis.
+
+- **Zugriff:** Nur für den Scheduler: `Authorization: Bearer $CRON_SECRET`.
+- **Erfolg:** 201
+- **Mögliche Fehler:** 400, 401, 409, 422, 500
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `quelle` | string | ja | `SECURITY_CHECK` \| `EXTERNAL_MONITOR` \| `ZAP_BASELINE` \| `DEPENDENCY_CHECK` \| `BACKUP` \| `HOST_INTEGRITY` |
+| `status` | string | ja | `OK` \| `WARNUNG` \| `KRITISCH` \| `NICHT_GEPRUEFT` |
+| `version` | string | – | max. 80 Zeichen |
+| `erstelltAm` | string | ja | date-time |
+| `zusammenfassung` | string | ja | min. 1 Zeichen, max. 500 Zeichen |
+| `pruefungen` | object[] | – | max. 50 Einträge, Standard `[]` |
+| `pruefungen[].id` | string | ja | min. 1 Zeichen, max. 60 Zeichen |
+| `pruefungen[].titel` | string | ja | min. 1 Zeichen, max. 160 Zeichen |
+| `pruefungen[].status` | string | ja | `BESTANDEN` \| `BEFUND` \| `NICHT_GEPRUEFT` \| `FEHLER` |
+| `pruefungen[].befunde` | integer | ja | ≥ 0, ≤ 100000 |
+| `befunde` | object[] | – | max. 200 Einträge, Standard `[]` |
+| `befunde[].id` | string | – | max. 120 Zeichen |
+| `befunde[].titel` | string | ja | min. 1 Zeichen, max. 300 Zeichen |
+| `befunde[].schwere` | string | ja | `kritisch` \| `hoch` \| `mittel` \| `niedrig` \| `info` |
+| `befunde[].ort` | string | – | max. 300 Zeichen |
+| `befunde[].details` | string | – | max. 1000 Zeichen |
+| `kennzahlen` | object | – | Standard `{}` |
 
 ### `POST /api/webhooks/stripe`
 

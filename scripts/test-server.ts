@@ -40,7 +40,7 @@ import { join } from 'node:path';
 import { config } from 'dotenv';
 
 import { databaseNameOf, istTestdatenbank } from '../prisma/seed-guard';
-import { PRUEF_RESEND_GEHEIMNIS } from '../tests/helpers/webhooks';
+import { PRUEF_RESEND_GEHEIMNIS, PRUEF_SICHERHEITSBERICHT_TOKEN } from '../tests/helpers/webhooks';
 
 // `.env` nur, um `DATABASE_URL` abzuleiten — `next start` liest sie ohnehin selbst.
 config();
@@ -100,6 +100,8 @@ function main(): void {
        * steht in `tests/helpers/webhooks.ts`. Es verlässt die Testumgebung nie.
        */
       RESEND_WEBHOOK_SECRET: PRUEF_RESEND_GEHEIMNIS,
+      /** Berichtseingang der Sicherheitszentrale (`sicherheitsberichte.test.ts`). */
+      SECURITY_REPORT_TOKEN: PRUEF_SICHERHEITSBERICHT_TOKEN,
     },
   });
   const beenden = () => kind.kill();

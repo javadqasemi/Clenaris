@@ -4,7 +4,7 @@
 > Diagramme sind damit nie älter als das Schema. Prosa und Bereichseinteilung
 > stehen in `scripts/generate-erd.ts`.
 
-**147 Modelle, 116 Aufzählungstypen, 2848 Felder.**
+**148 Modelle, 118 Aufzählungstypen, 2859 Felder.**
 PostgreSQL 16+; alle Zeitstempel als `timestamptz` in UTC, Anzeige in Europe/Zurich.
 
 ## Vier Entscheidungen, die das ganze Schema prägen
@@ -36,7 +36,7 @@ Beleg so lesbar, wie er ausgestellt wurde.
 ```mermaid
 flowchart LR
   stammdaten["Mandant und Stammdaten<br/><small>6 Modelle</small>"]
-  identitaet["Identität und Zugriff<br/><small>8 Modelle</small>"]
+  identitaet["Identität und Zugriff<br/><small>9 Modelle</small>"]
   signatur["Elektronische Unterzeichnung<br/><small>5 Modelle</small>"]
   crm["CRM<br/><small>13 Modelle</small>"]
   katalog["Leistungskatalog und Preislogik<br/><small>6 Modelle</small>"]
@@ -128,7 +128,7 @@ erDiagram
 
 | Modell | Tabelle | Felder | Zweck |
 | --- | --- | --- | --- |
-| `Organization` | `organizations` | 128 | Mandant — Firmendaten, Bankverbindung, Erscheinungsbild. Wurzel fast aller Beziehungen. |
+| `Organization` | `organizations` | 129 | Mandant — Firmendaten, Bankverbindung, Erscheinungsbild. Wurzel fast aller Beziehungen. |
 | `NumberSequence` | `number_sequences` | 6 | Fortlaufende, lückenlose Belegnummern (Schweizer Buchhaltungsanforderung). |
 | `OpeningHours` | `opening_hours` | 10 | Öffnungszeiten je Wochentag und die Einsatzzeiten, falls sie davon abweichen. |
 | `Holiday` | `holidays` | 7 | Feiertage und Betriebsferien. Sperren Termine und zählen nicht als Abwesenheitstage. |
@@ -221,6 +221,16 @@ erDiagram
     Int durationMs
     Int processed
   }
+  SecurityReport {
+    String id PK
+    String organizationId
+    SecurityReportSource source
+    SecurityReportStatus status
+    String version
+    String summary
+    Json details
+    DateTime reportedAt
+  }
   User ||--o{ RefreshToken : "user"
   User |o--o{ VerificationToken : "user"
   User ||--o{ Consent : "user"
@@ -239,6 +249,7 @@ erDiagram
 | `AuditLog` | `audit_logs` | 13 | Prüfprotokoll aller ändernden Vorgänge — wer, wann, was, vorher/nachher. |
 | `SecurityEvent` | `security_events` | 17 | Sicherheitsereignisse — der Strom, den das Sicherheitszentrum liest. |
 | `CronRun` | `cron_runs` | 12 | Ein Lauf eines geplanten Auftrags (`/api/cron/hourly`, `/api/cron/daily`). |
+| `SecurityReport` | `security_reports` | 10 | Bericht einer Prüfung, die **ausserhalb** der Anwendung läuft |
 
 ## Elektronische Unterzeichnung
 
@@ -1948,6 +1959,8 @@ exakte TypeScript-Typen.
 | `SecuritySeverity` | `INFO`, `WARNING`, `CRITICAL` |
 | `SecurityCategory` | `AUTHENTICATION`, `SESSION`, `ACCESS`, `PUBLIC_LINK`, `FILE`, `SYSTEM` |
 | `CronRunStatus` | `RUNNING`, `SUCCESS`, `PARTIAL`, `FAILED` |
+| `SecurityReportSource` | `SECURITY_CHECK`, `EXTERNAL_MONITOR`, `ZAP_BASELINE`, `DEPENDENCY_CHECK`, `BACKUP`, `HOST_INTEGRITY` |
+| `SecurityReportStatus` | `OK`, `WARNUNG`, `KRITISCH`, `NICHT_GEPRUEFT` |
 | `PayrollRateCode` | `AHV_IV_EO`, `ALV`, `ALV_SOLIDARITY`, `UVG_NBU`, `UVG_BU`, `KTG`, `FAK`, `VK`, `BVG` |
 | `PayrollVerification` | `UNGEPRUEFT`, `GEPRUEFT` |
 | `ThirteenthSalaryMode` | `NONE`, `ANNUAL`, `PRO_RATA`, `MONTHLY` |
