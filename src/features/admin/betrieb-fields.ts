@@ -65,6 +65,7 @@ export function materialFields(): FieldSpec[] {
     { name: 'sku', label: 'Artikelnummer', required: true, half: true },
     { name: 'unit', label: 'Einheit', half: true, placeholder: 'Stk., l, kg' },
     { name: 'name', label: 'Bezeichnung', required: true },
+    { name: 'barcode', label: 'Strichcode (EAN/GTIN)', placeholder: '7610000000000', hint: 'Vom Hersteller aufgedruckt — dann findet der Scanner den Artikel.' },
     { name: 'unitCost', label: 'Einstandspreis', type: 'number', step: 0.05, suffix: 'CHF', half: true },
     { name: 'minStock', label: 'Meldebestand', type: 'number', step: 1, half: true },
     { name: 'note', label: 'Notiz', type: 'textarea', rows: 2 },
@@ -120,6 +121,16 @@ export function maintenanceFields(): FieldSpec[] {
     { name: 'cost', label: 'Kosten', type: 'number', step: 0.05, suffix: 'CHF', half: true },
     { name: 'note', label: 'Notiz', type: 'textarea', rows: 2 },
   ];
+}
+
+/**
+ * „Defekt melden" aus dem Scanner: dasselbe `POST /api/equipment/:id/status`
+ * wie in der Geräteliste, mit `MAINTENANCE` als festem Wert. Der Grund ist
+ * hier Pflicht in der Maske, obwohl der Endpunkt ihn nur beim Ausmustern
+ * verlangt — eine Defektmeldung ohne Beschreibung schickt die Werkstatt raten.
+ */
+export function defektFields(): FieldSpec[] {
+  return [{ name: 'reason', label: 'Was ist defekt?', type: 'textarea', rows: 3, required: true }];
 }
 
 export function assignFields(personen: Option[]): FieldSpec[] {

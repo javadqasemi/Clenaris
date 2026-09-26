@@ -31,6 +31,7 @@ import { FINANZ_ROUTES } from './openapi-routes-finanzen';
 import { VERKAUF_ROUTES } from './openapi-routes-verkauf';
 import { KOMMUNIKATION_ROUTES } from './openapi-routes-kommunikation';
 import { SUCHE_ROUTES } from './openapi-routes-suche';
+import { SCAN_ROUTES } from './openapi-routes-scan';
 import { VERSIONEN_ROUTES } from './openapi-routes-versionen';
 
 /**
@@ -4477,6 +4478,11 @@ export const ROUTES: RouteDoc[] = [
   //  Globale Suche (Wave 17)
   // -------------------------------------------------------------------------
   ...SUCHE_ROUTES,
+
+  // -------------------------------------------------------------------------
+  //  Scanplattform (2026-09-26)
+  // -------------------------------------------------------------------------
+  ...SCAN_ROUTES,
 
   // -------------------------------------------------------------------------
   //  Versionsverwaltung (Produktsprint 2026-09-26)

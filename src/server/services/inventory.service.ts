@@ -102,6 +102,7 @@ export async function createMaterial(params: { organizationId: string; actorId: 
       data: {
         organizationId: params.organizationId,
         sku: params.input.sku,
+        barcode: params.input.barcode ?? null,
         name: params.input.name,
         unit: params.input.unit,
         unitCost: params.input.unitCost,
@@ -119,25 +120,44 @@ export async function createMaterial(params: { organizationId: string; actorId: 
     });
     return m;
   } catch (fehler) {
-    if (isUniqueConstraintError(fehler)) throw new ConflictError(`Die Artikelnummer ${params.input.sku} ist bereits vergeben.`);
+    if (isUniqueConstraintError(fehler)) throw new ConflictError(eindeutigkeitsMeldung(fehler, params.input.sku));
     throw fehler;
   }
+}
+
+/**
+ * Artikelnummer und Strichcode sind beide je Organisation eindeutig; die
+ * Meldung soll sagen, welcher der beiden schon vergeben ist — „Artikelnummer
+ * vergeben" beim doppelten Strichcode schickte die Person das falsche Feld
+ * ändern.
+ */
+function eindeutigkeitsMeldung(fehler: unknown, sku?: string): string {
+  const ziel = (fehler as { meta?: { target?: unknown } }).meta?.target;
+  const felder = Array.isArray(ziel) ? ziel.map(String) : [String(ziel ?? '')];
+  if (felder.some((f) => f.includes('barcode'))) return 'Dieser Strichcode gehört bereits zu einem anderen Artikel.';
+  return sku ? `Die Artikelnummer ${sku} ist bereits vergeben.` : 'Die Artikelnummer ist bereits vergeben.';
 }
 
 export async function updateMaterial(params: { organizationId: string; id: string; actorId: string; ip?: string | null; input: MaterialUpdateInput }) {
   const vorher = await prisma.material.findFirst({ where: { id: params.id, organizationId: params.organizationId } });
   if (!vorher) throw new NotFoundError('Material');
-  const nachher = await prisma.material.update({
-    where: { id: vorher.id },
-    data: {
-      ...(params.input.name !== undefined ? { name: params.input.name } : {}),
-      ...(params.input.unit !== undefined ? { unit: params.input.unit } : {}),
-      ...(params.input.unitCost !== undefined ? { unitCost: params.input.unitCost } : {}),
-      ...(params.input.minStock !== undefined ? { minStock: params.input.minStock } : {}),
-      ...(params.input.active !== undefined ? { active: params.input.active } : {}),
-      ...(params.input.note !== undefined ? { note: params.input.note } : {}),
-    },
-  });
+  const nachher = await prisma.material
+    .update({
+      where: { id: vorher.id },
+      data: {
+        ...(params.input.name !== undefined ? { name: params.input.name } : {}),
+        ...(params.input.barcode !== undefined ? { barcode: params.input.barcode } : {}),
+        ...(params.input.unit !== undefined ? { unit: params.input.unit } : {}),
+        ...(params.input.unitCost !== undefined ? { unitCost: params.input.unitCost } : {}),
+        ...(params.input.minStock !== undefined ? { minStock: params.input.minStock } : {}),
+        ...(params.input.active !== undefined ? { active: params.input.active } : {}),
+        ...(params.input.note !== undefined ? { note: params.input.note } : {}),
+      },
+    })
+    .catch((fehler: unknown) => {
+      if (isUniqueConstraintError(fehler)) throw new ConflictError(eindeutigkeitsMeldung(fehler));
+      throw fehler;
+    });
   await audit.updated({
     organizationId: params.organizationId,
     userId: params.actorId,

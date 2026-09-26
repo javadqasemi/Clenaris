@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+import { gtinNormalisieren } from '@/lib/scan/kennung';
+
 /**
  * Schemata des Betriebs (Wave 11): Reklamationen/Vorfälle, Material und
  * Lager, Geräte.
@@ -96,6 +98,31 @@ export const complaintCorrectiveActionSchema = z.object({
 //  Material und Lager
 // ---------------------------------------------------------------------------
 
+/**
+ * Herstellerstrichcode, eingetippt oder aus dem Scanner übernommen. Gespeichert
+ * wird die einheitliche Form (`gtinNormalisieren`): UPC-A und GTIN-14 mit
+ * führender Null als EAN-13, damit derselbe Artikel gefunden wird, gleich wie
+ * die Kamera ihn gelesen hat. Ohne gültige Prüfziffer kein Strichcode — ein
+ * Tippfehler würde sonst einen Artikel anlegen, den kein Scan je findet.
+ * Leer heisst „keiner" (`null`).
+ */
+const strichcode = z
+  .string()
+  .trim()
+  .max(20)
+  .nullable()
+  .optional()
+  .transform((wert, ctx) => {
+    if (wert === undefined) return undefined;
+    if (wert === null || wert === '') return null;
+    const gtin = gtinNormalisieren(wert.replace(/\s/g, ''));
+    if (!gtin) {
+      ctx.addIssue({ code: 'custom', message: 'Kein gültiger EAN-/GTIN-Strichcode (8, 12, 13 oder 14 Ziffern mit Prüfziffer).' });
+      return z.NEVER;
+    }
+    return gtin.gtin;
+  });
+
 export const materialCreateSchema = z.object({
   sku: z
     .string()
@@ -104,6 +131,7 @@ export const materialCreateSchema = z.object({
     .max(40)
     .regex(/^[A-Za-z0-9._-]+$/, 'Nur Buchstaben, Ziffern, Punkt, Bindestrich und Unterstrich.'),
   name: text(120),
+  barcode: strichcode,
   unit: z.string().trim().min(1).max(20).default('Stk.'),
   unitCost: betrag.default(0),
   minStock: betrag.default(0),
@@ -113,6 +141,7 @@ export const materialCreateSchema = z.object({
 export const materialUpdateSchema = z
   .object({
     name: text(120).optional(),
+    barcode: strichcode,
     unit: z.string().trim().min(1).max(20).optional(),
     unitCost: betrag.optional(),
     minStock: betrag.optional(),

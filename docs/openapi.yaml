@@ -15548,6 +15548,8 @@ paths:
                 changeReason:
                   type: 'string'
                   maxLength: 500
+                overrideCapacity:
+                  type: 'boolean'
       responses:
         '200':
           description: 'Erfolg'
@@ -43543,6 +43545,9 @@ paths:
                   type: 'string'
                   minLength: 1
                   maxLength: 120
+                barcode:
+                  type: 'string'
+                  maxLength: 20
                 unit:
                   type: 'string'
                   minLength: 1
@@ -43708,6 +43713,9 @@ paths:
                   type: 'string'
                   minLength: 1
                   maxLength: 120
+                barcode:
+                  type: 'string'
+                  maxLength: 20
                 unit:
                   type: 'string'
                   minLength: 1
@@ -46134,6 +46142,224 @@ paths:
                 '$ref': '#/components/schemas/ErrorEnvelope'
         '403':
           description: 'FORBIDDEN — angemeldet, aber ohne die nötige Berechtigung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: 'RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+  '/api/scan/resolve':
+    post:
+      tags:
+        - 'System'
+      summary: 'Scan auflösen'
+      description: |-
+          Einen gescannten oder eingefügten Text (Etikettcode, EAN/GTIN, QR-Rechnung, Nummer) einordnen und im Leserecht der Rolle auflösen. Liest nur: die Antwort nennt Treffer und die Schlüssel der Schnellaktionen, ausgeführt wird nichts. Unbekannt, fremde Organisation, gelöscht und ohne Recht ergeben dieselbe leere Antwort. Adressen werden weder aufgelöst noch als Link zurückgegeben. Kontingent je Person: 60 pro Minute.
+
+          **Zugriff:** Erfordert die Berechtigung: `dashboard:view`.
+
+          **Rate-Limit-Klasse:** `scanResolve`
+      operationId: 'postScanResolve'
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          'application/json':
+            schema:
+              type: 'object'
+              properties:
+                text:
+                  type: 'string'
+                  minLength: 1
+                  maxLength: 1000
+              required:
+                - 'text'
+      responses:
+        '200':
+          description: 'Erfolg'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/SuccessEnvelope'
+        '400':
+          description: 'VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 'UNAUTHORIZED — keine oder abgelaufene Sitzung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 'FORBIDDEN — angemeldet, aber ohne die nötige Berechtigung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: 'BUSINESS_RULE — fachlich nicht zulässig, etwa eine bereits ausgestellte Rechnung ändern.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: 'RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+  '/api/scan/codes':
+    post:
+      tags:
+        - 'System'
+      summary: 'Etikettcode erzeugen'
+      description: |-
+          Den aktiven Etikettcode eines Datensatzes liefern (200) oder erzeugen (201). Ein aktiver Code je Datensatz, erzwungen durch einen Teilindex. Verlangt das Pflegerecht der Art: Material `inventory:manage`, Gerät `equipment:manage`, Objekt `property:update`, Einsatz `job:update` (sonst 403). Fremde oder unbekannte IDs: 404.
+
+          **Zugriff:** Erfordert eine der Berechtigungen: `inventory:manage`, `equipment:manage`, `property:update`, `job:update`.
+
+          **Rate-Limit-Klasse:** `apiWrite`
+      operationId: 'postScanCodes'
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          'application/json':
+            schema:
+              type: 'object'
+              properties:
+                entityType:
+                  type: 'string'
+                  enum:
+                    - 'MATERIAL'
+                    - 'EQUIPMENT'
+                    - 'PROPERTY'
+                    - 'JOB'
+                entityId:
+                  type: 'string'
+                  minLength: 1
+                  maxLength: 40
+              required:
+                - 'entityType'
+                - 'entityId'
+      responses:
+        '200':
+          description: 'Erfolg'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/SuccessEnvelope'
+        '400':
+          description: 'VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 'UNAUTHORIZED — keine oder abgelaufene Sitzung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 'FORBIDDEN — angemeldet, aber ohne die nötige Berechtigung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: 'BUSINESS_RULE — fachlich nicht zulässig, etwa eine bereits ausgestellte Rechnung ändern.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: 'RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+  '/api/scan/codes/{id}':
+    delete:
+      tags:
+        - 'System'
+      summary: 'Etikettcode sperren'
+      description: |-
+          Endgültig. Der Eintrag bleibt als Nachweis; der Code löst danach nichts mehr auf. Ohne Pflegerecht für die Art des Datensatzes: 404 wie bei einer fremden ID.
+
+          **Zugriff:** Erfordert eine der Berechtigungen: `inventory:manage`, `equipment:manage`, `property:update`, `job:update`.
+
+          **Rate-Limit-Klasse:** `apiWrite`
+      operationId: 'deleteScanCodesById'
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: 'id'
+          in: 'path'
+          required: true
+          schema:
+            type: 'string'
+            minLength: 1
+      responses:
+        '200':
+          description: 'Erfolg'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/SuccessEnvelope'
+        '400':
+          description: 'VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 'UNAUTHORIZED — keine oder abgelaufene Sitzung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 'FORBIDDEN — angemeldet, aber ohne die nötige Berechtigung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: 'NOT_FOUND — nicht vorhanden, oder für diese Sitzung nicht sichtbar.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: 'BUSINESS_RULE — fachlich nicht zulässig, etwa eine bereits ausgestellte Rechnung ändern.'
           content:
             'application/json':
               schema:

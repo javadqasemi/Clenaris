@@ -541,6 +541,7 @@ model Organization {
   materials             Material[]
   stockMovements        StockMovement[]
   equipment             Equipment[]
+  scanCodes             ScanCode[]
   numberSequences   NumberSequence[]
   files             FileAsset[]
   newsletter        NewsletterSubscriber[]
@@ -3038,6 +3039,7 @@ model Invoice {
   @@index([customerId])
   @@index([issueDate])
   @@index([contractId, contractPeriodStart])
+  @@index([organizationId, qrReference])
   @@map("invoices")
 }
 
@@ -6714,6 +6716,11 @@ model Material {
   id             String  @id @default(cuid())
   organizationId String
   sku            String
+  /// Strichcode des Herstellers (EAN-13, EAN-8 oder GTIN-14; UPC-A wird mit
+  /// führender Null als EAN-13 gespeichert). Eindeutig je Organisation — ein
+  /// Scan muss auf genau einen Artikel führen. Kein eigener Code: Den trägt
+  /// `ScanCode`.
+  barcode        String?
   name           String
   unit           String  @default("Stk.")
   unitCost       Decimal @default(0) @db.Decimal(12, 2)
@@ -6729,6 +6736,7 @@ model Material {
   movements    StockMovement[]
 
   @@unique([organizationId, sku])
+  @@unique([organizationId, barcode])
   @@map("materials")
 }
 
@@ -6808,6 +6816,47 @@ model Equipment {
   @@index([organizationId, status])
   @@index([organizationId, nextMaintenanceOn])
   @@map("equipment")
+}
+
+enum ScanEntity {
+  MATERIAL
+  EQUIPMENT
+  PROPERTY
+  JOB
+}
+
+/// Eigener Etikettcode (Scanplattform, 2026-09-26) — die einzige Kennung, die
+/// Clenaris selbst auf ein Etikett druckt.
+///
+/// **Warum eine eigene Tabelle statt der Datensatz-ID im QR-Code.** Ein
+/// Etikett klebt jahrelang an einem Gerät oder im Hauswartraum eines Objekts,
+/// und es geht verloren, wird fotografiert, abgerissen. Die ID eines
+/// Datensatzes lässt sich nicht zurückziehen; ein Code schon (`revokedAt`),
+/// und danach löst der alte Aufkleber nichts mehr auf. Zudem verrät ein Code
+/// nichts: 20 Zeichen Zufall, keine Nummer, kein Name, keine Adresse — wer
+/// ihn abliest, hält eine Zeichenfolge in der Hand, die ohne Anmeldung und
+/// Leserecht nirgendwohin führt.
+///
+/// Ein aktiver Code je Datensatz — erzwungen durch den Teilindex
+/// `scan_codes_ein_aktiver_je_datensatz` (Migration), nicht durch die Oberfläche.
+/// Der Code selbst ist global eindeutig, damit ein Treffer in einer fremden
+/// Organisation gar nicht erst denkbar ist; gesucht wird trotzdem immer mit
+/// `organizationId`.
+model ScanCode {
+  id             String     @id @default(cuid())
+  organizationId String
+  code           String     @unique
+  entityType     ScanEntity
+  entityId       String
+  createdById    String?
+  createdAt      DateTime   @default(now()) @db.Timestamptz(6)
+  revokedAt      DateTime?  @db.Timestamptz(6)
+  revokedById    String?
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, entityType, entityId])
+  @@map("scan_codes")
 }
 
 // ===========================================================================

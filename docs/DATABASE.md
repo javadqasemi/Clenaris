@@ -4,7 +4,7 @@
 > Diagramme sind damit nie älter als das Schema. Prosa und Bereichseinteilung
 > stehen in `scripts/generate-erd.ts`.
 
-**146 Modelle, 115 Aufzählungstypen, 2836 Felder.**
+**147 Modelle, 116 Aufzählungstypen, 2848 Felder.**
 PostgreSQL 16+; alle Zeitstempel als `timestamptz` in UTC, Anzeige in Europe/Zurich.
 
 ## Vier Entscheidungen, die das ganze Schema prägen
@@ -40,7 +40,7 @@ flowchart LR
   signatur["Elektronische Unterzeichnung<br/><small>5 Modelle</small>"]
   crm["CRM<br/><small>13 Modelle</small>"]
   katalog["Leistungskatalog und Preislogik<br/><small>6 Modelle</small>"]
-  auftrag["Buchung, Offerte, Einsatz<br/><small>16 Modelle</small>"]
+  auftrag["Buchung, Offerte, Einsatz<br/><small>17 Modelle</small>"]
   vertraege["Verträge und Einsatzpläne<br/><small>10 Modelle</small>"]
   personal["Personal und Zeit<br/><small>16 Modelle</small>"]
   finanzen["Finanzen<br/><small>8 Modelle</small>"]
@@ -128,7 +128,7 @@ erDiagram
 
 | Modell | Tabelle | Felder | Zweck |
 | --- | --- | --- | --- |
-| `Organization` | `organizations` | 127 | Mandant — Firmendaten, Bankverbindung, Erscheinungsbild. Wurzel fast aller Beziehungen. |
+| `Organization` | `organizations` | 128 | Mandant — Firmendaten, Bankverbindung, Erscheinungsbild. Wurzel fast aller Beziehungen. |
 | `NumberSequence` | `number_sequences` | 6 | Fortlaufende, lückenlose Belegnummern (Schweizer Buchhaltungsanforderung). |
 | `OpeningHours` | `opening_hours` | 10 | Öffnungszeiten je Wochentag und die Einsatzzeiten, falls sie davon abweichen. |
 | `Holiday` | `holidays` | 7 | Feiertage und Betriebsferien. Sperren Termine und zählen nicht als Abwesenheitstage. |
@@ -651,11 +651,11 @@ erDiagram
     String id PK
     String organizationId
     String sku
+    String barcode
     String name
     String unit
     Decimal unitCost
     Decimal minStock
-    Boolean active
   }
   StockMovement {
     String id PK
@@ -676,6 +676,16 @@ erDiagram
     String serialNumber
     EquipmentStatus status
     String assignedEmployeeId
+  }
+  ScanCode {
+    String id PK
+    String organizationId
+    String code UK
+    ScanEntity entityType
+    String entityId
+    String createdById
+    DateTime createdAt
+    DateTime revokedAt
   }
   SiteVisit {
     String id PK
@@ -742,10 +752,11 @@ erDiagram
 | `JobChecklistItem` | `job_checklist_items` | 11 | Prüfpunkt des Abnahmeprotokolls, mit Vermerk wer wann abgehakt hat. |
 | `JobPhoto` | `job_photos` | 12 | Vorher-, Nachher- oder Schadensfoto mit Standort und Zeitpunkt. |
 | `MaterialUsage` | `material_usages` | 12 | Verbrauchtes Material je Einsatz — Grundlage der Deckungsbeitragsrechnung. |
-| `Material` | `materials` | 13 | Verbrauchsmaterial mit Bestand. Der Bestand ist die **Summe der |
+| `Material` | `materials` | 14 | Verbrauchsmaterial mit Bestand. Der Bestand ist die **Summe der |
 | `StockMovement` | `stock_movements` | 16 | Eine Lagerbewegung — **nur anfügen** (Trigger `stock_movements_nur_anfuegen`). |
 | `Equipment` | `equipment` | 20 | Gerät (Maschine, Staubsauger, Hochdruckreiniger) mit Zuteilung und Wartung. |
 | `EquipmentMaintenance` | `equipment_maintenances` | 9 | Eine durchgeführte Wartung — Beleg, nicht änderbar (Trigger). |
+| `ScanCode` | `scan_codes` | 10 | Eigener Etikettcode (Scanplattform, 2026-09-26) — die einzige Kennung, die |
 
 ## Verträge und Einsatzpläne
 
@@ -2004,6 +2015,7 @@ exakte TypeScript-Typen.
 | `ComplaintChannel` | `PHONE`, `EMAIL`, `PORTAL`, `ON_SITE`, `OTHER` |
 | `StockMovementKind` | `RECEIPT`, `ISSUE`, `RETURN`, `ADJUSTMENT` |
 | `EquipmentStatus` | `AVAILABLE`, `IN_USE`, `MAINTENANCE`, `RETIRED` |
+| `ScanEntity` | `MATERIAL`, `EQUIPMENT`, `PROPERTY`, `JOB` |
 | `SiteVisitStatus` | `PLANNED`, `DONE`, `CANCELLED` |
 | `ReleaseKind` | `PATCH`, `MINOR`, `MAJOR`, `SECURITY` |
 | `ReleaseSeverity` | `LOW`, `MEDIUM`, `HIGH`, `CRITICAL` |

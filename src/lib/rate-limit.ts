@@ -72,6 +72,18 @@ export const RATE_LIMITS = {
   apiRead: { limit: 300, windowSeconds: 60 },
   apiWrite: { limit: 90, windowSeconds: 60 },
   webhook: { limit: 600, windowSeconds: 60 },
+  /**
+   * Scans auflösen (Scanplattform, 2026-09-26).
+   *
+   * Enger als `apiRead`, weil ein Scan exakte Nummern prüft: Rechnungs-,
+   * Kunden- und Einsatznummern sind fortlaufend, und 300 Versuche pro Minute
+   * wären ein bequemes Werkzeug, um sie durchzuzählen — zwar nur innerhalb
+   * des eigenen Leserechts, aber genau dafür gibt es die Liste. 60 pro Minute
+   * ist ein Scan pro Sekunde; schneller scannt auch ein Handscanner an der
+   * Inventur nicht dauerhaft. Etikettcodes selbst tragen 100 Bit Zufall; das
+   * Limit schützt sie nicht, es schützt die Nummern.
+   */
+  scanResolve: { limit: 60, windowSeconds: 60 },
 
   /**
    * Links ohne Anmeldung — enger als `apiRead`/`apiWrite`.

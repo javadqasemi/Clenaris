@@ -5,7 +5,7 @@
 > Quelle, aus der sowohl diese Referenz als auch die Laufzeitvalidierung
 > stammen.
 
-Stand: 530 Endpunkte. Die maschinenlesbare Fassung liegt in
+Stand: 533 Endpunkte. Die maschinenlesbare Fassung liegt in
 [`openapi.yaml`](./openapi.yaml) bzw. [`openapi.json`](./openapi.json).
 
 ## Grundlagen
@@ -2077,6 +2077,7 @@ Familie.
 | `customerNote` | string | – | max. 2000 Zeichen |
 | `accessNote` | string | – | max. 500 Zeichen |
 | `changeReason` | string | – | max. 500 Zeichen |
+| `overrideCapacity` | boolean | – | – |
 
 ## Offerten
 
@@ -6617,6 +6618,52 @@ Familie.
 | --- | --- | --- | --- |
 | `q` | string | ja | min. 2 Zeichen, max. 80 Zeichen |
 
+### `POST /api/scan/resolve`
+
+**Scan auflösen.** Einen gescannten oder eingefügten Text (Etikettcode, EAN/GTIN, QR-Rechnung, Nummer) einordnen und im Leserecht der Rolle auflösen. Liest nur: die Antwort nennt Treffer und die Schlüssel der Schnellaktionen, ausgeführt wird nichts. Unbekannt, fremde Organisation, gelöscht und ohne Recht ergeben dieselbe leere Antwort. Adressen werden weder aufgelöst noch als Link zurückgegeben. Kontingent je Person: 60 pro Minute.
+
+- **Zugriff:** Erfordert die Berechtigung: `dashboard:view`.
+- **Rate-Limit-Klasse:** `scanResolve`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 422, 429, 500
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `text` | string | ja | min. 1 Zeichen, max. 1000 Zeichen |
+
+### `POST /api/scan/codes`
+
+**Etikettcode erzeugen.** Den aktiven Etikettcode eines Datensatzes liefern (200) oder erzeugen (201). Ein aktiver Code je Datensatz, erzwungen durch einen Teilindex. Verlangt das Pflegerecht der Art: Material `inventory:manage`, Gerät `equipment:manage`, Objekt `property:update`, Einsatz `job:update` (sonst 403). Fremde oder unbekannte IDs: 404.
+
+- **Zugriff:** Erfordert eine der Berechtigungen: `inventory:manage`, `equipment:manage`, `property:update`, `job:update`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 422, 429, 500
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `entityType` | string | ja | `MATERIAL` \| `EQUIPMENT` \| `PROPERTY` \| `JOB` |
+| `entityId` | string | ja | min. 1 Zeichen, max. 40 Zeichen |
+
+### `DELETE /api/scan/codes/{id}`
+
+**Etikettcode sperren.** Endgültig. Der Eintrag bleibt als Nachweis; der Code löst danach nichts mehr auf. Ohne Pflegerecht für die Art des Datensatzes: 404 wie bei einer fremden ID.
+
+- **Zugriff:** Erfordert eine der Berechtigungen: `inventory:manage`, `equipment:manage`, `property:update`, `job:update`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
 ### `GET /api/system/releases`
 
 **Bekannte Clenaris-Versionen.** Laufende Version und je bekannte Version ihr Zustand für diesen Betrieb: verfügbar, freigegeben, terminiert, installiert oder älter. Nur die Systemverantwortung.
@@ -7020,6 +7067,7 @@ Familie.
 | --- | --- | --- | --- |
 | `sku` | string | ja | min. 1 Zeichen, max. 40 Zeichen |
 | `name` | string | ja | min. 1 Zeichen, max. 120 Zeichen |
+| `barcode` | string | – | max. 20 Zeichen |
 | `unit` | string | – | min. 1 Zeichen, max. 20 Zeichen, Standard `"Stk."` |
 | `unitCost` | number | – | ≥ 0, ≤ 1000000, Standard `0` |
 | `minStock` | number | – | ≥ 0, ≤ 1000000, Standard `0` |
@@ -7060,6 +7108,7 @@ Familie.
 | Feld | Typ | Pflicht | Regeln |
 | --- | --- | --- | --- |
 | `name` | string | – | min. 1 Zeichen, max. 120 Zeichen |
+| `barcode` | string | – | max. 20 Zeichen |
 | `unit` | string | – | min. 1 Zeichen, max. 20 Zeichen |
 | `unitCost` | number | – | ≥ 0, ≤ 1000000 |
 | `minStock` | number | – | ≥ 0, ≤ 1000000 |

@@ -251,6 +251,7 @@ const DOMAINS: Domain[] = [
       'StockMovement',
       'Equipment',
       'EquipmentMaintenance',
+      'ScanCode',
     ],
   },
   {
