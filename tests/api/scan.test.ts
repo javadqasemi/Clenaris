@@ -253,6 +253,13 @@ describe('Fremd, gelöscht, kaputt, feindlich', () => {
     }
   });
 
+  it('fremde Herkunft: Etikett erzeugen, sperren und auflösen werden abgewiesen (403)', async () => {
+    const fremd = { origin: 'https://fremde-seite.example' };
+    assert.equal((await post('/api/scan/codes', { entityType: 'MATERIAL', entityId: materialId }, { jar: jars.manager, headers: fremd })).status, 403);
+    assert.equal((await del('/api/scan/codes/irgendeiner', { jar: jars.manager, headers: fremd })).status, 403);
+    assert.equal((await post('/api/scan/resolve', { text: SKU }, { jar: jars.manager, headers: fremd })).status, 403);
+  });
+
   it('zu lang: 422 vor jedem Dienst; leer: 422', async () => {
     assert.equal((await aufloesen('A'.repeat(1001), jars.admin)).status, 422);
     assert.equal((await aufloesen('', jars.admin)).status, 422);
