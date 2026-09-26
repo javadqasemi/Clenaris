@@ -463,13 +463,16 @@ describe('Der Strom enthält keine Geheimnisse', () => {
    * für das Prüfprotokoll hergestellt und gilt hier genauso.
    */
   it('eine Linkausstellung steht im Strom, der Link selbst nicht', async () => {
-    const offerten = await get<{ data: { id: string }[] }>('/api/quotes?proSeite=1', {
+    // Eine Offerte, die noch versendet werden darf. Bis 2026-09-26 nahm der
+    // Fall die erste der Liste — auch eine angenommene, die der Versand dann
+    // auf SENT zurücksetzte (siehe `sendQuote`).
+    const offerten = await get<{ data: { id: string; status: string }[] }>('/api/quotes?pageSize=50', {
       jar: jars.admin,
     });
     if (offerten.status !== 200) return;
 
     const liste = data(offerten);
-    const erste = Array.isArray(liste) ? liste[0] : undefined;
+    const erste = Array.isArray(liste) ? liste.find((o) => ['DRAFT', 'SENT', 'VIEWED'].includes(o.status)) : undefined;
     if (!erste) return;
 
     const versand = await post(`/api/quotes/${erste.id}/send`, {}, { jar: jars.admin });

@@ -691,6 +691,23 @@ export async function sendQuote(params: {
     },
   });
   if (!quote) throw new NotFoundError('Offerte');
+  /**
+   * Versendet wird nur, was noch eine Antwort erwartet.
+   *
+   * Bis 2026-09-26 fehlte diese Prüfung: Eine angenommene Offerte liess sich
+   * erneut versenden, der Versand setzte sie auf SENT zurück — und die
+   * tragende Gleichung „Offerte angenommen ⇔ abgeschlossener
+   * Annahmevorgang" (Gate 4C) war gebrochen, ohne dass jemand etwas
+   * rückgängig gemacht hätte. Gefunden hat es die Integritätsprüfung
+   * (`offerte_annahme`), nachdem eine Prüfreihe die erste Offerte der Liste
+   * versandt hatte. Eine abgelehnte, abgelaufene oder umgewandelte Offerte
+   * wird ebenso wenig wiederbelebt: Wer neu anbieten will, legt eine neue an.
+   */
+  if (!['DRAFT', 'SENT', 'VIEWED'].includes(quote.status)) {
+    throw new BusinessRuleError(
+      `Die Offerte ${quote.number} ist ${quote.status === 'ACCEPTED' || quote.status === 'CONVERTED' ? 'bereits angenommen' : quote.status === 'REJECTED' ? 'abgelehnt' : 'abgelaufen'} und wird nicht erneut versendet.`,
+    );
+  }
   if (quote.items.length === 0) {
     throw new BusinessRuleError('Die Offerte enthält keine Positionen.');
   }

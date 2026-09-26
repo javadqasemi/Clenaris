@@ -471,6 +471,12 @@ describe('Offertannahme über den öffentlichen Link', () => {
     assert.equal(admin.participants[0]!.signatureMethod, 'DRAWN');
     assert.ok(admin.signedArtifactHash, 'auch gezeichnet entsteht B');
     assert.ok(admin.evidenceArtifactHash, 'auch gezeichnet entsteht C');
+
+    // Erneut versenden setzte eine angenommene Offerte bis 2026-09-26 auf SENT
+    // zurück und brach „angenommen ⇔ abgeschlossener Vorgang".
+    const nochmal = await post(`/api/quotes/${quote.id}/send`, { attachPdf: false }, { jar: jars.admin });
+    assert.equal(nochmal.status, 422, nochmal.text);
+    assert.equal((await quoteLesen(quote.id)).status, 'ACCEPTED');
   });
 
   it('lehnt ohne Unterzeichnung ab — und danach ist Annehmen verwehrt', ohnePost, async () => {
