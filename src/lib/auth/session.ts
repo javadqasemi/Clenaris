@@ -20,6 +20,7 @@ import {
   verifyRefreshToken,
 } from './jwt';
 import { can, type Permission } from './rbac';
+import { getOrganizationId } from '@/server/services/organization.service';
 import { DeviceHandoffLockedError, ForbiddenError, UnauthorizedError } from '@/lib/errors';
 
 export interface SessionUser {
@@ -70,15 +71,31 @@ export const getSession = reactCache(async (): Promise<SessionUser | null> => {
   const claims = await verifyAccessToken(token);
   if (!claims) return null;
 
-  const [widerrufen, handoffId] = await Promise.all([
-    tokenWasRevoked(claims.sub, claims.iat),
+  const [konto, handoffId, installationsOrg] = await Promise.all([
+    kontoPruefen(claims.sub, claims.iat),
     aktiveUebergabe(claims.lck),
+    getOrganizationId(),
   ]);
-  if (widerrufen) return null;
+  if (!konto) return null;
+
+  /*
+    Mandantenbindung (2026-09-27). Diese Installation bedient genau eine
+    Organisation (`getOrganizationId()`), und jede Route liest ihre Daten
+    über diese. Eine Sitzung gilt deshalb nur, wenn das Konto **laut
+    Datenbank** zu eben dieser Organisation gehört — der Anspruch `org` im
+    Token allein genügt nicht, er könnte vor einem Wechsel ausgestellt sein.
+
+    Vorher fehlte der Vergleich ganz: Ein Konto einer anderen Organisation
+    meldete sich an, und jede Route löste danach die Organisation dieser
+    Installation auf. Ein Administrator von B verwaltete damit A. Jetzt hat
+    ein solches Konto hier schlicht keine Sitzung — geschlossen, nicht
+    umgeleitet.
+  */
+  if (konto.organizationId !== installationsOrg || claims.org !== konto.organizationId) return null;
 
   return {
     id: claims.sub,
-    organizationId: claims.org,
+    organizationId: konto.organizationId,
     email: claims.email,
     firstName: claims.name.split(' ')[0] ?? '',
     lastName: claims.name.split(' ').slice(1).join(' '),
@@ -160,18 +177,18 @@ export async function getVerifiedSession(): Promise<SessionUser | null> {
  * Ein Token ohne Ausstellungszeitpunkt lässt sich nicht einordnen, und im
  * Zweifel schliesst diese Prüfung.
  */
-async function tokenWasRevoked(userId: string, issuedAt: number | undefined): Promise<boolean> {
+async function kontoPruefen(userId: string, issuedAt: number | undefined): Promise<{ organizationId: string } | null> {
   const user = await prisma.user.findUnique({
     where: { id: userId },
-    select: { sessionsRevokedAt: true },
+    select: { sessionsRevokedAt: true, organizationId: true },
   });
 
   // Konto gelöscht oder nie existent: das Token gehört zu niemandem mehr.
-  if (!user) return true;
-  if (!user.sessionsRevokedAt) return false;
-  if (issuedAt === undefined) return true;
+  if (!user) return null;
+  if (!user.sessionsRevokedAt) return { organizationId: user.organizationId };
+  if (issuedAt === undefined) return null;
 
-  return issuedAt < Math.floor(user.sessionsRevokedAt.getTime() / 1000);
+  return issuedAt < Math.floor(user.sessionsRevokedAt.getTime() / 1000) ? null : { organizationId: user.organizationId };
 }
 
 /**
@@ -312,6 +329,15 @@ export async function createSession({ userId, family }: CreateSessionInput) {
       employee: { select: { id: true } },
     },
   });
+
+  // Die einzige Stelle, die Zugangstoken ausstellt, stellt keines für ein
+  // Konto einer anderen Organisation aus (Mandantenbindung, siehe
+  // `getSession`). Anmeldung, zweiter Faktor, Einladung, Passwortwechsel und
+  // Erneuerung laufen alle hier durch — ein Weg, der die Prüfung in
+  // `login()` umginge, endet trotzdem hier.
+  if (user.organizationId !== (await getOrganizationId())) {
+    throw new UnauthorizedError('Dieses Konto gehört nicht zu dieser Installation.');
+  }
 
   // Das Profil folgt der Rolle, nicht der Reihenfolge „Kundschaft, sonst
   // Personal": Eine Person kann beides haben (privat gebucht *und*

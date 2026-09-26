@@ -15,19 +15,33 @@ import { cache, cacheKeys } from '@/lib/redis';
 
 export const DEFAULT_ORG_SLUG = process.env.ORGANIZATION_SLUG ?? 'clenaris';
 
-/** Die aktive Organisation. Pro Request dedupliziert und 5 Minuten gecacht. */
+/**
+ * Die Organisation dieser Installation. Pro Request dedupliziert und 5 Minuten
+ * gecacht.
+ *
+ * **Kein Rückfall mehr auf „die erste Organisation"** (2026-09-27). Bis dahin
+ * griff die Funktion, wenn der Slug fehlte, zur ältesten Organisation der
+ * Datenbank — gedacht gegen einen harten Fehler bei abweichendem Seed. In
+ * einer Datenbank mit mehr als einer Organisation hiess das: Welche
+ * Kundschaft die Installation bedient, entschied die Einfügereihenfolge. Ein
+ * falsch gesetzter `ORGANIZATION_SLUG` ist ein Konfigurationsfehler und soll
+ * laut scheitern, nicht still die falschen Daten zeigen.
+ *
+ * Für angemeldete Anfragen ist das zugleich die Organisation der Sitzung:
+ * `getSession()` lässt nur Konten dieser Organisation durch, und
+ * `createSession()` stellt für andere kein Token aus. Jede der rund 440
+ * Aufrufstellen arbeitet damit im Mandanten der angemeldeten Person — ohne
+ * dass eine davon einer Organisationskennung aus der Anfrage glaubt.
+ */
 export const getOrganization = reactCache(async () => {
   return cache.remember(cacheKeys.organization(DEFAULT_ORG_SLUG), 300, async () => {
-    const org = await prisma.organization.findFirst({
-      where: { slug: DEFAULT_ORG_SLUG },
-      orderBy: { createdAt: 'asc' },
-    });
-
-    if (org) return org;
-
-    // Fallback: erste Organisation überhaupt — verhindert einen harten Fehler,
-    // wenn der Slug abweichend geseedet wurde.
-    return prisma.organization.findFirstOrThrow({ orderBy: { createdAt: 'asc' } });
+    const org = await prisma.organization.findFirst({ where: { slug: DEFAULT_ORG_SLUG } });
+    if (!org) {
+      throw new Error(
+        `Organisation „${DEFAULT_ORG_SLUG}" nicht gefunden — ORGANIZATION_SLUG prüfen oder den Konfigurations-Seed ausführen.`,
+      );
+    }
+    return org;
   });
 });
 

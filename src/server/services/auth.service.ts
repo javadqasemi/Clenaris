@@ -22,6 +22,7 @@ import { checkRateLimit, resetRateLimit } from '@/lib/rate-limit';
 import type { LoginInput, RegisterInput } from '@/lib/validation/auth';
 
 import { nextNumber } from './numbering.service';
+import { getOrganizationId } from './organization.service';
 import { ensureCustomerProfile } from './profile.service';
 import { logger } from '@/lib/logger';
 import { ROLE_LABELS } from '@/lib/auth/rbac';
@@ -189,7 +190,15 @@ export async function login(params: { input: LoginInput; ip: string }) {
 
   // Dummy-Verifikation gegen Timing-Angriffe: der Ablauf dauert gleich lang,
   // egal ob das Konto existiert.
-  if (!user || user.deletedAt) {
+  //
+  // Ein Konto einer **anderen** Organisation gilt hier als nicht vorhanden
+  // (2026-09-27). `User.email` ist über alle Organisationen eindeutig, und
+  // bis dahin meldete sich ein solches Konto normal an — danach löste jede
+  // Route über `getOrganizationId()` die Organisation dieser Installation
+  // auf, und ein Administrator der Organisation B verwaltete die Daten von A.
+  // Dieselbe Meldung wie beim falschen Passwort: Ob es die Adresse irgendwo
+  // gibt, soll die Anmeldung nicht verraten.
+  if (!user || user.deletedAt || user.organizationId !== (await getOrganizationId())) {
     await verifyPassword(
       '$argon2id$v=19$m=19456,t=2,p=1$c29tZXNhbHR2YWx1ZQ$0000000000000000000000000000000000000000000',
       params.input.password,

@@ -43,7 +43,12 @@ async function aufraeumen() {
   await db.supplier.deleteMany({ where: { organizationId: org, name: { startsWith: MARKE } } });
   await db.property.deleteMany({ where: { label: { startsWith: MARKE } } });
   await db.customer.deleteMany({ where: { organizationId: org, lastName: MARKE } });
+  await db.user.deleteMany({ where: { email: { endsWith: KONTO_DOMAIN } } });
 }
+
+/** Konten der Mandantenreihe — an der Domain erkennbar und wegräumbar. */
+const KONTO_DOMAIN = '@mandant-pruef.example.ch';
+const KONTO_PASSWORT = 'Mandant-Pruefung-2026!';
 
 before(async () => {
   await requireServer();
@@ -154,6 +159,66 @@ describe('Verweise auf fremde Datensätze werden abgewiesen', () => {
       { jar: jars.admin },
     );
     assert.equal(r.status, 404, r.text);
+  });
+});
+
+/**
+ * Die Gegenrichtung (2026-09-27): nicht „die eigene Person sieht fremde
+ * Daten", sondern „eine **fremde** Person handelt in dieser Installation".
+ *
+ * Bis dahin fehlte der Fall, und genau dort lag die Lücke: Jede Route löste
+ * die Organisation über `getOrganizationId()` auf, die Sitzung wurde nie
+ * damit verglichen. Ein Administrator einer anderen Organisation meldete sich
+ * an und verwaltete die Daten dieser. Geprüft wird an echten Konten, nicht an
+ * nachgebauten Tokens: eines, das von Anfang an fremd ist, und eines, das
+ * mitten in einer gültigen Sitzung die Organisation wechselt.
+ */
+describe('Konten einer fremden Organisation handeln hier nicht', () => {
+  async function konto(organizationId: string, name: string): Promise<{ id: string; email: string }> {
+    const db = testDb()!;
+    const { hashPassword } = await import('../../src/lib/auth/password');
+    const email = `${name}.${RUN}${KONTO_DOMAIN}`;
+    const user = await db.user.create({
+      data: {
+        organizationId,
+        email,
+        passwordHash: await hashPassword(KONTO_PASSWORT),
+        firstName: 'Mandant',
+        lastName: name,
+        role: 'ADMIN',
+        status: 'ACTIVE',
+      },
+    });
+    return { id: user.id, email };
+  }
+
+  it('ein Administrator der fremden Organisation kann sich nicht anmelden — dieselbe Meldung wie beim falschen Passwort', async () => {
+    const fremderAdmin = await konto(org, 'fremd');
+    const anmeldung = await post<{ error: { message: string } }>('/api/auth/login', { email: fremderAdmin.email, password: KONTO_PASSWORT });
+    assert.equal(anmeldung.status, 401, anmeldung.text);
+    const falsch = await post<{ error: { message: string } }>('/api/auth/login', { email: fremderAdmin.email, password: 'falsch-falsch-falsch' });
+    assert.equal(anmeldung.payload.error.message, falsch.payload.error.message, 'Die Anmeldung verrät nicht, dass das Konto anderswo existiert');
+    assert.equal(anmeldung.cookies, '', 'Kein Cookie für ein fremdes Konto');
+  });
+
+  it('wechselt ein Konto die Organisation, endet die laufende Sitzung sofort — Endpunkt, Seite und Erneuerung', async () => {
+    const db = testDb()!;
+    const { eigeneOrganisationId } = await import('../helpers/testdb');
+    const eigene = (await eigeneOrganisationId())!;
+    const wechsler = await konto(eigene, 'wechsel');
+
+    const anmeldung = await post('/api/auth/login', { email: wechsler.email, password: KONTO_PASSWORT });
+    assert.equal(anmeldung.status, 200, anmeldung.text);
+    const jar = anmeldung.cookies;
+    assert.equal((await get('/api/customers?pageSize=1', { jar })).status, 200, 'Vorher: die eigene Organisation ist erreichbar');
+
+    await db.user.update({ where: { id: wechsler.id }, data: { organizationId: org } });
+
+    // Dasselbe, noch gültige Zugangstoken — die Datenbank entscheidet.
+    assert.equal((await get('/api/customers?pageSize=1', { jar })).status, 401, 'Endpunkt: keine Sitzung mehr');
+    const seite = await get('/admin/kunden', { jar });
+    assert.ok([302, 303, 307].includes(seite.status), `Seite: Weiterleitung zur Anmeldung erwartet, war ${seite.status}`);
+    assert.equal((await post('/api/auth/refresh', undefined, { jar })).status, 401, 'Erneuerung: kein neues Token für ein fremdes Konto');
   });
 });
 
