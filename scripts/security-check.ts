@@ -44,6 +44,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
+import { befundEinordnen, veralteteBewertungen, type Bewertung } from './security/bewertung';
 import { melden, type Meldung } from './security/melden';
 import { musterPruefen, type Unterdrueckung } from './security/muster';
 
@@ -146,14 +147,6 @@ function geheimnisse() {
 //  2. Abhängigkeiten — npm audit, eingeordnet
 // ---------------------------------------------------------------------------
 
-interface Bewertung {
-  id: string;
-  paket: string;
-  schwere: string;
-  begruendung: string;
-  bis: string;
-}
-
 interface AuditEintrag {
   name: string;
   severity: string;
@@ -183,33 +176,28 @@ function abhaengigkeiten() {
       const id = via.url.split('/').pop() ?? via.url;
       if (gesehen.has(id)) continue;
       gesehen.add(id);
-      const bewertung = bewertungen.find((b) => b.id === id);
-      const gueltig = bewertung && bewertung.bis >= heute;
       const behebung =
         eintrag.fixAvailable === true
           ? 'Behebung ohne Hauptversion verfügbar'
           : eintrag.fixAvailable
             ? `Behebung: ${eintrag.fixAvailable.name}@${eintrag.fixAvailable.version}${eintrag.fixAvailable.isSemVerMajor ? ' (Hauptversion)' : ''}`
             : 'keine Behebung verfügbar';
-      const schwere: Schwere =
-        via.severity === 'critical'
-          ? 'blockierend' // kritisch lässt sich nicht wegbewerten
-          : via.severity === 'high'
-            ? gueltig
-              ? 'hinweis'
-              : 'blockierend'
-            : 'hinweis';
+      // Die Regeln (Ablauf, Vorwarnung, Höchstfrist) stehen in
+      // `scripts/security/bewertung.ts` und sind dort geprüft.
+      const { schwere, vermerk } = befundEinordnen(via.severity, bewertungen.find((b) => b.id === id), heute);
       befunde.push({
         id,
         schwere,
         titel: `${eintrag.name} (${via.severity}): ${via.title}`.slice(0, 300),
         ort: `${eintrag.name} ${via.range}`,
-        details: [behebung, gueltig ? `bewertet bis ${bewertung!.bis}: ${bewertung!.begruendung}` : bewertung ? `Bewertung abgelaufen (${bewertung.bis})` : via.severity === 'high' ? 'nicht bewertet — in security/akzeptierte-befunde.json einordnen oder beheben' : undefined]
-          .filter(Boolean)
-          .join(' · ')
-          .slice(0, 1000),
+        details: `${behebung} · ${vermerk}`.slice(0, 1000),
       });
     }
+  }
+  // Bewertungen ohne Befund: behoben oder zurückgezogen — der Eintrag gehört
+  // weg, sonst deckt er einen künftigen Befund mit derselben Kennung.
+  for (const alt of veralteteBewertungen(bewertungen, gesehen)) {
+    befunde.push({ id: alt.id, schwere: 'hinweis', titel: `Bewertung ohne Befund (entfernen): ${alt.id} ${alt.paket}` });
   }
   const m = bericht.metadata?.vulnerabilities ?? {};
   return {

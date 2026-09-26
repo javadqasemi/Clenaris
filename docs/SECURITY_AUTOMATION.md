@@ -107,7 +107,23 @@ der Routendatei bzw. bewusst keines bei signierten Webhooks.
 | GHSA-w5hq-g745-h8pq (moderate) | uuid ← exceljs | nicht betroffen (nur `uuidv4()` ohne Puffer) |
 
 Nach Ablauf blockiert jeder dieser Befunde wieder, bis jemand neu bewertet
-oder behoben hat. Behebungen, die eine Hauptversion verlangen, sind eigene
+oder behoben hat.
+
+**Ablauf ist ein Mechanismus, keine Erinnerung im Kalender**
+(`scripts/security/bewertung.ts`, geprüft in `sicherheitsbewertung.test.ts`):
+
+| Lage | `high` | `moderate`/`low` |
+|---|---|---|
+| gültig, mehr als 30 Tage Rest | Hinweis | Hinweis |
+| gültig, **höchstens 30 Tage** Rest | **Warnung** (Gesamtstatus WARNUNG) | Warnung |
+| abgelaufen | **blockierend** | Warnung |
+| Frist länger als 183 Tage ab `bewertetAm` | Warnung | Warnung |
+| `critical` | immer blockierend | — |
+| Bewertung ohne gemeldeten Befund | Hinweis „entfernen" | Hinweis |
+
+Für die heutigen Bewertungen heisst das: ab **2026-12-01** meldet jeder
+Lauf WARNUNG, ab **2027-01-01** blockieren die drei `high`-Befunde
+`security:check` und damit das CI, bis neu bewertet oder behoben ist. Behebungen, die eine Hauptversion verlangen, sind eigene
 Vorhaben mit eigener Prüfung — nie `npm audit fix --force` im Vorbeigehen.
 
 ## Stückliste
