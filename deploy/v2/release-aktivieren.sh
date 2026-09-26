@@ -95,9 +95,17 @@ node scripts/react-hydrationskorrektur.mjs --pruefen >/dev/null \
   || fail "React-Hydrationskorrektur im Artefakt nicht vorhanden."
 
 # --- 5. Migrationen ---------------------------------------------------------
-# Dieselbe Regel wie in deploy.sh: ohne geprüfte Sicherung keine Migration.
+# Reihenfolge (docs/PREPRODUCTION_READINESS.md, Migrationssicherheit):
+#   lesende Vorprüfung → geprüfte Sicherung → Migration → Umschalten → Health.
+# Die Vorprüfung steht vor der Sicherung: Findet sie einen Eindeutigkeits-
+# konflikt, bricht die Aktivierung ab, bevor irgendetwas geschrieben wurde —
+# `migrate deploy` bliebe sonst mitten in der Reihe stehen, und der Rücksprung
+# stellt nur die Anwendung wieder her, nie das Schema. (Ergänzt 2026-09-26;
+# vorher fehlte die Vorprüfung hier, während `deploy.sh` sie kannte.)
 if ! npx prisma migrate status >/dev/null 2>&1; then
-  log "Migrationen stehen an — Sicherung zuerst."
+  log "Migrationen stehen an — Vorprüfung, dann Sicherung."
+  npx tsx scripts/migration-preflight.ts \
+    || fail "Vorprüfung meldet Konflikte — keine Sicherung, keine Migration, kein Umschalten."
   APP_DIRECTORY="${BASIS}" npx tsx scripts/db-backup.ts --grund migration --commit "${COMMIT}" \
     || fail "Sicherung fehlgeschlagen — keine Migration."
   npx prisma migrate deploy

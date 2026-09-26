@@ -161,6 +161,11 @@ jobs:
       - name: TypeScript
         run: npm run typecheck
 
+      - name: Prisma-Schema gültig
+        # Läuft auch in `security:check` mit; als eigene Stufe, damit ein
+        # ungültiges Schema im Protokoll unter seinem Namen scheitert.
+        run: npx prisma validate
+
       - name: Keine Geheimnisse im Repository
         run: bash scripts/ci-secret-scan.sh
 
