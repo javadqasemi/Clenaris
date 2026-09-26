@@ -201,7 +201,8 @@ versendet.
 | `DATABASE_URL` | ja | PostgreSQL-Verbindung |
 | `DIRECT_URL` | – | Direktverbindung für Migrationen (bei Pooling) |
 | `JWT_SECRET` | ja | mindestens 32 Zeichen |
-| `NEXT_PUBLIC_APP_URL` | ja | Basisadresse für Magic Links und PDFs |
+| `APP_URL` | ja | Adresse dieser Instanz für Links in E-Mails, PDFs, Zahlungen, Signaturen und die Herkunftsprüfung — zur Laufzeit gelesen (älterer Name `NEXT_PUBLIC_APP_URL` gilt als Rückfall) |
+| `NEXT_PUBLIC_SITE_URL` | beim Bau | kanonische Domain der Website (Canonical, Sitemap, robots.txt), für jede Umgebung dieselbe |
 | `REDIS_URL` | – | Rate-Limits und Cache über Prozessgrenzen hinweg |
 | `NEXT_PUBLIC_SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` | – | Dateiablage |
 | `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` | – | Karten- und TWINT-Zahlung |

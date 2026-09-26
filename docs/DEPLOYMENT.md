@@ -305,15 +305,25 @@ Produktion:
 DATABASE_URL
 DIRECT_URL
 JWT_SECRET                 openssl rand -base64 48
-NEXT_PUBLIC_APP_URL        https://<produktionsadresse>
+APP_URL                    https://<produktionsadresse>   (Laufzeit)
 CRON_SECRET                openssl rand -hex 32
 ENCRYPTION_KEY             openssl rand -hex 32   (genau 64 Hex-Zeichen)
 ```
 
+Beim **Bau** zusätzlich `NEXT_PUBLIC_SITE_URL` — die kanonische Domain der
+Website, für jede Umgebung dieselbe (`https://clenaris.qasemi.ch`). Sie ist
+die einzige Adresse, die im Bau festsitzt (Canonical, Sitemap, robots.txt der
+statisch erzeugten Seiten). Alles andere — Links in E-Mails, PDFs,
+Zahlungsrücksprünge, Signaturen, die Herkunftsprüfung — liest `APP_URL` zur
+Laufzeit (V2-1, `docs/PRODUCTION_V2.md` §5). Fehlt `APP_URL` in der
+Produktion, verweigert die Anwendung jeden absoluten Link, statt auf
+`localhost` zu zeigen. Ein älteres `NEXT_PUBLIC_APP_URL` in der `.env` gilt
+weiter als Rückfall, zur Laufzeit gelesen.
+
 > **Die Produktionsadresse ist nicht `clenaris.ch`.** Das ist der Markenname
 > und steht in den Firmenangaben; als Hostname existierte er im DNS zuletzt
 > (2026-09-19) nicht. Überall dort, wo eine Adresse *angesprochen* wird —
-> `NEXT_PUBLIC_APP_URL`, `API_URL`, die `servers` der OpenAPI-Spezifikation —,
+> `APP_URL`, `NEXT_PUBLIC_SITE_URL`, `API_URL`, die `servers` der OpenAPI-Spezifikation —,
 > gehört die tatsächlich erreichbare Adresse hin. Eine Konfiguration, die auf
 > einen nicht auflösenden Namen zeigt, erzeugt Magic Links und PDF-Verweise,
 > die ins Leere führen, und der Fehler fällt erst der Kundschaft auf.
@@ -1129,7 +1139,8 @@ stehen.
   nichts tut, und genau solche Variablen verwirren später bei der Fehlersuche.
 - `API_URL` — die Anwendung kennt keine getrennte Schnittstellenadresse, weil
   Oberfläche und Schnittstelle unter derselben Adresse laufen. Das Secret
-  existiert trotzdem und wird auf `NEXT_PUBLIC_APP_URL` abgebildet.
+  existiert trotzdem und wird auf `APP_URL` abgebildet (und für den Übergang
+  zusätzlich auf das ältere `NEXT_PUBLIC_APP_URL`).
 
 **14.2 Repository-Variablen — Konfiguration, keine Geheimnisse.**
 
@@ -1142,7 +1153,7 @@ dass man im Protokoll sieht, was gesetzt war.
 | Variable | Pflicht | Bedeutung |
 | --- | --- | --- |
 | `DEPLOY_ENABLED` | **Schalter** | `true` schaltet den Auslieferungsauftrag ein. Jeder andere Wert und jede nicht gesetzte Variable lassen ihn **übersprungen** — fail-closed. Das Qualitätstor läuft davon unberührt bei jedem Push, jedem Pull Request und jedem Handstart. **Erst setzen, wenn der V2-Server steht und `SERVER_HOST`, `SERVER_SSH_KEY` und `SERVER_SSH_KNOWN_HOSTS` auf ihn zeigen.** Ohne diesen Schalter wäre der erste grüne Lauf zugleich eine Auslieferung an das Ziel, das die bestehenden Secrets gerade nennen — und niemand hätte sie ausgelöst |
-| `API_URL` | empfohlen | Öffentliche Adresse der Anwendung, etwa `https://<domain>`. Wird auf dem Server zu `NEXT_PUBLIC_APP_URL` und trägt den Health Check von aussen. Steht sie nicht, fällt der Workflow für den Übergang auf das gleichnamige Secret zurück; fehlt beides, entfällt die Prüfung von aussen mit einer Warnung |
+| `API_URL` | empfohlen | Öffentliche Adresse der Anwendung, etwa `https://<domain>`. Wird auf dem Server zu `APP_URL` (und `NEXT_PUBLIC_APP_URL` als Rückfall) und trägt den Health Check von aussen. Steht sie nicht, fällt der Workflow für den Übergang auf das gleichnamige Secret zurück; fehlt beides, entfällt die Prüfung von aussen mit einer Warnung |
 | `TRUSTED_PROXY_MODE` | nein, aber empfohlen | `NONE` \| `SINGLE_REVERSE_PROXY` \| `CLOUDFLARE` — welcher Kopfzeile die Anwendung die Client-Adresse glaubt (13.5.1). **Ist sie nicht gesetzt, überträgt die Auslieferung nichts und die `.env` des Servers behält ihren bisherigen Wert.** Das ist Absicht: Eine Auslieferung soll die Vertrauensannahme nicht heimlich umstellen. Ein *unbekannter* Wert bricht die Auslieferung dagegen ab, statt stillschweigend auf `NONE` zu fallen |
 
 **Warum die Prüfung auf den unbekannten Wert wichtiger ist als die Variable

@@ -56,6 +56,64 @@ DEPLOYMENT:                   NO
 OLD SERVER CONTACTED:         NO
 ```
 
+Der Block oben ist der Stand der Pre-Production-Prüfung vom 2026-09-26 und
+bleibt als solcher stehen. Was danach geschah, steht in den zwei Nachträgen
+direkt darunter.
+
+## Nachtrag A — echter CI-Lauf (2026-09-26)
+
+Zweig `ci/production-v2-github-haertung`, Pull Request #3 nach `main`
+(nicht zusammengeführt), **Lauf 36272635541** am Stand `7b8bab9`
+(2026-09-26 21:21 UTC):
+
+```
+Auftrag „Prüfung":            grün, jede Stufe bestanden
+npm test:                     1567 / 1567, 0 übersprungen
+E2E:                          42 / 42, retries = 0
+SECRET SCAN:                  PASS — scripts/ci-secret-scan.sh mit echter Bash
+SECURITY:CHECK:               PASS — im CI alle Prüfungen ausgeführt (Bash vorhanden)
+HYDRATIONSKORREKTUR:          --pruefen OK
+AUFTRAG „Auslieferung":       übersprungen (pull_request; DEPLOY_ENABLED nicht gesetzt)
+```
+
+Damit ist **E-1** (unten) erfüllt. Die drei vorangegangenen roten Läufe
+desselben Zweigs waren **CI-Fehler, keine Produktfehler**; alle drei sind an
+der Ursache behoben:
+
+| Lauf | Ursache | Behebung |
+|---|---|---|
+| 36270931878 | Bau mit `NODE_ENV=development` aus der Auftragsumgebung („<Html> should not be imported …" beim Vorrendern von `/404`) | `NODE_ENV: production` für die Stufe „Build" (8ab708b), örtlich nachgestellt |
+| 36271508638 | `.nvmrc` sagte Node 20; `node --test` mit Muster braucht ≥ 21 („Could not find tests/**/*.test.ts") | Node 22 überall: `.nvmrc`, `engines`, `deploy.sh` (b1a6e55) |
+| 36271930469 | nacktes `next start` statt `scripts/test-server.ts` — zwölf Fälle ohne Prüfgeheimnisse (Resend-Webhook, Berichtseingang) | CI startet über `test-server.ts` (7b8bab9) |
+
+Keine Prüfung wurde abgeschwächt, übersprungen oder mit
+`continue-on-error` versehen.
+
+## Nachtrag B — V2-1 und GitHub-Härtung (2026-09-26/27)
+
+**V2-1 ist geschlossen.** Umgebungsabhängiges wird zur Laufzeit gelesen
+(`APP_URL`, Analyse-Kennungen über `GET /api/public/runtime-config`, Maps- und
+Supabase-Werte serverseitig); bewusst beim Bau bleibt nur die kanonische
+Domain der statischen Website (`NEXT_PUBLIC_SITE_URL`, eine Produktkonstante
+für alle Umgebungen). Bewiesen mit **einem** Bau unter zwei
+Laufzeitumgebungen ohne Neubau — Einzelheiten, Bestandsaufnahme und
+Begründung in `docs/PRODUCTION_V2.md` §5, Prüfung in
+`tests/api/laufzeit-konfiguration.test.ts`.
+
+**CI-Lieferkette:** alle vier fremden Aktionen auf über die API aufgelöste
+Commits festgelegt, `persist-credentials: false`, keine `${{ }}`-Ausdrücke
+mehr in Skripttext. Rechte, Pull-Request-Grenze, Zwischenspeicher,
+Artefakte und die vorgeschlagenen (nicht angewandten) Schutzregeln für
+`main`: `docs/GITHUB_GOVERNANCE.md`.
+
+**Beifund:** drei Vertragsfälle scheiterten zwischen 00:00 und 02:00
+Zürcher Zeit, weil die Prüfungen „heute" in UTC rechneten, die Dienste in
+Zürich (`tests/helpers/datum.ts`). Behoben in den Prüfungen; das Produkt
+rechnete richtig.
+
+Ergebnis des CI-Laufs zu diesem Stand: im Pull Request #3 und im
+Abschlussbericht der Mission.
+
 ---
 
 ## 1. Reproduzierbarer Release-Bau
@@ -162,7 +220,8 @@ sind gewollt: Die Listen brechen sie über eine eindeutige Spalte
   aus, nie den Wert; bei `NEXT_PUBLIC_`-Namen die Zeile (nur ein Name).
 - `continue-on-error` steht ausschliesslich bei der Merkmalsprüfung
   (bewusst beratend).
-- Nicht ausgeführt: kein Push → **CI VERIFICATION REQUIRED**.
+- ~~Nicht ausgeführt: kein Push → CI VERIFICATION REQUIRED.~~ Ausgeführt in
+  Lauf 36272635541: **PASS** (Nachtrag A).
 
 ## 5. CI-Qualitätstor
 
@@ -176,8 +235,10 @@ In Reihenfolge, jede Stufe blockierend (ausser Merkmalsprüfung):
 unverändert. Neu: `.github/pull_request_template.md` mit der Durchsichtsliste
 aus `docs/SECURITY_STANDARD.md` — sie erinnert, erzwingt aber nichts.
 
-Offen für V2: Das CI baut mit `NEXT_PUBLIC_APP_URL=http://localhost:3000`
-(V2-1) — ein Artefakt aus diesem Lauf ist nicht auslieferbar.
+~~Offen für V2: Das CI baut mit `NEXT_PUBLIC_APP_URL=http://localhost:3000`
+(V2-1) — ein Artefakt aus diesem Lauf ist nicht auslieferbar.~~ Seit
+Nachtrag B baut das CI mit `APP_URL` (Laufzeit) und der kanonischen
+Produktdomain; derselbe Bau taugt für jede Umgebung.
 
 ## 6. Scanner auf echten Geräten
 
@@ -250,7 +311,7 @@ SHA-256 und Manifest → Aktivierung → Migration → `start:built` → Health 
 Commit. Die Aktivierung (`deploy/v2/release-aktivieren.sh`) führt **kein**
 `git pull`, `npm install`, `npm run build`, `prisma generate` aus und
 **patcht nichts** (Korrektur nur `--pruefen`); Migrationen nur ausdrücklich
-und nach Sicherung. Blocker: **V2-1** (`NEXT_PUBLIC_*` beim Bau), V2-2…V2-5
+und nach Sicherung. Blocker: ~~V2-1~~ (geschlossen, Nachtrag B), V2-2…V2-5
 (extern). Der heutige Weg (`scripts/deploy.sh`) baut auf dem Server — genau
 das, was V2 ablöst.
 
@@ -301,7 +362,8 @@ Dokumentation erzwingt nichts; erzwungen wird nur, was CI und
 
 | Nr. | Punkt |
 |---|---|
-| E-1 | CI-Lauf (Geheimnisprüfung, `security:check`, gesamtes Tor) — erst nach Push |
+| ~~E-1~~ | ~~CI-Lauf (Geheimnisprüfung, `security:check`, gesamtes Tor)~~ — erfüllt, Lauf 36272635541 (Nachtrag A) |
+| E-9 | Schutzregeln für `main` und Sichtbarkeit des Repositorys — Entscheid der Inhaberschaft (`GITHUB_GOVERNANCE.md`) |
 | E-2 | Scanner auf echten Geräten (`SCANNER_DEVICE_ACCEPTANCE.md`) |
 | E-3 | ClamAV-Abnahme gegen echten `clamd` (`MALWARE_PROTECTION.md` §10) |
 | E-4 | Überwachungsrechner: aufsetzen, `shellcheck`, Probelauf, Alarmwege |

@@ -28,7 +28,7 @@
   `opened`, `clicked`. Ohne Geheimnis 503; ungültig 401; unbekannte Kennung
   200 (andere Umgebung); Verarbeitungsfehler 500 (Anbieter wiederholt).
 - **Twilio:** `sendSms` setzt `statusCallback`; Signatur `X-Twilio-Signature`
-  über die **öffentliche** Adresse (`NEXT_PUBLIC_APP_URL`) und die
+  über die **öffentliche** Adresse (`APP_URL`, zur Laufzeit) und die
   Formularfelder mit `TWILIO_AUTH_TOKEN`. Hinter einem Proxy muss die
   öffentliche Adresse stimmen — mit einem echten Konto zu prüfen.
 - Gespeichert werden nur Status, Zeitpunkte und ein Fehlercode — kein Inhalt
