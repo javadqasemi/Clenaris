@@ -225,6 +225,23 @@ describe('Rauchtest', { concurrency: 1 }, async () => {
       ['/admin/qualitaet', inspectionId],
     ];
 
+    /**
+     * Die Etikettseite der Scanplattform (2026-09-26): für das Büro erreichbar,
+     * für Mitarbeitende ohne Lagerrecht nicht vorhanden (404, reine
+     * Bearbeitungsmaske). Sie erzeugt beim Aufrufen keinen Code.
+     */
+    it('/admin/etikett/:art/:id', async () => {
+      // Ein Einsatz, weil der Demobestand kein Material kennt; die Seite ist
+      // für alle vier Arten dieselbe.
+      const jobId = await firstId('/api/jobs?pageSize=1');
+      assert.ok(jobId, 'kein Einsatz im Demobestand');
+      const buero = await get(`/admin/etikett/JOB/${jobId}`, { jar: jars.admin });
+      assert.equal(buero.status, 200, `HTTP ${buero.status}`);
+      assert.equal((await get(`/admin/etikett/JOB/${jobId}`, { jar: jars.manager })).status, 200);
+      assert.equal((await get(`/admin/etikett/UNBEKANNT/${jobId}`, { jar: jars.admin })).status, 404);
+      assert.equal((await get('/admin/etikett/JOB/gibt-es-nicht', { jar: jars.admin })).status, 404);
+    });
+
     for (const [prefix, id] of targets) {
       it(`${prefix}/:id`, async () => {
         assert.ok(id, `keine Beispiel-ID für ${prefix} — Datenbank befüllt?`);
