@@ -6,7 +6,7 @@
       "paket": "deepmerge-ts (über @prisma/config, prisma)",
       "schwere": "high",
       "einordnung": "EXTERNE ABHÄNGIGKEIT",
-      "begruendung": "Stapelüberlauf beim Zusammenführen rekursiver Objektgraphen. Nur im Prisma-Werkzeug beim Laden der eigenen Konfiguration (Bau, Migration), keine fremden Eingaben; die Laufzeit nutzt @prisma/client. prisma 6.19.3 pinnt deepmerge-ts 7.1.5 exakt; das von npm audit gemeldete „fix available" ist der Sprung auf Prisma 7 (Hauptversion). Gleichlautend in docs/LIEFERKETTE.md.",
+      "begruendung": "Stapelüberlauf beim Zusammenführen rekursiver Objektgraphen. Nur im Prisma-Werkzeug beim Laden der eigenen Konfiguration (Bau, Migration), keine fremden Eingaben; die Laufzeit nutzt @prisma/client. prisma 6.19.3 pinnt deepmerge-ts 7.1.5 exakt; das von npm audit gemeldete „fix available“ ist der Sprung auf Prisma 7 (Hauptversion). Gleichlautend in docs/LIEFERKETTE.md.",
       "bewertetAm": "2026-09-26",
       "bis": "2026-12-31"
     },
