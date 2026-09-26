@@ -47,9 +47,18 @@ import { testDb, testDbSchliessen } from '../helpers/testdb';
 
 // Werte, die in keiner Antwort auftauchen dürfen. Jeder ist eindeutig genug,
 // dass ein Treffer kein Zufall sein kann.
+//
+// Die Formen sind so gewählt, dass die Geheimnisprüfung
+// (`scripts/ci-secret-scan.sh`) sie zu Recht **nicht** für echte hält: Die
+// Datenbankadressen zeigen auf `.invalid` (reserviert, nie auflösbar — die
+// dort dokumentierte Ausnahme), die Anbietermarker sind kürzer als echte
+// Schlüssel. Ein erster Entwurf mit einem gewöhnlichen Hostnamen und einem
+// `NEXT_PUBLIC_…SECRET` hielt den CI-Lauf 36277056624 an — richtig so: Aus
+// einer eingecheckten Datei heraus ist ein Marker von einem Geheimnis nicht
+// zu unterscheiden, also muss er anders aussehen.
 const MARKER = {
-  DATABASE_URL: 'postgresql://marker-db-user:marker-db-passwort@marker-db-host:5432/marker_test',
-  DIRECT_URL: 'postgresql://marker-direct:marker-direct-passwort@marker-db-host:5432/marker_test',
+  DATABASE_URL: 'postgresql://marker-db-user:marker-db-passwort@marker-db-host.invalid:5432/marker_test',
+  DIRECT_URL: 'postgresql://marker-direct:marker-direct-passwort@marker-db-host.invalid:5432/marker_test',
   JWT_SECRET: 'marker-jwt-geheimnis-0123456789abcdef0123456789abcdef',
   CRON_SECRET: 'marker-cron-geheimnis-0123456789abcdef',
   ENCRYPTION_KEY: 'deadbeef'.repeat(8),
@@ -65,7 +74,7 @@ const MARKER = {
   GOOGLE_MAPS_SERVER_KEY: 'marker-maps-server',
   // Öffentlich benannt, aber nicht freigegeben: Auch ein `NEXT_PUBLIC_`-Name
   // reicht nicht, um in die Browser-Konfiguration zu gelangen.
-  NEXT_PUBLIC_EVIL_SECRET: 'marker-oeffentlich-benannt',
+  NEXT_PUBLIC_NICHT_FREIGEGEBEN: 'marker-oeffentlich-benannt',
   NEXT_PUBLIC_GOOGLE_MAPS_API_KEY: 'marker-maps-browser',
   NEXT_PUBLIC_SUPABASE_URL: 'https://marker-supabase.example',
 } as const;
