@@ -19,6 +19,8 @@ import {
 } from '@/components/app/page-parts';
 import { getOrganizationId } from '@/server/services/organization.service';
 import { cronZustand, FEHLER_IN_FOLGE_ALARM } from '@/server/services/cron-monitor.service';
+import { berichtsZustand } from '@/server/services/security-report.service';
+import { Sicherheitsberichte } from '@/features/admin/sicherheitsberichte';
 import {
   getSicherheitsUeberblick,
   listAuffaelligeKonten,
@@ -95,7 +97,8 @@ export default async function SicherheitPage({
   const organizationId = await getOrganizationId();
   const seite = Math.max(1, Number(params.seite) || 1);
 
-  const [ueberblick, ereignisse, konten, laeufe] = await Promise.all([
+  const jetzt = new Date();
+  const [ueberblick, ereignisse, konten, laeufe, berichte] = await Promise.all([
     getSicherheitsUeberblick(organizationId),
     listSecurityEvents({
       organizationId,
@@ -107,6 +110,7 @@ export default async function SicherheitPage({
     }),
     listAuffaelligeKonten(organizationId),
     cronZustand(organizationId),
+    berichtsZustand(organizationId, jetzt),
   ]);
 
   const seiten = Math.max(1, Math.ceil(ereignisse.gesamt / ereignisse.proSeite));
@@ -279,6 +283,13 @@ export default async function SicherheitPage({
           </table>
         </TableScroll>
       </ListCard>
+
+      {/*
+        Was Prüfungen ausserhalb der Anwendung gemeldet haben — security:check,
+        der Überwachungsrechner, ZAP, die Sicherung (2026-09-26). Nur Anzeige:
+        Diese Seite startet keine Prüfung und ruft kein Programm auf.
+      */}
+      <Sicherheitsberichte zustaende={berichte} version={process.env.APP_VERSION ?? null} scanner={ueberblick.scanner} jetzt={jetzt} />
 
       {(ueberblick.dateienInQuarantaene > 0 || ueberblick.dateienOhneBefund > 0) && (
         <Alert variant={ueberblick.dateienInQuarantaene > 0 ? 'destructive' : 'warning'}>

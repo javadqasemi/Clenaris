@@ -267,6 +267,41 @@ bekommt.
 
 ---
 
+## 8a. Betriebssicherheit von aussen (2026-09-26)
+
+Die Seite zeigt zusätzlich, was Prüfungen **ausserhalb** der Anwendung
+gemeldet haben: `security:check` (CI, Freigabe), der externe
+Überwachungsrechner (Erreichbarkeit, TLS, Kopfzeilen, offen erreichbare
+Dateien), die passive ZAP-Grundprüfung, Abhängigkeits- und
+Betriebssystemprüfung, Sicherung und Wiederherstellungsprobe,
+Rechnerintegrität — dazu die laufende Version (`APP_VERSION`) und den
+Zustand des Schadsoftwareprüfers.
+
+**Die Seite startet nichts.** Es gibt keinen Knopf „Prüfung starten", keine
+Shell, kein `npm`, kein SSH, keinen Neustart. Die Prüfungen melden über
+`POST /api/cron/security-report` (Bearer `SECURITY_REPORT_TOKEN`, eigenes
+Geheimnis, nicht `CRON_SECRET`); gespeichert wird in `SecurityReport`, je
+Quelle die letzten 100.
+
+**Ausgeblieben schlägt Status.** Jede Quelle hat eine erwartete Taktung
+(`ERWARTET_ALLE_STUNDEN` in `security-report.service.ts`: Überwachung 2 h,
+Sicherung/Integrität/Abhängigkeiten 26 h, ZAP und security:check 8 Tage).
+Ist der letzte Bericht älter, steht „Ausgeblieben" statt des alten grünen
+Status; ohne jeden Bericht „Noch nie gemeldet". Ein kritischer Bericht wird
+beim Wechsel in diesen Zustand ein Sicherheitsereignis
+(`SECURITY_REPORT_CRITICAL`) mit Bestätigungspflicht.
+
+Sicherung und Wiederherstellungsprobe melden selbst (`db-backup.ts`,
+`db-restore-verify.ts`), wenn `SECURITY_REPORT_URL` und
+`SECURITY_REPORT_TOKEN` gesetzt sind. Beide melden unter der Quelle
+`BACKUP`; der jeweils letzte Bericht steht in der Zeile — die
+Sicherungskennzahlen und die der Probe erscheinen deshalb abwechselnd.
+Getrennte Quellen wären genauer; bewusst so gelassen, bis es stört.
+
+Prüfreihe: `tests/api/sicherheitsberichte.test.ts`.
+
+---
+
 ## 9. Wo was steht
 
 | Datei | Inhalt |
