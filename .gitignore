@@ -34,9 +34,18 @@ yarn-error.log*
 .pnpm-debug.log*
 
 # env
+# Jede Umgebungsdatei, ausser den Beispielen. Bis 2026-09-27 standen hier nur
+# `.env`, `.env*.local` und `.env.production` — eine `.env.staging` oder
+# `.env.preview` wäre beim nächsten `git add -A` verfolgt worden (nachgeprüft
+# mit `git check-ignore`). Eine Ausnahmeliste der erlaubten Namen ist
+# sicherer als eine Liste der verbotenen: Was neu dazukommt, ist zuerst
+# ignoriert. Massgebend bleibt die Geheimnisprüfung (scripts/security/
+# geheimnisse.ts), die jede verfolgte Umgebungsdatei ausser den Beispielen
+# meldet.
 .env
-.env*.local
-.env.production
+.env.*
+!.env.example
+!.env.*.example
 
 # vercel
 .vercel

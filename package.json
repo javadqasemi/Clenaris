@@ -41,7 +41,10 @@
     "openapi": "tsx scripts/generate-openapi.ts",
     "erd": "tsx scripts/generate-erd.ts",
     "audit:merkmale": "tsx scripts/feature-integrity.ts",
-    "security:check": "tsx scripts/security-check.ts",
+    "security:check": "tsx scripts/security-check.ts --umfang voll",
+    "security:check:static": "tsx scripts/security-check.ts --umfang statisch",
+    "security:check:tests": "tsx scripts/security-check.ts --umfang tests",
+    "security:secrets": "tsx scripts/security/geheimnisse.ts",
     "security:sbom": "tsx scripts/security-sbom.ts",
     "docs": "npm run openapi && npm run erd",
     "postinstall": "prisma generate && node scripts/react-hydrationskorrektur.mjs"

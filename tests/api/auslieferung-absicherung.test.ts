@@ -3,6 +3,15 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
+import {
+  ANBIETERMUSTER,
+  DB_AUSNAHMEHOSTS,
+  DB_MUSTER,
+  TOKENGRENZE,
+  dateienPruefen,
+  zeilenPruefen,
+} from '../../scripts/security/geheimnisse';
+
 /**
  * Was am Auslieferungsweg nicht mehr verrutschen darf.
  *
@@ -265,35 +274,17 @@ describe('Client-Adresse — genau eine Richtlinie', () => {
  * Tage, und sie stand aus dem denkbar irreführendsten Grund: Die Prüfung
  * meldete ein Geheimnis im Repository.
  *
- * Diese Datei liest die Muster **aus dem Skript** statt sie zu wiederholen.
- * Eine Kopie wäre nach der ersten Änderung eine Lüge.
+ * Diese Datei liest die Muster **aus der Prüfung selbst** statt sie zu
+ * wiederholen. Eine Kopie wäre nach der ersten Änderung eine Lüge. Seit
+ * 2026-09-27 stehen sie in `scripts/security/geheimnisse.ts` (das Bash-Skript
+ * ist nur noch eine Hülle darum) und werden hier importiert statt aus einem
+ * Skripttext herausgelesen.
  */
 describe('Geheimnis-Suche — Muster', () => {
-  const skript = readFileSync(join(wurzel, 'scripts', 'ci-secret-scan.sh'), 'utf8');
+  const grenze = TOKENGRENZE;
 
-  /**
-   * Die Grenze steht im Skript als eigene Konstante, damit sie an einer
-   * Stelle gepflegt wird. Hier wird sie genauso aufgelöst, wie bash es täte.
-   */
-  const grenze = skript.match(/^readonly TOKENGRENZE='(.+)'$/m)?.[1];
-
-  const muster = (() => {
-    const block = skript.match(/^muster=\(\r?\n([\s\S]*?)^\)\r?$/m)?.[1] ?? '';
-    return block
-      .split(/\r?\n/)
-      .map((zeile) => zeile.trim())
-      .filter(Boolean)
-      .map((zeile) => {
-        const roh = zeile.match(/^(['"])([\s\S]*)\1$/)?.[2];
-        assert.ok(roh, `Eintrag nicht lesbar: ${zeile}`);
-        const trenner = roh.indexOf('|');
-        const name = roh.slice(0, trenner);
-        const ere = roh.slice(trenner + 1).replaceAll('${TOKENGRENZE}', grenze ?? '');
-        // `m`, weil `git grep` zeilenweise arbeitet: `^` heisst dort
-        // Zeilenanfang, nicht Textanfang.
-        return { name, ere, regex: new RegExp(ere, 'm') };
-      });
-  })();
+  // `m`, weil die Prüfung zeilenweise arbeitet: `^` heisst Zeilenanfang.
+  const muster = ANBIETERMUSTER.map(({ name, muster: m }) => ({ name, ere: m.source, regex: new RegExp(m.source, 'm') }));
 
   /**
    * Proben werden zur Laufzeit zusammengesetzt und stehen bewusst **nicht**
@@ -340,8 +331,8 @@ describe('Geheimnis-Suche — Muster', () => {
     'export type FeatureRequestsAntwort = { scoreRequestsGesamt: number };',
   ];
 
-  it('das Skript erklärt eine Tokengrenze und jedes Präfixmuster benutzt sie', () => {
-    assert.ok(grenze, 'TOKENGRENZE muss im Skript als readonly-Konstante stehen');
+  it('die Prüfung erklärt eine Tokengrenze und jedes Präfixmuster benutzt sie', () => {
+    assert.ok(grenze, 'TOKENGRENZE muss in scripts/security/geheimnisse.ts exportiert sein');
     assert.ok(muster.length >= 13, `zu wenige Muster gelesen: ${muster.length}`);
     for (const { name, ere } of muster) {
       // Der private Schlüssel trägt seine Grenze im Muster selbst (`-----`).
@@ -424,16 +415,19 @@ describe('Geheimnis-Suche — Muster', () => {
   // Namen, die für Beispiele reserviert oder nicht auflösbar sind, können
   // keine Produktionszugangsdaten tragen.
 
-  const dbMuster = skript.match(/^readonly DB_MUSTER='(.+)'$/m)?.[1];
-  const dbAusnahme = skript.match(/^readonly DB_AUSNAHMEHOSTS='(.+)'$/m)?.[1];
-
-  /** Genau die Verknüpfung, die das Skript aus `git grep` und `grep -v` bildet. */
+  /** Genau die Regel der Prüfung — über ihren Zeilenkern, nicht nachgebaut. */
   const alsFundGemeldet = (zeile: string) =>
-    new RegExp(dbMuster!, 'm').test(zeile) && !new RegExp(dbAusnahme!, 'm').test(zeile);
+    zeilenPruefen('beliebig.ts', zeile).some((f) => f.regel === 'Datenbankverbindung mit Passwort');
 
   it('kennt Muster und Wirtsausnahme für Datenbankverbindungen', () => {
-    assert.ok(dbMuster, 'DB_MUSTER muss als readonly-Konstante im Skript stehen');
-    assert.ok(dbAusnahme, 'DB_AUSNAHMEHOSTS ebenso — sonst ist die Ausnahme nicht prüfbar');
+    assert.ok(DB_MUSTER instanceof RegExp, 'DB_MUSTER muss exportiert sein');
+    assert.ok(DB_AUSNAHMEHOSTS instanceof RegExp, 'DB_AUSNAHMEHOSTS ebenso — sonst ist die Ausnahme nicht prüfbar');
+  });
+
+  it('meldet verfolgte Umgebungsdateien, lässt die Beispiele durch', () => {
+    const funde = dateienPruefen(['.env', '.env.staging', 'x/.env.local', '.env.example', 'ops/.env.monitor.example'], () => null, '.env\n');
+    assert.deepEqual(funde.map((f) => f.datei).sort(), ['.env', '.env.staging', 'x/.env.local']);
+    assert.ok(dateienPruefen([], () => null, 'node_modules/\n').some((f) => f.datei === '.gitignore'), '.gitignore ohne .env ist ein Fund');
   });
 
   it('meldet eine Verbindung zu einem echten Wirt', () => {

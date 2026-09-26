@@ -45,6 +45,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSy
 import { join } from 'node:path';
 
 import { befundEinordnen, veralteteBewertungen, type Bewertung } from './security/bewertung';
+import { geheimnisseImBestand } from './security/geheimnisse';
 import { melden, type Meldung } from './security/melden';
 import { musterPruefen, type Unterdrueckung } from './security/muster';
 
@@ -69,8 +70,42 @@ interface Pruefung {
 }
 
 const WURZEL = join(__dirname, '..');
-const args = new Set(process.argv.slice(2));
-const STRENG = args.has('--streng');
+const argv = process.argv.slice(2);
+const args = new Set(argv);
+
+/**
+ * Welche Prüfungen dieser Aufruf verspricht (2026-09-27).
+ *
+ *   statisch   Geheimnisse, Abhängigkeiten, Muster, Migrationen,
+ *              Schnittstellen, Repository — ohne laufenden Server
+ *   tests      nur die Sicherheitsreihen gegen TEST_BASE_URL
+ *   voll       beides (Vorgabe, `npm run security:check`)
+ *
+ * **Jede Prüfung im Umfang muss laufen und bestehen.** Vorher kannte der Lauf
+ * nur einen Umfang, aus dem die Prüfreihe ohne `--mit-tests` als
+ * NICHT GEPRÜFT herausfiel — der Befehl endete mit Exitcode 0 und dem
+ * Gesamtstatus NICHT_GEPRUEFT zugleich. „Bestanden" hiess damit je nach
+ * Aufruf etwas anderes. Jetzt nennt der Aufruf seinen Umfang, und innerhalb
+ * dieses Umfangs ist NICHT GEPRÜFT ein Fehlschlag, kein Hinweis. Was
+ * ausserhalb des Umfangs liegt, erscheint nicht als „nicht geprüft", sondern
+ * gar nicht — der Befehl hat es nicht versprochen.
+ *
+ * `--streng` und `--mit-tests` bleiben als ältere Schreibweisen gültig
+ * (`--mit-tests` = voll); strenger als jetzt geht es nicht mehr.
+ */
+type Umfang = 'statisch' | 'tests' | 'voll';
+const umfangRoh = argv[argv.indexOf('--umfang') + 1];
+const UMFANG: Umfang =
+  argv.includes('--umfang') && (umfangRoh === 'statisch' || umfangRoh === 'tests' || umfangRoh === 'voll')
+    ? umfangRoh
+    : argv.includes('--umfang')
+      ? (() => {
+          console.error(`Unbekannter Umfang „${umfangRoh ?? ''}" — erlaubt: statisch, tests, voll.`);
+          process.exit(2);
+        })()
+      : 'voll';
+const MIT_STATISCH = UMFANG !== 'tests';
+const MIT_TESTS = UMFANG !== 'statisch';
 
 function json<T>(pfad: string): T {
   return JSON.parse(readFileSync(join(WURZEL, pfad), 'utf8')) as T;
@@ -122,25 +157,18 @@ async function pruefung(id: string, titel: string, lauf: () => Promise<Omit<Prue
 const statusAus = (befunde: Befund[]): Status => (befunde.some((b) => b.schwere !== 'hinweis') ? 'BEFUND' : 'BESTANDEN');
 
 // ---------------------------------------------------------------------------
-//  1. Geheimnisse — massgebend ist das Bash-Skript
+//  1. Geheimnisse — dieselbe Umsetzung wie im CI
 // ---------------------------------------------------------------------------
+//
+// Bis 2026-09-27 rief diese Prüfung das Bash-Skript auf und meldete ohne Bash
+// NICHT GEPRÜFT — auf jedem Windows-Rechner also immer. Jetzt stehen die
+// Regeln einmal in `scripts/security/geheimnisse.ts`; das Bash-Skript ist nur
+// noch eine Hülle darum. Örtlich und im CI läuft derselbe Code.
 
 function geheimnisse() {
-  const probe = ausfuehren('bash', ['-c', 'echo bereit'], { zeitMs: 15_000 });
-  if (probe.code !== 0 || !probe.stdout.includes('bereit')) {
-    return {
-      status: 'NICHT_GEPRUEFT' as const,
-      befunde: [],
-      hinweis: 'Keine lauffähige Bash (unter Windows: WSL ohne Distribution oder Git-Bash fehlt). Massgebend ist `bash scripts/ci-secret-scan.sh` im CI.',
-    };
-  }
-  const r = ausfuehren('bash', ['scripts/ci-secret-scan.sh'], { zeitMs: 120_000 });
-  if (r.code === 0) return { status: 'BESTANDEN' as const, befunde: [] };
-  const zeilen = `${r.stdout}\n${r.stderr}`.split('\n').filter((z) => z.includes('✗')).slice(0, 20);
-  return {
-    status: 'BEFUND' as const,
-    befunde: (zeilen.length ? zeilen : ['Geheimnisprüfung meldet Befunde (Ausgabe prüfen).']).map((z) => ({ schwere: 'blockierend' as const, titel: z.replace(/^\s*✗\s*/, '').slice(0, 300) })),
-  };
+  const { funde, dateien } = geheimnisseImBestand(WURZEL);
+  const befunde: Befund[] = funde.map((f) => ({ schwere: 'blockierend', titel: f.regel, ort: `${f.datei}${f.zeile ? `:${f.zeile}` : ''}` }));
+  return { status: statusAus(befunde), befunde, hinweis: `${dateien} verfolgte Dateien.` };
 }
 
 // ---------------------------------------------------------------------------
@@ -382,9 +410,8 @@ const SICHERHEITSREIHEN = [
 ];
 
 async function pruefreihe() {
-  if (!args.has('--mit-tests')) return { status: 'NICHT_GEPRUEFT' as const, befunde: [], hinweis: 'Nur mit --mit-tests (braucht `npm run test:server` und TEST_BASE_URL).' };
   const basis = process.env.TEST_BASE_URL;
-  if (!basis) return { status: 'NICHT_GEPRUEFT' as const, befunde: [], hinweis: 'TEST_BASE_URL fehlt.' };
+  if (!basis) return { status: 'NICHT_GEPRUEFT' as const, befunde: [], hinweis: 'TEST_BASE_URL fehlt (braucht `npm run test:server`).' };
   try {
     await fetch(`${basis}/api/auth/session`, { signal: AbortSignal.timeout(5000) });
   } catch {
@@ -405,16 +432,19 @@ async function pruefreihe() {
 const ZEICHEN: Record<Status, string> = { BESTANDEN: '✓', BEFUND: '✗', NICHT_GEPRUEFT: '○', FEHLER: '!' };
 
 async function main() {
-  console.log('\n  Sicherheitsprüfung — docs/SECURITY_STANDARD.md, docs/SECURITY_AUTOMATION.md\n');
-  const pruefungen = [
-    await pruefung('geheimnisse', 'Geheimnisse im Bestand (ci-secret-scan.sh)', geheimnisse),
-    await pruefung('abhaengigkeiten', 'Abhängigkeiten (npm audit, Laufzeit)', abhaengigkeiten),
-    await pruefung('muster', 'Musterprüfung (Durchsichtsanlässe)', muster),
-    await pruefung('migrationen', 'Migrationen, Schema, Datenbankschranken', migrationen),
-    await pruefung('schnittstellen', 'Öffentliche Endpunkte und Schutzdeklaration', schnittstellen),
-    await pruefung('repository', 'Repository (verbotene Dateien, Lockfile)', repository),
-    await pruefung('pruefreihe', 'Sicherheitsreihen der Prüfreihe', pruefreihe),
-  ];
+  console.log(`\n  Sicherheitsprüfung (Umfang: ${UMFANG}) — docs/SECURITY_STANDARD.md, docs/SECURITY_AUTOMATION.md\n`);
+  const pruefungen: Pruefung[] = [];
+  if (MIT_STATISCH) {
+    pruefungen.push(
+      await pruefung('geheimnisse', 'Geheimnisse im Bestand', geheimnisse),
+      await pruefung('abhaengigkeiten', 'Abhängigkeiten (npm audit, Laufzeit)', abhaengigkeiten),
+      await pruefung('muster', 'Musterprüfung (Durchsichtsanlässe)', muster),
+      await pruefung('migrationen', 'Migrationen, Schema, Datenbankschranken', migrationen),
+      await pruefung('schnittstellen', 'Öffentliche Endpunkte und Schutzdeklaration', schnittstellen),
+      await pruefung('repository', 'Repository (verbotene Dateien, Lockfile)', repository),
+    );
+  }
+  if (MIT_TESTS) pruefungen.push(await pruefung('pruefreihe', 'Sicherheitsreihen der Prüfreihe', pruefreihe));
 
   for (const p of pruefungen) {
     const blockierend = p.befunde.filter((b) => b.schwere === 'blockierend').length;
@@ -431,7 +461,9 @@ async function main() {
 
   const blockiert = pruefungen.some((p) => p.status === 'FEHLER' || p.befunde.some((b) => b.schwere === 'blockierend'));
   const ungeprueft = pruefungen.filter((p) => p.status === 'NICHT_GEPRUEFT');
-  const gesamt: Meldung['status'] = blockiert ? 'KRITISCH' : pruefungen.some((p) => p.befunde.some((b) => b.schwere === 'warnung')) ? 'WARNUNG' : ungeprueft.length ? 'NICHT_GEPRUEFT' : 'OK';
+  // NICHT GEPRÜFT innerhalb des Umfangs ist ein Fehlschlag (siehe UMFANG) und
+  // steht im Gesamtstatus deshalb vor der Warnung.
+  const gesamt: Meldung['status'] = blockiert ? 'KRITISCH' : ungeprueft.length ? 'NICHT_GEPRUEFT' : pruefungen.some((p) => p.befunde.some((b) => b.schwere === 'warnung')) ? 'WARNUNG' : 'OK';
 
   const bericht = {
     quelle: 'SECURITY_CHECK' as const,
@@ -462,12 +494,12 @@ async function main() {
   writeFileSync(join(ordner, `security-check-${stempel}.json`), `${JSON.stringify({ ...bericht, einzelheiten: pruefungen }, null, 2)}\n`);
   writeFileSync(join(ordner, 'letzter-lauf.json'), `${JSON.stringify(bericht, null, 2)}\n`);
 
-  console.log(`\n  Gesamt: ${gesamt}. Bericht: security-reports/security-check-${stempel}.json`);
-  if (ungeprueft.length) console.log(`  Nicht geprüft ist nicht bestanden: ${ungeprueft.map((p) => p.titel).join('; ')}.`);
+  console.log(`\n  Gesamt: ${gesamt} (Umfang ${UMFANG}, ${pruefungen.length} Prüfungen). Bericht: security-reports/security-check-${stempel}.json`);
+  if (ungeprueft.length) console.log(`  Nicht geprüft ist nicht bestanden — Lauf gescheitert: ${ungeprueft.map((p) => p.titel).join('; ')}.`);
 
   if (args.has('--melden')) await melden(bericht, (z) => console.log(`  ${z}`));
 
-  process.exitCode = blockiert || (STRENG && ungeprueft.length > 0) ? 1 : 0;
+  process.exitCode = blockiert || ungeprueft.length > 0 ? 1 : 0;
 }
 
 void main();

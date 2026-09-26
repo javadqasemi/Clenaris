@@ -199,9 +199,15 @@ jobs:
         # security/akzeptierte-befunde.json, Musterprüfung mit begründeten
         # Unterdrückungen, Migrationen und handgeschriebene Schranken,
         # öffentliche Endpunkte gegen die Durchsichtsliste, Repository.
-        # Blockiert bei einem blockierenden Befund. Die Sicherheitsreihen der
-        # Prüfreihe laufen weiter unten ohnehin mit `npm test`.
-        run: npm run security:check
+        # Blockiert bei einem blockierenden Befund.
+        #
+        # Umfang `statisch` (2026-09-27): alles, was ohne laufenden Server
+        # geht. Innerhalb eines Umfangs ist „nicht geprüft" seither ein
+        # Fehlschlag, kein Hinweis — vorher endete diese Stufe mit Exitcode 0
+        # und dem Gesamtstatus NICHT_GEPRUEFT zugleich. Die Sicherheitsreihen
+        # folgen als eigene Stufe, sobald die Anwendung läuft; zusammen sind
+        # beide genau `npm run security:check` (Umfang `voll`).
+        run: npm run security:check:static
 
       - name: Stückliste (CycloneDX)
         run: npm run security:sbom
@@ -330,6 +336,17 @@ jobs:
           echo "::error::Die Anwendung ist nicht hochgekommen."
           cat server.log
           exit 1
+
+      - name: Sicherheitsreihen
+        # Der zweite Teil von `security:check` (Umfang `tests`): die
+        # Sicherheitsreihen gegen den laufenden Server, über denselben
+        # Befehl wie örtlich. Sie stehen auch in `npm test`; hier laufen sie
+        # zuerst und als eigene Stufe, damit ein Sicherheitsbefund im Lauf
+        # als solcher sichtbar ist und nicht als einer von 1500 Fällen.
+        run: npm run security:check:tests
+        env:
+          TEST_BASE_URL: http://localhost:3000
+          CLENARIS_TEST_CACHE_DIR: ${{ runner.temp }}/clenaris-tests/cache
 
       - name: Testreihe
         # Serialisiert, weil sich alle Dateien eine Datenbank und dieselben
