@@ -110,7 +110,13 @@ jobs:
       # Muss im Server *und* im Testprozess gleich sein: `flows.test.ts` ruft
       # `/api/cron/daily` mit genau diesem Wert auf.
       CRON_SECRET: ci-cron-secret
-      NEXT_PUBLIC_APP_URL: http://localhost:3000
+      # V2-1 (2026-09-26): Die Herkunft der Instanz kommt zur Laufzeit aus
+      # `APP_URL` — hier der Testserver. Beim Bau fest steht nur die
+      # kanonische Domain der statischen Website (`src/lib/seiten-url.ts`),
+      # und die ist für jede Umgebung dieselbe: die Produktionsdomain. Damit
+      # ist der Bau dieses Laufs derselbe, der ausgeliefert werden könnte.
+      APP_URL: http://localhost:3000
+      NEXT_PUBLIC_SITE_URL: https://clenaris.qasemi.ch
       # Bewusst `development` für den Auftrag, nicht `production`: Der Seed
       # verweigert in der Produktion den Dienst, solange kein eigenes
       # Startpasswort gesetzt ist (siehe `prisma/seed.ts`) — richtig auf einem
@@ -120,12 +126,30 @@ jobs:
       NODE_ENV: development
       NEXT_TELEMETRY_DISABLED: '1'
 
+    # Fremde Aktionen sind auf einen **Commit** festgelegt, nicht auf ein Tag
+    # (2026-09-26). Ein Tag wie `v4` ist ein verschiebbarer Zeiger: Wer das
+    # Repository der Aktion übernimmt, hängt ihn um, und der nächste Lauf führt
+    # fremden Code mit dem Token dieses Laufs aus — so geschehen bei
+    # `tj-actions/changed-files` (März 2025). Ein Commit-Hash lässt sich nicht
+    # umhängen.
+    #
+    # Jeder Hash unten wurde über die GitHub-API aufgelöst — `v4` und das
+    # genaue Versions-Tag im Kommentar zeigen auf denselben Commit —, also
+    # läuft derselbe Code wie vorher. Aktualisieren heisst: neues Tag
+    # auflösen, Hash **und** Kommentar ersetzen, nie nur eins von beiden
+    # (docs/GITHUB_GOVERNANCE.md, „Aktionen festlegen").
     steps:
       - name: Repository auschecken
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          # Kein Token in `.git/config` zurücklassen: Kein späterer Schritt
+          # schreibt ins Repository, und ein Token auf der Platte des Läufers
+          # wäre für jedes Skript der Prüfreihe lesbar — auch für eine
+          # kompromittierte Abhängigkeit, die `npm ci` gerade installiert hat.
+          persist-credentials: false
 
       - name: Node einrichten
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version-file: .nvmrc
           # Zwischenspeicher für `~/.npm`, geschlüsselt über package-lock.json.
@@ -184,7 +208,7 @@ jobs:
 
       - name: Sicherheitsbericht und Stückliste sichern
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: sicherheitsbericht
           path: security-reports/
@@ -228,7 +252,7 @@ jobs:
 
       - name: Merkmalsbericht sichern
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: feature-integrity-report
           path: artifacts/feature-integrity-report.json
@@ -245,7 +269,7 @@ jobs:
         run: npm run db:seed:demo
 
       - name: Build-Zwischenspeicher wiederherstellen
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: .next/cache
           key: next-${{ runner.os }}-${{ hashFiles('package-lock.json') }}-${{ hashFiles('src/**/*.ts', 'src/**/*.tsx') }}
@@ -338,7 +362,7 @@ jobs:
 
       - name: Browser-Bericht sichern
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: playwright-bericht
           path: |
@@ -352,7 +376,7 @@ jobs:
 
       - name: Server-Protokoll sichern
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: server-log
           path: server.log
@@ -516,10 +540,12 @@ jobs:
           #
           # Der Rückfall auf `secrets.API_URL` steht hier für den Übergang:
           # Der Wert liegt heute als Secret vor, und ein harter Wechsel
-          # liesse die Variable leer — die Anwendung bekäme dann still eine
-          # `.env` ohne `NEXT_PUBLIC_APP_URL`, und Magic Links und
-          # PDF-Verweise zeigten auf `localhost`. Sobald die Variable gesetzt
-          # ist, kann das Secret gelöscht und dieser Rückfall entfernt werden.
+          # liesse die Variable leer — die Anwendung bekäme dann eine `.env`
+          # ohne `APP_URL`. Bis V2-1 zeigten Magic Links und PDF-Verweise dann
+          # still auf `localhost`; seither verweigert die Produktion jeden
+          # absoluten Link (`src/lib/laufzeit-konfiguration.ts`) — laut statt
+          # falsch, aber ausgefallen. Sobald die Variable gesetzt ist, kann
+          # das Secret gelöscht und dieser Rückfall entfernt werden.
           API_URL: ${{ vars.API_URL || secrets.API_URL }}
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
           ENCRYPTION_KEY: ${{ secrets.ENCRYPTION_KEY }}
@@ -604,6 +630,8 @@ jobs:
             [ -n "${DIRECT_URL:-}" ] && echo "DIRECT_URL=${DIRECT_URL}"
             echo "JWT_SECRET=${JWT_SECRET}"
             [ -n "${API_URL:-}" ]    && echo "NEXT_PUBLIC_APP_URL=${API_URL}"
+            # Laufzeitname seit V2-1; der ältere oben bleibt als Rückfall.
+            [ -n "${API_URL:-}" ]    && echo "APP_URL=${API_URL}"
             [ -n "${CRON_SECRET:-}" ] && echo "CRON_SECRET=${CRON_SECRET}"
             [ -n "${ENCRYPTION_KEY:-}" ] && echo "ENCRYPTION_KEY=${ENCRYPTION_KEY}"
             [ -n "${TRUSTED_PROXY_MODE:-}" ] && echo "TRUSTED_PROXY_MODE=${TRUSTED_PROXY_MODE}"
@@ -678,15 +706,28 @@ jobs:
 
       - name: Zusammenfassung
         if: always()
+        # Die Werte kommen über `env` und nicht als `${{ … }}` in den Text des
+        # Skripts (2026-09-26). Ein Ausdruck im `run:`-Block wird **vor** der
+        # Shell eingesetzt: Enthielte er ein `"` oder `$(…)`, wäre er Code.
+        # `github.actor` ist heute auf Buchstaben, Ziffern und Bindestrich
+        # beschränkt und `vars.API_URL` setzt nur, wer das Repository
+        # verwaltet — sicher also schon vorher. Die Regel soll aber nicht davon
+        # abhängen, dass jemand bei jedem neuen Feld nachprüft, wer es füllt.
+        env:
+          STATUS: ${{ job.status }}
+          STAND: ${{ github.sha }}
+          AUSLOESER: ${{ github.event_name }}
+          VON: ${{ github.actor }}
+          ZIEL: ${{ vars.API_URL }}
         run: |
           {
-            echo "## Auslieferung ${{ job.status }}"
+            echo "## Auslieferung ${STATUS}"
             echo ""
             echo "| Feld | Wert |"
             echo "|---|---|"
-            echo "| Stand | \`${{ github.sha }}\` |"
-            echo "| Auslöser | ${{ github.event_name }} |"
-            echo "| Von | ${{ github.actor }} |"
+            echo "| Stand | \`${STAND}\` |"
+            echo "| Auslöser | ${AUSLOESER} |"
+            echo "| Von | ${VON} |"
             # Hier bewusst **nur** `vars`, ohne Rückfall auf das Secret.
             #
             # Die Zusammenfassung ist eine Anzeigefläche, kein Arbeitsschritt:
@@ -700,5 +741,5 @@ jobs:
             # Ist die Variable nicht gesetzt, bleibt die Zelle leer. Das ist
             # richtig so: Sie sagt dann «nicht als Variable hinterlegt» und
             # behauptet nichts.
-            echo "| Ziel | ${{ vars.API_URL }} |"
+            echo "| Ziel | ${ZIEL} |"
           } >> "$GITHUB_STEP_SUMMARY"
