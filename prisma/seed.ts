@@ -140,17 +140,54 @@ async function main() {
   }
 
   const year = new Date().getFullYear();
-  const holidays = [
-    { name: 'Neujahr', date: `${year}-01-01` },
-    { name: 'Berchtoldstag', date: `${year}-01-02` },
-    { name: 'Karfreitag', date: `${year}-04-03` },
-    { name: 'Ostermontag', date: `${year}-04-06` },
-    { name: 'Tag der Arbeit', date: `${year}-05-01` },
-    { name: 'Auffahrt', date: `${year}-05-14` },
-    { name: 'Pfingstmontag', date: `${year}-05-25` },
-    { name: 'Bundesfeier', date: `${year}-08-01` },
-    { name: 'Weihnachten', date: `${year}-12-25` },
-    { name: 'Stephanstag', date: `${year}-12-26` },
+  /**
+   * Feste und bewegliche Feiertage — getrennt (2026-09-26).
+   *
+   * `recurring` heisst „jedes Jahr am selben Kalendertag". Das stimmt für
+   * Neujahr oder die Bundesfeier, nicht für Karfreitag, Ostermontag, Auffahrt
+   * und Pfingstmontag: Sie hängen an Ostern. Bis hierher standen auch sie als
+   * wiederkehrend im Seed; seit die Verfügbarkeit `recurring` beachtet, sperrte
+   * der Pfingstmontag 2026 (25. Mai) deshalb jeden 25. Mai — 2027 einen
+   * gewöhnlichen Dienstag. Die beweglichen werden jetzt je Jahr aus dem
+   * Osterdatum gerechnet, für dieses und das nächste Jahr, und sind nicht
+   * wiederkehrend. Die Migration `20260926120000_bewegliche_feiertage`
+   * korrigiert bestehende Datenbanken.
+   */
+  const ostern = (jahr: number): Date => {
+    // Gausssche Osterformel (gregorianisch, anonymer Algorithmus).
+    const a = jahr % 19;
+    const b = Math.floor(jahr / 100);
+    const c = jahr % 100;
+    const d = Math.floor(b / 4);
+    const e = b % 4;
+    const f = Math.floor((b + 8) / 25);
+    const g = Math.floor((b - f + 1) / 3);
+    const h = (19 * a + b - d - g + 15) % 30;
+    const i = Math.floor(c / 4);
+    const k = c % 4;
+    const l = (32 + 2 * e + 2 * i - h - k) % 7;
+    const m = Math.floor((a + 11 * h + 22 * l) / 451);
+    const monat = Math.floor((h + l - 7 * m + 114) / 31);
+    const tag = ((h + l - 7 * m + 114) % 31) + 1;
+    return new Date(Date.UTC(jahr, monat - 1, tag));
+  };
+  const plus = (d: Date, tage: number) => new Date(d.getTime() + tage * 86_400_000).toISOString().slice(0, 10);
+  const holidays: { name: string; date: string; recurring: boolean }[] = [
+    { name: 'Neujahr', date: `${year}-01-01`, recurring: true },
+    { name: 'Berchtoldstag', date: `${year}-01-02`, recurring: true },
+    { name: 'Tag der Arbeit', date: `${year}-05-01`, recurring: true },
+    { name: 'Bundesfeier', date: `${year}-08-01`, recurring: true },
+    { name: 'Weihnachten', date: `${year}-12-25`, recurring: true },
+    { name: 'Stephanstag', date: `${year}-12-26`, recurring: true },
+    ...[year, year + 1].flatMap((jahr) => {
+      const o = ostern(jahr);
+      return [
+        { name: 'Karfreitag', date: plus(o, -2), recurring: false },
+        { name: 'Ostermontag', date: plus(o, 1), recurring: false },
+        { name: 'Auffahrt', date: plus(o, 39), recurring: false },
+        { name: 'Pfingstmontag', date: plus(o, 50), recurring: false },
+      ];
+    }),
   ];
 
   for (const holiday of holidays) {
@@ -162,12 +199,14 @@ async function main() {
           name: holiday.name,
         },
       },
-      update: {},
+      // Auch bestehende Zeilen richtigstellen — ein beweglicher Feiertag, der
+      // als wiederkehrend gespeichert ist, sperrt jedes Jahr den falschen Tag.
+      update: { recurring: holiday.recurring },
       create: {
         organizationId: org.id,
         name: holiday.name,
         date: new Date(`${holiday.date}T00:00:00.000Z`),
-        recurring: true,
+        recurring: holiday.recurring,
         canton: 'BE',
       },
     });
