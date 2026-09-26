@@ -5,6 +5,8 @@ import type { SessionUser } from '@/lib/auth/session';
 import { prisma } from '@/lib/db';
 import { documentVisibilityWhere } from '@/server/services/document.service';
 import { propertyVisibilityWhere } from '@/server/services/property.service';
+import { scanAufloesen, type ScanTrefferArt } from '@/server/services/scan.service';
+import { scanEinordnen } from '@/lib/scan/kennung';
 
 /**
  * Globale Suche (Wave 17, 2026-09-23).
@@ -50,6 +52,16 @@ export interface Treffer {
 }
 
 const JE_BEREICH = 5;
+
+/** Arten des Scanners in den Gruppennamen der Suche. */
+const SCAN_ART: Record<ScanTrefferArt, string> = {
+  MATERIAL: 'Material',
+  GERAET: 'Gerät',
+  EINSATZ: 'Einsatz',
+  RECHNUNG: 'Rechnung',
+  KUNDSCHAFT: 'Kundschaft',
+  OBJEKT: 'Objekt',
+};
 
 export async function globaleSuche(params: { organizationId: string; session: SessionUser; q: string }): Promise<{ q: string; treffer: Treffer[] }> {
   const q = params.q.trim();
@@ -287,7 +299,7 @@ export async function globaleSuche(params: { organizationId: string; session: Se
     aufgaben.push(
       prisma.material
         .findMany({
-          where: { organizationId: org, OR: [{ sku: enthaelt }, { name: enthaelt }] },
+          where: { organizationId: org, OR: [{ sku: enthaelt }, { name: enthaelt }, { barcode: q }] },
           select: { id: true, sku: true, name: true },
           orderBy: { name: 'asc' },
           take: JE_BEREICH,
@@ -305,6 +317,19 @@ export async function globaleSuche(params: { organizationId: string; session: Se
           take: JE_BEREICH,
         })
         .then((r) => r.map((g) => ({ art: 'Gerät', id: g.id, titel: g.name, untertitel: g.inventoryNumber, link: `/admin/geraete` }))),
+    );
+  }
+
+  // Ein Etikettcode im Suchfeld (eingefügt oder vom Handscanner getippt)
+  // enthält keinen Namen, in dem `contains` etwas fände. Er geht deshalb
+  // durch denselben Auflöser wie der Scanner — mit dessen Rechte- und
+  // Sichtbarkeitsprüfung, nicht mit einer zweiten.
+  const eingabe = scanEinordnen(q);
+  if (eingabe.art === 'INTERN') {
+    aufgaben.unshift(
+      scanAufloesen({ organizationId: org, session: params.session, text: q }).then((r) =>
+        r.treffer.filter((t) => t.link).map((t) => ({ art: SCAN_ART[t.art], id: t.id, titel: t.titel, untertitel: t.untertitel, link: t.link! })),
+      ),
     );
   }
 

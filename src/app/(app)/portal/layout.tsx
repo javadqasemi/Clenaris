@@ -3,7 +3,7 @@ import { redirect } from 'next/navigation';
 import { prisma } from '@/lib/db';
 import { serverEnv } from '@/lib/env';
 import { getSession } from '@/lib/auth/session';
-import { guardForPath, homeRouteFor } from '@/lib/auth/rbac';
+import { can, guardForPath, homeRouteFor } from '@/lib/auth/rbac';
 import { AppShell, type NavGroup } from '@/components/app/app-shell';
 
 /**
@@ -76,6 +76,9 @@ export default async function PortalLayout({ children }: { children: React.React
       navigation={navigation}
       areaLabel="Mitarbeitendenportal"
       areaHref="/portal"
+      // Im Portal löst der Scanner nur eigene Einsätze und deren Objekte auf
+      // (`scan.service.ts`), mit Links ins Portal.
+      scan={can(session.role, 'dashboard:view')}
       sessionIdleSeconds={serverEnv().SESSION_IDLE_TTL}
       user={{
         id: session.id,

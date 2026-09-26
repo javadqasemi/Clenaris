@@ -82,6 +82,7 @@ import {
   SheetTrigger,
 } from '@/components/ui/overlays';
 import { GlobalSearch } from '@/components/app/global-search';
+import { ScanButton } from '@/components/app/scan-button';
 import { NotificationPanel } from '@/components/app/notification-panel';
 import { NavigationProgress } from '@/components/app/navigation-progress';
 import { ThemeSync } from '@/features/account/appearance-form';
@@ -201,6 +202,7 @@ export function AppShell({
   areaLabel,
   areaHref,
   search = false,
+  scan = false,
   sessionIdleSeconds = 900,
   children,
 }: {
@@ -215,6 +217,12 @@ export function AppShell({
    * auf eine verschlossene Tür.
    */
   search?: boolean;
+  /**
+   * Scanner in der Kopfzeile. Administration und Portal setzen ihn — der
+   * Endpunkt verlangt `dashboard:view`, den die Kundschaft nicht hat, und
+   * löst je Bereich nur auf, was die Rolle dort öffnen kann.
+   */
+  scan?: boolean;
   /** Sekunden ohne Aktivität bis zur Abmeldung — aus `SESSION_IDLE_TTL`. */
   sessionIdleSeconds?: number;
   children: React.ReactNode;
@@ -452,6 +460,12 @@ export function AppShell({
           ) : null}
 
           <div className="flex items-center gap-1.5">
+            {/*
+              Scanner vor allem anderen rechts — auf dem Telefon ist er der
+              Grund, die App im Lager oder vor einem Gerät zu öffnen. `scan`
+              kommt wie `search` aus den Server-Eigenschaften.
+            */}
+            {scan ? <ScanButton /> : null}
             {/*
               Früher ab `sm` ausgeblendet, weil das Dreiersegment auf einem
               Telefon die Zeile sprengte. Als Symbolknopf passt es überall —

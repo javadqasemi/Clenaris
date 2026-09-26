@@ -80,10 +80,15 @@ export default async function MaterialPage({ searchParams }: { searchParams: Pro
                 </thead>
                 <tbody>
                   {materialien.map((m) => (
-                    <tr key={m.id}>
+                    // Der Anker ist das Ziel eines Scans (`scan.service.ts`) —
+                    // Material hat keine eigene Detailseite.
+                    <tr key={m.id} id={`material-${m.id}`} className="scroll-mt-24 target:bg-primary/10">
                       <td className="font-medium">
                         {m.name}
-                        <span className="block text-xs text-muted-foreground">{m.sku}</span>
+                        <span className="block text-xs text-muted-foreground">
+                          {m.sku}
+                          {m.barcode ? ` · ${m.barcode}` : ''}
+                        </span>
                       </td>
                       <td className="num">
                         {m.bestand.toLocaleString('de-CH')} {m.unit}{' '}
@@ -106,6 +111,11 @@ export default async function MaterialPage({ searchParams }: { searchParams: Pro
                             fields={movementFields()}
                             values={{ kind: 'RECEIPT' }}
                           />
+                        ) : null}
+                        {darf ? (
+                          <Button asChild variant="ghost" size="sm">
+                            <Link href={`/admin/etikett/MATERIAL/${m.id}`}>Etikett</Link>
+                          </Button>
                         ) : null}
                       </td>
                     </tr>

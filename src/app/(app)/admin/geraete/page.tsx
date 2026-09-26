@@ -87,7 +87,8 @@ export default async function EquipmentPage({ searchParams }: { searchParams: Pr
                 </thead>
                 <tbody>
                   {geraete.map((g) => (
-                    <tr key={g.id}>
+                    // Ziel eines Scans (`scan.service.ts`) — Geräte haben keine eigene Detailseite.
+                    <tr key={g.id} id={`geraet-${g.id}`} className="scroll-mt-24 target:bg-primary/10">
                       <td className="font-medium">
                         {g.name}
                         <span className="block text-xs text-muted-foreground">
@@ -134,6 +135,9 @@ export default async function EquipmentPage({ searchParams }: { searchParams: Pr
                               variant="ghost"
                               size="sm"
                             />
+                            <Button asChild variant="ghost" size="sm">
+                              <Link href={`/admin/etikett/EQUIPMENT/${g.id}`}>Etikett</Link>
+                            </Button>
                           </>
                         ) : null}
                       </td>
