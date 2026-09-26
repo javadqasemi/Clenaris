@@ -8,6 +8,7 @@ import { SignJWT } from 'jose';
 
 import { data, del, get, patch, post, put } from '../helpers/client';
 import { loginAll, type AccountName } from '../helpers/accounts';
+import { zuercherHeute } from '../helpers/datum';
 import { testDb, testDbGrund, testDbSchliessen } from '../helpers/testdb';
 
 /**
@@ -48,7 +49,8 @@ let leistungId = '';
 const angelegt: string[] = [];
 
 const TAG = 86_400_000;
-const heute = new Date();
+// Der Zürcher Kalendertag, wie ihn die Dienste nehmen (`tests/helpers/datum.ts`).
+const heute = zuercherHeute();
 const tagIn = (n: number) =>
   new Date(Date.UTC(heute.getUTCFullYear(), heute.getUTCMonth(), heute.getUTCDate() + n)).toISOString().slice(0, 10);
 const alsDatum = (tag: string) => new Date(`${tag}T00:00:00Z`);

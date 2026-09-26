@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 
 import { data, del, get, patch, post, put, requireServer } from '../helpers/client';
 import { loginAll, type AccountName } from '../helpers/accounts';
+import { zuercherHeute } from '../helpers/datum';
 
 /**
  * Wave 10 — Verträge.
@@ -42,7 +43,8 @@ let leistungId: string;
 /** Alles, was dieser Lauf angelegt hat — wird am Ende verworfen. */
 const angelegteVertraege: string[] = [];
 
-const heute = new Date();
+// Der Zürcher Kalendertag, wie ihn die Dienste nehmen (`tests/helpers/datum.ts`).
+const heute = zuercherHeute();
 const tagIn = (tage: number) => {
   const d = new Date(Date.UTC(heute.getUTCFullYear(), heute.getUTCMonth(), heute.getUTCDate() + tage));
   return d.toISOString().slice(0, 10);
