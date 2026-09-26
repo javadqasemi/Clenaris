@@ -1082,6 +1082,55 @@ paths:
             schema:
               type: 'object'
               properties:
+                leistungen:
+                  type: 'array'
+                  items:
+                    type: 'object'
+                    properties:
+                      serviceId:
+                        type: 'string'
+                        minLength: 1
+                      squareMeters:
+                        type: 'integer'
+                        minimum: 5
+                        maximum: 5000
+                      rooms:
+                        type: 'number'
+                        minimum: 0.5
+                        maximum: 40
+                      bathrooms:
+                        type: 'integer'
+                        minimum: 0
+                        maximum: 20
+                      windows:
+                        type: 'integer'
+                        minimum: 0
+                        maximum: 500
+                      manualHours:
+                        type: 'number'
+                        minimum: 0.5
+                        maximum: 80
+                      extras:
+                        type: 'array'
+                        items:
+                          type: 'object'
+                          properties:
+                            extraId:
+                              type: 'string'
+                              minLength: 1
+                            quantity:
+                              type: 'integer'
+                              minimum: 1
+                              maximum: 50
+                              default: 1
+                          required:
+                            - 'extraId'
+                        maxItems: 20
+                        default: []
+                    required:
+                      - 'serviceId'
+                  minItems: 1
+                  maxItems: 5
                 squareMeters:
                   type: 'integer'
                   minimum: 5
@@ -1241,9 +1290,9 @@ paths:
     get:
       tags:
         - 'Öffentlich'
-      summary: 'Freie Zeitfenster eines Tages'
+      summary: 'Freie Zeitfenster eines Tages (eine Leistung)'
       description: |-
-          Berücksichtigt Öffnungszeiten, Feiertage, bestehende Einsätze, Abwesenheiten und die benötigte Teamgrösse. Ein Fenster erscheint nur, wenn genügend Personal frei ist.
+          Berücksichtigt Einsatzzeiten (sonst Öffnungszeiten), Feiertage, bestehende Einsätze und unbestätigte Buchungen, Arbeitszeiten und Abwesenheiten sowie die benötigte Teamgrösse. Ohne `durationMin` rechnet der Server die Dauer mit derselben Funktion wie den Preis. Ein Fenster erscheint nur, wenn der ganze Einsatz ins Einsatzfenster passt.
 
           **Zugriff:** Öffentlich — keine Anmeldung nötig.
 
@@ -1293,6 +1342,119 @@ paths:
                 '$ref': '#/components/schemas/SuccessEnvelope'
         '400':
           description: 'VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: 'RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+    post:
+      tags:
+        - 'Öffentlich'
+      summary: 'Kalender für eine Auswahl aus einer oder mehreren Leistungen'
+      description: |-
+          Nimmt die gewählten Leistungen samt Angaben, nicht eine Dauer: Dauer (Summe, nacheinander vom selben Team), Teamgrösse und Puffer rechnet der Server. Liefert je Tag, ob er ein buchbares Zeitfenster hat, und die Zeitfenster. Vorlauf und Horizont aus den Einstellungen (`bookingMinNoticeHours`, `bookingLeadDays`).
+
+          **Zugriff:** Öffentlich — keine Anmeldung nötig.
+
+          **Rate-Limit-Klasse:** `apiRead`
+      operationId: 'postPublicAvailability'
+      security: []
+      requestBody:
+        required: true
+        content:
+          'application/json':
+            schema:
+              type: 'object'
+              properties:
+                leistungen:
+                  type: 'array'
+                  items:
+                    type: 'object'
+                    properties:
+                      serviceId:
+                        type: 'string'
+                        minLength: 1
+                      squareMeters:
+                        type: 'integer'
+                        minimum: 5
+                        maximum: 5000
+                      rooms:
+                        type: 'number'
+                        minimum: 0.5
+                        maximum: 40
+                      bathrooms:
+                        type: 'integer'
+                        minimum: 0
+                        maximum: 20
+                      windows:
+                        type: 'integer'
+                        minimum: 0
+                        maximum: 500
+                      manualHours:
+                        type: 'number'
+                        minimum: 0.5
+                        maximum: 80
+                      extras:
+                        type: 'array'
+                        items:
+                          type: 'object'
+                          properties:
+                            extraId:
+                              type: 'string'
+                              minLength: 1
+                            quantity:
+                              type: 'integer'
+                              minimum: 1
+                              maximum: 50
+                              default: 1
+                          required:
+                            - 'extraId'
+                        maxItems: 20
+                        default: []
+                    required:
+                      - 'serviceId'
+                  minItems: 1
+                  maxItems: 5
+                hasPets:
+                  type: 'boolean'
+                  default: false
+                von:
+                  type: 'string'
+                  pattern: '^\d{4}-\d{2}-\d{2}$'
+                tage:
+                  type: 'integer'
+                  minimum: 1
+                  maximum: 42
+                  default: 21
+              required:
+                - 'leistungen'
+                - 'von'
+      responses:
+        '200':
+          description: 'Erfolg'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/SuccessEnvelope'
+        '400':
+          description: 'VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: 'BUSINESS_RULE — fachlich nicht zulässig, etwa eine bereits ausgestellte Rechnung ändern.'
           content:
             'application/json':
               schema:
@@ -1377,6 +1539,55 @@ paths:
                 serviceId:
                   type: 'string'
                   minLength: 1
+                leistungen:
+                  type: 'array'
+                  items:
+                    type: 'object'
+                    properties:
+                      serviceId:
+                        type: 'string'
+                        minLength: 1
+                      squareMeters:
+                        type: 'integer'
+                        minimum: 5
+                        maximum: 5000
+                      rooms:
+                        type: 'number'
+                        minimum: 0.5
+                        maximum: 40
+                      bathrooms:
+                        type: 'integer'
+                        minimum: 0
+                        maximum: 20
+                      windows:
+                        type: 'integer'
+                        minimum: 0
+                        maximum: 500
+                      manualHours:
+                        type: 'number'
+                        minimum: 0.5
+                        maximum: 80
+                      extras:
+                        type: 'array'
+                        items:
+                          type: 'object'
+                          properties:
+                            extraId:
+                              type: 'string'
+                              minLength: 1
+                            quantity:
+                              type: 'integer'
+                              minimum: 1
+                              maximum: 50
+                              default: 1
+                          required:
+                            - 'extraId'
+                        maxItems: 20
+                        default: []
+                    required:
+                      - 'serviceId'
+                  minItems: 1
+                  maxItems: 5
                 extras:
                   type: 'array'
                   items:
@@ -1574,7 +1785,6 @@ paths:
                       maxLength: 0
                     - const: ''
               required:
-                - 'serviceId'
                 - 'scheduledStart'
                 - 'acceptTerms'
                 - 'website'
@@ -25808,6 +26018,55 @@ paths:
                 serviceId:
                   type: 'string'
                   minLength: 1
+                leistungen:
+                  type: 'array'
+                  items:
+                    type: 'object'
+                    properties:
+                      serviceId:
+                        type: 'string'
+                        minLength: 1
+                      squareMeters:
+                        type: 'integer'
+                        minimum: 5
+                        maximum: 5000
+                      rooms:
+                        type: 'number'
+                        minimum: 0.5
+                        maximum: 40
+                      bathrooms:
+                        type: 'integer'
+                        minimum: 0
+                        maximum: 20
+                      windows:
+                        type: 'integer'
+                        minimum: 0
+                        maximum: 500
+                      manualHours:
+                        type: 'number'
+                        minimum: 0.5
+                        maximum: 80
+                      extras:
+                        type: 'array'
+                        items:
+                          type: 'object'
+                          properties:
+                            extraId:
+                              type: 'string'
+                              minLength: 1
+                            quantity:
+                              type: 'integer'
+                              minimum: 1
+                              maximum: 50
+                              default: 1
+                          required:
+                            - 'extraId'
+                        maxItems: 20
+                        default: []
+                    required:
+                      - 'serviceId'
+                  minItems: 1
+                  maxItems: 5
                 extras:
                   type: 'array'
                   items:
@@ -26018,7 +26277,6 @@ paths:
                   type: 'boolean'
                   default: false
               required:
-                - 'serviceId'
                 - 'scheduledStart'
                 - 'customerId'
       responses:
@@ -45876,6 +46134,441 @@ paths:
                 '$ref': '#/components/schemas/ErrorEnvelope'
         '403':
           description: 'FORBIDDEN — angemeldet, aber ohne die nötige Berechtigung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: 'RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+  '/api/system/releases':
+    get:
+      tags:
+        - 'System'
+      summary: 'Bekannte Clenaris-Versionen'
+      description: |-
+          Laufende Version und je bekannte Version ihr Zustand für diesen Betrieb: verfügbar, freigegeben, terminiert, installiert oder älter. Nur die Systemverantwortung.
+
+          **Zugriff:** Erfordert die Berechtigung: `release:read`.
+
+          **Rate-Limit-Klasse:** `apiRead`
+      operationId: 'getSystemReleases'
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: 'Erfolg'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/SuccessEnvelope'
+        '401':
+          description: 'UNAUTHORIZED — keine oder abgelaufene Sitzung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 'FORBIDDEN — angemeldet, aber ohne die nötige Berechtigung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: 'RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+  '/api/system/releases/{id}':
+    get:
+      tags:
+        - 'System'
+      summary: 'Eine Version mit Änderungsprotokoll'
+      description: |-
+          Änderungsprotokoll in Administrationssprache und der Verlauf der Entscheidungen dazu.
+
+          **Zugriff:** Erfordert die Berechtigung: `release:read`.
+
+          **Rate-Limit-Klasse:** `apiRead`
+      operationId: 'getSystemReleasesById'
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: 'id'
+          in: 'path'
+          required: true
+          schema:
+            type: 'string'
+            minLength: 1
+      responses:
+        '200':
+          description: 'Erfolg'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/SuccessEnvelope'
+        '400':
+          description: 'VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 'UNAUTHORIZED — keine oder abgelaufene Sitzung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 'FORBIDDEN — angemeldet, aber ohne die nötige Berechtigung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: 'NOT_FOUND — nicht vorhanden, oder für diese Sitzung nicht sichtbar.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: 'RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+  '/api/system/releases/{id}/freigabe':
+    post:
+      tags:
+        - 'System'
+      summary: 'Version freigeben'
+      description: |-
+          Legt einen Aktualisierungsauftrag (APPROVED) an und schreibt ihn im selben Commit ins Prüfprotokoll. Führt nichts aus. 422, wenn die Version installiert, älter oder bereits freigegeben ist; 409, wenn gleichzeitig entschieden wurde.
+
+          **Zugriff:** Erfordert die Berechtigung: `release:manage`.
+
+          **Rate-Limit-Klasse:** `apiWrite`
+      operationId: 'postSystemReleasesByIdFreigabe'
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: 'id'
+          in: 'path'
+          required: true
+          schema:
+            type: 'string'
+            minLength: 1
+      responses:
+        '200':
+          description: 'Erfolg'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/SuccessEnvelope'
+        '400':
+          description: 'VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 'UNAUTHORIZED — keine oder abgelaufene Sitzung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 'FORBIDDEN — angemeldet, aber ohne die nötige Berechtigung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: 'NOT_FOUND — nicht vorhanden, oder für diese Sitzung nicht sichtbar.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '409':
+          description: 'CONFLICT — verstösst gegen eine Eindeutigkeitsregel.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: 'BUSINESS_RULE — fachlich nicht zulässig, etwa eine bereits ausgestellte Rechnung ändern.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: 'RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+  '/api/system/releases/{id}/termin':
+    put:
+      tags:
+        - 'System'
+      summary: 'Aktualisierung terminieren oder verschieben'
+      description: |-
+          Aus „verfügbar" schliesst das die Freigabe ein. Termin frühestens in 15 Minuten, spätestens in 90 Tagen. Alter und neuer Termin stehen im Prüfprotokoll.
+
+          **Zugriff:** Erfordert die Berechtigung: `release:manage`.
+
+          **Rate-Limit-Klasse:** `apiWrite`
+      operationId: 'putSystemReleasesByIdTermin'
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: 'id'
+          in: 'path'
+          required: true
+          schema:
+            type: 'string'
+            minLength: 1
+      requestBody:
+        required: true
+        content:
+          'application/json':
+            schema:
+              type: 'object'
+              properties:
+                scheduledFor:
+                  type: 'string'
+                  format: 'date-time'
+              required:
+                - 'scheduledFor'
+      responses:
+        '200':
+          description: 'Erfolg'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/SuccessEnvelope'
+        '400':
+          description: 'VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 'UNAUTHORIZED — keine oder abgelaufene Sitzung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 'FORBIDDEN — angemeldet, aber ohne die nötige Berechtigung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: 'NOT_FOUND — nicht vorhanden, oder für diese Sitzung nicht sichtbar.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '409':
+          description: 'CONFLICT — verstösst gegen eine Eindeutigkeitsregel.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: 'BUSINESS_RULE — fachlich nicht zulässig, etwa eine bereits ausgestellte Rechnung ändern.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: 'RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+  '/api/system/releases/{id}/termin/stornieren':
+    post:
+      tags:
+        - 'System'
+      summary: 'Termin stornieren'
+      description: |-
+          Nur aus „terminiert". Der Auftrag wird CANCELLED und bleibt als Nachweis; die Version ist danach wieder verfügbar.
+
+          **Zugriff:** Erfordert die Berechtigung: `release:manage`.
+
+          **Rate-Limit-Klasse:** `apiWrite`
+      operationId: 'postSystemReleasesByIdTerminStornieren'
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: 'id'
+          in: 'path'
+          required: true
+          schema:
+            type: 'string'
+            minLength: 1
+      requestBody:
+        required: true
+        content:
+          'application/json':
+            schema:
+              type: 'object'
+              properties:
+                grund:
+                  type: 'string'
+                  maxLength: 500
+      responses:
+        '200':
+          description: 'Erfolg'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/SuccessEnvelope'
+        '400':
+          description: 'VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 'UNAUTHORIZED — keine oder abgelaufene Sitzung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 'FORBIDDEN — angemeldet, aber ohne die nötige Berechtigung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: 'NOT_FOUND — nicht vorhanden, oder für diese Sitzung nicht sichtbar.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: 'BUSINESS_RULE — fachlich nicht zulässig, etwa eine bereits ausgestellte Rechnung ändern.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: 'RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+  '/api/system/releases/{id}/zurueckstellen':
+    post:
+      tags:
+        - 'System'
+      summary: 'Version zurückstellen („Nicht jetzt")'
+      description: |-
+          Blendet eine verfügbare Version für einige Tage aus. Keine Freigabe, kein Auftrag.
+
+          **Zugriff:** Erfordert die Berechtigung: `release:manage`.
+
+          **Rate-Limit-Klasse:** `apiWrite`
+      operationId: 'postSystemReleasesByIdZurueckstellen'
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: 'id'
+          in: 'path'
+          required: true
+          schema:
+            type: 'string'
+            minLength: 1
+      requestBody:
+        required: true
+        content:
+          'application/json':
+            schema:
+              type: 'object'
+              properties:
+                tage:
+                  type: 'integer'
+                  minimum: 1
+                  maximum: 90
+                  default: 7
+      responses:
+        '200':
+          description: 'Erfolg'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/SuccessEnvelope'
+        '400':
+          description: 'VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 'UNAUTHORIZED — keine oder abgelaufene Sitzung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 'FORBIDDEN — angemeldet, aber ohne die nötige Berechtigung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: 'NOT_FOUND — nicht vorhanden, oder für diese Sitzung nicht sichtbar.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: 'BUSINESS_RULE — fachlich nicht zulässig, etwa eine bereits ausgestellte Rechnung ändern.'
           content:
             'application/json':
               schema:

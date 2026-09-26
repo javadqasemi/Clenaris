@@ -5,7 +5,7 @@
 > Quelle, aus der sowohl diese Referenz als auch die Laufzeitvalidierung
 > stammen.
 
-Stand: 523 Endpunkte. Die maschinenlesbare Fassung liegt in
+Stand: 530 Endpunkte. Die maschinenlesbare Fassung liegt in
 [`openapi.yaml`](./openapi.yaml) bzw. [`openapi.json`](./openapi.json).
 
 ## Grundlagen
@@ -318,6 +318,14 @@ Familie.
 
 | Feld | Typ | Pflicht | Regeln |
 | --- | --- | --- | --- |
+| `leistungen` | object[] | – | min. 1 Einträge, max. 5 Einträge |
+| `leistungen[].serviceId` | string | ja | min. 1 Zeichen |
+| `leistungen[].squareMeters` | integer | – | ≥ 5, ≤ 5000 |
+| `leistungen[].rooms` | number | – | ≥ 0.5, ≤ 40 |
+| `leistungen[].bathrooms` | integer | – | ≥ 0, ≤ 20 |
+| `leistungen[].windows` | integer | – | ≥ 0, ≤ 500 |
+| `leistungen[].manualHours` | number | – | ≥ 0.5, ≤ 80 |
+| `leistungen[].extras` | object[] | – | max. 20 Einträge, Standard `[]` |
 | `squareMeters` | integer | – | ≥ 5, ≤ 5000 |
 | `rooms` | number | – | ≥ 0.5, ≤ 40 |
 | `bathrooms` | integer | – | ≥ 0, ≤ 20 |
@@ -347,7 +355,7 @@ Familie.
 
 ### `GET /api/public/availability`
 
-**Freie Zeitfenster eines Tages.** Berücksichtigt Öffnungszeiten, Feiertage, bestehende Einsätze, Abwesenheiten und die benötigte Teamgrösse. Ein Fenster erscheint nur, wenn genügend Personal frei ist.
+**Freie Zeitfenster eines Tages (eine Leistung).** Berücksichtigt Einsatzzeiten (sonst Öffnungszeiten), Feiertage, bestehende Einsätze und unbestätigte Buchungen, Arbeitszeiten und Abwesenheiten sowie die benötigte Teamgrösse. Ohne `durationMin` rechnet der Server die Dauer mit derselben Funktion wie den Preis. Ein Fenster erscheint nur, wenn der ganze Einsatz ins Einsatzfenster passt.
 
 - **Zugriff:** Öffentlich — keine Anmeldung nötig.
 - **Rate-Limit-Klasse:** `apiRead`
@@ -363,6 +371,31 @@ Familie.
 | `durationMin` | integer | – | ≥ 30, ≤ 1440 |
 | `crewSize` | integer | – | ≥ 1, ≤ 20 |
 | `squareMeters` | integer | – | ≥ 5, ≤ 5000 |
+
+### `POST /api/public/availability`
+
+**Kalender für eine Auswahl aus einer oder mehreren Leistungen.** Nimmt die gewählten Leistungen samt Angaben, nicht eine Dauer: Dauer (Summe, nacheinander vom selben Team), Teamgrösse und Puffer rechnet der Server. Liefert je Tag, ob er ein buchbares Zeitfenster hat, und die Zeitfenster. Vorlauf und Horizont aus den Einstellungen (`bookingMinNoticeHours`, `bookingLeadDays`).
+
+- **Zugriff:** Öffentlich — keine Anmeldung nötig.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 422, 429, 500
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `leistungen` | object[] | ja | min. 1 Einträge, max. 5 Einträge |
+| `leistungen[].serviceId` | string | ja | min. 1 Zeichen |
+| `leistungen[].squareMeters` | integer | – | ≥ 5, ≤ 5000 |
+| `leistungen[].rooms` | number | – | ≥ 0.5, ≤ 40 |
+| `leistungen[].bathrooms` | integer | – | ≥ 0, ≤ 20 |
+| `leistungen[].windows` | integer | – | ≥ 0, ≤ 500 |
+| `leistungen[].manualHours` | number | – | ≥ 0.5, ≤ 80 |
+| `leistungen[].extras` | object[] | – | max. 20 Einträge, Standard `[]` |
+| `hasPets` | boolean | – | Standard `false` |
+| `von` | string | ja | – |
+| `tage` | integer | – | ≥ 1, ≤ 42, Standard `21` |
 
 ### `GET /api/public/service-areas/check`
 
@@ -392,7 +425,15 @@ Familie.
 
 | Feld | Typ | Pflicht | Regeln |
 | --- | --- | --- | --- |
-| `serviceId` | string | ja | min. 1 Zeichen |
+| `serviceId` | string | – | min. 1 Zeichen |
+| `leistungen` | object[] | – | min. 1 Einträge, max. 5 Einträge |
+| `leistungen[].serviceId` | string | ja | min. 1 Zeichen |
+| `leistungen[].squareMeters` | integer | – | ≥ 5, ≤ 5000 |
+| `leistungen[].rooms` | number | – | ≥ 0.5, ≤ 40 |
+| `leistungen[].bathrooms` | integer | – | ≥ 0, ≤ 20 |
+| `leistungen[].windows` | integer | – | ≥ 0, ≤ 500 |
+| `leistungen[].manualHours` | number | – | ≥ 0.5, ≤ 80 |
+| `leistungen[].extras` | object[] | – | max. 20 Einträge, Standard `[]` |
 | `extras` | object[] | – | max. 20 Einträge, Standard `[]` |
 | `extras[].extraId` | string | ja | min. 1 Zeichen |
 | `extras[].quantity` | integer | – | ≥ 1, ≤ 50, Standard `1` |
@@ -1881,7 +1922,15 @@ Familie.
 
 | Feld | Typ | Pflicht | Regeln |
 | --- | --- | --- | --- |
-| `serviceId` | string | ja | min. 1 Zeichen |
+| `serviceId` | string | – | min. 1 Zeichen |
+| `leistungen` | object[] | – | min. 1 Einträge, max. 5 Einträge |
+| `leistungen[].serviceId` | string | ja | min. 1 Zeichen |
+| `leistungen[].squareMeters` | integer | – | ≥ 5, ≤ 5000 |
+| `leistungen[].rooms` | number | – | ≥ 0.5, ≤ 40 |
+| `leistungen[].bathrooms` | integer | – | ≥ 0, ≤ 20 |
+| `leistungen[].windows` | integer | – | ≥ 0, ≤ 500 |
+| `leistungen[].manualHours` | number | – | ≥ 0.5, ≤ 80 |
+| `leistungen[].extras` | object[] | – | max. 20 Einträge, Standard `[]` |
 | `extras` | object[] | – | max. 20 Einträge, Standard `[]` |
 | `extras[].extraId` | string | ja | min. 1 Zeichen |
 | `extras[].quantity` | integer | – | ≥ 1, ≤ 50, Standard `1` |
@@ -6567,6 +6616,108 @@ Familie.
 | Feld | Typ | Pflicht | Regeln |
 | --- | --- | --- | --- |
 | `q` | string | ja | min. 2 Zeichen, max. 80 Zeichen |
+
+### `GET /api/system/releases`
+
+**Bekannte Clenaris-Versionen.** Laufende Version und je bekannte Version ihr Zustand für diesen Betrieb: verfügbar, freigegeben, terminiert, installiert oder älter. Nur die Systemverantwortung.
+
+- **Zugriff:** Erfordert die Berechtigung: `release:read`.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 401, 403, 429, 500
+
+### `GET /api/system/releases/{id}`
+
+**Eine Version mit Änderungsprotokoll.** Änderungsprotokoll in Administrationssprache und der Verlauf der Entscheidungen dazu.
+
+- **Zugriff:** Erfordert die Berechtigung: `release:read`.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+### `POST /api/system/releases/{id}/freigabe`
+
+**Version freigeben.** Legt einen Aktualisierungsauftrag (APPROVED) an und schreibt ihn im selben Commit ins Prüfprotokoll. Führt nichts aus. 422, wenn die Version installiert, älter oder bereits freigegeben ist; 409, wenn gleichzeitig entschieden wurde.
+
+- **Zugriff:** Erfordert die Berechtigung: `release:manage`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 409, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+### `PUT /api/system/releases/{id}/termin`
+
+**Aktualisierung terminieren oder verschieben.** Aus „verfügbar" schliesst das die Freigabe ein. Termin frühestens in 15 Minuten, spätestens in 90 Tagen. Alter und neuer Termin stehen im Prüfprotokoll.
+
+- **Zugriff:** Erfordert die Berechtigung: `release:manage`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 409, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `scheduledFor` | string | ja | date-time |
+
+### `POST /api/system/releases/{id}/termin/stornieren`
+
+**Termin stornieren.** Nur aus „terminiert". Der Auftrag wird CANCELLED und bleibt als Nachweis; die Version ist danach wieder verfügbar.
+
+- **Zugriff:** Erfordert die Berechtigung: `release:manage`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `grund` | string | – | max. 500 Zeichen |
+
+### `POST /api/system/releases/{id}/zurueckstellen`
+
+**Version zurückstellen („Nicht jetzt").** Blendet eine verfügbare Version für einige Tage aus. Keine Freigabe, kein Auftrag.
+
+- **Zugriff:** Erfordert die Berechtigung: `release:manage`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `tage` | integer | – | ≥ 1, ≤ 90, Standard `7` |
 
 ## Betrieb
 

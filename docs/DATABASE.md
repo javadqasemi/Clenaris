@@ -4,7 +4,7 @@
 > Diagramme sind damit nie älter als das Schema. Prosa und Bereichseinteilung
 > stehen in `scripts/generate-erd.ts`.
 
-**143 Modelle, 111 Aufzählungstypen, 2781 Felder.**
+**146 Modelle, 115 Aufzählungstypen, 2836 Felder.**
 PostgreSQL 16+; alle Zeitstempel als `timestamptz` in UTC, Anzeige in Europe/Zurich.
 
 ## Vier Entscheidungen, die das ganze Schema prägen
@@ -48,6 +48,7 @@ flowchart LR
   marketing["Marketing und Inhalte<br/><small>13 Modelle</small>"]
   redaktion["Redaktion<br/><small>6 Modelle</small>"]
   fuehrung["Unternehmensführung<br/><small>26 Modelle</small>"]
+  versionen["Versionsverwaltung<br/><small>3 Modelle</small>"]
   stammdaten --> identitaet
   identitaet --> crm
   crm --> auftrag
@@ -89,6 +90,8 @@ erDiagram
     String opensAt
     String closesAt
     Boolean closed
+    String serviceOpensAt
+    String serviceClosesAt
   }
   Holiday {
     String id PK
@@ -125,9 +128,9 @@ erDiagram
 
 | Modell | Tabelle | Felder | Zweck |
 | --- | --- | --- | --- |
-| `Organization` | `organizations` | 125 | Mandant — Firmendaten, Bankverbindung, Erscheinungsbild. Wurzel fast aller Beziehungen. |
+| `Organization` | `organizations` | 127 | Mandant — Firmendaten, Bankverbindung, Erscheinungsbild. Wurzel fast aller Beziehungen. |
 | `NumberSequence` | `number_sequences` | 6 | Fortlaufende, lückenlose Belegnummern (Schweizer Buchhaltungsanforderung). |
-| `OpeningHours` | `opening_hours` | 7 | Öffnungszeiten je Wochentag; Grundlage der buchbaren Zeitfenster. |
+| `OpeningHours` | `opening_hours` | 10 | Öffnungszeiten je Wochentag und die Einsatzzeiten, falls sie davon abweichen. |
 | `Holiday` | `holidays` | 7 | Feiertage und Betriebsferien. Sperren Termine und zählen nicht als Abwesenheitstage. |
 | `ServiceArea` | `service_areas` | 11 | Postleitzahlen im Einsatzgebiet, je mit Anfahrtspauschale und Fahrzeit. |
 | `TaxRate` | `tax_rates` | 7 | Mehrwertsteuersätze. Seit 2024 gilt in der Schweiz 8.1 % als Normalsatz. |
@@ -728,7 +731,7 @@ erDiagram
 | Modell | Tabelle | Felder | Zweck |
 | --- | --- | --- | --- |
 | `Booking` | `bookings` | 61 | Vereinbarung mit der Kundschaft: Termin, Objekt, Leistungen und Preis als Momentaufnahme. |
-| `BookingItem` | `booking_items` | 14 | Leistungsposition einer Buchung, mit Preis zum Buchungszeitpunkt. |
+| `BookingItem` | `booking_items` | 15 | Leistungsposition einer Buchung, mit Preis zum Buchungszeitpunkt. |
 | `BookingExtra` | `booking_extras` | 10 | Gebuchte Zusatzleistung mit Menge und Preis. |
 | `Quote` | `quotes` | 50 | Offerte mit Positionen, Gültigkeit, Magic-Link-Token und elektronischer Signatur. |
 | `QuoteItem` | `quote_items` | 15 | Offertposition; optionale Positionen zählen nicht ins Total. |
@@ -1839,6 +1842,50 @@ erDiagram
 | `ReportSchedule` | `report_schedules` | 15 | Zeitplan eines wiederkehrenden Berichts. |
 | `ReportRun` | `report_runs` | 16 | Ein erzeugter Bericht. |
 
+## Versionsverwaltung
+
+`Release` beschreibt eine Clenaris-Version — Änderungsprotokoll, Migrationen, Ausfallzeit, Prüfstufe —, produktweit und nach dem Eintragen unveränderlich; eingetragen wird sie nur über `scripts/release-registrieren.ts`, nie über einen Endpunkt. `ReleaseRequest` ist die Entscheidung eines Betriebs darüber (freigegeben, terminiert, storniert), höchstens ein offener Auftrag je Version per partiellem Index. `ReleaseDeferral` hält das „Nicht jetzt" fest. Ausgeführt wird von der Anwendung aus nichts: Den Auftrag liest ein externer, vertrauenswürdiger Ausführer, der heute noch nicht existiert.
+
+```mermaid
+erDiagram
+  Release {
+    String id PK
+    String version UK
+    DateTime releasedAt
+    ReleaseKind kind
+    ReleaseSeverity securitySeverity
+    String summary
+    String_list features
+    String_list fixes
+  }
+  ReleaseRequest {
+    String id PK
+    String organizationId
+    String releaseId
+    ReleaseRequestStatus status
+    String fromVersion
+    String toVersion
+    DateTime scheduledFor
+    String approvedById
+  }
+  ReleaseDeferral {
+    String id PK
+    String organizationId
+    String releaseId
+    String deferredById
+    DateTime deferredUntil
+    DateTime createdAt
+  }
+  Release ||--o{ ReleaseRequest : "release"
+  Release ||--o{ ReleaseDeferral : "release"
+```
+
+| Modell | Tabelle | Felder | Zweck |
+| --- | --- | --- | --- |
+| `Release` | `releases` | 23 | Eine Clenaris-Version mit ihrem Änderungsprotokoll — Metadaten, keine Ausführung. |
+| `ReleaseRequest` | `release_requests` | 18 | Die Entscheidung eines Betriebs über eine Version: freigegeben, terminiert, storniert. |
+| `ReleaseDeferral` | `release_deferrals` | 8 | „Nicht jetzt" — eine Version bewusst zurückgestellt, bis zu einem Datum. |
+
 ## Aufzählungstypen
 
 PostgreSQL-`ENUM`-Typen statt Textspalten mit Prüfbedingung: die Datenbank
@@ -1958,6 +2005,10 @@ exakte TypeScript-Typen.
 | `StockMovementKind` | `RECEIPT`, `ISSUE`, `RETURN`, `ADJUSTMENT` |
 | `EquipmentStatus` | `AVAILABLE`, `IN_USE`, `MAINTENANCE`, `RETIRED` |
 | `SiteVisitStatus` | `PLANNED`, `DONE`, `CANCELLED` |
+| `ReleaseKind` | `PATCH`, `MINOR`, `MAJOR`, `SECURITY` |
+| `ReleaseSeverity` | `LOW`, `MEDIUM`, `HIGH`, `CRITICAL` |
+| `ReleaseCiStatus` | `PASSED`, `FAILED`, `PENDING` |
+| `ReleaseRequestStatus` | `APPROVED`, `SCHEDULED`, `CANCELLED` |
 
 ## Migrationen
 
