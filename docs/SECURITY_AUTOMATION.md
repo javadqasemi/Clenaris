@@ -131,6 +131,24 @@ benutzen die Vorlagen des externen Überwachungsrechners
 `SECURITY_REPORT_TOKEN` ist ein eigenes Geheimnis — nicht `CRON_SECRET`:
 Wer Berichte senden darf, soll keine geplanten Läufe auslösen können.
 
+## Sicherheitsupdates im Update Center
+
+`/admin/updates` zeigt oben den Abschnitt „Sicherheitsupdates":
+
+* **Clenaris-Versionen mit Sicherheitskorrekturen** (`kind = SECURITY` oder
+  gesetzte `securitySeverity`), die noch nicht installiert sind — mit Link
+  auf die Detailseite, wo wie bei jeder Version **freigegeben, terminiert,
+  verschoben oder zurückgestellt** wird. Ausgeführt wird nichts (siehe
+  `release.service.ts`).
+* **Abhängigkeitsbefunde** (GHSA) aus dem letzten `security:check`-Bericht,
+  mit Bewertung und Behebungsweg — nur Einsicht. Eine behobene Abhängigkeit
+  kommt mit der nächsten Version.
+* **Betriebssystem-Sicherheitsupdates** aus `deps_check.sh` — nur Einsicht;
+  eingespielt vom Betrieb (unattended-upgrades).
+
+Im Abschnitt gibt es weder Formular noch Knopf (`release-center.test.ts`
+prüft das).
+
 ## Werkzeuge von Dritten — beschrieben, nicht installiert
 
 Keines davon ist eingerichtet. Jedes wäre eine Ergänzung mit eigenem

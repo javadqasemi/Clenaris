@@ -122,6 +122,41 @@ export interface QuellenZustand {
   erwartetAlleStunden: number;
 }
 
+/**
+ * Die Sicherheitsupdate-Lage für das Update Center (2026-09-26).
+ *
+ * Zwei Arten von Sicherheitsupdates, zwei Wege — und keiner führt über einen
+ * Knopf, der etwas ausführt:
+ *
+ *  • **Clenaris-Versionen** mit Sicherheitskorrekturen laufen durch das
+ *    bestehende Entscheidungsregister (freigeben, terminieren); das erledigt
+ *    `listReleases` im Update Center selbst.
+ *  • **Abhängigkeiten und Betriebssystem** kommen aus den Berichten
+ *    (`SECURITY_CHECK`, `DEPENDENCY_CHECK`). Hier gibt es nichts zu
+ *    „installieren": Eine behobene Abhängigkeit kommt mit der nächsten
+ *    Clenaris-Version, ein Betriebssystemupdate über den Betrieb des Servers
+ *    (unattended-upgrades). Das Update Center zeigt, was offen und wie es
+ *    bewertet ist, damit die Freigabe der nächsten Version darauf achten kann.
+ */
+export async function sicherheitsupdateLage(organizationId: string, jetzt = new Date()) {
+  const zustaende = await berichtsZustand(organizationId, jetzt);
+  const pruefung = zustaende.find((z) => z.quelle === 'SECURITY_CHECK')!;
+  const server = zustaende.find((z) => z.quelle === 'DEPENDENCY_CHECK')!;
+  const advisories = (pruefung.letzter?.befunde ?? []).filter((b) => b.id?.startsWith('GHSA-'));
+  return {
+    pruefung: { letzter: pruefung.letzter ? { receivedAt: pruefung.letzter.receivedAt, status: pruefung.letzter.status } : null, ausgeblieben: pruefung.ausgeblieben },
+    advisories,
+    server: server.letzter
+      ? {
+          receivedAt: server.letzter.receivedAt,
+          ausgeblieben: server.ausgeblieben,
+          sicherheitsupdates: server.letzter.kennzahlen.sicherheitsupdates,
+          paketeMitUpdates: server.letzter.kennzahlen.paketeMitUpdates,
+        }
+      : null,
+  };
+}
+
 /** Je Quelle der letzte Bericht und ob er frisch ist. */
 export async function berichtsZustand(organizationId: string, jetzt = new Date()): Promise<QuellenZustand[]> {
   const quellen = Object.keys(ERWARTET_ALLE_STUNDEN) as SecurityReportSource[];

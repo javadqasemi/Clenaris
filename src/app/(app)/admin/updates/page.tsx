@@ -10,6 +10,9 @@ import { Alert } from '@/components/ui/primitives';
 import { DetailSection, EmptyState, PageHeader } from '@/components/app/page-parts';
 import { getOrganizationId } from '@/server/services/organization.service';
 import { ARTNAMEN, ZUSTANDSNAMEN, listReleases } from '@/server/services/release.service';
+import { sicherheitsupdateLage } from '@/server/services/security-report.service';
+
+const SCHWERE: Record<string, string> = { LOW: 'niedrig', MEDIUM: 'mittel', HIGH: 'hoch', CRITICAL: 'kritisch' };
 
 export const metadata: Metadata = {
   title: 'Updates',
@@ -27,8 +30,13 @@ export const dynamic = 'force-dynamic';
  */
 export default async function UpdatesPage() {
   await requirePagePermission('release:read');
-  const { laufend, releases } = await listReleases(await getOrganizationId());
+  const organizationId = await getOrganizationId();
+  const [{ laufend, releases }, lage] = await Promise.all([listReleases(organizationId), sicherheitsupdateLage(organizationId)]);
   const neuer = releases.filter((r) => r.zustand !== 'INSTALLED' && r.zustand !== 'OLDER');
+  // Sicherheitsversionen, über die noch zu entscheiden ist oder die terminiert
+  // sind — die Entscheidung selbst fällt auf der Detailseite, wie bei jeder
+  // Version.
+  const sicherheitsversionen = neuer.filter((r) => r.release.kind === 'SECURITY' || r.release.securitySeverity);
 
   return (
     <div className="space-y-6">
@@ -75,6 +83,90 @@ export default async function UpdatesPage() {
             </dd>
           </div>
         </dl>
+      </DetailSection>
+
+      {/*
+        Sicherheitsupdates (2026-09-26). Versionen mit Sicherheitskorrekturen
+        führen auf ihre Detailseite — dort wird wie immer freigegeben und
+        terminiert. Abhängigkeits- und Betriebssystembefunde kommen aus den
+        Berichten und sind nur Einsicht: Behoben werden sie mit der nächsten
+        Version bzw. vom Betrieb des Servers, nie von hier aus.
+      */}
+      <DetailSection title="Sicherheitsupdates" body="flush">
+        <div className="space-y-4 px-6 py-4 text-sm" data-sicherheitsupdates>
+          {sicherheitsversionen.length ? (
+            <ul className="space-y-2">
+              {sicherheitsversionen.map(({ release, zustand, offenerAuftrag }) => (
+                <li key={release.id} className="flex flex-wrap items-center gap-2">
+                  <ShieldAlert className="size-4 text-destructive" aria-hidden />
+                  <Link href={`/admin/updates/${release.id}`} className="font-medium underline-offset-4 hover:underline">
+                    v{release.version}
+                  </Link>
+                  {release.securitySeverity ? (
+                    <Badge size="sm" variant={release.securitySeverity === 'CRITICAL' || release.securitySeverity === 'HIGH' ? 'destructive' : 'warning'}>
+                      {SCHWERE[release.securitySeverity]}
+                    </Badge>
+                  ) : null}
+                  <span className="text-muted-foreground">
+                    {ZUSTANDSNAMEN[zustand]}
+                    {zustand === 'SCHEDULED' && offenerAuftrag?.scheduledFor ? ` · ${formatDateTime(offenerAuftrag.scheduledFor)}` : ' — prüfen, freigeben oder terminieren'}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="text-muted-foreground">Keine offene Clenaris-Version mit Sicherheitskorrekturen.</p>
+          )}
+
+          <div>
+            <p className="font-medium">Abhängigkeiten der Anwendung</p>
+            {!lage.pruefung.letzter ? (
+              <p className="text-muted-foreground">
+                Noch kein Bericht von <code className="font-mono text-2xs">npm run security:check -- --melden</code>.
+              </p>
+            ) : (
+              <>
+                <p className="text-xs text-muted-foreground">
+                  Stand {formatDateTime(lage.pruefung.letzter.receivedAt)}
+                  {lage.pruefung.ausgeblieben ? ' — veraltet, bitte neu prüfen' : ''}. Behoben wird mit der nächsten Version; bewertet in{' '}
+                  <code className="font-mono text-2xs">security/akzeptierte-befunde.json</code>.
+                </p>
+                {lage.advisories.length ? (
+                  <ul className="mt-2 space-y-1.5" data-advisories>
+                    {lage.advisories.map((a) => (
+                      <li key={a.id}>
+                        <Badge size="sm" variant={a.schwere === 'hoch' || a.schwere === 'kritisch' ? 'warning' : 'neutral'}>
+                          {a.id}
+                        </Badge>{' '}
+                        {a.titel}
+                        {a.details ? <span className="block text-xs text-muted-foreground">{a.details}</span> : null}
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="mt-1 text-muted-foreground">Keine bekannten Lücken gemeldet.</p>
+                )}
+              </>
+            )}
+          </div>
+
+          <div>
+            <p className="font-medium">Betriebssystem des Servers</p>
+            {lage.server ? (
+              <p className="text-muted-foreground">
+                {typeof lage.server.sicherheitsupdates === 'number' && lage.server.sicherheitsupdates >= 0
+                  ? `${lage.server.sicherheitsupdates} Sicherheitsupdate(s) ausstehend`
+                  : 'nicht geprüft'}{' '}
+                · Stand {formatDateTime(lage.server.receivedAt)}
+                {lage.server.ausgeblieben ? ' (veraltet)' : ''}. Eingespielt vom Betrieb (unattended-upgrades), nicht von dieser Anwendung.
+              </p>
+            ) : (
+              <p className="text-muted-foreground">
+                Noch kein Bericht von <code className="font-mono text-2xs">ops/security-monitor/deps_check.sh</code>.
+              </p>
+            )}
+          </div>
+        </div>
       </DetailSection>
 
       {releases.length === 0 ? (

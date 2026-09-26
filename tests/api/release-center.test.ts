@@ -1,9 +1,10 @@
 import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { call, data, get, post, put, requireServer } from '../helpers/client';
+import { BASE_URL, call, data, get, post, put, requireServer } from '../helpers/client';
 import { ACCOUNTS, loginAll, type AccountName } from '../helpers/accounts';
 import { testDb, testDbSchliessen } from '../helpers/testdb';
+import { PRUEF_SICHERHEITSBERICHT_TOKEN } from '../helpers/webhooks';
 
 /**
  * Update Center der Systemverantwortung (Produktsprint 2026-09-26).
@@ -97,6 +98,40 @@ describe('Update Center', { concurrency: 1 }, () => {
     assert.equal(seite.status, 200);
     for (const text of ['Sicherheitsupdate', 'Hoch', 'Sitzungsprüfung verschärft', '20260926100000_versionsverwaltung', 'ca. 5 Minuten']) {
       assert.ok(seite.text.includes(text), `fehlt: ${text}`);
+    }
+  });
+
+  it('Sicherheitsupdates: Sicherheitsversion zum Entscheiden, Abhängigkeitsbefunde nur zur Einsicht', async (t) => {
+    if (!db) return t.skip('keine Testdatenbank');
+    const advisory = `GHSA-pruef-${RUN % 100000}`;
+    const bericht = await fetch(`${BASE_URL}/api/cron/security-report`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${PRUEF_SICHERHEITSBERICHT_TOKEN}` },
+      body: JSON.stringify({
+        quelle: 'SECURITY_CHECK',
+        status: 'WARNUNG',
+        erstelltAm: new Date().toISOString(),
+        zusammenfassung: `Prüfreihe-${RUN}: Update Center`,
+        befunde: [{ id: advisory, titel: 'pruefpaket (high): Prüflücke', schwere: 'hoch', details: 'Behebung: pruefpaket@2.0.0 (Hauptversion)' }],
+      }),
+    });
+    assert.equal(bericht.status, 201, await bericht.text());
+    try {
+      const html = (await get('/admin/updates', { jar: jars.super })).text.replace(/<!-- -->/g, '');
+      // Der Abschnitt reicht bis zur Überschrift der Versionsliste.
+      const start = html.indexOf('data-sicherheitsupdates');
+      assert.ok(start > 0, 'Abschnitt Sicherheitsupdates fehlt');
+      const ende = html.indexOf('>Versionen<', start);
+      const abschnitt = html.slice(start, ende > start ? ende : start + 8000);
+      assert.ok(abschnitt.includes(`v${NEU}`), 'Sicherheitsversion fehlt');
+      assert.ok(abschnitt.includes('prüfen, freigeben oder terminieren'));
+      assert.ok(abschnitt.includes(`href="/admin/updates/${neuId}"`), 'kein Weg zur Entscheidung');
+      assert.ok(abschnitt.includes(advisory) && abschnitt.includes('Prüflücke'), 'Abhängigkeitsbefund fehlt');
+      // Einsicht, keine Handlung: im Abschnitt weder Formular noch Knopf —
+      // entschieden wird auf der Detailseite.
+      assert.ok(!/<form|<button/.test(abschnitt), 'Handlungselement im Abschnitt Sicherheitsupdates');
+    } finally {
+      await db!.securityReport.deleteMany({ where: { summary: `Prüfreihe-${RUN}: Update Center` } });
     }
   });
 
