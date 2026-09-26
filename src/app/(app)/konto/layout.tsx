@@ -90,7 +90,6 @@ export default async function AccountLayout({ children }: { children: React.Reac
       navigation={navigation}
       areaLabel="Kundenbereich"
       areaHref="/konto"
-      settingsHref="/konto/profil"
       sessionIdleSeconds={serverEnv().SESSION_IDLE_TTL}
       user={{
         id: session.id,

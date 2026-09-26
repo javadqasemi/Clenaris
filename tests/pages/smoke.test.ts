@@ -65,6 +65,7 @@ const PAGES: Record<'admin' | 'employee' | 'customer', string[]> = {
     '/admin/einstellungen/leistungen',
     '/admin/einstellungen/gebiet',
     '/admin/profil',
+    '/admin/profil/einstellungen',
     '/admin/cta',
     '/admin/medien',
     '/admin/website',
@@ -100,6 +101,7 @@ const PAGES: Record<'admin' | 'employee' | 'customer', string[]> = {
     '/portal/abwesenheiten',
     '/portal/lohn',
     '/portal/profil',
+    '/portal/profil/einstellungen',
     '/portal/ziele',
     '/portal/wissen',
   ],
@@ -113,6 +115,7 @@ const PAGES: Record<'admin' | 'employee' | 'customer', string[]> = {
     '/konto/bewertungen',
     '/konto/reklamationen',
     '/konto/profil',
+    '/konto/profil/einstellungen',
   ],
 };
 

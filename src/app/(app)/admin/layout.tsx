@@ -227,7 +227,6 @@ export default async function AdminLayout({ children }: { children: React.ReactN
       navigation={navigation}
       areaLabel="Administration"
       areaHref="/admin"
-      settingsHref="/admin/einstellungen"
       // Die Suche nur, wenn der Endpunkt sie beantwortet (`dashboard:view`);
       // welche Bereiche sie durchsucht, entscheidet der Dienst je Recht.
       search={can(session.role, 'dashboard:view')}

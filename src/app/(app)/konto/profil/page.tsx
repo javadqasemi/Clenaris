@@ -1,5 +1,4 @@
 import type { Metadata } from 'next';
-import { ShieldCheck } from 'lucide-react';
 
 import { prisma } from '@/lib/db';
 import { requireSession } from '@/lib/auth/session';
@@ -7,16 +6,10 @@ import { formatDate, formatPhone, formatRelative } from '@/lib/utils';
 import { ROLE_LABELS } from '@/lib/auth/rbac';
 import { Badge } from '@/components/ui/badge';
 import { DetailRow, DetailSection, PageHeader } from '@/components/app/page-parts';
-import { AppearanceSection } from '@/features/account/appearance-form';
 import { AvatarUploader } from '@/features/account/avatar-uploader';
-import {
-  NotificationSwitches,
-  ProfileContactRows,
-} from '@/features/account/profile-details';
-import { PasswordChangeForm } from '@/features/account/password-change-form';
+import { ProfileContactRows } from '@/features/account/profile-details';
 import { ProfileEditDialog } from '@/features/account/profile-edit-dialog';
-import { TwoFactorSettings } from '@/features/account/two-factor-settings';
-import { getTwoFactorStatus } from '@/server/services/two-factor.service';
+import { ProfileTabs } from '@/features/account/profile-tabs';
 
 export const metadata: Metadata = {
   title: 'Mein Profil',
@@ -28,14 +21,15 @@ export const dynamic = 'force-dynamic';
 /**
  * Profilseite.
  *
- * Sie ist für alle Rollen identisch — Kontaktdaten, Benachrichtigungen,
- * Passwort und Datenschutzrechte. Rollenabhängige Informationen (Anstellung,
- * Kundendaten) stehen in den jeweiligen Bereichen.
+ * Sie ist für alle Rollen identisch — die Person: Bild, Kontaktdaten, Konto
+ * und Datenschutzrechte. Benachrichtigungen, Darstellung, Passwort und
+ * zweiter Faktor stehen seit 2026-09-26 unter „Einstellungen"
+ * (`…/profil/einstellungen`); warum, steht in
+ * `src/features/account/profile-tabs.tsx`. Rollenabhängige Informationen
+ * (Anstellung, Kundendaten) stehen in den jeweiligen Bereichen.
  */
 export default async function ProfilePage() {
   const session = await requireSession();
-
-  const twoFactor = await getTwoFactorStatus(session.id);
 
   const user = await prisma.user.findUniqueOrThrow({
     where: { id: session.id },
@@ -49,16 +43,10 @@ export default async function ProfilePage() {
       locale: true,
       role: true,
       avatarUrl: true,
-      theme: true,
-      notifyByEmail: true,
-      notifyBySms: true,
-      marketingOptIn: true,
       lastLoginAt: true,
       createdAt: true,
-      passwordChangedAt: true,
       customer: { select: { number: true } },
       employee: { select: { employeeNumber: true, position: true } },
-      _count: { select: { refreshTokens: true } },
     },
   });
 
@@ -66,8 +54,10 @@ export default async function ProfilePage() {
     <div className="space-y-6">
       <PageHeader
         title="Mein Profil"
-        description="Kontaktdaten, Benachrichtigungen und Sicherheit Ihres Kontos."
+        description="Profilbild, Kontaktdaten und Konto."
       />
+
+      <ProfileTabs />
 
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_20rem] lg:items-start">
         <div className="space-y-6">
@@ -116,49 +106,15 @@ export default async function ProfilePage() {
             />
           </DetailSection>
 
-          <DetailSection title="Benachrichtigungen">
-            <NotificationSwitches
-              values={{
-                firstName: user.firstName,
-                lastName: user.lastName,
-                notifyByEmail: user.notifyByEmail,
-                notifyBySms: user.notifyBySms,
-                marketingOptIn: user.marketingOptIn,
-              }}
-            />
-          </DetailSection>
-
-          <DetailSection title="Darstellung">
-            <AppearanceSection
-              preference={user.theme}
-              firstName={user.firstName}
-              lastName={user.lastName}
-            />
-          </DetailSection>
-
-          <DetailSection title="Passwort ändern">
-            <div className="py-4">
-              <PasswordChangeForm />
-            </div>
-          </DetailSection>
-
-          <TwoFactorSettings
-            status={{
-              enabled: twoFactor.enabled,
-              // Über die Grenze zur Client-Komponente geht eine Zeichenkette,
-              // nicht das Date-Objekt: die Formatierung braucht ohnehin die
-              // Zeitzone Europe/Zurich und nicht die des Servers.
-              confirmedAt: twoFactor.confirmedAt?.toISOString() ?? null,
-              remainingRecoveryCodes: twoFactor.remainingRecoveryCodes,
-            }}
-          />
         </div>
 
         <div className="space-y-6">
           {/*
-            Konto steht in der Seitenspalte, so breit wie Sicherheit und
-            Datenschutz darunter — die drei Karten, die man liest und nicht
-            bearbeitet, gehören zusammen an den Rand.
+            Konto steht in der Seitenspalte, so breit wie der Datenschutz
+            darunter — die Karten, die man liest und nicht bearbeitet, gehören
+            zusammen an den Rand. Die Sicherheitsübersicht (Passwortdatum,
+            Sitzungen) steht bei den Einstellungen, neben dem Passwortformular,
+            auf das sie sich bezieht.
           */}
           <DetailSection title="Konto">
             <dl className="protocol-list protocol-list--columns">
@@ -209,23 +165,6 @@ export default async function ProfilePage() {
                 </DetailRow>
               ) : null}
             </dl>
-          </DetailSection>
-
-          <DetailSection title="Sicherheit">
-            <dl className="protocol-list">
-              <DetailRow label="Passwort geändert">
-                {formatDate(user.passwordChangedAt)}
-              </DetailRow>
-              <DetailRow label="Aktive Sitzungen">
-                <span className="flex items-center gap-2">
-                  <ShieldCheck className="size-3.5 text-primary" aria-hidden />
-                  {user._count.refreshTokens} Gerät(e)
-                </span>
-              </DetailRow>
-            </dl>
-            <p className="py-4 text-sm leading-relaxed text-muted-foreground">
-              Bei einer Passwortänderung werden alle anderen Sitzungen automatisch beendet.
-            </p>
           </DetailSection>
 
           <DetailSection title="Ihre Datenschutzrechte">

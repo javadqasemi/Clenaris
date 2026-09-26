@@ -198,7 +198,6 @@ export function AppShell({
   user,
   areaLabel,
   areaHref,
-  settingsHref,
   search = false,
   sessionIdleSeconds = 900,
   children,
@@ -207,7 +206,6 @@ export function AppShell({
   user: AppShellUser;
   areaLabel: string;
   areaHref: string;
-  settingsHref?: string;
   /**
    * Globale Suche in der Kopfzeile. Nur die Administration setzt sie: Der
    * Endpunkt verlangt `dashboard:view`, und seine Treffer führen in
@@ -515,14 +513,21 @@ export function AppShell({
                     Mein Profil
                   </Link>
                 </DropdownMenuItem>
-                {settingsHref ? (
-                  <DropdownMenuItem asChild>
-                    <Link href={settingsHref}>
-                      <Settings aria-hidden />
-                      Einstellungen
-                    </Link>
-                  </DropdownMenuItem>
-                ) : null}
+                {/*
+                  Persönliche Einstellungen — in jedem Bereich, fest unter dem
+                  Profil. Bis 2026-09-26 war das Ziel eine Eigenschaft des
+                  Layouts, und die Administration setzte sie auf
+                  `/admin/einstellungen`: Das Kontomenü führte in die
+                  Betriebseinstellungen. Ein Menü, das „Mein Profil" heisst,
+                  darf nur zum eigenen Konto führen; die Firmenkonfiguration
+                  steht in der Seitenleiste unter „Betrieb", mit eigenem Recht.
+                */}
+                <DropdownMenuItem asChild>
+                  <Link href={`${areaHref}/profil/einstellungen`}>
+                    <Settings aria-hidden />
+                    Einstellungen
+                  </Link>
+                </DropdownMenuItem>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem destructive onSelect={() => void logout()}>
                   <LogOut aria-hidden />

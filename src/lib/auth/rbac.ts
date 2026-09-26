@@ -358,15 +358,18 @@ export function homeRouteFor(role: ActorRole): string {
 }
 
 /**
- * Die Profilseite der Rolle — dort steht das Passwortformular.
+ * Die persönlichen Einstellungen der Rolle — dort steht das Passwortformular.
  *
  * Gebraucht, wenn ein Konto sein Passwort wechseln *muss*: Die Anmeldung
  * leitete zuvor auf `/auth/passwort-aendern`, eine Seite, die es nie gab; wer
  * mit einem Startpasswort kam, landete auf einem 404. Das Passwort ändert man
- * auf der Profilseite, und die gibt es in jedem Bereich.
+ * in den persönlichen Einstellungen, und die gibt es in jedem Bereich. Bis
+ * 2026-09-26 stand das Formular direkt auf `…/profil`; seit der Trennung von
+ * Profil und Einstellungen führt der Weg eine Ebene tiefer, sonst landete die
+ * erzwungene Änderung auf einer Seite ohne Passwortfeld.
  */
 export function profileRouteFor(role: ActorRole): string {
-  return `${homeRouteFor(role)}/profil`;
+  return `${homeRouteFor(role)}/profil/einstellungen`;
 }
 
 /** Welche Rollen dürfen einen Pfad-Präfix betreten? Wird von der Middleware genutzt. */
