@@ -1,7 +1,7 @@
 import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { call, data, get, post, requireServer } from '../helpers/client';
+import { call, data, post, requireServer } from '../helpers/client';
 import { loginAll, type AccountName } from '../helpers/accounts';
 import { resetRateLimits } from '../helpers/rate-limit';
 import { eigeneOrganisationId, schutzfreiAufraeumen, testDb, testDbSchliessen } from '../helpers/testdb';
