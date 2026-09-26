@@ -1505,11 +1505,24 @@ Ein Abzieher nach jedem Duschen reduziert die Kalkbildung um schätzungsweise 80
       },
     });
 
+    /**
+     * Erst als Entwurf, dann in Kraft — nicht gleich als ACTIVE anlegen.
+     *
+     * Seit der Migration `20260923100000_vertragsintegritaet` sperrt die
+     * Datenbank den Leistungsumfang einer geltenden Fassung
+     * (`contract_services_unveraenderlich`): Leistung und Einsatzplan lassen
+     * sich an eine ACTIVE-Fassung nicht mehr anhängen. Aufgefallen ist das
+     * erst beim Aufsetzen einer frischen Testdatenbank am 2026-09-26 — auf
+     * einer bestehenden überspringt der Seed diesen Block, weil der Vertrag
+     * schon da ist. Der Weg unten ist derselbe, den der Dienst geht: Entwurf
+     * vollständig machen, dann DRAFT → ACTIVE, der einzige Übergang, den der
+     * Auslöser an dieser Stelle zulässt.
+     */
     const version = await prisma.contractVersion.create({
       data: {
         contractId: vertrag.id,
         versionNumber: 1,
-        status: 'ACTIVE',
+        status: 'DRAFT',
         effectiveFrom: beginn,
         reason: 'Erstfassung nach angenommener Offerte',
         minimumTermMonths: 12,
@@ -1567,6 +1580,30 @@ Ein Abzieher nach jedem Duschen reduziert die Kalkbildung um schätzungsweise 80
         active: true,
       },
     });
+
+    await prisma.contractVersion.update({ where: { id: version.id }, data: { status: 'ACTIVE' } });
+
+    /**
+     * Den Nummernkreis nachziehen — die Nummer oben ist von Hand vergeben.
+     *
+     * Ohne das zieht die erste Vertragsaktivierung danach `VT-…-00001` aus dem
+     * Zähler und scheitert an der Eindeutigkeit (409). Auf einer gewachsenen
+     * Datenbank fiel das nie auf, weil der Zähler längst weiter war; auf einer
+     * frischen war der Block bis 2026-09-26 gar nicht erreichbar (siehe oben).
+     * Dieselbe Regel wie `raiseSequence` für Buchungen und Rechnungen: nie
+     * zurückstellen, nur anheben.
+     */
+    const vertragsZaehler = await prisma.numberSequence.findUnique({
+      where: { organizationId_scope_year: { organizationId: org.id, scope: 'contract', year } },
+      select: { current: true },
+    });
+    if (!vertragsZaehler || vertragsZaehler.current < 1) {
+      await prisma.numberSequence.upsert({
+        where: { organizationId_scope_year: { organizationId: org.id, scope: 'contract', year } },
+        update: { current: 1 },
+        create: { organizationId: org.id, scope: 'contract', year, current: 1 },
+      });
+    }
 
     console.log('✓ Ein laufender Unterhaltsvertrag mit Fassung, Leistung und Einsatzplan');
   }

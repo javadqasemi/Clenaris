@@ -26,6 +26,10 @@
 import { PrismaClient, type Prisma } from '@prisma/client';
 import { hash } from '@node-rs/argon2';
 
+// Relativ, ohne Pfad-Alias: `beitraege.ts` ist ein reiner Rechenkern ohne
+// `server-only` und dafür gebaut, auch ausserhalb von Next geladen zu werden.
+import { SAETZE_2026 } from '../src/lib/payroll/beitraege';
+
 const prisma = new PrismaClient();
 
 const ORG_SLUG = 'clenaris';
@@ -923,6 +927,88 @@ async function main() {
       update: {},
       create: { organizationId: org.id, scope, year, current },
     });
+  }
+
+  // =========================================================================
+  //  11) Lohnsätze als ungeprüfte Vorbelegung
+  // =========================================================================
+  //
+  // Seit dem Lohnausbau (Migration `20260923130000_lohn_ausbau`) gibt es je
+  // Beitragsart Satzversionen. Die Migration übernahm sie aus den alten
+  // Jahreszeilen — auf einer *frischen* Datenbank gibt es solche Zeilen nicht,
+  // und die Lohnseite stand ohne einen einzigen Satz da, bis der erste Lauf
+  // Lücken füllte. Aufgefallen am 2026-09-26 beim Aufsetzen einer frischen
+  // Testdatenbank. Angelegt wird dasselbe, was der Lauf anlegen würde
+  // (`payroll-rates.service.ts`, `vorbelegung`): die bisherigen Jahreswerte,
+  // **ausdrücklich ungeprüft**, mit Herkunft im Text. Keine fachliche Aussage —
+  // Veröffentlichen verlangt weiterhin die Bestätigung ungeprüfter Sätze.
+  {
+    const quelle = 'Vorbelegung Clenaris (Stand 2026) — ungeprüft, fachlich zu bestätigen';
+    const s = SAETZE_2026;
+    const arten: {
+      code: Prisma.PayrollRateCreateInput['code'];
+      employeePct: number;
+      employerPct: number;
+      thresholdMin?: number;
+      thresholdMax?: number;
+      parameters?: Prisma.InputJsonValue;
+    }[] = [
+      { code: 'AHV_IV_EO', employeePct: s.ahvIvEo, employerPct: s.ahvIvEo },
+      { code: 'ALV', employeePct: s.alv, employerPct: s.alv, thresholdMax: s.alvGrenzeJahr },
+      { code: 'ALV_SOLIDARITY', employeePct: s.alvUeberGrenze, employerPct: s.alvUeberGrenze, thresholdMin: s.alvGrenzeJahr },
+      { code: 'UVG_NBU', employeePct: s.uvgNbu, employerPct: 0 },
+      { code: 'UVG_BU', employeePct: 0, employerPct: 0 },
+      { code: 'KTG', employeePct: 0, employerPct: 0 },
+      { code: 'FAK', employeePct: 0, employerPct: 0 },
+      { code: 'VK', employeePct: 0, employerPct: 0 },
+      {
+        code: 'BVG',
+        employeePct: s.bvgAnteilArbeitnehmer,
+        employerPct: 100 - s.bvgAnteilArbeitnehmer,
+        parameters: {
+          eintrittsschwelle: s.bvgEintrittsschwelle,
+          koordinationsabzug: s.bvgKoordinationsabzug,
+          mindestKoordiniert: s.bvgMindestKoordiniert,
+          obergrenze: s.bvgObergrenze,
+          baender: s.bvgSaetze,
+        } as unknown as Prisma.InputJsonValue,
+      },
+    ];
+    const jahresbeginn = new Date(Date.UTC(year, 0, 1));
+    const jahresende = new Date(Date.UTC(year, 11, 31));
+    let angelegt = 0;
+    for (const art of arten) {
+      // Nur, wo für das Jahr noch nichts gilt — die Versionen dürfen sich nicht
+      // überschneiden (Ausschlussbedingung), und eine bestätigte Version
+      // überschreibt ein Seed nie.
+      const vorhanden = await prisma.payrollRate.findFirst({
+        where: {
+          organizationId: org.id,
+          code: art.code,
+          validFrom: { lte: jahresende },
+          OR: [{ validUntil: null }, { validUntil: { gte: jahresbeginn } }],
+        },
+        select: { id: true },
+      });
+      if (vorhanden) continue;
+      await prisma.payrollRate.create({
+        data: {
+          organizationId: org.id,
+          code: art.code,
+          validFrom: jahresbeginn,
+          validUntil: jahresende,
+          employeePct: art.employeePct,
+          employerPct: art.employerPct,
+          thresholdMin: art.thresholdMin ?? null,
+          thresholdMax: art.thresholdMax ?? null,
+          ...(art.parameters ? { parameters: art.parameters } : {}),
+          source: quelle,
+          verification: 'UNGEPRUEFT',
+        },
+      });
+      angelegt += 1;
+    }
+    console.log(`✓ Lohnsätze ${year}: ${angelegt} ungeprüfte Vorbelegung(en)`);
   }
 
   // =========================================================================
