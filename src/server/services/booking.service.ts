@@ -92,16 +92,29 @@ export async function createBooking(params: {
 }): Promise<CreateBookingResult> {
   const { organizationId, input, session, office } = params;
 
-  // --- 1) Kunde auflösen oder anlegen --------------------------------------
-  const { customerId, isNewCustomer, customerEmail, customerName, userId } = office
+  // --- 1) Kunde auflösen — anlegen erst in der Transaktion unten -----------
+  /**
+   * Eine neue Gastkundschaft entsteht erst zusammen mit der Buchung
+   * (Befund A2, 2026-09-26). Vorher legte `resolveCustomer` sie in einer
+   * eigenen Transaktion an, *bevor* Preis und Termin geprüft waren: Eine
+   * abgewiesene Buchung — Termin voll, Gutschein ungültig, Postleitzahl
+   * ausserhalb — hinterliess eine Kundenakte ohne Buchung, mit Nummer, im
+   * CRM. Wer abgewiesen wird, ist keine Kundschaft geworden; eine Anfrage
+   * daraus zu machen wäre eine eigene, ausdrückliche Entscheidung.
+   */
+  const kunde = office
     ? await resolveOfficeCustomer({ organizationId, customerId: office.customerId })
     : await resolveCustomer({ organizationId, input, session });
+  const { isNewCustomer, customerEmail, customerName, userId } = kunde;
 
   // --- 2) Preis serverseitig berechnen -------------------------------------
-  const customer = await prisma.customer.findUniqueOrThrow({
-    where: { id: customerId },
-    select: { discountPercent: true, blocked: true, blockedReason: true, totalBookings: true },
-  });
+  // Eine neue Kundschaft hat weder Rabatt noch Buchungen noch eine Sperre.
+  const customer = kunde.customerId
+    ? await prisma.customer.findUniqueOrThrow({
+        where: { id: kunde.customerId },
+        select: { discountPercent: true, blocked: true, blockedReason: true, totalBookings: true },
+      })
+    : { discountPercent: 0, blocked: false, blockedReason: null, totalBookings: 0 };
 
   if (customer.blocked) {
     throw new BusinessRuleError(
@@ -126,7 +139,9 @@ export async function createBooking(params: {
       postalCode: postalCode ?? null,
       hasPets: input.hasPets,
       couponCode: input.couponCode ?? null,
-      customer: { id: customerId, totalBookings: customer.totalBookings },
+      // Für eine neue Kundschaft eine Kennung, die keine Buchung trifft: Die
+      // Gutscheinprüfung zählt Einlösungen je Kundschaft, und es gibt keine.
+      customer: { id: kunde.customerId ?? '__neue_kundschaft__', totalBookings: customer.totalBookings },
       customerDiscountPercent: toNumber(customer.discountPercent),
       urgent: input.urgent,
     },
@@ -187,6 +202,10 @@ export async function createBooking(params: {
       });
       if (!slotCheck.ok) throw new BusinessRuleError(slotCheck.reason!);
     }
+
+    // Erst jetzt, nach allen Prüfungen und in derselben Transaktion wie die
+    // Buchung: Scheitert danach noch etwas, rollt die Kundschaft mit zurück.
+    const customerId = kunde.customerId ?? (await gastkundschaftAnlegen(tx, organizationId, kunde.neu!));
 
     const { number } = await nextNumber(tx, organizationId, 'booking');
 
@@ -1581,16 +1600,23 @@ async function bookingPdfAttachment(
  * einer erfundenen nicht zu unterscheiden. Eine gesperrte Kundschaft läuft
  * weiter unten in dieselbe Regel wie im öffentlichen Weg.
  */
-async function resolveOfficeCustomer(params: {
-  organizationId: string;
-  customerId: string;
-}): Promise<{
-  customerId: string;
+/**
+ * Wer bucht. `customerId: null` heisst: eine neue Gastkundschaft, die erst
+ * mit der Buchung angelegt wird (`neu` trägt ihre Angaben).
+ */
+interface AufgeloesteKundschaft {
+  customerId: string | null;
+  neu?: NeueGastkundschaft;
   isNewCustomer: boolean;
   customerEmail: string;
   customerName: string;
   userId: string | null;
-}> {
+}
+
+async function resolveOfficeCustomer(params: {
+  organizationId: string;
+  customerId: string;
+}): Promise<AufgeloesteKundschaft> {
   const customer = await prisma.customer.findFirst({
     where: { id: params.customerId, organizationId: params.organizationId, deletedAt: null },
     select: { id: true, email: true, firstName: true, lastName: true, companyName: true, userId: true },
@@ -1610,13 +1636,7 @@ async function resolveCustomer(params: {
   organizationId: string;
   input: BookingCoreInput;
   session: SessionUser | null;
-}): Promise<{
-  customerId: string;
-  isNewCustomer: boolean;
-  customerEmail: string;
-  customerName: string;
-  userId: string | null;
-}> {
+}): Promise<AufgeloesteKundschaft> {
   const { organizationId, input, session } = params;
 
   // Fall 1: eingeloggter Kunde
@@ -1673,30 +1693,63 @@ async function resolveCustomer(params: {
     };
   }
 
-  const customer = await prisma.$transaction(async (tx) => {
-    const { number } = await nextNumber(tx, organizationId, 'customer');
-    return tx.customer.create({
-      data: {
-        organizationId,
-        number,
-        type: input.companyName ? 'BUSINESS' : 'PRIVATE',
-        companyName: input.companyName ?? null,
-        firstName: input.firstName!,
-        lastName: input.lastName!,
-        email: input.email!,
-        phone: input.phone!,
-        referralCode: randomToken(4).toUpperCase(),
-      },
-    });
-  });
-
+  // Neue Kundschaft: noch nichts schreiben — `createBooking` legt sie in der
+  // Transaktion der Buchung an (Begründung dort).
   return {
-    customerId: customer.id,
+    customerId: null,
+    neu: {
+      companyName: input.companyName ?? null,
+      firstName: input.firstName,
+      lastName: input.lastName,
+      email: input.email,
+      phone: input.phone,
+    },
     isNewCustomer: true,
-    customerEmail: customer.email,
-    customerName: `${customer.firstName} ${customer.lastName}`,
+    customerEmail: input.email,
+    customerName: `${input.firstName} ${input.lastName}`,
     userId: null,
   };
+}
+
+interface NeueGastkundschaft {
+  companyName: string | null;
+  firstName: string;
+  lastName: string;
+  email: string;
+  phone: string;
+}
+
+/**
+ * Die Gastkundschaft einer Buchung anlegen — innerhalb der Buchungstransaktion.
+ *
+ * Zuerst noch einmal nach der Adresse suchen: Zwischen dem Auflösen vor der
+ * Preisberechnung und diesem Punkt kann eine zweite Buchung derselben Person
+ * die Akte angelegt haben. Die Transaktionssperre der Buchung serialisiert
+ * beide; die zweite findet hier die Akte der ersten, statt eine Doppelakte
+ * anzulegen.
+ */
+async function gastkundschaftAnlegen(tx: Tx, organizationId: string, neu: NeueGastkundschaft): Promise<string> {
+  const vorhanden = await tx.customer.findFirst({
+    where: { organizationId, email: neu.email, deletedAt: null },
+    select: { id: true },
+  });
+  if (vorhanden) return vorhanden.id;
+  const { number } = await nextNumber(tx, organizationId, 'customer');
+  const customer = await tx.customer.create({
+    data: {
+      organizationId,
+      number,
+      type: neu.companyName ? 'BUSINESS' : 'PRIVATE',
+      companyName: neu.companyName,
+      firstName: neu.firstName,
+      lastName: neu.lastName,
+      email: neu.email,
+      phone: neu.phone,
+      referralCode: randomToken(4).toUpperCase(),
+    },
+    select: { id: true },
+  });
+  return customer.id;
 }
 
 /**
