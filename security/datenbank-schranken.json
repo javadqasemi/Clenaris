@@ -1,0 +1,37 @@
+{
+  "_zweck": "Handgeschriebene SQL-Schranken, die das Prisma-Schema nicht kennt. `npm run security:check` sucht jede in prisma/migrations und — mit --datenbank — in der Datenbank. Fehlt eine, hat jemand eine Migration bearbeitet oder `migrate dev` hat sie verworfen. Neue Schranke: hier eintragen.",
+  "teilindizes": [
+    "contract_amendments_ein_offener",
+    "contract_versions_eine_aktive",
+    "device_handoff_sessions_eine_aktive_je_familie",
+    "invoices_vertragsperiode_einmal",
+    "jobs_serientermin_einmal",
+    "payroll_items_qst_manuell_einmal",
+    "quality_inspections_nummer_einmal",
+    "release_requests_offen_einmal",
+    "scan_codes_ein_aktiver_je_datensatz",
+    "signature_requests_offene_abnahme_je_einsatz",
+    "signature_requests_offene_annahme_je_offerte",
+    "signature_requests_offene_annahme_je_vertragsfassung"
+  ],
+  "trigger": [
+    "contract_services_unveraenderlich",
+    "contract_versions_unveraenderlich",
+    "equipment_maintenances_unveraenderlich",
+    "gutschrift_unveraenderlich",
+    "mahnung_unveraenderlich",
+    "payroll_items_unveraenderlich",
+    "payroll_rates_unveraenderlich",
+    "payslip_lines_unveraenderlich",
+    "payslips_unveraenderlich",
+    "rechnung_unveraenderlich",
+    "rechnungsposition_unveraenderlich",
+    "salary_certificates_unveraenderlich",
+    "service_schedules_unveraenderlich",
+    "signature_events_kein_delete",
+    "signature_events_kein_truncate",
+    "signature_events_kein_update",
+    "stock_movements_nur_anfuegen",
+    "zahlung_unveraenderlich"
+  ]
+}

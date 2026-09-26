@@ -164,6 +164,28 @@ jobs:
       - name: Keine Geheimnisse im Repository
         run: bash scripts/ci-secret-scan.sh
 
+      - name: Sicherheitsprüfung
+        # Der Dirigent aus docs/SECURITY_AUTOMATION.md: Geheimnisse (hier mit
+        # Bash, also wirklich geprüft), npm audit gegen die Bewertungen in
+        # security/akzeptierte-befunde.json, Musterprüfung mit begründeten
+        # Unterdrückungen, Migrationen und handgeschriebene Schranken,
+        # öffentliche Endpunkte gegen die Durchsichtsliste, Repository.
+        # Blockiert bei einem blockierenden Befund. Die Sicherheitsreihen der
+        # Prüfreihe laufen weiter unten ohnehin mit `npm test`.
+        run: npm run security:check
+
+      - name: Stückliste (CycloneDX)
+        run: npm run security:sbom
+
+      - name: Sicherheitsbericht und Stückliste sichern
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sicherheitsbericht
+          path: security-reports/
+          if-no-files-found: ignore
+          retention-days: 90
+
       - name: Dokumentation ist aktuell
         # `npm run docs` erzeugt OpenAPI und ERD neu und bricht ab, wenn eine
         # Route oder ein Modell undokumentiert ist. Der anschliessende Vergleich

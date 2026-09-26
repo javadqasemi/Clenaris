@@ -94,3 +94,8 @@ public/pdfjs/
 # enthalten `node_modules` und gehören in die CI-Ablage, nicht ins Repository.
 release/
 RELEASE.json
+# Berichte von `npm run security:check` und `security:sbom`. Sie beschreiben
+# einen Stand, nicht den Code; in die Sicherheitszentrale kommen sie über
+# `--melden`, in die Freigabe als CI-Artefakt. Verankert, damit kein
+# gleichnamiges Quellverzeichnis mitgemeint ist.
+/security-reports/
