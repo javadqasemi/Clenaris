@@ -220,6 +220,77 @@ export async function createInvoice(params: {
   return invoice;
 }
 
+type BuchungMitPositionen = Prisma.BookingGetPayload<{ include: { items: true; extras: true } }>;
+
+/**
+ * Rechnungszeilen und Rechnungsrabatt aus der Preisherleitung einer Buchung.
+ *
+ * Die eine Herleitung: Positionen (jede Leistung samt Grundpauschale),
+ * Zusatzleistungen, Anfahrt und Zuschläge werden Zeilen, Rabatte
+ * (Rhythmus, Stammkunde, Gutschein) der Rechnungsrabatt. Was die
+ * gespeicherten Zeilen nicht einzeln hergeben — Preisregeln,
+ * Express-Zuschlag, Mindestauftragswert —, ergibt sich als Differenz zum
+ * gespeicherten Nettobetrag und wird aus der Herleitung benannt, soweit sie
+ * es kann. So ist `Rechnung.netTotal = Buchung.netTotal` eine Gleichung,
+ * nicht eine Hoffnung; `mehrere-leistungen.test.ts` prüft sie.
+ *
+ * Die MwSt. rechnet die Rechnung wie jede Rechnung je Position
+ * (`computeInvoiceTotals`). Gegenüber der auf dem Total gerundeten
+ * Buchungs-MwSt. kann das je Position um einen Rappen abweichen — die
+ * Rechnung folgt der MWSTG-Regel, die Buchung ist eine Schätzung.
+ */
+export function rechnungsgrundlageAusBuchung(
+  booking: BuchungMitPositionen,
+  jobId: string,
+  termin: Date,
+): { items: InvoiceItemInput[]; discountAmount: number } {
+  const satz = toNumber(booking.vatRate);
+  const datum = termin.toLocaleDateString('de-CH', { timeZone: 'Europe/Zurich' });
+  const items: InvoiceItemInput[] = [];
+
+  for (const position of [...booking.items].sort((a, b) => a.position - b.position)) {
+    items.push({
+      jobId,
+      name: `${position.name} · ${datum}`,
+      quantity: toNumber(position.quantity),
+      unit: position.unit,
+      unitPrice: toNumber(position.unitPrice),
+      discount: 0,
+      vatRate: toNumber(position.vatRate) || satz,
+    });
+  }
+  for (const extra of booking.extras) {
+    items.push({ jobId, name: extra.name, quantity: extra.quantity, unit: 'Stk.', unitPrice: toNumber(extra.unitPrice), discount: 0, vatRate: satz });
+  }
+  const anfahrt = toNumber(booking.travelFee);
+  if (anfahrt > 0) {
+    items.push({ jobId, name: 'Anfahrt', quantity: 1, unit: 'Pauschal', unitPrice: anfahrt, discount: 0, vatRate: satz });
+  }
+
+  const zeilenSumme = round2(items.reduce((s, i) => s + round2(i.quantity * i.unitPrice), 0));
+  let discountAmount = round2(toNumber(booking.discountAmount));
+  // Was zwischen Zeilen, Rabatt und gespeichertem Nettobetrag fehlt, sind
+  // Zuschläge (positiv) oder zusätzliche Abzüge (negativ, etwa eine
+  // Preisregel mit Minusbetrag).
+  const rest = round2(toNumber(booking.netTotal) - zeilenSumme + discountAmount);
+  if (rest > 0) {
+    const herleitung = (booking.priceBreakdown ?? null) as { lines?: { label?: string; amount?: number; kind?: string }[] } | null;
+    const zuschlaege = (herleitung?.lines ?? []).filter((l) => l.kind === 'surcharge' && typeof l.amount === 'number' && l.amount > 0 && l.label);
+    const benannt = round2(zuschlaege.reduce((s, l) => s + (l.amount ?? 0), 0));
+    if (zuschlaege.length > 0 && Math.abs(benannt - rest) < 0.005) {
+      for (const z of zuschlaege) {
+        items.push({ jobId, name: z.label!, quantity: 1, unit: 'Pauschal', unitPrice: round2(z.amount!), discount: 0, vatRate: satz });
+      }
+    } else {
+      items.push({ jobId, name: `Zuschläge gemäss Buchung ${booking.number}`, quantity: 1, unit: 'Pauschal', unitPrice: rest, discount: 0, vatRate: satz });
+    }
+  } else if (rest < 0) {
+    discountAmount = round2(discountAmount - rest);
+  }
+
+  return { items, discountAmount };
+}
+
 /** Sammelrechnung aus abgeschlossenen Einsätzen. */
 export async function createInvoiceFromJobs(params: {
   organizationId: string;
@@ -263,78 +334,46 @@ export async function createInvoiceFromJobs(params: {
   }
 
   const items: InvoiceItemInput[] = [];
+  let discountAmount = 0;
+  /** Eine Buchung wird einmal verrechnet, auch wenn mehrere ihrer Einsätze auf der Rechnung stehen. */
+  const verrechneteBuchungen = new Set<string>();
 
   for (const job of jobs) {
     /**
-     * Buchung mit mehreren Leistungen (Produktsprint 2026-09-26): je
-     * gebuchter Position eine Rechnungszeile, dazu die Zusatzleistungen. Die
-     * Einzelzeile unten nähme nur die erste Position — bei Büro- und
-     * Fensterreinigung verschwände die Fensterreinigung von der Rechnung.
+     * Einsatz aus einer Buchung: Die Rechnung übernimmt die gespeicherte
+     * Preisherleitung der Buchung — dieselbe, die die Kundschaft bestätigt
+     * hat —, statt eine eigene Formel zu rechnen (Befund A1, 2026-09-26).
      *
-     * Buchungen mit einer Leistung laufen bewusst weiter über die bisherige
-     * Einzelzeile: Deren Verhalten (nur die erste Position, ohne
-     * Grundpauschale, Zusatzleistungen und Anfahrt) ist ein eigener,
-     * vorbestehender Befund und steht im Bericht des Sprints — ihn hier
-     * nebenbei zu ändern, änderte die Beträge bestehender Abläufe ohne
-     * eigene Entscheidung.
+     * Vorher entstand je Einsatz eine Zeile aus der *ersten* Buchungsposition:
+     * Grundpauschale, Zusatzleistungen, Anfahrt, Zuschläge und Rabatte fielen
+     * weg, und der Rechnungsbetrag wich vom gebuchten ab. Jetzt ergibt die
+     * Rechnung denselben Nettobetrag wie die Buchung (`rechnungsgrundlageAusBuchung`).
+     * Bei mehreren Einsätzen derselben Buchung (Nachbesserung) steht die
+     * Buchung einmal auf der Rechnung, am ersten Einsatz.
      */
-    const positionen = job.booking?.items ?? [];
-    if (new Set(positionen.map((p) => p.serviceId)).size > 1) {
-      const datum = job.scheduledStart.toLocaleDateString('de-CH', { timeZone: 'Europe/Zurich' });
-      for (const position of [...positionen].sort((a, b) => a.position - b.position)) {
-        items.push({
-          jobId: job.id,
-          name: `${position.name} · ${datum}`,
-          description: job.completionNote ?? undefined,
-          quantity: toNumber(position.quantity),
-          unit: position.unit,
-          unitPrice: toNumber(position.unitPrice),
-          discount: 0,
-          vatRate: toNumber(position.vatRate),
-        });
+    if (job.booking) {
+      if (!verrechneteBuchungen.has(job.booking.id)) {
+        verrechneteBuchungen.add(job.booking.id);
+        const grundlage = rechnungsgrundlageAusBuchung(job.booking, job.id, job.scheduledStart);
+        items.push(...grundlage.items);
+        discountAmount = round2(discountAmount + grundlage.discountAmount);
       }
-      for (const extra of job.booking?.extras ?? []) {
-        items.push({
-          jobId: job.id,
-          name: extra.name,
-          quantity: extra.quantity,
-          unit: 'Stk.',
-          unitPrice: toNumber(extra.unitPrice),
-          discount: 0,
-          vatRate: toNumber(job.booking!.vatRate),
-        });
-      }
-      for (const material of job.materials) {
-        items.push({
-          jobId: job.id,
-          name: `Material: ${material.name}`,
-          quantity: toNumber(material.quantity),
-          unit: material.unit,
-          unitPrice: toNumber(material.unitCost),
-          discount: 0,
-          vatRate: 8.1,
-        });
-      }
-      continue;
+    } else {
+      // Einsatz ohne Buchung (von Hand angelegt): Sein Ertrag ist die einzige
+      // Grundlage, verteilt auf die geleisteten oder geplanten Stunden.
+      const minutes = job.timeEntries.reduce((sum, e) => sum + e.minutes, 0) || job.estimatedMin;
+      const hours = round2(minutes / 60);
+      items.push({
+        jobId: job.id,
+        name: `${job.service?.name ?? job.title} · ${job.scheduledStart.toLocaleDateString('de-CH', { timeZone: 'Europe/Zurich' })}`,
+        description: job.completionNote ?? undefined,
+        quantity: hours,
+        unit: 'Std.',
+        unitPrice: round2(toNumber(job.revenue) / Math.max(hours, 0.5)),
+        discount: 0,
+        vatRate: 8.1,
+      });
     }
-
-    const bookingItem = job.booking?.items[0];
-    const minutes =
-      job.timeEntries.reduce((sum, e) => sum + e.minutes, 0) || job.estimatedMin;
-    const hours = round2(minutes / 60);
-
-    items.push({
-      jobId: job.id,
-      name: `${job.service?.name ?? job.title} · ${job.scheduledStart.toLocaleDateString('de-CH')}`,
-      description: job.completionNote ?? undefined,
-      quantity: bookingItem ? toNumber(bookingItem.quantity) : hours,
-      unit: bookingItem?.unit ?? 'Std.',
-      unitPrice: bookingItem
-        ? toNumber(bookingItem.unitPrice)
-        : round2(toNumber(job.revenue) / Math.max(hours, 0.5)),
-      discount: 0,
-      vatRate: bookingItem ? toNumber(bookingItem.vatRate) : 8.1,
-    });
 
     for (const material of job.materials) {
       items.push({
@@ -354,8 +393,9 @@ export async function createInvoiceFromJobs(params: {
     actorId: params.actorId,
     input: {
       customerId: params.customerId,
+      ...(verrechneteBuchungen.size === 1 ? { bookingId: [...verrechneteBuchungen][0] } : {}),
       items,
-      discountAmount: 0,
+      discountAmount,
       periodFrom: params.periodFrom,
       periodTo: params.periodTo,
       issueImmediately: params.issueImmediately,
