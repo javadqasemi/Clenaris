@@ -84,6 +84,13 @@ function wartungsUrl(testUrl: string): string {
 }
 
 async function datenbankAnlegen(testUrl: string, name: string, frisch: boolean): Promise<void> {
+  // `DROP` und `CREATE DATABASE` vertragen keine Parameterbindung; der Name
+  // ist deshalb interpoliert. Er stammt nicht aus einer Anfrage, sondern aus
+  // `DATABASE_URL`, und hat die Musterprüfung oben bestanden. Anführungszeichen
+  // werden **vor** beiden Anweisungen ausgeschlossen — bis 2026-09-26 stand
+  // diese Prüfung erst vor `CREATE`, das `DROP` mit `--frisch` lief ungeprüft
+  // (gefunden von `npm run security:check`, Regel `sql-unsafe`).
+  if (/["\\]/.test(name)) throw new Error(`Unzulässiger Datenbankname: ${name}`);
   const client = new PrismaClient({ datasources: { db: { url: wartungsUrl(testUrl) } } });
   try {
     if (frisch) {
@@ -102,11 +109,6 @@ async function datenbankAnlegen(testUrl: string, name: string, frisch: boolean):
       return;
     }
 
-    // `CREATE DATABASE` verträgt keine Parameterbindung; der Name ist deshalb
-    // interpoliert. Er stammt nicht aus einer Anfrage, sondern aus
-    // `DATABASE_URL`, und hat die Musterprüfung oben bestanden — zusätzlich
-    // sind Anführungszeichen im Namen ausgeschlossen.
-    if (/["\\]/.test(name)) throw new Error(`Unzulässiger Datenbankname: ${name}`);
     await client.$executeRawUnsafe(`CREATE DATABASE "${name}"`);
     console.log(`   ✓ „${name}" angelegt`);
   } finally {

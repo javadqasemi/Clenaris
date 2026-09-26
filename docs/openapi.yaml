@@ -270,6 +270,8 @@ paths:
           Widerruft den Refresh-Token in der Datenbank und löscht beide Cookies. Ein blosses Löschen im Browser würde einen gestohlenen Token weiterleben lassen.
 
           **Zugriff:** Öffentlich — keine Anmeldung nötig.
+
+          **Rate-Limit-Klasse:** `apiWrite`
       operationId: 'postAuthLogout'
       security: []
       responses:
@@ -281,6 +283,12 @@ paths:
                 '$ref': '#/components/schemas/SuccessEnvelope'
         '422':
           description: 'BUSINESS_RULE — fachlich nicht zulässig, etwa eine bereits ausgestellte Rechnung ändern.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: 'RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.'
           content:
             'application/json':
               schema:
@@ -389,6 +397,8 @@ paths:
           Beantwortet „bin ich angemeldet, und wohin gehöre ich?". Existiert, damit die öffentliche Website die Sitzung nicht im Layout lesen muss — ein Cookie-Zugriff dort würde jede Marketingseite dynamisch machen und jeden Besuch zu einer Datenbankabfrage. Die Antwort ist absichtlich mager und wird nicht zwischengespeichert.
 
           **Zugriff:** Öffentlich — keine Anmeldung nötig.
+
+          **Rate-Limit-Klasse:** `apiRead`
       operationId: 'getAuthSession'
       security: []
       responses:
@@ -398,6 +408,12 @@ paths:
             'application/json':
               schema:
                 '$ref': '#/components/schemas/SuccessEnvelope'
+        '429':
+          description: 'RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
         '500':
           description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
           content:
@@ -3231,6 +3247,8 @@ paths:
           Einer von zwei Endpunkten, die während einer Geräteübergabe antworten (`allowDuringHandoff`) — sonst gäbe es keinen Weg zurück in den Mitarbeiterbereich. Liefert Einsatznummer, Zeitpunkte und den Zustand des Vorgangs, keine Rapport- oder Kundendaten.
 
           **Zugriff:** Erfordert eine angemeldete Sitzung.
+
+          **Rate-Limit-Klasse:** `apiRead`
       operationId: 'getHandoff'
       security:
         - sessionCookie: []
@@ -3243,6 +3261,12 @@ paths:
                 '$ref': '#/components/schemas/SuccessEnvelope'
         '401':
           description: 'UNAUTHORIZED — keine oder abgelaufene Sitzung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: 'RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.'
           content:
             'application/json':
               schema:
@@ -27026,6 +27050,8 @@ paths:
           Setzt das Draft-Mode-Cookie von Next.js. Mit `nur=1` antwortet der Endpunkt mit 204 statt weiterzuleiten (nötig im `iframe` der Redaktionsmaske), mit `aus=1` schaltet er den Modus ab (`aus=1&nur=1` ebenfalls mit 204). `pfad` ist ein geprüftes Rücksprungziel auf dieser Domain. Das Cookie wirkt nur zusammen mit einer Sitzung mit `content:update` und nur im Rahmen der Maske (`Sec-Fetch-Dest: iframe`); ausserhalb liefert die Website den veröffentlichten Stand ohne Bearbeitungsmarken.
 
           **Zugriff:** Erfordert die Berechtigung: `content:update`.
+
+          **Rate-Limit-Klasse:** `apiWrite`
       operationId: 'getContentPreview'
       security:
         - sessionCookie: []
@@ -27071,6 +27097,12 @@ paths:
                 '$ref': '#/components/schemas/ErrorEnvelope'
         '403':
           description: 'FORBIDDEN — angemeldet, aber ohne die nötige Berechtigung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: 'RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.'
           content:
             'application/json':
               schema:

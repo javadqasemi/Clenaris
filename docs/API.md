@@ -112,8 +112,9 @@ Familie.
 **Abmelden.** Widerruft den Refresh-Token in der Datenbank und löscht beide Cookies. Ein blosses Löschen im Browser würde einen gestohlenen Token weiterleben lassen.
 
 - **Zugriff:** Öffentlich — keine Anmeldung nötig.
+- **Rate-Limit-Klasse:** `apiWrite`
 - **Erfolg:** 200
-- **Mögliche Fehler:** 422, 500
+- **Mögliche Fehler:** 422, 429, 500
 
 ### `POST /api/auth/refresh`
 
@@ -144,8 +145,9 @@ Familie.
 **Sitzungsstatus.** Beantwortet „bin ich angemeldet, und wohin gehöre ich?". Existiert, damit die öffentliche Website die Sitzung nicht im Layout lesen muss — ein Cookie-Zugriff dort würde jede Marketingseite dynamisch machen und jeden Besuch zu einer Datenbankabfrage. Die Antwort ist absichtlich mager und wird nicht zwischengespeichert.
 
 - **Zugriff:** Öffentlich — keine Anmeldung nötig.
+- **Rate-Limit-Klasse:** `apiRead`
 - **Erfolg:** 200
-- **Mögliche Fehler:** 500
+- **Mögliche Fehler:** 429, 500
 
 ### `POST /api/auth/password`
 
@@ -923,8 +925,9 @@ Familie.
 **Läuft auf diesem Gerät eine Kundenabnahme?.** Einer von zwei Endpunkten, die während einer Geräteübergabe antworten (`allowDuringHandoff`) — sonst gäbe es keinen Weg zurück in den Mitarbeiterbereich. Liefert Einsatznummer, Zeitpunkte und den Zustand des Vorgangs, keine Rapport- oder Kundendaten.
 
 - **Zugriff:** Erfordert eine angemeldete Sitzung.
+- **Rate-Limit-Klasse:** `apiRead`
 - **Erfolg:** 200
-- **Mögliche Fehler:** 401, 500
+- **Mögliche Fehler:** 401, 429, 500
 
 ### `POST /api/handoff/unlock`
 
@@ -4987,8 +4990,9 @@ Familie.
 **Vorschaumodus schalten.** Setzt das Draft-Mode-Cookie von Next.js. Mit `nur=1` antwortet der Endpunkt mit 204 statt weiterzuleiten (nötig im `iframe` der Redaktionsmaske), mit `aus=1` schaltet er den Modus ab (`aus=1&nur=1` ebenfalls mit 204). `pfad` ist ein geprüftes Rücksprungziel auf dieser Domain. Das Cookie wirkt nur zusammen mit einer Sitzung mit `content:update` und nur im Rahmen der Maske (`Sec-Fetch-Dest: iframe`); ausserhalb liefert die Website den veröffentlichten Stand ohne Bearbeitungsmarken.
 
 - **Zugriff:** Erfordert die Berechtigung: `content:update`.
+- **Rate-Limit-Klasse:** `apiWrite`
 - **Erfolg:** 200
-- **Mögliche Fehler:** 400, 401, 403, 500
+- **Mögliche Fehler:** 400, 401, 403, 429, 500
 
 **Query-Parameter**
 

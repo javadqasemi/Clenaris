@@ -13,6 +13,9 @@ export const runtime = 'nodejs';
  * Sitzung spätestens in 15 Minuten.
  */
 export const POST = definePublicRoute({
+  // Schreibt in die Datenbank (Widerruf); ohne Kontingent liesse sich das von
+  // aussen beliebig oft auslösen (C9, `security:check`).
+  rateLimit: 'apiWrite',
   handler: async () => {
     await destroySession();
     return ok({ success: true });

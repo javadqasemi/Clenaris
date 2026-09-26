@@ -125,6 +125,7 @@ export const ROUTES: RouteDoc[] = [
       'Widerruft den Refresh-Token in der Datenbank und löscht beide Cookies. Ein blosses ' +
       'Löschen im Browser würde einen gestohlenen Token weiterleben lassen.',
     guard: { kind: 'public' },
+    rateLimit: 'apiWrite',
   },
   {
     method: 'post',
@@ -165,6 +166,7 @@ export const ROUTES: RouteDoc[] = [
       'würde jede Marketingseite dynamisch machen und jeden Besuch zu einer ' +
       'Datenbankabfrage. Die Antwort ist absichtlich mager und wird nicht zwischengespeichert.',
     guard: { kind: 'public' },
+    rateLimit: 'apiRead',
   },
   {
     method: 'post',
@@ -695,6 +697,7 @@ export const ROUTES: RouteDoc[] = [
       'sonst gäbe es keinen Weg zurück in den Mitarbeiterbereich. Liefert Einsatznummer, Zeitpunkte ' +
       'und den Zustand des Vorgangs, keine Rapport- oder Kundendaten.',
     guard: { kind: 'session' },
+    rateLimit: 'apiRead',
   },
   {
     method: 'post',
@@ -4251,6 +4254,7 @@ export const ROUTES: RouteDoc[] = [
       'und nur im Rahmen der Maske (`Sec-Fetch-Dest: iframe`); ausserhalb liefert die Website ' +
       'den veröffentlichten Stand ohne Bearbeitungsmarken.',
     guard: perm('all', 'content:update'),
+    rateLimit: 'apiWrite',
     query: cms.previewQuery,
   },
 

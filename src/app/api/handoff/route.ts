@@ -18,6 +18,10 @@ export const runtime = 'nodejs';
  */
 export const GET = defineRoute({
   allowDuringHandoff: true,
+  // Die Rückgabemaske fragt im Abstand von Sekunden; `apiRead` lässt ihr
+  // reichlich Luft und begrenzt trotzdem, wer den Endpunkt in einer Schleife
+  // anfährt (Sicherheitsstandard C9, gefunden von `security:check`).
+  rateLimit: 'apiRead',
   handler: async () => {
     const handoff = await activeHandoffForCurrentDevice();
     if (!handoff) return ok({ active: false }, { headers: { 'Cache-Control': 'no-store' } });
