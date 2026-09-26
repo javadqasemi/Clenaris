@@ -1,8 +1,15 @@
-import { before, describe, it } from 'node:test';
+import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { data, del, get, patch, post, requireServer } from '../helpers/client';
-import { loginAll, type AccountName } from '../helpers/accounts';
+import { ACCOUNTS, loginAll, type AccountName } from '../helpers/accounts';
+import { testDb, testDbSchliessen } from '../helpers/testdb';
+
+// Die Datenbankverbindung (nur für die Datumswahl der Abwesenheit) am Ende
+// schliessen — sonst hielte sie den Prozess offen.
+after(async () => {
+  await testDbSchliessen();
+});
 
 /**
  * Was die CRUD-Prüfung vom 13. September 2026 ergänzt hat: Feiertage als
@@ -134,9 +141,29 @@ describe('Abwesenheit — eigenen Antrag zurückziehen', () => {
 
   it('Mitarbeitende ziehen den eigenen Antrag zurück; entschieden ist entschieden', async () => {
     // Ein Antrag weit in der Zukunft, damit er keinem echten in die Quere kommt.
+    //
+    // Dazu an einem Tag, an dem Anna noch keinen Eintrag hat: `dispatch.test.ts`
+    // legt seine bewilligten Ferien ebenfalls ab 300 Tagen voraus an und lässt
+    // sie stehen. Am 2026-09-26 fiel „heute + 300" genau in solche Ferien
+    // (21.–23.07.2027), und der Antrag scheiterte mit 409 — nicht am
+    // Zurückziehen, sondern am Datum. Gesucht wird deshalb der erste freie
+    // Werktag statt eines festen Abstands.
+    const belegt = new Set<string>();
+    const db = testDb();
+    if (db) {
+      const eintraege = await db.absence.findMany({
+        where: { employee: { user: { email: ACCOUNTS.employee.email } }, endDate: { gte: new Date(Date.now() + 299 * 86_400_000) } },
+        select: { startDate: true, endDate: true },
+      });
+      for (const e of eintraege) {
+        for (let t = e.startDate.getTime(); t <= e.endDate.getTime(); t += 86_400_000) {
+          belegt.add(new Date(t).toISOString().slice(0, 10));
+        }
+      }
+    }
     const start = new Date();
     start.setUTCDate(start.getUTCDate() + 300);
-    while (start.getUTCDay() === 0 || start.getUTCDay() === 6) {
+    while (start.getUTCDay() === 0 || start.getUTCDay() === 6 || belegt.has(start.toISOString().slice(0, 10))) {
       start.setUTCDate(start.getUTCDate() + 1);
     }
     const day = start.toISOString().slice(0, 10);
