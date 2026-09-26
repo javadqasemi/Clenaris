@@ -4,6 +4,7 @@ import { notFound } from 'next/navigation';
 import { ArrowLeft, Camera, Clock, FileDown, MapPin, Receipt } from 'lucide-react';
 
 import { toNumber } from '@/lib/db';
+import { leistungsnamen } from '@/lib/booking/leistungen';
 import { requireCustomerId } from '@/lib/auth/session';
 import { NotFoundError } from '@/lib/errors';
 import { formatCurrency, formatDateLong, formatDuration, timeRangeLabel } from '@/lib/utils';
@@ -68,7 +69,7 @@ export default async function AccountBookingDetailPage({
 
       <PageHeader
         title={formatDateLong(booking.scheduledStart)}
-        description={`${booking.items[0]?.name ?? 'Reinigung'} · Buchung ${booking.number}`}
+        description={`${leistungsnamen(booking.items)} · Buchung ${booking.number}`}
         actions={
           <>
             <StatusBadge status={booking.status} className="self-center" />

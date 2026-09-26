@@ -338,13 +338,29 @@ export const ROUTES: RouteDoc[] = [
     method: 'get',
     path: '/api/public/availability',
     tag: 'Öffentlich',
-    summary: 'Freie Zeitfenster eines Tages',
+    summary: 'Freie Zeitfenster eines Tages (eine Leistung)',
     description:
-      'Berücksichtigt Öffnungszeiten, Feiertage, bestehende Einsätze, Abwesenheiten und die ' +
-      'benötigte Teamgrösse. Ein Fenster erscheint nur, wenn genügend Personal frei ist.',
+      'Berücksichtigt Einsatzzeiten (sonst Öffnungszeiten), Feiertage, bestehende Einsätze und ' +
+      'unbestätigte Buchungen, Arbeitszeiten und Abwesenheiten sowie die benötigte Teamgrösse. ' +
+      'Ohne `durationMin` rechnet der Server die Dauer mit derselben Funktion wie den Preis. ' +
+      'Ein Fenster erscheint nur, wenn der ganze Einsatz ins Einsatzfenster passt.',
     guard: { kind: 'public' },
     rateLimit: 'apiRead',
     query: q.availabilityCheckQuery,
+  },
+  {
+    method: 'post',
+    path: '/api/public/availability',
+    tag: 'Öffentlich',
+    summary: 'Kalender für eine Auswahl aus einer oder mehreren Leistungen',
+    description:
+      'Nimmt die gewählten Leistungen samt Angaben, nicht eine Dauer: Dauer (Summe, nacheinander ' +
+      'vom selben Team), Teamgrösse und Puffer rechnet der Server. Liefert je Tag, ob er ein ' +
+      'buchbares Zeitfenster hat, und die Zeitfenster. Vorlauf und Horizont aus den Einstellungen ' +
+      '(`bookingMinNoticeHours`, `bookingLeadDays`).',
+    guard: { kind: 'public' },
+    rateLimit: 'apiRead',
+    body: booking.verfuegbarkeitAnfrageSchema,
   },
   {
     method: 'get',

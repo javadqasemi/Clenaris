@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 
 import { toNumber } from '@/lib/db';
+import { leistungsnamen } from '@/lib/booking/leistungen';
 import { requirePermission } from '@/lib/auth/session';
 import { NotFoundError } from '@/lib/errors';
 import {
@@ -300,7 +301,7 @@ export default async function AdminCustomerDetailPage({
                     <DataCell strong className="tabular-nums text-primary">
                       {booking.number}
                     </DataCell>
-                    <DataCell truncate>{booking.items[0]?.name ?? 'Reinigung'}</DataCell>
+                    <DataCell truncate>{leistungsnamen(booking.items)}</DataCell>
                     <DataCell numeric muted label="Termin">
                       {formatDate(booking.scheduledStart)}
                     </DataCell>

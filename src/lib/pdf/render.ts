@@ -35,6 +35,7 @@ import {
   rhythmusText,
 } from '@/lib/contracts/bezeichnungen';
 import { FREQUENCY_LABEL } from '@/lib/pricing/engine';
+import { leistungsnamen } from '@/lib/booking/leistungen';
 import { absoluteUrl } from '@/lib/utils';
 import { STATUS_MAP } from '@/components/ui/badge';
 import { logger } from '@/lib/logger';
@@ -825,7 +826,8 @@ export async function renderBookingConfirmationPdf(
       status: booking.status,
       statusLabel: STATUS_MAP[booking.status]?.label ?? booking.status,
       createdAt: booking.createdAt,
-      serviceName: booking.items[0]?.service?.name ?? booking.items[0]?.name ?? 'Reinigung',
+      // Alle Leistungen, nicht nur die erste (Produktsprint 2026-09-26).
+      serviceName: leistungsnamen(booking.items),
       frequencyLabel: FREQUENCY_LABEL[booking.frequency] ?? 'Einmalig',
       scheduledStart: booking.scheduledStart,
       scheduledEnd: booking.scheduledEnd,

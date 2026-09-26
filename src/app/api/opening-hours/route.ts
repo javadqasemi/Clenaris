@@ -27,6 +27,15 @@ const bodySchema = z.object({
         opensAt: z.union([timeSchema, z.literal('')]).optional(),
         closesAt: z.union([timeSchema, z.literal('')]).optional(),
         closed: z.boolean().default(false),
+        /**
+         * Einsatzzeiten, falls sie von den Öffnungszeiten abweichen
+         * (2026-09-26). Beide leer = wie die Öffnungszeiten. Weggelassen heisst
+         * dasselbe: `PUT` beschreibt den ganzen Tag, und wer die Felder nicht
+         * kennt, meint die Öffnungszeiten.
+         */
+        serviceOpensAt: z.union([timeSchema, z.literal('')]).optional(),
+        serviceClosesAt: z.union([timeSchema, z.literal('')]).optional(),
+        serviceClosed: z.boolean().default(false),
       }),
     )
     .min(1)
@@ -66,6 +75,9 @@ export const PUT = defineRoute({
         opensAt: hour.opensAt || null,
         closesAt: hour.closesAt || null,
         closed: hour.closed,
+        serviceOpensAt: hour.serviceOpensAt || null,
+        serviceClosesAt: hour.serviceClosesAt || null,
+        serviceClosed: hour.serviceClosed,
       })),
     });
     return ok(hours);

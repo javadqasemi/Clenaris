@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 
 import { toNumber } from '@/lib/db';
+import { leistungsnamen } from '@/lib/booking/leistungen';
 import { NotFoundError } from '@/lib/errors';
 import { formatCurrency, formatDateLong, formatDuration, timeRangeLabel } from '@/lib/utils';
 import { getPublicCompanyInfo } from '@/server/services/organization.service';
@@ -144,7 +145,7 @@ export default async function BookingConfirmedPage({
                 <div className="protocol-row">
                   <dt className="protocol-label">Leistung</dt>
                   <dd className="protocol-value">
-                    {booking.items[0]?.service.name ?? booking.items[0]?.name ?? 'Reinigung'}
+                    {leistungsnamen(booking.items)}
                   </dd>
                 </div>
                 <div className="protocol-row">

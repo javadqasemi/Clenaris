@@ -2,6 +2,7 @@ import 'server-only';
 
 import { prisma, toNumber } from '@/lib/db';
 import { absoluteUrl } from '@/lib/utils';
+import { leistungsnamen } from '@/lib/booking/leistungen';
 import {
   birthdayEmail,
   bookingReminderEmail,
@@ -47,7 +48,7 @@ export async function sendBookingReminders(organizationId: string): Promise<{
       include: {
         customer: { include: { user: { select: { id: true } } } },
         address: true,
-        items: { select: { name: true }, take: 1 },
+        items: { select: { name: true, serviceId: true, position: true } },
       },
       take: 200,
     }),
@@ -65,7 +66,7 @@ export async function sendBookingReminders(organizationId: string): Promise<{
       include: {
         customer: { include: { user: { select: { id: true } } } },
         address: true,
-        items: { select: { name: true }, take: 1 },
+        items: { select: { name: true, serviceId: true, position: true } },
       },
       take: 100,
     }),
@@ -94,7 +95,7 @@ export async function sendBookingReminders(organizationId: string): Promise<{
       emailContent: bookingReminderEmail({
         firstName: booking.customer.firstName,
         bookingNumber: booking.number,
-        serviceName: booking.items[0]?.name ?? 'Reinigung',
+        serviceName: leistungsnamen(booking.items),
         scheduledStart: booking.scheduledStart,
         scheduledEnd: booking.scheduledEnd,
         address,
@@ -216,7 +217,7 @@ export async function requestReviews(organizationId: string): Promise<number> {
     },
     include: {
       customer: { include: { user: { select: { id: true } } } },
-      items: { select: { name: true }, take: 1 },
+      items: { select: { name: true, serviceId: true, position: true } },
     },
     take: 100,
   });
@@ -250,7 +251,7 @@ export async function requestReviews(organizationId: string): Promise<number> {
       link: bewertungsLink,
       emailContent: reviewRequestEmail({
         firstName: booking.customer.firstName,
-        serviceName: booking.items[0]?.name ?? 'Reinigung',
+        serviceName: leistungsnamen(booking.items),
         reviewUrl: absoluteUrl(bewertungsLink),
       }),
       entity: 'Booking',

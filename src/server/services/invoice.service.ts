@@ -241,7 +241,7 @@ export async function createInvoiceFromJobs(params: {
       service: true,
       timeEntries: true,
       materials: { where: { billable: true } },
-      booking: { include: { items: true } },
+      booking: { include: { items: { include: { service: { select: { name: true } } } }, extras: true } },
     },
   });
 
@@ -265,6 +265,59 @@ export async function createInvoiceFromJobs(params: {
   const items: InvoiceItemInput[] = [];
 
   for (const job of jobs) {
+    /**
+     * Buchung mit mehreren Leistungen (Produktsprint 2026-09-26): je
+     * gebuchter Position eine Rechnungszeile, dazu die Zusatzleistungen. Die
+     * Einzelzeile unten nähme nur die erste Position — bei Büro- und
+     * Fensterreinigung verschwände die Fensterreinigung von der Rechnung.
+     *
+     * Buchungen mit einer Leistung laufen bewusst weiter über die bisherige
+     * Einzelzeile: Deren Verhalten (nur die erste Position, ohne
+     * Grundpauschale, Zusatzleistungen und Anfahrt) ist ein eigener,
+     * vorbestehender Befund und steht im Bericht des Sprints — ihn hier
+     * nebenbei zu ändern, änderte die Beträge bestehender Abläufe ohne
+     * eigene Entscheidung.
+     */
+    const positionen = job.booking?.items ?? [];
+    if (new Set(positionen.map((p) => p.serviceId)).size > 1) {
+      const datum = job.scheduledStart.toLocaleDateString('de-CH', { timeZone: 'Europe/Zurich' });
+      for (const position of [...positionen].sort((a, b) => a.position - b.position)) {
+        items.push({
+          jobId: job.id,
+          name: `${position.name} · ${datum}`,
+          description: job.completionNote ?? undefined,
+          quantity: toNumber(position.quantity),
+          unit: position.unit,
+          unitPrice: toNumber(position.unitPrice),
+          discount: 0,
+          vatRate: toNumber(position.vatRate),
+        });
+      }
+      for (const extra of job.booking?.extras ?? []) {
+        items.push({
+          jobId: job.id,
+          name: extra.name,
+          quantity: extra.quantity,
+          unit: 'Stk.',
+          unitPrice: toNumber(extra.unitPrice),
+          discount: 0,
+          vatRate: toNumber(job.booking!.vatRate),
+        });
+      }
+      for (const material of job.materials) {
+        items.push({
+          jobId: job.id,
+          name: `Material: ${material.name}`,
+          quantity: toNumber(material.quantity),
+          unit: material.unit,
+          unitPrice: toNumber(material.unitCost),
+          discount: 0,
+          vatRate: 8.1,
+        });
+      }
+      continue;
+    }
+
     const bookingItem = job.booking?.items[0];
     const minutes =
       job.timeEntries.reduce((sum, e) => sum + e.minutes, 0) || job.estimatedMin;

@@ -4,7 +4,9 @@ import type { Booking, Frequency, Prisma } from '@prisma/client';
 
 import { prisma, toNumber, type Tx } from '@/lib/db';
 import { BusinessRuleError, ForbiddenError, NotFoundError } from '@/lib/errors';
-import { calculatePrice } from '@/lib/pricing/engine';
+import { calculateBookingPrice } from '@/lib/pricing/engine';
+import type { LeistungInput, PriceBreakdown } from '@/lib/pricing/types';
+import { leistungsnamen } from '@/lib/booking/leistungen';
 import { absoluteUrl, round2 } from '@/lib/utils';
 import { orderByFor, resolveSort, type SortOrder } from '@/lib/sort';
 import { randomToken } from '@/lib/auth/jwt';
@@ -114,20 +116,15 @@ export async function createBooking(params: {
       ? (await prisma.address.findUnique({ where: { id: input.addressId } }))?.postalCode
       : undefined);
 
-  const breakdown = await calculatePrice(
+  const leistungen = leistungenAusEingabe(input);
+  const breakdown = await calculateBookingPrice(
     {
-      serviceId: input.serviceId,
-      squareMeters: input.squareMeters,
-      rooms: input.rooms,
-      bathrooms: input.bathrooms,
-      windows: input.windows,
+      leistungen,
       propertyKind: input.propertyKind,
       frequency: input.frequency,
-      extras: input.extras,
       scheduledStart: input.scheduledStart,
       postalCode: postalCode ?? null,
       hasPets: input.hasPets,
-      manualHours: input.manualHours,
       couponCode: input.couponCode ?? null,
       customer: { id: customerId, totalBookings: customer.totalBookings },
       customerDiscountPercent: toNumber(customer.discountPercent),
@@ -138,7 +135,9 @@ export async function createBooking(params: {
 
   if (breakdown.onRequest) {
     throw new BusinessRuleError(
-      'Für diese Dienstleistung erstellen wir eine individuelle Offerte. Bitte nutzen Sie das Offertformular.',
+      leistungen.length > 1
+        ? 'Mindestens eine der gewählten Leistungen offerieren wir individuell. Bitte nutzen Sie das Offertformular oder buchen Sie sie getrennt.'
+        : 'Für diese Dienstleistung erstellen wir eine individuelle Offerte. Bitte nutzen Sie das Offertformular.',
     );
   }
 
@@ -150,30 +149,45 @@ export async function createBooking(params: {
     throw new BusinessRuleError(breakdown.coupon.message);
   }
 
-  // --- 3) Kapazität prüfen --------------------------------------------------
-  /**
-   * Die Kapazitätsprüfung hält den öffentlichen Buchungstrichter davon ab,
-   * mehr zuzusagen, als das Team schafft. Im Büro ist sie eine Empfehlung:
-   * Wer anruft, weil es brennt, bekommt einen Termin, und die Disposition
-   * löst es. Deshalb übergehbar — aber nur ausdrücklich, und der
-   * Protokolleintrag unten hält fest, dass es geschehen ist.
-   */
-  if (!office?.overrideCapacity) {
-    const slotCheck = await isSlotBookable({
-      organizationId,
-      start: input.scheduledStart,
-      durationMin: breakdown.durationMinutes,
-      crewSize: breakdown.crewSize,
-    });
-    if (!slotCheck.ok) throw new BusinessRuleError(slotCheck.reason!);
-  }
-
-  // --- 4) Buchung + Job in einer Transaktion -------------------------------
+  // --- 3) + 4) Kapazität prüfen und Buchung schreiben, in einem Zug -------
   const scheduledEnd = new Date(
     input.scheduledStart.getTime() + breakdown.durationMinutes * 60_000,
   );
 
   const booking = await prisma.$transaction(async (tx) => {
+    /**
+     * Die Kapazitätsprüfung hält den öffentlichen Buchungstrichter davon ab,
+     * mehr zuzusagen, als das Team schafft. Im Büro ist sie eine Empfehlung:
+     * Wer anruft, weil es brennt, bekommt einen Termin, und die Disposition
+     * löst es. Deshalb übergehbar — aber nur ausdrücklich, und der
+     * Protokolleintrag unten hält fest, dass es geschehen ist.
+     *
+     * **Warum innerhalb der Transaktion und hinter einer Sperre**
+     * (2026-09-26): Vorher lief die Prüfung vor der Transaktion. Zwei
+     * Anfragen für den letzten freien Platz lasen beide „frei" und schrieben
+     * beide — der Kalender hatte den Platz beiden angeboten, und beide bekamen
+     * ihn. Jetzt nimmt jede Buchung zuerst eine Transaktionssperre je
+     * Organisation (`pg_advisory_xact_lock`), prüft dann mit den Daten *in*
+     * der Transaktion und schreibt. Die zweite Anfrage wartet, bis die erste
+     * festgeschrieben ist, und sieht deren Buchung als Belegung — seit diesem
+     * Sprint zählen auch unbestätigte Buchungen (siehe `availability.service`).
+     * Die Sperre gilt je Organisation und nur für die Dauer einer Buchung;
+     * bei den Buchungszahlen eines Reinigungsbetriebs ist das kein Engpass.
+     */
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`buchung:${organizationId}`}))`;
+    if (!office?.overrideCapacity) {
+      const slotCheck = await isSlotBookable({
+        organizationId,
+        start: input.scheduledStart,
+        durationMin: breakdown.durationMinutes,
+        crewSize: breakdown.crewSize,
+        bufferMin: breakdown.bufferMinutes,
+        kanal: office ? 'buero' : 'oeffentlich',
+        db: tx,
+      });
+      if (!slotCheck.ok) throw new BusinessRuleError(slotCheck.reason!);
+    }
+
     const { number } = await nextNumber(tx, organizationId, 'booking');
 
     // Adresse übernehmen oder neu anlegen.
@@ -211,9 +225,12 @@ export async function createBooking(params: {
         recurrenceRuleId,
         frequency: input.frequency,
         propertyKind: input.propertyKind,
-        squareMeters: input.squareMeters ?? null,
-        rooms: input.rooms ?? null,
-        windows: input.windows ?? null,
+        // Die Objektangaben an der Buchung bleiben, was sie waren: das
+        // Objekt. Bei mehreren Leistungen die grösste angegebene Fläche und
+        // Zimmerzahl — die Angaben je Leistung stehen an den Positionen.
+        squareMeters: objektwert(input.squareMeters, leistungen.map((l) => l.squareMeters)),
+        rooms: objektwert(input.rooms, leistungen.map((l) => l.rooms)),
+        windows: objektwert(input.windows, leistungen.map((l) => l.windows)),
         customerNote: input.customerNote ?? null,
         internalNote: office?.internalNote ?? null,
         accessNote: input.accessNote ?? null,
@@ -232,35 +249,8 @@ export async function createBooking(params: {
         source: office?.source ?? 'WEBSITE',
         bookedByIp: params.ip ?? null,
         confirmationToken: randomToken(24),
-        items: {
-          create: breakdown.lines
-            .filter((line) => line.kind === 'base')
-            .map((line, index) => ({
-              serviceId: input.serviceId,
-              name: line.label,
-              quantity: line.quantity,
-              unit: line.unit,
-              unitPrice: line.unitPrice,
-              vatRate: breakdown.vatRate,
-              lineTotal: line.amount,
-              durationMin: index === 0 ? breakdown.durationMinutes : 0,
-              position: index,
-            })),
-        },
-        extras: {
-          create: input.extras.map((extra) => {
-            const line = breakdown.lines.find(
-              (l) => l.kind === 'extra' && l.meta?.extraId === extra.extraId,
-            );
-            return {
-              extraId: extra.extraId,
-              name: line?.label ?? 'Zusatzleistung',
-              quantity: extra.quantity,
-              unitPrice: line?.unitPrice ?? 0,
-              lineTotal: line?.amount ?? 0,
-            };
-          }),
-        },
+        items: { create: positionenAusHerleitung(breakdown, leistungen) },
+        extras: { create: zusatzleistungenAusHerleitung(breakdown) },
       },
       include: { customer: true, address: true },
     });
@@ -301,10 +291,8 @@ export async function createBooking(params: {
   // --- 5) Folgeaktionen ausserhalb der Transaktion -------------------------
   await invalidateAvailability(organizationId, input.scheduledStart);
 
-  const service = await prisma.service.findUnique({
-    where: { id: input.serviceId },
-    select: { name: true },
-  });
+  // Für Mitteilungen: alle Leistungen beim Namen, nicht nur die erste.
+  const service = { name: breakdown.positionen.map((p) => p.name).join(' + ') };
 
   const addressLabel = await formatBookingAddress(booking.addressId);
   const confirmationUrl = absoluteUrl(`/buchung/${booking.confirmationToken}`);
@@ -393,6 +381,113 @@ export async function createBooking(params: {
 }
 
 // ---------------------------------------------------------------------------
+//  Mehrere Leistungen (Produktsprint 2026-09-26)
+// ---------------------------------------------------------------------------
+
+/**
+ * Die Leistungen einer Buchungseingabe — aus der neuen Liste oder aus der
+ * alten Einzelform.
+ *
+ * Die Einzelform (`serviceId` plus Angaben auf oberster Ebene) bleibt gültig:
+ * Offertformular, Büroerfassung und ältere Aufrufer schicken sie, und sie ist
+ * nichts anderes als eine Liste mit einem Eintrag. Fläche, Zimmer, Bäder und
+ * Fenster auf oberster Ebene beschreiben das Objekt; eine Leistung ohne eigene
+ * Angabe übernimmt sie von dort.
+ */
+export function leistungenAusEingabe(input: BookingCoreInput): LeistungInput[] {
+  if (input.leistungen?.length) {
+    return input.leistungen.map((l) => ({
+      serviceId: l.serviceId,
+      squareMeters: l.squareMeters ?? input.squareMeters ?? null,
+      rooms: l.rooms ?? input.rooms ?? null,
+      bathrooms: l.bathrooms ?? input.bathrooms ?? null,
+      windows: l.windows ?? input.windows ?? null,
+      manualHours: l.manualHours ?? null,
+      extras: l.extras,
+    }));
+  }
+  if (!input.serviceId) throw new BusinessRuleError('Bitte wählen Sie mindestens eine Dienstleistung.');
+  return [
+    {
+      serviceId: input.serviceId,
+      squareMeters: input.squareMeters ?? null,
+      rooms: input.rooms ?? null,
+      bathrooms: input.bathrooms ?? null,
+      windows: input.windows ?? null,
+      manualHours: input.manualHours ?? null,
+      extras: input.extras,
+    },
+  ];
+}
+
+/** Objektangabe der Buchung: die ausdrückliche, sonst die grösste der Leistungen. */
+function objektwert(oben: number | null | undefined, jeLeistung: (number | null | undefined)[]): number | null {
+  if (oben !== null && oben !== undefined) return oben;
+  const werte = jeLeistung.filter((w): w is number => typeof w === 'number');
+  return werte.length ? Math.max(...werte) : null;
+}
+
+/**
+ * Buchungspositionen aus der Herleitung der Preis-Engine.
+ *
+ * Eine Position je Grundzeile, wie bisher — mit der Leistung, zu der die
+ * Zeile gehört (`meta.serviceId`), statt immer der einen `input.serviceId`.
+ * Die erste Zeile einer Leistung trägt deren Dauer und ihre Angaben
+ * (`details`); so bleibt für Disposition, Einsatz und Rechnung ablesbar,
+ * welche Leistung wie lange dauert und womit sie gebucht wurde.
+ */
+export function positionenAusHerleitung(breakdown: PriceBreakdown, leistungen: LeistungInput[]) {
+  const gesehen = new Set<string>();
+  return breakdown.lines
+    .filter((line) => line.kind === 'base')
+    .map((line, index) => {
+      const serviceId = (line.meta?.serviceId as string | undefined) ?? breakdown.service.id;
+      const erste = !gesehen.has(serviceId);
+      gesehen.add(serviceId);
+      const position = breakdown.positionen.find((p) => p.serviceId === serviceId);
+      const eingabe = leistungen.find((l) => l.serviceId === serviceId);
+      return {
+        serviceId,
+        name: line.label,
+        quantity: line.quantity,
+        unit: line.unit,
+        unitPrice: line.unitPrice,
+        vatRate: breakdown.vatRate,
+        lineTotal: line.amount,
+        durationMin: erste ? (position?.durationMinutes ?? 0) : 0,
+        position: index,
+        ...(erste && eingabe ? { details: eingabe as unknown as Prisma.InputJsonValue } : {}),
+      };
+    });
+}
+
+/**
+ * Zusatzleistungen der Buchung — je Zusatzleistung eine Zeile.
+ *
+ * Wählen zwei Leistungen dieselbe Zusatzleistung, wird sie zusammengezählt:
+ * `@@unique([bookingId, extraId])` erlaubt nur eine Zeile, und fachlich ist
+ * es eine Menge. Es entstehen nur Zeilen für Zusatzleistungen, die die Engine
+ * gefunden und bepreist hat — eine unbekannte ID aus dem Browser erzeugte
+ * früher eine Zeile zum Preis null.
+ */
+export function zusatzleistungenAusHerleitung(breakdown: PriceBreakdown) {
+  const karte = new Map<string, { extraId: string; name: string; quantity: number; unitPrice: number; lineTotal: number }>();
+  for (const line of breakdown.lines) {
+    if (line.kind !== 'extra') continue;
+    const extraId = line.meta?.extraId as string | undefined;
+    if (!extraId) continue;
+    const bestehend = karte.get(extraId);
+    if (bestehend) {
+      bestehend.quantity += line.quantity;
+      bestehend.lineTotal = round2(bestehend.lineTotal + line.amount);
+    } else {
+      karte.set(extraId, { extraId, name: line.label, quantity: line.quantity, unitPrice: line.unitPrice, lineTotal: line.amount });
+    }
+  }
+  return [...karte.values()];
+}
+
+// ---------------------------------------------------------------------------
 //  Statusübergänge
 // ---------------------------------------------------------------------------
 
@@ -428,7 +523,7 @@ export async function confirmBooking(params: {
     return result;
   });
 
-  const serviceName = booking.items[0]?.service.name ?? 'Reinigung';
+  const serviceName = leistungsnamen(booking.items);
   const addressLabel = await formatBookingAddress(booking.addressId);
   // Nach dem Statuswechsel rendern — das Dokument soll „Terminbestätigung"
   // heissen, nicht „Buchungsbestätigung (wird geprüft)".
@@ -541,7 +636,7 @@ export async function cancelBooking(params: {
     emailContent: bookingCancelledEmail({
       firstName: booking.customer.firstName,
       bookingNumber: booking.number,
-      serviceName: booking.items[0]?.name ?? 'Reinigung',
+      serviceName: leistungsnamen(booking.items),
       scheduledStart: booking.scheduledStart,
       reason: params.reason,
     }),
@@ -590,17 +685,28 @@ export async function rescheduleBooking(params: {
     );
   }
 
-  const check = await isSlotBookable({
-    organizationId: params.organizationId,
-    start: params.newStart,
-    durationMin: booking.durationMin,
-    crewSize: booking.crewSize,
-  });
-  if (!check.ok) throw new BusinessRuleError(check.reason!);
-
   const newEnd = new Date(params.newStart.getTime() + booking.durationMin * 60_000);
 
   const updated = await prisma.$transaction(async (tx) => {
+    /**
+     * Dieselbe Sperre und dieselbe Prüfung wie beim Anlegen (siehe
+     * `createBooking`). `ohneBuchungId`: Die Buchung selbst und ihr Einsatz
+     * belegen den alten Termin — beim Verschieben um eine halbe Stunde zählte
+     * sie sonst gegen sich selbst, und ein voller Tag liess sich nicht einmal
+     * innerhalb seiner eigenen Belegung umstellen.
+     */
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`buchung:${params.organizationId}`}))`;
+    const check = await isSlotBookable({
+      organizationId: params.organizationId,
+      start: params.newStart,
+      durationMin: booking.durationMin,
+      crewSize: booking.crewSize,
+      kanal: params.byStaff ? 'buero' : 'oeffentlich',
+      ohneBuchungId: booking.id,
+      db: tx,
+    });
+    if (!check.ok) throw new BusinessRuleError(check.reason!);
+
     const result = await tx.booking.update({
       where: { id: booking.id },
       data: {
@@ -635,7 +741,7 @@ export async function rescheduleBooking(params: {
     emailContent: bookingRescheduledEmail({
       firstName: booking.customer.firstName,
       bookingNumber: booking.number,
-      serviceName: booking.items[0]?.name ?? 'Reinigung',
+      serviceName: leistungsnamen(booking.items),
       scheduledStart: params.newStart,
       scheduledEnd: newEnd,
       address: await formatBookingAddress(booking.addressId),
@@ -1364,7 +1470,8 @@ export async function listBookings(filter: BookingListFilter) {
           select: { id: true, firstName: true, lastName: true, companyName: true, email: true },
         },
         address: { select: { street: true, streetNo: true, postalCode: true, city: true } },
-        items: { select: { name: true }, take: 1 },
+        // Alle Positionen, nicht nur die erste — die Liste nennt jede Leistung.
+        items: { select: { name: true, serviceId: true, position: true, service: { select: { name: true } } } },
         jobs: { select: { id: true, number: true, status: true } },
       },
     }),

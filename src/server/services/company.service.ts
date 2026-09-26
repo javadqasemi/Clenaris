@@ -138,6 +138,10 @@ export interface OpeningHourInput {
   opensAt?: string | null;
   closesAt?: string | null;
   closed: boolean;
+  /** Einsatzzeiten, falls abweichend — siehe `OpeningHours` im Schema. */
+  serviceOpensAt?: string | null;
+  serviceClosesAt?: string | null;
+  serviceClosed?: boolean;
 }
 
 /**
@@ -159,6 +163,20 @@ export async function updateOpeningHours({
   hours: OpeningHourInput[];
 }) {
   for (const hour of hours) {
+    // Einsatzzeiten: beide oder keine, und das Ende nach dem Beginn. Über
+    // Mitternacht hinweg (18:00–02:00) ist nicht vorgesehen — ein Einsatz,
+    // der in den nächsten Kalendertag reicht, gehört zu zwei Wochentagen, und
+    // die Verfügbarkeit rechnet je Tag.
+    if (!hour.serviceClosed && (Boolean(hour.serviceOpensAt) !== Boolean(hour.serviceClosesAt))) {
+      throw new BusinessRuleError(
+        `Für abweichende Einsatzzeiten sind Beginn und Ende beide erforderlich (Wochentag ${hour.weekday}).`,
+      );
+    }
+    if (!hour.serviceClosed && hour.serviceOpensAt && hour.serviceClosesAt && hour.serviceClosesAt <= hour.serviceOpensAt) {
+      throw new BusinessRuleError(
+        `Das Ende der Einsatzzeit muss nach ihrem Beginn liegen (Wochentag ${hour.weekday}).`,
+      );
+    }
     if (hour.closed) continue;
     if (!hour.opensAt || !hour.closesAt) {
       throw new BusinessRuleError(
@@ -172,6 +190,12 @@ export async function updateOpeningHours({
     }
   }
 
+  const einsatz = (hour: OpeningHourInput) => ({
+    serviceOpensAt: hour.serviceClosed ? null : (hour.serviceOpensAt ?? null),
+    serviceClosesAt: hour.serviceClosed ? null : (hour.serviceClosesAt ?? null),
+    serviceClosed: hour.serviceClosed ?? false,
+  });
+
   await prisma.$transaction(
     hours.map((hour) =>
       prisma.openingHours.upsert({
@@ -180,6 +204,7 @@ export async function updateOpeningHours({
           opensAt: hour.closed ? null : (hour.opensAt ?? null),
           closesAt: hour.closed ? null : (hour.closesAt ?? null),
           closed: hour.closed,
+          ...einsatz(hour),
         },
         create: {
           organizationId,
@@ -187,6 +212,7 @@ export async function updateOpeningHours({
           opensAt: hour.closed ? null : (hour.opensAt ?? null),
           closesAt: hour.closed ? null : (hour.closesAt ?? null),
           closed: hour.closed,
+          ...einsatz(hour),
         },
       }),
     ),
@@ -197,11 +223,16 @@ export async function updateOpeningHours({
     userId: actorId,
     entity: 'OpeningHours',
     entityId: organizationId,
-    summary: 'Öffnungszeiten geändert',
+    summary: 'Öffnungs- und Einsatzzeiten geändert',
     changes: Object.fromEntries(
       hours.map((h) => [
         `weekday${h.weekday}`,
-        h.closed ? 'geschlossen' : `${h.opensAt}–${h.closesAt}`,
+        (h.closed ? 'geschlossen' : `${h.opensAt}–${h.closesAt}`) +
+          (h.serviceClosed
+            ? ' · keine Einsätze'
+            : h.serviceOpensAt
+              ? ` · Einsätze ${h.serviceOpensAt}–${h.serviceClosesAt}`
+              : ''),
       ]),
     ),
     ip,

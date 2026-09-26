@@ -40,9 +40,61 @@ export const extraSelectionSchema = z.object({
   quantity: z.number().int().min(1).max(50).default(1),
 });
 
+/**
+ * Eine Leistung einer Buchung mit ihren eigenen Angaben (Produktsprint
+ * 2026-09-26).
+ *
+ * Dieselben Grenzen wie die Einzelfelder unten — eine Fensterreinigung mit
+ * 5001 Fenstern ist in der Liste so unmöglich wie ohne sie.
+ */
+export const leistungSchema = z
+  .object({
+    serviceId: cuidSchema,
+    squareMeters: z.number().int().min(5).max(5000).nullish(),
+    rooms: z.number().min(0.5).max(40).nullish(),
+    bathrooms: z.number().int().min(0).max(20).nullish(),
+    windows: z.number().int().min(0).max(500).nullish(),
+    manualHours: z.number().min(0.5).max(80).nullish(),
+    extras: z.array(extraSelectionSchema).max(20).default([]),
+  })
+  .strict();
+export type LeistungEingabe = z.infer<typeof leistungSchema>;
+
+/**
+ * Die Leistungsliste. Höchstens fünf (`MAX_LEISTUNGEN` in der Engine), jede
+ * höchstens einmal — beides prüft die Engine ein zweites Mal, weil sie auch
+ * von Wegen ohne dieses Schema gerufen wird. Hier steht es, damit der Fehler
+ * als 422 am richtigen Feld ankommt statt erst tief im Dienst.
+ */
+export const leistungenSchema = z
+  .array(leistungSchema)
+  .min(1, 'Bitte wählen Sie mindestens eine Dienstleistung.')
+  .max(5, 'Höchstens fünf Leistungen je Buchung.')
+  .refine((liste) => new Set(liste.map((l) => l.serviceId)).size === liste.length, {
+    message: 'Jede Dienstleistung lässt sich nur einmal pro Buchung wählen.',
+  });
+
+/**
+ * Entweder die alte Form (eine `serviceId` mit Angaben auf oberster Ebene)
+ * oder die neue (`leistungen`). Beides zugleich wäre mehrdeutig — welche
+ * Fläche gälte? — und wird abgewiesen, statt still eine Seite zu bevorzugen.
+ */
+const EINE_LEISTUNGSFORM = {
+  message: 'Bitte entweder eine Dienstleistung (serviceId) oder eine Leistungsliste (leistungen) angeben.',
+  path: ['leistungen'],
+};
+function genauEineLeistungsform(data: { serviceId?: string | null; leistungen?: unknown[] | null; extras?: unknown[] }) {
+  if (data.leistungen && data.leistungen.length > 0) {
+    return !data.serviceId && (data.extras?.length ?? 0) === 0;
+  }
+  return Boolean(data.serviceId);
+}
+
 /** Eingabe für die Sofort-Preisberechnung (öffentlich, ohne Login). */
 export const priceEstimateSchema = z.object({
   serviceId: cuidSchema,
+  /** Mehrere Leistungen — ersetzt `serviceId` und die Angaben darunter. */
+  leistungen: leistungenSchema.optional(),
   squareMeters: z.number().int().min(5).max(5000).nullish(),
   rooms: z.number().min(0.5).max(40).nullish(),
   bathrooms: z.number().int().min(0).max(20).nullish(),
@@ -74,8 +126,9 @@ export type PriceEstimateInput = z.infer<typeof priceEstimateSchema>;
  * nicht zwei Listen, die auseinanderlaufen.
  */
 const bookingCoreShape = {
-  // Leistung
-  serviceId: cuidSchema,
+  // Leistung — eine (`serviceId`, bisherige Form) oder mehrere (`leistungen`).
+  serviceId: cuidSchema.optional(),
+  leistungen: leistungenSchema.optional(),
   extras: z.array(extraSelectionSchema).max(20).default([]),
   frequency: frequencyEnum.default('ONCE'),
 
@@ -153,6 +206,7 @@ export const createBookingSchema = z
     acceptTerms: consentSchema,
     website: honeypotSchema,
   })
+  .refine(genauEineLeistungsform, EINE_LEISTUNGSFORM)
   .refine((data) => Boolean(data.addressId) || Boolean(data.address), ADRESSE_PFLICHT)
   .refine((data) => data.frequency === 'ONCE' || Boolean(data.recurrence), RHYTHMUS_PFLICHT);
 export type CreateBookingInput = z.infer<typeof createBookingSchema>;
@@ -190,6 +244,7 @@ export const staffBookingSchema = z
     internalNote: z.string().trim().max(4000).optional(),
     overrideCapacity: z.boolean().default(false),
   })
+  .refine(genauEineLeistungsform, EINE_LEISTUNGSFORM)
   .refine((data) => Boolean(data.addressId) || Boolean(data.address), ADRESSE_PFLICHT)
   .refine((data) => data.frequency === 'ONCE' || Boolean(data.recurrence), RHYTHMUS_PFLICHT);
 export type StaffBookingInput = z.infer<typeof staffBookingSchema>;
@@ -347,8 +402,35 @@ export const publicEstimateSchema = priceEstimateSchema
     serviceId: z.string().min(1).optional(),
     serviceSlug: z.string().min(1).optional(),
   })
-  .refine((data) => Boolean(data.serviceId) || Boolean(data.serviceSlug), {
-    message: 'Bitte wählen Sie eine Dienstleistung.',
-    path: ['serviceId'],
-  });
+  .refine(
+    (data) => Boolean(data.serviceId) || Boolean(data.serviceSlug) || Boolean(data.leistungen?.length),
+    {
+      message: 'Bitte wählen Sie eine Dienstleistung.',
+      path: ['serviceId'],
+    },
+  )
+  .refine(
+    (data) => !data.leistungen?.length || (!data.serviceId && !data.serviceSlug && data.extras.length === 0),
+    EINE_LEISTUNGSFORM,
+  );
 export type PublicEstimateInput = z.infer<typeof publicEstimateSchema>;
+
+/**
+ * Verfügbarkeit für die ganze Auswahl (Produktsprint 2026-09-26).
+ *
+ * Der Terminwähler fragt nicht mehr mit einer einzelnen `serviceId` und einer
+ * geschätzten Dauer, sondern mit der Auswahl selbst: Dauer und Teamgrösse
+ * rechnet der Server mit derselben Funktion wie der Preis. Ein Browser, der
+ * eine kürzere Dauer schickt, bekommt deshalb keine anderen Zeitfenster —
+ * er kann keine schicken. `von` + `tage` liefert den Kalender auf einmal,
+ * damit ein Tag nur auswählbar ist, wenn er wirklich ein Zeitfenster hat.
+ */
+export const verfuegbarkeitAnfrageSchema = z
+  .object({
+    leistungen: leistungenSchema,
+    hasPets: z.boolean().default(false),
+    von: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Datum im Format JJJJ-MM-TT.'),
+    tage: z.number().int().min(1).max(42).default(21),
+  })
+  .strict();
+export type VerfuegbarkeitAnfrage = z.infer<typeof verfuegbarkeitAnfrageSchema>;

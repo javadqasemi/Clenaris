@@ -601,7 +601,8 @@ model NumberSequence {
   @@map("number_sequences")
 }
 
-/// Öffnungszeiten je Wochentag; Grundlage der buchbaren Zeitfenster.
+/// Öffnungszeiten je Wochentag und die Einsatzzeiten, falls sie davon abweichen.
+/// Grundlage der buchbaren Zeitfenster: `src/server/services/availability.service.ts`.
 model OpeningHours {
   id             String  @id @default(cuid())
   organizationId String
@@ -609,6 +610,16 @@ model OpeningHours {
   opensAt        String? // "08:00"
   closesAt       String? // "17:30"
   closed         Boolean @default(false)
+
+  /// Einsatzzeiten (Produktsprint 2026-09-26). Leer = wie die Öffnungszeiten.
+  /// Eine Firma, deren Büro 08–17 Uhr offen ist und die Büros abends von 18 bis
+  /// 22 Uhr reinigt, konnte das vorher nicht ausdrücken, ohne auf der Website
+  /// falsche Bürozeiten zu veröffentlichen — dieselbe Zeile speist Fusszeile,
+  /// Kontaktseite und die strukturierten Daten für Suchmaschinen.
+  serviceOpensAt  String?
+  serviceClosesAt String?
+  /// An diesem Tag keine Einsätze, auch wenn das Büro offen ist.
+  serviceClosed   Boolean @default(false)
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
@@ -1890,6 +1901,11 @@ model BookingItem {
   lineTotal   Decimal @db.Decimal(12, 2)
   durationMin Int     @default(0)
   position    Int     @default(0)
+  /// Die Angaben, mit denen diese Leistung gebucht wurde (Fläche, Fenster,
+  /// Zusatzleistungen …) — je Leistung, seit eine Buchung mehrere haben kann.
+  /// Nur an der ersten Zeile einer Leistung; ältere Buchungen haben `null`
+  /// und tragen ihre Angaben weiterhin an der Buchung selbst.
+  details     Json?
 
   booking Booking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
   service Service @relation(fields: [serviceId], references: [id], onDelete: Restrict)

@@ -279,6 +279,9 @@ export default async function SettingsPage({
                 opensAt: hour.opensAt,
                 closesAt: hour.closesAt,
                 closed: hour.closed,
+                serviceOpensAt: hour.serviceOpensAt,
+                serviceClosesAt: hour.serviceClosesAt,
+                serviceClosed: hour.serviceClosed,
               }))}
             />
           ) : (
@@ -291,6 +294,11 @@ export default async function SettingsPage({
                       {hour.closed || !hour.opensAt
                         ? 'geschlossen'
                         : `${hour.opensAt} – ${hour.closesAt} Uhr`}
+                      {hour.serviceClosed
+                        ? ' · keine Einsätze'
+                        : hour.serviceOpensAt
+                          ? ` · Einsätze ${hour.serviceOpensAt} – ${hour.serviceClosesAt} Uhr`
+                          : ''}
                     </dd>
                   </div>
                 ))}

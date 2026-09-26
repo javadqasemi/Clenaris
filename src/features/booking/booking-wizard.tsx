@@ -12,6 +12,8 @@ import { Alert } from '@/components/ui/primitives';
 import { trackEvent } from '@/components/marketing/analytics';
 
 import { BOOKING_STEPS, useBookingStore, type Frequency, type PropertyKind } from './store';
+import { leistungenPayload } from './payload';
+import { useVerfuegbarkeit } from './use-availability';
 import { useLivePrice } from './use-price';
 import {
   StepContact,
@@ -95,9 +97,14 @@ export function BookingWizard({
     const zip = prefill?.postalCode ?? searchParams.get('plz') ?? undefined;
 
     const service = slug ? services.find((item) => item.slug === slug) : undefined;
+    const bereitsGewaehlt = useBookingStore.getState().auswahl.length > 0;
 
     patch({
-      ...(service ? { serviceId: service.id, serviceSlug: service.slug } : {}),
+      // Vorbelegen nur, wenn noch nichts gewählt ist — sonst überschriebe der
+      // Link einer Leistungsseite eine Auswahl, die im Tab noch besteht.
+      ...(service && !bereitsGewaehlt
+        ? { auswahl: [{ id: service.id, slug: service.slug, kind: service.kind }] }
+        : {}),
       ...(area ? { squareMeters: area } : {}),
       ...(zip && /^[1-9]\d{3}$/.test(zip) ? { postalCode: zip } : {}),
     });
@@ -116,6 +123,35 @@ export function BookingWizard({
     patch({ requiresContact: !isAuthenticated });
   }, [isAuthenticated, patch]);
 
+  /**
+   * Eine gewählte Uhrzeit, die nicht mehr passt, wird verworfen — nicht
+   * behalten (Produktsprint 2026-09-26).
+   *
+   * Wer 19:00 für eine Büroreinigung wählt und danach die Fensterreinigung
+   * dazunimmt, hat eine längere Auswahl; in einem Fenster bis 22:00 passt sie
+   * um 19:00 vielleicht nicht mehr. Der Server würde den Abschluss dann mit
+   * 422 ablehnen — am Ende des Trichters, nach der Eingabe aller
+   * Kontaktdaten. Deshalb prüft der Assistent nach jeder Änderung an Leistungen,
+   * Angaben oder Zusätzen, ob die gewählte Zeit im neuen Kalender noch als
+   * buchbar steht, und löscht sie sonst mit einem Hinweis. Die Abfrage läuft
+   * nur, solange eine Zeit gewählt ist oder der Terminschritt offen ist.
+   */
+  const scheduledStart = useBookingStore((s) => s.scheduledStart);
+  const verfuegbarkeit = useVerfuegbarkeit(Boolean(scheduledStart) || step === 'termin');
+  React.useEffect(() => {
+    if (!scheduledStart || !verfuegbarkeit.data || verfuegbarkeit.isFetching) return;
+    const nochBuchbar = verfuegbarkeit.data.tage.some((tag) =>
+      tag.slots.some((slot) => slot.start === scheduledStart && slot.available),
+    );
+    if (!nochBuchbar) {
+      patch({
+        scheduledStart: null,
+        terminHinweis:
+          'Die Verfügbarkeit wurde aufgrund Ihrer geänderten Leistungen aktualisiert. Die gewählte Uhrzeit ist nicht mehr möglich — bitte wählen Sie eine neue.',
+      });
+    }
+  }, [scheduledStart, verfuegbarkeit.data, verfuegbarkeit.isFetching, patch]);
+
   const submit = async () => {
     const state = useBookingStore.getState();
     setSubmitting(true);
@@ -125,11 +161,10 @@ export function BookingWizard({
       const result = await api.post<{ id: string; number: string; confirmationUrl: string }>(
         '/api/public/bookings',
         {
-          serviceId: state.serviceId,
-          extras: Object.entries(state.extras).map(([extraId, quantity]) => ({
-            extraId,
-            quantity,
-          })),
+          // Alle Leistungen mit ihren Angaben und Zusätzen — dieselbe Form wie
+          // für Preis und Kalender (`leistungenPayload`). Preis, Dauer und
+          // Verfügbarkeit rechnet der Server beim Abschluss neu.
+          leistungen: leistungenPayload(state),
           frequency: state.frequency,
           scheduledStart: state.scheduledStart,
           urgent: state.urgent,
@@ -171,7 +206,7 @@ export function BookingWizard({
       trackEvent('booking_completed', {
         value: price.data?.grossTotal ?? 0,
         currency: 'CHF',
-        service: state.serviceSlug ?? '',
+        service: state.auswahl.map((l) => l.slug).join('+'),
       });
 
       reset();
@@ -379,6 +414,21 @@ function PriceSummary({
         </p>
       ) : (
         <>
+          {data.positionen && data.positionen.length > 1 ? (
+            // Mehrere Leistungen: jede mit ihrer Dauer, damit die Gesamtdauer
+            // unten nachvollziehbar ist — sie ist deren Summe.
+            <div className="space-y-1.5 text-sm">
+              <p className="text-xs font-medium text-muted-foreground">Ihre Leistungen</p>
+              <ul className="space-y-1">
+                {data.positionen.map((p) => (
+                  <li key={p.serviceId} className="flex items-baseline justify-between gap-3">
+                    <span>{p.name}</span>
+                    <span className="shrink-0 tabular-nums text-muted-foreground">ca. {formatDuration(p.durationMinutes)}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
           <dl className="protocol-list text-sm">
             {data.lines.map((line) => (
               <div key={line.key} className="flex items-baseline justify-between gap-4 py-2.5">
@@ -421,7 +471,8 @@ function PriceSummary({
 
           <div className="space-y-2 border-t border-border pt-4 text-meta text-muted-foreground">
             <p>
-              Einsatzdauer ca. {formatDuration(data.durationMinutes)}
+              {data.positionen && data.positionen.length > 1 ? 'Gesamtdauer' : 'Einsatzdauer'} ca.{' '}
+              {formatDuration(data.durationMinutes)}
               {data.crewSize > 1 ? ` · ${data.crewSize} Personen` : ''}
             </p>
             {data.notes.map((note) => (

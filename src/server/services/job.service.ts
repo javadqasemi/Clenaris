@@ -1,6 +1,6 @@
 import 'server-only';
 
-import type { Job, Prisma, ServiceKind } from '@prisma/client';
+import type { Job, Prisma, Service, ServiceKind } from '@prisma/client';
 
 import { prisma, toNumber, type Tx } from '@/lib/db';
 import { BusinessRuleError, ForbiddenError, NotFoundError } from '@/lib/errors';
@@ -200,10 +200,31 @@ export async function createJobsForBooking(tx: Tx, bookingId: string): Promise<J
   const existing = await tx.job.count({ where: { bookingId } });
   if (existing > 0) return [];
 
-  const service = booking.items[0]?.service;
+  /**
+   * Mehrere Leistungen, ein Einsatz (Produktsprint 2026-09-26).
+   *
+   * Eine Buchung mit Büro- und Fensterreinigung wird vom selben Team am
+   * selben Termin nacheinander erledigt — so rechnet auch die
+   * Verfügbarkeit (Dauer = Summe, Team = das grösste). Zwei Einsätze wären
+   * zwei Zuteilungen für eine Anfahrt und würden den Termin in der
+   * Disposition doppelt belegen.
+   *
+   * Damit downstream keine Leistung verloren geht: Der Titel nennt alle, die
+   * Checkliste enthält die Punkte jeder Leistung (bei mehreren mit deren Namen
+   * vorangestellt), und die Beschreibung listet sie mit ihrer Dauer. `serviceId`
+   * am Einsatz bleibt die erste Leistung — das Feld ist einwertig, und
+   * Kalenderfarbe und Auswertung je Leistungsart hängen daran; die
+   * vollständige Liste steht an der Buchung, auf die der Einsatz verweist.
+   */
+  const leistungen = eindeutigeLeistungen(booking.items);
+  const service = leistungen[0]?.service;
+  const mehrere = leistungen.length > 1;
   const { number } = await nextNumber(tx, booking.organizationId, 'job');
 
-  const checklistTemplate = service ? CHECKLIST_TEMPLATES[service.kind] : [];
+  const checklistTemplate = leistungen.flatMap(({ service: s }) =>
+    CHECKLIST_TEMPLATES[s.kind].map((item) => ({ ...item, label: mehrere ? `${s.name}: ${item.label}` : item.label })),
+  );
+  const namen = leistungen.map((l) => l.service.name).join(' + ') || 'Reinigung';
 
   const job = await tx.job.create({
     data: {
@@ -214,7 +235,10 @@ export async function createJobsForBooking(tx: Tx, bookingId: string): Promise<J
       addressId: booking.addressId,
       propertyId: booking.propertyId,
       serviceId: service?.id ?? null,
-      title: `${service?.name ?? 'Reinigung'} · ${booking.customer.companyName ?? booking.customer.lastName}`,
+      title: `${namen} · ${booking.customer.companyName ?? booking.customer.lastName}`,
+      description: mehrere
+        ? `Leistungen, nacheinander: ${leistungen.map((l) => `${l.service.name} (ca. ${Math.round((l.dauer / 60) * 10) / 10} Std.)`).join(', ')}`
+        : null,
       status: 'UNASSIGNED',
       scheduledStart: booking.scheduledStart,
       scheduledEnd: booking.scheduledEnd,
@@ -235,6 +259,17 @@ export async function createJobsForBooking(tx: Tx, bookingId: string): Promise<J
   });
 
   return [job];
+}
+
+/** Die Leistungen einer Buchung in Positionsreihenfolge, je Leistung einmal, mit ihrer Dauer. */
+function eindeutigeLeistungen<T extends { serviceId: string; position: number; durationMin: number; service: Service }>(items: T[]) {
+  const karte = new Map<string, { service: Service; dauer: number }>();
+  for (const item of [...items].sort((a, b) => a.position - b.position)) {
+    const eintrag = karte.get(item.serviceId);
+    if (eintrag) eintrag.dauer += item.durationMin;
+    else karte.set(item.serviceId, { service: item.service, dauer: item.durationMin });
+  }
+  return [...karte.values()];
 }
 
 export async function createJob(params: {

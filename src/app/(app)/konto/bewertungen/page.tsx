@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 import { Star } from 'lucide-react';
 
 import { prisma } from '@/lib/db';
+import { leistungsnamen } from '@/lib/booking/leistungen';
 import { requireCustomerId } from '@/lib/auth/session';
 import { cn, formatDate } from '@/lib/utils';
 import { Badge } from '@/components/ui/badge';
@@ -78,7 +79,7 @@ export default async function AccountReviewsPage() {
         id: true,
         number: true,
         scheduledStart: true,
-        items: { orderBy: { position: 'asc' }, take: 1, select: { name: true } },
+        items: { orderBy: { position: 'asc' }, select: { name: true, serviceId: true, position: true } },
       },
     }),
   ]);
@@ -87,7 +88,7 @@ export default async function AccountReviewsPage() {
     id: booking.id,
     number: booking.number,
     scheduledStart: booking.scheduledStart.toISOString(),
-    serviceName: booking.items[0]?.name ?? 'Reinigung',
+    serviceName: leistungsnamen(booking.items),
   }));
 
   return (

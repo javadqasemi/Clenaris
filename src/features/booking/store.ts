@@ -49,12 +49,21 @@ export type Frequency =
   | 'ANNUAL'
   | 'CUSTOM';
 
+/** Eine gewählte Leistung — mit ihrer Art, weil davon die Pflichtangaben abhängen. */
+export interface GewaehlteLeistung {
+  id: string;
+  slug: string;
+  kind: string;
+}
+
+/** Dauerhaft geplante Leistungsarten — nur sie erlauben einen Turnus. */
+export const WIEDERKEHRENDE_ARTEN = ['RESIDENTIAL_CLEANING', 'OFFICE_CLEANING'];
+
 export interface BookingState {
   step: BookingStep;
 
-  // Leistung
-  serviceId: string | null;
-  serviceSlug: string | null;
+  // Leistungen (seit 2026-09-26 eine oder mehrere, in der Reihenfolge der Wahl)
+  auswahl: GewaehlteLeistung[];
   frequency: Frequency;
 
   // Objekt
@@ -66,12 +75,20 @@ export interface BookingState {
   hasPets: boolean;
   propertyId: string | null;
 
-  // Extras
-  extras: Record<string, number>;
+  // Extras — je Leistung, denn „Backofen" gehört zur Umzugsreinigung, nicht
+  // zur Fensterreinigung daneben: `{ [serviceId]: { [extraId]: Menge } }`.
+  extras: Record<string, Record<string, number>>;
 
   // Termin
   scheduledStart: string | null;
   urgent: boolean;
+  /**
+   * Hinweis, wenn eine gewählte Uhrzeit durch eine spätere Änderung
+   * ungültig wurde (Leistung dazu, Fläche grösser …). Der Assistent löscht
+   * die Uhrzeit dann, statt einen Termin zu behalten, den der Server
+   * ablehnen würde — und sagt, warum.
+   */
+  terminHinweis: string | null;
 
   // Kontakt & Adresse
   /**
@@ -104,7 +121,9 @@ export interface BookingState {
   next: () => void;
   back: () => void;
   patch: (values: Partial<BookingState>) => void;
-  setExtra: (extraId: string, quantity: number) => void;
+  /** Leistung an- oder abwählen. Abwählen verwirft auch ihre Zusatzleistungen. */
+  toggleLeistung: (leistung: GewaehlteLeistung) => void;
+  setExtra: (serviceId: string, extraId: string, quantity: number) => void;
   reset: () => void;
   /** Ist der aktuelle Schritt vollständig ausgefüllt? */
   canProceed: () => boolean;
@@ -112,8 +131,7 @@ export interface BookingState {
 
 const INITIAL = {
   step: 'leistung' as BookingStep,
-  serviceId: null,
-  serviceSlug: null,
+  auswahl: [] as GewaehlteLeistung[],
   frequency: 'ONCE' as Frequency,
   propertyKind: 'APARTMENT' as PropertyKind,
   squareMeters: null,
@@ -122,9 +140,10 @@ const INITIAL = {
   windows: null,
   hasPets: false,
   propertyId: null,
-  extras: {} as Record<string, number>,
+  extras: {} as Record<string, Record<string, number>>,
   scheduledStart: null,
   urgent: false,
+  terminHinweis: null,
   requiresContact: true,
   firstName: '',
   lastName: '',
@@ -164,12 +183,26 @@ export const useBookingStore = create<BookingState>()(
 
       patch: (values) => set(values),
 
-      setExtra: (extraId, quantity) =>
+      toggleLeistung: (leistung) =>
         set((state) => {
+          const gewaehlt = state.auswahl.some((l) => l.id === leistung.id);
+          const auswahl = gewaehlt
+            ? state.auswahl.filter((l) => l.id !== leistung.id)
+            : [...state.auswahl, leistung];
           const extras = { ...state.extras };
-          if (quantity <= 0) delete extras[extraId];
-          else extras[extraId] = quantity;
-          return { extras };
+          if (gewaehlt) delete extras[leistung.id];
+          // Ein Turnus nur, wenn *jede* gewählte Leistung wiederkehrend
+          // planbar ist — eine Umzugsreinigung wöchentlich gibt es nicht.
+          const wiederkehrend = auswahl.length > 0 && auswahl.every((l) => WIEDERKEHRENDE_ARTEN.includes(l.kind));
+          return { auswahl, extras, ...(wiederkehrend ? {} : { frequency: 'ONCE' as Frequency }) };
+        }),
+
+      setExtra: (serviceId, extraId, quantity) =>
+        set((state) => {
+          const jeLeistung = { ...(state.extras[serviceId] ?? {}) };
+          if (quantity <= 0) delete jeLeistung[extraId];
+          else jeLeistung[extraId] = quantity;
+          return { extras: { ...state.extras, [serviceId]: jeLeistung } };
         }),
 
       reset: () => set(INITIAL),
@@ -178,10 +211,18 @@ export const useBookingStore = create<BookingState>()(
         const state = get();
         switch (state.step) {
           case 'leistung':
-            return Boolean(state.serviceId);
-          case 'objekt':
-            // Fensterreinigung braucht die Fensterzahl, alles andere die Fläche.
-            return Boolean(state.squareMeters ?? state.windows ?? state.rooms);
+            return state.auswahl.length > 0;
+          case 'objekt': {
+            // Fensterreinigung braucht die Fensterzahl, alles andere Fläche
+            // oder Zimmer — bei einer Auswahl aus beidem beides.
+            const fenster = state.auswahl.some((l) => l.kind === 'WINDOW_CLEANING');
+            const flaeche = state.auswahl.some((l) => l.kind !== 'WINDOW_CLEANING');
+            return (
+              (!fenster || Boolean(state.windows)) &&
+              (!flaeche || Boolean(state.squareMeters ?? state.rooms)) &&
+              state.auswahl.length > 0
+            );
+          }
           case 'extras':
             return true;
           case 'termin':
@@ -209,6 +250,14 @@ export const useBookingStore = create<BookingState>()(
     }),
     {
       name: 'clenaris-booking',
+      /**
+       * Fassung 2 (2026-09-26): `serviceId` wurde zu `auswahl`, `extras` zu
+       * Zusatzleistungen je Leistung. Ein im Tab gespeicherter Stand der
+       * alten Form wird verworfen statt umgedeutet — eine halb übersetzte
+       * Auswahl wäre schlimmer als ein Neubeginn im ersten Schritt.
+       */
+      version: 2,
+      migrate: () => ({ ...INITIAL }) as unknown as BookingState,
       storage: createJSONStorage(() => sessionStorage),
       // Der Schritt selbst wird nicht persistiert: nach einem Neuladen soll der
       // Assistent von vorne durchlaufen, die Eingaben bleiben aber erhalten.

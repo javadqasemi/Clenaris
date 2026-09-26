@@ -32,6 +32,53 @@ export interface PriceInput {
 }
 
 /**
+ * Eine Leistung innerhalb einer Buchung mit ihren eigenen Angaben
+ * (Produktsprint 2026-09-26).
+ *
+ * Die Angaben stehen *je Leistung*, weil sie je Leistung etwas anderes
+ * bedeuten: Für die Büroreinigung zählt die Fläche, für die Fensterreinigung
+ * die Zahl der Fenster, und eine Zusatzleistung wie „Backofen" gehört zur
+ * Umzugsreinigung, nicht zur Fensterreinigung daneben.
+ */
+export interface LeistungInput {
+  serviceId: string;
+  squareMeters?: number | null;
+  rooms?: number | null;
+  bathrooms?: number | null;
+  windows?: number | null;
+  manualHours?: number | null;
+  extras: { extraId: string; quantity: number }[];
+}
+
+/**
+ * Eingabe für eine Buchung mit einer oder mehreren Leistungen.
+ *
+ * Was nicht je Leistung gilt — Objektart, Haustiere, Termin, Rhythmus,
+ * Postleitzahl, Gutschein, Kundschaft —, steht einmal für die ganze Buchung.
+ */
+export interface BookingPriceInput
+  extends Omit<PriceInput, 'serviceId' | 'squareMeters' | 'rooms' | 'bathrooms' | 'windows' | 'manualHours' | 'extras'> {
+  leistungen: LeistungInput[];
+}
+
+/** Was eine einzelne Leistung zur Buchung beiträgt. */
+export interface PricePosition {
+  serviceId: string;
+  name: string;
+  kind: ServiceKind;
+  pricingModel: PricingModel;
+  /** Dauer dieser Leistung einschliesslich ihrer Zusatzleistungen. */
+  durationMinutes: number;
+  crewSize: number;
+  /** Grundpreis dieser Leistung (Arbeit, Fläche, Stück, Pauschale, Grundpauschale). */
+  subtotal: number;
+  extrasTotal: number;
+  /** „Puffer zwischen Einsätzen" aus dem Katalog. */
+  bufferMinutes: number;
+  onRequest: boolean;
+}
+
+/**
  * Warum ein Gutschein greift oder nicht. `APPLIED` ist der einzige Zustand,
  * in dem eine Rabattzeile entsteht; jeder andere trägt eine Begründung, die
  * das Formular direkt neben dem Feld anzeigt und die der Buchungsabschluss
@@ -68,15 +115,27 @@ export interface PriceLine {
 }
 
 export interface PriceBreakdown {
+  /**
+   * Die erste Leistung — für Stellen, die aus der Zeit mit genau einer
+   * Leistung stammen. Wer alle Leistungen braucht, liest `positionen`.
+   */
   service: {
     id: string;
     name: string;
     kind: ServiceKind;
     pricingModel: PricingModel;
   };
+  /** Alle Leistungen der Buchung, in der gewählten Reihenfolge. */
+  positionen: PricePosition[];
   lines: PriceLine[];
-  /** Geschätzte Einsatzdauer in Minuten (inkl. Extras, ohne Anfahrt). */
+  /**
+   * Geschätzte Einsatzdauer in Minuten (inkl. Extras, ohne Anfahrt). Bei
+   * mehreren Leistungen die Summe: Sie werden nacheinander vom selben Team
+   * ausgeführt, nicht parallel von mehreren.
+   */
   durationMinutes: number;
+  /** Grösster „Puffer zwischen Einsätzen" der gebuchten Leistungen. */
+  bufferMinutes: number;
   crewSize: number;
   /** Kalkulierte Arbeitsstunden (durationMinutes × crewSize / 60). */
   laborHours: number;

@@ -3,6 +3,7 @@ import Link from 'next/link';
 import { CalendarPlus, Clock, MapPin } from 'lucide-react';
 
 import { toNumber } from '@/lib/db';
+import { leistungsnamen } from '@/lib/booking/leistungen';
 import { requireCustomerId } from '@/lib/auth/session';
 import { formatCurrency, formatDateLong, timeRangeLabel } from '@/lib/utils';
 import { getOrganizationId } from '@/server/services/organization.service';
@@ -119,7 +120,7 @@ function BookingList({ bookings }: { bookings: BookingListItem[] }) {
                   <Clock className="size-3.5 shrink-0" aria-hidden />
                   {timeRangeLabel(booking.scheduledStart, booking.scheduledEnd)} Uhr
                 </p>
-                <p className="font-medium">{booking.items[0]?.name ?? 'Reinigung'}</p>
+                <p className="font-medium">{leistungsnamen(booking.items)}</p>
                 {booking.address ? (
                   <p className="flex items-center gap-2 text-sm text-muted-foreground">
                     <MapPin className="size-3.5 shrink-0" aria-hidden />

@@ -1158,7 +1158,7 @@ export async function getCustomerDetail(params: {
         where: { deletedAt: null },
         orderBy: { scheduledStart: 'desc' },
         take: 10,
-        include: { items: { select: { name: true }, take: 1 } },
+        include: { items: { select: { name: true, serviceId: true, position: true } } },
       },
       invoices: {
         where: { deletedAt: null },
