@@ -17,6 +17,9 @@
 #   3. TLS           Ablauf des Zertifikats (openssl), ohne HTTP-Anfrage
 #   4. Dateien       eine feste, kurze Liste von Pfaden, die nie erreichbar sein
 #                    dürfen (.env, .git, Abzüge, Schema) — nur GET, begrenzte Grösse
+#   5. Betrieb       GET /api/cron/status mit SECURITY_REPORT_TOKEN: geplante
+#                    Läufe, ClamAV erreichbar, Alter von Sicherung und
+#                    bestandener Wiederherstellungsprobe — je eigener Alarm
 #
 # Meldet das Ergebnis an die Sicherheitszentrale (EXTERNAL_MONITOR) und
 # alarmiert über alert.sh — mit Entwarnung, wenn ein Problem verschwindet.
@@ -188,11 +191,68 @@ LISTE
   fi
 fi
 
+# --- 5. Betrieb: geplante Läufe, Schadsoftwareprüfer, Sicherung, Probe ---------
+# Mit dem Überwachungstoken (SECURITY_REPORT_TOKEN), nicht mit CRON_SECRET:
+# Dieses Token liest den Zustand, löst aber keinen Lauf aus. Jeder Punkt hat
+# einen eigenen Alarmschlüssel — ein gemeinsamer Alarm hiesse, erst suchen zu
+# müssen, was los ist.
+cron_gesund=unbekannt
+pruefer=unbekannt
+sicherung_h=-1
+probe_h=-1
+if [[ "$erreichbar" == true && -n "${SECURITY_REPORT_TOKEN:-}" && "$SECURITY_REPORT_TOKEN" != *'"'* ]]; then
+  code="$(printf 'url = "https://%s/api/cron/status"\nheader = "Authorization: Bearer %s"\n' "$host" "$SECURITY_REPORT_TOKEN" |
+    curl --silent --proto '=https' --max-time "$MONITOR_ZEITLIMIT_S" --config - -o "$arbeit/status.json" -w '%{http_code}' 2>/dev/null || echo 000)"
+  pause
+  if [[ "$code" == "200" || "$code" == "503" ]] && jq -e '.betrieb' "$arbeit/status.json" >/dev/null 2>&1; then
+    cron_gesund="$(jq -r '.gesund' "$arbeit/status.json")"
+    if [[ "$cron_gesund" != "true" ]]; then
+      befund kritisch "Geplante Läufe ausgeblieben, hängend oder wiederholt gescheitert" "/api/cron/status"
+      hebe KRITISCH
+      "$HIER/alert.sh" kritisch cron "geplante Läufe nicht gesund" || true
+    else
+      "$HIER/alert.sh" entwarnung cron "geplante Läufe gesund" || true
+    fi
+
+    pruefer="$(jq -r '.betrieb.schadsoftwarepruefer | if .eingerichtet | not then "fehlt" elif .art != "clamav" then .art elif .erreichbar then "erreichbar" else "stumm" end' "$arbeit/status.json")"
+    if [[ "$pruefer" != "erreichbar" ]]; then
+      befund kritisch "Schadsoftwareprüfer: $pruefer — neue Dateien bleiben gesperrt" "ClamAV"
+      hebe KRITISCH
+      "$HIER/alert.sh" kritisch clamav "Schadsoftwareprüfer $pruefer" || true
+    else
+      "$HIER/alert.sh" entwarnung clamav "Schadsoftwareprüfer erreichbar" || true
+    fi
+
+    sicherung_h="$(jq -r '.betrieb.sicherung.alterStunden // -1' "$arbeit/status.json")"
+    if [[ "$(jq -r '.betrieb.sicherung.frisch' "$arbeit/status.json")" != "true" ]]; then
+      befund hoch "Letzte gemeldete Sicherung zu alt oder nie ($sicherung_h h)" "BACKUP"
+      hebe WARNUNG
+      "$HIER/alert.sh" warnung sicherung "letzte Sicherung ${sicherung_h} h (oder nie)" || true
+    else
+      "$HIER/alert.sh" entwarnung sicherung "Sicherung aktuell" || true
+    fi
+
+    probe_h="$(jq -r '.betrieb.wiederherstellung.alterStunden // -1' "$arbeit/status.json")"
+    if [[ "$(jq -r '.betrieb.wiederherstellung.frisch' "$arbeit/status.json")" != "true" ]]; then
+      befund hoch "Letzte bestandene Wiederherstellungsprobe zu alt oder nie ($probe_h h)" "BACKUP"
+      hebe WARNUNG
+      "$HIER/alert.sh" warnung wiederherstellung "letzte bestandene Probe ${probe_h} h (oder nie)" || true
+    else
+      "$HIER/alert.sh" entwarnung wiederherstellung "Wiederherstellungsprobe aktuell" || true
+    fi
+  else
+    befund hoch "Betriebszustand nicht lesbar (HTTP $code) — Token prüfen" "/api/cron/status"
+    hebe WARNUNG
+  fi
+fi
+
 # --- Bericht ---------------------------------------------------------------
 anzahl="$(wc -l < "$BEFUNDE" | tr -d ' ')"
 kennzahlen="$(jq -cn --argjson e "$erreichbar" --argjson ms "$antwort_ms" --arg hs "$health_status" \
   --argjson tls "$tls_tage" --argjson kf "$fehlend" --argjson od "$offen" \
-  '{erreichbar: $e, antwortMs: $ms, healthStatus: $hs, tlsTageBisAblauf: $tls, kopfzeilenFehlend: $kf, offengelegteDateien: $od}')"
+  --arg cg "$cron_gesund" --arg pr "$pruefer" --argjson sh "$sicherung_h" --argjson ph "$probe_h" \
+  '{erreichbar: $e, antwortMs: $ms, healthStatus: $hs, tlsTageBisAblauf: $tls, kopfzeilenFehlend: $kf, offengelegteDateien: $od,
+    cronGesund: $cg, schadsoftwarepruefer: $pr, backupAlterStunden: $sh, wiederherstellungAlterStunden: $ph}')"
 zusammenfassung="Erreichbar: $erreichbar, TLS noch $tls_tage Tage, $fehlend Kopfzeile(n) fehlen, $offen Datei(en) offen, $anzahl Befund(e)."
 melden EXTERNAL_MONITOR "$schwerste" "$zusammenfassung" "$kennzahlen"
 protokoll "security_check: $schwerste — $zusammenfassung"

@@ -146,7 +146,8 @@ export async function getSicherheitsUeberblick(
   };
 }
 
-async function scannerZustand(): Promise<SicherheitsUeberblick['scanner']> {
+/** Auch für `/api/cron/status` (externe Überwachung) — derselbe `zPING`, keine zweite Prüfung. */
+export async function scannerZustand(): Promise<SicherheitsUeberblick['scanner']> {
   const grund = scannerEingerichtet();
   if (grund.art !== 'clamav') return { ...grund, erreichbar: null, version: null };
   const scanner = getScanner();

@@ -43,7 +43,7 @@ leerem `SECURITY_REPORT_URL` (siehe „Erprobung").
 | Datei | Wo | Was |
 |---|---|---|
 | `lib.sh` | beide | Gemeinsame Hilfen: Takt (≤ 2/s), Protokoll, Befunde, Bericht |
-| `security_check.sh` | Überwachungsrechner | Gesundheit, Kopfzeilen, TLS, offen erreichbare Dateien → `EXTERNAL_MONITOR` |
+| `security_check.sh` | Überwachungsrechner | Erreichbarkeit und Antwortzeit (`/api/health`), Sicherheitskopfzeilen, TLS-Ablauf, offen erreichbare Dateien, dazu über `/api/cron/status` mit dem Überwachungstoken: geplante Läufe, ClamAV erreichbar, Alter der letzten Sicherung und der letzten bestandenen Wiederherstellungsprobe — je eigener Alarmschlüssel → `EXTERNAL_MONITOR` |
 | `zap_baseline.sh` | Überwachungsrechner | ZAP-Baseline, **nur passiv** → `ZAP_BASELINE` |
 | `deps_check.sh` | Anwendungsserver | OS-Updates, npm audit, ClamAV-Signaturen, Sicherungsalter, AIDE → `DEPENDENCY_CHECK`, `HOST_INTEGRITY` |
 | `alert.sh` | beide | Alarm mit Schwere und Entdoppelung (Webhook, Mail, syslog) |
@@ -78,7 +78,10 @@ sudoedit /etc/clenaris-monitor/monitor.env      # Ziel, Token, Alarmwege
 ```
 
 `SECURITY_REPORT_TOKEN` muss **derselbe Wert** sein wie in der `.env` der
-Anwendung und darf **nicht** `CRON_SECRET` sein. Mindestens 32 zufällige
+Anwendung und darf **nicht** `CRON_SECRET` sein. Mit ihm liest der
+Überwachungsrechner auch `/api/cron/status`; `/api/cron/hourly` und `/daily`
+nehmen es nicht an — der Überwachungsrechner kann keinen Lauf auslösen.
+`CRON_SECRET` gehört **nicht** auf diesen Rechner. Mindestens 32 zufällige
 Zeichen: `openssl rand -hex 32`.
 
 Für `zap_baseline.sh` braucht der Benutzer Docker-Rechte

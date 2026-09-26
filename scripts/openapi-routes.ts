@@ -4131,7 +4131,10 @@ export const ROUTES: RouteDoc[] = [
     description:
       'Für eine Überwachung von aussen: 200, wenn jeder Auftrag frisch ist, keiner hängt und keiner ' +
       'wiederholt scheitert; sonst **503**. Bleiben stündlicher und nächtlicher Lauf beide aus, ' +
-      'meldet von innen niemand etwas — diese Adresse schon. Zeitpunkte und Zahlen, keine Inhalte.',
+      'meldet von innen niemand etwas — diese Adresse schon. Zeitpunkte und Zahlen, keine Inhalte. ' +
+      'Dazu `betrieb`: Erreichbarkeit des Schadsoftwareprüfers, Alter der letzten Sicherung und der letzten ' +
+      'bestandenen Wiederherstellungsprobe (ohne Einfluss auf den Statuscode). Bearer `CRON_SECRET` oder ' +
+      '`SECURITY_REPORT_TOKEN` — Letzteres öffnet nur diesen lesenden Endpunkt, keinen Lauf.',
     guard: { kind: 'cron' },
   },
   {

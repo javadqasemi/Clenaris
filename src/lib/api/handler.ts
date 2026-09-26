@@ -443,6 +443,8 @@ function secretsMatch(provided: string, expected: string): boolean {
  * Endpunkt, der ausschliesslich vom Scheduler aufgerufen werden darf.
  * Vercel Cron sendet `Authorization: Bearer $CRON_SECRET`.
  */
+type CronGeheimnis = 'CRON_SECRET' | 'SECURITY_REPORT_TOKEN';
+
 export function defineCronRoute(config: {
   handler: (request: NextRequest) => Promise<Response> | Response;
   /**
@@ -453,7 +455,7 @@ export function defineCronRoute(config: {
    * die geplanten Läufe auslösen können — und umgekehrt. Ein gemeinsames
    * Geheimnis hätte beide Rechte an denselben Rechner gebunden.
    */
-  secretEnv?: 'CRON_SECRET' | 'SECURITY_REPORT_TOKEN';
+  secretEnv?: CronGeheimnis | CronGeheimnis[];
 }) {
   return async (request: NextRequest): Promise<Response> => {
     /**
@@ -466,9 +468,16 @@ export function defineCronRoute(config: {
      */
     return mitBeobachtung(request, {}, async () => {
     try {
-      const secret = process.env[config.secretEnv ?? 'CRON_SECRET'];
+      // Mehrere erlaubte Geheimnisse nur für rein lesende Endpunkte (der
+      // Zustand der Läufe für die Überwachung) — jedes wird zeitkonstant
+      // verglichen, ein leeres zählt nicht.
+      const namen = Array.isArray(config.secretEnv) ? config.secretEnv : [config.secretEnv ?? 'CRON_SECRET'];
       const provided = request.headers.get('authorization')?.replace(/^Bearer\s+/i, '');
-      if (!secret || !provided || !secretsMatch(provided, secret)) {
+      const passt = namen.some((name) => {
+        const secret = process.env[name];
+        return Boolean(secret && provided && secretsMatch(provided, secret));
+      });
+      if (!passt) {
         throw new UnauthorizedError('Ungültiges Cron-Token.');
       }
       return await config.handler(request);

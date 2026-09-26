@@ -157,6 +157,37 @@ export async function sicherheitsupdateLage(organizationId: string, jetzt = new 
   };
 }
 
+/** Sicherung: spätestens alle 26 h. Wiederherstellungsprobe: spätestens alle 35 Tage (monatlich plus Spielraum). */
+export const SICHERUNG_STUNDEN = 26;
+export const WIEDERHERSTELLUNG_TAGE = 35;
+
+/**
+ * Frische von Sicherung und Wiederherstellungsprobe — getrennt, obwohl beide
+ * unter der Quelle `BACKUP` melden (2026-09-26).
+ *
+ * In der Sicherheitszentrale steht nur der jeweils letzte Bericht; für die
+ * Überwachung reicht das nicht: Eine tägliche Sicherung überdeckte sonst eine
+ * seit Monaten ausgebliebene Wiederherstellungsprobe. Deshalb wird je Art der
+ * letzte *erfolgreiche* Bericht gesucht — erkennbar an seiner Kennzahl
+ * (`backupAlterStunden` bzw. `wiederherstellungErgebnis = bestanden`).
+ */
+export async function sicherungsFrische(organizationId: string, jetzt = new Date()) {
+  const berichte = await prisma.securityReport.findMany({
+    where: { organizationId, source: 'BACKUP', status: 'OK' },
+    orderBy: { receivedAt: 'desc' },
+    take: 100,
+    select: { receivedAt: true, details: true },
+  });
+  const kennzahl = (d: unknown, k: string) => ((d ?? {}) as { kennzahlen?: Record<string, unknown> }).kennzahlen?.[k];
+  const sicherung = berichte.find((b) => kennzahl(b.details, 'backupAlterStunden') !== undefined)?.receivedAt ?? null;
+  const probe = berichte.find((b) => kennzahl(b.details, 'wiederherstellungErgebnis') === 'bestanden')?.receivedAt ?? null;
+  const alterStunden = (d: Date | null) => (d ? Math.floor((jetzt.getTime() - d.getTime()) / 3_600_000) : null);
+  return {
+    sicherung: { zuletzt: sicherung, alterStunden: alterStunden(sicherung), frisch: sicherung !== null && alterStunden(sicherung)! <= SICHERUNG_STUNDEN },
+    wiederherstellung: { zuletzt: probe, alterStunden: alterStunden(probe), frisch: probe !== null && alterStunden(probe)! <= WIEDERHERSTELLUNG_TAGE * 24 },
+  };
+}
+
 /** Je Quelle der letzte Bericht und ob er frisch ist. */
 export async function berichtsZustand(organizationId: string, jetzt = new Date()): Promise<QuellenZustand[]> {
   const quellen = Object.keys(ERWARTET_ALLE_STUNDEN) as SecurityReportSource[];

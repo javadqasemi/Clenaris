@@ -75,9 +75,44 @@ describe('Berichtseingang', () => {
     assert.equal(gespeichert?.status, 'OK');
   });
 
-  it('das Token des Berichtseingangs öffnet keine geplanten Läufe', async () => {
+  it('das Token des Berichtseingangs löst keine geplanten Läufe aus', async () => {
+    for (const lauf of ['/api/cron/hourly', '/api/cron/daily']) {
+      const r = await fetch(`${BASE_URL}${lauf}`, { headers: { authorization: `Bearer ${PRUEF_SICHERHEITSBERICHT_TOKEN}` } });
+      assert.equal(r.status, 401, lauf);
+    }
+  });
+
+  it('… liest aber den Betriebszustand für die Überwachung: Läufe, Schadsoftwareprüfer, Sicherung, Wiederherstellung', async (t) => {
+    const ohne = await fetch(`${BASE_URL}/api/cron/status`);
+    assert.equal(ohne.status, 401);
+    const falsch = await fetch(`${BASE_URL}/api/cron/status`, { headers: { authorization: 'Bearer falsch' } });
+    assert.equal(falsch.status, 401);
+
+    const db = testDb();
+    if (!db) return t.skip('keine Testdatenbank');
+    // Eine Sicherung und eine bestandene Probe melden — getrennt ausgewertet,
+    // obwohl beide unter BACKUP laufen.
+    assert.equal((await senden(bericht({ quelle: 'BACKUP', zusammenfassung: `${MARKE}: Sicherung`, kennzahlen: { backupAlterStunden: 0 } }))).status, 201);
+    assert.equal((await senden(bericht({ quelle: 'BACKUP', zusammenfassung: `${MARKE}: Probe`, kennzahlen: { wiederherstellungErgebnis: 'bestanden' } }))).status, 201);
+
     const r = await fetch(`${BASE_URL}/api/cron/status`, { headers: { authorization: `Bearer ${PRUEF_SICHERHEITSBERICHT_TOKEN}` } });
-    assert.equal(r.status, 401);
+    // Der Statuscode sagt weiterhin nur etwas über die Läufe (200 oder 503).
+    assert.ok([200, 503].includes(r.status), `HTTP ${r.status}`);
+    const zustand = (await r.json()) as {
+      gesund: boolean;
+      betrieb: {
+        schadsoftwarepruefer: { eingerichtet: boolean; art: string };
+        sicherung: { frisch: boolean; alterStunden: number | null };
+        wiederherstellung: { frisch: boolean; alterStunden: number | null };
+      };
+    };
+    assert.equal(typeof zustand.gesund, 'boolean');
+    assert.equal(typeof zustand.betrieb.schadsoftwarepruefer.eingerichtet, 'boolean');
+    assert.equal(zustand.betrieb.sicherung.frisch, true);
+    assert.equal(zustand.betrieb.sicherung.alterStunden, 0);
+    assert.equal(zustand.betrieb.wiederherstellung.frisch, true);
+    // Keine Inhalte: kein Pfad, kein Hash, keine Verbindungsangabe.
+    assert.doesNotMatch(JSON.stringify(zustand), /postgres|\.dump|sha256|password/i);
   });
 
   it('ungültige Inhalte: 422 — unbekannte Quelle, zu viele Befunde, zu lange Texte, Zeit in der Zukunft', async () => {
