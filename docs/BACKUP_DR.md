@@ -75,9 +75,11 @@ anlegt.** Nicht bewiesen ist, dass die Produktion so gesichert wird.
 2. Hetzner-Backup für den Server einschalten (ergänzt, ersetzt nicht 1).
 3. Die Schlüssel aus der `.env` (`ENCRYPTION_KEY*`, `JWT_SECRET`,
    `CRON_SECRET`) in einem Passwortmanager ausserhalb des Servers führen.
-4. **Vierteljährlich** `db-restore-verify.ts` gegen die jüngste Kopie vom
+4. **Monatlich** `db-restore-verify.ts` gegen die jüngste Kopie vom
    zweiten Ort — nicht gegen die Datei auf dem Server —, Ergebnis
-   protokollieren.
+   protokollieren. (Bis 2026-09-26 stand hier „vierteljährlich"; die
+   Überwachung erwartet seither eine bestandene Probe spätestens alle
+   35 Tage, `WIEDERHERSTELLUNG_TAGE` in `security-report.service.ts`.)
 5. RPO/RTO festlegen; Vorschlag: RPO 24 h, RTO 4 h.
 6. Einen Überwacher für das Ausbleiben der Sicherung (dasselbe Werkzeug wie
    für den Cron-Monitor, siehe offene externe Punkte).
@@ -97,3 +99,39 @@ anlegt.** Nicht bewiesen ist, dass die Produktion so gesichert wird.
 
 Keiner dieser Schritte ist gegen die Produktion geübt —
 **EXTERNAL VERIFICATION REQUIRED**.
+
+## 6. Abnahme vor Production V2 (Stand 2026-09-26)
+
+Eine Hetzner-Server-Sicherung allein **genügt nicht**: Sie liegt beim selben
+Anbieter, im selben Konto, ist nicht verschlüsselt unter eigener Kontrolle
+und beweist nicht, dass die Datenbank daraus konsistent zurückkommt. Sie
+ergänzt die Datenbanksicherung, sie ersetzt sie nicht.
+
+Was **im Code vorhanden** ist (Repository, örtlich geprüft): `db-backup.ts`
+(Archiv, Lesbarkeit, SHA-256, Aufbewahrung am Ort), `db-restore-verify.ts`
+(Wegwerfdatenbank, Zeilen, Trigger, Teilindizes), beide **melden** an die
+Sicherheitszentrale; `/api/cron/status` liefert das Alter der letzten
+Sicherung und der letzten bestandenen Probe; `security_check.sh` alarmiert je
+Punkt. Was **nicht im Code** ist und zum Betrieb gehört: Zeitplan, Kopie an
+einen zweiten Ort, Verschlüsselung, gestaffelte Aufbewahrung.
+
+| Nr. | Punkt | Abnahme (Nachweis) | Stand |
+|---|---|---|---|
+| BK-1 | Tägliche Sicherung | systemd-Timer/Cron ruft `db-backup.ts --grund taeglich`; zwei aufeinanderfolgende Tage mit `BACKUP_DATEI=` im Journal | offen, extern |
+| BK-2 | Prüfsumme | `BACKUP_SHA256` im Journal; nach der Übertragung an den zweiten Ort denselben SHA-256 **dort** berechnen und vergleichen | offen, extern |
+| BK-3 | Aufbewahrung am Ort | `CLENARIS_BACKUP_KEEP` gesetzt (z. B. 7); nach acht Läufen sieben Archive | offen, extern |
+| BK-4 | Zweiter Ort, ausserhalb des Servers | Storage Box oder Objektspeicher in der Schweiz, **anderes Konto/anderer Zugang** als der Server; Server darf dort nur schreiben, nicht löschen (Append-only/Unveränderlichkeit, falls verfügbar) | offen, extern |
+| BK-5 | Verschlüsselung | Archiv vor dem Kopieren mit `age`/`gpg` auf einen öffentlichen Schlüssel verschlüsselt; privater Schlüssel offline, nicht auf dem Server | offen, extern |
+| BK-6 | Gestaffelte Aufbewahrung am zweiten Ort | z. B. 14 täglich, 12 monatlich, 10 jährlich (Art. 958f OR); Löschregel dort, nicht auf dem Server | offen, extern |
+| BK-7 | Schlüssel und `.env` getrennt | `ENCRYPTION_KEY*` (auch ausgemusterte), `JWT_SECRET`, `CRON_SECRET`, `SECURITY_REPORT_TOKEN` im Passwortmanager ausserhalb des Servers | offen, extern |
+| RS-1 | Wiederherstellungsprobe vom zweiten Ort | monatlich: Archiv holen, entschlüsseln, SHA-256 prüfen, `db-restore-verify.ts` → „alle Zeilenzahlen stimmen überein", Trigger und Teilindizes gleich | offen, extern |
+| RS-2 | Vollständige Übung | einmal vor Inbetriebnahme Abschnitt 5 auf einem Wegwerfserver durchspielen, Zeit messen (RTO) | offen, extern |
+| RS-3 | RPO/RTO beschlossen | Geschäftsleitung; Vorschlag RPO 24 h, RTO 4 h | offen, Entscheid |
+| MO-1 | Meldung an die Zentrale | `SECURITY_REPORT_URL`/`SECURITY_REPORT_TOKEN` auf dem Server gesetzt; `/admin/sicherheit` zeigt „Sicherung und Wiederherstellung" mit frischem Bericht | offen, extern |
+| MO-2 | Alarm bei Ausbleiben | `/api/cron/status` → `betrieb.sicherung.frisch` / `betrieb.wiederherstellung.frisch`; `security_check.sh` alarmiert `sicherung`/`wiederherstellung` (Probe: Timer einen Tag aussetzen) | Code vorhanden; Einrichtung extern |
+| MO-3 | Alarm bei Fehlschlag | `db-backup.ts` meldet bei Fehler `KRITISCH` → Sicherheitsereignis und Alarm; Probe mit falscher `BACKUP_DATABASE_URL` | Code vorhanden; Abnahme extern |
+| DT-1 | Dateien | Ist in V2 der eingebaute Speicher (`LOCAL`) aktiv, sind Dateien im Archiv; sonst eigener Sicherungsweg für den Objektspeicher (B-DR-6) | Entscheid bei V2 |
+
+**BACKUP PLAN READY** heisst hier: Die Punkte sind vollständig beschrieben und
+der Code trägt sie. **Abgenommen** ist davon nichts — jede Zeile verlangt
+einen Nachweis auf der echten Infrastruktur.
