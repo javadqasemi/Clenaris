@@ -761,8 +761,16 @@ describe('RB-012 — vom zeitbezogenen Auslöser bis zur ausgeführten Aktion', 
 
     const zweiter = await stuendlich();
     assert.ok([200, 500].includes(zweiter.status));
-    const nachher = await db.automationRun.findMany({ where: eigene });
-    assert.equal(nachher.find((l) => l.entityId === offen)?.status, 'SUCCESS', 'Die offene Aufgabe löst die Aktion aus');
+    const nachher = await db.automationRun.findMany({ where: eigene, include: { aktionen: true } });
+    const offenerLauf = nachher.find((l) => l.entityId === offen);
+    // Mit Fehlertext und Lauf-Antwort: Bleibt der Lauf stehen, soll die
+    // Meldung sagen, ob er gar nicht angefasst wurde (Antwort des Takts) oder
+    // gescheitert und zurückgestellt ist (Fehler, Versuche).
+    assert.equal(
+      offenerLauf?.status,
+      'SUCCESS',
+      `Die offene Aufgabe löst die Aktion aus — Versuche ${offenerLauf?.attempts}, Fehler ${offenerLauf?.error ?? '—'}, Aktionen ${JSON.stringify(offenerLauf?.aktionen.map((a) => [a.status, a.error]))}, Takt HTTP ${zweiter.status} ${JSON.stringify(zweiter.payload).slice(0, 600)}`,
+    );
     assert.equal(nachher.find((l) => l.entityId === erledigt)?.status, 'SKIPPED', 'Die erledigte nicht mehr');
 
     // Ein dritter Lauf meldet nichts doppelt.
@@ -880,7 +888,12 @@ describe('Automatisierung — jede Aktion höchstens einmal', () => {
       await stuendlich();
     }
 
-    const folge = await db.task.count({ where: { title: { startsWith: `Folgeaufgabe Einmal ${RUN}` } } });
+    // Nur die Folgeaufgabe der *eigenen* Aufgabe zählt: `{{titel}}` setzt
+    // deren Titel ein. Eine offene Demo-Aufgabe, deren Frist zufällig im
+    // Suchfenster des stündlichen Laufs liegt, löst dieselbe Regel zu Recht
+    // ebenfalls aus — gezählt über das blosse Präfix lief „die erste Aktion"
+    // dann scheinbar zweimal, je nach Uhrzeit des Prüflaufs (2026-09-27).
+    const folge = await db.task.count({ where: { title: `Folgeaufgabe Einmal ${RUN} Einmal ${RUN}` } });
     assert.equal(folge, 1, `die erste Aktion lief ${folge}-mal`);
 
     const lauf = await db.automationRun.findFirstOrThrow({ where: eigene, include: { aktionen: { orderBy: { position: 'asc' } } } });
