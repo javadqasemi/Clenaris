@@ -113,7 +113,7 @@ export default async function ObjectivesPage({ searchParams }: { searchParams: P
                 <DataCell muted>{o.quarter ? `Q${o.quarter} ${o.fiscalYear}` : o.endsOn ? `bis ${formatDate(o.endsOn)}` : o.fiscalYear ? String(o.fiscalYear) : '—'}</DataCell>
                 <DataCell numeric>
                   <span className="flex items-center justify-end gap-2">
-                    <Progress value={o.progressPct} className="hidden w-16 sm:block" />
+                    <Progress value={o.progressPct} className="hidden w-16 sm:block" aria-label={`Fortschritt ${o.title}`} />
                     {o.progressPct} %
                   </span>
                 </DataCell>

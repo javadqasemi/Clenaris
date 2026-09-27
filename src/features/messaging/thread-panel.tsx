@@ -55,7 +55,7 @@ export function ThreadPanel({
 }) {
   const queryClient = useQueryClient();
   const [draft, setDraft] = React.useState('');
-  const endRef = React.useRef<HTMLDivElement>(null);
+  const endRef = React.useRef<HTMLLIElement>(null);
 
   const thread = useQuery({
     queryKey: queryKeys.thread(id),
@@ -147,7 +147,8 @@ export function ThreadPanel({
             </li>
           );
         })}
-        <div ref={endRef} />
+        {/* Rollanker als `<li>`: In einer Liste darf direkt nichts anderes stehen (axe `list`, 2026-09-27). */}
+        <li ref={endRef} aria-hidden className="list-none" />
       </ol>
 
       {data.closed ? (

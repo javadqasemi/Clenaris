@@ -7,7 +7,7 @@ import { AlertCircle, Loader2, Search } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { api } from '@/lib/api/client';
 import { Button } from '@/components/ui/button';
-import { Dialog, DialogContent, DialogTitle } from '@/components/ui/overlays';
+import { Dialog, DialogContent, DialogDescription, DialogTitle, DialogTrigger } from '@/components/ui/overlays';
 
 /**
  * Globale Live-Suche in der Kopfzeile (Produktsprint 2026-09-26).
@@ -232,21 +232,38 @@ const SuchFeld = React.forwardRef<
     router.push(`/admin/suche?q=${encodeURIComponent(q)}`);
   };
 
+  /*
+    „Alle Treffer anzeigen" ist die letzte Option der Liste (2026-09-27).
+    Vorher war es ein Knopf mit `tabIndex={-1}`, der nur auf `mousedown`
+    reagierte: Mit der Tastatur erreichte man ihn nie, nur über Enter ohne
+    gewählte Zeile — was niemand wissen konnte. Jetzt führen die Pfeile auch
+    auf ihn, und Enter öffnet ihn.
+  */
+  const optionen = treffer.length > 0 ? treffer.length + 1 : 0;
+  const alleIndex = treffer.length;
+
+  // Die aktive Option sichtbar halten — bei vielen Treffern lag sie sonst
+  // unterhalb des Rollbereichs, und die Auswahl wanderte unsichtbar weiter.
+  React.useEffect(() => {
+    if (aktiv < 0) return;
+    document.getElementById(`${idPraefix}-option-${aktiv}`)?.scrollIntoView({ block: 'nearest' });
+  }, [aktiv, idPraefix]);
+
   const onKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
     switch (event.key) {
       case 'ArrowDown':
         event.preventDefault();
         setOffen(true);
-        if (treffer.length) setAktiv((i) => (i + 1) % treffer.length);
+        if (optionen) setAktiv((i) => (i + 1) % optionen);
         break;
       case 'ArrowUp':
         event.preventDefault();
         setOffen(true);
-        if (treffer.length) setAktiv((i) => (i <= 0 ? treffer.length - 1 : i - 1));
+        if (optionen) setAktiv((i) => (i <= 0 ? optionen - 1 : i - 1));
         break;
       case 'Enter': {
         event.preventDefault();
-        const gewaehlt = aktiv >= 0 ? treffer[aktiv] : undefined;
+        const gewaehlt = aktiv >= 0 && aktiv < alleIndex ? treffer[aktiv] : undefined;
         // Ohne gewählte Zeile führt Enter zur Vollansicht aller Treffer —
         // dieselbe Erwartung wie bei jedem Suchfeld, und die Seite zeigt
         // mehr als die fünf Treffer je Bereich der Schnellliste.
@@ -435,17 +452,22 @@ const SuchFeld = React.forwardRef<
         ) : null}
         {treffer.length > 0 ? (
           <div className="mt-1 border-t border-border px-1 pt-1">
-            <button
-              type="button"
-              tabIndex={-1}
+            <div
+              id={optionId(alleIndex)}
+              role="option"
+              aria-selected={aktiv === alleIndex}
+              onMouseEnter={() => setAktiv(alleIndex)}
               onMouseDown={(event) => {
                 event.preventDefault();
                 alleTreffer();
               }}
-              className="w-full rounded-lg px-2 py-2 text-left text-xs font-medium text-primary hover:bg-muted"
+              className={cn(
+                'w-full cursor-pointer rounded-lg px-2 py-2 text-left text-xs font-medium text-primary',
+                aktiv === alleIndex ? 'bg-primary/10' : 'hover:bg-muted',
+              )}
             >
-              Alle Treffer anzeigen (Enter)
-            </button>
+              Alle Treffer anzeigen
+            </div>
           </div>
         ) : null}
       </div>
@@ -488,20 +510,18 @@ export function GlobalSearch() {
         <SuchFeld ref={feld} idPraefix="kopfsuche" />
       </div>
 
-      <Button
-        type="button"
-        variant="ghost"
-        size="icon"
-        className="md:hidden"
-        aria-label="Suche öffnen"
-        onClick={() => setDialogOffen(true)}
-      >
-        <Search aria-hidden />
-      </Button>
-
+      {/* `DialogTrigger`: der Fokus kehrt nach dem Schliessen hierher zurück (wie beim Scanner). */}
       <Dialog open={dialogOffen} onOpenChange={setDialogOffen}>
+        <DialogTrigger asChild>
+          <Button type="button" variant="ghost" size="icon" className="md:hidden" aria-label="Suche öffnen">
+            <Search aria-hidden />
+          </Button>
+        </DialogTrigger>
         <DialogContent className="top-4 translate-y-0 gap-3 p-4 sm:top-16" size="lg">
           <DialogTitle className="text-base">Suche</DialogTitle>
+          <DialogDescription className="sr-only">
+            Kundschaft, Objekte, Aufträge, Verträge und Rechnungen. Pfeiltasten wählen, Enter öffnet.
+          </DialogDescription>
           <SuchFeld idPraefix="dialogsuche" imDialog onGewaehlt={() => setDialogOffen(false)} />
         </DialogContent>
       </Dialog>

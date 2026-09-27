@@ -25,7 +25,8 @@ export default function SignierenLayout({ children }: { children: React.ReactNod
           <span className="text-meta text-muted-foreground">Elektronische Unterzeichnung</span>
         </div>
       </header>
-      <main className="flex-1">{children}</main>
+      {/* `id="inhalt"`: Ziel des Sprunglinks aus dem Wurzellayout — ohne es sprang er ins Leere (2026-09-27). */}
+      <main id="inhalt" className="flex-1">{children}</main>
       <footer className="border-t border-border py-4 text-center text-2xs text-muted-foreground">
         Sichere Verbindung · Der Ablauf wird in einem Signaturprotokoll festgehalten.
       </footer>

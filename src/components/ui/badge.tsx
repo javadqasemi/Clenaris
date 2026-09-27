@@ -14,7 +14,8 @@ const badgeVariants = cva(
         warning: 'border-transparent bg-warning/14 text-warning',
         destructive: 'border-transparent bg-destructive/12 text-destructive',
         info: 'border-transparent bg-info/12 text-info',
-        accent: 'border-transparent bg-accent/15 text-accent',
+        // Schrift in `--accent-text`, nicht im Gold selbst: 2.6 : 1 war zu wenig (globals.css).
+        accent: 'border-transparent bg-accent/15 text-[hsl(var(--accent-text))]',
         solid: 'border-transparent bg-primary text-primary-foreground',
       },
       size: {

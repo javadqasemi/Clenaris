@@ -11,6 +11,7 @@ import { EXPENSE_CATEGORY_LABELS, optionsOf } from '@/lib/bi/labels';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { ActionButton } from '@/components/app/action-button';
 import { ListCard, TableScroll } from '@/components/app/page-parts';
 import type { BudgetVarianceLine } from '@/server/services/budget.service';
 import { FormDialog } from './resource-form';
@@ -61,16 +62,6 @@ export function BudgetLinesEditor({
     }
   };
 
-  const remove = async (line: BudgetVarianceLine) => {
-    if (!window.confirm(`Budgetzeile „${line.label}" löschen?`)) return;
-    try {
-      await api.delete(`/api/bi/budget-lines/${line.id}`);
-      toast.success('Zeile gelöscht.');
-      router.refresh();
-    } catch (error) {
-      toast.error(error instanceof ApiError ? error.message : 'Löschen fehlgeschlagen.');
-    }
-  };
 
   return (
     <ListCard
@@ -160,9 +151,20 @@ export function BudgetLinesEditor({
                               <PenLine aria-hidden />
                             </Button>
                             {status === 'DRAFT' ? (
-                              <Button variant="ghost" size="icon-sm" aria-label="Löschen" onClick={() => remove(line)}>
+                              // Eigener Bestätigungsdialog statt `window.confirm` (2026-09-27).
+                              <ActionButton
+                                endpoint={`/api/bi/budget-lines/${line.id}`}
+                                method="DELETE"
+                                label="Löschen"
+                                aria-label={`Budgetzeile „${line.label}" löschen`}
+                                confirmTitle="Budgetzeile löschen?"
+                                confirm={`„${line.label}" wird aus dem Entwurf entfernt.`}
+                                successMessage="Zeile gelöscht."
+                                variant="ghost"
+                                size="icon-sm"
+                              >
                                 <Trash2 aria-hidden />
-                              </Button>
+                              </ActionButton>
                             ) : null}
                           </>
                         )}

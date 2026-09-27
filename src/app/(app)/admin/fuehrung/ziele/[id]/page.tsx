@@ -111,7 +111,7 @@ export default async function ObjectiveDetailPage({ params }: { params: Promise<
               <span className="text-sm text-muted-foreground">Fortschritt</span>
               <span className="font-display text-2xl font-bold tabular-nums">{objective.progressPct} %</span>
             </div>
-            <Progress value={objective.progressPct} className="mt-3 h-3" />
+            <Progress value={objective.progressPct} className="mt-3 h-3" aria-label={`Fortschritt ${objective.title}`} />
             <p className="mt-2 text-xs text-muted-foreground">
               {objective.keyResults.length > 0 ? 'Mittel der Schlüsselergebnisse.' : objective.children.length > 0 ? 'Mittel der untergeordneten Ziele.' : 'Noch keine Messgrösse.'}
             </p>

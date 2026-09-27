@@ -30,6 +30,8 @@ interface CalendarEvent {
   end: string;
   backgroundColor: string;
   borderColor: string;
+  /** Vom Dienst zur Fläche gerechnet (`lesbareFarben`) — nie hier festlegen. */
+  textColor: string;
   extendedProps: {
     number: string;
     status: string;
@@ -96,7 +98,13 @@ export function PersonalCalendar() {
           week: 'Woche',
           day: 'Tag',
           list: 'Liste',
+          prev: '‹ Zurück',
+          next: 'Weiter ›',
         }}
+        // Text statt namenloser Pfeilsymbole, „+ weitere" als Schaltfläche —
+        // Begründung im Einsatzkalender (`dispatch-calendar.tsx`).
+        buttonIcons={false}
+        moreLinkDidMount={({ el }) => el.setAttribute('role', 'button')}
         noEventsText="In diesem Zeitraum sind keine Einsätze geplant."
         // Der ganze Tag — Frühschichten vor sechs und Büroreinigungen nach
         // achtzehn Uhr fielen mit dem alten Fenster unsichtbar heraus.
@@ -122,7 +130,8 @@ export function PersonalCalendar() {
               <p className="truncate font-semibold">{arg.timeText}</p>
               <p className="truncate">{props.customerName}</p>
               {props.address ? (
-                <p className="truncate text-2xs opacity-90">{props.address}</p>
+                // Ohne `opacity` — Begründung im Einsatzkalender.
+                <p className="truncate text-2xs">{props.address}</p>
               ) : null}
             </div>
           );

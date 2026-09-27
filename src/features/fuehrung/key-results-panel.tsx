@@ -12,6 +12,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Progress } from '@/components/ui/primitives';
+import { ActionButton } from '@/components/app/action-button';
 import { DetailSection } from '@/components/app/page-parts';
 import { FormDialog } from './resource-form';
 
@@ -72,16 +73,6 @@ export function KeyResultsPanel({
     }
   };
 
-  const remove = async (kr: KeyResultView) => {
-    if (!window.confirm(`Schlüsselergebnis „${kr.title}" löschen?`)) return;
-    try {
-      await api.delete(`/api/bi/key-results/${kr.id}`);
-      toast.success('Gelöscht.');
-      router.refresh();
-    } catch (error) {
-      toast.error(error instanceof ApiError ? error.message : 'Löschen fehlgeschlagen.');
-    }
-  };
 
   return (
     <DetailSection
@@ -135,9 +126,22 @@ export function KeyResultsPanel({
                     {stale ? <Badge variant="warning" size="sm">Check-in überfällig</Badge> : null}
                     <span className="text-sm font-semibold tabular-nums">{kr.progressPct} %</span>
                     {canEdit ? (
-                      <Button variant="ghost" size="icon-sm" aria-label="Löschen" onClick={() => remove(kr)}>
+                      // Bestätigung im eigenen Dialog statt `window.confirm` (2026-09-27):
+                      // Der Browserdialog blockiert die Seite, ist nicht gestaltet und
+                      // lässt sich in der Oberflächenprüfung nicht bedienen.
+                      <ActionButton
+                        endpoint={`/api/bi/key-results/${kr.id}`}
+                        method="DELETE"
+                        label="Löschen"
+                        aria-label={`Schlüsselergebnis „${kr.title}" löschen`}
+                        confirmTitle="Schlüsselergebnis löschen?"
+                        confirm={`„${kr.title}" wird gelöscht, samt seinen Check-ins.`}
+                        successMessage="Gelöscht."
+                        variant="ghost"
+                        size="icon-sm"
+                      >
                         <Trash2 aria-hidden />
-                      </Button>
+                      </ActionButton>
                     ) : null}
                   </div>
                 </div>

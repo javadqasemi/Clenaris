@@ -138,9 +138,17 @@ export function PersonAvatar({
 //  Progress
 // ---------------------------------------------------------------------------
 
+/**
+ * Ein Fortschrittsbalken braucht einen Namen (2026-09-27). axe meldete auf
+ * Cockpit und Zielen `aria-progressbar-name` als schwer: Der Screenreader
+ * hörte „Fortschrittsbalken, 40 %" — wovon, blieb offen. Der Typ verlangt den
+ * Namen jetzt, damit kein neuer Balken ohne ihn entsteht.
+ */
+type ProgressName = { 'aria-label': string; 'aria-labelledby'?: never } | { 'aria-labelledby': string; 'aria-label'?: never };
+
 const Progress = React.forwardRef<
   React.ElementRef<typeof ProgressPrimitive.Root>,
-  React.ComponentPropsWithoutRef<typeof ProgressPrimitive.Root> & { indicatorClassName?: string }
+  React.ComponentPropsWithoutRef<typeof ProgressPrimitive.Root> & { indicatorClassName?: string } & ProgressName
 >(({ className, value, indicatorClassName, ...props }, ref) => (
   <ProgressPrimitive.Root
     ref={ref}

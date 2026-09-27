@@ -61,6 +61,13 @@
     /* Wappengold — sparsam, für Auszeichnungen */
     --accent: 38 61% 47%;
     --accent-foreground: 40 60% 98%;
+    /*
+       Gold als *Schrift* (Abzeichen „Hervorgehoben", „Offerte"): 47 %
+       Helligkeit auf dem eigenen hellen Grund ergab 2.6 : 1 (axe, 2026-09-27,
+       Bewertungen). 28 % hält den Ton und liegt über 6 : 1 — dieselbe Lösung
+       wie bei der Warnung darunter.
+    */
+    --accent-text: 34 70% 28%;
 
     --success: 156 47% 33%;
     --success-foreground: 156 40% 97%;
@@ -118,6 +125,8 @@
 
     --accent: 38 70% 55%;
     --accent-foreground: 192 52% 6%;
+    /* Im Dunkeln hell genug auf dunklem Grund — das Gold selbst reicht hier. */
+    --accent-text: 38 70% 60%;
 
     --success: 156 45% 48%;
     --success-foreground: 192 52% 6%;

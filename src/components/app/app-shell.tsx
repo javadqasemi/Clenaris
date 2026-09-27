@@ -77,6 +77,7 @@ import {
   DropdownMenuTrigger,
   Sheet,
   SheetContent,
+  SheetDescription,
   SheetHeader,
   SheetTitle,
   SheetTrigger,
@@ -165,6 +166,20 @@ const NAV_ICONS = {
 } satisfies Record<string, React.ComponentType<{ className?: string }>>;
 
 export type NavIcon = keyof typeof NAV_ICONS;
+
+/**
+ * Seiten, die bewusst keinen Menüpunkt haben (Profil, Suche, Etikett,
+ * Assistent), aber in den Brotkrumen einen Namen brauchen. Ohne diese Liste
+ * stand dort nur der Bereichsname, als wäre man auf der Startseite.
+ */
+const SEITEN_OHNE_MENUEPUNKT: [string, string][] = [
+  ['/admin/profil', 'Mein Profil'],
+  ['/portal/profil', 'Mein Profil'],
+  ['/konto/profil', 'Mein Profil'],
+  ['/admin/suche', 'Suche'],
+  ['/admin/etikett', 'Etikett'],
+  ['/admin/fuehrung/assistent', 'Assistent'],
+];
 
 export interface NavItem {
   href: string;
@@ -438,6 +453,7 @@ export function AppShell({
               <SheetContent side="left" className="w-72 p-0">
                 <SheetHeader className="sr-only">
                   <SheetTitle>Navigation</SheetTitle>
+                  <SheetDescription>Bereiche dieses Kontos. Escape schliesst das Menü.</SheetDescription>
                 </SheetHeader>
                 {sidebar}
               </SheetContent>
@@ -591,11 +607,15 @@ function Breadcrumbs({
   areaLabel: string;
 }) {
   const items = navigation.flatMap((group) => group.items);
+  // `exact` gilt hier wie in der Seitenleiste (2026-09-27): Vorher hiess
+  // `/admin/fuehrung/assistent` in den Brotkrumen „Cockpit", während in der
+  // Seitenleiste nichts aktiv war — zwei Antworten auf „wo bin ich?".
   const match = items
-    .filter((item) => pathname === item.href || pathname.startsWith(`${item.href}/`))
+    .filter((item) => pathname === item.href || (!item.exact && pathname.startsWith(`${item.href}/`)))
     .sort((a, b) => b.href.length - a.href.length)[0];
 
-  const unterseite = match && match.href !== areaHref ? match.label : null;
+  const unterseite =
+    match && match.href !== areaHref ? match.label : (SEITEN_OHNE_MENUEPUNKT.find(([pfad]) => pathname === pfad || pathname.startsWith(`${pfad}/`))?.[1] ?? null);
 
   /*
     Auch hier hängt die Struktur nicht mehr am Pfad.

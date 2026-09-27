@@ -1,7 +1,7 @@
 # Browser-Prüfungen (Gate 4D.1)
 
 Diese Reihe fährt die Anwendung in einem echten Chromium. Sie **ergänzt** die
-809 Prüfungen unter `tests/api` und `tests/pages` und ersetzt keine einzige
+HTTP-Prüfungen unter `tests/api` und `tests/pages` und ersetzt keine einzige
 davon.
 
 ## Wozu eine zweite Ebene
@@ -51,6 +51,7 @@ E-Mail an `nicole.wyss@example.ch` hinaus.
 | `scan.spec.ts` | Scanplattform (2026-09-26) mit nachgebildeter Kamera und nachgebildetem `BarcodeDetector`: Etikett erkannt → Treffer, **nichts gebucht, Seite nicht gewechselt, Kamera wieder aus** → Wareneingang in der Maske → Bestand, Lagerbewegung und Protokolleintrag in der Datenbank; feindliche Inhalte (`javascript:`, Markup, fremde Adresse) öffnen, rendern und rufen nichts auf; unbekannte EAN → „Neuen Artikel erfassen" nur mit dem Strichcode vorbelegt. Beweist nicht, dass ein echter Detektor einen gedruckten Code liest |
 | `wave23-masken.spec.ts` | Drei Masken, die die Merkmalsprüfung als fehlend meldete, gegen die Datenbank: Lohnvereinbarungen in der Personalakte, offene Zeiten auf der Lohnseite freigeben, Material aus dem Lager für einen Einsatz entnehmen — und dass die neue Materialzeile ohne hartes Neuladen erscheint |
 | `wave18-barrierefreiheit.spec.ts` | axe-core (WCAG 2.1 A/AA) auf öffentlichen Seiten, Verwaltung, Portal und Kundenbereich; `critical`/`serious` lassen den Fall scheitern, alles andere liegt als Anhang bei. Misst, was maschinell messbar ist — keine Konformitätsaussage (`docs/BARRIEREFREIHEIT.md`) |
+| `phase21-oberflaeche.spec.ts` | Oberfläche und Barrierefreiheit **aus der Navigation abgeleitet** (2026-09-27): je Rolle jeder Eintrag der Seitenleiste erreichbar, ohne Fehlergrenze, genau dort `aria-current`, axe ohne `critical`/`serious`; Sprunglink als erster Tabstopp in allen Rahmen; kein seitliches Scrollen in sieben Fenstergrössen und bei 200 % Zoom; mobile Navigation mit denselben Einträgen, Escape und Fokusrückgabe; Scanner-Dialog und Suche (Fokus, Escape, Pfeile bis „Alle Treffer"); reduzierte Bewegung; öffentliche Seiten auf dem Telefon mit axe |
 | `hydration-wiederholung.spec.ts` | RB-001 deterministisch: die **von Next mitgelieferte** React-Fassung spielt ein angehaltenes `<main>` während der Hydration wieder ab (Flight-artiger `lazy`-Knoten). Verlangt, dass das Wiederabspielen eintritt, und dass dabei keine Abweichung entsteht. Scheitert ohne `scripts/react-hydrationskorrektur.mjs` (`docs/HYDRATION.md` §16) |
 
 Die Helfer liegen in `helpers/`: Prüfbestand über die Schnittstelle

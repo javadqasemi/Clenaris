@@ -11,6 +11,7 @@ import { CRYPTO_CONTEXT, decryptNullable } from '@/lib/crypto';
 import { jobAssignedEmail } from '@/lib/email/templates';
 import { smsTemplates } from '@/lib/sms/client';
 import { audit } from '@/lib/audit';
+import { lesbareFarben } from '@/lib/farbkontrast';
 import { automationEreignisseAbarbeiten, automationEreignisVormerken } from './automation-engine.service';
 import {
   deriveJobCosts,
@@ -2025,13 +2026,19 @@ export async function getCalendarJobs(params: {
     CANCELLED: '#C92A2A',
   };
 
-  return jobs.map((job) => ({
+  return jobs.map((job) => {
+    // Fläche und Schrift als Paar (2026-09-27): Vorher weisse Schrift auf
+    // jeder Fläche — auf „Erledigt" 4.36 : 1, auf „Pausiert" 2.1 : 1. Warum
+    // gerechnet statt eine Palette korrigiert: `lesbareFarben`.
+    const farben = lesbareFarben(job.color ?? STATUS_COLORS[job.status], STATUS_COLORS[job.status]);
+    return {
     id: job.id,
     title: `${job.number} · ${job.customer.companyName ?? job.customer.lastName}`,
     start: job.scheduledStart.toISOString(),
     end: job.scheduledEnd.toISOString(),
-    backgroundColor: job.color ?? STATUS_COLORS[job.status],
-    borderColor: job.color ?? STATUS_COLORS[job.status],
+    backgroundColor: farben.hintergrund,
+    borderColor: farben.hintergrund,
+    textColor: farben.schrift,
     resourceIds: job.assignments.map((a) => a.employeeId),
     extendedProps: {
       number: job.number,
@@ -2044,7 +2051,8 @@ export async function getCalendarJobs(params: {
       crew: job.assignments.map((a) => `${a.employee.user.firstName} ${a.employee.user.lastName}`),
       crewSize: job.crewSize,
     },
-  }));
+    };
+  });
 }
 
 export { CHECKLIST_TEMPLATES };

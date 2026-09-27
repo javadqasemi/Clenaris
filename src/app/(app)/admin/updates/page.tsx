@@ -63,15 +63,11 @@ export default async function UpdatesPage() {
       <DetailSection title="Laufende Version" body="list">
         <dl className="protocol-list protocol-list--columns">
           <div className="protocol-row">
-            <div className="protocol-row-head">
-              <dt className="protocol-label">Installiert</dt>
-            </div>
+            <dt className="protocol-row-head protocol-label">Installiert</dt>
             <dd className="protocol-value font-display text-lg font-semibold tabular-nums">v{laufend}</dd>
           </div>
           <div className="protocol-row">
-            <div className="protocol-row-head">
-              <dt className="protocol-label">Status</dt>
-            </div>
+            <dt className="protocol-row-head protocol-label">Status</dt>
             <dd className="protocol-value">
               {neuer.length ? (
                 <Badge variant="warning">

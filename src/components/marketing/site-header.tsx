@@ -38,6 +38,7 @@ import {
   Sheet,
   SheetBody,
   SheetContent,
+  SheetDescription,
   SheetHeader,
   SheetTitle,
   SheetTrigger,
@@ -372,6 +373,7 @@ export function SiteHeader({
             <SheetContent side="right" className="w-[min(24rem,92vw)]">
               <SheetHeader>
                 <SheetTitle>Menü</SheetTitle>
+                <SheetDescription className="sr-only">Buchen, Anrufen und alle Seiten der Website.</SheetDescription>
               </SheetHeader>
               <SheetBody className="py-4">
                 {/*

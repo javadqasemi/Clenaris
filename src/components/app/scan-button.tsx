@@ -7,7 +7,7 @@ import { AlertCircle, Camera, CameraOff, ImageUp, Loader2, PackagePlus, QrCode, 
 import { api, ApiError } from '@/lib/api/client';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/overlays';
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/overlays';
 import { ResourceForm } from '@/components/app/resource-form';
 import { aktionsMaske, neuerArtikelMaske, type AktionsMaske, type ScanAktionSchluessel } from '@/features/shared/scan-aktionen';
 
@@ -114,7 +114,7 @@ function detektorKlasse(): DetektorKlasse | null {
 function useKamera(onErkannt: (text: string) => void) {
   const video = React.useRef<HTMLVideoElement>(null);
   const strom = React.useRef<MediaStream | null>(null);
-  const [status, setStatus] = React.useState<'aus' | 'startet' | 'laeuft' | 'fehlt' | 'verweigert'>('aus');
+  const [status, setStatus] = React.useState<'aus' | 'startet' | 'laeuft' | 'fehlt' | 'verweigert' | 'keineKamera' | 'belegt'>('aus');
   const [formate, setFormate] = React.useState<string[] | null>(null);
   const erkannt = React.useRef(onErkannt);
   erkannt.current = onErkannt;
@@ -171,7 +171,22 @@ function useKamera(onErkannt: (text: string) => void) {
       void runde();
     } catch (fehler) {
       stoppen();
-      setStatus(fehler instanceof DOMException && fehler.name === 'NotAllowedError' ? 'verweigert' : 'fehlt');
+      /*
+        Jeder Kamerafehler hiess bis 2026-09-27 „Dieser Browser erkennt keine
+        Codes" — auch wenn das Gerät gar keine Kamera hat oder eine andere
+        Anwendung sie gerade benutzt. Die Meldung schickte die Person zum
+        falschen Ausweg (Browser wechseln statt Videoanruf beenden).
+      */
+      const name = fehler instanceof DOMException ? fehler.name : '';
+      setStatus(
+        name === 'NotAllowedError' || name === 'SecurityError'
+          ? 'verweigert'
+          : name === 'NotFoundError' || name === 'OverconstrainedError'
+            ? 'keineKamera'
+            : name === 'NotReadableError' || name === 'AbortError'
+              ? 'belegt'
+              : 'fehlt',
+      );
     }
   }, [stoppen]);
 
@@ -229,11 +244,11 @@ function ScanInhalt() {
             <Button type="button" variant="outline" size="sm" onClick={kamera.stoppen}>
               <CameraOff aria-hidden /> Kamera beenden
             </Button>
-          ) : (
+          ) : hatDetektor ? (
             <Button type="button" variant="outline" size="sm" onClick={() => void kamera.starten()}>
               <Camera aria-hidden /> Kamera
             </Button>
-          )}
+          ) : null}
           {hatDetektor ? (
             <label className="inline-flex h-9 cursor-pointer items-center gap-2 rounded-lg border border-input px-3 text-sm font-medium hover:bg-muted">
               <ImageUp className="size-4" aria-hidden /> Bild
@@ -253,12 +268,24 @@ function ScanInhalt() {
             </label>
           ) : null}
         </div>
-        {kamera.status === 'fehlt' ? (
+        {/*
+          Ohne Erkennung im Browser gar kein Kameraknopf, sondern gleich der
+          Hinweis (2026-09-27) — vorher führte der Knopf nur zu dieser Meldung.
+        */}
+        {kamera.status === 'fehlt' || (!hatDetektor && kamera.status === 'aus') ? (
           <p className="text-sm text-muted-foreground">
             Dieser Browser erkennt keine Codes über die Kamera. Code eintippen, einfügen oder einen Handscanner verwenden.
           </p>
         ) : kamera.status === 'verweigert' ? (
-          <p className="text-sm text-muted-foreground">Der Zugriff auf die Kamera wurde nicht erlaubt.</p>
+          <p className="text-sm text-muted-foreground" role="status">
+            Der Zugriff auf die Kamera wurde nicht erlaubt. In den Einstellungen des Browsers freigeben oder den Code eintippen.
+          </p>
+        ) : kamera.status === 'keineKamera' ? (
+          <p className="text-sm text-muted-foreground" role="status">Auf diesem Gerät wurde keine Kamera gefunden. Code eintippen oder einfügen.</p>
+        ) : kamera.status === 'belegt' ? (
+          <p className="text-sm text-muted-foreground" role="status">
+            Die Kamera wird gerade von einer anderen Anwendung benutzt. Diese schliessen und erneut versuchen.
+          </p>
         ) : kamera.status === 'laeuft' && kamera.formate ? (
           <p className="text-xs text-muted-foreground">Erkennt: {kamera.formate.map((f) => f.replace('_', '-').toUpperCase()).join(', ')}</p>
         ) : null}
@@ -429,10 +456,19 @@ export function ScanButton() {
   const [offen, setOffen] = React.useState(false);
   return (
     <>
-      <Button type="button" variant="ghost" size="icon" aria-label="Scannen" title="Scannen" onClick={() => setOffen(true)}>
-        <ScanLine aria-hidden />
-      </Button>
+      {/*
+        `DialogTrigger` statt eines Knopfs mit eigenem `onClick` (2026-09-27):
+        Nur so weiss Radix, wohin der Fokus nach dem Schliessen zurückgehört.
+        Vorher landete er nach Escape im Dokument, und wer mit der Tastatur
+        arbeitet, begann wieder oben auf der Seite (gefunden von der
+        Oberflächenprüfung, `phase21-oberflaeche.spec.ts`).
+      */}
       <Dialog open={offen} onOpenChange={setOffen}>
+        <DialogTrigger asChild>
+          <Button type="button" variant="ghost" size="icon" aria-label="Scannen" title="Scannen">
+            <ScanLine aria-hidden />
+          </Button>
+        </DialogTrigger>
         <DialogContent className="top-4 translate-y-0 gap-3 p-4 sm:top-16" size="lg">
           <DialogHeader>
             <DialogTitle className="text-base">Scannen</DialogTitle>

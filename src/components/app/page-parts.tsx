@@ -149,7 +149,12 @@ export function TableScroll({
         // `.data-table--sticky` in globals.css: Innerhalb eines Scrollrahmens
         // klebt sie nicht an der Seite, sondern schiebt sich über die ersten
         // Zeilen.
-        className="table-scroll -mx-1 overflow-x-auto px-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        // `relative`: Ohne ihn waren absolut positionierte Kinder — die
+        // `sr-only`-Beschriftung der Tabelle — auf einen Vorfahren ausserhalb
+        // bezogen und entkamen dem Beschnitt. Auf dem Telefon machten sie die
+        // *ganze Seite* bis zu 458 px breiter, statt nur die Tabelle scrollbar
+        // (Oberflächenprüfung, 2026-09-27).
+        className="table-scroll relative -mx-1 overflow-x-auto px-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         tabIndex={0}
         role="region"
         aria-label={label}
@@ -299,12 +304,20 @@ export function DetailRow({
   action?: React.ReactNode;
   children: React.ReactNode;
 }) {
+  /*
+    Die Kopfzeile **ist** das `<dt>` (2026-09-27). Vorher lag das `<dt>` in
+    einem zusätzlichen `<div>`; eine Gruppe in `<dl>` darf aber nur `<dt>` und
+    `<dd>` enthalten, und axe meldete `definition-list`/`dlitem` als schwer —
+    Screenreader lasen Beschriftung und Wert dann nicht als Paar. Die
+    Handlung (Stift) steht mit im `<dt>`; ihr eigener Name („… bearbeiten")
+    trennt sie hörbar von der Beschriftung.
+  */
   return (
     <div className="protocol-row">
-      <div className="protocol-row-head">
-        <dt className="protocol-label">{label}</dt>
+      <dt className="protocol-row-head">
+        <span className="protocol-label">{label}</span>
         {action}
-      </div>
+      </dt>
       <dd className="protocol-value">{children}</dd>
     </div>
   );

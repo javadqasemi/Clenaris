@@ -3,6 +3,7 @@
 import * as React from 'react';
 import Link from 'next/link';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { toast } from 'sonner';
 import { BellOff, CheckCheck } from 'lucide-react';
 
 import { cn, formatRelative } from '@/lib/utils';
@@ -38,17 +39,24 @@ export function NotificationPanel({
   const [open, setOpen] = React.useState(false);
   const queryClient = useQueryClient();
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isError, refetch } = useQuery({
     queryKey: [...queryKeys.notifications(), 'list'],
     queryFn: () => api.get<NotificationDto[]>('/api/notifications'),
     enabled: open,
   });
 
+  /*
+    Fehler werden gemeldet (2026-09-27). Vorher hatten beide Aufrufe kein
+    `onError`: Scheiterte „alle gelesen", blieb der Zähler stehen, und nichts
+    sagte warum — ein Klick, der nichts tut, sieht aus wie ein Fehler der
+    Maus.
+  */
   const markAllRead = useMutation({
     mutationFn: () => api.post('/api/notifications/read-all'),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.notifications() });
     },
+    onError: () => toast.error('Die Benachrichtigungen liessen sich nicht als gelesen markieren. Bitte erneut versuchen.'),
   });
 
   const markRead = useMutation({
@@ -56,6 +64,7 @@ export function NotificationPanel({
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.notifications() });
     },
+    onError: () => toast.error('Die Benachrichtigung liess sich nicht als gelesen markieren.'),
   });
 
   return (
@@ -88,6 +97,15 @@ export function NotificationPanel({
               {Array.from({ length: 3 }).map((_, index) => (
                 <Skeleton key={index} className="h-14" />
               ))}
+            </div>
+          ) : isError ? (
+            // Ein Ladefehler ist kein leeres Postfach — sonst hiesse „keine
+            // Benachrichtigungen", dass es keine gibt, obwohl sie nur fehlen.
+            <div className="flex flex-col items-center gap-3 p-10 text-center" role="alert">
+              <p className="text-sm text-muted-foreground">Die Benachrichtigungen liessen sich nicht laden.</p>
+              <Button variant="outline" size="sm" onClick={() => refetch()}>
+                Erneut laden
+              </Button>
             </div>
           ) : !data || data.length === 0 ? (
             <div className="flex flex-col items-center gap-3 p-10 text-center">

@@ -209,6 +209,20 @@ export function ResourceForm({
     onFieldChange?.(name, value);
   };
 
+  /*
+    Nach einem abgewiesenen Senden steht der Fokus im ersten fehlerhaften
+    Feld (2026-09-27). Vorher blieb er auf dem Knopf: Wer mit der Tastatur
+    oder einem Screenreader arbeitet, hörte „Pflichtfeld" irgendwo weiter oben
+    und musste das Feld selbst suchen.
+  */
+  const fehlerFokus = React.useRef(false);
+  React.useEffect(() => {
+    if (!fehlerFokus.current) return;
+    fehlerFokus.current = false;
+    const erstes = fields.find((f) => errors[f.name]);
+    if (erstes) document.getElementById(`${id}-${erstes.name}`)?.focus();
+  }, [errors, fields, id]);
+
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
     setError(null);
@@ -217,6 +231,7 @@ export function ResourceForm({
       (f) => f.required && f.type !== 'checkbox' && !String(state[f.name] ?? '').trim(),
     );
     if (missing.length > 0) {
+      fehlerFokus.current = true;
       setErrors(Object.fromEntries(missing.map((f) => [f.name, 'Pflichtfeld'])));
       return;
     }
@@ -240,6 +255,7 @@ export function ResourceForm({
       if (err instanceof ApiError) {
         setError(err.message);
         if (err.fieldErrors.length) {
+          fehlerFokus.current = true;
           setErrors(Object.fromEntries(err.fieldErrors.map((e) => [e.field, e.message])));
         }
       } else {
@@ -258,13 +274,18 @@ export function ResourceForm({
           const fieldId = `${id}-${f.name}`;
           const value = state[f.name];
           const message = errors[f.name];
+          // Fehler oder Hinweis gehören zum Feld, nicht nur optisch darunter:
+          // Der Screenreader liest sie mit, wenn das Feld den Fokus bekommt.
+          const hinweisId = message || f.hint ? `${fieldId}-hinweis` : undefined;
           return (
             <div key={f.name} className={cn('space-y-2', !f.half && 'sm:col-span-2')}>
               {f.type === 'checkbox' ? (
                 <label className="flex cursor-pointer items-center gap-2.5 pt-2 text-sm">
                   <Checkbox
+                    id={fieldId}
                     checked={Boolean(value)}
                     onCheckedChange={(c) => set(f.name, c === true)}
+                    aria-describedby={hinweisId}
                   />
                   {f.label}
                 </label>
@@ -281,13 +302,14 @@ export function ResourceForm({
                       placeholder={f.placeholder}
                       onChange={(e) => set(f.name, e.target.value)}
                       invalid={Boolean(message)}
+                      aria-describedby={hinweisId}
                     />
                   ) : f.type === 'select' ? (
                     <Select
                       value={String(value ?? '') || '__none__'}
                       onValueChange={(v) => set(f.name, v === '__none__' ? '' : v)}
                     >
-                      <SelectTrigger id={fieldId} aria-invalid={Boolean(message) || undefined}>
+                      <SelectTrigger id={fieldId} aria-invalid={Boolean(message) || undefined} aria-describedby={hinweisId}>
                         <SelectValue placeholder={f.placeholder ?? 'Bitte wählen'} />
                       </SelectTrigger>
                       <SelectContent>
@@ -324,16 +346,17 @@ export function ResourceForm({
                       step={f.step}
                       onChange={(e) => set(f.name, e.target.value)}
                       invalid={Boolean(message)}
+                      aria-describedby={hinweisId}
                     />
                   )}
                 </>
               )}
               {message ? (
-                <p className="text-meta font-medium text-destructive" role="alert">
+                <p id={hinweisId} className="text-meta font-medium text-destructive" role="alert">
                   {message}
                 </p>
               ) : f.hint ? (
-                <p className="text-meta text-muted-foreground">{f.hint}</p>
+                <p id={hinweisId} className="text-meta text-muted-foreground">{f.hint}</p>
               ) : null}
             </div>
           );
@@ -393,7 +416,12 @@ export function FormDialog({
           {iconOnly ? null : triggerLabel}
         </Button>
       </DialogTrigger>
-      <DialogContent size={size}>
+      {/*
+        Ohne Beschreibung ausdrücklich keine: `aria-describedby={undefined}`
+        sagt Radix, dass das Absicht ist, statt dass der Dialog auf ein
+        fehlendes Element verweist (2026-09-27).
+      */}
+      <DialogContent size={size} {...(description ? {} : { 'aria-describedby': undefined })}>
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
           {description ? <DialogDescription>{description}</DialogDescription> : null}
