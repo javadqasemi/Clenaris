@@ -5,6 +5,7 @@ import type { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/db';
 import { ConflictError } from '@/lib/errors';
 import { ausRappen } from '@/lib/money';
+import { erstattungsstandUebernehmen } from './invoice.service';
 
 /**
  * Stripe-Ereignisse verbuchen.
@@ -98,6 +99,66 @@ export class EreignisVerfruehtError extends ConflictError {
     super(`Ereignis ${typ} kam vor der zugehörigen Zahlung an und wird bei der nächsten Zustellung verbucht.`);
     this.name = 'EreignisVerfruehtError';
   }
+}
+
+/**
+ * Stripe-Zustände einer Rückerstattung, in denen ihr Geld **nicht** (mehr)
+ * zurückgeht: `failed` (etwa eine geschlossene Karte, Tage nach der
+ * Auslösung) und `canceled` (abgebrochen, solange sie noch ausstand). Beide
+ * sind endgültig — eine Rückerstattung scheitert höchstens einmal.
+ */
+export const AUSGEFALLENE_RUECKERSTATTUNG = ['failed', 'canceled'] as const;
+
+/** Präfix des Vermerks „Ausfall dieser Rückerstattung verbucht" in `ProviderWebhookEvent`. */
+export const AUSFALL_VERMERK = 'rueckerstattung_ausgefallen:';
+
+/**
+ * Eine bei Stripe gescheiterte oder abgebrochene Rückerstattung verbuchen
+ * (2026-09-27, Rest von F-04) — der kumulierte Erstattungsstand der Zahlung
+ * sinkt um ihren Betrag, und der Saldo der Rechnung steigt wieder.
+ *
+ * Läuft als Wirkung von `ereignisVerbuchen`; die Rechnung selbst macht
+ * `erstattungsstandUebernehmen` (Zeilensperre, Anbieterzeitpunkt,
+ * `saldoNeuBilden`, Kundenwert) — derselbe Weg wie `charge.refunded`, damit
+ * es auch hier nur *einen* Erstattungsstand gibt.
+ *
+ * **Warum ein zweiter Vermerk, je Rückerstattung.** Der Ereignisvermerk von
+ * `ereignisVerbuchen` hält *eine Zustellung* fest. Denselben Ausfall meldet
+ * Stripe aber mit bis zu drei verschiedenen Ereignissen — `refund.updated`,
+ * `refund.failed` und das ältere `charge.refund.updated` —, je nachdem,
+ * welche am Endpunkt abonniert sind, und jedes mit eigener Kennung. Weil der
+ * Ausfall den Stand *um einen Betrag* senkt und nicht auf einen Stand setzt,
+ * zöge jedes davon ihn erneut ab. Der Vermerk `rueckerstattung_ausgefallen:
+ * <Rückerstattung>` in derselben Tabelle ist eindeutig wie jeder andere
+ * (`provider` + `eventId`) und entsteht in derselben Transaktion: Der Ausfall
+ * einer Rückerstattung wirkt genau einmal, gleich über welches Ereignis und
+ * wie oft zugestellt. Verworfen: nur eines der drei Ereignisse zu behandeln —
+ * welches abonniert ist, entscheidet die Stripe-Konfiguration, nicht der
+ * Code, und ein nicht abonniertes Ereignis liesse den Ausfall unbemerkt.
+ *
+ * Der Vermerk entsteht **nach** der Prüfung, ob die Zahlung existiert: Meldet
+ * `erstattungsstandUebernehmen` `'ausstehend'`, wirft `ereignisVerbuchen` und
+ * rollt beide Vermerke zurück — Stripes Wiederholung findet später die
+ * Zahlung und verbucht den Ausfall dann.
+ */
+export async function rueckerstattungsausfallVerbuchen(
+  tx: Prisma.TransactionClient,
+  params: { refundId: string; providerPaymentId: string; betragRappen: number; erstelltAm: Date; stand: Date },
+): Promise<string> {
+  const zahlung = await tx.payment.findUnique({ where: { providerPaymentId: params.providerPaymentId }, select: { id: true } });
+  if (!zahlung) return 'ausstehend';
+
+  const neu = await tx.providerWebhookEvent.createMany({
+    data: [{ provider: 'stripe', eventId: `${AUSFALL_VERMERK}${params.refundId}`, type: 'refund.ausgefallen' }],
+    skipDuplicates: true,
+  });
+  if (neu.count === 0) return 'doppelt';
+
+  return erstattungsstandUebernehmen(tx, {
+    providerPaymentId: params.providerPaymentId,
+    ausfall: { betrag: ausRappen(params.betragRappen), erstelltAm: params.erstelltAm },
+    stand: params.stand,
+  });
 }
 
 /**

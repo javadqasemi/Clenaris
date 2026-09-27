@@ -863,10 +863,29 @@ const EINGEGANGENE_ZAHLUNG: PaymentStatus[] = ['SUCCEEDED', 'PARTIALLY_REFUNDED'
  *
  * Läuft in der Transaktion des Aufrufers (Webhook), damit Ereignisvermerk und
  * Wirkung zusammen bestehen oder zusammen zurückrollen.
+ *
+ * **Zweite Quelle: die gescheiterte Rückerstattung** (`ausfall`, 2026-09-27,
+ * Rest von F-04). Scheitert eine Rückerstattung bei Stripe nachträglich
+ * (`failed`) oder wird sie abgebrochen (`canceled`), sinkt der kumulierte
+ * Stand der Zahlung wieder — aber das Ereignis dazu (`refund.updated`,
+ * `refund.failed`, `charge.refund.updated`) trägt nur die *eine*
+ * Rückerstattung, nicht den Stand der Zahlung. Bis hierher wurde es gar nicht
+ * behandelt: Der Saldo blieb gesenkt, obwohl das Geld nie zurückging, und
+ * die Rechnung wäre als offen gemahnt worden.
+ *
+ * Der neue Stand wird deshalb **hinter derselben Zeilensperre** aus dem
+ * gespeicherten gebildet — nicht beim Aufrufer, der ihn ausserhalb der Sperre
+ * läse: Zwei gleichzeitig gescheiterte Rückerstattungen derselben Zahlung
+ * läsen sonst beide den alten Stand, und die zweite überschriebe die erste.
+ * Und er wird nur dann gesenkt, wenn die Rückerstattung überhaupt schon
+ * mitgezählt ist — siehe unten.
  */
 export async function erstattungsstandUebernehmen(
   tx: Prisma.TransactionClient,
-  params: { providerPaymentId: string; kumuliert: Prisma.Decimal; stand: Date },
+  params: { providerPaymentId: string; stand: Date } & (
+    | { kumuliert: Prisma.Decimal }
+    | { ausfall: { betrag: Prisma.Decimal; erstelltAm: Date } }
+  ),
 ): Promise<'uebernommen' | 'veraltet' | 'unbekannt' | 'ausstehend'> {
   const vorhanden = await tx.payment.findUnique({ where: { providerPaymentId: params.providerPaymentId }, select: { id: true } });
   /*
@@ -886,9 +905,35 @@ export async function erstattungsstandUebernehmen(
   if (!EINGEGANGENE_ZAHLUNG.includes(zahlung.status)) return 'unbekannt';
 
   const betrag = geld(zahlung.amount);
+  /*
+    Bei einem Ausfall: Ist die gescheiterte Rückerstattung im gespeicherten
+    Stand schon enthalten? Stripe zählt eine Rückerstattung ab ihrer
+    Erstellung zu `amount_refunded` (auch solange sie `pending` ist), und
+    `charge.refunded` entsteht frühestens in dieser Sekunde. Wurde also schon
+    ein Stand übernommen, der nicht älter ist als die Rückerstattung
+    (`refundSyncedAt ≥ erstelltAm`), ist sie darin enthalten und wird
+    abgezogen. Ist der übernommene Stand älter, kam das Ausfallereignis vor
+    dem `charge.refunded` dieser Rückerstattung an (Stripe garantiert keine
+    Reihenfolge): Dann ist nichts abzuziehen — der Stand bleibt, rückt aber
+    auf den Zeitpunkt des Ausfalls vor, und das verspätete `charge.refunded`,
+    das die gescheiterte Rückerstattung noch mitzählt, gilt oben als
+    veraltet. Einfach abzuziehen, wie es naheläge, hätte in diesem Fall eine
+    *andere*, gültige Rückerstattung mit ausgebucht.
+
+    Die Grenze: Zwei Rückerstattungen derselben Zahlung in derselben Sekunde,
+    von denen nur die erste schon übernommen ist, lassen sich an Sekunden
+    nicht unterscheiden; die zweite gälte als enthalten. Das lässt sich nur
+    mit Stripes eigenem Stand der Zahlung (API-Abfrage) auflösen.
+  */
+  const roh =
+    'ausfall' in params
+      ? zahlung.refundSyncedAt && zahlung.refundSyncedAt.getTime() >= params.ausfall.erstelltAm.getTime()
+        ? geld(zahlung.refundedAmount).minus(params.ausfall.betrag)
+        : geld(zahlung.refundedAmount)
+      : params.kumuliert;
   // Mehr als die Zahlung kann nicht erstattet sein; ein solcher Wert wäre ein
   // Anbieterfehler und wird auf den Zahlbetrag begrenzt.
-  const kumuliert = aufRappen(Prisma.Decimal.min(max0(params.kumuliert), betrag));
+  const kumuliert = aufRappen(Prisma.Decimal.min(max0(roh), betrag));
   /*
     Gleiche Sekunde, kleinerer Stand: veraltet (2026-09-27). `event.created`
     hat nur Sekundenauflösung; zwei Teilerstattungen in derselben Sekunde
@@ -896,8 +941,14 @@ export async function erstattungsstandUebernehmen(
     liess das ältere, später zugestellte Ereignis den Stand zurückdrehen. Der
     kumulierte Stand wächst innerhalb einer Sekunde nur — der grössere ist
     der neuere.
+
+    **Nicht für den Ausfall:** Er senkt den Stand ausdrücklich. Scheitert
+    eine Rückerstattung in derselben Sekunde, in der ihr `charge.refunded`
+    übernommen wurde, wäre der kleinere Stand sonst als „veraltet" verworfen
+    — und der Ausfall ginge verloren, weil sein Vermerk trotzdem stünde.
   */
   if (
+    !('ausfall' in params) &&
     zahlung.refundSyncedAt &&
     zahlung.refundSyncedAt.getTime() === params.stand.getTime() &&
     kumuliert.lessThan(geld(zahlung.refundedAmount))
@@ -924,6 +975,19 @@ export async function erstattungsstandUebernehmen(
   return 'uebernommen';
 }
 
+/**
+ * Eine Anbieterzahlung passt nicht zu ihrer Rechnung und wird nicht gebucht
+ * (2026-09-27). Eigene Klasse, damit der Webhook genau diesen Fall erkennt —
+ * als dauerhaften Zustand, der vermerkt und gemeldet, aber nicht von Stripe
+ * wiederholt werden soll — und nicht jede andere Geschäftsregel mit ihm.
+ */
+export class ZahlungsbezugError extends BusinessRuleError {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ZahlungsbezugError';
+  }
+}
+
 export async function recordPayment(params: {
   organizationId: string;
   invoiceId: string;
@@ -931,12 +995,43 @@ export async function recordPayment(params: {
   actorId?: string | null;
   provider?: string;
   providerPaymentId?: string;
+  /**
+   * Die Währung, in der der Anbieter das Geld tatsächlich eingezogen hat
+   * (Stripe: `session.currency`). Fehlt sie, lässt sich nichts vergleichen —
+   * echte Stripe-Ereignisse tragen sie immer.
+   */
+  providerCurrency?: string | null;
 }): Promise<{ invoice: Invoice; fullyPaid: boolean }> {
   const invoice = await prisma.invoice.findFirst({
     where: { id: params.invoiceId, organizationId: params.organizationId, deletedAt: null },
     include: { customer: { include: { user: { select: { id: true } } } } },
   });
   if (!invoice) throw new NotFoundError('Rechnung');
+
+  /*
+    Anbietergeld in einer **anderen Währung** als die Rechnung (2026-09-27,
+    Testmatrix `zahlung.falscherBezug`): nicht buchen.
+
+    Bis dahin übernahm der Webhook `amount_total` ungesehen als Betrag der
+    Rechnungswährung — EUR 108.10 standen als CHF 108.10 im Zahlungsbuch, der
+    Saldo war null, die Rechnung „bezahlt", und niemand erfuhr, dass Stripe
+    etwas ganz anderes eingezogen hatte. Umrechnen können wir nicht: Den Kurs
+    und die Gebühren kennt allein der Anbieter, und eine selbst gewählte
+    Umrechnung wäre eine erfundene Zahl in einem Buch, das nach Art. 957a OR
+    stimmen muss.
+
+    Anders als bei der stornierten Rechnung (unten) wird hier *nicht* gebucht:
+    Dort stimmt die Zahl und nur der Zweck ist weggefallen; hier stimmt die
+    Zahl selbst nicht. Der Webhook vermerkt das Ereignis, meldet es dem Büro
+    und antwortet 200 — der Zustand ist dauerhaft, eine Wiederholung durch
+    Stripe änderte nichts (Regel 6 im Webhook). Die Rückzahlung läuft von
+    Hand über den Anbieter.
+  */
+  if (params.provider && params.providerCurrency && params.providerCurrency.toUpperCase() !== invoice.currency.toUpperCase()) {
+    throw new ZahlungsbezugError(
+      `Die Zahlung lautet auf ${params.providerCurrency.toUpperCase()}, die Rechnung ${invoice.number} auf ${invoice.currency}.`,
+    );
+  }
   // Schnelle Antwort für das Büro. Entscheidend ist die Prüfung hinter der
   // Zeilensperre in `zahlungBuchen` — diese hier schliesst keinen Wettlauf.
   if (!params.provider && invoice.status === 'CANCELLED') {
@@ -964,8 +1059,9 @@ export async function recordPayment(params: {
   */
   let updated: Invoice;
   let aufStornierteRechnung = false;
+  let abweichendVon: number | null = null;
   try {
-    ({ rechnung: updated, storniert: aufStornierteRechnung } = await zahlungBuchen());
+    ({ rechnung: updated, storniert: aufStornierteRechnung, abweichendVon } = await zahlungBuchen());
   } catch (error) {
     if (params.providerPaymentId && error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
       const aktuell = await prisma.invoice.findUniqueOrThrow({ where: { id: invoice.id } });
@@ -974,7 +1070,7 @@ export async function recordPayment(params: {
     throw error;
   }
 
-  function zahlungBuchen(): Promise<{ rechnung: Invoice; storniert: boolean }> {
+  function zahlungBuchen(): Promise<{ rechnung: Invoice; storniert: boolean; abweichendVon: number | null }> {
     return prisma.$transaction(async (tx) => {
     /*
       Zeilensperre für **jede** Zahlung, dann den Stand in der Transaktion
@@ -1035,7 +1131,28 @@ export async function recordPayment(params: {
       führen — das Modell kennt kein Guthabenkonto, und eine Zahlung ohne
       Rechnung verschwände aus jeder Sicht, in der das Büro danach sucht.
     */
-    const hinweis = storniert ? 'Eingang auf stornierte Rechnung — Rückzahlung über den Zahlungsanbieter veranlassen.' : null;
+    /*
+      Anbietergeld mit **abweichendem Betrag** (2026-09-27, Testmatrix
+      `zahlung.falscherBezug`): buchen, was eingegangen ist — und es sagen.
+
+      Die Checkout-Session entsteht über genau den offenen Saldo. Weicht der
+      eingezogene Betrag davon ab, hat sich der Saldo seither bewegt (eine
+      Büro-Zahlung, eine Gutschrift) oder die Session gehört nicht zu diesem
+      Stand. Abweisen hiesse eingegangenes Geld verschweigen — dieselbe
+      Begründung wie bei der Überzahlung oben. Bis dahin geschah die Buchung
+      aber *stillschweigend*: Eine Überzahlung stand als negativer Saldo an der
+      Rechnung, und niemand wurde aufgefordert, sie zurückzuzahlen. Jetzt trägt
+      die Zahlung den Hinweis, das Protokoll den Vermerk, und das Büro bekommt
+      eine Meldung (nach dem Commit, wie beim Storno). Die stornierte Rechnung
+      hat ihren eigenen, schärferen Hinweis; dort ist jeder Betrag „zu viel".
+    */
+    const offen = toNumber(stand.balance);
+    const betragWeichtAb = Boolean(params.provider) && !storniert && Math.abs(amount - offen) >= 0.005;
+    const hinweis = storniert
+      ? 'Eingang auf stornierte Rechnung — Rückzahlung über den Zahlungsanbieter veranlassen.'
+      : betragWeichtAb
+        ? `Betrag weicht vom offenen Saldo ab (offen CHF ${offen.toFixed(2)}, eingegangen CHF ${amount.toFixed(2)}) — bitte prüfen.`
+        : null;
 
     await tx.payment.create({
       data: {
@@ -1080,11 +1197,27 @@ export async function recordPayment(params: {
       entityId: invoice!.id,
       summary:
         `Zahlung CHF ${amount.toFixed(2)} (${params.input.method}) zu Rechnung ${invoice!.number}` +
-        (storniert ? ' — Rechnung ist storniert, Rückzahlung nötig' : ''),
+        (storniert ? ' — Rechnung ist storniert, Rückzahlung nötig' : '') +
+        (betragWeichtAb ? ` — Betrag weicht vom offenen Saldo (CHF ${offen.toFixed(2)}) ab` : ''),
     });
 
-    return { rechnung: result, storniert };
+    return { rechnung: result, storniert, abweichendVon: betragWeichtAb ? offen : null };
     });
+  }
+
+  if (abweichendVon !== null) {
+    // Nach dem Commit, aus demselben Grund wie beim Storno: Die Meldung darf
+    // die Buchung nicht zurückrollen. Einmal je Zahlung — eine erneute
+    // Zustellung endet oben an `providerPaymentId`, bevor sie hierher kommt.
+    await notifyStaff({
+      organizationId: params.organizationId,
+      title: 'Zahlung mit abweichendem Betrag',
+      body: `Auf die Rechnung ${invoice.number} sind CHF ${amount.toFixed(2)} eingegangen; offen waren CHF ${abweichendVon.toFixed(2)}. Bitte prüfen und eine Differenz ausgleichen.`,
+      link: `/admin/rechnungen/${invoice.id}`,
+      permission: 'payment:read',
+      entity: 'Invoice',
+      entityId: invoice.id,
+    }).catch((error) => log.error('Meldung zur Zahlung mit abweichendem Betrag fehlgeschlagen', { error }));
   }
 
   if (aufStornierteRechnung) {

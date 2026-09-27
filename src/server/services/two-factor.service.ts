@@ -345,7 +345,39 @@ export async function completeMfaLogin(params: {
   );
   const recoveryIndex = byToken ? null : await matchRecoveryCode(user.twoFactorRecoveryCodes, params.token);
 
-  if (!byToken && recoveryIndex === null) {
+  /**
+   * Den Ersatzcode verbrauchen, **bevor** eine Sitzung entsteht — und nur,
+   * wenn er in diesem Augenblick noch im Vorrat steht.
+   *
+   * Früher stand hier: Liste lesen, Hash prüfen, gefilterte Liste
+   * zurückschreiben. Zwischen Lesen und Schreiben liegen zehn Argon2-Prüfungen,
+   * also Hunderte Millisekunden. Fünf gleichzeitige Anfragen mit demselben
+   * Code lasen alle denselben Vorrat, fanden alle den Code, schrieben alle
+   * dieselbe „Liste ohne ihn" — und bekamen alle eine Sitzung. Ein
+   * Einmalcode, der fünfmal öffnet, ist kein Einmalcode.
+   *
+   * Deshalb entscheidet die Datenbank in *einer* Anweisung: Entfernt wird nur,
+   * solange der Hash noch enthalten ist; genau eine Anfrage findet ihn, alle
+   * anderen ändern keine Zeile und gelten als falscher Code. `array_remove`
+   * statt „gefilterte Liste zurückschreiben", damit zwei *verschiedene* Codes,
+   * gleichzeitig eingelöst, einander nicht wiederbeleben — eine Liste aus
+   * einem alten Stand stellte den anderen, eben verbrauchten Code wieder her.
+   * Die Hashes sind gesalzen und damit eindeutig; `array_remove` trifft nur
+   * diesen einen.
+   */
+  let remainingAfterRecovery: number | null = null;
+  if (recoveryIndex !== null) {
+    const hash = user.twoFactorRecoveryCodes[recoveryIndex];
+    const rows = await prisma.$queryRaw<{ rest: number }[]>`
+      UPDATE "users"
+         SET "twoFactorRecoveryCodes" = array_remove("twoFactorRecoveryCodes", ${hash})
+       WHERE "id" = ${user.id}
+         AND ${hash} = ANY("twoFactorRecoveryCodes")
+      RETURNING cardinality("twoFactorRecoveryCodes")::int AS rest`;
+    remainingAfterRecovery = rows[0]?.rest ?? null;
+  }
+
+  if (!byToken && remainingAfterRecovery === null) {
     await audit.denied({
       organizationId: user.organizationId,
       userId: user.id,
@@ -373,15 +405,7 @@ export async function completeMfaLogin(params: {
     throw new UnauthorizedError('Der Code stimmt nicht.');
   }
 
-  let remaining = user.twoFactorRecoveryCodes.length;
-  if (recoveryIndex !== null) {
-    const rest = user.twoFactorRecoveryCodes.filter((_, index) => index !== recoveryIndex);
-    remaining = rest.length;
-    await prisma.user.update({
-      where: { id: user.id },
-      data: { twoFactorRecoveryCodes: rest },
-    });
-  }
+  const remaining = remainingAfterRecovery ?? user.twoFactorRecoveryCodes.length;
 
   store.delete(MFA_COOKIE);
   await createSession({ userId: user.id });

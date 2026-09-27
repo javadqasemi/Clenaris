@@ -6,12 +6,17 @@ import { constructWebhookEvent, fromRappen } from '@/lib/payments/stripe';
 import { erstattungsstandUebernehmen, recordPayment } from '@/server/services/invoice.service';
 import { getOrganizationId } from '@/server/services/organization.service';
 import {
+  AUSGEFALLENE_RUECKERSTATTUNG,
   EreignisVerfruehtError,
   ereignisVerbuchen,
   fehlgeschlageneZahlungVermerken,
+  rueckerstattungsausfallVerbuchen,
   zahlungsabsichtVermerken,
 } from '@/server/services/stripe-ereignis.service';
 import { logger } from '@/lib/logger';
+import { NotFoundError } from '@/lib/errors';
+import { ZahlungsbezugError } from '@/server/services/invoice.service';
+import { notifyStaff } from '@/server/services/notification.service';
 
 const log = logger('stripe');
 
@@ -34,8 +39,10 @@ export const maxDuration = 30;
  *     `providerPaymentId`, jedes Ereignis der eindeutige Vermerk in
  *     `ProviderWebhookEvent` (in derselben Transaktion wie seine Wirkung,
  *     `ereignisVerbuchen` in `stripe-ereignis.service.ts`),
- *     Erstattungen ihr Anbieterzeitpunkt (`refundSyncedAt`). Bis 2026-09-27
- *     galt das nur für die Zahlung selbst.
+ *     Erstattungen ihr Anbieterzeitpunkt (`refundSyncedAt`), der Ausfall
+ *     einer Rückerstattung ein eigener Vermerk je Rückerstattung (er kommt
+ *     über bis zu drei Ereignistypen). Bis 2026-09-27 galt das nur für die
+ *     Zahlung selbst.
  *  5. Fehler beim Verarbeiten führen zu einem 500 — dann wiederholt Stripe die
  *     Zustellung. Ein 200 auf einen Fehler würde die Zahlung verlieren.
  *  6. Umgekehrt darf ein *dauerhafter* Zustand keine Fehlerantwort erzeugen
@@ -75,19 +82,57 @@ export async function POST(request: Request): Promise<Response> {
         const organizationId = await getOrganizationId();
         const method = session.metadata?.method === 'TWINT' ? 'TWINT' : 'CARD';
 
-        await recordPayment({
-          organizationId,
-          invoiceId,
-          provider: 'stripe',
-          providerPaymentId: String(session.payment_intent ?? session.id),
-          input: {
-            amount: fromRappen(session.amount_total ?? 0),
-            method,
-            paidAt: new Date(),
-            reference: session.id,
-            note: `Online bezahlt via ${method === 'TWINT' ? 'TWINT' : 'Karte'}`,
-          },
-        });
+        /*
+          Falscher Bezug (2026-09-27, Testmatrix `zahlung.falscherBezug`). Eine
+          korrekt signierte Session beweist nur, dass Stripe sie geschickt hat
+          — nicht, dass sie zu *dieser* Rechnung passt. Zwei Fälle sind
+          dauerhaft und werden deshalb nach Regel 6 nicht mit einer
+          Fehlerantwort in Stripes Wiederholung geschickt, sondern vermerkt,
+          protokolliert, dem Büro gemeldet und mit 200 beantwortet:
+
+           • Die Rechnung gibt es in dieser Organisation nicht (fremde oder
+             falsche Kennung in `metadata.invoiceId`) — `recordPayment` sucht
+             mit der Organisation im `where` und findet nichts. Vorher: 404,
+             drei Tage Wiederholung, danach nichts, und das Büro erfuhr nie,
+             dass Geld ohne Rechnung auf dem Stripe-Konto lag.
+           • Die Währung weicht ab (`ZahlungsbezugError`) — warum nicht
+             gebucht wird, steht in `recordPayment`.
+
+          Der Ereignisvermerk entsteht dabei ohne Wirkung; die Meldung geht nur
+          beim ersten Vermerk hinaus, eine erneute Zustellung ist „doppelt".
+          Ein abweichender *Betrag* gehört nicht hierher: Er wird gebucht und
+          in `recordPayment` markiert.
+        */
+        try {
+          await recordPayment({
+            organizationId,
+            invoiceId,
+            provider: 'stripe',
+            providerPaymentId: String(session.payment_intent ?? session.id),
+            providerCurrency: session.currency ?? null,
+            input: {
+              amount: fromRappen(session.amount_total ?? 0),
+              method,
+              paidAt: new Date(),
+              reference: session.id,
+              note: `Online bezahlt via ${method === 'TWINT' ? 'TWINT' : 'Karte'}`,
+            },
+          });
+        } catch (error) {
+          if (!(error instanceof ZahlungsbezugError) && !(error instanceof NotFoundError)) throw error;
+          const grund = error instanceof ZahlungsbezugError ? error.message : 'Zur Rechnungskennung gibt es in dieser Organisation keine Rechnung.';
+          const ergebnis = await ereignisVerbuchen(event, async () => 'bezug_abgewiesen');
+          if (ergebnis !== 'doppelt') {
+            log.error('Stripe-Zahlung passt nicht zu ihrer Rechnung — nicht gebucht, bitte von Hand prüfen', { sessionId: session.id, eventId: event.id, grund });
+            await notifyStaff({
+              organizationId,
+              title: 'Online-Zahlung nicht zugeordnet',
+              body: `Stripe meldet eine Zahlung (${(session.currency ?? '').toUpperCase()} ${fromRappen(session.amount_total ?? 0).toFixed(2)}, Session ${session.id}), die nicht gebucht wurde: ${grund} Bitte im Stripe-Dashboard prüfen und gegebenenfalls zurückzahlen.`,
+              permission: 'payment:read',
+            }).catch((meldefehler) => log.error('Meldung zur nicht zugeordneten Zahlung fehlgeschlagen', { error: meldefehler }));
+          }
+          break;
+        }
 
         await zahlungsabsichtVermerken({ organizationId, invoiceId, paymentIntentId: String(session.payment_intent ?? '') });
 
@@ -133,6 +178,59 @@ export async function POST(request: Request): Promise<Response> {
           break;
         }
         log.info('Rückerstattung verarbeitet', { paymentIntentId, ergebnis });
+        break;
+      }
+
+      /*
+        Eine Rückerstattung scheitert nachträglich oder wird abgebrochen
+        (2026-09-27, Rest von F-04). Bis hierher unbehandelt: Der Saldo blieb
+        um einen Betrag gesenkt, der nie zurückging.
+
+        Drei Ereignistypen, ein Fall. Die SDK-Typen (stripe 17.7, API
+        `2025-02-24.acacia`) kennen `refund.updated` und `refund.failed` als
+        die heutigen Ereignisse und `charge.refund.updated` als das ältere,
+        das Stripe weiterhin sendet; alle drei tragen dasselbe
+        `Stripe.Refund`. Welche davon am Endpunkt abonniert sind, steht in der
+        Stripe-Konfiguration, nicht hier — deshalb werden alle drei
+        angenommen, und `rueckerstattungsausfallVerbuchen` lässt den Ausfall
+        je Rückerstattung nur einmal wirken.
+
+        Das Ereignis trägt nur die *eine* Rückerstattung, nicht den
+        kumulierten Stand der Zahlung (`amount_refunded` steht an der Charge,
+        die hier nicht mitkommt). Verworfen: die Charge bei Stripe abzufragen —
+        das bände den Webhook an einen API-Schlüssel und an Stripes
+        Erreichbarkeit, und die Prüfreihe liefe an diesem Weg vorbei. Der neue
+        Stand entsteht stattdessen hinter der Zeilensperre aus dem
+        gespeicherten (`erstattungsstandUebernehmen`, Variante `ausfall`).
+
+        Jeder andere Status (`pending`, `requires_action`, `succeeded`) ändert
+        am Geld nichts, was `charge.refunded` nicht schon meldet — er wird
+        bestätigt und nicht vermerkt.
+      */
+      case 'refund.updated':
+      case 'refund.failed':
+      case 'charge.refund.updated': {
+        const refund = event.data.object as Stripe.Refund;
+        const status = refund.status ?? '';
+        if (!(AUSGEFALLENE_RUECKERSTATTUNG as readonly string[]).includes(status)) break;
+        const paymentIntentId =
+          typeof refund.payment_intent === 'string' ? refund.payment_intent : (refund.payment_intent?.id ?? '');
+        if (!paymentIntentId) break;
+
+        const ergebnis = await ereignisVerbuchen(event, (tx) =>
+          rueckerstattungsausfallVerbuchen(tx, {
+            refundId: refund.id,
+            providerPaymentId: paymentIntentId,
+            betragRappen: refund.amount,
+            erstelltAm: new Date(refund.created * 1000),
+            stand: new Date(event.created * 1000),
+          }),
+        );
+        if (ergebnis === 'ausstehend_verfallen') {
+          log.error('Gescheiterte Rückerstattung ohne gebuchte Zahlung — bitte von Hand prüfen', { paymentIntentId, eventId: event.id });
+          break;
+        }
+        log.warn('Rückerstattung bei Stripe gescheitert — Saldo wiederhergestellt', { paymentIntentId, status, ergebnis });
         break;
       }
 
