@@ -101,8 +101,11 @@ public/pdfjs/
 .env.tmp.*
 # Release-Artefakte (Production V2, scripts/release-artefakt.ts) — sie
 # enthalten `node_modules` und gehören in die CI-Ablage, nicht ins Repository.
-release/
-RELEASE.json
+# Verankert an der Wurzel (2026-09-27): Ohne `/` traf die Regel jeden Ordner
+# namens `release` — auch `src/lib/release/` mit der Signatur des
+# Release-Ausführers, der so stillschweigend nicht mit eingecheckt wurde.
+/release/
+/RELEASE.json
 # Berichte von `npm run security:check` und `security:sbom`. Sie beschreiben
 # einen Stand, nicht den Code; in die Sicherheitszentrale kommen sie über
 # `--melden`, in die Freigabe als CI-Artefakt. Verankert, damit kein
