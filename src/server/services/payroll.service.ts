@@ -2,7 +2,7 @@ import 'server-only';
 
 import type { Prisma } from '@prisma/client';
 
-import { audit } from '@/lib/audit';
+import { audit, recordAuditInTx } from '@/lib/audit';
 import { toDateOnly, zurichMidnight } from '@/lib/bi/periods';
 import { sha256Hex } from '@/lib/crypto';
 import { isUniqueConstraintError, prisma, toNumber } from '@/lib/db';
@@ -934,10 +934,49 @@ export async function publishPayslips(params: {
       bytes,
     });
 
-    const treffer = await prisma.payslip.updateMany({
-      where: { id: k.id, published: false, updatedAt: k.updatedAt },
-      data: { published: true, publishedAt: jetzt, pdfFileId: assetId, pdfChecksum: checksum },
-    });
+    /*
+      Veröffentlichen und Protokollzeile in **einer** Transaktion, je
+      Abrechnung (2026-09-27, F-14).
+
+      Vorher entstand nach der Schleife *eine* Sammelzeile über
+      `audit.updated`, das Fehler verschluckt. Eine veröffentlichte
+      Lohnabrechnung ist unveränderlich und geht an eine Person, die sie
+      nachrechnet — dass sie ohne Protokoll veröffentlicht sein kann, ist die
+      falsche Richtung des Irrtums. Und die Frage „wer hat **diese**
+      Abrechnung freigegeben?" beantwortete eine Sammelzeile ohne Kennung nur
+      über eine Suche in `changes`. Jetzt trägt jede Abrechnung ihre Zeile mit
+      ihrer Kennung; scheitert das Protokoll, bleibt sie unveröffentlicht.
+      Beträge stehen bewusst nicht in der Zeile — sie gehören in die
+      Abrechnung, nicht in ein Protokoll, das mehr Personen lesen.
+    */
+    let treffer: { count: number };
+    try {
+      treffer = await prisma.$transaction(async (tx) => {
+        const ergebnis = await tx.payslip.updateMany({
+          where: { id: k.id, published: false, updatedAt: k.updatedAt },
+          data: { published: true, publishedAt: jetzt, pdfFileId: assetId, pdfChecksum: checksum },
+        });
+        if (ergebnis.count === 0) return ergebnis;
+        await recordAuditInTx(tx, {
+          organizationId: params.organizationId,
+          userId: params.actorId,
+          action: 'UPDATE',
+          entity: 'Payslip',
+          entityId: k.id,
+          summary:
+            `Lohnabrechnung ${k.year}-${String(k.month).padStart(2, '0')} veröffentlicht` +
+            (k.unverifiedRates ? ' — mit ausdrücklicher Bestätigung ungeprüfter Sätze' : ''),
+          changes: { published: true },
+          ip: params.ip,
+        });
+        return ergebnis;
+      });
+    } catch (error) {
+      // Die Abrechnung ist nicht veröffentlicht — das eben abgelegte PDF
+      // gehört zu nichts und würde sonst als Waise liegen bleiben.
+      await lohnPdfVerwerfen(params.organizationId, assetId).catch(() => undefined);
+      throw error;
+    }
     if (treffer.count === 0) {
       // Verloren — die eigene, nie referenzierte Fassung wieder wegräumen.
       // Die des Gewinners liegt unter einem anderen Pfad und bleibt unberührt.
@@ -946,19 +985,6 @@ export async function publishPayslips(params: {
       continue;
     }
     veroeffentlicht += 1;
-  }
-
-  if (veroeffentlicht > 0) {
-    await audit.updated({
-      organizationId: params.organizationId,
-      userId: params.actorId,
-      entity: 'Payslip',
-      summary:
-        `${veroeffentlicht} Lohnabrechnung(en) veröffentlicht` +
-        (ungeprueft.length > 0 ? ' — mit ausdrücklicher Bestätigung ungeprüfter Sätze' : ''),
-      changes: { payslipIds: offen.map((k) => k.id) },
-      ip: params.ip,
-    });
   }
 
   return { veroeffentlicht, uebersprungen: kandidaten.length - veroeffentlicht, gruende };
@@ -1039,9 +1065,25 @@ export async function lohnPdfVerwerfen(organizationId: string, assetId: string):
 export async function lohnPdfLesen(organizationId: string, assetId: string, erwartet: string | null): Promise<Buffer> {
   const asset = await prisma.fileAsset.findFirst({
     where: { id: assetId, organizationId, scope: 'PAYROLL' },
-    select: { url: true, path: true, storedFile: { select: { id: true, path: true, driver: true } } },
+    select: { url: true, path: true, checksum: true, storedFile: { select: { id: true, path: true, driver: true } } },
   });
   if (!asset) throw new NotFoundError('Dokument');
+  /*
+    Ohne Sollwert wird nicht ausgeliefert (F-13, 2026-09-27). Bis hierher
+    stand `if (erwartet && …)`: Fehlte die Prüfsumme an der Abrechnung, gingen
+    die gespeicherten Bytes **ungeprüft** hinaus — genau der Fall, in dem
+    niemand mehr sagen kann, ob sie die veröffentlichte Fassung sind. Jetzt
+    gilt die Prüfsumme des Dokuments; fehlt sie, die Momentaufnahme am
+    `FileAsset`; fehlen beide, wird verweigert. Und weichen die beiden
+    voneinander ab, ist das der Befund selbst (`FileAsset.checksum`: „weicht
+    später eines ab, ist das der Befund") — auch dann wird nichts
+    ausgeliefert, gleich welche der beiden die Bytes bestätigen würden.
+  */
+  const soll = erwartet ?? asset.checksum;
+  if (!soll || (erwartet && asset.checksum && erwartet !== asset.checksum)) {
+    log.error('Prüfsumme eines Lohndokuments fehlt oder ist widersprüchlich', { assetId });
+    throw new BusinessRuleError('Das gespeicherte Dokument stimmt nicht mit der veröffentlichten Fassung überein.');
+  }
   // Ein Weg für beide Treiber (`readAssetBytes`) — vorher nur lokal lesbar.
   const bytes = await readAssetBytes(asset);
   if (!bytes) throw new NotFoundError('Dokument');
@@ -1050,7 +1092,7 @@ export async function lohnPdfLesen(organizationId: string, assetId: string, erwa
    * Lohnabrechnung, die ausgeliefert wird, als wäre sie die veröffentlichte,
    * ist schlimmer als ein Fehler, der gemeldet wird.
    */
-  if (erwartet && sha256Hex(bytes) !== erwartet) {
+  if (sha256Hex(bytes) !== soll) {
     log.error('Prüfsumme eines Lohndokuments weicht ab', { assetId });
     throw new BusinessRuleError('Das gespeicherte Dokument stimmt nicht mit der veröffentlichten Fassung überein.');
   }

@@ -3,6 +3,7 @@ import 'server-only';
 import type { Prisma } from '@prisma/client';
 
 import { prisma } from '@/lib/db';
+import { ConflictError } from '@/lib/errors';
 import { ausRappen } from '@/lib/money';
 
 /**
@@ -31,9 +32,36 @@ import { ausRappen } from '@/lib/money';
  * schon verarbeitet, und die Wirkung entfällt. Scheitert die Wirkung, rollt
  * der Vermerk mit zurück, und die nächste Zustellung versucht es neu — das
  * ist Stripes Wiederholung, und sie soll wirken können.
+ *
+ * **„Noch nicht anwendbar" ist kein „verarbeitet"** (2026-09-27, Befund F-04).
+ * Meldet die Wirkung `'ausstehend'` — ihr Gegenstand existiert bei uns noch
+ * nicht, etwa die Rückerstattung einer Zahlung, deren
+ * `checkout.session.completed` erst unterwegs ist —, dann darf der Vermerk
+ * nicht stehen bleiben. Bis dahin wurde er trotzdem festgeschrieben: Stripe
+ * wiederholte die Rückerstattung, der Vermerk meldete „doppelt", und die
+ * Erstattung ging für immer verloren, obwohl die Zahlung Sekunden später
+ * gebucht war. Jetzt wirft `ereignisVerbuchen` `EreignisVerfruehtError`, die
+ * Transaktion rollt samt Vermerk zurück, der Endpunkt antwortet 409, und
+ * Stripe stellt später erneut zu — dann liegt die Zahlung vor.
+ *
+ * Verworfen wurde, das Ereignis als „ausstehend" zu speichern und beim
+ * Eintreffen der Zahlung nachzuholen: Dafür fehlt eine Tabelle (oder eine
+ * Platzhalterzahlung, die `providerPaymentId` belegte und die spätere echte
+ * Buchung als „schon gebucht" verschluckte — genau der Fehler, den
+ * `fehlgeschlageneZahlungVermerken` unten beschreibt). Stripes Wiederholung
+ * ist der Nachholmechanismus, den es schon gibt; sie läuft mit wachsendem
+ * Abstand bis zu drei Tage.
+ *
+ * Die Grenze: Ein Ereignis, das älter als `VERFRUEHT_FRIST_MS` ist, wird nicht
+ * mehr zurückgewiesen, sondern als `'ausstehend_verfallen'` festgeschrieben.
+ * Dann ist die Zahlung auch nach Tagen nicht da — sie gehört nicht zu einer
+ * unserer Rechnungen (etwa eine im Stripe-Dashboard von Hand ausgelöste
+ * Belastung) —, und eine endlose Zurückweisung liesse nur den Endpunkt bei
+ * Stripe als gestört erscheinen. Der Endpunkt protokolliert diesen Fall als
+ * Fehler zur Prüfung von Hand.
  */
 export async function ereignisVerbuchen(
-  event: { id: string; type: string },
+  event: { id: string; type: string; created?: number },
   wirkung: (tx: Prisma.TransactionClient) => Promise<string>,
 ): Promise<string> {
   return prisma.$transaction(async (tx) => {
@@ -42,8 +70,34 @@ export async function ereignisVerbuchen(
       skipDuplicates: true,
     });
     if (neu.count === 0) return 'doppelt';
-    return wirkung(tx);
+    const ergebnis = await wirkung(tx);
+    if (ergebnis !== 'ausstehend') return ergebnis;
+    const alterMs = event.created === undefined ? 0 : Date.now() - event.created * 1000;
+    if (alterMs > VERFRUEHT_FRIST_MS) return 'ausstehend_verfallen';
+    // Werfen, nicht zurückgeben: Nur so rollt der Vermerk mit zurück.
+    throw new EreignisVerfruehtError(event.type);
   });
+}
+
+/**
+ * Wie lange ein Ereignis ohne seinen Gegenstand zurückgewiesen wird — so
+ * lange, wie Stripe im Livebetrieb überhaupt wiederholt (drei Tage).
+ */
+export const VERFRUEHT_FRIST_MS = 3 * 24 * 60 * 60 * 1000;
+
+/**
+ * Das Ereignis kam vor dem, worauf es sich bezieht — später erneut zustellen.
+ *
+ * 409 statt 500: Nichts ist kaputt, der Zustand passt nur noch nicht. Stripe
+ * wiederholt bei jeder Antwort ausserhalb von 2xx; der Code sagt im Log und
+ * im Stripe-Dashboard, dass es sich um Reihenfolge handelt und nicht um einen
+ * Serverfehler.
+ */
+export class EreignisVerfruehtError extends ConflictError {
+  constructor(typ: string) {
+    super(`Ereignis ${typ} kam vor der zugehörigen Zahlung an und wird bei der nächsten Zustellung verbucht.`);
+    this.name = 'EreignisVerfruehtError';
+  }
 }
 
 /**
@@ -72,6 +126,16 @@ export async function zahlungsabsichtVermerken(params: { organizationId: string;
  * nicht. Die Rechnung wird mit der Organisation in der `where`-Klausel
  * gesucht; eine fremde oder unbekannte Rechnung ergibt `'unbekannt'` und
  * schreibt nichts.
+ *
+ * **Warum `'unbekannt'` hier endgültig ist und bei der Rückerstattung nicht**
+ * (2026-09-27, geprüft mit F-04). Die Rechnungskennung stammt aus den
+ * Metadaten, die wir beim Anlegen der Checkout-Session selbst mitgeben — die
+ * Rechnung existiert also, bevor es überhaupt einen Zahlungsversuch geben
+ * kann. Fehlt sie trotzdem, gehört der Versuch nicht zu dieser Organisation
+ * oder die Kennung ist falsch; Warten ändert daran nichts. Und es ist kein
+ * Geld geflossen: Der Vermerk ist Auskunft für das Büro, keine Buchung. Die
+ * Rückerstattung dagegen bezieht sich auf eine *Zahlung*, die erst mit einem
+ * eigenen Ereignis entsteht und deshalb tatsächlich später eintreffen kann.
  */
 export async function fehlgeschlageneZahlungVermerken(
   tx: Prisma.TransactionClient,

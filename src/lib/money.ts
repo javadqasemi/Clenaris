@@ -90,3 +90,32 @@ export function max0(wert: Eingabe): Geld {
   const w = geld(wert);
   return w.isNegative() ? new Prisma.Decimal(0) : w;
 }
+
+/**
+ * Der Ertrag eines Einsatzes ohne Buchung als eine Rechnungszeile
+ * (2026-09-27, Befund N-03).
+ *
+ * Die Regel: Verrechnet wird der vereinbarte Ertrag des Einsatzes — nicht
+ * mehr, nicht weniger. `invoice.service.ts:createInvoiceFromJobs` bildete
+ * vorher Menge = Stunden und Einzelpreis = Ertrag / max(Stunden, 0.5). Unter
+ * 30 Minuten verrechnete das nur einen Bruchteil (20 Minuten, Ertrag 100 →
+ * 0.33 × 200 = 66), darüber wich gerundeter Satz mal gerundete Stunden vom
+ * Ertrag ab. Eine Menge × Satz, deren Produkt *genau* der Ertrag ist, gibt es
+ * bei Stunden wie 0.33 nicht; eine Pauschale über den Ertrag ist die einzige
+ * Zeile, die ihn exakt trägt. Die Dauer bleibt als Auskunft (`stunden`) für
+ * den Zeilentext erhalten.
+ *
+ * Hier und nicht im Dienst, weil der Dienst `server-only` ist und die Regel
+ * sich so ohne Server prüfen lässt (`tests/api/finanzbelege.test.ts`).
+ */
+export function einsatzertragAlsPauschale(
+  ertrag: Eingabe,
+  minuten: number,
+): { quantity: number; unit: string; unitPrice: number; stunden: number } {
+  return {
+    quantity: 1,
+    unit: 'Pauschal',
+    unitPrice: aufRappen(ertrag).toNumber(),
+    stunden: aufRappen(geld(Math.max(0, minuten)).dividedBy(60)).toNumber(),
+  };
+}

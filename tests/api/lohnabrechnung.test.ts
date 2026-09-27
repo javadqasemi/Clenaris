@@ -962,6 +962,133 @@ describe('Lohnausbau — ganze Abrechnung über HTTP', () => {
     assert.ok(!medien.text.includes('Lohnabrechnung-2021-03'), 'Lohndokumente erscheinen nicht in der Mediathek');
   });
 
+  // -------------------------------------------------------------------------
+  //  F-13 (2026-09-27): Das veröffentlichte PDF scheitert geschlossen.
+  //
+  //  Eine veröffentlichte Lohnabrechnung ist ein Dokument, das eine Person
+  //  nachrechnet und das eine Behörde verlangen kann. Liegen die Bytes nicht
+  //  mehr so da, wie sie veröffentlicht wurden — verändert, verschwunden, ohne
+  //  Sollwert, in fremder Hand —, darf der Endpunkt **nichts** ausliefern,
+  //  schon gar nicht andere Bytes. Die Manipulation geschieht direkt in der
+  //  Testdatenbank (Schutztrigger aus, `schutzfreiAufraeumen`) und wird im
+  //  `finally` zurückgesetzt; der letzte Schritt jedes Falls beweist, dass das
+  //  Original wieder ausgeliefert wird.
+  // -------------------------------------------------------------------------
+
+  const pdfAblage = async () => {
+    const db = testDb()!;
+    const abrechnung = await db.payslip.findUniqueOrThrow({ where: { id: maerz }, select: { pdfFileId: true, pdfChecksum: true, employeeId: true } });
+    const asset = await db.fileAsset.findUniqueOrThrow({
+      where: { id: abrechnung.pdfFileId! },
+      select: { id: true, organizationId: true, checksum: true, storedFileId: true },
+    });
+    // Der Prüfserver läuft mit dem eingebauten Speicher. Der Lesetest gegen
+    // Supabase ist ein externer Nachweis (docs/FINAL_REMEDIATION_MATRIX.md, F-13).
+    assert.ok(asset.storedFileId, 'Das Lohn-PDF hat keine lokale Ablagezeile — die Bytes lassen sich hier nicht verändern.');
+    const ablage = await db.storedFile.findUniqueOrThrow({ where: { id: asset.storedFileId }, select: { data: true } });
+    assert.ok(ablage.data, 'Die Ablagezeile trägt keine Bytes.');
+    return { abrechnung, asset, storedFileId: asset.storedFileId, original: Buffer.from(ablage.data) };
+  };
+
+  const originalWirdAusgeliefert = async (pruefsumme: string | null) => {
+    const wieder = await bytesVon(`/api/payroll/payslips/${maerz}/pdf`, jars.admin);
+    assert.equal(wieder.status, 200, 'nach dem Zurücksetzen wird das Original nicht mehr ausgeliefert');
+    assert.equal(createHash('sha256').update(wieder.bytes).digest('hex'), pruefsumme);
+  };
+
+  const abrufprotokolle = () => testDb()!.auditLog.count({ where: { entity: 'Payslip', entityId: maerz, action: 'EXPORT' } });
+
+  it('das PDF: veränderte Bytes (falsche Prüfsumme) werden nicht ausgeliefert — keine anderen Bytes, kein Abrufprotokoll', async () => {
+    const { abrechnung, storedFileId, original } = await pdfAblage();
+    const veraendert = Buffer.concat([original, Buffer.from('\n% nachträglich verändert\n')]);
+    const protokolleVorher = await abrufprotokolle();
+    try {
+      await schutzfreiAufraeumen((tx) => tx.storedFile.update({ where: { id: storedFileId }, data: { data: new Uint8Array(veraendert) } }));
+      const r = await bytesVon(`/api/payroll/payslips/${maerz}/pdf`, jars.admin);
+      assert.equal(r.status, 422, `veränderte Bytes: Status ${r.status}`);
+      assert.notEqual(r.bytes.subarray(0, 4).toString(), '%PDF', 'es wurden PDF-Bytes ausgeliefert');
+      assert.ok(!r.type.includes('application/pdf'), r.type);
+      assert.equal(await abrufprotokolle(), protokolleVorher, 'ein verweigerter Abruf steht als Abruf im Protokoll');
+    } finally {
+      await schutzfreiAufraeumen((tx) => tx.storedFile.update({ where: { id: storedFileId }, data: { data: new Uint8Array(original) } }));
+    }
+    await originalWirdAusgeliefert(abrechnung.pdfChecksum);
+  });
+
+  it('das PDF: fehlt das gespeicherte Objekt, antwortet der Endpunkt 404 — nie mit anderen Bytes', async () => {
+    const { abrechnung, storedFileId, original } = await pdfAblage();
+    try {
+      await schutzfreiAufraeumen((tx) => tx.storedFile.update({ where: { id: storedFileId }, data: { data: null } }));
+      const r = await bytesVon(`/api/payroll/payslips/${maerz}/pdf`, jars.admin);
+      assert.equal(r.status, 404, `fehlendes Objekt: Status ${r.status}`);
+      assert.notEqual(r.bytes.subarray(0, 4).toString(), '%PDF');
+    } finally {
+      await schutzfreiAufraeumen((tx) => tx.storedFile.update({ where: { id: storedFileId }, data: { data: new Uint8Array(original) } }));
+    }
+    await originalWirdAusgeliefert(abrechnung.pdfChecksum);
+  });
+
+  /**
+   * Der Fall, den dieser Auftrag im Code fand: `if (erwartet && …)` lieferte
+   * die Bytes ungeprüft aus, sobald an der Abrechnung keine Prüfsumme stand.
+   * Gegen den alten Stand antwortet der erste Abruf hier mit 200.
+   */
+  it('das PDF: ohne Sollwert wird nicht ausgeliefert; widersprechen sich Abrechnung und Datei, auch nicht', async () => {
+    const { abrechnung, asset } = await pdfAblage();
+    const db = testDb()!;
+    try {
+      await schutzfreiAufraeumen(async (tx) => {
+        await tx.payslip.update({ where: { id: maerz }, data: { pdfChecksum: null } });
+        await tx.fileAsset.update({ where: { id: asset.id }, data: { checksum: null } });
+      });
+      const ohne = await bytesVon(`/api/payroll/payslips/${maerz}/pdf`, jars.admin);
+      assert.equal(ohne.status, 422, `ohne jede Prüfsumme: Status ${ohne.status}`);
+      assert.notEqual(ohne.bytes.subarray(0, 4).toString(), '%PDF', 'ungeprüfte Bytes wurden ausgeliefert');
+
+      // Nur die Momentaufnahme an der Datei: Sie genügt als Sollwert.
+      await schutzfreiAufraeumen((tx) => tx.fileAsset.update({ where: { id: asset.id }, data: { checksum: asset.checksum } }));
+      assert.equal((await bytesVon(`/api/payroll/payslips/${maerz}/pdf`, jars.admin)).status, 200, 'die Prüfsumme der Datei trägt als Sollwert');
+
+      // Beide vorhanden, aber verschieden: Das ist der Befund — nichts ausliefern.
+      await schutzfreiAufraeumen((tx) => tx.payslip.update({ where: { id: maerz }, data: { pdfChecksum: 'f'.repeat(64) } }));
+      assert.equal((await bytesVon(`/api/payroll/payslips/${maerz}/pdf`, jars.admin)).status, 422);
+    } finally {
+      await schutzfreiAufraeumen(async (tx) => {
+        await tx.payslip.update({ where: { id: maerz }, data: { pdfChecksum: abrechnung.pdfChecksum } });
+        await tx.fileAsset.update({ where: { id: asset.id }, data: { checksum: asset.checksum } });
+      });
+    }
+    assert.equal((await db.payslip.findUniqueOrThrow({ where: { id: maerz }, select: { pdfChecksum: true } })).pdfChecksum, abrechnung.pdfChecksum);
+    await originalWirdAusgeliefert(abrechnung.pdfChecksum);
+  });
+
+  it('das PDF: fremde Organisation — weder die Datei noch die Abrechnung einer fremden Organisation wird ausgeliefert', async () => {
+    assert.ok(fremdeOrg, 'keine fremde Prüforganisation');
+    const { abrechnung, asset } = await pdfAblage();
+
+    // 1. Die Datei gehört einer fremden Organisation, die Abrechnung der eigenen.
+    try {
+      await schutzfreiAufraeumen((tx) => tx.fileAsset.update({ where: { id: asset.id }, data: { organizationId: fremdeOrg! } }));
+      const r = await bytesVon(`/api/payroll/payslips/${maerz}/pdf`, jars.admin);
+      assert.equal(r.status, 404, `fremde Datei: Status ${r.status}`);
+      assert.notEqual(r.bytes.subarray(0, 4).toString(), '%PDF');
+    } finally {
+      await schutzfreiAufraeumen((tx) => tx.fileAsset.update({ where: { id: asset.id }, data: { organizationId: asset.organizationId } }));
+    }
+
+    // 2. Die Abrechnung gehört einer Person einer fremden Organisation.
+    const person = await testDb()!.employee.findUniqueOrThrow({ where: { id: abrechnung.employeeId }, select: { organizationId: true } });
+    try {
+      await schutzfreiAufraeumen((tx) => tx.employee.update({ where: { id: abrechnung.employeeId }, data: { organizationId: fremdeOrg! } }));
+      const r = await bytesVon(`/api/payroll/payslips/${maerz}/pdf`, jars.admin);
+      assert.equal(r.status, 404, `fremde Abrechnung: Status ${r.status}`);
+      assert.notEqual(r.bytes.subarray(0, 4).toString(), '%PDF');
+    } finally {
+      await schutzfreiAufraeumen((tx) => tx.employee.update({ where: { id: abrechnung.employeeId }, data: { organizationId: person.organizationId } }));
+    }
+    await originalWirdAusgeliefert(abrechnung.pdfChecksum);
+  });
+
   it('ein unveröffentlichter Monat hat kein PDF', async () => {
     const liste = await get<{ data: { eintraege: { id: string }[] } }>(`/api/payroll/payslips?employeeId=${a}&year=2021&month=5`, { jar: jars.admin });
     assert.equal((await bytesVon(`/api/payroll/payslips/${data(liste).eintraege[0]!.id}/pdf`, jars.admin)).status, 404);

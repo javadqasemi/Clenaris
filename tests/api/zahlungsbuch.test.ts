@@ -218,3 +218,138 @@ describe('Ein Saldo für alle Wege', () => {
     assert.deepEqual(await stand(zuerstGutschrift), { bezahlt: 97.29, offen: 0, status: 'PAID' });
   });
 });
+
+/**
+ * Reihenfolge, Storno und Protokoll (2026-09-27, Befunde F-04, N-05, F-14).
+ *
+ *  • **Rückerstattung vor der Zahlung.** Stripe garantiert keine Reihenfolge.
+ *    Kam `charge.refunded` vor `checkout.session.completed`, fand der Webhook
+ *    keine Zahlung, schrieb den Ereignisvermerk aber trotzdem fest — jede
+ *    Wiederholung galt als „doppelt", die Erstattung war verloren. Jetzt wird
+ *    das Ereignis zurückgewiesen (409), und die spätere Zustellung wirkt.
+ *  • **Zahlung auf eine stornierte Rechnung.** Der Webhook antwortete 422,
+ *    Stripe wiederholte drei Tage lang, und das Geld stand in keiner
+ *    Buchhaltung. Jetzt: gebucht, zur Rückzahlung markiert, 200.
+ *  • **Zahlung ohne Protokollzeile.** Das Protokoll lief nach dem Commit und
+ *    verschluckte Fehler. Geprüft wird die Richtung, auf die es ankommt:
+ *    Lässt sich die Zeile nicht schreiben, entsteht auch die Zahlung nicht —
+ *    und Stripes nächste Zustellung bucht beides. Die Sperre ist ein
+ *    Prüf-Trigger auf `audit_logs`, der nur die Kennungen dieser Reihe trifft.
+ */
+describe('Reihenfolge, Storno und Protokoll', () => {
+  const SPERRE = 'pruef_sperre_zahlungsbuch';
+
+  before(async () => {
+    const db = testDb()!;
+    await db.$executeRawUnsafe(`CREATE TABLE IF NOT EXISTS ${SPERRE} ("entityId" text PRIMARY KEY)`);
+    await db.$executeRawUnsafe(
+      `CREATE OR REPLACE FUNCTION ${SPERRE}() RETURNS trigger LANGUAGE plpgsql AS $$
+       BEGIN
+         IF EXISTS (SELECT 1 FROM ${SPERRE} s WHERE s."entityId" = NEW."entityId") THEN
+           RAISE EXCEPTION 'Prüfreihe Zahlungsbuch: Protokoll gesperrt' USING ERRCODE = 'P0001';
+         END IF;
+         RETURN NEW;
+       END $$`,
+    );
+    await db.$executeRawUnsafe(`DROP TRIGGER IF EXISTS ${SPERRE} ON audit_logs`);
+    await db.$executeRawUnsafe(`CREATE TRIGGER ${SPERRE} BEFORE INSERT ON audit_logs FOR EACH ROW EXECUTE FUNCTION ${SPERRE}()`);
+  });
+
+  after(async () => {
+    const db = testDb();
+    if (!db) return;
+    await db.$executeRawUnsafe(`DROP TRIGGER IF EXISTS ${SPERRE} ON audit_logs`);
+    await db.$executeRawUnsafe(`DROP FUNCTION IF EXISTS ${SPERRE}()`);
+    await db.$executeRawUnsafe(`DROP TABLE IF EXISTS ${SPERRE}`);
+  });
+
+  it('eine Rückerstattung vor ihrer Zahlung wird zurückgewiesen und nach der Zahlung verbucht — nicht als „doppelt" verworfen', async () => {
+    const id = await rechnung();
+    const intent = neueId('pi');
+    const ereignis = neueId('evt');
+
+    const zuFrueh = await erstattet(intent, 3_000, { eventId: ereignis });
+    assert.equal(zuFrueh, 409, 'ohne Zahlung ist die Rückerstattung noch nicht anwendbar — Stripe soll erneut zustellen');
+    assert.equal(
+      await testDb()!.providerWebhookEvent.count({ where: { eventId: ereignis } }),
+      0,
+      'ein nicht angewandtes Ereignis darf nicht als verarbeitet vermerkt sein',
+    );
+
+    assert.equal(await bezahlt(id, intent), 200);
+    assert.deepEqual(await stand(id), { bezahlt: BRUTTO, offen: 0, status: 'PAID' });
+
+    // Stripes Wiederholung desselben Ereignisses — jetzt liegt die Zahlung vor.
+    assert.equal(await erstattet(intent, 3_000, { eventId: ereignis }), 200);
+    assert.deepEqual(await stand(id), { bezahlt: 78.1, offen: 30, status: 'PARTIALLY_PAID' });
+    const zahlung = await testDb()!.payment.findFirstOrThrow({ where: { invoiceId: id } });
+    assert.equal(Number(zahlung.refundedAmount), 30);
+    assert.equal(zahlung.status, 'PARTIALLY_REFUNDED');
+
+    // Und eine weitere Zustellung ist wieder „doppelt" — einmal abgezogen.
+    assert.equal(await erstattet(intent, 3_000, { eventId: ereignis }), 200);
+    assert.deepEqual(await stand(id), { bezahlt: 78.1, offen: 30, status: 'PARTIALLY_PAID' });
+  });
+
+  it('eine Rückerstattung, zu der auch nach Tagen keine Zahlung gehört, wird nicht endlos zurückgewiesen', async () => {
+    const ereignis = neueId('evt');
+    const vorVierTagen = Math.floor(Date.now() / 1000) - 4 * 24 * 60 * 60;
+    assert.equal(await erstattet(neueId('pi'), 1_000, { eventId: ereignis, created: vorVierTagen }), 200);
+    assert.equal(await testDb()!.providerWebhookEvent.count({ where: { eventId: ereignis } }), 1, 'endgültig vermerkt');
+  });
+
+  it('eine Stripe-Zahlung auf eine stornierte Rechnung wird gebucht, zur Rückzahlung markiert und nicht endlos wiederholt', async () => {
+    const id = await rechnung();
+    const storno = await post(`/api/invoices/${id}/cancel`, { reason: `${MARKE}: storniert vor der Zahlung` }, { jar: jars.admin });
+    assert.equal(storno.status, 200, storno.text);
+
+    const intent = neueId('pi');
+    const ereignis = neueId('evt');
+    assert.equal(await bezahlt(id, intent, ereignis), 200, 'eingegangenes Geld ist kein Fehler — sonst wiederholt Stripe tagelang');
+    assert.equal(await bezahlt(id, intent, ereignis), 200, 'die Wiederholung bucht nicht doppelt');
+
+    const db = testDb()!;
+    const zahlungen = await db.payment.findMany({ where: { invoiceId: id } });
+    assert.equal(zahlungen.length, 1, 'das Geld ist gebucht — genau einmal');
+    assert.equal(zahlungen[0]!.status, 'SUCCEEDED');
+    assert.equal(Number(zahlungen[0]!.amount), BRUTTO);
+    assert.match(zahlungen[0]!.note ?? '', /stornierte Rechnung/, 'die Zahlung ist zur Rückzahlung markiert');
+
+    const r = await db.invoice.findUniqueOrThrow({ where: { id }, select: { status: true, paidAmount: true, balance: true } });
+    assert.equal(r.status, 'CANCELLED', 'der Storno bleibt bestehen');
+    assert.equal(Number(r.paidAmount), BRUTTO, 'der eingegangene Betrag steht an der Rechnung');
+    assert.equal(Number(r.balance), 0, 'eine stornierte Rechnung hat keinen offenen Posten');
+
+    const protokoll = await db.auditLog.findMany({ where: { entity: 'Invoice', entityId: id, action: 'PAYMENT' } });
+    assert.equal(protokoll.length, 1, 'eine Protokollzeile zur Zahlung');
+    assert.match(protokoll[0]!.summary ?? '', /storniert/);
+
+    // Die Rückzahlung über Stripe schliesst den Fall.
+    assert.equal(await erstattet(intent, BRUTTO_RAPPEN), 200);
+    const danach = await db.invoice.findUniqueOrThrow({ where: { id }, select: { status: true, paidAmount: true } });
+    assert.equal(danach.status, 'CANCELLED');
+    assert.equal(Number(danach.paidAmount), 0);
+  });
+
+  it('eine Stripe-Zahlung ohne Protokollzeile gibt es nicht — Stripe stellt erneut zu, dann stehen beide', async () => {
+    const id = await rechnung();
+    const db = testDb()!;
+    const intent = neueId('pi');
+    const ereignis = neueId('evt');
+
+    await db.$executeRawUnsafe(`INSERT INTO ${SPERRE} ("entityId") VALUES ($1) ON CONFLICT DO NOTHING`, id);
+    try {
+      const gesperrt = await bezahlt(id, intent, ereignis);
+      assert.ok(gesperrt >= 400, `ohne Protokoll darf die Zahlung nicht als verbucht gelten (kam ${gesperrt})`);
+      assert.equal(await db.payment.count({ where: { invoiceId: id } }), 0, 'Zahlung ohne Protokollzeile gebucht');
+      assert.deepEqual(await stand(id), { bezahlt: 0, offen: BRUTTO, status: 'ISSUED' });
+    } finally {
+      await db.$executeRawUnsafe(`DELETE FROM ${SPERRE} WHERE "entityId" = $1`, id);
+    }
+
+    assert.equal(await bezahlt(id, intent, ereignis), 200, 'die Wiederholung bucht');
+    assert.equal(await db.payment.count({ where: { invoiceId: id } }), 1);
+    assert.equal(await db.auditLog.count({ where: { entity: 'Invoice', entityId: id, action: 'PAYMENT' } }), 1);
+    assert.deepEqual(await stand(id), { bezahlt: BRUTTO, offen: 0, status: 'PAID' });
+  });
+});

@@ -2,11 +2,10 @@ import { defineRoute, idParam } from '@/lib/api/handler';
 import { noContent, ok } from '@/lib/api/response';
 import { prisma, toNumber } from '@/lib/db';
 import { audit, diff } from '@/lib/audit';
-import { BusinessRuleError, NotFoundError } from '@/lib/errors';
+import { NotFoundError } from '@/lib/errors';
 import { updatePaymentSchema } from '@/lib/validation/finance';
-import { zuercherTagText } from '@/lib/zuerich';
 import { getOrganizationId } from '@/server/services/organization.service';
-import { saldoNeuBilden } from '@/server/services/invoice.service';
+import { zahlungStornieren } from '@/server/services/invoice.service';
 
 export const runtime = 'nodejs';
 
@@ -87,72 +86,10 @@ export const DELETE = defineRoute({
   permissions: ['payment:delete'],
   params: idParam,
   rateLimit: 'apiWrite',
+  // Regeln (nur Handzahlungen, bedingter Übergang, Kundenwert, Saldo,
+  // Protokoll in der Transaktion) in `zahlungStornieren`, invoice.service.ts.
   handler: async ({ params, session, ip }) => {
-    const organizationId = await getOrganizationId();
-    const payment = await prisma.payment.findFirst({
-      where: { id: params.id, ...scope(organizationId) },
-      include: { invoice: { select: { id: true, number: true, grossTotal: true } } },
-    });
-    if (!payment) throw new NotFoundError('Zahlung');
-
-    if (payment.provider && payment.provider !== 'manual') {
-      throw new BusinessRuleError(
-        `Diese Zahlung stammt von ${payment.provider} und ist dort eine Tatsache. ` +
-          'Eine Erstattung läuft über den Zahlungsanbieter, nicht über das Löschen der Zeile.',
-      );
-    }
-
-    const amount = toNumber(payment.amount);
-    if (payment.status === 'CANCELLED') {
-      throw new BusinessRuleError('Diese Zahlung ist bereits storniert.');
-    }
-
-    await prisma.$transaction(async (tx) => {
-      await tx.payment.update({
-        where: { id: params.id },
-        data: {
-          status: 'CANCELLED',
-          note: [payment.note, `Storniert am ${zuercherTagText()}`].filter(Boolean).join('\n'),
-        },
-      });
-
-      /**
-       * Der Kundenwert wurde beim Verbuchen erhöht (`recordPayment`); ein
-       * Storno nimmt ihn zurück. Bis 2026-09-23 blieb er stehen, und eine
-       * irrtümlich verbuchte und stornierte Zahlung machte die Kundschaft
-       * dauerhaft „wertvoller".
-       */
-      if (payment.status === 'SUCCEEDED') {
-        // Dieselbe Akte wie beim Erhöhen: die Kundschaft der Rechnung, sonst die der Zahlung.
-        const kunde =
-          (payment.invoiceId
-            ? (await tx.invoice.findUnique({ where: { id: payment.invoiceId }, select: { customerId: true } }))?.customerId
-            : null) ?? payment.customerId;
-        if (kunde) await tx.customer.update({ where: { id: kunde }, data: { lifetimeValue: { decrement: amount } } });
-      }
-
-      /**
-       * Saldo, bezahlter Betrag und Status aus den Belegen neu bilden — mit
-       * den Gutschriften. Bis Wave 24 rechnete der Storno hier selbst
-       * `grossTotal − bezahlt` und setzte damit eine gutgeschriebene Summe
-       * wieder als offen (`saldoNeuBilden` im Rechnungsdienst).
-       */
-      if (payment.invoiceId && payment.status === 'SUCCEEDED') {
-        await saldoNeuBilden(tx, payment.invoiceId);
-      }
-    });
-
-    await audit.deleted({
-      organizationId,
-      userId: session.id,
-      entity: 'Payment',
-      entityId: params.id,
-      summary: payment.invoice
-        ? `Zahlung über ${amount} CHF zu Rechnung ${payment.invoice.number} storniert`
-        : `Zahlung über ${amount} CHF storniert`,
-      ip,
-    });
-
+    await zahlungStornieren({ organizationId: await getOrganizationId(), paymentId: params.id, actorId: session.id, ip });
     return noContent();
   },
 });

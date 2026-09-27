@@ -5,6 +5,8 @@ import type { Prisma, Quote } from '@prisma/client';
 import { prisma, toNumber, type Tx } from '@/lib/db';
 import { BusinessRuleError, NotFoundError } from '@/lib/errors';
 import { absoluteUrl, formatDate, round2 } from '@/lib/utils';
+import { aufRappen, geld, max0, prozentVon, summe } from '@/lib/money';
+import { rechnungsSummen } from '@/lib/rechnungsbetraege';
 import { orderByFor, resolveSort, type SortOrder } from '@/lib/sort';
 import { audit } from '@/lib/audit';
 import { automationEreignisseAbarbeiten, automationEreignisVormerken } from './automation-engine.service';
@@ -75,21 +77,38 @@ interface ComputedTotals {
   items: (QuoteItemInput & { lineTotal: number; position: number })[];
 }
 
-/** Positionen und Totale konsistent berechnen. */
+/**
+ * Positionen und Totale konsistent berechnen — dezimal und nach derselben
+ * Regel wie die Rechnung (2026-09-27, Befund N-03/Q-02).
+ *
+ * Bis dahin rechnete diese Funktion in JavaScript-`number`: 1.5 Std. × CHF
+ * 30.15 sind 45.225, binär knapp darunter, und die Offerte zeigte 45.22 statt
+ * 45.23. Dazu eine eigene MWST-Methode (Summe der ungerundeten
+ * Positionssteuern), während die Rechnung aus derselben Offerte
+ * (`createInvoiceFromQuote`) je Position auf Rappen rundet, wie es
+ * `invoice.service.ts` für das MWSTG festhält. Offerte und Rechnung konnten so
+ * um Rappen auseinanderliegen, obwohl die Rechnung die angenommene Offerte
+ * sein soll.
+ *
+ * Jetzt rechnet `rechnungsSummen` (`lib/rechnungsbetraege.ts`) beides:
+ * Positionsnetto, MWST je Position, Rabatt gekappt und anteilig auf die MWST
+ * umgelegt. `createInvoiceFromQuote` übergibt dieselben verbindlichen
+ * Positionen und denselben Rabattbetrag — die Rechnung ergibt damit genau das
+ * Total der Offerte. Die Rabattregel der Offerte (Prozent vom Zwischentotal
+ * oder Fixbetrag, höchstens das Zwischentotal) bleibt, nur dezimal.
+ */
 export function computeQuoteTotals(
   items: QuoteItemInput[],
   discountType?: 'PERCENT' | 'FIXED',
   discountValue = 0,
 ): ComputedTotals {
-  const computed = items.map((item, index) => {
-    const gross = item.quantity * item.unitPrice;
-    const lineTotal = round2(gross * (1 - (item.discount ?? 0) / 100));
-    return { ...item, lineTotal, position: index };
-  });
+  // Zeilen **aller** Positionen — auch die optionalen tragen im PDF ihren Betrag.
+  const zeilen = rechnungsSummen(items).items;
+  const computed = items.map((item, index) => ({ ...item, lineTotal: zeilen[index]!.netAmount, position: index }));
 
   // Optionale Positionen zählen nicht zum verbindlichen Total.
-  const billable = computed.filter((item) => !item.optional);
-  const subtotal = round2(billable.reduce((sum, item) => sum + item.lineTotal, 0));
+  const verbindlich = items.filter((item) => !item.optional);
+  const subtotal = summe(computed.filter((item) => !item.optional).map((item) => item.lineTotal)).toNumber();
 
   /**
    * Ohne gewählte Rabattart gibt es keinen Rabatt.
@@ -103,26 +122,18 @@ export function computeQuoteTotals(
   const discountAmount = !discountType
     ? 0
     : discountType === 'PERCENT'
-      ? round2(subtotal * (discountValue / 100))
-      : round2(Math.min(discountValue, subtotal));
+      ? prozentVon(subtotal, discountValue)
+      : aufRappen(max0(discountValue).lessThan(geld(subtotal)) ? max0(discountValue) : geld(subtotal)).toNumber();
 
-  const netTotal = round2(subtotal - discountAmount);
-
-  // MWST pro Satz berechnen, damit gemischte Sätze korrekt bleiben.
-  const discountFactor = subtotal > 0 ? netTotal / subtotal : 1;
-  const vatAmount = round2(
-    billable.reduce(
-      (sum, item) => sum + item.lineTotal * discountFactor * (item.vatRate / 100),
-      0,
-    ),
-  );
+  // Netto, MWST je Position und Brutto wie auf der Rechnung aus dieser Offerte.
+  const summen = rechnungsSummen(verbindlich, discountAmount);
 
   return {
-    subtotal,
+    subtotal: summen.subtotal,
     discountAmount,
-    netTotal,
-    vatAmount,
-    grossTotal: round2(netTotal + vatAmount),
+    netTotal: summen.netTotal,
+    vatAmount: summen.vatAmount,
+    grossTotal: summen.grossTotal,
     items: computed,
   };
 }
@@ -1266,6 +1277,35 @@ export async function convertQuoteToBooking(params: {
       data: { status: 'CONVERTED', convertedBookingId: created.id },
     });
 
+    /**
+     * Beide Buchungsereignisse, in dieser Transaktion (F-12, 2026-09-27).
+     *
+     * Die Umwandlung legt die Buchung in einem Schritt an **und** bestätigt
+     * sie — `status: 'CONFIRMED'` —, sie durchläuft also weder
+     * `createBooking` noch `confirmBooking`, wo die beiden Vermerke sonst
+     * entstehen. Bis hierher lief deshalb keine Regel auf „Buchung angelegt"
+     * oder „Buchung bestätigt", wenn die Buchung aus einer Offerte kam: die
+     * Bestätigungsmail an die Kundschaft blieb aus, ohne Fehler und ohne
+     * Spur. Der Paritätstest sah das nicht, weil er nur nach dem Quelltext
+     * `trigger: 'X'` sucht und beide Auslöser anderswo vorkommen.
+     *
+     * Beide und nicht nur BOOKING_CONFIRMED: Eine Regel „bei neuer Buchung
+     * die Disposition benachrichtigen" soll nicht davon abhängen, auf welchem
+     * Weg die Buchung entstand. Vermerkt in der Transaktion, damit die
+     * Buchung ohne ihre Ereignisse nicht festgeschrieben werden kann.
+     */
+    await automationEreignisVormerken(tx, { organizationId: params.organizationId, trigger: 'BOOKING_CREATED', entityId: created.id });
+    await automationEreignisVormerken(tx, { organizationId: params.organizationId, trigger: 'BOOKING_CONFIRMED', entityId: created.id });
+
+    // Buchungszahl und letzte Buchung wie in `createBooking` (2026-09-27).
+    // Vorher fehlten sie hier; das Stornieren zählt aber auf jedem Weg
+    // herunter — eine stornierte umgewandelte Buchung drückte die Zahl unter
+    // den wahren Wert.
+    await tx.customer.update({
+      where: { id: created.customerId },
+      data: { totalBookings: { increment: 1 }, lastBookingAt: new Date() },
+    });
+
     return created;
   });
 
@@ -1282,6 +1322,14 @@ export async function convertQuoteToBooking(params: {
     entityId: quote.id,
     summary: `Offerte ${quote.number} in Buchung ${booking.number} umgewandelt`,
   });
+
+  /**
+   * Nach dem Commit abarbeiten — wie `createBooking` und `confirmBooking`:
+   * Die Maschine lädt die Buchung neu und sähe sie innerhalb der Transaktion
+   * nicht, und eine Regel darf die Umwandlung nicht scheitern lassen (wirft
+   * nie). Bleibt dieser Aufruf aus, holt der stündliche Lauf den Vermerk nach.
+   */
+  await automationEreignisseAbarbeiten({ organizationId: params.organizationId });
 
   return booking;
 }

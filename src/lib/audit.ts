@@ -19,6 +19,16 @@ const log = logger('audit');
  * Die Ausnahme sind Vorgänge, die es ohne Eintrag nicht geben darf — Rollen,
  * Identitätswechsel, Bereinigung, Freigaben. Sie schreiben mit
  * `recordAuditInTx` in derselben Transaktion (siehe dort).
+ *
+ * Seit 2026-09-27 (Befund F-14) gehören auch die Geld- und Lohnbelege dazu:
+ * Rechnung ausstellen (`createInvoice`, `issueInvoice`), Storno
+ * (`cancelInvoice`), Zahlung (`recordPayment`, auch aus dem Stripe-Webhook),
+ * Mahnung (`processOverdueInvoices`) und Lohnabrechnung veröffentlichen
+ * (`publishPayslips`). Für sie hiess „nach bestem Bemühen" bis dahin: Eine
+ * vergebene Rechnungsnummer, eine Mahngebühr oder eine veröffentlichte
+ * Lohnabrechnung konnte ohne jede Zeile im Protokoll stehen. Eine eigene
+ * Hilfe (`audit.imTx`) braucht es dafür nicht — `recordAuditInTx` ist genau
+ * sie und läuft durch dieselbe Schwärzung (`auditDaten`).
  */
 
 /**

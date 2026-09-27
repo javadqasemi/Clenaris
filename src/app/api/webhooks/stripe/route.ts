@@ -5,7 +5,12 @@ import { ausRappen } from '@/lib/money';
 import { constructWebhookEvent, fromRappen } from '@/lib/payments/stripe';
 import { erstattungsstandUebernehmen, recordPayment } from '@/server/services/invoice.service';
 import { getOrganizationId } from '@/server/services/organization.service';
-import { ereignisVerbuchen, fehlgeschlageneZahlungVermerken, zahlungsabsichtVermerken } from '@/server/services/stripe-ereignis.service';
+import {
+  EreignisVerfruehtError,
+  ereignisVerbuchen,
+  fehlgeschlageneZahlungVermerken,
+  zahlungsabsichtVermerken,
+} from '@/server/services/stripe-ereignis.service';
 import { logger } from '@/lib/logger';
 
 const log = logger('stripe');
@@ -33,6 +38,12 @@ export const maxDuration = 30;
  *     galt das nur für die Zahlung selbst.
  *  5. Fehler beim Verarbeiten führen zu einem 500 — dann wiederholt Stripe die
  *     Zustellung. Ein 200 auf einen Fehler würde die Zahlung verlieren.
+ *  6. Umgekehrt darf ein *dauerhafter* Zustand keine Fehlerantwort erzeugen
+ *     (2026-09-27, N-05): Eine Zahlung auf eine inzwischen stornierte
+ *     Rechnung wird gebucht und zur Rückzahlung gemeldet (`recordPayment`),
+ *     statt mit 422 abgewiesen und von Stripe tagelang erneut zugestellt zu
+ *     werden. Zurückgewiesen wird nur, was sich durch Warten erledigt — die
+ *     Rückerstattung vor ihrer Zahlung (409, `EreignisVerfruehtError`).
  */
 export async function POST(request: Request): Promise<Response> {
   const signature = request.headers.get('stripe-signature');
@@ -101,6 +112,13 @@ export async function POST(request: Request): Promise<Response> {
           damit ein verspätetes älteres Ereignis nichts zurückdreht), und den
           Saldo bildet `saldoNeuBilden` — dieselbe Rechnung wie überall.
         */
+        /*
+          Kommt die Rückerstattung vor der Zahlung an (Stripe garantiert keine
+          Reihenfolge), meldet `erstattungsstandUebernehmen` `'ausstehend'`, und
+          `ereignisVerbuchen` weist das Ereignis samt Vermerk zurück (409) —
+          Stripe stellt es später erneut zu, dann ist die Zahlung gebucht. Bis
+          2026-09-27 blieb der Vermerk stehen und die Erstattung ging verloren.
+        */
         const ergebnis = await ereignisVerbuchen(event, (tx) =>
           erstattungsstandUebernehmen(tx, {
             providerPaymentId: paymentIntentId,
@@ -108,6 +126,12 @@ export async function POST(request: Request): Promise<Response> {
             stand: new Date(event.created * 1000),
           }),
         );
+        if (ergebnis === 'ausstehend_verfallen') {
+          // Tage nach dem Ereignis noch immer keine Zahlung: keine unserer
+          // Rechnungen. Nicht mehr zurückweisen, aber sichtbar machen.
+          log.error('Rückerstattung ohne gebuchte Zahlung — bitte von Hand prüfen', { paymentIntentId, eventId: event.id });
+          break;
+        }
         log.info('Rückerstattung verarbeitet', { paymentIntentId, ergebnis });
         break;
       }
@@ -141,6 +165,12 @@ export async function POST(request: Request): Promise<Response> {
 
     return Response.json({ received: true });
   } catch (error) {
+    // Ein verfrühtes Ereignis ist erwartete Reihenfolge, kein Fehler — es
+    // bekommt 409 und eine Warnung statt eines Fehlerprotokolls.
+    if (error instanceof EreignisVerfruehtError) {
+      log.warn('Ereignis vor seiner Zahlung — Stripe stellt erneut zu', { event: event.type, eventId: event.id });
+      return toErrorResponse(error);
+    }
     // 500 → Stripe wiederholt die Zustellung. Genau das wollen wir.
     log.error('Ereignisverarbeitung fehlgeschlagen', { event: event.type, error });
     return toErrorResponse(error);

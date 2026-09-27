@@ -3,13 +3,13 @@ import 'server-only';
 import { Prisma, type Invoice, type PaymentMethod, type PaymentStatus } from '@prisma/client';
 
 import { prisma, toNumber } from '@/lib/db';
-import { aufRappen, geld, max0 } from '@/lib/money';
+import { aufRappen, einsatzertragAlsPauschale, geld, max0 } from '@/lib/money';
 import { tagPlus, zuercherTag, zuercherTagesbeginn } from '@/lib/zuerich';
 import { gutschriftsSummen, rechnungsSummen } from '@/lib/rechnungsbetraege';
 import { BusinessRuleError, ConflictError, NotFoundError } from '@/lib/errors';
 import { absoluteUrl, formatDate, round2 } from '@/lib/utils';
 import { orderByFor, resolveSort, type SortOrder } from '@/lib/sort';
-import { audit } from '@/lib/audit';
+import { audit, recordAuditInTx } from '@/lib/audit';
 import { automationEreignisseAbarbeiten, automationEreignisVormerken } from './automation-engine.service';
 import {
   invoiceIssuedEmail,
@@ -32,7 +32,7 @@ import {
   tokenRejectionError,
 } from './access-token.service';
 import { nextNumber } from './numbering.service';
-import { notify } from './notification.service';
+import { notify, notifyStaff } from './notification.service';
 import { logger } from '@/lib/logger';
 
 const log = logger('invoice');
@@ -208,20 +208,29 @@ export async function createInvoice(params: {
     if (params.input.issueImmediately) {
       await automationEreignisVormerken(tx, { organizationId: params.organizationId, trigger: 'INVOICE_ISSUED', entityId: angelegt.id });
     }
+    /*
+      Protokoll in der Transaktion (2026-09-27, F-14). Eine direkt
+      ausgestellte Rechnung zieht hier ihre Nummer aus der lückenlosen Folge
+      nach Art. 957a OR — eine Nummer ohne Protokollzeile wäre ein Beleg, von
+      dem niemand weiss, wer ihn ausgestellt hat. Vorher lief `audit.created`
+      nach dem Commit und verschluckte jeden Fehler. Jetzt stehen Rechnung und
+      Zeile gemeinsam oder gar nicht; scheitert das Protokoll, rollt auch die
+      Nummer zurück, und die Folge bleibt lückenlos.
+    */
+    await recordAuditInTx(tx, {
+      organizationId: params.organizationId,
+      userId: params.actorId,
+      action: 'CREATE',
+      entity: 'Invoice',
+      entityId: angelegt.id,
+      summary: `Rechnung ${angelegt.number} ${params.input.issueImmediately ? 'erstellt und ausgestellt' : 'erstellt'} (${toNumber(angelegt.grossTotal).toFixed(2)} CHF)`,
+    });
     return angelegt;
   });
 
   if (params.input.issueImmediately) {
     await renderInvoicePdf(invoice.id).catch((error) => log.error('PDF-Erzeugung fehlgeschlagen', { error }));
   }
-
-  await audit.created({
-    organizationId: params.organizationId,
-    userId: params.actorId,
-    entity: 'Invoice',
-    entityId: invoice.id,
-    summary: `Rechnung ${invoice.number} erstellt (${toNumber(invoice.grossTotal).toFixed(2)} CHF)`,
-  });
 
   if (params.input.issueImmediately) await automationEreignisseAbarbeiten({ organizationId: params.organizationId });
 
@@ -403,17 +412,28 @@ export async function createInvoiceFromJobs(params: {
         discountAmount = round2(discountAmount + grundlage.discountAmount);
       }
     } else {
-      // Einsatz ohne Buchung (von Hand angelegt): Sein Ertrag ist die einzige
-      // Grundlage, verteilt auf die geleisteten oder geplanten Stunden.
+      /*
+        Einsatz ohne Buchung (von Hand angelegt): Sein Ertrag ist die einzige
+        Grundlage — und genau der wird verrechnet (2026-09-27, N-03).
+
+        Vorher: Menge = Stunden, Einzelpreis = Ertrag / max(Stunden, 0.5). Die
+        Untergrenze sollte eine Division durch fast null verhindern, verrechnete
+        aber unter 30 Minuten nur einen Bruchteil: 20 Minuten mit Ertrag 100
+        ergaben 0.33 × 200 = 66. Darüber rechneten gerundeter Stundensatz mal
+        gerundete Stunden am Ertrag vorbei. Eine Mindestverrechnung gibt es in
+        keiner Regel dieses Betriebs; der vereinbarte Ertrag ist der Preis.
+        Deshalb eine Pauschale über den Ertrag, die Dauer steht im Text
+        (`einsatzertragAlsPauschale` in `lib/money.ts`).
+      */
       const minutes = job.timeEntries.reduce((sum, e) => sum + e.minutes, 0) || job.estimatedMin;
-      const hours = round2(minutes / 60);
+      const zeile = einsatzertragAlsPauschale(job.revenue, minutes);
       items.push({
         jobId: job.id,
-        name: `${job.service?.name ?? job.title} · ${job.scheduledStart.toLocaleDateString('de-CH', { timeZone: 'Europe/Zurich' })}`,
+        name: `${job.service?.name ?? job.title} · ${job.scheduledStart.toLocaleDateString('de-CH', { timeZone: 'Europe/Zurich' })} · ${zeile.stunden.toFixed(2)} Std.`,
         description: job.completionNote ?? undefined,
-        quantity: hours,
-        unit: 'Std.',
-        unitPrice: round2(toNumber(job.revenue) / Math.max(hours, 0.5)),
+        quantity: zeile.quantity,
+        unit: zeile.unit,
+        unitPrice: zeile.unitPrice,
         discount: 0,
         vatRate: 8.1,
       });
@@ -543,20 +563,23 @@ export async function issueInvoice(params: {
       },
     });
     await automationEreignisVormerken(tx, { organizationId: params.organizationId, trigger: 'INVOICE_ISSUED', entityId: invoice.id });
+    // In derselben Transaktion wie die Nummer (F-14, 2026-09-27) — Begründung
+    // bei `createInvoice`: keine ausgestellte Nummer ohne Protokollzeile, und
+    // kein Protokoll für eine Ausstellung, die zurückgerollt ist.
+    await recordAuditInTx(tx, {
+      organizationId: params.organizationId,
+      userId: params.actorId,
+      action: 'UPDATE',
+      entity: 'Invoice',
+      entityId: ausgestellt.id,
+      summary: `Rechnung ${ausgestellt.number} ausgestellt`,
+    });
     return ausgestellt;
   });
 
   await renderInvoicePdf(issued.id).catch((error) =>
     log.error('PDF-Erzeugung fehlgeschlagen', { error }),
   );
-
-  await audit.updated({
-    organizationId: params.organizationId,
-    userId: params.actorId,
-    entity: 'Invoice',
-    entityId: issued.id,
-    summary: `Rechnung ${issued.number} ausgestellt`,
-  });
 
   await automationEreignisseAbarbeiten({ organizationId: params.organizationId });
 
@@ -670,6 +693,74 @@ export async function sendInvoice(params: {
 const BEZAHLT_TOLERANZ = new Prisma.Decimal('0.05');
 
 /**
+ * Eine von Hand erfasste Zahlung stornieren — vorher im Endpunkt
+ * `DELETE /api/payments/:id` geschrieben (bis 2026-09-27).
+ *
+ * Der Übergang ist **bedingt** (`status: SUCCEEDED` bzw. nicht `CANCELLED`
+ * im `where` des `updateMany`): Zwei gleichzeitige Stornos derselben Zahlung
+ * lasen vorher beide „gültig" ausserhalb jeder Sperre und senkten den
+ * Kundenwert zweimal (Befund N-05, Rest). Jetzt gewinnt genau einer; der
+ * zweite findet nichts mehr umzustellen und bekommt die Meldung „bereits
+ * storniert". Protokollzeile in derselben Transaktion (F-14).
+ *
+ * Zahlungen eines Anbieters werden hier nie storniert — sie sind dort eine
+ * Tatsache; die Erstattung läuft über den Anbieter.
+ */
+export async function zahlungStornieren(params: {
+  organizationId: string;
+  paymentId: string;
+  actorId: string;
+  ip?: string | null;
+}): Promise<void> {
+  const payment = await prisma.payment.findFirst({
+    where: {
+      id: params.paymentId,
+      OR: [{ invoice: { organizationId: params.organizationId } }, { customer: { organizationId: params.organizationId } }],
+    },
+    include: { invoice: { select: { id: true, number: true, customerId: true } } },
+  });
+  if (!payment) throw new NotFoundError('Zahlung');
+  if (payment.provider && payment.provider !== 'manual') {
+    throw new BusinessRuleError(
+      `Diese Zahlung stammt von ${payment.provider} und ist dort eine Tatsache. ` +
+        'Eine Erstattung läuft über den Zahlungsanbieter, nicht über das Löschen der Zeile.',
+    );
+  }
+  const amount = toNumber(payment.amount);
+
+  await prisma.$transaction(async (tx) => {
+    const umgestellt = await tx.payment.updateMany({
+      where: { id: payment.id, status: { not: 'CANCELLED' } },
+      data: {
+        status: 'CANCELLED',
+        note: [payment.note, `Storniert am ${zuercherTag().toISOString().slice(0, 10)}`].filter(Boolean).join('\n'),
+      },
+    });
+    if (umgestellt.count === 0) throw new BusinessRuleError('Diese Zahlung ist bereits storniert.');
+
+    // Der Kundenwert wurde beim Verbuchen erhöht; nur eine *gebuchte*
+    // Zahlung nimmt ihn zurück — dieselbe Akte wie beim Erhöhen.
+    if (payment.status === 'SUCCEEDED') {
+      const kunde = payment.invoice?.customerId ?? payment.customerId;
+      if (kunde) await tx.customer.update({ where: { id: kunde }, data: { lifetimeValue: { decrement: amount } } });
+      if (payment.invoiceId) await saldoNeuBilden(tx, payment.invoiceId);
+    }
+
+    await recordAuditInTx(tx, {
+      organizationId: params.organizationId,
+      userId: params.actorId,
+      action: 'DELETE',
+      entity: 'Payment',
+      entityId: payment.id,
+      summary: payment.invoice
+        ? `Zahlung über ${amount} CHF zu Rechnung ${payment.invoice.number} storniert`
+        : `Zahlung über ${amount} CHF storniert`,
+      ip: params.ip ?? undefined,
+    });
+  });
+}
+
+/**
  * Bezahlter Betrag, offener Posten und Zahlstatus einer Rechnung — aus den
  * Belegen gebildet, nicht fortgeschrieben.
  *
@@ -776,9 +867,17 @@ const EINGEGANGENE_ZAHLUNG: PaymentStatus[] = ['SUCCEEDED', 'PARTIALLY_REFUNDED'
 export async function erstattungsstandUebernehmen(
   tx: Prisma.TransactionClient,
   params: { providerPaymentId: string; kumuliert: Prisma.Decimal; stand: Date },
-): Promise<'uebernommen' | 'veraltet' | 'unbekannt'> {
+): Promise<'uebernommen' | 'veraltet' | 'unbekannt' | 'ausstehend'> {
   const vorhanden = await tx.payment.findUnique({ where: { providerPaymentId: params.providerPaymentId }, select: { id: true } });
-  if (!vorhanden) return 'unbekannt';
+  /*
+    Noch keine Zahlung zu dieser Kennung: `'ausstehend'`, nicht `'unbekannt'`
+    (2026-09-27, F-04). Stripe stellt `charge.refunded` und
+    `checkout.session.completed` in beliebiger Reihenfolge zu; die Zahlung
+    kann schlicht noch unterwegs sein. `ereignisVerbuchen` weist das Ereignis
+    daraufhin zurück, statt es als verarbeitet zu vermerken — mit
+    `'unbekannt'` war die Rückerstattung verloren, sobald die Zahlung eintraf.
+  */
+  if (!vorhanden) return 'ausstehend';
   // Zeile sperren: Zwei gleichzeitige Ereignisse derselben Zahlung dürfen
   // nicht beide den alten Stand lesen.
   await tx.$queryRaw`SELECT "id" FROM "payments" WHERE "id" = ${vorhanden.id} FOR UPDATE`;
@@ -790,6 +889,21 @@ export async function erstattungsstandUebernehmen(
   // Mehr als die Zahlung kann nicht erstattet sein; ein solcher Wert wäre ein
   // Anbieterfehler und wird auf den Zahlbetrag begrenzt.
   const kumuliert = aufRappen(Prisma.Decimal.min(max0(params.kumuliert), betrag));
+  /*
+    Gleiche Sekunde, kleinerer Stand: veraltet (2026-09-27). `event.created`
+    hat nur Sekundenauflösung; zwei Teilerstattungen in derselben Sekunde
+    lassen sich am Zeitpunkt nicht ordnen, und der strikte Vergleich oben
+    liess das ältere, später zugestellte Ereignis den Stand zurückdrehen. Der
+    kumulierte Stand wächst innerhalb einer Sekunde nur — der grössere ist
+    der neuere.
+  */
+  if (
+    zahlung.refundSyncedAt &&
+    zahlung.refundSyncedAt.getTime() === params.stand.getTime() &&
+    kumuliert.lessThan(geld(zahlung.refundedAmount))
+  ) {
+    return 'veraltet';
+  }
   const zuwachs = kumuliert.minus(geld(zahlung.refundedAmount));
 
   await tx.payment.update({
@@ -823,7 +937,9 @@ export async function recordPayment(params: {
     include: { customer: { include: { user: { select: { id: true } } } } },
   });
   if (!invoice) throw new NotFoundError('Rechnung');
-  if (invoice.status === 'CANCELLED') {
+  // Schnelle Antwort für das Büro. Entscheidend ist die Prüfung hinter der
+  // Zeilensperre in `zahlungBuchen` — diese hier schliesst keinen Wettlauf.
+  if (!params.provider && invoice.status === 'CANCELLED') {
     throw new BusinessRuleError('Für eine stornierte Rechnung können keine Zahlungen erfasst werden.');
   }
 
@@ -847,8 +963,9 @@ export async function recordPayment(params: {
     Anbieter stellte weiter zu.
   */
   let updated: Invoice;
+  let aufStornierteRechnung = false;
   try {
-    updated = await zahlungBuchen();
+    ({ rechnung: updated, storniert: aufStornierteRechnung } = await zahlungBuchen());
   } catch (error) {
     if (params.providerPaymentId && error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
       const aktuell = await prisma.invoice.findUniqueOrThrow({ where: { id: invoice.id } });
@@ -857,15 +974,29 @@ export async function recordPayment(params: {
     throw error;
   }
 
-  function zahlungBuchen() {
+  function zahlungBuchen(): Promise<{ rechnung: Invoice; storniert: boolean }> {
     return prisma.$transaction(async (tx) => {
     /*
+      Zeilensperre für **jede** Zahlung, dann den Stand in der Transaktion
+      lesen (2026-09-27, N-05). Vorher prüfte nur die Abfrage oben
+      „storniert?", ausserhalb jeder Sperre: Ein gleichzeitiger Storno las
+      „nichts bezahlt", die Zahlung las „nicht storniert", und beide
+      schrieben — eine stornierte Rechnung mit Geld darauf, von der niemand
+      wusste. `cancelInvoice` sperrt dieselbe Zeile; einer von beiden wartet
+      und sieht danach den Stand des anderen.
+    */
+    await tx.$queryRaw`SELECT id FROM invoices WHERE id = ${invoice!.id} FOR UPDATE`;
+    const stand = await tx.invoice.findUniqueOrThrow({ where: { id: invoice!.id }, select: { balance: true, status: true } });
+    const storniert = stand.status === 'CANCELLED';
+
+    /*
       Eine von Hand erfasste Zahlung höchstens bis zum offenen Saldo
-      (2026-09-27), geprüft hinter einer Zeilensperre der Rechnung, damit zwei
-      gleichzeitige Erfassungen nicht beide „passt noch" lesen. Vorher nahm
-      die Erfassung jeden positiven Betrag an — ein Tippfehler (1800 statt
-      180) ergab einen negativen Saldo und einen um 1620 zu hohen Kundenwert.
-      Ein Betrag, der nach Rundung auf Rappen null ist, ist keine Zahlung.
+      (2026-09-27), geprüft hinter der Zeilensperre, damit zwei gleichzeitige
+      Erfassungen nicht beide „passt noch" lesen. Vorher nahm die Erfassung
+      jeden positiven Betrag an — ein Tippfehler (1800 statt 180) ergab einen
+      negativen Saldo und einen um 1620 zu hohen Kundenwert. Ein Betrag, der
+      nach Rundung auf Rappen null ist, ist keine Zahlung. Und auf eine
+      stornierte Rechnung bucht das Büro nichts.
 
       **Nicht** für Zahlungen eines Anbieters (`provider`): Deren Geld ist
       schon eingegangen, und eine Überzahlung muss gebucht werden, um sie
@@ -873,15 +1004,39 @@ export async function recordPayment(params: {
       verschweigen.
     */
     if (!params.provider) {
-      await tx.$queryRaw`SELECT id FROM invoices WHERE id = ${invoice!.id} FOR UPDATE`;
-      const offen = await tx.invoice.findUniqueOrThrow({ where: { id: invoice!.id }, select: { balance: true } });
+      if (storniert) throw new BusinessRuleError('Für eine stornierte Rechnung können keine Zahlungen erfasst werden.');
       if (amount <= 0) throw new BusinessRuleError('Der Betrag muss mindestens einen Rappen betragen.');
-      if (amount > toNumber(offen.balance)) {
+      if (amount > toNumber(stand.balance)) {
         throw new BusinessRuleError(
-          `Der Betrag übersteigt den offenen Saldo von CHF ${toNumber(offen.balance).toFixed(2)}. Eine Überzahlung bitte als Gutschrift oder Rückzahlung behandeln.`,
+          `Der Betrag übersteigt den offenen Saldo von CHF ${toNumber(stand.balance).toFixed(2)}. Eine Überzahlung bitte als Gutschrift oder Rückzahlung behandeln.`,
         );
       }
     }
+
+    /*
+      Geld eines Anbieters auf eine **stornierte** Rechnung (N-05,
+      2026-09-27): buchen und zur Rückzahlung melden, nicht abweisen.
+
+      Vorher warf diese Funktion auch hier `BusinessRuleError`. Der Webhook
+      antwortete 422, Stripe wertete das als Fehlschlag und stellte drei Tage
+      lang erneut zu — jedes Mal mit demselben Ergebnis. Das Geld der
+      Kundschaft lag danach bei Stripe, und in der Buchhaltung stand nichts
+      davon. Genau der Fall entsteht regelmässig: Die Kundschaft öffnet den
+      Zahlungslink, das Büro storniert die Rechnung, die Kundschaft bezahlt.
+
+      Gebucht wird die Zahlung an der stornierten Rechnung, wie jede andere
+      eingegangene Zahlung. `saldoNeuBilden` hält den Saldo einer stornierten
+      Rechnung bei 0 und weist den eingegangenen Betrag als `paidAmount` aus
+      — eine stornierte Rechnung mit bezahltem Betrag ist genau das Merkmal
+      „Geld zurückzahlen". Die Zahlungsnotiz sagt es ausdrücklich, das Büro
+      wird benachrichtigt (unten, nach dem Commit), und die Rückzahlung läuft
+      über den Anbieter; ihr `charge.refunded` senkt den Betrag wieder.
+      Verworfen: die Zahlung ohne Rechnung als Guthaben der Kundschaft zu
+      führen — das Modell kennt kein Guthabenkonto, und eine Zahlung ohne
+      Rechnung verschwände aus jeder Sicht, in der das Büro danach sucht.
+    */
+    const hinweis = storniert ? 'Eingang auf stornierte Rechnung — Rückzahlung über den Zahlungsanbieter veranlassen.' : null;
+
     await tx.payment.create({
       data: {
         invoiceId: invoice!.id,
@@ -891,7 +1046,7 @@ export async function recordPayment(params: {
         method: params.input.method as PaymentMethod,
         status: 'SUCCEEDED',
         reference: params.input.reference ?? null,
-        note: params.input.note ?? null,
+        note: [params.input.note, hinweis].filter(Boolean).join('\n') || null,
         provider: params.provider ?? 'manual',
         providerPaymentId: params.providerPaymentId ?? null,
         paidAt: params.input.paidAt ?? new Date(),
@@ -900,15 +1055,52 @@ export async function recordPayment(params: {
 
     const result = await saldoNeuBilden(tx, invoice!.id);
 
-    // Kundenwert (Lifetime Value) fortschreiben.
+    // Kundenwert (Lifetime Value) fortschreiben. Auch bei der stornierten
+    // Rechnung: Die Rückerstattung senkt ihn später um denselben Betrag
+    // (`erstattungsstandUebernehmen`) — beide Seiten bleiben symmetrisch.
     await tx.customer.update({
       where: { id: invoice!.customerId },
       data: { lifetimeValue: { increment: amount } },
     });
 
-    return result;
+    /*
+      Protokoll in der Transaktion (F-14, 2026-09-27). Eine eingegangene
+      Zahlung ohne Protokollzeile ist genau der Fall, nach dem eine
+      Revision fragt; `audit.payment` lief nach dem Commit und verschluckte
+      jeden Fehler. Jetzt gilt: keine Zahlung ohne Zeile. Scheitert das
+      Protokoll bei einer Anbieterzahlung, antwortet der Webhook 500 und
+      Stripe stellt erneut zu — die Zahlung geht nicht verloren, sie wird
+      mit ihrer Zeile gebucht, sobald das Protokoll wieder schreibt.
+    */
+    await recordAuditInTx(tx, {
+      organizationId: params.organizationId,
+      userId: params.actorId ?? null,
+      action: 'PAYMENT',
+      entity: 'Invoice',
+      entityId: invoice!.id,
+      summary:
+        `Zahlung CHF ${amount.toFixed(2)} (${params.input.method}) zu Rechnung ${invoice!.number}` +
+        (storniert ? ' — Rechnung ist storniert, Rückzahlung nötig' : ''),
+    });
+
+    return { rechnung: result, storniert };
     });
   }
+
+  if (aufStornierteRechnung) {
+    // Nach dem Commit: Eine Meldung, die scheitert, darf die Buchung nicht
+    // zurückrollen — das Geld ist da, und die Zahlungszeile trägt den Hinweis.
+    await notifyStaff({
+      organizationId: params.organizationId,
+      title: 'Zahlung auf stornierte Rechnung',
+      body: `Auf die stornierte Rechnung ${invoice.number} sind CHF ${amount.toFixed(2)} eingegangen. Bitte die Rückzahlung veranlassen.`,
+      link: `/admin/rechnungen/${invoice.id}`,
+      permission: 'payment:read',
+      entity: 'Invoice',
+      entityId: invoice.id,
+    }).catch((error) => log.error('Meldung zur Zahlung auf stornierte Rechnung fehlgeschlagen', { error }));
+  }
+
   const fullyPaid = updated.status === 'PAID';
 
   if (fullyPaid) {
@@ -927,14 +1119,6 @@ export async function recordPayment(params: {
       entityId: invoice.id,
     });
   }
-
-  await audit.payment({
-    organizationId: params.organizationId,
-    userId: params.actorId,
-    entity: 'Invoice',
-    entityId: invoice.id,
-    summary: `Zahlung CHF ${amount.toFixed(2)} (${params.input.method}) zu Rechnung ${invoice.number}`,
-  });
 
   return { invoice: updated, fullyPaid };
 }
@@ -1003,6 +1187,46 @@ export async function processOverdueInvoices(organizationId: string): Promise<{
       expiresAt: new Date(now.getTime() + 180 * 24 * 60 * 60 * 1000),
     });
 
+    /*
+      Mahnung, Mahnstufe und Protokollzeile in **einer** Transaktion
+      (2026-09-27, F-14). Eine Mahnung mit Gebühr ändert die Forderung
+      gegenüber der Kundschaft und ist eine der ersten Fragen jeder
+      Reklamation („wann wurde ich gemahnt, mit welcher Gebühr?"). Bis dahin
+      lief das Protokoll nach dem Commit über `audit.updated`, das Fehler
+      verschluckt: Die Gebühr stand dann in der Forderung, aber in keinem
+      Protokoll. Ohne handelnde Person — der Tageslauf mahnt, nicht jemand im
+      Büro.
+
+      **Erst festhalten, dann versenden** (2026-09-27). Vorher ging die
+      Nachricht vor der Transaktion hinaus: Scheiterte diese, war die
+      Kundschaft gemahnt, aber nichts vermerkt, und der nächste Tageslauf
+      mahnte dieselbe Stufe noch einmal. Der Übergang der Mahnstufe ist
+      bedingt (`reminderLevel` wie gelesen) — zwei gleichzeitige Tagesläufe
+      mahnen so nicht beide. Scheitert danach der Versand, steht die Mahnung
+      vermerkt und der Fehlversand im Benachrichtigungsprotokoll; eine
+      doppelte Mahnung wäre das grössere Übel.
+    */
+    const vermerkt = await prisma.$transaction(async (tx) => {
+      const stufe = await tx.invoice.updateMany({
+        where: { id: invoice.id, reminderLevel: invoice.reminderLevel },
+        data: { reminderLevel: level, lastReminderAt: now },
+      });
+      if (stufe.count === 0) return false;
+      await tx.paymentReminder.create({
+        data: { invoiceId: invoice.id, level, fee, channel: 'EMAIL' },
+      });
+      await recordAuditInTx(tx, {
+        organizationId,
+        action: 'UPDATE',
+        entity: 'Invoice',
+        entityId: invoice.id,
+        summary: `${level === 1 ? 'Zahlungserinnerung' : `${level - 1}. Mahnung`} zu Rechnung ${invoice.number} versendet${fee > 0 ? ` (Gebühr CHF ${fee.toFixed(2)})` : ''}`,
+        changes: { reminderLevel: level, fee },
+      });
+      return true;
+    });
+    if (!vermerkt) continue;
+
     await notify({
       userId: invoice.customer.user?.id ?? null,
       email: invoice.billToEmail ?? invoice.customer.email,
@@ -1028,29 +1252,7 @@ export async function processOverdueInvoices(organizationId: string): Promise<{
       }),
       entity: 'Invoice',
       entityId: invoice.id,
-    });
-
-    await prisma.$transaction([
-      prisma.paymentReminder.create({
-        data: { invoiceId: invoice.id, level, fee, channel: 'EMAIL' },
-      }),
-      prisma.invoice.update({
-        where: { id: invoice.id },
-        data: { reminderLevel: level, lastReminderAt: now },
-      }),
-    ]);
-
-    // Seit 2026-09-27 protokolliert: Eine Mahnung mit Gebühr ändert die
-    // Forderung gegenüber der Kundschaft und ist eine der ersten Fragen jeder
-    // Reklamation („wann wurde ich gemahnt, mit welcher Gebühr?"). Ohne
-    // handelnde Person — der Tageslauf mahnt, nicht jemand im Büro.
-    await audit.updated({
-      organizationId,
-      entity: 'Invoice',
-      entityId: invoice.id,
-      summary: `${level === 1 ? 'Zahlungserinnerung' : `${level - 1}. Mahnung`} zu Rechnung ${invoice.number} versendet${fee > 0 ? ` (Gebühr CHF ${fee.toFixed(2)})` : ''}`,
-      changes: { reminderLevel: level, fee },
-    });
+    }).catch((error) => log.error('Mahnung vermerkt, Versand fehlgeschlagen', { invoiceId: invoice.id, error }));
 
     sent++;
   }
@@ -1072,34 +1274,53 @@ export async function cancelInvoice(params: {
     where: { id: params.invoiceId, organizationId: params.organizationId, deletedAt: null },
   });
   if (!invoice) throw new NotFoundError('Rechnung');
-  if (toNumber(invoice.paidAmount) > 0) {
-    throw new BusinessRuleError(
-      'Für eine teilweise bezahlte Rechnung ist eine Gutschrift zu erstellen, kein Storno.',
-    );
-  }
 
   // Storno und Freigabe der Einsätze gemeinsam: Eine stornierte Rechnung
   // verrechnet nichts mehr, und die Einsätze lassen sich neu verrechnen.
   const updated = await prisma.$transaction(async (tx) => {
+    /*
+      Zeilensperre und Prüfung **in** der Transaktion (2026-09-27, N-05).
+      Vorher las der Storno den bezahlten Betrag vor der Transaktion und
+      schrieb danach unbedingt: Eine Zahlung, die dazwischen gebucht wurde,
+      stand anschliessend auf einer stornierten Rechnung — Geld, das die
+      Regel „bezahlt ⇒ Gutschrift statt Storno" gerade verhindern sollte.
+      `recordPayment` sperrt dieselbe Zeile; wer zuerst kommt, gewinnt, und
+      der andere sieht dessen Stand.
+
+      Die Regel selbst bleibt: Ist Geld eingegangen, wird nicht storniert,
+      sondern gutgeschrieben (Gutschrift, danach Rückzahlung) — sonst stünde
+      eingegangenes Geld ohne Gegenbeleg da.
+    */
+    await tx.$queryRaw`SELECT "id" FROM "invoices" WHERE "id" = ${invoice.id} FOR UPDATE`;
+    const stand = await tx.invoice.findUniqueOrThrow({ where: { id: invoice.id }, select: { status: true, paidAmount: true, notes: true } });
+    if (stand.status === 'CANCELLED') throw new BusinessRuleError('Diese Rechnung ist bereits storniert.');
+    if (geld(stand.paidAmount).greaterThan(0)) {
+      throw new BusinessRuleError(
+        'Für eine teilweise bezahlte Rechnung ist eine Gutschrift zu erstellen, kein Storno.',
+      );
+    }
+
     const storniert = await tx.invoice.update({
       where: { id: invoice.id },
       data: {
         status: 'CANCELLED',
         cancelledAt: new Date(),
         balance: 0,
-        notes: [invoice.notes, `Storniert: ${params.reason}`].filter(Boolean).join('\n'),
+        notes: [stand.notes, `Storniert: ${params.reason}`].filter(Boolean).join('\n'),
       },
     });
     await einsaetzeFreigeben(tx, invoice.id);
+    // In der Transaktion (F-14): Ein Storno ohne Zeile wäre ein Beleg, der
+    // verschwindet, ohne dass jemand sagen kann, wer ihn zurückgenommen hat.
+    await recordAuditInTx(tx, {
+      organizationId: params.organizationId,
+      userId: params.actorId,
+      action: 'UPDATE',
+      entity: 'Invoice',
+      entityId: invoice.id,
+      summary: `Rechnung ${invoice.number} storniert: ${params.reason}`,
+    });
     return storniert;
-  });
-
-  await audit.updated({
-    organizationId: params.organizationId,
-    userId: params.actorId,
-    entity: 'Invoice',
-    entityId: invoice.id,
-    summary: `Rechnung ${invoice.number} storniert: ${params.reason}`,
   });
 
   return updated;

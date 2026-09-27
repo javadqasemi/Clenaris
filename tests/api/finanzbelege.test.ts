@@ -3,8 +3,10 @@ import assert from 'node:assert/strict';
 
 import { BASE_URL, data, del, get, post, requireServer } from '../helpers/client';
 import { loginAll, type AccountName } from '../helpers/accounts';
-import { schutzfreiAufraeumen, testDb, testDbGrund, testDbSchliessen } from '../helpers/testdb';
+import { lohnBelegeEntfernen, schutzfreiAufraeumen, testDb, testDbGrund, testDbSchliessen } from '../helpers/testdb';
 import { zuercherHeute } from '../helpers/datum';
+import { einsatzertragAlsPauschale } from '../../src/lib/money';
+import { rechnungsSummen } from '../../src/lib/rechnungsbetraege';
 
 /**
  * Wave 13 — Finanzbelege: Unveränderlichkeit in der Datenbank, Storno statt
@@ -444,5 +446,231 @@ describe('Ausgaben: Formeln im Export, fremde Dateien als Beleg', () => {
       await db.message.deleteMany({ where: { threadId: verlauf.id } });
       await db.messageThread.delete({ where: { id: verlauf.id } });
     }
+  });
+});
+
+/**
+ * Verrechnet wird, was vereinbart ist — dezimal (2026-09-27, Befund N-03).
+ *
+ *  • **Einsatz ohne Buchung.** `createInvoiceFromJobs` rechnete Menge =
+ *    Stunden, Einzelpreis = Ertrag / max(Stunden, 0.5). Unter 30 Minuten kam
+ *    ein Bruchteil des Ertrags auf die Rechnung: 20 Minuten mit Ertrag 100
+ *    ergaben 0.33 × 200 = 66. Der Zweig ist über HTTP heute nicht erreichbar
+ *    (`POST /api/bookings/:id/invoice` verrechnet nur Einsätze *mit* Buchung);
+ *    geprüft wird deshalb die Regel selbst, die der Dienst benutzt, und zwar
+ *    zusammen mit der Summenrechnung, durch die jede Rechnungszeile läuft.
+ *  • **Offerte.** `computeQuoteTotals` rechnete in `number`: 1.5 × 30.15
+ *    ergab 45.22 statt 45.23. Geprüft über den echten Weg, `POST /api/quotes`.
+ */
+describe('Verrechnung: Einsatz ohne Buchung und Offerte, dezimal', () => {
+  const MARKE_OFFERTE = `${MARKE} Offerte`;
+
+  async function offertenAufraeumen() {
+    const db = testDb();
+    if (!db) return;
+    const offerten = await db.quote.findMany({ where: { title: { startsWith: MARKE_OFFERTE } }, select: { id: true, deletedAt: true } });
+    for (const offerte of offerten) {
+      if (!offerte.deletedAt) await del(`/api/quotes/${offerte.id}`, { jar: jars.admin }).catch(() => undefined);
+    }
+    const ids = offerten.map((o) => o.id);
+    if (ids.length === 0) return;
+    await db.publicAccessToken.deleteMany({ where: { resourceId: { in: ids } } });
+    // Wie `protokollpflicht.test.ts`: hängt doch noch etwas daran, bleibt die
+    // Offerte im Papierkorb — ein Rest, kein Fehlschlag.
+    await db.quote.deleteMany({ where: { id: { in: ids } } }).catch(() => undefined);
+  }
+
+  before(offertenAufraeumen);
+  after(offertenAufraeumen);
+
+  it('Einsatz ohne Buchung unter 30 Minuten: verrechnet wird der Ertrag, nicht zwei Drittel davon', () => {
+    for (const [minuten, ertrag] of [
+      [20, 100],
+      [7, 45.5],
+      [29, 80],
+      [50, 199.99],
+      [95, 123.45],
+    ] as const) {
+      const zeile = einsatzertragAlsPauschale(ertrag, minuten);
+      const summen = rechnungsSummen([{ ...zeile, discount: 0, vatRate: 8.1 }]);
+      assert.equal(summen.netTotal, ertrag, `${minuten} Minuten, Ertrag ${ertrag}: verrechnet ${summen.netTotal}`);
+    }
+    // Die Dauer bleibt als Auskunft für den Zeilentext erhalten.
+    assert.equal(einsatzertragAlsPauschale(100, 20).stunden, 0.33);
+    assert.equal(einsatzertragAlsPauschale(100, 90).stunden, 1.5);
+  });
+
+  it('Offerte: 1.5 Std. × 30.15 ergibt 45.23, nicht 45.22 — und MWST je Position wie auf der Rechnung', async () => {
+    const gueltigBis = new Date(zuercherHeute().getTime() + 30 * 86_400_000).toISOString().slice(0, 10);
+    const antwort = await post<{ data: { id: string } }>(
+      '/api/quotes',
+      {
+        customerId: kundeId,
+        title: `${MARKE_OFFERTE} ${Date.now()}`,
+        validUntil: gueltigBis,
+        items: [
+          { name: 'Unterhaltsreinigung', quantity: 1.5, unit: 'Std.', unitPrice: 30.15, discount: 0, vatRate: 8.1, optional: false },
+          // Optional: steht mit Betrag in der Offerte, zählt aber nicht zum Total.
+          { name: 'Fenster zusätzlich', quantity: 1, unit: 'Pauschal', unitPrice: 99.95, discount: 0, vatRate: 8.1, optional: true },
+        ],
+        discountValue: 0,
+      },
+      { jar: jars.admin },
+    );
+    assert.equal(antwort.status, 201, antwort.text);
+    const q = await testDb()!.quote.findUniqueOrThrow({ where: { id: data(antwort).id }, include: { items: { orderBy: { position: 'asc' } } } });
+    assert.equal(q.items[0]!.lineTotal.toString(), '45.23', 'Positionsbetrag');
+    assert.equal(q.items[1]!.lineTotal.toString(), '99.95', 'die optionale Position trägt ihren Betrag');
+    assert.equal(q.subtotal.toString(), '45.23', 'Zwischentotal ohne optionale Position');
+    // 45.23 × 8.1 % = 3.66363 → 3.66; brutto 48.89.
+    assert.equal(q.vatAmount.toString(), '3.66');
+    assert.equal(q.grossTotal.toString(), '48.89');
+    // Dieselben Positionen als Rechnung gerechnet ergeben dasselbe Total —
+    // die Rechnung aus einer Offerte ist die Offerte.
+    const alsRechnung = rechnungsSummen([{ quantity: 1.5, unitPrice: 30.15, discount: 0, vatRate: 8.1 }]);
+    assert.equal(alsRechnung.grossTotal, Number(q.grossTotal));
+  });
+});
+
+/**
+ * Beleg und Protokollzeile entstehen gemeinsam oder gar nicht (2026-09-27,
+ * Befund F-14).
+ *
+ * Rechnung ausstellen, Zahlung erfassen und Lohnabrechnung veröffentlichen
+ * schrieben ihr Protokoll nach dem Commit über `recordAudit`, das jeden Fehler
+ * verschluckt. Ob eine Zeile *vorhanden* ist, prüft `protokollpflicht.test.ts`;
+ * hier geht es um die andere Hälfte: Lässt sich die Zeile nicht schreiben,
+ * darf auch der Beleg nicht entstehen. Eine Sperre auf `audit_logs` (ein
+ * Prüf-Trigger, der nur die Kennungen dieser Reihe trifft) macht das
+ * beobachtbar — gegen den alten Stand gelingt die Handlung trotz Sperre, und
+ * der Beleg steht ohne Zeile da.
+ */
+describe('Beleg und Protokollzeile in einer Transaktion', () => {
+  const SPERRE = 'pruef_sperre_finanzbelege';
+  const LOHN_JAHR = 2019;
+  const LOHN_MONAT = 3;
+  let mitarbeiterId = '';
+
+  async function sperren(entityId: string) {
+    await testDb()!.$executeRawUnsafe(`INSERT INTO ${SPERRE} ("entityId") VALUES ($1) ON CONFLICT DO NOTHING`, entityId);
+  }
+  async function entsperren(entityId: string) {
+    await testDb()!.$executeRawUnsafe(`DELETE FROM ${SPERRE} WHERE "entityId" = $1`, entityId);
+  }
+
+  async function lohnAufraeumen() {
+    const db = testDb();
+    if (!db || !mitarbeiterId) return;
+    const abrechnungen = await db.payslip.findMany({ where: { employeeId: mitarbeiterId, year: LOHN_JAHR, month: LOHN_MONAT }, select: { id: true } });
+    const ids = abrechnungen.map((a) => a.id);
+    if (ids.length === 0) return;
+    const waisen = await db.fileAsset.findMany({ where: { OR: ids.map((id) => ({ path: { contains: `/payroll/payslips/${id}` } })) }, select: { id: true } });
+    await schutzfreiAufraeumen(async (tx) => {
+      await lohnBelegeEntfernen(tx, ids);
+      await tx.fileAsset.deleteMany({ where: { id: { in: waisen.map((w) => w.id) } } });
+    });
+  }
+
+  before(async () => {
+    const db = testDb()!;
+    await db.$executeRawUnsafe(`CREATE TABLE IF NOT EXISTS ${SPERRE} ("entityId" text PRIMARY KEY)`);
+    await db.$executeRawUnsafe(
+      `CREATE OR REPLACE FUNCTION ${SPERRE}() RETURNS trigger LANGUAGE plpgsql AS $$
+       BEGIN
+         IF EXISTS (SELECT 1 FROM ${SPERRE} s WHERE s."entityId" = NEW."entityId") THEN
+           RAISE EXCEPTION 'Prüfreihe Finanzbelege: Protokoll gesperrt' USING ERRCODE = 'P0001';
+         END IF;
+         RETURN NEW;
+       END $$`,
+    );
+    await db.$executeRawUnsafe(`DROP TRIGGER IF EXISTS ${SPERRE} ON audit_logs`);
+    await db.$executeRawUnsafe(`CREATE TRIGGER ${SPERRE} BEFORE INSERT ON audit_logs FOR EACH ROW EXECUTE FUNCTION ${SPERRE}()`);
+    mitarbeiterId = data(await get<{ data: { id: string }[] }>('/api/employees', { jar: jars.admin }))[0]!.id;
+    await lohnAufraeumen();
+  });
+
+  after(async () => {
+    await lohnAufraeumen();
+    const db = testDb();
+    if (!db) return;
+    await db.$executeRawUnsafe(`DROP TRIGGER IF EXISTS ${SPERRE} ON audit_logs`);
+    await db.$executeRawUnsafe(`DROP FUNCTION IF EXISTS ${SPERRE}()`);
+    await db.$executeRawUnsafe(`DROP TABLE IF EXISTS ${SPERRE}`);
+  });
+
+  it('Ausstellen ohne Protokollzeile gibt es nicht — die Rechnung bleibt Entwurf, und die Wiederholung stellt mit Zeile aus', async () => {
+    const entwurf = await rechnung(false);
+    const db = testDb()!;
+    await sperren(entwurf.id);
+    try {
+      const gesperrt = await post(`/api/invoices/${entwurf.id}/issue`, undefined, { jar: jars.admin });
+      assert.ok(gesperrt.status >= 400, `ausgestellt ohne Protokoll (kam ${gesperrt.status})`);
+      const r = await db.invoice.findUniqueOrThrow({ where: { id: entwurf.id }, select: { status: true, number: true } });
+      assert.equal(r.status, 'DRAFT', 'die Rechnung ist ohne Protokollzeile ausgestellt');
+      assert.ok(r.number.startsWith('ENTWURF-'), `eine Nummer ist ohne Protokollzeile vergeben: ${r.number}`);
+    } finally {
+      await entsperren(entwurf.id);
+    }
+
+    assert.equal((await post(`/api/invoices/${entwurf.id}/issue`, undefined, { jar: jars.admin })).status, 200);
+    const zeilen = await db.auditLog.findMany({ where: { entity: 'Invoice', entityId: entwurf.id, action: 'UPDATE' } });
+    assert.ok(zeilen.some((z) => /ausgestellt/.test(z.summary ?? '')), 'die Ausstellung steht im Protokoll');
+  });
+
+  it('eine Büro-Zahlung ohne Protokollzeile wird nicht gebucht', async () => {
+    const r = await rechnung(true);
+    const db = testDb()!;
+    await sperren(r.id);
+    try {
+      const gesperrt = await post(`/api/invoices/${r.id}/payments`, { amount: 20, method: 'BANK_TRANSFER', reference: MARKE }, { jar: jars.admin });
+      assert.ok(gesperrt.status >= 400, `gebucht ohne Protokoll (kam ${gesperrt.status})`);
+      assert.equal(await db.payment.count({ where: { invoiceId: r.id } }), 0, 'Zahlung ohne Protokollzeile gebucht');
+      const stand = await db.invoice.findUniqueOrThrow({ where: { id: r.id }, select: { paidAmount: true } });
+      assert.equal(Number(stand.paidAmount), 0);
+    } finally {
+      await entsperren(r.id);
+    }
+
+    const zahlung = await post(`/api/invoices/${r.id}/payments`, { amount: 20, method: 'BANK_TRANSFER', reference: MARKE }, { jar: jars.admin });
+    assert.equal(zahlung.status, 201, zahlung.text);
+    assert.equal(await db.auditLog.count({ where: { entity: 'Invoice', entityId: r.id, action: 'PAYMENT' } }), 1);
+  });
+
+  it('eine Lohnabrechnung wird nicht ohne ihre Protokollzeile veröffentlicht — und hinterlässt kein verwaistes PDF', async () => {
+    const db = testDb()!;
+    const abrechnung = await db.payslip.create({
+      data: {
+        employeeId: mitarbeiterId,
+        year: LOHN_JAHR,
+        month: LOHN_MONAT,
+        hours: 10,
+        grossPay: 300,
+        netPay: 300,
+        unverifiedRates: false,
+        lines: { create: [{ position: 0, type: 'BASE', kind: 'EARNING', label: `${MARKE} Grundlohn`, quantity: 10, rate: 30, amount: 300 }] },
+      },
+      select: { id: true },
+    });
+
+    await sperren(abrechnung.id);
+    try {
+      const gesperrt = await post('/api/payroll/publish', { payslipIds: [abrechnung.id] }, { jar: jars.admin });
+      assert.ok(gesperrt.status >= 400, `veröffentlicht ohne Protokoll (kam ${gesperrt.status}: ${gesperrt.text.slice(0, 200)})`);
+      const stand = await db.payslip.findUniqueOrThrow({ where: { id: abrechnung.id }, select: { published: true, pdfFileId: true } });
+      assert.equal(stand.published, false, 'die Abrechnung ist ohne Protokollzeile veröffentlicht');
+      assert.equal(stand.pdfFileId, null);
+      const waisen = await db.fileAsset.count({ where: { scope: 'PAYROLL', path: { contains: `/payroll/payslips/${abrechnung.id}` } } });
+      assert.equal(waisen, 0, 'das PDF des gescheiterten Versuchs ist liegen geblieben');
+    } finally {
+      await entsperren(abrechnung.id);
+    }
+
+    const frei = await post<{ data: { veroeffentlicht: number } }>('/api/payroll/publish', { payslipIds: [abrechnung.id] }, { jar: jars.admin });
+    assert.equal(frei.status, 200, frei.text);
+    assert.equal(data(frei).veroeffentlicht, 1);
+    const zeile = await db.auditLog.findFirst({ where: { entity: 'Payslip', entityId: abrechnung.id, action: 'UPDATE' } });
+    assert.ok(zeile, 'die Veröffentlichung steht mit der Kennung der Abrechnung im Protokoll');
+    assert.match(zeile.summary ?? '', /veröffentlicht/);
+    assert.ok(!/300/.test(zeile.summary ?? ''), 'Beträge gehören nicht in die Protokollzeile');
   });
 });
