@@ -27,6 +27,7 @@ import { automationEreignisseAbarbeiten, automationEreignisVormerken } from './a
 import { logger } from '@/lib/logger';
 import { renderBookingConfirmationPdf } from '@/lib/pdf/render';
 
+import { kundenakteSperren } from './kundenakte-sperre';
 import { nextNumber } from './numbering.service';
 import { invalidateAvailability, isSlotBookable, leistungsbedarf } from './availability.service';
 import { assertAssignable } from './assignment.service';
@@ -2110,6 +2111,10 @@ interface NeueGastkundschaft {
  * anzulegen.
  */
 async function gastkundschaftAnlegen(tx: Tx, organizationId: string, neu: NeueGastkundschaft): Promise<string> {
+  // Dieselbe Sperre wie jeder andere Anlageweg (`kundenakte-sperre.ts`): Die
+  // Buchungssperre serialisiert nur Buchungen untereinander, nicht die
+  // Buchung gegen das Büro oder die Registrierung.
+  await kundenakteSperren(tx, organizationId, neu.email);
   const vorhanden = await tx.customer.findFirst({
     where: { organizationId, email: neu.email, deletedAt: null },
     select: { id: true },

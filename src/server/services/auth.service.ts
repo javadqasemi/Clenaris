@@ -21,6 +21,7 @@ import {
 import { checkRateLimit, resetRateLimit } from '@/lib/rate-limit';
 import type { LoginInput, RegisterInput } from '@/lib/validation/auth';
 
+import { kundenakteSperren } from './kundenakte-sperre';
 import { nextNumber } from './numbering.service';
 import { getOrganizationId } from './organization.service';
 import { ensureCustomerProfile } from './profile.service';
@@ -89,7 +90,10 @@ export async function register(params: {
       },
     });
 
-    // Bestehendes Kundenprofil (z. B. aus einer Gastbuchung) verknüpfen.
+    // Bestehendes Kundenprofil (z. B. aus einer Gastbuchung) verknüpfen —
+    // hinter der Sperre jedes Anlagewegs (`kundenakte-sperre.ts`), damit eine
+    // gleichzeitige Gastbuchung derselben Adresse keine zweite Akte anlegt.
+    await kundenakteSperren(tx, params.organizationId, email);
     const existingCustomer = await tx.customer.findFirst({
       where: { organizationId: params.organizationId, email, userId: null, deletedAt: null },
     });

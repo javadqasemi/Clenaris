@@ -52,7 +52,10 @@ export function documentVisibilityWhere(session: SessionUser, organizationId: st
   if (can(session.role, 'document:read_own')) {
     return { ...base, OR: [{ visibility: 'STAFF' }, ...(own ? [own] : [])] };
   }
-  return { ...base, id: '__keines__' };
+  // Die Sperre als `AND`-Glied, nicht als `id` (2026-09-27): Aufrufer
+  // verbreiten die Sichtregel und setzen danach ihr eigenes `id` — das hätte
+  // die Sperre still ersetzt.
+  return { ...base, AND: [{ id: '__keines__' }] };
 }
 
 const include = {
@@ -120,27 +123,45 @@ function defaultVisibility(input: { category: string; visibility?: string }): Do
  * Bedingungen in der Abfrage sind die Prüfung: richtige Organisation,
  * Prüfsumme vorhanden (also abgeschlossen) und noch keiner Fassung
  * zugeordnet. Trifft eine davon nicht zu, gibt es keine Fassung.
+ *
+ * **Dieselben Bindungsregeln wie `dateienBinden`** (2026-09-27): nur ein
+ * eigener Upload, an nichts anderem gebunden (Nachricht, Buchung, Beleg),
+ * nicht öffentlich, nicht als schädlich oder unprüfbar markiert. Vorher
+ * reichten Organisation und Zweck — die Verwaltung konnte den Upload einer
+ * Kundin oder den Anhang einer Nachricht zur Fassung einer Führungsakte
+ * machen, und damit unter eine ganz andere Sichtbarkeit stellen. Und die
+ * Zeile wird gesperrt (`FOR UPDATE`): Ohne Sperre konnten zwei
+ * gleichzeitige Fassungen dieselbe Datei beanspruchen, weil „noch keiner
+ * Fassung zugeordnet" für beide stimmte.
  */
 async function beanspruchteDatei(
   tx: Prisma.TransactionClient,
   organizationId: string,
   fileId: string,
+  uploadedById: string,
 ) {
+  await tx.$queryRaw`SELECT id FROM file_assets WHERE id = ${fileId} FOR UPDATE`;
   const file = await tx.fileAsset.findFirst({
     where: {
       id: fileId,
       organizationId,
+      uploadedById,
       checksum: { not: null },
       scope: 'DOCUMENT',
+      isPublic: false,
+      scanStatus: { notIn: ['INFECTED', 'QUARANTINED', 'ERROR'] },
+      messageId: null,
+      bookingId: null,
+      expenseId: null,
       versions: { none: {} },
     },
     select: { id: true },
   });
-  if (!file) {
-    throw new BusinessRuleError(
-      'Diese Datei steht nicht zur Verfügung. Bitte erneut hochladen.',
-    );
-  }
+  // 404 wie `dateienBinden` (2026-09-27): eine Datei, die nicht gebunden
+  // werden darf — fremd, schon vergeben, nicht die eigene —, ist für diesen
+  // Weg nicht vorhanden. Vorher 422; die Antwort verriet zwar nichts, wich aber
+  // als einzige Bindungsstelle von der gemeinsamen Regel ab.
+  if (!file) throw new NotFoundError('Datei');
   return file;
 }
 
@@ -171,7 +192,7 @@ export async function createDocument(session: SessionUser, organizationId: strin
       },
     });
     if (input.fileId) {
-      const file = await beanspruchteDatei(tx, organizationId, input.fileId);
+      const file = await beanspruchteDatei(tx, organizationId, input.fileId, session.id);
       const version = await tx.documentVersion.create({
         data: { documentId: doc.id, version: 1, fileAssetId: file.id, changeNote: input.changeNote ?? null, uploadedById: session.id },
       });
@@ -213,19 +234,29 @@ export async function updateDocument(session: SessionUser, organizationId: strin
 export async function addDocumentVersion(session: SessionUser, organizationId: string, id: string, input: AddDocumentVersionInput) {
   const document = await prisma.managedDocument.findFirst({
     where: { ...documentVisibilityWhere(session, organizationId), id },
-    include: { versions: { orderBy: { version: 'desc' }, take: 1 } },
+    select: { id: true, title: true },
   });
   if (!document) throw new NotFoundError('Dokument');
-  const nextVersion = (document.versions[0]?.version ?? 0) + 1;
+  /*
+    Die nächste Nummer in der Transaktion, hinter einer Zeilensperre am
+    Dokument (2026-09-27). Vorher wurde sie davor gelesen: Fünf gleichzeitige
+    Fassungen rechneten alle mit derselben Nummer, vier scheiterten am
+    eindeutigen Index mit 409 — und die hochgeladene Datei war verloren,
+    obwohl niemand etwas falsch gemacht hatte. Jetzt kommen alle fünf durch,
+    lückenlos nummeriert, und die höchste gilt.
+  */
   const version = await prisma.$transaction(async (tx) => {
-    const file = await beanspruchteDatei(tx, organizationId, input.fileId);
+    await tx.$queryRaw`SELECT id FROM managed_documents WHERE id = ${id} FOR UPDATE`;
+    const letzte = await tx.documentVersion.findFirst({ where: { documentId: id }, orderBy: { version: 'desc' }, select: { version: true } });
+    const nextVersion = (letzte?.version ?? 0) + 1;
+    const file = await beanspruchteDatei(tx, organizationId, input.fileId, session.id);
     const created = await tx.documentVersion.create({
       data: { documentId: id, version: nextVersion, fileAssetId: file.id, changeNote: input.changeNote ?? null, uploadedById: session.id },
     });
     await tx.managedDocument.update({ where: { id }, data: { currentVersionId: created.id } });
     return created;
   });
-  await audit.updated({ organizationId, userId: session.id, entity: 'ManagedDocument', entityId: id, summary: `Dokument „${document.title}": Fassung ${nextVersion} hochgeladen` });
+  await audit.updated({ organizationId, userId: session.id, entity: 'ManagedDocument', entityId: id, summary: `Dokument „${document.title}": Fassung ${version.version} hochgeladen` });
   return version;
 }
 

@@ -134,6 +134,18 @@ async function pruefeUeberschneidung(
   endedAt: Date,
   ausserId?: string,
 ): Promise<void> {
+  /*
+    Erst die Sperre je Person, dann lesen (2026-09-27). Ohne sie lasen
+    parallele Erfassungen unter READ COMMITTED alle „frei" und schrieben alle —
+    sechs gleichzeitige, sich überlappende Zeiten ergaben sechs Einträge und
+    sechsfachen Lohn für dieselbe Stunde. Eine Datenbankbedingung (EXCLUDE
+    über einen Zeitbereich) ginge auch, verlangte aber `btree_gist` und liest
+    den laufenden Eintrag (`endedAt: null`) nicht als „bis jetzt". Dieselbe
+    Bauart wie die Zuteilung (`assignment.service.ts`): eine
+    Transaktionssperre, die mit dem Commit endet — der Aufrufer muss also in
+    einer Transaktion sein, und alle sind es.
+  */
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`zeiterfassung:${employeeId}`}))`;
   const andere = await tx.timeEntry.findMany({
     where: {
       employeeId,
@@ -589,14 +601,29 @@ export async function approveTimeEntries(params: {
     'Zeiten freigegeben',
   );
 
-  await audit.updated({
-    organizationId: params.organizationId,
-    userId: params.actorId,
-    entity: 'TimeEntry',
-    summary: `${treffer.count} Zeiterfassung(en) freigegeben`,
-    changes: { entryIds: geeignet },
-    ip: params.ip,
+  /*
+    Eine Zeile je Erfassung (2026-09-27). Vorher stand die ganze Freigabe in
+    einer Zeile ohne `entityId`, die Kennungen nur im Änderungsfeld: Die
+    Frage „wer hat diese Zeit freigegeben?" liess sich im Protokoll einer
+    Erfassung nicht beantworten, weil sie dort gar nicht auftauchte. Nur die
+    tatsächlich freigegebenen — wer zwischen Lesen und Schreiben schon
+    freigegeben war, hat die Zeile des anderen.
+  */
+  const tatsaechlich = await prisma.timeEntry.findMany({
+    where: { id: { in: geeignet }, approved: true, approvedById: params.actorId },
+    select: { id: true },
   });
+  for (const { id } of tatsaechlich) {
+    await audit.updated({
+      organizationId: params.organizationId,
+      userId: params.actorId,
+      entity: 'TimeEntry',
+      entityId: id,
+      summary: 'Zeiterfassung freigegeben',
+      changes: { approved: true },
+      ip: params.ip,
+    });
+  }
 
   return {
     freigegeben: treffer.count,

@@ -111,17 +111,47 @@ export function toErrorResponse(error: unknown): NextResponse {
   if (error instanceof Prisma.PrismaClientKnownRequestError) {
     switch (error.code) {
       case 'P2002': {
-        const target = (error.meta as { target?: string[] })?.target?.join(', ') ?? 'Wert';
+        /*
+          Ohne Spaltennamen (2026-09-27). Vorher stand das Prisma-Ziel in der
+          Meldung — „Dieser documentId, version ist bereits vergeben." —, also
+          interne Feldnamen vor der Kundschaft, und kein Mensch konnte damit
+          etwas anfangen. Wo ein Dienst eine sprechende Meldung kennt, wirft er
+          selbst einen `ConflictError`; hier bleibt die allgemeine. Das Ziel
+          steht im Protokoll, wo es zur Fehlersuche gebraucht wird.
+        */
+        log.warn('Eindeutigkeit verletzt', { target: (error.meta as { target?: unknown })?.target });
         return NextResponse.json(
           {
             error: {
               code: 'CONFLICT',
-              message: `Dieser ${target} ist bereits vergeben.`,
+              message: 'Dieser Wert ist bereits vergeben. Bitte laden Sie die Ansicht neu und prüfen Sie die Eingabe.',
             },
           },
           { status: 409 },
         );
       }
+      case 'P2010':
+        // Rohe Abfrage (`$queryRaw`/`$executeRaw`): Verklemmung (40P01) und
+        // Serialisierungsfehler (40001) sind derselbe Fall wie P2034 darunter;
+        // jeder andere Fehler einer rohen Abfrage bleibt unbehandelt.
+        if (!['40P01', '40001'].includes(String((error.meta as { code?: unknown })?.code ?? ''))) break;
+      // falls through
+      case 'P2034':
+        /*
+          Schreibkonflikt oder Verklemmung zweier Transaktionen (2026-09-27).
+          Bis dahin fiel er als unbehandelter Fehler auf 500 — dabei ist er
+          kein Fehler der Anwendung, sondern „gleichzeitig mit jemand anderem
+          geschrieben", und ein erneuter Versuch gelingt. 409 sagt genau das.
+        */
+        return NextResponse.json(
+          {
+            error: {
+              code: 'CONFLICT',
+              message: 'Gleichzeitig wurde derselbe Datensatz geändert. Bitte versuchen Sie es erneut.',
+            },
+          },
+          { status: 409 },
+        );
       case 'P2025':
         return NextResponse.json(
           { error: { code: 'NOT_FOUND', message: 'Der Datensatz wurde nicht gefunden.' } },

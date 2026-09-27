@@ -4,6 +4,7 @@ import type { Prisma, UserRole } from '@prisma/client';
 
 import type { Tx } from '@/lib/db';
 
+import { kundenakteSperren } from './kundenakte-sperre';
 import { nextNumber } from './numbering.service';
 
 /**
@@ -75,6 +76,8 @@ export async function ensureCustomerProfile(
   });
   if (user.customer) return user.customer.id;
 
+  // Dieselbe Sperre wie jeder Anlageweg (`kundenakte-sperre.ts`).
+  await kundenakteSperren(tx, params.organizationId, user.email);
   const orphan = await tx.customer.findFirst({
     where: {
       organizationId: params.organizationId,

@@ -5,7 +5,7 @@ import type { Absence, Employee, Prisma } from '@prisma/client';
 import { prisma, toNumber } from '@/lib/db';
 import { BusinessRuleError, ConflictError, NotFoundError } from '@/lib/errors';
 import { formatDate, round2 } from '@/lib/utils';
-import { zuercherJahr, zuercherTagText } from '@/lib/zuerich';
+import { tagPlus, zuercherJahr, zuercherTagesbeginn, zuercherTagText } from '@/lib/zuerich';
 import { audit } from '@/lib/audit';
 import { CRYPTO_CONTEXT, decryptNullable, encryptNullable } from '@/lib/crypto';
 import type {
@@ -726,34 +726,56 @@ export async function decideAbsence(params: {
     throw new BusinessRuleError('Dieser Antrag wurde bereits entschieden.');
   }
 
-  // Konflikte mit bereits zugeteilten Einsätzen sichtbar machen.
-  if (params.status === 'APPROVED') {
-    const conflicts = await prisma.jobAssignment.count({
-      where: {
-        employeeId: absence.employeeId,
-        job: {
-          deletedAt: null,
-          status: { notIn: ['CANCELLED', 'COMPLETED', 'VERIFIED'] },
-          scheduledStart: { lte: absence.endDate },
-          scheduledEnd: { gte: absence.startDate },
+  /*
+    Prüfen und entscheiden in einer Transaktion, hinter derselben Sperre wie
+    die Zuteilung (`zuteilung:<employeeId>`, `assignment.service.ts`) —
+    2026-09-27. Vorher lagen Konfliktzählung und Statuswechsel getrennt und
+    ohne Sperre: Eine Zuteilung und eine Bewilligung für dieselbe Person und
+    Zeit liefen gleichzeitig beide durch, und die Person stand eingeteilt in
+    ihren bewilligten Ferien. Der Statuswechsel ist bedingt (`status:
+    REQUESTED`), damit auch zwei gleichzeitige Entscheide nicht beide gelten.
+
+    Der Zeitraum nach Zürcher Kalender, den letzten Tag eingeschlossen. Vorher
+    wurde `scheduledStart <= endDate` verglichen — `endDate` ist ein
+    Kalendertag um UTC-Mitternacht, ein Einsatz am letzten Ferientag lag
+    also danach und zählte nicht als Konflikt.
+  */
+  const von = zuercherTagesbeginn(absence.startDate);
+  const bisAusschliesslich = zuercherTagesbeginn(tagPlus(absence.endDate, 1));
+
+  const updated = await prisma.$transaction(async (tx) => {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`zuteilung:${absence.employeeId}`}))`;
+
+    if (params.status === 'APPROVED') {
+      const conflicts = await tx.jobAssignment.count({
+        where: {
+          employeeId: absence.employeeId,
+          job: {
+            deletedAt: null,
+            status: { notIn: ['CANCELLED', 'COMPLETED', 'VERIFIED'] },
+            scheduledStart: { lt: bisAusschliesslich },
+            scheduledEnd: { gt: von },
+          },
         },
+      });
+      if (conflicts > 0) {
+        throw new BusinessRuleError(
+          `In diesem Zeitraum sind noch ${conflicts} Einsätze zugeteilt. Bitte planen Sie diese zuerst um.`,
+        );
+      }
+    }
+
+    const entschieden = await tx.absence.updateMany({
+      where: { id: absence.id, status: 'REQUESTED' },
+      data: {
+        status: params.status,
+        decidedById: params.actorId,
+        decidedAt: new Date(),
+        decisionNote: params.note ?? null,
       },
     });
-    if (conflicts > 0) {
-      throw new BusinessRuleError(
-        `In diesem Zeitraum sind noch ${conflicts} Einsätze zugeteilt. Bitte planen Sie diese zuerst um.`,
-      );
-    }
-  }
-
-  const updated = await prisma.absence.update({
-    where: { id: absence.id },
-    data: {
-      status: params.status,
-      decidedById: params.actorId,
-      decidedAt: new Date(),
-      decisionNote: params.note ?? null,
-    },
+    if (entschieden.count === 0) throw new BusinessRuleError('Dieser Antrag wurde bereits entschieden.');
+    return tx.absence.findUniqueOrThrow({ where: { id: absence.id } });
   });
 
   // Unbezahlter Urlaub mindert den Monatslohn — eine schon berechnete Abrechnung stimmt nicht mehr.
