@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 
 import { join } from 'node:path';
 
-import { bilanzPruefen, konfigurierteDateien, testbilanzLesen } from '../../scripts/security/testbilanz';
+import { bilanzPruefen, browserBilanzPruefen, konfigurierteDateien, testbilanzLesen } from '../../scripts/security/testbilanz';
 
 /**
  * Das Freigabetor zählt übersprungene Fälle (N-08, 2026-09-27).
@@ -115,6 +115,35 @@ describe('Bilanz eines Testlaufs', () => {
   it('ein Lauf ohne Fälle besteht nicht', () => {
     const leer = TAP_GRUEN.replace('# tests 1', '# tests 0').replace('# pass 1', '# pass 0');
     assert.ok(bilanzPruefen(testbilanzLesen(leer)).some((g) => g.includes('keinen einzigen Fall')));
+  });
+});
+
+/**
+ * Die Browserreihe (N-08, Rest): Playwright endet mit 0, auch wenn Fälle
+ * übersprungen wurden oder erst im zweiten Anlauf bestanden. Die Regel steht
+ * als reine Funktion in `testbilanz.ts`; `verify.ts` (voller Weg und
+ * `npm run verify:e2e`) wertet damit den JSON-Bericht aus.
+ */
+describe('Bilanz der Browserreihe', () => {
+  it('ein grüner Bericht ohne Übersprungenes besteht', () => {
+    assert.deepEqual(browserBilanzPruefen({ expected: 57, skipped: 0, unexpected: 0, flaky: 0 }), []);
+  });
+
+  it('ein übersprungener Browserfall ist ein Fehlschlag — auch wenn alle übrigen bestehen', () => {
+    assert.ok(browserBilanzPruefen({ expected: 56, skipped: 1, unexpected: 0, flaky: 0 }).some((g) => g.includes('übersprungen')));
+  });
+
+  it('ein wackeliger Fall (erst im zweiten Anlauf grün) ist ein Fehlschlag', () => {
+    assert.ok(browserBilanzPruefen({ expected: 56, skipped: 0, unexpected: 0, flaky: 1 }).some((g) => g.includes('wackelig')));
+  });
+
+  it('ein gescheiterter Fall ist ein Fehlschlag', () => {
+    assert.ok(browserBilanzPruefen({ expected: 56, skipped: 0, unexpected: 1, flaky: 0 }).some((g) => g.includes('gescheitert')));
+  });
+
+  it('ohne Bericht oder ohne einen einzigen bestandenen Fall ist nichts bewiesen', () => {
+    assert.ok(browserBilanzPruefen(null).some((g) => g.includes('Kein JSON-Bericht')));
+    assert.ok(browserBilanzPruefen({}).some((g) => g.includes('Kein einziger Browserfall')));
   });
 });
 

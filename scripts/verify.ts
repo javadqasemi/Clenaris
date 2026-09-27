@@ -41,11 +41,11 @@ import { config } from 'dotenv';
 
 import { databaseNameOf, istTestdatenbank } from '../prisma/seed-guard';
 
-import { bilanzPruefen, testbilanzLesen } from './security/testbilanz';
+import { bilanzPruefen, browserBilanzPruefen, testbilanzLesen, type BrowserZahlen } from './security/testbilanz';
 
 config();
 
-type Modus = 'statisch' | 'pruefreihen' | 'voll' | 'release';
+type Modus = 'statisch' | 'pruefreihen' | 'browser' | 'voll' | 'release';
 
 const WURZEL = resolve(__dirname, '..');
 const WINDOWS = process.platform === 'win32';
@@ -282,22 +282,14 @@ function browserreihe(env: Record<string, string>, port: string): void {
     env: { ...env, E2E_PORT: port, PLAYWRIGHT_JSON_OUTPUT_NAME: bericht },
   });
   const start = Date.now();
-  type Zahlen = { expected?: number; skipped?: number; unexpected?: number; flaky?: number };
-  const stats: Zahlen | null = (() => {
+  const stats: BrowserZahlen | null = (() => {
     try {
-      return (JSON.parse(readFileSync(bericht, 'utf8')) as { stats?: Zahlen }).stats ?? null;
+      return (JSON.parse(readFileSync(bericht, 'utf8')) as { stats?: BrowserZahlen }).stats ?? null;
     } catch {
       return null;
     }
   })();
-  const gruende: string[] = [];
-  if (!stats) gruende.push('Kein JSON-Bericht der Browserreihe — ohne Zahlen ist nichts bewiesen.');
-  else {
-    if ((stats.expected ?? 0) === 0) gruende.push('Kein einziger Browserfall bestanden.');
-    if ((stats.skipped ?? 0) > 0) gruende.push(`${stats.skipped} Browserfall/-fälle übersprungen.`);
-    if ((stats.flaky ?? 0) > 0) gruende.push(`${stats.flaky} Browserfall/-fälle wackelig.`);
-    if ((stats.unexpected ?? 0) > 0) gruende.push(`${stats.unexpected} Browserfall/-fälle gescheitert.`);
-  }
+  const gruende = browserBilanzPruefen(stats);
   ergebnisse.push({
     schritt: 'Browser-Bilanz (0 übersprungen, 0 wackelig)',
     ok: gruende.length === 0,
@@ -376,6 +368,15 @@ async function main(): Promise<void> {
       await pruefreihen(basis, process.env.CLENARIS_TEST_CACHE_DIR, new URL(basis).port || '80');
       break;
     }
+    case 'browser': {
+      // `npm run verify:e2e` (2026-09-27): dieselbe Browserreihe mit Bilanz wie
+      // im vollen Weg, gegen einen bereits laufenden Server. Vorher war das ein
+      // blosses `playwright test --retries=0`, das nur den Exitcode sah.
+      const basis = process.env.TEST_BASE_URL?.trim();
+      if (!basis) abbrechen('TEST_BASE_URL fehlt — `browser` läuft gegen einen bereits gestarteten Server.');
+      browserreihe({ TEST_BASE_URL: basis }, new URL(basis).port || '80');
+      break;
+    }
     case 'voll':
       await voll({ frisch });
       break;
@@ -383,7 +384,7 @@ async function main(): Promise<void> {
       await release();
       break;
     default:
-      console.error('Aufruf: tsx scripts/verify.ts statisch | pruefreihen | voll [--frisch] | release');
+      console.error('Aufruf: tsx scripts/verify.ts statisch | pruefreihen | browser | voll [--frisch] | release');
       process.exit(2);
   }
   zusammenfassung();

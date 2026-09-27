@@ -52,7 +52,7 @@
     "verify:full": "tsx scripts/verify.ts voll",
     "verify:release": "tsx scripts/verify.ts release",
     "verify:security": "npm run security:check",
-    "verify:e2e": "playwright test --retries=0",
+    "verify:e2e": "tsx scripts/verify.ts browser",
     "postinstall": "prisma generate && node scripts/react-hydrationskorrektur.mjs"
   },
   "prisma": {

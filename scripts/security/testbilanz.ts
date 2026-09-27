@@ -130,6 +130,33 @@ export function bilanzPruefen(b: Testbilanz): string[] {
 }
 
 /**
+ * Die Bilanz der Browserreihe als Tor — aus dem JSON-Bericht von Playwright
+ * (`stats`), dieselbe Regel wie `bilanzPruefen` (2026-09-27, N-08).
+ *
+ * Playwright endet mit 0, wenn Fälle sich per `test.skip()` verabschieden,
+ * und ein Fall, der erst im zweiten Anlauf besteht, heisst `flaky` — beides
+ * sieht der Exitcode nicht. Ohne Bericht gibt es keine Zahlen und damit keinen
+ * Beweis. Eine eigene, reine Funktion, damit die Regel geprüft werden kann,
+ * ohne eine Browserreihe zu starten (`pruefbilanz.test.ts`).
+ */
+export interface BrowserZahlen {
+  expected?: number;
+  skipped?: number;
+  unexpected?: number;
+  flaky?: number;
+}
+
+export function browserBilanzPruefen(stats: BrowserZahlen | null | undefined): string[] {
+  if (!stats) return ['Kein JSON-Bericht der Browserreihe — ohne Zahlen ist nichts bewiesen.'];
+  const gruende: string[] = [];
+  if ((stats.expected ?? 0) === 0) gruende.push('Kein einziger Browserfall bestanden.');
+  if ((stats.skipped ?? 0) > 0) gruende.push(`${stats.skipped} Browserfall/-fälle übersprungen.`);
+  if ((stats.flaky ?? 0) > 0) gruende.push(`${stats.flaky} Browserfall/-fälle wackelig.`);
+  if ((stats.unexpected ?? 0) > 0) gruende.push(`${stats.unexpected} Browserfall/-fälle gescheitert.`);
+  return gruende;
+}
+
+/**
  * Konfigurierte Prüfdateien auflösen. Eine fehlende Datei wird **gemeldet**,
  * nicht weggefiltert: Bis 2026-09-27 stand hier `filter(existsSync)`, und eine
  * umbenannte Sicherheitsreihe verschwand still aus dem Lauf — der Rest blieb
