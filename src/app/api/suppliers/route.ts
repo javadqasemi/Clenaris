@@ -1,6 +1,5 @@
-import { z } from 'zod';
-
 import { defineRoute } from '@/lib/api/handler';
+import { supplierListQuery } from '@/lib/validation/queries';
 import { created, ok } from '@/lib/api/response';
 import { prisma } from '@/lib/db';
 import { audit } from '@/lib/audit';
@@ -9,18 +8,11 @@ import { getOrganizationId } from '@/server/services/organization.service';
 
 export const runtime = 'nodejs';
 
-const listQuery = z.object({
-  q: z.string().trim().max(120).optional(),
-  includeInactive: z
-    .enum(['0', '1'])
-    .default('0')
-    .transform((v) => v === '1'),
-});
 
 /** GET /api/suppliers — Lieferanten mit der Zahl ihrer Belege. */
 export const GET = defineRoute({
   permissions: ['supplier:read'],
-  query: listQuery,
+  query: supplierListQuery,
   rateLimit: 'apiRead',
   handler: async ({ query }) => {
     const organizationId = await getOrganizationId();

@@ -10313,6 +10313,124 @@
             "sessionCookie": []
           }
         ],
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1
+            }
+          },
+          {
+            "name": "pageSize",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 120
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 60
+            }
+          },
+          {
+            "name": "order",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "asc",
+                "desc"
+              ],
+              "default": "desc"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "UNASSIGNED",
+                "SCHEDULED",
+                "DISPATCHED",
+                "EN_ROUTE",
+                "IN_PROGRESS",
+                "ON_HOLD",
+                "COMPLETED",
+                "VERIFIED",
+                "CANCELLED"
+              ]
+            }
+          },
+          {
+            "name": "employeeId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "name": "customerId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "name": "contractId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "Erfolg",
@@ -10320,6 +10438,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/SuccessEnvelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -13129,6 +13257,49 @@
             "sessionCookie": []
           }
         ],
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "REQUESTED",
+                "APPROVED",
+                "REJECTED",
+                "CANCELLED"
+              ]
+            }
+          },
+          {
+            "name": "employeeId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "Erfolg",
@@ -13136,6 +13307,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/SuccessEnvelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -15707,6 +15888,31 @@
             "sessionCookie": []
           }
         ],
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "DRAFT",
+                "SCHEDULED",
+                "PUBLISHED",
+                "ARCHIVED"
+              ]
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 120
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "Erfolg",
@@ -15714,6 +15920,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/SuccessEnvelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -23423,6 +23639,123 @@
             }
           }
         ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "customerId": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "bookingId": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "quoteId": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "issueDate": {
+                    "type": "string",
+                    "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                  },
+                  "dueDate": {
+                    "type": "string",
+                    "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                  },
+                  "periodFrom": {
+                    "type": "string",
+                    "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                  },
+                  "periodTo": {
+                    "type": "string",
+                    "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                  },
+                  "introText": {
+                    "type": "string",
+                    "maxLength": 4000
+                  },
+                  "outroText": {
+                    "type": "string",
+                    "maxLength": 4000
+                  },
+                  "notes": {
+                    "type": "string",
+                    "maxLength": 4000
+                  },
+                  "discountAmount": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 9999999,
+                    "default": 0
+                  },
+                  "items": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "jobId": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "name": {
+                          "type": "string",
+                          "minLength": 2,
+                          "maxLength": 200
+                        },
+                        "description": {
+                          "type": "string",
+                          "maxLength": 2000
+                        },
+                        "quantity": {
+                          "type": "number",
+                          "minimum": 0.01,
+                          "maximum": 10000
+                        },
+                        "unit": {
+                          "type": "string",
+                          "maxLength": 20,
+                          "default": "Std."
+                        },
+                        "unitPrice": {
+                          "type": "number",
+                          "minimum": 0,
+                          "maximum": 9999999
+                        },
+                        "discount": {
+                          "type": "number",
+                          "minimum": 0,
+                          "maximum": 100,
+                          "default": 0
+                        },
+                        "vatRate": {
+                          "type": "number",
+                          "minimum": 0,
+                          "maximum": 30,
+                          "default": 8.1
+                        }
+                      },
+                      "required": [
+                        "name",
+                        "quantity",
+                        "unitPrice"
+                      ]
+                    },
+                    "minItems": 1,
+                    "maxItems": 200
+                  }
+                }
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "Erfolg",
@@ -23949,6 +24282,166 @@
             }
           }
         ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "label": {
+                    "type": "string",
+                    "minLength": 2,
+                    "maxLength": 80
+                  },
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "APARTMENT",
+                      "HOUSE",
+                      "OFFICE",
+                      "COMMERCIAL",
+                      "INDUSTRIAL",
+                      "CONSTRUCTION_SITE",
+                      "PRACTICE",
+                      "RESTAURANT",
+                      "SCHOOL",
+                      "OTHER"
+                    ],
+                    "default": "APARTMENT"
+                  },
+                  "addressId": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "address": {
+                    "type": "object",
+                    "properties": {
+                      "label": {
+                        "type": "string",
+                        "maxLength": 60
+                      },
+                      "street": {
+                        "type": "string",
+                        "minLength": 2,
+                        "maxLength": 120
+                      },
+                      "streetNo": {
+                        "type": "string",
+                        "maxLength": 20
+                      },
+                      "addition": {
+                        "type": "string",
+                        "maxLength": 120
+                      },
+                      "postalCode": {
+                        "type": "string",
+                        "pattern": "^[1-9]\\d{3}$"
+                      },
+                      "city": {
+                        "type": "string",
+                        "minLength": 2,
+                        "maxLength": 80
+                      },
+                      "canton": {
+                        "type": "string",
+                        "default": "BE"
+                      },
+                      "country": {
+                        "type": "string",
+                        "default": "CH"
+                      },
+                      "lat": {
+                        "type": "number",
+                        "minimum": -90,
+                        "maximum": 90
+                      },
+                      "lng": {
+                        "type": "number",
+                        "minimum": -180,
+                        "maximum": 180
+                      },
+                      "placeId": {
+                        "type": "string",
+                        "maxLength": 200
+                      },
+                      "accessNote": {
+                        "type": "string",
+                        "maxLength": 500
+                      }
+                    },
+                    "required": [
+                      "street",
+                      "postalCode",
+                      "city"
+                    ]
+                  },
+                  "squareMeters": {
+                    "type": "integer",
+                    "minimum": 5,
+                    "maximum": 50000
+                  },
+                  "rooms": {
+                    "type": "number",
+                    "minimum": 0.5,
+                    "maximum": 200
+                  },
+                  "bathrooms": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 50
+                  },
+                  "windows": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 2000
+                  },
+                  "floor": {
+                    "type": "integer",
+                    "minimum": -5,
+                    "maximum": 60
+                  },
+                  "hasBalcony": {
+                    "type": "boolean",
+                    "default": false
+                  },
+                  "hasGarden": {
+                    "type": "boolean",
+                    "default": false
+                  },
+                  "hasPets": {
+                    "type": "boolean",
+                    "default": false
+                  },
+                  "hasElevator": {
+                    "type": "boolean",
+                    "default": false
+                  },
+                  "parkingInfo": {
+                    "type": "string",
+                    "maxLength": 300
+                  },
+                  "keyLocation": {
+                    "type": "string",
+                    "maxLength": 300
+                  },
+                  "alarmCode": {
+                    "type": "string",
+                    "maxLength": 60
+                  },
+                  "accessNote": {
+                    "type": "string",
+                    "maxLength": 1000
+                  },
+                  "notes": {
+                    "type": "string",
+                    "maxLength": 2000
+                  }
+                }
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "Erfolg",
@@ -24154,6 +24647,21 @@
             "sessionCookie": []
           }
         ],
+        "parameters": [
+          {
+            "name": "papierkorb",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "0",
+                "1"
+              ],
+              "default": "0"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "Erfolg",
@@ -24161,6 +24669,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/SuccessEnvelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -24803,6 +25321,19 @@
               "type": "string",
               "minLength": 1
             }
+          },
+          {
+            "name": "endgueltig",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "0",
+                "1"
+              ],
+              "default": "0"
+            }
           }
         ],
         "responses": {
@@ -24913,6 +25444,24 @@
             }
           }
         ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "active": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "active"
+                ]
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "Erfolg",
@@ -25241,6 +25790,74 @@
             "sessionCookie": []
           }
         ],
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1
+            }
+          },
+          {
+            "name": "pageSize",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 120
+            }
+          },
+          {
+            "name": "scope",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "BOOKING",
+                "QUOTE",
+                "INVOICE",
+                "JOB",
+                "CUSTOMER",
+                "EMPLOYEE",
+                "PROPERTY",
+                "BLOG",
+                "GALLERY",
+                "APPLICATION",
+                "EXPENSE",
+                "MESSAGE",
+                "OTHER"
+              ]
+            }
+          },
+          {
+            "name": "nurBilder",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "0",
+                "1"
+              ],
+              "default": "0"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "Erfolg",
@@ -25248,6 +25865,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/SuccessEnvelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -25440,6 +26067,41 @@
             }
           }
         ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "filename": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 255
+                  },
+                  "scope": {
+                    "type": "string",
+                    "enum": [
+                      "BOOKING",
+                      "QUOTE",
+                      "INVOICE",
+                      "JOB",
+                      "CUSTOMER",
+                      "EMPLOYEE",
+                      "PROPERTY",
+                      "BLOG",
+                      "GALLERY",
+                      "APPLICATION",
+                      "EXPENSE",
+                      "MESSAGE",
+                      "OTHER"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "Erfolg",
@@ -25544,6 +26206,19 @@
               "type": "string",
               "minLength": 1
             }
+          },
+          {
+            "name": "trotzdem",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "0",
+                "1"
+              ],
+              "default": "0"
+            }
           }
         ],
         "responses": {
@@ -25643,6 +26318,59 @@
             "sessionCookie": []
           }
         ],
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 120
+            }
+          },
+          {
+            "name": "role",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "CUSTOMER",
+                "EMPLOYEE",
+                "MANAGER",
+                "ADMIN",
+                "SUPER_ADMIN"
+              ]
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "PENDING",
+                "ACTIVE",
+                "SUSPENDED",
+                "DISABLED"
+              ]
+            }
+          },
+          {
+            "name": "papierkorb",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "0",
+                "1"
+              ],
+              "default": "0"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "Erfolg",
@@ -25650,6 +26378,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/SuccessEnvelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -29294,6 +30032,91 @@
             "sessionCookie": []
           }
         ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "hours": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "weekday": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 6
+                        },
+                        "opensAt": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$"
+                            },
+                            {
+                              "const": ""
+                            }
+                          ]
+                        },
+                        "closesAt": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$"
+                            },
+                            {
+                              "const": ""
+                            }
+                          ]
+                        },
+                        "closed": {
+                          "type": "boolean",
+                          "default": false
+                        },
+                        "serviceOpensAt": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$"
+                            },
+                            {
+                              "const": ""
+                            }
+                          ]
+                        },
+                        "serviceClosesAt": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$"
+                            },
+                            {
+                              "const": ""
+                            }
+                          ]
+                        },
+                        "serviceClosed": {
+                          "type": "boolean",
+                          "default": false
+                        }
+                      },
+                      "required": [
+                        "weekday"
+                      ]
+                    },
+                    "minItems": 1,
+                    "maxItems": 7
+                  }
+                },
+                "required": [
+                  "hours"
+                ]
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "Erfolg",
@@ -29301,6 +30124,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/SuccessEnvelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -29817,6 +30650,30 @@
             "sessionCookie": []
           }
         ],
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 120
+            }
+          },
+          {
+            "name": "includeInactive",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "0",
+                "1"
+              ],
+              "default": "0"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "Erfolg",
@@ -29824,6 +30681,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/SuccessEnvelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -30064,6 +30931,79 @@
             }
           }
         ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 2,
+                    "maxLength": 140
+                  },
+                  "contactName": {
+                    "type": "string",
+                    "maxLength": 120
+                  },
+                  "email": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "format": "email"
+                      },
+                      {
+                        "const": ""
+                      }
+                    ]
+                  },
+                  "phone": {
+                    "type": "string",
+                    "maxLength": 30
+                  },
+                  "street": {
+                    "type": "string",
+                    "maxLength": 120
+                  },
+                  "postalCode": {
+                    "type": "string",
+                    "maxLength": 10
+                  },
+                  "city": {
+                    "type": "string",
+                    "maxLength": 80
+                  },
+                  "country": {
+                    "type": "string",
+                    "default": "CH"
+                  },
+                  "vatNumber": {
+                    "type": "string",
+                    "maxLength": 40
+                  },
+                  "iban": {
+                    "type": "string",
+                    "maxLength": 40
+                  },
+                  "paymentTermDays": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 180,
+                    "default": 30
+                  },
+                  "notes": {
+                    "type": "string",
+                    "maxLength": 2000
+                  },
+                  "active": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "Erfolg",
@@ -30267,6 +31207,72 @@
             "sessionCookie": []
           }
         ],
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1
+            }
+          },
+          {
+            "name": "pageSize",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "PENDING",
+                "PROCESSING",
+                "SUCCEEDED",
+                "FAILED",
+                "REFUNDED",
+                "CANCELLED"
+              ]
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 120
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "Erfolg",
@@ -30274,6 +31280,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/SuccessEnvelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -35874,6 +36890,50 @@
             "sessionCookie": []
           }
         ],
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 120
+            }
+          },
+          {
+            "name": "confirmed",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "0",
+                "1"
+              ]
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1
+            }
+          },
+          {
+            "name": "pageSize",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200,
+              "default": 50
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "Erfolg",
@@ -35881,6 +36941,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/SuccessEnvelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -38505,6 +39575,26 @@
             "sessionCookie": []
           }
         ],
+        "parameters": [
+          {
+            "name": "customerId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 120
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "Erfolg",
@@ -38512,6 +39602,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/SuccessEnvelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -38570,6 +39670,185 @@
             "sessionCookie": []
           }
         ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "allOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "label": {
+                        "type": "string",
+                        "minLength": 2,
+                        "maxLength": 80
+                      },
+                      "kind": {
+                        "type": "string",
+                        "enum": [
+                          "APARTMENT",
+                          "HOUSE",
+                          "OFFICE",
+                          "COMMERCIAL",
+                          "INDUSTRIAL",
+                          "CONSTRUCTION_SITE",
+                          "PRACTICE",
+                          "RESTAURANT",
+                          "SCHOOL",
+                          "OTHER"
+                        ],
+                        "default": "APARTMENT"
+                      },
+                      "addressId": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "address": {
+                        "type": "object",
+                        "properties": {
+                          "label": {
+                            "type": "string",
+                            "maxLength": 60
+                          },
+                          "street": {
+                            "type": "string",
+                            "minLength": 2,
+                            "maxLength": 120
+                          },
+                          "streetNo": {
+                            "type": "string",
+                            "maxLength": 20
+                          },
+                          "addition": {
+                            "type": "string",
+                            "maxLength": 120
+                          },
+                          "postalCode": {
+                            "type": "string",
+                            "pattern": "^[1-9]\\d{3}$"
+                          },
+                          "city": {
+                            "type": "string",
+                            "minLength": 2,
+                            "maxLength": 80
+                          },
+                          "canton": {
+                            "type": "string",
+                            "default": "BE"
+                          },
+                          "country": {
+                            "type": "string",
+                            "default": "CH"
+                          },
+                          "lat": {
+                            "type": "number",
+                            "minimum": -90,
+                            "maximum": 90
+                          },
+                          "lng": {
+                            "type": "number",
+                            "minimum": -180,
+                            "maximum": 180
+                          },
+                          "placeId": {
+                            "type": "string",
+                            "maxLength": 200
+                          },
+                          "accessNote": {
+                            "type": "string",
+                            "maxLength": 500
+                          }
+                        },
+                        "required": [
+                          "street",
+                          "postalCode",
+                          "city"
+                        ]
+                      },
+                      "squareMeters": {
+                        "type": "integer",
+                        "minimum": 5,
+                        "maximum": 50000
+                      },
+                      "rooms": {
+                        "type": "number",
+                        "minimum": 0.5,
+                        "maximum": 200
+                      },
+                      "bathrooms": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 50
+                      },
+                      "windows": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 2000
+                      },
+                      "floor": {
+                        "type": "integer",
+                        "minimum": -5,
+                        "maximum": 60
+                      },
+                      "hasBalcony": {
+                        "type": "boolean",
+                        "default": false
+                      },
+                      "hasGarden": {
+                        "type": "boolean",
+                        "default": false
+                      },
+                      "hasPets": {
+                        "type": "boolean",
+                        "default": false
+                      },
+                      "hasElevator": {
+                        "type": "boolean",
+                        "default": false
+                      },
+                      "parkingInfo": {
+                        "type": "string",
+                        "maxLength": 300
+                      },
+                      "keyLocation": {
+                        "type": "string",
+                        "maxLength": 300
+                      },
+                      "alarmCode": {
+                        "type": "string",
+                        "maxLength": 60
+                      },
+                      "accessNote": {
+                        "type": "string",
+                        "maxLength": 1000
+                      },
+                      "notes": {
+                        "type": "string",
+                        "maxLength": 2000
+                      }
+                    },
+                    "required": [
+                      "label"
+                    ]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "customerId": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    },
+                    "required": [
+                      "customerId"
+                    ]
+                  }
+                ]
+              }
+            }
+          }
+        },
         "responses": {
           "201": {
             "description": "Erfolg",
@@ -38577,6 +39856,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/SuccessEnvelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -38657,6 +39946,103 @@
             "sessionCookie": []
           }
         ],
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1
+            }
+          },
+          {
+            "name": "pageSize",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 120
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 60
+            }
+          },
+          {
+            "name": "order",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "asc",
+                "desc"
+              ],
+              "default": "desc"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "PENDING",
+                "CONFIRMED",
+                "IN_PROGRESS",
+                "COMPLETED",
+                "CANCELLED",
+                "NO_SHOW"
+              ]
+            }
+          },
+          {
+            "name": "customerId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "Erfolg",
@@ -38664,6 +40050,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/SuccessEnvelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }

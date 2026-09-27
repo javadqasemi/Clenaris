@@ -1,5 +1,5 @@
 import { defineRoute, idParam } from '@/lib/api/handler';
-import { createPropertySchema } from '@/lib/validation/crm';
+import { updatePropertySchema } from '@/lib/validation/crm';
 import { NotFoundError } from '@/lib/errors';
 import { CRYPTO_CONTEXT, encryptNullable } from '@/lib/crypto';
 import { audit, diff } from '@/lib/audit';
@@ -83,7 +83,7 @@ export const GET = defineRoute({
 export const PATCH = defineRoute({
   permissions: ['property:update'],
   params: idParam,
-  body: createPropertySchema.innerType().partial(),
+  body: updatePropertySchema,
   rateLimit: 'apiWrite',
   handler: async ({ params, body, session, ip }) => {
     const organizationId = await getOrganizationId();

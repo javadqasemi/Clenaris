@@ -1,21 +1,11 @@
 import { defineRoute } from '@/lib/api/handler';
 import { buildPagination, created, paginated } from '@/lib/api/response';
-import { searchQuery } from '@/lib/validation/queries';
+import { bookingListQuery } from '@/lib/validation/queries';
 import { staffBookingSchema } from '@/lib/validation/booking';
 import { createBooking, listBookings } from '@/server/services/booking.service';
 import { getOrganizationId } from '@/server/services/organization.service';
-import { z } from 'zod';
 
 export const runtime = 'nodejs';
-
-const listQuery = searchQuery.extend({
-  status: z
-    .enum(['PENDING', 'CONFIRMED', 'IN_PROGRESS', 'COMPLETED', 'CANCELLED', 'NO_SHOW'])
-    .optional(),
-  customerId: z.string().min(1).optional(),
-  from: z.coerce.date().optional(),
-  to: z.coerce.date().optional(),
-});
 
 /**
  * GET /api/bookings — Buchungen mit Filter und Blätterung.
@@ -26,7 +16,7 @@ const listQuery = searchQuery.extend({
  */
 export const GET = defineRoute({
   permissions: ['booking:read'],
-  query: listQuery,
+  query: bookingListQuery,
   rateLimit: 'apiRead',
   handler: async ({ query }) => {
     const { items, total } = await listBookings({

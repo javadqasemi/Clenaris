@@ -150,6 +150,16 @@ export const createSupplierSchema = z.object({
 });
 export type CreateSupplierInput = z.infer<typeof createSupplierSchema>;
 
+/**
+ * Ändern = Anlegen mit lauter freiwilligen Feldern, plus `active` (bis
+ * 2026-09-27 in der Route).
+ *
+ * `active` fehlt beim Anlegen bewusst: ein neu erfasster Lieferant ist aktiv,
+ * alles andere wäre eine Einstellung ohne Anwendungsfall. Beim Ändern ist es
+ * der Weg, einen Lieferanten stillzulegen, ohne seine Belege zu verlieren.
+ */
+export const updateSupplierSchema = createSupplierSchema.partial().extend({ active: z.boolean().optional() });
+
 /** Zahlung starten (Stripe Card / TWINT). */
 export const startPaymentSchema = z.object({
   invoiceId: cuidSchema,

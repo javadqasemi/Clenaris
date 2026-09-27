@@ -1,11 +1,9 @@
-import { z } from 'zod';
-
 import { defineRoute } from '@/lib/api/handler';
 import { buildPagination, created, paginated } from '@/lib/api/response';
 import { ForbiddenError, NotFoundError } from '@/lib/errors';
 import { prisma } from '@/lib/db';
 import { can } from '@/lib/auth/rbac';
-import { searchQuery } from '@/lib/validation/queries';
+import { jobListQuery } from '@/lib/validation/queries';
 import { createJobSchema } from '@/lib/validation/operations';
 import { createJob, listJobs } from '@/server/services/job.service';
 import { getOrganizationId } from '@/server/services/organization.service';
@@ -22,28 +20,6 @@ export const runtime = 'nodejs';
  * braucht der Betrieb aber laufend — Nachbesserung, Sonderauftrag,
  * Hauswartung auf Zuruf.
  */
-
-const listQuery = searchQuery.extend({
-  status: z
-    .enum([
-      'UNASSIGNED', 'SCHEDULED', 'DISPATCHED', 'EN_ROUTE', 'IN_PROGRESS',
-      'ON_HOLD', 'COMPLETED', 'VERIFIED', 'CANCELLED',
-    ])
-    .optional(),
-  employeeId: z.string().min(1).optional(),
-  customerId: z.string().min(1).optional(),
-  /**
-   * Alle Einsätze eines Vertrags (Wave 10).
-   *
-   * Die Frage „was ist aus diesem Vertrag entstanden" wird in der Vertragsakte
-   * gestellt und beim Prüfen der Serienplanung. Ohne diesen Filter bliebe nur,
-   * die ganze Liste zu holen und im Browser zu filtern — und das ist bei
-   * einem Unterhaltsvertrag über zwei Jahre eine vierstellige Zahl Zeilen.
-   */
-  contractId: z.string().min(1).optional(),
-  from: z.coerce.date().optional(),
-  to: z.coerce.date().optional(),
-});
 
 /**
  * GET /api/jobs — Einsätze mit Filter, Sortierung und Blätterung.
@@ -66,7 +42,7 @@ const listQuery = searchQuery.extend({
 export const GET = defineRoute({
   permissions: ['job:read', 'job:read_assigned'],
   anyPermission: true,
-  query: listQuery,
+  query: jobListQuery,
   rateLimit: 'apiRead',
   handler: async ({ query, session }) => {
     const nurEigene = !can(session.role, 'job:read');

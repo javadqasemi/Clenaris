@@ -1,25 +1,12 @@
-import { z } from 'zod';
-
 import { defineRoute, idParam } from '@/lib/api/handler';
 import { noContent, ok } from '@/lib/api/response';
 import { prisma } from '@/lib/db';
 import { audit, diff } from '@/lib/audit';
 import { BusinessRuleError, NotFoundError } from '@/lib/errors';
-import { createSupplierSchema } from '@/lib/validation/finance';
+import { updateSupplierSchema } from '@/lib/validation/finance';
 import { getOrganizationId } from '@/server/services/organization.service';
 
 export const runtime = 'nodejs';
-
-/**
- * Ändern = Anlegen mit lauter freiwilligen Feldern, plus `active`.
- *
- * `active` fehlt beim Anlegen bewusst: ein neu erfasster Lieferant ist aktiv,
- * alles andere wäre eine Einstellung ohne Anwendungsfall. Beim Ändern ist es
- * der Weg, einen Lieferanten stillzulegen, ohne seine Belege zu verlieren.
- */
-const updateSupplierSchema = createSupplierSchema
-  .partial()
-  .extend({ active: z.boolean().optional() });
 
 /** PATCH /api/suppliers/:id */
 export const PATCH = defineRoute({

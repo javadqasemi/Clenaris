@@ -1,6 +1,6 @@
 import { defineRoute } from '@/lib/api/handler';
 import { prisma } from '@/lib/db';
-import { z } from 'zod';
+import { absenceListQuery } from '@/lib/validation/queries';
 import { created, ok } from '@/lib/api/response';
 import { ForbiddenError } from '@/lib/errors';
 import { absenceRequestSchema } from '@/lib/validation/operations';
@@ -37,13 +37,6 @@ export const POST = defineRoute({
   },
 });
 
-const listQuery = z.object({
-  status: z.enum(['REQUESTED', 'APPROVED', 'REJECTED', 'CANCELLED']).optional(),
-  employeeId: z.string().min(1).optional(),
-  from: z.coerce.date().optional(),
-  to: z.coerce.date().optional(),
-});
-
 /**
  * GET /api/absences — Abwesenheitsgesuche.
  *
@@ -54,7 +47,7 @@ const listQuery = z.object({
 export const GET = defineRoute({
   permissions: ['absence:read_all', 'absence:request'],
   anyPermission: true,
-  query: listQuery,
+  query: absenceListQuery,
   rateLimit: 'apiRead',
   handler: async ({ query, session }) => {
     const { can } = await import('@/lib/auth/rbac');

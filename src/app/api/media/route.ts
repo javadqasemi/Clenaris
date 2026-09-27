@@ -1,44 +1,17 @@
-import { z } from 'zod';
-
 import { defineRoute } from '@/lib/api/handler';
 import { buildPagination, created, paginated } from '@/lib/api/response';
 import { finalizeUploadSchema } from '@/lib/validation/files';
-import { paginationQuery } from '@/lib/validation/queries';
+import { mediaListQuery } from '@/lib/validation/queries';
 import { finalizeUpload } from '@/server/services/file.service';
 import { listMedia } from '@/server/services/media.service';
 import { getOrganizationId } from '@/server/services/organization.service';
 
 export const runtime = 'nodejs';
 
-const FILE_SCOPES = [
-  'BOOKING',
-  'QUOTE',
-  'INVOICE',
-  'JOB',
-  'CUSTOMER',
-  'EMPLOYEE',
-  'PROPERTY',
-  'BLOG',
-  'GALLERY',
-  'APPLICATION',
-  'EXPENSE',
-  'MESSAGE',
-  'OTHER',
-] as const;
-
-const listQuery = paginationQuery.extend({
-  q: z.string().trim().max(120).optional(),
-  scope: z.enum(FILE_SCOPES).optional(),
-  nurBilder: z
-    .enum(['0', '1'])
-    .default('0')
-    .transform((v) => v === '1'),
-});
-
 /** GET /api/media — Mediathek mit Blätterung. */
 export const GET = defineRoute({
   permissions: ['media:read'],
-  query: listQuery,
+  query: mediaListQuery,
   rateLimit: 'apiRead',
   handler: async ({ query }) => {
     const { items, total, totalBytes } = await listMedia({

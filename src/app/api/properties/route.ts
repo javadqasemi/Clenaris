@@ -1,21 +1,15 @@
-import { z } from 'zod';
-
 import { defineRoute } from '@/lib/api/handler';
+import { propertyListQuery } from '@/lib/validation/queries';
 import { created, ok } from '@/lib/api/response';
 import { prisma } from '@/lib/db';
 import { audit } from '@/lib/audit';
 import { ForbiddenError, NotFoundError } from '@/lib/errors';
 import { CRYPTO_CONTEXT, encryptNullable } from '@/lib/crypto';
-import { createPropertySchema } from '@/lib/validation/crm';
+import { createPropertyBodySchema } from '@/lib/validation/crm';
 import { getOrganizationId } from '@/server/services/organization.service';
 import { mayManagePropertyOf, propertyVisibilityWhere } from '@/server/services/property.service';
 
 export const runtime = 'nodejs';
-
-const listQuery = z.object({
-  customerId: z.string().min(1).optional(),
-  q: z.string().trim().max(120).optional(),
-});
 
 /**
  * GET /api/properties — Objekte und Liegenschaften.
@@ -35,7 +29,7 @@ const listQuery = z.object({
  */
 export const GET = defineRoute({
   permissions: ['property:read'],
-  query: listQuery,
+  query: propertyListQuery,
   rateLimit: 'apiRead',
   handler: async ({ query, session }) => {
     const organizationId = await getOrganizationId();
@@ -73,19 +67,6 @@ export const GET = defineRoute({
 });
 
 /**
- * Körper des Anlegens: das Objektschema plus die Kundschaft, zu der es gehört.
- *
- * `z.intersection` statt `.extend()`, weil `createPropertySchema` mit einem
- * `.refine()` endet (Adresse ist Pflicht) und damit kein einfaches
- * `ZodObject` mehr ist. Die Prüfung bleibt dadurch an genau einer Stelle —
- * die Adressregel gilt hier wie überall sonst.
- */
-const createPropertyBody = z.intersection(
-  createPropertySchema,
-  z.object({ customerId: z.string().min(1, 'Eine Kundschaft ist erforderlich.') }),
-);
-
-/**
  * POST /api/properties — Objekt erfassen.
  *
  * Die Kundschaft darf Objekte nur an die eigene Akte hängen. Die Kunden-ID
@@ -94,7 +75,7 @@ const createPropertyBody = z.intersection(
  */
 export const POST = defineRoute({
   permissions: ['property:create'],
-  body: createPropertyBody,
+  body: createPropertyBodySchema,
   rateLimit: 'apiWrite',
   handler: async ({ body, session, ip }) => {
     const organizationId = await getOrganizationId();

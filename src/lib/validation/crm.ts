@@ -224,6 +224,23 @@ export const createPropertySchema = z.object({
   });
 export type CreatePropertyInput = z.infer<typeof createPropertySchema>;
 
+/**
+ * Körper von `POST /api/properties`: das Objektschema plus die Kundschaft, zu
+ * der es gehört. Stand bis 2026-09-27 in der Route selbst.
+ *
+ * `z.intersection` statt `.extend()`, weil `createPropertySchema` mit einem
+ * `.refine()` endet (Adresse ist Pflicht) und damit kein einfaches
+ * `ZodObject` mehr ist. Die Prüfung bleibt dadurch an genau einer Stelle —
+ * die Adressregel gilt hier wie überall sonst.
+ */
+export const createPropertyBodySchema = z.intersection(
+  createPropertySchema,
+  z.object({ customerId: z.string().min(1, 'Eine Kundschaft ist erforderlich.') }),
+);
+
+/** Körper von `PATCH /api/properties/:id` — jedes Feld freiwillig, ohne die Adressregel. */
+export const updatePropertySchema = createPropertySchema.innerType().partial();
+
 export const createContactSchema = z.object({
   firstName: nameSchema,
   lastName: nameSchema,

@@ -1575,7 +1575,14 @@ Familie.
 - **Zugriff:** Erfordert die Berechtigung: `property:read`.
 - **Rate-Limit-Klasse:** `apiRead`
 - **Erfolg:** 200
-- **Mögliche Fehler:** 401, 403, 429, 500
+- **Mögliche Fehler:** 400, 401, 403, 429, 500
+
+**Query-Parameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `customerId` | string | – | min. 1 Zeichen |
+| `q` | string | – | max. 120 Zeichen |
 
 ### `POST /api/properties`
 
@@ -1584,7 +1591,12 @@ Familie.
 - **Zugriff:** Erfordert die Berechtigung: `property:create`.
 - **Rate-Limit-Klasse:** `apiWrite`
 - **Erfolg:** 201
-- **Mögliche Fehler:** 401, 403, 409, 422, 429, 500
+- **Mögliche Fehler:** 400, 401, 403, 409, 422, 429, 500
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
 
 ### `GET /api/properties/{id}`
 
@@ -1615,6 +1627,41 @@ Familie.
 | Feld | Typ | Pflicht | Regeln |
 | --- | --- | --- | --- |
 | `id` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `label` | string | – | min. 2 Zeichen, max. 80 Zeichen |
+| `kind` | string | – | `APARTMENT` \| `HOUSE` \| `OFFICE` \| `COMMERCIAL` \| `INDUSTRIAL` \| `CONSTRUCTION_SITE` \| `PRACTICE` \| `RESTAURANT` \| `SCHOOL` \| `OTHER`, Standard `"APARTMENT"` |
+| `addressId` | string | – | min. 1 Zeichen |
+| `address` | object | – | – |
+| `address.label` | string | – | max. 60 Zeichen |
+| `address.street` | string | ja | min. 2 Zeichen, max. 120 Zeichen |
+| `address.streetNo` | string | – | max. 20 Zeichen |
+| `address.addition` | string | – | max. 120 Zeichen |
+| `address.postalCode` | string | ja | – |
+| `address.city` | string | ja | min. 2 Zeichen, max. 80 Zeichen |
+| `address.canton` | string | – | Standard `"BE"` |
+| `address.country` | string | – | Standard `"CH"` |
+| `address.lat` | number | – | ≥ -90, ≤ 90 |
+| `address.lng` | number | – | ≥ -180, ≤ 180 |
+| `address.placeId` | string | – | max. 200 Zeichen |
+| `address.accessNote` | string | – | max. 500 Zeichen |
+| `squareMeters` | integer | – | ≥ 5, ≤ 50000 |
+| `rooms` | number | – | ≥ 0.5, ≤ 200 |
+| `bathrooms` | integer | – | ≥ 0, ≤ 50 |
+| `windows` | integer | – | ≥ 0, ≤ 2000 |
+| `floor` | integer | – | ≥ -5, ≤ 60 |
+| `hasBalcony` | boolean | – | Standard `false` |
+| `hasGarden` | boolean | – | Standard `false` |
+| `hasPets` | boolean | – | Standard `false` |
+| `hasElevator` | boolean | – | Standard `false` |
+| `parkingInfo` | string | – | max. 300 Zeichen |
+| `keyLocation` | string | – | max. 300 Zeichen |
+| `alarmCode` | string | – | max. 60 Zeichen |
+| `accessNote` | string | – | max. 1000 Zeichen |
+| `notes` | string | – | max. 2000 Zeichen |
 
 ### `GET /api/customers/{id}/merge`
 
@@ -1918,7 +1965,21 @@ Familie.
 - **Zugriff:** Erfordert die Berechtigung: `booking:read`.
 - **Rate-Limit-Klasse:** `apiRead`
 - **Erfolg:** 200
-- **Mögliche Fehler:** 401, 403, 429, 500
+- **Mögliche Fehler:** 400, 401, 403, 429, 500
+
+**Query-Parameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `page` | integer | – | ≥ 1, Standard `1` |
+| `pageSize` | integer | – | ≥ 1, ≤ 100, Standard `20` |
+| `q` | string | – | max. 120 Zeichen |
+| `sort` | string | – | max. 60 Zeichen |
+| `order` | string | – | `asc` \| `desc`, Standard `"desc"` |
+| `status` | string | – | `PENDING` \| `CONFIRMED` \| `IN_PROGRESS` \| `COMPLETED` \| `CANCELLED` \| `NO_SHOW` |
+| `customerId` | string | – | min. 1 Zeichen |
+| `from` | string | – | date-time |
+| `to` | string | – | date-time |
 
 ### `POST /api/bookings`
 
@@ -2587,7 +2648,23 @@ Familie.
 - **Zugriff:** Erfordert eine der Berechtigungen: `job:read`, `job:read_assigned`.
 - **Rate-Limit-Klasse:** `apiRead`
 - **Erfolg:** 200
-- **Mögliche Fehler:** 401, 403, 429, 500
+- **Mögliche Fehler:** 400, 401, 403, 429, 500
+
+**Query-Parameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `page` | integer | – | ≥ 1, Standard `1` |
+| `pageSize` | integer | – | ≥ 1, ≤ 100, Standard `20` |
+| `q` | string | – | max. 120 Zeichen |
+| `sort` | string | – | max. 60 Zeichen |
+| `order` | string | – | `asc` \| `desc`, Standard `"desc"` |
+| `status` | string | – | `UNASSIGNED` \| `SCHEDULED` \| `DISPATCHED` \| `EN_ROUTE` \| `IN_PROGRESS` \| `ON_HOLD` \| `COMPLETED` \| `VERIFIED` \| `CANCELLED` |
+| `employeeId` | string | – | min. 1 Zeichen |
+| `customerId` | string | – | min. 1 Zeichen |
+| `contractId` | string | – | min. 1 Zeichen |
+| `from` | string | – | date-time |
+| `to` | string | – | date-time |
 
 ### `POST /api/jobs`
 
@@ -4203,7 +4280,16 @@ Familie.
 - **Zugriff:** Erfordert eine der Berechtigungen: `absence:read_all`, `absence:request`.
 - **Rate-Limit-Klasse:** `apiRead`
 - **Erfolg:** 200
-- **Mögliche Fehler:** 401, 403, 429, 500
+- **Mögliche Fehler:** 400, 401, 403, 429, 500
+
+**Query-Parameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `status` | string | – | `REQUESTED` \| `APPROVED` \| `REJECTED` \| `CANCELLED` |
+| `employeeId` | string | – | min. 1 Zeichen |
+| `from` | string | – | date-time |
+| `to` | string | – | date-time |
 
 ### `DELETE /api/applications/{id}`
 
@@ -4512,7 +4598,14 @@ Familie.
 - **Zugriff:** Erfordert die Berechtigung: `supplier:read`.
 - **Rate-Limit-Klasse:** `apiRead`
 - **Erfolg:** 200
-- **Mögliche Fehler:** 401, 403, 429, 500
+- **Mögliche Fehler:** 400, 401, 403, 429, 500
+
+**Query-Parameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `q` | string | – | max. 120 Zeichen |
+| `includeInactive` | string | – | `0` \| `1`, Standard `"0"` |
 
 ### `POST /api/suppliers`
 
@@ -4555,6 +4648,24 @@ Familie.
 | --- | --- | --- | --- |
 | `id` | string | ja | min. 1 Zeichen |
 
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `name` | string | – | min. 2 Zeichen, max. 140 Zeichen |
+| `contactName` | string | – | max. 120 Zeichen |
+| `email` | union | – | – |
+| `phone` | string | – | max. 30 Zeichen |
+| `street` | string | – | max. 120 Zeichen |
+| `postalCode` | string | – | max. 10 Zeichen |
+| `city` | string | – | max. 80 Zeichen |
+| `country` | string | – | Standard `"CH"` |
+| `vatNumber` | string | – | max. 40 Zeichen |
+| `iban` | string | – | max. 40 Zeichen |
+| `paymentTermDays` | integer | – | ≥ 0, ≤ 180, Standard `30` |
+| `notes` | string | – | max. 2000 Zeichen |
+| `active` | boolean | – | – |
+
 ### `DELETE /api/suppliers/{id}`
 
 **Lieferant löschen.** Nur ohne gebuchte Ausgaben. Eine Ausgabe ohne ihren Lieferanten liesse sich in der Buchhaltung nicht mehr zuordnen — setzen Sie ihn stattdessen auf inaktiv.
@@ -4577,7 +4688,18 @@ Familie.
 - **Zugriff:** Erfordert die Berechtigung: `payment:read`.
 - **Rate-Limit-Klasse:** `apiRead`
 - **Erfolg:** 200
-- **Mögliche Fehler:** 401, 403, 429, 500
+- **Mögliche Fehler:** 400, 401, 403, 429, 500
+
+**Query-Parameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `page` | integer | – | ≥ 1, Standard `1` |
+| `pageSize` | integer | – | ≥ 1, ≤ 100, Standard `20` |
+| `status` | string | – | `PENDING` \| `PROCESSING` \| `SUCCEEDED` \| `FAILED` \| `REFUNDED` \| `CANCELLED` |
+| `from` | string | – | date-time |
+| `to` | string | – | date-time |
+| `q` | string | – | max. 120 Zeichen |
 
 ### `PATCH /api/expenses/{id}`
 
@@ -4640,6 +4762,32 @@ Familie.
 | Feld | Typ | Pflicht | Regeln |
 | --- | --- | --- | --- |
 | `id` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `customerId` | string | – | min. 1 Zeichen |
+| `bookingId` | string | – | min. 1 Zeichen |
+| `quoteId` | string | – | min. 1 Zeichen |
+| `issueDate` | string | – | – |
+| `dueDate` | string | – | – |
+| `periodFrom` | string | – | – |
+| `periodTo` | string | – | – |
+| `introText` | string | – | max. 4000 Zeichen |
+| `outroText` | string | – | max. 4000 Zeichen |
+| `notes` | string | – | max. 4000 Zeichen |
+| `discountAmount` | number | – | ≥ 0, ≤ 9999999, Standard `0` |
+| `items` | object[] | – | min. 1 Einträge, max. 200 Einträge |
+| `items[].id` | string | – | min. 1 Zeichen |
+| `items[].jobId` | string | – | min. 1 Zeichen |
+| `items[].name` | string | ja | min. 2 Zeichen, max. 200 Zeichen |
+| `items[].description` | string | – | max. 2000 Zeichen |
+| `items[].quantity` | number | ja | ≥ 0.01, ≤ 10000 |
+| `items[].unit` | string | – | max. 20 Zeichen, Standard `"Std."` |
+| `items[].unitPrice` | number | ja | ≥ 0, ≤ 9999999 |
+| `items[].discount` | number | – | ≥ 0, ≤ 100, Standard `0` |
+| `items[].vatRate` | number | – | ≥ 0, ≤ 30, Standard `8.1` |
 
 ### `PATCH /api/payments/{id}`
 
@@ -5560,7 +5708,13 @@ Familie.
 - **Zugriff:** Erfordert die Berechtigung: `cta:read`.
 - **Rate-Limit-Klasse:** `apiRead`
 - **Erfolg:** 200
-- **Mögliche Fehler:** 401, 403, 429, 500
+- **Mögliche Fehler:** 400, 401, 403, 429, 500
+
+**Query-Parameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `papierkorb` | string | – | `0` \| `1`, Standard `"0"` |
 
 ### `POST /api/cta`
 
@@ -5656,6 +5810,12 @@ Familie.
 | --- | --- | --- | --- |
 | `id` | string | ja | min. 1 Zeichen |
 
+**Query-Parameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `endgueltig` | string | – | `0` \| `1`, Standard `"0"` |
+
 ### `POST /api/cta/{id}/publish`
 
 **Handlungsaufruf ein- oder ausschalten.** Eigene Berechtigung, weil dies die einzige Handlung ist, die etwas auf der öffentlichen Website erscheinen lässt. Wer Texte vorbereiten darf, muss nicht veröffentlichen dürfen.
@@ -5670,6 +5830,12 @@ Familie.
 | Feld | Typ | Pflicht | Regeln |
 | --- | --- | --- | --- |
 | `id` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `active` | boolean | ja | – |
 
 ### `POST /api/cta/{id}/restore`
 
@@ -5709,7 +5875,17 @@ Familie.
 - **Zugriff:** Erfordert die Berechtigung: `media:read`.
 - **Rate-Limit-Klasse:** `apiRead`
 - **Erfolg:** 200
-- **Mögliche Fehler:** 401, 403, 429, 500
+- **Mögliche Fehler:** 400, 401, 403, 429, 500
+
+**Query-Parameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `page` | integer | – | ≥ 1, Standard `1` |
+| `pageSize` | integer | – | ≥ 1, ≤ 100, Standard `20` |
+| `q` | string | – | max. 120 Zeichen |
+| `scope` | string | – | `BOOKING` \| `QUOTE` \| `INVOICE` \| `JOB` \| `CUSTOMER` \| `EMPLOYEE` \| `PROPERTY` \| `BLOG` \| `GALLERY` \| `APPLICATION` \| `EXPENSE` \| `MESSAGE` \| `OTHER` |
+| `nurBilder` | string | – | `0` \| `1`, Standard `"0"` |
 
 ### `POST /api/media`
 
@@ -5742,6 +5918,13 @@ Familie.
 | --- | --- | --- | --- |
 | `id` | string | ja | min. 1 Zeichen |
 
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `filename` | string | – | min. 1 Zeichen, max. 255 Zeichen |
+| `scope` | string | – | `BOOKING` \| `QUOTE` \| `INVOICE` \| `JOB` \| `CUSTOMER` \| `EMPLOYEE` \| `PROPERTY` \| `BLOG` \| `GALLERY` \| `APPLICATION` \| `EXPENSE` \| `MESSAGE` \| `OTHER` |
+
 ### `DELETE /api/media/{id}`
 
 **Datei endgültig löschen.** Kein Papierkorb — die Datei liegt im Objektspeicher und kostet dort Geld. Hängt sie an einem Beleg, antwortet der Endpunkt mit 422 und nennt woran; `?trotzdem=1` setzt sich darüber hinweg.
@@ -5756,6 +5939,12 @@ Familie.
 | Feld | Typ | Pflicht | Regeln |
 | --- | --- | --- | --- |
 | `id` | string | ja | min. 1 Zeichen |
+
+**Query-Parameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `trotzdem` | string | – | `0` \| `1`, Standard `"0"` |
 
 ### `GET /api/faq`
 
@@ -6070,7 +6259,14 @@ Familie.
 - **Zugriff:** Erfordert die Berechtigung: `blog:read`.
 - **Rate-Limit-Klasse:** `apiRead`
 - **Erfolg:** 200
-- **Mögliche Fehler:** 401, 403, 429, 500
+- **Mögliche Fehler:** 400, 401, 403, 429, 500
+
+**Query-Parameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `status` | string | – | `DRAFT` \| `SCHEDULED` \| `PUBLISHED` \| `ARCHIVED` |
+| `q` | string | – | max. 120 Zeichen |
 
 ### `GET /api/blog/{id}`
 
@@ -6139,7 +6335,16 @@ Familie.
 - **Zugriff:** Erfordert die Berechtigung: `user:read`.
 - **Rate-Limit-Klasse:** `apiRead`
 - **Erfolg:** 200
-- **Mögliche Fehler:** 401, 403, 429, 500
+- **Mögliche Fehler:** 400, 401, 403, 429, 500
+
+**Query-Parameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `q` | string | – | max. 120 Zeichen |
+| `role` | string | – | `CUSTOMER` \| `EMPLOYEE` \| `MANAGER` \| `ADMIN` \| `SUPER_ADMIN` |
+| `status` | string | – | `PENDING` \| `ACTIVE` \| `SUSPENDED` \| `DISABLED` |
+| `papierkorb` | string | – | `0` \| `1`, Standard `"0"` |
 
 ### `POST /api/users`
 
@@ -6392,7 +6597,20 @@ Familie.
 - **Zugriff:** Erfordert die Berechtigung: `company:update`.
 - **Rate-Limit-Klasse:** `apiWrite`
 - **Erfolg:** 200
-- **Mögliche Fehler:** 401, 403, 422, 429, 500
+- **Mögliche Fehler:** 400, 401, 403, 422, 429, 500
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `hours` | object[] | ja | min. 1 Einträge, max. 7 Einträge |
+| `hours[].weekday` | integer | ja | ≥ 0, ≤ 6 |
+| `hours[].opensAt` | union | – | – |
+| `hours[].closesAt` | union | – | – |
+| `hours[].closed` | boolean | – | Standard `false` |
+| `hours[].serviceOpensAt` | union | – | – |
+| `hours[].serviceClosesAt` | union | – | – |
+| `hours[].serviceClosed` | boolean | – | Standard `false` |
 
 ### `GET /api/holidays`
 
@@ -7364,7 +7582,16 @@ Familie.
 - **Zugriff:** Erfordert die Berechtigung: `newsletter:read`.
 - **Rate-Limit-Klasse:** `apiRead`
 - **Erfolg:** 200
-- **Mögliche Fehler:** 401, 403, 429, 500
+- **Mögliche Fehler:** 400, 401, 403, 429, 500
+
+**Query-Parameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `q` | string | – | max. 120 Zeichen |
+| `confirmed` | string | – | `0` \| `1` |
+| `page` | integer | – | ≥ 1, Standard `1` |
+| `pageSize` | integer | – | ≥ 1, ≤ 200, Standard `50` |
 
 ### `DELETE /api/newsletter/{id}`
 

@@ -45,8 +45,9 @@ function verifyCoverage(): void {
 
   const missing: string[] = [];
   const drifted: string[] = [];
+  const ohneSchema: string[] = [];
   for (const route of discovered) {
-    for (const { method, guard } of route.methods) {
+    for (const { method, guard, hatKoerper, hatAbfrage } of route.methods) {
       const key = `${method} ${route.path}`;
       const doc = documented.get(key);
       if (!doc) {
@@ -56,6 +57,11 @@ function verifyCoverage(): void {
       if (guard && guardKey(guard) !== guardKey(doc.guard)) {
         drifted.push(`${key}\n      Liste:  ${guardSource(doc.guard)}\n      Quelle: ${guardSource(guard)}`);
       }
+      // Seit 2026-09-27: Ein Körper oder eine Abfrage im Quelltext muss auch
+      // in der Liste stehen — sonst beschreibt die Doku einen Endpunkt, der
+      // etwas anderes annimmt, als sie sagt.
+      if (hatKoerper && !doc.body) ohneSchema.push(`${key} — Körper im Quelltext, nicht in der Liste`);
+      if (hatAbfrage && !doc.query) ohneSchema.push(`${key} — Abfrage im Quelltext, nicht in der Liste`);
     }
   }
 
@@ -64,11 +70,12 @@ function verifyCoverage(): void {
   );
   const stale = [...documented.keys()].filter((key) => !discoveredKeys.has(key));
 
-  if (missing.length || stale.length || drifted.length) {
+  if (missing.length || stale.length || drifted.length || ohneSchema.length) {
     const report = [
       missing.length ? `Nicht dokumentiert:\n  ${missing.join('\n  ')}` : '',
       stale.length ? `Dokumentiert, aber nicht vorhanden:\n  ${stale.join('\n  ')}` : '',
       drifted.length ? `Schutz weicht ab:\n  ${drifted.join('\n  ')}` : '',
+      ohneSchema.length ? `Schema fehlt in der Liste:\n  ${ohneSchema.join('\n  ')}` : '',
     ]
       .filter(Boolean)
       .join('\n\n');

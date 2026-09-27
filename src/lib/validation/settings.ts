@@ -104,6 +104,42 @@ const holidayFields = {
     .nullable(),
 };
 
+// --- Öffnungszeiten (bis 2026-09-27 in `api/opening-hours/route.ts`) ---------
+
+const uhrzeitSchema = z
+  .string()
+  .regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'Bitte eine Uhrzeit im Format HH:MM angeben.');
+
+/**
+ * Die Woche als Ganzes.
+ *
+ * Sieben Zeilen kommen zusammen, sieben gehen zurück. Einzelne Tage zu pflegen
+ * wäre bei einem Formular mit sieben Zeilen sieben Anfragen — und jede könnte
+ * für sich fehlschlagen, was einen halb gespeicherten Wochenplan hinterliesse.
+ */
+export const openingHoursSchema = z.object({
+  hours: z
+    .array(
+      z.object({
+        weekday: z.number().int().min(0, 'Wochentag 0–6.').max(6, 'Wochentag 0–6.'),
+        opensAt: z.union([uhrzeitSchema, z.literal('')]).optional(),
+        closesAt: z.union([uhrzeitSchema, z.literal('')]).optional(),
+        closed: z.boolean().default(false),
+        /**
+         * Einsatzzeiten, falls sie von den Öffnungszeiten abweichen
+         * (2026-09-26). Beide leer = wie die Öffnungszeiten. Weggelassen heisst
+         * dasselbe: `PUT` beschreibt den ganzen Tag, und wer die Felder nicht
+         * kennt, meint die Öffnungszeiten.
+         */
+        serviceOpensAt: z.union([uhrzeitSchema, z.literal('')]).optional(),
+        serviceClosesAt: z.union([uhrzeitSchema, z.literal('')]).optional(),
+        serviceClosed: z.boolean().default(false),
+      }),
+    )
+    .min(1)
+    .max(7),
+});
+
 export const createHolidaySchema = z.object(holidayFields);
 export const updateHolidaySchema = z.object(holidayFields).partial();
 

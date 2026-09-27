@@ -1,6 +1,5 @@
-import { z } from 'zod';
-
 import { defineRoute } from '@/lib/api/handler';
+import { blogListQuery } from '@/lib/validation/queries';
 import { created, ok } from '@/lib/api/response';
 import { prisma } from '@/lib/db';
 import { slugify } from '@/lib/utils';
@@ -79,11 +78,6 @@ export const POST = defineRoute({
   },
 });
 
-const listQuery = z.object({
-  status: z.enum(['DRAFT', 'SCHEDULED', 'PUBLISHED', 'ARCHIVED']).optional(),
-  q: z.string().trim().max(120).optional(),
-});
-
 /**
  * GET /api/blog — alle Beiträge, auch Entwürfe.
  *
@@ -92,7 +86,7 @@ const listQuery = z.object({
  */
 export const GET = defineRoute({
   permissions: ['blog:read'],
-  query: listQuery,
+  query: blogListQuery,
   rateLimit: 'apiRead',
   handler: async ({ query }) => {
     const organizationId = await getOrganizationId();

@@ -1200,6 +1200,7 @@ export const ROUTES: RouteDoc[] = [
       'auf den Rapport des einzelnen Einsatzes.',
     guard: perm('any', 'job:read', 'job:read_assigned'),
     rateLimit: 'apiRead',
+    query: q.jobListQuery,
   },
   {
     method: 'post',
@@ -2377,6 +2378,7 @@ export const ROUTES: RouteDoc[] = [
       'Alle Aufrufe, auch abgeschaltete. `?papierkorb=1` zeigt zusätzlich die gelöschten.',
     guard: perm('all', 'cta:read'),
     rateLimit: 'apiRead',
+    query: q.ctaListQuery,
   },
   {
     method: 'post',
@@ -2424,6 +2426,7 @@ export const ROUTES: RouteDoc[] = [
       'bereits im Papierkorb liegt.',
     guard: perm('all', 'cta:delete'),
     rateLimit: 'apiWrite',
+    query: q.ctaDeleteQuery,
     params: q.idParam,
     status: 204,
     extraErrors: [422],
@@ -2438,6 +2441,7 @@ export const ROUTES: RouteDoc[] = [
       'Website erscheinen lässt. Wer Texte vorbereiten darf, muss nicht veröffentlichen dürfen.',
     guard: perm('all', 'cta:publish'),
     rateLimit: 'apiWrite',
+    body: cta.publishCtaSchema,
     params: q.idParam,
     extraErrors: [422],
   },
@@ -2476,6 +2480,7 @@ export const ROUTES: RouteDoc[] = [
     description: 'Alle hochgeladenen Dateien mit Blätterung, Filter nach Bereich und Dateityp.',
     guard: perm('all', 'media:read'),
     rateLimit: 'apiRead',
+    query: q.mediaListQuery,
   },
   {
     method: 'post',
@@ -2500,6 +2505,7 @@ export const ROUTES: RouteDoc[] = [
     description: 'Ändert Anzeigename und Bereich. Die Adresse der Datei bleibt bestehen.',
     guard: perm('all', 'media:update'),
     rateLimit: 'apiWrite',
+    body: files.mediaUpdateSchema,
     params: q.idParam,
   },
   {
@@ -2513,6 +2519,7 @@ export const ROUTES: RouteDoc[] = [
       'darüber hinweg.',
     guard: perm('all', 'media:delete'),
     rateLimit: 'apiWrite',
+    query: q.mediaDeleteQuery,
     params: q.idParam,
     status: 204,
     extraErrors: [422],
@@ -2529,6 +2536,7 @@ export const ROUTES: RouteDoc[] = [
     description: 'Filter nach Rolle, Status und Suchbegriff. `?papierkorb=1` zeigt gelöschte mit.',
     guard: perm('all', 'user:read'),
     rateLimit: 'apiRead',
+    query: q.userListQuery,
   },
   {
     method: 'post',
@@ -2892,6 +2900,7 @@ export const ROUTES: RouteDoc[] = [
       'Tage zu pflegen wären sieben Anfragen, von denen jede für sich fehlschlagen könnte.',
     guard: perm('all', 'company:update'),
     rateLimit: 'apiWrite',
+    body: settings.openingHoursSchema,
     extraErrors: [422],
   },
 
@@ -2958,6 +2967,7 @@ export const ROUTES: RouteDoc[] = [
     description: 'Mit der Zahl der darauf gebuchten Ausgaben.',
     guard: perm('all', 'supplier:read'),
     rateLimit: 'apiRead',
+    query: q.supplierListQuery,
   },
   {
     method: 'post',
@@ -2979,6 +2989,7 @@ export const ROUTES: RouteDoc[] = [
       'Teil-Update. Mit active=false wird der Lieferant stillgelegt, ohne Belege zu verlieren.',
     guard: perm('all', 'supplier:update'),
     rateLimit: 'apiWrite',
+    body: finance.updateSupplierSchema,
     params: q.idParam,
   },
   {
@@ -3005,6 +3016,7 @@ export const ROUTES: RouteDoc[] = [
       'bezahlt ist. Enthält Zahlungen mit und ohne Rechnungsbezug.',
     guard: perm('all', 'payment:read'),
     rateLimit: 'apiRead',
+    query: q.paymentListQuery,
   },
 
   // -------------------------------------------------------------------------
@@ -3590,6 +3602,7 @@ export const ROUTES: RouteDoc[] = [
       'versehentlich wieder anschreibt, ist genau der Fehler, den das Austragen verhindern soll.',
     guard: perm('all', 'newsletter:read'),
     rateLimit: 'apiRead',
+    query: opsAdmin.newsletterListQuery,
   },
   {
     method: 'delete',
@@ -3865,6 +3878,7 @@ export const ROUTES: RouteDoc[] = [
     description: 'Alle Beiträge, auch Entwürfe. Ohne Blätterung — ein Reinigungsbetrieb schreibt keine tausend Artikel.',
     guard: perm('all', 'blog:read'),
     rateLimit: 'apiRead',
+    query: q.blogListQuery,
   },
   {
     method: 'get',
@@ -3917,6 +3931,7 @@ export const ROUTES: RouteDoc[] = [
       'gehört auf den Einsatzrapport der zugewiesenen Person.',
     guard: perm('all', 'property:read'),
     rateLimit: 'apiRead',
+    query: q.propertyListQuery,
   },
   {
     method: 'post',
@@ -3928,6 +3943,7 @@ export const ROUTES: RouteDoc[] = [
       'Objekt an eine fremde Adresse hängen, und der Einsatzrapport führte das Team dorthin.',
     guard: perm('all', 'property:create'),
     rateLimit: 'apiWrite',
+    body: crm.createPropertyBodySchema,
     status: 201,
   },
   {
@@ -3940,6 +3956,7 @@ export const ROUTES: RouteDoc[] = [
       'kann mehrere Einsätze erzeugen, und ein Einsatz kann ohne Buchung bestehen.',
     guard: perm('all', 'booking:read'),
     rateLimit: 'apiRead',
+    query: q.bookingListQuery,
   },
   {
     method: 'post',
@@ -3969,6 +3986,7 @@ export const ROUTES: RouteDoc[] = [
       'in den Ferien war, ist eine Personalangabe und geht die Kolleginnen und Kollegen nichts an.',
     guard: perm('any', 'absence:read_all', 'absence:request'),
     rateLimit: 'apiRead',
+    query: q.absenceListQuery,
   },
   {
     method: 'patch',
@@ -3981,6 +3999,7 @@ export const ROUTES: RouteDoc[] = [
       'erhalten hat. Korrigiert wird über eine Gutschrift.',
     guard: perm('all', 'invoice:update'),
     rateLimit: 'apiWrite',
+    body: finance.updateInvoiceSchema,
     params: q.idParam,
     extraErrors: [422],
   },
@@ -4083,6 +4102,7 @@ export const ROUTES: RouteDoc[] = [
       'erfasst und das alte stillgelegt.',
     guard: perm('all', 'property:update'),
     rateLimit: 'apiWrite',
+    body: crm.updatePropertySchema,
     params: q.idParam,
   },
   {

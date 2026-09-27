@@ -1,19 +1,10 @@
-import { z } from 'zod';
-
 import { defineRoute } from '@/lib/api/handler';
 import { buildPagination, paginated } from '@/lib/api/response';
 import { prisma, toNumber } from '@/lib/db';
-import { paginationQuery } from '@/lib/validation/queries';
+import { paymentListQuery } from '@/lib/validation/queries';
 import { getOrganizationId } from '@/server/services/organization.service';
 
 export const runtime = 'nodejs';
-
-const listQuery = paginationQuery.extend({
-  status: z.enum(['PENDING', 'PROCESSING', 'SUCCEEDED', 'FAILED', 'REFUNDED', 'CANCELLED']).optional(),
-  from: z.coerce.date().optional(),
-  to: z.coerce.date().optional(),
-  q: z.string().trim().max(120).optional(),
-});
 
 /**
  * GET /api/payments — Zahlungseingänge.
@@ -28,7 +19,7 @@ const listQuery = paginationQuery.extend({
  */
 export const GET = defineRoute({
   permissions: ['payment:read'],
-  query: listQuery,
+  query: paymentListQuery,
   rateLimit: 'apiRead',
   handler: async ({ query }) => {
     const organizationId = await getOrganizationId();

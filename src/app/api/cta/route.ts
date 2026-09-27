@@ -1,20 +1,11 @@
-import { z } from 'zod';
-
 import { defineRoute } from '@/lib/api/handler';
 import { created, ok } from '@/lib/api/response';
 import { createCtaSchema } from '@/lib/validation/cta';
+import { ctaListQuery } from '@/lib/validation/queries';
 import { createCta, listCtas } from '@/server/services/cta.service';
 import { getOrganizationId } from '@/server/services/organization.service';
 
 export const runtime = 'nodejs';
-
-const listQuery = z.object({
-  /** `1` zeigt auch den Papierkorb. */
-  papierkorb: z
-    .enum(['0', '1'])
-    .default('0')
-    .transform((v) => v === '1'),
-});
 
 /**
  * GET /api/cta — alle Handlungsaufrufe, auch abgeschaltete.
@@ -24,7 +15,7 @@ const listQuery = z.object({
  */
 export const GET = defineRoute({
   permissions: ['cta:read'],
-  query: listQuery,
+  query: ctaListQuery,
   rateLimit: 'apiRead',
   handler: async ({ query }) => ok(await listCtas(await getOrganizationId(), query.papierkorb)),
 });

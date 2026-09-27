@@ -10,6 +10,32 @@ import { z } from 'zod';
  * auseinander, schlägt `tsc` fehl, nicht erst die Laufzeit.
  */
 
+/**
+ * Zwecke, die die Mediathek zeigt und zuordnen lässt. Stand bis 2026-09-27
+ * doppelt als Konstante in `api/media/route.ts` und `api/media/[id]/route.ts`.
+ */
+export const MEDIA_SCOPES = [
+  'BOOKING',
+  'QUOTE',
+  'INVOICE',
+  'JOB',
+  'CUSTOMER',
+  'EMPLOYEE',
+  'PROPERTY',
+  'BLOG',
+  'GALLERY',
+  'APPLICATION',
+  'EXPENSE',
+  'MESSAGE',
+  'OTHER',
+] as const;
+
+/** PATCH /api/media/:id — Dateiname und Zuordnung. */
+export const mediaUpdateSchema = z.object({
+  filename: z.string().trim().min(1).max(255).optional(),
+  scope: z.enum(MEDIA_SCOPES).optional(),
+});
+
 export const UPLOAD_PROFILE_NAMES = [
   'jobPhoto',
   'bookingPhoto',
