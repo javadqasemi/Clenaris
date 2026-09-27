@@ -5,6 +5,8 @@ import { audit } from '@/lib/audit';
 import { BusinessRuleError, NotFoundError } from '@/lib/errors';
 import type { Permission } from '@/lib/auth/rbac';
 
+import { einsaetzeBeanspruchen, einsaetzeFreigeben } from './invoice.service';
+
 /**
  * Papierkorb: weiches Löschen und Wiederherstellen.
  *
@@ -314,8 +316,17 @@ export async function softDelete(
 
   const description = await definition.describe(id);
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  await (delegate as any).update({ where: { id }, data: { deletedAt: new Date() } });
+  if (model === 'invoice') {
+    // Ein gelöschter Entwurf verrechnet nichts mehr: Löschen und Freigabe
+    // der Einsätze gemeinsam (Verrechnungsanspruch, `invoice.service.ts`).
+    await prisma.$transaction(async (tx) => {
+      await tx.invoice.update({ where: { id }, data: { deletedAt: new Date() } });
+      await einsaetzeFreigeben(tx, id);
+    });
+  } else {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (delegate as any).update({ where: { id }, data: { deletedAt: new Date() } });
+  }
 
   await audit.deleted({
     organizationId,
@@ -345,8 +356,22 @@ export async function restore(
 
   const description = await definition.describe(id);
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  await (delegate as any).update({ where: { id }, data: { deletedAt: null } });
+  if (model === 'invoice') {
+    // Wiederhergestellt wird nur, wenn die Einsätze des Entwurfs inzwischen
+    // nicht anderswo verrechnet sind — sonst trüge ein Einsatz zwei gültige
+    // Rechnungen. Scheitert der Anspruch, bleibt der Entwurf im Papierkorb.
+    await prisma.$transaction(async (tx) => {
+      const rechnung = await tx.invoice.update({
+        where: { id },
+        data: { deletedAt: null },
+        select: { customerId: true, items: { select: { jobId: true } } },
+      });
+      await einsaetzeBeanspruchen(tx, { organizationId, customerId: rechnung.customerId, invoiceId: id, jobIds: rechnung.items.map((i) => i.jobId) });
+    });
+  } else {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (delegate as any).update({ where: { id }, data: { deletedAt: null } });
+  }
 
   await audit.updated({
     organizationId,

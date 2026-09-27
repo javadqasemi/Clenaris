@@ -4,7 +4,7 @@ import { Prisma, type Invoice, type PaymentMethod, type PaymentStatus } from '@p
 
 import { prisma, toNumber } from '@/lib/db';
 import { aufRappen, geld, max0 } from '@/lib/money';
-import { BusinessRuleError, NotFoundError } from '@/lib/errors';
+import { BusinessRuleError, ConflictError, NotFoundError } from '@/lib/errors';
 import { absoluteUrl, round2 } from '@/lib/utils';
 import { orderByFor, resolveSort, type SortOrder } from '@/lib/sort';
 import { audit } from '@/lib/audit';
@@ -155,7 +155,7 @@ export async function createInvoice(params: {
       qrReference = buildQrReference({ invoiceSequence: seq.sequence });
     }
 
-    return tx.invoice.create({
+    const angelegt = await tx.invoice.create({
       data: {
         organizationId: params.organizationId,
         number,
@@ -208,6 +208,16 @@ export async function createInvoice(params: {
         },
       },
     });
+
+    // Jeder Einsatz auf dieser Rechnung wird hier beansprucht — in derselben
+    // Transaktion, sonst rollt die Rechnung zurück (samt Nummer).
+    await einsaetzeBeanspruchen(tx, {
+      organizationId: params.organizationId,
+      customerId: customer.id,
+      invoiceId: angelegt.id,
+      jobIds: totals.items.map((item) => item.jobId),
+    });
+    return angelegt;
   });
 
   await audit.created({
@@ -219,6 +229,41 @@ export async function createInvoice(params: {
   });
 
   return invoice;
+}
+
+/**
+ * Die Einsätze einer Rechnung für diese Rechnung beanspruchen (2026-09-27).
+ *
+ * Eine bedingte Aktualisierung, kein „lesen, dann schreiben": Nur Einsätze
+ * derselben Organisation und Kundschaft, die noch **keine** gültige Rechnung
+ * tragen, werden gesetzt. Stimmt die Zahl nicht, war mindestens einer schon
+ * verrechnet — oder gehört nicht hierher — und die ganze Rechnung scheitert
+ * (409). Zwei gleichzeitige Rechnungen für denselben Einsatz treffen dieselbe
+ * Zeile; PostgreSQL lässt die zweite warten, und danach sieht sie den Anspruch
+ * der ersten.
+ *
+ * Das gilt für jeden Weg zu einer Rechnung mit Einsatzbezug: Sammelrechnung
+ * aus Einsätzen, von Hand erfasste Position mit `jobId`, Vertragsabrechnung
+ * je Einsatz.
+ */
+export async function einsaetzeBeanspruchen(
+  tx: Prisma.TransactionClient,
+  params: { organizationId: string; customerId: string; invoiceId: string; jobIds: (string | null | undefined)[] },
+): Promise<void> {
+  const ids = [...new Set(params.jobIds.filter((id): id is string => Boolean(id)))];
+  if (ids.length === 0) return;
+  const beansprucht = await tx.job.updateMany({
+    where: { id: { in: ids }, organizationId: params.organizationId, customerId: params.customerId, deletedAt: null, billedInvoiceId: null },
+    data: { billedInvoiceId: params.invoiceId },
+  });
+  if (beansprucht.count !== ids.length) {
+    throw new ConflictError('Mindestens ein Einsatz dieser Rechnung ist bereits verrechnet oder gehört nicht zu dieser Kundschaft.');
+  }
+}
+
+/** Den Anspruch einer Rechnung freigeben — bei Storno und gelöschtem Entwurf. */
+export async function einsaetzeFreigeben(tx: Prisma.TransactionClient, invoiceId: string): Promise<void> {
+  await tx.job.updateMany({ where: { billedInvoiceId: invoiceId }, data: { billedInvoiceId: null } });
 }
 
 type BuchungMitPositionen = Prisma.BookingGetPayload<{ include: { items: true; extras: true } }>;
@@ -326,11 +371,12 @@ export async function createInvoiceFromJobs(params: {
     );
   }
 
-  const alreadyInvoiced = await prisma.invoiceItem.findMany({
-    where: { jobId: { in: params.jobIds } },
-    select: { jobId: true },
-  });
-  if (alreadyInvoiced.length > 0) {
+  // Schnelle, verständliche Antwort für den Normalfall. Entscheidend ist der
+  // Anspruch in `createInvoice` — diese Vorprüfung schliesst keinen Wettlauf,
+  // sie erspart nur die Arbeit. Vorher fragte sie jede Position mit diesem
+  // Einsatz ab, auch auf **stornierten** Rechnungen: Ein Einsatz liess sich
+  // nach einem Storno nie wieder verrechnen.
+  if (jobs.some((job) => job.billedInvoiceId)) {
     throw new BusinessRuleError('Mindestens ein Einsatz wurde bereits verrechnet.');
   }
 
@@ -971,14 +1017,20 @@ export async function cancelInvoice(params: {
     );
   }
 
-  const updated = await prisma.invoice.update({
-    where: { id: invoice.id },
-    data: {
-      status: 'CANCELLED',
-      cancelledAt: new Date(),
-      balance: 0,
-      notes: [invoice.notes, `Storniert: ${params.reason}`].filter(Boolean).join('\n'),
-    },
+  // Storno und Freigabe der Einsätze gemeinsam: Eine stornierte Rechnung
+  // verrechnet nichts mehr, und die Einsätze lassen sich neu verrechnen.
+  const updated = await prisma.$transaction(async (tx) => {
+    const storniert = await tx.invoice.update({
+      where: { id: invoice.id },
+      data: {
+        status: 'CANCELLED',
+        cancelledAt: new Date(),
+        balance: 0,
+        notes: [invoice.notes, `Storniert: ${params.reason}`].filter(Boolean).join('\n'),
+      },
+    });
+    await einsaetzeFreigeben(tx, invoice.id);
+    return storniert;
   });
 
   await audit.updated({

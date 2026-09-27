@@ -4,7 +4,7 @@
 > Diagramme sind damit nie älter als das Schema. Prosa und Bereichseinteilung
 > stehen in `scripts/generate-erd.ts`.
 
-**149 Modelle, 118 Aufzählungstypen, 2865 Felder.**
+**149 Modelle, 118 Aufzählungstypen, 2871 Felder.**
 PostgreSQL 16+; alle Zeitstempel als `timestamptz` in UTC, Anzeige in Europe/Zurich.
 
 ## Vier Entscheidungen, die das ganze Schema prägen
@@ -242,7 +242,7 @@ erDiagram
 | Modell | Tabelle | Felder | Zweck |
 | --- | --- | --- | --- |
 | `User` | `users` | 60 | Benutzerkonto mit Rolle und Anmeldedaten. Passwörter als Argon2id-Hash. |
-| `RefreshToken` | `refresh_tokens` | 10 | Rotierender Refresh-Token. Gespeichert wird nur der SHA-256-Hash plus Familien-ID zur Erkennung von Wiederverwendung. |
+| `RefreshToken` | `refresh_tokens` | 11 | Rotierender Refresh-Token. Gespeichert wird nur der SHA-256-Hash plus Familien-ID zur Erkennung von Wiederverwendung. |
 | `VerificationToken` | `verification_tokens` | 9 | Einmaltoken für E-Mail-Bestätigung, Passwortreset und Einladung. |
 | `PublicAccessToken` | `public_access_tokens` | 15 | Ein Schluessel fuer genau eine Sache, ohne Anmeldung. |
 | `Consent` | `consents` | 9 | Nachweis erteilter und widerrufener Einwilligungen mit Zeitpunkt und IP. |
@@ -546,7 +546,7 @@ erDiagram
 | Modell | Tabelle | Felder | Zweck |
 | --- | --- | --- | --- |
 | `ServiceCategory` | `service_categories` | 13 | Gruppierung des Leistungskatalogs für Website und Navigation. |
-| `Service` | `services` | 44 | Angebotene Leistung mit Preismodell, Dauerkennzahlen und SEO-Angaben. |
+| `Service` | `services` | 45 | Angebotene Leistung mit Preismodell, Dauerkennzahlen und SEO-Angaben. |
 | `ServiceExtra` | `service_extras` | 15 | Zubuchbare Zusatzleistung, etwa Backofen oder Balkon. |
 | `ServiceExtraOnService` | `service_extras_on_services` | 4 | Welcher Zusatz ist zu welcher Leistung buchbar. |
 | `PriceRule` | `price_rules` | 9 | Multiplikatoren und Zuschläge, die die Preis-Engine anwendet. |
@@ -758,7 +758,7 @@ erDiagram
 | `QuoteItem` | `quote_items` | 15 | Offertposition; optionale Positionen zählen nicht ins Total. |
 | `SiteVisit` | `site_visits` | 31 | Besichtigung vor Ort — die Grundlage einer Offerte für ein Objekt, das man |
 | `SiteVisitArea` | `site_visit_areas` | 15 | Eine aufgenommene Fläche mit der Leistung, die dort erbracht werden soll. |
-| `Job` | `jobs` | 63 | Ausführung durch das Team: Termin, Zuteilung, Checkliste, Abschluss, Kosten. |
+| `Job` | `jobs` | 66 | Ausführung durch das Team: Termin, Zuteilung, Checkliste, Abschluss, Kosten. |
 | `JobAssignment` | `job_assignments` | 11 | Zuteilung einer Person zu einem Einsatz, samt Zu- oder Absage. |
 | `JobChecklistItem` | `job_checklist_items` | 11 | Prüfpunkt des Abnahmeprotokolls, mit Vermerk wer wann abgehakt hat. |
 | `JobPhoto` | `job_photos` | 12 | Vorher-, Nachher- oder Schadensfoto mit Standort und Zeitpunkt. |
@@ -1202,7 +1202,7 @@ erDiagram
 
 | Modell | Tabelle | Felder | Zweck |
 | --- | --- | --- | --- |
-| `Invoice` | `invoices` | 62 | Rechnung mit QR-Referenz und Empfänger-Momentaufnahme. Nach dem Ausstellen unveränderlich. |
+| `Invoice` | `invoices` | 63 | Rechnung mit QR-Referenz und Empfänger-Momentaufnahme. Nach dem Ausstellen unveränderlich. |
 | `InvoiceItem` | `invoice_items` | 16 | Rechnungsposition mit Netto-, MWST- und Bruttobetrag. |
 | `Payment` | `payments` | 22 | Zahlungseingang. `providerPaymentId` ist eindeutig — daran bleibt der Webhook idempotent. |
 | `ProviderWebhookEvent` | `provider_webhook_events` | 5 | Verarbeitete Webhook-Ereignisse eines Zahlungsanbieters (2026-09-27). |

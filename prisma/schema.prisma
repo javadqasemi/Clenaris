@@ -771,6 +771,11 @@ model RefreshToken {
   ip        String?
   expiresAt DateTime  @db.Timestamptz(6)
   revokedAt DateTime? @db.Timestamptz(6)
+  /// Gesetzt, wenn der Token durch **Rotation** verbraucht wurde — nicht durch
+  /// Abmelden, Leerlauf oder Sperre (2026-09-27). Taucht er kurz danach noch
+  /// einmal auf, ist das ein verlorener Wettlauf zweier Tabs, keine
+  /// Wiederverwendung; siehe `session-refresh.service.ts`.
+  rotatedAt DateTime? @db.Timestamptz(6)
   createdAt DateTime  @default(now()) @db.Timestamptz(6)
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -1722,6 +1727,10 @@ model Service {
   minutesPerSqm      Decimal @default(1.2) @db.Decimal(6, 3)
   defaultCrewSize    Int     @default(1)
   bufferMinutes      Int     @default(30)
+  /// Qualifikationen, die jede Ausführung dieser Leistung verlangt — dieselben
+  /// Namen wie `EmployeeSkill.name` (2026-09-27). Ein Einsatz übernimmt sie
+  /// bei seiner Entstehung (`Job.requiredSkills`), die Zuteilung prüft sie.
+  requiredSkills     String[] @default([])
 
   // SEO
   seoTitle       String?
@@ -2130,6 +2139,25 @@ model Job {
   /// `scheduleDate` die Identität eines geplanten Termins.
   seriesKey         String?
 
+  /// Die gültige Rechnung, die diesen Einsatz verrechnet (2026-09-27).
+  ///
+  /// Die Verrechnung ist ein **Anspruch**, gesetzt in der Transaktion der
+  /// Rechnung mit einer bedingten Aktualisierung (`WHERE billedInvoiceId IS
+  /// NULL`): Zwei gleichzeitige Rechnungen für denselben Einsatz — der
+  /// Doppelklick auf „Rechnung erstellen" — treffen dieselbe Zeile, und nur
+  /// eine setzt sie. Vorher stand die Prüfung „schon verrechnet?" vor der
+  /// Transaktion, und fünf gleichzeitige Aufrufe ergaben drei Rechnungen.
+  /// Storno und gelöschter Entwurf geben den Anspruch frei; eine stornierte
+  /// Rechnung verrechnet nichts mehr.
+  billedInvoiceId String?
+  /// Qualifikationen, die dieser Einsatz verlangt — Momentaufnahme bei der
+  /// Entstehung aus Leistung oder Vertragsleistung (2026-09-27). Dieselben
+  /// Namen wie `EmployeeSkill.name`; die Zuteilung
+  /// (`assignment.service.ts`) weist Personen ohne gültige Qualifikation ab.
+  /// Eine Momentaufnahme, damit eine spätere Änderung am Katalog keinen
+  /// geplanten Einsatz rückwirkend unbesetzbar macht.
+  requiredSkills String[] @default([])
+
   title  String
   status JobStatus @default(UNASSIGNED)
 
@@ -2187,6 +2215,7 @@ model Job {
   contract        Contract?        @relation(fields: [contractId], references: [id], onDelete: SetNull)
   contractVersion ContractVersion? @relation(fields: [contractVersionId], references: [id], onDelete: SetNull)
   serviceSchedule ServiceSchedule? @relation(fields: [serviceScheduleId], references: [id], onDelete: SetNull)
+  billedInvoice   Invoice?         @relation("VerrechneteEinsaetze", fields: [billedInvoiceId], references: [id], onDelete: SetNull)
 
   assignments  JobAssignment[]
   checklist    JobChecklistItem[]
@@ -2223,6 +2252,7 @@ model Job {
   @@index([serviceScheduleId, scheduleDate])
   @@index([contractId, seriesKey, scheduleDate])
   @@index([organizationId, status, scheduledStart])
+  @@index([billedInvoiceId])
   @@index([scheduledStart])
   @@index([customerId])
   @@index([contractId])
@@ -3082,6 +3112,8 @@ model Invoice {
   contractVersion ContractVersion? @relation(fields: [contractVersionId], references: [id], onDelete: SetNull)
 
   items       InvoiceItem[]
+  /// Einsätze, deren Verrechnung diese Rechnung beansprucht (`Job.billedInvoiceId`).
+  billedJobs  Job[]         @relation("VerrechneteEinsaetze")
   payments    Payment[]
   creditNotes CreditNote[]
   reminders   PaymentReminder[]

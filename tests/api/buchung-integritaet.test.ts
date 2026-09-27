@@ -259,6 +259,141 @@ describe('Buchung → Rechnung, Gastbuchung, Terminänderung', { concurrency: 1 
     });
   });
 
+  /**
+   * A4 (2026-09-27) — eine öffentliche Buchung verweist nur auf Eigenes.
+   *
+   * Die Buchung nahm `addressId`, `propertyId` und `fileIds` entgegen und
+   * schrieb sie ungeprüft an. Wer die Kennung einer fremden Adresse kannte,
+   * bekam sie in Bestätigung und PDF zurück; eine fremde Datei (hier: eine
+   * Lohnabrechnung) wurde zum Buchungsfoto umgewidmet und über die eigene
+   * Buchung lesbar. Geprüft wird die Abweisung **und** dass nichts geschah:
+   * keine Buchung, keine Akte, die Datei unverändert.
+   */
+  describe('A4 — öffentliche Buchung: nur eigene Adressen, Objekte und Dateien', () => {
+    const FREMD = `A4-FREMD-${RUN}`;
+    const fremd = { adresse: '', objekt: '', datei: '' };
+    const anfrage = (extra: Record<string, unknown>) => ({
+      leistungen: [{ serviceId: S.fenster, extras: [] }],
+      scheduledStart: termin(30, '09:00'),
+      propertyKind: 'OFFICE',
+      acceptTerms: true,
+      website: '',
+      address: adresse,
+      ...extra,
+    });
+    const gastAngaben = (email: string) => ({ firstName: 'Gast', lastName: `Fremdverweis${RUN}`, email, phone: '+41 79 000 00 00' });
+
+    before(async () => {
+      if (!db) return;
+      fremd.adresse = (await db.address.create({ data: { customerId: kundeId, street: 'Geheimweg', streetNo: '1', postalCode: '3011', city: 'Bern', canton: 'BE', accessNote: `${FREMD} Schlüssel unter der Matte` } })).id;
+      fremd.objekt = (await db.property.create({ data: { customerId: kundeId, label: `${FREMD} Objekt` } })).id;
+      fremd.datei = (
+        await db.fileAsset.create({
+          data: { organizationId: org, scope: 'PAYROLL', scanStatus: 'CLEAN', checksum: 'a'.repeat(64), path: `pruef/${FREMD}.pdf`, url: `pruef/${FREMD}.pdf`, filename: `${FREMD}.pdf`, mimeType: 'application/pdf', sizeBytes: 10 },
+        })
+      ).id;
+    });
+
+    after(async () => {
+      if (!db) return;
+      await db.fileAsset.deleteMany({ where: { filename: { startsWith: FREMD } } });
+      await db.property.deleteMany({ where: { label: { startsWith: FREMD } } });
+      await db.address.deleteMany({ where: { accessNote: { startsWith: FREMD } } });
+      await db.customer.deleteMany({ where: { email: { startsWith: 'integritaet.fremdverweis.' } } });
+    });
+
+    async function nichtsGeschehen(email?: string) {
+      assert.equal(await db!.booking.count({ where: { OR: [{ addressId: fremd.adresse }, { propertyId: fremd.objekt }] } }), 0, 'Buchung mit fremdem Verweis entstanden');
+      const datei = await db!.fileAsset.findUniqueOrThrow({ where: { id: fremd.datei } });
+      assert.equal(datei.bookingId, null, 'fremde Datei an eine Buchung gebunden');
+      assert.equal(datei.scope, 'PAYROLL', 'Zweck der fremden Datei umgeschrieben');
+      if (email) assert.equal(await db!.customer.count({ where: { email } }), 0, 'Kundenakte trotz Abweisung');
+    }
+
+    it('Gast mit fremder Adresse → 404, nichts angelegt', async (t) => {
+      if (!db) return t.skip('keine Testdatenbank');
+      resetRateLimits();
+      const email = `integritaet.fremdverweis.${RUN}.adresse@example.ch`;
+      const r = await post('/api/public/bookings', anfrage({ ...gastAngaben(email), address: undefined, addressId: fremd.adresse }));
+      assert.equal(r.status, 404, r.text);
+      assert.ok(!r.text.includes('Geheimweg'), 'Die Antwort nennt die fremde Adresse');
+      await nichtsGeschehen(email);
+    });
+
+    it('Gast mit fremdem Objekt → 404', async (t) => {
+      if (!db) return t.skip('keine Testdatenbank');
+      const email = `integritaet.fremdverweis.${RUN}.objekt@example.ch`;
+      const r = await post('/api/public/bookings', anfrage({ ...gastAngaben(email), propertyId: fremd.objekt }));
+      assert.equal(r.status, 404, r.text);
+      await nichtsGeschehen(email);
+    });
+
+    it('Gast mit fremder Datei → 422, die Datei bleibt, was sie war', async (t) => {
+      if (!db) return t.skip('keine Testdatenbank');
+      const email = `integritaet.fremdverweis.${RUN}.datei@example.ch`;
+      const r = await post('/api/public/bookings', anfrage({ ...gastAngaben(email), fileIds: [fremd.datei] }));
+      assert.equal(r.status, 422, r.text);
+      await nichtsGeschehen(email);
+    });
+
+    it('angemeldete Kundschaft mit fremder Adresse, fremdem Objekt oder fremder Datei → 404', async (t) => {
+      if (!db) return t.skip('keine Testdatenbank');
+      for (const extra of [{ address: undefined, addressId: fremd.adresse }, { propertyId: fremd.objekt }, { fileIds: [fremd.datei] }]) {
+        const r = await post('/api/public/bookings', anfrage(extra), { jar: jars.customer });
+        assert.equal(r.status, 404, `${JSON.stringify(extra)}: ${r.text}`);
+      }
+      await nichtsGeschehen();
+    });
+  });
+
+  /**
+   * A5 (2026-09-27) — ein Einsatz wird höchstens einmal verrechnet.
+   *
+   * `createInvoiceFromJobs` prüfte „schon verrechnet?" vor der Transaktion,
+   * ohne Sperre und ohne Datenbankschranke. Ein Doppelklick auf „Rechnung
+   * erstellen" erzeugte zwei Rechnungen für denselben Einsatz. Umgekehrt
+   * zählte eine **stornierte** Rechnung weiter als Verrechnung — ein Einsatz
+   * liess sich danach nie wieder verrechnen.
+   */
+  describe('A5 — ein Einsatz, höchstens eine gültige Rechnung', () => {
+    it('fünf gleichzeitige „Rechnung erstellen" ergeben genau eine Rechnung', async (t) => {
+      if (!db) return t.skip('keine Testdatenbank');
+      const id = await bueroBuchung([{ serviceId: S.fenster, extras: [] }], termin(235, '09:00'));
+      assert.equal((await post(`/api/bookings/${id}/confirm`, undefined, { jar: jars.admin })).status, 200);
+      await db.job.updateMany({ where: { bookingId: id }, data: { status: 'COMPLETED' } });
+
+      const antworten = await Promise.all(Array.from({ length: 5 }, () => post(`/api/bookings/${id}/invoice`, undefined, { jar: jars.admin })));
+      const status = antworten.map((a) => a.status);
+      assert.equal(status.filter((s) => s === 201).length, 1, `Erfolge: ${JSON.stringify(status)}`);
+      assert.ok(status.every((s) => s === 201 || s === 409 || s === 422), JSON.stringify(status));
+
+      const jobs = (await db.job.findMany({ where: { bookingId: id }, select: { id: true } })).map((j) => j.id);
+      assert.equal(await db.invoice.count({ where: { items: { some: { jobId: { in: jobs } } } } }), 1, 'mehr als eine Rechnung zum selben Einsatz');
+    });
+
+    it('nach dem Storno lässt sich der Einsatz wieder verrechnen — vorher nicht', async (t) => {
+      if (!db) return t.skip('keine Testdatenbank');
+      const id = await bueroBuchung([{ serviceId: S.fenster, extras: [] }], termin(242, '09:00'));
+      const erste = await rechnungAus(id);
+      assert.equal((await post(`/api/invoices/${erste.id}/issue`, undefined, { jar: jars.admin })).status, 200);
+      const nochmal = await post(`/api/bookings/${id}/invoice`, undefined, { jar: jars.admin });
+      assert.ok([409, 422].includes(nochmal.status), `zweite Verrechnung vor dem Storno: ${nochmal.status}`);
+
+      assert.equal((await post(`/api/invoices/${erste.id}/cancel`, { reason: 'Prüfreihe: falsch verrechnet' }, { jar: jars.admin })).status, 200);
+      const neu = await post(`/api/bookings/${id}/invoice`, undefined, { jar: jars.admin });
+      assert.equal(neu.status, 201, `nach dem Storno: ${neu.text}`);
+    });
+
+    it('eine manuelle Rechnung kann keinen bereits verrechneten Einsatz tragen', async (t) => {
+      if (!db) return t.skip('keine Testdatenbank');
+      const id = await bueroBuchung([{ serviceId: S.fenster, extras: [] }], termin(249, '09:00'));
+      await rechnungAus(id);
+      const job = await db.job.findFirstOrThrow({ where: { bookingId: id }, select: { id: true } });
+      const r = await post('/api/invoices', { customerId: kundeId, items: [{ jobId: job.id, name: 'Nochmals', quantity: 1, unitPrice: 10 }] }, { jar: jars.admin });
+      assert.ok([409, 422].includes(r.status), `manuelle Doppelverrechnung: ${r.status} ${r.text}`);
+    });
+  });
+
   describe('A3 — Terminänderung prüft die Verfügbarkeit', () => {
     it('ausserhalb der Einsatzzeit, zu lange Dauer: 422 — ausdrücklich übergangen: 200 und protokolliert', async (t) => {
       if (!db) return t.skip('keine Testdatenbank');
