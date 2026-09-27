@@ -118,7 +118,14 @@ export default async function PrivacyPage() {
           { label: 'Resend (EU/USA)', value: 'Versand von Transaktions-E-Mails' },
           { label: 'Twilio (EU/USA)', value: 'SMS-Versand für Terminerinnerungen' },
           { label: 'Google Ireland (Maps)', value: 'Adressvervollständigung und Kartendarstellung' },
-          { label: 'Anthropic (USA)', value: 'KI-Assistent — ohne Kundenstammdaten' },
+          // Bis 2026-09-27: „KI-Assistent — ohne Kundenstammdaten". Das stimmte
+          // nicht: Jede Anfrage über das Formular wird mit ihrem Text von der KI
+          // eingeschätzt. Der Eintrag sagt jetzt, was übermittelt wird.
+          {
+            label: 'Anthropic (USA)',
+            value:
+              'KI-Funktionen: Website-Chat, Einschätzung eingehender Anfragen, Textentwürfe. Übermittelt wird der jeweilige Text; Namen, E-Mail-Adressen, Telefonnummern, IBAN und AHV-Nummern werden vorher ersetzt.',
+          },
         ].map((row) => (
           <div key={row.label} className="protocol-row">
             <dt className="protocol-label">{row.label}</dt>

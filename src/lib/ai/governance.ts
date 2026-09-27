@@ -85,6 +85,41 @@ export function mitPlatzhaltern(text: string, namen: Record<string, string | nul
   return ergebnis;
 }
 
+/**
+ * Bekannte Personennamen in Freitext ersetzen — ohne Rückweg (2026-09-27).
+ *
+ * Für Texte, in denen ein Name im *Ergebnis* nichts zu suchen hat:
+ * Bewertungstexte, Check-in-Kommentare, Sitzungsnotizen. „Frau Keller war
+ * super" wird zu „Frau [NAME] war super" — für eine Stimmungsauswertung
+ * genügt das, und der Name verlässt das Haus nicht.
+ *
+ * **Bekannt heisst: aus der eigenen Datenbank** — Vor- und Nachnamen der
+ * Konten, der Mitarbeitenden und der Kundschaft, die der Aufrufer mitgibt.
+ * Ein Name, den niemand erfasst hat („der Hauswart, Herr Brunner"), bleibt
+ * stehen; einen beliebigen Namen im Freitext sicher zu erkennen, gelingt
+ * keinem Muster. Deshalb heisst die Übermittlung sparsam, nicht anonym.
+ *
+ * Ganze Wörter, ohne Rücksicht auf Gross-/Kleinschreibung, längere Namen
+ * zuerst. Namen unter drei Zeichen werden übergangen — „Li" oder „Al" träfen
+ * sonst Wortteile in jedem zweiten Satz.
+ */
+export function namenErsetzen(text: string, namen: Iterable<string | null | undefined>): { text: string; ersetzt: number } {
+  const liste = [...new Set([...namen].map((n) => n?.trim() ?? '').filter((n) => n.length >= 3))].sort((a, b) => b.length - a.length);
+  let ergebnis = text;
+  let ersetzt = 0;
+  for (const name of liste) {
+    const maskiert = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    // `\b` kennt keine Umlaute; die Grenze wird deshalb über Nicht-Buchstaben
+    // beschrieben, damit „Müller" auch vor einem Komma endet.
+    const muster = new RegExp(`(?<![\\p{L}\\p{N}])${maskiert}(?![\\p{L}\\p{N}])`, 'giu');
+    ergebnis = ergebnis.replace(muster, () => {
+      ersetzt += 1;
+      return '[NAME]';
+    });
+  }
+  return { text: ergebnis, ersetzt };
+}
+
 /** Platzhalter im Ergebnis wieder durch die Namen ersetzen — im eigenen Prozess. */
 export function platzhalterZurueck(text: string, namen: Record<string, string | null | undefined>): string {
   let ergebnis = text;

@@ -18,6 +18,7 @@ import {
   draftRiskSuggestions,
   draftVarianceExplanation,
 } from '@/lib/ai/features-bi';
+import { namenErsetzen } from '@/lib/ai/governance';
 import { computeHealth } from './health.service';
 import { getInsights } from './insight.service';
 import { getBudgetVariance } from './budget.service';
@@ -26,10 +27,37 @@ import { getBudgetVariance } from './budget.service';
  * Der Führungsassistent — Datensammlung für die KI-Entwürfe.
  *
  * Dieser Dienst entscheidet, *was* das Modell sieht. Die Regel: aggregierte
- * Zahlen und Titel, nie Personendaten. Kundennamen, Löhne, Adressen und
- * Bewertungstexte mit Namen verlassen die Anwendung nicht — Bewertungen
- * werden anonymisiert übergeben.
+ * Zahlen und Titel; Löhne und Adressen gehen nie hinaus.
+ *
+ * **Freitext ist nicht anonym, und hier stand bis 2026-09-27, er sei es.**
+ * Bewertungstexte, Check-in-Kommentare und Sitzungsnotizen gingen roh hinaus,
+ * während dieser Kopf und die Seite „anonymisiert" und „keine Personendaten"
+ * versprachen — „Frau Keller war super" erreichte das Modell mit Namen. Jetzt
+ * ersetzt `namenErsetzen` jeden Namen, den die Datenbank kennt (Konten,
+ * Kundschaft, Verfasser der Bewertung), durch `[NAME]`, bevor der Text das
+ * Haus verlässt; der Ausgangsfilter des Clients nimmt E-Mail, Telefon, IBAN
+ * und AHV-Nummer. Ein Name, den niemand erfasst hat, bleibt stehen — die
+ * Übermittlung ist sparsam, nicht anonym, und so steht es jetzt auch in der
+ * Oberfläche.
  */
+
+/**
+ * Die Namen, die diese Organisation kennt: Konten (Personal, Büro,
+ * Kundschaft mit Konto) und Kundschaft samt Firmennamen. Für ein Assistenz-
+ * Werkzeug, das auf Knopfdruck läuft, ist die Menge klein genug, um sie je
+ * Aufruf frisch zu lesen — ein Zwischenspeicher wäre eine Liste, die einen
+ * neuen Namen erst später kennt.
+ */
+async function bekannteNamen(organizationId: string): Promise<string[]> {
+  const [konten, kundschaft] = await Promise.all([
+    prisma.user.findMany({ where: { organizationId }, select: { firstName: true, lastName: true } }),
+    prisma.customer.findMany({ where: { organizationId }, select: { firstName: true, lastName: true, companyName: true } }),
+  ]);
+  return [
+    ...konten.flatMap((k) => [k.firstName, k.lastName]),
+    ...kundschaft.flatMap((k) => [k.firstName, k.lastName, k.companyName ?? '']),
+  ];
+}
 
 function assertAi() {
   if (!hasIntegration('ai')) {
@@ -73,7 +101,7 @@ async function insightDigest(organizationId: string): Promise<string> {
   return insights.length ? insights.map((i) => `- [${i.severity}] ${i.title}. ${i.detail}`).join('\n') : '- keine Auffälligkeiten aus den Regeln';
 }
 
-async function objectivesDigest(organizationId: string, fiscalYear?: number, quarter?: number): Promise<string> {
+async function objectivesDigest(organizationId: string, namen: string[], fiscalYear?: number, quarter?: number): Promise<string> {
   const objectives = await prisma.objective.findMany({
     where: {
       organizationId,
@@ -88,7 +116,9 @@ async function objectivesDigest(organizationId: string, fiscalYear?: number, qua
   return objectives
     .map((o) => {
       const krs = o.keyResults
-        .map((kr) => `  · ${kr.title}: ${toNumber(kr.startValue)} → ${toNumber(kr.currentValue)} (Ziel ${toNumber(kr.targetValue)}), ${kr.progressPct} %${kr.checkins[0]?.comment ? ` — „${kr.checkins[0].comment}"` : ''}`)
+        // Der Check-in-Kommentar ist Freitext von Mitarbeitenden — Namen darin
+        // werden ersetzt, bevor er hinausgeht.
+        .map((kr) => `  · ${kr.title}: ${toNumber(kr.startValue)} → ${toNumber(kr.currentValue)} (Ziel ${toNumber(kr.targetValue)}), ${kr.progressPct} %${kr.checkins[0]?.comment ? ` — „${namenErsetzen(kr.checkins[0].comment, namen).text}"` : ''}`)
         .join('\n');
       return `- ${o.horizon} ${o.level}: ${o.title} [${o.status}, ${o.progressPct} %]${o.department ? ` Bereich ${o.department}` : ''}\n${krs}`;
     })
@@ -154,25 +184,40 @@ export async function runAssistant(session: SessionUser, organizationId: string,
       break;
     }
     case 'meetingMinutes': {
-      result = await draftMeetingMinutes({ notes: input.notes, title: input.title });
+      // Sitzungsnotizen nennen Personen beim Namen („Anna übernimmt …"). Das
+      // Protokoll braucht die Rollen der Pendenzen, nicht die Namen.
+      const namen = await bekannteNamen(organizationId);
+      result = await draftMeetingMinutes({
+        notes: namenErsetzen(input.notes, namen).text,
+        title: input.title === undefined ? undefined : namenErsetzen(input.title, namen).text,
+      });
       break;
     }
     case 'quarterlyReview': {
       const q = periodOf('QUARTER', zurichMidnight(input.fiscalYear, (input.quarter - 1) * 3, 1));
-      const data = [`Quartal ${q.label}`, await healthDigest(organizationId), 'Ziele und Schlüsselergebnisse:', await objectivesDigest(organizationId, input.fiscalYear, input.quarter), 'Kennzahlen im Quartal:', await kpiDigest(organizationId, q.periodStart, q.periodEnd), 'Offene Risiken:', await riskDigest(organizationId)].join('\n\n');
+      const data = [`Quartal ${q.label}`, await healthDigest(organizationId), 'Ziele und Schlüsselergebnisse:', await objectivesDigest(organizationId, await bekannteNamen(organizationId), input.fiscalYear, input.quarter), 'Kennzahlen im Quartal:', await kpiDigest(organizationId, q.periodStart, q.periodEnd), 'Offene Risiken:', await riskDigest(organizationId)].join('\n\n');
       result = await draftQuarterlyReview({ data });
       break;
     }
     case 'analyzeFeedback': {
       const reviews = await prisma.review.findMany({
         where: { organizationId, createdAt: { gte: input.from, lte: input.to } },
-        select: { rating: true, title: true, body: true, serviceKind: true, createdAt: true },
+        select: { rating: true, title: true, body: true, serviceKind: true, createdAt: true, authorName: true },
         orderBy: { createdAt: 'desc' },
         take: 200,
       });
       if (reviews.length === 0) throw new NotFoundError('Bewertungen im Zeitraum');
-      // Anonymisiert: kein Autorname, keine Kundschaft — nur Bewertung und Text.
-      const data = reviews.map((r, i) => `#${i + 1} ${r.createdAt.toISOString().slice(0, 10)} ${r.rating}/5${r.serviceKind ? ` ${r.serviceKind}` : ''}: ${r.title ? `${r.title} — ` : ''}${r.body.slice(0, 600)}`).join('\n');
+      // Ohne Verfasser und Kundschaft als Feld — und im Text selbst ersetzt,
+      // was die Datenbank als Namen kennt, samt dem Verfasser dieser Bewertung
+      // (der nicht immer ein Konto oder eine Kundenakte hat).
+      const namen = await bekannteNamen(organizationId);
+      const data = reviews
+        .map((r, i) => {
+          const eigene = [...namen, r.authorName, ...r.authorName.split(/\s+/)];
+          const text = namenErsetzen(`${r.title ? `${r.title} — ` : ''}${r.body.slice(0, 600)}`, eigene).text;
+          return `#${i + 1} ${r.createdAt.toISOString().slice(0, 10)} ${r.rating}/5${r.serviceKind ? ` ${r.serviceKind}` : ''}: ${text}`;
+        })
+        .join('\n');
       result = await draftFeedbackAnalysis({ data });
       break;
     }

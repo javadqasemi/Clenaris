@@ -32,7 +32,7 @@ const CAPABILITIES = [
   { value: 'draftPestel', label: 'PESTEL-Entwurf', hint: 'Aus den Marktbeobachtungen.' },
   { value: 'suggestRisks', label: 'Risiken vorschlagen', hint: 'Was fehlt im Register?' },
   { value: 'explainVariance', label: 'Budgetabweichung erklären', hint: 'Je Zeile eine Ursache und Massnahme.' },
-  { value: 'analyzeFeedback', label: 'Kundenfeedback auswerten', hint: 'Themen und Stimmung aus Bewertungen, anonymisiert.' },
+  { value: 'analyzeFeedback', label: 'Kundenfeedback auswerten', hint: 'Themen und Stimmung aus Bewertungen — bekannte Namen werden vorher ersetzt.' },
   { value: 'marketingIdeas', label: 'Marketingvorschläge', hint: 'Aus Leadquellen, Konversion und Wettbewerb.' },
   { value: 'meetingMinutes', label: 'Protokoll aus Notizen', hint: 'Rohnotizen werden Traktanden, Beschlüsse, Pendenzen.' },
 ] as const;

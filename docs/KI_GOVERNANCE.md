@@ -1,6 +1,6 @@
 # KI-Governance und Datensparsamkeit
 
-> Stand: 23. September 2026 (Wave 15). Anbieter: Anthropic (Auftragsverarbeiter
+> Stand: 27. September 2026 (Korrektur des Inventars, siehe Abschnitt 2). Anbieter: Anthropic (Auftragsverarbeiter
 > im Ausland). Ohne `ANTHROPIC_API_KEY` sind alle KI-Funktionen aus.
 
 ## 1. Grundsätze
@@ -8,7 +8,10 @@
 1. **Die KI entwirft, sie entscheidet nicht.** Kein KI-Endpunkt schreibt
    Geschäftsdaten: Offerten, E-Mails, Berichte, Routen und Zuteilungen sind
    Vorschläge, die eine Person übernimmt oder verwirft. (Geprüft: keine der
-   sieben KI-Routen enthält einen Schreibzugriff.)
+   sieben KI-Routen enthält einen Schreibzugriff.) Die eine Ausnahme ist die
+   automatische Anfrage-Einschätzung: Sie schreibt einen Punktwert und eine
+   Begründung an die Anfrage — eine Empfehlung für die Reihenfolge der
+   Bearbeitung, die nichts auslöst.
 2. **Zentraler Ausgangsfilter.** Jede Anfrage läuft im KI-Client durch
    `ausgangsfilter` (`src/lib/ai/governance.ts`): E-Mail-Adressen,
    Telefonnummern, IBAN, AHV-Nummern und Datenbankkennungen werden durch
@@ -34,10 +37,21 @@
 | Übersetzung | `/api/ai/translate` | der eingefügte Text | Ausgangsfilter | PARTIAL (Freitext) |
 | Routenplanung | `/api/ai/dispatch` | Adressen, Zeitfenster, Dauer | Kürzel statt Kennungen; Adressen sind nötig | COMPLETE |
 | Blogentwurf | `/api/ai/blog-draft` | Thema, Stichworte | keine Personendaten | COMPLETE |
-| Führungsassistent | `/api/bi/assistant` | Kennzahlen, Ziele (aggregiert) | keine Personendaten (bestehend) | COMPLETE |
+| Führungsassistent | `/api/bi/assistant` | Kennzahlen, Ziele (aggregiert); je nach Auswertung Bewertungstexte, Check-in-Kommentare, Sitzungsnotizen | bekannte Namen → `[NAME]` (`namenErsetzen`) + Filter; Freitext bleibt nicht anonym | PARTIAL (Freitext) |
+| Anfrage-Einschätzung | automatisch bei jeder Anfrage (`crm.service` → `scoreLead`) | Anfragetext, Leistungsart, Fläche, Kundentyp, Quelle | Name und Firma der Anfrage → `[NAME]` + Filter; schreibt einen Punktwert mit Begründung an die Anfrage (Empfehlung) | COMPLETE |
+| Antwortentwurf Bewertung | `/api/reviews/[id]/reply-draft` | Bewertungstext | Ausgangsfilter | PARTIAL (Freitext) |
 | Personaldisposition | (Dienst) | Qualifikationen, Fenster, Auslastung | Kürzel (bestehend) | COMPLETE |
-| Einsatzbericht | (Dienst) | Checkliste, Material, Notizen | Platzhalter für Kunde/Team + Filter | COMPLETE |
-| Website-Chat | öffentlich | Besucherfragen | Ausgangsfilter; keine Protokollierung (anonym) | COMPLETE |
+| Einsatzbericht | `/api/jobs/[id]/report/draft` | Checkliste, Material, Notizen | Platzhalter für Kunde/Team + Filter | COMPLETE |
+| Website-Chat | öffentlich | Besucherfragen samt Verlauf der Sitzung | Ausgangsfilter auf Frage und Verlauf; bei uns nicht gespeichert — beim Anbieter gilt dessen Aufbewahrung | COMPLETE |
+
+**Korrektur 2026-09-27.** Das Inventar nannte den Führungsassistenten „keine
+Personendaten", und Oberfläche wie Code sprachen von „anonymisierten"
+Bewertungstexten. Die Texte gingen roh hinaus. Seither ersetzt
+`namenErsetzen` (`src/lib/ai/governance.ts`, geprüft in
+`tests/api/ki-governance.test.ts`) jeden Namen, den die Datenbank kennt;
+Oberfläche und Datenschutzerklärung sagen „sparsam, nicht anonym". Die
+automatische Anfrage-Einschätzung fehlte im Inventar ganz, und die
+Datenschutzerklärung behauptete „ohne Kundenstammdaten".
 
 ## 3. Was bewusst offen bleibt
 

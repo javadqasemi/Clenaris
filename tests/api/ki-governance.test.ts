@@ -1,7 +1,7 @@
 import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { ausgangsfilter, kuerzel, mitPlatzhaltern, platzhalterZurueck, summeErsetzungen } from '../../src/lib/ai/governance';
+import { ausgangsfilter, kuerzel, mitPlatzhaltern, namenErsetzen, platzhalterZurueck, summeErsetzungen } from '../../src/lib/ai/governance';
 import { post, requireServer } from '../helpers/client';
 import { loginAll, type AccountName } from '../helpers/accounts';
 import { testDb, testDbSchliessen } from '../helpers/testdb';
@@ -53,6 +53,22 @@ describe('Platzhalter und Kürzel', () => {
   it('längere Namen zuerst: „Anna Keller" wird nicht als „Anna" zerteilt', () => {
     const hinaus = mitPlatzhaltern('Anna Keller und Anna', { A: 'Anna', B: 'Anna Keller' });
     assert.equal(hinaus, '{{B}} und {{A}}');
+  });
+
+  /**
+   * `namenErsetzen` (2026-09-27): Der Führungsassistent schickte
+   * Bewertungstexte roh hinaus und nannte das „anonymisiert". Jetzt geht jeder
+   * Name, den die Datenbank kennt, als `[NAME]` hinaus — ohne Rückweg.
+   */
+  it('bekannte Namen werden zu [NAME] — ganze Wörter, Umlaute, gross oder klein', () => {
+    const r = namenErsetzen('Frau Müller war super, auch müller jun. — Müllerei bleibt. Keller-Team: Anna Keller.', ['Müller', 'Anna Keller', 'Keller']);
+    assert.equal(r.text, 'Frau [NAME] war super, auch [NAME] jun. — Müllerei bleibt. [NAME]-Team: [NAME].');
+    assert.equal(r.ersetzt, 4);
+  });
+
+  it('kurze Namen unter drei Zeichen werden übergangen, Sonderzeichen im Namen brechen nichts', () => {
+    const r = namenErsetzen('Al kam mit Li. O. (Hans) half.', ['Al', 'Li', '(Hans)', 'O.']);
+    assert.equal(r.text, 'Al kam mit Li. O. [NAME] half.');
   });
 
   it('Kürzel sind je Anfrage und erfundene werden verworfen', () => {

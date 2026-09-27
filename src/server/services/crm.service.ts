@@ -13,6 +13,7 @@ import { sendEmail } from '@/lib/email/client';
 import { contactAutoReplyEmail, newLeadInternalEmail } from '@/lib/email/templates';
 import { hasIntegration } from '@/lib/env';
 import { scoreLead } from '@/lib/ai/features';
+import { namenErsetzen } from '@/lib/ai/governance';
 import type {
   ContactFormInput,
   CreateCustomerInput,
@@ -309,10 +310,20 @@ export async function createLeadFromContactForm(params: {
     }),
   });
 
-  // KI-Bewertung im Hintergrund — Fehler bleiben folgenlos.
+  /**
+   * KI-Bewertung im Hintergrund — Fehler bleiben folgenlos.
+   *
+   * Sie läuft ohne Zutun einer Person bei jeder Anfrage und schickt deren
+   * Text an den Auftragsverarbeiter; das Ergebnis ist ein Punktwert mit
+   * Begründung an der Anfrage, eine Empfehlung, keine Entscheidung. Namen der
+   * anfragenden Person und ihrer Firma werden vorher durch `[NAME]` ersetzt
+   * (2026-09-27) — für die Einschätzung der Anfrage spielen sie keine Rolle;
+   * E-Mail und Telefon nimmt der Ausgangsfilter des Clients. Im Inventar in
+   * `docs/KI_GOVERNANCE.md` stand diese Funktion bis dahin nicht.
+   */
   if (hasIntegration('ai')) {
     void scoreLeadInBackground(lead.id, {
-      message: input.message,
+      message: namenErsetzen(input.message, [input.firstName, input.lastName, input.company ?? '']).text,
       serviceKind: input.serviceKind ?? null,
       squareMeters: 'squareMeters' in input ? (input.squareMeters ?? null) : null,
       isBusiness: Boolean(input.company),

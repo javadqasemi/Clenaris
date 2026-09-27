@@ -15,9 +15,12 @@ import { generateStructured } from './client';
  *     Empfehlung ohne Herleitung ist eine Meinung; mit Herleitung ist sie
  *     prüfbar. Der Vertrauensgrad sagt, wie dünn die Datenlage war — bei
  *     zwei Monaten Verlauf ist er tief, und das soll man sehen.
- *  3. **Keine Personendaten.** Übermittelt werden aggregierte Kennzahlen,
- *     Zieltitel, Risikotitel, Wettbewerbernamen — nie Kundennamen, Löhne,
- *     Adressen oder Bewertungstexte mit Namen.
+ *  3. **Sparsam, nicht anonym.** Übermittelt werden aggregierte Kennzahlen,
+ *     Zieltitel, Risikotitel, Wettbewerbernamen — nie Löhne oder Adressen.
+ *     Freitext (Bewertungen, Check-in-Kommentare, Sitzungsnotizen) geht mit,
+ *     aber erst nachdem `bi-assistant.service` jeden bekannten Namen durch
+ *     `[NAME]` ersetzt hat. Hier stand bis 2026-09-27 „keine Personendaten";
+ *     das stimmte für diese Texte nicht.
  */
 
 const SYSTEM = `Du bist der Führungsassistent einer Reinigungsfirma im Kanton Bern, Schweiz.
@@ -238,7 +241,7 @@ export async function draftFeedbackAnalysis(params: { data: string }): Promise<F
     system: `${SYSTEM}
 
 Du wertest Kundenbewertungen aus: wiederkehrende Themen mit Stimmung und Häufigkeit, dazu Empfehlungen. Zitiere Beispiele sinngemäss, nie mit Namen.`,
-    prompt: `Bewertungen (anonymisiert):\n"""\n${params.data.slice(0, 20_000)}\n"""`,
+    prompt: `Bewertungen (bekannte Namen ersetzt durch [NAME]):\n"""\n${params.data.slice(0, 20_000)}\n"""`,
     schema: schema(
       {
         themes: { type: 'array', maxItems: 8, items: { type: 'object', additionalProperties: false, required: ['theme', 'sentiment', 'count', 'example'], properties: { theme: { type: 'string' }, sentiment: { type: 'string', enum: ['positiv', 'neutral', 'negativ'] }, count: { type: 'integer' }, example: { type: 'string' } } } },
