@@ -34,6 +34,19 @@ export const dateRangeQuery = z.object({
   to: z.coerce.date().optional(),
 });
 
+/**
+ * Höchstens `tage` Tage zwischen `from` und `to` (Phase 23, 2026-09-27).
+ *
+ * Kalender und Exporte nahmen jeden Zeitraum an. Eine Anfrage über zehn
+ * Jahre lud jeden Einsatz samt Kundschaft, Adresse und Team in den Speicher
+ * — eine Anfrage, die der Server nicht ablehnen konnte, weil nichts sie
+ * begrenzte. Die Grenzen sind so gewählt, dass die Oberfläche sie nie
+ * erreicht: Monatsansicht (höchstens sechs Wochen) und Jahresexport.
+ */
+function hoechstensTage<T extends { from?: Date; to?: Date }>(tage: number) {
+  return (wert: T) => !wert.from || !wert.to || wert.to.getTime() - wert.from.getTime() <= tage * 86_400_000;
+}
+
 export const idParam = z.object({ id: z.string().min(1) });
 
 /** Zwei Segmente: die Kundenakte und die Adresse darin. */
@@ -90,16 +103,21 @@ export const invoiceListQuery = searchQuery.extend({
   to: z.coerce.date().optional(),
 });
 
-/** Zeitraum für Exporte. Ohne Angabe liefert der Endpunkt das laufende Jahr. */
-export const exportRangeQuery = dateRangeQuery;
+/** Zeitraum für Exporte. Ohne Angabe liefert der Endpunkt das laufende Jahr; höchstens ein (Schalt-)Jahr. */
+export const exportRangeQuery = dateRangeQuery.refine(hoechstensTage(367), {
+  message: 'Ein Export umfasst höchstens ein Jahr. Bitte den Zeitraum aufteilen.',
+  path: ['to'],
+});
 
 // --- Einsätze ---------------------------------------------------------------
 
-export const calendarRangeQuery = z.object({
-  from: z.coerce.date(),
-  to: z.coerce.date(),
-  employeeId: cuidSchema.optional(),
-});
+export const calendarRangeQuery = z
+  .object({
+    from: z.coerce.date(),
+    to: z.coerce.date(),
+    employeeId: cuidSchema.optional(),
+  })
+  .refine(hoechstensTage(62), { message: 'Der Kalender lädt höchstens 62 Tage auf einmal.', path: ['to'] });
 
 // --- Öffentlich -------------------------------------------------------------
 
@@ -209,7 +227,9 @@ export const supplierListQuery = z.object({
   includeInactive: schalter,
 });
 
-export const userListQuery = z.object({
+export const userListQuery = paginationQuery.extend({
+  // 50 statt 20: Eine Seite soll das Personal eines Betriebs ganz zeigen.
+  pageSize: z.coerce.number().int().min(1).max(100).default(50),
   q: z.string().trim().max(120).optional(),
   role: z.enum(USER_ROLES).optional(),
   status: z.enum(USER_STATUS).optional(),

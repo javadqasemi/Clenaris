@@ -53,49 +53,33 @@ interface Definition {
  * Bezeichner für das Protokoll — dieselbe Zeile, die auch der Nutzer sieht.
  */
 async function labelOf(model: Recyclable, id: string): Promise<string> {
-  switch (model) {
-    case 'customer': {
-      const row = await prisma.customer.findUnique({
-        where: { id },
-        select: { number: true, firstName: true, lastName: true, companyName: true },
-      });
-      return row ? `${row.number} · ${row.companyName ?? `${row.firstName} ${row.lastName}`}` : id;
-    }
-    case 'lead': {
-      const row = await prisma.lead.findUnique({
-        where: { id },
-        select: { number: true, firstName: true, lastName: true },
-      });
-      return row ? `${row.number} · ${row.firstName} ${row.lastName}` : id;
-    }
-    case 'booking': {
-      const row = await prisma.booking.findUnique({ where: { id }, select: { number: true } });
-      return row?.number ?? id;
-    }
-    case 'quote': {
-      const row = await prisma.quote.findUnique({
-        where: { id },
-        select: { number: true, title: true },
-      });
-      return row ? `${row.number} · ${row.title}` : id;
-    }
-    case 'invoice': {
-      const row = await prisma.invoice.findUnique({ where: { id }, select: { number: true } });
-      return row?.number ?? id;
-    }
-    case 'job': {
-      const row = await prisma.job.findUnique({
-        where: { id },
-        select: { number: true, title: true },
-      });
-      return row ? `${row.number} · ${row.title}` : id;
-    }
-    case 'property': {
-      const row = await prisma.property.findUnique({ where: { id }, select: { label: true } });
-      return row?.label ?? id;
-    }
-  }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const row = await (delegateFor(model) as any).findUnique({ where: { id }, select: BESCHRIFTUNG[model].select });
+  return row ? BESCHRIFTUNG[model].text(row) : id;
 }
+
+/**
+ * Welche Felder eine Zeile beschriften, und wie (2026-09-27).
+ *
+ * Eine Tabelle statt einer Abfrage je Zeile: Der Papierkorb rief für jede
+ * gelistete Zeile `describe(id)` auf — bis zu 100 Zeilen je Bereich, sieben
+ * Bereiche, also bis zu 700 Einzelabfragen für eine Seite. Jetzt liest die
+ * Liste die Felder gleich mit, und die Beschriftung ist eine reine Funktion.
+ * Protokoll und Liste zeigen dieselbe Zeile, weil beide hier formatieren.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const BESCHRIFTUNG: Record<Recyclable, { select: Record<string, true>; text: (row: any) => string }> = {
+  customer: {
+    select: { number: true, firstName: true, lastName: true, companyName: true },
+    text: (r) => `${r.number} · ${r.companyName ?? `${r.firstName} ${r.lastName}`}`,
+  },
+  lead: { select: { number: true, firstName: true, lastName: true }, text: (r) => `${r.number} · ${r.firstName} ${r.lastName}` },
+  booking: { select: { number: true }, text: (r) => r.number },
+  quote: { select: { number: true, title: true }, text: (r) => `${r.number} · ${r.title}` },
+  invoice: { select: { number: true }, text: (r) => r.number },
+  job: { select: { number: true, title: true }, text: (r) => `${r.number} · ${r.title}` },
+  property: { select: { label: true }, text: (r) => r.label },
+};
 
 /**
  * Mandantenfilter je Modell.
@@ -409,18 +393,16 @@ export async function listTrash(organizationId: string, limit = 100): Promise<Tr
         where: { ...scopeWhere(model, organizationId), deletedAt: { not: null } },
         orderBy: { deletedAt: 'desc' },
         take: limit,
-        select: { id: true, deletedAt: true },
+        select: { id: true, deletedAt: true, ...BESCHRIFTUNG[model].select },
       });
 
-      return Promise.all(
-        (rows as { id: string; deletedAt: Date }[]).map(async (row) => ({
-          id: row.id,
-          model,
-          label: DEFINITIONS[model].label,
-          description: await DEFINITIONS[model].describe(row.id),
-          deletedAt: row.deletedAt.toISOString(),
-        })),
-      );
+      return (rows as { id: string; deletedAt: Date }[]).map((row) => ({
+        id: row.id,
+        model,
+        label: DEFINITIONS[model].label,
+        description: BESCHRIFTUNG[model].text(row),
+        deletedAt: row.deletedAt.toISOString(),
+      }));
     }),
   );
 

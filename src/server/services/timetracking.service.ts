@@ -539,10 +539,26 @@ export async function approveTimeEntries(params: {
 
   // Eine Zeit in einem Monat mit veröffentlichter Abrechnung wird nicht mehr
   // nachträglich freigegeben — sie gehört in eine Korrektur des Folgemonats.
-  const gesperrt = new Set<string>();
-  for (const e of eintraege) {
-    if (await lohnmonatVeroeffentlicht(e.employeeId, e.startedAt)) gesperrt.add(e.id);
-  }
+  // Eine Abfrage für alle Monate der Auswahl (Phase 23, 2026-09-27); vorher
+  // eine je Erfassung, bis zu 200 für einen Klick.
+  const monatVon = (e: { employeeId: string; startedAt: Date }) => {
+    const t = zurichParts(e.startedAt);
+    return { employeeId: e.employeeId, year: t.year, month: t.month };
+  };
+  const monate = [...new Map(eintraege.map((e) => { const m = monatVon(e); return [`${m.employeeId}:${m.year}:${m.month}`, m] as const; })).values()];
+  const veroeffentlicht = monate.length
+    ? new Set(
+        (
+          await prisma.payslip.findMany({
+            where: { published: true, OR: monate },
+            select: { employeeId: true, year: true, month: true },
+          })
+        ).map((p) => `${p.employeeId}:${p.year}:${p.month}`),
+      )
+    : new Set<string>();
+  const gesperrt = new Set(
+    eintraege.filter((e) => { const m = monatVon(e); return veroeffentlicht.has(`${m.employeeId}:${m.year}:${m.month}`); }).map((e) => e.id),
+  );
   const geeignet = eintraege
     .filter((e) => e.endedAt !== null && !e.approved && !gesperrt.has(e.id))
     .map((e) => e.id);

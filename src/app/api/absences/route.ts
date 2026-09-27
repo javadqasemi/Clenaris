@@ -74,6 +74,10 @@ export const GET = defineRoute({
             : {}),
         },
         orderBy: [{ status: 'asc' }, { startDate: 'desc' }],
+        // Obergrenze (Phase 23, 2026-09-27): Ohne Zeitraum lieferte der
+        // Endpunkt der Verwaltung die ganze Abwesenheitsgeschichte aller
+        // Personen. Offene Gesuche stehen zuerst, danach die jüngsten.
+        take: 500,
         include: {
           employee: {
             select: {

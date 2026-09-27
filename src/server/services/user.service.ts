@@ -48,12 +48,33 @@ export interface UserListFilter {
   role?: UserRole;
   status?: "PENDING" | "ACTIVE" | "SUSPENDED" | "DISABLED";
   includeDeleted?: boolean;
+  /** Nur gelöschte Konten — der Papierkorb-Reiter der Maske. */
+  nurGeloescht?: boolean;
+  page?: number;
+  pageSize?: number;
 }
 
-export async function listUsers(filter: UserListFilter) {
-  const where: Prisma.UserWhereInput = {
+/**
+ * Benutzerkonten, seitenweise (Phase 23, 2026-09-27).
+ *
+ * Bis hierher lud die Liste **alle** Konten samt gelöschten und trennte sie
+ * erst im Speicher. Zu den Konten gehören auch die Kundschaft, die sich auf
+ * der Website registriert — die Liste wächst also mit dem Kundenstamm, nicht
+ * mit dem Personal. Jetzt entscheidet die Datenbank: Filter, Zählung und
+ * eine Seite von höchstens 100 Konten.
+ */
+export async function listUsers(filter: UserListFilter): Promise<{ items: Awaited<ReturnType<typeof kontenLaden>>; total: number }> {
+  const pageSize = Math.min(100, Math.max(1, filter.pageSize ?? 50));
+  const page = Math.max(1, filter.page ?? 1);
+  const where = kontenFilter(filter);
+  const [items, total] = await Promise.all([kontenLaden(where, (page - 1) * pageSize, pageSize), prisma.user.count({ where })]);
+  return { items, total };
+}
+
+function kontenFilter(filter: UserListFilter): Prisma.UserWhereInput {
+  return {
     organizationId: filter.organizationId,
-    ...(filter.includeDeleted ? {} : { deletedAt: null }),
+    ...(filter.nurGeloescht ? { deletedAt: { not: null } } : filter.includeDeleted ? {} : { deletedAt: null }),
     ...(filter.role ? { role: filter.role } : {}),
     ...(filter.status ? { status: filter.status } : {}),
     ...(filter.q
@@ -66,16 +87,22 @@ export async function listUsers(filter: UserListFilter) {
         }
       : {}),
   };
+}
 
+function kontenLaden(where: Prisma.UserWhereInput, skip: number, take: number) {
   return prisma.user.findMany({
     where,
+    skip,
+    take,
     // Nach Name, nicht nach Rolle. Die Liste war nach Rolle gruppiert, und
     // das hatte eine tückische Folge: Ein Rollenwechsel verschob die Zeile an
     // eine andere Stelle, alle anderen rückten nach — und die Tabelle sah
     // aus, als hätte *jedes* Konto die Rolle gewechselt. Wer danach „die
     // Zeile" korrigieren wollte, traf eine andere Person. Ein Name bleibt, wo
     // er ist; die Rolle steht in der Spalte daneben.
-    orderBy: [{ lastName: "asc" }, { firstName: "asc" }],
+    // `id` zuletzt: Zwei „Anna Keller" hätten sonst beim Blättern keine feste
+    // Reihenfolge, und dieselbe Person erschiene auf zwei Seiten.
+    orderBy: [{ lastName: "asc" }, { firstName: "asc" }, { id: "asc" }],
     select: {
       id: true,
       email: true,

@@ -2,11 +2,16 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 import { ShieldCheck } from 'lucide-react';
 
+import type { UserRole } from '@prisma/client';
+
+import { prisma } from '@/lib/db';
 import { getSession, requirePagePermission } from '@/lib/auth/session';
-import { assignableRoles, can } from '@/lib/auth/rbac';
+import { ROLE_LABELS, assignableRoles, can } from '@/lib/auth/rbac';
+import { toQueryString } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Alert } from '@/components/ui/primitives';
-import { PageHeader } from '@/components/app/page-parts';
+import { FilterBar } from '@/components/app/filter-bar';
+import { PageHeader, Pagination } from '@/components/app/page-parts';
 import { UserWorkspace, type UserRow } from '@/features/admin/users/user-workspace';
 import { listUsers } from '@/server/services/user.service';
 import { getOrganizationId } from '@/server/services/organization.service';
@@ -25,15 +30,31 @@ export const dynamic = 'force-dynamic';
  * Verwaltung) oder durch die Registrierung einer Kundschaft auf der Website.
  * Beide landen hier.
  */
-export default async function UsersPage() {
+const JE_SEITE = 50;
+
+export default async function UsersPage({ searchParams }: { searchParams: Promise<Record<string, string | undefined>> }) {
   await requirePagePermission('user:read');
   const session = await getSession();
   const role = session!.role;
   const organizationId = await getOrganizationId();
+  const params = await searchParams;
+  const page = Math.max(1, Number(params.seite) || 1);
+  const rolle = params.rolle && params.rolle in ROLE_LABELS && params.rolle !== 'GUEST' ? (params.rolle as UserRole) : undefined;
 
-  const all = await listUsers({ organizationId, includeDeleted: true });
+  /*
+    Seitenweise (Phase 23, 2026-09-27) — vorher alle Konten samt gelöschten,
+    getrennt erst im Speicher. Der Papierkorb zeigt die jüngsten 50; alle
+    gelöschten Datensätze stehen ohnehin unter /admin/papierkorb.
+  */
+  const [lebend, geloescht, aktiv] = await Promise.all([
+    listUsers({ organizationId, q: params.q, role: rolle, page, pageSize: JE_SEITE }),
+    listUsers({ organizationId, nurGeloescht: true, pageSize: JE_SEITE }),
+    prisma.user.count({ where: { organizationId, deletedAt: null, status: 'ACTIVE', ...(rolle ? { role: rolle } : {}) } }),
+  ]);
+  const totalPages = Math.max(1, Math.ceil(lebend.total / JE_SEITE));
+  const baseHref = `/admin/benutzer${toQueryString({ q: params.q, rolle: params.rolle })}`;
 
-  const toRow = (user: (typeof all)[number]): UserRow => ({
+  const toRow = (user: (typeof lebend.items)[number]): UserRow => ({
     id: user.id,
     email: user.email,
     firstName: user.firstName,
@@ -53,8 +74,8 @@ export default async function UsersPage() {
         : null,
   });
 
-  const live = all.filter((user) => !user.deletedAt).map(toRow);
-  const trashed = all.filter((user) => user.deletedAt).map(toRow);
+  const live = lebend.items.map(toRow);
+  const trashed = geloescht.items.map(toRow);
 
   const canAssignRole = can(role, 'role:assign');
 
@@ -71,7 +92,18 @@ export default async function UsersPage() {
             </Link>
           </Button>
         }
-      />
+      >
+        <FilterBar
+          searchPlaceholder="Name oder E-Mail …"
+          filters={[
+            {
+              param: 'rolle',
+              label: 'Rolle',
+              options: (['SUPER_ADMIN', 'ADMIN', 'MANAGER', 'EMPLOYEE', 'CUSTOMER'] as const).map((r) => ({ value: r, label: ROLE_LABELS[r] })),
+            },
+          ]}
+        />
+      </PageHeader>
 
       {canAssignRole ? null : (
         <Alert variant="info">
@@ -82,7 +114,10 @@ export default async function UsersPage() {
 
       <UserWorkspace
         users={live}
+        gesamt={lebend.total}
+        aktiv={aktiv}
         trashed={trashed}
+        trashedTotal={geloescht.total}
         currentUserId={session!.id}
         assignableRoles={assignableRoles(role)}
         canCreate={can(role, 'user:create')}
@@ -90,6 +125,7 @@ export default async function UsersPage() {
         canDelete={can(role, 'user:delete')}
         canAssignRole={canAssignRole}
       />
+      {totalPages > 1 ? <Pagination page={page} totalPages={totalPages} total={lebend.total} baseHref={baseHref} /> : null}
     </div>
   );
 }

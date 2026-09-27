@@ -1,6 +1,6 @@
 import { defineRoute } from '@/lib/api/handler';
 import { userListQuery } from '@/lib/validation/queries';
-import { created, ok } from '@/lib/api/response';
+import { buildPagination, created, paginated } from '@/lib/api/response';
 import { ForbiddenError } from '@/lib/errors';
 import { assignableRoles } from '@/lib/auth/rbac';
 import { inviteUserSchema } from '@/lib/validation/users';
@@ -11,21 +11,28 @@ import { getOrganizationId } from '@/server/services/organization.service';
 export const runtime = 'nodejs';
 
 
-/** GET /api/users — Benutzerkonten der Organisation. */
+/**
+ * GET /api/users — Benutzerkonten der Organisation, seitenweise.
+ *
+ * `data` bleibt eine Liste; Seite und Gesamtzahl stehen in `meta`
+ * (2026-09-27, vorher ungebremst die ganze Tabelle).
+ */
 export const GET = defineRoute({
   permissions: ['user:read'],
   query: userListQuery,
   rateLimit: 'apiRead',
-  handler: async ({ query }) =>
-    ok(
-      await listUsers({
-        organizationId: await getOrganizationId(),
-        q: query.q,
-        role: query.role,
-        status: query.status,
-        includeDeleted: query.papierkorb,
-      }),
-    ),
+  handler: async ({ query }) => {
+    const { items, total } = await listUsers({
+      organizationId: await getOrganizationId(),
+      q: query.q,
+      role: query.role,
+      status: query.status,
+      includeDeleted: query.papierkorb,
+      page: query.page,
+      pageSize: query.pageSize,
+    });
+    return paginated(items, buildPagination(query.page, query.pageSize, total));
+  },
 });
 
 /**

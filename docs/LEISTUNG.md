@@ -62,6 +62,36 @@ Profilseiten 241 kB, `/buchen` 234 kB. Kein Handlungsbedarf festgestellt.
 |---|---|---|---|
 | `/portal/einsaetze` | 298 ms Median, 457 ms p95, **1 396 KB** HTML | 72 ms, 87 ms, 218 KB | 60 Tage Einsätze ohne Grenze gerendert (317 Karten im Prüfbestand). Jetzt 40 je Reiter mit „Alle anzeigen" (`?alle=1`), die Reiter nennen die volle Zahl, Erledigtes neueste zuerst |
 
+### Obergrenzen (Phase 23, 2026-09-27)
+
+Eine Durchsicht des aktuellen Codes (nicht der Messwerte oben) nach
+ungebremsten Abfragen. Behoben, geprüft in `tests/api/grenzen.test.ts`:
+
+| Stelle | Vorher | Jetzt |
+|---|---|---|
+| `GET /api/jobs/calendar` | jeder Zeitraum, jeder Einsatz mit Kundschaft, Adresse, Team | höchstens 62 Tage (Monatsansicht braucht 42), sonst 422 |
+| Exporte (`/api/exports/*`, Buchhaltung) | jeder Zeitraum, alles im Speicher | höchstens ein (Schalt-)Jahr, sonst 422 |
+| `/admin/benutzer`, `GET /api/users` | alle Konten samt gelöschten, getrennt im Speicher; wächst mit der registrierten Kundschaft | Suche, Rollenfilter und Seiten in der Datenbank (50 je Seite, höchstens 100), `meta` mit Gesamtzahl |
+| `/portal/einsaetze?alle=1` | Grenze ganz aufgehoben | höchstens 300, danach Verweis auf den Kalender |
+| `/admin/papierkorb` | eine Abfrage je gelisteter Zeile (bis 700) | Beschriftung aus der Listenabfrage |
+| Zeitfreigabe (bis 200 Erfassungen) | eine Lohnabfrage je Erfassung | eine Abfrage über die betroffenen Monate |
+| `GET /api/properties`, `/api/reviews`, `/api/absences` | ohne Grenze | 200 / 200 / 500, Reihenfolge wie bisher |
+
+Bewusst nicht geändert, mit Begründung:
+
+- **Lohnlauf und Veröffentlichung** rechnen je Person nacheinander (bis 500
+  Personen, beim Veröffentlichen mit PDF). Ohne Auswahl läuft ohnehin jede
+  aktive Personalakte; bei 6–15 Mitarbeitenden eines Reinigungsbetriebs sind
+  das Sekunden. Wächst der Betrieb um eine Grössenordnung, gehört der Lauf in
+  eine Warteschlange statt in die Anfrage.
+- **Kundenexport** (`/api/exports/kunden`) hat keinen Zeitraum, weil er den
+  Stamm beschreibt; er wächst mit der Kundschaft, nicht mit der Zeit.
+- **Liquiditätsvorschau** und **KI-Namensschwärzung** lesen offene Posten
+  bzw. alle Namen je Aufruf. Beides ist durch die Sache begrenzt (offene
+  Posten; der Assistent ist Verwaltung und hat ein eigenes Kontingent).
+- Seiten mit Personalbestand (`/admin/personal`, Saldo je Person) — begrenzt
+  durch die Zahl der Mitarbeitenden.
+
 Die Indizes der gemessenen Abfragen sind vorhanden (`jobs(organizationId,
 status, scheduledStart)`, `job_assignments(employeeId)`,
 `invoices(organizationId, status, dueDate)`, `customers(organizationId,

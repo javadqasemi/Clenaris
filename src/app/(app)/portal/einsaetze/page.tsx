@@ -26,6 +26,16 @@ export const dynamic = 'force-dynamic';
  */
 const JE_REITER = 40;
 
+/**
+ * „Alle" heisst nicht „unbegrenzt" (Phase 23, 2026-09-27). Vorher liess
+ * `?alle=1` die Grenze ganz fallen: 60 Tage einer dicht verplanten Person mit
+ * Team, Adresse und Checkliste je Einsatz — im Prüfbestand 317 Einsätze und
+ * 1.4 MB HTML auf dem Telefon. 300 decken zwei Monate voller Auslastung; wer
+ * mehr braucht, sucht im Kalender, der zeitraumweise lädt. Die Gesamtzahl
+ * wird weiterhin gezählt und angezeigt, damit die Grenze sichtbar bleibt.
+ */
+const HOECHSTENS_ALLE = 300;
+
 export default async function PortalJobsPage({
   searchParams,
 }: {
@@ -43,13 +53,13 @@ export default async function PortalJobsPage({
       employeeId,
       from: today,
       to: new Date(today.getTime() + 60 * 86_400_000),
-      take: alle ? undefined : JE_REITER,
+      take: alle ? HOECHSTENS_ALLE : JE_REITER,
     }),
     getEmployeeSchedule({
       employeeId,
       from: new Date(today.getTime() - 60 * 86_400_000),
       to: today,
-      take: alle ? undefined : JE_REITER,
+      take: alle ? HOECHSTENS_ALLE : JE_REITER,
       absteigend: true,
     }),
   ]);
@@ -75,7 +85,7 @@ export default async function PortalJobsPage({
               description="Sobald dir das Büro einen Einsatz zuteilt, erscheint er hier — und du bekommst eine Nachricht."
             />
           ) : (
-            <JobList jobs={upcoming.jobs} gesamt={upcoming.gesamt} />
+            <JobList jobs={upcoming.jobs} gesamt={upcoming.gesamt} alle={alle} />
           )}
         </TabsContent>
 
@@ -86,7 +96,7 @@ export default async function PortalJobsPage({
               description="Hier findest du später deine erledigten Einsätze mit Checkliste und Fotos."
             />
           ) : (
-            <JobList jobs={past.jobs} gesamt={past.gesamt} />
+            <JobList jobs={past.jobs} gesamt={past.gesamt} alle={alle} />
           )}
         </TabsContent>
       </Tabs>
@@ -96,7 +106,7 @@ export default async function PortalJobsPage({
 
 type ScheduleJob = Awaited<ReturnType<typeof getEmployeeSchedule>>['jobs'][number];
 
-function JobList({ jobs, gesamt }: { jobs: ScheduleJob[]; gesamt: number }) {
+function JobList({ jobs, gesamt, alle }: { jobs: ScheduleJob[]; gesamt: number; alle: boolean }) {
   return (
     <>
       <ul className="space-y-3">
@@ -162,11 +172,12 @@ function JobList({ jobs, gesamt }: { jobs: ScheduleJob[]; gesamt: number }) {
       {gesamt > jobs.length ? (
         <p className="mt-4 text-center text-sm text-muted-foreground">
           {jobs.length} von {gesamt} angezeigt ·{' '}
+          {/* Schon „alle" und trotzdem mehr: weiter im Kalender, nicht im Kreis. */}
           <Link
-            href="/portal/einsaetze?alle=1"
+            href={alle ? '/portal/kalender' : '/portal/einsaetze?alle=1'}
             className="font-medium text-primary underline-offset-4 hover:underline"
           >
-            Alle anzeigen
+            {alle ? 'Weitere im Kalender' : 'Alle anzeigen'}
           </Link>
         </p>
       ) : null}

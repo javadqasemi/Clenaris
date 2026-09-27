@@ -30,7 +30,8 @@ describe('Zwei-Faktor-Anmeldung', { concurrency: 1 }, () => {
     await requireServer();
     superJar = await loginAs('super');
 
-    const list = await get<{ data: { id: string; email: string }[] }>('/api/users?perPage=100', {
+    // `perPage` gab es nie (ignoriert); seit die Liste seitenweise ist, wird gezielt gesucht.
+    const list = await get<{ data: { id: string; email: string }[] }>(`/api/users?q=${encodeURIComponent(SUBJECT.email)}`, {
       jar: superJar,
     });
     const found = list.payload?.data?.find((user) => user.email === SUBJECT.email);

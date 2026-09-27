@@ -47,9 +47,9 @@ interface Employee {
   user: { email: string; firstName: string };
 }
 
-const window = () => {
-  const from = new Date(Date.now() - 60 * 864e5).toISOString();
-  const to = new Date(Date.now() + 60 * 864e5).toISOString();
+const window = (vonTagen = -30, bisTagen = 30) => {
+  const from = new Date(Date.now() + vonTagen * 864e5).toISOString();
+  const to = new Date(Date.now() + bisTagen * 864e5).toISOString();
   return `from=${from}&to=${to}`;
 };
 
@@ -74,9 +74,12 @@ describe('Einsätze — bearbeiten, Team, Material, Nachkalkulation', () => {
     await requireServer();
     jars = await loginAll();
 
-    const events = data(
-      await get<{ data: CalendarEvent[] }>(`/api/jobs/calendar?${window()}`, { jar: jars.admin }),
-    );
+    // Zwei Fenster statt eines: Der Kalender lädt seit 2026-09-27 höchstens
+    // 62 Tage auf einmal (so viel wie die Monatsansicht braucht).
+    const events = [
+      ...data(await get<{ data: CalendarEvent[] }>(`/api/jobs/calendar?${window(-60, 0)}`, { jar: jars.admin })),
+      ...data(await get<{ data: CalendarEvent[] }>(`/api/jobs/calendar?${window(0, 60)}`, { jar: jars.admin })),
+    ];
     const candidate = events.find((event) =>
       ['SCHEDULED', 'DISPATCHED', 'UNASSIGNED'].includes(event.extendedProps.status),
     );

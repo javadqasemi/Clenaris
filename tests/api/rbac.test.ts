@@ -443,11 +443,14 @@ describe('Selbstschutz der Rechteverwaltung', { concurrency: 1 }, () => {
     await requireServer();
     jars ??= await loginAll();
 
-    const users = await get<{ data: { id: string; email: string }[] }>('/api/users', {
-      jar: jars.super,
-    });
-    selfId = users.payload.data.find((u) => u.email === 'system@clenaris.ch')?.id ?? '';
-    otherId = users.payload.data.find((u) => u.email === 'admin@clenaris.ch')?.id ?? '';
+    // Gezielt suchen: Die Liste ist seit 2026-09-27 seitenweise, und welche
+    // Konten auf Seite 1 stehen, hängt vom Bestand ab.
+    const konto = async (email: string) =>
+      (await get<{ data: { id: string; email: string }[] }>(`/api/users?q=${encodeURIComponent(email)}`, { jar: jars.super })).payload.data.find(
+        (u) => u.email === email,
+      )?.id ?? '';
+    selfId = await konto('system@clenaris.ch');
+    otherId = await konto('admin@clenaris.ch');
     assert.ok(selfId && otherId, 'Prüfkonten nicht gefunden');
   });
 
@@ -486,7 +489,7 @@ describe('Selbstschutz der Rechteverwaltung', { concurrency: 1 }, () => {
     // Sonst stünde die Person mit Kundenkonto weiter in Teamauswahl,
     // Kalender und Kennzahlen — der Weg heraus ist das Stilllegen der Akte.
     const users = await get<{ data: { id: string; email: string; role: string }[] }>(
-      '/api/users',
+      '/api/users?q=anna.keller%40clenaris.ch',
       { jar: jars.super },
     );
     const employee = users.payload.data.find((u) => u.email === 'anna.keller@clenaris.ch');
@@ -500,7 +503,7 @@ describe('Selbstschutz der Rechteverwaltung', { concurrency: 1 }, () => {
     assert.equal(response.status, 422, response.text);
     assert.match(response.payload.error.message, /Personalakte/);
 
-    const after = await get<{ data: { id: string; role: string }[] }>('/api/users', {
+    const after = await get<{ data: { id: string; role: string }[] }>('/api/users?q=anna.keller%40clenaris.ch', {
       jar: jars.super,
     });
     assert.equal(

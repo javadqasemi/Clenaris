@@ -179,6 +179,12 @@ export const accountingExportSchema = z.object({
 }).refine((d) => d.periodTo >= d.periodFrom, {
   message: 'Das Enddatum darf nicht vor dem Startdatum liegen.',
   path: ['periodTo'],
+})
+// Wie `exportRangeQuery` (Phase 23): Ein Buchhaltungsexport über zehn Jahre
+// lud jeden Beleg in den Speicher. Ein Geschäftsjahr ist die Einheit.
+.refine((d) => d.periodTo.getTime() - d.periodFrom.getTime() <= 367 * 86_400_000, {
+  message: 'Ein Export umfasst höchstens ein Jahr. Bitte den Zeitraum aufteilen.',
+  path: ['periodTo'],
 });
 export type AccountingExportInput = z.infer<typeof accountingExportSchema>;
 

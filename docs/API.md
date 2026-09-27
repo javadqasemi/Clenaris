@@ -6341,6 +6341,8 @@ Familie.
 
 | Feld | Typ | Pflicht | Regeln |
 | --- | --- | --- | --- |
+| `page` | integer | – | ≥ 1, Standard `1` |
+| `pageSize` | integer | – | ≥ 1, ≤ 100, Standard `50` |
 | `q` | string | – | max. 120 Zeichen |
 | `role` | string | – | `CUSTOMER` \| `EMPLOYEE` \| `MANAGER` \| `ADMIN` \| `SUPER_ADMIN` |
 | `status` | string | – | `PENDING` \| `ACTIVE` \| `SUSPENDED` \| `DISABLED` |

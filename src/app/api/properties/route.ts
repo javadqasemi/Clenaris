@@ -41,6 +41,10 @@ export const GET = defineRoute({
           ...(query.q ? { label: { contains: query.q, mode: 'insensitive' } } : {}),
         },
         orderBy: { label: 'asc' },
+        // Obergrenze (Phase 23, 2026-09-27): Die Liste wächst mit dem
+        // Kundenstamm und füllt Auswahlfelder; wer mehr als 200 Objekte
+        // durchsehen will, sucht (`q`) oder grenzt nach Kundschaft ein.
+        take: 200,
         select: {
           id: true,
           label: true,

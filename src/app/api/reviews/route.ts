@@ -37,6 +37,9 @@ export const GET = defineRoute({
     const reviews = await prisma.review.findMany({
       where: { organizationId, ...(seesAll ? {} : { customerId: customer!.id }) },
       orderBy: { createdAt: 'desc' },
+      // Die jüngsten 200 (Phase 23, 2026-09-27) — vorher jede Bewertung des
+      // Mandanten samt Buchung in einer Antwort.
+      take: 200,
       select: {
         id: true,
         rating: true,
