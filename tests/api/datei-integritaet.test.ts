@@ -1,4 +1,5 @@
 import { strict as assert } from 'node:assert';
+import { createHash } from 'node:crypto';
 import { after, before, describe, it } from 'node:test';
 
 import { BASE_URL, data, get, post } from '../helpers/client.js';
@@ -316,6 +317,45 @@ describe('Der Abschluss ist die Grenze', () => {
       ergebnisse.filter((r) => r.status === 201).map((r) => data(r).id),
     );
     assert.equal(kennungen.size, 1, `es entstanden ${kennungen.size} Assets`);
+  });
+
+  /**
+   * Einmal beschreiben heisst einmal — auch gleichzeitig (2026-09-27).
+   *
+   * Der Speicher prüfte „noch leer?" und schrieb danach, bedingungslos. Zwei
+   * gleichzeitige Übertragungen auf dasselbe Ticket lasen beide „leer": Die
+   * kleine landete zuerst, wurde abgeschlossen, geprüft und für sauber
+   * befunden — und dann überschrieb die grosse, langsamere die Bytes. Die
+   * Prüfsumme gehörte danach zu Bytes, die nicht mehr da waren, und was
+   * ausgeliefert wurde, hatte nie ein Prüfer gesehen. Jetzt ist das
+   * Beschreiben ein bedingter Übergang: genau eine Übertragung gelingt, und
+   * die ausgelieferten Bytes sind die geprüften.
+   */
+  it('gleichzeitige Übertragungen auf ein Ticket: genau eine gelingt, ausgeliefert wird, was geprüft wurde', async () => {
+    const klein = mitKopf([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], 64);
+    const gross = mitKopf([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], 2_000_000);
+    const ticket = await ticketHolen({ jar: jars.admin, profile: 'gallery', filename: 'wettlauf-bytes.png', mimeType: 'image/png', sizeBytes: gross.byteLength });
+    assert.equal(ticket.status, 201, ticket.text);
+
+    const uebertragungen = await Promise.all([
+      bytesSchreiben(data(ticket).signedUrl, gross, 'image/png'),
+      bytesSchreiben(data(ticket).signedUrl, klein, 'image/png'),
+      bytesSchreiben(data(ticket).signedUrl, gross, 'image/png'),
+      bytesSchreiben(data(ticket).signedUrl, klein, 'image/png'),
+    ]);
+    const erfolge = uebertragungen.filter((u) => u.status === 200).length;
+    assert.equal(erfolge, 1, `Erfolge: ${uebertragungen.map((u) => u.status).join(', ')}`);
+
+    const abschluss = await post<{ data: Abschluss }>('/api/files/finalize', { ticketId: data(ticket).ticketId, filename: 'wettlauf-bytes.png' }, { jar: jars.admin });
+    assert.equal(abschluss.status, 201, abschluss.text);
+
+    // Nach dem Abschluss nimmt das Ticket nichts mehr an.
+    assert.notEqual((await bytesSchreiben(data(ticket).signedUrl, klein, 'image/png')).status, 200);
+
+    const abruf = await fetch(`${BASE_URL}${data(abschluss).url}`, { headers: { cookie: jars.admin } });
+    assert.equal(abruf.status, 200);
+    const ausgeliefert = Buffer.from(await abruf.arrayBuffer());
+    assert.equal(createHash('sha256').update(ausgeliefert).digest('hex'), data(abschluss).checksum, 'ausgelieferte Bytes ≠ geprüfte Prüfsumme');
   });
 
   it('ein unbekanntes Ticket ergibt 404', async () => {

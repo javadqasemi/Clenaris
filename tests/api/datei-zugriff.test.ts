@@ -2,7 +2,8 @@ import { strict as assert } from 'node:assert';
 import { before, describe, it } from 'node:test';
 
 import { BASE_URL, data, get, post } from '../helpers/client.js';
-import { loginAll } from '../helpers/accounts.js';
+import { ACCOUNTS, loginAll } from '../helpers/accounts.js';
+import { testDb } from '../helpers/testdb.js';
 
 /**
  * Wer welche Datei abrufen darf (Gate 2).
@@ -214,6 +215,42 @@ describe('Kopfzeilen der Auslieferung', () => {
     assert.equal(antwort.headers.get('x-eingeschleust'), null, 'Kopfzeile eingeschleust');
     const disposition = antwort.headers.get('content-disposition') ?? '';
     assert.doesNotMatch(disposition, /[\r\n]/);
+  });
+});
+
+/**
+ * Objektunterlagen folgen dem Objekt, nicht der Berechtigung (2026-09-27).
+ *
+ * `property:read` hält auch die Kundschaft — für die eigenen Objekte. Die
+ * Dateiroute liess damit jede Kundschaft die Objektunterlagen jeder anderen
+ * Kundschaft derselben Organisation lesen, sobald sie eine Kennung kannte
+ * (Grundrisse, Schlüsselfotos). Jetzt gilt dieselbe Regel wie für das Objekt:
+ * Büro alles, Kundschaft die eigenen, Personal die seiner Einsätze.
+ */
+describe('Objektunterlagen: nur wer das Objekt sehen darf', () => {
+  async function objektdatei(propertyId: string, name: string) {
+    const datei = await hochladen({ jar: jars.admin, profile: 'document', filename: name, mimeType: 'application/pdf', bytes: PDF });
+    await testDb()!.fileAsset.update({ where: { id: datei.id }, data: { scope: 'PROPERTY', propertyId } });
+    return datei;
+  }
+
+  it('die Kundschaft liest die Unterlagen des eigenen Objekts, nicht die eines fremden', async (t) => {
+    const db = testDb();
+    if (!db) return t.skip('keine Testdatenbank');
+    const eigenesKonto = await db.user.findUniqueOrThrow({ where: { email: ACCOUNTS.customer.email }, select: { customer: { select: { id: true } } } });
+    const kundeId = eigenesKonto.customer!.id;
+    const eigenes = await db.property.findFirst({ where: { customerId: kundeId, deletedAt: null }, select: { id: true } });
+    const fremdes = await db.property.findFirst({ where: { customerId: { not: kundeId }, deletedAt: null }, select: { id: true } });
+    assert.ok(fremdes, 'der Demobestand hat ein Objekt einer anderen Kundschaft');
+
+    const fremd = await objektdatei(fremdes.id, 'fremdes-objekt.pdf');
+    assert.equal((await get(fremd.url, { jar: jars.customer })).status, 404, 'fremde Objektunterlage ausgeliefert');
+    assert.equal((await get(fremd.url, { jar: jars.admin })).status, 200, 'das Büro sieht sie');
+
+    if (eigenes) {
+      const eigen = await objektdatei(eigenes.id, 'eigenes-objekt.pdf');
+      assert.equal((await get(eigen.url, { jar: jars.customer })).status, 200, 'die eigene Objektunterlage bleibt lesbar');
+    }
   });
 });
 

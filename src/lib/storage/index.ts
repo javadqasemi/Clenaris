@@ -141,12 +141,12 @@ export async function createSignedDownloadUrl(path: string, expiresIn = 3600): P
  *
  * Die Rückfallebene *kann* keine befristete Adresse ausstellen — ihre Bytes
  * liegen in der Datenbank, und die einzige Route, die sie ausliefert
- * (`/api/files/blob/…`), prüft gröber als die Fachdienste: Sie kennt
- * `document:read`, aber nicht `EMPLOYEE_PRIVATE` und die betroffene Person.
- * Dorthin weiterzuleiten hiesse, die feinere Prüfung zu umgehen. Der einzige
- * Weg, der beides einhält, ist deshalb: Der Fachdienst, der die
- * Sichtbarkeit ohnehin schon in seiner `where`-Klausel geprüft hat, liefert
- * die Bytes selbst aus.
+ * (`/api/files/blob/…`), prüfte damals gröber als die Fachdienste: Sie
+ * kannte `document:read`, aber nicht `EMPLOYEE_PRIVATE` und die betroffene
+ * Person. Seit 2026-09-27 prüft sie für Dokumentfassungen dieselbe
+ * Sichtbarkeit (`darfLesen` in `file.service.ts`). Der Fachdienst liefert die
+ * Bytes trotzdem selbst aus: Er protokolliert den Download als Export, und
+ * eine Weiterleitung auf die Dateiroute wäre ein Umweg ohne Gewinn.
  *
  * Dieser Typ macht die Unterscheidung sichtbar, statt sie einer Zeichenkette
  * zu überlassen, der man nicht ansieht, ob sie Adresse oder Pfad ist.

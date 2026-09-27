@@ -21,6 +21,9 @@ import { loadTicket } from '@/lib/storage/tickets';
 import { SCAN_MAX_ATTEMPTS, getScanner } from '@/lib/security/malware';
 import { darfAusgeliefertWerden as pruefeAuslieferung } from '@/lib/security/malware/auslieferung';
 
+import { documentVisibilityWhere } from './document.service';
+import { propertyVisibilityWhere } from './property.service';
+
 const log = logger('file.security');
 
 /**
@@ -793,7 +796,11 @@ async function darfLesen(
     case 'EMPLOYEE':
       return asset.employeeId === session.profileId || can(rolle, 'employee:read');
     case 'CUSTOMER':
-      return asset.customerId === session.profileId || can(rolle, 'customer:read');
+      // Die eigene Akte, oder Büro. `customer:read` hält auch das Personal —
+      // für die Adresse eines Einsatzes, nicht für die Unterlagen jeder
+      // Kundschaft (2026-09-27; dieselbe Linie wie `propertyVisibilityWhere`).
+      if (rolle === 'CUSTOMER') return asset.customerId === session.profileId;
+      return can(rolle, 'customer:read') && rolle !== 'EMPLOYEE';
     case 'JOB':
       if (can(rolle, 'job:read')) return true;
       return istEinsatzBeteiligt(asset, session);
@@ -811,9 +818,44 @@ async function darfLesen(
     case 'APPLICATION':
       return can(rolle, 'application:read');
     case 'PROPERTY':
-      return can(rolle, 'property:read');
+      /*
+        Nach der Beziehung, nicht nach der Berechtigung (2026-09-27).
+        `property:read` hält auch die **Kundschaft** — für die eigenen
+        Objekte. Hier genügte sie allein: Jede Kundschaft las mit einer
+        Kennung die Objektunterlagen jeder anderen Kundschaft derselben
+        Organisation (Grundrisse, Schlüsselfotos). Jetzt gilt dieselbe Regel
+        wie für das Objekt selbst (`propertyVisibilityWhere`): Büro alles,
+        Kundschaft die eigenen, Personal die seiner Einsätze.
+      */
+      if (!asset.propertyId) return can(rolle, 'property:read') && rolle !== 'CUSTOMER' && rolle !== 'EMPLOYEE';
+      return (
+        (await prisma.property.count({
+          where: { id: asset.propertyId, ...propertyVisibilityWhere(session, asset.organizationId) },
+        })) > 0
+      );
     case 'DOCUMENT':
-      return can(rolle, 'document:read');
+      /*
+        Verwaltete Dokumente haben eine eigene Sichtbarkeit
+        (`EMPLOYEE_PRIVATE`: nur Leitung und die betroffene Person). Die
+        Dateiroute kannte sie nicht — sie prüfte nur `document:read`, und wer
+        die Kennung einer Fassung kannte, umging die Sichtbarkeit (so stand es
+        bis 2026-09-27 sogar in `storage/index.ts`). Hängt die Datei an einer
+        Dokumentfassung, entscheidet jetzt dieselbe Bedingung wie die Liste.
+      */
+      {
+        const fassung = await prisma.documentVersion.findFirst({
+          where: { fileAssetId: asset.id },
+          select: { documentId: true },
+        });
+        if (fassung) {
+          return (
+            (await prisma.managedDocument.count({
+              where: { id: fassung.documentId, ...documentVisibilityWhere(session, asset.organizationId) },
+            })) > 0
+          );
+        }
+        return can(rolle, 'document:read');
+      }
     case 'REPORT':
       return can(rolle, 'report:read');
     case 'OBJECTIVE':

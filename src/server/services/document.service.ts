@@ -1,6 +1,7 @@
 import 'server-only';
 
-import type { DocumentVisibility, Prisma } from '@prisma/client';
+import type { DocumentVisibility, FileProvenance, FileScanStatus, Prisma } from '@prisma/client';
+import { darfAusgeliefertWerden as pruefeAuslieferung } from '@/lib/security/malware/auslieferung';
 
 import { prisma } from '@/lib/db';
 import { audit } from '@/lib/audit';
@@ -263,6 +264,7 @@ export async function resolveDocumentDownload(
   if (!target) throw new NotFoundError('Fassung');
 
   const file = target.file;
+  auslieferbarOderNicht(file);
 
   /**
    * Ohne externen Objektspeicher gibt es keine befristete Adresse, auf die
@@ -296,6 +298,20 @@ export async function resolveDocumentDownload(
 }
 
 /**
+ * Das Auslieferungstor der Schadsoftwareprüfung — dasselbe wie in der
+ * Dateiroute (2026-09-27).
+ *
+ * Dokumente gingen bis dahin daran vorbei: Die Sichtbarkeit wurde geprüft,
+ * der Prüfstand nicht. Eine Fassung im Status PENDING, INFECTED oder
+ * QUARANTINED liess sich herunterladen und ansehen, solange man das Dokument
+ * sehen durfte. Die Antwort ist 404, nicht „in Quarantäne": Sie soll nicht
+ * mehr verraten als die Dateiroute.
+ */
+function auslieferbarOderNicht(file: { scanStatus: FileScanStatus; provenance: FileProvenance }): void {
+  if (!pruefeAuslieferung(file).erlaubt) throw new NotFoundError('Datei');
+}
+
+/**
  * Die Bytes einer Fassung — aus der Ablagezeile, sonst über den einen
  * zugelassenen Altbestandsweg.
  *
@@ -306,8 +322,11 @@ export async function resolveDocumentDownload(
  */
 async function fassungsBytes(file: {
   url: string;
+  scanStatus: FileScanStatus;
+  provenance: FileProvenance;
   storedFile: { id: string; path: string; driver: 'LOCAL' | 'SUPABASE' } | null;
 }): Promise<Buffer> {
+  auslieferbarOderNicht(file);
   let bytes: Buffer | null = null;
 
   if (file.storedFile) {

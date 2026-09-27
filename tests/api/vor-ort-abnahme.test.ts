@@ -517,6 +517,42 @@ describe('Die Gerätesperre', () => {
     await post('/api/handoff/unlock', { password: ACCOUNTS.employee.password }, { jar: mitarbeiter });
   });
 
+  /**
+   * Die Dateiauslieferung (2026-09-27). Sie ist von Hand gebaut
+   * (Binärtransfer), nicht über die Routenfactory — und liess bis dahin an
+   * der Sperre vorbei: Wer das übergebene Gerät hielt, lud private Dateien
+   * mit der Sitzung des Personals. Jetzt gilt die gesperrte Sitzung dort als
+   * **keine** Sitzung: Öffentliches (Logo auf der Abnahmeseite) bleibt
+   * erreichbar, Privates nicht. Geprüft an einer echten Datei, die die Person
+   * vorher selbst hochgeladen hat und vorher lesen konnte.
+   */
+  it('liefert während der Übergabe keine private Datei — auch nicht die eigene', ohneDb, async () => {
+    const job = await einsatzVorbereiten();
+    const mitarbeiter = await frischeMitarbeiterSitzung();
+
+    const bytes = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(64, 0x20)]);
+    const ticket = await post<{ data: { ticketId: string; signedUrl: string } }>(
+      '/api/files/upload-url',
+      { profile: 'jobPhoto', filename: 'uebergabe.jpg', mimeType: 'image/jpeg', sizeBytes: bytes.byteLength },
+      { jar: mitarbeiter },
+    );
+    assert.equal(ticket.status, 201, ticket.text);
+    const pfad = new URL(data(ticket).signedUrl, BASE_URL).pathname;
+    assert.equal((await fetch(`${BASE_URL}${pfad}`, { method: 'PUT', headers: { 'Content-Type': 'image/jpeg' }, body: new Uint8Array(bytes) })).status, 200);
+    const abschluss = await post<{ data: { url: string } }>('/api/files/finalize', { ticketId: data(ticket).ticketId, filename: 'uebergabe.jpg' }, { jar: mitarbeiter });
+    assert.equal(abschluss.status, 201, abschluss.text);
+    const adresse = data(abschluss).url;
+
+    assert.equal((await get(adresse, { jar: mitarbeiter })).status, 200, 'vor der Übergabe: die eigene Datei ist lesbar');
+
+    assert.equal((await uebergeben(job.id, mitarbeiter)).status, 200);
+    const waehrend = await get(adresse, { jar: mitarbeiter });
+    assert.notEqual(waehrend.status, 200, 'während der Übergabe: keine private Datei');
+
+    await post('/api/handoff/unlock', { password: ACCOUNTS.employee.password }, { jar: mitarbeiter });
+    assert.equal((await get(adresse, { jar: mitarbeiter })).status, 200, 'nach dem Entsperren wieder lesbar');
+  });
+
   it('bleibt gesperrt, wenn das Zugangstoken gelöscht und erneuert wird', ohneDb, async () => {
     const job = await einsatzVorbereiten();
     const mitarbeiter = await frischeMitarbeiterSitzung();

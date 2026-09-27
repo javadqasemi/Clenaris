@@ -279,8 +279,26 @@ export async function receiveLocalUpload(params: {
   // Übertragung: Jener wurde gegen das Profil geprüft, dieser nicht.
   verifyBytes(record.profile as UploadProfile, record.mimeType, params.data);
 
-  await prisma.storedFile.update({
-    where: { id: record.id },
+  /**
+   * Einmal beschreiben heisst einmal — als **bedingter** Übergang
+   * (2026-09-27).
+   *
+   * Die Prüfung „noch leer?" oben ist nur die freundliche Antwort für den
+   * Normalfall. Bis hierher schrieb danach ein `update` nach Kennung, ohne
+   * Bedingung: Zwei gleichzeitige Übertragungen lasen beide „leer" und
+   * schrieben beide. Die kleine landete zuerst, wurde abgeschlossen, geprüft
+   * und für sauber befunden — die grosse, langsamere überschrieb danach die
+   * Bytes. Die Prüfsumme gehörte zu Bytes, die nicht mehr da waren, und was
+   * ausgeliefert wurde, hatte kein Prüfer gesehen. Nachgestellt: vier
+   * gleichzeitige Übertragungen, vier Erfolge.
+   *
+   * Jetzt steht die Bedingung in der `where`-Klausel: noch keine Bytes, noch
+   * keine Prüfsumme, nicht abgelaufen. PostgreSQL wertet sie für eine
+   * wartende zweite Aktualisierung neu aus — nach dem Festschreiben der
+   * ersten trifft sie keine Zeile mehr.
+   */
+  const geschrieben = await prisma.storedFile.updateMany({
+    where: { id: record.id, data: null, checksum: null, expiresAt: { gt: new Date() } },
     data: {
       // `Uint8Array` statt `Buffer`: Prisma erwartet für `Bytes` genau diesen
       // Typ, und `Buffer` erbt von einem `ArrayBufferLike`, das auch geteilten
@@ -293,6 +311,9 @@ export async function receiveLocalUpload(params: {
       // Bytes hier bereits in Ordnung waren.
     },
   });
+  if (geschrieben.count !== 1) {
+    throw new ValidationError('Diese Upload-Adresse wurde bereits verwendet.');
+  }
 
   return { url: localUploadUrl(record.id) };
 }

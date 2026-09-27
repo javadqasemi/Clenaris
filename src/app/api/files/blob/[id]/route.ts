@@ -146,7 +146,17 @@ export async function GET(
      */
     await enforceRateLimit('fileDownload', getClientIp(request));
 
-    const session = await getSession();
+    /*
+      Gerätesperre (2026-09-27). Diese Route ist von Hand gebaut und lief
+      deshalb an der Sperre vorbei, die `defineRoute` durchsetzt: Wer das
+      übergebene Gerät hielt, lud private Dateien mit der Sitzung des
+      Personals. Eine gesperrte Sitzung gilt hier als **keine** Sitzung — wie
+      in `definePublicRoute`: Öffentliches (das Logo auf der Abnahmeseite)
+      bleibt erreichbar, Privates endet in 404. Ein 423 für alles hätte auch
+      die öffentlichen Bilder der Abnahmeseite gesperrt.
+    */
+    const roheSitzung = await getSession();
+    const session = roheSitzung?.handoffId ? null : roheSitzung;
     const freigabe = await authorizeStoredFile(id, session);
     if (!freigabe) throw new NotFoundError('Datei');
 
