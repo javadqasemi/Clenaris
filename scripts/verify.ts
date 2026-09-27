@@ -4,7 +4,7 @@
  *   npm run verify:static     statisch       ohne Datenbank und Server
  *   npm run verify:tests      pruefreihen    gegen einen laufenden Server (TEST_BASE_URL)
  *   npm run verify:full       voll           statisch + Testdatenbank + Build + Server + Prüfreihen
- *   npm run verify:release    release        voll auf frischer Datenbank, aus sauberem `git archive`
+ *   npm run verify:release    release        voll auf frischer Datenbank, aus sauberem Worktree des Commits
  *
  * ---------------------------------------------------------------------------
  *  Warum ein Skript
@@ -33,7 +33,7 @@
  */
 
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
-import { appendFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync } from 'node:fs';
+import { appendFileSync, cpSync, existsSync, mkdtempSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -235,22 +235,33 @@ async function voll(optionen: { frisch: boolean }): Promise<void> {
  * Arbeitsbaum gelingt — wegen einer nicht eingecheckten Datei, eines
  * örtlichen Zwischenspeichers, eines nachträglich gepatchten Moduls —, fällt
  * hier auf.
+ *
+ * **Worktree, nicht `git archive`** (2026-09-27). Der Abzug per Archiv hat
+ * kein `.git`, und zwei Schritte des Prüfwegs fragen git: die
+ * Geheimnissuche (`git ls-files` — sie prüft den *verfolgten* Bestand) und
+ * der Vergleich „Dokumentation ist mitgeliefert" (`git diff`). Im Archiv
+ * scheiterte der erste mit „not a git repository", der Release-Weg konnte
+ * also nie grün werden. Ein losgelöster Worktree des aktuellen Commits ist
+ * genauso sauber — nur eingecheckte Dateien, keine örtlichen Reste, kein
+ * gemeinsamer `node_modules` oder `.next` —, und git funktioniert darin.
+ * Er wird am Ende wieder entfernt, auch nach einem Fehlschlag.
  */
 async function release(): Promise<void> {
   const git = gitBefehl();
-  if (!git) abbrechen('git nicht gefunden — ohne `git archive` kein sauberer Abzug.');
+  if (!git) abbrechen('git nicht gefunden — ohne Worktree kein sauberer Abzug.');
   const ziel = mkdtempSync(join(tmpdir(), 'clenaris-release-'));
-  const archiv = join(ziel, 'quelle.tar');
-  schritt('Sauberer Abzug des aktuellen Commits (git archive)', `${git} archive --format=tar -o "${archiv}" HEAD`);
   const quelle = join(ziel, 'quelle');
-  mkdirSync(quelle);
-  schritt('Abzug entpacken', `tar -xf "${archiv}" -C "${quelle}"`);
+  const aufraeumen = () => {
+    spawnSync(`${git} worktree remove --force "${quelle}"`, { shell: true, cwd: WURZEL, stdio: 'ignore' });
+    rmSync(ziel, { recursive: true, force: true });
+  };
+  process.once('exit', aufraeumen);
+  schritt('Sauberer Abzug des aktuellen Commits (git worktree, losgelöst)', `${git} worktree add --detach "${quelle}" HEAD`);
   // Die `.env` gehört nicht ins Repository; die Testdatenbank wird ausdrücklich
   // übergeben, damit der Abzug dieselbe Datenbank ableitet wie der Arbeitsbaum.
   if (existsSync(join(WURZEL, '.env'))) cpSync(join(WURZEL, '.env'), join(quelle, '.env'));
   schritt('Abhängigkeiten aus der Sperrdatei (npm ci)', 'npm ci --no-audit --no-fund', { cwd: quelle });
   schritt('Voller Prüfweg im Abzug, frische Testdatenbank', 'npx tsx scripts/verify.ts voll --frisch', { cwd: quelle, env: { TEST_DATABASE_URL: testdatenbank() } });
-  rmSync(ziel, { recursive: true, force: true });
 }
 
 async function main(): Promise<void> {

@@ -155,7 +155,7 @@ und schreibt es in die Beschreibung des Commits oder Pull Requests.
 | [ ] | Sicherheitsprüfung | `npm run security:check` |
 | [ ] | Geheimnisprüfung | `npm run security:secrets` |
 | [ ] | Frische Datenbank | `npm run db:test:setup -- --frisch` |
-| [ ] | Bau aus einem sauberen `git archive` | `npm run verify:release` |
+| [ ] | Bau aus einem sauberen, losgelösten Worktree des Commits | `npm run verify:release` |
 | [ ] | Browser-Prüfreihe ohne Wiederholungen | `npm run verify:e2e` |
 | [ ] | Last | `npm run e2e:stress` |
 | [ ] | Hydration | `node scripts/react-hydrationskorrektur.mjs --pruefen` und die Browser-Prüfreihe |
@@ -172,7 +172,7 @@ und schreibt es in die Beschreibung des Commits oder Pull Requests.
 | `npm run verify:full` | `verify:static`, dann Migrationen auf die Testdatenbank, Build, Testserver, Sicherheitsreihen, vollständige Testreihe, Browser-Prüfreihe — und der Server wird am Ende sicher beendet |
 | `npm run verify:security` | `security:check` im Umfang `voll` (braucht den laufenden Testserver) |
 | `npm run verify:e2e` | Browser-Prüfreihe ohne Wiederholungen |
-| `npm run verify:release` | `verify:full` auf einer **frischen** Testdatenbank und aus einem sauberen `git archive` des aktuellen Commits |
+| `npm run verify:release` | `verify:full` auf einer **frischen** Testdatenbank und aus einem sauberen, losgelösten `git worktree` des aktuellen Commits (nicht `git archive`: ohne `.git` scheitern Geheimnissuche und Doku-Vergleich) |
 
 CI ruft dieselben Befehle auf (`.github/workflows/deploy.yml`); es gibt keinen
 zweiten, versteckten Prüfweg.
