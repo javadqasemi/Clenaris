@@ -170,6 +170,24 @@ export function toErrorResponse(error: unknown): NextResponse {
     }
   }
 
+  /*
+    Verklemmung oder Serialisierungsfehler, die nicht als P2034/P2010 kommen
+    (2026-09-27). Im Release-Lauf erreichte eine Verklemmung aus `updateMany`
+    die Antwort als unbekannter Fehler (`PrismaClientUnknownRequestError`) mit
+    der Postgres-Meldung im Text — und wurde zu 500. Erkannt wird sie am
+    SQLSTATE oder an der Meldung der Datenbank; die Antwort ist dieselbe wie
+    oben, ohne die Meldung selbst nach aussen zu geben.
+  */
+  if (
+    (error instanceof Prisma.PrismaClientUnknownRequestError || error instanceof Prisma.PrismaClientKnownRequestError) &&
+    /40P01|40001|deadlock detected|could not serialize access/i.test(error.message)
+  ) {
+    return NextResponse.json(
+      { error: { code: 'CONFLICT', message: 'Gleichzeitig wurde derselbe Datensatz geändert. Bitte versuchen Sie es erneut.' } },
+      { status: 409 },
+    );
+  }
+
   log.error('Unbehandelter Fehler', { error });
 
   /**

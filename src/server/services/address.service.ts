@@ -1,6 +1,6 @@
 import 'server-only';
 
-import { prisma } from '@/lib/db';
+import { prisma, type Tx } from '@/lib/db';
 import { audit, diff } from '@/lib/audit';
 import { can } from '@/lib/auth/rbac';
 import type { SessionUser } from '@/lib/auth/session';
@@ -101,6 +101,23 @@ const ORTSFELDER = ['street', 'streetNo', 'addition', 'postalCode', 'city', 'can
 const describe = (address:{ street: string; streetNo: string | null; city: string }) =>
   `${address.street} ${address.streetNo ?? ''}`.trim() + `, ${address.city}`;
 
+/**
+ * Sperre je Kundschaft über ihre Adressen (2026-09-27).
+ *
+ * Standard- und Rechnungsadresse werden umgesetzt, indem zuerst alle übrigen
+ * Adressen der Kundschaft den Merker verlieren und dann eine ihn bekommt.
+ * Gleichzeitige Umsetzungen sperrten dieselben Zeilen in verschiedener
+ * Reihenfolge und verklemmten sich — im Release-Lauf auf frischer Datenbank
+ * antworteten drei von vier mit 500. „Genau eine Standardadresse" hielt die
+ * Zeilensperre zwar, aber eine Verklemmung ist kein Ergebnis, das die
+ * Oberfläche erklären kann. Die Sperre reiht die Umsetzungen einer Kundschaft
+ * hintereinander; Adressen verschiedener Kundschaften warten nicht
+ * aufeinander.
+ */
+async function adressenSperren(tx: Tx, customerId: string): Promise<void> {
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`adressen:${customerId}`}))`;
+}
+
 export async function createAddress(params: {
   organizationId: string;
   customerId: string;
@@ -118,6 +135,7 @@ export async function createAddress(params: {
   const isBilling = existing === 0 ? true : params.input.isBilling;
 
   const address = await prisma.$transaction(async (tx) => {
+    await adressenSperren(tx, params.customerId);
     if (isDefault) {
       await tx.address.updateMany({
         where: { customerId: params.customerId },
@@ -207,6 +225,7 @@ export async function updateAddress(params: {
   }
 
   const address = await prisma.$transaction(async (tx) => {
+    await adressenSperren(tx, params.customerId);
     if (params.input.isDefault === true) {
       await tx.address.updateMany({
         where: { customerId: params.customerId, id: { not: params.addressId } },
