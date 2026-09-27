@@ -118,7 +118,17 @@ const EMPLOYEE_PERMISSIONS: Permission[] = [
   'employee:read_own',
   'absence:request',
   'payslip:read_own',
-  'customer:read',
+  /*
+   * Kein `customer:read` mehr (2026-09-27). Die Begründung war „sie müssen
+   * wissen, wohin sie fahren" — das beantwortet der zugeteilte Einsatz mit
+   * seiner Adresse, und für Objekte zieht `propertyVisibilityWhere` genau
+   * diese Linie. Das Recht öffnete dagegen `GET /api/customers` (der ganze
+   * Kundenstamm mit Namen und E-Mail), `GET /api/customers/:id` (die volle
+   * Akte samt Rechnungen und Zeitachse), die Adressen jeder Kundschaft und die
+   * Kundensuche. Keine Seite des Portals brauchte es; mehrere Stellen mussten
+   * die Rolle ausdrücklich wieder ausnehmen (`role !== 'EMPLOYEE'`) — ein
+   * Zeichen, dass das Recht nicht passte.
+   */
   'property:read',
   'message:read_own',
   'message:write_own',

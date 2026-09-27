@@ -84,6 +84,17 @@ export const RATE_LIMITS = {
    * Limit schützt sie nicht, es schützt die Nummern.
    */
   scanResolve: { limit: 60, windowSeconds: 60 },
+  /**
+   * Globale Suche (2026-09-27) — Kopfzeile und Vollansicht zählen gemeinsam.
+   *
+   * Eine Suche sind bis zu fünfzehn `contains`-Abfragen über die grössten
+   * Tabellen; auf `apiRead` (300/min) war sie das billigste Werkzeug, die
+   * Datenbank zu beschäftigen. Die Vollansicht `/admin/suche` rief den
+   * Dienst ausserdem direkt auf und lief an jedem Kontingent vorbei. 120 pro
+   * Minute reichen für entprelltes Tippen (höchstens vier je Sekunde, und nur
+   * solange getippt wird) mit Abstand.
+   */
+  search: { limit: 120, windowSeconds: 60 },
 
   /**
    * Links ohne Anmeldung — enger als `apiRead`/`apiWrite`.

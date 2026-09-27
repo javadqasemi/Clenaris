@@ -111,18 +111,24 @@ describe('Adressen', { concurrency: 1 }, async () => {
       assert.equal(response.status, 403);
     });
 
-    it('lässt Mitarbeitende lesen, aber nicht schreiben', async () => {
+    it('lässt Mitarbeitende weder lesen noch schreiben', async () => {
       /**
-       * Mitarbeitende haben `customer:read` — sie müssen wissen, wohin sie
-       * fahren. Zum Ändern fehlt ihnen `customer:update`, und `customer:
-       * update_own` haben sie nicht, weil sie keine Kundenakte sind.
+       * Bis 2026-09-27 stand hier „lesen ja": Mitarbeitende hatten
+       * `customer:read`, weil sie wissen müssen, wohin sie fahren. Das weiss
+       * der zugeteilte Einsatz — er trägt die Adresse. Das Recht öffnete
+       * dagegen die Adressen *jeder* Kundschaft, samt Zugangshinweisen, und
+       * dazu Kundenliste und volle Akte. Es ist entzogen; die Prüfung hält
+       * jetzt die engere Grenze fest.
        *
-       * Genau dort verläuft die Grenze, und genau dort muss sie halten.
+       * Zum Ändern fehlt ihnen ohnehin `customer:update`, und `customer:
+       * update_own` haben sie nicht, weil sie keine Kundenakte sind.
        */
       const read = await get(`/api/customers/${otherCustomerId}/addresses`, {
         jar: jars.employee,
       });
-      assert.equal(read.status, 200, `Lesen: HTTP ${read.status}`);
+      assert.equal(read.status, 403, `Lesen: HTTP ${read.status}`);
+      assert.equal((await get('/api/customers?pageSize=5', { jar: jars.employee })).status, 403, 'Kundenliste');
+      assert.equal((await get(`/api/customers/${otherCustomerId}`, { jar: jars.employee })).status, 403, 'Kundenakte');
 
       const write = await post(
         `/api/customers/${otherCustomerId}/addresses`,
@@ -410,13 +416,20 @@ describe('Adressen', { concurrency: 1 }, async () => {
     /**
      * Die Matrix in einer Zeile: Wer darf lesen, wer darf schreiben?
      *
-     * Lesen dürfen alle angemeldeten Rollen — das Büro über `customer:read`,
-     * Mitarbeitende ebenso (sie müssen wissen, wohin sie fahren), die
-     * Kundschaft über `customer:read_own` für die eigene Akte.
+     * Lesen darf das Büro über `customer:read` und die Kundschaft über
+     * `customer:read_own` für die eigene Akte. Mitarbeitende nicht mehr
+     * (2026-09-27): Ihre Adressen kommen mit dem zugeteilten Einsatz.
      *
      * Schreiben trennt: `customer:update` im Büro, `customer:update_own` für
      * die eigene Akte. Mitarbeitende haben keines von beiden.
      */
+    const MAY_READ: Record<AccountName, boolean> = {
+      super: true,
+      admin: true,
+      manager: true,
+      employee: false,
+      customer: true,
+    };
     const MAY_WRITE: Record<AccountName, boolean> = {
       super: true,
       admin: true,
@@ -426,9 +439,9 @@ describe('Adressen', { concurrency: 1 }, async () => {
     };
 
     for (const role of ROLE_ORDER) {
-      it(`${role}: liest ja, schreibt ${MAY_WRITE[role] ? 'ja' : 'nein'}`, async () => {
+      it(`${role}: liest ${MAY_READ[role] ? 'ja' : 'nein'}, schreibt ${MAY_WRITE[role] ? 'ja' : 'nein'}`, async () => {
         const read = await get(`/api/customers/${ownCustomerId}/addresses`, { jar: jars[role] });
-        assert.equal(read.status, 200, `Lesen: HTTP ${read.status}`);
+        assert.equal(read.status, MAY_READ[role] ? 200 : 403, `Lesen: HTTP ${read.status}`);
 
         const write = await post(
           `/api/customers/${ownCustomerId}/addresses`,

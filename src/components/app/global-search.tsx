@@ -73,7 +73,7 @@ interface Treffer {
 type Zustand =
   | { status: 'leer' }
   | { status: 'laedt'; vorher: Treffer[] }
-  | { status: 'fertig'; q: string; treffer: Treffer[] }
+  | { status: 'fertig'; q: string; treffer: Treffer[]; hinweis: string | null }
   | { status: 'fehler'; meldung: string };
 
 const ENTPRELLUNG_MS = 250;
@@ -126,13 +126,13 @@ function useLiveSuche(eingabe: string, versuch: number): Zustand {
         vorher: vorher.status === 'fertig' ? vorher.treffer : vorher.status === 'laedt' ? vorher.vorher : [],
       }));
       try {
-        const antwort = await api.get<{ q: string; treffer: Treffer[] }>(
+        const antwort = await api.get<{ q: string; treffer: Treffer[]; hinweis: string | null }>(
           '/api/search',
           { q },
           { signal: abbruch.signal },
         );
         if (abbruch.signal.aborted) return;
-        setZustand({ status: 'fertig', q: antwort.q, treffer: antwort.treffer });
+        setZustand({ status: 'fertig', q: antwort.q, treffer: antwort.treffer, hinweis: antwort.hinweis ?? null });
       } catch (fehler) {
         if (abbruch.signal.aborted) return;
         setZustand({
@@ -422,6 +422,17 @@ const SuchFeld = React.forwardRef<
             </div>
           ))
         )}
+        {/*
+          Der Hinweis des Scanners — etwa „Dieses Etikett ist gesperrt". Die
+          Suche zeigte den Datensatz eines gesperrten Etiketts bis 2026-09-27
+          ohne ihn, während der Scanner denselben Code mit Warnung auflöste.
+        */}
+        {zustand.status === 'fertig' && zustand.hinweis ? (
+          <p role="status" className="mx-1 mt-1 flex items-start gap-2 rounded-lg bg-warning/10 px-2 py-2 text-xs text-foreground">
+            <AlertCircle className="mt-0.5 size-3.5 shrink-0 text-warning" aria-hidden />
+            {zustand.hinweis}
+          </p>
+        ) : null}
         {treffer.length > 0 ? (
           <div className="mt-1 border-t border-border px-1 pt-1">
             <button

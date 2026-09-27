@@ -6649,10 +6649,10 @@ Familie.
 
 ### `GET /api/search`
 
-**Globale Suche.** Über die Bereiche, die die Rolle lesen darf, je höchstens fünf Treffer. Jeder Bereich nur mit seiner Leseberechtigung, die Organisation in jeder Abfrage, keine sensiblen Felder als Treffergrund (kein Lohn, keine IBAN, keine AHV-Nummer, keine Notizen). Mindestens zwei Zeichen.
+**Globale Suche.** Über die Bereiche, die die Rolle lesen darf, je höchstens fünf Treffer; `mehr` nennt die Bereiche mit weiteren, `hinweis` die Meldung des Scanners zu einem Etikettcode (etwa „gesperrt"). Jeder Bereich nur mit seiner Leseberechtigung, die Organisation in jeder Abfrage, keine sensiblen Felder als Treffergrund (kein Lohn, keine IBAN, keine AHV-Nummer, keine Notizen). Mindestens zwei Zeichen. Nur für die Rollen der Verwaltung — jeder Treffer führt nach /admin.
 
-- **Zugriff:** Erfordert die Berechtigung: `dashboard:view`.
-- **Rate-Limit-Klasse:** `apiRead`
+- **Zugriff:** Erfordert die Rolle SUPER_ADMIN oder ADMIN oder MANAGER.
+- **Rate-Limit-Klasse:** `search`
 - **Erfolg:** 200
 - **Mögliche Fehler:** 400, 401, 403, 429, 500
 

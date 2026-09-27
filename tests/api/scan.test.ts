@@ -174,6 +174,16 @@ describe('Etikettcode: erzeugen, auflösen, sperren', () => {
     // Ohne Leserecht bleibt auch der gesperrte Code stumm.
     assert.equal(data(await aufloesen(inhalt, jars.employee)).hinweis, 'Kein Datensatz zu diesem Etikett.');
 
+    // Die globale Suche gibt dieselbe Warnung (2026-09-27). Vorher zeigte sie
+    // den Artikel zum gesperrten Etikett kommentarlos — derselbe Code, zwei
+    // verschiedene Antworten, und die Suche war die ohne Warnung.
+    const suche = data(await get<{ data: { treffer: { id: string }[]; hinweis: string | null } }>(`/api/search?q=${encodeURIComponent(inhalt)}`, { jar: jars.manager }));
+    assert.ok(suche.treffer.some((t) => t.id === materialId), JSON.stringify(suche));
+    assert.match(suche.hinweis ?? '', /gesperrt/, 'die Suche verschweigt die Sperre');
+    const seite = await get(`/admin/suche?q=${encodeURIComponent(inhalt)}`, { jar: jars.manager });
+    assert.equal(seite.status, 200);
+    assert.match(seite.text, /Etikett ist gesperrt/, 'die Vollansicht verschweigt die Sperre');
+
     const neu = await etikett('MATERIAL', materialId, jars.manager);
     assert.equal(neu.status, 201);
     assert.notEqual(data(neu).inhalt, inhalt);

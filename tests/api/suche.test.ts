@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 
 import { data, get, requireServer } from '../helpers/client';
 import { loginAll, type AccountName } from '../helpers/accounts';
+import { resetRateLimits } from '../helpers/rate-limit';
 import { eigeneOrganisationId, fremdeOrganisation, testDb, testDbSchliessen } from '../helpers/testdb';
 
 /**
@@ -74,17 +75,19 @@ describe('Globale Suche', () => {
     assert.equal((await get('/api/search?q=a', { jar: jars.admin })).status, 422);
   });
 
-  it('Bereiche ohne Leseberechtigung bleiben leer (Mitarbeitende: keine Rechnungen, keine Offerten)', async () => {
-    const r = await get<Antwort>('/api/search?q=RE-', { jar: jars.employee });
-    assert.equal(r.status, 200);
-    const arten = new Set(data(r).treffer.map((t) => t.art));
-    for (const verboten of ['Rechnung', 'Offerte', 'Vertrag', 'Personal', 'Reklamation', 'Material', 'Gerät']) {
-      assert.ok(!arten.has(verboten), `Mitarbeitende finden ${verboten}`);
+  /**
+   * Bis 2026-09-27 durften Mitarbeitende suchen (`dashboard:view`) — und
+   * fanden die ganze Kundschaft samt E-Mail (`customer:read`), mit Links nach
+   * `/admin`, das sie nicht betreten dürfen. Die Suche gibt es in der
+   * Oberfläche nur im Verwaltungsbereich; der Endpunkt verlangt jetzt dessen
+   * Rollen, und `customer:read` ist der Rolle entzogen.
+   */
+  it('Mitarbeitende und Kundschaft haben keine globale Suche', async () => {
+    for (const rolle of ['employee', 'customer'] as AccountName[]) {
+      const r = await get('/api/search?q=er', { jar: jars[rolle] });
+      assert.equal(r.status, 403, `${rolle}: ${r.status}`);
+      assert.ok(!r.text.includes('/admin/'), `${rolle}: die Antwort enthält Verwaltungslinks`);
     }
-  });
-
-  it('die Kundschaft hat keine globale Suche', async () => {
-    assert.equal((await get('/api/search?q=Reinigung', { jar: jars.customer })).status, 403);
   });
 
   it('eine fremde Organisation bleibt unsichtbar', async (t) => {
@@ -103,14 +106,10 @@ describe('Globale Suche', () => {
     assert.ok(r.treffer.some((t) => t.art === 'Buchung' && t.id === buchung.id), JSON.stringify(r).slice(0, 300));
   });
 
-  it('findet ein Objekt für das Büro — nicht aber für Mitarbeitende ohne Einsatz dort', async (t) => {
+  it('findet ein Objekt für das Büro', async (t) => {
     if (!eigenesObjekt) return t.skip('keine Testdatenbank');
     const buero = data(await get<Antwort>(`/api/search?q=${OBJEKT}`, { jar: jars.admin }));
     assert.ok(buero.treffer.some((x) => x.art === 'Objekt' && x.id === eigenesObjekt), JSON.stringify(buero));
-    // `property:read` besitzen auch Mitarbeitende — die Suche muss dieselbe
-    // Sichtbarkeitsbedingung anwenden wie die Objektliste.
-    const mitarbeitende = data(await get<Antwort>(`/api/search?q=${OBJEKT}`, { jar: jars.employee }));
-    assert.ok(!mitarbeitende.treffer.some((x) => x.id === eigenesObjekt), 'Mitarbeitende finden ein fremdes Objekt');
   });
 
   it('Objekte einer fremden Organisation bleiben unsichtbar', async (t) => {
@@ -119,11 +118,23 @@ describe('Globale Suche', () => {
     assert.equal(r.treffer.length, 0, JSON.stringify(r));
   });
 
-  it('Mitarbeitende finden keine Buchungen und keine Dokumente', async () => {
-    const r = await get<Antwort>('/api/search?q=er', { jar: jars.employee });
-    assert.equal(r.status, 200);
-    const arten = new Set(data(r).treffer.map((x) => x.art));
-    for (const verboten of ['Buchung', 'Dokument']) assert.ok(!arten.has(verboten), `Mitarbeitende finden ${verboten}`);
+  it('Bereiche ohne Leseberechtigung bleiben leer (Betriebsleitung: keine Dokumente)', async (t) => {
+    const db = testDb();
+    const org = await eigeneOrganisationId();
+    if (!db || !org) return t.skip('keine Testdatenbank');
+    // Ein eigenes Dokument statt eines Treffers aus dem Bestand: Die Prüfung
+    // soll nicht davon abhängen, welche Titel der Demobestand gerade hat.
+    const titel = `Suchdokument${RUN}`;
+    const dokument = await db.managedDocument.create({ data: { organizationId: org, title: titel } });
+    try {
+      const buero = data(await get<Antwort>(`/api/search?q=${titel}`, { jar: jars.admin }));
+      assert.ok(buero.treffer.some((x) => x.art === 'Dokument' && x.id === dokument.id), 'Vorbedingung: das Büro findet das Dokument');
+      // Die Betriebsleitung hat `document:read` nicht.
+      const leitung = data(await get<Antwort>(`/api/search?q=${titel}`, { jar: jars.manager }));
+      assert.ok(!leitung.treffer.some((x) => x.art === 'Dokument'), 'die Betriebsleitung findet Dokumente');
+    } finally {
+      await db.managedDocument.delete({ where: { id: dokument.id } });
+    }
   });
 
   it('eine leere Trefferliste ist eine Antwort, kein Fehler', async () => {
@@ -137,5 +148,74 @@ describe('Globale Suche', () => {
       const r = data(await get<Antwort>(`/api/search?q=${encodeURIComponent(q)}`, { jar: jars.admin }));
       assert.ok(!r.treffer.some((t) => t.art === 'Personal'), `${q} findet Personal`);
     }
+  });
+});
+
+/**
+ * „Alle Treffer anzeigen" zeigt wirklich alle (2026-09-27).
+ *
+ * Die Vollansicht lief durch dieselbe Grenze von fünf Treffern je Bereich wie
+ * die Vorschau in der Kopfzeile — der sechste Treffer war nirgends zu finden.
+ * Geprüft mit 27 Kundinnen zu einem Suchwort: Vorschau fünf und `mehr`,
+ * Übersicht zehn und ein Link „Weitere", Seite 1 des Bereichs 25, Seite 2 den
+ * Rest — und jede der 27 genau einmal.
+ */
+describe('Globale Suche — Vollansicht blättert', () => {
+  const WORT = `Seitenweise${RUN}`;
+  const ids: string[] = [];
+
+  before(async () => {
+    const db = testDb();
+    const org = await eigeneOrganisationId();
+    if (!db || !org) return;
+    for (let i = 0; i < 27; i += 1) {
+      ids.push((await db.customer.create({ data: { organizationId: org, number: `K-SEITE-${RUN}-${i}`, firstName: `Nr${i}`, lastName: WORT, email: `seite.${RUN}.${i}@example.ch` } })).id);
+    }
+  });
+
+  after(async () => {
+    await testDb()?.customer.deleteMany({ where: { lastName: WORT } });
+  });
+
+  const gezeigt = (html: string) => ids.filter((id) => html.includes(`/admin/kunden/${id}`));
+
+  it('Vorschau: fünf und der Hinweis auf mehr', async (t) => {
+    if (ids.length === 0) return t.skip('keine Testdatenbank');
+    const r = data(await get<{ data: { treffer: { art: string }[]; mehr: string[] } }>(`/api/search?q=${WORT}`, { jar: jars.admin }));
+    assert.equal(r.treffer.filter((x) => x.art === 'Kundschaft').length, 5);
+    assert.ok(r.mehr.includes('Kundschaft'), JSON.stringify(r.mehr));
+  });
+
+  it('Übersicht: zehn und ein Link auf weitere; Bereich Seite für Seite, jede genau einmal', async (t) => {
+    if (ids.length === 0) return t.skip('keine Testdatenbank');
+    const uebersicht = await get(`/admin/suche?q=${WORT}`, { jar: jars.admin });
+    assert.equal(uebersicht.status, 200);
+    assert.equal(gezeigt(uebersicht.text).length, 10);
+    assert.match(uebersicht.text, /Weitere Treffer in/);
+
+    const s1 = await get(`/admin/suche?q=${WORT}&bereich=Kundschaft&seite=1`, { jar: jars.admin });
+    const s2 = await get(`/admin/suche?q=${WORT}&bereich=Kundschaft&seite=2`, { jar: jars.admin });
+    const a = gezeigt(s1.text);
+    const b = gezeigt(s2.text);
+    assert.equal(a.length, 25, 'Seite 1');
+    assert.equal(b.length, 2, 'Seite 2');
+    assert.equal(new Set([...a, ...b]).size, 27, 'jede Kundin genau einmal über beide Seiten');
+    assert.match(s1.text, /Nächste Seite/);
+    assert.doesNotMatch(s2.text, /Nächste Seite/);
+  });
+
+  it('die Vollansicht zählt auf das Kontingent der Suche', async (t) => {
+    if (ids.length === 0) return t.skip('keine Testdatenbank');
+    // Das Kontingent ist 120 je Minute und Person, Kopfzeile und Seite
+    // zusammen. Vorher rief die Seite den Dienst am Kontingent vorbei.
+    resetRateLimits();
+    let gebremst = false;
+    for (let i = 0; i < 125 && !gebremst; i += 1) {
+      const r = await get(`/admin/suche?q=${WORT}`, { jar: jars.admin });
+      gebremst = r.text.includes('Zu viele Suchen');
+    }
+    assert.ok(gebremst, 'nach 125 Aufrufen noch keine Bremse');
+    assert.equal((await get(`/api/search?q=${WORT}`, { jar: jars.admin, retries: 0 })).status, 429, 'der Endpunkt teilt den Zähler');
+    resetRateLimits();
   });
 });
