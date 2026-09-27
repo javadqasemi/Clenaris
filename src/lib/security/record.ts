@@ -1,6 +1,7 @@
 import 'server-only';
 
 import { redact } from '@/lib/audit';
+import { freitextSchwaerzen } from '@/lib/sensitive-fields';
 import { prisma } from '@/lib/db';
 import { logger } from '@/lib/logger';
 
@@ -68,7 +69,11 @@ export async function recordSecurityEvent(input: SecurityEventInput): Promise<vo
         kind: input.kind,
         category: art.category,
         severity: art.severity,
-        summary: (input.summary ?? art.label).slice(0, 500),
+        // Die Zusammenfassung ist Freitext wie im Prüfprotokoll — und wurde bis
+        // 2026-09-27 anders als dort nicht geschwärzt. Eine IBAN, AHV-Nummer
+        // oder ein JWT in einer Meldung stand damit im Klartext in einer
+        // Tabelle, die mehr Leute lesen als das betroffene Konto.
+        summary: freitextSchwaerzen(input.summary ?? art.label).slice(0, 500),
         context: input.context ? (redact(input.context) as object) : undefined,
         ip: input.ip ?? null,
         userAgent: input.userAgent?.slice(0, 300) ?? null,

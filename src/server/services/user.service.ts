@@ -1,17 +1,22 @@
-import 'server-only';
+import "server-only";
 
-import { Prisma, type UserRole } from '@prisma/client';
+import { Prisma, type UserRole } from "@prisma/client";
 
-import { prisma } from '@/lib/db';
-import { audit, diff } from '@/lib/audit';
-import { recordSecurityEvent } from '@/lib/security/record';
-import { BusinessRuleError, ConflictError, ForbiddenError, NotFoundError } from '@/lib/errors';
-import { assignableRoles, ROLE_LABELS, type ActorRole } from '@/lib/auth/rbac';
-import type { UpdateUserInput } from '@/lib/validation/users';
+import { prisma, type Tx } from "@/lib/db";
+import { audit, diff, recordAuditInTx } from "@/lib/audit";
+import { recordSecurityEvent } from "@/lib/security/record";
+import {
+  BusinessRuleError,
+  ConflictError,
+  ForbiddenError,
+  NotFoundError,
+} from "@/lib/errors";
+import { assignableRoles, ROLE_LABELS, type ActorRole } from "@/lib/auth/rbac";
+import type { UpdateUserInput } from "@/lib/validation/users";
 
-import { revokeAllSessions } from '@/lib/auth/session';
+import { revokeAllSessions } from "@/lib/auth/session";
 
-import { ensureCustomerProfile } from './profile.service';
+import { ensureCustomerProfile } from "./profile.service";
 
 /**
  * Benutzerkonten.
@@ -41,7 +46,7 @@ export interface UserListFilter {
   organizationId: string;
   q?: string;
   role?: UserRole;
-  status?: 'PENDING' | 'ACTIVE' | 'SUSPENDED' | 'DISABLED';
+  status?: "PENDING" | "ACTIVE" | "SUSPENDED" | "DISABLED";
   includeDeleted?: boolean;
 }
 
@@ -54,9 +59,9 @@ export async function listUsers(filter: UserListFilter) {
     ...(filter.q
       ? {
           OR: [
-            { firstName: { contains: filter.q, mode: 'insensitive' } },
-            { lastName: { contains: filter.q, mode: 'insensitive' } },
-            { email: { contains: filter.q, mode: 'insensitive' } },
+            { firstName: { contains: filter.q, mode: "insensitive" } },
+            { lastName: { contains: filter.q, mode: "insensitive" } },
+            { email: { contains: filter.q, mode: "insensitive" } },
           ],
         }
       : {}),
@@ -70,7 +75,7 @@ export async function listUsers(filter: UserListFilter) {
     // aus, als hätte *jedes* Konto die Rolle gewechselt. Wer danach „die
     // Zeile" korrigieren wollte, traf eine andere Person. Ein Name bleibt, wo
     // er ist; die Rolle steht in der Spalte daneben.
-    orderBy: [{ lastName: 'asc' }, { firstName: 'asc' }],
+    orderBy: [{ lastName: "asc" }, { firstName: "asc" }],
     select: {
       id: true,
       email: true,
@@ -93,8 +98,10 @@ export async function listUsers(filter: UserListFilter) {
 }
 
 async function findOwn(organizationId: string, userId: string) {
-  const user = await prisma.user.findFirst({ where: { id: userId, organizationId } });
-  if (!user) throw new NotFoundError('Benutzerkonto');
+  const user = await prisma.user.findFirst({
+    where: { id: userId, organizationId },
+  });
+  if (!user) throw new NotFoundError("Benutzerkonto");
   return user;
 }
 
@@ -111,50 +118,62 @@ export async function updateUser({
   ip,
   userId,
   input,
-}: Omit<Actor, 'actorRole'> & { userId: string; input: UpdateUserInput }) {
+}: Omit<Actor, "actorRole"> & { userId: string; input: UpdateUserInput }) {
   const before = await findOwn(organizationId, userId);
 
-  if (userId === actorId && input.status && input.status !== 'ACTIVE') {
+  if (userId === actorId && input.status && input.status !== "ACTIVE") {
     throw new BusinessRuleError(
-      'Das eigene Konto lässt sich nicht sperren. Bitten Sie eine andere berechtigte Person darum.',
+      "Das eigene Konto lässt sich nicht sperren. Bitten Sie eine andere berechtigte Person darum.",
     );
   }
 
-  if (input.status && input.status !== 'ACTIVE') {
-    await assertNotLastSuperAdmin(organizationId, before.id, before.role);
-  }
-
   try {
-    const user = await prisma.user.update({
-      where: { id: userId },
-      data: {
-        ...(input.firstName !== undefined ? { firstName: input.firstName } : {}),
-        ...(input.lastName !== undefined ? { lastName: input.lastName } : {}),
-        ...(input.phone !== undefined ? { phone: input.phone ?? null } : {}),
-        ...(input.email !== undefined ? { email: input.email } : {}),
-        ...(input.locale !== undefined ? { locale: input.locale } : {}),
-        ...(input.status !== undefined ? { status: input.status } : {}),
-        ...(input.notifyByEmail !== undefined ? { notifyByEmail: input.notifyByEmail } : {}),
-        ...(input.notifyBySms !== undefined ? { notifyBySms: input.notifyBySms } : {}),
-        ...(input.avatarUrl !== undefined ? { avatarUrl: input.avatarUrl || null } : {}),
-        ...(input.mustChangePassword !== undefined
-          ? { mustChangePassword: input.mustChangePassword }
-          : {}),
-      },
+    const user = await prisma.$transaction(async (tx) => {
+      if (input.status && input.status !== "ACTIVE") {
+        await assertNotLastSuperAdmin(tx, organizationId, before.id);
+      }
+      return tx.user.update({
+        where: { id: userId },
+        data: {
+          ...(input.firstName !== undefined
+            ? { firstName: input.firstName }
+            : {}),
+          ...(input.lastName !== undefined ? { lastName: input.lastName } : {}),
+          ...(input.phone !== undefined ? { phone: input.phone ?? null } : {}),
+          ...(input.email !== undefined ? { email: input.email } : {}),
+          ...(input.locale !== undefined ? { locale: input.locale } : {}),
+          ...(input.status !== undefined ? { status: input.status } : {}),
+          ...(input.notifyByEmail !== undefined
+            ? { notifyByEmail: input.notifyByEmail }
+            : {}),
+          ...(input.notifyBySms !== undefined
+            ? { notifyBySms: input.notifyBySms }
+            : {}),
+          ...(input.avatarUrl !== undefined
+            ? { avatarUrl: input.avatarUrl || null }
+            : {}),
+          ...(input.mustChangePassword !== undefined
+            ? { mustChangePassword: input.mustChangePassword }
+            : {}),
+        },
+      });
     });
 
     // Eine Sperre muss sofort wirken, nicht erst nach Ablauf des Zugangstokens.
     // Dasselbe gilt für den erzwungenen Passwortwechsel: Er greift bei der
     // nächsten Anmeldung — die es ohne Sitzungsende erst in einer Viertelstunde
     // gäbe.
-    if ((input.status && input.status !== 'ACTIVE') || input.mustChangePassword === true) {
+    if (
+      (input.status && input.status !== "ACTIVE") ||
+      input.mustChangePassword === true
+    ) {
       await revokeAllSessions(userId);
     }
 
     await audit.updated({
       organizationId,
       userId: actorId,
-      entity: 'User',
+      entity: "User",
       entityId: userId,
       summary: `Konto ${user.email} geändert`,
       changes: diff(
@@ -178,10 +197,10 @@ export async function updateUser({
       await recordSecurityEvent({
         organizationId,
         userId,
-        kind: input.status === 'ACTIVE' ? 'USER_REACTIVATED' : 'USER_SUSPENDED',
+        kind: input.status === "ACTIVE" ? "USER_REACTIVATED" : "USER_SUSPENDED",
         summary:
-          input.status === 'ACTIVE'
-            ? 'Konto wieder aktiviert'
+          input.status === "ACTIVE"
+            ? "Konto wieder aktiviert"
             : `Konto stillgelegt (${input.status})`,
         context: { von: before.status, zu: input.status, durch: actorId },
         ip,
@@ -190,8 +209,11 @@ export async function updateUser({
 
     return user;
   } catch (error) {
-    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
-      throw new ConflictError('Diese E-Mail-Adresse ist bereits vergeben.');
+    if (
+      error instanceof Prisma.PrismaClientKnownRequestError &&
+      error.code === "P2002"
+    ) {
+      throw new ConflictError("Diese E-Mail-Adresse ist bereits vergeben.");
     }
     throw error;
   }
@@ -226,14 +248,14 @@ export async function assignRole({
 
   if (userId === actorId) {
     throw new BusinessRuleError(
-      'Die eigene Rolle lässt sich nicht ändern — sonst könnte man sich selbst höherstufen.',
+      "Die eigene Rolle lässt sich nicht ändern — sonst könnte man sich selbst höherstufen.",
     );
   }
 
   const allowed = assignableRoles(actorRole);
   if (!allowed.includes(role)) {
     throw new ForbiddenError(
-      `Sie können höchstens die Rolle „${ROLE_LABELS[allowed[allowed.length - 1] ?? 'CUSTOMER']}" vergeben.`,
+      `Sie können höchstens die Rolle „${ROLE_LABELS[allowed[allowed.length - 1] ?? "CUSTOMER"]}" vergeben.`,
     );
   }
   if (!allowed.includes(target.role)) {
@@ -242,11 +264,7 @@ export async function assignRole({
     );
   }
 
-  if (target.role === 'SUPER_ADMIN' && role !== 'SUPER_ADMIN') {
-    await assertNotLastSuperAdmin(organizationId, target.id, target.role);
-  }
-
-  if (role === 'CUSTOMER') {
+  if (role === "CUSTOMER") {
     const activeEmployee = await prisma.employee.findFirst({
       where: { userId, active: true },
       select: { employeeNumber: true },
@@ -254,18 +272,35 @@ export async function assignRole({
     if (activeEmployee) {
       throw new BusinessRuleError(
         `Dieses Konto hat eine aktive Personalakte (${activeEmployee.employeeNumber}). ` +
-          'Solange sie aktiv ist, stünde die Person weiterhin in Einsatzplanung und Team. ' +
-          'Legen Sie die Personalakte zuerst still (Mitarbeitende → Akte → Stilllegen), ' +
-          'dann lässt sich die Rolle auf Kundschaft setzen.',
+          "Solange sie aktiv ist, stünde die Person weiterhin in Einsatzplanung und Team. " +
+          "Legen Sie die Personalakte zuerst still (Mitarbeitende → Akte → Stilllegen), " +
+          "dann lässt sich die Rolle auf Kundschaft setzen.",
       );
     }
   }
 
   const user = await prisma.$transaction(async (tx) => {
-    const updated = await tx.user.update({ where: { id: userId }, data: { role } });
-    if (role === 'CUSTOMER') {
+    if (role !== "SUPER_ADMIN")
+      await assertNotLastSuperAdmin(tx, organizationId, target.id);
+    const updated = await tx.user.update({
+      where: { id: userId },
+      data: { role },
+    });
+    if (role === "CUSTOMER") {
       await ensureCustomerProfile(tx, { organizationId, userId });
     }
+    // Eine vergebene Rolle ohne Protokolleintrag darf es nicht geben — der
+    // Eintrag steht deshalb in derselben Transaktion (`recordAuditInTx`).
+    await recordAuditInTx(tx, {
+      organizationId,
+      userId: actorId,
+      action: "PERMISSION_CHANGE",
+      entity: "User",
+      entityId: userId,
+      summary: `Rolle von ${updated.email}: ${ROLE_LABELS[target.role]} → ${ROLE_LABELS[role]}`,
+      changes: { role: { from: target.role, to: role } },
+      ip,
+    });
     return updated;
   });
 
@@ -273,16 +308,6 @@ export async function assignRole({
   // alten Rechte bis zu fünfzehn Minuten — bei einer Herabstufung genau die
   // Zeit, die man nicht will.
   await revokeAllSessions(userId);
-
-  await audit.updated({
-    organizationId,
-    userId: actorId,
-    entity: 'User',
-    entityId: userId,
-    summary: `Rolle von ${user.email}: ${ROLE_LABELS[target.role]} → ${ROLE_LABELS[role]}`,
-    changes: { role: { from: target.role, to: role } },
-    ip,
-  });
 
   /**
    * `CRITICAL` und damit bestätigungspflichtig — auch bei einer Herabstufung.
@@ -296,7 +321,7 @@ export async function assignRole({
   await recordSecurityEvent({
     organizationId,
     userId,
-    kind: 'ROLE_ASSIGNED',
+    kind: "ROLE_ASSIGNED",
     summary: `Rolle geändert: ${ROLE_LABELS[target.role]} → ${ROLE_LABELS[role]}`,
     context: { von: target.role, zu: role, durch: actorId },
     ip,
@@ -305,8 +330,8 @@ export async function assignRole({
   await recordSecurityEvent({
     organizationId,
     userId,
-    kind: 'SESSIONS_REVOKED',
-    summary: 'Alle Sitzungen beendet — Rollenänderung',
+    kind: "SESSIONS_REVOKED",
+    summary: "Alle Sitzungen beendet — Rollenänderung",
     context: { durch: actorId },
     ip,
   });
@@ -319,30 +344,33 @@ export async function deleteUser({
   actorId,
   ip,
   userId,
-}: Omit<Actor, 'actorRole'> & { userId: string }) {
+}: Omit<Actor, "actorRole"> & { userId: string }) {
   const user = await findOwn(organizationId, userId);
 
   if (userId === actorId) {
-    throw new BusinessRuleError('Das eigene Konto lässt sich nicht löschen.');
+    throw new BusinessRuleError("Das eigene Konto lässt sich nicht löschen.");
   }
-  if (user.deletedAt) throw new BusinessRuleError('Dieses Konto liegt bereits im Papierkorb.');
+  if (user.deletedAt)
+    throw new BusinessRuleError("Dieses Konto liegt bereits im Papierkorb.");
 
-  await assertNotLastSuperAdmin(organizationId, user.id, user.role);
-
-  await prisma.user.update({
-    where: { id: userId },
-    data: { deletedAt: new Date(), status: 'DISABLED' },
+  await prisma.$transaction(async (tx) => {
+    await assertNotLastSuperAdmin(tx, organizationId, user.id);
+    await tx.user.update({
+      where: { id: userId },
+      data: { deletedAt: new Date(), status: "DISABLED" },
+    });
+    // Ein Konto verschwindet nicht ohne Eintrag — in derselben Transaktion.
+    await recordAuditInTx(tx, {
+      organizationId,
+      userId: actorId,
+      action: "DELETE",
+      entity: "User",
+      entityId: userId,
+      summary: `Konto ${user.email} gelöscht (wiederherstellbar)`,
+      ip,
+    });
   });
   await revokeAllSessions(userId);
-
-  await audit.deleted({
-    organizationId,
-    userId: actorId,
-    entity: 'User',
-    entityId: userId,
-    summary: `Konto ${user.email} gelöscht (wiederherstellbar)`,
-    ip,
-  });
 }
 
 export async function restoreUser({
@@ -350,20 +378,21 @@ export async function restoreUser({
   actorId,
   ip,
   userId,
-}: Omit<Actor, 'actorRole'> & { userId: string }) {
+}: Omit<Actor, "actorRole"> & { userId: string }) {
   const user = await findOwn(organizationId, userId);
-  if (!user.deletedAt) throw new BusinessRuleError('Dieses Konto liegt nicht im Papierkorb.');
+  if (!user.deletedAt)
+    throw new BusinessRuleError("Dieses Konto liegt nicht im Papierkorb.");
 
   const restored = await prisma.user.update({
     where: { id: userId },
     // Gesperrt zurück: wer wiederherstellt, soll bewusst entsperren.
-    data: { deletedAt: null, status: 'SUSPENDED' },
+    data: { deletedAt: null, status: "SUSPENDED" },
   });
 
   await audit.updated({
     organizationId,
     userId: actorId,
-    entity: 'User',
+    entity: "User",
     entityId: userId,
     summary: `Konto ${user.email} wiederhergestellt (gesperrt)`,
     ip,
@@ -381,17 +410,34 @@ export async function restoreUser({
  * in die Datenbank.
  */
 async function assertNotLastSuperAdmin(
+  tx: Tx,
   organizationId: string,
   userId: string,
-  role: UserRole,
 ): Promise<void> {
-  if (role !== 'SUPER_ADMIN') return;
+  /**
+   * In der Transaktion, hinter einer Sperre je Organisation (2026-09-27).
+   *
+   * Die Prüfung lief vorher vor dem Schreiben und ohne Sperre. Zwei
+   * Systemverantwortliche, die sich gleichzeitig gegenseitig herabstufen,
+   * sahen beide die andere Person noch als aktiv, beide schrieben — und es gab
+   * keine mehr (nachgewiesen in `rbac.test.ts`: 200, 200). Jetzt nimmt jede
+   * Änderung an einer Systemverantwortung zuerst dieselbe Sperre, liest den
+   * Bestand danach und schreibt in derselben Transaktion. Die zweite Anfrage
+   * wartet und sieht die erste als geschehen. Die Rolle des Ziels wird hier
+   * ebenfalls frisch gelesen — die von vor der Transaktion kann überholt sein.
+   */
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`systemverantwortung:${organizationId}`}))`;
+  const ziel = await tx.user.findFirst({
+    where: { id: userId, organizationId },
+    select: { role: true },
+  });
+  if (ziel?.role !== "SUPER_ADMIN") return;
 
-  const others = await prisma.user.count({
+  const others = await tx.user.count({
     where: {
       organizationId,
-      role: 'SUPER_ADMIN',
-      status: 'ACTIVE',
+      role: "SUPER_ADMIN",
+      status: "ACTIVE",
       deletedAt: null,
       id: { not: userId },
     },
@@ -399,7 +445,7 @@ async function assertNotLastSuperAdmin(
 
   if (others === 0) {
     throw new BusinessRuleError(
-      'Dies ist die letzte aktive Systemverantwortung. Ernennen Sie zuerst eine weitere — sonst kann danach niemand mehr Rollen vergeben.',
+      "Dies ist die letzte aktive Systemverantwortung. Ernennen Sie zuerst eine weitere — sonst kann danach niemand mehr Rollen vergeben.",
     );
   }
 }

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 
 import { call, del, get, post, requireServer } from '../helpers/client';
 import { loginAll, ROLE_ORDER, type AccountName } from '../helpers/accounts';
+import { eigeneOrganisationId, testDb } from '../helpers/testdb';
 
 /**
  * Die Rechtematrix — der Kern der Zugriffskontrolle.
@@ -507,6 +508,52 @@ describe('Selbstschutz der Rechteverwaltung', { concurrency: 1 }, () => {
       'EMPLOYEE',
       'Rolle blieb unverändert',
     );
+  });
+
+  /**
+   * Zwei Systemverantwortliche stufen sich gleichzeitig gegenseitig herab
+   * (2026-09-27).
+   *
+   * Die Prüfung „nie die letzte" lief vor der Transaktion: Jede Anfrage sah
+   * die andere Person noch als aktive Systemverantwortung, beide schrieben —
+   * und danach gab es keine mehr, also niemanden, der den Zustand beheben
+   * könnte. Das Demokonto `system@` wird dafür kurz stillgelegt, damit genau
+   * die zwei Prüfkonten zählen.
+   */
+  it('zwei gleichzeitige gegenseitige Herabstufungen lassen eine Systemverantwortung übrig', async (t) => {
+    const db = testDb();
+    const org = await eigeneOrganisationId();
+    if (!db || !org) return t.skip('keine Testdatenbank');
+    const { hashPassword } = await import('../../src/lib/auth/password');
+    const passwort = 'Letzte-Verantwortung-2026!';
+    const lauf = Date.now();
+    const konten = await Promise.all(
+      ['b', 'c'].map(async (n) =>
+        db.user.create({
+          data: { organizationId: org, email: `letzte.${n}.${lauf}@pruef-rollen.example.ch`, passwordHash: await hashPassword(passwort), firstName: 'Letzte', lastName: n.toUpperCase(), role: 'SUPER_ADMIN', status: 'ACTIVE' },
+        }),
+      ),
+    );
+    const [b, c] = konten as [(typeof konten)[number], (typeof konten)[number]];
+    await db.user.update({ where: { id: selfId }, data: { status: 'SUSPENDED' } });
+    try {
+      const anmelden = async (email: string) => (await post('/api/auth/login', { email, password: passwort })).cookies;
+      const [jarB, jarC] = await Promise.all([anmelden(b.email), anmelden(c.email)]);
+      assert.ok(jarB && jarC, 'Anmeldung der Prüfkonten');
+
+      const antworten = await Promise.all([
+        call('PATCH', `/api/users/${c.id}/role`, { jar: jarB, body: { role: 'ADMIN' }, retries: 0 }),
+        call('PATCH', `/api/users/${b.id}/role`, { jar: jarC, body: { role: 'ADMIN' }, retries: 0 }),
+      ]);
+      const uebrig = await db.user.count({ where: { organizationId: org, role: 'SUPER_ADMIN', status: 'ACTIVE', deletedAt: null } });
+      assert.ok(uebrig >= 1, `keine aktive Systemverantwortung mehr — Antworten ${antworten.map((a) => a.status).join(', ')}`);
+      assert.equal(antworten.filter((a) => a.status === 200).length, 1, `genau eine Herabstufung: ${antworten.map((a) => a.status).join(', ')}`);
+    } finally {
+      await db.user.update({ where: { id: selfId }, data: { status: 'ACTIVE' } });
+      await db.user.deleteMany({ where: { id: { in: [b.id, c.id] } } }).catch(async () => {
+        await db.user.updateMany({ where: { id: { in: [b.id, c.id] } }, data: { deletedAt: new Date(), status: 'DISABLED', role: 'CUSTOMER' } });
+      });
+    }
   });
 });
 

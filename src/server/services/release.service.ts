@@ -2,6 +2,7 @@ import 'server-only';
 
 import { Prisma, type Release, type ReleaseRequest, type ReleaseRequestStatus } from '@prisma/client';
 
+import { recordAuditInTx } from '@/lib/audit';
 import { prisma } from '@/lib/db';
 import { BusinessRuleError, ConflictError, NotFoundError } from '@/lib/errors';
 import { aktuelleVersion, vergleicheVersionen } from '@/lib/version';
@@ -248,23 +249,23 @@ async function protokolliere(
 ) {
   // Im selben Commit wie die Entscheidung: eine Freigabe ohne Protokoll gibt
   // es nicht. Gespeichert werden Versionen, Zeitpunkte und der Grund — keine
-  // Artefaktadressen, keine Zugangsdaten; der Auftrag trägt keine.
-  await tx.auditLog.create({
-    data: {
-      organizationId: h.organizationId,
-      userId: h.actorId,
-      action,
-      entity: 'ReleaseRequest',
-      entityId: auftrag.id,
-      summary: summary.slice(0, 500),
-      changes: {
-        vonVersion: auftrag.fromVersion,
-        zielVersion: auftrag.toVersion,
-        ...changes,
-      } as Prisma.InputJsonValue,
-      ip: h.ip ?? null,
-      userAgent: h.userAgent?.slice(0, 300) ?? null,
+  // Artefaktadressen, keine Zugangsdaten; der Auftrag trägt keine. Über
+  // `recordAuditInTx`, damit auch hier die Schwärzung greift — der Grund ist
+  // Freitext (bis 2026-09-27 ging er direkt in die Tabelle).
+  await recordAuditInTx(tx, {
+    organizationId: h.organizationId,
+    userId: h.actorId,
+    action,
+    entity: 'ReleaseRequest',
+    entityId: auftrag.id,
+    summary,
+    changes: {
+      vonVersion: auftrag.fromVersion,
+      zielVersion: auftrag.toVersion,
+      ...changes,
     },
+    ip: h.ip ?? null,
+    userAgent: h.userAgent ?? null,
   });
 }
 
@@ -419,18 +420,16 @@ export async function releaseZurueckstellen(h: Handelnde, releaseId: string, tag
     const eintrag = await tx.releaseDeferral.create({
       data: { organizationId: h.organizationId, releaseId, deferredById: h.actorId, deferredUntil: bis },
     });
-    await tx.auditLog.create({
-      data: {
-        organizationId: h.organizationId,
-        userId: h.actorId,
-        action: 'UPDATE',
-        entity: 'ReleaseDeferral',
-        entityId: eintrag.id,
-        summary: `Version ${release.version} zurückgestellt bis ${bis.toISOString()}`,
-        changes: { vonVersion: laufend, zielVersion: release.version, zurueckgestelltBis: bis.toISOString() } as Prisma.InputJsonValue,
-        ip: h.ip ?? null,
-        userAgent: h.userAgent?.slice(0, 300) ?? null,
-      },
+    await recordAuditInTx(tx, {
+      organizationId: h.organizationId,
+      userId: h.actorId,
+      action: 'UPDATE',
+      entity: 'ReleaseDeferral',
+      entityId: eintrag.id,
+      summary: `Version ${release.version} zurückgestellt bis ${bis.toISOString()}`,
+      changes: { vonVersion: laufend, zielVersion: release.version, zurueckgestelltBis: bis.toISOString() },
+      ip: h.ip ?? null,
+      userAgent: h.userAgent ?? null,
     });
     return eintrag;
   });

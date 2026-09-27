@@ -1,7 +1,6 @@
 import 'server-only';
 
-import type { Prisma } from '@prisma/client';
-
+import { recordAuditInTx } from '@/lib/audit';
 import { prisma, type Tx } from '@/lib/db';
 import { BusinessRuleError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
@@ -479,23 +478,22 @@ export async function runPurge(params: {
           (sequencesReset.length > 0 ? ` · Nummernkreise zurückgesetzt: ${sequencesReset.join(', ')}` : '');
 
         // Im selben Commit wie das Löschen. Scheitert das Protokoll, rollt
-        // alles zurück — ein unprotokolliertes Löschen gibt es nicht.
-        await tx.auditLog.create({
-          data: {
-            organizationId,
-            userId: actorId,
-            action: 'DELETE',
-            entity: 'Datenbereinigung',
-            entityId: area.key,
-            summary: summary.slice(0, 500),
-            changes: {
-              bereich: area.key,
-              geloescht: Object.fromEntries(deleted.map((entry) => [entry.label, entry.count])),
-              nummernkreiseZurueckgesetzt: sequencesReset,
-            } as Prisma.InputJsonValue,
-            ip: params.ip ?? null,
-            userAgent: params.userAgent?.slice(0, 300) ?? null,
+        // alles zurück — ein unprotokolliertes Löschen gibt es nicht. Über
+        // `recordAuditInTx`, damit dieselbe Schwärzung greift wie überall.
+        await recordAuditInTx(tx, {
+          organizationId,
+          userId: actorId,
+          action: 'DELETE',
+          entity: 'Datenbereinigung',
+          entityId: area.key,
+          summary,
+          changes: {
+            bereich: area.key,
+            geloescht: Object.fromEntries(deleted.map((entry) => [entry.label, entry.count])),
+            nummernkreiseZurueckgesetzt: sequencesReset,
           },
+          ip: params.ip ?? null,
+          userAgent: params.userAgent ?? null,
         });
 
         out.push({ key: area.key, label: area.label, deleted, total, sequencesReset });

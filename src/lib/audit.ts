@@ -1,7 +1,7 @@
 import 'server-only';
 
-import type { AuditAction } from '@prisma/client';
-import { prisma } from '@/lib/db';
+import type { AuditAction, Prisma } from '@prisma/client';
+import { prisma, type Tx } from '@/lib/db';
 import { logger } from '@/lib/logger';
 import { freitextSchwaerzen, GESCHWAERZT, istSensiblerSchluessel, wertSchwaerzen } from '@/lib/sensitive-fields';
 
@@ -10,11 +10,15 @@ const log = logger('audit');
 /**
  * Revisionssichere Protokollierung.
  *
- * Architekturentscheid: Audit-Schreibvorgänge dürfen die eigentliche
- * Geschäftstransaktion niemals zum Scheitern bringen — sie laufen deshalb
+ * Architekturentscheid: Gewöhnliche Audit-Schreibvorgänge dürfen die
+ * eigentliche Geschäftstransaktion nicht zum Scheitern bringen — sie laufen
  * ausserhalb der Transaktion und schlucken Fehler (mit Console-Log). Für die
  * Nachvollziehbarkeit nach DSG/DSGVO reicht das, weil jede Mutation zusätzlich
  * über `updatedAt` und die Domänen-Statusfelder rekonstruierbar ist.
+ *
+ * Die Ausnahme sind Vorgänge, die es ohne Eintrag nicht geben darf — Rollen,
+ * Identitätswechsel, Bereinigung, Freigaben. Sie schreiben mit
+ * `recordAuditInTx` in derselben Transaktion (siehe dort).
  */
 
 /**
@@ -115,26 +119,55 @@ export interface AuditInput {
   userAgent?: string | null;
 }
 
+/**
+ * Die Zeile, wie sie in `audit_logs` steht — geschwärzt, gekürzt.
+ *
+ * Die eine Stelle, an der ein Protokolleintrag entsteht (2026-09-27). Bis
+ * dahin schrieben die Datenbereinigung und die Freigaben ihre Einträge direkt
+ * mit `tx.auditLog.create` — richtig in der Transaktion, aber an der
+ * Schwärzung vorbei: Zusammenfassung und Änderungen gingen ungefiltert in die
+ * Tabelle. Jeder Weg in das Protokoll geht jetzt hier durch.
+ */
+export function auditDaten(input: AuditInput) {
+  return {
+    organizationId: input.organizationId,
+    userId: input.userId ?? null,
+    action: input.action,
+    entity: input.entity,
+    entityId: input.entityId ?? null,
+    // Auch die Zusammenfassung ist Freitext, in dem eine IBAN oder
+    // AHV-Nummer stehen könnte; die erkennbaren Formate werden ersetzt.
+    summary: input.summary ? freitextSchwaerzen(input.summary).slice(0, 500) : null,
+    changes: input.changes ? (redact(input.changes, input.entity) as Prisma.InputJsonValue) : undefined,
+    ip: input.ip ?? null,
+    userAgent: input.userAgent?.slice(0, 300) ?? null,
+  };
+}
+
 export async function recordAudit(input: AuditInput): Promise<void> {
   try {
-    await prisma.auditLog.create({
-      data: {
-        organizationId: input.organizationId,
-        userId: input.userId ?? null,
-        action: input.action,
-        entity: input.entity,
-        entityId: input.entityId ?? null,
-        // Auch die Zusammenfassung ist Freitext, in dem eine IBAN oder
-        // AHV-Nummer stehen könnte; die erkennbaren Formate werden ersetzt.
-        summary: input.summary ? freitextSchwaerzen(input.summary).slice(0, 500) : null,
-        changes: input.changes ? (redact(input.changes, input.entity) as object) : undefined,
-        ip: input.ip ?? null,
-        userAgent: input.userAgent?.slice(0, 300) ?? null,
-      },
-    });
+    await prisma.auditLog.create({ data: auditDaten(input) });
   } catch (error) {
     log.error('Protokollierung fehlgeschlagen', { error });
   }
+}
+
+/**
+ * Ein Protokolleintrag **in** der Geschäftstransaktion — für Vorgänge, die es
+ * ohne Eintrag nicht geben darf.
+ *
+ * Der Architekturentscheid oben (ausserhalb, Fehler schlucken) gilt für den
+ * Alltag: Eine geänderte Telefonnummer soll nicht scheitern, weil das
+ * Protokoll klemmt. Für einige Vorgänge ist die Richtung des Irrtums aber
+ * umgekehrt: Eine vergebene Rolle, ein Identitätswechsel, eine
+ * Datenbereinigung oder eine Freigabe **ohne** Eintrag ist schlimmer als ein
+ * gescheiterter Versuch — sie wäre unsichtbar. Hier wirft der Eintrag, und
+ * die Transaktion rollt mit ihm zurück. Und umgekehrt: Rollt die
+ * Geschäftstransaktion zurück, verschwindet auch der Eintrag, statt einen
+ * Vorgang zu bezeugen, der nie stattfand.
+ */
+export async function recordAuditInTx(tx: Tx, input: AuditInput): Promise<void> {
+  await tx.auditLog.create({ data: auditDaten(input) });
 }
 
 /** Bequemer Wrapper für Erstellen/Ändern/Löschen. */

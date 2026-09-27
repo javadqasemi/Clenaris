@@ -19,6 +19,8 @@ import { PRUEF_SICHERHEITSBERICHT_TOKEN } from '../helpers/webhooks';
 const RUN = Date.now();
 const NEU = `9.${RUN % 1_000_000}.0`;
 const ALT = `0.0.${RUN % 1_000_000}`;
+/** Eine gültig geformte Schweizer IBAN im Freitext — sie darf nicht ins Protokoll. */
+const IBAN_IM_GRUND = 'CH93 0076 2011 6238 5295 7';
 const db = testDb();
 let jars: Record<AccountName, string>;
 let neuId = '';
@@ -151,7 +153,9 @@ describe('Update Center', { concurrency: 1 }, () => {
     const uebermorgen = new Date(Date.now() + 2 * 86_400_000).toISOString();
     assert.equal((await put(`/api/system/releases/${neuId}/termin`, { scheduledFor: uebermorgen }, { jar: jars.super })).status, 200);
 
-    const storno = await post<{ data: { status: string } }>(`/api/system/releases/${neuId}/termin/stornieren`, { grund: 'Ferienzeit' }, { jar: jars.super });
+    // Der Grund ist Freitext; die IBAN darin prüft unten, dass auch dieser Weg
+    // ins Protokoll geschwärzt wird (bis 2026-09-27 ging er daran vorbei).
+    const storno = await post<{ data: { status: string } }>(`/api/system/releases/${neuId}/termin/stornieren`, { grund: `Ferienzeit, Rückfragen an ${IBAN_IM_GRUND}` }, { jar: jars.super });
     assert.equal(storno.status, 200, storno.text);
     assert.equal(data(storno).status, 'CANCELLED');
     assert.equal(await zustandVon(neuId), 'AVAILABLE');
@@ -220,6 +224,12 @@ describe('Update Center', { concurrency: 1 }, () => {
       assert.ok(typeof changes.vonVersion === 'string');
       assert.ok(!JSON.stringify(changes).match(/token|secret|passw|ssh|key/i), 'Geheimnis im Protokoll');
     }
+    // Die Freigaben schrieben ihren Eintrag direkt mit `tx.auditLog.create` —
+    // an der Schwärzung vorbei. Die IBAN aus dem Stornogrund darf nirgends im
+    // Protokoll stehen, weder in der Zusammenfassung noch in den Änderungen.
+    const alles = JSON.stringify(eintraege.map((e) => [e.summary, e.changes]));
+    assert.ok(!alles.includes(IBAN_IM_GRUND) && !alles.includes('CH9300762011623852957'), 'IBAN im Klartext im Prüfprotokoll');
+    assert.ok(texte.some((s) => s.includes('[IBAN redigiert]')), 'der Stornogrund fehlt oder wurde nicht geschwärzt');
     const verschoben = eintraege.find((e) => /verschoben/.test(e.summary ?? ''));
     const termin = (verschoben?.changes as { termin?: { from: string | null; to: string } }).termin;
     assert.ok(termin?.from && termin.to && termin.from !== termin.to, 'alter und neuer Termin fehlen');
