@@ -33,7 +33,7 @@
  */
 
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
-import { appendFileSync, cpSync, existsSync, mkdtempSync, readdirSync, rmSync } from 'node:fs';
+import { appendFileSync, cpSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -155,6 +155,10 @@ function statisch(): void {
   schritt('Prisma-Schema gültig', 'npx prisma validate');
   schritt('Keine Geheimnisse im Repository', 'npm run security:secrets');
   schritt('Sicherheitsprüfung (statisch)', 'npm run security:check:static');
+  // Das Prüfpaket für die Lohnfachprüfung ist aus dem Code erzeugt und muss
+  // zu ihm passen (Sätze, Formeln, Musterfälle gegen Handrechnung) — sonst
+  // prüft die Fachperson einen Stand, der nicht ausgeliefert wird (F-13).
+  schritt('Lohn-Prüfpaket aktuell', 'npx tsx scripts/lohn-pruefpaket.ts --pruefen');
   schritt('Dokumentation erzeugen (OpenAPI, ERD)', 'npm run docs');
   /**
    * `npm run docs` bricht bei einer undokumentierten Route ab; der Vergleich
@@ -258,9 +262,49 @@ async function pruefreihen(basis: string, cacheDir: string | undefined, port: st
     Fassung mit Spec liest `testbilanzLesen` ebenso.
   */
   await schrittMitBilanz('Testreihe (vollständig, seriell, 0 übersprungen)', 'npm test', { env });
-  // Ohne Wiederholungen: Ein Browserfall, der nur im zweiten Anlauf grün
-  // wird, ist rot (Definition of Done, Checkliste G).
-  schritt('Browser-Prüfreihe (ohne Wiederholungen)', 'npx playwright test --retries=0', { env: { ...env, E2E_PORT: port } });
+  browserreihe(env, port);
+}
+
+/**
+ * Browser-Prüfreihe mit Bilanz (2026-09-27, Rest von N-08).
+ *
+ * Ohne Wiederholungen: Ein Browserfall, der nur im zweiten Anlauf grün wird,
+ * ist rot (Definition of Done, Checkliste G). Und wie bei `npm test` zählt
+ * nicht nur der Exitcode: Playwright endet mit 0, wenn Fälle sich per
+ * `test.skip()` verabschieden — etwa ohne Testdatenbank oder ohne passende
+ * Demodaten. Der JSON-Bericht (neben der gewohnten Liste) liefert die Zahlen;
+ * übersprungen, wackelig (`flaky`) oder unerwartet ist ein Fehlschlag, und
+ * ein fehlender Bericht ebenso — ohne Zahlen ist nichts bewiesen.
+ */
+function browserreihe(env: Record<string, string>, port: string): void {
+  const bericht = join(mkdtempSync(join(tmpdir(), 'clenaris-e2e-')), 'bericht.json');
+  schritt('Browser-Prüfreihe (ohne Wiederholungen)', 'npx playwright test --retries=0 --reporter=list,json', {
+    env: { ...env, E2E_PORT: port, PLAYWRIGHT_JSON_OUTPUT_NAME: bericht },
+  });
+  const start = Date.now();
+  type Zahlen = { expected?: number; skipped?: number; unexpected?: number; flaky?: number };
+  const stats: Zahlen | null = (() => {
+    try {
+      return (JSON.parse(readFileSync(bericht, 'utf8')) as { stats?: Zahlen }).stats ?? null;
+    } catch {
+      return null;
+    }
+  })();
+  const gruende: string[] = [];
+  if (!stats) gruende.push('Kein JSON-Bericht der Browserreihe — ohne Zahlen ist nichts bewiesen.');
+  else {
+    if ((stats.expected ?? 0) === 0) gruende.push('Kein einziger Browserfall bestanden.');
+    if ((stats.skipped ?? 0) > 0) gruende.push(`${stats.skipped} Browserfall/-fälle übersprungen.`);
+    if ((stats.flaky ?? 0) > 0) gruende.push(`${stats.flaky} Browserfall/-fälle wackelig.`);
+    if ((stats.unexpected ?? 0) > 0) gruende.push(`${stats.unexpected} Browserfall/-fälle gescheitert.`);
+  }
+  ergebnisse.push({
+    schritt: 'Browser-Bilanz (0 übersprungen, 0 wackelig)',
+    ok: gruende.length === 0,
+    dauerMs: Date.now() - start,
+    hinweis: stats ? `${stats.expected ?? 0} bestanden, ${stats.skipped ?? 0} übersprungen, ${stats.flaky ?? 0} wackelig` : 'kein Bericht',
+  });
+  if (gruende.length) abbrechen(`Browser-Bilanz: ${gruende.join(' ')}`);
 }
 
 async function voll(optionen: { frisch: boolean }): Promise<void> {
