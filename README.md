@@ -16,7 +16,7 @@ Schweizer DSG und DSGVO.
 | | |
 | --- | --- |
 | **Stack** | Next.js 15 (App Router) · React 19 · TypeScript · Tailwind · Prisma 6 · PostgreSQL 16+ |
-| **Umfang** | <!-- kennzahlen:umfang -->166 Seiten · 375 Route-Dateien mit 540 Endpunkten · 151 Datenmodelle · 85 Dienste · 99 Prüfdateien<!-- /kennzahlen:umfang --> (gezählt von `scripts/kennzahlen.ts`) |
+| **Umfang** | <!-- kennzahlen:umfang -->166 Seiten · 375 Route-Dateien mit 540 Endpunkten · 151 Datenmodelle · 85 Dienste · 100 Prüfdateien<!-- /kennzahlen:umfang --> (gezählt von `scripts/kennzahlen.ts`) |
 | **Rollen** | SUPER_ADMIN · ADMIN · MANAGER · EMPLOYEE · CUSTOMER |
 | **Sprache** | Deutsch (Schema und Endpunkte für FR/IT/EN vorbereitet) |
 | **Betrieb** | Eigener Server: Internet → Cloudflare → Cloud Firewall → Nginx → Next.js auf `127.0.0.1:3000`, ausgeliefert über GitHub Actions → SSH → PM2 · Postgres & Objektspeicher · Redis empfohlen |
@@ -48,18 +48,28 @@ getrennt, weil sie verschiedene Zwecke haben:
 
 ### Demozugänge
 
-| Rolle | E-Mail | Passwort |
-| --- | --- | --- |
-| Systemverantwortung | `system@clenaris.ch` | `System#2026Clenaris` |
-| Administration | `admin@clenaris.ch` | `Admin#2026Clenaris` |
-| Betriebsleitung | `manager@clenaris.ch` | `Demo#2026Clenaris` |
-| Mitarbeitende | `anna.keller@clenaris.ch` | `Demo#2026Clenaris` |
-| Kundschaft | `nicole.wyss@example.ch` | `Demo#2026Clenaris` |
+Die Demokonten entstehen **nur auf einem Wegwerf-System**: ausserhalb der
+Produktion und gegen eine Datenbank, deren Name sie als Test-, Vorschau- oder
+Demodatenbank ausweist (`npm run db:test:setup` legt `<name>_test` an), oder
+nach dem bewussten `ALLOW_DEMO_SEED=ja`.
 
-Die beiden Verwaltungskonten folgen `SEED_ADMIN_EMAIL`/`SEED_ADMIN_PASSWORD`
-bzw. `SEED_SUPERADMIN_*`, sobald diese in der `.env` stehen; die Tabelle nennt
-die Rückfallwerte. Auf einem erreichbaren System müssen sie gesetzt sein —
-sonst bricht der Seed ab.
+| Rolle | E-Mail |
+| --- | --- |
+| Systemverantwortung | `system@clenaris.ch` |
+| Administration | `admin@clenaris.ch` |
+| Betriebsleitung | `manager@clenaris.ch` |
+| Mitarbeitende | `anna.keller@clenaris.ch` |
+| Kundschaft | `nicole.wyss@example.ch` |
+
+Die Passwörter sind örtlich für Entwicklung und Prüfung festgelegt
+(`tests/helpers/accounts.ts`) und stehen hier absichtlich nicht mehr. Sie
+waren früher in dieser Datei veröffentlicht und gelten deshalb als
+**verbrannt**: Ein Produktionsbau weist sie bei der Anmeldung und bei jedem
+Passwortwechsel ab, der Seed legt mit ihnen ausserhalb eines Wegwerf-Systems
+kein Konto an, und `npm run production:preflight` prüft jedes aktive Konto
+dagegen (`src/lib/auth/oeffentliche-zugangsdaten.ts`). Ein echtes System
+bekommt sein erstes Verwaltungskonto über `scripts/create-admin.ts` bzw.
+eigene `SEED_ADMIN_PASSWORD`/`SEED_SUPERADMIN_PASSWORD`.
 
 Nach der Anmeldung führt die Rolle an den richtigen Ort: `/admin`, `/portal`
 oder `/konto`.

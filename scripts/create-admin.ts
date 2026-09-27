@@ -1,6 +1,8 @@
 import { PrismaClient, type UserRole } from '@prisma/client';
 import { hash } from '@node-rs/argon2';
 
+import { istOeffentlichesPasswort } from '../src/lib/auth/oeffentliche-zugangsdaten';
+
 /**
  * Legt ein Verwaltungskonto an oder setzt es zurück.
  *
@@ -36,6 +38,18 @@ async function main() {
   }
   if (password.length < 10) {
     console.error('Das Passwort muss mindestens 10 Zeichen haben.');
+    process.exit(1);
+  }
+  /**
+   * Veröffentlichte Passwörter nie — auch nicht in der Entwicklung
+   * (Notfallauftrag 2026-09-27). Dieses Skript ist genau der Weg, auf dem das
+   * erste Verwaltungskonto eines neuen Systems entsteht; es ist der letzte
+   * Ort, an dem ein Passwort aus dem Repository landen darf. Anders als
+   * Anmeldung und Seed kennt es deshalb keine Ausnahme für Wegwerf-Systeme:
+   * Wer dort ein Verwaltungskonto braucht, hat den Seed.
+   */
+  if (istOeffentlichesPasswort(password)) {
+    console.error('Dieses Passwort ist öffentlich bekannt (es stand im Repository) und wird nicht gesetzt. Erzeugen: openssl rand -base64 24');
     process.exit(1);
   }
   const role: UserRole = roleArg;

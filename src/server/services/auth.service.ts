@@ -5,6 +5,7 @@ import type { UserRole } from '@prisma/client';
 
 import { prisma } from '@/lib/db';
 import { hashPassword, verifyPassword } from '@/lib/auth/password';
+import { passwortHierGesperrt } from '@/lib/auth/oeffentliche-zugangsdaten';
 import { hashToken, randomToken } from '@/lib/auth/jwt';
 import { clientIpFrom, createSession, revokeAllSessions } from '@/lib/auth/session';
 import { BusinessRuleError, ConflictError, NotFoundError, UnauthorizedError } from '@/lib/errors';
@@ -297,6 +298,49 @@ export async function login(params: { input: LoginInput; ip: string }) {
       });
     }
 
+    throw new UnauthorizedError('E-Mail-Adresse oder Passwort ist falsch.');
+  }
+
+  /**
+   * Richtiges Passwort — aber ein veröffentlichtes (Notfallauftrag
+   * 2026-09-27, `oeffentliche-zugangsdaten.ts`).
+   *
+   * Geprüft **nach** Argon2 und nicht davor: Nur so steht fest, dass das Konto
+   * dieses Passwort wirklich trägt, und nur dann ist das Ereignis eines — ein
+   * Tippversuch mit dem Demopasswort auf ein sauberes Konto ist ein gewöhnlicher
+   * Fehlversuch und oben bereits gezählt.
+   *
+   * Die Antwort ist dieselbe wie beim falschen Passwort. Eine eigene Meldung
+   * bestätigte dem, der die Liste aus dem Repository durchprobiert, dass er
+   * das Konto getroffen hat. Die rechtmässige Inhaberin erfährt es über das
+   * Sicherheitszentrum und kommt über „Passwort vergessen" wieder hinein —
+   * dort setzt sie ein neues, und `hashPassword` weist das alte dabei ab.
+   *
+   * Kein Fehlversuch im Zähler: Die Sperre nach acht Versuchen soll Raten
+   * bremsen, und hier wird nicht geraten. Wer das veröffentlichte Passwort
+   * kennt, braucht keine acht Versuche, und die Inhaberin soll sich nicht
+   * aussperren, während sie versteht, was los ist.
+   *
+   * Das Passwort selbst steht in keinem Ereignis — nur, dass es eines der
+   * veröffentlichten war.
+   */
+  if (passwortHierGesperrt(params.input.password)) {
+    await recordSecurityEvent({
+      organizationId: user.organizationId,
+      userId: user.id,
+      kind: 'LOGIN_BLOCKED',
+      summary: 'Anmeldung mit einem öffentlich bekannten Passwort abgewiesen — Passwort zurücksetzen',
+      ip: params.ip,
+    });
+    await audit.denied({
+      organizationId: user.organizationId,
+      userId: user.id,
+      entity: 'User',
+      entityId: user.id,
+      summary: 'Anmeldung mit öffentlich bekanntem Passwort abgewiesen',
+      ip: params.ip,
+    });
+    log.warn('Anmeldung mit öffentlich bekanntem Passwort abgewiesen', { userId: user.id });
     throw new UnauthorizedError('E-Mail-Adresse oder Passwort ist falsch.');
   }
 
