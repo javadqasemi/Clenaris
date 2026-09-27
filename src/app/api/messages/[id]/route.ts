@@ -3,6 +3,7 @@ import { created, ok } from '@/lib/api/response';
 import { prisma } from '@/lib/db';
 import { BusinessRuleError, ForbiddenError, NotFoundError } from '@/lib/errors';
 import { replyMessageSchema } from '@/lib/validation/messaging';
+import { dateienBinden } from '@/server/services/file.service';
 import { notify, notifyStaff } from '@/server/services/notification.service';
 import { getOrganizationId } from '@/server/services/organization.service';
 
@@ -121,17 +122,11 @@ export const POST = defineRoute({
       });
 
       if (body.fileIds?.length) {
-        // Wie bei Buchung und Beleg: nur eine abgeschlossene, also geprüfte
-        // Datei hängt sich an eine Nachricht.
-        await tx.fileAsset.updateMany({
-          where: {
-            id: { in: body.fileIds },
-            organizationId,
-            uploadedById: session.id,
-            checksum: { not: null },
-          },
-          data: { messageId: createdMessage.id },
-        });
+        // Derselbe Weg wie Buchung und Beleg (`dateienBinden`, 2026-09-27):
+        // eigene Uploads, ungebunden, abgeschlossen — und eine Kennung, die
+        // nicht passt, lässt die Nachricht scheitern statt still zu fehlen.
+        // Nachrichtenanhänge kommen über das Dokumentprofil.
+        await dateienBinden(tx, { organizationId, fileIds: body.fileIds, uploadedById: session.id, scope: 'DOCUMENT', ziel: 'messageId', zielId: createdMessage.id });
       }
 
       await tx.messageThread.update({

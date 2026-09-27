@@ -703,7 +703,6 @@ Familie.
 | `rooms` | number | – | ≥ 0.5, ≤ 100 |
 | `frequency` | string | – | `ONCE` \| `WEEKLY` \| `BIWEEKLY` \| `MONTHLY` \| `QUARTERLY` \| `SEMIANNUAL` \| `ANNUAL` \| `CUSTOM`, Standard `"ONCE"` |
 | `preferredDate` | string | – | – |
-| `fileIds` | string[] | – | max. 10 Einträge, Standard `[]` |
 
 ## Dateien
 

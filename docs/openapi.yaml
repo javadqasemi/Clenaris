@@ -28346,13 +28346,6 @@ paths:
                 preferredDate:
                   type: 'string'
                   pattern: '^\d{4}-\d{2}-\d{2}$'
-                fileIds:
-                  type: 'array'
-                  items:
-                    type: 'string'
-                    minLength: 1
-                  maxItems: 10
-                  default: []
               required:
                 - 'firstName'
                 - 'lastName'

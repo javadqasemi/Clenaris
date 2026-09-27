@@ -8,7 +8,7 @@ import { absoluteUrl } from '@/lib/utils';
 import { orderByFor, resolveSort, type SortOrder } from '@/lib/sort';
 import { randomToken } from '@/lib/auth/jwt';
 import { audit } from '@/lib/audit';
-import { emitAutomationTrigger } from './automation-engine.service';
+import { automationEreignisseAbarbeiten, automationEreignisVormerken } from './automation-engine.service';
 import { sendEmail } from '@/lib/email/client';
 import { contactAutoReplyEmail, newLeadInternalEmail } from '@/lib/email/templates';
 import { hasIntegration } from '@/lib/env';
@@ -209,8 +209,6 @@ export async function createLeadFromContactForm(params: {
       },
     });
 
-    await attachRequestFiles(params.organizationId, input);
-
     await audit.updated({
       organizationId: params.organizationId,
       entity: 'Lead',
@@ -258,7 +256,7 @@ export async function createLeadFromContactForm(params: {
       select: { id: true },
     });
 
-    return tx.lead.create({
+    const angelegt = await tx.lead.create({
       data: {
         organizationId: params.organizationId,
         number,
@@ -288,9 +286,10 @@ export async function createLeadFromContactForm(params: {
         },
       },
     });
+    await automationEreignisVormerken(tx, { organizationId: params.organizationId, trigger: 'LEAD_CREATED', entityId: angelegt.id });
+    return angelegt;
   });
 
-  await attachRequestFiles(params.organizationId, input);
   await sendContactAutoReply(input.email, input.firstName, lead.id);
 
   // Interne Benachrichtigung.
@@ -329,11 +328,8 @@ export async function createLeadFromContactForm(params: {
     ip: params.ip,
   });
 
-  await emitAutomationTrigger({
-    organizationId: params.organizationId,
-    trigger: 'LEAD_CREATED',
-    entityId: lead.id,
-  });
+  // Vermerkt in der Transaktion oben; hier nur noch abarbeiten (Outbox).
+  await automationEreignisseAbarbeiten({ organizationId: params.organizationId });
 
   return { ...lead, isNew: true };
 }
@@ -358,18 +354,6 @@ async function sendContactAutoReply(
     templateKey: 'contact_auto_reply',
     entity: 'Lead',
     entityId: leadId,
-  });
-}
-
-/** Mit der Anfrage hochgeladene Dateien der Organisation zuordnen. */
-async function attachRequestFiles(
-  organizationId: string,
-  input: ContactFormInput | QuoteRequestInput,
-): Promise<void> {
-  if (!('fileIds' in input) || input.fileIds.length === 0) return;
-  await prisma.fileAsset.updateMany({
-    where: { id: { in: input.fileIds }, organizationId },
-    data: { scope: 'OTHER' },
   });
 }
 
@@ -405,7 +389,7 @@ export async function createLead(params: {
   const lead = await prisma.$transaction(async (tx) => {
     const { number } = await nextNumber(tx, params.organizationId, 'lead');
 
-    return tx.lead.create({
+    const angelegt = await tx.lead.create({
       data: {
         organizationId: params.organizationId,
         number,
@@ -429,6 +413,8 @@ export async function createLead(params: {
         },
       },
     });
+    await automationEreignisVormerken(tx, { organizationId: params.organizationId, trigger: 'LEAD_CREATED', entityId: angelegt.id });
+    return angelegt;
   });
 
   await audit.created({
@@ -439,11 +425,7 @@ export async function createLead(params: {
     summary: `Lead ${lead.number} manuell erfasst`,
   });
 
-  await emitAutomationTrigger({
-    organizationId: params.organizationId,
-    trigger: 'LEAD_CREATED',
-    entityId: lead.id,
-  });
+  await automationEreignisseAbarbeiten({ organizationId: params.organizationId });
 
   return lead;
 }

@@ -64,7 +64,10 @@ export const quoteRequestSchema = contactFormSchema.extend({
     .enum(['ONCE', 'WEEKLY', 'BIWEEKLY', 'MONTHLY', 'QUARTERLY', 'SEMIANNUAL', 'ANNUAL', 'CUSTOM'])
     .default('ONCE'),
   preferredDate: dateOnlySchema.optional(),
-  fileIds: z.array(cuidSchema).max(10).default([]),
+  // `fileIds` entfernt (2026-09-27): Das Formular hat keinen Upload, und der
+  // Dienst setzte den Zweck jeder genannten Datei der Organisation auf
+  // `OTHER` — ohne sie an die Anfrage zu hängen. Eine Kennung aus einem
+  // öffentlichen Formular ist keine Berechtigung auf eine Datei.
 });
 export type QuoteRequestInput = z.infer<typeof quoteRequestSchema>;
 

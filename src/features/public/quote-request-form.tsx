@@ -68,7 +68,6 @@ export function QuoteRequestForm({
       city: '',
       message: '',
       frequency: 'ONCE',
-      fileIds: [],
       acceptPrivacy: false as unknown as true,
       website: '',
     },

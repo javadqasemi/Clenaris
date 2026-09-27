@@ -4,6 +4,7 @@ import { prisma, toNumber } from '@/lib/db';
 import { round2 } from '@/lib/utils';
 import { audit } from '@/lib/audit';
 import { createExpenseSchema } from '@/lib/validation/finance';
+import { dateienBinden } from '@/server/services/file.service';
 import { getOrganizationId } from '@/server/services/organization.service';
 
 export const runtime = 'nodejs';
@@ -52,7 +53,8 @@ export const POST = defineRoute({
     const vatAmount = round2(body.netAmount * (body.vatRate / 100));
     const grossAmount = round2(body.netAmount + vatAmount);
 
-    const expense = await prisma.expense.create({
+    const expense = await prisma.$transaction(async (tx) => {
+      const angelegt = await tx.expense.create({
       data: {
         organizationId,
         supplierId: body.supplierId ?? null,
@@ -72,15 +74,15 @@ export const POST = defineRoute({
       },
     });
 
-    if (body.fileIds.length > 0) {
-      // Nur geprüfte Dateien: `checksum: { not: null }` heisst, der
-      // Abschluss hat die Bytes gesehen. Ohne die Bedingung liesse sich ein
-      // nicht geprüftes Asset als Beleg anhängen.
-      await prisma.fileAsset.updateMany({
-        where: { id: { in: body.fileIds }, organizationId, checksum: { not: null } },
-        data: { expenseId: expense.id, scope: 'EXPENSE' },
-      });
-    }
+      // Belege nur aus den eigenen Uploads mit dem Beleg-Profil, ungebunden,
+      // ohne den Zweck umzuschreiben (`dateienBinden`, 2026-09-27). Vorher
+      // wurde jede Datei der Organisation zum Beleg — auch eine
+      // Lohnabrechnung, die damit für jede Rolle mit `expense:read` lesbar
+      // wurde. In derselben Transaktion: Passt ein Anhang nicht, entsteht
+      // auch die Ausgabe nicht.
+      await dateienBinden(tx, { organizationId, fileIds: body.fileIds, uploadedById: session.id, scope: 'EXPENSE', ziel: 'expenseId', zielId: angelegt.id });
+      return angelegt;
+    });
 
     await audit.created({
       organizationId,

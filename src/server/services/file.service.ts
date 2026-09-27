@@ -117,6 +117,58 @@ function zuordnungFuer(profile: UploadProfile, session: SessionUser | null): Zuo
   return { ...basis, beziehung: {} };
 }
 
+/**
+ * Hochgeladene Dateien an ein Geschäftsobjekt binden — **der eine Weg**
+ * (2026-09-27).
+ *
+ * Bis dahin band jede Stelle selbst, und fast jede zu weit: Die Buchung und
+ * der Ausgabenbeleg nahmen jede Datei der Organisation, deren Kennung jemand
+ * kannte, und **überschrieben ihren Zweck** — eine Lohnabrechnung wurde zum
+ * Beleg und für jede Rolle mit `expense:read` lesbar; die Kontaktformulare
+ * setzten den Zweck fremder Dateien auf `OTHER`. Eine Kennung ist keine
+ * Berechtigung.
+ *
+ * Gebunden wird jetzt nur, was **diese** Person hochgeladen hat, mit dem
+ * Zweck, den das Upload-Profil für genau diese Verwendung vergibt, was noch
+ * an keinem Objekt dieser Art hängt, abgeschlossen ist (Prüfsumme) und nicht
+ * als schädlich oder unprüfbar gilt. Der Zweck wird nie umgeschrieben. Die
+ * Bindung ist ein einziger bedingter Übergang; passt eine Kennung nicht,
+ * scheitert der ganze Vorgang — eine still übergangene Kennung verdeckte
+ * genau den Versuch, der hier abgewiesen wird.
+ *
+ * Noch nicht fertig geprüfte Dateien (PENDING, SCANNING) dürfen gebunden
+ * werden: Ausgeliefert werden sie trotzdem erst, wenn der Prüfer sie für
+ * sauber hält (`pruefeAuslieferung`).
+ */
+export async function dateienBinden(
+  tx: Prisma.TransactionClient,
+  p: {
+    organizationId: string;
+    fileIds: string[];
+    uploadedById: string;
+    scope: FileScope;
+    ziel: 'bookingId' | 'expenseId' | 'messageId';
+    zielId: string;
+  },
+): Promise<void> {
+  const ids = [...new Set(p.fileIds)];
+  if (ids.length === 0) return;
+  const gebunden = await tx.fileAsset.updateMany({
+    where: {
+      id: { in: ids },
+      organizationId: p.organizationId,
+      uploadedById: p.uploadedById,
+      scope: p.scope,
+      isPublic: false,
+      checksum: { not: null },
+      scanStatus: { notIn: ['INFECTED', 'QUARANTINED', 'ERROR'] },
+      [p.ziel]: null,
+    },
+    data: { [p.ziel]: p.zielId },
+  });
+  if (gebunden.count !== ids.length) throw new NotFoundError('Datei');
+}
+
 export interface AbschlussErgebnis {
   fileAssetId: string;
   url: string;
