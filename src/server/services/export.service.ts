@@ -4,7 +4,7 @@ import ExcelJS from 'exceljs';
 
 import { prisma, toNumber } from '@/lib/db';
 import { round2 } from '@/lib/utils';
-import { csvZeile } from '@/lib/csv';
+import { csvZeile, formelsicher } from '@/lib/csv';
 import { tagPlus, zuercherFelder, zuercherTag, zuercherTagesbeginn } from '@/lib/zuerich';
 import { audit } from '@/lib/audit';
 import type { AccountingExportInput } from '@/lib/validation/finance';
@@ -47,6 +47,24 @@ function autoFilterAndZebra(sheet: ExcelJS.Worksheet) {
       row.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: BRAND.zebra } };
     }
   });
+}
+
+/**
+ * Die ganze Mappe vor dem Schreiben entschärfen (2026-09-27): jede
+ * Textzelle, die mit einem Formelzeichen beginnt, bekommt den Apostroph aus
+ * `formelsicher`. Ein Durchgang über alle Zellen statt einer Stelle je
+ * Spalte — so kann eine neue Spalte mit Freitext nicht vergessen werden.
+ * Zahlen, Daten und echte Formeln der Anwendung (keine hier) bleiben.
+ */
+export async function mappeSchreiben(workbook: ExcelJS.Workbook): Promise<Buffer> {
+  workbook.eachSheet((sheet) => {
+    sheet.eachRow((row) => {
+      row.eachCell((cell) => {
+        if (typeof cell.value === 'string') cell.value = formelsicher(cell.value);
+      });
+    });
+  });
+  return Buffer.from(await workbook.xlsx.writeBuffer());
 }
 
 // ---------------------------------------------------------------------------
@@ -144,7 +162,7 @@ export async function exportInvoicesXlsx(params: {
     summary: `${invoices.length} Rechnungen als Excel exportiert`,
   });
 
-  const buffer = Buffer.from(await workbook.xlsx.writeBuffer());
+  const buffer = await mappeSchreiben(workbook);
   return {
     buffer,
     filename: `Rechnungen_${formatFileDate(params.from)}_${formatFileDate(params.to)}.xlsx`,
@@ -219,7 +237,7 @@ export async function exportCustomersXlsx(params: {
   });
 
   return {
-    buffer: Buffer.from(await workbook.xlsx.writeBuffer()),
+    buffer: await mappeSchreiben(workbook),
     filename: `Kunden_${formatFileDate(new Date())}.xlsx`,
   };
 }
@@ -337,7 +355,7 @@ export async function exportTimesheetsXlsx(params: {
   });
 
   return {
-    buffer: Buffer.from(await workbook.xlsx.writeBuffer()),
+    buffer: await mappeSchreiben(workbook),
     filename: `Zeiterfassung_${formatFileDate(params.from)}_${formatFileDate(params.to)}.xlsx`,
   };
 }

@@ -30,11 +30,25 @@
 const FORMELANFANG = /^[=+\-@\t\r]/;
 const REINE_ZAHL = /^[+-]?\d+(?:[.,]\d+)?$/;
 
+/**
+ * Einen Text entschärfen, der als Formel gelesen werden könnte — dieselbe
+ * Regel für CSV und Excel (2026-09-27).
+ *
+ * Für Excel-Mappen (`exceljs`): Eine Zeichenkette landet dort als Textzelle
+ * und wird beim Öffnen nicht ausgewertet. Aber ein Doppelklick in die Zelle
+ * und Enter macht aus `=HYPERLINK(…)` eine lebende Formel, und wer die Mappe
+ * als CSV weiterspeichert, hat das CSV-Problem zurück. Die Exporte der
+ * Kundschaft, Rechnungen und Zeiten schrieben Freitext bis dahin
+ * ungeschützt.
+ */
+export function formelsicher(text: string): string {
+  return FORMELANFANG.test(text) && !REINE_ZAHL.test(text) ? `'${text}` : text;
+}
+
 /** Eine Zelle entschärfen und — wo nötig — in Anführungszeichen setzen. */
 export function csvZelle(wert: unknown, trenner = ';'): string {
   if (wert === null || wert === undefined) return '';
-  let text = String(wert);
-  if (FORMELANFANG.test(text) && !REINE_ZAHL.test(text)) text = `'${text}`;
+  const text = formelsicher(String(wert));
   const braucht = text.includes(trenner) || /["\r\n]/.test(text);
   return braucht ? `"${text.replace(/"/g, '""')}"` : text;
 }

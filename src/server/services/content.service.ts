@@ -8,7 +8,7 @@ import { prisma, Prisma } from '@/lib/db';
 import { cache, cacheKeys } from '@/lib/redis';
 import { logger } from '@/lib/logger';
 import { audit, diff } from '@/lib/audit';
-import { NotFoundError } from '@/lib/errors';
+import { BusinessRuleError, NotFoundError } from '@/lib/errors';
 import type { UpdateSeoInput } from '@/lib/validation/cms';
 import {
   CONTENT_DEFINITIONS,
@@ -581,13 +581,20 @@ export async function publishContent(params: {
 
   await invalidateContent(params.organizationId);
 
-  await audit.updated({
-    organizationId: params.organizationId,
-    userId: params.actorId,
-    entity: 'ContentBlock',
-    entityId: params.organizationId,
-    summary: `${blocks.length} Website-Baustein(e) veröffentlicht`,
-  });
+  // Eine Zeile je Baustein, mit seiner Kennung und seinem Schlüssel
+  // (2026-09-27). Vorher eine Sammelzeile mit der Organisation als
+  // `entityId` und nur einer Zahl — welcher Text wann live ging, stand
+  // nirgends. Die Fassung selbst liegt in der Historie (`ContentRevision`).
+  for (const block of blocks) {
+    await audit.updated({
+      organizationId: params.organizationId,
+      userId: params.actorId,
+      entity: 'ContentBlock',
+      entityId: block.id,
+      summary: `Website-Baustein „${block.key}" veröffentlicht`,
+      changes: { key: block.key },
+    });
+  }
 
   return blocks.length;
 }
@@ -757,6 +764,25 @@ export async function updateAssetField(params: {
 }): Promise<{ url: string | null }> {
   if (!isAssetField(params.entity, params.field)) {
     throw new NotFoundError('Bildfeld');
+  }
+
+  /*
+    Eine Adresse der eigenen Ablage nur, wenn sie eine **öffentliche** Datei
+    dieser Organisation bezeichnet (2026-09-27, Standard C12). Vorher nahm
+    das Bildfeld jeden Pfad `/api/files/blob/…` — auch den eines privaten
+    Nachrichtenanhangs. Ausgeliefert hätte ihn die Ablage zwar nicht (sie
+    prüft selbst), aber die Website hätte auf eine private Datei verwiesen und
+    ihre Kennung jedem Besucher gezeigt. Bilder für die Website kommen über
+    die Mediathek, und die legt sie öffentlich ab.
+  */
+  const ablage = params.url ? /^\/api\/files\/blob\/([^/?#]+)/.exec(params.url) : null;
+  if (ablage) {
+    const oeffentlich = await prisma.fileAsset.count({
+      where: { storedFileId: ablage[1], organizationId: params.organizationId, isPublic: true },
+    });
+    if (oeffentlich === 0) {
+      throw new BusinessRuleError('Dieses Bild ist nicht für die Website freigegeben. Bitte über die Mediathek hochladen.');
+    }
   }
 
   /**

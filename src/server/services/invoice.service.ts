@@ -859,6 +859,29 @@ export async function recordPayment(params: {
 
   function zahlungBuchen() {
     return prisma.$transaction(async (tx) => {
+    /*
+      Eine von Hand erfasste Zahlung höchstens bis zum offenen Saldo
+      (2026-09-27), geprüft hinter einer Zeilensperre der Rechnung, damit zwei
+      gleichzeitige Erfassungen nicht beide „passt noch" lesen. Vorher nahm
+      die Erfassung jeden positiven Betrag an — ein Tippfehler (1800 statt
+      180) ergab einen negativen Saldo und einen um 1620 zu hohen Kundenwert.
+      Ein Betrag, der nach Rundung auf Rappen null ist, ist keine Zahlung.
+
+      **Nicht** für Zahlungen eines Anbieters (`provider`): Deren Geld ist
+      schon eingegangen, und eine Überzahlung muss gebucht werden, um sie
+      zurückzuzahlen — sie abzuweisen hiesse, eingegangenes Geld zu
+      verschweigen.
+    */
+    if (!params.provider) {
+      await tx.$queryRaw`SELECT id FROM invoices WHERE id = ${invoice!.id} FOR UPDATE`;
+      const offen = await tx.invoice.findUniqueOrThrow({ where: { id: invoice!.id }, select: { balance: true } });
+      if (amount <= 0) throw new BusinessRuleError('Der Betrag muss mindestens einen Rappen betragen.');
+      if (amount > toNumber(offen.balance)) {
+        throw new BusinessRuleError(
+          `Der Betrag übersteigt den offenen Saldo von CHF ${toNumber(offen.balance).toFixed(2)}. Eine Überzahlung bitte als Gutschrift oder Rückzahlung behandeln.`,
+        );
+      }
+    }
     await tx.payment.create({
       data: {
         invoiceId: invoice!.id,
@@ -1016,6 +1039,18 @@ export async function processOverdueInvoices(organizationId: string): Promise<{
         data: { reminderLevel: level, lastReminderAt: now },
       }),
     ]);
+
+    // Seit 2026-09-27 protokolliert: Eine Mahnung mit Gebühr ändert die
+    // Forderung gegenüber der Kundschaft und ist eine der ersten Fragen jeder
+    // Reklamation („wann wurde ich gemahnt, mit welcher Gebühr?"). Ohne
+    // handelnde Person — der Tageslauf mahnt, nicht jemand im Büro.
+    await audit.updated({
+      organizationId,
+      entity: 'Invoice',
+      entityId: invoice.id,
+      summary: `${level === 1 ? 'Zahlungserinnerung' : `${level - 1}. Mahnung`} zu Rechnung ${invoice.number} versendet${fee > 0 ? ` (Gebühr CHF ${fee.toFixed(2)})` : ''}`,
+      changes: { reminderLevel: level, fee },
+    });
 
     sent++;
   }

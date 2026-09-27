@@ -26,6 +26,7 @@ import { changePct, healthStatus, riskBand } from '@/lib/bi/math';
 import { formatKpiValue, HEALTH_STATUS_LABELS, OBJECTIVE_STATUS_LABELS, REPORT_KIND_LABELS, RISK_BAND_LABELS } from '@/lib/bi/labels';
 import { dateOnly, periodOf, shiftPeriod, toDateOnly, zurichMidnight, type PeriodBounds } from '@/lib/bi/periods';
 import type { CreateReportScheduleInput, GenerateReportInput, UpdateReportScheduleInput } from '@/lib/validation/bi-reports';
+import { mappeSchreiben } from './export.service';
 import { computeHealth, type HealthComponent } from './health.service';
 import { getInsights, type Insight } from './insight.service';
 
@@ -243,7 +244,9 @@ async function renderXlsx(content: ReportContent): Promise<Buffer> {
     r.getRow(1).font = { bold: true };
   }
 
-  return Buffer.from(await workbook.xlsx.writeBuffer());
+  // Über denselben entschärfenden Schreibweg wie die Datenexporte: Ziel- und
+  // Risikotitel sind Freitext (2026-09-27).
+  return mappeSchreiben(workbook);
 }
 
 async function renderDocx(content: ReportContent): Promise<Buffer> {
