@@ -2,7 +2,7 @@ import 'server-only';
 
 import type { Prisma } from '@prisma/client';
 
-import { audit } from '@/lib/audit';
+import { audit, recordAuditInTx } from '@/lib/audit';
 import { zurichParts } from '@/lib/bi/periods';
 import { prisma, toNumber, type Tx } from '@/lib/db';
 import { BusinessRuleError, NotFoundError } from '@/lib/errors';
@@ -120,6 +120,25 @@ export function berechneMinuten(startedAt: Date, endedAt: Date, breakMin: number
 }
 
 /**
+ * Die Transaktionssperre der Zeiterfassung einer Person — **die eine**.
+ *
+ * Exportiert, weil es zwei Schreibwege in die Zeiterfassung gibt: diesen
+ * Dienst (Nacherfassung, Korrektur) und das Einstempeln in `job.service.ts`
+ * (`clockIn`). Bis 2026-09-27 nahm nur dieser Dienst die Sperre; `clockIn`
+ * prüfte die laufende Erfassung ausserhalb jeder Transaktion (N-01). Zwei
+ * Stempelungen im selben Augenblick — Doppeltipp, zwei Geräte, ein
+ * wiederholter Aufruf nach einem Zeitlimit — lasen beide „nichts offen" und
+ * legten beide eine laufende Erfassung an: doppelter Lohn für dieselbe Zeit.
+ *
+ * Der Schlüssel steht nur hier. Schrieben zwei Stellen ihn je selbst hin,
+ * genügte ein Tippfehler in einer davon, und die beiden Wege sperrten
+ * einander nicht mehr — ohne dass es irgendwo auffiele.
+ */
+export async function zeiterfassungSperren(tx: Tx, employeeId: string): Promise<void> {
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`zeiterfassung:${employeeId}`}))`;
+}
+
+/**
  * Überschneidet sich dieser Zeitraum mit einer anderen Erfassung derselben
  * Person?
  *
@@ -145,7 +164,7 @@ async function pruefeUeberschneidung(
     Transaktionssperre, die mit dem Commit endet — der Aufrufer muss also in
     einer Transaktion sein, und alle sind es.
   */
-  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`zeiterfassung:${employeeId}`}))`;
+  await zeiterfassungSperren(tx, employeeId);
   const andere = await tx.timeEntry.findMany({
     where: {
       employeeId,
@@ -580,20 +599,76 @@ export async function approveTimeEntries(params: {
   }
 
   /**
-   * Die Bedingung steht in der `where`-Klausel, nicht nur in der Auswahl
-   * oben. Zwischen Lesen und Schreiben kann jemand anders freigegeben haben;
-   * so entscheidet die Datenbank, und der zweite Aufruf überschreibt weder
-   * Zeitpunkt noch Person des ersten.
+   * Freigabe und Protokoll in **einer** Transaktion (F-14, 2026-09-27).
+   *
+   * Vorher schrieb die Freigabe zuerst und protokollierte danach mit
+   * `audit.updated` — nach bestem Bemühen, Fehler verschluckt. Klemmte das
+   * Protokoll, stand eine Zeit als freigegeben in der Lohngrundlage, ohne
+   * dass sich je feststellen liess, wer sie freigegeben hat. Eine Freigabe
+   * ist genau der Vorgang, den es ohne Eintrag nicht geben darf (siehe
+   * `recordAuditInTx` in `lib/audit.ts`): Jetzt scheitert sie mit dem Eintrag,
+   * und ein zurückgerollter Versuch hinterlässt auch keine Zeile, die eine
+   * nie geschehene Freigabe bezeugt.
+   *
+   * **Welche Zeilen tatsächlich freigegeben wurden, entscheidet die
+   * Zeilensperre.** `FOR UPDATE` mit der Bedingung in der `WHERE`-Klausel: Hat
+   * eine gleichzeitige Freigabe eine Zeile gerade gesperrt, wartet diese
+   * Abfrage, prüft die Bedingung danach auf dem *neuen* Stand der Zeile
+   * erneut (READ COMMITTED) und lässt sie weg. Die zurückgegebenen Kennungen
+   * sind also genau die, die dieser Aufruf freigibt — nicht die, die er beim
+   * Lesen oben für freigebbar hielt. Vorher wurden die Protokollzeilen danach
+   * über `approvedById` zusammengesucht; zwei gleichzeitige Freigaben
+   * derselben Person hätten dabei die Zeilen der jeweils anderen mitgezählt.
+   * Weder Zeitpunkt noch Person einer früheren Freigabe werden überschrieben.
    */
-  const treffer = await prisma.timeEntry.updateMany({
-    where: { id: { in: geeignet }, approved: false, endedAt: { not: null } },
-    data: { approved: true, approvedById: params.actorId },
+  const freigegebeneIds = await prisma.$transaction(async (tx) => {
+    const gesperrt = await tx.$queryRaw<{ id: string }[]>`
+      SELECT id FROM time_entries
+      WHERE id = ANY(${geeignet}::text[]) AND approved = false AND "endedAt" IS NOT NULL
+      FOR UPDATE`;
+    const ids = gesperrt.map((zeile) => zeile.id);
+    if (ids.length === 0) return ids;
+
+    await tx.timeEntry.updateMany({
+      where: { id: { in: ids } },
+      data: { approved: true, approvedById: params.actorId },
+    });
+
+    /*
+      Eine Zeile je Erfassung (2026-09-27). Vorher stand die ganze Freigabe
+      in einer Zeile ohne `entityId`, die Kennungen nur im Änderungsfeld: Die
+      Frage „wer hat diese Zeit freigegeben?" liess sich im Protokoll einer
+      Erfassung nicht beantworten, weil sie dort gar nicht auftauchte.
+      Geschrieben über `recordAuditInTx` — derselbe Weg mit derselben
+      Schwärzung (`auditDaten`) wie jeder andere Eintrag, nur in der
+      Transaktion.
+    */
+    for (const id of ids) {
+      await recordAuditInTx(tx, {
+        organizationId: params.organizationId,
+        userId: params.actorId,
+        action: 'UPDATE',
+        entity: 'TimeEntry',
+        entityId: id,
+        summary: 'Zeiterfassung freigegeben',
+        changes: { approved: true },
+        ip: params.ip,
+      });
+    }
+    return ids;
   });
 
-  // Eine späte Freigabe in einem berechneten, noch offenen Monat ändert dessen Stundenlohn.
+  /*
+    Eine späte Freigabe in einem berechneten, noch offenen Monat ändert dessen
+    Stundenlohn. Nach dem Festschreiben und nur für die tatsächlich
+    freigegebenen Zeilen: Die Markierung ist ein Hinweis zum Neuberechnen,
+    kein Beleg — sie darf die Freigabe nicht zurückrollen, und ein Monat,
+    dessen Zeiten ein anderer Aufruf freigegeben hat, markiert jener.
+  */
+  const freigegebenSet = new Set(freigegebeneIds);
   await markiereMonateVeraltet(
     eintraege
-      .filter((e) => geeignet.includes(e.id))
+      .filter((e) => freigegebenSet.has(e.id))
       .map((e) => {
         const p = zurichParts(e.startedAt);
         return { employeeId: e.employeeId, year: p.year, month: p.month };
@@ -601,33 +676,9 @@ export async function approveTimeEntries(params: {
     'Zeiten freigegeben',
   );
 
-  /*
-    Eine Zeile je Erfassung (2026-09-27). Vorher stand die ganze Freigabe in
-    einer Zeile ohne `entityId`, die Kennungen nur im Änderungsfeld: Die
-    Frage „wer hat diese Zeit freigegeben?" liess sich im Protokoll einer
-    Erfassung nicht beantworten, weil sie dort gar nicht auftauchte. Nur die
-    tatsächlich freigegebenen — wer zwischen Lesen und Schreiben schon
-    freigegeben war, hat die Zeile des anderen.
-  */
-  const tatsaechlich = await prisma.timeEntry.findMany({
-    where: { id: { in: geeignet }, approved: true, approvedById: params.actorId },
-    select: { id: true },
-  });
-  for (const { id } of tatsaechlich) {
-    await audit.updated({
-      organizationId: params.organizationId,
-      userId: params.actorId,
-      entity: 'TimeEntry',
-      entityId: id,
-      summary: 'Zeiterfassung freigegeben',
-      changes: { approved: true },
-      ip: params.ip,
-    });
-  }
-
   return {
-    freigegeben: treffer.count,
-    uebersprungen: eintraege.length - treffer.count,
+    freigegeben: freigegebeneIds.length,
+    uebersprungen: eintraege.length - freigegebeneIds.length,
   };
 }
 

@@ -435,6 +435,101 @@ describe('Disposition — Buchung, Einsatz, Zuteilung', () => {
   });
 
   /**
+   * F-06 (2026-09-27): `assignJob` fragte nur nach der Person, nie nach dem
+   * Einsatz. `setJobTeam` wies abgeschlossene Einsätze ab, `/assign` — dieselbe
+   * Handlung aus dem Kalender — ersetzte das Team trotzdem, auch an einem
+   * abgesagten Einsatz. Geprüft wird die Abweisung **und** dass das Team
+   * danach dasselbe ist.
+   */
+  it('Zuteilung an einen abgeschlossenen oder abgesagten Einsatz → 422, das Team bleibt', async () => {
+    const angelegt = await jobAnlegen({ customerId, addressId, title: `${TITEL} abgeschlossen`, scheduledStart: tag(TAG0 + 40, 8), scheduledEnd: tag(TAG0 + 40, 11) });
+    assert.equal(angelegt.status, 201, angelegt.text);
+    const jobId = data(angelegt).id;
+    angelegteJobs.push(jobId);
+
+    const zugeteilt = await post(`/api/jobs/${jobId}/assign`, { employeeIds: [zweiteKraftId], notify: false }, { jar: jars.admin });
+    assert.equal(zugeteilt.status, 200, zugeteilt.text);
+
+    const team = async () =>
+      data(await get<{ data: { assignments: { employeeId: string }[] } }>(`/api/jobs/${jobId}`, { jar: jars.admin })).assignments.map((a) => a.employeeId);
+
+    for (const status of ['COMPLETED', 'CANCELLED'] as const) {
+      const gesetzt = await patch(`/api/jobs/${jobId}`, { status }, { jar: jars.admin });
+      assert.equal(gesetzt.status, 200, gesetzt.text);
+
+      const ersetzt = await post<Fehler>(`/api/jobs/${jobId}/assign`, { employeeIds: [annaId], notify: false }, { jar: jars.admin });
+      assert.equal(ersetzt.status, 422, `${status}: ${ersetzt.text}`);
+      assert.deepEqual(await team(), [zweiteKraftId], `${status}: das Team ist unverändert`);
+    }
+
+    // Auch über die Teamverwaltung kommt niemand an einen abgesagten Einsatz dazu.
+    const dazu = await put(
+      `/api/jobs/${jobId}/team`,
+      { members: [{ employeeId: zweiteKraftId, role: 'LEAD' }, { employeeId: annaId, role: 'MEMBER' }], notify: false },
+      { jar: jars.admin },
+    );
+    assert.equal(dazu.status, 422, dazu.text);
+    assert.deepEqual(await team(), [zweiteKraftId]);
+  });
+
+  /**
+   * F-06 (2026-09-27): Terminverschiebung und Teamwechsel am selben Einsatz,
+   * gleichzeitig.
+   *
+   * Aufbau je Durchgang: Einsatz K (08–11) mit der zweiten Kraft, Einsatz J
+   * (14–17) mit Anna. Dann gleichzeitig: J auf 08–11 verschieben (Anna ist
+   * dort frei → für sich allein zulässig) und J die zweite Kraft als Team
+   * geben (um 14–17 frei → für sich allein zulässig). Zusammen ergäben sie
+   * die zweite Kraft um 08–11 auf J — zur selben Zeit wie K.
+   *
+   * Vorher lasen beide Vorgänge den Einsatz vor ihrer Transaktion: Die
+   * Verschiebung prüfte Anna zur neuen Zeit, der Teamwechsel die zweite Kraft
+   * zur alten; die Personensperren betrafen verschiedene Personen und
+   * hielten nichts auf. Jetzt sperrt jeder Vorgang zuerst die Einsatzzeile
+   * und liest danach — der zweite sieht das Ergebnis des ersten und wird
+   * abgewiesen. Fünf Durchgänge, weil ein Wettlauf ohne Sperre nicht jedes
+   * Mal auftritt; mit Sperre muss jeder genau einen Erfolg ergeben, und der
+   * Endstand darf nie die Doppelbelegung sein.
+   */
+  it('Terminverschiebung und Teamwechsel gleichzeitig: nie ein ungeprüftes Team zur neuen Zeit — fünfmal', async () => {
+    for (let durchgang = 0; durchgang < 5; durchgang++) {
+      const tagNr = TAG0 + 45 + durchgang;
+      const k = await jobAnlegen({ customerId, addressId, title: `${TITEL} Wettlauf ${durchgang}K`, scheduledStart: tag(tagNr, 8), scheduledEnd: tag(tagNr, 11) });
+      const j = await jobAnlegen({ customerId, addressId, title: `${TITEL} Wettlauf ${durchgang}J`, scheduledStart: tag(tagNr, 14), scheduledEnd: tag(tagNr, 17) });
+      assert.equal(k.status, 201, k.text);
+      assert.equal(j.status, 201, j.text);
+      const kId = data(k).id;
+      const jId = data(j).id;
+      angelegteJobs.push(kId, jId);
+
+      const kBesetzt = await post(`/api/jobs/${kId}/assign`, { employeeIds: [zweiteKraftId], notify: false }, { jar: jars.admin });
+      assert.equal(kBesetzt.status, 200, kBesetzt.text);
+      const jBesetzt = await post(`/api/jobs/${jId}/assign`, { employeeIds: [annaId], notify: false }, { jar: jars.admin });
+      assert.equal(jBesetzt.status, 200, jBesetzt.text);
+
+      const [verschoben, umbesetzt] = await Promise.all([
+        patch(`/api/jobs/${jId}`, { scheduledStart: tag(tagNr, 8), scheduledEnd: tag(tagNr, 11) }, { jar: jars.admin }),
+        put(`/api/jobs/${jId}/team`, { members: [{ employeeId: zweiteKraftId, role: 'LEAD' }], notify: false }, { jar: jars.admin }),
+      ]);
+
+      const endstand = data(
+        await get<{ data: { scheduledStart: string; assignments: { employeeId: string }[] } }>(`/api/jobs/${jId}`, { jar: jars.admin }),
+      );
+      const aufKsZeit = new Date(endstand.scheduledStart).getTime() === new Date(tag(tagNr, 8)).getTime();
+      const zweiteKraftAufJ = endstand.assignments.some((a) => a.employeeId === zweiteKraftId);
+      assert.ok(
+        !(aufKsZeit && zweiteKraftAufJ),
+        `Durchgang ${durchgang}: die zweite Kraft steht zur selben Zeit auf J und K — ${verschoben.text} | ${umbesetzt.text}`,
+      );
+      assert.deepEqual(
+        [verschoben.status, umbesetzt.status].sort(),
+        [200, 422],
+        `Durchgang ${durchgang}: genau einer der beiden Vorgänge gelingt — ${verschoben.text} | ${umbesetzt.text}`,
+      );
+    }
+  });
+
+  /**
    * Qualifikationen (2026-09-27). Verlangt waren sie bis dahin nur an der
    * Vertragsleistung, geprüft nirgends. Jetzt trägt der Einsatz die
    * Qualifikationen seiner Leistung, und die Zuteilung prüft sie — samt
@@ -794,13 +889,13 @@ describe('Disposition — Buchung, Einsatz, Zuteilung', () => {
        * Geprüft wird der **Inhalt**, nicht der Statuscode — und das ist kein
        * nachgiebiger Test, sondern der genauere.
        *
-       * Die Seite hat ein `loading.tsx`. Next liefert deshalb sofort die
-       * Hülle mit 200 aus und schiebt den fertigen Inhalt im selben Strom
-       * nach. Wenn die Server Component danach `notFound()` wirft, ist der
-       * Statuscode längst abgeschickt und lässt sich nicht mehr ändern; die
-       * Nicht-gefunden-Darstellung kommt als Nachtrag im Strom. Das gilt für
-       * jede gestreamte Seite dieser Anwendung und ist keine Eigenheit dieses
-       * Einsatzes.
+       * Als der Test entstand, hatte die Seite ein `loading.tsx`: Next
+       * lieferte sofort die Hülle mit 200 aus und schob den Inhalt im selben
+       * Strom nach, und ein späteres `notFound()` konnte den Statuscode nicht
+       * mehr ändern. `loading.tsx` ist seit Wave 9.1 entfernt; die Prüfung
+       * bleibt beim Inhalt, weil sie auch für jede künftig wieder gestreamte
+       * Seite stimmt — der Statuscode wäre dann wieder kein verlässliches
+       * Zeichen.
        *
        * Die Sicherheitsaussage hängt daran nicht: Entscheidend ist, dass von
        * dem Einsatz nichts durchkommt — weder Nummer noch Alarmcode. Genau das

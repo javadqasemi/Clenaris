@@ -64,6 +64,15 @@ import { activeStaffWhere } from './profile.service';
  * globalen Klienten: Ausserhalb einer Transaktion gälte die Sperre für eine
  * einzige Anweisung und schützte nichts.
  *
+ * **Die Personensperre schützt Personen, nicht Einsätze** (F-06,
+ * 2026-09-27). Verschiebt ein Vorgang den Termin (altes Team, neue Zeit) und
+ * setzt ein zweiter gleichzeitig ein neues Team (neues Team, alte Zeit),
+ * betreffen die beiden Prüfungen verschiedene Personen und sperren einander
+ * nicht — das Ergebnis, neues Team zur neuen Zeit, prüfte niemand. Deshalb
+ * sperren die Aufrufer in `job.service.ts` zuerst die **Einsatzzeile**
+ * (`einsatzSperren`, `SELECT … FOR UPDATE`) und lesen Termin und Team erst
+ * danach. Reihenfolge immer: Einsatz, dann Personen.
+ *
  * ---------------------------------------------------------------------------
  *  Was blockiert und was nur warnt
  * ---------------------------------------------------------------------------
@@ -245,8 +254,33 @@ export async function checkAssignmentEligibility(
       startDate: { lte: jobLastDay },
       endDate: { gte: jobFirstDay },
     },
-    select: { employeeId: true, status: true, type: true, startDate: true, endDate: true },
+    select: { employeeId: true, status: true, type: true, startDate: true, endDate: true, halfDay: true },
   });
+
+  /*
+    Halbe Tage (F-06 c, geprüft 2026-09-27): Eine bewilligte Abwesenheit mit
+    `halfDay` sperrt den **ganzen** Tag, und das ist die Regel, nicht ein
+    Versehen.
+
+    `Absence` hält nur fest, *dass* es ein halber Tag ist, nicht *welcher*
+    (Vor- oder Nachmittag) — die Maske fragt es nicht, das Schema hat kein
+    Feld dafür. Ohne diese Angabe gibt es nur zwei Lesarten: Den halben Tag
+    übergehen hiesse, eine Person in die Stunden einzuteilen, in denen sie
+    bewilligt fehlt; den ganzen Tag sperren heisst schlimmstenfalls, einen
+    halben Tag Arbeitszeit ungenutzt zu lassen. Die zweite ist die
+    vorsichtige, und es ist dieselbe, die die Verfügbarkeit
+    (`availability.service.ts`, „Ein halber Tag zählt als ganzer") und die
+    Bewilligung (`decideAbsence` zählt Einsätze über den ganzen Kalendertag)
+    schon verwenden — dokumentiert in `docs/VERFUEGBARKEIT.md`. Drei Stellen,
+    eine Lesart: Eine Zuteilung, die die Bewilligung nicht verhindert hätte,
+    wird hier auch nicht verhindert, und umgekehrt.
+
+    Eine genauere Regel verlangt zuerst das fehlende Datum (Vor-/Nachmittag
+    an der Abwesenheit, samt Migration und Maske); dann ändern sich alle drei
+    Stellen zusammen. Bis dahin sagt die Meldung ausdrücklich, dass ein halber
+    Tag den ganzen sperrt — sonst liest das Büro „abwesend" und sucht den
+    Fehler bei sich.
+  */
 
   const ABSENCE_LABEL: Record<string, string> = {
     VACATION: 'Ferien',
@@ -263,7 +297,13 @@ export async function checkAssignmentEligibility(
 
   for (const absence of absences) {
     const employee = byId.get(absence.employeeId)!;
-    const zeitraum = `${dayLabel(absence.startDate)}–${dayLabel(absence.endDate)}`;
+    // Ein halber Tag hat Start = Ende (Schema); „vom 03.–03." läse sich wie ein Fehler.
+    const spanne = `${dayLabel(absence.startDate)}–${dayLabel(absence.endDate)}`;
+    const abwesendZeitraum = absence.halfDay ? `am ${dayLabel(absence.startDate)} einen halben Tag` : `vom ${spanne}`;
+    const antragZeitraum = absence.halfDay ? `den ${dayLabel(absence.startDate)} einen halben Tag` : spanne;
+    const halbtagsHinweis = absence.halfDay
+      ? ' Ohne Angabe von Vor- oder Nachmittag gilt der ganze Tag als belegt.'
+      : '';
     const grund = ABSENCE_LABEL[absence.type] ?? 'Abwesenheit';
 
     conflicts.push(
@@ -273,14 +313,14 @@ export async function checkAssignmentEligibility(
             severity: 'block',
             employeeId: absence.employeeId,
             employeeName: fullName(employee),
-            message: `${fullName(employee)} ist vom ${zeitraum} abwesend (${grund}, bewilligt).`,
+            message: `${fullName(employee)} ist ${abwesendZeitraum} abwesend (${grund}, bewilligt).${halbtagsHinweis}`,
           }
         : {
             code: 'ABSENCE_REQUESTED',
             severity: 'warn',
             employeeId: absence.employeeId,
             employeeName: fullName(employee),
-            message: `${fullName(employee)} hat für ${zeitraum} ${grund} beantragt — noch nicht entschieden.`,
+            message: `${fullName(employee)} hat für ${antragZeitraum} ${grund} beantragt — noch nicht entschieden.${halbtagsHinweis}`,
           },
     );
   }

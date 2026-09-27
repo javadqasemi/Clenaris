@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import { data, del, get, patch, post, requireServer } from '../helpers/client';
 import { loginAll, type AccountName } from '../helpers/accounts';
 import { zuercherHeute } from '../helpers/datum';
+import { testDb } from '../helpers/testdb';
 
 /**
  * Wave 11 — Qualitätskontrolle über HTTP.
@@ -567,6 +568,98 @@ describe('Qualitätskontrolle', () => {
         { jar: jars.customer },
       );
       assert.equal(antwort.status, 403);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  //  Zugehörigkeit des Einsatzes (RB-011)
+  // -------------------------------------------------------------------------
+
+  /**
+   * RB-011 (2026-09-27): `zugehoerigkeitPruefen` wies einen Einsatz nur ab,
+   * wenn er **weder** zum Vertrag **noch** zur Kundschaft des Vertrags
+   * gehörte (`&&` statt der Einzelprüfung). Ein Einsatz aus einem anderen
+   * Vertrag derselben Kundschaft ging damit als zugehörig durch — und die
+   * Begehung urteilte gegen eine Zusage, die für diesen Einsatz nie galt.
+   *
+   * Die Einsätze entstehen über `POST /api/jobs`; ihren Vertrag setzt die
+   * Prüfung direkt in der Testdatenbank, weil ein Vertragseinsatz sonst nur
+   * über den Planungslauf entsteht, dessen Termine die Prüfung nicht steuert.
+   */
+  describe('Zugehörigkeit des Einsatzes', () => {
+    const db = testDb();
+    let vertragA = '';
+    let vertragB = '';
+    let einsatzAusA = '';
+    let einsatzOhneVertrag = '';
+
+    async function einsatz(titel: string) {
+      const start = new Date(Date.now() + 1000 * 864e5);
+      start.setUTCHours(7, 0, 0, 0);
+      const angelegt = await post<{ data: { id: string } }>(
+        '/api/jobs',
+        {
+          customerId: kundeId,
+          title: `${titel} ${Date.now()}`,
+          scheduledStart: start.toISOString(),
+          scheduledEnd: new Date(start.getTime() + 2 * 3_600_000).toISOString(),
+        },
+        { jar: jars.admin },
+      );
+      assert.equal(angelegt.status, 201, angelegt.text);
+      return data(angelegt).id;
+    }
+
+    before(async () => {
+      if (!db) return;
+      vertragA = await vertragMitZusage();
+      vertragB = await vertragMitZusage();
+      einsatzAusA = await einsatz('Prüfeinsatz Begehung Vertrag A');
+      einsatzOhneVertrag = await einsatz('Prüfeinsatz Begehung ohne Vertrag');
+      await db.job.update({ where: { id: einsatzAusA }, data: { contractId: vertragA } });
+    });
+
+    after(async () => {
+      if (!db) return;
+      // Begehungen räumt das äussere `after` weg; den Vertragsbezug lösen,
+      // damit sich die Verträge danach löschen lassen.
+      const ids = [einsatzAusA, einsatzOhneVertrag].filter(Boolean);
+      await db.job.updateMany({ where: { id: { in: ids } }, data: { contractId: null } });
+      for (const id of ids) await del(`/api/jobs/${id}`, { jar: jars.admin });
+    });
+
+    it('ein Einsatz aus einem anderen Vertrag derselben Kundschaft → 422', async (t) => {
+      if (!db) return t.skip('keine Testdatenbank');
+      const antwort = await begehungAnlegen({
+        contractId: vertragB,
+        jobId: einsatzAusA,
+        inspectedAt: new Date().toISOString(),
+        items: positionen(),
+      });
+      assert.equal(antwort.status, 422, antwort.text);
+      assert.match(antwort.text, /gehört nicht zu diesem Vertrag/);
+    });
+
+    it('ein Einsatz ohne Vertrag gehört nicht zu einem Vertrag → 422', async (t) => {
+      if (!db) return t.skip('keine Testdatenbank');
+      const antwort = await begehungAnlegen({
+        contractId: vertragA,
+        jobId: einsatzOhneVertrag,
+        inspectedAt: new Date().toISOString(),
+        items: positionen(),
+      });
+      assert.equal(antwort.status, 422, antwort.text);
+    });
+
+    it('der Einsatz aus diesem Vertrag wird angenommen', async (t) => {
+      if (!db) return t.skip('keine Testdatenbank');
+      const antwort = await begehungAnlegen({
+        contractId: vertragA,
+        jobId: einsatzAusA,
+        inspectedAt: new Date().toISOString(),
+        items: positionen(),
+      });
+      assert.equal(antwort.status, 201, antwort.text);
     });
   });
 });

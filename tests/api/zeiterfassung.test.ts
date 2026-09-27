@@ -2,7 +2,8 @@ import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { get, post, patch, del, data, requireServer } from '../helpers/client';
-import { loginAll, type AccountName } from '../helpers/accounts';
+import { ACCOUNTS, loginAll, type AccountName } from '../helpers/accounts';
+import { testDb } from '../helpers/testdb';
 
 /**
  * Wave 8 — Zeiterfassung ansehen, korrigieren, freigeben.
@@ -445,5 +446,94 @@ describe('Zeiterfassung', () => {
       { jar: jars.admin },
     );
     assert.equal(antwort.status, 404);
+  });
+
+  // -------------------------------------------------------------------------
+  //  Einstempeln — gleichzeitig
+  // -------------------------------------------------------------------------
+
+  /**
+   * N-01 (2026-09-27): `clockIn` sah vor der Transaktion und ohne Sperre nach,
+   * ob schon eine Erfassung läuft. Sechs gleichzeitige Stempelungen —
+   * Doppeltipp, Wiederholung nach einem Zeitlimit, zwei Geräte — lasen alle
+   * „nichts offen" und legten alle eine laufende Erfassung an. Beim
+   * Ausstempeln schliesst nur die jüngste; die übrigen laufen weiter in Lohn
+   * und Nachkalkulation.
+   *
+   * Geprüft wird der Endstand in der Datenbank, nicht nur die Statuscodes:
+   * genau eine laufende Erfassung, und genau eine Antwort 201.
+   */
+  describe('gleichzeitiges Einstempeln', () => {
+    const db = testDb();
+    const TITEL = 'Prüfeinsatz Einstempeln';
+    let einsatzId = '';
+    let annaId = '';
+
+    async function aufraeumen() {
+      if (!db) return;
+      // Auch Reste abgebrochener Läufe: Eine liegengebliebene laufende
+      // Erfassung Annas liesse jede spätere Stempelung scheitern.
+      const reste = { job: { title: { startsWith: TITEL } } };
+      await db.gpsEvent.deleteMany({ where: reste });
+      await db.timeEntry.deleteMany({ where: reste });
+    }
+
+    before(async () => {
+      if (!db) return;
+      await aufraeumen();
+
+      const anna = await db.user.findFirstOrThrow({
+        where: { email: ACCOUNTS.employee.email },
+        select: { employee: { select: { id: true } } },
+      });
+      annaId = anna.employee!.id;
+
+      const objekte = data(await get<{ data: { customer: { id: string } }[] }>('/api/properties', { jar: jars.admin }));
+      // Weit in der Zukunft und um drei Uhr früh: Hier liegt kein anderer
+      // Einsatz Annas, und die Zuteilung scheitert an keiner Überschneidung.
+      const start = new Date(Date.now() + 950 * 864e5);
+      start.setUTCHours(2, 0, 0, 0);
+      const angelegt = await post<{ data: { id: string } }>(
+        '/api/jobs',
+        {
+          customerId: objekte[0]!.customer.id,
+          title: `${TITEL} ${Date.now()}`,
+          scheduledStart: start.toISOString(),
+          scheduledEnd: new Date(start.getTime() + 2 * 3_600_000).toISOString(),
+        },
+        { jar: jars.admin },
+      );
+      assert.equal(angelegt.status, 201, angelegt.text);
+      einsatzId = data(angelegt).id;
+
+      const zugeteilt = await post(`/api/jobs/${einsatzId}/assign`, { employeeIds: [annaId], notify: false }, { jar: jars.admin });
+      assert.equal(zugeteilt.status, 200, zugeteilt.text);
+    });
+
+    after(async () => {
+      if (!db) return;
+      await aufraeumen();
+      if (einsatzId) await del(`/api/jobs/${einsatzId}`, { jar: jars.admin });
+    });
+
+    it('sechs gleichzeitige Stempelungen ergeben genau eine laufende Erfassung', async (t) => {
+      if (!db) return t.skip('keine Testdatenbank');
+
+      // Kein Überspringen (Null-Übersprünge-Regel): Eine laufende Erfassung
+      // Annas an dieser Stelle heisst, dass ein anderer Fall nicht aufgeräumt
+      // hat — das soll als Fehler sichtbar werden, nicht still verschwinden.
+      const schonOffen = await db.timeEntry.count({ where: { employeeId: annaId, endedAt: null } });
+      assert.equal(schonOffen, 0, `Anna ist bereits eingestempelt (${schonOffen} laufende Erfassung) — ein anderer Fall hat nicht aufgeräumt`);
+
+      const antworten = await Promise.all(
+        Array.from({ length: 6 }, () => post('/api/time/clock-in', { jobId: einsatzId }, { jar: jars.employee })),
+      );
+      const codes = antworten.map((r) => r.status);
+
+      const offen = await db.timeEntry.count({ where: { employeeId: annaId, endedAt: null } });
+      assert.equal(offen, 1, `genau eine laufende Erfassung, nicht ${offen} — Antworten: ${codes.join(', ')}`);
+      assert.equal(codes.filter((c) => c === 201).length, 1, `genau eine Stempelung gelingt: ${codes.join(', ')}`);
+      assert.equal(codes.filter((c) => c === 422).length, 5, `die übrigen scheitern fachlich (422): ${codes.join(', ')}`);
+    });
   });
 });

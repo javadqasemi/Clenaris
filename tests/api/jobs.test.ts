@@ -1,8 +1,9 @@
 import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { data, get, patch, put, requireServer } from '../helpers/client';
-import { loginAll, type AccountName } from '../helpers/accounts';
+import { data, del, get, patch, post, put, requireServer } from '../helpers/client';
+import { ACCOUNTS, loginAll, type AccountName } from '../helpers/accounts';
+import { eigeneOrganisationId, testDb } from '../helpers/testdb';
 
 /**
  * Einsätze: bearbeiten, Team mit mehreren Personen, Material und die
@@ -80,10 +81,24 @@ describe('Einsätze — bearbeiten, Team, Material, Nachkalkulation', () => {
       ...data(await get<{ data: CalendarEvent[] }>(`/api/jobs/calendar?${window(-60, 0)}`, { jar: jars.admin })),
       ...data(await get<{ data: CalendarEvent[] }>(`/api/jobs/calendar?${window(0, 60)}`, { jar: jars.admin })),
     ];
-    const candidate = events.find((event) =>
-      ['SCHEDULED', 'DISPATCHED', 'UNASSIGNED'].includes(event.extendedProps.status),
-    );
-    assert.ok(candidate, 'kein geplanter Demo-Einsatz im Kalender — Datenbank mit db:seed:demo befüllt?');
+    /*
+      Ein Einsatz **ohne verlangte Qualifikation** (2026-09-27): Der Fall
+      teilt zwei Demo-Personen zu, und seit die Zuteilung Qualifikationen
+      prüft, scheitert das an einem Einsatz, der eine verlangt, die beide
+      nicht haben. Welcher Einsatz zuerst im Kalender steht, hängt vom
+      Datenbestand ab — Vertragseinsätze anderer Prüfreihen bleiben nach dem
+      Vertragsende stehen. Die Wahl darf davon nicht abhängen.
+    */
+    const geplant = events.filter((event) => ['SCHEDULED', 'DISPATCHED', 'UNASSIGNED'].includes(event.extendedProps.status));
+    let candidate: CalendarEvent | undefined;
+    for (const event of geplant) {
+      const kandidat = data(await get<{ data: { requiredSkills?: string[] } }>(`/api/jobs/${event.id}`, { jar: jars.admin }));
+      if ((kandidat.requiredSkills ?? []).length === 0) {
+        candidate = event;
+        break;
+      }
+    }
+    assert.ok(candidate, 'kein geplanter Demo-Einsatz ohne verlangte Qualifikation im Kalender — Datenbank mit db:seed:demo befüllt?');
     jobId = candidate.id;
     original = await detail();
   });
@@ -278,5 +293,145 @@ describe('Einsätze — bearbeiten, Team, Material, Nachkalkulation', () => {
       { jar: jars.admin },
     );
     assert.equal(mixed.status, 422);
+  });
+});
+
+/**
+ * Einsatzfotos binden nur über die eine Bindungsregel (F-09b, 2026-09-27).
+ *
+ * `POST /api/jobs/:id/photos` band Dateien bis dahin im Routenhandler selbst:
+ * Datei lesen, dann bedingungslos an den Einsatz schreiben. Geprüft wurden
+ * Organisation, Zweck und Prüfsumme — nicht, **wer** die Datei hochgeladen hat,
+ * und nicht, ob die Schadsoftwareprüfung sie als schädlich erkannt hat. Eine
+ * Kennung war damit eine Berechtigung: Wer die Kennung eines fremden
+ * Einsatzbildes kannte, hängte es an einen Einsatz, den er sieht.
+ *
+ * Die Dateien entstehen direkt in der Testdatenbank — so wie
+ * `buchung-integritaet.test.ts` es für Buchungsdateien tut: Ein echter Upload
+ * von zwei verschiedenen Konten samt Prüfbefund liesse sich über HTTP nur mit
+ * einem Schadsoftwareprüfer herstellen, den die Prüfreihe nicht hat. Geprüft
+ * wird jeweils die Abweisung **und** dass nichts geschah: Datei ungebunden,
+ * kein Foto.
+ */
+describe('Einsatzfotos — nur über die eine Bindungsregel', () => {
+  const db = testDb();
+  const RUN = Date.now();
+  const MARKE = 'FOTO-PRUEF-';
+  let jars: Jars;
+  let org = '';
+  let adminUserId = '';
+  let managerUserId = '';
+  const einsaetze: string[] = [];
+  const dateien = { eigen: '', fremd: '', infiziert: '' };
+
+  async function datei(name: string, uploadedById: string, scanStatus: 'CLEAN' | 'INFECTED' = 'CLEAN') {
+    const pfad = `pruef/${MARKE}${RUN}-${name}.jpg`;
+    const angelegt = await db!.fileAsset.create({
+      data: {
+        organizationId: org,
+        scope: 'JOB',
+        scanStatus,
+        checksum: 'b'.repeat(64),
+        isPublic: false,
+        path: pfad,
+        url: pfad,
+        filename: `${MARKE}${RUN}-${name}.jpg`,
+        mimeType: 'image/jpeg',
+        sizeBytes: 10,
+        uploadedById,
+      },
+    });
+    return angelegt.id;
+  }
+
+  async function aufraeumen() {
+    if (!db) return;
+    // Alle Läufe, nicht nur dieser: Ein abgebrochener Lauf hinterliesse sonst
+    // Fotos und Dateien, die niemand mehr zuordnet.
+    await db.jobPhoto.deleteMany({ where: { url: { startsWith: `pruef/${MARKE}` } } });
+    await db.fileAsset.deleteMany({ where: { filename: { startsWith: MARKE } } });
+  }
+
+  before(async () => {
+    if (!db) return;
+    await requireServer();
+    jars = await loginAll();
+    await aufraeumen();
+
+    org = (await eigeneOrganisationId()) ?? '';
+    adminUserId = (await db.user.findFirstOrThrow({ where: { email: ACCOUNTS.admin.email }, select: { id: true } })).id;
+    managerUserId = (await db.user.findFirstOrThrow({ where: { email: ACCOUNTS.manager.email }, select: { id: true } })).id;
+
+    const objekte = data(await get<{ data: { customer: { id: string } }[] }>('/api/properties', { jar: jars.admin }));
+    const customerId = objekte[0]!.customer.id;
+    for (const nr of [1, 2]) {
+      const start = new Date(Date.now() + (900 + nr) * 864e5);
+      start.setUTCHours(7, 0, 0, 0);
+      const angelegt = await post<{ data: { id: string } }>(
+        '/api/jobs',
+        {
+          customerId,
+          title: `Prüfeinsatz Fotos ${RUN} ${nr}`,
+          scheduledStart: start.toISOString(),
+          scheduledEnd: new Date(start.getTime() + 2 * 3_600_000).toISOString(),
+        },
+        { jar: jars.admin },
+      );
+      assert.equal(angelegt.status, 201, angelegt.text);
+      einsaetze.push(data(angelegt).id);
+    }
+
+    dateien.eigen = await datei('eigen', adminUserId);
+    dateien.fremd = await datei('fremd', managerUserId);
+    dateien.infiziert = await datei('infiziert', adminUserId, 'INFECTED');
+  });
+
+  after(async () => {
+    if (!db) return;
+    await aufraeumen();
+    for (const id of einsaetze) await del(`/api/jobs/${id}`, { jar: jars.admin });
+  });
+
+  const binden = (jobId: string, fileId: string) =>
+    post(`/api/jobs/${jobId}/photos`, { fileId, type: 'BEFORE' }, { jar: jars.admin });
+
+  async function nichtsGeschehen(fileId: string) {
+    const nachher = await db!.fileAsset.findUniqueOrThrow({ where: { id: fileId }, select: { jobId: true, url: true } });
+    assert.equal(nachher.jobId, null, 'die Datei wurde trotz Abweisung an einen Einsatz gebunden');
+    assert.equal(await db!.jobPhoto.count({ where: { url: nachher.url } }), 0, 'Foto trotz Abweisung angelegt');
+  }
+
+  it('die eigene, geprüfte Datei wird Foto dieses Einsatzes', async (t) => {
+    if (!db) return t.skip('keine Testdatenbank');
+    const antwort = await binden(einsaetze[0]!, dateien.eigen);
+    assert.equal(antwort.status, 201, antwort.text);
+
+    const nachher = await db.fileAsset.findUniqueOrThrow({ where: { id: dateien.eigen }, select: { jobId: true, url: true } });
+    assert.equal(nachher.jobId, einsaetze[0], 'die Datei hängt am Einsatz');
+    assert.equal(await db.jobPhoto.count({ where: { jobId: einsaetze[0], url: nachher.url } }), 1);
+  });
+
+  it('die Datei einer anderen Person wird kein Einsatzfoto — 404, die Datei bleibt ungebunden', async (t) => {
+    if (!db) return t.skip('keine Testdatenbank');
+    const antwort = await binden(einsaetze[0]!, dateien.fremd);
+    assert.equal(antwort.status, 404, antwort.text);
+    await nichtsGeschehen(dateien.fremd);
+  });
+
+  it('eine als schädlich erkannte Datei wird kein Einsatzfoto — 404', async (t) => {
+    if (!db) return t.skip('keine Testdatenbank');
+    const antwort = await binden(einsaetze[0]!, dateien.infiziert);
+    assert.equal(antwort.status, 404, antwort.text);
+    await nichtsGeschehen(dateien.infiziert);
+  });
+
+  it('eine bereits gebundene Datei lässt sich nicht an einen zweiten Einsatz hängen — 404', async (t) => {
+    if (!db) return t.skip('keine Testdatenbank');
+    const antwort = await binden(einsaetze[1]!, dateien.eigen);
+    assert.equal(antwort.status, 404, antwort.text);
+
+    const nachher = await db.fileAsset.findUniqueOrThrow({ where: { id: dateien.eigen }, select: { jobId: true, url: true } });
+    assert.equal(nachher.jobId, einsaetze[0], 'die Datei hängt weiter am ersten Einsatz');
+    assert.equal(await db.jobPhoto.count({ where: { jobId: einsaetze[1], url: nachher.url } }), 0, 'kein Foto am zweiten Einsatz');
   });
 });

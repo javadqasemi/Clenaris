@@ -190,6 +190,13 @@ async function zugehoerigkeitPruefen(params: {
         'Das Objekt gehört nicht der Kundschaft dieses Vertrags. Eine Begehung verbindet nur Vertrag und Objekt derselben Kundschaft.',
       );
     }
+    // Nennt der Vertrag ein Objekt, gilt seine Zusage nur dort (RB-011,
+    // Rest, 2026-09-27). Derselbe Grund wie beim Einsatz unten: Die Begehung
+    // eines anderen Objekts derselben Kundschaft würde gegen eine Zusage
+    // geurteilt, die für dieses Objekt nie gegeben wurde.
+    if (vertrag?.propertyId && objekt.id !== vertrag.propertyId) {
+      throw new BusinessRuleError('Dieser Vertrag gilt für ein anderes Objekt. Eine Begehung misst nur am Objekt des Vertrags.');
+    }
   }
 
   if (params.jobId) {
@@ -198,7 +205,23 @@ async function zugehoerigkeitPruefen(params: {
       select: { id: true, contractId: true, propertyId: true, customerId: true },
     });
     if (!einsatz) throw new NotFoundError('Einsatz');
-    if (vertrag && einsatz.contractId !== vertrag.id && einsatz.customerId !== vertrag.customerId) {
+    /*
+      Der Einsatz muss **aus diesem Vertrag** stammen (RB-011, 2026-09-27).
+
+      Hier stand `einsatz.contractId !== vertrag.id && einsatz.customerId !==
+      vertrag.customerId` — abgewiesen wurde also nur, was *beides* verfehlte.
+      Ein Einsatz aus einem **anderen Vertrag derselben Kundschaft** ging
+      damit als zugehörig durch, obwohl die Meldung genau das Gegenteil sagt,
+      und ebenso ein Einzelauftrag ohne Vertrag. Die Begehung misst aber gegen
+      die Qualitätszusage *dieses* Vertrags (Zielwert der Fassung): Ein
+      Einsatz, für den diese Zusage nie galt, verfälscht das Urteil und die
+      Fälligkeit der nächsten Begehung.
+
+      Ein Einsatz ohne Vertrag gehört deshalb auch nicht dazu. Wer einen
+      solchen Einsatz prüfen will, erfasst die Begehung am Objekt ohne
+      Vertrag — dort wird gemessen, aber nicht gegen eine Zusage geurteilt.
+    */
+    if (vertrag && einsatz.contractId !== vertrag.id) {
       throw new BusinessRuleError('Der Einsatz gehört nicht zu diesem Vertrag.');
     }
     if (params.propertyId && einsatz.propertyId && einsatz.propertyId !== params.propertyId) {

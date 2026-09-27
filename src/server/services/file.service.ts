@@ -148,7 +148,11 @@ export async function dateienBinden(
     fileIds: string[];
     uploadedById: string;
     scope: FileScope;
-    ziel: 'bookingId' | 'expenseId' | 'messageId';
+    /**
+     * `jobId` seit F-09b (2026-09-27): Einsatzfotos banden bis dahin im
+     * Routenhandler selbst, ohne Urheberschaft und Prüfbefund anzusehen.
+     */
+    ziel: 'bookingId' | 'expenseId' | 'messageId' | 'jobId';
     zielId: string;
   },
 ): Promise<void> {
