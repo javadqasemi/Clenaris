@@ -1,10 +1,21 @@
 import 'server-only';
 
 import { generateStructured, generateText, type Effort } from './client';
-import { kuerzel, mitPlatzhaltern, platzhalterZurueck } from './governance';
-import { offertentwurfNutzlast, SWISS_CONTEXT, uebersetzungNutzlast, zusammenfassungNutzlast, type AiQuoteRequest } from './nutzlast';
+import { kuerzel } from './governance';
+import {
+  bewertungsantwortNutzlast,
+  einsatzberichtNutzlast,
+  emailEntwurfNutzlast,
+  offertentwurfNutzlast,
+  SWISS_CONTEXT,
+  uebersetzungNutzlast,
+  zusammenfassungNutzlast,
+  type AiQuoteRequest,
+  type EinsatzberichtEingabe,
+  type EmailTone,
+} from './nutzlast';
 
-export type { AiQuoteRequest } from './nutzlast';
+export type { AiQuoteRequest, EmailTone } from './nutzlast';
 
 /**
  * KI-Funktionen der Plattform.
@@ -16,7 +27,9 @@ export type { AiQuoteRequest } from './nutzlast';
  *    werden vor dem Versand von einer Person freigegeben — das steht so auch
  *    in den Prompts, damit das Modell keine Verbindlichkeit suggeriert.
  *  • Personenbezogene Daten werden auf das Nötige reduziert (Vorname, Objekt-
- *    kenndaten) — nie AHV-Nummern, IBAN oder Alarmcodes.
+ *    kenndaten) — nie AHV-Nummern, IBAN oder Alarmcodes. Jede Funktion mit
+ *    Freitext baut ihre Nutzlast in `nutzlast.ts`, wo die Prüfreihe sie ohne
+ *    Anbieter prüfen kann (F-15).
  */
 
 // ---------------------------------------------------------------------------
@@ -95,8 +108,6 @@ export async function generateQuoteDraft(request: AiQuoteRequest): Promise<AiQuo
 //  2) E-Mail-Assistent
 // ---------------------------------------------------------------------------
 
-export type EmailTone = 'freundlich' | 'sachlich' | 'entschuldigend' | 'bestimmt' | 'werblich';
-
 export async function writeEmail(params: {
   purpose: string;
   recipientName: string;
@@ -105,28 +116,15 @@ export async function writeEmail(params: {
   senderName: string;
 }): Promise<{ subject: string; body: string }> {
   /**
-   * Namen als Platzhalter (Wave 15): Das Modell formuliert die Anrede mit
-   * `{{EMPFAENGER}}` und die Grussformel mit `{{ABSENDER}}`; die Namen setzt
-   * erst der eigene Prozess ein. Auch im Kontext werden sie ersetzt — dort
-   * stehen sie oft ein zweites Mal.
+   * Namen als Platzhalter (Wave 15), seit F-15 auch als Vor- oder Nachname
+   * allein, und Zweck wie Kontext mit Schutzplatzhaltern und Rückweg: Codes,
+   * Lohnbeträge, Gesundheitssätze und vermutete Namen erreichen den Anbieter
+   * nicht, stehen aber im Entwurf, wenn er sie braucht (`nutzlast.ts`).
    */
-  const namen = { EMPFAENGER: params.recipientName, ABSENDER: params.senderName };
+  const nutzlast = emailEntwurfNutzlast(params);
   const entwurf = await generateStructured<{ subject: string; body: string }>({
-    system: `${SWISS_CONTEXT}
-
-Du formulierst E-Mails im Namen der Reinigungsfirma. Halte dich kurz: maximal 200 Wörter.
-Struktur: Anrede, Kernaussage im ersten Absatz, Details, klarer nächster Schritt, Grussformel mit dem Namen der absendenden Person.
-Erfinde keine Zahlen, Termine oder Zusagen, die nicht im Kontext stehen.
-Namen sind durch Platzhalter ersetzt: Verwende {{EMPFAENGER}} für die angeschriebene Person und {{ABSENDER}} für die absendende Person, unverändert.`,
-    prompt: `Zweck: ${mitPlatzhaltern(params.purpose, namen)}
-Empfänger: {{EMPFAENGER}}
-Tonalität: ${params.tone}
-Absender: {{ABSENDER}}
-
-Kontext:
-"""
-${mitPlatzhaltern(params.context.slice(0, 4000), namen)}
-"""`,
+    system: nutzlast.system,
+    prompt: nutzlast.prompt,
     schema: {
       type: 'object',
       additionalProperties: false,
@@ -142,7 +140,35 @@ ${mitPlatzhaltern(params.context.slice(0, 4000), namen)}
     effort: 'low',
     maxTokens: 2_000,
   });
-  return { subject: platzhalterZurueck(entwurf.subject, namen), body: platzhalterZurueck(entwurf.body, namen) };
+  return { subject: nutzlast.zurueck(entwurf.subject), body: nutzlast.zurueck(entwurf.body) };
+}
+
+/**
+ * Öffentliche Antwort auf eine Bewertung (F-15).
+ *
+ * Lief bis 2026-09-27 über `writeEmail` mit dem ganzen Bewertungstext als
+ * „Kontext" — nur durch den Formfilter. Eine Bewertung nennt aber oft die
+ * Mitarbeiterin beim Namen oder erzählt, warum der Termin ausfiel („meine
+ * Frau lag im Spital"). Jetzt eigene Nutzlast: Sterne als Zahl, Zweck und Ton
+ * aus dem Code, Text geschwärzt ohne Rückweg — die Antwort ist öffentlich.
+ */
+export async function writeReviewReply(params: {
+  rating: number;
+  title: string | null;
+  body: string;
+  authorName: string;
+  senderName: string;
+  bekannteNamen?: Iterable<string | null | undefined>;
+}): Promise<string> {
+  const nutzlast = bewertungsantwortNutzlast(params);
+  const antwort = await generateText({
+    system: nutzlast.system,
+    prompt: nutzlast.prompt,
+    tier: 'fast',
+    effort: 'low',
+    maxTokens: 1_500,
+  });
+  return nutzlast.zurueck(antwort);
 }
 
 // ---------------------------------------------------------------------------
@@ -197,54 +223,22 @@ export async function summarize(params: {
   });
 }
 
-export async function generateJobReport(params: {
-  jobNumber: string;
-  customerName: string;
-  serviceName: string;
-  date: string;
-  durationMinutes: number;
-  crew: string[];
-  checklist: { label: string; done: boolean; note?: string | null }[];
-  materials: { name: string; quantity: number; unit: string }[];
-  notes?: string | null;
-}): Promise<string> {
+export async function generateJobReport(params: EinsatzberichtEingabe): Promise<string> {
   /**
    * Kunden- und Teamnamen als Platzhalter (Wave 15) — der Bericht braucht
-   * sie im Ergebnis, das Modell nicht zum Formulieren. Auch in Checkliste
-   * und Notizen werden sie ersetzt.
+   * sie im Ergebnis, das Modell nicht zum Formulieren. Seit F-15 auch als
+   * Namensteil, und Checkliste wie Notizen geschwärzt ohne Rückweg: Die
+   * interne Notiz darf weder den Anbieter noch den Kundenbericht mit einem
+   * Alarmcode oder einem Gesundheitssatz erreichen (`nutzlast.ts`).
    */
-  const namen: Record<string, string> = { KUNDE: params.customerName };
-  params.crew.forEach((name, i) => {
-    namen[`TEAM_${i + 1}`] = name;
-  });
-  const schutz = (t: string) => mitPlatzhaltern(t, namen);
+  const nutzlast = einsatzberichtNutzlast(params);
   const bericht = await generateText({
-    system: `${SWISS_CONTEXT}
-
-Du schreibst Einsatzberichte für Kundinnen und Kunden. Sachlich, vollständig, ohne Werbesprache.
-Struktur: Einleitungssatz, ausgeführte Arbeiten als Liste, verwendete Materialien, Bemerkungen, Abschlusssatz.
-Erwähne nicht erledigte Checklistenpunkte transparent mit Begründung, sofern eine vorliegt.
-Namen sind durch Platzhalter wie {{KUNDE}} oder {{TEAM_1}} ersetzt — verwende sie unverändert.`,
-    prompt: `Erstelle den Einsatzbericht.
-
-Auftrag: ${params.jobNumber}
-Kunde: {{KUNDE}}
-Leistung: ${params.serviceName}
-Datum: ${params.date}
-Dauer: ${Math.round(params.durationMinutes / 60 * 10) / 10} Stunden
-Team: ${params.crew.map((_, i) => `{{TEAM_${i + 1}}}`).join(', ')}
-
-Checkliste:
-${params.checklist.map((c) => `- [${c.done ? 'x' : ' '}] ${schutz(c.label)}${c.note ? ` — ${schutz(c.note)}` : ''}`).join('\n')}
-
-Material:
-${params.materials.length ? params.materials.map((m) => `- ${m.quantity} ${m.unit} ${m.name}`).join('\n') : '- keines'}
-
-Interne Notizen: ${params.notes ? schutz(params.notes) : 'keine'}`,
+    system: nutzlast.system,
+    prompt: nutzlast.prompt,
     effort: 'low',
     maxTokens: 2_000,
   });
-  return platzhalterZurueck(bericht, namen);
+  return nutzlast.zurueck(bericht);
 }
 
 // ---------------------------------------------------------------------------

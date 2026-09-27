@@ -282,8 +282,20 @@ function buchstabenIndex(n: number): string {
  */
 export function mitSchutzplatzhaltern(
   text: string,
-  optionen: { namen?: Iterable<string | null | undefined> } = {},
+  optionen: {
+    namen?: Iterable<string | null | undefined>;
+    /**
+     * Vorsilbe der Platzhalter (Standard `GESCHUETZT`). Nötig, sobald eine
+     * Nutzlast **zwei** Texte getrennt schützt — der E-Mail-Entwurf schützt
+     * Zweck und Kontext je für sich, und beide Zählungen beginnen bei A. Mit
+     * derselben Vorsilbe setzte der Rückweg des einen Textes den Wert des
+     * anderen ein. Nur Grossbuchstaben und Unterstrich: Eine Ziffer im
+     * Platzhalter läse die Code-Regel als Wert.
+     */
+    praefix?: string;
+  } = {},
 ): Filterergebnis & { zurueck: (ergebnis: string) => string } {
+  const praefix = optionen.praefix && /^[A-Z_]{2,20}$/.test(optionen.praefix) ? optionen.praefix : 'GESCHUETZT';
   const originale: string[] = [];
   const ersetzungen: Record<string, number> = {};
   const ergebnis = regelnAnwenden(
@@ -291,7 +303,7 @@ export function mitSchutzplatzhaltern(
     (art, original) => {
       ersetzungen[art] = (ersetzungen[art] ?? 0) + 1;
       originale.push(original);
-      return `{{GESCHUETZT_${buchstabenIndex(originale.length - 1)}}}`;
+      return `{{${praefix}_${buchstabenIndex(originale.length - 1)}}}`;
     },
     optionen.namen,
   );
@@ -301,8 +313,104 @@ export function mitSchutzplatzhaltern(
     // Rückwärts: Eine spätere Regel kann einen früheren Platzhalter
     // eingeschlossen haben („Passwort {{GESCHUETZT_A}}" → B). Erst B
     // auflösen, dann das darin wieder auftauchende A.
-    zurueck: (antwort) => originale.reduceRight((t, original, i) => t.split(`{{GESCHUETZT_${buchstabenIndex(i)}}}`).join(original), antwort),
+    zurueck: (antwort) => originale.reduceRight((t, original, i) => t.split(`{{${praefix}_${buchstabenIndex(i)}}}`).join(original), antwort),
   };
+}
+
+// ---------------------------------------------------------------------------
+//  Namen vermuten, die niemand erfasst hat (F-15, 2026-09-27)
+// ---------------------------------------------------------------------------
+//
+// `namenErsetzen` kennt nur Namen aus der eigenen Datenbank. Zusammenfassen
+// und Übersetzen bekommen aber eingefügte E-Mails, und darin steht der Name
+// an Stellen, die ihn **an der Form** verraten: nach „Frau" und „Herr", in
+// der Anrede („Liebe Anna,") und unter der Grussformel. Einen beliebigen
+// Namen irgendwo im Satz zu erkennen, gelingt keinem Muster — diese Stellen
+// schon, weil dort die Sprache selbst sagt, dass ein Name folgt.
+//
+// Die Regeln sind **zurückhaltend**, weil ein falscher Treffer Geschäftstext
+// zerstört: „Sehr geehrte Damen und Herren", „Liebe Grüsse", „Ihr
+// Clenaris-Team", „Herrn Keller Bescheid geben" müssen stehen bleiben. Was
+// eine Regel findet, wird danach **überall** im Text ersetzt (ganze Wörter),
+// wie ein bekannter Name — sonst stünde „Keller" im zweiten Absatz wieder da.
+//
+// Bekannter Preis: Ein Nachname, der zugleich ein Wort ist („Keller",
+// „Koch"), wird auch als Wort ersetzt, sobald die Person im selben Text als
+// „Frau Keller" vorkommt. Das ist die Richtung, in der ein Fehler hier liegen
+// darf; umgekehrt verliesse der Name das Haus.
+
+/** Ein grossgeschriebenes Wort aus Buchstaben (samt Bindestrich/Apostroph), mindestens zwei Zeichen. */
+const GROSSWORT = String.raw`\p{Lu}[\p{L}'’-]+`;
+
+/**
+ * Wörter, die an einer Namensstelle stehen, aber keine Namen sind: höfliche
+ * Anredepronomen, Sammelanreden, Funktionen, Firmenbestandteile. Ein Treffer
+ * darin verwirft in Anrede und Grussformel die **ganze** Zeile — „Ihr
+ * Clenaris-Team" ist eine Signatur ohne Person.
+ */
+const KEIN_NAME =
+  /^(?:Ihr|Ihre|Ihren|Ihrem|Ihrer|Ihres|Ihnen|Sie|Du|Dein|Deine|Euch|Damen|Herren|Frau|Herr|Herrn|Kund\p{L}*|\p{L}*[Tt]eam|Alle|Allerseits|Zusammen|Mitarbeit\p{L}*|Kolleg\p{L}*|Gr(?:ü|ue)ss\p{L}*|Gruss|Doktor|Direktor\p{L}*|Präsident\p{L}*|Hauswart\p{L}*|Verwaltung|Geschäftsleitung|Leitung|Nachbar\p{L}*|Mieter\p{L}*|Vermieter\p{L}*|Eigentümer\p{L}*|Der|Die|Das|Den|Dem|Des|Ein|Eine|Einen|Und|AG|GmbH|Reinigung\p{L}*|Büro|Geschäft|Firma|Verein|Schweiz|Bern)$/u;
+
+/**
+ * „Frau Keller", „Herrn Dr. Brunner", „Fr. Anna Keller hat angerufen". Das
+ * erste grossgeschriebene Wort nach der Anrede gilt als Name; ein zweites
+ * nur, wenn danach der Satz endet oder ein typisches Folgewort steht
+ * („hat", „ist", „und" …). Sonst wäre in „Herrn Keller Bescheid geben" auch
+ * „Bescheid" ein Name.
+ */
+const NACH_ANREDE = new RegExp(
+  String.raw`(?<![\p{L}])(?:Herrn?|Frau|Hr\.|Fr\.)[^\S\n]+(?:(?:Dr|Prof)\.[^\S\n]+)*(${GROSSWORT})(?:[^\S\n]+(${GROSSWORT})(?=[^\S\n]*(?:[,.;:!?)]|\n|$)|[^\S\n]+(?:hat|hatte|ist|war|wird|wurde|kann|konnte|möchte|will|wünscht|schreibt|schrieb|ruft|rief|meldet|meldete|bittet|bat|kommt|kam|bestätigt|und|oder|von|vom|aus|sowie)(?![\p{L}])))?`,
+  'gu',
+);
+
+/** „Liebe Anna," / „Hallo Beat Keller!" — nur am Zeilenanfang und nur bis Komma, Ausruf oder Zeilenende. */
+const GRUSS_ANREDE = new RegExp(
+  String.raw`(?:^|\n)[^\S\n]*(?:Liebe[rs]?|Hallo|Hoi|Hi|Grüezi|Grüessech|Guten Tag|Guten Morgen|Bonjour|Salut|Ciao|Dear|Hello)[^\S\n]+(${GROSSWORT}(?:[^\S\n]+${GROSSWORT})?)[^\S\n]*(?=[,!]|\n|$)`,
+  'gu',
+);
+
+/**
+ * Grussformel, dann die Namenszeile — auf derselben Zeile nach einem Komma
+ * oder auf der nächsten nicht leeren Zeile. Die Namenszeile besteht aus
+ * höchstens vier grossgeschriebenen Wörtern oder Initialen und sonst nichts;
+ * eine Zeile mit Satzzeichen, Kleinwörtern oder Ziffern ist keine Signatur.
+ */
+const GRUSSFORMEL = new RegExp(
+  String.raw`(?:^|\n)[^\S\n]*(?:(?:[Mm]it[^\S\n]+)?(?:[Ff]reundliche[n]?|[Bb]este[n]?|[Hh]erzliche[n]?|[Ll]iebe[n]?|[Vv]iele[n]?|[Ss]onnige[n]?)[^\S\n]+Gr(?:ü|ue)ss(?:e|en)|Gruss|Grüsse|MfG|Kind regards|Best regards|Regards|Cordialement|Meilleures salutations|Cordiali saluti)[^\S\n]*(?:,[^\S\n]*|[^\S\n]*\n(?:[^\S\n]*\n)*[^\S\n]*)((?:${GROSSWORT}|\p{Lu}\.)(?:[^\S\n]+(?:${GROSSWORT}|\p{Lu}\.)){0,3})[^\S\n]*(?=\n|$)`,
+  'gu',
+);
+
+/** „Mein Name ist Anna Keller" — die Person stellt sich selbst vor. */
+const SELBST_VORGESTELLT = new RegExp(String.raw`(?:[Mm]ein Name ist|[Ii]ch heisse)[^\S\n]+(${GROSSWORT})(?:[^\S\n]+(${GROSSWORT}))?`, 'gu');
+
+/**
+ * Namen, die der Text an seiner Form verrät — als Liste für `namen` in
+ * `freitextSchwaerzen` / `mitSchutzplatzhaltern`. Keine Ersetzung hier: Der
+ * Aufrufer entscheidet, ob der Name ohne Rückweg (`[NAME]`) oder mit Rückweg
+ * (Übersetzung) hinausgeht.
+ */
+export function namenVermuten(text: string): string[] {
+  const gefunden = new Set<string>();
+  const einzeln = (wort: string | undefined) => {
+    if (wort && wort.replace(/[.'’-]/g, '').length >= 3 && !KEIN_NAME.test(wort)) gefunden.add(wort);
+  };
+  /** Anrede und Grussformel: ein Nicht-Name verwirft die ganze Zeile. */
+  const zeile = (worte: string | undefined) => {
+    const teile = worte?.trim().split(/[^\S\n]+/) ?? [];
+    if (teile.length === 0 || teile.some((w) => KEIN_NAME.test(w))) return;
+    teile.forEach(einzeln);
+  };
+  for (const m of text.matchAll(NACH_ANREDE)) {
+    einzeln(m[1]);
+    einzeln(m[2]);
+  }
+  for (const m of text.matchAll(GRUSS_ANREDE)) zeile(m[1]);
+  for (const m of text.matchAll(GRUSSFORMEL)) zeile(m[1]);
+  for (const m of text.matchAll(SELBST_VORGESTELLT)) {
+    einzeln(m[1]);
+    einzeln(m[2]);
+  }
+  return [...gefunden];
 }
 
 /**

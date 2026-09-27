@@ -2,7 +2,7 @@ import { defineRoute, idParam } from '@/lib/api/handler';
 import { ok } from '@/lib/api/response';
 import { prisma } from '@/lib/db';
 import { NotFoundError } from '@/lib/errors';
-import { writeEmail } from '@/lib/ai/features';
+import { writeReviewReply } from '@/lib/ai/features';
 import { getOrganizationId } from '@/server/services/organization.service';
 
 export const runtime = 'nodejs';
@@ -26,22 +26,40 @@ export const POST = defineRoute({
 
     const review = await prisma.review.findFirst({
       where: { id: params.id, organizationId },
-      select: { authorName: true, rating: true, title: true, body: true },
+      select: {
+        authorName: true,
+        rating: true,
+        title: true,
+        body: true,
+        customer: { select: { firstName: true, lastName: true, contacts: { select: { firstName: true, lastName: true } } } },
+      },
     });
     if (!review) throw new NotFoundError('Bewertung');
 
-    const result = await writeEmail({
-      purpose:
-        review.rating >= 4
-          ? 'Öffentliche Antwort auf eine positive Bewertung — kurz danken, ohne Werbefloskeln.'
-          : 'Öffentliche Antwort auf eine kritische Bewertung: danken, Verantwortung übernehmen, konkrete Verbesserung nennen, persönliches Gespräch anbieten. Nicht rechtfertigen, nicht relativieren.',
-      recipientName: review.authorName,
-      tone: review.rating >= 4 ? 'freundlich' : 'entschuldigend',
-      context: `Bewertung mit ${review.rating} von 5 Sternen.\nTitel: ${review.title ?? '—'}\nText: ${review.body}`,
+    // Die Namen, die im Bewertungstext stehen können und nicht hinausgehören:
+    // Mitarbeitende („Frau Keller war super"), die Kundschaft der Bewertung
+    // samt Kontakten. Die Konten der Organisation sind eine kleine Menge und
+    // werden je Aufruf frisch gelesen — wie im Führungsassistenten (F-15).
+    const konten = await prisma.user.findMany({ where: { organizationId }, select: { firstName: true, lastName: true } });
+    const bekannteNamen = [
+      ...konten.flatMap((k) => [k.firstName, k.lastName]),
+      review.customer?.firstName,
+      review.customer?.lastName,
+      ...(review.customer?.contacts ?? []).flatMap((c) => [c.firstName, c.lastName]),
+    ];
+
+    // Eigene Nutzlast statt `writeEmail`: Sterne als Zahl, Zweck aus dem Code,
+    // Text geschwärzt ohne Rückweg (`bewertungsantwortNutzlast`).
+    // Nur der Fliesstext — eine öffentliche Antwort hat keinen Betreff.
+    const text = await writeReviewReply({
+      rating: review.rating,
+      title: review.title,
+      body: review.body,
+      authorName: review.authorName,
       senderName: session.name,
+      bekannteNamen,
     });
 
-    // Nur der Fliesstext — eine öffentliche Antwort hat keinen Betreff.
-    return ok({ text: result.body });
+    return ok({ text });
   },
 });

@@ -20,7 +20,9 @@ import { generateStructured } from './client';
  *     Freitext (Bewertungen, Check-in-Kommentare, Sitzungsnotizen) geht mit,
  *     aber erst nachdem `bi-assistant.service` jeden bekannten Namen durch
  *     `[NAME]` ersetzt hat. Hier stand bis 2026-09-27 „keine Personendaten";
- *     das stimmte für diese Texte nicht.
+ *     das stimmte für diese Texte nicht. Seit F-15 entsteht `data` nur noch
+ *     in `biDaten` (`nutzlast.ts`) aus einer Erlaubnisliste von Bausteinen;
+ *     die Funktionen hier nehmen den fertigen Text und fügen nichts hinzu.
  */
 
 const SYSTEM = `Du bist der Führungsassistent einer Reinigungsfirma im Kanton Bern, Schweiz.
