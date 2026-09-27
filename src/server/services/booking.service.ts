@@ -8,6 +8,7 @@ import { calculateBookingPrice } from '@/lib/pricing/engine';
 import type { LeistungInput, PriceBreakdown } from '@/lib/pricing/types';
 import { leistungsnamen } from '@/lib/booking/leistungen';
 import { absoluteUrl, formatDate, formatDateTime, round2 } from '@/lib/utils';
+import { produkt, prozentVon, summeZahl } from '@/lib/money';
 import { orderByFor, resolveSort, type SortOrder } from '@/lib/sort';
 import { randomToken } from '@/lib/auth/jwt';
 import { can, type ActorRole } from '@/lib/auth/rbac';
@@ -517,7 +518,7 @@ export function zusatzleistungenAusHerleitung(breakdown: PriceBreakdown) {
     const bestehend = karte.get(extraId);
     if (bestehend) {
       bestehend.quantity += line.quantity;
-      bestehend.lineTotal = round2(bestehend.lineTotal + line.amount);
+      bestehend.lineTotal = summeZahl(bestehend.lineTotal, line.amount);
     } else {
       karte.set(extraId, { extraId, name: line.label, quantity: line.quantity, unitPrice: line.unitPrice, lineTotal: line.amount });
     }
@@ -1279,7 +1280,7 @@ export async function updateBooking(params: {
           unit: item.unit,
           unitPrice: item.unitPrice,
           vatRate: pricing.vatRate,
-          lineTotal: round2(item.quantity * item.unitPrice),
+          lineTotal: produkt(item.quantity, item.unitPrice),
           durationMin: item.durationMin,
           position: index,
         })),
@@ -1296,7 +1297,7 @@ export async function updateBooking(params: {
             name: extra.name,
             quantity: extra.quantity,
             unitPrice: extra.unitPrice,
-            lineTotal: round2(extra.quantity * extra.unitPrice),
+            lineTotal: produkt(extra.quantity, extra.unitPrice),
           })),
         });
       }
@@ -1490,30 +1491,31 @@ export function recalculateBookingTotals(input: {
   discountAmount: number;
   vatRate: number;
 }) {
+  /*
+    Dezimal, und die Summen aus den gerundeten Zeilen (Phase 25, 2026-09-27).
+    Vorher: jede Zeile binär multipliziert (1.5 × 30.15 ergab 45.22), und das
+    Zwischentotal aus den *ungerundeten* Produkten — Zeilen und Total konnten
+    um einen Rappen auseinanderliegen. Die Rechnung rundet je Position
+    (`rechnungsbetraege.ts`); der Auftrag jetzt ebenso.
+  */
+  const artikel = input.items.map((item) => produkt(item.quantity, item.unitPrice));
+  const zusatz = input.extras.map((extra) => produkt(extra.quantity, extra.unitPrice));
   const lines = [
-    ...input.items.map((item) => ({
-      key: 'item',
-      kind: 'base' as const,
-      amount: round2(item.quantity * item.unitPrice),
-    })),
-    ...input.extras.map((extra) => ({
-      key: 'extra',
-      kind: 'extra' as const,
-      amount: round2(extra.quantity * extra.unitPrice),
-    })),
+    ...artikel.map((amount) => ({ key: 'item', kind: 'base' as const, amount })),
+    ...zusatz.map((amount) => ({ key: 'extra', kind: 'extra' as const, amount })),
   ];
 
-  const subtotal = round2(input.items.reduce((sum, i) => sum + i.quantity * i.unitPrice, 0));
-  const extrasTotal = round2(input.extras.reduce((sum, e) => sum + e.quantity * e.unitPrice, 0));
-  const travelFee = round2(input.travelFee);
+  const subtotal = summeZahl(...artikel);
+  const extrasTotal = summeZahl(...zusatz);
+  const travelFee = summeZahl(input.travelFee);
 
   // Der Rabatt kann den Auftrag höchstens auf null bringen, nie darunter.
-  const beforeDiscount = round2(subtotal + extrasTotal + travelFee);
-  const discountAmount = round2(Math.min(input.discountAmount, beforeDiscount));
+  const beforeDiscount = summeZahl(subtotal, extrasTotal, travelFee);
+  const discountAmount = summeZahl(Math.min(input.discountAmount, beforeDiscount));
 
-  const netTotal = round2(beforeDiscount - discountAmount);
+  const netTotal = summeZahl(beforeDiscount, -discountAmount);
   const vatRate = input.vatRate;
-  const vatAmount = round2(netTotal * (vatRate / 100));
+  const vatAmount = prozentVon(netTotal, vatRate);
 
   return {
     lines,
@@ -1524,7 +1526,7 @@ export function recalculateBookingTotals(input: {
     netTotal,
     vatRate,
     vatAmount,
-    grossTotal: round2(netTotal + vatAmount),
+    grossTotal: summeZahl(netTotal, vatAmount),
   };
 }
 

@@ -1,11 +1,12 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { aufRappen, ausRappen, geld, inRappen, max0, summe } from '../../src/lib/money';
+import { aufRappen, ausRappen, geld, inRappen, max0, produkt, prozentVon, summe, summeZahl } from '../../src/lib/money';
 import { kaufmaennischRunden } from '../../src/lib/runden';
 import { gutschriftsSummen, rechnungsSummen } from '../../src/lib/rechnungsbetraege';
 import { round2 as biRound2 } from '../../src/lib/bi/math';
-import { rappen } from '../../src/lib/payroll/beitraege';
+import { SAETZE_2026, berechneBeitraege, rappen } from '../../src/lib/payroll/beitraege';
+import { monatslohnAnteilig, ueberstundenBetrag } from '../../src/lib/payroll/lohnbestandteile';
 
 /**
  * Geldrechnung (2026-09-27) — die zwei Stellen, an denen Beträge gerundet
@@ -102,6 +103,48 @@ describe('Rechnungs- und Gutschriftsbeträge — dezimal', () => {
     // 18.525 × 8.1 % = 1.5005… → 1.50
     assert.equal(g.vatAmount, 1.5);
     assert.equal(g.grossTotal, 20.33);
+  });
+});
+
+describe('produkt und prozentVon — Produkte dezimal (Preis-Engine)', () => {
+  it('Produkte, deren Binärwert unter die Hälfte fällt, runden auf', () => {
+    // Treffer der Suche vom 2026-09-27: binär 45.22, 133.7, 0.03.
+    assert.equal(produkt(30.15, 1.5), 45.23);
+    assert.equal(produkt(30.25, 4.42), 133.71);
+    assert.equal(prozentVon(0.35, 10), 0.04);
+    assert.equal(prozentVon(1.5, 15), 0.23);
+    // Zur Gegenprobe: genau diese Fälle rundet die Zahlenrechnung falsch.
+    assert.equal(kaufmaennischRunden(30.15 * 1.5), 45.22);
+    assert.equal(kaufmaennischRunden(0.35 * (10 / 100)), 0.03);
+  });
+
+  it('MWST, grosse Beträge, negative Werte, Summen', () => {
+    assert.equal(prozentVon(45.23, 8.1), 3.66);
+    assert.equal(prozentVon(9_999_999.99, 8.1), 810_000);
+    assert.equal(produkt(-30.15, 1.5), -45.23);
+    assert.equal(summeZahl(0.1, 0.2), 0.3);
+    assert.equal(summeZahl(45.23, -6.78, 3.66), 42.11);
+  });
+});
+
+describe('Lohn — Beiträge und Bestandteile dezimal', () => {
+  it('AHV 5.3 % von CHF 1085.00 sind 57.51, nicht 57.50', () => {
+    const b = berechneBeitraege({ bruttoMonat: 1085, bruttoJahr: 1085 * 12, alter: 30 }, SAETZE_2026);
+    assert.equal(b.ahvIv, 57.51);
+    // Gegenprobe: die frühere Rechnung ergab 57.50.
+    assert.equal(rappen(1085 * (5.3 / 100)), 57.5);
+    // Summe = Summe der angezeigten Zeilen.
+    assert.equal(b.summe, summeZahl(b.ahvIv, b.alv, b.bvg, b.uvg, b.ktg));
+  });
+
+  it('Überstunden und anteiliger Monatslohn ohne Binärfehler', () => {
+    // 1.5 Std. × CHF 30.15 × 125 % = 56.53125 → 56.53
+    assert.equal(ueberstundenBetrag(1.5, 30.15, 25), 56.53);
+    // 30.15 × 1.5 = 45.225 → 45.23 (ohne Zuschlag)
+    assert.equal(ueberstundenBetrag(1.5, 30.15, 0), 45.23);
+    // Ein voller Monat nach Kalendertagen ist genau der Monatslohn, auch bei 31 Tagen.
+    const voll = monatslohnAnteilig({ jahr: 2026, monat: 1, abschnitte: [{ abTag: 1, monatslohnVoll: 4567.85 }], ersterTag: 1, letzterTag: 31 });
+    assert.equal(voll.betrag, 4567.85);
   });
 });
 

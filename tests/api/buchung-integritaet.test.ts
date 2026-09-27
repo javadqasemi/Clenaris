@@ -24,7 +24,7 @@ const RUN = Date.now();
 const db = testDb();
 let jars: Record<AccountName, string>;
 let org = '';
-const S = { buero: '', fenster: '', klein: '', puffer: '', quali: '' };
+const S = { buero: '', fenster: '', klein: '', puffer: '', quali: '', satz: '' };
 const QUALI = `Prüfqualifikation ${RUN}`;
 let zusatzId = '';
 let kundeId = '';
@@ -146,6 +146,7 @@ before(async () => {
   S.klein = await leistung('klein', 'SPECIAL', 50, 60, { minPrice: 500 });
   S.puffer = await leistung('puffer', 'OFFICE_CLEANING', 45, 60, { bufferMinutes: 60 });
   S.quali = await leistung('quali', 'OFFICE_CLEANING', 45, 60, { requiredSkills: [QUALI] });
+  S.satz = await leistung('satz', 'OFFICE_CLEANING', 30.15, 60);
   zusatzId = (await db.serviceExtra.create({ data: { organizationId: org, slug: `integritaet-zusatz-${RUN}`, name: `Integritätszusatz ${RUN}`, price: 25, durationMin: 15 } })).id;
   await db.serviceExtraOnService.create({ data: { serviceId: S.buero, extraId: zusatzId } });
   kundeId = (
@@ -169,6 +170,29 @@ after(async () => {
 
 describe('Buchung → Rechnung, Gastbuchung, Terminänderung', { concurrency: 1 }, () => {
   describe('A1 — die Rechnung aus dem Einsatz verliert nichts', () => {
+    /**
+     * Die Preis-Engine rechnete Produkte binär (Phase 25, 2026-09-27):
+     * CHF 30.15 × 1.5 Std. = 45.225 wurde zur Gleitkommazahl knapp darunter
+     * und damit zu 45.22 — auch mit der korrigierten Rundung, denn die rundete
+     * richtig, nur die falsche Zahl. Gefunden durch eine Suche über
+     * Stundensätze und Dauern; zehn Treffer zwischen CHF 30 und 31.
+     */
+    it('dezimal: CHF 30.15 × 1.5 Std. sind 45.23, nicht 45.22', async (t) => {
+      if (!db) return t.skip('keine Testdatenbank');
+      const r = await post<{ data: { lines: { key: string; amount: number }[]; netTotal: number; vatAmount: number } }>('/api/public/pricing/estimate', {
+        leistungen: [{ serviceId: S.satz, manualHours: 1.5, extras: [] }],
+        propertyKind: 'OFFICE',
+        frequency: 'ONCE',
+      });
+      assert.equal(r.status, 200, r.text);
+      const arbeit = data(r).lines.find((l) => l.key === 'labor');
+      assert.equal(arbeit?.amount, 45.23, `Arbeitszeile: ${JSON.stringify(arbeit)}`);
+      // Keine Grundpauschale, keine Anfahrt ohne Postleitzahl: Netto = Arbeit.
+      assert.equal(n(data(r).netTotal), 45.23);
+      // 45.23 × 8.1 % = 3.66363 → 3.66
+      assert.equal(n(data(r).vatAmount), 3.66);
+    });
+
     it('eine Leistung mit Grundpauschale, Zusatzleistung, Anfahrt, Stammkundenrabatt und Gutschein', async (t) => {
       if (!db) return t.skip('keine Testdatenbank');
       const id = await bueroBuchung([{ serviceId: S.buero, extras: [{ extraId: zusatzId, quantity: 2 }] }], termin(200, '09:00'), { couponCode: gutschein });

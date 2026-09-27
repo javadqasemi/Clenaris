@@ -8,7 +8,7 @@ import { sha256Hex } from '@/lib/crypto';
 import { isUniqueConstraintError, prisma, toNumber } from '@/lib/db';
 import { BusinessRuleError, NotFoundError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
-import { alterImJahr, rappen } from '@/lib/payroll/beitraege';
+import { alterImJahr } from '@/lib/payroll/beitraege';
 import {
   ermittleLohnteil,
   monatslohnAnteilig,
@@ -25,6 +25,7 @@ import {
 import { renderPayslipPdf } from '@/lib/pdf/render';
 import { deleteFile, readAssetBytes, uploadBuffer } from '@/lib/storage';
 import { round2 } from '@/lib/utils';
+import { alsZahl, geld, produkt, prozentVon, summe } from '@/lib/money';
 
 import { letzterTagDesMonats, saetzeZumStichtag } from './payroll-rates.service';
 import { VERALTET_PRAEFIX } from './payroll-veraltet';
@@ -121,7 +122,7 @@ interface Lohnstand {
 }
 
 function monatslohnVoll(stand: Lohnstand): number {
-  return round2(toNumber(stand.monthlySalary) * (stand.workloadPct / 100));
+  return prozentVon(stand.monthlySalary, stand.workloadPct);
 }
 
 /** Angestellte Tage im Monat (1-basiert, einschliesslich) — oder `null`, wenn gar nicht angestellt. */
@@ -224,9 +225,15 @@ async function ermittleGrundlohn(
     }),
   ]);
 
+  /*
+    Minuten × Satz ÷ 60, dezimal und erst am Ende gerundet (Phase 25,
+    2026-09-27). Vorher `minutes / 60` als Gleitkommazahl — 20 Minuten sind
+    0.333…, binär nicht darstellbar — mal Satz, dann über alle Erfassungen
+    summiert: Der Stundenlohn des Monats hing an der Reihenfolge der Addition.
+  */
   let stunden = 0;
   let stundenBezahlt = 0;
-  let stundenBetrag = 0;
+  let stundenBetrag = geld(0);
   for (const e of freigegeben) {
     const h = (e.minutes ?? 0) / 60;
     stunden += h;
@@ -240,9 +247,10 @@ async function ermittleGrundlohn(
     if (toNumber(stand.monthlySalary) > 0) continue;
     const ausHistorie = satzAm(akte.salaryHistory, tag)?.hourlyRate ?? null;
     stundenBezahlt += h;
-    stundenBetrag += h * toNumber(ausHistorie ?? e.hourlyRate ?? akte.hourlyRate);
+    stundenBetrag = stundenBetrag.plus(geld(e.minutes ?? 0).times(geld(ausHistorie ?? e.hourlyRate ?? akte.hourlyRate)).dividedBy(60));
   }
   stunden = round2(stunden);
+  const stundenlohn = alsZahl(stundenBetrag);
 
   const letzterTag = anstellung ? tagDatum(jahr, monat, anstellung.letzterTag) : letzterTagDesMonats(jahr, monat);
   const ende = standAm(letzterTag);
@@ -257,7 +265,7 @@ async function ermittleGrundlohn(
         tage: monatlich.tage,
         voll: monatlich.voll,
         monatslohnVoll: vollEnde > 0 ? vollEnde : Math.max(...abschnitte.map((a) => a.monatslohnVoll)),
-        stundenAnteil: stundenBetrag > 0 ? { betrag: rappen(stundenBetrag), stunden: round2(stundenBezahlt) } : undefined,
+        stundenAnteil: stundenlohn > 0 ? { betrag: stundenlohn, stunden: round2(stundenBezahlt) } : undefined,
       },
       stunden,
       erfassungen: freigegeben.length,
@@ -267,7 +275,7 @@ async function ermittleGrundlohn(
        * Monatsende mal 12 — mal 13, wenn ein 13. Monatslohn vereinbart ist,
        * weil er zum massgebenden Jahreslohn gehört.
        */
-      hochrechnungJahr: round2(vollEnde * (mitDreizehntem ? 13 : 12)),
+      hochrechnungJahr: produkt(vollEnde, mitDreizehntem ? 13 : 12),
       basis: 'MONTHLY',
       monatslohnVollEnde: vollEnde > 0 ? vollEnde : null,
     };
@@ -281,11 +289,12 @@ async function ermittleGrundlohn(
    */
   const satz = toNumber(ende.hourlyRate ?? akte.hourlyRate);
   return {
-    eingabe: { art: 'HOURLY', betrag: rappen(stundenBetrag), stunden: round2(stundenBezahlt) },
+    eingabe: { art: 'HOURLY', betrag: stundenlohn, stunden: round2(stundenBezahlt) },
     stunden,
     erfassungen: freigegeben.length,
     offeneErfassungen: offen,
-    hochrechnungJahr: round2(42 * (ende.workloadPct / 100) * 52 * satz),
+    // 42 Std. × Pensum × 52 Wochen × Satz — dezimal, gerundet einmal am Ende.
+    hochrechnungJahr: alsZahl(geld(42 * 52).times(geld(ende.workloadPct)).dividedBy(100).times(geld(satz))),
     basis: 'HOURLY',
     monatslohnVollEnde: null,
   };
@@ -341,8 +350,8 @@ async function dreizehnterKontext(
     },
     select: { type: true, amount: true },
   });
-  const grundlohn = frueher.filter((z) => z.type !== 'THIRTEENTH').reduce((s, z) => s + toNumber(z.amount), 0);
-  const bereits = frueher.filter((z) => z.type === 'THIRTEENTH').reduce((s, z) => s + toNumber(z.amount), 0);
+  const grundlohn = summe(frueher.filter((z) => z.type !== 'THIRTEENTH').map((z) => z.amount)).toNumber();
+  const bereits = summe(frueher.filter((z) => z.type === 'THIRTEENTH').map((z) => z.amount)).toNumber();
 
   const jahresbeginn = tagDatum(jahr, 1, 1);
   const jahresende = tagDatum(jahr, 12, 31);
@@ -355,8 +364,8 @@ async function dreizehnterKontext(
 
   return {
     ...leer,
-    grundlohnBisherImJahr: rappen(grundlohn),
-    bereitsAusbezahlt: rappen(bereits),
+    grundlohnBisherImJahr: grundlohn,
+    bereitsAusbezahlt: bereits,
     anstellungstageImJahr: anstellungstage,
     tageImJahr,
     austrittImMonat: austritt,

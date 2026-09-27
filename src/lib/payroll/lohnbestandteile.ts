@@ -32,12 +32,12 @@
 import {
   berechneArbeitgeberbeitraege,
   berechneBeitraege,
-  rappen,
   type ArbeitgeberBeitraege,
   type ArbeitgeberSaetze,
   type Beitraege,
   type BeitragsSaetze,
 } from './beitraege';
+import { alsZahl, geld, prozentVon, summe, summeZahl, type Geld } from '../money';
 
 // ---------------------------------------------------------------------------
 //  Kalender
@@ -111,14 +111,16 @@ export interface Monatslohngrundlage {
  */
 export function monatslohnAnteilig(g: Monatslohngrundlage): { betrag: number; tage: number; voll: boolean } {
   const tage = tageImMonat(g.jahr, g.monat);
-  let summe = 0;
+  // Dezimal (Phase 25): 31 Anteile `Lohn / 31` binär addiert ergeben den
+  // vollen Lohn nicht genau, und eine Summe knapp unter x.xx5 rundet ab.
+  let summe = geld(0);
   for (let tag = g.ersterTag; tag <= g.letzterTag; tag++) {
     let gilt = 0;
     for (const a of g.abschnitte) if (a.abTag <= tag) gilt = a.monatslohnVoll;
-    summe += gilt / tage;
+    summe = summe.plus(geld(gilt).dividedBy(tage));
   }
   const angestellt = Math.max(0, g.letzterTag - g.ersterTag + 1);
-  return { betrag: rappen(summe), tage: angestellt, voll: angestellt === tage };
+  return { betrag: alsZahl(summe), tage: angestellt, voll: angestellt === tage };
 }
 
 // ---------------------------------------------------------------------------
@@ -198,14 +200,15 @@ function zeile(
   type: Zeilenart,
   kind: Zeilenwirkung,
   label: string,
-  amount: number,
+  /** Als Dezimalzahl, wo er aus einer Rechnung stammt — gerundet wird hier, einmal. */
+  amount: number | Geld,
   extra: Partial<Pick<Zeile, 'quantity' | 'rate' | 'taxable' | 'sourceItemId'>> = {},
 ): Zeile {
   return {
     type,
     kind,
     label,
-    amount: rappen(amount),
+    amount: alsZahl(amount),
     quantity: extra.quantity ?? null,
     rate: extra.rate ?? null,
     taxable: extra.taxable ?? (kind === 'EARNING'),
@@ -240,7 +243,7 @@ export interface Position {
 
 /** Überstunden: Stunden × Ansatz × (1 + Zuschlag). Der Server rechnet, nie der Client. */
 export function ueberstundenBetrag(stunden: number, ansatz: number, zuschlagPct: number): number {
-  return rappen(stunden * ansatz * (1 + zuschlagPct / 100));
+  return alsZahl(geld(stunden).times(geld(ansatz)).times(geld(100).plus(geld(zuschlagPct))).dividedBy(100));
 }
 
 export type DreizehnterArt = 'NONE' | 'ANNUAL' | 'PRO_RATA' | 'MONTHLY';
@@ -357,11 +360,11 @@ export function ermittleLohnteil(e: AbrechnungsEingabe): Lohnteil {
      * `docs/PAYROLL.md` steht; der Vertrag kann anders rechnen.
      */
     if (e.unbezahlteTage > 0 && e.werktageImMonat > 0) {
-      const abzug = rappen((e.grundlohn.monatslohnVoll / e.werktageImMonat) * e.unbezahlteTage);
+      const abzug = alsZahl(geld(e.grundlohn.monatslohnVoll).dividedBy(e.werktageImMonat).times(e.unbezahlteTage));
       zeilen.push(
         zeile('UNPAID_LEAVE', 'EARNING', `Unbezahlter Urlaub (${e.unbezahlteTage} Werktage)`, -Math.min(abzug, e.grundlohn.betrag), {
           quantity: e.unbezahlteTage,
-          rate: rappen(e.grundlohn.monatslohnVoll / e.werktageImMonat),
+          rate: alsZahl(geld(e.grundlohn.monatslohnVoll).dividedBy(e.werktageImMonat)),
         }),
       );
       herleitung.unbezahlterUrlaub = { tage: e.unbezahlteTage, werktageImMonat: e.werktageImMonat };
@@ -405,12 +408,12 @@ export function ermittleLohnteil(e: AbrechnungsEingabe): Lohnteil {
   }
 
   // Ferien- und Feiertagsentschädigung (Stundenlohn) -------------------------
-  const grundlohn = zeilen.filter((z) => z.type === 'BASE').reduce((s, z) => s + z.amount, 0);
+  const grundlohn = summe(zeilen.filter((z) => z.type === 'BASE').map((z) => z.amount)).toNumber();
   if (e.grundlohn.art === 'HOURLY' && e.ferienImLohn) {
     const satz = ferienanteilProzent(e.ferientageJeJahr);
     if (satz > 0) {
       zeilen.push(
-        zeile('VACATION_PAY', 'EARNING', `Ferienentschädigung ${satz.toFixed(2)} %`, grundlohn * (satz / 100), { rate: satz }),
+        zeile('VACATION_PAY', 'EARNING', `Ferienentschädigung ${satz.toFixed(2)} %`, prozentVon(grundlohn, satz), { rate: satz }),
       );
       herleitung.ferienentschaedigung = { ferientageJeJahr: e.ferientageJeJahr, satzPct: satz };
     }
@@ -421,24 +424,24 @@ export function ermittleLohnteil(e: AbrechnungsEingabe): Lohnteil {
         'HOLIDAY_PAY',
         'EARNING',
         `Feiertagsentschädigung ${e.feiertagsanteilPct.toFixed(2)} %`,
-        grundlohn * (e.feiertagsanteilPct / 100),
+        prozentVon(grundlohn, e.feiertagsanteilPct),
         { rate: e.feiertagsanteilPct },
       ),
     );
   }
 
   // 13. Monatslohn -----------------------------------------------------------
-  const unbezahlt = zeilen.filter((z) => z.type === 'UNPAID_LEAVE').reduce((s, z) => s + z.amount, 0);
-  const dreizehnter = berechneDreizehnten(e.dreizehnter, grundlohn + unbezahlt, e.monat);
+  const unbezahlt = summe(zeilen.filter((z) => z.type === 'UNPAID_LEAVE').map((z) => z.amount)).toNumber();
+  const dreizehnter = berechneDreizehnten(e.dreizehnter, summeZahl(grundlohn, unbezahlt), e.monat);
   if (dreizehnter.betrag !== 0) {
     zeilen.push(zeile('THIRTEENTH', 'EARNING', dreizehnter.beschriftung, dreizehnter.betrag));
   }
   herleitung.dreizehnter = dreizehnter.herleitung;
 
-  const brutto = rappen(zeilen.filter((z) => z.kind === 'EARNING').reduce((s, z) => s + z.amount, 0));
-  const quellensteuerBemessung = rappen(
-    zeilen.filter((z) => (z.kind === 'EARNING' || z.kind === 'PAYMENT') && z.taxable).reduce((s, z) => s + z.amount, 0),
-  );
+  const brutto = summe(zeilen.filter((z) => z.kind === 'EARNING').map((z) => z.amount)).toNumber();
+  const quellensteuerBemessung = summe(
+    zeilen.filter((z) => (z.kind === 'EARNING' || z.kind === 'PAYMENT') && z.taxable).map((z) => z.amount),
+  ).toNumber();
   return { zeilen, brutto, quellensteuerBemessung, quellensteuerVonHand, herleitung };
 }
 
@@ -467,7 +470,7 @@ export function berechneDreizehnten(
   if (g.art === 'NONE') return { betrag: 0, beschriftung: '', herleitung: { art: 'NONE' } };
 
   if (g.art === 'MONTHLY') {
-    const betrag = rappen(grundlohnDiesesMonats / 12);
+    const betrag = alsZahl(geld(grundlohnDiesesMonats).dividedBy(12));
     return { betrag, beschriftung: '13. Monatslohn (monatlich 1/12)', herleitung: { art: 'MONTHLY', grundlage: grundlohnDiesesMonats } };
   }
 
@@ -481,7 +484,11 @@ export function berechneDreizehnten(
       return { betrag: 0, beschriftung: '', herleitung: { art, bereitsAusbezahlt: g.bereitsAusbezahlt } };
     }
     const anteil = g.tageImJahr > 0 ? Math.min(1, g.anstellungstageImJahr / g.tageImJahr) : 0;
-    const betrag = rappen((g.monatslohnVoll ?? 0) * anteil);
+    // Lohn × Tage ÷ Jahrestage, nicht Lohn × (binärer Anteil).
+    const betrag =
+      anteil >= 1
+        ? alsZahl(g.monatslohnVoll ?? 0)
+        : alsZahl(geld(g.monatslohnVoll ?? 0).times(g.anstellungstageImJahr).dividedBy(g.tageImJahr));
     return {
       betrag,
       beschriftung: anteil < 1 ? `13. Monatslohn anteilig (${g.anstellungstageImJahr} Tage)` : '13. Monatslohn',
@@ -489,12 +496,12 @@ export function berechneDreizehnten(
     };
   }
 
-  const summe = g.grundlohnBisherImJahr + grundlohnDiesesMonats;
-  const betrag = rappen(summe / 12 - g.bereitsAusbezahlt);
+  const imJahr = geld(g.grundlohnBisherImJahr).plus(geld(grundlohnDiesesMonats));
+  const betrag = alsZahl(imJahr.dividedBy(12).minus(geld(g.bereitsAusbezahlt)));
   return {
     betrag: betrag > 0 ? betrag : 0,
     beschriftung: '13. Monatslohn (1/12 der Grundlöhne)',
-    herleitung: { art: 'PRO_RATA', grundlohnImJahr: rappen(summe), bereitsAusbezahlt: g.bereitsAusbezahlt },
+    herleitung: { art: 'PRO_RATA', grundlohnImJahr: alsZahl(imJahr), bereitsAusbezahlt: g.bereitsAusbezahlt },
   };
 }
 
@@ -527,11 +534,11 @@ export function schliesseAbrechnungAb(
   let pruefungsgrund: string | null = null;
   const qstHerleitung: Record<string, unknown> = { status: quellensteuer.status, bemessung: teil.quellensteuerBemessung };
   if (teil.quellensteuerVonHand) {
-    qst = rappen(teil.quellensteuerVonHand.amount);
+    qst = alsZahl(teil.quellensteuerVonHand.amount);
     abzug('WITHHOLDING_TAX', teil.quellensteuerVonHand.label || 'Quellensteuer (von Hand)', qst, null);
     qstHerleitung.vonHand = true;
   } else if (quellensteuer.status === 'SATZ') {
-    qst = rappen(teil.quellensteuerBemessung * (quellensteuer.satzPct / 100));
+    qst = prozentVon(teil.quellensteuerBemessung, quellensteuer.satzPct);
     abzug(
       'WITHHOLDING_TAX',
       `Quellensteuer ${quellensteuer.kanton} ${quellensteuer.tarif} ${quellensteuer.satzPct.toFixed(2)} %`,
@@ -557,9 +564,9 @@ export function schliesseAbrechnungAb(
   ag('Arbeitgeber Verwaltungskosten', arbeitgeber.vk);
   ag('Arbeitgeber BVG', arbeitgeber.bvg);
 
-  const spesenUndZahlungen = rappen(zeilen.filter((z) => z.kind === 'PAYMENT').reduce((s, z) => s + z.amount, 0));
-  const andereAbzuege = rappen(zeilen.filter((z) => z.type === 'DEDUCTION').reduce((s, z) => s + z.amount, 0));
-  const netto = rappen(teil.brutto - beitraege.summe - qst - andereAbzuege + spesenUndZahlungen);
+  const spesenUndZahlungen = summe(zeilen.filter((z) => z.kind === 'PAYMENT').map((z) => z.amount)).toNumber();
+  const andereAbzuege = summe(zeilen.filter((z) => z.type === 'DEDUCTION').map((z) => z.amount)).toNumber();
+  const netto = summeZahl(teil.brutto, -beitraege.summe, -qst, -andereAbzuege, spesenUndZahlungen);
 
   return {
     zeilen,

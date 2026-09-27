@@ -5,6 +5,7 @@ import type { Frequency, PriceRule, Service, ServiceExtra, ServiceKind } from '@
 import { prisma, toNumber } from '@/lib/db';
 import { BusinessRuleError, NotFoundError } from '@/lib/errors';
 import { round2 } from '@/lib/utils';
+import { aufRappen, geld, produkt, prozentVon, summeZahl } from '@/lib/money';
 import type {
   BookingPriceInput,
   CouponCheck,
@@ -418,9 +419,10 @@ export async function calculateBookingPrice(
     switch (service.pricingModel) {
       case 'PER_HOUR': {
         const rate = toNumber(service.hourlyRate);
-        const amount = round2(rate * laborHours);
+        // Dezimal (Phase 25): 30.15 × 1.5 ergab binär 45.22 statt 45.23.
+        const amount = produkt(rate, laborHours);
         lines.push({ key: k('labor'), label: `${service.name} · ${laborHours.toFixed(2)} Std.`, quantity: laborHours, unit: 'Std.', unitPrice: rate, amount, kind: 'base', meta });
-        postenSubtotal += amount;
+        postenSubtotal = summeZahl(postenSubtotal, amount);
         break;
       }
       case 'PER_SQM': {
@@ -433,23 +435,23 @@ export async function calculateBookingPrice(
           );
         }
         const rate = toNumber(service.pricePerSqm);
-        const amount = round2(rate * sqm);
+        const amount = produkt(rate, sqm);
         lines.push({ key: k('area'), label: `${service.name} · ${sqm} m²`, quantity: sqm, unit: 'm²', unitPrice: rate, amount, kind: 'base', meta });
-        postenSubtotal += amount;
+        postenSubtotal = summeZahl(postenSubtotal, amount);
         break;
       }
       case 'PER_UNIT': {
         const units = eingabe.windows ?? eingabe.rooms ?? 1;
         const rate = toNumber(service.hourlyRate) || basePrice;
-        const amount = round2(rate * units);
+        const amount = produkt(rate, units);
         lines.push({ key: k('units'), label: `${service.name} · ${units} Einheiten`, quantity: units, unit: 'Stk.', unitPrice: rate, amount, kind: 'base', meta });
-        postenSubtotal += amount;
+        postenSubtotal = summeZahl(postenSubtotal, amount);
         break;
       }
       case 'FLAT':
       default: {
         lines.push({ key: k('flat'), label: `${service.name} · Pauschale`, quantity: 1, unit: 'Pauschal', unitPrice: basePrice, amount: basePrice, kind: 'base', meta });
-        postenSubtotal += basePrice;
+        postenSubtotal = summeZahl(postenSubtotal, basePrice);
         break;
       }
     }
@@ -466,7 +468,7 @@ export async function calculateBookingPrice(
         kind: 'base',
         meta,
       });
-      postenSubtotal += basePrice;
+      postenSubtotal = summeZahl(postenSubtotal, basePrice);
     }
 
     let postenExtras = 0;
@@ -476,7 +478,7 @@ export async function calculateBookingPrice(
       if (!extra) continue;
       const quantity = Math.max(1, Math.min(50, Math.floor(requested.quantity)));
       const unitPrice = toNumber(extra.price);
-      const amount = round2(unitPrice * quantity);
+      const amount = produkt(unitPrice, quantity);
       lines.push({
         key: k(`extra:${extra.slug}`),
         label: extra.name,
@@ -487,14 +489,14 @@ export async function calculateBookingPrice(
         kind: 'extra',
         meta: { extraId: extra.id, serviceId: service.id },
       });
-      postenExtras += amount;
+      postenExtras = summeZahl(postenExtras, amount);
       postenExtrasMinuten += extra.durationMin * quantity;
     }
 
-    subtotal += postenSubtotal;
-    extrasTotal += postenExtras;
+    subtotal = summeZahl(subtotal, postenSubtotal);
+    extrasTotal = summeZahl(extrasTotal, postenExtras);
     extrasMinutesTotal += postenExtrasMinuten;
-    arbeitswerte.push(postenSubtotal + postenExtras);
+    arbeitswerte.push(summeZahl(postenSubtotal, postenExtras));
     positionen.push({
       serviceId: service.id,
       name: service.name,
@@ -524,7 +526,7 @@ export async function calculateBookingPrice(
   }
 
   // --- 4) Preisregeln -------------------------------------------------------
-  const workingBase = subtotal + extrasTotal;
+  const workingBase = summeZahl(subtotal, extrasTotal);
   let surchargeTotal = 0;
 
   const flaechen = posten.map((p) => p.eingabe.squareMeters ?? 0).filter((f) => f > 0);
@@ -563,8 +565,9 @@ export async function calculateBookingPrice(
 
     const multiplier = toNumber(rule.multiplier);
     const flat = toNumber(rule.surcharge);
-    const multiplierAmount = round2(basis * (multiplier - 1));
-    const amount = round2(multiplierAmount + flat);
+    // Der Faktor dezimal: `multiplier - 1` wäre bei 1.15 binär 0.1499999…
+    const multiplierAmount = aufRappen(geld(basis).times(geld(rule.multiplier).minus(1))).toNumber();
+    const amount = summeZahl(multiplierAmount, flat);
     if (amount === 0) continue;
 
     lines.push({
@@ -578,13 +581,13 @@ export async function calculateBookingPrice(
       meta: { multiplier, flat },
     });
 
-    surchargeTotal += amount;
+    surchargeTotal = summeZahl(surchargeTotal, amount);
     appliedRules.push({ name: rule.name, multiplier, surcharge: flat });
   }
 
   // Express-Aufschlag, falls nicht bereits über eine Regel abgedeckt.
   if (input.urgent && !regeln.some((r) => (r.rule.condition as PriceRuleCondition)?.urgent)) {
-    const amount = round2(workingBase * (URGENT_MULTIPLIER - 1));
+    const amount = aufRappen(geld(workingBase).times(geld(URGENT_MULTIPLIER).minus(1))).toNumber();
     lines.push({
       key: 'urgent',
       label: 'Express-Zuschlag (Termin innert 48 Std.)',
@@ -594,7 +597,7 @@ export async function calculateBookingPrice(
       amount,
       kind: 'surcharge',
     });
-    surchargeTotal += amount;
+    surchargeTotal = summeZahl(surchargeTotal, amount);
     appliedRules.push({ name: 'Express-Zuschlag', multiplier: URGENT_MULTIPLIER, surcharge: 0 });
   }
 
@@ -603,7 +606,7 @@ export async function calculateBookingPrice(
   const frequencyRate = FREQUENCY_DISCOUNT[input.frequency] ?? 0;
 
   if (frequencyRate > 0) {
-    const amount = -round2((workingBase + surchargeTotal) * frequencyRate);
+    const amount = -produkt(summeZahl(workingBase, surchargeTotal), frequencyRate);
     lines.push({
       key: 'frequency-discount',
       label: `Abo-Rabatt · ${FREQUENCY_LABEL[input.frequency]} (${Math.round(frequencyRate * 100)} %)`,
@@ -613,7 +616,7 @@ export async function calculateBookingPrice(
       amount,
       kind: 'discount',
     });
-    discountTotal += amount;
+    discountTotal = summeZahl(discountTotal, amount);
     notes.push(
       `Sie sparen ${Math.round(frequencyRate * 100)} % dank wiederkehrender Reinigung. Jederzeit kündbar.`,
     );
@@ -622,7 +625,7 @@ export async function calculateBookingPrice(
   // --- 6) Kundenrabatt & Gutschein -----------------------------------------
   const customerDiscount = input.customerDiscountPercent ?? 0;
   if (customerDiscount > 0) {
-    const amount = -round2((workingBase + surchargeTotal) * (customerDiscount / 100));
+    const amount = -prozentVon(summeZahl(workingBase, surchargeTotal), customerDiscount);
     lines.push({
       key: 'customer-discount',
       label: `Stammkundenrabatt (${customerDiscount} %)`,
@@ -632,7 +635,7 @@ export async function calculateBookingPrice(
       amount,
       kind: 'discount',
     });
-    discountTotal += amount;
+    discountTotal = summeZahl(discountTotal, amount);
   }
 
   // Das Ergebnis der Prüfung wandert als eigenes Feld in die Herleitung, nicht
@@ -645,8 +648,8 @@ export async function calculateBookingPrice(
         organizationId,
         code: input.couponCode,
         serviceKinds: posten.map((p) => p.service.kind),
-        orderValue: workingBase + surchargeTotal,
-        beforeCoupon: workingBase + surchargeTotal + discountTotal,
+        orderValue: summeZahl(workingBase, surchargeTotal),
+        beforeCoupon: summeZahl(workingBase, surchargeTotal, discountTotal),
         customer: input.customer ?? null,
       })
     : null;
@@ -662,17 +665,17 @@ export async function calculateBookingPrice(
       kind: 'discount',
       meta: { couponId: couponCheck.couponId },
     });
-    discountTotal -= couponCheck.amount;
+    discountTotal = summeZahl(discountTotal, -couponCheck.amount);
   }
 
   // --- 7) Totale, Mindestpreis, MwSt. --------------------------------------
-  let netTotal = round2(workingBase + travelFee + surchargeTotal + discountTotal);
+  let netTotal = summeZahl(workingBase, travelFee, surchargeTotal, discountTotal);
 
   // Der Mindestauftragswert gilt je Auftrag, nicht je Leistung: Es gilt der
   // höchste der gebuchten Leistungen.
   const minPrice = Math.max(...posten.map((p) => toNumber(p.service.minPrice)));
   if (minPrice > 0 && netTotal < minPrice) {
-    const adjustment = round2(minPrice - netTotal);
+    const adjustment = summeZahl(minPrice, -netTotal);
     lines.push({
       key: 'min-price',
       label: `Mindestauftragswert CHF ${minPrice.toFixed(2)}`,
@@ -682,15 +685,15 @@ export async function calculateBookingPrice(
       amount: adjustment,
       kind: 'surcharge',
     });
-    surchargeTotal += adjustment;
+    surchargeTotal = summeZahl(surchargeTotal, adjustment);
     netTotal = minPrice;
     notes.push(`Es gilt ein Mindestauftragswert von CHF ${minPrice.toFixed(2)}.`);
   }
 
   netTotal = Math.max(0, netTotal);
   const vatRate = toNumber(erste.vatRate);
-  const vatAmount = round2(netTotal * (vatRate / 100));
-  const grossTotal = round2(netTotal + vatAmount);
+  const vatAmount = prozentVon(netTotal, vatRate);
+  const grossTotal = summeZahl(netTotal, vatAmount);
 
   if (travelMinutes > 0) {
     notes.push(`Anfahrtszeit ca. ${travelMinutes} Minuten ab unserem Standort in Bern.`);
@@ -825,7 +828,7 @@ async function checkCoupon(params: {
 
   let amount =
     coupon.discountType === 'PERCENT'
-      ? round2(params.beforeCoupon * (toNumber(coupon.discountValue) / 100))
+      ? prozentVon(params.beforeCoupon, coupon.discountValue)
       : toNumber(coupon.discountValue);
 
   const maxDiscount = coupon.maxDiscount ? toNumber(coupon.maxDiscount) : null;

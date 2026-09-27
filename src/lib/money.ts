@@ -59,6 +59,33 @@ export function ausRappen(rappen: number): Geld {
   return aufRappen(new Prisma.Decimal(rappen).dividedBy(100));
 }
 
+/**
+ * a × b, dezimal gerechnet und auf Rappen gerundet — als Zahl für die
+ * Weiterverarbeitung (2026-09-27, Preis-Engine).
+ *
+ * CHF 30.15 × 1.5 Std. sind 45.225; binär ergibt das Produkt die Zahl knapp
+ * darunter, und selbst die Rundung auf die kürzeste Dezimaldarstellung
+ * (`kaufmaennischRunden`) macht daraus 45.22 — sie rundet richtig, aber die
+ * *falsche Zahl*. Die Eingaben dagegen sind exakt: Eine `number` wie 30.15
+ * wird als „30.15" übernommen. Also wird das Produkt dezimal gebildet.
+ *
+ * Wichtig für Aufrufer: Faktoren nie vorher binär umformen. `geld(1.15 - 1)`
+ * ist 0.1499999…, `geld(1.15).minus(1)` ist 0.15.
+ */
+export function produkt(a: Eingabe, b: Eingabe): number {
+  return aufRappen(geld(a).times(geld(b))).toNumber();
+}
+
+/** `prozent` % von `basis`, dezimal, auf Rappen. Der Satz als Prozentzahl (8.1), nicht als Anteil (0.081). */
+export function prozentVon(basis: Eingabe, prozent: Eingabe): number {
+  return aufRappen(geld(basis).times(geld(prozent)).dividedBy(100)).toNumber();
+}
+
+/** Summe als Zahl, dezimal gerechnet. */
+export function summeZahl(...werte: Eingabe[]): number {
+  return summe(werte).toNumber();
+}
+
 export function max0(wert: Eingabe): Geld {
   const w = geld(wert);
   return w.isNegative() ? new Prisma.Decimal(0) : w;

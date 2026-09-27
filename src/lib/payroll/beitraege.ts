@@ -39,6 +39,7 @@
  * Treuhand, und das steht auch so in `docs/PAYROLL.md`.
  */
 
+import { alsZahl, geld, summe as geldSumme, type Geld } from '../money';
 import { kaufmaennischRunden } from '../runden';
 
 /**
@@ -49,6 +50,22 @@ import { kaufmaennischRunden } from '../runden';
 export function rappen(betrag: number): number {
   return kaufmaennischRunden(betrag, 2);
 }
+
+/**
+ * `satz` % von `basis`, **ungerundet** und dezimal (Phase 25, 2026-09-27).
+ *
+ * `rappen` rundet richtig — aber nur, was man ihm gibt. AHV 5.3 % von
+ * CHF 1085.00 sind 57.505; binär ergab `1085 * (5.3 / 100)` die Zahl knapp
+ * darunter, und daraus wurden 57.50 statt 57.51. Gefunden durch eine Suche
+ * über Monatslöhne in 5-Rappen-Schritten. Jede Beitragsrechnung geht deshalb
+ * über diese Funktion und wird erst am Schluss einmal gerundet.
+ */
+function prozent(basis: number | Geld, satz: number): Geld {
+  return geld(basis).times(geld(satz)).dividedBy(100);
+}
+
+const kleinerer = (a: Geld, b: Geld): Geld => (a.lessThan(b) ? a : b);
+const nichtNegativ = (a: Geld): Geld => (a.isNegative() ? geld(0) : a);
 
 /**
  * Die Sätze eines Jahres.
@@ -153,21 +170,21 @@ export function berechneArbeitgeberbeitraege(
   arbeitnehmer: Beitraege,
 ): ArbeitgeberBeitraege {
   const brutto = Math.max(0, grundlage.bruttoMonat);
-  const ahvIvEo = rappen(brutto * (arbeitgeber.ahvIvEo / 100));
-  const alv = rappen(
-    arbeitnehmer.herleitung.alvPflichtigerMonatslohn * (arbeitgeber.alv / 100) +
-      arbeitnehmer.herleitung.alvUeberGrenzeMonatslohn * (arbeitgeber.alvUeberGrenze / 100),
+  const ahvIvEo = alsZahl(prozent(brutto, arbeitgeber.ahvIvEo));
+  const alv = alsZahl(
+    prozent(arbeitnehmer.herleitung.alvPflichtigerMonatslohn, arbeitgeber.alv).plus(
+      prozent(arbeitnehmer.herleitung.alvUeberGrenzeMonatslohn, arbeitgeber.alvUeberGrenze),
+    ),
   );
-  const uvg = rappen(brutto * ((arbeitgeber.uvgNbu + arbeitgeber.uvgBu) / 100));
-  const ktg = rappen(brutto * (arbeitgeber.ktg / 100));
-  const fak = rappen(brutto * (arbeitgeber.fak / 100));
-  const vk = rappen((arbeitnehmer.ahvIv + ahvIvEo) * (arbeitgeber.vk / 100));
-  const bvgJahrGesamt =
-    arbeitnehmer.herleitung.bvgKoordinierterJahreslohn * (arbeitnehmer.herleitung.bvgSatzGesamt / 100);
+  const uvg = alsZahl(prozent(brutto, geld(arbeitgeber.uvgNbu).plus(geld(arbeitgeber.uvgBu)).toNumber()));
+  const ktg = alsZahl(prozent(brutto, arbeitgeber.ktg));
+  const fak = alsZahl(prozent(brutto, arbeitgeber.fak));
+  const vk = alsZahl(prozent(geld(arbeitnehmer.ahvIv).plus(geld(ahvIvEo)), arbeitgeber.vk));
+  const bvgJahrGesamt = prozent(arbeitnehmer.herleitung.bvgKoordinierterJahreslohn, arbeitnehmer.herleitung.bvgSatzGesamt);
   const bvg = arbeitnehmer.herleitung.bvgVersichert
-    ? rappen((bvgJahrGesamt / 12) * ((100 - saetze.bvgAnteilArbeitnehmer) / 100))
+    ? alsZahl(prozent(bvgJahrGesamt.dividedBy(12), geld(100).minus(geld(saetze.bvgAnteilArbeitnehmer)).toNumber()))
     : 0;
-  return { ahvIvEo, alv, uvg, ktg, fak, vk, bvg, summe: rappen(ahvIvEo + alv + uvg + ktg + fak + vk + bvg) };
+  return { ahvIvEo, alv, uvg, ktg, fak, vk, bvg, summe: geldSumme([ahvIvEo, alv, uvg, ktg, fak, vk, bvg]).toNumber() };
 }
 
 /**
@@ -312,7 +329,7 @@ export function berechneBeitraege(
 ): Beitraege {
   const brutto = Math.max(0, grundlage.bruttoMonat);
 
-  const ahvIv = rappen(brutto * (saetze.ahvIvEo / 100));
+  const ahvIv = alsZahl(prozent(brutto, saetze.ahvIvEo));
 
   /**
    * Die ALV-Grenze ist eine **Jahres**grenze. Auf den Monat heruntergebrochen
@@ -323,15 +340,13 @@ export function berechneBeitraege(
    * sehr hohen, stark schwankenden Löhnen; im Reinigungsgewerbe tritt der
    * Fall nicht auf. Dass er bestünde, gehört trotzdem gesagt.
    */
-  const grenzeMonat = saetze.alvGrenzeJahr / 12;
-  const alvPflichtig = Math.min(brutto, grenzeMonat);
-  const alvDarueber = Math.max(0, brutto - grenzeMonat);
-  const alv = rappen(
-    alvPflichtig * (saetze.alv / 100) + alvDarueber * (saetze.alvUeberGrenze / 100),
-  );
+  const grenzeMonat = geld(saetze.alvGrenzeJahr).dividedBy(12);
+  const alvPflichtig = kleinerer(geld(brutto), grenzeMonat);
+  const alvDarueber = nichtNegativ(geld(brutto).minus(grenzeMonat));
+  const alv = alsZahl(prozent(alvPflichtig, saetze.alv).plus(prozent(alvDarueber, saetze.alvUeberGrenze)));
 
-  const uvg = rappen(brutto * (saetze.uvgNbu / 100));
-  const ktg = rappen(brutto * (saetze.ktg / 100));
+  const uvg = alsZahl(prozent(brutto, saetze.uvgNbu));
+  const ktg = alsZahl(prozent(brutto, saetze.ktg));
 
   const koordiniert = koordinierterLohn(grundlage.bruttoJahr, saetze);
   const bvgSatz = koordiniert.versichert ? bvgSatzFuerAlter(grundlage.alter, saetze) : 0;
@@ -340,12 +355,10 @@ export function berechneBeitraege(
    * Der Monatsbeitrag ist ein Zwölftel des Jahresbeitrags, und der
    * Arbeitnehmeranteil davon.
    */
-  const bvgJahrGesamt = koordiniert.betrag * (bvgSatz / 100);
-  const bvg = rappen(
-    (bvgJahrGesamt / 12) * (saetze.bvgAnteilArbeitnehmer / 100),
-  );
+  const bvgJahrGesamt = prozent(koordiniert.betrag, bvgSatz);
+  const bvg = alsZahl(prozent(bvgJahrGesamt.dividedBy(12), saetze.bvgAnteilArbeitnehmer));
 
-  const summe = rappen(ahvIv + alv + bvg + uvg + ktg);
+  const summe = geldSumme([ahvIv, alv, bvg, uvg, ktg]).toNumber();
 
   return {
     ahvIv,
@@ -355,8 +368,8 @@ export function berechneBeitraege(
     ktg,
     summe,
     herleitung: {
-      alvPflichtigerMonatslohn: rappen(alvPflichtig),
-      alvUeberGrenzeMonatslohn: rappen(alvDarueber),
+      alvPflichtigerMonatslohn: alsZahl(alvPflichtig),
+      alvUeberGrenzeMonatslohn: alsZahl(alvDarueber),
       bvgKoordinierterJahreslohn: rappen(koordiniert.betrag),
       bvgSatzGesamt: bvgSatz,
       bvgVersichert: koordiniert.versichert,
