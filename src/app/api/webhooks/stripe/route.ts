@@ -1,12 +1,11 @@
 import type Stripe from 'stripe';
-import type { Prisma } from '@prisma/client';
 
-import { prisma } from '@/lib/db';
 import { toErrorResponse } from '@/lib/api/response';
 import { ausRappen } from '@/lib/money';
 import { constructWebhookEvent, fromRappen } from '@/lib/payments/stripe';
 import { erstattungsstandUebernehmen, recordPayment } from '@/server/services/invoice.service';
 import { getOrganizationId } from '@/server/services/organization.service';
+import { ereignisVerbuchen, fehlgeschlageneZahlungVermerken, zahlungsabsichtVermerken } from '@/server/services/stripe-ereignis.service';
 import { logger } from '@/lib/logger';
 
 const log = logger('stripe');
@@ -28,7 +27,8 @@ export const maxDuration = 30;
  *  4. Jede Wirkung ist idempotent: Stripe stellt Ereignisse mehrfach und in
  *     beliebiger Reihenfolge zu. Zahlungen erkennt die eindeutige
  *     `providerPaymentId`, jedes Ereignis der eindeutige Vermerk in
- *     `ProviderWebhookEvent` (in derselben Transaktion wie seine Wirkung),
+ *     `ProviderWebhookEvent` (in derselben Transaktion wie seine Wirkung,
+ *     `ereignisVerbuchen` in `stripe-ereignis.service.ts`),
  *     Erstattungen ihr Anbieterzeitpunkt (`refundSyncedAt`). Bis 2026-09-27
  *     galt das nur für die Zahlung selbst.
  *  5. Fehler beim Verarbeiten führen zu einem 500 — dann wiederholt Stripe die
@@ -78,10 +78,7 @@ export async function POST(request: Request): Promise<Response> {
           },
         });
 
-        await prisma.invoice.update({
-          where: { id: invoiceId },
-          data: { stripePaymentIntentId: String(session.payment_intent ?? '') },
-        });
+        await zahlungsabsichtVermerken({ organizationId, invoiceId, paymentIntentId: String(session.payment_intent ?? '') });
 
         // Die Buchung selbst ist über `providerPaymentId` idempotent; der
         // Ereignisvermerk hält die Zustellung nur fest (Nachvollziehbarkeit).
@@ -121,30 +118,17 @@ export async function POST(request: Request): Promise<Response> {
         if (!invoiceId) break;
         const organizationId = await getOrganizationId();
 
-        await ereignisVerbuchen(event, async (tx) => {
-          const rechnung = await tx.invoice.findFirst({ where: { id: invoiceId, organizationId }, select: { id: true, customerId: true } });
-          if (!rechnung) return 'unbekannt';
-          await tx.payment.create({
-            data: {
-              invoiceId: rechnung.id,
-              customerId: rechnung.customerId,
-              amount: ausRappen(intent.amount),
-              method: 'CARD',
-              status: 'FAILED',
-              provider: 'stripe',
-              /*
-                **Nicht** in `providerPaymentId`: Diese Spalte ist eindeutig und
-                bezeichnet die *gebuchte* Zahlung. Ein fehlgeschlagener
-                Versuch trägt dieselbe PaymentIntent-Kennung wie der spätere
-                erfolgreiche — stand sie hier, galt die erfolgreiche Zahlung
-                als „schon gebucht" und wurde nie verbucht (bis 2026-09-27).
-              */
-              reference: intent.id,
-              failureReason: intent.last_payment_error?.message ?? 'Zahlung fehlgeschlagen',
-            },
-          });
-          return 'uebernommen';
-        });
+        // Die Kennung steht als `reference`, **nicht** in `providerPaymentId` —
+        // warum, steht bei `fehlgeschlageneZahlungVermerken`.
+        await ereignisVerbuchen(event, (tx) =>
+          fehlgeschlageneZahlungVermerken(tx, {
+            organizationId,
+            invoiceId,
+            betragRappen: intent.amount,
+            paymentIntentId: intent.id,
+            fehlermeldung: intent.last_payment_error?.message ?? null,
+          }),
+        );
 
         log.warn('Zahlung fehlgeschlagen', { invoiceId });
         break;
@@ -161,28 +145,4 @@ export async function POST(request: Request): Promise<Response> {
     log.error('Ereignisverarbeitung fehlgeschlagen', { event: event.type, error });
     return toErrorResponse(error);
   }
-}
-
-/**
- * Ein Ereignis genau einmal wirken lassen (2026-09-27).
- *
- * Vermerk und Wirkung stehen in **einer** Transaktion: Der Vermerk
- * (`ProviderWebhookEvent`, eindeutig je Anbieter und Kennung) entsteht mit
- * `ON CONFLICT DO NOTHING`; trifft er eine vorhandene Zeile, ist das Ereignis
- * schon verarbeitet, und die Wirkung entfällt. Scheitert die Wirkung, rollt
- * der Vermerk mit zurück, und die nächste Zustellung versucht es neu — das
- * ist Stripes Wiederholung, und sie soll wirken können.
- */
-async function ereignisVerbuchen(
-  event: Stripe.Event,
-  wirkung: (tx: Prisma.TransactionClient) => Promise<string>,
-): Promise<string> {
-  return prisma.$transaction(async (tx) => {
-    const neu = await tx.providerWebhookEvent.createMany({
-      data: [{ provider: 'stripe', eventId: event.id, type: event.type }],
-      skipDuplicates: true,
-    });
-    if (neu.count === 0) return 'doppelt';
-    return wirkung(tx);
-  });
 }

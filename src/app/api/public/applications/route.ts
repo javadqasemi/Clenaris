@@ -1,13 +1,8 @@
 import { definePublicRoute } from '@/lib/api/handler';
 import { created } from '@/lib/api/response';
-import { prisma } from '@/lib/db';
-import { NotFoundError } from '@/lib/errors';
-import { absoluteUrl } from '@/lib/utils';
-import { sendEmail } from '@/lib/email/client';
-import { button, renderEmail } from '@/lib/email/layout';
 import { publicApplicationSchema } from '@/lib/validation/content';
 import { getOrganizationId } from '@/server/services/organization.service';
-import { notifyStaff } from '@/server/services/notification.service';
+import { submitApplication } from '@/server/services/website.service';
 
 export const runtime = 'nodejs';
 
@@ -16,97 +11,16 @@ export const runtime = 'nodejs';
  *
  * Bewerbung auf eine ausgeschriebene Stelle. Bewerbungsunterlagen sind
  * besonders schützenswerte Personendaten: sie landen nur in der Datenbank und
- * im internen Bereich, nie in einer E-Mail an eine Sammeladresse.
+ * im internen Bereich, nie in einer E-Mail an eine Sammeladresse. Prüfung des
+ * Inserats, Anhängen des Lebenslaufs und die Benachrichtigungen stehen in
+ * `submitApplication` (`website.service.ts`).
  */
 export const POST = definePublicRoute({
   body: publicApplicationSchema,
   rateLimit: 'contactForm',
   handler: async ({ body }) => {
     const organizationId = await getOrganizationId();
-
-    const posting = await prisma.jobPosting.findFirst({
-      where: { id: body.postingId, organizationId, status: 'PUBLISHED' },
-      select: { id: true, title: true },
-    });
-    if (!posting) throw new NotFoundError('Stelleninserat');
-
-    /**
-     * Die Adresse der Unterlage kommt aus dem geprüften `FileAsset`, nicht
-     * aus dem Formular. Vorher schickte der Browser `cvUrl` mit, und sie
-     * wurde so übernommen — es liess sich also jede beliebige Adresse als
-     * Lebenslauf einer Bewerbung eintragen.
-     *
-     * Die Bedingung `checksum: { not: null }` ist dabei die eigentliche
-     * Prüfung: Ohne Prüfsumme ist der Upload nicht abgeschlossen, und eine
-     * nicht abgeschlossene Datei hängt sich hier nicht an.
-     */
-    const lebenslauf = body.cvFileId
-      ? await prisma.fileAsset.findFirst({
-          where: {
-            id: body.cvFileId,
-            organizationId,
-            scope: 'APPLICATION',
-            checksum: { not: null },
-            applicationId: null,
-          },
-          select: { id: true, url: true },
-        })
-      : null;
-
-    const application = await prisma.jobApplication.create({
-      data: {
-        postingId: posting.id,
-        firstName: body.firstName,
-        lastName: body.lastName,
-        email: body.email,
-        phone: body.phone,
-        message: body.message ?? null,
-        cvUrl: lebenslauf?.url ?? null,
-        availableFrom: body.availableFrom ?? null,
-      },
-    });
-
-    if (lebenslauf) {
-      await prisma.fileAsset.update({
-        where: { id: lebenslauf.id },
-        data: { applicationId: application.id },
-      });
-    }
-
-    // Eingangsbestätigung an die bewerbende Person.
-    await sendEmail({
-      to: body.email,
-      subject: `Ihre Bewerbung als ${posting.title}`,
-      html: renderEmail(
-        'Bewerbung erhalten',
-        `<p>Guten Tag ${body.firstName}</p>
-         <p>Vielen Dank für Ihre Bewerbung als <strong>${posting.title}</strong>. Wir sichten Ihre Unterlagen und melden uns innerhalb von fünf Arbeitstagen — auch dann, wenn es diesmal nicht passt.</p>
-         <p>Falls Sie in der Zwischenzeit Fragen haben, antworten Sie einfach auf diese E-Mail.</p>`,
-        { preheader: 'Wir melden uns innerhalb von fünf Arbeitstagen.' },
-      ),
-      templateKey: 'application_received',
-      entity: 'JobApplication',
-      entityId: application.id,
-    });
-
-    await notifyStaff({
-      organizationId,
-      title: 'Neue Bewerbung',
-      body: `${body.firstName} ${body.lastName} · ${posting.title}`,
-      link: '/admin/personal/bewerbungen',
-      permission: 'application:read',
-      emailContent: {
-        subject: `Neue Bewerbung: ${posting.title}`,
-        html: renderEmail(
-          'Neue Bewerbung',
-          `<p><strong>${body.firstName} ${body.lastName}</strong> hat sich als ${posting.title} beworben.</p>
-           <p>E-Mail: ${body.email}<br>Telefon: ${body.phone}</p>
-           ${body.message ? `<p style="background:#F8FAFC;border-radius:12px;padding:16px;white-space:pre-wrap;">${body.message}</p>` : ''}
-           ${button('Bewerbung öffnen', absoluteUrl('/admin/personal/bewerbungen'))}`,
-        ),
-      },
-    });
-
+    const application = await submitApplication({ organizationId, input: body });
     return created({ id: application.id, status: 'received' });
   },
 });

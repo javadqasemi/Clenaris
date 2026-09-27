@@ -7,8 +7,9 @@ import { isPreview } from '@/lib/cms/preview';
 import { prisma, Prisma } from '@/lib/db';
 import { cache, cacheKeys } from '@/lib/redis';
 import { logger } from '@/lib/logger';
-import { audit } from '@/lib/audit';
+import { audit, diff } from '@/lib/audit';
 import { NotFoundError } from '@/lib/errors';
+import type { UpdateSeoInput } from '@/lib/validation/cms';
 import {
   CONTENT_DEFINITIONS,
   defaultContent,
@@ -265,6 +266,109 @@ export async function invalidateSeo(organizationId: string, path: string): Promi
   await cache.del(cacheKeys.seo(organizationId, path, 'DE'));
   // Der Seitentitel steckt im erzeugten HTML — der Seitencache muss mit.
   revalidatePath(path);
+}
+
+/**
+ * Suchmaschinenangaben einer Seite pflegen (`PATCH /api/seo`).
+ *
+ * Vorher im Endpunkt geschrieben (bis 2026-09-27). Die Regeln unten sind
+ * Inhaltsregeln, keine HTTP-Details, und sie gehören neben `getPageSeo` und
+ * `invalidateSeo`, die dieselbe Zeile lesen und ihren Cache leeren — sonst
+ * stünden Lese- und Schreibregel derselben Tabelle in zwei Schichten.
+ *
+ * Architekturentscheide:
+ *
+ *  • **Leeren heisst zurücksetzen**, wie bei den Textbausteinen: ein leeres
+ *    Feld löscht die Zeile, und es gilt wieder der Registerwert. So kann die
+ *    Redaktion einen misslungenen Titel jederzeit rückgängig machen.
+ *
+ *  • **`noIndex` wird gesondert protokolliert.** Es ist die einzige Schaltung
+ *    hier, die eine Seite aus den Suchergebnissen wirft — versehentlich
+ *    gesetzt kostet sie Umsatz, und man will nachvollziehen können, wer sie
+ *    wann gesetzt hat.
+ *
+ *  • **Der Seitencache wird geleert.** Der Titel steckt im erzeugten HTML;
+ *    ohne Neuaufbau bliebe der alte stehen.
+ */
+export async function updateSeoMeta(params: {
+  organizationId: string;
+  actorId: string;
+  input: UpdateSeoInput;
+}): Promise<{ path: string; reset: boolean }> {
+  const { organizationId, actorId, input } = params;
+  const definition = seoDefinitionFor(input.path);
+
+  const before = await prisma.seoMeta.findUnique({
+    where: { organizationId_path_locale: { organizationId, path: input.path, locale: 'DE' } },
+    select: { title: true, description: true, keywords: true, ogImageUrl: true, noIndex: true },
+  });
+
+  const title = input.title?.trim() ?? '';
+  const description = input.description?.trim() ?? '';
+  const ogImageUrl = input.ogImageUrl?.trim() ?? '';
+
+  // Nichts gepflegt und nicht ausgeblendet → die Zeile hat keinen Zweck.
+  const isEmpty =
+    title === '' &&
+    description === '' &&
+    ogImageUrl === '' &&
+    input.keywords.length === 0 &&
+    !input.noIndex;
+
+  if (isEmpty) {
+    if (before) {
+      await prisma.seoMeta.delete({
+        where: { organizationId_path_locale: { organizationId, path: input.path, locale: 'DE' } },
+      });
+    }
+  } else {
+    await prisma.seoMeta.upsert({
+      where: { organizationId_path_locale: { organizationId, path: input.path, locale: 'DE' } },
+      create: {
+        organizationId,
+        path: input.path,
+        locale: 'DE',
+        title: title || null,
+        description: description || null,
+        keywords: input.keywords,
+        ogImageUrl: ogImageUrl || null,
+        noIndex: input.noIndex,
+        updatedById: actorId,
+      },
+      update: {
+        title: title || null,
+        description: description || null,
+        keywords: input.keywords,
+        ogImageUrl: ogImageUrl || null,
+        noIndex: input.noIndex,
+        updatedById: actorId,
+      },
+    });
+  }
+
+  await invalidateSeo(organizationId, input.path);
+
+  const after = {
+    title: title || null,
+    description: description || null,
+    keywords: input.keywords,
+    ogImageUrl: ogImageUrl || null,
+    noIndex: input.noIndex,
+  };
+
+  await audit.updated({
+    organizationId,
+    userId: actorId,
+    entity: 'SeoMeta',
+    entityId: input.path,
+    summary:
+      `Suchmaschinenangaben für „${definition?.label ?? input.path}" geändert` +
+      (input.noIndex && !before?.noIndex ? ' — Seite aus dem Index genommen' : '') +
+      (!input.noIndex && before?.noIndex ? ' — Seite wieder freigegeben' : ''),
+    changes: diff(before as never, after as never),
+  });
+
+  return { path: input.path, reset: isEmpty };
 }
 
 /** Zählt, wie viele Bausteine tatsächlich gepflegt sind — für die Übersicht. */
