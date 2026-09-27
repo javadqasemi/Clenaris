@@ -16,6 +16,7 @@ import { contactAutoReplyEmail, newLeadInternalEmail } from '@/lib/email/templat
 import { hasIntegration } from '@/lib/env';
 import { scoreLead } from '@/lib/ai/features';
 import { namenErsetzen } from '@/lib/ai/governance';
+import { statusZurStufe, stufeZumStatus, type LeadStatus } from '@/lib/crm/pipeline';
 import type {
   ContactFormInput,
   CreateCustomerInput,
@@ -394,11 +395,57 @@ async function scoreLeadInBackground(
   }
 }
 
+/**
+ * Verweise einer Anfrage gegen die Organisation prüfen und Stufe und Status
+ * in Einklang bringen (2026-09-27).
+ *
+ * Stufe, zuständige Person und Etiketten kamen ungeprüft aus der Anfrage —
+ * eine fremde Kennung wurde gespeichert. Und die Regel „die Stufe bestimmt
+ * den Status" setzte nur das Kanban im Browser durch (`lib/crm/pipeline.ts`).
+ * Jetzt gilt: Wer eine Stufe setzt, bekommt deren Status; wer nur einen
+ * Status setzt, bekommt die passende Stufe, sofern die Organisation eine hat.
+ * Fremde oder unbekannte Kennungen sind 404 — nicht von einer erfundenen zu
+ * unterscheiden.
+ */
+async function leadBezuegePruefen(params: {
+  organizationId: string;
+  stageId?: string | null;
+  status?: string | null;
+  ownerId?: string | null;
+  tagIds?: string[];
+}): Promise<{ stageId?: string | null; status?: LeadStatus }> {
+  const { organizationId } = params;
+  if (params.ownerId && !(await prisma.employee.count({ where: { id: params.ownerId, organizationId } }))) {
+    throw new NotFoundError('Zuständige Person');
+  }
+  if (params.tagIds?.length) {
+    const eindeutig = [...new Set(params.tagIds)];
+    if ((await prisma.tag.count({ where: { id: { in: eindeutig }, organizationId } })) !== eindeutig.length) throw new NotFoundError('Etikett');
+  }
+  if (params.stageId) {
+    const stufe = await prisma.pipelineStage.findFirst({ where: { id: params.stageId, organizationId }, select: { key: true } });
+    if (!stufe) throw new NotFoundError('Stufe');
+    return { stageId: params.stageId, status: statusZurStufe(stufe.key) };
+  }
+  if (params.status) {
+    const schluessel = stufeZumStatus(params.status);
+    const stufe = schluessel ? await prisma.pipelineStage.findFirst({ where: { organizationId, key: schluessel }, select: { id: true } }) : null;
+    return { status: params.status as LeadStatus, ...(stufe ? { stageId: stufe.id } : {}) };
+  }
+  return {};
+}
+
 export async function createLead(params: {
   organizationId: string;
   input: CreateLeadInput;
   actorId: string;
 }): Promise<Lead> {
+  const abgeglichen = await leadBezuegePruefen({
+    organizationId: params.organizationId,
+    stageId: params.input.stageId,
+    ownerId: params.input.ownerId,
+    tagIds: params.input.tagIds,
+  });
   const lead = await prisma.$transaction(async (tx) => {
     const { number } = await nextNumber(tx, params.organizationId, 'lead');
 
@@ -419,6 +466,7 @@ export async function createLead(params: {
         estimatedValue: params.input.estimatedValue ?? null,
         source: params.input.source,
         stageId: params.input.stageId ?? null,
+        ...(abgeglichen.status ? { status: abgeglichen.status } : {}),
         ownerId: params.input.ownerId ?? null,
         nextFollowUpAt: params.input.nextFollowUpAt ?? null,
         tags: {
@@ -454,7 +502,16 @@ export async function updateLead(params: {
   });
   if (!lead) throw new NotFoundError('Lead');
 
-  const { tagIds, ...rest } = params.input;
+  const { tagIds, ...eingabe } = params.input;
+  const abgeglichen = await leadBezuegePruefen({
+    organizationId: params.organizationId,
+    stageId: eingabe.stageId,
+    status: eingabe.status,
+    ownerId: eingabe.ownerId,
+    tagIds,
+  });
+  // Stufe und Status aus der Prüfung — der Server entscheidet, nicht die Maske.
+  const rest = { ...eingabe, ...abgeglichen };
 
   const updated = await prisma.lead.update({
     where: { id: lead.id },

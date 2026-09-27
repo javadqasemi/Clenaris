@@ -250,6 +250,64 @@ describe('Konten einer fremden Organisation handeln hier nicht', () => {
   });
 });
 
+/**
+ * Anfragen als Verkaufschancen (Phase 19, 2026-09-27): Stufe und Status sind
+ * dasselbe, und jeder Verweis gehört zur eigenen Organisation.
+ *
+ * Bis dahin setzte nur das Kanban im Browser zur Stufe den passenden Status;
+ * die Schnittstelle speicherte „Stufe gewonnen, Status neu", wenn man es ihr
+ * so schickte. Und eine Stufe der fremden Organisation wurde übernommen.
+ */
+describe('Anfragen: Stufe, Status und Verweise', () => {
+  const eigeneAnfrage = async () => {
+    const r = await post<{ data: { id: string } }>(
+      '/api/leads',
+      { firstName: 'Pipeline', lastName: MARKE, email: `pipeline.${Date.now()}@example.ch`, source: 'OTHER' },
+      { jar: jars.admin },
+    );
+    assert.equal(r.status, 201, r.text);
+    return r.payload.data.id;
+  };
+
+  it('die Stufe bestimmt den Status — auch wenn der Aufruf etwas anderes schickt', async () => {
+    const db = testDb()!;
+    const { eigeneOrganisationId } = await import('../helpers/testdb');
+    const eigene = (await eigeneOrganisationId())!;
+    const gewonnen = await db.pipelineStage.findFirst({ where: { organizationId: eigene, key: 'won' } });
+    const verloren = await db.pipelineStage.findFirst({ where: { organizationId: eigene, key: 'lost' } });
+    assert.ok(gewonnen && verloren, 'Vorbedingung: die Standardstufen der eigenen Organisation');
+    const id = await eigeneAnfrage();
+    try {
+      const r = await patch<{ data: { status: string; stageId: string } }>(`/api/leads/${id}`, { stageId: gewonnen.id, status: 'NEW' }, { jar: jars.admin });
+      assert.equal(r.status, 200, r.text);
+      const nachStufe = await db.lead.findUniqueOrThrow({ where: { id } });
+      assert.equal(nachStufe.status, 'WON', 'Stufe „gewonnen", Status blieb „neu"');
+      assert.ok(nachStufe.convertedAt, 'gewonnen ohne Abschlusszeitpunkt');
+
+      // Umgekehrt: nur ein Status — die Stufe folgt.
+      assert.equal((await patch(`/api/leads/${id}`, { status: 'LOST', lostReason: 'Preis' }, { jar: jars.admin })).status, 200);
+      const nachStatus = await db.lead.findUniqueOrThrow({ where: { id } });
+      assert.equal(nachStatus.stageId, verloren.id, 'Status „verloren", Stufe blieb „gewonnen"');
+    } finally {
+      await db.lead.deleteMany({ where: { id } });
+    }
+  });
+
+  it('eine Stufe der fremden Organisation wird nicht übernommen (404)', async () => {
+    const db = testDb()!;
+    const fremdeStufe = await db.pipelineStage.create({ data: { organizationId: org, name: `${MARKE} Stufe`, key: `pruef-${RUN}` } });
+    const id = await eigeneAnfrage();
+    try {
+      const r = await patch(`/api/leads/${id}`, { stageId: fremdeStufe.id }, { jar: jars.admin });
+      assert.equal(r.status, 404, r.text);
+      assert.equal((await db.lead.findUniqueOrThrow({ where: { id } })).stageId === fremdeStufe.id, false, 'fremde Stufe gespeichert');
+    } finally {
+      await db.lead.deleteMany({ where: { id } });
+      await db.pipelineStage.delete({ where: { id: fremdeStufe.id } });
+    }
+  });
+});
+
 describe('Kundenkonto', () => {
   it('sieht keine fremden Objekte und Rechnungen', async () => {
     for (const pfad of ['/api/properties', '/api/invoices']) {

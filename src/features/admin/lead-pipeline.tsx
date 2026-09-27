@@ -8,6 +8,7 @@ import { toast } from 'sonner';
 
 import { cn, formatCurrency, formatRelative } from '@/lib/utils';
 import { api, ApiError } from '@/lib/api/client';
+import { statusZurStufe } from '@/lib/crm/pipeline';
 import { Badge } from '@/components/ui/badge';
 
 /**
@@ -266,16 +267,9 @@ function ScoreBadge({ score }: { score: number }) {
   );
 }
 
+/** Dieselbe Zuordnung wie auf dem Server (`lib/crm/pipeline.ts`), der sie seit 2026-09-27 durchsetzt. */
 function stageKeyToStatus(key: string): string {
-  const map: Record<string, string> = {
-    new: 'NEW',
-    contacted: 'CONTACTED',
-    qualified: 'QUALIFIED',
-    proposal: 'PROPOSAL',
-    won: 'WON',
-    lost: 'LOST',
-  };
-  return map[key] ?? 'NEW';
+  return statusZurStufe(key);
 }
 
 export { Building2, UserCheck };
