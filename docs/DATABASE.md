@@ -4,7 +4,7 @@
 > Diagramme sind damit nie älter als das Schema. Prosa und Bereichseinteilung
 > stehen in `scripts/generate-erd.ts`.
 
-**149 Modelle, 118 Aufzählungstypen, 2871 Felder.**
+**151 Modelle, 119 Aufzählungstypen, 2891 Felder.**
 PostgreSQL 16+; alle Zeitstempel als `timestamptz` in UTC, Anzeige in Europe/Zurich.
 
 ## Vier Entscheidungen, die das ganze Schema prägen
@@ -44,7 +44,7 @@ flowchart LR
   vertraege["Verträge und Einsatzpläne<br/><small>10 Modelle</small>"]
   personal["Personal und Zeit<br/><small>16 Modelle</small>"]
   finanzen["Finanzen<br/><small>9 Modelle</small>"]
-  kommunikation["Kommunikation und Automatisierung<br/><small>10 Modelle</small>"]
+  kommunikation["Kommunikation und Automatisierung<br/><small>12 Modelle</small>"]
   marketing["Marketing und Inhalte<br/><small>13 Modelle</small>"]
   redaktion["Redaktion<br/><small>6 Modelle</small>"]
   fuehrung["Unternehmensführung<br/><small>26 Modelle</small>"]
@@ -1311,9 +1311,30 @@ erDiagram
     DateTime startedAt
     DateTime finishedAt
   }
+  AutomationActionRun {
+    String id PK
+    String runId
+    Int position
+    String type
+    AutomationActionRunStatus status
+    Int attempts
+    Json result
+    String error
+  }
+  AutomationEvent {
+    String id PK
+    String organizationId
+    AutomationTrigger trigger
+    String entityId
+    DateTime bezugszeit
+    DateTime createdAt
+    DateTime processedAt
+    Int attempts
+  }
   MessageThread ||--o{ Message : "thread"
   Automation ||--o{ AutomationAction : "automation"
   Automation ||--o{ AutomationRun : "automation"
+  AutomationRun ||--o{ AutomationActionRun : "run"
 ```
 
 | Modell | Tabelle | Felder | Zweck |
@@ -1327,7 +1348,9 @@ erDiagram
 | `SmsLog` | `sms_logs` | 13 | Protokoll jedes SMS-Versands inkl. Kosten. |
 | `Automation` | `automations` | 13 | Regel aus Auslöser und Aktionen, als Daten statt als Code. |
 | `AutomationAction` | `automation_actions` | 6 | Einzelne Aktion einer Regel, mit Verzögerung und Reihenfolge. |
-| `AutomationRun` | `automation_runs` | 13 | Ausführung einer Regel mit Ergebnis — macht Automatisierungen nachvollziehbar. |
+| `AutomationRun` | `automation_runs` | 14 | Ausführung einer Regel mit Ergebnis — macht Automatisierungen nachvollziehbar. |
+| `AutomationActionRun` | `automation_action_runs` | 11 | Der Stand **einer** Aktion innerhalb eines Laufs (2026-09-27). |
+| `AutomationEvent` | `automation_events` | 8 | Ein fachliches Ereignis für die Automatisierung, vermerkt **in der |
 
 ## Marketing und Inhalte
 
@@ -1960,6 +1983,7 @@ exakte TypeScript-Typen.
 | `AutomationTrigger` | `BOOKING_CREATED`, `BOOKING_CONFIRMED`, `BOOKING_REMINDER_24H`, `BOOKING_REMINDER_2H`, `BOOKING_COMPLETED`, `BOOKING_CANCELLED`, `QUOTE_SENT`, `QUOTE_ACCEPTED`, `QUOTE_EXPIRING`, `INVOICE_ISSUED`, `INVOICE_DUE_SOON`, `INVOICE_OVERDUE`, `JOB_ASSIGNED`, `JOB_COMPLETED`, `CUSTOMER_BIRTHDAY`, `REVIEW_REQUEST`, `LEAD_CREATED`, `LEAD_IDLE`, `TASK_DUE`, `RECURRING_BOOKING_GENERATE` |
 | `AutomationActionType` | `SEND_EMAIL`, `SEND_SMS`, `CREATE_TASK`, `CREATE_NOTIFICATION`, `UPDATE_STATUS`, `WEBHOOK`, `AI_GENERATE` |
 | `AutomationRunStatus` | `PENDING`, `RUNNING`, `SUCCESS`, `FAILED`, `SKIPPED` |
+| `AutomationActionRunStatus` | `RUNNING`, `SUCCEEDED`, `FAILED`, `SKIPPED` |
 | `FileScope` | `BOOKING`, `QUOTE`, `INVOICE`, `JOB`, `CUSTOMER`, `EMPLOYEE`, `PROPERTY`, `BLOG`, `GALLERY`, `APPLICATION`, `EXPENSE`, `MESSAGE`, `OTHER`, `OBJECTIVE`, `INVESTMENT`, `RISK`, `CONTROL`, `DOCUMENT`, `ARTICLE`, `MEETING`, `REPORT`, `SIGNATURE`, `PAYROLL` |
 | `AuditAction` | `CREATE`, `UPDATE`, `DELETE`, `LOGIN`, `LOGIN_FAILED`, `LOGOUT`, `PASSWORD_RESET`, `PERMISSION_CHANGE`, `EXPORT`, `IMPORT`, `PAYMENT`, `ACCESS_DENIED` |
 | `ConsentType` | `MARKETING_EMAIL`, `MARKETING_SMS`, `ANALYTICS`, `TERMS`, `PRIVACY`, `DATA_PROCESSING` |

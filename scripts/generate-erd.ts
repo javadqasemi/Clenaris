@@ -351,6 +351,8 @@ const DOMAINS: Domain[] = [
       'Automation',
       'AutomationAction',
       'AutomationRun',
+      'AutomationActionRun',
+      'AutomationEvent',
     ],
   },
   {

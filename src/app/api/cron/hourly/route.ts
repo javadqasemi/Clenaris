@@ -1,7 +1,7 @@
 import { defineCronRoute } from '@/lib/api/handler';
 import { getOrganizationId } from '@/server/services/organization.service';
 import { sendBookingReminders, sendCrewReminders } from '@/server/services/automation.service';
-import { emitZeitbezogeneAusloeser, runDueAutomations } from '@/server/services/automation-engine.service';
+import { automationEreignisseAbarbeiten, emitZeitbezogeneAusloeser, runDueAutomations } from '@/server/services/automation-engine.service';
 import { mitUeberwachung } from '@/server/services/cron-monitor.service';
 
 export const runtime = 'nodejs';
@@ -47,6 +47,10 @@ export const GET = defineCronRoute({
            */
           name: 'automatisierungen',
           lauf: async () => ({
+            // Liegengebliebene Ereignisse aus der Transaktion der Vorgänge
+            // (Outbox, 2026-09-27) — der Rückfall, falls die Verarbeitung
+            // direkt nach dem Vorgang ausblieb.
+            nachgeholt: await automationEreignisseAbarbeiten({ organizationId, limit: 500 }),
             ausgeloest: await emitZeitbezogeneAusloeser({ organizationId }),
             ausgefuehrt: await runDueAutomations({ organizationId, limit: 200 }),
           }),

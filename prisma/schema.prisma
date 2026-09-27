@@ -369,6 +369,13 @@ enum AutomationRunStatus {
   SKIPPED
 }
 
+enum AutomationActionRunStatus {
+  RUNNING
+  SUCCEEDED
+  FAILED
+  SKIPPED
+}
+
 enum FileScope {
   BOOKING
   QUOTE
@@ -3505,10 +3512,67 @@ model AutomationRun {
   createdAt DateTime @default(now()) @db.Timestamptz(6)
 
   automation Automation @relation(fields: [automationId], references: [id], onDelete: Cascade)
+  aktionen   AutomationActionRun[]
 
   @@unique([automationId, entity, entityId])
   @@index([status, scheduledFor])
   @@map("automation_runs")
+}
+
+/// Der Stand **einer** Aktion innerhalb eines Laufs (2026-09-27).
+///
+/// Bis dahin kannte nur der Lauf als Ganzes einen Stand. Scheiterte die
+/// zweite von zwei Aktionen, wurde der Lauf wiederholt — und die erste lief
+/// erneut: Aufgaben doppelt, E-Mails an bereits Erreichte noch einmal. Jetzt
+/// setzt ein Wiederholungsversuch bei der ersten nicht erfolgreichen Aktion
+/// fort; erfolgreiche und übersprungene bleiben erledigt.
+///
+/// `RUNNING` bleibt stehen, wenn der Prozess mitten in der Aktion starb. Für
+/// eine Aktion mit Aussenwirkung ist dann ungewiss, ob sie gewirkt hat; sie
+/// wird nicht blind wiederholt, sondern der Lauf endet sichtbar
+/// (`automation-engine.service.ts`). `result` trägt den Fortschritt innerhalb
+/// der Aktion — beim Versand die bereits Erreichten.
+model AutomationActionRun {
+  id         String                    @id @default(cuid())
+  runId      String
+  /// Stelle der Aktion in der Regel — mit `runId` ihre Identität.
+  position   Int
+  type       String
+  status     AutomationActionRunStatus @default(RUNNING)
+  attempts   Int                       @default(0)
+  result     Json?
+  error      String?
+  startedAt  DateTime?                 @db.Timestamptz(6)
+  finishedAt DateTime?                 @db.Timestamptz(6)
+
+  run AutomationRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@unique([runId, position])
+  @@map("automation_action_runs")
+}
+
+/// Ein fachliches Ereignis für die Automatisierung, vermerkt **in der
+/// Transaktion des Geschäftsvorgangs** (Transactional Outbox, 2026-09-27).
+///
+/// Vorher meldeten die Dienste ihre Auslöser nach dem Festschreiben,
+/// bestmöglich: Starb der Prozess zwischen Commit und Meldung, war das
+/// Ereignis verloren, und keine Regel lief. Jetzt entsteht diese Zeile mit
+/// der Buchung, der Rechnung, dem Einsatz — oder gar nicht. Verarbeitet wird
+/// sie gleich danach im selben Aufruf und, falls das ausbleibt, vom
+/// stündlichen Lauf; die Eindeutigkeit der Läufe macht beides unschädlich.
+model AutomationEvent {
+  id             String    @id @default(cuid())
+  organizationId String
+  trigger        AutomationTrigger
+  entityId       String
+  /// Bezug für die Verzögerung der Regel — wie `bezugszeit` beim Melden.
+  bezugszeit     DateTime? @db.Timestamptz(6)
+  createdAt      DateTime  @default(now()) @db.Timestamptz(6)
+  processedAt    DateTime? @db.Timestamptz(6)
+  attempts       Int       @default(0)
+
+  @@index([processedAt, createdAt])
+  @@map("automation_events")
 }
 
 // ===========================================================================

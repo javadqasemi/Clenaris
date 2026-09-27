@@ -373,9 +373,101 @@ export async function emitAutomationTrigger(params: {
    */
   bezugszeit?: Date;
 }): Promise<AusloeseErgebnis> {
-  const leer: AusloeseErgebnis = { geprueft: 0, angelegt: 0, vorhanden: 0 };
-
   try {
+    return await ausloesen(params);
+  } catch (fehler) {
+    log.error('Auslöser konnte nicht verarbeitet werden', {
+      trigger: params.trigger,
+      error: fehler,
+    });
+    return { geprueft: 0, angelegt: 0, vorhanden: 0 };
+  }
+}
+
+// ---------------------------------------------------------------------------
+//  Ereignisse in der Transaktion (Transactional Outbox, 2026-09-27)
+// ---------------------------------------------------------------------------
+
+/**
+ * Ein fachliches Ereignis vermerken — **in der Transaktion des Vorgangs**.
+ *
+ * Bis 2026-09-27 meldeten die Dienste ihre Auslöser nach dem Festschreiben,
+ * bestmöglich über `emitAutomationTrigger`. Starb der Prozess zwischen Commit
+ * und Meldung, oder scheiterte die Meldung, war das Ereignis verloren — die
+ * Buchung stand, die Regel lief nie, und niemand erfuhr es (die Meldung
+ * „wirft nie"). Jetzt entsteht der Vermerk mit dem Vorgang oder gar nicht.
+ * Verarbeitet wird er gleich danach (`automationEreignisseAbarbeiten`) und,
+ * falls das ausbleibt, im stündlichen Lauf.
+ */
+export async function automationEreignisVormerken(
+  tx: Prisma.TransactionClient,
+  params: { organizationId: string; trigger: AutomationTrigger; entityId: string; bezugszeit?: Date },
+): Promise<void> {
+  await tx.automationEvent.create({
+    data: {
+      organizationId: params.organizationId,
+      trigger: params.trigger,
+      entityId: params.entityId,
+      bezugszeit: params.bezugszeit ?? null,
+    },
+  });
+}
+
+/** Wie oft ein Ereignis versucht wird, bevor es liegen bleibt (sichtbar). */
+const EREIGNIS_MAX_VERSUCHE = 5;
+
+/**
+ * Offene Ereignisse zu Läufen machen. Aufgerufen direkt nach dem Vorgang,
+ * der sie vermerkt hat, und stündlich als Rückfall.
+ *
+ * **Wirft nie** — wie `emitAutomationTrigger` darf eine Regel keinen
+ * Geschäftsvorgang scheitern lassen. Ein gescheitertes Ereignis bleibt offen
+ * (mit gezähltem Versuch) und wird beim nächsten Takt wiederholt. Doppelte
+ * Verarbeitung — zwei Aufrufe gleichzeitig — ist unschädlich: Der eindeutige
+ * Index der Läufe lässt je Regel und Vorgang genau einen entstehen.
+ */
+export async function automationEreignisseAbarbeiten(params: { organizationId?: string; limit?: number } = {}): Promise<number> {
+  let verarbeitet = 0;
+  try {
+    const offen = await prisma.automationEvent.findMany({
+      where: {
+        processedAt: null,
+        attempts: { lt: EREIGNIS_MAX_VERSUCHE },
+        ...(params.organizationId ? { organizationId: params.organizationId } : {}),
+      },
+      orderBy: { createdAt: 'asc' },
+      take: params.limit ?? 100,
+    });
+    for (const ereignis of offen) {
+      try {
+        await ausloesen({
+          organizationId: ereignis.organizationId,
+          trigger: ereignis.trigger,
+          entityId: ereignis.entityId,
+          bezugszeit: ereignis.bezugszeit ?? undefined,
+        });
+        await prisma.automationEvent.updateMany({ where: { id: ereignis.id, processedAt: null }, data: { processedAt: new Date() } });
+        verarbeitet += 1;
+      } catch (fehler) {
+        await prisma.automationEvent.update({ where: { id: ereignis.id }, data: { attempts: { increment: 1 } } });
+        log.error('Ereignis konnte nicht verarbeitet werden — bleibt offen', { trigger: ereignis.trigger, error: fehler });
+      }
+    }
+  } catch (fehler) {
+    log.error('Ereignisse konnten nicht gelesen werden', { error: fehler });
+  }
+  return verarbeitet;
+}
+
+/** Der Kern von `emitAutomationTrigger` — wirft, damit die Ereignisverarbeitung einen Fehlschlag erkennt. */
+async function ausloesen(params: {
+  organizationId: string;
+  trigger: AutomationTrigger;
+  entityId: string;
+  bezugszeit?: Date;
+}): Promise<AusloeseErgebnis> {
+  const leer: AusloeseErgebnis = { geprueft: 0, angelegt: 0, vorhanden: 0 };
+  {
     const regeln = await prisma.automation.findMany({
       where: { organizationId: params.organizationId, trigger: params.trigger, active: true },
       select: { id: true, name: true, conditions: true, delayMinutes: true },
@@ -429,12 +521,6 @@ export async function emitAutomationTrigger(params: {
     }
 
     return { geprueft: regeln.length, angelegt, vorhanden };
-  } catch (fehler) {
-    log.error('Auslöser konnte nicht verarbeitet werden', {
-      trigger: params.trigger,
-      error: fehler,
-    });
-    return leer;
   }
 }
 
@@ -676,8 +762,43 @@ async function fuehreLaufAus(organizationId: string, runId: string): Promise<Aus
 
   const protokoll: unknown[] = [];
   let gescheitertMit: string | null = null;
+  let endgueltig = false;
 
-  for (const aktion of lauf.automation.actions) {
+  /**
+   * Jede Aktion mit eigenem Stand (`AutomationActionRun`, 2026-09-27).
+   *
+   * Die Reihe bricht beim ersten Fehler ab — richtig, solange die Aktionen
+   * aufeinander aufbauen („Aufgabe anlegen, dann benachrichtigen"). Bis
+   * hierher wurde danach der **ganze** Lauf wiederholt, und eine bereits
+   * ausgeführte Aktion lief erneut; hier stand, ein zweiter Versand sei
+   * „ärgerlich, aber nicht falsch". Eine doppelte Aufgabe, eine doppelte
+   * Gutschrift-Erinnerung, ein zweiter Webhook an ein Buchhaltungssystem sind
+   * falsch. Jetzt:
+   *
+   *  • erledigte Aktionen (SUCCEEDED, SKIPPED) bleiben erledigt;
+   *  • eine gescheiterte wird fortgesetzt — beim Versand ohne die bereits
+   *    Erreichten (`result.zugestellt`);
+   *  • eine Aktion, die noch auf RUNNING steht, hat einen Absturz mitten in
+   *    der Ausführung hinter sich. Hat sie Aussenwirkung, ist ungewiss, ob
+   *    sie gewirkt hat; sie wird **nicht** blind wiederholt, der Lauf endet
+   *    sichtbar mit diesem Grund. Lieber eine Nachfrage als eine zweite
+   *    Wirkung. Zielzustände (Statusänderung) sind wiederholbar.
+   */
+  for (const [position, aktion] of lauf.automation.actions.entries()) {
+    const vorher = await prisma.automationActionRun.findUnique({ where: { runId_position: { runId, position } } });
+    if (vorher && (vorher.status === 'SUCCEEDED' || vorher.status === 'SKIPPED')) {
+      protokoll.push({ aktion: aktion.type, ergebnis: 'bereits erledigt' });
+      continue;
+    }
+    if (vorher?.status === 'RUNNING' && !WIEDERHOLBAR.has(aktion.type)) {
+      const grund = 'Abgebrochen während der Ausführung — Wirkung ungewiss, nicht wiederholt. Bitte prüfen.';
+      await prisma.automationActionRun.update({ where: { id: vorher.id }, data: { status: 'FAILED', error: grund, finishedAt: new Date() } });
+      protokoll.push({ aktion: aktion.type, ergebnis: 'fehler', grund });
+      gescheitertMit = grund;
+      endgueltig = true;
+      break;
+    }
+
     const befund = pruefeAktionsKonfiguration(aktion.type, aktion.config);
     if (!befund.ok) {
       /**
@@ -687,24 +808,38 @@ async function fuehreLaufAus(organizationId: string, runId: string): Promise<Aus
        * und ein Ausführen mit geratenen Werten wäre die schlechtere
        * Alternative.
        */
+      await aktionsstandSetzen(runId, position, aktion.type, 'SKIPPED', { grund: befund.grund });
       protokoll.push({ aktion: aktion.type, ergebnis: 'uebersprungen', grund: befund.grund });
       continue;
     }
 
+    // Vor der Wirkung auf RUNNING — damit ein Absturz mittendrin erkennbar bleibt.
+    await prisma.automationActionRun.upsert({
+      where: { runId_position: { runId, position } },
+      create: { runId, position, type: aktion.type, status: 'RUNNING', attempts: 1, startedAt: new Date() },
+      update: { status: 'RUNNING', attempts: { increment: 1 }, startedAt: new Date(), error: null },
+    });
+
     try {
+      const bereitsZugestellt = ((vorher?.result ?? {}) as { zugestellt?: string[] }).zugestellt ?? [];
       const teilErgebnis = await fuehreAktionAus({
         organizationId,
         art: aktion.type,
         config: (aktion.config ?? {}) as Record<string, unknown>,
         nutzlast,
+        bereitsZugestellt,
+        idempotenzSchluessel: `${runId}:${position}`,
       });
       protokoll.push({ aktion: aktion.type, ...teilErgebnis });
+      const stand = teilErgebnis.ergebnis === 'ok' ? 'SUCCEEDED' : teilErgebnis.ergebnis === 'uebersprungen' ? 'SKIPPED' : 'FAILED';
+      await aktionsstandSetzen(runId, position, aktion.type, stand, teilErgebnis, stand === 'FAILED' ? teilErgebnis.grund : undefined);
       if (teilErgebnis.ergebnis === 'fehler') {
         gescheitertMit = teilErgebnis.grund ?? 'Unbekannter Fehler';
         break;
       }
     } catch (fehler) {
       const meldung = fehler instanceof Error ? fehler.message : String(fehler);
+      await aktionsstandSetzen(runId, position, aktion.type, 'FAILED', vorher?.result ?? null, meldung);
       protokoll.push({ aktion: aktion.type, ergebnis: 'fehler', grund: meldung });
       gescheitertMit = meldung;
       break;
@@ -716,17 +851,7 @@ async function fuehreLaufAus(organizationId: string, runId: string): Promise<Aus
     return 'erfolgreich';
   }
 
-  /**
-   * Die Reihe bricht beim ersten Fehler ab, und der Lauf wird als Ganzes
-   * wiederholt. Das ist richtig, solange die Aktionen aufeinander aufbauen —
-   * „Aufgabe anlegen, dann benachrichtigen" ohne Aufgabe ergibt keine
-   * sinnvolle Benachrichtigung. Der Preis: Eine bereits ausgeführte Aktion
-   * läuft beim Wiederholungsversuch erneut. Deshalb ist der Abbruch auf die
-   * Aktionen beschränkt, die wiederholbar sind — die Statusänderung setzt
-   * einen Zielzustand und keinen Übergang, und ein zweiter Versand derselben
-   * Erinnerung ist ärgerlich, aber nicht falsch.
-   */
-  if (lauf.attempts < MAX_VERSUCHE) {
+  if (!endgueltig && lauf.attempts < MAX_VERSUCHE) {
     const minuten = BACKOFF_MINUTEN[Math.min(lauf.attempts - 1, BACKOFF_MINUTEN.length - 1)];
     await prisma.automationRun.update({
       where: { id: runId },
@@ -747,6 +872,27 @@ async function fuehreLaufAus(organizationId: string, runId: string): Promise<Aus
     versuche: lauf.attempts,
   });
   return 'gescheitert';
+}
+
+/**
+ * Aktionen, deren Wiederholung nach einem Absturz unschädlich ist: Sie setzen
+ * einen Zielzustand, keinen Übergang, und haben keine Aussenwirkung.
+ */
+const WIEDERHOLBAR = new Set(['UPDATE_STATUS', 'AI_GENERATE']);
+
+async function aktionsstandSetzen(
+  runId: string,
+  position: number,
+  type: string,
+  status: 'SUCCEEDED' | 'FAILED' | 'SKIPPED',
+  result: unknown,
+  fehler?: string,
+): Promise<void> {
+  await prisma.automationActionRun.upsert({
+    where: { runId_position: { runId, position } },
+    create: { runId, position, type, status, attempts: 1, result: (result ?? undefined) as Prisma.InputJsonValue, error: fehler?.slice(0, 500) ?? null, finishedAt: new Date() },
+    update: { status, result: (result ?? undefined) as Prisma.InputJsonValue, error: fehler?.slice(0, 500) ?? null, finishedAt: new Date() },
+  });
 }
 
 async function abschliessen(
@@ -781,6 +927,10 @@ async function fuehreAktionAus(params: {
   art: string;
   config: Record<string, unknown>;
   nutzlast: VorgangsNutzlast;
+  /** Beim Versand: Konten, die ein früherer Versuch dieser Aktion schon erreicht hat. */
+  bereitsZugestellt?: string[];
+  /** Lauf und Stelle der Aktion — für Gegenstellen, die Wiederholungen erkennen. */
+  idempotenzSchluessel?: string;
 }): Promise<AktionsErgebnis> {
   switch (params.art) {
     case 'SEND_EMAIL':
@@ -847,6 +997,7 @@ async function sendeNachricht(params: {
   art: string;
   config: Record<string, unknown>;
   nutzlast: VorgangsNutzlast;
+  bereitsZugestellt?: string[];
 }): Promise<AktionsErgebnis> {
   const perMail = params.art === 'SEND_EMAIL';
   const templateKey = String(params.config.templateKey ?? '');
@@ -895,8 +1046,17 @@ async function sendeNachricht(params: {
   let nichtErreichbar = 0;
   const zustellfehler: string[] = [];
   const fehlend = new Set<string>();
+  /**
+   * Wer schon erreicht wurde — aus einem früheren Versuch dieser Aktion und
+   * aus diesem. Steht im Ergebnis und damit im Aktionsstand, auch wenn die
+   * Aktion scheitert: Ein Wiederholungsversuch schreibt nur noch denen, die
+   * fehlen (2026-09-27). Vorher bekam, wer beim ersten Versuch erreicht
+   * wurde, dieselbe Nachricht bei jedem weiteren Versuch erneut.
+   */
+  const zugestellt = [...(params.bereitsZugestellt ?? [])];
 
   for (const userId of konten) {
+    if (zugestellt.includes(userId)) continue;
     if (perMail) {
       const v = vorlage as { subject: string; bodyHtml: string; bodyText: string | null };
       const betreff = fuelleVorlage(v.subject, params.nutzlast);
@@ -916,8 +1076,10 @@ async function sendeNachricht(params: {
         entityId: params.nutzlast.entityId,
       });
       if (!zustellung.email) nichtErreichbar += 1;
-      else if (zustellung.email.ok) versandt += 1;
-      else zustellfehler.push(zustellung.email.fehler ?? 'E-Mail nicht zugestellt');
+      else if (zustellung.email.ok) {
+        versandt += 1;
+        zugestellt.push(userId);
+      } else zustellfehler.push(zustellung.email.fehler ?? 'E-Mail nicht zugestellt');
     } else {
       const v = vorlage as { body: string };
       const sms = fuelleVorlage(v.body, params.nutzlast);
@@ -933,8 +1095,10 @@ async function sendeNachricht(params: {
         entityId: params.nutzlast.entityId,
       });
       if (!zustellung.sms) nichtErreichbar += 1;
-      else if (zustellung.sms.ok) versandt += 1;
-      else zustellfehler.push(zustellung.sms.fehler ?? 'SMS nicht zugestellt');
+      else if (zustellung.sms.ok) {
+        versandt += 1;
+        zugestellt.push(userId);
+      } else zustellfehler.push(zustellung.sms.fehler ?? 'SMS nicht zugestellt');
     }
   }
 
@@ -944,9 +1108,10 @@ async function sendeNachricht(params: {
       ergebnis: 'fehler',
       grund: `${zustellfehler.length} von ${konten.length} Nachrichten nicht zugestellt: ${zustellfehler[0]!.slice(0, 200)}`,
       versandt,
+      zugestellt,
     };
   }
-  if (versandt === 0) {
+  if (zugestellt.length === 0) {
     return {
       ergebnis: 'uebersprungen',
       grund: `Kein Empfänger erreichbar (${nichtErreichbar} ohne Adresse oder abbestellt).`,
@@ -956,6 +1121,7 @@ async function sendeNachricht(params: {
   return {
     ergebnis: 'ok',
     versandt,
+    zugestellt,
     ...(nichtErreichbar > 0 ? { nichtErreichbar } : {}),
     // Für die Vorlagenpflege sichtbar, bevor es der Kundschaft auffällt.
     ...(fehlend.size > 0 ? { fehlendePlatzhalter: [...fehlend] } : {}),
@@ -1094,6 +1260,7 @@ async function aendereStatus(params: {
 async function rufeAuf(params: {
   config: Record<string, unknown>;
   nutzlast: VorgangsNutzlast;
+  idempotenzSchluessel?: string;
 }): Promise<AktionsErgebnis> {
   const url = String(params.config.url ?? '');
   const secret = params.config.secret ? String(params.config.secret) : undefined;
@@ -1101,6 +1268,7 @@ async function rufeAuf(params: {
   const antwort = await sendeWebhook({
     url,
     secret,
+    idempotenzSchluessel: params.idempotenzSchluessel,
     /**
      * Der Rumpf ist die Nutzlast — also genau das, was oben als „bewusst
      * schmal" festgelegt wurde. Er geht an eine fremde Gegenstelle, und

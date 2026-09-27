@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 
 import { bedingungenErfuellt, wertAn } from '../../src/lib/automation/conditions';
 import { fuelleVorlage, platzhalterIn } from '../../src/lib/automation/template';
-import { istPrivateAdresse, pruefeZiel } from '../../src/lib/automation/webhook';
+import { istPrivateAdresse, pruefendeVerbindungsaufloesung, pruefeZiel, sendeWebhook } from '../../src/lib/automation/webhook';
 import { pruefeAktionsKonfiguration } from '../../src/lib/validation/automation-config';
 import { get, post, patch, del, data, requireServer } from '../helpers/client';
 import { loginAll, type AccountName } from '../helpers/accounts';
@@ -266,6 +266,18 @@ describe('Ausgehende Aufrufe — die Adressprüfung', () => {
       // Dieselbe Rückschleife in IPv6-Schreibweise. Ohne diesen Fall wäre die
       // ganze IPv4-Prüfung mit einer anderen Notation zu umgehen.
       '::ffff:127.0.0.1',
+      // Bis 2026-09-27 durchgelassen — die Prüfung arbeitete mit Präfixen der
+      // Zeichenkette statt mit der Adresse:
+      '::ffff:7f00:1', // = 127.0.0.1, hexadezimal gemappt
+      '::127.0.0.1', // IPv4-kompatibel
+      '64:ff9b::a9fe:a9fe', // NAT64 auf 169.254.169.254
+      '2002:a9fe:a9fe::1', // 6to4 aus 169.254.169.254
+      '2001:0:4136:e378::1', // Teredo
+      'fe81::1', // link-local, aber nicht „fe80"
+      'fec0::1', // site-local
+      '198.18.0.1', // Benchmarking
+      '203.0.113.7', // Dokumentation
+      '0:0:0:0:0:0:0:1', // ::1 ausgeschrieben
     ];
 
     for (const adresse of privat) {
@@ -297,20 +309,57 @@ describe('Ausgehende Aufrufe — die Adressprüfung', () => {
     assert.equal(ergebnis.ok === false && ergebnis.fehler, 'PRIVATE_ADRESSE');
   });
 
+  it('weist ein IPv6-Literal in Klammern ab, statt es als Namen aufzulösen', async () => {
+    const ergebnis = await pruefeZiel('https://[::1]/hook', async () => {
+      throw new Error('darf nicht aufgelöst werden');
+    });
+    assert.equal(ergebnis.ok === false && ergebnis.fehler, 'PRIVATE_ADRESSE');
+  });
+
   /**
    * Der Fall, an dem eine Prüfung über die Zeichenkette scheitern würde: Ein
-   * Name im **öffentlichen** DNS, der auf die Rückschleife zeigt. `localtest.me`
-   * ist genau dafür gedacht und löst auf 127.0.0.1 auf.
+   * Name, der auf die Rückschleife zeigt. Bis 2026-09-27 hing dieser Fall an
+   * einem echten DNS-Namen (`localtest.me`) und übersprang sich ohne
+   * Namensauflösung. Jetzt mit einer kontrollierten Auflösung — immer
+   * ausgeführt, nie übersprungen, ohne Netz.
    */
-  it('weist einen öffentlichen Namen ab, der auf die Rückschleife zeigt', async (t) => {
-    const ergebnis = await pruefeZiel('https://localtest.me/hook');
+  it('weist einen Namen ab, der auf die Rückschleife zeigt — auch wenn nur eine von mehreren Antworten privat ist', async () => {
+    const nurPrivat = await pruefeZiel('https://intern.pruef.example/hook', async () => [{ address: '127.0.0.1', family: 4 }]);
+    assert.equal(nurPrivat.ok === false && nurPrivat.fehler, 'PRIVATE_ADRESSE');
+    const gemischt = await pruefeZiel('https://gemischt.pruef.example/hook', async () => [
+      { address: '93.184.216.34', family: 4 },
+      { address: '10.0.0.5', family: 4 },
+    ]);
+    assert.equal(gemischt.ok === false && gemischt.fehler, 'PRIVATE_ADRESSE');
+  });
 
-    if (!ergebnis.ok && ergebnis.fehler === 'UNAUFLOESBAR') {
-      return t.skip('keine Namensauflösung in dieser Umgebung');
-    }
+  /**
+   * DNS Rebinding (2026-09-27). Die Prüfung löste auf, und `fetch` löste
+   * danach selbst noch einmal auf — ein Name, der beim ersten Mal öffentlich
+   * und beim zweiten Mal `169.254.169.254` antwortet, kam durch. Die
+   * kontrollierte Auflösung hier tut genau das. Die Verbindung muss an der
+   * zweiten Antwort scheitern — vor jedem Byte ins Netz, deshalb braucht
+   * diese Prüfung weder Netz noch Gegenstelle.
+   */
+  it('DNS Rebinding: erst öffentlich, beim Verbinden privat — die Verbindung wird verweigert', async () => {
+    let aufrufe = 0;
+    const kippend = async () => {
+      aufrufe += 1;
+      return aufrufe === 1 ? [{ address: '93.184.216.34', family: 4 }] : [{ address: '169.254.169.254', family: 4 }];
+    };
+    const ergebnis = await sendeWebhook({ url: 'https://kippt.pruef.example/hook', rumpf: { test: true }, secret: 'x', aufloesen: kippend });
+    assert.equal(aufrufe >= 2, true, 'die Verbindung hat selbst aufgelöst — über die geprüfte Funktion');
+    assert.equal(ergebnis.ok, false);
+    assert.equal(ergebnis.fehler, 'PRIVATE_ADRESSE', JSON.stringify(ergebnis));
+  });
 
-    assert.equal(ergebnis.ok, false, 'ein Name auf 127.0.0.1 darf nicht durchgehen');
-    assert.equal(ergebnis.ok === false && ergebnis.fehler, 'PRIVATE_ADRESSE');
+  it('die Verbindungsauflösung prüft auch mehrere Antworten (Happy Eyeballs)', async () => {
+    const aufloesung = pruefendeVerbindungsaufloesung(async () => [
+      { address: '2606:4700:4700::1111', family: 6 },
+      { address: '::ffff:7f00:1', family: 6 },
+    ]);
+    const fehler = await new Promise<Error | null>((fertig) => aufloesung('x.pruef.example', { all: true }, (e) => fertig(e)));
+    assert.ok(fehler, 'eine private Antwort unter mehreren muss die Verbindung verhindern');
   });
 });
 
@@ -762,5 +811,137 @@ describe('RB-012 — vom zeitbezogenen Auslöser bis zur ausgeführten Aktion', 
     assert.match(b.error ?? '', /Abgebrochen/);
 
     await db.automationRun.deleteMany({ where: { id: { in: [nochVersuche.id, erschoepft.id] } } });
+  });
+});
+
+/**
+ * Genau einmal je Aktion (2026-09-27).
+ *
+ * Ein Lauf mit zwei Aktionen, deren zweite scheitert, wurde als Ganzes
+ * wiederholt — und die erste lief bei jedem Versuch erneut: Aufgaben
+ * doppelt, E-Mails an bereits Erreichte noch einmal. Der Code nahm das
+ * ausdrücklich in Kauf. Jetzt trägt jede Aktion ihren eigenen Stand
+ * (`AutomationActionRun`); ein Wiederholungsversuch setzt bei der
+ * gescheiterten fort. Eine Aktion mit Aussenwirkung, deren Prozess
+ * mittendrin starb, wird nicht blind wiederholt, sondern als „Wirkung
+ * ungewiss" beendet — lieber eine Nachfrage als eine zweite Wirkung.
+ */
+describe('Automatisierung — jede Aktion höchstens einmal', () => {
+  let regelId = '';
+  const aufgaben: string[] = [];
+  const RUN = Date.now();
+
+  before(async () => {
+    await requireServer();
+    jars = await loginAll();
+  });
+
+  after(async () => {
+    const db = testDb();
+    if (regelId) await del(`/api/automations/${regelId}`, { jar: jars.admin }).catch(() => {});
+    for (const id of aufgaben) await del(`/api/tasks/${id}`, { jar: jars.admin }).catch(() => {});
+    if (db) await db.task.deleteMany({ where: { title: { startsWith: `Folgeaufgabe Einmal ${RUN}` } } });
+    await testDbSchliessen();
+  });
+
+  const stuendlich = () => get('/api/cron/hourly', { headers: { authorization: `Bearer ${process.env.CRON_SECRET ?? 'dev-cron-secret'}` } });
+
+  it('scheitert die zweite Aktion, läuft die erste beim Wiederholen nicht noch einmal', async (t) => {
+    const db = testDb();
+    if (!db) return t.skip(`kein Zugang zur Testdatenbank: ${testDbGrund()}`);
+
+    const regel = await post<{ data: { id: string } }>(
+      '/api/automations',
+      {
+        name: `Einmal-Prüfung ${RUN}`,
+        trigger: 'TASK_DUE',
+        delayMinutes: 0,
+        active: true,
+        actions: [
+          { type: 'CREATE_TASK', config: { titel: `Folgeaufgabe Einmal ${RUN} {{titel}}`, faelligInTagen: 1 } },
+          // `.invalid` löst nie auf — ein vorübergehender Fehler, der
+          // wiederholt wird, ohne Netz und ohne Gegenstelle.
+          { type: 'WEBHOOK', config: { url: 'https://gegenstelle.pruef.invalid/hook' } },
+        ],
+      },
+      { jar: jars.admin },
+    );
+    assert.equal(regel.status, 201, regel.text);
+    regelId = data(regel).id;
+
+    const aufgabe = await post<{ data: { id: string } }>('/api/tasks', { title: `Einmal ${RUN}`, dueAt: new Date(Date.now() + 30 * 60_000).toISOString() }, { jar: jars.admin });
+    assert.equal(aufgabe.status, 201, aufgabe.text);
+    aufgaben.push(data(aufgabe).id);
+
+    await stuendlich();
+    const eigene = { automationId: regelId, entityId: data(aufgabe).id };
+    for (let versuch = 1; versuch <= 2; versuch++) {
+      await db.automationRun.updateMany({ where: eigene, data: { scheduledFor: new Date(Date.now() - 60_000) } });
+      await stuendlich();
+    }
+
+    const folge = await db.task.count({ where: { title: { startsWith: `Folgeaufgabe Einmal ${RUN}` } } });
+    assert.equal(folge, 1, `die erste Aktion lief ${folge}-mal`);
+
+    const lauf = await db.automationRun.findFirstOrThrow({ where: eigene, include: { aktionen: { orderBy: { position: 'asc' } } } });
+    assert.ok(lauf.attempts >= 2, `Versuche: ${lauf.attempts}`);
+    assert.equal(lauf.aktionen[0]?.status, 'SUCCEEDED');
+    assert.equal(lauf.aktionen[0]?.attempts, 1, 'die erfolgreiche Aktion wurde genau einmal ausgeführt');
+    assert.equal(lauf.aktionen[1]?.status, 'FAILED');
+    assert.ok((lauf.aktionen[1]?.attempts ?? 0) >= 2);
+  });
+
+  /**
+   * Parität und Outbox (2026-09-27). Eine direkt ausgestellte Rechnung löste
+   * „Rechnung ausgestellt" nie aus — nur der Weg über „Ausstellen" tat es.
+   * Und das Ereignis entsteht jetzt in der Transaktion der Rechnung
+   * (`AutomationEvent`) und ist danach verarbeitet.
+   */
+  it('eine direkt ausgestellte Rechnung löst INVOICE_ISSUED aus — über den Vermerk in ihrer Transaktion', async (t) => {
+    const db = testDb();
+    if (!db) return t.skip(`kein Zugang zur Testdatenbank: ${testDbGrund()}`);
+    const regel = await post<{ data: { id: string } }>(
+      '/api/automations',
+      { name: `Parität ${RUN}`, trigger: 'INVOICE_ISSUED', delayMinutes: 60, active: true, actions: [{ type: 'CREATE_NOTIFICATION', config: { titel: 'Ausgestellt', empfaenger: 'MANAGEMENT' } }] },
+      { jar: jars.admin },
+    );
+    assert.equal(regel.status, 201, regel.text);
+    try {
+      const kunde = data(await get<{ data: { id: string }[] }>('/api/customers?pageSize=1', { jar: jars.admin }))[0]!.id;
+      const rechnung = await post<{ data: { id: string } }>(
+        '/api/invoices',
+        { customerId: kunde, notes: `Prüfreihe Parität ${RUN}`, items: [{ name: 'Reinigung', quantity: 1, unitPrice: 10 }], issueImmediately: true },
+        { jar: jars.admin },
+      );
+      assert.equal(rechnung.status, 201, rechnung.text);
+      const id = data(rechnung).id;
+      const ereignis = await db.automationEvent.findFirst({ where: { trigger: 'INVOICE_ISSUED', entityId: id } });
+      assert.ok(ereignis, 'kein Vermerk in der Transaktion der Rechnung');
+      assert.ok(ereignis.processedAt, 'der Vermerk wurde nicht abgearbeitet');
+      assert.equal(await db.automationRun.count({ where: { automationId: data(regel).id, entityId: id } }), 1, 'kein Lauf für die direkt ausgestellte Rechnung');
+    } finally {
+      await del(`/api/automations/${data(regel).id}`, { jar: jars.admin }).catch(() => {});
+    }
+  });
+
+  it('eine Aktion mit Aussenwirkung, die mittendrin abbrach, wird nicht blind wiederholt', async (t) => {
+    const db = testDb();
+    if (!db) return t.skip(`kein Zugang zur Testdatenbank: ${testDbGrund()}`);
+    assert.ok(regelId, 'Die Regel aus dem vorigen Fall fehlt');
+
+    const aufgabe = await post<{ data: { id: string } }>('/api/tasks', { title: `Einmal abgebrochen ${RUN}`, dueAt: new Date().toISOString() }, { jar: jars.admin });
+    aufgaben.push(data(aufgabe).id);
+    const lauf = await db.automationRun.create({
+      data: { automationId: regelId, entity: 'Task', entityId: data(aufgabe).id, status: 'PENDING', scheduledFor: new Date(Date.now() - 60_000) },
+    });
+    // Zustand nach einem Absturz mitten in Aktion 1 (Aufgabe anlegen): RUNNING, ohne Abschluss.
+    await db.automationActionRun.create({ data: { runId: lauf.id, position: 0, type: 'CREATE_TASK', status: 'RUNNING', attempts: 1, startedAt: new Date(Date.now() - 3_600_000) } });
+
+    await stuendlich();
+
+    const nachher = await db.automationRun.findUniqueOrThrow({ where: { id: lauf.id }, include: { aktionen: { orderBy: { position: 'asc' } } } });
+    assert.equal(nachher.status, 'FAILED', 'endgültig beendet, nicht wiederholt');
+    assert.match(nachher.error ?? '', /ungewiss/i);
+    assert.equal(await db.task.count({ where: { title: { startsWith: `Folgeaufgabe Einmal ${RUN} Einmal abgebrochen` } } }), 0, 'keine zweite Wirkung');
   });
 });

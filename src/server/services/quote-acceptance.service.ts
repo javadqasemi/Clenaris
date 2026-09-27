@@ -7,7 +7,7 @@ import { BusinessRuleError, NotFoundError } from '@/lib/errors';
 import { absoluteUrl } from '@/lib/utils';
 
 import { revokeTokensFor } from './access-token.service';
-import { emitAutomationTrigger } from './automation-engine.service';
+import { automationEreignisseAbarbeiten, automationEreignisVormerken } from './automation-engine.service';
 import { notifyStaff } from './notification.service';
 import { appendSignatureEvent, type AnfrageKontext } from './signature-events';
 
@@ -93,7 +93,13 @@ export async function acceptQuoteInTx(tx: Tx, quoteId: string, now: Date): Promi
     where: { id: quoteId, status: { in: [...QUOTE_BEANTWORTBAR] }, deletedAt: null, validUntil: { gte: now } },
     data: { status: 'ACCEPTED', acceptedAt: now },
   });
-  return uebergang.count === 1;
+  if (uebergang.count !== 1) return false;
+  // Das Ereignis entsteht mit dem Übergang — in der Transaktion, die auch den
+  // Signaturvorgang abschliesst (Outbox, 2026-09-27). Vorher erst danach und
+  // bestmöglich gemeldet.
+  const { organizationId } = await tx.quote.findUniqueOrThrow({ where: { id: quoteId }, select: { organizationId: true } });
+  await automationEreignisVormerken(tx, { organizationId, trigger: 'QUOTE_ACCEPTED', entityId: quoteId });
+  return true;
 }
 
 /**
@@ -238,10 +244,11 @@ export async function afterQuoteAccepted(params: {
 
   /**
    * `QUOTE_ACCEPTED` — bis 2026-09-23 in der Oberfläche wählbar und nie
-   * gemeldet (RB-012). Hier, vom Gewinner des Übergangs und genau einmal;
-   * die Meldung wirft nie und hält die Annahme nicht auf.
+   * gemeldet (RB-012). Vermerkt wird es seit 2026-09-27 im Übergang selbst
+   * (`acceptQuoteInTx`); hier wird es nur abgearbeitet. Wirft nie und hält
+   * die Annahme nicht auf.
    */
-  await emitAutomationTrigger({ organizationId: quote.organizationId, trigger: 'QUOTE_ACCEPTED', entityId: quote.id });
+  await automationEreignisseAbarbeiten({ organizationId: quote.organizationId });
 
   await audit.updated({
     organizationId: quote.organizationId,

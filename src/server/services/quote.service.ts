@@ -7,7 +7,7 @@ import { BusinessRuleError, NotFoundError } from '@/lib/errors';
 import { absoluteUrl, round2 } from '@/lib/utils';
 import { orderByFor, resolveSort, type SortOrder } from '@/lib/sort';
 import { audit } from '@/lib/audit';
-import { emitAutomationTrigger } from './automation-engine.service';
+import { automationEreignisseAbarbeiten, automationEreignisVormerken } from './automation-engine.service';
 import { quoteExpiringEmail, quoteSentEmail } from '@/lib/email/templates';
 import { renderQuotePdf, renderQuoteSnapshot } from '@/lib/pdf/render';
 import { readLocalBytes, readStoredBytes } from '@/lib/storage';
@@ -783,9 +783,14 @@ export async function sendQuote(params: {
     entityId: quote.id,
   });
 
-  const updated = await prisma.quote.update({
-    where: { id: quote.id },
-    data: { status: 'SENT', sentAt: new Date() },
+  // Statuswechsel und Ereignis gemeinsam (Outbox, 2026-09-27).
+  const updated = await prisma.$transaction(async (tx) => {
+    const gesendet = await tx.quote.update({
+      where: { id: quote.id },
+      data: { status: 'SENT', sentAt: new Date() },
+    });
+    await automationEreignisVormerken(tx, { organizationId: params.organizationId, trigger: 'QUOTE_SENT', entityId: quote.id });
+    return gesendet;
   });
 
   await audit.updated({
@@ -796,11 +801,7 @@ export async function sendQuote(params: {
     summary: `Offerte ${quote.number} an ${recipientEmail} versendet`,
   });
 
-  await emitAutomationTrigger({
-    organizationId: params.organizationId,
-    trigger: 'QUOTE_SENT',
-    entityId: quote.id,
-  });
+  await automationEreignisseAbarbeiten({ organizationId: params.organizationId });
 
   return updated;
 }

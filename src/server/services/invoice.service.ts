@@ -8,7 +8,7 @@ import { BusinessRuleError, ConflictError, NotFoundError } from '@/lib/errors';
 import { absoluteUrl, round2 } from '@/lib/utils';
 import { orderByFor, resolveSort, type SortOrder } from '@/lib/sort';
 import { audit } from '@/lib/audit';
-import { emitAutomationTrigger } from './automation-engine.service';
+import { automationEreignisseAbarbeiten, automationEreignisVormerken } from './automation-engine.service';
 import {
   invoiceIssuedEmail,
   paymentReceivedEmail,
@@ -217,8 +217,22 @@ export async function createInvoice(params: {
       invoiceId: angelegt.id,
       jobIds: totals.items.map((item) => item.jobId),
     });
+    /*
+      Parität mit `issueInvoice` (2026-09-27): Eine direkt ausgestellte
+      Rechnung ist ebenso ausgestellt. Bis dahin meldete nur `issueInvoice`
+      den Auslöser und erzeugte das PDF — die Sammelrechnung aus Einsätzen und
+      die Rechnung aus einer Offerte (beide direkt ausgestellt) lösten keine
+      Regel „Rechnung ausgestellt" aus und hatten kein PDF.
+    */
+    if (params.input.issueImmediately) {
+      await automationEreignisVormerken(tx, { organizationId: params.organizationId, trigger: 'INVOICE_ISSUED', entityId: angelegt.id });
+    }
     return angelegt;
   });
+
+  if (params.input.issueImmediately) {
+    await renderInvoicePdf(invoice.id).catch((error) => log.error('PDF-Erzeugung fehlgeschlagen', { error }));
+  }
 
   await audit.created({
     organizationId: params.organizationId,
@@ -227,6 +241,8 @@ export async function createInvoice(params: {
     entityId: invoice.id,
     summary: `Rechnung ${invoice.number} erstellt (${toNumber(invoice.grossTotal).toFixed(2)} CHF)`,
   });
+
+  if (params.input.issueImmediately) await automationEreignisseAbarbeiten({ organizationId: params.organizationId });
 
   return invoice;
 }
@@ -508,8 +524,19 @@ export async function issueInvoice(params: {
   }
 
   const issued = await prisma.$transaction(async (tx) => {
+    /*
+      Zeile sperren und den Stand **in** der Transaktion erneut prüfen
+      (2026-09-27). Vorher prüfte nur die Abfrage oben „noch Entwurf?", und
+      das Schreiben war unbedingt: Zwei gleichzeitige „Ausstellen" zogen je
+      eine Nummer, die zweite überschrieb die erste — eine Lücke in der nach
+      Art. 957a OR lückenlosen Folge. Jetzt wartet der zweite Aufruf, sieht
+      ISSUED und scheitert, bevor er eine Nummer zieht.
+    */
+    await tx.$queryRaw`SELECT "id" FROM "invoices" WHERE "id" = ${invoice.id} FOR UPDATE`;
+    const stand = await tx.invoice.findUniqueOrThrow({ where: { id: invoice.id }, select: { status: true } });
+    if (stand.status !== 'DRAFT') throw new BusinessRuleError('Diese Rechnung wurde bereits ausgestellt.');
     const seq = await nextNumber(tx, params.organizationId, 'invoice', invoice.issueDate);
-    return tx.invoice.update({
+    const ausgestellt = await tx.invoice.update({
       where: { id: invoice.id },
       data: {
         number: seq.number,
@@ -517,6 +544,8 @@ export async function issueInvoice(params: {
         qrReference: buildQrReference({ invoiceSequence: seq.sequence }),
       },
     });
+    await automationEreignisVormerken(tx, { organizationId: params.organizationId, trigger: 'INVOICE_ISSUED', entityId: invoice.id });
+    return ausgestellt;
   });
 
   await renderInvoicePdf(issued.id).catch((error) =>
@@ -531,11 +560,7 @@ export async function issueInvoice(params: {
     summary: `Rechnung ${issued.number} ausgestellt`,
   });
 
-  await emitAutomationTrigger({
-    organizationId: params.organizationId,
-    trigger: 'INVOICE_ISSUED',
-    entityId: issued.id,
-  });
+  await automationEreignisseAbarbeiten({ organizationId: params.organizationId });
 
   return issued;
 }

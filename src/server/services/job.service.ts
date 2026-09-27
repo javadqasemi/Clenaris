@@ -11,7 +11,7 @@ import { CRYPTO_CONTEXT, decryptNullable } from '@/lib/crypto';
 import { jobAssignedEmail } from '@/lib/email/templates';
 import { smsTemplates } from '@/lib/sms/client';
 import { audit } from '@/lib/audit';
-import { emitAutomationTrigger } from './automation-engine.service';
+import { automationEreignisseAbarbeiten, automationEreignisVormerken } from './automation-engine.service';
 import {
   deriveJobCosts,
   effectiveHourlyRate,
@@ -341,6 +341,11 @@ export async function createJob(params: {
       },
     });
 
+    // Parität (2026-09-27): Ein Einsatz, der gleich mit Team entsteht, ist
+    // ebenso zugeteilt wie einer, dem das Team später zugewiesen wird.
+    if (input.employeeIds.length > 0) {
+      await automationEreignisVormerken(tx, { organizationId, trigger: 'JOB_ASSIGNED', entityId: created.id });
+    }
     return created;
   });
 
@@ -348,6 +353,7 @@ export async function createJob(params: {
 
   if (input.employeeIds.length > 0) {
     await notifyAssignees(job.id, input.employeeIds);
+    await automationEreignisseAbarbeiten({ organizationId });
   }
 
   await audit.created({
@@ -592,6 +598,7 @@ export async function assignJob(params: {
       where: { id: job.id },
       data: { status: job.status === 'UNASSIGNED' ? 'SCHEDULED' : job.status },
     });
+    await automationEreignisVormerken(tx, { organizationId: params.organizationId, trigger: 'JOB_ASSIGNED', entityId: job.id });
   });
 
   if (params.notify !== false) {
@@ -622,11 +629,7 @@ export async function assignJob(params: {
     changes: { employeeIds: params.employeeIds, role: params.role ?? 'MEMBER' },
   });
 
-  await emitAutomationTrigger({
-    organizationId: params.organizationId,
-    trigger: 'JOB_ASSIGNED',
-    entityId: job.id,
-  });
+  await automationEreignisseAbarbeiten({ organizationId: params.organizationId });
 }
 
 async function notifyAssignees(jobId: string, employeeIds: string[]) {
@@ -957,9 +960,13 @@ export async function completeJob(params: {
           where: { id: job.bookingId },
           data: { status: 'COMPLETED', completedAt: new Date() },
         });
+        // Die Buchung ist mit diesem Einsatz abgeschlossen — das Ereignis
+        // entsteht in derselben Transaktion wie der Statuswechsel.
+        await automationEreignisVormerken(tx, { organizationId: params.organizationId, trigger: 'BOOKING_COMPLETED', entityId: job.bookingId });
       }
     }
 
+    await automationEreignisVormerken(tx, { organizationId: params.organizationId, trigger: 'JOB_COMPLETED', entityId: job.id });
     return result;
   });
 
@@ -971,34 +978,15 @@ export async function completeJob(params: {
     summary: `Einsatz ${job.number} abgeschlossen`,
   });
 
-  await emitAutomationTrigger({
-    organizationId: params.organizationId,
-    trigger: 'JOB_COMPLETED',
-    entityId: job.id,
-  });
-
   /**
-   * Schliesst der Einsatz die letzte offene Position einer Buchung, gilt auch
-   * die Buchung als abgeschlossen — das entscheidet die Transaktion oben. Der
-   * Auslöser dazu gehört hierher und nicht dorthin: Innerhalb der Transaktion
-   * wäre der neue Zustand für die Maschine nicht sichtbar, und ein zweiter
-   * Lauf entsteht durch den Teilindex ohnehin nicht.
+   * JOB_COMPLETED und — wenn dieser Einsatz die Buchung abschloss —
+   * BOOKING_COMPLETED sind oben in der Transaktion vermerkt (Outbox,
+   * 2026-09-27). Vorher stand die zweite Meldung hier mit einer eigenen,
+   * nachträglichen Zählung: zwei gleichzeitige Abschlüsse der letzten beiden
+   * Einsätze konnten beide „noch einer offen" sehen, und die Buchung meldete
+   * ihren Abschluss nie.
    */
-  if (job.bookingId) {
-    const offen = await prisma.job.count({
-      where: {
-        bookingId: job.bookingId,
-        status: { notIn: ['COMPLETED', 'VERIFIED', 'CANCELLED'] },
-      },
-    });
-    if (offen === 0) {
-      await emitAutomationTrigger({
-        organizationId: params.organizationId,
-        trigger: 'BOOKING_COMPLETED',
-        entityId: job.bookingId,
-      });
-    }
-  }
+  await automationEreignisseAbarbeiten({ organizationId: params.organizationId });
 
   return updated;
 }
@@ -1494,11 +1482,18 @@ export async function setJobTeam(params: {
               : job.status,
       },
     });
+    // Gleichwertig zu `assignJob` (Parität, 2026-09-27): Wer über die
+    // Teamverwaltung neu dazukommt, ist ebenso zugeteilt. Bis dahin meldete
+    // nur `assignJob` den Auslöser.
+    if (added.length > 0) {
+      await automationEreignisVormerken(tx, { organizationId: params.organizationId, trigger: 'JOB_ASSIGNED', entityId: job.id });
+    }
   });
 
   if (params.input.notify && added.length > 0) {
     await notifyAssignees(job.id, added);
   }
+  await automationEreignisseAbarbeiten({ organizationId: params.organizationId });
 
   await audit.updated({
     organizationId: params.organizationId,
