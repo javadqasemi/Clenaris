@@ -1,5 +1,6 @@
 import 'server-only';
 
+import { audit } from '@/lib/audit';
 import { prisma } from '@/lib/db';
 import { BusinessRuleError, ForbiddenError, NotFoundError } from '@/lib/errors';
 import type { ReplyMessageInput } from '@/lib/validation/messaging';
@@ -37,8 +38,13 @@ export interface ThreadViewer {
  * (bis 2026-09-27; die Merkmalsprüfung sah es nicht, weil `MessageThread`
  * auch hier geschrieben wird, aber es war dieselbe Umgehung).
  *
- * Der Verlauf wird immer an die Kundschaft gebunden, auch wenn ihn das Büro
- * anlegt: sonst taucht die Antwort im Kundenkonto nicht auf.
+ * Kundschaft: Der Verlauf gehört dem eigenen Kundenkonto. Büro, Leitung und
+ * Mitarbeitende ohne Kundenkonto eröffnen nur Verläufe zu einem Einsatz, und
+ * die bleiben **intern** (`customerId` leer) — die Kundschaft sieht sie
+ * nicht. Die frühere Beschreibung („immer an die Kundschaft gebunden")
+ * stimmte mit dem Verhalten nicht überein; berichtigt 2026-09-27 zugunsten
+ * des Verhaltens, weil Einsatzabsprachen im Team nicht ungefragt im
+ * Kundenkonto erscheinen sollen.
  */
 export async function openThread(params: {
   session: ThreadViewer & { firstName: string; lastName: string };
@@ -59,16 +65,23 @@ export async function openThread(params: {
 
   // …und nur zu einem, dem sie zugeteilt sind. Die Einsatz-ID kommt aus dem
   // Körper; ohne Prüfung liesse sich an jeden Einsatz des Betriebs schreiben.
-  if (input.jobId && session.role === 'EMPLOYEE') {
-    const assigned = await prisma.job.count({
+  //
+  // Der Einsatz wird für **jede** Rolle in der eigenen Organisation gesucht
+  // (2026-09-27). Vorher nur für Mitarbeitende; Büro und Leitung konnten einen
+  // Verlauf an die Einsatz-ID einer fremden Organisation hängen — die
+  // Buchungs-ID darunter war längst mandantengebunden, die Einsatz-ID nicht.
+  if (input.jobId) {
+    const gefunden = await prisma.job.count({
       where: {
         id: input.jobId,
         organizationId,
         deletedAt: null,
-        assignments: { some: { employeeId: session.profileId ?? '__keines__' } },
+        ...(session.role === 'EMPLOYEE'
+          ? { assignments: { some: { employeeId: session.profileId ?? '__keines__' } } }
+          : {}),
       },
     });
-    if (!assigned) throw new NotFoundError('Einsatz');
+    if (!gefunden) throw new NotFoundError('Einsatz');
   }
 
   if (input.bookingId) {
@@ -100,6 +113,17 @@ export async function openThread(params: {
   const senderName = customer
     ? (customer.companyName ?? `${customer.firstName} ${customer.lastName}`)
     : `${session.firstName} ${session.lastName}`;
+
+  // Protokolliert seit 2026-09-27 — das Eröffnen war der einzige schreibende
+  // Weg dieses Dienstes ohne Eintrag. Der Betreff, nicht der Text: Die
+  // Nachricht selbst gehört in den Verlauf, nicht ins Protokoll.
+  await audit.created({
+    organizationId,
+    userId: session.id,
+    entity: 'MessageThread',
+    entityId: thread.id,
+    summary: `Nachrichtenverlauf „${thread.subject}" eröffnet`,
+  });
 
   if (session.role === 'CUSTOMER') {
     await notifyStaff({
@@ -135,17 +159,22 @@ export async function loadThread(threadId: string, session: ThreadViewer) {
   });
   if (!thread) throw new NotFoundError('Nachrichtenverlauf');
 
+  /*
+    Ein fremder Verlauf ist „nicht gefunden", nicht „verboten" (2026-09-27,
+    Standard C19). Die frühere Antwort war 403 mit dem Kommentar „bewusst
+    404-nah formuliert" — aber der Status verriet es trotzdem: 403 für einen
+    Verlauf, den es gibt, 404 für einen, den es nicht gibt. Wer Kennungen
+    durchprobiert, erfuhr so, welche existieren.
+  */
   if (session.role === 'CUSTOMER' && thread.customer?.userId !== session.id) {
-    // Bewusst 404-nah formuliert: die Existenz fremder Threads ist nichts,
-    // was ein fremdes Konto bestätigt bekommen soll.
-    throw new ForbiddenError('Kein Zugriff auf diesen Nachrichtenverlauf.');
+    throw new NotFoundError('Nachrichtenverlauf');
   }
 
   if (
     session.role === 'EMPLOYEE' &&
     !thread.job?.assignments.some((assignment) => assignment.employeeId === session.profileId)
   ) {
-    throw new ForbiddenError('Kein Zugriff auf diesen Nachrichtenverlauf.');
+    throw new NotFoundError('Nachrichtenverlauf');
   }
 
   return thread;

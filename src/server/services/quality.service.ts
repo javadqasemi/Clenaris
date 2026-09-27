@@ -516,10 +516,13 @@ export async function listInspections(params: {
 }) {
   const { filter } = params;
 
+  // Die Sichtregel als eigenes `AND`-Glied (2026-09-27): Verbreitet
+  // überschrieb `?status=DRAFT` ihr `status: 'COMPLETED'`, und die Kundschaft
+  // sah die internen Entwürfe ihrer Kontrollen.
   const where: Prisma.QualityInspectionWhereInput = {
     organizationId: params.organizationId,
     deletedAt: null,
-    ...qualityVisibilityWhere(params.role, params.customerId),
+    AND: [qualityVisibilityWhere(params.role, params.customerId)],
     ...(filter.status ? { status: filter.status } : {}),
     ...(filter.outcome ? { outcome: filter.outcome } : {}),
     ...(filter.contractId ? { contractId: filter.contractId } : {}),

@@ -1092,7 +1092,7 @@ export async function startCustomerHandoff(params: {
   let participantId = vorhanden?.participants[0]?.id ?? null;
 
   if (!requestId) {
-    const snapshot = await renderJobReportSnapshot(job.id);
+    const snapshot = await renderJobReportSnapshot(job.organizationId, job.id);
     const angelegt = await createJobAcceptanceRequest({
       job: { id: job.id, organizationId: job.organizationId, number: job.number, title: job.title },
       participant: { name: kundenName, email: kundenMail, customerId: job.customer.id },

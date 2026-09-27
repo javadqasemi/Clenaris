@@ -589,9 +589,10 @@ export async function renderQuotePdf(quoteId: string): Promise<{
  * `JobReportDocument` führt sie ohnehin nicht — geprüft in Gate 4D.
  */
 export async function renderJobReportSnapshot(
+  organizationId: string,
   jobId: string,
 ): Promise<{ buffer: Buffer; filename: string }> {
-  const { props, number } = await einsatzberichtProps(jobId);
+  const { props, number } = await einsatzberichtProps(organizationId, jobId);
   const buffer = await renderToBuffer(
     React.createElement(JobReportDocument, { ...props, signature: null }) as never,
   );
@@ -599,10 +600,11 @@ export async function renderJobReportSnapshot(
 }
 
 export async function renderJobReportPdf(
+  organizationId: string,
   jobId: string,
   reportText?: string | null,
 ): Promise<{ buffer: Buffer; filename: string; url: string | null }> {
-  const { props, organizationId, jobId: id, number } = await einsatzberichtProps(jobId, reportText);
+  const { props, jobId: id, number } = await einsatzberichtProps(organizationId, jobId, reportText);
   const buffer = await renderToBuffer(React.createElement(JobReportDocument, props) as never);
 
   const filename = `Einsatzbericht-${number}.pdf`;
@@ -613,6 +615,7 @@ export async function renderJobReportPdf(
 
 /** Eine Abfrage, zwei Renderer — der Bericht und sein unveränderlicher Schnappschuss. */
 async function einsatzberichtProps(
+  organizationId: string,
   jobId: string,
   reportText?: string | null,
 ): Promise<{
@@ -621,8 +624,16 @@ async function einsatzberichtProps(
   jobId: string;
   number: string;
 }> {
-  const job = await prisma.job.findUnique({
-    where: { id: jobId },
+  /*
+    Die Organisation ist Pflicht und steht im `where` (2026-09-27). Vorher
+    suchte der Bericht nur nach der Kennung: `GET /api/jobs/:id/report`
+    renderte den Rapport eines Einsatzes jeder Organisation — mit Kundschaft,
+    Adresse und Team — und legte die Datei sogar unter deren Ablage ab. Ein
+    Pflichtparameter statt einer Prüfung im Endpunkt, damit kein künftiger
+    Aufrufer sie vergessen kann.
+  */
+  const job = await prisma.job.findFirst({
+    where: { id: jobId, organizationId, deletedAt: null },
     include: {
       customer: true,
       address: true,

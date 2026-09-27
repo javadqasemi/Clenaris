@@ -22,6 +22,7 @@ import { SCAN_MAX_ATTEMPTS, getScanner } from '@/lib/security/malware';
 import { darfAusgeliefertWerden as pruefeAuslieferung } from '@/lib/security/malware/auslieferung';
 
 import { documentVisibilityWhere } from './document.service';
+import { getOrganizationId } from './organization.service';
 import { propertyVisibilityWhere } from './property.service';
 
 const log = logger('file.security');
@@ -998,8 +999,17 @@ export async function authorizeStoredFile(
   storedFileId: string,
   session: SessionUser | null,
 ): Promise<DateiFreigabe | null> {
+  /*
+    Die Organisation dieser Installation im `where` (2026-09-27). Vorher
+    suchte die Freigabe nur nach der Kennung, und `darfLesen` gab eine
+    öffentliche Datei vor jeder Organisationsprüfung frei — die öffentlichen
+    Bilder einer fremden Organisation wurden hier ausgeliefert, angemeldet wie
+    anonym. „Öffentlich" heisst „öffentlich auf der eigenen Website", nicht
+    „über jede Installation erreichbar". Eine fremde Datei ist damit, wie
+    überall, schlicht nicht gefunden.
+  */
   const asset = await prisma.fileAsset.findFirst({
-    where: { storedFileId },
+    where: { storedFileId, organizationId: await getOrganizationId() },
     select: MIT_BEZIEHUNGEN,
   });
 

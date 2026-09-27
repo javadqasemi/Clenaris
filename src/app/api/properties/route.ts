@@ -35,10 +35,19 @@ export const GET = defineRoute({
     const organizationId = await getOrganizationId();
     return ok(
       await prisma.property.findMany({
+        /*
+          Sicht und Filter als Glieder eines `AND` (2026-09-27). Vorher wurden
+          beide in ein Objekt verbreitet, und `?customerId=` überschrieb das
+          `customerId` der Sichtregel: Eine Kundin listete mit der Kennung
+          einer anderen Kundschaft deren Objekte — samt Schlüsseldepot und
+          Zugangshinweis. Ein Filter darf die Sicht nur verengen, nie ersetzen.
+        */
         where: {
-          ...propertyVisibilityWhere(session, organizationId),
-          ...(query.customerId ? { customerId: query.customerId } : {}),
-          ...(query.q ? { label: { contains: query.q, mode: 'insensitive' } } : {}),
+          AND: [
+            propertyVisibilityWhere(session, organizationId),
+            ...(query.customerId ? [{ customerId: query.customerId }] : []),
+            ...(query.q ? [{ label: { contains: query.q, mode: 'insensitive' as const } }] : []),
+          ],
         },
         orderBy: { label: 'asc' },
         // Obergrenze (Phase 23, 2026-09-27): Die Liste wächst mit dem

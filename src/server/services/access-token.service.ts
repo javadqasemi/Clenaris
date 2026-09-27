@@ -10,6 +10,7 @@ import { randomToken } from '@/lib/auth/jwt';
 import { legacyTokensAllowed, purposesSatisfying } from '@/lib/auth/public-token-policy';
 import { sha256Hex } from '@/lib/crypto';
 import { zuercherTagText } from '@/lib/zuerich';
+import { getOrganizationId } from './organization.service';
 
 /**
  * Öffentliche Zugriffstokens — die eine Stelle für Links ohne Anmeldung.
@@ -264,8 +265,18 @@ export async function resolvePublicToken(params: {
   // Zweck und Token werden gemeinsam geprüft, nicht nacheinander: Ein
   // Rechnungstoken, den jemand an der Offertroute vorlegt, ist hier schlicht
   // unbekannt — die Antwort verrät nicht, dass es ihn gibt.
+  //
+  // Und die Organisation dieser Installation gehört dazu (2026-09-27). Vorher
+  // gab die Auflösung die Organisation *des Tokens* zurück, und kein Aufrufer
+  // verglich sie — ein Link einer fremden Organisation öffnete, bezahlte oder
+  // nahm deren Offerte hier an. Die Stelle ist die einzige, durch die jeder
+  // öffentliche Link geht; hier geprüft, gilt es für alle, auch für künftige
+  // Aufrufer. Ein fremder Link ist „unbekannt", nicht „abgewiesen": Er wird
+  // weder gemeldet noch bestätigt.
   const erlaubt = purposesSatisfying(params.purpose);
-  if (!record || !erlaubt.includes(record.purpose)) return { ok: false, reason: 'UNKNOWN' };
+  if (!record || !erlaubt.includes(record.purpose) || record.organizationId !== (await getOrganizationId())) {
+    return { ok: false, reason: 'UNKNOWN' };
+  }
 
   /**
    * Abgewiesene Links, die es **gibt**, werden gemeldet — geratene nicht.
