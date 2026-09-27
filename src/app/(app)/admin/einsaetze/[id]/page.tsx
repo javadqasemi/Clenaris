@@ -18,7 +18,8 @@ import { navigationUrl } from '@/lib/maps/google';
 import { getOrganizationId } from '@/server/services/organization.service';
 import { breakdownForJob, getJobDetail } from '@/server/services/job.service';
 import { activeStaffWhere } from '@/server/services/profile.service';
-import { StatusBadge } from '@/components/ui/badge';
+import { Badge, StatusBadge } from '@/components/ui/badge';
+import { ActionButton } from '@/components/app/action-button';
 import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/primitives';
 import { DetailRow, DetailSection, PageHeader } from '@/components/app/page-parts';
@@ -69,6 +70,7 @@ export default async function AdminJobDetailPage({
   // erstellt, darf Ansätze je Person sehen; die Betriebsleitung sieht die
   // Marge, aber nicht, was eine bestimmte Person verdient.
   const canSeeWages = can(session.role, 'payslip:create');
+  const canApproveTime = can(session.role, 'timetracking:approve');
   const closed = ['COMPLETED', 'VERIFIED', 'CANCELLED'].includes(job.status);
 
   // Für die Teamzuteilung: das aktive Personal zur Auswahl — Personalakte
@@ -465,8 +467,26 @@ export default async function AdminJobDetailPage({
                       <Clock className="size-3.5 text-muted-foreground" aria-hidden />
                       {entry.employee.user.firstName} {entry.employee.user.lastName}
                     </span>
-                    <span className="text-sm tabular-nums text-muted-foreground">
+                    <span className="flex items-center gap-2 text-sm tabular-nums text-muted-foreground">
                       {entry.endedAt ? formatDuration(entry.minutes) : 'läuft'}
+                      {entry.approved ? <Badge size="sm" variant="success">freigegeben</Badge> : null}
+                      {/*
+                        Freigabe aufheben (2026-09-27) — der Endpunkt bestand,
+                        eine Schaltfläche nicht. Einzeln und mit Rückfrage, wie
+                        der Endpunkt es begründet; in einem veröffentlichten
+                        Lohnmonat verweigert ihn der Dienst.
+                      */}
+                      {entry.approved && canApproveTime ? (
+                        <ActionButton
+                          endpoint={`/api/time/${entry.id}/reopen`}
+                          label="Freigabe aufheben"
+                          confirmTitle="Freigabe aufheben?"
+                          confirm="Die Zeit lässt sich danach wieder korrigieren und muss erneut freigegeben werden."
+                          successMessage="Freigabe aufgehoben."
+                          variant="ghost"
+                          size="sm"
+                        />
+                      ) : null}
                     </span>
                   </li>
                 ))}

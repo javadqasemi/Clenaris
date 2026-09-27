@@ -470,7 +470,7 @@ erDiagram
 | `Building` | `buildings` | 18 | Liegenschaft mit mehreren Objekten, etwa eine Überbauung. |
 | `Property` | `properties` | 34 | Konkretes Reinigungsobjekt: Fläche, Zimmer, Zugang, Schlüsseldepot. |
 | `PipelineStage` | `pipeline_stages` | 10 | Stufe im Vertriebstrichter, frei benennbar. |
-| `Tag` | `tags` | 7 | Frei vergebbares Etikett für Kundschaft und Anfragen. |
+| `Tag` | `tags` | 7 | Etikett für Kundschaft und Anfragen. |
 | `LeadTag` | `lead_tags` | 4 | Zuordnung Etikett ↔ Anfrage. |
 | `CustomerTag` | `customer_tags` | 4 | Zuordnung Etikett ↔ Kundschaft. |
 | `Activity` | `activities` | 24 | Verlaufseintrag: Notiz, Telefonat, E-Mail, Termin, Statuswechsel. |

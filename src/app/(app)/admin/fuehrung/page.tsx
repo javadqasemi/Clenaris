@@ -16,6 +16,7 @@ import { Button } from '@/components/ui/button';
 import { Alert, Progress } from '@/components/ui/primitives';
 import { KpiTile } from '@/components/app/kpi-tile';
 import { DetailSection, PageHeader } from '@/components/app/page-parts';
+import { ActionButton } from '@/components/app/action-button';
 import { HealthHistoryChart } from '@/components/charts/lazy';
 import { HealthGauge } from '@/features/fuehrung/health-gauge';
 import { RiskMatrix } from '@/features/fuehrung/risk-matrix';
@@ -85,7 +86,29 @@ export default async function CockpitPage({ searchParams }: { searchParams: Prom
         </Alert>
       ) : null}
 
-      <DetailSection title="Gesundheitswert" description="Gewichtete Teilnoten aus sechs Bereichen. Die Herleitung steht daneben, damit die Zahl prüfbar bleibt." body="form">
+      <DetailSection
+        title="Gesundheitswert"
+        description="Gewichtete Teilnoten aus sechs Bereichen. Die Herleitung steht daneben, damit die Zahl prüfbar bleibt."
+        body="form"
+        action={
+          /*
+            Heute festschreiben (2026-09-27) — sonst tut es der Nachtlauf. Nach
+            einer Korrektur an Zielwerten will man den Verlauf nicht bis morgen
+            falsch stehen lassen; der Endpunkt dafür bestand, ohne Knopf.
+          */
+          can(session.role, 'kpi:manage') ? (
+            <ActionButton
+              endpoint="/api/bi/cockpit/health"
+              label="Heute festschreiben"
+              confirmTitle="Gesundheitswert festschreiben?"
+              confirm="Der heutige Wert wird in den Verlauf übernommen; der Nachtlauf überschreibt ihn heute Nacht mit dem Stand von dann."
+              successMessage="Festgeschrieben."
+              variant="outline"
+              size="sm"
+            />
+          ) : null
+        }
+      >
         <HealthGauge score={cockpit.health.score} status={cockpit.health.status} delta={lastHealth?.scoreDelta} topRisk={cockpit.health.topRisk} components={cockpit.health.components} />
       </DetailSection>
 
@@ -170,7 +193,7 @@ export default async function CockpitPage({ searchParams }: { searchParams: Prom
                       <span className="text-sm tabular-nums">{o.progressPct} %</span>
                     </span>
                   </div>
-                  <Progress value={o.progressPct} />
+                  <Progress value={o.progressPct} aria-label={`Fortschritt ${o.title}`} />
                 </li>
               ))}
             </ul>

@@ -369,10 +369,46 @@ function main(): void {
     untersuche(modell, { dienste, routen, seiten, berechtigungen, eltern }),
   );
 
-  const halbe = befunde.filter((b) => b.einstufung === 'halb');
+  const halbeAlle = befunde.filter((b) => b.einstufung === 'halb');
   const dienstumgehungen = befunde.filter((b) => b.einstufung === 'dienstumgehung');
   const ohneOberflaeche = befunde.filter((b) => b.einstufung === 'ohne_oberflaeche');
-  const verwaisteEndpunkte = endpunkteOhneAufruf(routen, seiten);
+
+  /**
+   * Geprüfte Befunde (2026-09-27, `security/merkmale-geprueft.json`).
+   *
+   * Die Heuristik meldet zusammengesetzte Adressen als „ohne Aufruf" (siehe
+   * `endpunkteOhneAufruf`). Nach der Durchsicht stehen sie in einer Liste —
+   * aber nur mit **Beleg**: Datei und Textstück, das den Aufruf zeigt. Fehlt
+   * das Stück, weil jemand den Aufruf entfernt hat, zählt der Befund wieder
+   * als offen. Eine Ausnahmeliste ohne Beleg würde still veralten.
+   */
+  const geprueft = JSON.parse(readFileSync(join(ROOT, 'security', 'merkmale-geprueft.json'), 'utf8')) as {
+    endpunkte: { weg: string; datei: string; beleg: string; grund: string }[];
+    modelle?: { modell: string; datei: string; beleg: string; grund: string }[];
+  };
+  const belegVorhanden = (datei: string, beleg: string) => {
+    try {
+      return readFileSync(join(ROOT, datei), 'utf8').includes(beleg);
+    } catch {
+      return false; // Datei fehlt — dann fehlt auch der Beleg
+    }
+  };
+  const belegt = new Set<string>();
+  const belegFehlt: string[] = [];
+  for (const e of geprueft.endpunkte) {
+    if (belegVorhanden(e.datei, e.beleg)) belegt.add(e.weg);
+    else belegFehlt.push(`${e.weg} (Beleg „${e.beleg}" nicht mehr in ${e.datei})`);
+  }
+  // Dasselbe für halbe Merkmale, die nach Durchsicht kein Fehler sind (Stammdaten aus dem Seed, bewusst stillgelegte Modelle).
+  const gepruefteModelle = new Set<string>();
+  for (const m of geprueft.modelle ?? []) {
+    if (belegVorhanden(m.datei, m.beleg)) gepruefteModelle.add(m.modell);
+    else belegFehlt.push(`${m.modell} (Beleg „${m.beleg}" nicht mehr in ${m.datei})`);
+  }
+  const halbe = halbeAlle.filter((b) => !gepruefteModelle.has(b.modell));
+  const alleOhneAufruf = endpunkteOhneAufruf(routen, seiten);
+  const verwaisteEndpunkte = alleOhneAufruf.filter((w) => !belegt.has(w));
+  const gepruefteEndpunkte = alleOhneAufruf.filter((w) => belegt.has(w));
 
   const bericht = {
     erzeugtAm: new Date().toISOString(),
@@ -384,7 +420,12 @@ function main(): void {
       dienstumgehungen: dienstumgehungen.length,
       ohneOberflaeche: ohneOberflaeche.length,
       endpunkteOhneAufruf: verwaisteEndpunkte.length,
+      endpunkteGeprueft: gepruefteEndpunkte.length,
+      halbeGeprueft: halbeAlle.length - halbe.length,
+      belegFehlt: belegFehlt.length,
     },
+    gepruefteEndpunkte,
+    belegFehlt,
     halbeMerkmale: halbe,
     dienstumgehungen,
     ohneOberflaeche: ohneOberflaeche.map((b) => ({ modell: b.modell, hinweis: b.hinweis })),
@@ -398,10 +439,17 @@ function main(): void {
   // --- Zusammenfassung für die CI ------------------------------------------
   console.log('Merkmalsprüfung — halbe Merkmale, Endpunkte ohne Aufruf\n');
   console.log(`  Modelle im Schema:        ${befunde.length}`);
-  console.log(`  Halbe Merkmale:           ${halbe.length}`);
+  console.log(`  Halbe Merkmale:           ${halbe.length} (geprüft, belegt: ${halbeAlle.length - halbe.length})`);
   console.log(`  Dienstumgehungen:         ${dienstumgehungen.length}`);
   console.log(`  Ohne Oberfläche:          ${ohneOberflaeche.length}`);
-  console.log(`  Endpunkte ohne Aufruf:    ${verwaisteEndpunkte.length}\n`);
+  console.log(`  Endpunkte ohne Aufruf:    ${verwaisteEndpunkte.length}`);
+  console.log(`  … davon geprüft, belegt:  ${gepruefteEndpunkte.length} (security/merkmale-geprueft.json)\n`);
+
+  if (belegFehlt.length > 0) {
+    console.log('  Geprüfte Befunde ohne Beleg — wieder offen:');
+    for (const b of belegFehlt) console.log(`    · ${b}`);
+    console.log('');
+  }
 
   if (halbe.length > 0) {
     console.log('  Halbe Merkmale — geplant, aber ohne Schreibpfad:');
@@ -424,7 +472,7 @@ function main(): void {
 
   console.log(`  Bericht: ${relative(ROOT, BERICHT).split(sep).join('/')}`);
 
-  if (streng && (halbe.length > 0 || verwaisteEndpunkte.length > 0)) {
+  if (streng && (halbe.length > 0 || verwaisteEndpunkte.length > 0 || belegFehlt.length > 0)) {
     console.error('\n  --streng: Befunde vorhanden.');
     process.exit(1);
   }

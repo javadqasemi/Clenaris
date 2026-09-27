@@ -97,6 +97,22 @@ export function withholdingProfileFields(personen: Option[]): FieldSpec[] {
   ];
 }
 
+/**
+ * Profil ändern — ohne Person und Beginn: Wer ein Profil einer anderen Person
+ * oder ab einem anderen Tag will, beendet dieses und erfasst ein neues (der
+ * Dienst verweigert inhaltliche Änderungen über veröffentlichte Monate).
+ */
+export function withholdingProfileEditFields(): FieldSpec[] {
+  return [
+    { name: 'validUntil', label: 'Gültig bis', type: 'date', half: true, nullable: true },
+    { name: 'canton', label: 'Kanton', half: true },
+    { name: 'tariffCode', label: 'Tarifcode', half: true },
+    { name: 'children', label: 'Kinder', type: 'number', min: 0, max: 20, half: true },
+    { name: 'churchTax', label: 'Kirchensteuerpflichtig', type: 'checkbox' },
+    { name: 'note', label: 'Notiz', type: 'textarea', rows: 2, nullable: true },
+  ];
+}
+
 export function salaryCertificateFields(personen: Option[]): FieldSpec[] {
   return [
     { name: 'employeeId', label: 'Person', type: 'select', options: personen, required: true },

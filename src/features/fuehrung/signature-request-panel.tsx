@@ -2,7 +2,7 @@
 
 import * as React from 'react';
 import { useRouter } from 'next/navigation';
-import { FileSignature, Loader2, Plus, Trash2, XCircle } from 'lucide-react';
+import { FileSignature, Loader2, Plus, Send, Trash2, XCircle } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { api, ApiError } from '@/lib/api/client';
@@ -12,6 +12,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/form';
 import { Alert } from '@/components/ui/primitives';
 import { Badge } from '@/components/ui/badge';
+import { ActionButton } from '@/components/app/action-button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/controls';
 import {
   Dialog,
@@ -119,18 +120,6 @@ export function SignatureRequestPanel({
     }
   };
 
-  const abbrechen = async (id: string) => {
-    setBusy(true);
-    try {
-      await api.post(`/api/signatures/${id}/cancel`, {});
-      toast.success('Vorgang abgebrochen.');
-      router.refresh();
-    } catch (err) {
-      toast.error(err instanceof ApiError ? err.message : 'Abbrechen nicht möglich.');
-    } finally {
-      setBusy(false);
-    }
-  };
 
   return (
     <section className="rounded-2xl border border-border bg-card shadow-soft">
@@ -166,10 +155,39 @@ export function SignatureRequestPanel({
                 </div>
                 <div className="flex items-center gap-2 text-xs text-muted-foreground">
                   <span>angelegt {formatDateTime(new Date(r.createdAt))}</span>
+                  {/*
+                    Erneut senden (2026-09-27): Der Endpunkt stellte neue Links
+                    aus und widerrief die alten, aber keine Schaltfläche rief ihn
+                    — wer die erste E-Mail verlor, musste den Vorgang abbrechen
+                    und neu anlegen. Beide Handlungen fragen jetzt nach, weil
+                    beide etwas Bestehendes ungültig machen.
+                  */}
+                  {canCreate && r.status === 'PENDING' ? (
+                    <ActionButton
+                      endpoint={`/api/signatures/${r.id}/send`}
+                      label="Erneut senden"
+                      confirmTitle="Links erneut senden?"
+                      confirm="Jede Person erhält einen neuen Link; die bisherigen Links werden ungültig."
+                      successMessage="Neu versendet."
+                      variant="ghost"
+                      size="sm"
+                    >
+                      <Send aria-hidden /> Erneut senden
+                    </ActionButton>
+                  ) : null}
                   {canCancel && (r.status === 'PENDING' || r.status === 'DRAFT') ? (
-                    <Button type="button" variant="ghost" size="sm" onClick={() => abbrechen(r.id)} disabled={busy}>
+                    <ActionButton
+                      endpoint={`/api/signatures/${r.id}/cancel`}
+                      body={{}}
+                      label="Abbrechen"
+                      confirmTitle="Vorgang abbrechen?"
+                      confirm="Die Links werden ungültig; bereits geleistete Unterschriften bleiben im Protokoll, der Vorgang wird nicht abgeschlossen."
+                      successMessage="Vorgang abgebrochen."
+                      variant="ghost"
+                      size="sm"
+                    >
                       <XCircle aria-hidden /> Abbrechen
-                    </Button>
+                    </ActionButton>
                   ) : null}
                 </div>
               </div>

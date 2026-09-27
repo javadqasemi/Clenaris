@@ -1191,7 +1191,11 @@ model PipelineStage {
   @@map("pipeline_stages")
 }
 
-/// Frei vergebbares Etikett für Kundschaft und Anfragen.
+/// Etikett für Kundschaft und Anfragen.
+///
+/// Stand 2026-09-27: angelegt nur über den Seed, in der Anfrage auswählbar
+/// (gegen die Organisation geprüft). Eine Pflegemaske fehlt — „frei
+/// vergebbar", wie es hier stand, war es nie.
 model Tag {
   id             String @id @default(cuid())
   organizationId String
@@ -1521,6 +1525,11 @@ model Property {
 }
 
 /// Hinterlegtes Zahlungsmittel — nur der Verweis beim Anbieter, nie die Kartendaten.
+///
+/// **Kein Produktbestandteil — Stand 2026-09-27.** Kein Weg hinterlegt ein
+/// Zahlungsmittel (Online-Zahlungen laufen je Rechnung über Stripe Checkout).
+/// Einzig das Zusammenführen von Kundschaft (`crm.service.ts`) hängt
+/// vorhandene Zeilen um, damit keine verwaist, falls je welche entstehen.
 model PaymentMethodRef {
   id         String        @id @default(cuid())
   customerId String
@@ -3650,6 +3659,12 @@ model Coupon {
 }
 
 /// Geschenkkarte mit Restguthaben.
+///
+/// **Kein Produktbestandteil — Stand 2026-09-27.** Kein Weg legt eine Karte
+/// an, keiner löst eine ein, die Buchhaltung kennt sie nicht; die
+/// Marketingseite zeigte deshalb eine immer leere Kachel und wurde bereinigt.
+/// Die Tabelle bleibt (Migrationen nur hinzufügend). Wird es ein Produkt,
+/// braucht es zuerst Verkauf, Einlösung auf der Rechnung und Verbuchung.
 model GiftCard {
   id             String    @id @default(cuid())
   organizationId String
@@ -3992,6 +4007,11 @@ model SeoMeta {
 }
 
 /// Kampagnenseite mit eigenem Inhalt und Nachverfolgung.
+///
+/// **Kein Produktbestandteil — Stand 2026-09-27.** Kein Code liest oder
+/// schreibt dieses Modell; die Website-Inhalte laufen über das CMS
+/// (`src/lib/cms/registry.ts`) und `SeoMeta`. Die Tabelle bleibt
+/// (Migrationen nur hinzufügend).
 model LandingPage {
   id             String     @id @default(cuid())
   organizationId String

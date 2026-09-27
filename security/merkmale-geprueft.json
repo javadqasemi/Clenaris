@@ -1,0 +1,25 @@
+{
+  "zweck": "Von Hand geprüfte Befunde der Merkmalsprüfung (scripts/feature-integrity.ts). Jeder Eintrag nennt eine Datei und ein Textstück, das den Aufruf belegt; fehlt das Stück, gilt der Befund wieder als offen. So kann die Liste nicht still veralten.",
+  "endpunkte": [
+    { "weg": "/api/bookings/[id]/restore", "datei": "src/app/(app)/admin/papierkorb/page.tsx", "beleg": "${RESTORE_PATH[entry.model]}/${entry.id}/restore", "grund": "Der Papierkorb setzt den Pfad je Bereich zusammen (RESTORE_PATH)." },
+    { "weg": "/api/customers/[id]/restore", "datei": "src/app/(app)/admin/papierkorb/page.tsx", "beleg": "customer: '/api/customers'", "grund": "Wie oben." },
+    { "weg": "/api/invoices/[id]/restore", "datei": "src/app/(app)/admin/papierkorb/page.tsx", "beleg": "invoice: '/api/invoices'", "grund": "Wie oben." },
+    { "weg": "/api/jobs/[id]/restore", "datei": "src/app/(app)/admin/papierkorb/page.tsx", "beleg": "job: '/api/jobs'", "grund": "Wie oben." },
+    { "weg": "/api/leads/[id]/restore", "datei": "src/app/(app)/admin/papierkorb/page.tsx", "beleg": "lead: '/api/leads'", "grund": "Wie oben." },
+    { "weg": "/api/properties/[id]/restore", "datei": "src/app/(app)/admin/papierkorb/page.tsx", "beleg": "property: '/api/properties'", "grund": "Wie oben." },
+    { "weg": "/api/quotes/[id]/restore", "datei": "src/app/(app)/admin/papierkorb/page.tsx", "beleg": "quote: '/api/quotes'", "grund": "Wie oben." },
+    { "weg": "/api/files/upload-url", "datei": "src/lib/upload.ts", "beleg": "'/api/files/upload-url'", "grund": "Der Hochladeweg liegt in src/lib/upload.ts, den jede Hochladekomponente benutzt; die Prüfung liest src/lib nicht." },
+    { "weg": "/api/files/finalize", "datei": "src/lib/upload.ts", "beleg": "'/api/files/finalize'", "grund": "Wie oben." },
+    { "weg": "/api/time/clock-out", "datei": "src/features/portal/time-clock.tsx", "beleg": "'clock-in' : 'clock-out'", "grund": "Stempeluhr setzt die Richtung in die Adresse ein." },
+    { "weg": "/api/system/releases/[id]/freigabe", "datei": "src/features/admin/system/release-actions.tsx", "beleg": "${basis}/freigabe", "grund": "Update Center: Adresse aus `basis`." },
+    { "weg": "/api/system/releases/[id]/termin", "datei": "src/features/admin/system/release-actions.tsx", "beleg": "${basis}/termin", "grund": "Wie oben." },
+    { "weg": "/api/system/releases/[id]/termin/stornieren", "datei": "src/features/admin/system/release-actions.tsx", "beleg": "${basis}/termin/stornieren", "grund": "Wie oben." },
+    { "weg": "/api/system/releases/[id]/zurueckstellen", "datei": "src/features/admin/system/release-actions.tsx", "beleg": "${basis}/zurueckstellen", "grund": "Wie oben." },
+    { "weg": "/api/bi/kpis/weights", "datei": "src/app/(app)/admin/fuehrung/kennzahlen/[id]/page.tsx", "beleg": "name: 'healthWeight'", "grund": "Bewusst ohne eigene Maske: Das Gewicht wird je Kennzahl in deren Maske gesetzt; der Sammelendpunkt ist für Skripte und Übernahmen." }
+  ],
+  "modelle": [
+    { "modell": "PipelineStage", "datei": "prisma/seed.ts", "beleg": "prisma.pipelineStage.upsert", "grund": "Stammdaten aus dem Seed (feste Stufen des Trichters, Abbildung auf den Anfragestatus in src/lib/crm/pipeline.ts). Gelesen in Pipeline und Anfragemaske; eine Pflegemaske ist bewusst nicht vorgesehen, weil die Stufen an den Status gebunden sind." },
+    { "modell": "Tag", "datei": "prisma/seed.ts", "beleg": "prisma.tag.upsert", "grund": "Stammdaten aus dem Seed, in der Anfrage auswählbar (tagIds, gegen die Organisation geprüft). Eine Pflegemaske fehlt — offen und im Schema vermerkt, kein halber Schreibweg." },
+    { "modell": "Building", "datei": "prisma/schema.prisma", "beleg": "**Kein Produktbestandteil — Stand 2026-09-27.** Es gibt keinen Anlegeweg", "grund": "Kein Produktbestandteil; die Vertragsleistung weist buildingId ab (contractServiceSchema). Tabelle bleibt, Migrationen nur hinzufügend." }
+  ]
+}

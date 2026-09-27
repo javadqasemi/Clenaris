@@ -10,7 +10,8 @@ import { zuercherFelder } from '@/lib/zuerich';
 import { getOrganizationId } from '@/server/services/organization.service';
 import { listPayslips, monatsfenster } from '@/server/services/payroll.service';
 import { ART_BESCHRIFTUNG, listPayrollRates } from '@/server/services/payroll-rates.service';
-import { listPayrollItems, listWithholdingProfiles } from '@/server/services/payroll-stamm.service';
+import { listPayrollItems, listWithholdingProfiles, listWithholdingRates } from '@/server/services/payroll-stamm.service';
+import { QuellensteuerTarifEinlesen } from '@/features/admin/withholding-rates-import';
 import { listSalaryCertificates } from '@/server/services/salary-certificate.service';
 import { VERALTET_PRAEFIX } from '@/server/services/payroll-veraltet';
 import { Badge } from '@/components/ui/badge';
@@ -24,6 +25,7 @@ import {
   payrollItemFields,
   payrollRateFields,
   salaryCertificateFields,
+  withholdingProfileEditFields,
   withholdingProfileFields,
 } from '@/features/admin/payroll-fields';
 import { monatsname } from '@/lib/payroll/monate';
@@ -67,11 +69,12 @@ export default async function PayrollPage({ searchParams }: { searchParams: Prom
   // der Lauf einem anderen Monat zurechnet.
   const fenster = monatsfenster(jahr, monat);
 
-  const [abrechnungen, saetze, positionen, qstProfile, ausweise, personal, offeneZeiten] = await Promise.all([
+  const [abrechnungen, saetze, positionen, qstProfile, qstTarife, ausweise, personal, offeneZeiten] = await Promise.all([
     listPayslips({ organizationId, year: jahr, month: monat }),
     darfRechnen ? listPayrollRates({ organizationId, year: jahr }) : Promise.resolve([]),
     darfRechnen ? listPayrollItems({ organizationId, year: jahr, month: monat }) : Promise.resolve([]),
     darfRechnen ? listWithholdingProfiles({ organizationId }) : Promise.resolve([]),
+    darfRechnen ? listWithholdingRates({ organizationId, year: jahr }) : Promise.resolve({ zeilen: [], stapel: [] }),
     listSalaryCertificates({ organizationId, year: jahr }),
     prisma.employee.findMany({
       where: { organizationId },
@@ -469,6 +472,84 @@ export default async function PayrollPage({ searchParams }: { searchParams: Prom
                       {q.validUntil ? ` bis ${formatDate(q.validUntil)}` : ''}
                     </span>
                   </span>
+                  {/*
+                    Ändern und Entfernen (2026-09-27) — die Endpunkte gab es,
+                    die Maske nicht. Über veröffentlichte Monate verweigert der
+                    Dienst beides mit Begründung („beenden statt löschen").
+                  */}
+                  <span className="flex items-center gap-2">
+                    <FormDialog
+                      title="Quellensteuerprofil ändern"
+                      triggerLabel="Ändern"
+                      triggerVariant="ghost"
+                      triggerSize="sm"
+                      endpoint={`/api/payroll/withholding/profiles/${q.id}`}
+                      method="PATCH"
+                      submitLabel="Änderungen speichern"
+                      successMessage="Profil geändert."
+                      fields={withholdingProfileEditFields()}
+                      values={{
+                        validUntil: q.validUntil ? q.validUntil.toISOString().slice(0, 10) : undefined,
+                        canton: q.canton,
+                        tariffCode: q.tariffCode,
+                        children: q.children,
+                        churchTax: q.churchTax,
+                        note: q.note ?? undefined,
+                      }}
+                    />
+                    <ActionButton
+                      endpoint={`/api/payroll/withholding/profiles/${q.id}`}
+                      method="DELETE"
+                      label="Entfernen"
+                      confirmTitle="Quellensteuerprofil entfernen?"
+                      confirm="Nur möglich, solange in seinem Zeitraum keine Abrechnung veröffentlicht ist."
+                      successMessage="Profil entfernt."
+                      variant="ghost"
+                      size="sm"
+                    />
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </DetailSection>
+      ) : null}
+
+      {darfRechnen ? (
+        <DetailSection
+          title={`Quellensteuertarife ${jahr}`}
+          description="Eingelesene Ausschnitte der kantonalen Tarifdateien, je Stapel. Gerechnet wird mit jeder eingelesenen Zeile; veröffentlicht wird mit ungeprüften nur nach ausdrücklicher Bestätigung."
+          body="flush"
+          action={darfVeroeffentlichen ? <QuellensteuerTarifEinlesen jahr={jahr} /> : null}
+        >
+          {qstTarife.stapel.length === 0 ? (
+            <p className="px-6 py-6 text-sm text-muted-foreground">Für {jahr} ist kein Tarif eingelesen.</p>
+          ) : (
+            <ul className="divide-y divide-border">
+              {qstTarife.stapel.map((s) => (
+                <li key={s.importBatch} className="flex flex-wrap items-center justify-between gap-2 px-6 py-3 text-sm">
+                  <span>
+                    {s.canton} · {s.year} · {s.zeilen} Stufen
+                    <span className="block text-xs text-muted-foreground">{s.source}</span>
+                  </span>
+                  {s.verification === 'GEPRUEFT' ? (
+                    <Badge size="sm" variant="success">Geprüft</Badge>
+                  ) : darfVeroeffentlichen ? (
+                    <ActionButton
+                      endpoint="/api/payroll/withholding/rates/verify"
+                      body={{ importBatch: s.importBatch }}
+                      label="Bestätigen"
+                      confirmTitle={`Tarif ${s.canton} ${s.year} bestätigen`}
+                      confirm="Sie bestätigen, dass alle Stufen dieses Stapels mit der Tarifdatei übereinstimmen."
+                      withNote
+                      noteField="note"
+                      noteLabel="Worauf stützt sich die Bestätigung?"
+                      variant="outline"
+                      size="sm"
+                    />
+                  ) : (
+                    <Badge size="sm" variant="warning">Ungeprüft</Badge>
+                  )}
                 </li>
               ))}
             </ul>
