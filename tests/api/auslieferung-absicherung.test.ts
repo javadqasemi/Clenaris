@@ -36,6 +36,31 @@ import {
 const wurzel = process.cwd();
 const workflow = readFileSync(join(wurzel, '.github', 'workflows', 'deploy.yml'), 'utf8');
 
+describe('Aktionen auf Commits gepinnt — auch in den Vorlagen', () => {
+  /**
+   * Bis 2026-09-27 stand das nur im Bericht („alle vier Aktionen gepinnt"),
+   * geprüft wurde es nicht — und die beiden V2-Vorlagen unter `deploy/v2/`
+   * verwiesen auf bewegliche Tags (`@v4`). Eine Vorlage wird kopiert, wie sie
+   * ist; mit Tag holte sie beim nächsten Tag der Aktion fremden Code in die
+   * Pipeline mit Zugriff auf die Produktionsgeheimnisse.
+   */
+  it('jede `uses:`-Zeile nennt einen 40-stelligen Commit', () => {
+    const dateien = [
+      join('.github', 'workflows', 'deploy.yml'),
+      join('deploy', 'v2', 'workflow-ergaenzung.yml'),
+      join('deploy', 'v2', 'release-ausfuehrer.yml'),
+    ];
+    const lose: string[] = [];
+    for (const datei of dateien) {
+      for (const [nr, zeile] of readFileSync(join(wurzel, datei), 'utf8').split(/\r?\n/).entries()) {
+        const treffer = /^\s*-?\s*uses:\s*(\S+)/.exec(zeile);
+        if (treffer && !/@[0-9a-f]{40}$/.test(treffer[1]!)) lose.push(`${datei}:${nr + 1} ${treffer[1]}`);
+      }
+    }
+    assert.deepEqual(lose, [], `nicht gepinnt:\n${lose.join('\n')}`);
+  });
+});
+
 describe('Auslieferungs-Workflow — fail-closed', () => {
   /**
    * Der Anlass: Der Preflight fand `SERVER_USER` als einziges der
