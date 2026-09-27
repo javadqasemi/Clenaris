@@ -1,30 +1,33 @@
 # GitHub-Governance
 
 Stand 2026-09-27. Dieses Dokument beschreibt, wie das Repository
-`javadqasemi/Clenaris` auf GitHub abgesichert ist, was davon **tatsächlich
-eingestellt** ist und was **vorgeschlagen, aber nicht angewandt** ist.
+`javadqasemi/Clenaris` auf GitHub abgesichert ist und was davon **tatsächlich
+eingestellt** ist.
 
-Nichts hier wurde von einer Prüfung oder einem Werkzeug verändert: Schutzregeln,
-Regelsätze, Sichtbarkeit, Secrets und Variablen sind so, wie die Inhaberschaft
-sie eingestellt hat. Die Einstellungen unten wurden **lesend** über die
-GitHub-API erhoben. Wo eine Aussage nicht aus dieser Abfrage stammt, steht es
-dabei.
+**Angewandt am 2026-09-27** (Auftrag „Enterprise Remediation", Phase 42 — die
+Schutzmassnahmen, die der bestehende Plan kostenlos bietet): der Regelsatz aus
+Abschnitt 2, Secret Scanning, Push Protection und Dependabot-Warnungen.
+**Nicht** verändert: Sichtbarkeit, Standardzweig, Plan, Secrets, Variablen —
+das sind Entscheide der Inhaberschaft. Vorher- und Nachher-Stand wurden über
+die GitHub-API gelesen; der Nachher-Stand steht unten.
 
 ---
 
-## 1. Ist-Stand (lesend erhoben am 2026-09-27)
+## 1. Ist-Stand (über die API gelesen am 2026-09-27, nach dem Anwenden)
 
 | Bereich | Wert |
 |---|---|
-| Sichtbarkeit | **öffentlich** |
-| Standardzweig | `feature/crud-rbac-cta` — **nicht** `main` |
-| Schutz von `main` | keiner (`protected: false`; Schutz-API 404) |
-| Regelsätze (Repository) | keine (`/rulesets` → `[]`, `/rules/branches/main` → `[]`) |
+| Sichtbarkeit | **öffentlich** (unverändert) |
+| Standardzweig | `feature/crud-rbac-cta` — **nicht** `main` (unverändert, Entscheid der Inhaberschaft) |
+| Schutz von `main` | **Regelsatz „main schützen" (ID 24071027), `active`**: `deletion`, `non_fast_forward`, `pull_request` (0 Freigaben, Unterhaltungen aufgelöst), `required_status_checks` (`Prüfung`, streng: Zweig aktuell) — `/rules/branches/main` meldet genau diese vier. Umgehungsliste leer |
+| Klassischer Zweigschutz | keiner (der Regelsatz ersetzt ihn) |
 | Actions erlaubt | alle Aktionen |
 | `GITHUB_TOKEN`-Vorgabe | nur lesen; Workflows dürfen keine Pull Requests freigeben |
 | Forks | erlaubt; Läufe aus Forks von Erstbeitragenden brauchen eine Freigabe |
-| Secret Scanning / Push Protection | **aus** |
-| Dependabot-Sicherheitsupdates | **aus** |
+| Secret Scanning | **an** (vorher aus) |
+| Push Protection | **an** (vorher aus) — ein Push mit erkanntem Geheimnis wird abgewiesen |
+| Dependabot-Warnungen | **an** (vorher aus) |
+| Dependabot-Sicherheitsupdates | aus — sie eröffnen selbständig Pull Requests; einschalten ist ein Entscheid über den Arbeitsablauf, keine Schutzlücke |
 | Umgebung `production` | Zweigregel: nur `main`; Secrets `SERVER_HOST`, `SERVER_PORT`, `SERVER_SSH_KNOWN_HOSTS` — **kein** `SERVER_SSH_KEY`, **kein** `SERVER_USER` |
 | Repository-Variablen | keine — insbesondere `DEPLOY_ENABLED` nicht gesetzt |
 | Repository-Secrets | keine |
@@ -35,7 +38,13 @@ ersten Stufe (Schlüssel und Benutzer fehlen), bevor eine Verbindung entsteht.
 
 ---
 
-## 2. Vorgeschlagener Schutz für `main` — nicht angewandt
+## 2. Schutz für `main` — angewandt am 2026-09-27
+
+Die Tabelle beschreibt, was gilt, und warum. Folge für die Arbeit: `main`
+ändert sich nur noch über einen Pull Request, dessen Prüfung `Prüfung` grün
+ist und dessen Zweig auf dem Stand von `main` steht. Ein direkter Push auf
+`main` wird abgewiesen — das ist Absicht, weil ein Push dort eine
+Auslieferung auslöst, sobald `DEPLOY_ENABLED` gesetzt ist.
 
 **Empfohlen als Regelsatz** (Settings → Rules → Rulesets), nicht als
 klassische Zweigschutzregel: Ein Regelsatz ist als Ganzes sichtbar, lässt sich
@@ -70,7 +79,7 @@ Für die Auslieferung selbst gibt es unabhängig davon die Umgebung
 `production`: Dort lässt sich eine **Freigabe vor der Auslieferung**
 einschalten (Required reviewers), ohne den Workflow zu ändern.
 
-### Regelsatz als Vorlage (nicht angewandt)
+### Regelsatz (so angewandt, ID 24071027)
 
 ```json
 {
@@ -103,9 +112,14 @@ einschalten (Required reviewers), ohne den Workflow zu ändern.
 }
 ```
 
-`integration_id` 15368 ist die GitHub-Actions-App. Vor dem Anwenden im
-Modus `evaluate` einen Pull Request durchlaufen lassen und in „Rule insights"
-nachsehen, ob die Prüfung unter genau diesem Namen erkannt wird.
+`integration_id` 15368 ist die GitHub-Actions-App. Der Modus `evaluate` ist
+GitHub Enterprise vorbehalten; angewandt wurde deshalb direkt `active`. Der
+Name `Prüfung` ist der des Auftrags in `deploy.yml` und erscheint so in jedem
+Lauf dieses Zweigs (zuletzt Lauf 36309577672, grün). **Nachzuprüfen beim
+ersten Pull Request auf `main`:** In „Rule insights" muss die Prüfung unter
+genau diesem Namen erkannt werden; sonst blockiert der Regelsatz das
+Zusammenführen, bis der Name angepasst ist (Settings → Rules → Rulesets).
+Aufheben: Regelsatz löschen oder auf `disabled` stellen.
 
 ### Unterstützt der Plan das?
 
@@ -135,7 +149,7 @@ Meldungen beziehen sich auf den falschen Zweig. Entscheid der Inhaberschaft.
 | | Öffentlich (heute) | Privat |
 |---|---|---|
 | Zweigschutz/Regelsätze auf Free | ja | **nein** (Pro/Team nötig) |
-| Secret Scanning, Push Protection | kostenlos verfügbar (heute **aus**) | nur mit GitHub Advanced Security |
+| Secret Scanning, Push Protection | kostenlos verfügbar (seit 2026-09-27 **an**) | nur mit GitHub Advanced Security |
 | Actions-Minuten | unbegrenzt auf Standardläufern | 2 000 Minuten/Monat auf Free; ein Lauf dieses Workflows dauert gut 20 Minuten |
 | Artefakte (Sicherheitsbericht, SBOM, bei Fehlschlag Server-Protokoll und Browserbericht) | für jedes angemeldete GitHub-Konto herunterladbar | nur mit Leserecht |
 | Offengelegt | Quelltext eines kommerziellen Produkts; Betriebsdokumentation mit Domain, Aufbau, früherer Serveradresse (u. a. `docs/NEXT_DEVELOPMENT_AUDIT.md`, `docs/DEPLOYMENT.md`, `ops/security-monitor/`), Liste akzeptierter Abhängigkeitsbefunde | nichts davon |
