@@ -1210,6 +1210,15 @@ describe('Falscher Bezug — eine Aktion wirkt nur auf den auslösenden Vorgang'
       for (const alt of await db.automation.findMany({ where: { name: { startsWith: 'Bezugsprüfung ' } }, select: { id: true } })) {
         await del(`/api/automations/${alt.id}`, { jar: jars.admin }).catch(() => {});
       }
+      /**
+       * Zusätzlich abschalten, direkt in der Datenbank (2026-09-27). Das
+       * Löschen oben scheiterte still (`.catch`), und eine Regel eines
+       * abgebrochenen Laufs blieb aktiv: Sie löste auf die Gegenprobe dieses
+       * Laufs aus und stornierte sie — der Fall meldete dann einen falschen
+       * Bezug, den es im Produkt nicht gibt. Auf der frischen CI-Datenbank
+       * trat das nie auf, auf einer gewachsenen Testdatenbank jedes Mal.
+       */
+      await db.automation.updateMany({ where: { name: { startsWith: 'Bezugsprüfung ' } }, data: { active: false } });
     }
   });
 
@@ -1217,6 +1226,8 @@ describe('Falscher Bezug — eine Aktion wirkt nur auf den auslösenden Vorgang'
     const db = testDb();
     if (regelId) await del(`/api/automations/${regelId}`, { jar: jars.admin }).catch(() => {});
     if (db) {
+      // Siehe `before`: Eine stehen gebliebene aktive Regel verfälscht den nächsten Lauf.
+      await db.automation.updateMany({ where: { name: { startsWith: TITEL } }, data: { active: false } });
       await db.task.deleteMany({ where: { title: { startsWith: TITEL } } });
       await db.notification.deleteMany({ where: { title: { startsWith: TITEL } } });
     }
