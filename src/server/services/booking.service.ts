@@ -123,11 +123,15 @@ export async function createBooking(params: {
     );
   }
 
-  const postalCode =
-    input.address?.postalCode ??
-    (input.addressId
-      ? (await prisma.address.findUnique({ where: { id: input.addressId } }))?.postalCode
-      : undefined);
+  const bezuege = await buchungsbezuegePruefen({
+    organizationId,
+    customerId: kunde.customerId,
+    addressId: input.addressId ?? null,
+    propertyId: input.propertyId ?? null,
+    fileIds: input.fileIds,
+    uploaderId: session?.id ?? null,
+  });
+  const postalCode = input.address?.postalCode ?? bezuege.postalCode ?? undefined;
 
   const leistungen = leistungenAusEingabe(input);
   const breakdown = await calculateBookingPrice(
@@ -275,19 +279,31 @@ export async function createBooking(params: {
     });
 
     /**
-     * Hochgeladene Fotos der Buchung zuordnen — aber nur geprüfte.
+     * Hochgeladene Fotos der Buchung zuordnen — nur die eigenen, nur einmal.
      *
-     * `checksum: { not: null }` ist die Bedingung, die zählt: Sie steht für
-     * „der Abschluss hat die Bytes gesehen". Ohne sie liesse sich hier eine
-     * Datei anhängen, die nie durch die Prüfung ging. Derzeit hat das
-     * Buchungsformular keinen Bildupload und `fileIds` bleibt leer — die
-     * Bedingung steht trotzdem, damit sie schon da ist, wenn er kommt.
+     * Bis 2026-09-27 standen hier nur Organisation und Prüfsumme als
+     * Bedingung, und die Zuordnung **überschrieb den Zweck** (`scope`). Wer
+     * die Kennung irgendeiner Datei kannte — Lohnabrechnung, Bewerbung,
+     * Dokument einer anderen Kundschaft —, hängte sie an die eigene Buchung,
+     * machte sie damit zu einem Buchungsfoto und las sie über die eigene
+     * Buchungsansicht aus. Die Kennung war der Schlüssel; eine Kennung ist
+     * keine Berechtigung.
+     *
+     * Jetzt ist die Zuordnung ein einziger bedingter Übergang: Die Datei muss
+     * von **dieser** angemeldeten Person hochgeladen sein, als Buchungsfoto,
+     * noch an keiner Buchung hängen, fertig geprüft und sauber sein. Trifft
+     * das nicht auf jede genannte Kennung zu, scheitert die ganze Buchung —
+     * eine stillschweigend übergangene Kennung verdeckte genau den Versuch,
+     * der hier abgewiesen wird. Die Vorprüfung (`buchungsbezuegePruefen`)
+     * meldet den Fehler früh; dieser Übergang entscheidet, auch wenn eine
+     * zweite Buchung dieselbe Datei gleichzeitig beansprucht.
      */
     if (input.fileIds.length > 0) {
-      await tx.fileAsset.updateMany({
-        where: { id: { in: input.fileIds }, organizationId, checksum: { not: null } },
-        data: { bookingId: created.id, scope: 'BOOKING' },
+      const gebunden = await tx.fileAsset.updateMany({
+        where: { id: { in: input.fileIds }, ...ANHAENGBAR, organizationId, uploadedById: session!.id },
+        data: { bookingId: created.id },
       });
+      if (gebunden.count !== new Set(input.fileIds).size) throw new NotFoundError('Datei');
     }
 
     // Gutscheinzähler erhöhen.
@@ -969,6 +985,16 @@ export async function updateBooking(params: {
   }
 
   if (input.propertyId !== undefined) {
+    // Dieselbe Regel wie für die Adresse zwei Absätze weiter oben — und bis
+    // 2026-09-27 fehlte sie hier: Ein fremdes Objekt (samt Schlüsselort und
+    // Zugangsnotiz) liess sich an einen Auftrag hängen.
+    if (input.propertyId && input.propertyId !== booking.propertyId) {
+      const objekt = await prisma.property.findFirst({
+        where: { id: input.propertyId, customerId: customerIdAfter, customer: { organizationId: params.organizationId } },
+        select: { id: true },
+      });
+      if (!objekt) throw new NotFoundError('Objekt');
+    }
     track('propertyId', booking.propertyId, input.propertyId);
     data.property = input.propertyId
       ? { connect: { id: input.propertyId } }
@@ -1685,6 +1711,75 @@ async function resolveOfficeCustomer(params: {
   };
 }
 
+/**
+ * Was eine Datei erfüllen muss, um an eine Buchung zu kommen — neben der
+ * Organisation und der hochladenden Person, die der Aufrufer ergänzt.
+ */
+const ANHAENGBAR = {
+  scope: 'BOOKING',
+  bookingId: null,
+  isPublic: false,
+  scanStatus: 'CLEAN',
+  checksum: { not: null },
+} satisfies Prisma.FileAssetWhereInput;
+
+/**
+ * Die Verweise einer Buchung prüfen, **bevor** gerechnet oder geschrieben
+ * wird (2026-09-27).
+ *
+ * Die öffentliche Buchung nahm `addressId`, `propertyId` und `fileIds`
+ * entgegen und schrieb sie ungeprüft an die Buchung. `Address` und `Property`
+ * tragen keine Organisation, und niemand verglich die Kundschaft: Wer eine
+ * Kennung kannte, buchte auf die Adresse einer fremden Kundschaft — und bekam
+ * sie in Bestätigung, PDF und Buchungsansicht zurück, beim Objekt samt
+ * Schlüsselort und Zugangsnotiz. Eine Kennung ist kein Beweis von Besitz.
+ *
+ * Die Regeln, ausdrücklich:
+ *
+ *  • Adresse und Objekt nur aus dem Bestand **dieser** Kundschaft, in dieser
+ *    Organisation. Eine Gastbuchung ohne bestehende Kundschaft hat keinen
+ *    Bestand — sie gibt eine neue Adresse an, keine Kennung.
+ *  • Dateien nur von der **angemeldeten** Person selbst hochgeladen, als
+ *    Buchungsfoto, noch ungebunden, geprüft und sauber. Ein Gast hat keine
+ *    Identität, an die sich eine Datei binden liesse; das Buchungsformular
+ *    hat heute ohnehin keinen Bildupload.
+ *
+ * Unbekannt, fremd und nicht erlaubt ergeben dieselbe Antwort (404): Die
+ * Antwort soll nicht verraten, ob es eine Kennung anderswo gibt.
+ */
+async function buchungsbezuegePruefen(params: {
+  organizationId: string;
+  customerId: string | null;
+  addressId: string | null;
+  propertyId: string | null;
+  fileIds: string[];
+  uploaderId: string | null;
+}): Promise<{ postalCode: string | null }> {
+  const { organizationId, customerId } = params;
+  const eigene = customerId ? { customerId, customer: { organizationId, deletedAt: null } } : null;
+
+  let postalCode: string | null = null;
+  if (params.addressId) {
+    const adresse = eigene ? await prisma.address.findFirst({ where: { id: params.addressId, ...eigene }, select: { postalCode: true } }) : null;
+    if (!adresse) throw new NotFoundError('Adresse');
+    postalCode = adresse.postalCode;
+  }
+  if (params.propertyId) {
+    const objekt = eigene ? await prisma.property.findFirst({ where: { id: params.propertyId, ...eigene }, select: { id: true } }) : null;
+    if (!objekt) throw new NotFoundError('Objekt');
+  }
+  if (params.fileIds.length > 0) {
+    if (!params.uploaderId) {
+      throw new BusinessRuleError('Fotos lassen sich nur mit Anmeldung an eine Buchung anhängen.');
+    }
+    const passend = await prisma.fileAsset.count({
+      where: { id: { in: params.fileIds }, ...ANHAENGBAR, organizationId, uploadedById: params.uploaderId },
+    });
+    if (passend !== new Set(params.fileIds).size) throw new NotFoundError('Datei');
+  }
+  return { postalCode };
+}
+
 async function resolveCustomer(params: {
   organizationId: string;
   input: BookingCoreInput;
@@ -1709,9 +1804,11 @@ async function resolveCustomer(params: {
 
   // Fall 2: Mitarbeitende buchen im Namen eines Kunden — dann muss die
   // Kunden-ID aus einer bestehenden Adresse oder Liegenschaft hervorgehen.
+  // Nur Adressen der eigenen Organisation (2026-09-27): `Address` trägt keine
+  // Organisation, die Grenze läuft über die Kundschaft.
   if (session && session.role !== 'CUSTOMER' && input.addressId) {
-    const address = await prisma.address.findUnique({
-      where: { id: input.addressId },
+    const address = await prisma.address.findFirst({
+      where: { id: input.addressId, customer: { organizationId, deletedAt: null } },
       include: { customer: { select: { id: true, email: true, firstName: true, lastName: true, userId: true } } },
     });
     if (!address) throw new NotFoundError('Adresse');
