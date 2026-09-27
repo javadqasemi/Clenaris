@@ -79,12 +79,12 @@ und schreibt es in die Beschreibung des Commits oder Pull Requests.
 |---|---|---|
 | [ ] | Anmeldung | 401 ohne Sitzung; Sitzung nur für die Organisation dieser Installation |
 | [ ] | Rechte | `tests/api/rbac.test.ts` (Matrix), 403 für fehlendes Recht |
-| [ ] | Mandant | `tests/api/mandanten.test.ts` — fremder Datensatz nicht in Liste, nicht einzeln, nicht änderbar |
+| [ ] | Mandant | `tests/api/mandanten.test.ts` — fremder Datensatz nicht in Liste, nicht einzeln, nicht änderbar — auch nicht über Suchbegriff, Filter oder öffentlichen Link |
 | [ ] | IDOR | `tests/api/ownership.test.ts`, `datei-zugriff.test.ts` |
 | [ ] | CSRF | Herkunftsprüfung in der Routenfabrik (`assertTrustedOrigin`) |
 | [ ] | XSS | Kein `dangerouslySetInnerHTML` mit fremdem Inhalt; CSP |
 | [ ] | SSRF | `lib/automation/webhook.ts`: Ziel **und** Verbindung geprüft (DNS-Rebinding) |
-| [ ] | Injection | Prisma bzw. `$queryRaw` mit Platzhaltern; CSV: `lib/csv.ts` entschärft Formeln |
+| [ ] | Injection | Prisma bzw. `$queryRaw` mit Platzhaltern; Tabellenexporte entschärfen Formeln: CSV über `csvZeile`, XLSX über `mappeSchreiben` (beide mit `formelsicher` aus `lib/csv.ts`) |
 | [ ] | Rate-Limiting | Anmeldung, öffentliche Links, Suche, Scanner, Uploads |
 | [ ] | Geheimnisse | `npm run security:secrets`; `.env*` ignoriert |
 | [ ] | Personendaten | Schwärzung in Protokollen, Minimierung vor der KI |
@@ -109,7 +109,7 @@ und schreibt es in die Beschreibung des Commits oder Pull Requests.
 | [ ] | Telefon | Kein horizontales Scrollen; Tabellen in `TableScroll` |
 | [ ] | Tastatur | Jede Aktion ohne Maus erreichbar |
 | [ ] | Fokus | Sichtbar, nach Dialogen zurück an den Auslöser |
-| [ ] | Ladezustand | |
+| [ ] | Ladezustand | `NavigationProgress` im App-Rahmen; keine `loading.tsx` — sie entfielen in Wave 9.1 wegen Hydrationsfehlern (`docs/HYDRATION.md`) |
 | [ ] | Leerzustand | `EmptyState` mit Handlungsvorschlag |
 | [ ] | Fehlerzustand | Deutsche Meldung aus dem Server, am Feld (`ResourceForm`) |
 | [ ] | Erfolgszustand | |
@@ -119,8 +119,8 @@ und schreibt es in die Beschreibung des Commits oder Pull Requests.
 | [ ] | Einheitliche Tabellen | `data-list`, Sortierung über `lib/sort.ts` |
 | [ ] | Keine toten Links | Kein Link in einen Bereich, den die Rolle nicht betreten darf |
 | [ ] | Keine doppelte Navigation | |
-| [ ] | Kein horizontales Überlaufen | |
-| [ ] | Barrierefreiheit geprüft | axe in der Browser-Prüfreihe (`tests/e2e`) |
+| [ ] | Kein horizontales Überlaufen | `tests/e2e/phase21-oberflaeche.spec.ts` (acht Fenstergrössen inkl. 200 % Zoom), `tests/pages/tables.test.ts` |
+| [ ] | Barrierefreiheit geprüft | axe in der Browser-Prüfreihe: `phase21-oberflaeche.spec.ts` misst jeden Eintrag der Seitenleiste je Rolle — eine neue Seite in der Navigation wird damit automatisch gemessen; Stand der Bereiche in `docs/PREPRODUCTION_READINESS.md`, „UI/UX-Prüfmatrix" |
 
 ## Checkliste F — Prüfungen
 
@@ -168,10 +168,10 @@ und schreibt es in die Beschreibung des Commits oder Pull Requests.
 
 | Befehl | Was er tut |
 |---|---|
-| `npm run verify:static` | Alles ohne Datenbank und Server: Hydrationskorrektur, Linter, Typen, Prisma-Schema, Geheimnisse, statische Sicherheitsprüfung, Dokumentation aktuell, Merkmalsprüfung |
-| `npm run verify:full` | `verify:static`, dann Migrationen auf die Testdatenbank, Build, Testserver, Sicherheitsreihen, vollständige Testreihe, Browser-Prüfreihe — und der Server wird am Ende sicher beendet |
+| `npm run verify:static` | Alles ohne Datenbank und Server: Hydrationskorrektur, `npm audit` (kritisch blockiert), Linter, Typen, Prisma-Schema, Geheimnisse (`security:secrets`, ohne Bash), statische Sicherheitsprüfung, Lohn-Prüfpaket passt zum Code (`lohn-pruefpaket.ts --pruefen`, seit 2026-09-27), Dokumentation aktuell (kein Unterschied in `docs/` und `README.md`), Merkmalsprüfung (beratend) |
+| `npm run verify:full` | `verify:static`, dann Migrationen auf die Testdatenbank, Build, Testserver, Sicherheitsreihen, vollständige Testreihe (0 übersprungen, `node:test`-Bilanz), Browser-Prüfreihe mit Bilanz (seit 2026-09-27: übersprungen, wackelig, unerwartet oder kein JSON-Bericht ist ein Fehlschlag) — und der Server wird am Ende sicher beendet |
 | `npm run verify:security` | `security:check` im Umfang `voll` (braucht den laufenden Testserver) |
-| `npm run verify:e2e` | Browser-Prüfreihe ohne Wiederholungen |
+| `npm run verify:e2e` | Browser-Prüfreihe ohne Wiederholungen **mit Bilanz** (`verify.ts browser`, gegen einen laufenden Server über `TEST_BASE_URL`): übersprungen, wackelig, gescheitert oder kein JSON-Bericht ist ein Fehlschlag — dieselbe Regel wie im vollen Weg (`browserBilanzPruefen`, geprüft in `pruefbilanz.test.ts`) |
 | `npm run verify:release` | `verify:full` auf einer **frischen** Testdatenbank und aus einem sauberen, losgelösten `git worktree` des aktuellen Commits (nicht `git archive`: ohne `.git` scheitern Geheimnissuche und Doku-Vergleich) |
 
 CI ruft dieselben Befehle auf (`.github/workflows/deploy.yml`); es gibt keinen

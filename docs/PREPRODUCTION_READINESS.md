@@ -1,6 +1,7 @@
 # Pre-Production-Bereitschaft
 
-Stand 2026-09-26. Diese Mission hat **keine** Produktfunktion hinzugefügt,
+Stand 2026-09-26, fortgeschrieben 2026-09-27 (Nachträge C und D und
+„UI/UX-Prüfmatrix" am Ende). Diese Mission hat **keine** Produktfunktion hinzugefügt,
 nichts gepusht, nichts ausgeliefert, keinen Server, kein DNS, kein
 Cloudflare und keine Geheimnisse angefasst und 2.29.18.45 nicht kontaktiert.
 Status „READY" heisst in diesem Dokument: beschrieben, im Code getragen und —
@@ -57,8 +58,8 @@ OLD SERVER CONTACTED:         NO
 ```
 
 Der Block oben ist der Stand der Pre-Production-Prüfung vom 2026-09-26 und
-bleibt als solcher stehen. Was danach geschah, steht in den zwei Nachträgen
-direkt darunter.
+bleibt als solcher stehen. Was danach geschah, steht in den vier Nachträgen
+direkt darunter; der jüngste Stand ist **Nachtrag D**.
 
 ## Nachtrag A — echter CI-Lauf (2026-09-26)
 
@@ -136,6 +137,117 @@ Behoben in der Prüfung (7e43ccc), die Geheimnisprüfung blieb unverändert.
 Dieser Dokumentstand selbst hat einen eigenen Lauf; die Nummer steht im
 Pull Request #3.
 
+## Nachtrag C — Freigabelauf und Härtung (2026-09-27)
+
+```
+CODE-STAND:                   5760e88
+VERIFY:RELEASE:               PASS — sauberer, losgelöster git worktree des Commits,
+                              frische Testdatenbank, alle Schritte grün
+npm test:                     1905 / 1905, 0 übersprungen
+SICHERHEITSREIHEN, STATISCH:  grün (security:secrets, security:check:static,
+                              security:check:tests, npm audit --audit-level=critical)
+E2E:                          53 / 53, retries = 0
+STRESS:                       STRESS-ERGEBNIS: 5 von 5 grün auf 0023556 — je 57/57 Browserfälle, 0 gescheitert, 0 übersprungen, 0 Hydrationsartefakte, ohne Wiederholungen, jeder Lauf gegen einen frisch gestarteten Testserver (Bericht test-results/stress-2026-09-27T17-10-28-542Z.json)
+CI:                           Lauf 36319443611 grün; Auslieferung übersprungen
+TESTMATRIX:                   196 abgedeckt / 9 Lücken / 2 nicht zutreffend
+SICHERHEITSMATRIX:            15 / 15 Klassen abgedeckt
+UMFANG (README, kennzahlen):  166 Seiten · 373 Route-Dateien mit 538 Endpunkten ·
+                              151 Datenmodelle · 84 Dienste · 94 Prüfdateien ·
+                              49 Migrationen
+PUSH / DEPLOYMENT:            keine Auslieferung; kein Zugriff auf die Produktion
+```
+
+**Was sich gegenüber dem Block oben geändert hat:**
+
+- **Geheimnisprüfung örtlich:** `npm run security:secrets`
+  (`scripts/security/geheimnisse.ts`) ist seit 2026-09-27 die einzige
+  Umsetzung und läuft ohne Bash; `scripts/ci-secret-scan.sh` ruft sie nur
+  auf. „SECRET SCAN: CI VERIFICATION REQUIRED" und „Geheimnisprüfung NICHT
+  GEPRÜFT (keine Bash)" oben sind damit überholt.
+- **Freigabeweg:** `npm run verify:release` baut und prüft aus einem
+  losgelösten `git worktree` (nicht mehr `git archive` — ohne `.git`
+  scheiterten Geheimnisprüfung und Doku-Vergleich).
+- **Behobene Befunde dieses Tages**, je mit Regressionsprüfung
+  (Belege in `docs/SECURITY_STANDARD.md`, „Abschlussmatrix"):
+  - Mandant: Zahlungssuche, öffentliche Tokens an die Organisation der
+    Installation gebunden, Einsatzrapport, öffentliche Dateien, Objektfilter
+    `?customerId=` der Kundschaft, Entwürfe von Qualitätskontrollen,
+    Zeitachse der Ziele.
+  - Gleichzeitigkeit: Sperre der Zeiterfassung je Person, Kundenakte je
+    E-Mail-Adresse auf fünf Anlagewegen, Anfrageumwandlung, Kontaktformular,
+    Bewilligung von Abwesenheiten, Dokumentfassungen.
+  - Prüfprotokoll: Mahnlauf, Zeitfreigabe je Eintrag, Eröffnen eines
+    Nachrichtenverlaufs, Anfrageverknüpfung, CMS-Veröffentlichung je Baustein.
+  - Weiteres: Zahlung von Hand höchstens bis zum offenen Saldo;
+    CMS-Freigabeliste mit `Object.hasOwn`; private Dateien nicht als
+    Website-Bild; Formelentschärfung in allen Excel-Ausgaben; 409 statt 500
+    bei Verklemmung; P2002 ohne Feldnamen; fremder Nachrichtenverlauf 404
+    (C19).
+- **Übersprungene Fälle:** 0 im Freigabelauf. Der zeitabhängige Fall aus
+  Nachtrag B (`betrieb.test.ts`) überspringt sich nur zwischen 00:00 und
+  03:00 Zürcher Zeit; ein Lauf in diesem Fenster zeigt wieder einen
+  Übersprung, und das ist dann kein Rückschritt.
+
+**Unverändert offen:** die externen Blocker unten (E-2…E-9) und die
+PARTIAL-Punkte der UI/UX-Prüfmatrix. `APPLICATION CODE READY: YES`,
+`PRE-PRODUCTION READY: NO` (externe Nachweise), `PRODUCTION V2 READY: NO`
+(V2-2…V2-6, extern).
+
+## Nachtrag D — dritte Nachprüfung der Nachbesserung (2026-09-27)
+
+Der Block in Nachtrag C ist der Stand an `5760e88` und bleibt als solcher
+stehen; seine Zahlen für Testmatrix und Umfang sind durch diesen Nachtrag
+überholt. Einzelheiten je Befund: `docs/FINAL_REMEDIATION_MATRIX.md`.
+
+```
+CODE-STAND:                   fb0202e
+VERIFY:RELEASE 34b3484:       PASS — 1969 / 1969, 0 übersprungen, E2E 57 / 57, retries = 0
+npm test (Bau 8bcc88c…fb0202e): 2033 Fälle, alle bestanden, 0 übersprungen
+                              (nach Korrektur von 7 Fehlern im Testcode; die
+                              betroffenen Dateien erneut: 102 / 102)
+VERIFY:RELEASE fb0202e:       RELEASE-ERGEBNIS fb0202e: FAIL (2032/2033 - Standardadresse gleichzeitig, Verklemmung -> 500; behoben in 0023556). verify:release auf 0023556: PASS - saubere Worktree-Kopie, frische Datenbank, 2038/2038 Tests, 0 übersprungen, Browser 57/57 ohne Wiederholungen, 0 übersprungen, 0 wackelig; CI-Lauf 36332513820 grün, Auslieferung übersprungen
+STRESS:                       STRESS-ERGEBNIS: 5 von 5 grün auf 0023556 — je 57/57 Browserfälle, 0 gescheitert, 0 übersprungen, 0 Hydrationsartefakte, ohne Wiederholungen, jeder Lauf gegen einen frisch gestarteten Testserver (Bericht test-results/stress-2026-09-27T17-10-28-542Z.json)
+TESTMATRIX:                   205 abgedeckt / 0 Lücken / 2 nicht zutreffend
+SICHERHEITSMATRIX:            15 / 15 Klassen abgedeckt
+UMFANG (README, kennzahlen):  166 Seiten · 375 Route-Dateien mit 540 Endpunkten ·
+                              151 Datenmodelle · 85 Dienste · 99 Prüfdateien ·
+                              51 Migrationen
+NACHBESSERUNG (F/RB):         24 GESCHLOSSEN · 5 EXTERN · 0 OFFEN
+OFFEN IM REPOSITORY:          keiner (N-08 nachgezogen: Bilanz der Browserreihe geprüft)
+PUSH / DEPLOYMENT:            keine Auslieferung; kein Zugriff auf die Produktion
+```
+
+**Was sich gegenüber Nachtrag C geändert hat:**
+
+- **Zwei neue öffentliche Endpunkte:** `POST /api/public/newsletter/bestaetigen`
+  und `POST /api/public/newsletter/abmelden` (eingetragen in
+  `security/oeffentliche-endpunkte.json` und im OpenAPI-Register). Die Seiten
+  `/newsletter/bestaetigen` und `/newsletter/abmelden` schreiben nicht mehr
+  beim Aufruf — Mailfilter rufen Links vorab auf und bestätigten so
+  Anmeldungen ohne die Person. Erst der Klick wirkt, mit Organisation und
+  Protokollzeile (`newsletter-links.test.ts`).
+- **Dateien (F-09 c):** ein geprüfter Leseweg für beide Speicher
+  (`leseAblageGeprueft`), servererzeugte Uploads auch mit Supabase mit
+  Ablagezeile und Prüfsumme, Downloads ohne Umleitung auf befristete
+  Adressen. Geprüft gegen einen Nachbau (`ablage-vertrag.test.ts`); der Lauf
+  gegen einen echten Bucket ist **EXTERNER NACHWEIS ERFORDERLICH** (E-8,
+  `scripts/abnahme/supabase-ablage.ts`).
+- **KI (F-15):** Nutzlastbauer für alle Funktionen mit Freitext; der
+  Führungsassistent sendet nur aggregierte Bausteine (`ki-nutzlast.test.ts`).
+- **Finanzen (F-04, N-05):** gescheiterte Rückerstattungen, Stripe falscher
+  Bezug, Storno gegen Zahlung (`zahlungsbuch.test.ts`); Zwei-Faktor-Ersatzcode
+  atomar (`two-factor.test.ts`).
+- **Prüftor (N-08):** `verify.ts` wertet den JSON-Bericht der Browserreihe
+  aus (übersprungen, wackelig, unerwartet, kein Bericht → Fehlschlag); das
+  Lohn-Prüfpaket läuft in `verify:static`. Die Bilanz der Browserreihe ist
+  die reine Funktion `browserBilanzPruefen`, geprüft in `pruefbilanz.test.ts`;
+  `npm run verify:e2e` läuft über dieselbe Regel.
+
+**Unverändert:** `APPLICATION CODE READY: YES`, `PRE-PRODUCTION READY: NO`
+(externe Nachweise E-1…E-8; Release-Lauf auf `0023556` und die Stressreihe
+5/5 sind grün),
+`PRODUCTION V2 READY: NO`.
+
 ---
 
 ## 1. Reproduzierbarer Release-Bau
@@ -212,8 +324,8 @@ sind gewollt: Die Listen brechen sie über eine eindeutige Spalte
 
 | Prüfung | Inhalt | Status |
 |---|---|---|
-| Geheimnisprüfung | `scripts/ci-secret-scan.sh` (Anbietermuster, DB-Verbindungen, `.env`, `NEXT_PUBLIC_`-Geheimnisse) | **CI ONLY** (örtlich keine Bash). Emulation derselben Ausdrücke über `git grep`: 0 Funde, Positivkontrolle trifft |
-| Abhängigkeiten | `npm audit --omit=dev --json` gegen `security/akzeptierte-befunde.json` | **LOCAL VERIFIED** (0 kritisch, 4 hoch, 3 mittel — alle bewertet) · Netzabhängig: ein Lauf von vier ohne Antwort → NICHT GEPRÜFT, nie „bestanden" |
+| Geheimnisprüfung | `npm run security:secrets` → `scripts/security/geheimnisse.ts` (Anbietermuster, DB-Verbindungen, `.env`, `NEXT_PUBLIC_`-Geheimnisse); `scripts/ci-secret-scan.sh` ist nur noch die Hülle | ~~CI ONLY (örtlich keine Bash)~~ — seit 2026-09-27 **LOCAL VERIFIED** (eine Umsetzung in TypeScript, Teil von `verify:static`) und im CI bestanden (Nachtrag C) |
+| Abhängigkeiten | `npm audit --omit=dev --json` gegen `security/akzeptierte-befunde.json` | **LOCAL VERIFIED** (Stand 2026-09-26: 0 kritisch, 4 hoch, 3 mittel — alle bewertet; die Bewertungsdatei führt am 2026-09-27 sechs Einträge, alle befristet bis 2026-12-31) · Netzabhängig: ein Lauf von vier ohne Antwort → NICHT GEPRÜFT, nie „bestanden" |
 | Bewertungsablauf | Vorwarnung 30 Tage, Ablauf, Höchstfrist 183 Tage | **LOCAL VERIFIED** (`sicherheitsbewertung.test.ts`) |
 | Quelltext-/Musterprüfung | 16 Regeln inkl. Rate-Limit je Route | **LOCAL VERIFIED** (43 Treffer, alle begründet) |
 | Gefährliche Muster (SQL-Unsafe, Prozess, eval, TLS aus, Token im Speicher) | Teil der Musterprüfung | **LOCAL VERIFIED** |
@@ -221,7 +333,7 @@ sind gewollt: Die Listen brechen sie über eine eindeutige Spalte
 | Öffentliche Endpunkte | Registry gegen `security/oeffentliche-endpunkte.json` | **LOCAL VERIFIED** |
 | Repository-Integrität | verbotene Dateien, Lockfile, `.gitignore` | **LOCAL VERIFIED** |
 | Erzeugte Dokumentation | `npm run docs` + Vergleich | **LOCAL VERIFIED** (bytegleich); im CI als eigene Stufe |
-| RBAC-/Sicherheitsreihen | `rbac`, `ownership`, `session-refresh`, … | **LOCAL VERIFIED** über `npm test`; im Dirigenten nur mit `--mit-tests` |
+| RBAC-/Sicherheitsreihen | `rbac`, `ownership`, `zugriffsgrenzen`, `sicherheitsluecken`, `nebenlaeufigkeit`, `session-refresh`, … | **LOCAL VERIFIED** über `npm test` und als eigener Schritt `security:check:tests` in `verify:full`/`verify:release` (Nachtrag C) |
 | Mandantentrennung | `mandanten`, `suche`, `scan` (fremde Organisation) | **LOCAL VERIFIED** über `npm test` |
 | Öffentliche Tokens | `zugriffstokens`, `oeffentlicher-zugang`, `oeffentliche-links`, `signatur`, `offertannahme` | **LOCAL VERIFIED** über `npm test` |
 | Dateisicherheit | `dateisicherheit`, `datei-zugriff`, `datei-integritaet`, `clamd-protokoll` (Nachbau) | **LOCAL VERIFIED**; echter `clamd` **EXTERNAL** |
@@ -375,7 +487,9 @@ vertrauenswürdiges Werkzeug; es existiert nicht.
 
 ## 18. Sicherheitsstandard
 
-`docs/SECURITY_STANDARD.md` deckt alle geforderten Bereiche (C1–C20). Neu:
+`docs/SECURITY_STANDARD.md` deckt alle geforderten Bereiche (C1–C20); die
+Zuordnung jedes Bereichs zu Prüfungen und fehlenden externen Belegen steht
+dort in der „Abschlussmatrix (2026-09-27)". Neu:
 `.github/pull_request_template.md` verweist Punkt für Punkt darauf.
 Dokumentation erzwingt nichts; erzwungen wird nur, was CI und
 `security:check` prüfen.
@@ -385,7 +499,7 @@ Dokumentation erzwingt nichts; erzwungen wird nur, was CI und
 | Nr. | Punkt |
 |---|---|
 | ~~E-1~~ | ~~CI-Lauf (Geheimnisprüfung, `security:check`, gesamtes Tor)~~ — erfüllt, Lauf 36272635541 (Nachtrag A) |
-| E-9 | Schutzregeln für `main` und Sichtbarkeit des Repositorys — Entscheid der Inhaberschaft (`GITHUB_GOVERNANCE.md`) |
+| E-9 | Sichtbarkeit des Repositorys — Entscheid der Inhaberschaft (`GITHUB_GOVERNANCE.md`). Schutz von `main` erledigt: Regelsatz „main schützen" (ID 24071027) aktiv seit 2026-09-27 |
 | E-2 | Scanner auf echten Geräten (`SCANNER_DEVICE_ACCEPTANCE.md`) |
 | E-3 | ClamAV-Abnahme gegen echten `clamd` (`MALWARE_PROTECTION.md` §10) |
 | E-4 | Überwachungsrechner: aufsetzen, `shellcheck`, Probelauf, Alarmwege |
@@ -393,3 +507,52 @@ Dokumentation erzwingt nichts; erzwungen wird nur, was CI und
 | E-6 | V2-Infrastruktur: V2-2…V2-5, Firewall, Nginx, Cloudflare, Nachmessung |
 | E-7 | RB-009 Lohnprüfung durch Fachperson (unverändert) |
 | E-8 | RPO/RTO-Entscheid der Geschäftsleitung |
+
+## UI/UX-Prüfmatrix (2026-09-27)
+
+Stand: `5760e88`, Browser-Reihe 53/53 ohne Wiederholungen, `npm test`
+1905/1905 (Nachtrag C). Jeder Beleg nennt Datei und wörtlichen Testtitel;
+beides ist per Suche im Repository bestätigt. **PASS** nur mit einer
+automatischen Prüfung. Wo nur das Lesen des Codes eine Aussage trägt, steht
+**PARTIAL** mit dem Grund. Eine Konformitätsaussage (WCAG) ist keine dieser
+Zeilen — axe misst die maschinell prüfbaren Regeln, Stufe „critical" und
+„serious" (`docs/BARRIEREFREIHEIT.md`).
+
+Die Navigationszeilen beziehen sich auf den App-Rahmen
+(`src/components/app/app-shell.tsx`): **SideNav** ist die Seitenleiste
+`nav[aria-label="Bereichsnavigation"]`, **TopNav** die Kopfzeile (Schubfach
+„Navigation öffnen", Brotkrumen, Suche, Scanner, Farbschema,
+Benachrichtigungen, Kontomenü), **SubNav** die Reiter unterhalb einer Seite
+(`profile-tabs.tsx`, „Kontobereich") und die Brotkrumen.
+
+| Bereich | Status | Beleg (Datei — Testtitel) | Grund für PARTIAL / Grenze |
+|---|---|---|---|
+| Navigation | **PASS** | `tests/e2e/phase21-oberflaeche.spec.ts` — „Navigation ${bereich.konto}: jeder Eintrag erreichbar, aktiv markiert, axe ohne schwere Befunde" (fünf Rollen: super, admin, manager, employee, customer; jeder Eintrag der Seitenleiste); `tests/api/rbac.test.ts` — Block „Seitenschutz und Navigation"; `tests/pages/public-site.test.ts` — „führt eine überschaubare Hauptnavigation" | — |
+| TopNav | **PARTIAL** | `tests/e2e/produktsprint-2026-09-26.spec.ts` — „Live-Treffer ohne Enter, veraltete Anfrage abgebrochen, Treffer öffnet die Akte", „Administration: „Einstellungen" im Kontomenü ist nicht mehr die Firmenkonfiguration"; `phase21-oberflaeche.spec.ts` — „Dialog und Suche: Fokus hinein, Escape hinaus, Fokus zurück; Pfeile bis „Alle Treffer"" (Knopf „Scannen"), „Mobile Navigation: dieselben Einträge wie die Seitenleiste, Escape schliesst, Fokus kehrt zurück" | Suche, Scanner, Kontomenü und Schubfach sind im Browser geprüft. **Nicht** geprüft: Benachrichtigungsknopf (Zähler, Panel), Farbschema-Umschalter und Brotkrumen — deren Verhalten (u. a. der `exact`-Abgleich der Brotkrumen mit der Seitenleiste vom 2026-09-27) ist nur aus dem Code gelesen |
+| SideNav | **PASS** | `phase21-oberflaeche.spec.ts` — „Navigation ${bereich.konto}: …" (`aria-current="page"` genau auf dem geöffneten Eintrag), „Mobile Navigation: dieselben Einträge wie die Seitenleiste, …"; `rbac.test.ts` — „verbirgt vor der Betriebsleitung, was sie nicht darf", „zeigt der Administration die Benutzerkonten, aber nicht das Protokoll", „zeigt der Systemverantwortung alles" | — |
+| SubNav | **PARTIAL** | `produktsprint-2026-09-26.spec.ts` — „Mitarbeitende: der Reiter führt zu den persönlichen Einstellungen"; `tests/api/settings.test.ts` — „das Profil verweist auf die persönlichen Einstellungen seines eigenen Bereichs" | Nur die Profilreiter sind geprüft. Die Navigationsprüfung liest ausschliesslich die Seitenleiste; Brotkrumen und Reiter anderer Seiten werden von keiner Prüfung auf Ziel und Markierung gelesen |
+| Search | **PASS** | `produktsprint-2026-09-26.spec.ts` — „Live-Treffer ohne Enter, veraltete Anfrage abgebrochen, Treffer öffnet die Akte"; `phase21-oberflaeche.spec.ts` — „Dialog und Suche: …" (Strg+K, Pfeiltasten, „Alle Treffer anzeigen"); `tests/api/suche.test.ts` — „eine fremde Organisation bleibt unsichtbar", „Übersicht: zehn und ein Link auf weitere; Bereich Seite für Seite, jede genau einmal", „eine leere Trefferliste ist eine Antwort, kein Fehler" | — |
+| Scanner | **PASS** | `tests/e2e/scan.spec.ts` — „Kamera → Treffer → Wareneingang → Bestand und Protokoll", „feindliche Inhalte: nichts wird geöffnet, ausgeführt oder als Markup dargestellt", „unbekannte EAN → „Neuen Artikel erfassen", vorbelegt nur mit dem Strichcode"; `phase21-oberflaeche.spec.ts` — „Dialog und Suche: …" (axe im offenen Scanner-Dialog); `tests/api/scan.test.ts` — „ein Code einer fremden Organisation löst nichts auf" | Kamera nachgebildet; echte Geräte: EXTERNER NACHWEIS (E-2) |
+| Profile | **PASS** | `produktsprint-2026-09-26.spec.ts` — Block „B — Profil → Einstellungen" (zwei Fälle); `settings.test.ts` — „${role}: ${BEREICH[role]}/profil/einstellungen zeigt das eigene Konto, nicht die Firma", „über das eigene Profil lässt sich weder Rolle noch Organisation ändern" | — |
+| Settings | **PASS** | `settings.test.ts` — „${role}: liest …, schreibt …" (Zugriff je Rolle), „nimmt eine Änderung an und zeigt sie danach an", „zeigt die neuen Zeiten in der Maske", „Mitarbeitende und Kundschaft erreichen die Betriebseinstellungen weder als Seite noch als Endpunkt"; `phase21-oberflaeche.spec.ts` — „Umbruch: …" (enthält `/admin/einstellungen`) | — |
+| Dashboard | **PASS** | `phase21-oberflaeche.spec.ts` — „Navigation ${bereich.konto}: …" (die Startseiten `/admin` „Übersicht", `/portal` „Heute", `/konto` „Übersicht" sind Einträge der Seitenleiste); `tests/e2e/wave18-barrierefreiheit.spec.ts` — „Verwaltung", „Portal und Kundenbereich"; `tests/api/bi-fuehrung.test.ts` — „das Cockpit ist für Geschäfts- und Betriebsleitung offen, für Kundschaft nicht", „die Betriebsleitung sieht im Cockpit keine Finanzgruppe"; `tests/api/release-center.test.ts` — „das Dashboard meldet die neue Version der Systemverantwortung, sonst niemandem" | — |
+| Forms | **PASS** | `tests/e2e/wave23-masken.spec.ts` — „Lohnvereinbarungen in der Personalakte setzen", „Offene Zeiten auf der Lohnseite freigeben", „Material aus dem Lager für einen Einsatz entnehmen"; `produktsprint-2026-09-26.spec.ts` — „D + F — Büro und Fenster im Fenster 18:00–22:00 buchen; die Administration sieht beide", „E — eine gewählte Uhrzeit wird verworfen, wenn eine Leistung dazukommt"; `settings.test.ts` — „zeigt ihn in der Bearbeitungsmaske", „weist eine unvollständige Adresse ab"; `tests/pages/smoke.test.ts` — „/admin/offerten/:id/bearbeiten", „/admin/leads/:id/bearbeiten" | Die Anzeige einer Serverfehlermeldung **am Feld** siehe Zeile Error |
+| Tables | **PASS** | `tests/pages/tables.test.ts` — „${path} (${role})" über jede Seite hinter der Anmeldung, „liefert insgesamt Datentabellen aus (${pages.length} Seiten geprüft)"; `tests/pages/sorting.test.ts` — „setzt aria-sort am aktiven und an den übrigen Köpfen", „macht die Sortierung über echte Links bedienbar", Block „überlebt das Blättern"; `tests/api/grenzen.test.ts` — „Benutzerkonten: seitenweise mit Gesamtzahl, höchstens 100 je Seite" | — |
+| Dialogs | **PASS** | `phase21-oberflaeche.spec.ts` — „Dialog und Suche: Fokus hinein, Escape hinaus, Fokus zurück; …", „Mobile Navigation: …" (Schubfach als Dialog); `produktsprint-2026-09-26.spec.ts` — „verfügbare Version → Details → freigeben → terminieren → stornieren"; `tests/e2e/wave10-vertraege.spec.ts` — „A: aus der angenommenen Offerte — Vertrag in der Maske, Plan im Dialog, Einsätze mit ihrer Fassung" | — |
+| Mobile | **PASS** | `phase21-oberflaeche.spec.ts` — „Mobile Navigation: …", „öffentliche Seiten auf dem Telefon: axe ohne schwere Befunde", „Umbruch: …" (375×667, 390×844); `tests/e2e/gate4d-abnahme.spec.ts` — „bleibt die Abnahme auf einem Smartphone-Bildschirm vollständig bedienbar" | Emulierte Geräte; echte Telefone nur für den Scanner als EXTERNER NACHWEIS (E-2) gefordert |
+| Responsive | **PASS** | `phase21-oberflaeche.spec.ts` — „Umbruch: kein seitliches Scrollen in sieben Fenstergrössen und bei 200 % Zoom" (375 bis 1920 px und 683×450 für 200 % Zoom; 18 Seiten öffentlich, Verwaltung, Portal, Kundenbereich); `tables.test.ts` — „${path} (${role})" (keine starren Breiten über 320 px, Tabellen mit Scrollrahmen) | — |
+| Keyboard | **PASS** | `phase21-oberflaeche.spec.ts` — „Sprunglink: erster Tabstopp, springt zum Inhalt — öffentlich, im Konto und beim Unterschreiben", „Dialog und Suche: …"; `tests/e2e/gate3-pdf-viewer.spec.ts` — „lässt sich im Browser bedienen: blättern, Seite eingeben, zoomen, anpassen, herunterladen, Tastatur", „gibt jedem Bedienelement des Viewers einen zugänglichen Namen und einen Tastaturfokus"; `tests/e2e/gate4c-offertannahme.spec.ts` — „gibt der Unterzeichnungsseite Beschriftungen, Tastaturfokus und wahrnehmbare Meldungen" | Geprüft sind die benannten Wege, kein vollständiger Tastaturdurchgang jeder Seite; dieser bleibt eine manuelle Prüfung (`docs/BARRIEREFREIHEIT.md`) |
+| Accessibility | **PASS** | `phase21-oberflaeche.spec.ts` — „Navigation ${bereich.konto}: …" (axe auf jedem Eintrag der Seitenleiste, fünf Rollen), „öffentliche Seiten auf dem Telefon: axe ohne schwere Befunde", „Reduzierte Bewegung: keine laufenden Übergänge über 10 ms auf der Startseite"; `wave18-barrierefreiheit.spec.ts` — „öffentliche Seiten", „Verwaltung", „Portal und Kundenbereich"; `tests/api/farbkontrast.test.ts` — „jede alte Statusfarbe ergibt ein Paar über der Schwelle", „jedes Ereignis trägt eine Schriftfarbe, die auf seiner Fläche die Schwelle hält" | Automatisch messbarer Teil; Screenreader und manuelle Prüfung bleiben EXTERNER NACHWEIS (Wave 18) |
+| Loading | **PARTIAL** | `tests/e2e/hydration-wiederholung.spec.ts` — „spielt ein angehaltenes <main> während der Hydration wieder ab, ohne Abweichung" | Belegt ist nur, dass angehaltenes Rendern sauber hydriert. Die Ladeanzeige selbst (`NavigationProgress` im App-Rahmen; `loading.tsx` gibt es seit Wave 9.1 nicht mehr, `docs/HYDRATION.md`) prüft kein Test — weder, dass sie erscheint, noch, dass sie verschwindet |
+| Empty | **PARTIAL** | `suche.test.ts` — „eine leere Trefferliste ist eine Antwort, kein Fehler"; `scan.spec.ts` — „unbekannte EAN → „Neuen Artikel erfassen", vorbelegt nur mit dem Strichcode" | Leere Antworten sind geprüft, ebenso ein Leerzustand mit Handlungsvorschlag im Scanner. `EmptyState` in den Listen (`page-parts.tsx`) rendert keine Prüfung mit leerer Liste — nur Code gelesen |
+| Error | **PARTIAL** | `phase21-oberflaeche.spec.ts` — „Navigation ${bereich.konto}: …" (keine Seite zeigt die Fehlergrenze „Dieser Bereich lässt sich gerade nicht laden"); `gate4d-abnahme.spec.ts` — „führt die Abnahme getippt durch: Übergabe, Sperre, Unterschrift, Rückgabe, Entsperren" (abgelehntes Passwort als `form [role="alert"]`, Ablehnung vom Server); `tests/api/ownership.test.ts` — „${path} zeigt keine Platzhalterwerte" | Belegt ist die **Abwesenheit** von Fehlerzuständen und eine Fehlermeldung in einem Formular. Keine Prüfung löst die Fehlergrenzen (`src/app/error.tsx`, `admin/`, `portal/`, `konto/error.tsx`) oder `not-found.tsx` aus und liest ihren Inhalt; die Zuordnung von 422-Feldfehlern in `ResourceForm` ist nur aus dem Code gelesen |
+| Notifications | **PARTIAL** | `smoke.test.ts` — „/api/notifications", „/api/notifications/count" (je Rolle); `tests/api/protokoll-und-schranken.test.ts` — „jede Route unter /api/notifications deklariert ein rateLimit", „schreibende Benachrichtigungsendpunkte nehmen das Schreibkontingent"; `ownership.test.ts` — „lässt die eigene Herkunft und Aufrufe ohne Origin durch" (`read-all` der Kundschaft); `tests/api/kommunikation.test.ts` — „zwei Tagesläufe ergeben genau eine Bitte (vorher griff die Sperre nie)" | Endpunkte, Schranken und eine Erzeugerregel sind geprüft. Das Panel in der Kopfzeile (Zähler, einzeln gelesen, Link zum Ziel) hat keine Browserprüfung, und der Empfängerschnitt steht nicht in der Eigentumsreihe |
+| Consistency | **PARTIAL** | `tables.test.ts` — „${path} (${role})" (ein Tabellenmuster auf jeder Seite); `sorting.test.ts` — „setzt aria-sort am aktiven und an den übrigen Köpfen"; `farbkontrast.test.ts` — „jede alte Statusfarbe ergibt ein Paar über der Schwelle" (`STATUS_MAP`); `rbac.test.ts` — Block „Menüpunkte verschwinden, statt auszugrauen"; `phase21-oberflaeche.spec.ts` — „Navigation ${bereich.konto}: …" (genau ein aktiver Eintrag) | Messbare Teile sind belegt. Ob Seiten `PageHeader`, `DetailSection`, `ResourceForm` und `ActionButton` einheitlich verwenden und dieselben Wörter und Abstände haben, prüft keine Maschine — nur Durchsicht |
+| Performance | **PARTIAL** | `grenzen.test.ts` — „Kalender: sechs Wochen ja, zehn Jahre nein", „Exporte: ein Jahr ja, mehr nein — auch der Buchhaltungsexport", „Portal: „alle Einsätze" antwortet, auch mit Grenze", „Papierkorb: die Beschriftung kommt aus der Listenabfrage, nicht aus einer Abfrage je Zeile"; Messung `scripts/leistungsmessung.ts` (`docs/LEISTUNG.md`) | Obergrenzen und eine N+1-Regel sind geprüft; kein Test setzt eine Zeitgrenze, keine Browserkennzahlen (LCP, INP), Messung nicht im CI; Last und Produktion: EXTERNER NACHWEIS. Stressreihe: STRESS-ERGEBNIS: 5 von 5 grün auf 0023556 — je 57/57 Browserfälle, 0 gescheitert, 0 übersprungen, 0 Hydrationsartefakte, ohne Wiederholungen, jeder Lauf gegen einen frisch gestarteten Testserver (Bericht test-results/stress-2026-09-27T17-10-28-542Z.json) |
+| Role-aware UI | **PASS** | `rbac.test.ts` — „verbirgt vor der Betriebsleitung, was sie nicht darf", „zeigt der Administration die Benutzerkonten, aber nicht das Protokoll"; `settings.test.ts` — „zeigt der Betriebsleitung das Protokoll statt der Felder"; `bi-fuehrung.test.ts` — „die Betriebsleitung sieht im Cockpit keine Finanzgruppe"; `release-center.test.ts` — „das Dashboard meldet die neue Version der Systemverantwortung, sonst niemandem"; `phase21-oberflaeche.spec.ts` — „Navigation ${bereich.konto}: …" (fünf Rollen) | — |
+
+**Zählung:** 15 PASS, 8 PARTIAL, 0 FAIL. Die PARTIAL-Zeilen sind Lücken in
+der Prüfung, keine gemessenen Fehler: Für TopNav, SubNav, Loading, Empty,
+Error und Notifications fehlt je ein Browserfall, der den Zustand herbeiführt
+und liest; Consistency ist nur teilweise maschinell prüfbar; Performance hat
+keine Zeitgrenze und wartet auf das Stressergebnis.

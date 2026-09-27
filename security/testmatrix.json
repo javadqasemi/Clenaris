@@ -134,8 +134,11 @@
           ]
         },
         "nebenlaeufigkeit": {
-          "status": "luecke",
-          "grund": "Die gleichzeitige Einlösung desselben Ersatzcodes (parallele POST /api/auth/2fa/verify) ist nicht geprüft — nur die Wiederverwendung nacheinander. Auch nebenlaeufigkeit.test.ts enthält keinen Zwei-Faktor-Fall."
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/two-factor.test.ts", "test": "derselbe Ersatzcode fünfmal gleichzeitig eingelöst: genau eine Sitzung, vier 401, ein Code weniger im Vorrat" }
+          ],
+          "hinweis": "Seit 8bcc88c: Die Einlösung ist eine bedingte Anweisung (array_remove in two-factor.service.ts). Gleichzeitige Einlösung desselben TOTP-Codes (nicht Ersatzcode) ist nicht eigens geprüft."
         },
         "idempotenz": {
           "status": "abgedeckt",
@@ -207,8 +210,14 @@
             { "datei": "tests/api/buchung-integritaet.test.ts", "test": "angemeldete Kundschaft mit fremder Adresse, fremdem Objekt oder fremder Datei → 404" },
             { "datei": "tests/api/buchung-integritaet.test.ts", "test": "Gast mit fremder Adresse → 404, nichts angelegt" },
             { "datei": "tests/api/buchung-integritaet.test.ts", "test": "Gast mit fremdem Objekt → 404" },
+            { "datei": "tests/api/buchung-integritaet.test.ts", "test": "Gast mit der E-Mail-Adresse einer Kundschaft und deren Adresse → 404, nichts angelegt" },
+            { "datei": "tests/api/buchung-integritaet.test.ts", "test": "Gast mit der E-Mail-Adresse einer Kundschaft und deren Objekt → 404" },
+            { "datei": "tests/api/buchung-integritaet.test.ts", "test": "Gast mit bekannter E-Mail-Adresse und neuer Adresse: bucht, erfährt nichts über die Kundschaft, bekommt keinen Rabatt und verdrängt nichts" },
+            { "datei": "tests/api/buchung-integritaet.test.ts", "test": "Mitarbeiterin ohne booking:create bucht über die öffentliche Route auf keine fremde Adresse (404)" },
+            { "datei": "tests/api/buchung-integritaet.test.ts", "test": "nach dem Storno öffnet der alte Link weder Seite noch PDF (404), und der Token ist widerrufen" },
             { "datei": "tests/api/sicherheitsluecken.test.ts", "test": "die Kundschaft liest keine fremde Buchung — weder Daten noch PDF noch Seite" }
-          ]
+          ],
+          "hinweis": "Seit 2026-09-27 (F-03, N-04) auch der Gast mit der E-Mail-Adresse einer bestehenden Kundschaft (Akte A8) und der Buchungslink nach dem Storno (A9)."
         },
         "nebenlaeufigkeit": {
           "status": "abgedeckt",
@@ -227,9 +236,10 @@
         "audit": {
           "status": "abgedeckt",
           "belege": [
-            { "datei": "tests/api/buchung-integritaet.test.ts", "test": "ausserhalb der Einsatzzeit, zu lange Dauer: 422 — ausdrücklich übergangen: 200 und protokolliert" }
+            { "datei": "tests/api/buchung-integritaet.test.ts", "test": "ausserhalb der Einsatzzeit, zu lange Dauer: 422 — ausdrücklich übergangen: 200 und protokolliert" },
+            { "datei": "tests/api/protokollpflicht.test.ts", "test": "Gastbuchung: CREATE an der Buchung, ohne Person" }
           ],
-          "hinweis": "Nur das Übergehen der Kapazitätsprüfung ist als Protokolleintrag belegt; Anlegen, Bestätigen und Stornieren einer Buchung nicht."
+          "hinweis": "Belegt sind das Übergehen der Kapazitätsprüfung und (seit f2ab527) das Anlegen einer Gastbuchung. Bestätigen und Stornieren einer Buchung sind nicht auf Protokolleinträge geprüft."
         }
       }
     },
@@ -525,8 +535,11 @@
             { "datei": "tests/api/vertraege.test.ts", "test": "bleibt idempotent, wenn zwei Läufe gleichzeitig starten" },
             { "datei": "tests/api/vertraege.test.ts", "test": "zwei gleichzeitige Läufe erzeugen genau eine Rechnung" },
             { "datei": "tests/api/vertraege-integritaet.test.ts", "test": "Stornieren gegen Unterschreiben gleichzeitig: nie storniert und angenommen" },
-            { "datei": "tests/api/vertraege-integritaet.test.ts", "test": "Wechsel mit gleicher Serie, drei Planer gleichzeitig, Wiederholung: je Termin genau ein Einsatz" }
-          ]
+            { "datei": "tests/api/vertraege-integritaet.test.ts", "test": "Wechsel mit gleicher Serie, drei Planer gleichzeitig, Wiederholung: je Termin genau ein Einsatz" },
+            { "datei": "tests/api/vertraege-integritaet.test.ts", "test": "Pausieren und Beenden gleichzeitig: am Ende beendet, nie pausiert mit Enddatum" },
+            { "datei": "tests/api/vertraege-integritaet.test.ts", "test": "Fortsetzen und Beenden gleichzeitig: am Ende beendet, nie aktiv mit Enddatum" }
+          ],
+          "hinweis": "Kündigen und Kündigung-Zurücknehmen gleichzeitig mit einem anderen Schritt sind nicht eigens geprüft; sie laufen unter derselben Vertragssperre (N-02)."
         },
         "idempotenz": {
           "status": "abgedeckt",
@@ -564,7 +577,8 @@
             { "datei": "tests/api/jobs.test.ts", "test": "Ende vor Beginn wird abgelehnt" },
             { "datei": "tests/api/dispatch.test.ts", "test": "erkennt die Überschneidung: 08–11 und 10:30–13 gehen nicht zusammen" },
             { "datei": "tests/api/dispatch.test.ts", "test": "ohne Qualifikation → 422 MISSING_SKILL; mit → 200; abgelaufen → 422" },
-            { "datei": "tests/api/dispatch.test.ts", "test": "ein bewilligtes Gesuch blockiert die Zuteilung" }
+            { "datei": "tests/api/dispatch.test.ts", "test": "ein bewilligtes Gesuch blockiert die Zuteilung" },
+            { "datei": "tests/api/dispatch.test.ts", "test": "Zuteilung an einen abgeschlossenen oder abgesagten Einsatz → 422, das Team bleibt" }
           ]
         },
         "unangemeldet": {
@@ -594,14 +608,18 @@
             { "datei": "tests/api/dispatch.test.ts", "test": "POST /api/jobs: Adresse einer fremden Kundschaft wird abgewiesen" },
             { "datei": "tests/api/dispatch.test.ts", "test": "weist eine erfundene Personal-ID ab, ohne ihre Existenz zu verraten" },
             { "datei": "tests/api/dispatch.test.ts", "test": "GET /api/jobs: Mitarbeitende sehen nur die eigenen — auch mit fremdem Filter" },
-            { "datei": "tests/api/dispatch.test.ts", "test": "bleibt für nicht zugeteilte Mitarbeitende unerreichbar" }
+            { "datei": "tests/api/dispatch.test.ts", "test": "bleibt für nicht zugeteilte Mitarbeitende unerreichbar" },
+            { "datei": "tests/api/jobs.test.ts", "test": "die Datei einer anderen Person wird kein Einsatzfoto — 404, die Datei bleibt ungebunden" },
+            { "datei": "tests/api/jobs.test.ts", "test": "eine bereits gebundene Datei lässt sich nicht an einen zweiten Einsatz hängen — 404" },
+            { "datei": "tests/api/jobs.test.ts", "test": "eine als schädlich erkannte Datei wird kein Einsatzfoto — 404" }
           ]
         },
         "nebenlaeufigkeit": {
           "status": "abgedeckt",
           "belege": [
             { "datei": "tests/api/dispatch.test.ts", "test": "zwei gleichzeitige Zuteilungen derselben Person auf überlappende Einsätze: genau eine gelingt — fünfmal" },
-            { "datei": "tests/api/nebenlaeufigkeit.test.ts", "test": "Zuteilung und Bewilligung gleichzeitig — nie beides, fünfmal" }
+            { "datei": "tests/api/nebenlaeufigkeit.test.ts", "test": "Zuteilung und Bewilligung gleichzeitig — nie beides, fünfmal" },
+            { "datei": "tests/api/dispatch.test.ts", "test": "Terminverschiebung und Teamwechsel gleichzeitig: nie ein ungeprüftes Team zur neuen Zeit — fünfmal" }
           ]
         },
         "idempotenz": {
@@ -674,7 +692,8 @@
         "nebenlaeufigkeit": {
           "status": "abgedeckt",
           "belege": [
-            { "datei": "tests/api/nebenlaeufigkeit.test.ts", "test": "sechs gleichzeitige, sich überlappende Erfassungen derselben Person — genau eine wird angenommen" }
+            { "datei": "tests/api/nebenlaeufigkeit.test.ts", "test": "sechs gleichzeitige, sich überlappende Erfassungen derselben Person — genau eine wird angenommen" },
+            { "datei": "tests/api/zeiterfassung.test.ts", "test": "sechs gleichzeitige Stempelungen ergeben genau eine laufende Erfassung" }
           ]
         },
         "idempotenz": {
@@ -733,15 +752,20 @@
         "fremderMandant": {
           "status": "abgedeckt",
           "belege": [
-            { "datei": "tests/api/lohnabrechnung.test.ts", "test": "Mandanten: Daten einer fremden Organisation werden weder gezeigt noch verrechnet" }
+            { "datei": "tests/api/lohnabrechnung.test.ts", "test": "Mandanten: Daten einer fremden Organisation werden weder gezeigt noch verrechnet" },
+            { "datei": "tests/api/lohnabrechnung.test.ts", "test": "das PDF: fremde Organisation — weder die Datei noch die Abrechnung einer fremden Organisation wird ausgeliefert" }
           ]
         },
         "falscherBezug": {
           "status": "abgedeckt",
           "belege": [
             { "datei": "tests/api/lohnabrechnung.test.ts", "test": "das PDF: gespeicherte Bytes mit Prüfsumme, nur für Berechtigte" },
-            { "datei": "tests/api/lohnabrechnung.test.ts", "test": "Mitarbeitende sehen keine unveröffentlichte Abrechnung" }
-          ]
+            { "datei": "tests/api/lohnabrechnung.test.ts", "test": "Mitarbeitende sehen keine unveröffentlichte Abrechnung" },
+            { "datei": "tests/api/lohnabrechnung.test.ts", "test": "das PDF: veränderte Bytes (falsche Prüfsumme) werden nicht ausgeliefert — keine anderen Bytes, kein Abrufprotokoll" },
+            { "datei": "tests/api/lohnabrechnung.test.ts", "test": "das PDF: fehlt das gespeicherte Objekt, antwortet der Endpunkt 404 — nie mit anderen Bytes" },
+            { "datei": "tests/api/lohnabrechnung.test.ts", "test": "das PDF: ohne Sollwert wird nicht ausgeliefert; widersprechen sich Abrechnung und Datei, auch nicht" }
+          ],
+          "hinweis": "Über HTTP geprüft mit dem eingebauten Speicher. Der Supabase-Leseweg samt Prüfsumme ist seit 6696dd2 gegen einen Nachbau der Storage-API geprüft (tests/api/ablage-vertrag.test.ts); der Lesetest gegen einen echten Bucket ist ein externer Nachweis (E-8, scripts/abnahme/supabase-ablage.ts)."
         },
         "nebenlaeufigkeit": {
           "status": "abgedeckt",
@@ -760,7 +784,8 @@
           "status": "abgedeckt",
           "belege": [
             { "datei": "tests/api/lohnabrechnung.test.ts", "test": "das Prüfprotokoll hält Beträge und Quellensteuerdaten geschwärzt fest" },
-            { "datei": "tests/api/protokoll-schwaerzung.test.ts", "test": "eine Änderung der Personalakte hinterlässt Schlüssel, aber keine Werte" }
+            { "datei": "tests/api/protokoll-schwaerzung.test.ts", "test": "eine Änderung der Personalakte hinterlässt Schlüssel, aber keine Werte" },
+            { "datei": "tests/api/finanzbelege.test.ts", "test": "eine Lohnabrechnung wird nicht ohne ihre Protokollzeile veröffentlicht — und hinterlässt kein verwaistes PDF" }
           ]
         }
       }
@@ -838,8 +863,10 @@
             { "datei": "tests/api/protokollpflicht.test.ts", "test": "Rechnung ausstellen: UPDATE „ausgestellt\" an der Rechnung" },
             { "datei": "tests/api/protokollpflicht.test.ts", "test": "Rechnung senden: UPDATE „versendet\" — ohne Zahlungslink, Token oder Hash" },
             { "datei": "tests/api/protokollpflicht.test.ts", "test": "Rechnung stornieren: UPDATE „storniert\" mit Begründung" },
-            { "datei": "tests/api/protokollpflicht.test.ts", "test": "Rechnung mahnen (Tageslauf): Protokollzeile an Rechnung oder Mahnung, als System" }
-          ]
+            { "datei": "tests/api/protokollpflicht.test.ts", "test": "Rechnung mahnen (Tageslauf): Protokollzeile an Rechnung oder Mahnung, als System" },
+            { "datei": "tests/api/finanzbelege.test.ts", "test": "Ausstellen ohne Protokollzeile gibt es nicht — die Rechnung bleibt Entwurf, und die Wiederholung stellt mit Zeile aus" }
+          ],
+          "hinweis": "Dass der Beleg ohne Zeile nicht entsteht (F-14), ist für das Ausstellen erzwungen geprüft; für Storno und Mahnung ist nur das Vorhandensein der Zeile belegt."
         }
       }
     },
@@ -883,36 +910,51 @@
           "belege": [
             { "datei": "tests/api/mandanten.test.ts", "test": "Zahlung: nicht in der Liste — auch nicht mit Suchbegriff —, nicht korrigierbar, nicht stornierbar" },
             { "datei": "tests/api/mandanten.test.ts", "test": "eine Zahlung auf eine fremde Rechnung wird nicht verbucht (404)" },
-            { "datei": "tests/api/mandanten.test.ts", "test": "Rechnung ansehen (INVOICE_VIEW) und bezahlen (INVOICE_PAY): 404" }
-          ],
-          "hinweis": "Ein gültig signiertes Stripe-Ereignis, das auf eine Rechnung einer fremden Organisation verweist, ist nicht geprüft."
+            { "datei": "tests/api/mandanten.test.ts", "test": "Rechnung ansehen (INVOICE_VIEW) und bezahlen (INVOICE_PAY): 404" },
+            { "datei": "tests/api/zahlungsbuch.test.ts", "test": "eine korrekt signierte Zahlung auf die Rechnung einer fremden Organisation bucht nichts, wird vermerkt, gemeldet und nicht endlos wiederholt" }
+          ]
         },
         "falscherBezug": {
-          "status": "luecke",
-          "grund": "Kein Test, dass ein Stripe-Ereignis abgewiesen wird, dessen Betrag, Währung oder Rechnungsbezug (client_reference_id/metadata.invoiceId) nicht zur Rechnung passt. sicherheitsluecken.test.ts prüft am Stripe-Webhook nur Signatur und Alter, nebenlaeufigkeit.test.ts nur passende Ereignisse."
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/zahlungsbuch.test.ts", "test": "eine korrekt signierte Zahlung auf die Rechnung einer fremden Organisation bucht nichts, wird vermerkt, gemeldet und nicht endlos wiederholt" },
+            { "datei": "tests/api/zahlungsbuch.test.ts", "test": "eine Zahlung in EUR auf eine CHF-Rechnung wird nicht als CHF gebucht — Rechnung bleibt offen, Ereignis vermerkt, Büro gemeldet" },
+            { "datei": "tests/api/zahlungsbuch.test.ts", "test": "ein Betrag, der nicht zum offenen Saldo passt, wird gebucht wie eingegangen — aber markiert, protokolliert und gemeldet, nicht still" },
+            { "datei": "tests/api/zahlungsbuch.test.ts", "test": "ein Ausfall vor dem charge.refunded seiner Rückerstattung bucht keine andere Rückerstattung aus" }
+          ],
+          "hinweis": "Seit 8bcc88c. Ein abweichender Betrag wird bewusst nicht abgewiesen (das Geld ist bei Stripe eingegangen), sondern gebucht, markiert und gemeldet; Rechnung und Währung müssen passen."
         },
         "nebenlaeufigkeit": {
           "status": "abgedeckt",
           "belege": [
             { "datei": "tests/api/nebenlaeufigkeit.test.ts", "test": "dasselbe Zahlungsereignis sechsmal gleichzeitig zugestellt — eine Zahlung, einmal Kundenwert" },
-            { "datei": "tests/api/nebenlaeufigkeit.test.ts", "test": "dieselbe Rückerstattung sechsmal gleichzeitig zugestellt — genau einmal abgezogen" }
+            { "datei": "tests/api/nebenlaeufigkeit.test.ts", "test": "dieselbe Rückerstattung sechsmal gleichzeitig zugestellt — genau einmal abgezogen" },
+            { "datei": "tests/api/zahlungsbuch.test.ts", "test": "fünf gleichzeitige Stornos derselben Büro-Zahlung — genau ein 204, Kundenwert einmal gesenkt, eine Protokollzeile" },
+            { "datei": "tests/api/zahlungsbuch.test.ts", "test": "Büro-Zahlung und Rechnungsstorno gleichzeitig — nie beides, und der Saldo passt zum Gewinner" }
           ],
-          "hinweis": "Eine Büro-Zahlung parallel zum Webhook derselben Rechnung ist nicht geprüft."
+          "hinweis": "Seit 8bcc88c auch Storno gegen Zahlung und gleichzeitige Zahlungsstornos (N-05). Eine Büro-Zahlung parallel zum Webhook derselben Rechnung ist nicht geprüft."
         },
         "idempotenz": {
           "status": "abgedeckt",
           "belege": [
             { "datei": "tests/api/zahlungsbuch.test.ts", "test": "eine dreimal zugestellte Zahlung bucht einmal" },
             { "datei": "tests/api/zahlungsbuch.test.ts", "test": "ein fehlgeschlagener Versuch blockiert die spätere erfolgreiche Zahlung nicht — auch doppelt gemeldet" },
-            { "datei": "tests/api/finanzbelege.test.ts", "test": "der Storno lässt die Zeile stehen und setzt Saldo, bezahlten Betrag und Kundenwert zurück" }
-          ]
+            { "datei": "tests/api/finanzbelege.test.ts", "test": "der Storno lässt die Zeile stehen und setzt Saldo, bezahlten Betrag und Kundenwert zurück" },
+            { "datei": "tests/api/zahlungsbuch.test.ts", "test": "eine Rückerstattung vor ihrer Zahlung wird zurückgewiesen und nach der Zahlung verbucht — nicht als „doppelt\" verworfen" },
+            { "datei": "tests/api/zahlungsbuch.test.ts", "test": "eine Stripe-Zahlung auf eine stornierte Rechnung wird gebucht, zur Rückzahlung markiert und nicht endlos wiederholt" },
+            { "datei": "tests/api/zahlungsbuch.test.ts", "test": "eine Rückerstattung scheitert bei Stripe — Stand, Saldo und Kundenwert kehren zurück, genau einmal über alle drei Ereignistypen" }
+          ],
+          "hinweis": "Seit 8bcc88c werden refund.updated, refund.failed und charge.refund.updated (Status failed/canceled) verarbeitet; der Ausfall wirkt je Rückerstattung einmal."
         },
         "audit": {
           "status": "abgedeckt",
           "belege": [
-            { "datei": "tests/api/protokollpflicht.test.ts", "test": "Zahlung erfassen: PAYMENT an der Rechnung, mit Betrag und Person" }
+            { "datei": "tests/api/protokollpflicht.test.ts", "test": "Zahlung erfassen: PAYMENT an der Rechnung, mit Betrag und Person" },
+            { "datei": "tests/api/finanzbelege.test.ts", "test": "eine Büro-Zahlung ohne Protokollzeile wird nicht gebucht" },
+            { "datei": "tests/api/zahlungsbuch.test.ts", "test": "eine Stripe-Zahlung ohne Protokollzeile gibt es nicht — Stripe stellt erneut zu, dann stehen beide" },
+            { "datei": "tests/api/zahlungsbuch.test.ts", "test": "fünf gleichzeitige Stornos derselben Büro-Zahlung — genau ein 204, Kundenwert einmal gesenkt, eine Protokollzeile" }
           ],
-          "hinweis": "Nur die Büro-Zahlung. Zahlungsstorno und Stripe-Verbuchung sind nicht auf einen Protokolleintrag geprüft."
+          "hinweis": "Büro-Zahlung, Stripe-Zahlung und Zahlungsstorno (genau eine Zeile bei fünf gleichzeitigen Stornos) sind belegt. Dass der Storno ohne Protokollzeile scheitert, ist nicht erzwungen geprüft."
         }
       }
     },
@@ -970,9 +1012,12 @@
         "idempotenz": {
           "status": "abgedeckt",
           "belege": [
-            { "datei": "tests/api/zahlungsbuch.test.ts", "test": "zwei Teilrückerstattungen, je doppelt zugestellt, dazu ein verspätetes älteres Ereignis — der Saldo folgt dem letzten Stand" }
+            { "datei": "tests/api/zahlungsbuch.test.ts", "test": "zwei Teilrückerstattungen, je doppelt zugestellt, dazu ein verspätetes älteres Ereignis — der Saldo folgt dem letzten Stand" },
+            { "datei": "tests/api/zahlungsbuch.test.ts", "test": "eine Rückerstattung vor ihrer Zahlung wird zurückgewiesen und nach der Zahlung verbucht — nicht als „doppelt\" verworfen" },
+            { "datei": "tests/api/zahlungsbuch.test.ts", "test": "eine Rückerstattung, zu der auch nach Tagen keine Zahlung gehört, wird nicht endlos zurückgewiesen" },
+            { "datei": "tests/api/zahlungsbuch.test.ts", "test": "eine Rückerstattung scheitert bei Stripe — Stand, Saldo und Kundenwert kehren zurück, genau einmal über alle drei Ereignistypen" }
           ],
-          "hinweis": "Nur Stripe-Rückerstattungen. Ein doppelt abgeschicktes Gutschriftformular (zweimal POST …/credit-note) ist nicht geprüft."
+          "hinweis": "Nur Stripe-Rückerstattungen, seit 8bcc88c samt gescheiterter Rückerstattung (refund.updated/refund.failed/charge.refund.updated). Ein doppelt abgeschicktes Gutschriftformular (zweimal POST …/credit-note) ist nicht geprüft."
         },
         "audit": {
           "status": "abgedeckt",
@@ -1031,8 +1076,13 @@
             { "datei": "tests/api/datei-integritaet.test.ts", "test": "ein fremdes Ticket lässt sich nicht abschliessen" },
             { "datei": "tests/api/datei-zugriff.test.ts", "test": "die Kundschaft liest die Unterlagen des eigenen Objekts, nicht die eines fremden" },
             { "datei": "tests/api/datei-zugriff.test.ts", "test": "eine fremde Datei antwortet genauso wie eine nicht vorhandene" },
-            { "datei": "tests/api/dateisicherheit.test.ts", "test": "eine fremde Sitzung bekommt die Datei nicht" }
-          ]
+            { "datei": "tests/api/dateisicherheit.test.ts", "test": "eine fremde Sitzung bekommt die Datei nicht" },
+            { "datei": "tests/api/jobs.test.ts", "test": "die Datei einer anderen Person wird kein Einsatzfoto — 404, die Datei bleibt ungebunden" },
+            { "datei": "tests/api/jobs.test.ts", "test": "eine bereits gebundene Datei lässt sich nicht an einen zweiten Einsatz hängen — 404" },
+            { "datei": "tests/api/ablage-vertrag.test.ts", "test": "veränderte Bytes im Bucket → „abweichung\", keine Bytes (fail closed)" },
+            { "datei": "tests/api/ablage-vertrag.test.ts", "test": "Ablagezeile und FileAsset nennen verschiedene Prüfsummen → „widerspruch\", keine Bytes — auch wenn die Bytes zu einer der beiden passen" }
+          ],
+          "hinweis": "Seit 2026-09-27 (F-09 b) binden auch Einsatzfotos über dateienBinden. Über HTTP geprüft mit dem eingebauten Speicher. Seit 6696dd2 (F-09 c) liest die Auslieferung für beide Treiber über leseAblageGeprueft; der Supabase-Treiber ist gegen einen Nachbau der Storage-API geprüft (ablage-vertrag.test.ts), der Lauf gegen einen echten Bucket fehlt (E-8)."
         },
         "nebenlaeufigkeit": {
           "status": "abgedeckt",
@@ -1115,12 +1165,20 @@
           ]
         },
         "nebenlaeufigkeit": {
-          "status": "luecke",
-          "grund": "Keine Prüfung gleichzeitiger Antworten bzw. Antwort gegen Abschliessen; nebenlaeufigkeit.test.ts enthält keinen Nachrichtenfall."
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/flows.test.ts", "test": "sechs gleichzeitige Antworten: alle angenommen, keine verloren, lastMessageAt ist die neueste Nachricht" },
+            { "datei": "tests/api/flows.test.ts", "test": "Antworten gegen Abschliessen, fünf Runden: nach dem Abschluss steht keine Antwort mehr im Verlauf, jede Absage ist 422 ohne Nachricht" }
+          ],
+          "hinweis": "Seit f2ab527: Die Antwort sperrt den Verlauf und prüft „geschlossen“ dahinter (message.service.ts)."
         },
         "idempotenz": {
-          "status": "luecke",
-          "grund": "Kein Test zu doppelt abgeschickten Nachrichten oder doppeltem Abschliessen. Belegt ist nur, dass ein Anhang kein zweites Mal gebunden wird (sicherheitsluecken.test.ts: „ein eigener Anhang bindet einmal — ein zweites Binden scheitert samt Nachricht“) — das ist Dateibindung, nicht die Wiederholung einer Nachricht."
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/flows.test.ts", "test": "ein zweites Abschliessen ist eine Absage (422) und schreibt keine Nachricht" },
+            { "datei": "tests/api/sicherheitsluecken.test.ts", "test": "ein eigener Anhang bindet einmal — ein zweites Binden scheitert samt Nachricht" }
+          ],
+          "hinweis": "Belegt sind das doppelte Abschliessen und das doppelte Binden eines Anhangs. Eine doppelt abgeschickte Antwort ergibt zwei Nachrichten — es gibt keinen Idempotenzschlüssel; das ist nicht geprüft und nicht verhindert."
         },
         "audit": {
           "status": "abgedeckt",
@@ -1173,8 +1231,15 @@
           ]
         },
         "falscherBezug": {
-          "status": "luecke",
-          "grund": "Kein Test für unpassende Verweise innerhalb der eigenen Organisation (Umwandlung einer Anfrage in eine bestehende, nicht passende Kundenakte; Aufgabe/Besichtigung an einer Anfrage mit anderem Kundenbezug)."
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/flows.test.ts", "test": "die umgewandelte Anfrage von A in einer Offerte für B: 422, keine Offerte, die Anfrage bleibt gewonnen" },
+            { "datei": "tests/api/flows.test.ts", "test": "die Anfrage von A ohne Kundschaft, aber mit dem Objekt von B: 404, keine Offerte" },
+            { "datei": "tests/api/flows.test.ts", "test": "Kundschaft A mit dem Objekt von B: 404, keine Offerte" },
+            { "datei": "tests/api/flows.test.ts", "test": "Besichtigung: die Anfrage von A für Kundschaft B → 422, mit dem Objekt von B → 404; nichts entsteht" },
+            { "datei": "tests/api/flows.test.ts", "test": "Gegenprobe: passende Bezüge werden angenommen — mit und ohne ausdrückliche Kundschaft, und eine offene Anfrage zu jeder Kundschaft" }
+          ],
+          "hinweis": "Seit f2ab527 für Offerte und Besichtigung (Anfrage, Kundschaft und Objekt müssen zusammenpassen). Die Umwandlung einer Anfrage in eine bestehende, nicht passende Kundenakte und Aufgaben an einer Anfrage mit anderem Kundenbezug sind nicht eigens geprüft."
         },
         "nebenlaeufigkeit": {
           "status": "abgedeckt",
@@ -1356,7 +1421,8 @@
           "status": "abgedeckt",
           "belege": [
             { "datei": "tests/api/automatisierungen.test.ts", "test": "ein echter Geschäftsvorgang erzeugt einen Lauf" },
-            { "datei": "tests/api/automatisierungen.test.ts", "test": "TASK_DUE: gemeldet mit Bezug auf die Frist, ausgeführt, und übersprungen, wenn der Anlass fehlt" }
+            { "datei": "tests/api/automatisierungen.test.ts", "test": "TASK_DUE: gemeldet mit Bezug auf die Frist, ausgeführt, und übersprungen, wenn der Anlass fehlt" },
+            { "datei": "tests/api/automatisierungen.test.ts", "test": "die Umwandlung Offerte → Buchung löst BOOKING_CREATED und BOOKING_CONFIRMED aus" }
           ]
         },
         "validierung": {
@@ -1389,8 +1455,11 @@
           "hinweis": "Dass ein Vorgang der eigenen Organisation keine Regel der fremden auslöst, ist nicht eigens geprüft."
         },
         "falscherBezug": {
-          "status": "luecke",
-          "grund": "Kein Test, dass eine Aktion (Aufgabe, E-Mail, Statuswechsel) nur auf den auslösenden Datensatz wirkt und nicht über einen Platzhalter oder eine Kennung in der Konfiguration auf einen fremden."
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/automatisierungen.test.ts", "test": "Status, Aufgabe, Meldung und Platzhalter treffen nur die auslösende Buchung — auch mit der Kennung einer anderen in der Konfiguration" }
+          ],
+          "hinweis": "Seit f2ab527, am Auslöser Buchung. Andere Auslöser (Rechnung, Anfrage, Einsatz) sind nicht je einzeln geprüft."
         },
         "nebenlaeufigkeit": {
           "status": "abgedeckt",
@@ -1405,8 +1474,12 @@
           "belege": [
             { "datei": "tests/api/automatisierungen.test.ts", "test": "derselbe Vorgang erzeugt keinen zweiten Lauf" },
             { "datei": "tests/api/automatisierungen.test.ts", "test": "scheitert die zweite Aktion, läuft die erste beim Wiederholen nicht noch einmal" },
-            { "datei": "tests/api/automatisierungen.test.ts", "test": "eine Aktion mit Aussenwirkung, die mittendrin abbrach, wird nicht blind wiederholt" }
-          ]
+            { "datei": "tests/api/automatisierungen.test.ts", "test": "eine Aktion mit Aussenwirkung, die mittendrin abbrach, wird nicht blind wiederholt" },
+            { "datei": "tests/api/automatisierungen.test.ts", "test": "eine während der Wiederholung geänderte Regel führt an derselben Stelle keine andere Aktion als Fortsetzung aus" },
+            { "datei": "tests/api/automatisierungen.test.ts", "test": "ein Ereignis mit aufgebrauchten Versuchen wird der Leitung gemeldet — genau einmal" },
+            { "datei": "tests/api/automatisierungen.test.ts", "test": "wer vor dem Abbruch erreicht wurde, bekommt beim Wiederholen keine zweite Nachricht — die übrigen genau eine" }
+          ],
+          "hinweis": "Seit f2ab527 ist auch der dritte Teil von N-07 (Empfänger eines abgebrochenen Versands, result.zugestellt) geprüft."
         },
         "audit": {
           "status": "abgedeckt",
@@ -1607,17 +1680,25 @@
           ]
         },
         "nebenlaeufigkeit": {
-          "status": "luecke",
-          "grund": "Keine Prüfung gleichzeitiger Entwürfe/Veröffentlichungen desselben Blocks; nebenlaeufigkeit.test.ts enthält keinen CMS-Fall."
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/cms.test.ts", "test": "sechs gleichzeitige Entwürfe eines noch nie gespeicherten Bausteins: kein 500, eine Zeile, einer der Entwürfe gilt, keine Fassung" },
+            { "datei": "tests/api/cms.test.ts", "test": "gleichzeitige Entwürfe eines veröffentlichten Bausteins: keine Fassung geht verloren, keine entsteht zu viel" },
+            { "datei": "tests/api/cms.test.ts", "test": "fünf gleichzeitige Freigaben desselben Entwurfs: genau eine Fassung und eine Protokollzeile" }
+          ],
+          "hinweis": "Seit f2ab527 (Freigaben sperren die Bausteine, content.service.ts)."
         },
         "idempotenz": {
-          "status": "luecke",
-          "grund": "Kein Test, dass ein zweites Veröffentlichen ohne Änderung keine neue Revision erzeugt."
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/cms.test.ts", "test": "zweimal veröffentlichen ohne Änderung: keine zweite Fassung, keine zweite Protokollzeile" }
+          ]
         },
         "audit": {
           "status": "abgedeckt",
           "belege": [
-            { "datei": "tests/api/protokollpflicht.test.ts", "test": "Text veröffentlichen: UPDATE, das den veröffentlichten Baustein nennt" }
+            { "datei": "tests/api/protokollpflicht.test.ts", "test": "Text veröffentlichen: UPDATE, das den veröffentlichten Baustein nennt" },
+            { "datei": "tests/api/cms.test.ts", "test": "fünf gleichzeitige Freigaben desselben Entwurfs: genau eine Fassung und eine Protokollzeile" }
           ],
           "hinweis": "Nur das Veröffentlichen. Zurücksetzen und Bildwechsel sind nicht auf Revisions- oder Prüfprotokolleinträge geprüft."
         }
@@ -1663,15 +1744,18 @@
             { "datei": "tests/api/mandanten.test.ts", "test": "Rechnung ansehen (INVOICE_VIEW) und bezahlen (INVOICE_PAY): 404" },
             { "datei": "tests/api/mandanten.test.ts", "test": "Buchung verwalten (BOOKING_MANAGE): kein PDF (404)" },
             { "datei": "tests/api/mandanten.test.ts", "test": "Unterzeichnungslink tauschen (SIGNATURE_ACCESS): 404, keine Signatursitzung, kein Protokolleintrag" },
-            { "datei": "tests/api/mandanten.test.ts", "test": "öffentliche Datei der fremden Organisation wird hier nicht ausgeliefert (404) — weder angemeldet noch anonym" }
+            { "datei": "tests/api/mandanten.test.ts", "test": "öffentliche Datei der fremden Organisation wird hier nicht ausgeliefert (404) — weder angemeldet noch anonym" },
+            { "datei": "tests/api/newsletter-links.test.ts", "test": "der Token einer fremden Organisation ist unbekannt (404) und ändert nichts" }
           ],
-          "hinweis": "Belegt sind die Token-Links und öffentliche Dateien. Dass eine öffentliche Buchung oder Preisberechnung keine Leistung oder Adresse einer fremden Organisation annimmt, ist nicht geprüft."
+          "hinweis": "Belegt sind die Token-Links, die Newsletter-Links (seit f2ab527) und öffentliche Dateien. Dass eine öffentliche Buchung oder Preisberechnung keine Leistung oder Adresse einer fremden Organisation annimmt, ist nicht geprüft."
         },
         "falscherBezug": {
           "status": "abgedeckt",
           "belege": [
             { "datei": "tests/api/buchung-integritaet.test.ts", "test": "Gast mit fremder Adresse → 404, nichts angelegt" },
             { "datei": "tests/api/buchung-integritaet.test.ts", "test": "Gast mit fremder Datei → 422, die Datei bleibt, was sie war" },
+            { "datei": "tests/api/buchung-integritaet.test.ts", "test": "Gast mit der E-Mail-Adresse einer Kundschaft und deren Adresse → 404, nichts angelegt" },
+            { "datei": "tests/api/buchung-integritaet.test.ts", "test": "Gast mit bekannter E-Mail-Adresse und neuer Adresse: bucht, erfährt nichts über die Kundschaft, bekommt keinen Rabatt und verdrängt nichts" },
             { "datei": "tests/api/oeffentlicher-zugang.test.ts", "test": "ein Offerttoken öffnet keine Rechnung" },
             { "datei": "tests/api/oeffentlicher-zugang.test.ts", "test": "ein Rechnungstoken öffnet keine Offerte" }
           ]
@@ -1687,13 +1771,24 @@
           "status": "abgedeckt",
           "belege": [
             { "datei": "tests/api/nebenlaeufigkeit.test.ts", "test": "dieselbe Adresse dreimal gleichzeitig zum Newsletter angemeldet — ein Eintrag, dreimal dieselbe Antwort" },
-            { "datei": "tests/api/nebenlaeufigkeit.test.ts", "test": "dieselbe Kontaktanfrage doppelt abgeschickt — eine offene Anfrage, beide Nachrichten daran" }
+            { "datei": "tests/api/nebenlaeufigkeit.test.ts", "test": "dieselbe Kontaktanfrage doppelt abgeschickt — eine offene Anfrage, beide Nachrichten daran" },
+            { "datei": "tests/api/newsletter-links.test.ts", "test": "der Klick bestätigt, entwertet den Token, protokolliert ohne Person — ein zweiter Klick ist 404" },
+            { "datei": "tests/api/newsletter-links.test.ts", "test": "der Klick meldet ab und protokolliert einmal — ein zweiter Klick ändert nichts" }
           ],
-          "hinweis": "Newsletter und Kontaktformular. Eine doppelt abgeschickte Gastbuchung (zweimal POST /api/public/bookings) ist nicht geprüft."
+          "hinweis": "Newsletter (Anmelden, Bestätigen, Abmelden) und Kontaktformular. Seit f2ab527 schreibt der blosse Seitenaufruf eines Newsletter-Links nichts mehr („der Seitenaufruf allein bestätigt nichts und bietet die Schaltfläche an“); erst das POST wirkt. Eine doppelt abgeschickte Gastbuchung (zweimal POST /api/public/bookings) ist nicht geprüft."
         },
         "audit": {
-          "status": "luecke",
-          "grund": "Kein Test prüft, ob öffentliche Schreibwege (Gastbuchung, Kontaktanfrage, Offertablehnung ohne Signatur) einen Protokolleintrag hinterlassen; protokollpflicht.test.ts deckt nur angemeldete Wege ab."
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/protokollpflicht.test.ts", "test": "Kontaktformular: CREATE an der neuen Anfrage, eine weitere Anfrage derselben Person UPDATE daran" },
+            { "datei": "tests/api/protokollpflicht.test.ts", "test": "Offertanfrage: CREATE an der Anfrage und CREATE am Offertentwurf — beide mit Adresse" },
+            { "datei": "tests/api/protokollpflicht.test.ts", "test": "Gastbuchung: CREATE an der Buchung, ohne Person" },
+            { "datei": "tests/api/protokollpflicht.test.ts", "test": "Newsletter-Anmeldung: CREATE am Eintrag, eine erneute Anmeldung UPDATE — ohne Adresse und ohne Token in der Zeile" },
+            { "datei": "tests/api/protokollpflicht.test.ts", "test": "Bewerbung: CREATE an der Bewerbung, ohne Name und E-Mail-Adresse in der Zeile" },
+            { "datei": "tests/api/protokollpflicht.test.ts", "test": "Offertablehnung über den Link: UPDATE an der Offerte, ohne Person, mit der Browser-Angabe" },
+            { "datei": "tests/api/newsletter-links.test.ts", "test": "der Klick bestätigt, entwertet den Token, protokolliert ohne Person — ein zweiter Klick ist 404" }
+          ],
+          "hinweis": "Seit f2ab527. Die Offertablehnung braucht einen echt ausgestellten Link aus dem Postausgang des Testservers; ohne ihn überspringt sich der Fall (dann scheitert das Null-Übersprung-Tor, N-08)."
         }
       }
     }

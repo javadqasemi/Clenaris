@@ -21,6 +21,9 @@
         { "datei": "tests/api/qualitaet.test.ts", "test": "die Kundschaft sieht nur abgeschlossene Begehungen der eigenen Objekte" },
         { "datei": "tests/api/bi-fuehrung.test.ts", "test": "Mitarbeitende sehen fremde Bereichsziele nicht (404) und können dort nicht einchecken" },
         { "datei": "tests/api/sicherheitsluecken.test.ts", "test": "die Kundschaft liest keine fremde Buchung — weder Daten noch PDF noch Seite" },
+        { "datei": "tests/api/buchung-integritaet.test.ts", "test": "Gast mit der E-Mail-Adresse einer Kundschaft und deren Adresse → 404, nichts angelegt" },
+        { "datei": "tests/api/buchung-integritaet.test.ts", "test": "Gast mit bekannter E-Mail-Adresse und neuer Adresse: bucht, erfährt nichts über die Kundschaft, bekommt keinen Rabatt und verdrängt nichts" },
+        { "datei": "tests/api/qualitaet.test.ts", "test": "ein Einsatz aus einem anderen Vertrag derselben Kundschaft → 422" },
         { "datei": "tests/api/sicherheitsluecken.test.ts", "test": "die Kundschaft liest keinen fremden Nachrichtenverlauf und schreibt nicht hinein" },
         { "datei": "tests/api/sicherheitsluecken.test.ts", "test": "Mitarbeitende lesen und ändern keine Zeiten einer anderen Person" },
         { "datei": "tests/api/zugriffsgrenzen.test.ts", "test": "Kundschaft: GET /api/messages/:id auf den Verlauf einer anderen Kundschaft → 404 (wie „nicht vorhanden\", C19), ohne Inhalt" },
@@ -56,9 +59,11 @@
         { "datei": "tests/api/mandanten.test.ts", "test": "die Übergabe beginnt nicht (404), setzt kein Signaturcookie und sperrt die Sitzung nicht" },
         { "datei": "tests/api/mandanten.test.ts", "test": "Unterzeichnungslink tauschen (SIGNATURE_ACCESS): 404, keine Signatursitzung, kein Protokolleintrag" },
         { "datei": "tests/api/mandanten.test.ts", "test": "Zwei-Faktor-Rücksetzung durch die Systemverantwortung: 404, der zweite Faktor bleibt" },
-        { "datei": "tests/api/mandanten.test.ts", "test": "ein Nachrichtenverlauf zu einem fremden Einsatz wird nicht eröffnet (404)" }
+        { "datei": "tests/api/mandanten.test.ts", "test": "ein Nachrichtenverlauf zu einem fremden Einsatz wird nicht eröffnet (404)" },
+        { "datei": "tests/api/zahlungsbuch.test.ts", "test": "eine korrekt signierte Zahlung auf die Rechnung einer fremden Organisation bucht nichts, wird vermerkt, gemeldet und nicht endlos wiederholt" },
+        { "datei": "tests/api/newsletter-links.test.ts", "test": "der Token einer fremden Organisation ist unbekannt (404) und ändert nichts" }
       ],
-      "hinweis": "Nicht eigens geprüft: Berichte der Führung, der Einsatzplan eines fremden Vertrags, ein gültig signiertes Stripe-Ereignis zu einer fremden Rechnung, und dass eine öffentliche Buchung oder Preisberechnung keine fremde Leistung annimmt. Die Protokolltabellen EmailLog/SmsLog tragen keine Organisation (docs/MANDANTEN.md)."
+      "hinweis": "Seit 8bcc88c/f2ab527 geprüft: ein gültig signiertes Stripe-Ereignis zu einer fremden Rechnung und Newsletter-Links einer fremden Organisation. Nicht eigens geprüft: Berichte der Führung, der Einsatzplan eines fremden Vertrags, und dass eine öffentliche Buchung oder Preisberechnung keine fremde Leistung annimmt. EmailLog/SmsLog tragen seit 2026-09-27 eine Organisation (F-02, Migration 20260927180000_kommunikation_mandant); geprüft ist nur das E-Mail-Zustellprotokoll, kein SMS-Fall. Das Lohn-PDF einer fremden Organisation ist geprüft (lohnabrechnung.test.ts: „das PDF: fremde Organisation — weder die Datei noch die Abrechnung einer fremden Organisation wird ausgeliefert“)."
     },
     {
       "id": "csrf",
@@ -90,9 +95,14 @@
         { "datei": "tests/api/automatisierungen.test.ts", "test": "DNS Rebinding: erst öffentlich, beim Verbinden privat — die Verbindung wird verweigert" },
         { "datei": "tests/api/automatisierungen.test.ts", "test": "weist eine Regel mit privater Webhook-Adresse ab" },
         { "datei": "tests/api/automatisierungen.test.ts", "test": "verlangt beim Webhook https und eine vollständige Adresse" },
-        { "datei": "tests/api/sicherheitsluecken.test.ts", "test": "${status} nach ${ort} wird nicht verfolgt — genau eine Anfrage, Ergebnis ein Fehlschlag" }
+        { "datei": "tests/api/sicherheitsluecken.test.ts", "test": "${status} nach ${ort} wird nicht verfolgt — genau eine Anfrage, Ergebnis ein Fehlschlag" },
+        { "datei": "tests/api/webhook-ziel.test.ts", "test": "${url} wird vor jeder Auflösung und Verbindung abgewiesen" },
+        { "datei": "tests/api/webhook-ziel.test.ts", "test": "der Standardport — weggelassen oder ausdrücklich :443 — bleibt zulässig" },
+        { "datei": "tests/api/webhook-ziel.test.ts", "test": "eine tröpfelnde Gegenstelle wird nach der Gesamtfrist abgebrochen — Ergebnis TIMEOUT, nicht Erfolg" },
+        { "datei": "tests/api/webhook-ziel.test.ts", "test": "eine hängende Namensauflösung zählt zur Frist" },
+        { "datei": "tests/api/webhook-ziel.test.ts", "test": "eine endlose Antwort wird nach ${WEBHOOK_MAX_ANTWORT_BYTES} Bytes abgebrochen, statt den Speicher zu füllen" }
       ],
-      "hinweis": "Nur der Webhook der Automatisierung, jetzt samt Weiterleitungsfolge (30x auf eine interne Adresse wird nicht verfolgt)."
+      "hinweis": "Nur der Webhook der Automatisierung, samt Weiterleitungsfolge (30x auf eine interne Adresse wird nicht verfolgt). Seit 2026-09-27 (N-10) auch nur Port 443, eine Gesamtfrist inklusive Namensauflösung und die Grössengrenze der Antwort."
     },
     {
       "id": "xss-nutzlast",
@@ -127,7 +137,7 @@
         { "datei": "tests/api/finanzbelege.test.ts", "test": "der Buchhaltungsexport enthält keine Zelle, die mit einer Formel beginnt" },
         { "datei": "tests/api/sicherheitsluecken.test.ts", "test": "keine Zelle ist eine Formel, und = + @ am Anfang eines Freitexts sind entschärft" }
       ],
-      "hinweis": "Geprüft sind der CSV-Buchhaltungsexport und der XLSX-Export der Kundschaft (/api/exports/kunden). Die XLSX-Exporte der Rechnungen und Zeiten (exportInvoicesXlsx, exportTimesheetsXlsx in export.service.ts) und die Excel-Berichte der Führung sind nicht auf Formelanfänge geprüft."
+      "hinweis": "Geprüft sind der CSV-Buchhaltungsexport und der XLSX-Export der Kundschaft (/api/exports/kunden). Seit 2026-09-27 schreiben alle XLSX-Exporte (auch Rechnungen, Zeiten und der Führungsbericht) über denselben entschärfenden Weg `mappeSchreiben` in export.service.ts; eigens getestet ist davon nur der Kundenexport."
     },
     {
       "id": "oeffentlicher-token-wiederverwendung",
@@ -144,8 +154,12 @@
         { "datei": "tests/api/signatur.test.ts", "test": "Abbrechen widerruft Tokens und macht bestehende Sitzungen sofort wertlos" },
         { "datei": "tests/api/signatur.test.ts", "test": "speichert nur einen Argon2id-Hash, zählt Versuche, sperrt den Neuversand und gilt einmal" },
         { "datei": "tests/api/buchung-integritaet.test.ts", "test": "die Spalte ist weg, der Link löst über den Hash auf und lässt sich widerrufen" },
-        { "datei": "tests/api/oeffentlicher-zugang.test.ts", "test": "öffnen ohne ausdrückliche Freigabe nichts" }
-      ]
+        { "datei": "tests/api/oeffentlicher-zugang.test.ts", "test": "öffnen ohne ausdrückliche Freigabe nichts" },
+        { "datei": "tests/api/newsletter-links.test.ts", "test": "der Klick bestätigt, entwertet den Token, protokolliert ohne Person — ein zweiter Klick ist 404" },
+        { "datei": "tests/api/newsletter-links.test.ts", "test": "der Seitenaufruf allein bestätigt nichts und bietet die Schaltfläche an" },
+        { "datei": "tests/api/newsletter-links.test.ts", "test": "der Seitenaufruf allein meldet nicht ab und bietet die Schaltfläche an" }
+      ],
+      "hinweis": "Seit f2ab527 wirken Newsletter-Bestätigung und -Abmeldung nur per POST; ein Vorabruf durch einen Mailfilter (GET der Seite) verbraucht den Token nicht mehr."
     },
     {
       "id": "refresh-replay",
@@ -159,7 +173,7 @@
         { "datei": "tests/api/mandanten.test.ts", "test": "wechselt ein Konto die Organisation, endet die laufende Sitzung sofort — Endpunkt, Seite und Erneuerung" },
         { "datei": "tests/api/sicherheitsluecken.test.ts", "test": "ein rotierter Token, nach der Kulanzfrist erneut vorgelegt, macht auch den neuesten ungültig" }
       ],
-      "hinweis": "Die Sperre der ganzen Rotationsfamilie nach später Wiederverwendung ist belegt. Nicht geprüft: dass dabei ein TOKEN_REUSE-Sicherheitsereignis entsteht — der Katalog stuft die Tokenwiederverwendung nur als Tabelle ein."
+      "hinweis": "Die Sperre der ganzen Rotationsfamilie nach später Wiederverwendung ist belegt; seit 8bcc88c auch die gleichzeitige Einlösung desselben Zwei-Faktor-Ersatzcodes (two-factor.test.ts: „derselbe Ersatzcode fünfmal gleichzeitig eingelöst: genau eine Sitzung, vier 401, ein Code weniger im Vorrat“). Nicht geprüft: dass dabei ein TOKEN_REUSE-Sicherheitsereignis entsteht — der Katalog stuft die Tokenwiederverwendung nur als Tabelle ein."
     },
     {
       "id": "dateiersetzung",
@@ -174,8 +188,14 @@
         { "datei": "tests/api/signatur.test.ts", "test": "liefert weiter die gebundene Fassung, wenn eine neue hochgeladen wurde" },
         { "datei": "tests/api/signatur.test.ts", "test": "bricht ab, wenn die gespeicherten Originalbytes nicht mehr zu Hash A passen" },
         { "datei": "tests/api/vor-ort-abnahme.test.ts", "test": "verweigert den Abschluss, wenn die Originalbytes manipuliert wurden" },
-        { "datei": "tests/api/lohnabrechnung.test.ts", "test": "das PDF: gespeicherte Bytes mit Prüfsumme, nur für Berechtigte" }
-      ]
+        { "datei": "tests/api/lohnabrechnung.test.ts", "test": "das PDF: gespeicherte Bytes mit Prüfsumme, nur für Berechtigte" },
+        { "datei": "tests/api/lohnabrechnung.test.ts", "test": "das PDF: veränderte Bytes (falsche Prüfsumme) werden nicht ausgeliefert — keine anderen Bytes, kein Abrufprotokoll" },
+        { "datei": "tests/api/lohnabrechnung.test.ts", "test": "das PDF: fehlt das gespeicherte Objekt, antwortet der Endpunkt 404 — nie mit anderen Bytes" },
+        { "datei": "tests/api/lohnabrechnung.test.ts", "test": "das PDF: ohne Sollwert wird nicht ausgeliefert; widersprechen sich Abrechnung und Datei, auch nicht" },
+        { "datei": "tests/api/ablage-vertrag.test.ts", "test": "veränderte Bytes im Bucket → „abweichung\", keine Bytes (fail closed)" },
+        { "datei": "tests/api/ablage-vertrag.test.ts", "test": "ohne upsert scheitert ein belegter Pfad laut — eine unveränderliche Fassung wird nie still überschrieben" }
+      ],
+      "hinweis": "Über HTTP geprüft mit dem eingebauten Speicher; der Supabase-Treiber seit 6696dd2 gegen einen Nachbau der Storage-API (ablage-vertrag.test.ts). Ein Lesetest gegen einen echten Supabase-Bucket fehlt (EXTERNER NACHWEIS E-8, scripts/abnahme/supabase-ablage.ts)."
     },
     {
       "id": "datei-umbindung",
@@ -193,7 +213,10 @@
         { "datei": "tests/api/sicherheitsluecken.test.ts", "test": "der ungebundene Upload einer Kundin wird nicht zur Fassung einer Führungsakte" },
         { "datei": "tests/api/sicherheitsluecken.test.ts", "test": "eine Fassung bindet ihre Datei einmal — weder eine zweite Akte noch eine zweite Fassung bekommen sie" },
         { "datei": "tests/api/sicherheitsluecken.test.ts", "test": "die Adresse eines privaten Anhangs wird nicht zum Website-Bild" },
-        { "datei": "tests/api/mandanten.test.ts", "test": "ein eigenes Dokument mit fremder Datei oder fremder Person wird nicht angelegt (404)" }
+        { "datei": "tests/api/mandanten.test.ts", "test": "ein eigenes Dokument mit fremder Datei oder fremder Person wird nicht angelegt (404)" },
+        { "datei": "tests/api/jobs.test.ts", "test": "die Datei einer anderen Person wird kein Einsatzfoto — 404, die Datei bleibt ungebunden" },
+        { "datei": "tests/api/jobs.test.ts", "test": "eine bereits gebundene Datei lässt sich nicht an einen zweiten Einsatz hängen — 404" },
+        { "datei": "tests/api/jobs.test.ts", "test": "eine als schädlich erkannte Datei wird kein Einsatzfoto — 404" }
       ],
       "hinweis": "Nicht geprüft ist das Profilbild der Personalakte, die letzte Stelle, die eine fileId aus der Anfrage annimmt."
     },
@@ -224,9 +247,13 @@
         { "datei": "tests/api/zahlungsbuch.test.ts", "test": "zwei Teilrückerstattungen, je doppelt zugestellt, dazu ein verspätetes älteres Ereignis — der Saldo folgt dem letzten Stand" },
         { "datei": "tests/api/zahlungsbuch.test.ts", "test": "eine volle Rückerstattung stellt den offenen Posten wieder her" },
         { "datei": "tests/api/zahlungsbuch.test.ts", "test": "eine Büro-Zahlung nach einer Rückerstattung verliert die Rückerstattung nicht" },
-        { "datei": "tests/api/nebenlaeufigkeit.test.ts", "test": "dieselbe Rückerstattung sechsmal gleichzeitig zugestellt — genau einmal abgezogen" }
+        { "datei": "tests/api/nebenlaeufigkeit.test.ts", "test": "dieselbe Rückerstattung sechsmal gleichzeitig zugestellt — genau einmal abgezogen" },
+        { "datei": "tests/api/zahlungsbuch.test.ts", "test": "eine Rückerstattung vor ihrer Zahlung wird zurückgewiesen und nach der Zahlung verbucht — nicht als „doppelt\" verworfen" },
+        { "datei": "tests/api/zahlungsbuch.test.ts", "test": "eine Rückerstattung, zu der auch nach Tagen keine Zahlung gehört, wird nicht endlos zurückgewiesen" },
+        { "datei": "tests/api/zahlungsbuch.test.ts", "test": "eine Rückerstattung scheitert bei Stripe — Stand, Saldo und Kundenwert kehren zurück, genau einmal über alle drei Ereignistypen" },
+        { "datei": "tests/api/zahlungsbuch.test.ts", "test": "ein Ausfall vor dem charge.refunded seiner Rückerstattung bucht keine andere Rückerstattung aus" }
       ],
-      "hinweis": "Gleichzeitig zugestellt ist nur dieselbe Rückerstattungsmeldung; zwei verschiedene Rückerstattungsereignisse zur selben Zahlung sind nur nacheinander geprüft."
+      "hinweis": "Gleichzeitig zugestellt ist nur dieselbe Rückerstattungsmeldung; zwei verschiedene Rückerstattungsereignisse zur selben Zahlung sind nur nacheinander geprüft. Seit 8bcc88c stellen refund.updated, refund.failed und charge.refund.updated (Status failed/canceled) Stand, Saldo und Kundenwert wieder her, je Rückerstattung genau einmal."
     },
     {
       "id": "rechnung-nebenlaeufigkeit",
@@ -252,9 +279,11 @@
       "belege": [
         { "datei": "tests/api/dispatch.test.ts", "test": "zwei gleichzeitige Zuteilungen derselben Person auf überlappende Einsätze: genau eine gelingt — fünfmal" },
         { "datei": "tests/api/buchung-integritaet.test.ts", "test": "zwei gleichzeitige Verschiebungen auf den letzten Platz: genau eine gelingt" },
-        { "datei": "tests/api/nebenlaeufigkeit.test.ts", "test": "Zuteilung und Bewilligung gleichzeitig — nie beides, fünfmal" }
+        { "datei": "tests/api/nebenlaeufigkeit.test.ts", "test": "Zuteilung und Bewilligung gleichzeitig — nie beides, fünfmal" },
+        { "datei": "tests/api/dispatch.test.ts", "test": "Terminverschiebung und Teamwechsel gleichzeitig: nie ein ungeprüftes Team zur neuen Zeit — fünfmal" },
+        { "datei": "tests/api/zeiterfassung.test.ts", "test": "sechs gleichzeitige Stempelungen ergeben genau eine laufende Erfassung" }
       ],
-      "hinweis": "Nicht geprüft: gleichzeitiges Verschieben eines Einsatzes (moveJob) auf eine bereits belegte Person."
+      "hinweis": "Seit 2026-09-27 (F-06, N-01) auch Termin gegen Team am selben Einsatz und doppeltes Einstempeln. Nicht geprüft: gleichzeitiges Verschieben eines Einsatzes (moveJob) auf eine bereits anderweitig belegte Person."
     },
     {
       "id": "automatisierung-wiederholung",
@@ -267,9 +296,11 @@
         { "datei": "tests/api/automatisierungen.test.ts", "test": "eine Aktion mit Aussenwirkung, die mittendrin abbrach, wird nicht blind wiederholt" },
         { "datei": "tests/api/automatisierungen.test.ts", "test": "nimmt hängende Läufe wieder auf — und gibt sie nach dem letzten Versuch als FAILED auf" },
         { "datei": "tests/api/kommunikation.test.ts", "test": "zwei Tagesläufe ergeben genau eine Bitte (vorher griff die Sperre nie)" },
-        { "datei": "tests/api/nebenlaeufigkeit.test.ts", "test": "fünf gleichzeitige stündliche Läufe mit einem fälligen Lauf — die Aktion läuft genau einmal" }
+        { "datei": "tests/api/nebenlaeufigkeit.test.ts", "test": "fünf gleichzeitige stündliche Läufe mit einem fälligen Lauf — die Aktion läuft genau einmal" },
+        { "datei": "tests/api/automatisierungen.test.ts", "test": "eine während der Wiederholung geänderte Regel führt an derselben Stelle keine andere Aktion als Fortsetzung aus" },
+        { "datei": "tests/api/automatisierungen.test.ts", "test": "wer vor dem Abbruch erreicht wurde, bekommt beim Wiederholen keine zweite Nachricht — die übrigen genau eine" }
       ],
-      "hinweis": "Gleichzeitige Abarbeitungsläufe (Cron mehrfach gestartet) sind über HTTP belegt; zwei gleichzeitige Auslösungen durch denselben Vorgang nur über den Teilindex an der Datenbank."
+      "hinweis": "Gleichzeitige Abarbeitungsläufe (Cron mehrfach gestartet) sind über HTTP belegt; zwei gleichzeitige Auslösungen durch denselben Vorgang nur über den Teilindex an der Datenbank. Seit f2ab527 ist auch geprüft, dass Empfänger eines abgebrochenen Versands nicht erneut benachrichtigt werden (N-07)."
     }
   ]
 }

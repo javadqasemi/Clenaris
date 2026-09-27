@@ -50,6 +50,15 @@ Neuladen. Behoben mit einem Schlüssel aus den Zeilenkennungen.
 
 ### Offen — PARTIAL, bewusst nicht in dieser Wave
 
+> **Nachtrag 2026-09-27:** Alle Zeilen dieser Tabelle sind inzwischen
+> geschlossen — Freigabe aufheben in der Einsatzakte, Tarifimport,
+> Bestätigen sowie Profil ändern und beenden in `/admin/lohn`, Signatur
+> „Erneut senden"/„Abbrechen", „Heute festschreiben" im Cockpit, und die
+> Schreibzugriffe liegen in `message`-, `supplier`-, `expense`-, `content`-
+> und `website.service`. Die Tabelle bleibt als Stand der damaligen Wave
+> stehen; Belege in `security/merkmale-geprueft.json` und
+> `docs/FINAL_REMEDIATION_MATRIX.md`.
+
 | Befund | Bewertung |
 |---|---|
 | `POST /api/time/:id/reopen` ohne Maske | Freigabe aufheben geht nur über die API. Selten gebraucht, aber ohne Maske muss für eine Korrektur nach der Freigabe jemand mit Schnittstellenzugang ran |
