@@ -742,3 +742,38 @@ describe('RB-011 — Zugehörigkeit der Begehung', () => {
     assert.equal(antwort.status, 422, JSON.stringify(antwort.payload));
   });
 });
+
+/**
+ * Gebäude (Phase 18, 2026-09-27): kein Verweis auf etwas, das niemand
+ * anlegen kann.
+ *
+ * `Building` hat keinen Anlegeweg — keine Route, keine Oberfläche, keinen
+ * Seed — und keine Organisation. Die Vertragsleistung nahm trotzdem eine
+ * `buildingId` entgegen und schrieb sie ungeprüft: ein Verweis auf eine
+ * mandantenlose Zeile, deren Name danach in der Vertragsakte stand. Solange
+ * Gebäude kein Produktbestandteil mit eigenem Lebenszyklus sind, weist die
+ * Schnittstelle den Verweis ab; die Lage einer Leistung beschreibt `zone`.
+ */
+describe('Gebäude: kein Verweis ohne Lebenszyklus', () => {
+  it('eine Vertragsleistung mit buildingId wird abgewiesen (422), kein Vertrag entsteht', ohneDb, async () => {
+    const gebaeude = await db!.building.create({ data: { name: `Fremdgebäude ${Date.now()}`, street: 'Nirgendweg 1', postalCode: '3000', city: 'Bern' } });
+    try {
+      const titel = `Gebäudeverweis ${Date.now()}`;
+      const antwort = await post<{ data: { id: string } }>(
+        '/api/contracts',
+        {
+          contract: { customerId: kundeId, propertyId: objektId, title: titel, startDate: tagIn(1) },
+          version: konditionen(),
+          services: [{ serviceId: leistungId, label: 'Unterhaltsreinigung', buildingId: gebaeude.id, estimatedMinutes: 120, requiredCrewSize: 1, materialsBy: 'PROVIDER' }],
+        },
+        { jar: jars.admin },
+      );
+      if (antwort.status === 201) angelegt.push(data(antwort).id);
+      assert.equal(antwort.status, 422, JSON.stringify(antwort.payload));
+      assert.equal(await db!.contractService.count({ where: { buildingId: gebaeude.id } }), 0, 'eine Leistung verweist auf das Gebäude');
+    } finally {
+      await db!.contractService.updateMany({ where: { buildingId: gebaeude.id }, data: { buildingId: null } }).catch(() => undefined);
+      await db!.building.delete({ where: { id: gebaeude.id } });
+    }
+  });
+});

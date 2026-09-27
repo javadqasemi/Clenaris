@@ -1435,6 +1435,15 @@ model Address {
 }
 
 /// Liegenschaft mit mehreren Objekten, etwa eine Überbauung.
+///
+/// **Kein Produktbestandteil — Stand 2026-09-27.** Es gibt keinen Anlegeweg
+/// (keine Route, keine Oberfläche, keinen Seed) und keine Organisation. Die
+/// Vertragsleistung weist deshalb eine `buildingId` ab
+/// (`contractServiceSchema`); die Lage einer Leistung steht in `zone`. Das
+/// Modell bleibt stehen, weil bestehende Zeilen darauf verweisen können und
+/// ein Löschen ohne Anlass Daten kostete. Wird es ein Produktbestandteil,
+/// braucht es zuerst `organizationId` und `customerId` und einen ganzen
+/// Lebenszyklus (Anlegen, Lesen, Ändern, Archivieren, Rechte, Prüfprotokoll).
 model Building {
   id           String  @id @default(cuid())
   name         String
@@ -1455,9 +1464,9 @@ model Building {
   updatedAt DateTime @updatedAt @db.Timestamptz(6)
 
   properties Property[]
-  /// Seit Wave 10 kein totes Modell mehr: Ein Vertrag über ein
-  /// Mehrfamilienhaus benennt Leistungen je Gebäude und Zone, nicht je
-  /// Wohnung.
+  /// Wave 10 hatte hier „kein totes Modell mehr" vermerkt, weil
+  /// Vertragsleistungen darauf verweisen können. Ohne Anlegeweg blieb es
+  /// trotzdem eines; siehe Kopf des Modells.
   contractServices ContractService[]
 
   @@index([postalCode])

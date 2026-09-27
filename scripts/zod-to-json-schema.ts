@@ -113,6 +113,15 @@ export function zodToJsonSchema(input: ZodTypeAny): JsonSchema {
     case Kind.ZodNull:
       return described({ type: 'null' });
 
+    /**
+     * `z.never()` — ein Feld, das es nicht geben darf (2026-09-27, erstmals
+     * `contractServiceSchema.buildingId`). In JSON Schema ist das `not: {}`:
+     * kein Wert passt. Dokumentiert statt weggelassen, damit die Beschreibung
+     * sagt, *warum* das Feld abgewiesen wird.
+     */
+    case Kind.ZodNever:
+      return described({ not: {} });
+
     case Kind.ZodDefault:
       return { ...zodToJsonSchema(def.innerType), default: def.defaultValue() };
 

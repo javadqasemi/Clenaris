@@ -204,7 +204,18 @@ export const contractServiceSchema = z.object({
   serviceId: optionalCuid,
   label: z.string().trim().min(2, 'Bitte geben Sie eine Bezeichnung an.').max(160),
   description: z.string().trim().max(2000).optional(),
-  buildingId: optionalCuid,
+  /**
+   * Abgewiesen statt übernommen (2026-09-27, Phase 18). `Building` hat
+   * keinen Anlegeweg und keine Organisation; ein Verweis darauf zeigte auf
+   * eine mandantenlose Zeile, die niemand über die Anwendung pflegen kann.
+   * Laut abgewiesen und nicht still verworfen: Wer das Feld schickt, soll
+   * erfahren, dass es nichts bewirkt. Die Lage einer Leistung beschreibt
+   * `zone`. Kommt ein Gebäudebestand mit eigenem Lebenszyklus, wird das Feld
+   * wieder angenommen — geprüft gegen dessen Organisation und Kundschaft.
+   */
+  buildingId: z
+    .never({ message: 'Gebäude lassen sich derzeit keiner Leistung zuordnen. Beschreiben Sie die Lage im Feld „Zone".' })
+    .optional(),
   zone: z.string().trim().max(120).optional(),
   estimatedMinutes: z.number().int().min(5, 'Mindestens 5 Minuten.').max(1440).default(120),
   requiredCrewSize: z.number().int().min(1).max(50).default(1),

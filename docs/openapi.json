@@ -57645,14 +57645,7 @@
                           "maxLength": 2000
                         },
                         "buildingId": {
-                          "anyOf": [
-                            {
-                              "type": "string"
-                            },
-                            {
-                              "const": ""
-                            }
-                          ]
+                          "not": {}
                         },
                         "zone": {
                           "type": "string",
@@ -59379,14 +59372,7 @@
                           "maxLength": 2000
                         },
                         "buildingId": {
-                          "anyOf": [
-                            {
-                              "type": "string"
-                            },
-                            {
-                              "const": ""
-                            }
-                          ]
+                          "not": {}
                         },
                         "zone": {
                           "type": "string",
@@ -60142,14 +60128,7 @@
                           "maxLength": 2000
                         },
                         "buildingId": {
-                          "anyOf": [
-                            {
-                              "type": "string"
-                            },
-                            {
-                              "const": ""
-                            }
-                          ]
+                          "not": {}
                         },
                         "zone": {
                           "type": "string",
@@ -61563,14 +61542,7 @@
                           "maxLength": 2000
                         },
                         "buildingId": {
-                          "anyOf": [
-                            {
-                              "type": "string"
-                            },
-                            {
-                              "const": ""
-                            }
-                          ]
+                          "not": {}
                         },
                         "zone": {
                           "type": "string",

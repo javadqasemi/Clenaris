@@ -9778,7 +9778,7 @@ Familie.
 | `services[].serviceId` | union | – | – |
 | `services[].label` | string | ja | min. 2 Zeichen, max. 160 Zeichen |
 | `services[].description` | string | – | max. 2000 Zeichen |
-| `services[].buildingId` | union | – | – |
+| `services[].buildingId` | object | – | – |
 | `services[].zone` | string | – | max. 120 Zeichen |
 | `services[].estimatedMinutes` | integer | – | ≥ 5, ≤ 1440, Standard `120` |
 | `services[].requiredCrewSize` | integer | – | ≥ 1, ≤ 50, Standard `1` |
@@ -10059,7 +10059,7 @@ Familie.
 | `services[].serviceId` | union | – | – |
 | `services[].label` | string | ja | min. 2 Zeichen, max. 160 Zeichen |
 | `services[].description` | string | – | max. 2000 Zeichen |
-| `services[].buildingId` | union | – | – |
+| `services[].buildingId` | object | – | – |
 | `services[].zone` | string | – | max. 120 Zeichen |
 | `services[].estimatedMinutes` | integer | – | ≥ 5, ≤ 1440, Standard `120` |
 | `services[].requiredCrewSize` | integer | – | ≥ 1, ≤ 50, Standard `1` |
@@ -10179,7 +10179,7 @@ Familie.
 | `services[].serviceId` | union | – | – |
 | `services[].label` | string | ja | min. 2 Zeichen, max. 160 Zeichen |
 | `services[].description` | string | – | max. 2000 Zeichen |
-| `services[].buildingId` | union | – | – |
+| `services[].buildingId` | object | – | – |
 | `services[].zone` | string | – | max. 120 Zeichen |
 | `services[].estimatedMinutes` | integer | – | ≥ 5, ≤ 1440, Standard `120` |
 | `services[].requiredCrewSize` | integer | – | ≥ 1, ≤ 50, Standard `1` |
@@ -10407,7 +10407,7 @@ Familie.
 | `services[].serviceId` | union | – | – |
 | `services[].label` | string | ja | min. 2 Zeichen, max. 160 Zeichen |
 | `services[].description` | string | – | max. 2000 Zeichen |
-| `services[].buildingId` | union | – | – |
+| `services[].buildingId` | object | – | – |
 | `services[].zone` | string | – | max. 120 Zeichen |
 | `services[].estimatedMinutes` | integer | – | ≥ 5, ≤ 1440, Standard `120` |
 | `services[].requiredCrewSize` | integer | – | ≥ 1, ≤ 50, Standard `1` |
