@@ -2,6 +2,9 @@ import 'server-only';
 
 import { generateStructured, generateText, type Effort } from './client';
 import { kuerzel, mitPlatzhaltern, platzhalterZurueck } from './governance';
+import { offertentwurfNutzlast, SWISS_CONTEXT, uebersetzungNutzlast, zusammenfassungNutzlast, type AiQuoteRequest } from './nutzlast';
+
+export type { AiQuoteRequest } from './nutzlast';
 
 /**
  * KI-Funktionen der Plattform.
@@ -16,31 +19,9 @@ import { kuerzel, mitPlatzhaltern, platzhalterZurueck } from './governance';
  *    kenndaten) — nie AHV-Nummern, IBAN oder Alarmcodes.
  */
 
-const SWISS_CONTEXT = `Du arbeitest für eine professionelle Reinigungsfirma im Kanton Bern, Schweiz.
-Regeln für alle Ausgaben:
-- Sprache: Schweizer Hochdeutsch. Niemals "ß" verwenden, immer "ss".
-- Anrede: höfliche Sie-Form. Grussformel "Freundliche Grüsse".
-- Währung: CHF mit zwei Nachkommastellen. Mehrwertsteuer: 8.1 % (Normalsatz).
-- Datumsformat: TT.MM.JJJJ. Uhrzeit im 24-Stunden-Format.
-- Ton: sachlich, freundlich, kompetent, ohne Superlative und ohne Emojis.
-- Keine verbindlichen Zusagen: Preise und Termine sind Vorschläge, die intern geprüft werden.`;
-
 // ---------------------------------------------------------------------------
 //  1) Offerten-Generator
 // ---------------------------------------------------------------------------
-
-export interface AiQuoteRequest {
-  serviceKind: string;
-  propertyKind: string;
-  squareMeters?: number | null;
-  rooms?: number | null;
-  windows?: number | null;
-  frequency: string;
-  customerMessage: string;
-  customerType: 'PRIVATE' | 'BUSINESS';
-  hourlyRate: number;
-  city?: string | null;
-}
 
 export interface AiQuoteDraft {
   title: string;
@@ -97,41 +78,12 @@ const QUOTE_SCHEMA = {
 } as const;
 
 export async function generateQuoteDraft(request: AiQuoteRequest): Promise<AiQuoteDraft> {
-  const details = [
-    `Leistungsart: ${request.serviceKind}`,
-    `Objektart: ${request.propertyKind}`,
-    request.squareMeters ? `Fläche: ${request.squareMeters} m²` : null,
-    request.rooms ? `Zimmer: ${request.rooms}` : null,
-    request.windows ? `Fenster: ${request.windows}` : null,
-    `Turnus: ${request.frequency}`,
-    `Kundentyp: ${request.customerType === 'BUSINESS' ? 'Geschäftskunde' : 'Privatkunde'}`,
-    request.city ? `Ort: ${request.city}` : null,
-    `Interner Stundenansatz: CHF ${request.hourlyRate.toFixed(2)}`,
-  ]
-    .filter(Boolean)
-    .join('\n');
-
+  // Erlaubte Felder und geschwärzter Anfragetext — der Bau steht in
+  // `nutzlast.ts`, damit die Prüfreihe genau diese Nutzlast prüfen kann (F-15).
+  const { system, prompt } = offertentwurfNutzlast(request);
   return generateStructured<AiQuoteDraft>({
-    system: `${SWISS_CONTEXT}
-
-Du erstellst Offertentwürfe für Reinigungsdienstleistungen. Kalkuliere realistisch nach branchenüblichen Leistungswerten:
-- Unterhaltsreinigung Wohnung: ca. 1.0–1.4 Minuten pro m²
-- Umzugsreinigung mit Abnahmegarantie: ca. 2.0–3.0 Minuten pro m²
-- Büroreinigung: ca. 0.8–1.2 Minuten pro m²
-- Fensterreinigung: 6–10 Minuten pro Fenster inkl. Rahmen
-- Baureinigung (Grobreinigung): ca. 2.5–4.0 Minuten pro m²
-
-Preise sind Nettopreise ohne MWST. Runde Stundenansätze auf ganze Franken.
-Halte die Positionen nachvollziehbar: eine Hauptposition, dazu Anfahrt und optionale Zusatzleistungen.
-Liste unter "assumptions" jede Annahme auf, die vor dem Versand geprüft werden muss.`,
-    prompt: `Erstelle einen Offertentwurf.
-
-${details}
-
-Kundenanfrage im Wortlaut:
-"""
-${request.customerMessage.slice(0, 3000)}
-"""`,
+    system,
+    prompt,
     schema: QUOTE_SCHEMA,
     toolName: 'offerte_erstellen',
     toolDescription: 'Erstellt einen strukturierten Offertentwurf mit Positionen und Annahmen.',
@@ -233,18 +185,12 @@ export async function summarize(params: {
   focus?: string;
   maxSentences?: number;
 }): Promise<string> {
+  // Geschwärzt ohne Rückweg: Codes, Lohnbeträge und Gesundheitssätze braucht
+  // keine Zusammenfassung (F-15, `nutzlast.ts`).
+  const { system, prompt } = zusammenfassungNutzlast(params);
   return generateText({
-    system: `${SWISS_CONTEXT}
-
-Du fasst Geschäftsdokumente und Kundenkommunikation zusammen. Nenne nur, was im Text steht.
-Struktur: Kernaussage in einem Satz, danach Stichpunkte mit den wichtigsten Fakten und offenen Punkten.`,
-    prompt: `Fasse den folgenden Text in maximal ${params.maxSentences ?? 6} Sätzen zusammen.${
-      params.focus ? ` Fokus: ${params.focus}.` : ''
-    }
-
-"""
-${params.text.slice(0, 40_000)}
-"""`,
+    system,
+    prompt,
     tier: 'fast',
     effort: 'low',
     maxTokens: 1_500,
@@ -305,32 +251,25 @@ Interne Notizen: ${params.notes ? schutz(params.notes) : 'keine'}`,
 //  5) Übersetzung
 // ---------------------------------------------------------------------------
 
-const LANGUAGE_NAMES: Record<string, string> = {
-  DE: 'Deutsch (Schweiz)',
-  EN: 'Englisch',
-  FR: 'Französisch (Schweiz)',
-  IT: 'Italienisch (Schweiz)',
-};
-
 export async function translate(params: {
   text: string;
   targetLocale: 'DE' | 'EN' | 'FR' | 'IT';
   preserveFormatting?: boolean;
 }): Promise<string> {
-  return generateText({
-    system: `Du bist Fachübersetzer für die Reinigungsbranche in der Schweiz.
-Übersetze präzise und idiomatisch. Behalte Fachbegriffe, Eigennamen, Zahlen, Beträge und Platzhalter der Form {{name}} unverändert bei.
-${params.preserveFormatting ? 'Behalte Zeilenumbrüche, Aufzählungszeichen und Markdown-Auszeichnungen exakt bei.' : ''}
-Gib ausschliesslich die Übersetzung zurück, ohne Vor- oder Nachbemerkung.`,
-    prompt: `Zielsprache: ${LANGUAGE_NAMES[params.targetLocale]}
-
-"""
-${params.text.slice(0, 20_000)}
-"""`,
+  /*
+    Schutzplatzhalter mit Rückweg (F-15, `nutzlast.ts`): Die Übersetzung soll
+    vollständig zurückkommen, der Alarmcode im Kundenbrief also wieder an
+    seiner Stelle stehen — aber ohne den Anbieter erreicht zu haben.
+  */
+  const nutzlast = uebersetzungNutzlast(params);
+  const uebersetzung = await generateText({
+    system: nutzlast.system,
+    prompt: nutzlast.prompt,
     tier: 'fast',
     effort: 'low',
     maxTokens: 8_000,
   });
+  return nutzlast.zurueck(uebersetzung);
 }
 
 // ---------------------------------------------------------------------------

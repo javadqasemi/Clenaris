@@ -48,6 +48,7 @@ import { befundEinordnen, veralteteBewertungen, type Bewertung } from './securit
 import { geheimnisseImBestand } from './security/geheimnisse';
 import { melden, type Meldung } from './security/melden';
 import { musterPruefen, type Unterdrueckung } from './security/muster';
+import { bilanzPruefen, konfigurierteDateien, testbilanzLesen } from './security/testbilanz';
 
 type Status = 'BESTANDEN' | 'BEFUND' | 'NICHT_GEPRUEFT' | 'FEHLER';
 type Schwere = 'blockierend' | 'warnung' | 'hinweis';
@@ -417,12 +418,43 @@ async function pruefreihe() {
   } catch {
     return { status: 'NICHT_GEPRUEFT' as const, befunde: [], hinweis: `Kein Testserver unter ${basis}.` };
   }
-  const dateien = SICHERHEITSREIHEN.map((n) => `tests/api/${n}.test.ts`).filter((d) => existsSync(join(WURZEL, d)));
-  const r = ausfuehren('npx', ['tsx', '--test', '--test-concurrency=1', ...dateien], { zeitMs: 600_000 });
-  const pass = Number(/# pass (\d+)/.exec(r.stdout)?.[1] ?? 0);
-  const fail = Number(/# fail (\d+)/.exec(r.stdout)?.[1] ?? 0);
-  const befunde: Befund[] = fail > 0 || r.code !== 0 ? [{ schwere: 'blockierend', titel: `${fail} Sicherheitsfälle gescheitert`, details: r.stdout.split('\n').filter((z) => /not ok/.test(z)).slice(0, 15).join('\n') }] : [];
-  return { status: statusAus(befunde), befunde, hinweis: `${dateien.length} Reihen, ${pass} bestanden, ${fail} gescheitert.` };
+  /*
+    N-08 (2026-09-27): Bis hierher filterte `existsSync` fehlende Reihen still
+    heraus, und gezählt wurden nur `# pass` und `# fail`. Eine umbenannte
+    Mandantenreihe fiel damit aus dem Lauf, und ein Fall, der sich mit
+    `t.skip()` verabschiedete, zählte wie ein bestandener. Jetzt ist eine
+    konfigurierte, aber fehlende Datei ein blockierender Befund, und die Bilanz
+    (übersprungen, todo, abgebrochen, fehlende Zusammenfassung) entscheidet
+    nach denselben Regeln wie `verify.ts` — `scripts/security/testbilanz.ts`.
+  */
+  const { vorhanden, fehlend } = konfigurierteDateien(WURZEL, SICHERHEITSREIHEN.map((n) => `tests/api/${n}.test.ts`));
+  const befunde: Befund[] = fehlend.map((d) => ({
+    schwere: 'blockierend' as const,
+    titel: 'Konfigurierte Sicherheitsreihe fehlt',
+    ort: d,
+    details: 'Datei wiederherstellen oder SICHERHEITSREIHEN in scripts/security-check.ts bewusst anpassen.',
+  }));
+  if (vorhanden.length === 0) return { status: statusAus(befunde), befunde, hinweis: 'Keine der konfigurierten Reihen ist vorhanden.' };
+
+  // Der Bericht wird ausdrücklich gewählt: Die Vorgabe hängt von der
+  // Node-Fassung und davon ab, ob die Ausgabe ein Terminal ist.
+  const r = ausfuehren('npx', ['tsx', '--test', '--test-concurrency=1', '--test-reporter=tap', ...vorhanden], { zeitMs: 600_000 });
+  const bilanz = testbilanzLesen(r.stdout);
+  for (const grund of bilanzPruefen(bilanz)) {
+    befunde.push({
+      schwere: 'blockierend',
+      titel: `Sicherheitsreihen: ${grund}`.slice(0, 300),
+      details: r.stdout.split('\n').filter((z) => /not ok|# SKIP|# TODO/i.test(z)).slice(0, 15).join('\n'),
+    });
+  }
+  if (r.code !== 0 && bilanz.gescheitert === 0 && bilanz.gefunden) {
+    befunde.push({ schwere: 'blockierend', titel: `Testlauf endete mit Exitcode ${r.code ?? 'unbekannt'} ohne gescheiterten Fall`, details: (r.stderr || '').slice(-800) });
+  }
+  return {
+    status: statusAus(befunde),
+    befunde,
+    hinweis: `${vorhanden.length} von ${SICHERHEITSREIHEN.length} Reihen, ${bilanz.bestanden} bestanden, ${bilanz.gescheitert} gescheitert, ${bilanz.uebersprungen} übersprungen.`,
+  };
 }
 
 // ---------------------------------------------------------------------------

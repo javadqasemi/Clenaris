@@ -57,8 +57,33 @@ import { isIP, type LookupFunction } from 'node:net';
  * mit festen Gegenstellen.
  */
 
-/** Zeitlimit für einen Aufruf. Länger wäre eine Einladung, den Lauf zu binden. */
+/**
+ * Zeitlimit für einen Aufruf. Länger wäre eine Einladung, den Lauf zu binden.
+ *
+ * **Eine Gesamtfrist, nicht nur eine Leerlaufzeit** (N-10, 2026-09-27). Bis
+ * hierher stand der Wert allein als `timeout` an `https.request` — das ist die
+ * Zeit, die der Socket *ohne ein Byte* sein darf. Eine Gegenstelle, die alle
+ * neun Sekunden ein Byte schickt, hielt den Lauf damit beliebig lange fest,
+ * und die Namensauflösung vor der Verbindung lag ganz ausserhalb. Jetzt gilt
+ * dieselbe Zahl als harte Frist ab dem Aufruf von `sendeWebhook`, über
+ * Auflösung, Verbindung, Handschlag und Antwort zusammen. Die Leerlaufzeit
+ * bleibt zusätzlich stehen: Sie beendet einen stummen Socket früher, als die
+ * Frist es müsste, und kostet nichts.
+ */
 export const WEBHOOK_TIMEOUT_MS = 10_000;
+
+/**
+ * Der einzige zulässige Zielport — der Standardport von https.
+ *
+ * `pruefeZiel` verlangt https; ein Port war aber frei wählbar, und
+ * `https://gegenstelle.example:22/` oder `:6379` machte aus dem Webhook einen
+ * Portscanner gegen öffentliche Adressen, mit unserem Server als Absender
+ * (N-10). Eine echte Gegenstelle für Ereignisse hört auf 443; wer etwas
+ * anderes braucht, stellt einen Proxy davor. http (Port 80) kommt nicht in
+ * Frage, weil das Schema schon an `https:` scheitert — so steht es auch in
+ * `webhookConfigSchema`.
+ */
+export const WEBHOOK_PORT = 443;
 
 /** So viel Antwort wird gelesen — der Rest verworfen. */
 export const WEBHOOK_MAX_ANTWORT_BYTES = 16 * 1024;
@@ -201,6 +226,17 @@ export async function pruefeZiel(
     return { ok: false, fehler: 'SCHEMA', grund: 'Nur https ist zulässig.' };
   }
 
+  /*
+    `URL.port` ist leer, wenn der Standardport des Schemas gemeint ist — auch
+    bei ausdrücklich geschriebenem `:443`. Alles andere wird abgewiesen, vor
+    jeder Namensauflösung. Als `SCHEMA`, weil es wie das Schema ein Fehler der
+    Adresse selbst ist: dauerhaft, kein Wiederholungsversuch
+    (`automation-engine.service.ts` wertet genau diese Art so).
+  */
+  if (ziel.port !== '' && Number(ziel.port) !== WEBHOOK_PORT) {
+    return { ok: false, fehler: 'SCHEMA', grund: `Nur der Standardport ${WEBHOOK_PORT} ist zulässig.` };
+  }
+
   // `[::1]` → `::1`: `URL.hostname` behält die Klammern um IPv6-Literale, und
   // `isIP('[::1]')` ist 0 — ohne das Entfernen landete die Adresse in der
   // Namensauflösung statt in der Adressprüfung.
@@ -298,7 +334,9 @@ export function pruefendeVerbindungsaufloesung(aufloesen: Aufloeser = systemAufl
  *  • **Keine Weiterleitungen.** Eine Weiterleitung führte an der
  *    Zielprüfung vorbei; `https.request` folgt keiner, 3xx ist ein
  *    Fehlschlag, und die Signatur reist nie zu einem anderen Ziel.
- *  • **Zeitlimit**, sonst bindet eine langsame Gegenstelle den Lauf.
+ *  • **Gesamtfrist** über den ganzen Aufruf, dazu die Leerlaufzeit des
+ *    Sockets — sonst bindet eine langsame oder tröpfelnde Gegenstelle den Lauf.
+ *  • **Nur Port 443** (`pruefeZiel`) — kein Portscanner mit unserem Absender.
  *  • **Grössengrenze** auf die Antwort, stückweise gelesen und abgebrochen —
  *    eine endlose Antwort füllt nicht den Speicher.
  *  • **Signatur statt Geheimnis in der Kopfzeile.** Ein gemeinsames Geheimnis
@@ -318,14 +356,50 @@ export async function sendeWebhook(params: {
   idempotenzSchluessel?: string;
   /** Nur für Prüfungen: eine kontrollierte Namensauflösung statt DNS. */
   aufloesen?: Aufloeser;
+  /**
+   * Nur für Prüfungen: eine kürzere Gesamtfrist, damit die Prüfreihe die
+   * Frist beweisen kann, ohne zehn Sekunden zu warten. Der Betrieb setzt sie
+   * nie; die Vorgabe ist `WEBHOOK_TIMEOUT_MS`.
+   */
+  gesamtfristMs?: number;
 }): Promise<WebhookErgebnis> {
   const start = Date.now();
   const aufloesen = params.aufloesen ?? systemAufloeser;
+  const frist = params.gesamtfristMs ?? WEBHOOK_TIMEOUT_MS;
 
-  const pruefung = await pruefeZiel(params.url, aufloesen);
-  if (!pruefung.ok) {
-    return { ok: false, fehler: pruefung.fehler, grund: pruefung.grund, dauerMs: Date.now() - start };
+  /*
+    Die Gesamtfrist läuft ab hier, nicht erst ab der Verbindung: Eine
+    Namensauflösung, die nicht antwortet, bindet den Lauf genauso wie eine
+    Gegenstelle, die tröpfelt. Ein Zeitgeber, ein Abbruchsignal — wer es
+    auslöst, entscheidet `ende` (der erste gewinnt).
+  */
+  const abbruch = new AbortController();
+  const zeitgeber = setTimeout(() => abbruch.abort(), frist);
+  const zeitUeberschritten = (): WebhookErgebnis => ({ ok: false, fehler: 'TIMEOUT', grund: 'Zeitlimit überschritten.', dauerMs: Date.now() - start });
+
+  try {
+    const pruefung = await Promise.race([
+      pruefeZiel(params.url, aufloesen),
+      new Promise<null>((fertig) => abbruch.signal.addEventListener('abort', () => fertig(null), { once: true })),
+    ]);
+    if (pruefung === null) return zeitUeberschritten();
+    if (!pruefung.ok) {
+      return { ok: false, fehler: pruefung.fehler, grund: pruefung.grund, dauerMs: Date.now() - start };
+    }
+    return await verbindenUndSenden(params, aufloesen, start, abbruch.signal);
+  } finally {
+    clearTimeout(zeitgeber);
   }
+}
+
+/** Der eigentliche Aufruf — nur nach bestandener `pruefeZiel`, unter der Gesamtfrist des Aufrufers. */
+function verbindenUndSenden(
+  params: { url: string; rumpf: unknown; secret?: string; idempotenzSchluessel?: string },
+  aufloesen: Aufloeser,
+  start: number,
+  frist: AbortSignal,
+): Promise<WebhookErgebnis> {
+  if (frist.aborted) return Promise.resolve({ ok: false, fehler: 'TIMEOUT', grund: 'Zeitlimit überschritten.', dauerMs: Date.now() - start });
 
   const rumpf = JSON.stringify(params.rumpf);
   const kopfzeilen: Record<string, string> = {
@@ -354,6 +428,7 @@ export async function sendeWebhook(params: {
       erledigt = true;
       fertig({ ...ergebnis, dauerMs: Date.now() - start });
     };
+    let laufendeAntwort: { destroy: () => void } | null = null;
 
     const anfrage = httpsRequest(
       params.url,
@@ -370,6 +445,7 @@ export async function sendeWebhook(params: {
          * die Verbindung sauber schliesst; beim Überschreiten der Grenze wird
          * sie abgebrochen. Der Inhalt der Gegenstelle gehört nirgends hin.
          */
+        laufendeAntwort = antwort;
         let gelesen = 0;
         antwort.on('data', (stueck: Buffer) => {
           gelesen += stueck.byteLength;
@@ -390,6 +466,21 @@ export async function sendeWebhook(params: {
       anfrage.destroy();
       ende({ ok: false, fehler: 'TIMEOUT', grund: 'Zeitlimit überschritten.' });
     });
+    /*
+      Die Gesamtfrist. Zuerst das Ergebnis festhalten, dann abbauen: Das
+      Zerstören der Antwort löst `close` aus, und `abschluss` meldete sonst
+      einen 2xx-Status als Erfolg — für einen Aufruf, der gerade wegen der
+      Frist abgebrochen wurde.
+    */
+    frist.addEventListener(
+      'abort',
+      () => {
+        ende({ ok: false, fehler: 'TIMEOUT', grund: 'Zeitlimit überschritten.' });
+        laufendeAntwort?.destroy();
+        anfrage.destroy();
+      },
+      { once: true },
+    );
     anfrage.on('error', (fehler) =>
       ende(
         fehler instanceof PrivatesZielBeimVerbinden

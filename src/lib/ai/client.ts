@@ -5,7 +5,7 @@ import { hasIntegration, serverEnv } from '@/lib/env';
 import { IntegrationError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
 
-import { ausgangsfilter, summeErsetzungen } from './governance';
+import { anfrageFiltern } from './governance';
 
 const log = logger('ai');
 
@@ -65,17 +65,11 @@ export interface GenerateOptions {
  * Katalog, etwa Leistungsnamen und Öffnungszeiten), nicht von Personen.
  */
 function gefiltert(prompt: string, history: Anthropic.MessageParam[] | undefined) {
-  const p = ausgangsfilter(prompt);
-  const summen: Record<string, number>[] = [p.ersetzungen];
-  const verlauf = (history ?? []).map((m) => {
-    if (typeof m.content !== 'string') return m;
-    const f = ausgangsfilter(m.content);
-    summen.push(f.ersetzungen);
-    return { ...m, content: f.text };
-  });
-  const ersetzungen = summeErsetzungen(...summen);
-  if (Object.keys(ersetzungen).length > 0) log.info('KI-Ausgangsfilter hat ersetzt', { ersetzungen });
-  return { prompt: p.text, history: verlauf };
+  // Die Regel selbst steht in `governance.ts:anfrageFiltern` — dort prüft die
+  // Prüfreihe sie ohne Anbieter; hier wird sie nur angewendet und gezählt.
+  const f = anfrageFiltern(prompt, history ?? []);
+  if (Object.keys(f.ersetzungen).length > 0) log.info('KI-Ausgangsfilter hat ersetzt', { ersetzungen: f.ersetzungen });
+  return { prompt: f.prompt, history: f.verlauf };
 }
 
 /** Extrahiert den Text aus einer Antwort und prüft auf Ablehnung. */

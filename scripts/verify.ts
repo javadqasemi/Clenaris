@@ -41,6 +41,8 @@ import { config } from 'dotenv';
 
 import { databaseNameOf, istTestdatenbank } from '../prisma/seed-guard';
 
+import { bilanzPruefen, testbilanzLesen } from './security/testbilanz';
+
 config();
 
 type Modus = 'statisch' | 'pruefreihen' | 'voll' | 'release';
@@ -201,10 +203,61 @@ function serverBeenden(): void {
   server = null;
 }
 
-function pruefreihen(basis: string, cacheDir: string | undefined, port: string): void {
+/**
+ * Einen Testlauf ausführen, seine Ausgabe durchreichen **und** mitlesen, und
+ * die Bilanz als Tor bewerten (N-08, 2026-09-27).
+ *
+ * `schritt` sah nur den Exitcode. `node:test` endet aber auch dann mit 0, wenn
+ * Fälle sich mit `t.skip()` verabschieden — etwa weil die Testdatenbank nicht
+ * erreichbar war oder der Postausgang fehlte. Der Prüfweg meldete dann
+ * „bestanden" für Fälle, die nie liefen. Jetzt gilt „0 übersprungen" als
+ * erzwungene Bedingung: Übersprungen, todo, abgebrochen oder eine fehlende
+ * Schlusszusammenfassung sind ein Fehlschlag (`scripts/security/testbilanz.ts`,
+ * dieselbe Regel wie in `security-check.ts`).
+ *
+ * Asynchron und mit durchgereichter Ausgabe statt `spawnSync` mit Puffer: Die
+ * Reihe läuft mehrere Minuten, und wer zusieht, soll den Fortschritt sehen,
+ * nicht erst am Ende einen Block.
+ */
+function schrittMitBilanz(name: string, befehl: string, optionen: { env?: Record<string, string> } = {}): Promise<void> {
+  console.log(`\n━━ ${name}\n   $ ${befehl}`);
+  const start = Date.now();
+  return new Promise((fertig) => {
+    const kind = spawn(befehl, { shell: true, stdio: ['inherit', 'pipe', 'inherit'], cwd: WURZEL, env: { ...process.env, ...optionen.env } });
+    let ausgabe = '';
+    kind.stdout!.on('data', (stueck: Buffer) => {
+      process.stdout.write(stueck);
+      ausgabe += stueck.toString('utf8');
+    });
+    kind.on('close', (code) => {
+      const bilanz = testbilanzLesen(ausgabe);
+      const gruende = bilanzPruefen(bilanz);
+      const ok = code === 0 && gruende.length === 0;
+      ergebnisse.push({
+        schritt: name,
+        ok,
+        dauerMs: Date.now() - start,
+        hinweis: bilanz.gefunden ? `${bilanz.bestanden} bestanden, ${bilanz.gescheitert} gescheitert, ${bilanz.uebersprungen} übersprungen` : 'keine Bilanz',
+      });
+      if (!ok) abbrechen(`„${name}" ist gescheitert (Exitcode ${code ?? 'unbekannt'}). ${gruende.join(' ')}`);
+      fertig();
+    });
+  });
+}
+
+async function pruefreihen(basis: string, cacheDir: string | undefined, port: string): Promise<void> {
   const env = { TEST_BASE_URL: basis, ...(cacheDir ? { CLENARIS_TEST_CACHE_DIR: cacheDir } : {}) };
   schritt('Sicherheitsreihen', 'npm run security:check:tests', { env });
-  schritt('Testreihe (vollständig, seriell)', 'npm test', { env });
+  /*
+    Der Bericht wird hier **nicht** erzwungen. `npm test -- --test-reporter=tap`
+    stünde hinter dem Dateimuster, und ob `node --test` Optionen dort noch als
+    Optionen liest, hängt von der Fassung ab; über `NODE_OPTIONS` erbten ihn
+    die Kindprozesse je Testdatei, die mit dem Elternprozess über einen eigenen
+    Bericht sprechen. Beides wäre ein Eingriff mit unklarer Wirkung. Die
+    Ausgabe ist hier kein Terminal, also wählt Node 22 TAP; eine spätere
+    Fassung mit Spec liest `testbilanzLesen` ebenso.
+  */
+  await schrittMitBilanz('Testreihe (vollständig, seriell, 0 übersprungen)', 'npm test', { env });
   // Ohne Wiederholungen: Ein Browserfall, der nur im zweiten Anlauf grün
   // wird, ist rot (Definition of Done, Checkliste G).
   schritt('Browser-Prüfreihe (ohne Wiederholungen)', 'npx playwright test --retries=0', { env: { ...env, E2E_PORT: port } });
@@ -222,7 +275,7 @@ async function voll(optionen: { frisch: boolean }): Promise<void> {
   const cacheDir = mkdtempSync(join(tmpdir(), 'clenaris-verify-'));
   try {
     await serverStarten(datenbank, port, cacheDir);
-    pruefreihen(`http://127.0.0.1:${port}`, cacheDir, port);
+    await pruefreihen(`http://127.0.0.1:${port}`, cacheDir, port);
   } finally {
     serverBeenden();
     rmSync(cacheDir, { recursive: true, force: true });
@@ -276,7 +329,7 @@ async function main(): Promise<void> {
     case 'pruefreihen': {
       const basis = process.env.TEST_BASE_URL?.trim();
       if (!basis) abbrechen('TEST_BASE_URL fehlt — `pruefreihen` läuft gegen einen bereits gestarteten Server.');
-      pruefreihen(basis, process.env.CLENARIS_TEST_CACHE_DIR, new URL(basis).port || '80');
+      await pruefreihen(basis, process.env.CLENARIS_TEST_CACHE_DIR, new URL(basis).port || '80');
       break;
     }
     case 'voll':

@@ -32,6 +32,10 @@ export const POST = defineRoute({
             where: { id: body.customerId, organizationId },
             select: {
               type: true,
+              // Nur, um sie im Anfragetext zu schwärzen — sie gehen nicht hinaus.
+              firstName: true,
+              lastName: true,
+              companyName: true,
               addresses: {
                 where: { isDefault: true },
                 take: 1,
@@ -43,7 +47,7 @@ export const POST = defineRoute({
       body.leadId
         ? prisma.lead.findFirst({
             where: { id: body.leadId, organizationId },
-            select: { serviceKind: true, city: true, company: true },
+            select: { serviceKind: true, city: true, company: true, firstName: true, lastName: true },
           })
         : Promise.resolve(null),
       prisma.service.findFirst({
@@ -69,6 +73,12 @@ export const POST = defineRoute({
       // Fällt der Katalog aus, gilt der interne Mindestansatz.
       hourlyRate: toNumber(service?.hourlyRate) || 62,
       city: customer?.addresses[0]?.city ?? lead?.city ?? null,
+      /*
+        F-15: Die Anfrage nennt oft die Person oder Firma selbst („Guten Tag,
+        hier ist Anna Keller von der Keller Treuhand AG"). Für die Kalkulation
+        ist das unnötig; die bekannten Namen gehen als `[NAME]` hinaus.
+      */
+      bekannteNamen: [customer?.firstName, customer?.lastName, customer?.companyName, lead?.firstName, lead?.lastName, lead?.company],
     });
     await protokolliereKiNutzung({ organizationId, userId: session.id, funktion: 'Offertentwurf', ip });
 

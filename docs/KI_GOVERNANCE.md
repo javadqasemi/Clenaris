@@ -1,6 +1,6 @@
 # KI-Governance und Datensparsamkeit
 
-> Stand: 27. September 2026 (Korrektur des Inventars, siehe Abschnitt 2). Anbieter: Anthropic (Auftragsverarbeiter
+> Stand: 27. September 2026 (Korrektur des Inventars, siehe Abschnitt 2; Nutzlast der Freitext-Funktionen, F-15). Anbieter: Anthropic (Auftragsverarbeiter
 > im Ausland). Ohne `ANTHROPIC_API_KEY` sind alle KI-Funktionen aus.
 
 ## 1. Grundsätze
@@ -26,15 +26,37 @@
 5. **Nachweis der Nutzung.** Jede erfolgreiche Nutzung steht im
    Prüfprotokoll (`entity = KiNutzung`: wer, wann, welche Funktion) — ohne
    Eingabe und Ergebnis.
+6. **Freitext nach Zusammenhang schwärzen, Strukturfelder nur aus einer
+   Erlaubnisliste** (F-15, 2026-09-27). Funktionen, die beliebigen Freitext
+   senden, bauen ihre Nutzlast in `src/lib/ai/nutzlast.ts` und schwärzen dort
+   zusätzlich zum Ausgangsfilter (`freitextSchwaerzen`,
+   `mitSchutzplatzhaltern` in `governance.ts`):
+   - **Zugangswerte** — der Wert nach Alarm, Code, PIN, Schlüssel(-safe),
+     Tresor, Kombination (mit mindestens einer Ziffer) und das Wort nach
+     Passwort/Kennwort → `[ZUGANGSCODE]`;
+   - **Lohnbeträge** — ein Betrag nach oder vor Lohn, Gehalt, Salär,
+     verdient, Bonus → `[LOHNBETRAG]`;
+   - **Gesundheit** — der ganze Satz mit krank, Arztzeugnis, Diagnose,
+     schwanger, Unfall, Medikament, arbeitsunfähig u. a. →
+     `[GESUNDHEITSANGABE]` (Orte wie Arztpraxis oder Spital bleiben: Sie
+     sind Kundschaft);
+   - **bekannte Namen**, wo die Funktion sie kennt → `[NAME]`.
+
+   Die Regeln erkennen Zusammenhang, nicht Bedeutung: Ein Code ohne
+   Schlüsselwort („die Zahl an der Tür ist 4711") bleibt stehen. Geprüft wird
+   die ausgehende Nutzlast je Funktion in `tests/api/ki-nutzlast.test.ts`.
+   Der Ausgangsfilter des Clients filtert seit demselben Tag auch Textblöcke
+   im Verlauf; Blöcke, die er nicht lesen kann (Bild, Dokument), gehen nicht
+   hinaus.
 
 ## 2. Inventar
 
 | Funktion | Endpunkt | Was an den Anbieter geht | Sparsamkeit | Status |
 |---|---|---|---|---|
-| Offertentwurf | `/api/ai/quote-draft` | Leistungsart, Objektart, Masse, Turnus, Ort (Stadt), Kundentyp, Freitext der Anfrage | Ausgangsfilter | COMPLETE |
+| Offertentwurf | `/api/ai/quote-draft` | Erlaubnisliste: Leistungs-/Objektart und Turnus nur als Katalogschlüssel, Fläche/Zimmer/Fenster als begrenzte Zahlen, Ort nur als Ortsname, Kundentyp, Stundenansatz aus dem Katalog; dazu der Anfragetext | `offertentwurfNutzlast`: Anfragetext nach Zusammenhang geschwärzt (Zugangswerte, Lohn, Gesundheit), Name und Firma der Anfrage → `[NAME]`, + Ausgangsfilter | COMPLETE + VERIFIED (Nutzlast) |
 | E-Mail-Entwurf | `/api/ai/email` | Zweck, Kontext, Tonalität | Platzhalter für Namen + Filter | COMPLETE + VERIFIED (Regeln) |
-| Zusammenfassung | `/api/ai/summarize` | der eingefügte Text | Ausgangsfilter; Namen im Freitext bleiben | PARTIAL (Freitext) |
-| Übersetzung | `/api/ai/translate` | der eingefügte Text | Ausgangsfilter | PARTIAL (Freitext) |
+| Zusammenfassung | `/api/ai/summarize` | der eingefügte Text, der Fokus | `zusammenfassungNutzlast`: geschwärzt ohne Rückweg (Zugangswerte, Lohn, Gesundheit) + Ausgangsfilter; Namen im Freitext bleiben | COMPLETE + VERIFIED (Nutzlast); Namen offen |
+| Übersetzung | `/api/ai/translate` | der eingefügte Text | `uebersetzungNutzlast`: Zugangswerte, Lohn, Gesundheitssätze, AHV, IBAN, E-Mail, Telefon als `{{GESCHUETZT_x}}` mit Rückweg — sie erscheinen im Ergebnis wieder, aber unübersetzt; Namen im Freitext bleiben | COMPLETE + VERIFIED (Nutzlast); Namen offen |
 | Routenplanung | `/api/ai/dispatch` | Adressen, Zeitfenster, Dauer | Kürzel statt Kennungen; Adressen sind nötig | COMPLETE |
 | Blogentwurf | `/api/ai/blog-draft` | Thema, Stichworte | keine Personendaten | COMPLETE |
 | Führungsassistent | `/api/bi/assistant` | Kennzahlen, Ziele (aggregiert); je nach Auswertung Bewertungstexte, Check-in-Kommentare, Sitzungsnotizen | bekannte Namen → `[NAME]` (`namenErsetzen`) + Filter; Freitext bleibt nicht anonym | PARTIAL (Freitext) |
@@ -58,6 +80,15 @@ Datenschutzerklärung behauptete „ohne Kundenstammdaten".
 - **Keine Anonymisierung.** Namen im Freitext, Adressen für die Route und
   fachliche Merkmale bleiben erkennbar. Die Übermittlung ist sparsam, nicht
   anonym.
+- **Schwärzung nach Zusammenhang ist eine Heuristik** (Stand 2026-09-27).
+  Sie greift in Zusammenfassung, Übersetzung und Offertentwurf; der
+  E-Mail-Entwurf, der Einsatzbericht, der Antwortentwurf zu Bewertungen und
+  der Führungsassistent haben weiterhin nur Ausgangsfilter und Platzhalter
+  bzw. `namenErsetzen`. Ein Wert ohne Schlüsselwort und ein Gesundheitsbegriff
+  ausserhalb der Liste bleiben stehen.
+- **Der Systemtext wird nicht gefiltert.** Er stammt aus dem Code und dem
+  Katalog (Leistungen, Öffnungszeiten, die Telefonnummer der Firma im
+  Website-Chat) — ein Filter darauf ersetzte die eigene Firmennummer.
 - **Auftragsverarbeitungsvertrag, Datenstandort, Aufbewahrung beim
   Anbieter:** EXTERNAL VERIFICATION REQUIRED (rechtlich, nicht technisch).
 - **Qualität der Antworten** wird nicht automatisiert geprüft; jede Antwort

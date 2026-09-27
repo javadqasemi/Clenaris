@@ -148,6 +148,13 @@ export const webhookConfigSchema = z.object({
     .refine((u) => u.startsWith('https://'), {
       message:
         'Nur https. Über http ginge der Inhalt des Vorgangs im Klartext durch fremde Netze.',
+    })
+    // Nur der Standardport (2026-09-27, N-10) — dieselbe Regel wie
+    // `WEBHOOK_PORT` in `lib/automation/webhook.ts`, hier nachgebildet, weil
+    // diese Datei auch im Browser läuft und jene Node-Module lädt. Ohne sie
+    // nahm die Maske `:8443` an, und die Regel scheiterte erst beim Ausführen.
+    .refine((u) => { try { return ['', '443'].includes(new URL(u).port); } catch { return false; } }, {
+      message: 'Nur der Standardport 443. Andere Ports erreichen oft interne Dienste statt einer Webhook-Gegenstelle.',
     }),
   /**
    * Ein gemeinsames Geheimnis, mit dem die Gegenstelle prüfen kann, dass der
