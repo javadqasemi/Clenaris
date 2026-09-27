@@ -65,8 +65,17 @@ function main(): void {
     console.error(`❌  „${name}" ist nicht als Testdatenbank erkennbar. Abbruch.`);
     process.exit(1);
   }
-  if (!existsSync(join(process.cwd(), '.next', 'BUILD_ID'))) {
-    console.error('❌  Kein Produktionsbau in .next — zuerst `npm run build` (bei gestopptem Entwicklungsserver).');
+  /**
+   * Der Bau liegt in `NEXT_DIST_DIR` (sonst `.next`), und er ist erst fertig,
+   * wenn alle drei Dateien da sind (2026-09-27). Vorher prüfte diese Stelle
+   * fest `.next/BUILD_ID`: Mit `NEXT_DIST_DIR` sah sie das falsche
+   * Verzeichnis, und `BUILD_ID` allein entsteht früh im Bau — ein halber Bau
+   * galt als vorhanden (CLAUDE.md, „Don't treat .next/BUILD_ID as build finished").
+   */
+  const dist = process.env.NEXT_DIST_DIR?.trim() || '.next';
+  const fehlend = ['BUILD_ID', 'routes-manifest.json', 'prerender-manifest.json'].filter((d) => !existsSync(join(process.cwd(), dist, d)));
+  if (fehlend.length > 0) {
+    console.error(`❌  Kein vollständiger Produktionsbau in ${dist} (fehlt: ${fehlend.join(', ')}) — zuerst \`npm run build\` (bei gestopptem Entwicklungsserver).`);
     process.exit(1);
   }
 

@@ -161,53 +161,22 @@ jobs:
         # Auslieferung, prüft nicht das, was ausgeliefert wird.
         run: npm ci --no-audit --no-fund
 
-      - name: React-Hydrationskorrektur ist angewendet
-        # `postinstall` wendet die Korrektur an (docs/HYDRATION.md §16). Diese
-        # Stufe sagt es noch einmal ausdrücklich und scheitert, wenn eine neue
-        # Next-Fassung die korrigierte Stelle verändert hat — dann ist die
-        # Korrektur neu zu bewerten, nicht blind zu übernehmen
-        # (docs/LIEFERKETTE.md, „Next aktualisieren").
-        run: node scripts/react-hydrationskorrektur.mjs --pruefen
-
-      - name: Keine kritische Sicherheitslücke in den Laufzeitabhängigkeiten
-        # Nur `critical` und nur, was ausgeliefert wird (`--omit=dev`). Die
-        # bekannten `high`/`moderate`-Befunde sind in docs/LIEFERKETTE.md
-        # einzeln bewertet; eine Schwelle darunter wäre von Anfang an rot und
-        # würde abgeschaltet. Eine *neue* kritische Lücke hält die
-        # Auslieferung an, bis jemand sie bewertet hat.
-        run: npm audit --omit=dev --audit-level=critical
-
       # -- Statische Prüfungen zuerst: Sie brauchen keine Datenbank und
       #    scheitern in Sekunden statt in Minuten. -------------------------
-      - name: Linter
-        run: npm run lint
-
-      - name: TypeScript
-        run: npm run typecheck
-
-      - name: Prisma-Schema gültig
-        # Läuft auch in `security:check` mit; als eigene Stufe, damit ein
-        # ungültiges Schema im Protokoll unter seinem Namen scheitert.
-        run: npx prisma validate
-
-      - name: Keine Geheimnisse im Repository
-        run: bash scripts/ci-secret-scan.sh
-
-      - name: Sicherheitsprüfung
-        # Der Dirigent aus docs/SECURITY_AUTOMATION.md: Geheimnisse (hier mit
-        # Bash, also wirklich geprüft), npm audit gegen die Bewertungen in
-        # security/akzeptierte-befunde.json, Musterprüfung mit begründeten
-        # Unterdrückungen, Migrationen und handgeschriebene Schranken,
-        # öffentliche Endpunkte gegen die Durchsichtsliste, Repository.
-        # Blockiert bei einem blockierenden Befund.
+      - name: Statische Prüfungen (verify:static)
+        # **Derselbe Befehl wie örtlich** (2026-09-27, Definition of Done
+        # Phase 47). Hier standen bis dahin die Einzelschritte von Hand —
+        # Hydrationskorrektur, kritische Lücken, Linter, Typen, Prisma-Schema,
+        # Geheimnisse, statische Sicherheitsprüfung, Dokumentation aktuell,
+        # Merkmalsprüfung. Eine zweite Aufzählung neben der örtlichen läuft
+        # auseinander: Ein Schritt kommt hier dazu und fehlt dort. Die Folge
+        # und die Begründung jedes Schritts stehen jetzt in `scripts/verify.ts`;
+        # jeder Schritt meldet sich dort unter seinem Namen, und das Protokoll
+        # dieser Stufe zeigt am Ende, welcher gescheitert ist.
         #
-        # Umfang `statisch` (2026-09-27): alles, was ohne laufenden Server
-        # geht. Innerhalb eines Umfangs ist „nicht geprüft" seither ein
-        # Fehlschlag, kein Hinweis — vorher endete diese Stufe mit Exitcode 0
-        # und dem Gesamtstatus NICHT_GEPRUEFT zugleich. Die Sicherheitsreihen
-        # folgen als eigene Stufe, sobald die Anwendung läuft; zusammen sind
-        # beide genau `npm run security:check` (Umfang `voll`).
-        run: npm run security:check:static
+        # Die Merkmalsprüfung schreibt ihr Ergebnis weiter in die
+        # Zusammenfassung des Laufs und bleibt nicht blockierend.
+        run: npm run verify:static
 
       - name: Stückliste (CycloneDX)
         run: npm run security:sbom
@@ -221,41 +190,13 @@ jobs:
           if-no-files-found: ignore
           retention-days: 90
 
-      - name: Dokumentation ist aktuell
-        # `npm run docs` erzeugt OpenAPI und ERD neu und bricht ab, wenn eine
-        # Route oder ein Modell undokumentiert ist. Der anschliessende Vergleich
-        # fängt den anderen Fall: Route dokumentiert, erzeugte Datei aber nicht
-        # mitgeliefert. Beides ist ein Fehler, nur der zweite fällt sonst nie auf.
-        run: |
-          npm run docs
-          if ! git diff --quiet -- docs/; then
-            echo "::error::docs/ ist nicht aktuell. Bitte 'npm run docs' ausführen und das Ergebnis mitliefern."
-            git diff --stat -- docs/
-            exit 1
-          fi
-
-      - name: Merkmalsprüfung
-        # Sucht das Muster „Schema + Berechtigung + Oberfläche, aber kein
-        # Schreibpfad" — dreimal in diesem Projekt aufgefallen, jedes Mal erst
-        # beim Durchklicken.
-        #
-        # **Blockiert nicht, und das ist Absicht.** Die Prüfung arbeitet über
-        # den Quelltext und meldet erwiesenermassen auch Fälle, die in Ordnung
-        # sind (eine selbst zusammengesetzte Adresse sieht sie nicht). Eine
-        # Heuristik, die den Bau anhält, wird binnen einer Woche mit
-        # Ausnahmelisten stillgelegt — dann hat man den Aufwand und die Meldung
-        # verloren. Das Ergebnis steht in der Zusammenfassung des Laufs; wer es
-        # als Tor will, ruft das Skript mit `--streng`.
-        continue-on-error: true
-        run: |
-          npx tsx scripts/feature-integrity.ts | tee /tmp/merkmale.txt
-          {
-            echo '### Merkmalsprüfung'
-            echo '```'
-            cat /tmp/merkmale.txt
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
-
+      # Die Merkmalsprüfung läuft in `verify:static` mit. Sie sucht das Muster
+      # „Schema + Berechtigung + Oberfläche, aber kein Schreibpfad" und
+      # **blockiert nicht, mit Absicht**: Sie arbeitet über den Quelltext und
+      # meldet erwiesenermassen auch Fälle, die in Ordnung sind. Eine
+      # Heuristik, die den Bau anhält, wird binnen einer Woche mit
+      # Ausnahmelisten stillgelegt. Wer sie als Tor will, ruft
+      # `scripts/feature-integrity.ts --streng`.
       - name: Merkmalsbericht sichern
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -337,45 +278,29 @@ jobs:
           cat server.log
           exit 1
 
-      - name: Sicherheitsreihen
-        # Der zweite Teil von `security:check` (Umfang `tests`): die
-        # Sicherheitsreihen gegen den laufenden Server, über denselben
-        # Befehl wie örtlich. Sie stehen auch in `npm test`; hier laufen sie
-        # zuerst und als eigene Stufe, damit ein Sicherheitsbefund im Lauf
-        # als solcher sichtbar ist und nicht als einer von 1500 Fällen.
-        run: npm run security:check:tests
-        env:
-          TEST_BASE_URL: http://localhost:3000
-          CLENARIS_TEST_CACHE_DIR: ${{ runner.temp }}/clenaris-tests/cache
-
-      - name: Testreihe
-        # Serialisiert, weil sich alle Dateien eine Datenbank und dieselben
-        # fünf Demokonten teilen. Parallelität erzeugt hier Fehlschläge, keine
-        # Geschwindigkeit.
-        run: npm test
-        env:
-          TEST_BASE_URL: http://localhost:3000
-          CLENARIS_TEST_CACHE_DIR: ${{ runner.temp }}/clenaris-tests/cache
-
       # -- Browser ------------------------------------------------------
       #
       # Gate 4D.1 hat die Browserebene als release-relevant eingeführt, und
       # Gate 4D.2 hat gezeigt, warum sie es ist: Der PDF-Viewer war in jedem
       # echten Chrome kaputt, während 812 HTTP-Prüfungen grün blieben. Ein
       # Lauf, der diese Ebene auslässt, prüft das Produkt nicht dort, wo die
-      # Kundschaft es benutzt.
-      #
-      # Die Reihe fährt gegen den bereits laufenden Server auf 3000 statt
-      # einen zweiten zu starten (`E2E_PORT`), und sie braucht denselben
-      # Postausgang wie die HTTP-Reihe.
+      # Kundschaft es benutzt. Installiert wird vor den Prüfreihen, die sie
+      # als letzten Schritt fahren.
       - name: Browser installieren
         run: npx playwright install --with-deps chromium
 
-      - name: Browser-Prüfreihe
+      - name: Prüfreihen (verify:tests)
+        # **Derselbe Befehl wie örtlich** (2026-09-27): Sicherheitsreihen
+        # (`security:check:tests`, zuerst und als eigener Schritt, damit ein
+        # Sicherheitsbefund als solcher sichtbar ist), vollständige Testreihe
+        # (seriell — alle Dateien teilen eine Datenbank und fünf Demokonten)
+        # und Browser-Prüfreihe **ohne Wiederholungen** gegen den bereits
+        # laufenden Server auf 3000; der Port kommt aus `TEST_BASE_URL`, der
+        # Postausgang aus demselben `CLENARIS_TEST_CACHE_DIR` wie der Server.
+        run: npm run verify:tests
         env:
-          E2E_PORT: '3000'
+          TEST_BASE_URL: http://localhost:3000
           CLENARIS_TEST_CACHE_DIR: ${{ runner.temp }}/clenaris-tests/cache
-        run: npm run e2e
 
       - name: Browser-Bericht sichern
         if: failure()

@@ -47,6 +47,12 @@
     "security:secrets": "tsx scripts/security/geheimnisse.ts",
     "security:sbom": "tsx scripts/security-sbom.ts",
     "docs": "npm run openapi && npm run erd",
+    "verify:static": "tsx scripts/verify.ts statisch",
+    "verify:tests": "tsx scripts/verify.ts pruefreihen",
+    "verify:full": "tsx scripts/verify.ts voll",
+    "verify:release": "tsx scripts/verify.ts release",
+    "verify:security": "npm run security:check",
+    "verify:e2e": "playwright test --retries=0",
     "postinstall": "prisma generate && node scripts/react-hydrationskorrektur.mjs"
   },
   "prisma": {

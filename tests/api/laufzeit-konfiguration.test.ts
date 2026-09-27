@@ -397,7 +397,18 @@ describe('Dasselbe Artefakt unter zwei Laufzeitumgebungen (ohne Neubau)', () => 
 
   it('Browser-Konfiguration: jede Instanz nennt ihre eigene Herkunft und Kennungen', optionen, async () => {
     for (const [instanz, erwartet] of [[a!, A], [b!, B]] as const) {
-      const { status, text } = await anfrage(instanz.port, '/api/public/runtime-config');
+      /**
+       * Diagnose (2026-09-27): In zwei vollen Läufen hing genau diese erste
+       * Anfrage 30 Sekunden, einzeln lief die Datei grün. Bis die Ursache
+       * feststeht, nennt ein Fehlschlag die Instanz, ihren Prozesszustand und
+       * das Ende ihres Serverprotokolls — die Erwartung selbst bleibt dieselbe.
+       */
+      const { status, text } = await anfrage(instanz.port, '/api/public/runtime-config').catch((fehler: Error) => {
+        throw new Error(
+          `Instanz ${instanz.name} (Port ${instanz.port}, Prozess ${instanz.prozess.exitCode === null ? 'läuft' : `beendet mit ${instanz.prozess.exitCode}`}): ${fehler.message}\n` +
+            `Serverprotokoll (Ende):\n${instanz.protokoll.join('').slice(-2500)}`,
+        );
+      });
       assert.equal(status, 200);
       const rumpf = JSON.parse(text) as { data: unknown };
       assert.deepEqual(rumpf.data, { appUrl: erwartet.appUrl, analytics: { gaMeasurementId: erwartet.ga, gtmId: erwartet.gtm } });
