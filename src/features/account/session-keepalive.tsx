@@ -69,6 +69,15 @@ export function SessionKeepalive({ idleSeconds }: { idleSeconds: number }) {
       // 429: die Bremse hat gegriffen, der Token gilt noch — beim nächsten
       // Durchgang erneut versuchen. Alles andere heisst: die Sitzung ist weg.
       if (response?.status === 429) return;
+      // Ausser: Ein anderer Tab hat sie soeben erneuert (`SESSION_ROTATED`).
+      // Dann lebt sie mit dessen Cookies weiter — nichts tun, nicht abmelden.
+      if (response?.status === 401) {
+        const antwort = (await response.json().catch(() => null)) as { error?: { code?: string } } | null;
+        if (antwort?.error?.code === 'SESSION_ROTATED') {
+          lastRefresh = Date.now();
+          return;
+        }
+      }
       if (!stopped) {
         stopped = true;
         const here = `${window.location.pathname}${window.location.search}`;

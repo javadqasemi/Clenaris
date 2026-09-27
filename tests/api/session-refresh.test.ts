@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 
 import { BASE_URL, get, post, requireServer } from '../helpers/client';
 import { ACCOUNTS, login } from '../helpers/accounts';
+import { resetRateLimits } from '../helpers/rate-limit';
 
 /**
  * Stille Sitzungserneuerung.
@@ -54,8 +55,11 @@ describe('Sitzungserneuerung', { concurrency: 1 }, async () => {
     assert.equal(check.payload.data.authenticated, true);
     assert.equal(check.payload.data.role, 'MANAGER');
 
-    // Der alte Token ist verbraucht — eine zweite Einlösung sperrt die Familie
-    // und landet bei der Anmeldung, mit Grund.
+    // Der alte Token ist verbraucht — eine zweite Einlösung wird abgewiesen
+    // und landet bei der Anmeldung, mit Grund. (Ob sie zugleich die Familie
+    // sperrt, hängt seit 2026-09-27 vom Abstand ab: Innerhalb weniger
+    // Sekunden ist sie ein verlorener Wettlauf zweier Tabs, danach eine
+    // Wiederverwendung — siehe den Gleichzeitigkeitsfall unten.)
     const replay = await get('/api/auth/refresh?weiter=%2Fportal', { jar: onlyRefresh });
     assert.equal(replay.status, 303);
     const location = replay.headers.get('location') ?? '';
@@ -103,5 +107,48 @@ describe('Sitzungserneuerung', { concurrency: 1 }, async () => {
 
   it('antwortet auf POST ohne Cookie mit 401', async () => {
     assert.equal((await post('/api/auth/refresh')).status, 401);
+  });
+
+  /**
+   * Fünfzig gleichzeitige Erneuerungen mit demselben Token (2026-09-27).
+   *
+   * Bis dahin lief die Rotation als Lesen → Widerrufen → Anlegen, ohne
+   * Bedingung. Zwei gleichzeitige Aufrufe — Middleware, API-Klient und
+   * Aktivitätswächter rufen alle hier an, in jedem offenen Tab — lasen beide
+   * einen gültigen Token und stellten beide einen neuen aus: Die Familie
+   * gabelte sich in zwei lebende Tokens. Oder der spätere sah den soeben
+   * widerrufenen, hielt ihn für gestohlen und beendete die Sitzung der Person,
+   * mit Sicherheitsmeldung, mitten in der Arbeit.
+   *
+   * Die Invariante: genau **eine** Erneuerung gelingt, alle anderen scheitern
+   * ungefährlich (401, ohne Cookies zu löschen), und die Familie lebt weiter —
+   * mit genau einem gültigen Token.
+   */
+  it('fünfzig gleichzeitige Erneuerungen: genau eine gelingt, die Familie bleibt heil', async () => {
+    resetRateLimits();
+    const frisch = await login(ACCOUNTS.manager.email, ACCOUNTS.manager.password);
+    assert.equal(frisch.status, 200);
+    const nurRefresh = refreshOnly(frisch.jar);
+
+    const antworten = await Promise.all(
+      Array.from({ length: 50 }, () => fetch(`${BASE_URL}/api/auth/refresh`, { method: 'POST', headers: { cookie: nurRefresh } })),
+    );
+    const status = antworten.map((a) => a.status);
+    assert.equal(status.filter((s) => s === 200).length, 1, `Erfolge: ${JSON.stringify(status)}`);
+    assert.ok(status.every((s) => s === 200 || s === 401), `nur 200 oder 401 erwartet: ${JSON.stringify(status)}`);
+
+    // Keine abgewiesene Antwort löscht Cookies — sie käme im Browser womöglich
+    // nach der erfolgreichen an und nähme ihr die neue Sitzung wieder weg.
+    for (const a of antworten.filter((x) => x.status === 401)) {
+      const geloescht = (a.headers.getSetCookie?.() ?? []).some((c) => /clenaris_(at|rt)=;/.test(c) || /Max-Age=0/i.test(c));
+      assert.ok(!geloescht, 'eine verlorene Erneuerung löscht die Cookies');
+    }
+
+    const gewinner = antworten.find((a) => a.status === 200)!;
+    const neueCookies = (gewinner.headers.getSetCookie?.() ?? []).map((c) => c.split(';')[0]).join('; ');
+    const pruefung = await get<{ data: { authenticated: boolean } }>('/api/auth/session', { jar: neueCookies });
+    assert.equal(pruefung.payload.data.authenticated, true, 'die neue Sitzung trägt — die Familie wurde nicht gesperrt');
+    const weiter = await post('/api/auth/refresh', undefined, { jar: refreshOnly(neueCookies) });
+    assert.equal(weiter.status, 200, 'der neue Token lässt sich seinerseits erneuern');
   });
 });

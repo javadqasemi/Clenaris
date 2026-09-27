@@ -5,7 +5,7 @@ import { cookies } from 'next/headers';
 import { prisma } from '@/lib/db';
 import { recordSecurityEvent } from '@/lib/security/record';
 import { serverEnv } from '@/lib/env';
-import { UnauthorizedError } from '@/lib/errors';
+import { AppError, UnauthorizedError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
 import { ACCESS_COOKIE, REFRESH_COOKIE, hashToken, verifyRefreshToken } from '@/lib/auth/jwt';
 import { createSession } from '@/lib/auth/session';
@@ -66,6 +66,28 @@ export async function refreshSession(): Promise<{ id: string; role: string; emai
     throw new UnauthorizedError('Die Sitzung ist abgelaufen.');
   }
 
+  /*
+    Verlorener Wettlauf, keine Wiederverwendung (2026-09-27).
+
+    Middleware, API-Klient und Aktivitätswächter rufen hier an — in jedem
+    offenen Tab. Legen zwei denselben Token fast gleichzeitig vor, gewinnt
+    einer die Rotation; der andere sieht einen Token, den **die Rotation**
+    eben verbraucht hat. Bis hierher galt auch das als Diebstahl: Die
+    Familie wurde gesperrt und die Person mitten in der Arbeit abgemeldet,
+    mit Sicherheitsmeldung.
+
+    Innerhalb von `ROTATIONS_KULANZ_MS` nach einer Rotation wird deshalb nur
+    abgewiesen — ohne Sperre und **ohne Cookies zu löschen**: Die Antwort des
+    Gewinners hat im Browser bereits die neuen gesetzt, und ein Löschen hier
+    käme womöglich danach an und nähme sie wieder weg. Nach der Frist, oder
+    bei einem Token, den nicht die Rotation verbraucht hat (Abmelden,
+    Leerlauf), bleibt es bei der Wiederverwendungserkennung darunter. Ein
+    Dieb, der innerhalb derselben Sekunden rät, bekommt ebenfalls nur 401.
+  */
+  if (record.revokedAt && record.rotatedAt && Date.now() - record.rotatedAt.getTime() < ROTATIONS_KULANZ_MS) {
+    throw new RotationsWettlaufError();
+  }
+
   if (record.revokedAt) {
     await prisma.refreshToken.updateMany({
       where: { family: record.family, revokedAt: null },
@@ -118,7 +140,47 @@ export async function refreshSession(): Promise<{ id: string; role: string; emai
     throw new UnauthorizedError('Dieses Konto ist nicht mehr aktiv.');
   }
 
-  await prisma.refreshToken.update({ where: { id: record.id }, data: { revokedAt: new Date() } });
+  /*
+    Die Rotation ist ein **bedingter** Übergang (2026-09-27): Nur wer den
+    Token im Zustand „nicht widerrufen" antrifft, verbraucht ihn. Vorher stand
+    hier ein unbedingtes Widerrufen nach dem Lesen — zwei gleichzeitige
+    Aufrufe lasen beide einen gültigen Token und stellten beide einen neuen
+    aus: Die Familie gabelte sich in zwei lebende Tokens. Jetzt trifft genau
+    einer die Zeile; die anderen landen in der Kulanz oben.
+  */
+  const jetzt = new Date();
+  const verbraucht = await prisma.refreshToken.updateMany({
+    where: { id: record.id, revokedAt: null },
+    data: { revokedAt: jetzt, rotatedAt: jetzt },
+  });
+  if (verbraucht.count === 0) throw new RotationsWettlaufError();
   const session = await createSession({ userId: record.user.id, family: record.family });
   return { id: session.user.id, role: session.user.role, email: session.user.email };
+}
+
+/**
+ * Wie lange ein durch Rotation verbrauchter Token als „anderer Tab war
+ * schneller" gilt statt als Wiederverwendung. Zehn Sekunden decken parallele
+ * Anfragen eines Seitenaufbaus und langsame Mobilnetze; länger würde die
+ * Wiederverwendungserkennung ohne Grund abschwächen.
+ */
+const ROTATIONS_KULANZ_MS = 10_000;
+
+/**
+ * Der verlorene Wettlauf — ein 401 mit eigener Meldung, ohne Familiensperre
+ * und ohne gelöschte Cookies.
+ *
+ * Der Seitenweg (`GET /api/auth/refresh`) leitet auch hier zur Anmeldung,
+ * nicht ans Ziel: Kämen die Cookies des Gewinners nie an (etwa weil der
+ * Gewinner eine Wiederholung war), liefe eine Weiterleitung ans Ziel im Kreis
+ * zwischen Middleware und Erneuerung. Die Anmeldemaske ist der sichere
+ * Ausgang; der API-Klient im Browser wiederholt ohnehin mit den neuen Cookies.
+ */
+export class RotationsWettlaufError extends AppError {
+  constructor() {
+    // Eigener Code, damit der API-Klient ihn vom „abgelaufen" unterscheiden
+    // kann: Er wiederholt dann mit den Cookies, die der andere Tab soeben
+    // gesetzt hat, statt zur Anmeldung zu gehen.
+    super('SESSION_ROTATED', 'Die Sitzung wurde soeben in einem anderen Fenster erneuert.', 401);
+  }
 }

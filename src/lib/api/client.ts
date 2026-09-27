@@ -56,10 +56,23 @@ interface RequestOptions extends Omit<RequestInit, 'body'> {
  */
 let refreshing: Promise<boolean> | null = null;
 
+/**
+ * Erneuern — und auch dann weitermachen, wenn ein **anderer Tab** schneller
+ * war (2026-09-27). Die Deduplizierung oben wirkt nur innerhalb eines Tabs;
+ * zwischen zwei Tabs gewinnt einer die Rotation, und der andere bekommt
+ * `SESSION_ROTATED`. Bis dahin hiess das hier „abgelaufen" und führte zur
+ * Anmeldung. Jetzt gilt es als Erfolg: Die Cookies des Gewinners liegen im
+ * gemeinsamen Cookie-Speicher, und die Wiederholung benutzt sie. Scheitert
+ * auch die Wiederholung, geht es wie bisher zur Anmeldung.
+ */
 async function tryRefresh(): Promise<boolean> {
   if (!refreshing) {
     refreshing = fetch('/api/auth/refresh', { method: 'POST', credentials: 'same-origin' })
-      .then((r) => r.ok)
+      .then(async (r) => {
+        if (r.ok) return true;
+        const antwort = (await r.json().catch(() => null)) as { error?: { code?: string } } | null;
+        return antwort?.error?.code === 'SESSION_ROTATED';
+      })
       .catch(() => false)
       .finally(() => {
         refreshing = null;

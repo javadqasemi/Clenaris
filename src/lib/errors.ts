@@ -22,6 +22,8 @@ export type ErrorCode =
   | 'BUSINESS_RULE'
   /** Das Gerät ist übergeben — die Sitzung ist vorübergehend gesperrt. */
   | 'DEVICE_HANDOFF_LOCKED'
+  /** Die Sitzung hat soeben ein anderer Tab erneuert — mit dessen Cookies weitermachen. */
+  | 'SESSION_ROTATED'
   | 'INTERNAL_ERROR';
 
 export class AppError extends Error {
