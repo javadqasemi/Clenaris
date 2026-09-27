@@ -158,6 +158,9 @@ describe('Disposition — Buchung, Einsatz, Zuteilung', () => {
     annaId = personal.find((person) => person.user.email === 'anna.keller@clenaris.ch')!.id;
     zweiteKraftId = personal.find((person) => person.id !== annaId)!.id;
     assert.ok(annaId && zweiteKraftId, 'zwei Mitarbeitende im Demobestand');
+    // Reste früherer Läufe (siehe `after` im Block „Abwesenheit"): nur die
+    // eigenen Prüfgesuche, erkennbar am Grund.
+    await testDb()?.absence.deleteMany({ where: { employeeId: annaId, reason: { startsWith: 'Prüflauf ' } } });
 
     /**
      * Das Fenster hinter alles legen, was Anna schon an Abwesenheiten hat —
@@ -554,6 +557,16 @@ describe('Disposition — Buchung, Einsatz, Zuteilung', () => {
 
     after(async () => {
       if (gesuchId) await post(`/api/absences/${gesuchId}/withdraw`, undefined, { jar: jars.employee });
+      /**
+       * Bewilligte Gesuche dieses Laufs direkt aus der Testdatenbank entfernen
+       * (2026-09-27). Über die Schnittstelle geht das nicht — zu Recht, siehe
+       * `fensterFestlegen` —, und so sammelten sie sich Lauf für Lauf an. Die
+       * Fenster wichen einander aus, der **Feriensaldo** des Jahres aber nicht:
+       * Nach einigen Läufen am selben Tag meldete „ein abgelehntes Gesuch
+       * blockiert nicht" plötzlich „Feriensaldo reicht nicht aus". Das war
+       * Prüfstand, kein Produkt.
+       */
+      await testDb()?.absence.deleteMany({ where: { employeeId: annaId, reason: `Prüflauf ${RUN}` } });
     });
 
     it('ein beantragtes Gesuch blockiert noch nicht', async () => {
