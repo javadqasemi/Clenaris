@@ -112,9 +112,9 @@ keine Produktionsmigration, kein Zugriff auf 2.29.18.45.
 | — | Bewegliche Feiertage als jährlich wiederkehrend gespeichert | FEHLER | **behoben**: Seed + Datenmigration | `buchung-integritaet.test.ts` |
 | — | Erneuter Versand setzte eine angenommene Offerte auf SENT zurück (gefunden im Regressionslauf von `datenintegritaet`) | FEHLER | **behoben**: Versand nur aus DRAFT/SENT/VIEWED, sonst 422 | `offertannahme.test.ts` |
 | A4 | Einsatzfenster über Mitternacht | DEFINIERTE PRODUKTGRENZE | abgelehnt, begründet | `docs/VERFUEGBARKEIT.md` |
-| — | Fähigkeiten (Skills) bei der Zuteilung | FEHLENDE FUNKTION | offen | `docs/VERFUEGBARKEIT.md` |
+| — | Fähigkeiten (Skills) bei der Zuteilung | FEHLENDE FUNKTION | **behoben** 2026-09-27: Zuteilung weist ohne gültige Qualifikation ab; Kalender und Buchung schliessen Tage ohne genug Qualifizierte | `dispatch.test.ts`, `buchung-integritaet.test.ts` (A7) |
 | — | Kapazität als Pool statt je Person | TECHNISCHE SCHULD | offen, zeitlich konservativ | `docs/VERFUEGBARKEIT.md` |
-| — | Rechnungsbeträge als `number` mit `round2` statt Decimal-Rechnung | TECHNISCHE SCHULD | offen | `docs/VERFUEGBARKEIT.md` |
+| — | Rechnungsbeträge als `number` mit `round2` statt Decimal-Rechnung | TECHNISCHE SCHULD | **behoben** 2026-09-27: Rechnung, Gutschrift, Preis-Engine, Auftragssummen und Lohn dezimal | `geldrechnung.test.ts`, `buchung-integritaet.test.ts` |
 
 ### 6.2 Neu
 

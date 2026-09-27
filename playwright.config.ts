@@ -12,7 +12,7 @@ import { DIAGNOSE_CACHE_DIR, DIAGNOSE_PORT } from './scripts/diagnose-umgebung';
  *  Warum es diese zweite Prüfebene überhaupt gibt
  * ---------------------------------------------------------------------------
  *
- * Die 809 Prüfungen unter `tests/api` und `tests/pages` fahren die Anwendung
+ * Die Prüfungen unter `tests/api` und `tests/pages` fahren die Anwendung
  * über echtes HTTP an. Das ist die richtige Ebene für Berechtigungen,
  * Statuscodes und ausgeliefertes HTML — und sie bleibt unverändert bestehen.
  * Drei Dinge kann sie aber grundsätzlich nicht beobachten:

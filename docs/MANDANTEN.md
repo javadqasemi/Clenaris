@@ -33,5 +33,5 @@ unsichtbar. Die Prüfreihe legt deshalb eine **fremde Organisation** an
 Kein Mandantenwechsel, keine Auflösung je Domain, keine Zeilen-Sicherheit in
 der Datenbank (RLS). Die Trennung beruht auf dem `where` jeder Abfrage und
 ist durch die Prüfreihe für die Kernbereiche belegt, nicht für jede der
-rund 520 Operationen. Vor einem echten Mehrmandantenbetrieb: RLS oder
+Operationen (Zahl: README, von `scripts/kennzahlen.ts` gezählt). Vor einem echten Mehrmandantenbetrieb: RLS oder
 Abfrage-Middleware, Mandant je Domain, Protokolltabellen mit Mandant.

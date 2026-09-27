@@ -46,7 +46,7 @@
     "security:check:tests": "tsx scripts/security-check.ts --umfang tests",
     "security:secrets": "tsx scripts/security/geheimnisse.ts",
     "security:sbom": "tsx scripts/security-sbom.ts",
-    "docs": "npm run openapi && npm run erd",
+    "docs": "npm run openapi && npm run erd && tsx scripts/kennzahlen.ts",
     "verify:static": "tsx scripts/verify.ts statisch",
     "verify:tests": "tsx scripts/verify.ts pruefreihen",
     "verify:full": "tsx scripts/verify.ts voll",

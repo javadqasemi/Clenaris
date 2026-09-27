@@ -404,8 +404,16 @@ Zeitstempel als `timestamptz` in UTC, Anzeige in Europe/Zurich. Sommerzeit ist
 im Kanton Bern real: ein Einsatz um 07:00 ist im März ein anderer Moment als im
 Juli, und `DateTime` ohne Zone hätte das verschluckt.
 
-Beträge als `Decimal(12,2)`. Fliesskomma hat in einer Buchhaltung nichts
-verloren; `toNumber()` wandelt erst an der Anzeigekante um.
+Beträge als `Decimal(12,2)` — gespeichert **und gerechnet**. Fliesskomma hat
+in einer Buchhaltung nichts verloren: Rechnungen, Gutschriften und Salden
+(`src/lib/rechnungsbetraege.ts`), die Preis-Engine, die Auftragssummen und
+die Lohnabrechnung rechnen seit 2026-09-27 mit `Prisma.Decimal`
+(`src/lib/money.ts`: `produkt`, `prozentVon`, `summeZahl`) und runden einmal
+kaufmännisch auf Rappen. Auslöser waren gemessene Rappenfehler: CHF 30.15 ×
+1.5 Std. ergab binär 45.22 statt 45.23, AHV 5.3 % von CHF 1085.00 57.50 statt
+57.51 (`tests/api/geldrechnung.test.ts`). `toNumber()` wandelt erst an der
+Anzeigekante um. Auswertungen und Kennzahlen (`lib/bi`) rechnen weiterhin in
+`number` — sie zeigen an, sie buchen nicht.
 
 ### Prüfprotokoll
 
@@ -478,7 +486,7 @@ dort, wo sie eine Handlung beantwortet — keine Einblendanimation pro Abschnitt
 Ehrlich benannt, statt stillschweigend übergangen:
 
 - **Unit-Tests.** Es gibt bewusst keine — geprüft wird die laufende Anwendung
-  über echtes HTTP (`tests/`, rund 470 Prüfungen zu Rechtematrix, Abläufen,
+  über echtes HTTP (`tests/`, Prüfungen zu Rechtematrix, Abläufen,
   Eigentümerschaft, Redaktion und ausgelieferten Seiten; siehe
   `tests/README.md`). Was dabei ungeprüft bleibt, sind die reinen Rechenkerne:
   Preis-Engine, QR-Referenz-Prüfziffer und Token-Rotation verdienen gezielte

@@ -162,7 +162,8 @@ function statisch(): void {
    */
   const git = gitBefehl();
   if (!git) abbrechen('git nicht gefunden — „Dokumentation aktuell" lässt sich nicht prüfen.');
-  schritt('Dokumentation ist mitgeliefert (kein Unterschied in docs/)', `${git} diff --exit-code --stat -- docs/`);
+  // README gehört dazu, seit ihre Umfangszahlen erzeugt werden (scripts/kennzahlen.ts, 2026-09-27).
+  schritt('Dokumentation ist mitgeliefert (kein Unterschied in docs/ und README.md)', `${git} diff --exit-code --stat -- docs/ README.md`);
   merkmalspruefung();
 }
 

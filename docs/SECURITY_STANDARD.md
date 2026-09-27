@@ -249,8 +249,11 @@ Nachweis: `zugriffstokens`, `oeffentlicher-zugang`, `oeffentliche-links`,
 
 ## C14 Finanzielle Integrität
 
-- **MUSS** Geld als `Decimal(12,2)` gespeichert und erst an der Anzeige mit
-  `toNumber()` umgewandelt werden.
+- **MUSS** Geld als `Decimal(12,2)` gespeichert, **dezimal gerechnet**
+  (`src/lib/money.ts`, `src/lib/rechnungsbetraege.ts`) und erst an der
+  Anzeige mit `toNumber()` umgewandelt werden. Kein Produkt, Prozentsatz oder
+  Summe eines Betrags in binärem `number` — auch nicht mit anschliessender
+  Rundung (gemessene Rappenfehler, `tests/api/geldrechnung.test.ts`).
 - **MUSS** Preise nur auf dem Server berechnet werden
   (`src/lib/pricing/engine.ts`); ein Preis aus dem Formular wird nie
   übernommen.

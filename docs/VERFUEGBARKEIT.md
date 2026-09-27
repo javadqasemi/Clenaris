@@ -31,7 +31,9 @@ genau eine Buchung.
 | Abgewiesene Gastbuchung legt Kundenakte an | **Fehler** (Datenintegrität) | behoben: Die Akte entsteht in der Transaktion der Buchung |
 | `updateBooking` ändert Termin/Dauer/Team ohne Verfügbarkeitsprüfung | **Fehler** | behoben: dieselbe Prüfung in der Transaktion; ausdrückliches, protokolliertes Übersteuern wie bei der Erfassung im Büro |
 | Bewegliche Feiertage als „wiederkehrend" gespeichert | **Fehler** (Daten, sichtbar geworden durch die Verfügbarkeit) | behoben: Seed rechnet Osterfeiertage je Jahr, Migration `20260926120000_bewegliche_feiertage` korrigiert Bestände |
-| Leistungen kennen keine erforderlichen Qualifikationen | **fehlende Funktion** | offen — `Service` hat kein Qualifikationsfeld (nur `ContractService.requiredSkills`). Die öffentliche Kapazität zählt alle verfügbaren Personen; die Eignung prüft die Zuteilung (`assignment.service.ts`) |
+| Leistungen kennen keine erforderlichen Qualifikationen | **fehlende Funktion** | **behoben 2026-09-27**: `Service.requiredSkills` geht als Momentaufnahme an den Einsatz; die Zuteilung weist Personen ohne gültige Qualifikation ab, und Kalender wie Buchungsabschluss schliessen einen Tag, an dem weniger qualifizierte Personen anwesend sind, als das Team braucht (`leistungsbedarf`, `availability.service.ts`). Welche davon zur Uhrzeit schon gebunden sind, rechnet weiter der Pool (Zeile darunter) |
+| Puffer eines Einsatzes = Puffer der ersten Leistung | **Fehler** | **behoben 2026-09-27**: der grösste Puffer aller Leistungen, wie vor der Bestätigung; die Umbuchung prüft mit Puffer |
+| Halber Abwesenheitstag über mehrere Tage, an Wochenenden | **Fehler** | **behoben 2026-09-27**: Start = Ende verlangt, 0.5 nur an einem Arbeitstag. Die Verfügbarkeit zählt einen halben Tag weiterhin als ganzen (Vor-/Nachmittag ist nicht erfasst) — vorsichtig, nie überbuchend |
 | Kapazität als Personenpool | **technische Schuld**, zeitlich vorsichtig | offen — Belegungen werden vom Pool abgezogen, nicht einer Person zugeordnet. Zeitlich kann das nicht überbuchen (wer zu einer Minute gebunden ist, zählt die ganze Zeit), es kann aber einen Termin ablehnen, den eine exakte Personenplanung zuliesse |
 | Einsatzfenster über Mitternacht (22:00–02:00) | **definierte Produktgrenze** | nicht unterstützt und ausdrücklich abgewiesen (Einstellungen: „Ende nach Beginn"). Ein Fenster gehört zu genau einem Kalendertag; ein Nachteinsatz über Mitternacht wird im Büro erfasst |
 | `e2e:stress` nach dem Sprint nicht gelaufen | Prüflücke | im Abschluss dieser Mission gelaufen (siehe `docs/RELEASEBEREITSCHAFT.md`) |
@@ -59,8 +61,9 @@ Eine von Hand bearbeitete Buchung (`pricing:update`) trägt die Beträge der
 Bearbeitung; das ist die ausdrückliche Übersteuerung der Engine durch die
 Verwaltung, nicht eine zweite Formel.
 
-Offene technische Schuld: Rechnungsbeträge werden als Zahlen gerechnet und je
-Schritt auf Rappen gerundet (`round2`), gespeichert als `Decimal(12,2)` — nicht
-durchgehend mit einem Dezimaltyp. Für Beträge dieser Grössenordnung ist das
-nach jeder Rundung exakt; eine Umstellung wäre eine eigene Änderung des ganzen
-Finanzmoduls.
+Geschlossen am 2026-09-27: Hier stand, Rechnungsbeträge würden als Zahlen
+gerechnet und das sei „nach jeder Rundung exakt". Das stimmte nicht — ein
+binäres Produkt kann knapp unter die Hälfte fallen, und die Rundung trifft
+dann die falsche Zahl (CHF 30.15 × 1.5 Std. ergab 45.22 statt 45.23).
+Rechnung, Gutschrift, Preis-Engine, Auftragssummen und Lohn rechnen seither
+mit `Prisma.Decimal` (`src/lib/money.ts`, `src/lib/rechnungsbetraege.ts`).
