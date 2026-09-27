@@ -1,0 +1,1701 @@
+{
+  "$beschreibung": "Abdeckungsmatrix der kritischen Funktionen gegen die bestehenden Prüfungen (tests/api, tests/pages, tests/e2e). Jeder Beleg nennt Datei und den wörtlichen Titel eines it/describe/test-Aufrufs; scripts/testmatrix-pruefen.ts prüft, dass beides existiert. „abgedeckt“ heisst: Test und Zusicherung wurden gelesen. Ein „hinweis“ an einer abgedeckten Dimension nennt, was trotzdem offen ist. Lücken sind Absicht dieser Datei, nicht ihr Fehler.",
+  "stand": "2026-09-27",
+  "dimensionen": {
+    "happyPath": "Der vorgesehene Ablauf gelingt über HTTP (oder im Browser) mit dem erwarteten Ergebnis.",
+    "validierung": "Unzulässige Eingaben oder Zustände werden mit 4xx abgewiesen, ohne Nebenwirkung.",
+    "unangemeldet": "Ohne Sitzung (bzw. ohne gültiges Geheimnis bei Maschinenwegen) gibt es weder Daten noch Wirkung.",
+    "unberechtigt": "Eine angemeldete Rolle ohne das nötige Recht wird abgewiesen.",
+    "fremderMandant": "Datensätze und Konten einer fremden Organisation sind unsichtbar und unantastbar.",
+    "falscherBezug": "Innerhalb der eigenen Organisation führt ein Verweis auf einen fremden Eigentümer, eine fremde Ressource oder einen falschen Tokenzweck zu nichts (IDOR, fremde Kundschaft, fremdes Ticket).",
+    "nebenlaeufigkeit": "Gleichzeitige Aufrufe ergeben genau ein gültiges Ergebnis.",
+    "idempotenz": "Die Wiederholung desselben Aufrufs erzeugt keinen zweiten Effekt.",
+    "audit": "Die Handlung hinterlässt einen (geschwärzten) Eintrag im Prüfprotokoll, Ereignisstrom oder Signaturprotokoll."
+  },
+  "funktionen": [
+    {
+      "id": "authentifizierung",
+      "name": "Authentifizierung/Sitzung",
+      "dimensionen": {
+        "happyPath": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/session-refresh.test.ts", "test": "erneuert über GET, setzt neue Cookies und leitet an das Ziel zurück" },
+            { "datei": "tests/api/two-factor.test.ts", "test": "meldet sich ohne eingeschalteten Faktor einstufig an" }
+          ]
+        },
+        "validierung": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/rate-limit.test.ts", "test": "Anmeldung: acht Versuche je Adresse, der neunte bekommt 429 mit Retry-After im Fenster" },
+            { "datei": "tests/api/sicherheitszentrum.test.ts", "test": "acht Fehlversuche sperren das Konto und melden beides" }
+          ],
+          "hinweis": "Ein missgebildeter Anmelderumpf (422) ist nicht eigens geprüft; rate-limit.test.ts wird ohne dateibasierten Zähler übersprungen."
+        },
+        "unangemeldet": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/session-refresh.test.ts", "test": "antwortet auf POST ohne Cookie mit 401" },
+            { "datei": "tests/api/session-refresh.test.ts", "test": "schickt einen Seitenaufruf ohne Zugangstoken zur Erneuerung statt zur Anmeldung" },
+            { "datei": "tests/api/flows.test.ts", "test": "antwortet ohne Anmeldung mit 401" }
+          ]
+        },
+        "unberechtigt": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/two-factor.test.ts", "test": "beendet die Sitzung bei einer Sperrung" },
+            { "datei": "tests/api/two-factor.test.ts", "test": "beendet die Sitzung bei einem Rollenwechsel" },
+            { "datei": "tests/api/two-factor.test.ts", "test": "verwirft ein Token, das älter ist als der Widerruf" }
+          ]
+        },
+        "fremderMandant": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/mandanten.test.ts", "test": "ein Administrator der fremden Organisation kann sich nicht anmelden — dieselbe Meldung wie beim falschen Passwort" },
+            { "datei": "tests/api/mandanten.test.ts", "test": "wechselt ein Konto die Organisation, endet die laufende Sitzung sofort — Endpunkt, Seite und Erneuerung" }
+          ]
+        },
+        "falscherBezug": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/session-refresh.test.ts", "test": "lässt kein fremdes Ziel zu" },
+            { "datei": "tests/api/session-refresh.test.ts", "test": "wechselt dabei nicht den Host — sonst reisen die neuen Cookies nicht mit" },
+            { "datei": "tests/api/vor-ort-abnahme.test.ts", "test": "entsperrt die Sitzung einer anderen Person nicht" }
+          ]
+        },
+        "nebenlaeufigkeit": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/session-refresh.test.ts", "test": "fünfzig gleichzeitige Erneuerungen: genau eine gelingt, die Familie bleibt heil" },
+            { "datei": "tests/api/rbac.test.ts", "test": "zwei gleichzeitige gegenseitige Herabstufungen lassen eine Systemverantwortung übrig" }
+          ]
+        },
+        "idempotenz": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/session-refresh.test.ts", "test": "erneuert über GET, setzt neue Cookies und leitet an das Ziel zurück" },
+            { "datei": "tests/api/sicherheitsluecken.test.ts", "test": "ein rotierter Token, nach der Kulanzfrist erneut vorgelegt, macht auch den neuesten ungültig" }
+          ],
+          "hinweis": "Die Sperre der ganzen Familie nach später Wiederverwendung ist belegt (HTTP und Bestand). Dass dabei ein TOKEN_REUSE-Sicherheitsereignis entsteht, prüft kein Test."
+        },
+        "audit": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/sicherheitszentrum.test.ts", "test": "eine fehlgeschlagene Anmeldung landet im Strom" },
+            { "datei": "tests/api/sicherheitszentrum.test.ts", "test": "Sitzungen beenden widerruft die Erneuerungstokens wirklich" }
+          ]
+        }
+      }
+    },
+    {
+      "id": "zwei-faktor",
+      "name": "2FA",
+      "dimensionen": {
+        "happyPath": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/two-factor.test.ts", "test": "schaltet mit dem richtigen Code ein und gibt zehn Ersatzcodes aus" },
+            { "datei": "tests/api/two-factor.test.ts", "test": "meldet mit dem richtigen Code an" }
+          ]
+        },
+        "validierung": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/two-factor.test.ts", "test": "weist einen falschen Code ab" },
+            { "datei": "tests/api/two-factor.test.ts", "test": "verlangt das richtige Passwort" },
+            { "datei": "tests/api/two-factor.test.ts", "test": "lässt den Faktor nach Fehlversuchen unverändert" }
+          ]
+        },
+        "unangemeldet": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/two-factor.test.ts", "test": "öffnet mit dem Zwischenschein keine geschützten Endpunkte" }
+          ]
+        },
+        "unberechtigt": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/two-factor.test.ts", "test": "verwehrt es der Administration" }
+          ]
+        },
+        "fremderMandant": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/mandanten.test.ts", "test": "Zwei-Faktor-Rücksetzung durch die Systemverantwortung: 404, der zweite Faktor bleibt" }
+          ]
+        },
+        "falscherBezug": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/zugriffsgrenzen.test.ts", "test": "der Zwischenschein von A lässt sich mit dem gültigen Code von B nicht einlösen (401, keine Sitzung)" },
+            { "datei": "tests/api/zugriffsgrenzen.test.ts", "test": "der Zwischenschein von A lässt sich auch mit einem Wiederherstellungscode von B nicht einlösen" },
+            { "datei": "tests/api/zugriffsgrenzen.test.ts", "test": "der Zwischenschein von B lässt sich mit dem gültigen Code von A nicht einlösen" },
+            { "datei": "tests/api/zugriffsgrenzen.test.ts", "test": "der Zwischenschein taugt nicht als Zugangstoken, auch nicht ins Sitzungscookie umgefüllt" }
+          ]
+        },
+        "nebenlaeufigkeit": {
+          "status": "luecke",
+          "grund": "Die gleichzeitige Einlösung desselben Ersatzcodes (parallele POST /api/auth/2fa/verify) ist nicht geprüft — nur die Wiederverwendung nacheinander. Auch nebenlaeufigkeit.test.ts enthält keinen Zwei-Faktor-Fall."
+        },
+        "idempotenz": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/two-factor.test.ts", "test": "nimmt denselben Code kein zweites Mal" },
+            { "datei": "tests/api/two-factor.test.ts", "test": "überschreibt einen scharfen Faktor nicht" },
+            { "datei": "tests/api/two-factor.test.ts", "test": "meldet beim zweiten Mal, dass es nichts zurückzusetzen gibt" }
+          ]
+        },
+        "audit": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/zugriffsgrenzen.test.ts", "test": "Einschalten schreibt einen Protokolleintrag und das Sicherheitsereignis TWO_FACTOR_ENABLED" },
+            { "datei": "tests/api/zugriffsgrenzen.test.ts", "test": "Ausschalten schreibt einen Protokolleintrag und das Sicherheitsereignis TWO_FACTOR_DISABLED" },
+            { "datei": "tests/api/zugriffsgrenzen.test.ts", "test": "Rücksetzung durch die Systemverantwortung: Protokolleintrag mit handelnder Person, TWO_FACTOR_DISABLED und SESSIONS_REVOKED beim betroffenen Konto" },
+            { "datei": "tests/api/protokollpflicht.test.ts", "test": "Faktor einschalten: PERMISSION_CHANGE am Konto — ohne Geheimnis und ohne Wiederherstellungscodes" },
+            { "datei": "tests/api/protokollpflicht.test.ts", "test": "Faktor ausschalten: PERMISSION_CHANGE am Konto — ohne Passwort und ohne Code" },
+            { "datei": "tests/api/protokollpflicht.test.ts", "test": "Faktor zurücksetzen (Systemverantwortung): PERMISSION_CHANGE am betroffenen Konto, mit der Systemverantwortung als Person" }
+          ]
+        }
+      }
+    },
+    {
+      "id": "buchung",
+      "name": "Buchung",
+      "dimensionen": {
+        "happyPath": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/flows.test.ts", "test": "bucht für ein Kundenkonto ohne Kontaktfelder auf das eigene Profil" },
+            { "datei": "tests/api/dispatch.test.ts", "test": "POST /api/bookings: erfasst im Büro, mit eigener Herkunft und serverseitigem Preis" },
+            { "datei": "tests/api/geschaeftsablaeufe.test.ts", "test": "3. die Gastbuchung legt Buchung und Kundschaft an" }
+          ]
+        },
+        "validierung": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/dispatch.test.ts", "test": "POST /api/bookings: ohne Adresse 422" },
+            { "datei": "tests/api/buchung-integritaet.test.ts", "test": "Termin in der Vergangenheit → 422, keine Akte" },
+            { "datei": "tests/api/mehrere-leistungen.test.ts", "test": "unzulässige Kombinationen werden abgewiesen" },
+            { "datei": "tests/api/flows.test.ts", "test": "weist eine Buchung mit ungültigem Gutscheincode ab" }
+          ]
+        },
+        "unangemeldet": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/flows.test.ts", "test": "liefert die Buchungsbestätigung als PDF und als druckbare Seite" }
+          ],
+          "hinweis": "Belegt ist nur GET /api/bookings/:id/pdf ohne Sitzung (401). Liste, Detail, PATCH und DELETE der Verwaltungsroute /api/bookings ohne Sitzung sind nicht eigens geprüft."
+        },
+        "unberechtigt": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/dispatch.test.ts", "test": "POST /api/bookings: nur mit booking:create — Team und Kundschaft abgewiesen" }
+          ]
+        },
+        "fremderMandant": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/mandanten.test.ts", "test": "${b.name}: nicht in der Liste, nicht einzeln, nicht änderbar, nicht löschbar" },
+            { "datei": "tests/api/mandanten.test.ts", "test": "Bestätigen, Stornieren, Wiederherstellen und PDF greifen nicht (404) — Status und Einsätze unverändert" },
+            { "datei": "tests/api/mandanten.test.ts", "test": "Kundenkonto: eine fremde Buchung ist nicht die eigene (404)" },
+            { "datei": "tests/api/mandanten.test.ts", "test": "Buchung verwalten (BOOKING_MANAGE): kein PDF (404)" }
+          ]
+        },
+        "falscherBezug": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/buchung-integritaet.test.ts", "test": "angemeldete Kundschaft mit fremder Adresse, fremdem Objekt oder fremder Datei → 404" },
+            { "datei": "tests/api/buchung-integritaet.test.ts", "test": "Gast mit fremder Adresse → 404, nichts angelegt" },
+            { "datei": "tests/api/buchung-integritaet.test.ts", "test": "Gast mit fremdem Objekt → 404" },
+            { "datei": "tests/api/sicherheitsluecken.test.ts", "test": "die Kundschaft liest keine fremde Buchung — weder Daten noch PDF noch Seite" }
+          ]
+        },
+        "nebenlaeufigkeit": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/buchung-integritaet.test.ts", "test": "zwei gleichzeitige Verschiebungen auf den letzten Platz: genau eine gelingt" },
+            { "datei": "tests/api/mehrere-leistungen.test.ts", "test": "zwei gleichzeitige Buchungen für den letzten Platz: genau eine kommt durch" }
+          ]
+        },
+        "idempotenz": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/dispatch.test.ts", "test": "zweimaliges Bestätigen einer Buchung erzeugt keinen zweiten Einsatz" }
+          ],
+          "hinweis": "Ein doppelt abgeschicktes Buchungsformular (zweimal POST /api/public/bookings mit denselben Daten) ist nicht geprüft."
+        },
+        "audit": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/buchung-integritaet.test.ts", "test": "ausserhalb der Einsatzzeit, zu lange Dauer: 422 — ausdrücklich übergangen: 200 und protokolliert" }
+          ],
+          "hinweis": "Nur das Übergehen der Kapazitätsprüfung ist als Protokolleintrag belegt; Anlegen, Bestätigen und Stornieren einer Buchung nicht."
+        }
+      }
+    },
+    {
+      "id": "offerte",
+      "name": "Offerte",
+      "dimensionen": {
+        "happyPath": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/flows.test.ts", "test": "erstellt eine Offerte mit optionaler Position" },
+            { "datei": "tests/api/flows.test.ts", "test": "erzeugt ein Offerten-PDF mit Inhalt" },
+            { "datei": "tests/api/besichtigung.test.ts", "test": "die Offerte übernimmt den berechneten Preis, einmal" }
+          ]
+        },
+        "validierung": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/besichtigung.test.ts", "test": "keine Offerte vor der Besichtigung" },
+            { "datei": "tests/api/besichtigung.test.ts", "test": "nach der Offerte ist die Aufnahme gesperrt" }
+          ],
+          "hinweis": "Nur Zustandsregeln der Besichtigung. Schemafehler von POST/PATCH /api/quotes (leere Positionen, negative Menge, Gültigkeit in der Vergangenheit) prüft kein Test."
+        },
+        "unangemeldet": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/zugriffsgrenzen.test.ts", "test": "${endpunkt.bereich}: ${endpunkt.methode} ${endpunkt.pfad.replace(GIBT_ES_NICHT, ':id')} verlangt eine Sitzung — ohne Cookie und mit gefälschtem Token 401" },
+            { "datei": "tests/api/zugriffsgrenzen.test.ts", "test": "die abgewiesenen Schreibversuche ohne Anmeldung hinterlassen keinen Datensatz" }
+          ],
+          "hinweis": "Geprüft sind GET/POST /api/quotes, GET/PATCH /api/quotes/:id und POST …/send, je ohne Cookie, mit gefälschter und mit fehlender Signatur. Das Offerten-PDF (/api/quotes/:id/pdf) und DELETE ohne Sitzung stehen nicht in der Liste."
+        },
+        "unberechtigt": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/zugriffsgrenzen.test.ts", "test": "${bezeichnung}: POST /api/quotes → 403 (kein quote:create)" },
+            { "datei": "tests/api/zugriffsgrenzen.test.ts", "test": "${bezeichnung}: PATCH /api/quotes/:id auf eine bestehende Offerte → 403 (kein quote:update)" },
+            { "datei": "tests/api/zugriffsgrenzen.test.ts", "test": "${bezeichnung}: POST /api/quotes/:id/send → 403 (kein quote:send)" },
+            { "datei": "tests/api/zugriffsgrenzen.test.ts", "test": "nach allen verweigerten Versuchen ist die Offerte unverändert und keine neue entstanden" }
+          ],
+          "hinweis": "Löschen und Duplizieren durch Mitarbeitende oder Kundschaft sind nicht eigens geprüft."
+        },
+        "fremderMandant": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/mandanten.test.ts", "test": "${b.name}: nicht in der Liste, nicht einzeln, nicht änderbar, nicht löschbar" },
+            { "datei": "tests/api/mandanten.test.ts", "test": "Offerte an fremde Kundschaft" },
+            { "datei": "tests/api/mandanten.test.ts", "test": "Objekt der fremden Kundschaft an eigener Offerte" }
+          ]
+        },
+        "falscherBezug": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/besichtigung.test.ts", "test": "eine Offerte an eine unbekannte Kundschaft wird abgewiesen" },
+            { "datei": "tests/api/besichtigung.test.ts", "test": "planen: Nummer vom Server, Bezug nur innerhalb der Organisation" },
+            { "datei": "tests/api/oeffentlicher-zugang.test.ts", "test": "eine fremde Offerte bleibt der Kundschaft verschlossen" }
+          ]
+        },
+        "nebenlaeufigkeit": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/besichtigung.test.ts", "test": "die Offerte übernimmt den berechneten Preis, einmal" }
+          ],
+          "hinweis": "Nur die Offerte aus einer Besichtigung (zwei gleichzeitige Klicks); gleichzeitiger Versand oder gleichzeitiges Duplizieren nicht."
+        },
+        "idempotenz": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/besichtigung.test.ts", "test": "die Offerte übernimmt den berechneten Preis, einmal" },
+            { "datei": "tests/api/geschaeftsablaeufe.test.ts", "test": "3. ein erneuter Versand widerruft den ersten Link" }
+          ]
+        },
+        "audit": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/protokollpflicht.test.ts", "test": "Offerte anlegen: CREATE an der Offerte, mit Verwaltung und Organisation" },
+            { "datei": "tests/api/protokollpflicht.test.ts", "test": "Offerte senden: UPDATE „versendet\" — ohne Link, rohen Token oder Tokenhash" },
+            { "datei": "tests/api/protokollpflicht.test.ts", "test": "Offerte duplizieren: CREATE an der Kopie, mit Verweis auf die Vorlage" }
+          ],
+          "hinweis": "Das Ändern einer Offerte (PATCH /api/quotes/:id) ist nicht auf einen Protokolleintrag geprüft."
+        }
+      }
+    },
+    {
+      "id": "offertannahme",
+      "name": "Offertannahme/Signatur",
+      "dimensionen": {
+        "happyPath": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/offertannahme.test.ts", "test": "nimmt eine Offerte getippt an — vom Versand bis zum Ergebnis" },
+            { "datei": "tests/api/offertannahme.test.ts", "test": "nimmt eine Offerte gezeichnet an" },
+            { "datei": "tests/e2e/gate4c-offertannahme.spec.ts", "test": "nimmt eine Offerte gezeichnet an — echte Mausbewegung auf dem Unterschriftenfeld" }
+          ]
+        },
+        "validierung": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/signatur.test.ts", "test": "verlangt die Zustimmung als Literal und den Namen; Text und Fassung bestimmt der Server" },
+            { "datei": "tests/api/signatur.test.ts", "test": "prüft die Position gegen die tatsächliche Seite" },
+            { "datei": "tests/api/offertannahme.test.ts", "test": "beginnt auf einer abgelaufenen Offerte keinen Vorgang" },
+            { "datei": "tests/api/offertannahme.test.ts", "test": "verweigert den Abschluss, wenn die gespeicherten Originalbytes nicht mehr zu Hash A passen" }
+          ]
+        },
+        "unangemeldet": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/signatur.test.ts", "test": "gibt ohne Sitzung, mit fremdem Cookie und für den falschen Bereich nichts preis" },
+            { "datei": "tests/api/signatur.test.ts", "test": "antwortet auf unbekannte, missgebildete, abgelaufene und widerrufene Tokens gleich nichtssagend" }
+          ]
+        },
+        "unberechtigt": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/offertannahme.test.ts", "test": "lässt QUOTE_VIEW ansehen, aber nicht annehmen" },
+            { "datei": "tests/api/signatur.test.ts", "test": "lässt nur Verwaltung Vorgänge anlegen — und nur auf sichtbaren Dokumenten" }
+          ]
+        },
+        "fremderMandant": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/mandanten.test.ts", "test": "Vorgang: nicht lesbar, keine Integritätsprüfung, keine Artefakte (404)" },
+            { "datei": "tests/api/mandanten.test.ts", "test": "Vorgang: nicht versendbar, nicht abbrechbar (404) — Zustand und Zugänge unverändert" },
+            { "datei": "tests/api/mandanten.test.ts", "test": "versendete Offerte der fremden Organisation: nicht erneut versendbar (404), das Kundenkonto kann sie nicht annehmen (404)" },
+            { "datei": "tests/api/mandanten.test.ts", "test": "Offerte annehmen und ablehnen (QUOTE_RESPOND): 404 — Offerte und Signaturvorgang unverändert" },
+            { "datei": "tests/api/mandanten.test.ts", "test": "Unterzeichnungslink tauschen (SIGNATURE_ACCESS): 404, keine Signatursitzung, kein Protokolleintrag" },
+            { "datei": "tests/api/mandanten.test.ts", "test": "Download, Inhalt, Signaturvorgänge und Dateiroute: 404; eine neue Fassung wird nicht angehängt" }
+          ],
+          "hinweis": "Der Abschluss eines fremden Vorgangs über eine bestehende Signatursitzung ist nicht eigens geprüft — ohne Tausch entsteht keine Sitzung, und der Tausch ist belegt."
+        },
+        "falscherBezug": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/offertannahme.test.ts", "test": "bindet SIGNATURE_ACCESS an genau einen Teilnehmer" },
+            { "datei": "tests/api/offertannahme.test.ts", "test": "verweigert die Offerte einer anderen Kundschaft" },
+            { "datei": "tests/api/oeffentlicher-zugang.test.ts", "test": "der Token von Offerte A öffnet Offerte B nicht" }
+          ]
+        },
+        "nebenlaeufigkeit": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/offertannahme.test.ts", "test": "erzeugt bei vier gleichzeitigen Annahmestarts genau einen Vorgang" },
+            { "datei": "tests/api/offertannahme.test.ts", "test": "nimmt bei vier gleichzeitigen Abschlüssen genau einmal an" },
+            { "datei": "tests/api/offertannahme.test.ts", "test": "lässt Annahme und Ablehnung nie beide gewinnen" },
+            { "datei": "tests/api/signatur.test.ts", "test": "ergibt bei vier gleichzeitigen Abschlüssen genau einen" }
+          ]
+        },
+        "idempotenz": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/signatur.test.ts", "test": "Nachtlauf: lässt Vorgänge ablaufen und holt ein fehlendes Protokoll idempotent nach" },
+            { "datei": "tests/api/oeffentliche-links.test.ts", "test": "lässt eine bereits abgelehnte Offerte nicht nachträglich annehmen" }
+          ]
+        },
+        "audit": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/offertannahme.test.ts", "test": "nimmt bei vier gleichzeitigen Abschlüssen genau einmal an" },
+            { "datei": "tests/api/offertannahme.test.ts", "test": "trägt den rohen Zugang nur im Fragment und im Tauschkörper" },
+            { "datei": "tests/api/signatur.test.ts", "test": "lässt Ereignisse in der Datenbank weder ändern noch löschen" }
+          ]
+        }
+      }
+    },
+    {
+      "id": "vor-ort-abnahme",
+      "name": "Vor-Ort-Abnahme",
+      "dimensionen": {
+        "happyPath": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/vor-ort-abnahme.test.ts", "test": "führt getippt von der Übergabe bis zur Rückgabe" },
+            { "datei": "tests/e2e/gate4d-abnahme.spec.ts", "test": "führt die Abnahme gezeichnet durch — echte Mausbewegung auf dem übergebenen Gerät" }
+          ]
+        },
+        "validierung": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/vor-ort-abnahme.test.ts", "test": "verweigert den Start auf einem noch nicht abgeschlossenen Einsatz" },
+            { "datei": "tests/api/vor-ort-abnahme.test.ts", "test": "verweigert jede signaturrelevante Änderung während der Übergabe" },
+            { "datei": "tests/api/vor-ort-abnahme.test.ts", "test": "verweigert den Abschluss, wenn die Originalbytes manipuliert wurden" }
+          ]
+        },
+        "unangemeldet": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/zugriffsgrenzen.test.ts", "test": "${endpunkt.bereich}: ${endpunkt.methode} ${endpunkt.pfad.replace(GIBT_ES_NICHT, ':id')} verlangt eine Sitzung — ohne Cookie und mit gefälschtem Token 401" }
+          ],
+          "hinweis": "Bereich „Geräteübergabe“: GET /api/handoff, POST und DELETE /api/jobs/:id/handoff und POST /api/handoff/unlock — jeweils 401 und kein Sitzungs- oder Signaturcookie."
+        },
+        "unberechtigt": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/vor-ort-abnahme.test.ts", "test": "lässt die zugeteilte Person starten und niemanden sonst" },
+            { "datei": "tests/api/vor-ort-abnahme.test.ts", "test": "sperrt jeden angemeldeten Endpunkt — auch aus einem zweiten Tab" },
+            { "datei": "tests/e2e/gate4d-sperre.spec.ts", "test": "sperrt den zweiten Tab desselben Browsers — serverseitig, nicht nur als Umleitung" }
+          ]
+        },
+        "fremderMandant": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/mandanten.test.ts", "test": "die Übergabe beginnt nicht (404), setzt kein Signaturcookie und sperrt die Sitzung nicht" },
+            { "datei": "tests/api/mandanten.test.ts", "test": "der laufende Abnahmevorgang des fremden Einsatzes ist weder lesbar noch abbrechbar (404)" },
+            { "datei": "tests/api/mandanten.test.ts", "test": "der Rapport eines fremden Einsatzes wird nicht erzeugt (404)" }
+          ]
+        },
+        "falscherBezug": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/vor-ort-abnahme.test.ts", "test": "verweigert den Start auf einem Einsatz ohne Zuteilung" },
+            { "datei": "tests/api/vor-ort-abnahme.test.ts", "test": "entsperrt die Sitzung einer anderen Person nicht" },
+            { "datei": "tests/api/vor-ort-abnahme.test.ts", "test": "verlangt das richtige Passwort und akzeptiert kein fremdes" }
+          ]
+        },
+        "nebenlaeufigkeit": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/vor-ort-abnahme.test.ts", "test": "erzeugt bei vier gleichzeitigen Starts einen Vorgang und eine Sperre" },
+            { "datei": "tests/api/vor-ort-abnahme.test.ts", "test": "nimmt bei vier gleichzeitigen Abschlüssen genau einmal ab" }
+          ]
+        },
+        "idempotenz": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/vor-ort-abnahme.test.ts", "test": "nimmt bei vier gleichzeitigen Abschlüssen genau einmal ab" },
+            { "datei": "tests/api/vor-ort-abnahme.test.ts", "test": "nimmt einen abgesagten Einsatz nicht mehr ab" }
+          ],
+          "hinweis": "Wiederholung nur als gleichzeitiger Aufruf geprüft; ein zweiter Abschluss nacheinander (nach COMPLETED) nicht eigens."
+        },
+        "audit": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/vor-ort-abnahme.test.ts", "test": "nimmt bei vier gleichzeitigen Abschlüssen genau einmal ab" },
+            { "datei": "tests/api/vor-ort-abnahme.test.ts", "test": "schreibt die Unterschrift der Kundschaft zu, nie dem Personal" }
+          ]
+        }
+      }
+    },
+    {
+      "id": "vertrag",
+      "name": "Vertrag",
+      "dimensionen": {
+        "happyPath": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/vertraege.test.ts", "test": "aktiviert und vergibt dabei die Vertragsnummer" },
+            { "datei": "tests/api/geschaeftsablaeufe.test.ts", "test": "6. aus der angenommenen Offerte entsteht ein Vertrag" },
+            { "datei": "tests/e2e/wave10-vertraege.spec.ts", "test": "A: aus der angenommenen Offerte — Vertrag in der Maske, Plan im Dialog, Einsätze mit ihrer Fassung" }
+          ]
+        },
+        "validierung": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/vertraege.test.ts", "test": "weist eine Version ohne Preis bei Festpreis ab (422)" },
+            { "datei": "tests/api/vertraege.test.ts", "test": "weist unzulässige Übergänge ab (422) — beendet ist beendet" },
+            { "datei": "tests/api/vertraege.test.ts", "test": "weist jede Änderung der Konditionen ab (422) — Preis, Zyklus, Zahlungsziel, Frist, Stichtag" }
+          ]
+        },
+        "unangemeldet": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/zugriffsgrenzen.test.ts", "test": "${endpunkt.bereich}: ${endpunkt.methode} ${endpunkt.pfad.replace(GIBT_ES_NICHT, ':id')} verlangt eine Sitzung — ohne Cookie und mit gefälschtem Token 401" }
+          ],
+          "hinweis": "Bereich „Verträge“: GET/POST /api/contracts, GET /api/contracts/:id, POST …/activate und …/pause. Fassungen, Kündigung und Einsatzplan ohne Sitzung stehen nicht in der Liste."
+        },
+        "unberechtigt": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/vertraege.test.ts", "test": "die Betriebsleitung entwirft, aktiviert aber nicht (403)" },
+            { "datei": "tests/api/vertraege.test.ts", "test": "Mitarbeitende haben keinen Zugang (403)" },
+            { "datei": "tests/api/vertraege.test.ts", "test": "wer beantragt, gibt nicht frei (422)" }
+          ]
+        },
+        "fremderMandant": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/mandanten.test.ts", "test": "${b.name}: nicht in der Liste, nicht einzeln, nicht änderbar, nicht löschbar" },
+            { "datei": "tests/api/mandanten.test.ts", "test": "Pause, Kündigung, Storno, neue Fassung und Aktivierung greifen nicht (404) — der Vertrag bleibt Entwurf" },
+            { "datei": "tests/api/mandanten.test.ts", "test": "Annahme einer fremden Vertragsfassung beginnt nicht und lässt sich nicht zurückziehen (404)" },
+            { "datei": "tests/api/mandanten.test.ts", "test": "Vertrag für fremde Kundschaft wird nicht angelegt (404)" }
+          ],
+          "hinweis": "Der Einsatzplan eines fremden Vertrags (Planer, Vorschau) ist nicht eigens geprüft."
+        },
+        "falscherBezug": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/vertraege.test.ts", "test": "Kundschaft sieht ausschliesslich die eigenen Verträge" },
+            { "datei": "tests/api/vertraege-integritaet.test.ts", "test": "Vertrag der einen und Objekt einer anderen Kundschaft: 422" }
+          ]
+        },
+        "nebenlaeufigkeit": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/vertraege.test.ts", "test": "bleibt idempotent, wenn zwei Läufe gleichzeitig starten" },
+            { "datei": "tests/api/vertraege.test.ts", "test": "zwei gleichzeitige Läufe erzeugen genau eine Rechnung" },
+            { "datei": "tests/api/vertraege-integritaet.test.ts", "test": "Stornieren gegen Unterschreiben gleichzeitig: nie storniert und angenommen" },
+            { "datei": "tests/api/vertraege-integritaet.test.ts", "test": "Wechsel mit gleicher Serie, drei Planer gleichzeitig, Wiederholung: je Termin genau ein Einsatz" }
+          ]
+        },
+        "idempotenz": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/vertraege.test.ts", "test": "ist idempotent: der zweite Lauf legt nichts an" },
+            { "datei": "tests/api/vertraege.test.ts", "test": "legt beim zweiten Aufruf nichts an — dieselbe Rechnung, 200 statt 201" }
+          ]
+        },
+        "audit": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/protokollpflicht.test.ts", "test": "Vertrag aktivieren: UPDATE am Vertrag mit Zustandswechsel DRAFT → ACTIVE" },
+            { "datei": "tests/api/protokollpflicht.test.ts", "test": "Vertrag pausieren: UPDATE am Vertrag mit Zeitraum und Begründung" },
+            { "datei": "tests/api/protokollpflicht.test.ts", "test": "neue Fassung: CREATE an der Fassung, danach UPDATE am Vertrag beim Inkraftsetzen" },
+            { "datei": "tests/api/protokollpflicht.test.ts", "test": "Preisanpassung: Vorschlag der Betriebsleitung, Freigabe und Übernahme durch die Verwaltung — je mit der eigenen Person" }
+          ],
+          "hinweis": "Kündigen und Beenden eines Vertrags sind nicht auf einen Protokolleintrag geprüft."
+        }
+      }
+    },
+    {
+      "id": "einsatz",
+      "name": "Einsatz/Zuteilung",
+      "dimensionen": {
+        "happyPath": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/dispatch.test.ts", "test": "teilt aktives Personal zu" },
+            { "datei": "tests/api/dispatch.test.ts", "test": "POST /api/jobs: legt einen Einsatz ohne Buchung an" }
+          ]
+        },
+        "validierung": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/jobs.test.ts", "test": "Ende vor Beginn wird abgelehnt" },
+            { "datei": "tests/api/dispatch.test.ts", "test": "erkennt die Überschneidung: 08–11 und 10:30–13 gehen nicht zusammen" },
+            { "datei": "tests/api/dispatch.test.ts", "test": "ohne Qualifikation → 422 MISSING_SKILL; mit → 200; abgelaufen → 422" },
+            { "datei": "tests/api/dispatch.test.ts", "test": "ein bewilligtes Gesuch blockiert die Zuteilung" }
+          ]
+        },
+        "unangemeldet": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/jobs.test.ts", "test": "bearbeiten darf, wer Einsätze führt — nicht das Team, nicht die Kundschaft" }
+          ],
+          "hinweis": "Nur PATCH /api/jobs/:id ohne Sitzung (401); GET/POST /api/jobs und POST /api/jobs/:id/assign ohne Sitzung sind nicht eigens geprüft."
+        },
+        "unberechtigt": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/dispatch.test.ts", "test": "Kundschaft und Mitarbeitende teilen niemanden zu" },
+            { "datei": "tests/api/dispatch.test.ts", "test": "POST /api/jobs: Kundschaft und Mitarbeitende dürfen nicht anlegen" }
+          ]
+        },
+        "fremderMandant": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/mandanten.test.ts", "test": "${b.name}: nicht in der Liste, nicht einzeln, nicht änderbar, nicht löschbar" }
+          ],
+          "hinweis": "Der Einsatz selbst ist abgedeckt (Bereich „Einsätze“). Die Zuteilung einer Person aus einer fremden Organisation ist nicht eigens geprüft."
+        },
+        "falscherBezug": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/dispatch.test.ts", "test": "POST /api/jobs: Adresse einer fremden Kundschaft wird abgewiesen" },
+            { "datei": "tests/api/dispatch.test.ts", "test": "weist eine erfundene Personal-ID ab, ohne ihre Existenz zu verraten" },
+            { "datei": "tests/api/dispatch.test.ts", "test": "GET /api/jobs: Mitarbeitende sehen nur die eigenen — auch mit fremdem Filter" },
+            { "datei": "tests/api/dispatch.test.ts", "test": "bleibt für nicht zugeteilte Mitarbeitende unerreichbar" }
+          ]
+        },
+        "nebenlaeufigkeit": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/dispatch.test.ts", "test": "zwei gleichzeitige Zuteilungen derselben Person auf überlappende Einsätze: genau eine gelingt — fünfmal" },
+            { "datei": "tests/api/nebenlaeufigkeit.test.ts", "test": "Zuteilung und Bewilligung gleichzeitig — nie beides, fünfmal" }
+          ]
+        },
+        "idempotenz": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/dispatch.test.ts", "test": "zweimaliges Bestätigen einer Buchung erzeugt keinen zweiten Einsatz" }
+          ]
+        },
+        "audit": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/protokoll-und-schranken.test.ts", "test": "assignJob legt die Kennungen der Personen in changes ab" },
+            { "datei": "tests/api/protokoll-und-schranken.test.ts", "test": "moveJob protokolliert ebenfalls" }
+          ],
+          "hinweis": "Reine Quelltextprüfung (liest job.service.ts); kein Laufzeitnachweis eines Eintrags in audit_logs nach einer Zuteilung über HTTP."
+        }
+      }
+    },
+    {
+      "id": "zeiterfassung",
+      "name": "Zeiterfassung",
+      "dimensionen": {
+        "happyPath": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/zeiterfassung.test.ts", "test": "erfasst eine Zeit von Hand und rechnet die Dauer selbst" },
+            { "datei": "tests/api/geschaeftsablaeufe.test.ts", "test": "10. die Mitarbeiterin stempelt ein und aus" }
+          ]
+        },
+        "validierung": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/zeiterfassung.test.ts", "test": "weist ein Ende vor dem Beginn ab" },
+            { "datei": "tests/api/zeiterfassung.test.ts", "test": "weist eine Erfassung über 24 Stunden ab" },
+            { "datei": "tests/api/zeiterfassung.test.ts", "test": "weist eine Überschneidung mit derselben Person ab" },
+            { "datei": "tests/api/zeiterfassung.test.ts", "test": "ein mitgeschicktes `minutes` wird nicht übernommen" }
+          ]
+        },
+        "unangemeldet": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/zugriffsgrenzen.test.ts", "test": "${endpunkt.bereich}: ${endpunkt.methode} ${endpunkt.pfad.replace(GIBT_ES_NICHT, ':id')} verlangt eine Sitzung — ohne Cookie und mit gefälschtem Token 401" }
+          ],
+          "hinweis": "Bereich „Zeiterfassung“: GET /api/time, POST /api/time/clock-in und …/clock-out. Korrektur und Freigabe ohne Sitzung stehen nicht in der Liste."
+        },
+        "unberechtigt": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/zeiterfassung.test.ts", "test": "die Liste ist nur mit `timetracking:read_all` erreichbar" },
+            { "datei": "tests/api/zeiterfassung.test.ts", "test": "ohne `timetracking:approve` lässt sich nichts erfassen oder freigeben" }
+          ]
+        },
+        "fremderMandant": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/mandanten.test.ts", "test": "nicht in der Liste — auch nicht gefiltert nach der fremden Person —, nicht änderbar, nicht löschbar, nicht wieder zu öffnen" },
+            { "datei": "tests/api/mandanten.test.ts", "test": "Freigabe: eine fremde Zeit wird nicht freigegeben" },
+            { "datei": "tests/api/mandanten.test.ts", "test": "eine Zeit für die fremde Person wird nicht erfasst (404)" }
+          ]
+        },
+        "falscherBezug": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/zeiterfassung.test.ts", "test": "ohne `timetracking:approve` lässt sich nichts erfassen oder freigeben" },
+            { "datei": "tests/api/zeiterfassung.test.ts", "test": "eine unbekannte Personalakte auch nicht" },
+            { "datei": "tests/api/sicherheitsluecken.test.ts", "test": "Mitarbeitende lesen und ändern keine Zeiten einer anderen Person" }
+          ],
+          "hinweis": "Belegt ist, dass niemand ohne Freigaberecht für andere erfasst. Dass eine Zeit nicht auf einen Einsatz gebucht werden kann, dem die Person nicht zugeteilt ist, prüft kein Test."
+        },
+        "nebenlaeufigkeit": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/nebenlaeufigkeit.test.ts", "test": "sechs gleichzeitige, sich überlappende Erfassungen derselben Person — genau eine wird angenommen" }
+          ]
+        },
+        "idempotenz": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/zeiterfassung.test.ts", "test": "gibt Zeiten frei und meldet, was übersprungen wurde" },
+            { "datei": "tests/api/zeiterfassung.test.ts", "test": "eine nicht freigegebene Zeit lässt sich nicht „zurücknehmen\"" }
+          ]
+        },
+        "audit": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/protokollpflicht.test.ts", "test": "Zeit von Hand erfassen: CREATE an der Erfassung" },
+            { "datei": "tests/api/protokollpflicht.test.ts", "test": "Zeit korrigieren: UPDATE an der Erfassung mit alter und neuer Pause" },
+            { "datei": "tests/api/protokollpflicht.test.ts", "test": "Zeit freigeben: UPDATE an genau dieser Erfassung, auffindbar über ihre Kennung" }
+          ],
+          "hinweis": "Das Aufheben einer Freigabe (POST /api/time/:id/reopen) und das Ein-/Ausstempeln sind nicht auf einen Protokolleintrag geprüft."
+        }
+      }
+    },
+    {
+      "id": "lohn",
+      "name": "Lohn",
+      "dimensionen": {
+        "happyPath": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/lohnabrechnung.test.ts", "test": "ganzer Monat: Zeilen, Arbeitgeberbeiträge, Satzversionen" },
+            { "datei": "tests/api/geschaeftsablaeufe.test.ts", "test": "6. veröffentlicht — erst jetzt sieht die Mitarbeiterin ihre Abrechnung als PDF" }
+          ]
+        },
+        "validierung": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/lohnabrechnung.test.ts", "test": "ein unmöglicher Monat wird abgewiesen" },
+            { "datei": "tests/api/lohnabrechnung.test.ts", "test": "mehr als 50 % Arbeitnehmeranteil am BVG wird abgewiesen" },
+            { "datei": "tests/api/lohnabrechnung.test.ts", "test": "ein laufender Monat wird nicht abgerechnet" }
+          ]
+        },
+        "unangemeldet": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/zugriffsgrenzen.test.ts", "test": "${endpunkt.bereich}: ${endpunkt.methode} ${endpunkt.pfad.replace(GIBT_ES_NICHT, ':id')} verlangt eine Sitzung — ohne Cookie und mit gefälschtem Token 401" }
+          ],
+          "hinweis": "Bereich „Lohn“: POST /api/payroll/run und GET /api/payroll/payslips. Das Lohnabrechnungs-PDF ohne Sitzung steht nicht in der Liste."
+        },
+        "unberechtigt": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/lohnabrechnung.test.ts", "test": "die Betriebsleitung sieht keine Lohnabrechnungen" },
+            { "datei": "tests/api/lohnabrechnung.test.ts", "test": "Mitarbeitende und Kundschaft kommen nicht an die Liste" },
+            { "datei": "tests/api/lohnabrechnung.test.ts", "test": "Rollen: Betriebsleitung und Mitarbeitende pflegen keine Lohnstammdaten" },
+            { "datei": "tests/api/employees.test.ts", "test": "weist Lohn-, AHV- und Bankfelder von der Betriebsleitung ab — die übrige Akte nicht" }
+          ]
+        },
+        "fremderMandant": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/lohnabrechnung.test.ts", "test": "Mandanten: Daten einer fremden Organisation werden weder gezeigt noch verrechnet" }
+          ]
+        },
+        "falscherBezug": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/lohnabrechnung.test.ts", "test": "das PDF: gespeicherte Bytes mit Prüfsumme, nur für Berechtigte" },
+            { "datei": "tests/api/lohnabrechnung.test.ts", "test": "Mitarbeitende sehen keine unveröffentlichte Abrechnung" }
+          ]
+        },
+        "nebenlaeufigkeit": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/lohnabrechnung.test.ts", "test": "zwei gleichzeitige Läufe ergeben eine Abrechnung mit denselben Zeilen" },
+            { "datei": "tests/api/lohnabrechnung.test.ts", "test": "drei gleichzeitige Veröffentlichungen: eine gewinnt, das PDF stimmt, keine Waise bleibt" }
+          ]
+        },
+        "idempotenz": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/lohnabrechnung.test.ts", "test": "ein zweiter Lauf über denselben Monat ist unbedenklich" }
+          ]
+        },
+        "audit": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/lohnabrechnung.test.ts", "test": "das Prüfprotokoll hält Beträge und Quellensteuerdaten geschwärzt fest" },
+            { "datei": "tests/api/protokoll-schwaerzung.test.ts", "test": "eine Änderung der Personalakte hinterlässt Schlüssel, aber keine Werte" }
+          ]
+        }
+      }
+    },
+    {
+      "id": "rechnung",
+      "name": "Rechnung",
+      "dimensionen": {
+        "happyPath": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/flows.test.ts", "test": "stellt eine Rechnung aus" },
+            { "datei": "tests/api/flows.test.ts", "test": "erzeugt ein Rechnungs-PDF mit Einzahlungsschein" },
+            { "datei": "tests/api/geschaeftsablaeufe.test.ts", "test": "6. die Rechnung entsteht aus der Buchung und wird ausgestellt" }
+          ]
+        },
+        "validierung": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/buchung-integritaet.test.ts", "test": "eine manuelle Rechnung kann keinen bereits verrechneten Einsatz tragen" },
+            { "datei": "tests/api/finanzbelege.test.ts", "test": "Betrag, Empfänger und Nummer lassen sich nicht ändern" },
+            { "datei": "tests/api/vertraege.test.ts", "test": "rechnet einen Entwurf nicht ab (422)" }
+          ],
+          "hinweis": "Schemafehler von POST /api/invoices (leere Positionen, negative Menge, unbekannter Steuersatz) sind nicht eigens geprüft."
+        },
+        "unangemeldet": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/pdf-auslieferung.test.ts", "test": "Rechnung: ohne Anmeldung nichts" }
+          ],
+          "hinweis": "Nur das Rechnungs-PDF; GET/POST /api/invoices ohne Sitzung nicht eigens."
+        },
+        "unberechtigt": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/vertraege.test.ts", "test": "die Betriebsleitung darf abrechnen — Mitarbeitende nicht" },
+            { "datei": "tests/api/scan.test.ts", "test": "Rechnung per Nummer und per QR-Rechnung — Zahlung erfassen nur mit payment:create, Mitarbeitende sehen nichts" }
+          ],
+          "hinweis": "GET/POST/PATCH /api/invoices direkt mit Mitarbeitenden- oder Kundensitzung prüft kein Test."
+        },
+        "fremderMandant": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/mandanten.test.ts", "test": "${b.name}: nicht in der Liste, nicht einzeln, nicht änderbar, nicht löschbar" },
+            { "datei": "tests/api/mandanten.test.ts", "test": "Rechnung an fremde Kundschaft" },
+            { "datei": "tests/api/mandanten.test.ts", "test": "sieht keine fremden Objekte, Rechnungen und Verträge" }
+          ]
+        },
+        "falscherBezug": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/pdf-auslieferung.test.ts", "test": "Rechnung: fremde Kundschaft nichts" },
+            { "datei": "tests/api/oeffentlicher-zugang.test.ts", "test": "ein Offerttoken öffnet keine Rechnung" }
+          ]
+        },
+        "nebenlaeufigkeit": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/buchung-integritaet.test.ts", "test": "fünf gleichzeitige „Rechnung erstellen\" ergeben genau eine Rechnung" },
+            { "datei": "tests/api/vertraege.test.ts", "test": "zwei gleichzeitige Läufe erzeugen genau eine Rechnung" },
+            { "datei": "tests/api/nebenlaeufigkeit.test.ts", "test": "fünf Entwürfe gleichzeitig ausgestellt — fünf verschiedene, lückenlos aufeinanderfolgende Nummern" },
+            { "datei": "tests/api/nebenlaeufigkeit.test.ts", "test": "derselbe Entwurf fünfmal gleichzeitig ausgestellt — eine Nummer, kein verbrauchter Zählerstand" }
+          ]
+        },
+        "idempotenz": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/vertraege.test.ts", "test": "legt beim zweiten Aufruf nichts an — dieselbe Rechnung, 200 statt 201" },
+            { "datei": "tests/api/buchung-integritaet.test.ts", "test": "nach dem Storno lässt sich der Einsatz wieder verrechnen — vorher nicht" }
+          ]
+        },
+        "audit": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/protokollpflicht.test.ts", "test": "Rechnung ausstellen: UPDATE „ausgestellt\" an der Rechnung" },
+            { "datei": "tests/api/protokollpflicht.test.ts", "test": "Rechnung senden: UPDATE „versendet\" — ohne Zahlungslink, Token oder Hash" },
+            { "datei": "tests/api/protokollpflicht.test.ts", "test": "Rechnung stornieren: UPDATE „storniert\" mit Begründung" },
+            { "datei": "tests/api/protokollpflicht.test.ts", "test": "Rechnung mahnen (Tageslauf): Protokollzeile an Rechnung oder Mahnung, als System" }
+          ]
+        }
+      }
+    },
+    {
+      "id": "zahlung",
+      "name": "Zahlung/Stripe",
+      "dimensionen": {
+        "happyPath": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/zahlungsbuch.test.ts", "test": "eine dreimal zugestellte Zahlung bucht einmal" },
+            { "datei": "tests/api/geschaeftsablaeufe.test.ts", "test": "14. die Zahlung wird im Büro erfasst — der Saldo ist null" }
+          ]
+        },
+        "validierung": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/sicherheitsluecken.test.ts", "test": "Betrag 0, negativ, unter einem Rappen und über dem offenen Saldo: 422, keine Zahlungszeile" }
+          ],
+          "hinweis": "Eine Zahlung auf einen Rechnungsentwurf ist nicht eigens geprüft."
+        },
+        "unangemeldet": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/sicherheitsluecken.test.ts", "test": "ohne stripe-signature: 400, keine Zahlung" },
+            { "datei": "tests/api/sicherheitsluecken.test.ts", "test": "mit falscher Signatur (Unsinn und fremdes Geheimnis): 400, keine Zahlung" },
+            { "datei": "tests/api/sicherheitsluecken.test.ts", "test": "korrekt signiert, aber zehn Minuten alt: 400, keine Zahlung" }
+          ],
+          "hinweis": "Die Büro-Zahlung (POST /api/invoices/:id/payments) ohne Sitzung steht nicht in der Liste von zugriffsgrenzen.test.ts."
+        },
+        "unberechtigt": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/scan.test.ts", "test": "Rechnung per Nummer und per QR-Rechnung — Zahlung erfassen nur mit payment:create, Mitarbeitende sehen nichts" },
+            { "datei": "tests/api/oeffentlicher-zugang.test.ts", "test": "INVOICE_VIEW darf nicht bezahlen" },
+            { "datei": "tests/api/oeffentlicher-zugang.test.ts", "test": "starten keine Zahlung" }
+          ]
+        },
+        "fremderMandant": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/mandanten.test.ts", "test": "Zahlung: nicht in der Liste — auch nicht mit Suchbegriff —, nicht korrigierbar, nicht stornierbar" },
+            { "datei": "tests/api/mandanten.test.ts", "test": "eine Zahlung auf eine fremde Rechnung wird nicht verbucht (404)" },
+            { "datei": "tests/api/mandanten.test.ts", "test": "Rechnung ansehen (INVOICE_VIEW) und bezahlen (INVOICE_PAY): 404" }
+          ],
+          "hinweis": "Ein gültig signiertes Stripe-Ereignis, das auf eine Rechnung einer fremden Organisation verweist, ist nicht geprüft."
+        },
+        "falscherBezug": {
+          "status": "luecke",
+          "grund": "Kein Test, dass ein Stripe-Ereignis abgewiesen wird, dessen Betrag, Währung oder Rechnungsbezug (client_reference_id/metadata.invoiceId) nicht zur Rechnung passt. sicherheitsluecken.test.ts prüft am Stripe-Webhook nur Signatur und Alter, nebenlaeufigkeit.test.ts nur passende Ereignisse."
+        },
+        "nebenlaeufigkeit": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/nebenlaeufigkeit.test.ts", "test": "dasselbe Zahlungsereignis sechsmal gleichzeitig zugestellt — eine Zahlung, einmal Kundenwert" },
+            { "datei": "tests/api/nebenlaeufigkeit.test.ts", "test": "dieselbe Rückerstattung sechsmal gleichzeitig zugestellt — genau einmal abgezogen" }
+          ],
+          "hinweis": "Eine Büro-Zahlung parallel zum Webhook derselben Rechnung ist nicht geprüft."
+        },
+        "idempotenz": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/zahlungsbuch.test.ts", "test": "eine dreimal zugestellte Zahlung bucht einmal" },
+            { "datei": "tests/api/zahlungsbuch.test.ts", "test": "ein fehlgeschlagener Versuch blockiert die spätere erfolgreiche Zahlung nicht — auch doppelt gemeldet" },
+            { "datei": "tests/api/finanzbelege.test.ts", "test": "der Storno lässt die Zeile stehen und setzt Saldo, bezahlten Betrag und Kundenwert zurück" }
+          ]
+        },
+        "audit": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/protokollpflicht.test.ts", "test": "Zahlung erfassen: PAYMENT an der Rechnung, mit Betrag und Person" }
+          ],
+          "hinweis": "Nur die Büro-Zahlung. Zahlungsstorno und Stripe-Verbuchung sind nicht auf einen Protokolleintrag geprüft."
+        }
+      }
+    },
+    {
+      "id": "gutschrift",
+      "name": "Gutschrift/Erstattung",
+      "dimensionen": {
+        "happyPath": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/finanzbelege.test.ts", "test": "Storno einer teilweise bezahlten Rechnung verweist auf die Gutschrift — und die lässt sich jetzt erstellen" },
+            { "datei": "tests/api/zahlungsbuch.test.ts", "test": "eine volle Rückerstattung stellt den offenen Posten wieder her" }
+          ]
+        },
+        "validierung": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/finanzbelege.test.ts", "test": "nie mehr gutschreiben, als die Rechnung betrug" }
+          ]
+        },
+        "unangemeldet": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/zugriffsgrenzen.test.ts", "test": "${endpunkt.bereich}: ${endpunkt.methode} ${endpunkt.pfad.replace(GIBT_ES_NICHT, ':id')} verlangt eine Sitzung — ohne Cookie und mit gefälschtem Token 401" },
+            { "datei": "tests/api/zugriffsgrenzen.test.ts", "test": "die abgewiesenen Schreibversuche ohne Anmeldung hinterlassen keinen Datensatz" }
+          ]
+        },
+        "unberechtigt": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/finanzbelege.test.ts", "test": "Rollen: Betriebsleitung ja, Mitarbeitende und Kundschaft nein" }
+          ],
+          "hinweis": "Geprüft ist nur das Lesen (GET /api/credit-notes); das Anlegen durch Mitarbeitende oder Kundschaft nicht."
+        },
+        "fremderMandant": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/mandanten.test.ts", "test": "Gutschrift: nicht in der Liste, kein PDF (404)" },
+            { "datei": "tests/api/mandanten.test.ts", "test": "Gutschrift auf fremde Rechnung oder an fremde Kundschaft wird nicht ausgestellt (404)" }
+          ]
+        },
+        "falscherBezug": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/finanzbelege.test.ts", "test": "nicht auf Entwürfe, nicht an eine fremde Kundschaft" }
+          ]
+        },
+        "nebenlaeufigkeit": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/nebenlaeufigkeit.test.ts", "test": "zwei gleichzeitige Gutschriften, die zusammen die Rechnung übersteigen — genau eine gelingt" },
+            { "datei": "tests/api/nebenlaeufigkeit.test.ts", "test": "sechs gleichzeitige Gutschriften zu je 32.43 — genau drei, und nie mehr als die Rechnung" }
+          ]
+        },
+        "idempotenz": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/zahlungsbuch.test.ts", "test": "zwei Teilrückerstattungen, je doppelt zugestellt, dazu ein verspätetes älteres Ereignis — der Saldo folgt dem letzten Stand" }
+          ],
+          "hinweis": "Nur Stripe-Rückerstattungen. Ein doppelt abgeschicktes Gutschriftformular (zweimal POST …/credit-note) ist nicht geprüft."
+        },
+        "audit": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/protokollpflicht.test.ts", "test": "Gutschrift anlegen: CREATE an der Gutschrift" }
+          ],
+          "hinweis": "Das Verbuchen einer Stripe-Rückerstattung ist nicht auf einen Protokolleintrag geprüft."
+        }
+      }
+    },
+    {
+      "id": "dateien",
+      "name": "Dateien/Upload",
+      "dimensionen": {
+        "happyPath": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/dateisicherheit.test.ts", "test": "eine harmlose Datei wird angenommen und ist abrufbar" },
+            { "datei": "tests/api/geschaeftsablaeufe.test.ts", "test": "4. die berechtigte Rolle bekommt genau die geprüften Bytes" }
+          ]
+        },
+        "validierung": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/datei-integritaet.test.ts", "test": "eine leere Datei wird abgelehnt" },
+            { "datei": "tests/api/datei-integritaet.test.ts", "test": "${name} wird abgelehnt" },
+            { "datei": "tests/api/dateisicherheit.test.ts", "test": "eine Endung, die nicht zum Inhalt passt, wird abgewiesen" },
+            { "datei": "tests/api/dateisicherheit.test.ts", "test": "eine erkannte Datei wird angenommen, aber nicht ausgeliefert" }
+          ]
+        },
+        "unangemeldet": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/datei-zugriff.test.ts", "test": "ein Dokument ist ohne Anmeldung nicht erreichbar" },
+            { "datei": "tests/api/dateisicherheit.test.ts", "test": "ohne Anmeldung öffnet die Kennung einer privaten Datei nichts" }
+          ]
+        },
+        "unberechtigt": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/datei-zugriff.test.ts", "test": "Kundschaft kommt nicht an ein internes Dokument" },
+            { "datei": "tests/api/vor-ort-abnahme.test.ts", "test": "liefert während der Übergabe keine private Datei — auch nicht die eigene" }
+          ]
+        },
+        "fremderMandant": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/mandanten.test.ts", "test": "private Datei: nicht auslieferbar, nicht in der Mediathek, nicht umbenennbar, nicht löschbar" },
+            { "datei": "tests/api/mandanten.test.ts", "test": "öffentliche Datei der fremden Organisation wird hier nicht ausgeliefert (404) — weder angemeldet noch anonym" },
+            { "datei": "tests/api/mandanten.test.ts", "test": "ein eigenes Dokument mit fremder Datei oder fremder Person wird nicht angelegt (404)" }
+          ]
+        },
+        "falscherBezug": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/datei-integritaet.test.ts", "test": "ein fremdes Ticket lässt sich nicht abschliessen" },
+            { "datei": "tests/api/datei-zugriff.test.ts", "test": "die Kundschaft liest die Unterlagen des eigenen Objekts, nicht die eines fremden" },
+            { "datei": "tests/api/datei-zugriff.test.ts", "test": "eine fremde Datei antwortet genauso wie eine nicht vorhandene" },
+            { "datei": "tests/api/dateisicherheit.test.ts", "test": "eine fremde Sitzung bekommt die Datei nicht" }
+          ]
+        },
+        "nebenlaeufigkeit": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/datei-integritaet.test.ts", "test": "zwei gleichzeitige Abschlüsse ergeben genau ein Asset" },
+            { "datei": "tests/api/datei-integritaet.test.ts", "test": "gleichzeitige Übertragungen auf ein Ticket: genau eine gelingt, ausgeliefert wird, was geprüft wurde" },
+            { "datei": "tests/api/dateisicherheit.test.ts", "test": "drei gleichzeitige Abschlüsse ergeben genau eine Datei" }
+          ]
+        },
+        "idempotenz": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/datei-integritaet.test.ts", "test": "ein zweiter Abschluss liefert dasselbe Asset, kein zweites" },
+            { "datei": "tests/api/dateisicherheit.test.ts", "test": "ein wiederholter Abschluss erzeugt keine zweite Datei" }
+          ]
+        },
+        "audit": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/protokollpflicht.test.ts", "test": "Upload abschliessen: CREATE am Asset — ohne Schreibadresse und ohne ihre Signatur" },
+            { "datei": "tests/api/protokollpflicht.test.ts", "test": "Führungsdokument herunterladen: EXPORT am Dokument, mit Person" }
+          ],
+          "hinweis": "Schadsoftwarefund und der Abruf gewöhnlicher privater Dateien sind nicht auf Protokoll- oder Sicherheitsereignisse geprüft; der Fund ist nur im Ereigniskatalog als Entscheidung eingestuft."
+        }
+      }
+    },
+    {
+      "id": "nachrichten",
+      "name": "Nachrichten",
+      "dimensionen": {
+        "happyPath": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/flows.test.ts", "test": "lässt die Kundschaft einen Verlauf eröffnen" },
+            { "datei": "tests/api/flows.test.ts", "test": "lässt das Büro antworten und abschliessen" }
+          ]
+        },
+        "validierung": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/flows.test.ts", "test": "verweigert die Antwort in einem geschlossenen Verlauf" }
+          ],
+          "hinweis": "Nur die Zustandsregel; leerer Text, zu langer Betreff oder unbekannte Felder sind nicht geprüft."
+        },
+        "unangemeldet": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/zugriffsgrenzen.test.ts", "test": "${endpunkt.bereich}: ${endpunkt.methode} ${endpunkt.pfad.replace(GIBT_ES_NICHT, ':id')} verlangt eine Sitzung — ohne Cookie und mit gefälschtem Token 401" },
+            { "datei": "tests/api/zugriffsgrenzen.test.ts", "test": "die abgewiesenen Schreibversuche ohne Anmeldung hinterlassen keinen Datensatz" }
+          ]
+        },
+        "unberechtigt": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/zugriffsgrenzen.test.ts", "test": "Mitarbeitende: Verläufe ohne zugeteilten Einsatz fehlen in der eigenen Liste" },
+            { "datei": "tests/api/zugriffsgrenzen.test.ts", "test": "Mitarbeitende: GET /api/messages/:id auf einen Verlauf zu einem nicht zugeteilten Einsatz → 404 (wie „nicht vorhanden\", C19)" },
+            { "datei": "tests/api/zugriffsgrenzen.test.ts", "test": "Mitarbeitende: GET /api/messages/:id auf einen Kundenverlauf ohne Einsatzbezug → 404 (wie „nicht vorhanden\", C19)" },
+            { "datei": "tests/api/zugriffsgrenzen.test.ts", "test": "Mitarbeitende: POST /api/messages/:id in einen Verlauf zu einem nicht zugeteilten Einsatz → 404 (wie „nicht vorhanden\", C19), ohne neue Nachricht" },
+            { "datei": "tests/api/zugriffsgrenzen.test.ts", "test": "Mitarbeitende: POST /api/messages zu einem nicht zugeteilten Einsatz → 404, kein Verlauf entsteht" }
+          ],
+          "hinweis": "Jede Rolle hält ein Nachrichtenrecht (message:read_own/write_own bzw. message:read); die Rollengrenze ist deshalb der Umfang, nicht das Recht, und so ist sie geprüft. Das Abschliessen eines Verlaufs durch Kundschaft oder Mitarbeitende ist nicht eigens geprüft."
+        },
+        "fremderMandant": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/mandanten.test.ts", "test": "${b.name}: nicht in der Liste, nicht einzeln, nicht änderbar, nicht löschbar" },
+            { "datei": "tests/api/mandanten.test.ts", "test": "Antwort in einen fremden Verlauf" },
+            { "datei": "tests/api/mandanten.test.ts", "test": "ein Nachrichtenverlauf zu einem fremden Einsatz wird nicht eröffnet (404)" }
+          ]
+        },
+        "falscherBezug": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/zugriffsgrenzen.test.ts", "test": "Kundschaft: der Verlauf einer anderen Kundschaft derselben Organisation fehlt in der eigenen Liste" },
+            { "datei": "tests/api/zugriffsgrenzen.test.ts", "test": "Kundschaft: GET /api/messages/:id auf den Verlauf einer anderen Kundschaft → 404 (wie „nicht vorhanden\", C19), ohne Inhalt" },
+            { "datei": "tests/api/zugriffsgrenzen.test.ts", "test": "Kundschaft: POST /api/messages/:id in den Verlauf einer anderen Kundschaft → 404 (wie „nicht vorhanden\", C19), und es entsteht keine Nachricht" },
+            { "datei": "tests/api/sicherheitsluecken.test.ts", "test": "die Kundschaft liest keinen fremden Nachrichtenverlauf und schreibt nicht hinein" },
+            { "datei": "tests/api/finanzbelege.test.ts", "test": "dieselbe Datei lässt sich auch nicht als Nachrichtenanhang binden — die Antwort scheitert ganz" },
+            { "datei": "tests/api/sicherheitsluecken.test.ts", "test": "der Upload einer anderen Person lässt sich nicht als Anhang binden" }
+          ]
+        },
+        "nebenlaeufigkeit": {
+          "status": "luecke",
+          "grund": "Keine Prüfung gleichzeitiger Antworten bzw. Antwort gegen Abschliessen; nebenlaeufigkeit.test.ts enthält keinen Nachrichtenfall."
+        },
+        "idempotenz": {
+          "status": "luecke",
+          "grund": "Kein Test zu doppelt abgeschickten Nachrichten oder doppeltem Abschliessen. Belegt ist nur, dass ein Anhang kein zweites Mal gebunden wird (sicherheitsluecken.test.ts: „ein eigener Anhang bindet einmal — ein zweites Binden scheitert samt Nachricht“) — das ist Dateibindung, nicht die Wiederholung einer Nachricht."
+        },
+        "audit": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/protokollpflicht.test.ts", "test": "Nachricht eröffnen (Kundschaft): CREATE am Verlauf, mit dem Kundenkonto als Person" }
+          ],
+          "hinweis": "Nur das Eröffnen. Antworten und Abschliessen eines Verlaufs sind nicht auf Protokolleinträge geprüft."
+        }
+      }
+    },
+    {
+      "id": "crm",
+      "name": "CRM/Leads",
+      "dimensionen": {
+        "happyPath": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/flows.test.ts", "test": "erfasst eine telefonische Anfrage" },
+            { "datei": "tests/api/geschaeftsablaeufe.test.ts", "test": "2. die Pipeline-Stufe wechselt auf „Qualifiziert\" — und der Status folgt der Stufe" },
+            { "datei": "tests/api/crud-audit.test.ts", "test": "eine gelöschte Anfrage erscheint im Papierkorb und kommt zurück" }
+          ]
+        },
+        "validierung": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/mandanten.test.ts", "test": "die Stufe bestimmt den Status — auch wenn der Aufruf etwas anderes schickt" }
+          ],
+          "hinweis": "Schemafehler von POST/PATCH /api/leads (fehlende Kontaktdaten, ungültige Quelle) sind nicht eigens geprüft."
+        },
+        "unangemeldet": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/zugriffsgrenzen.test.ts", "test": "${endpunkt.bereich}: ${endpunkt.methode} ${endpunkt.pfad.replace(GIBT_ES_NICHT, ':id')} verlangt eine Sitzung — ohne Cookie und mit gefälschtem Token 401" },
+            { "datei": "tests/api/zugriffsgrenzen.test.ts", "test": "die abgewiesenen Schreibversuche ohne Anmeldung hinterlassen keinen Datensatz" }
+          ],
+          "hinweis": "Bereich „Anfragen“: GET/POST /api/leads und PATCH /api/leads/:id. Umwandeln und Löschen ohne Sitzung stehen nicht in der Liste."
+        },
+        "unberechtigt": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/rbac.test.ts", "test": "POST /api/leads — Anfrage erfassen" }
+          ]
+        },
+        "fremderMandant": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/mandanten.test.ts", "test": "${b.name}: nicht in der Liste, nicht einzeln, nicht änderbar, nicht löschbar" },
+            { "datei": "tests/api/mandanten.test.ts", "test": "eine Stufe der fremden Organisation wird nicht übernommen (404)" },
+            { "datei": "tests/api/mandanten.test.ts", "test": "Aufgabe an fremder Kundschaft" }
+          ]
+        },
+        "falscherBezug": {
+          "status": "luecke",
+          "grund": "Kein Test für unpassende Verweise innerhalb der eigenen Organisation (Umwandlung einer Anfrage in eine bestehende, nicht passende Kundenakte; Aufgabe/Besichtigung an einer Anfrage mit anderem Kundenbezug)."
+        },
+        "nebenlaeufigkeit": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/nebenlaeufigkeit.test.ts", "test": "eine Anfrage sechsmal gleichzeitig umgewandelt — genau eine Kundschaft, überall dieselbe" }
+          ],
+          "hinweis": "Gleichzeitige Stufenwechsel derselben Anfrage sind nicht geprüft."
+        },
+        "idempotenz": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/nebenlaeufigkeit.test.ts", "test": "eine Anfrage sechsmal gleichzeitig umgewandelt — genau eine Kundschaft, überall dieselbe" }
+          ],
+          "hinweis": "Belegt als gleichzeitige Wiederholung; eine zweite Umwandlung nacheinander ist nicht eigens geprüft."
+        },
+        "audit": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/protokollpflicht.test.ts", "test": "Anfrage anlegen: CREATE an der Anfrage" },
+            { "datei": "tests/api/protokollpflicht.test.ts", "test": "Anfrage umwandeln (neue Kundschaft): CREATE an der Kundschaft, mit Verweis auf die Anfrage" },
+            { "datei": "tests/api/protokollpflicht.test.ts", "test": "Anfrage umwandeln (bestehende Kundschaft): Protokollzeile, die Anfrage und Verwaltung nennt" }
+          ],
+          "hinweis": "Stufenwechsel und Löschen einer Anfrage sind nicht auf Protokolleinträge geprüft."
+        }
+      }
+    },
+    {
+      "id": "kunden",
+      "name": "Kunden/Objekte",
+      "dimensionen": {
+        "happyPath": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/flows.test.ts", "test": "legt eine Firmenkundschaft an" },
+            { "datei": "tests/api/addresses.test.ts", "test": "legt eine Adresse an" }
+          ]
+        },
+        "validierung": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/addresses.test.ts", "test": "weist eine ungültige Postleitzahl ab" },
+            { "datei": "tests/api/addresses.test.ts", "test": "weist ein unbekanntes Feld ab" },
+            { "datei": "tests/api/addresses.test.ts", "test": "behält eine Adresse, auf die Einsätze verweisen" }
+          ]
+        },
+        "unangemeldet": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/flows.test.ts", "test": "antwortet ohne Anmeldung mit 401" },
+            { "datei": "tests/api/addresses.test.ts", "test": "verwehrt den Zugriff ohne Anmeldung" }
+          ],
+          "hinweis": "Objekte (/api/properties) ohne Sitzung sind nicht eigens geprüft."
+        },
+        "unberechtigt": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/flows.test.ts", "test": "verwehrt der Kundschaft die Kundenliste" },
+            { "datei": "tests/api/addresses.test.ts", "test": "lässt Mitarbeitende weder lesen noch schreiben" },
+            { "datei": "tests/api/ownership.test.ts", "test": "Mitarbeitende sehen nur Objekte mit zugeteilten Einsätzen" }
+          ]
+        },
+        "fremderMandant": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/mandanten.test.ts", "test": "${b.name}: nicht in der Liste, nicht einzeln, nicht änderbar, nicht löschbar" },
+            { "datei": "tests/api/mandanten.test.ts", "test": "sieht keine fremden Objekte, Rechnungen und Verträge" },
+            { "datei": "tests/api/suche.test.ts", "test": "Objekte einer fremden Organisation bleiben unsichtbar" }
+          ]
+        },
+        "falscherBezug": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/ownership.test.ts", "test": "die Kundschaft kann fremde Objekte weder lesen noch ändern" },
+            { "datei": "tests/api/addresses.test.ts", "test": "verwehrt der Kundschaft die fremde Akte — lesend" },
+            { "datei": "tests/api/addresses.test.ts", "test": "verwehrt der Kundschaft die fremde Akte — schreibend" },
+            { "datei": "tests/api/addresses.test.ts", "test": "findet die Adresse einer fremden Akte nicht" }
+          ]
+        },
+        "nebenlaeufigkeit": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/nebenlaeufigkeit.test.ts", "test": "vier Adressen gleichzeitig zur Standardadresse gemacht — danach genau eine" }
+          ]
+        },
+        "idempotenz": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/nebenlaeufigkeit.test.ts", "test": "dieselbe Kundschaft fünfmal gleichzeitig angelegt — eine Akte, die übrigen 409" }
+          ],
+          "hinweis": "Nur die Kundschaft; ein doppelt abgeschicktes Anlegen eines Objekts ist nicht geprüft."
+        },
+        "audit": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/protokoll-und-schranken.test.ts", "test": "Anlegen und Ändern eines Objekts schreiben einen Eintrag" },
+            { "datei": "tests/api/protokoll-und-schranken.test.ts", "test": "der Alarmcode gehört zu den redigierten Feldern" }
+          ],
+          "hinweis": "Reine Quelltextprüfung für Objekte; für Kundenakten und Adressen gibt es keinen Protokollnachweis."
+        }
+      }
+    },
+    {
+      "id": "material",
+      "name": "Material/Scan",
+      "dimensionen": {
+        "happyPath": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/scan.test.ts", "test": "Scan → Treffer → Wareneingang → Bestand und Protokoll" },
+            { "datei": "tests/api/betrieb.test.ts", "test": "Material anlegen; die Artikelnummer ist eindeutig" },
+            { "datei": "tests/e2e/scan.spec.ts", "test": "Kamera → Treffer → Wareneingang → Bestand und Protokoll" }
+          ]
+        },
+        "validierung": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/scan.test.ts", "test": "zu lang: 422 vor jedem Dienst; leer: 422" },
+            { "datei": "tests/api/scan.test.ts", "test": "ein Strichcode mit falscher Prüfziffer wird nicht gespeichert (422)" },
+            { "datei": "tests/api/betrieb.test.ts", "test": "der Bestand ist die Summe der Bewegungen und wird nie negativ" }
+          ]
+        },
+        "unangemeldet": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/scan.test.ts", "test": "die Kundschaft hat keinen Scanner (403), ohne Anmeldung 401" }
+          ],
+          "hinweis": "Nur POST /api/scan/resolve; Material- und Lagerendpunkte ohne Sitzung sind nicht eigens geprüft."
+        },
+        "unberechtigt": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/scan.test.ts", "test": "die Schnellaktion prüft der Endpunkt erneut: Mitarbeitende können nicht buchen, auch mit bekannter ID" },
+            { "datei": "tests/api/scan.test.ts", "test": "Mitarbeitende ohne Lagerrecht: dieselbe leere Antwort wie bei einem unbekannten Code" }
+          ]
+        },
+        "fremderMandant": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/scan.test.ts", "test": "ein Code einer fremden Organisation löst nichts auf" },
+            { "datei": "tests/api/scan.test.ts", "test": "ein fremder Strichcode findet den fremden Artikel nicht — und bietet das Anlegen an" },
+            { "datei": "tests/api/betrieb.test.ts", "test": "Rollen und Mandanten" }
+          ]
+        },
+        "falscherBezug": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/scan.test.ts", "test": "Etikett erzeugen verlangt das Pflegerecht der Art (Mitarbeitende 403) und findet keine fremden IDs (404)" },
+            { "datei": "tests/api/scan.test.ts", "test": "das Objekt eines gelöschten Datensatzes: nicht mehr auflösbar" }
+          ]
+        },
+        "nebenlaeufigkeit": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/scan.test.ts", "test": "zwei gleichzeitige Anfragen erzeugen genau einen aktiven Code" },
+            { "datei": "tests/api/betrieb.test.ts", "test": "gleichzeitige Entnahmen brechen den Bestand nicht" }
+          ]
+        },
+        "idempotenz": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/scan.test.ts", "test": "erzeugt einmal (201) und liefert danach denselben Code (200)" },
+            { "datei": "tests/api/scan.test.ts", "test": "derselbe Strichcode ein zweites Mal: 409 mit Hinweis auf den Strichcode" }
+          ]
+        },
+        "audit": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/scan.test.ts", "test": "Erzeugen und Sperren stehen im Protokoll — ohne den Code selbst" },
+            { "datei": "tests/api/geschaeftsablaeufe.test.ts", "test": "5. Etikett und Buchung stehen im Prüfprotokoll — der Code selbst nicht" }
+          ]
+        }
+      }
+    },
+    {
+      "id": "automatisierung",
+      "name": "Automatisierung",
+      "dimensionen": {
+        "happyPath": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/automatisierungen.test.ts", "test": "ein echter Geschäftsvorgang erzeugt einen Lauf" },
+            { "datei": "tests/api/automatisierungen.test.ts", "test": "TASK_DUE: gemeldet mit Bezug auf die Frist, ausgeführt, und übersprungen, wenn der Anlass fehlt" }
+          ]
+        },
+        "validierung": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/automatisierungen.test.ts", "test": "weist eine Regel mit unbrauchbarer Aktionskonfiguration ab" },
+            { "datei": "tests/api/automatisierungen.test.ts", "test": "weist eine Regel ab, die einen Rechnungsstatus setzen will" },
+            { "datei": "tests/api/automatisierungen.test.ts", "test": "weist eine Regel mit privater Webhook-Adresse ab" },
+            { "datei": "tests/api/website-ops.test.ts", "test": "weist eine Regel ohne Aktion ab" }
+          ]
+        },
+        "unangemeldet": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/automatisierungen.test.ts", "test": "ohne Anmeldung gar nichts" }
+          ]
+        },
+        "unberechtigt": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/automatisierungen.test.ts", "test": "Mitarbeitende und Kundschaft nicht" }
+          ]
+        },
+        "fremderMandant": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/mandanten.test.ts", "test": "${b.name}: nicht in der Liste, nicht einzeln, nicht änderbar, nicht löschbar" },
+            { "datei": "tests/api/mandanten.test.ts", "test": "ein fälliger Lauf der fremden Regel wird vom stündlichen Lauf nicht ausgeführt" }
+          ],
+          "hinweis": "Dass ein Vorgang der eigenen Organisation keine Regel der fremden auslöst, ist nicht eigens geprüft."
+        },
+        "falscherBezug": {
+          "status": "luecke",
+          "grund": "Kein Test, dass eine Aktion (Aufgabe, E-Mail, Statuswechsel) nur auf den auslösenden Datensatz wirkt und nicht über einen Platzhalter oder eine Kennung in der Konfiguration auf einen fremden."
+        },
+        "nebenlaeufigkeit": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/nebenlaeufigkeit.test.ts", "test": "fünf gleichzeitige stündliche Läufe mit einem fälligen Lauf — die Aktion läuft genau einmal" },
+            { "datei": "tests/api/automatisierungen.test.ts", "test": "derselbe Vorgang erzeugt keinen zweiten Lauf" }
+          ],
+          "hinweis": "Gleichzeitige Abarbeitung über den Cron ist über HTTP belegt; zwei gleichzeitige Auslösungen durch denselben Geschäftsvorgang nur über den Teilindex an der Datenbank."
+        },
+        "idempotenz": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/automatisierungen.test.ts", "test": "derselbe Vorgang erzeugt keinen zweiten Lauf" },
+            { "datei": "tests/api/automatisierungen.test.ts", "test": "scheitert die zweite Aktion, läuft die erste beim Wiederholen nicht noch einmal" },
+            { "datei": "tests/api/automatisierungen.test.ts", "test": "eine Aktion mit Aussenwirkung, die mittendrin abbrach, wird nicht blind wiederholt" }
+          ]
+        },
+        "audit": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/protokollpflicht.test.ts", "test": "Regel anlegen: CREATE an der Regel" },
+            { "datei": "tests/api/protokollpflicht.test.ts", "test": "Regel ändern: UPDATE an der Regel mit der Änderung" },
+            { "datei": "tests/api/protokollpflicht.test.ts", "test": "Regel löschen: DELETE an der Regel" }
+          ]
+        }
+      }
+    },
+    {
+      "id": "release",
+      "name": "Release/Update-Center",
+      "dimensionen": {
+        "happyPath": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/release-center.test.ts", "test": "freigeben → terminieren → verschieben → stornieren, und wieder freigeben" },
+            { "datei": "tests/api/geschaeftsablaeufe.test.ts", "test": "5. das Ergebnis „erfolgreich\" wird mit der Zielversion gemeldet" },
+            { "datei": "tests/e2e/produktsprint-2026-09-26.spec.ts", "test": "verfügbare Version → Details → freigeben → terminieren → stornieren" }
+          ]
+        },
+        "validierung": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/release-center.test.ts", "test": "unzulässige Übergänge: 422" },
+            { "datei": "tests/api/release-center.test.ts", "test": "Ergebnis: fremder Schlüssel 409, „erfolgreich\" ohne Zielversion 422, fehlgeschlagen 200, Wiederholung 200, Widerspruch 409" }
+          ]
+        },
+        "unangemeldet": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/release-center.test.ts", "test": "nur die Systemverantwortung — Seite und Endpunkte" },
+            { "datei": "tests/api/release-center.test.ts", "test": "ohne Token, ohne gültige Signatur, mit alter Zeit oder anderem Pfad: 401 — nichts übernommen" }
+          ]
+        },
+        "unberechtigt": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/release-center.test.ts", "test": "die Administration kann nicht entscheiden" },
+            { "datei": "tests/api/release-center.test.ts", "test": "das Dashboard meldet die neue Version der Systemverantwortung, sonst niemandem" }
+          ]
+        },
+        "fremderMandant": {
+          "status": "nicht_zutreffend",
+          "grund": "Updates betreffen die Installation, nicht eine Organisation. Die entsprechende Grenze ist die Umgebung, belegt unter falscherBezug („fremde Umgebung → 422“)."
+        },
+        "falscherBezug": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/release-center.test.ts", "test": "Übernahme: falsche Summe, CI rot, fremde Umgebung → 422; richtig → 200; Wiederholung → 200; zweiter Ausführer → 409" },
+            { "datei": "tests/api/release-center.test.ts", "test": "fällige Aufträge: nur die eigene Umgebung, mit Rücksprung und Hindernis" }
+          ]
+        },
+        "nebenlaeufigkeit": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/release-center.test.ts", "test": "gleichzeitige Freigaben: genau eine gilt" },
+            { "datei": "tests/api/release-center.test.ts", "test": "während der Ausführung: das Dashboard entscheidet nicht mit und zeigt die Ausführung" }
+          ]
+        },
+        "idempotenz": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/release-center.test.ts", "test": "Übernahme: falsche Summe, CI rot, fremde Umgebung → 422; richtig → 200; Wiederholung → 200; zweiter Ausführer → 409" }
+          ]
+        },
+        "audit": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/release-center.test.ts", "test": "jede Entscheidung steht im Prüfprotokoll — mit Person, Versionen und ohne Geheimnisse" },
+            { "datei": "tests/api/release-center.test.ts", "test": "Prüfprotokoll: Übernahme und Ergebnis, ohne Benutzer, mit Ausführer und Nachweis" }
+          ]
+        }
+      }
+    },
+    {
+      "id": "fuehrung-dokumente",
+      "name": "Führung/BI-Dokumente",
+      "dimensionen": {
+        "happyPath": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/pdf-auslieferung.test.ts", "test": "liefert Verwaltung die geltende Fassung samt Fassungsnummer" },
+            { "datei": "tests/api/bi-fuehrung.test.ts", "test": "erzeugt einen PDF-Bericht und lädt ihn über den protokollierten Weg" }
+          ]
+        },
+        "validierung": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/bi-fuehrung.test.ts", "test": "Personaldokument ohne Person wird abgewiesen; Sichtbarkeit fällt auf EMPLOYEE_PRIVATE" }
+          ]
+        },
+        "unangemeldet": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/pdf-auslieferung.test.ts", "test": "verweigert ohne Anmeldung" },
+            { "datei": "tests/api/pdf-auslieferung.test.ts", "test": "gibt Kundschaft und Anonymen nichts" }
+          ]
+        },
+        "unberechtigt": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/bi-fuehrung.test.ts", "test": "Budget, Investitionen, Szenarien und Risiken bleiben der Geschäftsleitung" },
+            { "datei": "tests/api/pdf-auslieferung.test.ts", "test": "verweigert Kundschaft" }
+          ]
+        },
+        "fremderMandant": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/mandanten.test.ts", "test": "${b.name}: nicht in der Liste, nicht einzeln, nicht änderbar, nicht löschbar" },
+            { "datei": "tests/api/mandanten.test.ts", "test": "Download, Inhalt, Signaturvorgänge und Dateiroute: 404; eine neue Fassung wird nicht angehängt" },
+            { "datei": "tests/api/mandanten.test.ts", "test": "ein eigenes Dokument mit fremder Datei oder fremder Person wird nicht angelegt (404)" }
+          ],
+          "hinweis": "Berichte (Berichtsläufe und ihre Dateien) einer fremden Organisation sind nicht eigens geprüft."
+        },
+        "falscherBezug": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/bi-fuehrung.test.ts", "test": "Mitarbeitende sehen Dokumente nur für alle und die eigene Akte" },
+            { "datei": "tests/api/bi-fuehrung.test.ts", "test": "Mitarbeitende sehen fremde Bereichsziele nicht (404) und können dort nicht einchecken" }
+          ]
+        },
+        "nebenlaeufigkeit": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/nebenlaeufigkeit.test.ts", "test": "fünf Fassungen gleichzeitig hochgeladen — eindeutige, lückenlose Nummern, die höchste gilt" }
+          ]
+        },
+        "idempotenz": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/sicherheitsluecken.test.ts", "test": "eine Fassung bindet ihre Datei einmal — weder eine zweite Akte noch eine zweite Fassung bekommen sie" }
+          ],
+          "hinweis": "Belegt ist, dass dieselbe Datei kein zweites Mal als Fassung gebunden wird. Ein doppelter Berichtslauf ist nicht geprüft."
+        },
+        "audit": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/protokollpflicht.test.ts", "test": "Führungsdokument herunterladen: EXPORT am Dokument, mit Person" }
+          ],
+          "hinweis": "Nur der Download. Anlegen eines Dokuments und Hochladen einer Fassung sind nicht auf Protokolleinträge geprüft."
+        }
+      }
+    },
+    {
+      "id": "cms",
+      "name": "CMS/Inhalte",
+      "dimensionen": {
+        "happyPath": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/cms.test.ts", "test": "zeigt sie nach dem Veröffentlichen" },
+            { "datei": "tests/api/website-ops.test.ts", "test": "legt eine Frage an und zeigt sie auf /faq" }
+          ]
+        },
+        "validierung": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/cms.test.ts", "test": "weist zu langen Text ab" },
+            { "datei": "tests/api/cms.test.ts", "test": "weist einen unbekannten Schlüssel ab" },
+            { "datei": "tests/api/website-ops.test.ts", "test": "weist ein protokollrelatives Ziel ab" }
+          ]
+        },
+        "unangemeldet": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/cms.test.ts", "test": "einschalten darf nur, wer Inhalte ändert" }
+          ],
+          "hinweis": "Belegt ist nur der Vorschauschalter ohne Sitzung (403). PATCH /api/content und PATCH /api/content/asset ohne Sitzung sind nicht geprüft."
+        },
+        "unberechtigt": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/cms.test.ts", "test": "${role}: ${ALLOWED[role] ? 'darf schreiben' : 'darf nicht schreiben'}" },
+            { "datei": "tests/api/cms.test.ts", "test": "verwehrt der Betriebsleitung die Pflege" }
+          ]
+        },
+        "fremderMandant": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/mandanten.test.ts", "test": "Fassungen der fremden Organisation erscheinen nicht und lassen sich nicht zurückholen (404)" },
+            { "datei": "tests/api/mandanten.test.ts", "test": "das Bildfeld eines fremden Galerieeintrags wird nicht überschrieben (404)" },
+            { "datei": "tests/api/mandanten.test.ts", "test": "die Website zeigt weder den veröffentlichten Text noch den Entwurf der fremden Organisation" },
+            { "datei": "tests/api/mandanten.test.ts", "test": "${b.name}: nicht in der Liste, nicht einzeln, nicht änderbar, nicht löschbar" }
+          ],
+          "hinweis": "Leistungs- und Blogbilder einer fremden Organisation über /api/content/asset sind nicht eigens geprüft, nur der Galerieeintrag."
+        },
+        "falscherBezug": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/sicherheitsluecken.test.ts", "test": "eine echte, aber nicht freigegebene Spalte oder Tabelle wird abgewiesen und nicht geschrieben" },
+            { "datei": "tests/api/sicherheitsluecken.test.ts", "test": "Namen aus der Prototypenkette bestehen die Freigabeliste nicht (Absage, kein 500)" },
+            { "datei": "tests/api/sicherheitsluecken.test.ts", "test": "Gegenprobe: ein freigegebenes Feld mit unverändertem Wert antwortet 200" },
+            { "datei": "tests/api/sicherheitsluecken.test.ts", "test": "die Adresse eines privaten Anhangs wird nicht zum Website-Bild" },
+            { "datei": "tests/api/mandanten.test.ts", "test": "das Bildfeld eines fremden Galerieeintrags wird nicht überschrieben (404)" }
+          ]
+        },
+        "nebenlaeufigkeit": {
+          "status": "luecke",
+          "grund": "Keine Prüfung gleichzeitiger Entwürfe/Veröffentlichungen desselben Blocks; nebenlaeufigkeit.test.ts enthält keinen CMS-Fall."
+        },
+        "idempotenz": {
+          "status": "luecke",
+          "grund": "Kein Test, dass ein zweites Veröffentlichen ohne Änderung keine neue Revision erzeugt."
+        },
+        "audit": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/protokollpflicht.test.ts", "test": "Text veröffentlichen: UPDATE, das den veröffentlichten Baustein nennt" }
+          ],
+          "hinweis": "Nur das Veröffentlichen. Zurücksetzen und Bildwechsel sind nicht auf Revisions- oder Prüfprotokolleinträge geprüft."
+        }
+      }
+    },
+    {
+      "id": "oeffentlich",
+      "name": "Öffentliche Endpunkte",
+      "dimensionen": {
+        "happyPath": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/flows.test.ts", "test": "berechnet einen Preis ohne Anmeldung" },
+            { "datei": "tests/api/flows.test.ts", "test": "nimmt eine Kontaktanfrage an" },
+            { "datei": "tests/api/oeffentlicher-zugang.test.ts", "test": "ein QUOTE_RESPOND-Token öffnet Seite, PDF und Antwort" }
+          ]
+        },
+        "validierung": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/flows.test.ts", "test": "weist einen Bot über das Honigtopf-Feld ab" },
+            { "datei": "tests/api/buchung-integritaet.test.ts", "test": "Postleitzahl ausserhalb des Einsatzgebiets → 422, keine Akte" },
+            { "datei": "tests/api/oeffentlicher-zugang.test.ts", "test": "missgebildete und unbekannte Werte antworten gleich" }
+          ]
+        },
+        "unangemeldet": {
+          "status": "nicht_zutreffend",
+          "grund": "Diese Endpunkte sind ohne Sitzung vorgesehen; die Grenze bilden Zweck und Bindung der Token (siehe unberechtigt/falscherBezug) und die Rate-Limits."
+        },
+        "unberechtigt": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/oeffentlicher-zugang.test.ts", "test": "QUOTE_VIEW darf nicht antworten" },
+            { "datei": "tests/api/oeffentlicher-zugang.test.ts", "test": "INVOICE_VIEW darf nicht bezahlen" },
+            { "datei": "tests/api/oeffentlicher-zugang.test.ts", "test": "öffnen ohne ausdrückliche Freigabe nichts" }
+          ]
+        },
+        "fremderMandant": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/mandanten.test.ts", "test": "Offerte ansehen (QUOTE_VIEW): kein PDF (404)" },
+            { "datei": "tests/api/mandanten.test.ts", "test": "Offerte annehmen und ablehnen (QUOTE_RESPOND): 404 — Offerte und Signaturvorgang unverändert" },
+            { "datei": "tests/api/mandanten.test.ts", "test": "Rechnung ansehen (INVOICE_VIEW) und bezahlen (INVOICE_PAY): 404" },
+            { "datei": "tests/api/mandanten.test.ts", "test": "Buchung verwalten (BOOKING_MANAGE): kein PDF (404)" },
+            { "datei": "tests/api/mandanten.test.ts", "test": "Unterzeichnungslink tauschen (SIGNATURE_ACCESS): 404, keine Signatursitzung, kein Protokolleintrag" },
+            { "datei": "tests/api/mandanten.test.ts", "test": "öffentliche Datei der fremden Organisation wird hier nicht ausgeliefert (404) — weder angemeldet noch anonym" }
+          ],
+          "hinweis": "Belegt sind die Token-Links und öffentliche Dateien. Dass eine öffentliche Buchung oder Preisberechnung keine Leistung oder Adresse einer fremden Organisation annimmt, ist nicht geprüft."
+        },
+        "falscherBezug": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/buchung-integritaet.test.ts", "test": "Gast mit fremder Adresse → 404, nichts angelegt" },
+            { "datei": "tests/api/buchung-integritaet.test.ts", "test": "Gast mit fremder Datei → 422, die Datei bleibt, was sie war" },
+            { "datei": "tests/api/oeffentlicher-zugang.test.ts", "test": "ein Offerttoken öffnet keine Rechnung" },
+            { "datei": "tests/api/oeffentlicher-zugang.test.ts", "test": "ein Rechnungstoken öffnet keine Offerte" }
+          ]
+        },
+        "nebenlaeufigkeit": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/oeffentliche-links.test.ts", "test": "beginnt auch bei gleichzeitigen Anfragen genau einen Annahmevorgang" },
+            { "datei": "tests/api/mehrere-leistungen.test.ts", "test": "zwei gleichzeitige Buchungen für den letzten Platz: genau eine kommt durch" }
+          ]
+        },
+        "idempotenz": {
+          "status": "abgedeckt",
+          "belege": [
+            { "datei": "tests/api/nebenlaeufigkeit.test.ts", "test": "dieselbe Adresse dreimal gleichzeitig zum Newsletter angemeldet — ein Eintrag, dreimal dieselbe Antwort" },
+            { "datei": "tests/api/nebenlaeufigkeit.test.ts", "test": "dieselbe Kontaktanfrage doppelt abgeschickt — eine offene Anfrage, beide Nachrichten daran" }
+          ],
+          "hinweis": "Newsletter und Kontaktformular. Eine doppelt abgeschickte Gastbuchung (zweimal POST /api/public/bookings) ist nicht geprüft."
+        },
+        "audit": {
+          "status": "luecke",
+          "grund": "Kein Test prüft, ob öffentliche Schreibwege (Gastbuchung, Kontaktanfrage, Offertablehnung ohne Signatur) einen Protokolleintrag hinterlassen; protokollpflicht.test.ts deckt nur angemeldete Wege ab."
+        }
+      }
+    }
+  ]
+}

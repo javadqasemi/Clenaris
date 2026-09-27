@@ -1,0 +1,275 @@
+{
+  "$beschreibung": "Sicherheitsklassen gegen die bestehenden Prüfungen (tests/api, tests/pages, tests/e2e). Gleiche Form wie security/testmatrix.json: status „abgedeckt“ mit wörtlichen Testtiteln als Belegen, „luecke“ oder „nicht_zutreffend“ mit Grund. Ein „hinweis“ an einer abgedeckten Klasse nennt die Stellen, an denen die Klasse trotzdem offen ist — er ist Teil des Befunds, nicht Beiwerk. Prüfbar mit scripts/testmatrix-pruefen.ts.",
+  "stand": "2026-09-27",
+  "klassen": [
+    {
+      "id": "idor",
+      "name": "IDOR",
+      "beschreibung": "Eine angemeldete Person erreicht über eine fremde Kennung Daten eines anderen Eigentümers derselben Organisation.",
+      "status": "abgedeckt",
+      "belege": [
+        { "datei": "tests/api/ownership.test.ts", "test": "die Kundschaft kann fremde Objekte weder lesen noch ändern" },
+        { "datei": "tests/api/addresses.test.ts", "test": "verwehrt der Kundschaft die fremde Akte — lesend" },
+        { "datei": "tests/api/addresses.test.ts", "test": "verwehrt der Kundschaft die fremde Akte — schreibend" },
+        { "datei": "tests/api/oeffentlicher-zugang.test.ts", "test": "eine fremde Offerte bleibt der Kundschaft verschlossen" },
+        { "datei": "tests/api/offertannahme.test.ts", "test": "verweigert die Offerte einer anderen Kundschaft" },
+        { "datei": "tests/api/pdf-auslieferung.test.ts", "test": "Rechnung: fremde Kundschaft nichts" },
+        { "datei": "tests/api/datei-zugriff.test.ts", "test": "eine fremde Datei antwortet genauso wie eine nicht vorhandene" },
+        { "datei": "tests/api/dispatch.test.ts", "test": "GET /api/jobs: Mitarbeitende sehen nur die eigenen — auch mit fremdem Filter" },
+        { "datei": "tests/api/lohnabrechnung.test.ts", "test": "das PDF: gespeicherte Bytes mit Prüfsumme, nur für Berechtigte" },
+        { "datei": "tests/api/vertraege.test.ts", "test": "Kundschaft sieht ausschliesslich die eigenen Verträge" },
+        { "datei": "tests/api/qualitaet.test.ts", "test": "die Kundschaft sieht nur abgeschlossene Begehungen der eigenen Objekte" },
+        { "datei": "tests/api/bi-fuehrung.test.ts", "test": "Mitarbeitende sehen fremde Bereichsziele nicht (404) und können dort nicht einchecken" },
+        { "datei": "tests/api/sicherheitsluecken.test.ts", "test": "die Kundschaft liest keine fremde Buchung — weder Daten noch PDF noch Seite" },
+        { "datei": "tests/api/sicherheitsluecken.test.ts", "test": "die Kundschaft liest keinen fremden Nachrichtenverlauf und schreibt nicht hinein" },
+        { "datei": "tests/api/sicherheitsluecken.test.ts", "test": "Mitarbeitende lesen und ändern keine Zeiten einer anderen Person" },
+        { "datei": "tests/api/zugriffsgrenzen.test.ts", "test": "Kundschaft: GET /api/messages/:id auf den Verlauf einer anderen Kundschaft → 404 (wie „nicht vorhanden\", C19), ohne Inhalt" },
+        { "datei": "tests/api/zugriffsgrenzen.test.ts", "test": "Mitarbeitende: GET /api/messages/:id auf einen Verlauf zu einem nicht zugeteilten Einsatz → 404 (wie „nicht vorhanden\", C19)" }
+      ],
+      "hinweis": "Ohne IDOR-Test über die Portal-Sitzung: Abwesenheiten anderer Mitarbeitender (crud-audit.test.ts deckt nur das Zurückziehen fremder Anträge ab)."
+    },
+    {
+      "id": "fremder-mandant",
+      "name": "fremder Mandant",
+      "beschreibung": "Datensätze oder Konten einer anderen Organisation werden sichtbar, änderbar oder handeln in dieser Installation.",
+      "status": "abgedeckt",
+      "belege": [
+        { "datei": "tests/api/mandanten.test.ts", "test": "${b.name}: nicht in der Liste, nicht einzeln, nicht änderbar, nicht löschbar" },
+        { "datei": "tests/api/mandanten.test.ts", "test": "Offerte an fremde Kundschaft" },
+        { "datei": "tests/api/mandanten.test.ts", "test": "Rechnung an fremde Kundschaft" },
+        { "datei": "tests/api/mandanten.test.ts", "test": "ein Administrator der fremden Organisation kann sich nicht anmelden — dieselbe Meldung wie beim falschen Passwort" },
+        { "datei": "tests/api/mandanten.test.ts", "test": "wechselt ein Konto die Organisation, endet die laufende Sitzung sofort — Endpunkt, Seite und Erneuerung" },
+        { "datei": "tests/api/suche.test.ts", "test": "eine fremde Organisation bleibt unsichtbar" },
+        { "datei": "tests/api/scan.test.ts", "test": "ein Code einer fremden Organisation löst nichts auf" },
+        { "datei": "tests/api/lohnabrechnung.test.ts", "test": "Mandanten: Daten einer fremden Organisation werden weder gezeigt noch verrechnet" },
+        { "datei": "tests/api/betrieb.test.ts", "test": "Rollen und Mandanten" },
+        { "datei": "tests/api/mandanten.test.ts", "test": "Bestätigen, Stornieren, Wiederherstellen und PDF greifen nicht (404) — Status und Einsätze unverändert" },
+        { "datei": "tests/api/mandanten.test.ts", "test": "Pause, Kündigung, Storno, neue Fassung und Aktivierung greifen nicht (404) — der Vertrag bleibt Entwurf" },
+        { "datei": "tests/api/mandanten.test.ts", "test": "nicht in der Liste — auch nicht gefiltert nach der fremden Person —, nicht änderbar, nicht löschbar, nicht wieder zu öffnen" },
+        { "datei": "tests/api/mandanten.test.ts", "test": "Zahlung: nicht in der Liste — auch nicht mit Suchbegriff —, nicht korrigierbar, nicht stornierbar" },
+        { "datei": "tests/api/mandanten.test.ts", "test": "Gutschrift auf fremde Rechnung oder an fremde Kundschaft wird nicht ausgestellt (404)" },
+        { "datei": "tests/api/mandanten.test.ts", "test": "private Datei: nicht auslieferbar, nicht in der Mediathek, nicht umbenennbar, nicht löschbar" },
+        { "datei": "tests/api/mandanten.test.ts", "test": "ein fälliger Lauf der fremden Regel wird vom stündlichen Lauf nicht ausgeführt" },
+        { "datei": "tests/api/mandanten.test.ts", "test": "Download, Inhalt, Signaturvorgänge und Dateiroute: 404; eine neue Fassung wird nicht angehängt" },
+        { "datei": "tests/api/mandanten.test.ts", "test": "Fassungen der fremden Organisation erscheinen nicht und lassen sich nicht zurückholen (404)" },
+        { "datei": "tests/api/mandanten.test.ts", "test": "Vorgang: nicht versendbar, nicht abbrechbar (404) — Zustand und Zugänge unverändert" },
+        { "datei": "tests/api/mandanten.test.ts", "test": "die Übergabe beginnt nicht (404), setzt kein Signaturcookie und sperrt die Sitzung nicht" },
+        { "datei": "tests/api/mandanten.test.ts", "test": "Unterzeichnungslink tauschen (SIGNATURE_ACCESS): 404, keine Signatursitzung, kein Protokolleintrag" },
+        { "datei": "tests/api/mandanten.test.ts", "test": "Zwei-Faktor-Rücksetzung durch die Systemverantwortung: 404, der zweite Faktor bleibt" },
+        { "datei": "tests/api/mandanten.test.ts", "test": "ein Nachrichtenverlauf zu einem fremden Einsatz wird nicht eröffnet (404)" }
+      ],
+      "hinweis": "Nicht eigens geprüft: Berichte der Führung, der Einsatzplan eines fremden Vertrags, ein gültig signiertes Stripe-Ereignis zu einer fremden Rechnung, und dass eine öffentliche Buchung oder Preisberechnung keine fremde Leistung annimmt. Die Protokolltabellen EmailLog/SmsLog tragen keine Organisation (docs/MANDANTEN.md)."
+    },
+    {
+      "id": "csrf",
+      "name": "CSRF",
+      "beschreibung": "Eine fremde Website löst mit den Cookies der angemeldeten Person eine ändernde Anfrage aus.",
+      "status": "abgedeckt",
+      "belege": [
+        { "datei": "tests/api/ownership.test.ts", "test": "lehnt ändernde Anfragen mit fremdem Origin ab" },
+        { "datei": "tests/api/ownership.test.ts", "test": "lässt die eigene Herkunft und Aufrufe ohne Origin durch" },
+        { "datei": "tests/api/scan.test.ts", "test": "fremde Herkunft: Etikett erzeugen, sperren und auflösen werden abgewiesen (403)" },
+        { "datei": "tests/api/laufzeit-konfiguration.test.ts", "test": "ein übergeschobenes X-Forwarded-Host macht eine fremde Herkunft nicht vertrauenswürdig" },
+        { "datei": "tests/api/signatur.test.ts", "test": "setzt das Cookie HttpOnly, nur für die Signatur-API, SameSite=Lax" },
+        { "datei": "tests/api/sicherheitsluecken.test.ts", "test": "clenaris_at und clenaris_rt sind HttpOnly und SameSite=Lax oder Strict" },
+        { "datei": "tests/api/sicherheitsluecken.test.ts", "test": "POST mit fremdem Origin: 403, und nichts wird angelegt" },
+        { "datei": "tests/api/sicherheitsluecken.test.ts", "test": "PATCH und öffentlicher POST mit fremdem Origin: 403, ohne Wirkung" },
+        { "datei": "tests/api/sicherheitsluecken.test.ts", "test": "POST ohne Origin und Referer läuft nach dokumentierter Regel durch (SameSite trägt)" }
+      ]
+    },
+    {
+      "id": "ssrf",
+      "name": "SSRF",
+      "beschreibung": "Der Server ruft auf Veranlassung einer Eingabe eine interne Adresse auf.",
+      "status": "abgedeckt",
+      "belege": [
+        { "datei": "tests/api/automatisierungen.test.ts", "test": "erkennt private und besondere Bereiche" },
+        { "datei": "tests/api/automatisierungen.test.ts", "test": "weist eine unmittelbar angegebene private Adresse ab" },
+        { "datei": "tests/api/automatisierungen.test.ts", "test": "weist ein IPv6-Literal in Klammern ab, statt es als Namen aufzulösen" },
+        { "datei": "tests/api/automatisierungen.test.ts", "test": "weist einen Namen ab, der auf die Rückschleife zeigt — auch wenn nur eine von mehreren Antworten privat ist" },
+        { "datei": "tests/api/automatisierungen.test.ts", "test": "DNS Rebinding: erst öffentlich, beim Verbinden privat — die Verbindung wird verweigert" },
+        { "datei": "tests/api/automatisierungen.test.ts", "test": "weist eine Regel mit privater Webhook-Adresse ab" },
+        { "datei": "tests/api/automatisierungen.test.ts", "test": "verlangt beim Webhook https und eine vollständige Adresse" },
+        { "datei": "tests/api/sicherheitsluecken.test.ts", "test": "${status} nach ${ort} wird nicht verfolgt — genau eine Anfrage, Ergebnis ein Fehlschlag" }
+      ],
+      "hinweis": "Nur der Webhook der Automatisierung, jetzt samt Weiterleitungsfolge (30x auf eine interne Adresse wird nicht verfolgt)."
+    },
+    {
+      "id": "xss-nutzlast",
+      "name": "XSS-Nutzlast",
+      "beschreibung": "Eine gespeicherte oder übermittelte Nutzlast wird als Markup oder Skript ausgeführt.",
+      "status": "abgedeckt",
+      "belege": [
+        { "datei": "tests/api/automatisierungen.test.ts", "test": "maskiert HTML im HTML-Modus" },
+        { "datei": "tests/api/automatisierungen.test.ts", "test": "führt keinen Ausdruck aus — es gibt keinen" },
+        { "datei": "tests/api/scan-kennung.test.ts", "test": "Markup bleibt Text — eingeordnet, nicht interpretiert" },
+        { "datei": "tests/api/scan-kennung.test.ts", "test": "jede Adresse ist eine Adresse — auch https und javascript" },
+        { "datei": "tests/api/scan.test.ts", "test": "kaputte Codes, Steuerzeichen und Markup: 200 ohne Treffer, nie ein Fehler 500" },
+        { "datei": "tests/e2e/scan.spec.ts", "test": "feindliche Inhalte: nichts wird geöffnet, ausgeführt oder als Markup dargestellt" },
+        { "datei": "tests/api/sicherheitsberichte.test.ts", "test": "die Systemverantwortung sieht Quelle, Zustand und Kennzahlen — Markup als Text" },
+        { "datei": "tests/e2e/gate3-pdf-viewer.spec.ts", "test": "führt in ein PDF eingebettetes JavaScript nicht aus" },
+        { "datei": "tests/api/dateisicherheit.test.ts", "test": "weist SVG und HTML als MIME-Typ zurück" },
+        { "datei": "tests/api/datei-zugriff.test.ts", "test": "ein Dateiname kann keine zweite Kopfzeile einschleusen" },
+        { "datei": "tests/api/website-ops.test.ts", "test": "weist ein protokollrelatives Ziel ab" },
+        { "datei": "tests/api/sicherheitsluecken.test.ts", "test": "Kundendetail: Name und Notiz erscheinen maskiert, nie als Markup" },
+        { "datei": "tests/api/sicherheitsluecken.test.ts", "test": "Offertdetail: Position und Titel erscheinen maskiert, nie als Markup" },
+        { "datei": "tests/api/sicherheitsluecken.test.ts", "test": "Nachrichten: Seite ohne Markup, Endpunkt als JSON mit nosniff und Text unverändert" }
+      ],
+      "hinweis": "Kundenname und -notiz, Offertposition und -titel sowie Nachrichten sind im ausgelieferten HTML auf Maskierung geprüft. Nicht geprüft: CMS-Texte, Anfragen und die E-Mail-Vorlagen mit einer Skript-Nutzlast."
+    },
+    {
+      "id": "csv-formelinjektion",
+      "name": "CSV-Formelinjektion",
+      "beschreibung": "Ein Feldwert, der mit =, +, - oder @ beginnt, wird in einer Tabellenkalkulation als Formel ausgeführt.",
+      "status": "abgedeckt",
+      "belege": [
+        { "datei": "tests/api/finanzbelege.test.ts", "test": "csvZelle: Formelanfänge entschärft, Zahlen und Text unberührt" },
+        { "datei": "tests/api/finanzbelege.test.ts", "test": "der Buchhaltungsexport enthält keine Zelle, die mit einer Formel beginnt" },
+        { "datei": "tests/api/sicherheitsluecken.test.ts", "test": "keine Zelle ist eine Formel, und = + @ am Anfang eines Freitexts sind entschärft" }
+      ],
+      "hinweis": "Geprüft sind der CSV-Buchhaltungsexport und der XLSX-Export der Kundschaft (/api/exports/kunden). Die XLSX-Exporte der Rechnungen und Zeiten (exportInvoicesXlsx, exportTimesheetsXlsx in export.service.ts) und die Excel-Berichte der Führung sind nicht auf Formelanfänge geprüft."
+    },
+    {
+      "id": "oeffentlicher-token-wiederverwendung",
+      "name": "Wiederverwendung öffentlicher Token",
+      "beschreibung": "Ein abgelaufener, widerrufener, verbrauchter oder zweckfremder öffentlicher Link öffnet oder bewirkt noch etwas.",
+      "status": "abgedeckt",
+      "belege": [
+        { "datei": "tests/api/oeffentlicher-zugang.test.ts", "test": "ein widerrufener Token wird abgewiesen" },
+        { "datei": "tests/api/oeffentlicher-zugang.test.ts", "test": "ein abgelaufener Token wird abgewiesen" },
+        { "datei": "tests/api/geschaeftsablaeufe.test.ts", "test": "3. ein erneuter Versand widerruft den ersten Link" },
+        { "datei": "tests/api/geschaeftsablaeufe.test.ts", "test": "5. abgeschlossen ist abgeschlossen: keine Annahme danach, kein Vorgang" },
+        { "datei": "tests/api/oeffentliche-links.test.ts", "test": "lässt eine bereits abgelehnte Offerte nicht nachträglich annehmen" },
+        { "datei": "tests/api/signatur.test.ts", "test": "Ablehnen ist terminal und widerruft den Link" },
+        { "datei": "tests/api/signatur.test.ts", "test": "Abbrechen widerruft Tokens und macht bestehende Sitzungen sofort wertlos" },
+        { "datei": "tests/api/signatur.test.ts", "test": "speichert nur einen Argon2id-Hash, zählt Versuche, sperrt den Neuversand und gilt einmal" },
+        { "datei": "tests/api/buchung-integritaet.test.ts", "test": "die Spalte ist weg, der Link löst über den Hash auf und lässt sich widerrufen" },
+        { "datei": "tests/api/oeffentlicher-zugang.test.ts", "test": "öffnen ohne ausdrückliche Freigabe nichts" }
+      ]
+    },
+    {
+      "id": "refresh-replay",
+      "name": "Refresh-Replay",
+      "beschreibung": "Ein bereits eingelöster oder widerrufener Refresh-Token erzeugt noch eine Sitzung.",
+      "status": "abgedeckt",
+      "belege": [
+        { "datei": "tests/api/session-refresh.test.ts", "test": "erneuert über GET, setzt neue Cookies und leitet an das Ziel zurück" },
+        { "datei": "tests/api/session-refresh.test.ts", "test": "fünfzig gleichzeitige Erneuerungen: genau eine gelingt, die Familie bleibt heil" },
+        { "datei": "tests/api/two-factor.test.ts", "test": "verwirft ein Token, das älter ist als der Widerruf" },
+        { "datei": "tests/api/mandanten.test.ts", "test": "wechselt ein Konto die Organisation, endet die laufende Sitzung sofort — Endpunkt, Seite und Erneuerung" },
+        { "datei": "tests/api/sicherheitsluecken.test.ts", "test": "ein rotierter Token, nach der Kulanzfrist erneut vorgelegt, macht auch den neuesten ungültig" }
+      ],
+      "hinweis": "Die Sperre der ganzen Rotationsfamilie nach später Wiederverwendung ist belegt. Nicht geprüft: dass dabei ein TOKEN_REUSE-Sicherheitsereignis entsteht — der Katalog stuft die Tokenwiederverwendung nur als Tabelle ein."
+    },
+    {
+      "id": "dateiersetzung",
+      "name": "Dateiersetzung",
+      "beschreibung": "Die Bytes einer geprüften oder gebundenen Datei werden nachträglich ausgetauscht oder überschrieben.",
+      "status": "abgedeckt",
+      "belege": [
+        { "datei": "tests/api/datei-integritaet.test.ts", "test": "gleichzeitige Übertragungen auf ein Ticket: genau eine gelingt, ausgeliefert wird, was geprüft wurde" },
+        { "datei": "tests/api/datei-integritaet.test.ts", "test": "der Client kann weder Pfad noch Sichtbarkeit noch Bereich bestimmen" },
+        { "datei": "tests/api/datei-integritaet.test.ts", "test": "ein frei erfundener Pfad wird mit 422 abgewiesen" },
+        { "datei": "tests/api/datei-integritaet.test.ts", "test": "ein zweiter Abschluss liefert dasselbe Asset, kein zweites" },
+        { "datei": "tests/api/signatur.test.ts", "test": "liefert weiter die gebundene Fassung, wenn eine neue hochgeladen wurde" },
+        { "datei": "tests/api/signatur.test.ts", "test": "bricht ab, wenn die gespeicherten Originalbytes nicht mehr zu Hash A passen" },
+        { "datei": "tests/api/vor-ort-abnahme.test.ts", "test": "verweigert den Abschluss, wenn die Originalbytes manipuliert wurden" },
+        { "datei": "tests/api/lohnabrechnung.test.ts", "test": "das PDF: gespeicherte Bytes mit Prüfsumme, nur für Berechtigte" }
+      ]
+    },
+    {
+      "id": "datei-umbindung",
+      "name": "Datei-Umbindung",
+      "beschreibung": "Eine vorhandene Datei eines anderen Zwecks oder Eigentümers wird per Kennung an einen neuen Datensatz gebunden und damit lesbar.",
+      "status": "abgedeckt",
+      "belege": [
+        { "datei": "tests/api/finanzbelege.test.ts", "test": "eine fremde Datei (Lohnabrechnung) lässt sich nicht als Beleg anhängen — und bleibt, was sie war" },
+        { "datei": "tests/api/finanzbelege.test.ts", "test": "dieselbe Datei lässt sich auch nicht als Nachrichtenanhang binden — die Antwort scheitert ganz" },
+        { "datei": "tests/api/buchung-integritaet.test.ts", "test": "Gast mit fremder Datei → 422, die Datei bleibt, was sie war" },
+        { "datei": "tests/api/buchung-integritaet.test.ts", "test": "angemeldete Kundschaft mit fremder Adresse, fremdem Objekt oder fremder Datei → 404" },
+        { "datei": "tests/api/sicherheitsluecken.test.ts", "test": "ein eigener Anhang bindet einmal — ein zweites Binden scheitert samt Nachricht" },
+        { "datei": "tests/api/sicherheitsluecken.test.ts", "test": "der Upload einer anderen Person lässt sich nicht als Anhang binden" },
+        { "datei": "tests/api/sicherheitsluecken.test.ts", "test": "ein bereits an eine Nachricht gebundener Anhang wird nicht zur Fassung einer Führungsakte" },
+        { "datei": "tests/api/sicherheitsluecken.test.ts", "test": "der ungebundene Upload einer Kundin wird nicht zur Fassung einer Führungsakte" },
+        { "datei": "tests/api/sicherheitsluecken.test.ts", "test": "eine Fassung bindet ihre Datei einmal — weder eine zweite Akte noch eine zweite Fassung bekommen sie" },
+        { "datei": "tests/api/sicherheitsluecken.test.ts", "test": "die Adresse eines privaten Anhangs wird nicht zum Website-Bild" },
+        { "datei": "tests/api/mandanten.test.ts", "test": "ein eigenes Dokument mit fremder Datei oder fremder Person wird nicht angelegt (404)" }
+      ],
+      "hinweis": "Nicht geprüft ist das Profilbild der Personalakte, die letzte Stelle, die eine fileId aus der Anfrage annimmt."
+    },
+    {
+      "id": "webhook-replay",
+      "name": "Webhook-Replay",
+      "beschreibung": "Ein Anbieterereignis wird erneut, veraltet oder ohne gültige Signatur zugestellt und wirkt ein zweites Mal oder überhaupt.",
+      "status": "abgedeckt",
+      "belege": [
+        { "datei": "tests/api/zahlungsbuch.test.ts", "test": "eine dreimal zugestellte Zahlung bucht einmal" },
+        { "datei": "tests/api/kommunikation.test.ts", "test": "eine falsche oder veraltete Signatur wird abgewiesen" },
+        { "datei": "tests/api/kommunikation.test.ts", "test": "Svix: gültig, falsches Geheimnis, veralteter Zeitstempel, manipulierter Text" },
+        { "datei": "tests/api/kommunikation.test.ts", "test": "zugestellt, danach eine späte „gesendet\"-Meldung: bleibt zugestellt" },
+        { "datei": "tests/api/kommunikation.test.ts", "test": "Twilio ohne Token oder ohne Signatur: abgewiesen" },
+        { "datei": "tests/api/release-center.test.ts", "test": "ohne Token, ohne gültige Signatur, mit alter Zeit oder anderem Pfad: 401 — nichts übernommen" },
+        { "datei": "tests/api/sicherheitsluecken.test.ts", "test": "ohne stripe-signature: 400, keine Zahlung" },
+        { "datei": "tests/api/sicherheitsluecken.test.ts", "test": "mit falscher Signatur (Unsinn und fremdes Geheimnis): 400, keine Zahlung" },
+        { "datei": "tests/api/sicherheitsluecken.test.ts", "test": "korrekt signiert, aber zehn Minuten alt: 400, keine Zahlung" },
+        { "datei": "tests/api/nebenlaeufigkeit.test.ts", "test": "dasselbe Zahlungsereignis sechsmal gleichzeitig zugestellt — eine Zahlung, einmal Kundenwert" }
+      ]
+    },
+    {
+      "id": "erstattungs-replay",
+      "name": "Erstattungs-Replay",
+      "beschreibung": "Eine Rückerstattung wird durch erneute, kumulierte oder verspätete Meldung doppelt oder rückwärts verbucht.",
+      "status": "abgedeckt",
+      "belege": [
+        { "datei": "tests/api/zahlungsbuch.test.ts", "test": "zwei Teilrückerstattungen, je doppelt zugestellt, dazu ein verspätetes älteres Ereignis — der Saldo folgt dem letzten Stand" },
+        { "datei": "tests/api/zahlungsbuch.test.ts", "test": "eine volle Rückerstattung stellt den offenen Posten wieder her" },
+        { "datei": "tests/api/zahlungsbuch.test.ts", "test": "eine Büro-Zahlung nach einer Rückerstattung verliert die Rückerstattung nicht" },
+        { "datei": "tests/api/nebenlaeufigkeit.test.ts", "test": "dieselbe Rückerstattung sechsmal gleichzeitig zugestellt — genau einmal abgezogen" }
+      ],
+      "hinweis": "Gleichzeitig zugestellt ist nur dieselbe Rückerstattungsmeldung; zwei verschiedene Rückerstattungsereignisse zur selben Zahlung sind nur nacheinander geprüft."
+    },
+    {
+      "id": "rechnung-nebenlaeufigkeit",
+      "name": "Rechnung Nebenläufigkeit",
+      "beschreibung": "Gleichzeitige Aufrufe erzeugen doppelte Rechnungen oder Lücken bzw. Doppel im Nummernkreis.",
+      "status": "abgedeckt",
+      "belege": [
+        { "datei": "tests/api/buchung-integritaet.test.ts", "test": "fünf gleichzeitige „Rechnung erstellen\" ergeben genau eine Rechnung" },
+        { "datei": "tests/api/vertraege.test.ts", "test": "zwei gleichzeitige Läufe erzeugen genau eine Rechnung" },
+        { "datei": "tests/api/finanzbelege.test.ts", "test": "lückenlose Nummern: zwei ausgestellte Rechnungen folgen unmittelbar aufeinander" },
+        { "datei": "tests/api/datenintegritaet.test.ts", "test": "keine Regelverletzung in Finanzen, Nummern, Lager, Mandantenbezug, Annahmen und Zeiten" },
+        { "datei": "tests/api/nebenlaeufigkeit.test.ts", "test": "fünf Entwürfe gleichzeitig ausgestellt — fünf verschiedene, lückenlos aufeinanderfolgende Nummern" },
+        { "datei": "tests/api/nebenlaeufigkeit.test.ts", "test": "derselbe Entwurf fünfmal gleichzeitig ausgestellt — eine Nummer, kein verbrauchter Zählerstand" },
+        { "datei": "tests/api/nebenlaeufigkeit.test.ts", "test": "zwei gleichzeitige Gutschriften, die zusammen die Rechnung übersteigen — genau eine gelingt" },
+        { "datei": "tests/api/nebenlaeufigkeit.test.ts", "test": "sechs gleichzeitige Gutschriften zu je 32.43 — genau drei, und nie mehr als die Rechnung" }
+      ]
+    },
+    {
+      "id": "zuteilung-nebenlaeufigkeit",
+      "name": "Zuteilung Nebenläufigkeit",
+      "beschreibung": "Gleichzeitige Zuteilungen verplanen dieselbe Person doppelt.",
+      "status": "abgedeckt",
+      "belege": [
+        { "datei": "tests/api/dispatch.test.ts", "test": "zwei gleichzeitige Zuteilungen derselben Person auf überlappende Einsätze: genau eine gelingt — fünfmal" },
+        { "datei": "tests/api/buchung-integritaet.test.ts", "test": "zwei gleichzeitige Verschiebungen auf den letzten Platz: genau eine gelingt" },
+        { "datei": "tests/api/nebenlaeufigkeit.test.ts", "test": "Zuteilung und Bewilligung gleichzeitig — nie beides, fünfmal" }
+      ],
+      "hinweis": "Nicht geprüft: gleichzeitiges Verschieben eines Einsatzes (moveJob) auf eine bereits belegte Person."
+    },
+    {
+      "id": "automatisierung-wiederholung",
+      "name": "Automatisierung Wiederholung/Duplikat",
+      "beschreibung": "Ein Auslöser erzeugt mehrere Läufe, oder ein wiederholter Lauf führt eine Aktion mit Aussenwirkung doppelt aus.",
+      "status": "abgedeckt",
+      "belege": [
+        { "datei": "tests/api/automatisierungen.test.ts", "test": "derselbe Vorgang erzeugt keinen zweiten Lauf" },
+        { "datei": "tests/api/automatisierungen.test.ts", "test": "scheitert die zweite Aktion, läuft die erste beim Wiederholen nicht noch einmal" },
+        { "datei": "tests/api/automatisierungen.test.ts", "test": "eine Aktion mit Aussenwirkung, die mittendrin abbrach, wird nicht blind wiederholt" },
+        { "datei": "tests/api/automatisierungen.test.ts", "test": "nimmt hängende Läufe wieder auf — und gibt sie nach dem letzten Versuch als FAILED auf" },
+        { "datei": "tests/api/kommunikation.test.ts", "test": "zwei Tagesläufe ergeben genau eine Bitte (vorher griff die Sperre nie)" },
+        { "datei": "tests/api/nebenlaeufigkeit.test.ts", "test": "fünf gleichzeitige stündliche Läufe mit einem fälligen Lauf — die Aktion läuft genau einmal" }
+      ],
+      "hinweis": "Gleichzeitige Abarbeitungsläufe (Cron mehrfach gestartet) sind über HTTP belegt; zwei gleichzeitige Auslösungen durch denselben Vorgang nur über den Teilindex an der Datenbank."
+    }
+  ]
+}
