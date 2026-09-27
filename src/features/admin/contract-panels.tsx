@@ -641,9 +641,19 @@ export interface Leistungszeile {
   zone?: string | null;
   estimatedMinutes: number;
   requiredCrewSize: number;
+  /**
+   * Mitgeschickt, weil der Endpunkt den Umfang als Ganzes ersetzt: Fehlte das
+   * Feld, löschte jede neue Position die Qualifikationen aller bestehenden.
+   */
+  requiredSkills: string[];
   materialsBy: string;
   quantity?: number | null;
   specialInstructions?: string | null;
+}
+
+/** „Hochdruck, Stapler" oder zeilenweise → ["Hochdruck", "Stapler"]. */
+export function qualifikationenAus(wert: unknown): string[] {
+  return [...new Set(String(wert ?? '').split(/[\n,;]/).map((s) => s.trim()).filter(Boolean))];
 }
 
 /**
@@ -692,6 +702,13 @@ export function LeistungHinzufuegenDialog({
           ],
         },
         { name: 'quantity', label: 'Menge', type: 'number', min: 0, half: true, hint: 'Nur bei mengenabhängigem Preis.' },
+        {
+          name: 'requiredSkills',
+          label: 'Verlangte Qualifikationen',
+          type: 'textarea',
+          rows: 2,
+          hint: 'Durch Komma oder Zeilen getrennt, gleich benannt wie in der Personalakte. Wer sie nicht hat, lässt sich für diese Einsätze nicht einteilen.',
+        },
         { name: 'specialInstructions', label: 'Besondere Hinweise', type: 'textarea', rows: 2 },
       ]}
       values={{ estimatedMinutes: 120, requiredCrewSize: 1, materialsBy: 'PROVIDER' }}
@@ -699,7 +716,7 @@ export function LeistungHinzufuegenDialog({
       method="PUT"
       submitLabel="Position hinzufügen"
       successMessage="Die Leistung gehört jetzt zur Fassung."
-      transform={(payload) => ({ services: [...bestehende, payload] })}
+      transform={(payload) => ({ services: [...bestehende, { ...payload, requiredSkills: qualifikationenAus(payload.requiredSkills) }] })}
     />
   );
 }

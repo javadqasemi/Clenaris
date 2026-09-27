@@ -2,7 +2,7 @@ import 'server-only';
 
 import type { Prisma } from '@prisma/client';
 
-import type { prisma, Tx } from '@/lib/db';
+import type { Tx } from '@/lib/db';
 import { BusinessRuleError } from '@/lib/errors';
 import { toDateOnly, zurichParts } from '@/lib/bi/periods';
 
@@ -46,13 +46,23 @@ import { activeStaffWhere } from './profile.service';
  * Funktion hier ein `Tx` entgegen und wird aus der Transaktion heraus
  * aufgerufen, in der auch geschrieben wird.
  *
- * Das schliesst das Fenster nicht vollständig — zwei Transaktionen, die
- * *verschiedene* Einsatzzeilen anfassen, sperren einander nicht. Vollständig
- * dicht wäre nur eine Ausschlussbedingung in der Datenbank
- * (`EXCLUDE USING gist` über Personal und Zeitraum), und die verlangt
- * `btree_gist` sowie eine materialisierte Zeitspalte am `JobAssignment`. Das
- * ist eine eigene Migration mit eigener Begründung; der Fensterschluss hier
- * deckt den Fall ab, der in der Praxis auftritt: zweimal Klicken.
+ * Die Transaktion allein schloss das Fenster nicht — zwei Transaktionen, die
+ * *verschiedene* Einsatzzeilen anfassen, sperren einander nicht: Zwei
+ * gleichzeitige Zuteilungen derselben Person auf zwei überlappende Einsätze
+ * lasen beide „frei" und schrieben beide. Seit 2026-09-27 nimmt die Prüfung
+ * deshalb zuerst eine **Transaktionssperre je Person**
+ * (`pg_advisory_xact_lock`, in fester Reihenfolge gegen Verklemmungen). Die
+ * zweite Zuteilung derselben Person wartet, bis die erste festgeschrieben
+ * ist, und sieht deren Einteilung als Überschneidung. Personen, die nichts
+ * miteinander zu tun haben, warten nicht aufeinander. Eine Ausschlussbedingung
+ * in der Datenbank (`EXCLUDE USING gist`) wäre die andere Möglichkeit; sie
+ * verlangte eine materialisierte Zeitspalte am `JobAssignment`, die bei jeder
+ * Terminverschiebung mitgeführt werden müsste — die Sperre sitzt an der
+ * einzigen Stelle, durch die jede Zuteilung ohnehin muss.
+ *
+ * Deshalb nimmt die Prüfung nur noch eine echte Transaktion (`Tx`), nicht den
+ * globalen Klienten: Ausserhalb einer Transaktion gälte die Sperre für eine
+ * einzige Anweisung und schützte nichts.
  *
  * ---------------------------------------------------------------------------
  *  Was blockiert und was nur warnt
@@ -64,6 +74,7 @@ import { activeStaffWhere } from './profile.service';
  * | Personalakte inaktiv  | blockiert | Wer ausgetreten ist, steht nicht vor der Tür |
  * | Bewilligte Abwesenheit| blockiert | Der Grund, aus dem es diese Datei gibt |
  * | Überschneidung        | blockiert | Niemand ist an zwei Orten |
+ * | Fehlende Qualifikation | blockiert | Der Einsatz verlangt sie (`Job.requiredSkills`); ohne sie ist er nicht fachgerecht ausführbar. Abgelaufene Zertifizierung zählt als fehlend |
  * | Beantragte Abwesenheit| **warnt**  | Noch nicht entschieden. Wer disponiert, soll es sehen — aber die Planung nicht an einem unbeantworteten Gesuch scheitern |
  * | Ausserhalb der Arbeitszeit | **warnt** | `Availability` ist eine Planungshilfe, keine Zusage. Ein Sonntagseinsatz nach Absprache ist normal; ihn zu blockieren hiesse, das Büro zu zwingen, zuerst ein Stammdatum zu ändern |
  *
@@ -78,6 +89,7 @@ export type AssignmentConflictCode =
   | 'EMPLOYEE_ABSENT'
   | 'ABSENCE_REQUESTED'
   | 'ASSIGNMENT_OVERLAP'
+  | 'MISSING_SKILL'
   | 'OUTSIDE_AVAILABILITY';
 
 export interface AssignmentConflict {
@@ -102,6 +114,11 @@ export interface EligibilityRequest {
    * bereits eingeteilten Einsatz selbst.
    */
   ignoreJobId?: string;
+  /**
+   * Verlangte Qualifikationen. Fehlt die Angabe, gelten die des Einsatzes
+   * `ignoreJobId` (der Einsatz, der gerade besetzt oder verschoben wird).
+   */
+  requiredSkills?: string[];
 }
 
 const BLOCKING_JOB_STATUS: Prisma.JobWhereInput['status'] = {
@@ -132,7 +149,7 @@ function dayLabel(date: Date): string {
  * davon nicht können, und nicht viermal nacheinander.
  */
 export async function checkAssignmentEligibility(
-  tx: Tx | typeof prisma,
+  tx: Tx,
   request: EligibilityRequest,
 ): Promise<AssignmentConflict[]> {
   const { organizationId, employeeIds, scheduledStart, scheduledEnd } = request;
@@ -140,6 +157,11 @@ export async function checkAssignmentEligibility(
 
   const unique = [...new Set(employeeIds)];
   const conflicts: AssignmentConflict[] = [];
+
+  // --- 0) Sperre je Person, in fester Reihenfolge (siehe Dateikopf) --------
+  for (const employeeId of [...unique].sort()) {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`zuteilung:${employeeId}`}))`;
+  }
 
   // --- 1) Existiert die Person, gehört sie zum Mandanten, ist sie aktiv? ----
   /**
@@ -295,6 +317,43 @@ export async function checkAssignmentEligibility(
     });
   }
 
+  // --- 3b) Qualifikationen ------------------------------------------------
+  /**
+   * Bis 2026-09-27 standen verlangte Qualifikationen nur an der
+   * Vertragsleistung — mit dem Vermerk, die Disposition könne sie „später"
+   * auswerten. Später war nie: Wer keine Hochdruckreiniger-Schulung hatte,
+   * liess sich trotzdem einteilen. Jetzt trägt jeder Einsatz seine
+   * Qualifikationen (Momentaufnahme aus Leistung oder Vertragsleistung), und
+   * eine Person ohne gültige Qualifikation wird abgewiesen. Gültig heisst:
+   * vorhanden (Name, gross/klein egal) und nicht vor dem Einsatztag
+   * abgelaufen.
+   */
+  const verlangt =
+    request.requiredSkills ??
+    (request.ignoreJobId
+      ? ((await tx.job.findFirst({ where: { id: request.ignoreJobId, organizationId }, select: { requiredSkills: true } }))?.requiredSkills ?? [])
+      : []);
+  const verlangtNormiert = [...new Set(verlangt.map((s) => s.trim()).filter(Boolean))];
+  if (verlangtNormiert.length > 0) {
+    const vorhanden = await tx.employeeSkill.findMany({
+      where: { employeeId: { in: aktiveIds }, OR: [{ certifiedUntil: null }, { certifiedUntil: { gte: jobLastDay } }] },
+      select: { employeeId: true, name: true },
+    });
+    for (const employee of aktive) {
+      const kann = new Set(vorhanden.filter((s) => s.employeeId === employee.id).map((s) => s.name.trim().toLowerCase()));
+      const fehlt = verlangtNormiert.filter((s) => !kann.has(s.toLowerCase()));
+      if (fehlt.length > 0) {
+        conflicts.push({
+          code: 'MISSING_SKILL',
+          severity: 'block',
+          employeeId: employee.id,
+          employeeName: fullName(employee),
+          message: `${fullName(employee)} fehlt die Qualifikation ${fehlt.join(', ')} (oder sie ist abgelaufen).`,
+        });
+      }
+    }
+  }
+
   // --- 4) Hinterlegte Arbeitszeit ------------------------------------------
   /**
    * Nur geprüft, wenn der Einsatz an einem einzigen Kalendertag liegt. Über
@@ -359,7 +418,7 @@ export async function checkAssignmentEligibility(
  * Büro gerade selbst ausgewählt hat, und Einsatznummern desselben Mandanten.
  */
 export async function assertAssignable(
-  tx: Tx | typeof prisma,
+  tx: Tx,
   request: EligibilityRequest,
 ): Promise<AssignmentConflict[]> {
   const conflicts = await checkAssignmentEligibility(tx, request);

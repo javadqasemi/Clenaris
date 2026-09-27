@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 
 import { data, del, get, patch, post, put, requireServer } from '../helpers/client';
 import { loginAll, type AccountName } from '../helpers/accounts';
+import { testDb } from '../helpers/testdb';
 
 /**
  * Buchung → Einsatz → Zuteilung: der Weg, auf dem ein Auftrag zu Arbeit wird.
@@ -405,6 +406,95 @@ describe('Disposition — Buchung, Einsatz, Zuteilung', () => {
       );
       assert.equal(antwort.status, 403, `${rolle} teilt nicht zu`);
     }
+  });
+
+  /**
+   * Gleichzeitigkeit (2026-09-27). Prüfung und Schreiben standen schon in
+   * einer Transaktion — aber zwei Transaktionen, die *verschiedene* Einsätze
+   * anfassen, sperren einander nicht: Beide lasen „frei" und schrieben beide.
+   * Jetzt sperrt die Prüfung je Person. Fünf Paare, weil ein Wettlauf ohne
+   * Sperre nicht jedes Mal auftritt; mit Sperre muss jedes Paar genau eine
+   * Zuteilung ergeben.
+   */
+  it('zwei gleichzeitige Zuteilungen derselben Person auf überlappende Einsätze: genau eine gelingt — fünfmal', async () => {
+    for (let paar = 0; paar < 5; paar++) {
+      const a = await jobAnlegen({ customerId, addressId, title: `${TITEL} parallel ${paar}A`, scheduledStart: tag(TAG0 + 5 + paar, 8), scheduledEnd: tag(TAG0 + 5 + paar, 11) });
+      const b = await jobAnlegen({ customerId, addressId, title: `${TITEL} parallel ${paar}B`, scheduledStart: tag(TAG0 + 5 + paar, 9), scheduledEnd: tag(TAG0 + 5 + paar, 12) });
+      assert.equal(a.status, 201, a.text);
+      assert.equal(b.status, 201, b.text);
+      angelegteJobs.push(data(a).id, data(b).id);
+
+      const antworten = await Promise.all(
+        [data(a).id, data(b).id].map((id) => post(`/api/jobs/${id}/assign`, { employeeIds: [zweiteKraftId], notify: false }, { jar: jars.admin })),
+      );
+      assert.deepEqual(antworten.map((r) => r.status).sort(), [200, 422], `Paar ${paar}: ${antworten.map((r) => r.text).join(' | ')}`);
+    }
+  });
+
+  /**
+   * Qualifikationen (2026-09-27). Verlangt waren sie bis dahin nur an der
+   * Vertragsleistung, geprüft nirgends. Jetzt trägt der Einsatz die
+   * Qualifikationen seiner Leistung, und die Zuteilung prüft sie — samt
+   * Ablaufdatum.
+   */
+  describe('Qualifikationen', () => {
+    const QUALI = `Prüfqualifikation ${RUN}`;
+    let leistungMitQuali = '';
+
+    before(async () => {
+      const db = testDb()!;
+      const vorlage = await db.service.findUniqueOrThrow({ where: { id: serviceId } });
+      leistungMitQuali = (
+        await db.service.create({
+          data: {
+            organizationId: vorlage.organizationId,
+            slug: `pruef-quali-${RUN}`,
+            kind: vorlage.kind,
+            name: `Prüfleistung Qualifikation ${RUN}`,
+            shortDesc: 'Nur für die Prüfreihe.',
+            description: 'Nur für die Prüfreihe.',
+            active: false,
+            requiredSkills: [QUALI],
+          },
+        })
+      ).id;
+    });
+
+    after(async () => {
+      const db = testDb()!;
+      await db.employeeSkill.deleteMany({ where: { name: QUALI } });
+      await db.job.updateMany({ where: { serviceId: leistungMitQuali }, data: { serviceId: null } });
+      await db.service.deleteMany({ where: { id: leistungMitQuali } });
+    });
+
+    const einsatzMitQuali = async (offset: number) => {
+      const r = await jobAnlegen({ customerId, addressId, serviceId: leistungMitQuali, title: `${TITEL} Qualifikation ${offset}`, scheduledStart: tag(TAG0 + 12 + offset, 8), scheduledEnd: tag(TAG0 + 12 + offset, 10) });
+      assert.equal(r.status, 201, r.text);
+      angelegteJobs.push(data(r).id);
+      return data(r).id;
+    };
+    const zuteilen = (jobId: string) => post<Fehler>(`/api/jobs/${jobId}/assign`, { employeeIds: [zweiteKraftId], notify: false }, { jar: jars.admin });
+
+    it('der Einsatz übernimmt die Qualifikation seiner Leistung', async () => {
+      const id = await einsatzMitQuali(0);
+      assert.deepEqual((await testDb()!.job.findUniqueOrThrow({ where: { id } })).requiredSkills, [QUALI]);
+    });
+
+    it('ohne Qualifikation → 422 MISSING_SKILL; mit → 200; abgelaufen → 422', async () => {
+      const db = testDb()!;
+      const ohne = await zuteilen(await einsatzMitQuali(1));
+      assert.equal(ohne.status, 422, ohne.text);
+      assert.equal(ohne.payload.error.details?.conflicts?.[0]?.code, 'MISSING_SKILL', ohne.text);
+
+      await db.employeeSkill.create({ data: { employeeId: zweiteKraftId, name: QUALI.toUpperCase() } });
+      const mit = await zuteilen(await einsatzMitQuali(2));
+      assert.equal(mit.status, 200, `gleicher Name, andere Schreibweise: ${mit.text}`);
+
+      await db.employeeSkill.updateMany({ where: { employeeId: zweiteKraftId, name: QUALI.toUpperCase() }, data: { certifiedUntil: new Date(Date.now() - 86_400_000) } });
+      const abgelaufen = await zuteilen(await einsatzMitQuali(3));
+      assert.equal(abgelaufen.status, 422, abgelaufen.text);
+      assert.equal(abgelaufen.payload.error.details?.conflicts?.[0]?.code, 'MISSING_SKILL');
+    });
   });
 
   // =========================================================================

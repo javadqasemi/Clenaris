@@ -5057,6 +5057,7 @@ Familie.
 | `minutesPerSqm` | number | – | ≥ 0, ≤ 60, Standard `1.2` |
 | `defaultCrewSize` | integer | – | ≥ 1, ≤ 20, Standard `1` |
 | `bufferMinutes` | integer | – | ≥ 0, ≤ 240, Standard `30` |
+| `requiredSkills` | string[] | – | max. 20 Einträge, Standard `[]` |
 | `bulletPoints` | string[] | – | max. 12 Einträge, Standard `[]` |
 | `includes` | string[] | – | max. 30 Einträge, Standard `[]` |
 | `excludes` | string[] | – | max. 30 Einträge, Standard `[]` |
@@ -5120,6 +5121,7 @@ Familie.
 | `minutesPerSqm` | number | – | ≥ 0, ≤ 60, Standard `1.2` |
 | `defaultCrewSize` | integer | – | ≥ 1, ≤ 20, Standard `1` |
 | `bufferMinutes` | integer | – | ≥ 0, ≤ 240, Standard `30` |
+| `requiredSkills` | string[] | – | max. 20 Einträge, Standard `[]` |
 | `bulletPoints` | string[] | – | max. 12 Einträge, Standard `[]` |
 | `includes` | string[] | – | max. 30 Einträge, Standard `[]` |
 | `excludes` | string[] | – | max. 30 Einträge, Standard `[]` |

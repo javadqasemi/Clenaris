@@ -235,6 +235,9 @@ export async function createJobsForBooking(tx: Tx, bookingId: string): Promise<J
       addressId: booking.addressId,
       propertyId: booking.propertyId,
       serviceId: service?.id ?? null,
+      // Alle Qualifikationen aller Leistungen — dasselbe Team erledigt sie
+      // nacheinander (siehe oben).
+      requiredSkills: [...new Set(leistungen.flatMap((l) => l.service.requiredSkills))],
       title: `${namen} · ${booking.customer.companyName ?? booking.customer.lastName}`,
       description: mehrere
         ? `Leistungen, nacheinander: ${leistungen.map((l) => `${l.service.name} (ca. ${Math.round((l.dauer / 60) * 10) / 10} Std.)`).join(', ')}`
@@ -287,11 +290,16 @@ export async function createJob(params: {
      * zur selben Zeit anderswo eingeteilt waren. Über den Kalender war das
      * verboten, über das Formular nicht.
      */
+    const requiredSkills = input.serviceId
+      ? ((await tx.service.findFirst({ where: { id: input.serviceId, organizationId }, select: { requiredSkills: true } }))?.requiredSkills ?? [])
+      : [];
+
     await assertAssignable(tx, {
       organizationId,
       employeeIds: input.employeeIds,
       scheduledStart: input.scheduledStart,
       scheduledEnd: input.scheduledEnd,
+      requiredSkills,
     });
 
     const { number } = await nextNumber(tx, organizationId, 'job');
@@ -305,6 +313,7 @@ export async function createJob(params: {
         addressId: input.addressId ?? null,
         propertyId: input.propertyId ?? null,
         serviceId: input.serviceId ?? null,
+        requiredSkills,
         title: input.title,
         status: input.employeeIds.length > 0 ? 'SCHEDULED' : 'UNASSIGNED',
         scheduledStart: input.scheduledStart,
@@ -382,8 +391,17 @@ export async function updateJob(params: {
     neuerStart.getTime() !== job.scheduledStart.getTime() ||
     neuesEnde.getTime() !== job.scheduledEnd.getTime();
 
+  /*
+    Prüfen und Schreiben in **einer** Transaktion (2026-09-27). Vorher lief
+    die Eignungsprüfung hier auf dem globalen Klienten und das Schreiben
+    danach getrennt — das weiteste Fenster aller fünf Aufrufer: Zwischen
+    „das Team ist frei" und dem Verschieben konnte ein zweiter Vorgang
+    dieselben Personen zur neuen Zeit einteilen. Die Sperre je Person in
+    `assertAssignable` wirkt nur innerhalb einer Transaktion.
+  */
+  const updated = await prisma.$transaction(async (tx) => {
   if (terminVerschoben && job.assignments.length > 0) {
-    await assertAssignable(prisma, {
+    await assertAssignable(tx, {
       organizationId: params.organizationId,
       employeeIds: job.assignments.map((assignment) => assignment.employeeId),
       scheduledStart: neuerStart,
@@ -392,7 +410,7 @@ export async function updateJob(params: {
     });
   }
 
-  const updated = await prisma.job.update({
+  return tx.job.update({
     where: { id: job.id },
     data: {
       ...(params.input.title !== undefined ? { title: params.input.title } : {}),
@@ -417,6 +435,7 @@ export async function updateJob(params: {
         : {}),
       ...(params.input.color !== undefined ? { color: params.input.color } : {}),
     },
+  });
   });
 
   await invalidateAvailability(params.organizationId, updated.scheduledStart);

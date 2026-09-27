@@ -12014,6 +12014,14 @@ paths:
                   minimum: 0
                   maximum: 240
                   default: 30
+                requiredSkills:
+                  type: 'array'
+                  items:
+                    type: 'string'
+                    minLength: 1
+                    maxLength: 200
+                  maxItems: 20
+                  default: []
                 bulletPoints:
                   type: 'array'
                   items:
@@ -12306,6 +12314,14 @@ paths:
                   minimum: 0
                   maximum: 240
                   default: 30
+                requiredSkills:
+                  type: 'array'
+                  items:
+                    type: 'string'
+                    minLength: 1
+                    maxLength: 200
+                  maxItems: 20
+                  default: []
                 bulletPoints:
                   type: 'array'
                   items:

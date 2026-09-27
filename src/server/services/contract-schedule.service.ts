@@ -413,6 +413,8 @@ interface Solltermin {
     serviceId: string | null;
     estimatedMinutes: number;
     requiredCrewSize: number;
+    /** Qualifikationen der Vertragsleistung — der Einsatz übernimmt sie (Zuteilungsprüfung). */
+    requiredSkills: string[];
     specialInstructions: string | null;
   };
 }
@@ -505,6 +507,7 @@ async function solltermine(
             serviceId: leistung.serviceId,
             estimatedMinutes: leistung.estimatedMinutes,
             requiredCrewSize: leistung.requiredCrewSize,
+            requiredSkills: leistung.requiredSkills,
             specialInstructions: leistung.specialInstructions,
           },
         });
@@ -700,6 +703,7 @@ async function einsatzAnlegen(params: {
           scheduledEnd: ende,
           crewSize: soll.leistung.requiredCrewSize,
           estimatedMin: soll.leistung.estimatedMinutes,
+          requiredSkills: soll.leistung.requiredSkills,
           description: soll.leistung.specialInstructions,
           contractId: params.vertrag.id,
           contractVersionId: soll.versionId,
@@ -856,6 +860,9 @@ export async function einsaetzeAbgleichen(params: {
           scheduledEnd: ende,
           crewSize: erwartet.leistung.requiredCrewSize,
           estimatedMin: erwartet.leistung.estimatedMinutes,
+          // Eine neue Fassung kann andere Qualifikationen verlangen; der
+          // geplante Einsatz folgt ihr wie bei Dauer und Teamgrösse.
+          requiredSkills: erwartet.leistung.requiredSkills,
           ...(aufheben ? { status: 'UNASSIGNED' as const } : {}),
           ...(zeitGeaendert
             ? { internalNote: anmerkung(job.internalNote, `Umgeplant: ${params.grund}`) }

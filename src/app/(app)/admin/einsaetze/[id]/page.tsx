@@ -415,6 +415,12 @@ export default async function AdminJobDetailPage({
           </DetailSection>
 
           <DetailSection title={`Team (${job.assignments.length}/${job.crewSize})`}>
+            {job.requiredSkills.length > 0 ? (
+              <p className="mb-3 text-meta text-muted-foreground">
+                Verlangte Qualifikationen: <span className="text-foreground">{job.requiredSkills.join(', ')}</span> — wer sie
+                nicht (oder nur abgelaufen) hat, lässt sich nicht einteilen.
+              </p>
+            ) : null}
             <JobTeamEditor
               jobId={job.id}
               crewSize={job.crewSize}

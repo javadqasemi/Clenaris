@@ -4,6 +4,8 @@ import * as React from 'react';
 
 import { ResourceForm, type FieldSpec } from '@/components/app/resource-form';
 
+import { qualifikationenAus } from './contract-panels';
+
 /**
  * Die Maske für einen neuen Vertrag.
  *
@@ -187,6 +189,13 @@ export function ContractForm({
     },
     { name: 'estimatedMinutes', label: 'Dauer je Einsatz', type: 'number', min: 5, max: 1440, suffix: 'min', half: true },
     { name: 'requiredCrewSize', label: 'Personen', type: 'number', min: 1, max: 50, half: true },
+    {
+      name: 'requiredSkills',
+      label: 'Verlangte Qualifikationen',
+      type: 'textarea',
+      rows: 2,
+      hint: 'Durch Komma oder Zeilen getrennt, gleich benannt wie in der Personalakte.',
+    },
     { name: 'specialInstructions', label: 'Besondere Anweisungen', type: 'textarea' },
   ];
 
@@ -256,7 +265,9 @@ export function ContractForm({
               requiredCrewSize: zahl('requiredCrewSize') ?? 1,
               specialInstructions: werte.specialInstructions || undefined,
               materialsBy: 'PROVIDER',
-              requiredSkills: [],
+              // Bis 2026-09-27 fest leer — das Feld gab es im Schema, in der
+              // Maske nicht. Jetzt aus der Eingabe, und die Zuteilung prüft es.
+              requiredSkills: qualifikationenAus(werte.requiredSkills),
               position: 0,
             },
           ],

@@ -259,6 +259,7 @@ export default async function ContractDetailPage({
       zone: leistung.zone,
       estimatedMinutes: leistung.estimatedMinutes,
       requiredCrewSize: leistung.requiredCrewSize,
+      requiredSkills: leistung.requiredSkills,
       materialsBy: leistung.materialsBy,
       quantity: leistung.quantity ? toNumber(leistung.quantity) : null,
       specialInstructions: leistung.specialInstructions,
@@ -610,7 +611,14 @@ export default async function ContractDetailPage({
                               ))}
                         </td>
                         <td className="num text-muted-foreground">{leistung.estimatedMinutes} min</td>
-                        <td className="num text-muted-foreground">{leistung.requiredCrewSize}</td>
+                        <td className="num text-muted-foreground">
+                          {leistung.requiredCrewSize}
+                          {leistung.requiredSkills.length > 0 ? (
+                            <span className="block text-2xs" title="Verlangte Qualifikationen — die Zuteilung prüft sie">
+                              {leistung.requiredSkills.join(', ')}
+                            </span>
+                          ) : null}
+                        </td>
                         {darfPlanen ? (
                           <td className="text-right">
                             <div className="flex flex-wrap justify-end gap-1">

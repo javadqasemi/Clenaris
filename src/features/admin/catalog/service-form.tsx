@@ -92,6 +92,7 @@ export interface ServiceRow {
   minutesPerSqm: number;
   defaultCrewSize: number;
   bufferMinutes: number;
+  requiredSkills: string[];
   bulletPoints: string[];
   includes: string[];
   excludes: string[];
@@ -123,6 +124,7 @@ const EMPTY: CreateServiceInput = {
   minutesPerSqm: 1.2,
   defaultCrewSize: 1,
   bufferMinutes: 30,
+  requiredSkills: [],
   bulletPoints: [],
   includes: [],
   excludes: [],
@@ -155,6 +157,7 @@ function toFormValues(service: ServiceRow): CreateServiceInput {
     minutesPerSqm: service.minutesPerSqm,
     defaultCrewSize: service.defaultCrewSize,
     bufferMinutes: service.bufferMinutes,
+    requiredSkills: service.requiredSkills,
     bulletPoints: service.bulletPoints,
     includes: service.includes,
     excludes: service.excludes,
@@ -580,6 +583,12 @@ export function ServiceForm({
                     hint="Fahrt- und Rüstzeit, die der Kalender freihält."
                   />
                 </div>
+                <ListField
+                  control={form.control}
+                  name="requiredSkills"
+                  label="Verlangte Qualifikationen"
+                  hint="Eine Zeile je Qualifikation, gleich benannt wie in der Personalakte. Wer sie nicht (oder nur abgelaufen) hat, lässt sich nicht einteilen."
+                />
               </section>
 
               {/* --- Suchmaschinen & Sichtbarkeit --------------------------- */}
