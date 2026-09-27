@@ -664,6 +664,44 @@ describe('Disposition — Buchung, Einsatz, Zuteilung', () => {
       );
       assert.equal(antwort.status, 200, `abgelehnt heisst anwesend — ${antwort.text}`);
     });
+
+    /**
+     * Halber Tag (2026-09-27): Vorher ergab „halber Tag" immer 0.5 Tage, egal
+     * über welchen Zeitraum und egal an welchem Wochentag — zwei Wochen
+     * Abwesenheit für einen halben Ferientag, oder ein halber Samstag vom
+     * Saldo.
+     */
+    it('halber Tag: nur ein Tag, nur an einem Arbeitstag, dann 0.5', async () => {
+      const angelegt: string[] = [];
+      const antrag = async (von: string, bis: string) => {
+        const r = await post<{ data: { id: string; days: string | number } }>(
+          '/api/absences',
+          { type: 'VACATION', startDate: von, endDate: bis, halfDay: true, reason: `Prüflauf ${RUN}` },
+          { jar: jars.employee },
+        );
+        // Auch ein fälschlich angenommener Antrag wird wieder zurückgezogen —
+        // sonst blockierte er Anna in allen folgenden Läufen.
+        if (r.status === 201) angelegt.push(data(r).id);
+        return r;
+      };
+      // Ein Montag und der Samstag davor, weit genug voraus, dass nichts anderes dort liegt.
+      let montag = TAG0 + 60;
+      while (new Date(`${tagOhneZeit(montag)}T12:00:00Z`).getUTCDay() !== 1) montag += 1;
+
+      try {
+        const ueberMehrereTage = await antrag(tagOhneZeit(montag), tagOhneZeit(montag + 11));
+        assert.equal(ueberMehrereTage.status, 422, `halber Tag über zwölf Tage: ${ueberMehrereTage.text}`);
+
+        const samstag = await antrag(tagOhneZeit(montag - 2), tagOhneZeit(montag - 2));
+        assert.equal(samstag.status, 422, `halber Samstag: ${samstag.text}`);
+
+        const gueltig = await antrag(tagOhneZeit(montag), tagOhneZeit(montag));
+        assert.equal(gueltig.status, 201, gueltig.text);
+        assert.equal(Number(data(gueltig).days), 0.5);
+      } finally {
+        for (const id of angelegt) await post(`/api/absences/${id}/withdraw`, undefined, { jar: jars.employee });
+      }
+    });
   });
 
   // =========================================================================

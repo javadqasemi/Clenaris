@@ -677,6 +677,20 @@ export const absenceRequestSchema = z.object({
 }).refine((d) => d.endDate >= d.startDate, {
   message: 'Das Enddatum darf nicht vor dem Startdatum liegen.',
   path: ['endDate'],
+})
+/**
+ * Ein halber Tag ist *ein* Tag (2026-09-27).
+ *
+ * Die Maske schickte bei „halber Tag" schon immer Start = Ende, der Server
+ * verlangte es nicht: Ein Antrag „halber Tag" über zwei Wochen ging durch,
+ * zählte 0.5 Tage vom Feriensaldo ab und blockierte die Person trotzdem
+ * zwei Wochen lang in der Disposition. Über mehrere Tage hinweg halbe Tage
+ * wären zwei Anträge — oder eine Angabe, welcher Tag halb ist, die es nicht
+ * gibt.
+ */
+.refine((d) => !d.halfDay || d.endDate.getTime() === d.startDate.getTime(), {
+  message: 'Ein halber Tag beginnt und endet am selben Tag.',
+  path: ['endDate'],
 });
 export type AbsenceRequestInput = z.infer<typeof absenceRequestSchema>;
 

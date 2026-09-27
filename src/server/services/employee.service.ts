@@ -593,33 +593,48 @@ export async function replaceEmployeeAvailability(params: {
 //  Abwesenheiten
 // ---------------------------------------------------------------------------
 
-/** Netto-Abwesenheitstage: Wochenenden und Feiertage zählen nicht. */
+/**
+ * Netto-Abwesenheitstage: Wochenenden und Feiertage zählen nicht.
+ *
+ * Zwei Korrekturen vom 2026-09-27:
+ *
+ *  • **Der halbe Tag ging an der Rechnung vorbei.** Er ergab immer 0.5 —
+ *    auch an einem Samstag oder am Nationalfeiertag, an dem gar nicht
+ *    gearbeitet wird. Jetzt zählt er als die Hälfte dessen, was der Tag
+ *    sonst zählte: 0.5 an einem Arbeitstag, 0 an einem freien, und 0 führt
+ *    wie beim ganzen Tag zur Meldung „keine Arbeitstage".
+ *  • **Wiederkehrende Feiertage zählten nur im Jahr ihres Eintrags.**
+ *    Neujahr 2026 als „jährlich" eingetragen, Ferien über Neujahr 2027 — der
+ *    1. Januar ging als Ferientag vom Saldo ab. Die Verfügbarkeit
+ *    (`availability.service.ts`) vergleicht wiederkehrende Einträge seit
+ *    2026-09-26 nach Monat und Tag; hier jetzt ebenso.
+ */
 async function countAbsenceDays(params: {
   organizationId: string;
   from: Date;
   to: Date;
   halfDay: boolean;
 }): Promise<number> {
-  if (params.halfDay) return 0.5;
-
   const holidays = await prisma.holiday.findMany({
     where: {
       organizationId: params.organizationId,
-      date: { gte: params.from, lte: params.to },
+      OR: [{ date: { gte: params.from, lte: params.to } }, { recurring: true }],
     },
-    select: { date: true },
+    select: { date: true, recurring: true },
   });
-  const holidayKeys = new Set(holidays.map((h) => h.date.toISOString().slice(0, 10)));
+  const festeTage = new Set(holidays.filter((h) => !h.recurring).map((h) => h.date.toISOString().slice(0, 10)));
+  const jaehrlich = new Set(holidays.filter((h) => h.recurring).map((h) => h.date.toISOString().slice(5, 10)));
 
   let days = 0;
   const cursor = new Date(params.from);
   while (cursor <= params.to) {
     const weekday = cursor.getUTCDay();
     const key = cursor.toISOString().slice(0, 10);
-    if (weekday !== 0 && weekday !== 6 && !holidayKeys.has(key)) days++;
+    if (weekday !== 0 && weekday !== 6 && !festeTage.has(key) && !jaehrlich.has(key.slice(5))) days++;
     cursor.setUTCDate(cursor.getUTCDate() + 1);
   }
-  return days;
+  // Das Schema verlangt für den halben Tag Start = Ende; `days` ist dann 0 oder 1.
+  return params.halfDay ? days * 0.5 : days;
 }
 
 export async function requestAbsence(params: {

@@ -24,7 +24,8 @@ const RUN = Date.now();
 const db = testDb();
 let jars: Record<AccountName, string>;
 let org = '';
-const S = { buero: '', fenster: '', klein: '' };
+const S = { buero: '', fenster: '', klein: '', puffer: '', quali: '' };
+const QUALI = `Prüfqualifikation ${RUN}`;
 let zusatzId = '';
 let kundeId = '';
 let gutschein = '';
@@ -107,6 +108,7 @@ async function aufraeumen() {
       await tx.serviceExtra.deleteMany({ where: { id: zusatzId } });
     }
     await tx.service.deleteMany({ where: { id: { in: ids } } });
+    await tx.absence.deleteMany({ where: { reason: { startsWith: 'Integrität ' } } });
     if (gutschein) await tx.coupon.deleteMany({ where: { organizationId: org, code: gutschein } });
   });
   await db.customer.deleteMany({ where: { email: { startsWith: `integritaet.gast.` } } });
@@ -142,6 +144,8 @@ before(async () => {
   S.buero = await leistung('buero', 'OFFICE_CLEANING', 55, 120, { basePrice: 40 });
   S.fenster = await leistung('fenster', 'OFFICE_CLEANING', 45, 60);
   S.klein = await leistung('klein', 'SPECIAL', 50, 60, { minPrice: 500 });
+  S.puffer = await leistung('puffer', 'OFFICE_CLEANING', 45, 60, { bufferMinutes: 60 });
+  S.quali = await leistung('quali', 'OFFICE_CLEANING', 45, 60, { requiredSkills: [QUALI] });
   zusatzId = (await db.serviceExtra.create({ data: { organizationId: org, slug: `integritaet-zusatz-${RUN}`, name: `Integritätszusatz ${RUN}`, price: 25, durationMin: 15 } })).id;
   await db.serviceExtraOnService.create({ data: { serviceId: S.buero, extraId: zusatzId } });
   kundeId = (
@@ -497,6 +501,188 @@ describe('Buchung → Rechnung, Gastbuchung, Terminänderung', { concurrency: 1 
         tage: 1,
       });
       assert.ok(!(data(k).tage[0]?.reason ?? '').includes('Pfingstmontag'), `${folgejahr} ist als Pfingstmontag gesperrt`);
+    });
+  });
+
+  /**
+   * A7 — Buchung und Einsatz bleiben deckungsgleich (Phase 17, 2026-09-27).
+   *
+   * Jede Prüfung hier war auf dem Stand davor rot: Eine Adresskorrektur
+   * erreichte den Einsatz nicht, eine Umbuchung setzte abwesende Personen
+   * ein und verschob laufende Einsätze, eine abgewiesene Bearbeitung
+   * hinterliess Adresse und Storno, der Puffer eines Einsatzes war der seiner
+   * ersten Leistung, und eine Leistung mit Qualifikation liess sich an einem
+   * Tag buchen, an dem sie niemand hat.
+   */
+  describe('A7 — Buchung und Einsatz bleiben deckungsgleich', () => {
+    const einsatzVon = async (bookingId: string) => db!.job.findFirstOrThrow({ where: { bookingId } });
+    const bestaetigen = async (bookingId: string) =>
+      assert.equal((await post(`/api/bookings/${bookingId}/confirm`, undefined, { jar: jars.admin })).status, 200);
+
+    it('eine reine Adresskorrektur erreicht den offenen Einsatz', async (t) => {
+      if (!db) return t.skip('keine Testdatenbank');
+      const id = await bueroBuchung([{ serviceId: S.fenster, extras: [] }], termin(250, '09:00'));
+      await bestaetigen(id);
+      const neu = await db.address.create({ data: { customerId: kundeId, street: 'Neufeldstrasse', streetNo: '3', postalCode: '3012', city: 'Bern' } });
+      const r = await call('PATCH', `/api/bookings/${id}`, { jar: jars.admin, body: { addressId: neu.id } });
+      assert.equal(r.status, 200, r.text);
+      assert.equal((await einsatzVon(id)).addressId, neu.id, 'der Einsatz zeigt noch auf die alte Adresse');
+    });
+
+    it('Umbuchen prüft die eingeteilten Personen am neuen Termin', async (t) => {
+      if (!db) return t.skip('keine Testdatenbank');
+      const anna = await db.employee.findFirst({ where: { organizationId: org, user: { email: 'anna.keller@clenaris.ch' } } });
+      if (!anna) return t.skip('keine Demo-Mitarbeiterin');
+      const id = await bueroBuchung([{ serviceId: S.fenster, extras: [] }], termin(257, '09:00'));
+      await bestaetigen(id);
+      const einsatz = await einsatzVon(id);
+      await db.jobAssignment.create({ data: { jobId: einsatz.id, employeeId: anna.id } });
+
+      const ziel = termin(264, '09:00');
+      const zielTag = new Date(ziel);
+      const abwesenheit = await db.absence.create({
+        data: {
+          employeeId: anna.id,
+          type: 'VACATION',
+          status: 'APPROVED',
+          startDate: new Date(zielTag.getTime() - 2 * 86_400_000),
+          endDate: new Date(zielTag.getTime() + 2 * 86_400_000),
+          days: 5,
+          reason: `Integrität ${RUN}`,
+        },
+      });
+      try {
+        const r = await post(`/api/bookings/${id}/reschedule`, { scheduledStart: ziel }, { jar: jars.admin });
+        assert.equal(r.status, 422, `Umbuchung in die Ferien der eingeteilten Person: ${r.text}`);
+        assert.equal((await einsatzVon(id)).scheduledStart.getTime(), einsatz.scheduledStart.getTime(), 'der Einsatz wurde trotzdem verschoben');
+      } finally {
+        await db.absence.delete({ where: { id: abwesenheit.id } });
+      }
+    });
+
+    it('ein begonnener Einsatz wird nicht umgeplant', async (t) => {
+      if (!db) return t.skip('keine Testdatenbank');
+      const id = await bueroBuchung([{ serviceId: S.fenster, extras: [] }], termin(271, '09:00'));
+      await bestaetigen(id);
+      const einsatz = await einsatzVon(id);
+      await db.job.update({ where: { id: einsatz.id }, data: { status: 'EN_ROUTE' } });
+      const bearbeitet = await call('PATCH', `/api/bookings/${id}`, { jar: jars.admin, body: { scheduledStart: termin(271, '11:00') } });
+      assert.equal(bearbeitet.status, 422, `Bearbeiten: ${bearbeitet.text}`);
+      const umgebucht = await post(`/api/bookings/${id}/reschedule`, { scheduledStart: termin(271, '11:00') }, { jar: jars.admin });
+      assert.equal(umgebucht.status, 422, `Umbuchen: ${umgebucht.text}`);
+      assert.equal((await einsatzVon(id)).scheduledStart.getTime(), einsatz.scheduledStart.getTime());
+      // Eine Notiz hält der laufende Einsatz nicht auf.
+      const notiz = await call('PATCH', `/api/bookings/${id}`, { jar: jars.admin, body: { internalNote: 'nur eine Notiz' } });
+      assert.equal(notiz.status, 200, notiz.text);
+    });
+
+    it('eine erledigte Buchung: Termin und Status fest, Notiz frei', async (t) => {
+      if (!db) return t.skip('keine Testdatenbank');
+      const id = await bueroBuchung([{ serviceId: S.fenster, extras: [] }], termin(278, '09:00'));
+      await db.booking.update({ where: { id }, data: { status: 'COMPLETED' } });
+      const termin2 = await call('PATCH', `/api/bookings/${id}`, { jar: jars.admin, body: { scheduledStart: termin(278, '13:00'), overrideCapacity: true } });
+      assert.equal(termin2.status, 422, `Termin einer erledigten Buchung: ${termin2.text}`);
+      const wieder = await call('PATCH', `/api/bookings/${id}`, { jar: jars.admin, body: { status: 'PENDING' } });
+      assert.equal(wieder.status, 422, `erledigt → offen: ${wieder.text}`);
+      const notiz = await call('PATCH', `/api/bookings/${id}`, { jar: jars.admin, body: { internalNote: 'Nachtrag' } });
+      assert.equal(notiz.status, 200, notiz.text);
+    });
+
+    it('eine abgewiesene Bearbeitung hinterlässt weder Adresse noch Storno', async (t) => {
+      if (!db) return t.skip('keine Testdatenbank');
+      const fremd = await db.property.findFirst({ where: { customerId: { not: kundeId }, customer: { organizationId: org } }, select: { id: true } });
+      if (!fremd) return t.skip('kein fremdes Objekt im Bestand');
+      const id = await bueroBuchung([{ serviceId: S.fenster, extras: [] }], termin(285, '09:00'));
+      const vorher = await db.address.count({ where: { customerId: kundeId } });
+
+      const mitAdresse = await call('PATCH', `/api/bookings/${id}`, {
+        jar: jars.admin,
+        body: { address: { ...adresse, street: 'Waisenhausplatz' }, propertyId: fremd.id },
+      });
+      assert.equal(mitAdresse.status, 404, mitAdresse.text);
+      assert.equal(await db.address.count({ where: { customerId: kundeId } }), vorher, 'eine Adresse ohne Auftrag blieb zurück');
+
+      const storno = await call('PATCH', `/api/bookings/${id}`, {
+        jar: jars.admin,
+        body: { status: 'CANCELLED', changeReason: 'Prüfung der Reihenfolge', propertyId: fremd.id },
+      });
+      assert.equal(storno.status, 404, storno.text);
+      assert.equal((await db.booking.findUniqueOrThrow({ where: { id } })).status, 'PENDING', 'storniert, obwohl die Bearbeitung abgewiesen wurde');
+    });
+
+    it('Puffer eines Einsatzes: der grösste seiner Leistungen, auch nach der Bestätigung', async (t) => {
+      if (!db) return t.skip('keine Testdatenbank');
+      // Ein Dienstag, an dem um 11 und um 12 Uhr jemand frei ist — das sagt der Kalender.
+      let offset = 292;
+      let c11 = 0;
+      let c12 = 0;
+      for (let versuch = 0; versuch < 6 && (c11 === 0 || c12 === 0); versuch += 1, offset += 7) {
+        const k = await post<{ data: { tage: { slots: { start: string; capacity: number }[] }[] } }>('/api/public/availability', {
+          leistungen: [{ serviceId: S.fenster, extras: [] }],
+          von: new Date(new Date(termin(offset, '12:00')).getTime() - 12 * 3_600_000).toISOString().slice(0, 10),
+          tage: 2,
+        });
+        const slots = data(k).tage.flatMap((d) => d.slots);
+        c11 = slots.find((s) => s.start === termin(offset, '11:00'))?.capacity ?? 0;
+        c12 = slots.find((s) => s.start === termin(offset, '12:00'))?.capacity ?? 0;
+      }
+      offset -= 7;
+      assert.ok(c11 >= 1 && c12 >= 1, `freie Personen um 11/12 Uhr: ${c11}/${c12}`);
+
+      // A: Fenster (ohne Puffer) + Grundreinigung (60 Min. Puffer), 09–11 Uhr, bindet alle um 11 Uhr Freien.
+      const a = await bueroBuchung([{ serviceId: S.fenster, extras: [] }, { serviceId: S.puffer, extras: [] }], termin(offset, '09:00'));
+      assert.equal((await call('PATCH', `/api/bookings/${a}`, { jar: jars.admin, body: { crewSize: c11, overrideCapacity: true } })).status, 200);
+      await bestaetigen(a);
+      const ende = (await db.booking.findUniqueOrThrow({ where: { id: a } })).scheduledEnd.toISOString();
+      assert.equal(ende, termin(offset, '11:00'), 'Dauer der Prüfbuchung');
+
+      const b = await bueroBuchung([{ serviceId: S.fenster, extras: [] }], termin(offset + 7, '09:00'));
+      const direktDanach = await call('PATCH', `/api/bookings/${b}`, { jar: jars.admin, body: { scheduledStart: termin(offset, '11:00') } });
+      assert.equal(direktDanach.status, 422, `um 11 Uhr hält der Puffer von A das Team noch: ${direktDanach.text}`);
+      const nachPuffer = await call('PATCH', `/api/bookings/${b}`, { jar: jars.admin, body: { scheduledStart: termin(offset, '12:00') } });
+      assert.equal(nachPuffer.status, 200, `um 12 Uhr ist der Puffer vorbei: ${nachPuffer.text}`);
+    });
+
+    it('eine Leistung mit Qualifikation: kein Termin, den niemand besetzen darf', async (t) => {
+      if (!db) return t.skip('keine Testdatenbank');
+      const kalender = async (serviceId: string) =>
+        data(
+          await post<{ data: { tage: { date: string; closed: boolean; reason?: string }[] } }>('/api/public/availability', {
+            leistungen: [{ serviceId, extras: [] }],
+            von: termin(20, '12:00').slice(0, 10),
+            tage: 7,
+          }),
+        ).tage;
+      const ohne = await kalender(S.fenster);
+      const mit = await kalender(S.quali);
+      const offen = ohne.filter((d) => !d.closed).map((d) => d.date);
+      assert.ok(offen.length > 0, 'keine offenen Tage zum Vergleichen');
+      for (const tag of mit.filter((d) => offen.includes(d.date))) {
+        assert.ok(tag.closed && (tag.reason ?? '').includes('Qualifikation'), `${tag.date} offen, obwohl niemand ${QUALI} hat`);
+      }
+
+      const r = await post<{ data: { id: string } }>('/api/bookings', {
+        customerId: kundeId,
+        leistungen: [{ serviceId: S.quali, extras: [] }],
+        scheduledStart: termin(20, '10:00'),
+        address: adresse,
+        propertyKind: 'OFFICE',
+        source: 'PHONE',
+      }, { jar: jars.admin });
+      if (r.status === 201) buchungen.push(data(r).id);
+      assert.equal(r.status, 422, `Büro ohne Übersteuerung: ${r.text}`);
+    });
+
+    it('der Ort einer Adresse mit abgeschlossenem Auftrag bleibt; Bezeichnung frei', async (t) => {
+      if (!db) return t.skip('keine Testdatenbank');
+      const alt = await db.address.create({ data: { customerId: kundeId, street: 'Bollwerk', streetNo: '15', postalCode: '3011', city: 'Bern' } });
+      const id = await bueroBuchung([{ serviceId: S.fenster, extras: [] }], termin(299, '09:00'), { addressId: alt.id, address: undefined });
+      await db.booking.update({ where: { id }, data: { status: 'COMPLETED' } });
+      const ort = await call('PATCH', `/api/customers/${kundeId}/addresses/${alt.id}`, { jar: jars.admin, body: { street: 'Spitalgasse' } });
+      assert.equal(ort.status, 422, `Strasse einer belegten Adresse: ${ort.text}`);
+      assert.equal((await db.address.findUniqueOrThrow({ where: { id: alt.id } })).street, 'Bollwerk');
+      const name = await call('PATCH', `/api/customers/${kundeId}/addresses/${alt.id}`, { jar: jars.admin, body: { label: 'Früheres Büro' } });
+      assert.equal(name.status, 200, name.text);
     });
   });
 });

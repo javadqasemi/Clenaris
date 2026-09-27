@@ -90,12 +90,14 @@ async function ladeZeitraum(
   von: string,
   tage: number,
   ausnahmen: { buchungId?: string | null } = {},
+  anforderung?: Qualifikationsanforderung,
 ): Promise<Tagesdaten[]> {
   const bis = naechsterTag(von, tage - 1);
   const zeitraumStart = zurichZuUtc(von, '00:00');
   const zeitraumEnde = zurichZuUtc(naechsterTag(bis), '00:00');
+  const verlangt = [...new Set((anforderung?.qualifikationen ?? []).map((s) => s.trim().toLowerCase()).filter(Boolean))];
 
-  const [zeiten, feiertage, personal, abwesenheiten, einsaetze, buchungen] = await Promise.all([
+  const [zeiten, feiertage, personal, abwesenheiten, einsaetze, buchungen, faehigkeiten] = await Promise.all([
     db.openingHours.findMany({ where: { organizationId } }),
     db.holiday.findMany({
       where: {
@@ -128,7 +130,13 @@ async function ladeZeitraum(
         scheduledEnd: { gt: zeitraumStart },
         ...(ausnahmen.buchungId ? { OR: [{ bookingId: null }, { bookingId: { not: ausnahmen.buchungId } }] } : {}),
       },
-      select: { scheduledStart: true, scheduledEnd: true, crewSize: true, service: { select: { bufferMinutes: true } } },
+      select: {
+        scheduledStart: true,
+        scheduledEnd: true,
+        crewSize: true,
+        service: { select: { bufferMinutes: true } },
+        booking: { select: { items: { select: { service: { select: { bufferMinutes: true } } } } } },
+      },
     }),
     /**
      * Unbestätigte Buchungen binden ihr Team schon jetzt. Ihr Einsatz entsteht
@@ -150,10 +158,31 @@ async function ladeZeitraum(
       },
       select: { scheduledStart: true, scheduledEnd: true, crewSize: true, items: { select: { service: { select: { bufferMinutes: true } } } } },
     }),
+    verlangt.length > 0
+      ? db.employeeSkill.findMany({
+          where: { employee: activeStaffWhere(organizationId) },
+          select: { employeeId: true, name: true, certifiedUntil: true },
+        })
+      : Promise.resolve([]),
   ]);
 
   const belegungen: Belegung[] = [
-    ...einsaetze.map((j) => ({ start: j.scheduledStart, ende: j.scheduledEnd, crew: j.crewSize, pufferMin: j.service?.bufferMinutes ?? 0 })),
+    /**
+     * Puffer eines Einsatzes: der grösste seiner Leistungen (2026-09-27).
+     *
+     * Bis hierher zählte nur `Job.service` — die *erste* Leistung, weil das
+     * Feld einwertig ist (siehe `createJobsForBooking`). Eine Buchung aus
+     * Büroreinigung (15 Min. Puffer) und Grundreinigung (60 Min.) hielt vor
+     * der Bestätigung 60 Minuten frei, danach nur noch 15: Die Bestätigung
+     * gab Kapazität frei, die es nicht gab. Jetzt rechnet der Einsatz
+     * dieselbe Grösse wie seine Buchung, nämlich das Maximum.
+     */
+    ...einsaetze.map((j) => ({
+      start: j.scheduledStart,
+      ende: j.scheduledEnd,
+      crew: j.crewSize,
+      pufferMin: Math.max(0, j.service?.bufferMinutes ?? 0, ...(j.booking?.items ?? []).map((i) => i.service.bufferMinutes)),
+    })),
     ...buchungen.map((b) => ({
       start: b.scheduledStart,
       ende: b.scheduledEnd,
@@ -172,34 +201,102 @@ async function ladeZeitraum(
       return d === datum || (f.recurring && d.slice(5) === datum.slice(5));
     });
     const zeile = zeiten.find((z) => z.weekday === wt) ?? null;
-    const fenster = feiertag ? null : einsatzfenster(zeile);
+    let fenster = feiertag ? null : einsatzfenster(zeile);
+    let grund = feiertag ? `Feiertag: ${feiertag.name}` : fenster ? undefined : 'An diesem Tag finden keine Einsätze statt.';
     const tagStart = zurichZuUtc(datum, '00:00');
     const tagEnde = zurichZuUtc(naechsterTag(datum), '00:00');
+
+    const personen = personal.map((p) => ({
+      id: p.id,
+      fenster: p.availability.length
+        ? p.availability.filter((a) => a.weekday === wt).map((a) => ({ von: a.startTime, bis: a.endTime }))
+        : null,
+      // Personen, nicht Zeilen: Zwei Einträge derselben Person am selben
+      // Tag machen sie nicht zweimal abwesend. Ein halber Tag zählt als
+      // ganzer — ob Vor- oder Nachmittag, steht nirgends.
+      abwesend: abwesenheiten.some(
+        (a) =>
+          a.employeeId === p.id &&
+          a.startDate.toISOString().slice(0, 10) <= datum &&
+          a.endDate.toISOString().slice(0, 10) >= datum,
+      ),
+    }));
+
+    /**
+     * Genug qualifizierte Leute an diesem Tag? (2026-09-27)
+     *
+     * Die Kapazität zählte Köpfe. Eine Leistung, die eine Qualifikation
+     * verlangt (`Service.requiredSkills`), liess sich deshalb an einem Tag
+     * buchen, an dem niemand mit dieser Qualifikation arbeitet — die Buchung
+     * ging durch, und die Zuteilung (`assignment.service.ts`) wies danach
+     * jede Person ab. Ein zugesagter Termin, den niemand besetzen darf.
+     *
+     * Bewusst die kleinste richtige Regel: Es müssen mindestens so viele
+     * anwesende Personen mit allen verlangten Qualifikationen (gültig am
+     * Einsatztag) existieren, wie das Team gross ist. Welche davon zur
+     * gewählten Uhrzeit schon anderswo eingeteilt sind, rechnet die
+     * Kopfzählung weiter pauschal — eine Zuordnung Person ↔ Belegung gibt es
+     * vor der Disposition nicht, und sie zu erfinden wäre eine Genauigkeit,
+     * die das Modell nicht hat. Ein Tag ohne ausreichend Qualifizierte ist
+     * deshalb geschlossen, mit Begründung, im Kalender wie beim Abschluss.
+     */
+    if (fenster && anforderung && verlangt.length > 0) {
+      const qualifiziert = personen.filter((p) => {
+        if (p.abwesend) return false;
+        const kann = new Set(
+          faehigkeiten
+            .filter((f) => f.employeeId === p.id && (!f.certifiedUntil || f.certifiedUntil.toISOString().slice(0, 10) >= datum))
+            .map((f) => f.name.trim().toLowerCase()),
+        );
+        return verlangt.every((s) => kann.has(s));
+      }).length;
+      if (qualifiziert < anforderung.crew) {
+        fenster = null;
+        grund = 'An diesem Tag ist nicht genug Personal mit der verlangten Qualifikation eingeplant.';
+      }
+    }
 
     ergebnis.push({
       datum,
       fenster,
-      grund: feiertag ? `Feiertag: ${feiertag.name}` : fenster ? undefined : 'An diesem Tag finden keine Einsätze statt.',
+      grund,
       arbeitszeitenGepflegt,
-      personen: personal.map((p) => ({
-        id: p.id,
-        fenster: p.availability.length
-          ? p.availability.filter((a) => a.weekday === wt).map((a) => ({ von: a.startTime, bis: a.endTime }))
-          : null,
-        // Personen, nicht Zeilen: Zwei Einträge derselben Person am selben
-        // Tag machen sie nicht zweimal abwesend. Ein halber Tag zählt als
-        // ganzer — ob Vor- oder Nachmittag, steht nirgends.
-        abwesend: abwesenheiten.some(
-          (a) =>
-            a.employeeId === p.id &&
-            a.startDate.toISOString().slice(0, 10) <= datum &&
-            a.endDate.toISOString().slice(0, 10) >= datum,
-        ),
-      })),
+      personen,
       belegungen: belegungen.filter((b) => b.start < tagEnde && b.ende.getTime() + b.pufferMin * 60_000 > tagStart.getTime()),
     });
   }
   return ergebnis;
+}
+
+/** Was eine Auswahl an Personal verlangt — siehe den Qualifikationsabschnitt in `ladeZeitraum`. */
+export interface Qualifikationsanforderung {
+  qualifikationen: string[];
+  crew: number;
+}
+
+/**
+ * Puffer und Qualifikationen einer Leistungsauswahl, aus dem Katalog.
+ *
+ * Eine Stelle für beide Grössen, weil sie dieselbe Frage beantworten („was
+ * bindet diese Auswahl?") und bis 2026-09-27 an drei Stellen je anders
+ * berechnet wurden: das Anlegen nahm die Preis-Engine, das Bearbeiten eine
+ * eigene Abfrage, das Verschieben gar nichts.
+ */
+export async function leistungsbedarf(
+  db: Db,
+  organizationId: string,
+  serviceIds: string[],
+): Promise<{ pufferMin: number; qualifikationen: string[] }> {
+  const ids = [...new Set(serviceIds)];
+  if (ids.length === 0) return { pufferMin: 0, qualifikationen: [] };
+  const leistungen = await db.service.findMany({
+    where: { id: { in: ids }, organizationId },
+    select: { bufferMinutes: true, requiredSkills: true },
+  });
+  return {
+    pufferMin: Math.max(0, ...leistungen.map((l) => l.bufferMinutes)),
+    qualifikationen: [...new Set(leistungen.flatMap((l) => l.requiredSkills))],
+  };
 }
 
 /**
@@ -233,6 +330,8 @@ export interface AvailabilityParams {
   durationMin: number;
   crewSize: number;
   bufferMin?: number;
+  /** Verlangte Qualifikationen der Auswahl (`leistungsbedarf`). */
+  qualifikationen?: string[];
 }
 
 /** Die Zeitfenster eines Tages — für die bestehende Einzeltag-Abfrage. */
@@ -254,9 +353,13 @@ export async function getAvailableDays(params: {
   durationMin: number;
   crewSize: number;
   bufferMin?: number;
+  qualifikationen?: string[];
 }) {
   const [tage, g] = await Promise.all([
-    ladeZeitraum(prisma, params.organizationId, params.von, params.tage),
+    ladeZeitraum(prisma, params.organizationId, params.von, params.tage, {}, {
+      qualifikationen: params.qualifikationen ?? [],
+      crew: params.crewSize,
+    }),
     grenzen(prisma, params.organizationId, 'oeffentlich'),
   ]);
   const anfrage: Anfrage = {
@@ -286,12 +389,17 @@ export async function isSlotBookable(params: {
   kanal?: 'oeffentlich' | 'buero';
   /** Beim Verschieben: die eigene Buchung (und ihre Einsätze) nicht als Belegung zählen. */
   ohneBuchungId?: string | null;
+  /** Verlangte Qualifikationen der Auswahl (`leistungsbedarf`). */
+  qualifikationen?: string[];
   db?: Db;
 }): Promise<{ ok: boolean; reason?: string }> {
   const db = params.db ?? prisma;
   const datum = zurichDatum(params.start);
   const [[tag], g] = await Promise.all([
-    ladeZeitraum(db, params.organizationId, datum, 1, { buchungId: params.ohneBuchungId }),
+    ladeZeitraum(db, params.organizationId, datum, 1, { buchungId: params.ohneBuchungId }, {
+      qualifikationen: params.qualifikationen ?? [],
+      crew: params.crewSize,
+    }),
     grenzen(db, params.organizationId, params.kanal ?? 'oeffentlich'),
   ]);
   if (!tag!.fenster) return { ok: false, reason: tag!.grund ?? ABLEHNUNGSTEXT.GESCHLOSSEN };

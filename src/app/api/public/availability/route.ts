@@ -3,7 +3,8 @@ import { ok } from '@/lib/api/response';
 import { estimateBookingEffort } from '@/lib/pricing/engine';
 import { verfuegbarkeitAnfrageSchema } from '@/lib/validation/booking';
 import { availabilityCheckQuery } from '@/lib/validation/queries';
-import { getAvailableDays, getAvailableSlots } from '@/server/services/availability.service';
+import { prisma } from '@/lib/db';
+import { getAvailableDays, getAvailableSlots, leistungsbedarf } from '@/server/services/availability.service';
 import { getOrganizationId } from '@/server/services/organization.service';
 
 export const runtime = 'nodejs';
@@ -23,10 +24,13 @@ export const GET = definePublicRoute({
   rateLimit: 'apiRead',
   handler: async ({ query }) => {
     const organizationId = await getOrganizationId();
-    const aufwand = await estimateBookingEffort(
-      { leistungen: [{ serviceId: query.serviceId, squareMeters: query.squareMeters ?? null, extras: [] }] },
-      organizationId,
-    );
+    const [aufwand, bedarf] = await Promise.all([
+      estimateBookingEffort(
+        { leistungen: [{ serviceId: query.serviceId, squareMeters: query.squareMeters ?? null, extras: [] }] },
+        organizationId,
+      ),
+      leistungsbedarf(prisma, organizationId, [query.serviceId]),
+    ]);
 
     return ok(
       await getAvailableSlots({
@@ -35,6 +39,7 @@ export const GET = definePublicRoute({
         durationMin: query.durationMin ?? aufwand.durationMinutes,
         crewSize: query.crewSize ?? aufwand.crewSize,
         bufferMin: aufwand.bufferMinutes,
+        qualifikationen: bedarf.qualifikationen,
       }),
     );
   },
@@ -57,7 +62,10 @@ export const POST = definePublicRoute({
   rateLimit: 'apiRead',
   handler: async ({ body }) => {
     const organizationId = await getOrganizationId();
-    const aufwand = await estimateBookingEffort({ leistungen: body.leistungen, hasPets: body.hasPets }, organizationId);
+    const [aufwand, bedarf] = await Promise.all([
+      estimateBookingEffort({ leistungen: body.leistungen, hasPets: body.hasPets }, organizationId),
+      leistungsbedarf(prisma, organizationId, body.leistungen.map((l) => l.serviceId)),
+    ]);
     const tage = await getAvailableDays({
       organizationId,
       von: body.von,
@@ -65,6 +73,7 @@ export const POST = definePublicRoute({
       durationMin: aufwand.durationMinutes,
       crewSize: aufwand.crewSize,
       bufferMin: aufwand.bufferMinutes,
+      qualifikationen: bedarf.qualifikationen,
     });
     return ok({ dauerMin: aufwand.durationMinutes, crew: aufwand.crewSize, tage });
   },

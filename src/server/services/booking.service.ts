@@ -27,7 +27,8 @@ import { logger } from '@/lib/logger';
 import { renderBookingConfirmationPdf } from '@/lib/pdf/render';
 
 import { nextNumber } from './numbering.service';
-import { invalidateAvailability, isSlotBookable } from './availability.service';
+import { invalidateAvailability, isSlotBookable, leistungsbedarf } from './availability.service';
+import { assertAssignable } from './assignment.service';
 import { notify, notifyStaff } from './notification.service';
 import { createJobsForBooking } from './job.service';
 import { dateienBinden } from './file.service';
@@ -197,12 +198,14 @@ export async function createBooking(params: {
      */
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`buchung:${organizationId}`}))`;
     if (!office?.overrideCapacity) {
+      const bedarf = await leistungsbedarf(tx, organizationId, leistungen.map((l) => l.serviceId));
       const slotCheck = await isSlotBookable({
         organizationId,
         start: input.scheduledStart,
         durationMin: breakdown.durationMinutes,
         crewSize: breakdown.crewSize,
         bufferMin: breakdown.bufferMinutes,
+        qualifikationen: bedarf.qualifikationen,
         kanal: office ? 'buero' : 'oeffentlich',
         db: tx,
       });
@@ -703,7 +706,7 @@ export async function rescheduleBooking(params: {
   });
   if (!booking) throw new NotFoundError('Buchung');
 
-  if (['CANCELLED', 'COMPLETED', 'IN_PROGRESS'].includes(booking.status)) {
+  if (['CANCELLED', 'COMPLETED', 'IN_PROGRESS', 'NO_SHOW'].includes(booking.status)) {
     throw new BusinessRuleError('Diese Buchung kann nicht mehr verschoben werden.');
   }
 
@@ -725,11 +728,20 @@ export async function rescheduleBooking(params: {
      * innerhalb seiner eigenen Belegung umstellen.
      */
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`buchung:${params.organizationId}`}))`;
+    /*
+      Puffer und Qualifikationen der Leistungen gehören zur Prüfung wie beim
+      Anlegen. Bis 2026-09-27 fehlten beide: Die Umbuchung prüfte ohne
+      Puffer, und ein Termin direkt hinter einem anderen Einsatz ging durch,
+      den die Buchung selbst nie angeboten hätte.
+    */
+    const bedarf = await leistungsbedarf(tx, params.organizationId, booking.items.map((i) => i.serviceId));
     const check = await isSlotBookable({
       organizationId: params.organizationId,
       start: params.newStart,
       durationMin: booking.durationMin,
       crewSize: booking.crewSize,
+      bufferMin: bedarf.pufferMin,
+      qualifikationen: bedarf.qualifikationen,
       kanal: params.byStaff ? 'buero' : 'oeffentlich',
       ohneBuchungId: booking.id,
       db: tx,
@@ -747,9 +759,12 @@ export async function rescheduleBooking(params: {
       },
     });
 
-    await tx.job.updateMany({
-      where: { bookingId: booking.id, status: { notIn: ['COMPLETED', 'VERIFIED', 'CANCELLED'] } },
-      data: { scheduledStart: params.newStart, scheduledEnd: newEnd },
+    await einsaetzeNachfuehren(tx, {
+      organizationId: params.organizationId,
+      bookingId: booking.id,
+      daten: { scheduledStart: params.newStart, scheduledEnd: newEnd },
+      zuteilungPruefen: true,
+      zeitOderOrt: true,
     });
 
     return result;
@@ -791,6 +806,90 @@ export async function rescheduleBooking(params: {
   });
 
   return updated;
+}
+
+/**
+ * Einsatzstatus, in denen ein Einsatz der Buchung noch folgt.
+ *
+ * Bis 2026-09-27 folgten alle nicht abgeschlossenen — auch `EN_ROUTE` und
+ * `IN_PROGRESS`. Eine Umbuchung auf morgen, während das Team schon vor der
+ * Tür steht, verschob dessen laufenden Einsatz mit: Zeiterfassung und
+ * Rapport hingen danach an einem Termin, der noch nicht war. Was begonnen
+ * hat, ist Geschehen und wird nicht umgeplant; die Buchung selbst lässt
+ * sich dann nicht mehr verschieben.
+ */
+const EINSATZ_FOLGT = ['UNASSIGNED', 'SCHEDULED', 'DISPATCHED'] as const;
+const EINSATZ_ABGESCHLOSSEN = ['COMPLETED', 'VERIFIED', 'CANCELLED'] as const;
+
+/**
+ * Die offenen Einsätze einer Buchung nachführen — eine Stelle für
+ * Verschieben und Bearbeiten (2026-09-27).
+ *
+ * Vorher führte jede der beiden Funktionen die Einsätze mit einem eigenen
+ * `updateMany` nach, und beide vergassen dasselbe: Die eingeteilten Personen
+ * wurden am neuen Termin nicht geprüft. Wer um 14 Uhr frei war, war es um
+ * 9 Uhr vielleicht nicht — Ferien, ein anderer Einsatz, eine abgelaufene
+ * Qualifikation —, und die Umbuchung setzte ihn trotzdem dort ein. Jetzt
+ * läuft für jeden besetzten Einsatz dieselbe Prüfung wie bei der Zuteilung
+ * (`assertAssignable`), in derselben Transaktion; scheitert sie, scheitert
+ * die Änderung mit der Begründung, und die Disposition entscheidet.
+ *
+ * Ein Einsatz, der schon begonnen hat, wird nicht angefasst — und wenn die
+ * Änderung ihn beträfe (Termin, Adresse), wird sie abgewiesen, statt ihn
+ * stillschweigend zurückzulassen.
+ */
+async function einsaetzeNachfuehren(
+  tx: Tx,
+  params: {
+    organizationId: string;
+    bookingId: string;
+    daten: Prisma.JobUncheckedUpdateInput;
+    /** Termin, Team oder Qualifikationen geändert — dann Personen neu prüfen. */
+    zuteilungPruefen: boolean;
+    /**
+     * Betrifft die Änderung Zeit oder Ort? Dann darf kein Einsatz begonnen
+     * haben. Eine blosse Notiz dagegen erreicht die begonnenen nicht und
+     * hält die übrigen nicht auf.
+     */
+    zeitOderOrt: boolean;
+  },
+): Promise<void> {
+  const einsaetze = await tx.job.findMany({
+    where: { bookingId: params.bookingId, deletedAt: null, status: { notIn: [...EINSATZ_ABGESCHLOSSEN] } },
+    select: {
+      id: true,
+      number: true,
+      status: true,
+      scheduledStart: true,
+      scheduledEnd: true,
+      requiredSkills: true,
+      assignments: { select: { employeeId: true } },
+    },
+  });
+  if (einsaetze.length === 0) return;
+
+  const folgt = (e: { status: string }) => (EINSATZ_FOLGT as readonly string[]).includes(e.status);
+  const begonnen = einsaetze.filter((e) => !folgt(e));
+  if (begonnen.length > 0 && params.zeitOderOrt) {
+    throw new BusinessRuleError(
+      `Der Einsatz ${begonnen.map((e) => e.number).join(', ')} hat bereits begonnen; Termin und Einsatzort lassen sich deshalb nicht mehr ändern. ` +
+        'Schliessen Sie ihn ab oder brechen Sie ihn in der Disposition ab.',
+    );
+  }
+
+  for (const einsatz of einsaetze.filter(folgt)) {
+    const neu = await tx.job.update({ where: { id: einsatz.id }, data: params.daten });
+    if (params.zuteilungPruefen && einsatz.assignments.length > 0) {
+      await assertAssignable(tx, {
+        organizationId: params.organizationId,
+        employeeIds: einsatz.assignments.map((a) => a.employeeId),
+        scheduledStart: neu.scheduledStart,
+        scheduledEnd: neu.scheduledEnd,
+        ignoreJobId: einsatz.id,
+        requiredSkills: neu.requiredSkills,
+      });
+    }
+  }
 }
 
 /**
@@ -858,28 +957,65 @@ export async function updateBooking(params: {
   const { input } = params;
   assertFieldPermissions(input, params.actorRole);
 
-  // --- Statuswechsel mit Nebenwirkungen zuerst -------------------------------
-  if (input.status && input.status !== booking.status) {
-    if (input.status === 'CANCELLED') {
-      if (!input.changeReason || input.changeReason.trim().length < 3) {
-        throw new BusinessRuleError(
-          'Bitte begründen Sie den Storno — die Begründung geht an die Kundschaft.',
-        );
-      }
-      await cancelBooking({
-        organizationId: params.organizationId,
-        bookingId: booking.id,
-        reason: input.changeReason,
-        actorId: params.actorId,
-        byStaff: true,
-      });
-    } else if (input.status === 'CONFIRMED') {
-      await confirmBooking({
-        organizationId: params.organizationId,
-        bookingId: booking.id,
-        actorId: params.actorId,
-      });
+  /**
+   * Was an einer erledigten Buchung noch geändert werden darf (2026-09-27).
+   *
+   * Bis hierher nahm die Maske jede Änderung an, auch an einer stornierten
+   * oder abgeschlossenen Buchung: Termin, Adresse, Kundschaft, Status. Eine
+   * abgeschlossene Buchung, deren Termin nachträglich verschoben wird,
+   * erzählt danach eine andere Geschichte als ihr Rapport und ihre
+   * Zeiterfassung; eine stornierte liess sich per Statusfeld wieder auf
+   * „offen" stellen, ohne dass ihre abgesagten Einsätze zurückkamen.
+   *
+   * Notizen, Objektangaben und — mit Preisrecht — Positionen bleiben
+   * änderbar: Eine Korrektur vor der Rechnung ist ein normaler Vorgang.
+   */
+  const erledigt = ['CANCELLED', 'COMPLETED', 'NO_SHOW'].includes(booking.status);
+  if (erledigt) {
+    const gesperrt = (
+      [
+        ['scheduledStart', 'Termin'],
+        ['durationMin', 'Dauer'],
+        ['crewSize', 'Teamgrösse'],
+        ['addressId', 'Adresse'],
+        ['address', 'Adresse'],
+        ['propertyId', 'Objekt'],
+        ['customerId', 'Kundschaft'],
+        ['frequency', 'Rhythmus'],
+      ] as const
+    ).filter(([feld]) => {
+      const wert = input[feld];
+      if (wert === undefined) return false;
+      if (feld === 'scheduledStart') return (wert as Date).getTime() !== booking.scheduledStart.getTime();
+      if (feld === 'address') return true;
+      return String(wert ?? '') !== String((booking as Record<string, unknown>)[feld] ?? '');
+    });
+    const statusWechsel = input.status !== undefined && input.status !== booking.status;
+    if (gesperrt.length > 0 || statusWechsel) {
+      const was = [...new Set(gesperrt.map(([, name]) => name)), ...(statusWechsel ? ['Status'] : [])];
+      throw new BusinessRuleError(
+        `Diese Buchung ist ${booking.status === 'CANCELLED' ? 'storniert' : 'erledigt'}; ${was.join(', ')} lassen sich nicht mehr ändern. ` +
+          'Für einen neuen Termin legen Sie eine neue Buchung an.',
+      );
     }
+  }
+
+  /**
+   * Statuswechsel mit Nebenwirkungen: erst prüfen, **nach** allem anderen
+   * ausführen (2026-09-27).
+   *
+   * Vorher lief Storno bzw. Bestätigung als Erstes — mit eigener Transaktion,
+   * eigener Mitteilung an die Kundschaft und eigenem Prüfprotokoll. Scheiterte
+   * danach die übrige Änderung (Kapazität, fremde Adresse, fehlende
+   * Berechtigung), antwortete die Maske mit einem Fehler, die Kundschaft hatte
+   * aber schon die Stornomitteilung. Jetzt werden die Voraussetzungen vorab
+   * geprüft, die Felder in einer Transaktion geschrieben, und erst danach
+   * folgt der Wechsel — auf die dann schon aktualisierte Buchung, sodass eine
+   * Bestätigung die Einsätze mit dem neuen Termin anlegt.
+   */
+  const statusWechsel = input.status && input.status !== booking.status ? input.status : null;
+  if (statusWechsel === 'CANCELLED' && (!input.changeReason || input.changeReason.trim().length < 3)) {
+    throw new BusinessRuleError('Bitte begründen Sie den Storno — die Begründung geht an die Kundschaft.');
   }
 
   const data: Prisma.BookingUpdateInput = {};
@@ -957,26 +1093,15 @@ export async function updateBooking(params: {
     if (!address) throw new NotFoundError('Adresse');
     track('addressId', booking.addressId, input.addressId);
     data.address = { connect: { id: input.addressId } };
-  } else if (input.address) {
-    const created = await prisma.address.create({
-      data: {
-        customerId: customerIdAfter,
-        label: input.address.label ?? 'Einsatzadresse',
-        street: input.address.street,
-        streetNo: input.address.streetNo ?? null,
-        addition: input.address.addition ?? null,
-        postalCode: input.address.postalCode,
-        city: input.address.city,
-        canton: input.address.canton,
-        country: input.address.country,
-        lat: input.address.lat ?? null,
-        lng: input.address.lng ?? null,
-        placeId: input.address.placeId ?? null,
-      },
-    });
-    track('addressId', booking.addressId, created.id);
-    data.address = { connect: { id: created.id } };
   }
+  /*
+    Eine neu erfasste Adresse entsteht in der Transaktion unten, nicht hier
+    (2026-09-27). Vorher wurde sie vor allen weiteren Prüfungen angelegt;
+    scheiterte danach die Kapazität oder ein fremder Objektbezug, blieb eine
+    Adresse ohne Auftrag in der Akte der Kundschaft zurück — bei jedem
+    erneuten Versuch eine weitere.
+  */
+  const neueAdresse = !input.addressId || input.addressId === booking.addressId ? input.address : undefined;
 
   if (input.propertyId !== undefined) {
     // Dieselbe Regel wie für die Adresse zwei Absätze weiter oben — und bis
@@ -1083,26 +1208,44 @@ export async function updateBooking(params: {
    * ist wie beim Anlegen an Vorlauf und Horizont nicht gebunden und kann die
    * Kapazitätsprüfung ausdrücklich übergehen — das steht dann im Protokoll.
    */
-  const statusDanach = input.status && !['CANCELLED', 'CONFIRMED'].includes(input.status) ? input.status : booking.status;
+  // Nach dem Wechsel gemeint — ein Storno bindet keine Kapazität mehr, eine
+  // Bestätigung schon (bis 2026-09-27 zählte hier der alte Status).
+  const statusDanach = input.status ?? booking.status;
   const verfuegbarkeitBetroffen =
     Boolean(data.scheduledStart || data.durationMin || data.crewSize || input.items) &&
     ['DRAFT', 'PENDING', 'CONFIRMED'].includes(statusDanach);
-  const pufferMin = verfuegbarkeitBetroffen
-    ? Math.max(
-        0,
-        ...(
-          await prisma.service.findMany({
-            where: {
-              id: { in: (input.items ?? booking.items).map((i) => i.serviceId) },
-              organizationId: params.organizationId,
-            },
-            select: { bufferMinutes: true },
-          })
-        ).map((s) => s.bufferMinutes),
-      )
-    : 0;
+  const bedarf = await leistungsbedarf(
+    prisma,
+    params.organizationId,
+    (input.items ?? booking.items).map((i) => i.serviceId),
+  );
+
+  if (statusWechsel === 'CONFIRMED' && ['CANCELLED', 'COMPLETED'].includes(booking.status)) {
+    throw new BusinessRuleError('Diese Buchung kann nicht mehr bestätigt werden.');
+  }
 
   const updated = await prisma.$transaction(async (tx) => {
+    if (neueAdresse) {
+      const created = await tx.address.create({
+        data: {
+          customerId: customerIdAfter,
+          label: neueAdresse.label ?? 'Einsatzadresse',
+          street: neueAdresse.street,
+          streetNo: neueAdresse.streetNo ?? null,
+          addition: neueAdresse.addition ?? null,
+          postalCode: neueAdresse.postalCode,
+          city: neueAdresse.city,
+          canton: neueAdresse.canton,
+          country: neueAdresse.country,
+          lat: neueAdresse.lat ?? null,
+          lng: neueAdresse.lng ?? null,
+          placeId: neueAdresse.placeId ?? null,
+        },
+      });
+      track('addressId', booking.addressId, created.id);
+      data.address = { connect: { id: created.id } };
+    }
+
     if (verfuegbarkeitBetroffen && !input.overrideCapacity) {
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`buchung:${params.organizationId}`}))`;
       const start = (data.scheduledStart as Date | undefined) ?? booking.scheduledStart;
@@ -1111,7 +1254,8 @@ export async function updateBooking(params: {
         start,
         durationMin: (data.durationMin as number | undefined) ?? booking.durationMin,
         crewSize: (data.crewSize as number | undefined) ?? booking.crewSize,
-        bufferMin: pufferMin,
+        bufferMin: bedarf.pufferMin,
+        qualifikationen: bedarf.qualifikationen,
         kanal: 'buero',
         ohneBuchungId: booking.id,
         db: tx,
@@ -1163,26 +1307,49 @@ export async function updateBooking(params: {
         ? await tx.booking.update({ where: { id: booking.id }, data })
         : await tx.booking.findUniqueOrThrow({ where: { id: booking.id } });
 
-    // Termin- und Teamänderungen an die noch offenen Einsätze weiterreichen —
-    // ein Einsatz, der auf den alten Termin zeigt, führt das Team an die
-    // falsche Tür.
-    if (data.scheduledStart || data.crewSize) {
+    /**
+     * Was die offenen Einsätze wissen müssen, an sie weiterreichen.
+     *
+     * Bis 2026-09-27 nur bei Termin- oder Teamänderung — und die Adresse
+     * ritt nur mit, wenn gleichzeitig der Termin geändert wurde. Eine
+     * reine Adresskorrektur liess den Einsatz auf die alte Tür zeigen; ein
+     * Wechsel von Kundschaft, Objekt oder Leistungen erreichte ihn nie, und
+     * die Qualifikationen des Einsatzes blieben die der alten Leistungen.
+     */
+    const terminNeu = Boolean(data.scheduledStart || data.durationMin);
+    const einsatzDaten = {
+      ...(terminNeu
+        ? { scheduledStart: result.scheduledStart, scheduledEnd: result.scheduledEnd, estimatedMin: result.durationMin }
+        : {}),
+      ...(data.crewSize ? { crewSize: result.crewSize } : {}),
+      ...(data.address ? { addressId: result.addressId } : {}),
+      ...(data.property ? { propertyId: result.propertyId } : {}),
+      ...(data.customer ? { customerId: result.customerId } : {}),
+      ...(input.customerNote !== undefined ? { customerNote: result.customerNote } : {}),
+      ...(input.items
+        ? { requiredSkills: bedarf.qualifikationen, serviceId: input.items[0]?.serviceId ?? null }
+        : {}),
+    };
+    if (Object.keys(einsatzDaten).length > 0) {
+      await einsaetzeNachfuehren(tx, {
+        organizationId: params.organizationId,
+        bookingId: booking.id,
+        daten: einsatzDaten,
+        zuteilungPruefen: terminNeu || Boolean(input.items),
+        zeitOderOrt: terminNeu || Boolean(data.address || data.property || data.customer),
+      });
+    }
+
+    /*
+      Der Zugangshinweis wurde beim Anlegen des Einsatzes in dessen interne
+      Notiz übernommen. Nachgeführt wird er nur, wo die Disposition diese
+      Notiz seither nicht selbst geändert hat — sonst überschriebe die
+      Buchungsmaske eine Anweisung ans Team.
+    */
+    if (input.accessNote !== undefined && (input.accessNote ?? null) !== booking.accessNote) {
       await tx.job.updateMany({
-        where: {
-          bookingId: booking.id,
-          status: { notIn: ['COMPLETED', 'VERIFIED', 'CANCELLED'] },
-        },
-        data: {
-          ...(data.scheduledStart
-            ? {
-                scheduledStart: result.scheduledStart,
-                scheduledEnd: result.scheduledEnd,
-                estimatedMin: result.durationMin,
-              }
-            : {}),
-          ...(data.crewSize ? { crewSize: result.crewSize } : {}),
-          ...(data.address ? { addressId: result.addressId } : {}),
-        },
+        where: { bookingId: booking.id, deletedAt: null, status: { in: [...EINSATZ_FOLGT] }, internalNote: booking.accessNote },
+        data: { internalNote: input.accessNote ?? null },
       });
     }
 
@@ -1225,6 +1392,20 @@ export async function updateBooking(params: {
       (verfuegbarkeitBetroffen && input.overrideCapacity ? ' — Kapazitätsprüfung übergangen' : ''),
     changes,
   });
+
+  // Der Wechsel zuletzt — siehe den Abschnitt „Statuswechsel" oben.
+  if (statusWechsel === 'CANCELLED') {
+    return cancelBooking({
+      organizationId: params.organizationId,
+      bookingId: booking.id,
+      reason: input.changeReason!,
+      actorId: params.actorId,
+      byStaff: true,
+    });
+  }
+  if (statusWechsel === 'CONFIRMED') {
+    return confirmBooking({ organizationId: params.organizationId, bookingId: booking.id, actorId: params.actorId });
+  }
 
   return updated;
 }
