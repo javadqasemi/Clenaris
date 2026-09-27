@@ -14,7 +14,6 @@ import { logger } from '@/lib/logger';
 import {
   createSignedDownloadUrl,
   readLocalBytes,
-  readStoredBytes,
   uploadBuffer,
   usesRemoteStorage,
   type Dateiauslieferung,
@@ -26,6 +25,7 @@ import { changePct, healthStatus, riskBand } from '@/lib/bi/math';
 import { formatKpiValue, HEALTH_STATUS_LABELS, OBJECTIVE_STATUS_LABELS, REPORT_KIND_LABELS, RISK_BAND_LABELS } from '@/lib/bi/labels';
 import { dateOnly, periodOf, shiftPeriod, toDateOnly, zurichMidnight, type PeriodBounds } from '@/lib/bi/periods';
 import type { CreateReportScheduleInput, GenerateReportInput, UpdateReportScheduleInput } from '@/lib/validation/bi-reports';
+import { geprueftLesen } from './document.service';
 import { mappeSchreiben } from './export.service';
 import { computeHealth, type HealthComponent } from './health.service';
 import { getInsights, type Insight } from './insight.service';
@@ -445,22 +445,26 @@ export async function resolveReportDownload(
    * nur `document:read` kennt. Also liefert dieser Dienst die Bytes selbst,
    * nachdem er den Mandanten geprüft hat.
    */
+  // Mit Ablagezeile: selbst ausliefern, gegen die Prüfsumme gelesen, für
+  // beide Treiber (2026-09-27, F-09 c) — dieselbe Regel wie beim Dokument.
+  if (file.storedFile) {
+    const bytes = await geprueftLesen(file.storedFile, file.checksum);
+    await audit.exported({ organizationId, userId: session.id, entity: 'ReportRun', entityId: id, summary: `Bericht „${file.filename}" heruntergeladen`, ip });
+    return { art: 'bytes', bytes, filename: file.filename, mimeType: file.mimeType };
+  }
   if (usesRemoteStorage()) {
     const url = await createSignedDownloadUrl(file.path, 600);
     await audit.exported({ organizationId, userId: session.id, entity: 'ReportRun', entityId: id, summary: `Bericht „${file.filename}" heruntergeladen`, ip });
     return { art: 'weiterleitung', url, filename: file.filename, mimeType: file.mimeType };
   }
 
+  // Altbestand ohne Ablagezeile (die mit Zeile sind oben ausgeliefert):
+  // Berichte legte `putLocalBuffer` ab, ohne das Asset an die Ablagezeile zu
+  // hängen; ihre Adresse ist dann die einzige Spur. Exakt diese Form, nichts
+  // erraten.
   let bytes: Buffer | null = null;
-  if (file.storedFile) {
-    bytes = await readStoredBytes({ id: file.storedFile.id, path: file.storedFile.path, driver: file.storedFile.driver });
-  } else {
-    // Berichte legt `putLocalBuffer` ab, ohne das Asset an die Ablagezeile zu
-    // hängen; ihre Adresse ist dann die einzige Spur. Exakt diese Form, nichts
-    // erraten.
-    const treffer = /^\/api\/files\/blob\/([A-Za-z0-9_-]+)$/.exec(file.url);
-    if (treffer) bytes = await readLocalBytes(treffer[1]!);
-  }
+  const treffer = /^\/api\/files\/blob\/([A-Za-z0-9_-]+)$/.exec(file.url);
+  if (treffer) bytes = await readLocalBytes(treffer[1]!);
   if (!bytes) throw new NotFoundError('Datei');
 
   await audit.exported({ organizationId, userId: session.id, entity: 'ReportRun', entityId: id, summary: `Bericht „${file.filename}" heruntergeladen`, ip });

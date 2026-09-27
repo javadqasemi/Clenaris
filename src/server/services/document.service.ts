@@ -10,6 +10,7 @@ import type { SessionUser } from '@/lib/auth/session';
 import { BusinessRuleError, NotFoundError } from '@/lib/errors';
 import {
   createSignedDownloadUrl,
+  leseAblageGeprueft,
   readLocalBytes,
   readStoredBytes,
   usesRemoteStorage,
@@ -303,19 +304,19 @@ export async function resolveDocumentDownload(
    * Dienst die Bytes selbst aus — hier, wo `documentVisibilityWhere` bereits
    * in der `where`-Klausel steht und `EMPLOYEE_PRIVATE` mitgeprüft ist.
    */
-  const ausgeliefert: Dateiauslieferung = usesRemoteStorage()
-    ? {
-        art: 'weiterleitung',
-        url: await createSignedDownloadUrl(file.path, 600),
-        filename: file.filename,
-        mimeType: file.mimeType,
-      }
-    : {
-        art: 'bytes',
-        bytes: await fassungsBytes(file),
-        filename: file.filename,
-        mimeType: file.mimeType,
-      };
+  /*
+    Mit Ablagezeile liefert der Dienst die Bytes selbst aus, für **beide**
+    Treiber und gegen die Prüfsumme gelesen (2026-09-27, F-09 c). Vorher
+    leitete er beim externen Speicher auf eine befristete Supabase-Adresse
+    weiter: Die Berechtigung war geprüft, die Bytes aber nicht — eine
+    veränderte Datei im Bucket ging unbemerkt hinaus. Nur Fassungen ohne
+    Ablagezeile (Altbestand vor F-09 c) nehmen noch den alten Weg.
+  */
+  const ausgeliefert: Dateiauslieferung = file.storedFile
+    ? { art: 'bytes', bytes: await geprueftLesen(file.storedFile, file.checksum), filename: file.filename, mimeType: file.mimeType }
+    : usesRemoteStorage()
+      ? { art: 'weiterleitung', url: await createSignedDownloadUrl(file.path, 600), filename: file.filename, mimeType: file.mimeType }
+      : { art: 'bytes', bytes: await fassungsBytes(file), filename: file.filename, mimeType: file.mimeType };
 
   await audit.exported({
     organizationId,
@@ -351,6 +352,22 @@ function auslieferbarOderNicht(file: { scanStatus: FileScanStatus; provenance: F
  * und die Abweichung fiele erst auf, wenn ein Dokument sich ansehen, aber
  * nicht herunterladen lässt.
  */
+/**
+ * Bytes aus der Ablage lesen und gegen die Prüfsumme halten — scheitert
+ * geschlossen: fehlt die Datei oder weicht sie ab, gibt es sie auf diesem Weg
+ * nicht (404), statt anderer Bytes. Die Quarantäne einer abweichenden Datei
+ * setzt die Dateiroute (`liesFreigegebeneDatei`); hier genügt die Absage.
+ * Auch vom Berichtsdownload benutzt.
+ */
+export async function geprueftLesen(
+  ablage: { id: string; path: string; driver: 'LOCAL' | 'SUPABASE'; checksum: string | null },
+  assetChecksum: string | null,
+): Promise<Buffer> {
+  const gelesen = await leseAblageGeprueft(ablage, assetChecksum);
+  if (gelesen.status !== 'ok') throw new NotFoundError('Datei');
+  return gelesen.bytes;
+}
+
 async function fassungsBytes(file: {
   url: string;
   scanStatus: FileScanStatus;

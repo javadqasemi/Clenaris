@@ -4,11 +4,11 @@ import { binaerAntwort } from '@/lib/api/binary-response';
 import { toErrorResponse } from '@/lib/api/response';
 import { getSession } from '@/lib/auth/session';
 import { NotFoundError, ValidationError } from '@/lib/errors';
-import { LOCAL_MAX_BYTES, readLocalFile, receiveLocalUpload } from '@/lib/storage';
+import { LOCAL_MAX_BYTES, receiveLocalUpload } from '@/lib/storage';
 import { enforceRateLimit, getClientIp } from '@/lib/rate-limit';
 import { sanitizeFilename } from '@/lib/storage';
 import { describeUploadLimit } from '@/lib/validation/files';
-import { authorizeStoredFile } from '@/server/services/file.service';
+import { authorizeStoredFile, liesFreigegebeneDatei } from '@/server/services/file.service';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -16,6 +16,11 @@ export const dynamic = 'force-dynamic';
 /**
  * Der eingebaute Dateispeicher — Gegenstück zur signierten Adresse von
  * Supabase.
+ *
+ * Das gilt seit F-09 c (2026-09-27) nur noch für das **Schreiben** (`PUT`).
+ * Gelesen wird über diese Route für beide Treiber: Sie ist der eine
+ * berechtigte Leseweg privater Dateien, auch wenn die Bytes im
+ * Supabase-Bucket liegen.
  *
  * **Warum diese Route von Hand geschrieben ist und nicht über `defineRoute`
  * läuft.** Jener Rahmen liest den Körper als JSON und prüft ihn gegen ein
@@ -160,8 +165,21 @@ export async function GET(
     const freigabe = await authorizeStoredFile(id, session);
     if (!freigabe) throw new NotFoundError('Datei');
 
-    const file = await readLocalFile(freigabe.storedFileId);
-    if (!file.data) throw new NotFoundError('Datei');
+    /*
+      Die Bytes aus dem Treiber, in dem sie liegen (F-09 c, 2026-09-27).
+      Hier stand `readLocalFile` — die Route kannte nur die Rückfallebene.
+      Mit Supabase war jede private Datei damit freigegeben und trotzdem
+      unerreichbar, und der einzige andere Weg wäre die öffentliche Adresse
+      gewesen. Jetzt liest der Dienst serverseitig über den Dienstschlüssel
+      und hält die Bytes vor der Auslieferung gegen die Prüfsumme; weichen
+      sie ab, fehlen sie oder widersprechen sich die Datensätze, kommt
+      dieselbe 404 wie für eine fremde Datei. Eine Weiterleitung auf eine
+      befristete Supabase-Adresse wäre kürzer gewesen — sie hätte aber genau
+      diese Gegenprobe übersprungen, und der Browser hätte Bytes bekommen,
+      die niemand angesehen hat.
+    */
+    const bytes = await liesFreigegebeneDatei(freigabe);
+    if (!bytes) throw new NotFoundError('Datei');
 
     const inline = INLINE_TYPEN.has(freigabe.mimeType);
     // Der Name wird entschärft und in Anführungszeichen gesetzt. Ein
@@ -170,7 +188,7 @@ export async function GET(
     const name = sanitizeFilename(freigabe.filename);
 
     return binaerAntwort({
-      bytes: file.data,
+      bytes,
       mimeType: freigabe.mimeType,
       filename: name,
       disposition: inline ? 'inline' : 'attachment',

@@ -83,6 +83,102 @@ export async function createTicket(params: {
 }
 
 /**
+ * Die Ablagezeile einer **servererzeugten** Datei im externen Speicher führen
+ * (F-09 c, 2026-09-27).
+ *
+ * **Die Lücke, die das schliesst.** Beim eingebauten Speicher legt
+ * `putLocalBuffer` für jedes erzeugte PDF eine `StoredFile`-Zeile mit
+ * Prüfsumme an; das `FileAsset` hängt daran, und Auslieferung wie
+ * `verifyFileIntegrity` haben etwas zum Vergleichen. Beim externen Speicher
+ * entstand keine Zeile: Lohnabrechnung, Signaturartefakt und Bericht hatten
+ * dort keine physische Prüfsumme, keine Kennung für die bewachte Route — und
+ * damit keinen berechtigten Leseweg ausser einer öffentlichen Adresse, die es
+ * bei einem privaten Bucket nicht gibt. Zwei Treiber, zwei Integritätsstufen.
+ *
+ * Jetzt führen beide Treiber dieselbe Zeile; bei `SUPABASE` bleibt `data`
+ * leer, der Pfad zeigt in den Bucket, die Prüfsumme stammt aus den Bytes, die
+ * hochgeladen wurden (`supabase.ts:uploadBuffer`).
+ *
+ * **Gleicher Pfad, gleiche Zeile** — wie bei `putLocalBuffer`. Ein erneut
+ * erzeugtes Rechnungs-PDF (`upsert`) ersetzt Bytes und Prüfsumme unter
+ * derselben Kennung, statt eine zweite Zeile daneben zu legen. Das berührt
+ * die Unveränderlichkeit der Finanzbelege nicht: Der Beleg ist der Datensatz
+ * (Rechnung, Gutschrift — per Trigger gesperrt bis auf `pdfUrl`), das PDF ist
+ * seine Darstellung. Wo die Datei selbst unveränderlich sein muss
+ * (Lohnabrechnung, Signaturschnappschuss A), steht die Prüfsumme im Pfad bzw.
+ * wird nie mit `upsert` geschrieben; dort entsteht je Fassung eine eigene
+ * Zeile.
+ *
+ * Gesucht wird nur unter servererzeugten Zeilen dieses Treibers (`profile`
+ * leer): Ein Upload-Ticket mit zufällig gleichem Pfad gibt es nicht — der Pfad
+ * trägt Zeitstempel und Zufallsteil —, aber diese Funktion soll ein Ticket
+ * auch dann nie umschreiben, wenn es doch einmal eines gäbe.
+ */
+export async function servererzeugteAblageFuehren(params: {
+  organizationId: string;
+  path: string;
+  mimeType: string;
+  sizeBytes: number;
+  checksum: string;
+}): Promise<{ id: string }> {
+  const vorhanden = await prisma.storedFile.findFirst({
+    where: {
+      organizationId: params.organizationId,
+      path: params.path,
+      driver: 'SUPABASE',
+      profile: null,
+    },
+    select: { id: true },
+  });
+  const jetzt = new Date();
+  if (vorhanden) {
+    return prisma.storedFile.update({
+      where: { id: vorhanden.id },
+      data: {
+        mimeType: params.mimeType,
+        sizeBytes: params.sizeBytes,
+        checksum: params.checksum,
+        uploadedAt: jetzt,
+      },
+      select: { id: true },
+    });
+  }
+  return prisma.storedFile.create({
+    data: {
+      organizationId: params.organizationId,
+      path: params.path,
+      mimeType: params.mimeType,
+      maxBytes: params.sizeBytes,
+      sizeBytes: params.sizeBytes,
+      // Gesetzt heisst abgeschlossen (`istAbgeschlossen`), und damit räumt
+      // `purgeExpiredUploads` die Zeile trotz abgelaufenem `expiresAt` nie ab.
+      checksum: params.checksum,
+      driver: 'SUPABASE',
+      // Kein Upload-Profil: Diese Datei kam nicht durch ein Ticket. Ein `PUT`
+      // auf ihre Kennung weist `receiveLocalUpload` doppelt ab — fremder
+      // Treiber, kein Profil.
+      profile: null,
+      uploadedAt: jetzt,
+      expiresAt: new Date(jetzt.getTime() + UPLOAD_WINDOW_MS),
+    },
+    select: { id: true },
+  });
+}
+
+/**
+ * Die Ablagezeile einer servererzeugten externen Datei entfernen, wenn die
+ * Datei selbst weggeräumt wurde (`lohnPdfVerwerfen`).
+ *
+ * `asset: null` in der Bedingung: Eine Zeile, an der noch ein `FileAsset`
+ * hängt, bleibt stehen — dieselbe Vorsicht wie bei `purgeExpiredUploads`.
+ */
+export async function servererzeugteAblageEntfernen(path: string): Promise<void> {
+  await prisma.storedFile.deleteMany({
+    where: { path, driver: 'SUPABASE', profile: null, asset: null },
+  });
+}
+
+/**
  * Ein Ticket samt allem, was der Abschluss zum Prüfen braucht.
  *
  * Bewusst ohne `data`: Die Bytes können 256 MB sein, und für die

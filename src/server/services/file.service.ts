@@ -15,7 +15,12 @@ import {
 import { audit } from '@/lib/audit';
 import { recordSecurityEvent } from '@/lib/security/record';
 import { logger } from '@/lib/logger';
-import { readStoredBytes, verifyBytes, type UploadProfile } from '@/lib/storage';
+import {
+  leseAblageGeprueft,
+  readStoredBytes,
+  verifyBytes,
+  type UploadProfile,
+} from '@/lib/storage';
 import { pruefeDateipolitik } from '@/lib/storage/dateipolitik';
 import { loadTicket } from '@/lib/storage/tickets';
 import { SCAN_MAX_ATTEMPTS, getScanner } from '@/lib/security/malware';
@@ -794,6 +799,15 @@ export interface DateiFreigabe {
   mimeType: string;
   filename: string;
   isPublic: boolean;
+  /**
+   * Seit F-09 c: woher die Bytes kommen und woran sie gemessen werden. Die
+   * Route liest nicht mehr selbst (sie kannte nur die Rückfallebene), sondern
+   * übergibt diese Freigabe an `liesFreigegebeneDatei`.
+   */
+  fileAssetId: string;
+  organizationId: string;
+  assetChecksum: string | null;
+  ablage: { id: string; path: string; driver: 'LOCAL' | 'SUPABASE'; checksum: string | null };
 }
 
 const MIT_BEZIEHUNGEN = {
@@ -819,6 +833,10 @@ const MIT_BEZIEHUNGEN = {
   messageId: true,
   applicationId: true,
   propertyId: true,
+  // Für den Leseweg nach der Freigabe (F-09 c): Treiber, Pfad und beide
+  // Prüfsummen. Sie entscheiden nichts über die Berechtigung.
+  checksum: true,
+  storedFile: { select: { id: true, path: true, driver: true, checksum: true } },
 } as const;
 
 type AssetMitBeziehungen = Prisma.FileAssetGetPayload<{ select: typeof MIT_BEZIEHUNGEN }>;
@@ -1028,7 +1046,7 @@ export async function authorizeStoredFile(
    * Weg prüft die Berechtigung selbst. Eine zweite, schwächere Tür daneben
    * wäre genau das Problem, das Gate 2 beseitigt.
    */
-  if (!asset || !asset.storedFileId) return null;
+  if (!asset || !asset.storedFileId || !asset.storedFile) return null;
 
   if (!(await darfLesen(asset, session))) return null;
 
@@ -1068,7 +1086,110 @@ export async function authorizeStoredFile(
     mimeType: asset.mimeType,
     filename: asset.filename,
     isPublic: asset.isPublic,
+    fileAssetId: asset.id,
+    organizationId: asset.organizationId,
+    assetChecksum: asset.checksum,
+    ablage: asset.storedFile,
   };
+}
+
+/**
+ * Die Bytes einer freigegebenen Datei — aus dem Treiber, in dem sie liegen,
+ * und nur, wenn sie noch die sind, die abgelegt wurden (F-09 c, 2026-09-27).
+ *
+ * **Warum das hier steht und nicht in der Route.** Die Route las bis dahin
+ * selbst, und zwar nur die Rückfallebene. Mit Supabase fand sie für jede
+ * private Datei keine Bytes — der berechtigte Leseweg fehlte, und die
+ * einzige Adresse, die zu solchen Dateien gespeichert war, war die
+ * öffentliche. Jetzt gilt: Die Berechtigung entscheidet `authorizeStoredFile`
+ * (samt Prüfstand), die Bytes holt `leseAblageGeprueft` aus dem richtigen
+ * Speicher, und was aus einer Abweichung folgt, entscheidet dieser Dienst —
+ * weil nur er Protokoll und Quarantäne führt.
+ *
+ * **Fail closed.** `null` für „nicht auslieferbar", in jedem der drei Fälle:
+ * Die Bytes fehlen, sie weichen von der Prüfsumme ab, oder die beiden
+ * Datensätze widersprechen sich. Die Route macht daraus dieselbe 404 wie für
+ * eine fremde Datei. Wer die Freigabe schon hat, erfährt dadurch nichts
+ * Neues über fremde Daten; er bekommt nur keine Bytes, für die niemand mehr
+ * einstehen kann.
+ *
+ * **Veränderte Bytes gehen in Quarantäne** — dieselbe Folge wie im Prüflauf
+ * (`scanFileAsset`, Abschnitt „Hash-Gegenprobe"), aus demselben Grund: Die
+ * Ablage wurde nach dem Abschluss verändert, und das darf auf keinem
+ * vorgesehenen Weg passieren. Der Übergang ist bedingt (`scanStatus` noch
+ * nicht `QUARANTINED`), damit hundert Abrufe einer veränderten Datei ein
+ * Ereignis erzeugen und nicht hundert. Bei servererzeugten Dateien sperrt der
+ * Zustand die Auslieferung nicht (`darfAusgeliefertWerden` entscheidet dort
+ * über die Herkunft) — gesperrt bleibt sie trotzdem, weil diese Gegenprobe
+ * bei jedem Abruf erneut scheitert, solange die Bytes nicht stimmen.
+ *
+ * Ein **Widerspruch** der Datensätze löst dagegen keine Quarantäne aus: Er
+ * entsteht auch ohne fremden Zugriff für einen Augenblick, wenn ein
+ * Signaturartefakt neu abgelegt und sein `FileAsset` erst danach
+ * nachgeführt wird. Verweigert wird trotzdem; das Protokoll hält es fest.
+ */
+export async function liesFreigegebeneDatei(freigabe: DateiFreigabe): Promise<Buffer | null> {
+  const gelesen = await leseAblageGeprueft(freigabe.ablage, freigabe.assetChecksum);
+
+  if (gelesen.status === 'ok') {
+    if (gelesen.pruefung === 'ungeprueft') {
+      // Nur Altbestand ohne Prüfsumme kommt hierher, und über den hat
+      // `darfAusgeliefertWerden` bereits entschieden. Festgehalten wird es
+      // trotzdem: Diese Auslieferung trägt keine Integritätszusicherung.
+      log.warn('Datei ohne Prüfsumme ausgeliefert', { fileAssetId: freigabe.fileAssetId });
+    }
+    return gelesen.bytes;
+  }
+
+  if (gelesen.status === 'fehlt') {
+    log.warn('Freigegebene Datei ohne Bytes im Speicher', {
+      fileAssetId: freigabe.fileAssetId,
+      treiber: freigabe.ablage.driver,
+    });
+    return null;
+  }
+
+  if (gelesen.status === 'widerspruch') {
+    log.error('Prüfsummen von Ablage und Datei widersprechen sich — nicht ausgeliefert', {
+      fileAssetId: freigabe.fileAssetId,
+    });
+    return null;
+  }
+
+  // Abweichung: Die Bytes im Speicher sind nicht mehr die abgelegten.
+  log.error('Prüfsumme beim Abruf weicht ab — nicht ausgeliefert, Datei in Quarantäne', {
+    fileAssetId: freigabe.fileAssetId,
+    treiber: freigabe.ablage.driver,
+  });
+  const isoliert = await prisma.fileAsset.updateMany({
+    where: { id: freigabe.fileAssetId, scanStatus: { not: 'QUARANTINED' } },
+    data: {
+      scanStatus: 'QUARANTINED',
+      quarantinedAt: new Date(),
+      lastScanErrorCode: 'CHECKSUM_MISMATCH',
+    },
+  });
+  if (isoliert.count > 0) {
+    await audit.denied({
+      organizationId: freigabe.organizationId,
+      entity: 'FileAsset',
+      entityId: freigabe.fileAssetId,
+      summary: 'Datei in Quarantäne: Die Bytes im Speicher weichen beim Abruf von der beim Ablegen gebildeten Prüfsumme ab.',
+    });
+    await recordSecurityEvent({
+      organizationId: freigabe.organizationId,
+      kind: 'FILE_QUARANTINED',
+      summary:
+        'Die gespeicherten Bytes weichen beim Abruf von der Prüfsumme ab — Datei isoliert, nicht ausgeliefert',
+      context: {
+        fileAssetId: freigabe.fileAssetId,
+        filename: freigabe.filename,
+        grund: 'CHECKSUM_MISMATCH',
+        treiber: freigabe.ablage.driver,
+      },
+    });
+  }
+  return null;
 }
 
 /**
