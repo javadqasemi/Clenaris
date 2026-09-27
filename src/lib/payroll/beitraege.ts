@@ -39,9 +39,15 @@
  * Treuhand, und das steht auch so in `docs/PAYROLL.md`.
  */
 
-/** Auf Rappen runden — kaufmännisch. */
+import { kaufmaennischRunden } from '../runden';
+
+/**
+ * Auf Rappen runden — kaufmännisch, auf den Dezimalwert (`lib/runden.ts`).
+ * Bis 2026-09-27 `Math.round(betrag * 100) / 100`: Ein Beitrag von x.xx5
+ * wurde je nach Binärdarstellung ab- statt aufgerundet.
+ */
 export function rappen(betrag: number): number {
-  return Math.round(betrag * 100) / 100;
+  return kaufmaennischRunden(betrag, 2);
 }
 
 /**

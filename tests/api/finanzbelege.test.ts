@@ -126,6 +126,32 @@ describe('Ausgestellte Rechnungen sind in der Datenbank unveränderlich', () => 
   });
 });
 
+/**
+ * Geld wird dezimal gerechnet, nicht binär (2026-09-27).
+ *
+ * `computeInvoiceTotals` rechnete in `number` und rundete mit
+ * `Math.round((x + EPSILON) * 100) / 100`. 1.5 Std. × CHF 12.35 sind 18.525 —
+ * binär 18.52499999…, und die Position stand mit 18.52 statt 18.53 auf der
+ * Rechnung. `EPSILON` ist für Beträge dieser Grösse zu klein, um das
+ * aufzufangen.
+ */
+describe('Rechnungsbeträge: dezimal, kaufmännisch gerundet', () => {
+  it('1.5 Std. × 12.35 ergibt 18.53, nicht 18.52 — Position, Summen, MWST', async () => {
+    const antwort = await post<{ data: { id: string } }>(
+      '/api/invoices',
+      { customerId: kundeId, notes: MARKE, items: [{ name: 'Unterhaltsreinigung', quantity: 1.5, unit: 'Std.', unitPrice: 12.35, vatRate: 8.1 }], issueImmediately: false },
+      { jar: jars.admin },
+    );
+    assert.equal(antwort.status, 201, antwort.text);
+    const r = await testDb()!.invoice.findUniqueOrThrow({ where: { id: data(antwort).id }, include: { items: true } });
+    assert.equal(r.items[0]!.netAmount.toString(), '18.53', 'Positionsbetrag');
+    assert.equal(r.netTotal.toString(), '18.53', 'Nettosumme');
+    // 18.53 × 8.1 % = 1.50093 → 1.50; brutto 20.03.
+    assert.equal(r.vatAmount.toString(), '1.5');
+    assert.equal(r.grossTotal.toString(), '20.03');
+  });
+});
+
 describe('Zahlungen: Storno statt Löschen', () => {
   let rechnungId = '';
   let zahlungId = '';
@@ -242,6 +268,72 @@ describe('Gutschriften', () => {
     for (const rolle of ['employee', 'customer'] as AccountName[]) {
       assert.equal((await get('/api/credit-notes', { jar: jars[rolle] })).status, 403, rolle);
     }
+  });
+});
+
+/**
+ * Rechnungsdatum und Fälligkeit in Zürcher Kalendertagen (2026-09-27).
+ *
+ * Der Befund: Ein Entwurf behielt beim Ausstellen sein altes Datum. Ein
+ * Entwurf vom Monatsanfang, am Monatsende ausgestellt, trug das Datum vom
+ * Monatsanfang, war beim Versand schon fällig und zog seine Nummer aus dem
+ * Kreis dieses Datums.
+ *
+ * Die zweite Prüfung hält eine Regel fest, die schon galt: Der Mahnlauf
+ * verglich `dueDate` (ein `@db.Date`) mit dem aktuellen Zeitpunkt; Prisma
+ * kürzt den Vergleichswert dabei auf den UTC-Tag, also „fällig vor heute".
+ * Der Dienst sagt das seither ausdrücklich mit dem Zürcher Tag — die Prüfung
+ * verhindert, dass ein späterer Umbau auf einen echten Zeitpunktvergleich
+ * Rechnungen am Fälligkeitstag selbst mahnt.
+ */
+describe('Rechnungsdatum und Fälligkeit: Zürcher Tage', () => {
+  const tag = (versatz: number) => new Date(zuercherHeute().getTime() + versatz * 86_400_000).toISOString().slice(0, 10);
+
+  it('ausgestellt wird auf den Ausstellungstag — die Zahlungsfrist wandert mit', async () => {
+    const entwurf = await post<{ data: { id: string } }>(
+      '/api/invoices',
+      { customerId: kundeId, notes: MARKE, issueDate: tag(-10), dueDate: tag(20), items: [{ name: 'Unterhaltsreinigung', quantity: 1, unitPrice: 80, vatRate: 8.1 }], issueImmediately: false },
+      { jar: jars.admin },
+    );
+    assert.equal(entwurf.status, 201, entwurf.text);
+    const id = data(entwurf).id;
+    assert.equal((await post(`/api/invoices/${id}/issue`, undefined, { jar: jars.admin })).status, 200);
+    const r = await testDb()!.invoice.findUniqueOrThrow({ where: { id } });
+    assert.equal(r.issueDate.toISOString().slice(0, 10), tag(0), 'das Rechnungsdatum ist der Tag der Ausstellung');
+    assert.equal(r.dueDate.toISOString().slice(0, 10), tag(30), 'die Frist von 30 Tagen zählt ab der Ausstellung');
+  });
+
+  it('der Buchhaltungsexport enthält die Zahlungen des letzten Tages im Zeitraum', async () => {
+    // `paidAt` ist ein Zeitpunkt; der Export filterte bis UTC-Mitternacht
+    // *des* letzten Tages und liess dessen Zahlungen fast alle weg. Eine
+    // Zahlung von jetzt, exportiert für den Zeitraum „heute bis heute", muss
+    // darin stehen.
+    const r = await rechnung(true);
+    const zahlung = await post(`/api/invoices/${r.id}/payments`, { amount: 12.34, method: 'BANK_TRANSFER' }, { jar: jars.admin });
+    assert.equal(zahlung.status, 201, zahlung.text);
+    const antwort = await fetch(`${BASE_URL}/api/exports/buchhaltung`, {
+      method: 'POST',
+      headers: { cookie: jars.admin, 'content-type': 'application/json' },
+      body: JSON.stringify({ format: 'csv', periodFrom: tag(0), periodTo: tag(0), include: ['payments'] }),
+    });
+    assert.equal(antwort.status, 200);
+    const text = await antwort.text();
+    assert.ok(text.includes(r.number) && text.includes('12.34'), `die Zahlung von heute fehlt im Export für heute:\n${text.slice(0, 400)}`);
+  });
+
+  it('am Fälligkeitstag selbst ist eine Rechnung noch nicht überfällig', async () => {
+    const antwort = await post<{ data: { id: string } }>(
+      '/api/invoices',
+      { customerId: kundeId, notes: MARKE, issueDate: tag(0), dueDate: tag(0), items: [{ name: 'Unterhaltsreinigung', quantity: 1, unitPrice: 60, vatRate: 8.1 }], issueImmediately: true },
+      { jar: jars.admin },
+    );
+    assert.equal(antwort.status, 201, antwort.text);
+    const id = data(antwort).id;
+    const lauf = await get('/api/cron/daily', { headers: { authorization: `Bearer ${process.env.CRON_SECRET ?? 'dev-cron-secret'}` } });
+    assert.equal(lauf.status, 200, lauf.text.slice(0, 300));
+    const r = await testDb()!.invoice.findUniqueOrThrow({ where: { id } });
+    assert.notEqual(r.status, 'OVERDUE', 'am Fälligkeitstag als überfällig markiert');
+    assert.equal(await testDb()!.paymentReminder.count({ where: { invoiceId: id } }), 0, 'am Fälligkeitstag gemahnt');
   });
 });
 

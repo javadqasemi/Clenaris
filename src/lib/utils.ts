@@ -2,6 +2,7 @@ import { type ClassValue, clsx } from 'clsx';
 import { extendTailwindMerge } from 'tailwind-merge';
 
 import { laufzeitUrsprung } from '@/lib/laufzeit-konfiguration';
+import { kaufmaennischRunden } from '@/lib/runden';
 
 /**
  * tailwind-merge kennt nur die Standard-Schriftgrössen. Die eigenen Stufen aus
@@ -182,9 +183,15 @@ export function roundToRappen(value: number): number {
   return Math.round(value * 20) / 20;
 }
 
-/** Kaufmännisch auf 2 Nachkommastellen runden — vermeidet Float-Artefakte. */
+/**
+ * Kaufmännisch auf 2 Nachkommastellen runden — auf den Dezimalwert.
+ *
+ * Bis 2026-09-27 `Math.round((value + Number.EPSILON) * 100) / 100`: Das
+ * rundete die Binärzahl, und 1.5 × 12.35 (= 18.525) wurde 18.52. Die Rechnung
+ * steht jetzt einmal in `lib/runden.ts`.
+ */
 export function round2(value: number): number {
-  return Math.round((value + Number.EPSILON) * 100) / 100;
+  return kaufmaennischRunden(value, 2);
 }
 
 export function clamp(value: number, min: number, max: number): number {

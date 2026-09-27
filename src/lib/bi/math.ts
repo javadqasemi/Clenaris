@@ -11,6 +11,8 @@
  * Rechnung gibt.
  */
 
+import { kaufmaennischRunden } from '../runden';
+
 export type Direction = 'UP_IS_GOOD' | 'DOWN_IS_GOOD';
 
 // ---------------------------------------------------------------------------
@@ -453,8 +455,9 @@ export function computeScenario(input: ScenarioInput): ScenarioResult {
 //  Kleinkram
 // ---------------------------------------------------------------------------
 
+/** Dieselbe Rundung wie überall (`lib/runden.ts`, 2026-09-27) — vorher ohne Rücksicht auf den Binärfehler. */
 export function round2(value: number): number {
-  return Math.round(value * 100) / 100;
+  return kaufmaennischRunden(value, 2);
 }
 
 /** Veränderung in Prozent; `null`, wenn es keinen Vergleichswert gibt. */

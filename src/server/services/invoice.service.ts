@@ -5,6 +5,7 @@ import { Prisma, type Invoice, type PaymentMethod, type PaymentStatus } from '@p
 import { prisma, toNumber } from '@/lib/db';
 import { aufRappen, geld, max0 } from '@/lib/money';
 import { tagPlus, zuercherTag, zuercherTagesbeginn } from '@/lib/zuerich';
+import { gutschriftsSummen, rechnungsSummen } from '@/lib/rechnungsbetraege';
 import { BusinessRuleError, ConflictError, NotFoundError } from '@/lib/errors';
 import { absoluteUrl, formatDate, round2 } from '@/lib/utils';
 import { orderByFor, resolveSort, type SortOrder } from '@/lib/sort';
@@ -67,38 +68,16 @@ interface ComputedInvoiceTotals {
   })[];
 }
 
+/**
+ * Summen einer Rechnung — dezimal gerechnet in `lib/rechnungsbetraege.ts`
+ * (2026-09-27). Vorher stand die Rechnung hier in JavaScript-`number`; die
+ * Regeln sind unverändert, die Arithmetik nicht mehr binär.
+ */
 export function computeInvoiceTotals(
   items: InvoiceItemInput[],
   discountAmount = 0,
 ): ComputedInvoiceTotals {
-  const computed = items.map((item, index) => {
-    const gross = item.quantity * item.unitPrice;
-    const netAmount = round2(gross * (1 - (item.discount ?? 0) / 100));
-    const vatAmount = round2(netAmount * (item.vatRate / 100));
-    return {
-      ...item,
-      netAmount,
-      vatAmount,
-      lineTotal: round2(netAmount + vatAmount),
-      position: index,
-    };
-  });
-
-  const subtotal = round2(computed.reduce((sum, item) => sum + item.netAmount, 0));
-  const cappedDiscount = round2(Math.min(discountAmount, subtotal));
-  const netTotal = round2(subtotal - cappedDiscount);
-
-  // Rabatt proportional auf die MWST-Basis umlegen.
-  const factor = subtotal > 0 ? netTotal / subtotal : 1;
-  const vatAmount = round2(computed.reduce((sum, item) => sum + item.vatAmount * factor, 0));
-
-  return {
-    subtotal,
-    netTotal,
-    vatAmount,
-    grossTotal: round2(netTotal + vatAmount),
-    items: computed,
-  };
+  return rechnungsSummen(items, discountAmount);
 }
 
 // ---------------------------------------------------------------------------
@@ -1100,16 +1079,8 @@ export async function createCreditNote(params: {
   items: { name: string; quantity: number; unit: string; unitPrice: number; vatRate: number }[];
   actorId: string;
 }) {
-  const netTotal = round2(
-    params.items.reduce((sum, item) => sum + item.quantity * item.unitPrice, 0),
-  );
-  const vatAmount = round2(
-    params.items.reduce(
-      (sum, item) => sum + item.quantity * item.unitPrice * (item.vatRate / 100),
-      0,
-    ),
-  );
-  const grossTotal = round2(netTotal + vatAmount);
+  // Dezimal gerechnet (`lib/rechnungsbetraege.ts`, 2026-09-27).
+  const { netTotal, vatAmount, grossTotal } = gutschriftsSummen(params.items);
   if (grossTotal <= 0) throw new BusinessRuleError('Eine Gutschrift über null Franken ist keine.');
 
   /**
@@ -1142,8 +1113,10 @@ export async function createCreditNote(params: {
         throw new BusinessRuleError('Gutgeschrieben wird nur auf eine ausgestellte, nicht stornierte Rechnung.');
       }
       const bisher = await tx.creditNote.aggregate({ where: { invoiceId: rechnung.id }, _sum: { grossTotal: true } });
-      const rest = round2(toNumber(rechnung.grossTotal) - toNumber(bisher._sum.grossTotal));
-      if (grossTotal > rest + 0.004) {
+      // Dezimal verglichen — vorher `number` mit einer Toleranz von 0.004, die
+      // den Binärfehler überdecken sollte.
+      const rest = aufRappen(geld(rechnung.grossTotal).minus(geld(bisher._sum.grossTotal))).toNumber();
+      if (geld(grossTotal).greaterThan(geld(rest))) {
         throw new BusinessRuleError(
           `Auf Rechnung ${rechnung.number} kann höchstens noch CHF ${rest.toFixed(2)} gutgeschrieben werden.`,
         );
