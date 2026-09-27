@@ -4,6 +4,7 @@ import ExcelJS from 'exceljs';
 
 import { prisma, toNumber } from '@/lib/db';
 import { round2 } from '@/lib/utils';
+import { csvZeile } from '@/lib/csv';
 import { audit } from '@/lib/audit';
 import type { AccountingExportInput } from '@/lib/validation/finance';
 
@@ -532,9 +533,9 @@ export async function exportAccounting(params: {
 
   // Semikolon als Trennzeichen: Excel-CH erwartet das bei Dezimalpunkt-Zahlen.
   const separator = params.input.format === 'datev' ? ';' : ';';
-  const content = [header, ...rows]
-    .map((row) => row.map(escapeCsv).join(separator))
-    .join('\r\n');
+  // `csvZeile` entschärft Formelanfänge (= + - @) in Freitext — Beschreibung,
+  // Lieferant, Beleg kommen von aussen (2026-09-27, `src/lib/csv.ts`).
+  const content = [header, ...rows].map((row) => csvZeile(row, separator)).join('\r\n');
 
   await prisma.accountingExport.create({
     data: {
@@ -576,11 +577,6 @@ const STATUS_LABELS: Record<string, string> = {
   CANCELLED: 'Storniert',
   WRITTEN_OFF: 'Abgeschrieben',
 };
-
-function escapeCsv(value: string): string {
-  if (/[";\r\n]/.test(value)) return `"${value.replace(/"/g, '""')}"`;
-  return value;
-}
 
 function formatAmount(value: number): string {
   return value.toFixed(2);
