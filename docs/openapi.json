@@ -2958,6 +2958,172 @@
         }
       }
     },
+    "/api/public/newsletter/bestaetigen": {
+      "post": {
+        "tags": [
+          "Öffentlich"
+        ],
+        "summary": "Newsletter-Anmeldung bestätigen",
+        "description": "Double-Opt-in mit dem Token aus der E-Mail (im Körper). Erst der Klick bestätigt, nicht der Seitenaufruf — Mailfilter rufen Links vorab auf. Unbekannter oder verbrauchter Token: 404.\n\n**Zugriff:** Öffentlich — keine Anmeldung nötig.\n\n**Rate-Limit-Klasse:** `publicTokenAction`",
+        "operationId": "postPublicNewsletterBestaetigen",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "token": {
+                    "type": "string",
+                    "minLength": 10,
+                    "maxLength": 100
+                  }
+                },
+                "required": [
+                  "token"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Erfolg",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SuccessEnvelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "BUSINESS_RULE — fachlich nicht zulässig, etwa eine bereits ausgestellte Rechnung ändern.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/public/newsletter/abmelden": {
+      "post": {
+        "tags": [
+          "Öffentlich"
+        ],
+        "summary": "Newsletter abbestellen",
+        "description": "Abmeldung mit dem Token aus der E-Mail (im Körper), ein Klick, ohne Anmeldung. Unbekannter Token: 404; eine zweite Abmeldung ändert nichts.\n\n**Zugriff:** Öffentlich — keine Anmeldung nötig.\n\n**Rate-Limit-Klasse:** `publicTokenAction`",
+        "operationId": "postPublicNewsletterAbmelden",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "token": {
+                    "type": "string",
+                    "minLength": 10,
+                    "maxLength": 100
+                  }
+                },
+                "required": [
+                  "token"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Erfolg",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SuccessEnvelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "BUSINESS_RULE — fachlich nicht zulässig, etwa eine bereits ausgestellte Rechnung ändern.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/public/applications": {
       "post": {
         "tags": [

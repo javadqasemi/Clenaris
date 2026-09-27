@@ -5,7 +5,8 @@ import { GESCHWAERZT, istSensiblerSchluessel } from '../../src/lib/sensitive-fie
 import { BASE_URL, data, del, get, patch, post, requireServer } from '../helpers/client';
 import { ACCOUNTS, login, loginAll, type AccountName } from '../helpers/accounts';
 import { zuercherHeute } from '../helpers/datum';
-import { alleMails } from '../helpers/mail';
+import { alleMails, letzteMail, linksIn } from '../helpers/mail';
+import { resetRateLimits } from '../helpers/rate-limit';
 import { eigeneOrganisationId, schutzfreiAufraeumen, testDb, testDbGrund, testDbSchliessen } from '../helpers/testdb';
 import { totp } from '../helpers/totp';
 
@@ -1307,5 +1308,310 @@ describe('Zwei-Faktor-Anmeldung: einschalten, ausschalten, zurücksetzen', { con
       'Faktor zurücksetzen',
     );
     keineGeheimnisse(neu, 'Faktor zurücksetzen', { geheimnisse: [s.secret, s.otpauth, ...codes] });
+  });
+});
+
+// ===========================================================================
+//  Öffentliche Schreibwege — nach der Zwei-Faktor-Prüfung, siehe unten
+// ===========================================================================
+
+const OEFFENTLICH_EMAIL = 'pruef.protokollpflicht.oeffentlich.';
+const OEFFENTLICH_LEISTUNG = 'protokollpflicht-oeffentlich-';
+
+/**
+ * Alles, was die öffentlichen Formulare dieses Bereichs anlegen — gefunden
+ * über das Adresspräfix und den Leistungsschlüssel, nicht über die
+ * Laufnummer. Buchungen und Kundschaft gehen wie in
+ * `geschaeftsablaeufe.test.ts` an den Triggern vorbei weg; die Offerte der
+ * Ablehnung räumt `offertenAufraeumen` (Titel mit `MARKE_OFFERTE`).
+ */
+async function oeffentlichAufraeumen(): Promise<void> {
+  if (!db) return;
+  const email = { startsWith: OEFFENTLICH_EMAIL };
+  const anfragen = (await db.lead.findMany({ where: { email }, select: { id: true } })).map((l) => l.id);
+  if (anfragen.length > 0) {
+    const offerten = (await db.quote.findMany({ where: { leadId: { in: anfragen } }, select: { id: true } })).map((q) => q.id);
+    await db.publicAccessToken.deleteMany({ where: { resourceId: { in: offerten } } });
+    await db.quote.deleteMany({ where: { id: { in: offerten } } }).catch(() => undefined);
+    await db.task.deleteMany({ where: { leadId: { in: anfragen } } }).catch(() => undefined);
+    await db.activity.deleteMany({ where: { leadId: { in: anfragen } } }).catch(() => undefined);
+    await db.lead.deleteMany({ where: { id: { in: anfragen } } }).catch(() => undefined);
+  }
+  await db.newsletterSubscriber.deleteMany({ where: { email } });
+  await db.jobApplication.deleteMany({ where: { email } });
+
+  const leistungen = (await db.service.findMany({ where: { slug: { startsWith: OEFFENTLICH_LEISTUNG } }, select: { id: true } })).map((x) => x.id);
+  const kunden = (await db.customer.findMany({ where: { email }, select: { id: true } })).map((x) => x.id);
+  const buchungen = (
+    await db.booking.findMany({
+      where: { OR: [{ items: { some: { serviceId: { in: leistungen } } } }, { customerId: { in: kunden } }] },
+      select: { id: true },
+    })
+  ).map((x) => x.id);
+  await schutzfreiAufraeumen(async (tx) => {
+    const einsaetze = (await tx.job.findMany({ where: { bookingId: { in: buchungen } }, select: { id: true } })).map((x) => x.id);
+    await tx.jobChecklistItem.deleteMany({ where: { jobId: { in: einsaetze } } });
+    await tx.jobAssignment.deleteMany({ where: { jobId: { in: einsaetze } } });
+    await tx.activity.deleteMany({ where: { jobId: { in: einsaetze } } });
+    await tx.job.deleteMany({ where: { id: { in: einsaetze } } });
+    await tx.bookingItem.deleteMany({ where: { bookingId: { in: buchungen } } });
+    await tx.bookingExtra.deleteMany({ where: { bookingId: { in: buchungen } } });
+    await tx.activity.deleteMany({ where: { bookingId: { in: buchungen } } });
+    await tx.publicAccessToken.deleteMany({ where: { resourceId: { in: buchungen } } });
+    await tx.booking.deleteMany({ where: { id: { in: buchungen } } });
+    await tx.address.deleteMany({ where: { customerId: { in: kunden } } });
+    await tx.activity.deleteMany({ where: { customerId: { in: kunden } } });
+    await tx.customer.deleteMany({ where: { id: { in: kunden } } });
+    await tx.service.deleteMany({ where: { id: { in: leistungen } } });
+  });
+}
+
+/**
+ * Testmatrix „Öffentliche Endpunkte / audit" (2026-09-27): Die Bereiche oben
+ * prüfen angemeldete Wege. Die öffentlichen Formulare schreiben ebenso in
+ * den Bestand — eine Anfrage, eine Buchung, eine Einwilligung, eine
+ * Bewerbung —, und auf die Frage „wann und auf welchem Weg kam das herein?"
+ * muss das Protokoll antworten, gerade weil niemand angemeldet war.
+ *
+ * Verlangt wird je Weg die Zeile an der richtigen Entität und Kennung,
+ * **ohne handelnde Person** (`userId` leer — eine Person einzutragen hiesse,
+ * eine Anmeldung zu behaupten, die es nicht gab), in der eigenen
+ * Organisation, und **mit dem Anfragekontext**, den die Route kennt:
+ *
+ *  • Wege über den `ip`-Parameter der Route (`definePublicRoute`) tragen die
+ *    Adresse in `ip`. Der Testserver läuft mit `TRUSTED_PROXY_MODE=NONE`;
+ *    die Route kennt dann keine Adresse und gibt den ehrlichen Platzhalter
+ *    `unbekannt` weiter (`getClientIp`). Geprüft wird, dass **überhaupt**
+ *    etwas ankommt: Ein Dienst, der `ip` nicht an `audit` weiterreicht,
+ *    hinterlässt `null` — und damit fehlt die Adresse auch im Betrieb, wo
+ *    ein Proxy sie liefert.
+ *  • Die Offertablehnung über den Link nimmt den Signaturkontext
+ *    (`requestContext`): Adresse nur mit bekanntem Proxy, dafür die
+ *    Browser-Angabe. Dort wird die gesendete Browser-Angabe verlangt.
+ *
+ * Befund beim Schreiben (2026-09-27): Bewerbung und Newsletter-Anmeldung
+ * schrieben **keine** Zeile, der Offertentwurf aus der Offertanfrage eine
+ * ohne Adresse. Behoben in `website.service.ts` (`submitApplication`), in
+ * `/api/public/newsletter` und in `createQuoteFromRequest`.
+ *
+ * **Warum nach der Zwei-Faktor-Prüfung.** Jene steht zuletzt, weil sie die
+ * Sitzungen der Betriebsleitung beendet. Dieser Bereich braucht keine
+ * davon — die Formulare sind öffentlich, nur Vorbereitung und Aufräumen
+ * laufen über die Verwaltung.
+ */
+describe('Öffentliche Schreibwege: Protokollzeile ohne Person, mit Anfragekontext', { concurrency: 1, skip: ohneDb }, () => {
+  const BROWSER = 'Pruefreihe-Protokollpflicht/1.0';
+  const adresse = (name: string) => `${OEFFENTLICH_EMAIL}${name}.${RUN}@example.ch`;
+  const kontakt = (email: string) => ({
+    firstName: 'Protokoll',
+    lastName: `${MARKE_ANFRAGE}Oeffentlich${RUN}`,
+    email,
+    phone: '+41 31 555 00 12',
+    message: 'Wir suchen eine Unterhaltsreinigung für ein Büro in Bern.',
+    acceptPrivacy: true,
+    website: '',
+  });
+
+  before(async () => {
+    await oeffentlichAufraeumen();
+    await offertenAufraeumen();
+    // Die Formulare haben enge Stundenkontingente; ein früherer Bereich
+    // dieser Datei soll sie nicht aufgebraucht haben.
+    resetRateLimits();
+  });
+  after(async () => {
+    await oeffentlichAufraeumen();
+    await offertenAufraeumen();
+  });
+
+  /** Die öffentliche Zeile: ohne Person, eigene Organisation, mit Adresse. */
+  function erwarteOeffentlich(eintraege: Eintrag[], erwartet: Omit<Erwartung, 'userId'>, vorgang: string): Eintrag {
+    const eintrag = erwarteEintrag(eintraege, { ...erwartet, userId: null }, vorgang);
+    assert.ok(eintrag.ip, `${vorgang}: die Zeile trägt keine Adresse — die Route hat ihr Wissen nicht an das Protokoll weitergegeben`);
+    return eintrag;
+  }
+
+  it('Kontaktformular: CREATE an der neuen Anfrage, eine weitere Anfrage derselben Person UPDATE daran', async () => {
+    const email = adresse('kontakt');
+    const antwort = await post('/api/public/contact', kontakt(email));
+    assert.equal(antwort.status, 201, antwort.text);
+    const anfrage = await db!.lead.findFirstOrThrow({ where: { email, deletedAt: null }, select: { id: true } });
+    const eintraege = await eintraegeZu('Lead', anfrage.id);
+    erwarteOeffentlich(eintraege, { entity: 'Lead', entityId: anfrage.id, action: 'CREATE' }, 'Kontaktformular');
+    keineGeheimnisse(eintraege, 'Kontaktformular');
+
+    const { ergebnis, neu } = await beobachten({ entity: 'Lead', entityId: anfrage.id }, () => post('/api/public/contact', kontakt(email)));
+    assert.equal(ergebnis.status, 201, ergebnis.text);
+    erwarteOeffentlich(neu, { entity: 'Lead', entityId: anfrage.id, action: 'UPDATE', summary: /Weitere Anfrage/ }, 'Weitere Kontaktanfrage');
+    keineGeheimnisse(neu, 'Weitere Kontaktanfrage');
+  });
+
+  it('Offertanfrage: CREATE an der Anfrage und CREATE am Offertentwurf — beide mit Adresse', async () => {
+    const email = adresse('offerte');
+    const antwort = await post<{ data: { quoteNumber: string | null } }>('/api/public/quotes', {
+      ...kontakt(email),
+      serviceKind: 'OFFICE_CLEANING',
+      squareMeters: 80,
+      postalCode: '3011',
+      city: 'Bern',
+      frequency: 'ONCE',
+    });
+    assert.equal(antwort.status, 201, antwort.text);
+    assert.ok(data(antwort).quoteNumber, `Vorbedingung: der Offertentwurf ist entstanden (${antwort.text})`);
+
+    // Über die Offerte zur Anfrage, nicht über die E-Mail-Adresse: Die
+    // Zuordnung (`findMatchingLead`) hängt eine Anfrage mit derselben
+    // Telefonnummer an eine bestehende an — die Kontaktanfrage oben in diesem
+    // Block trägt dieselbe Nummer, und die Anfrage heisst dann nach ihr.
+    const offerte = await db!.quote.findFirstOrThrow({ where: { number: data(antwort).quoteNumber! }, select: { id: true, leadId: true } });
+    assert.ok(offerte.leadId, 'der Offertentwurf hängt an keiner Anfrage');
+    const anfrage = { id: offerte.leadId };
+    const anAnfrage = await eintraegeZu('Lead', anfrage.id);
+    const anOfferte = await eintraegeZu('Quote', offerte.id);
+    erwarteOeffentlich(anAnfrage, { entity: 'Lead', entityId: anfrage.id, action: 'CREATE' }, 'Offertanfrage (Anfrage)');
+    erwarteOeffentlich(anOfferte, { entity: 'Quote', entityId: offerte.id, action: 'CREATE', summary: /Website-Anfrage/ }, 'Offertanfrage (Entwurf)');
+    keineGeheimnisse([...anAnfrage, ...anOfferte], 'Offertanfrage');
+  });
+
+  it('Gastbuchung: CREATE an der Buchung, ohne Person', async () => {
+    const leistung = (
+      await db!.service.create({
+        data: {
+          organizationId: stamm.org,
+          slug: `${OEFFENTLICH_LEISTUNG}${RUN}`,
+          kind: 'OFFICE_CLEANING',
+          name: `Protokollpflicht öffentlich ${RUN}`,
+          shortDesc: 'Prüfleistung',
+          description: 'Nur für die Prüfreihe Protokollpflicht.',
+          pricingModel: 'PER_HOUR',
+          hourlyRate: 60,
+          basePrice: 0,
+          minPrice: 0,
+          minHours: 1,
+          defaultDurationMin: 60,
+          minutesPerSqm: 0,
+          defaultCrewSize: 1,
+          bufferMinutes: 0,
+          vatRate: 8.1,
+        },
+      })
+    ).id;
+    const leistungen = [{ serviceId: leistung, extras: [] }];
+
+    const verfuegbar = await post<{ data: { tage: { available: boolean; slots: { start: string; available: boolean }[] }[] } }>(
+      '/api/public/availability',
+      { leistungen, von: tagIn(7), tage: 21 },
+    );
+    assert.equal(verfuegbar.status, 200, verfuegbar.text);
+    const slot = data(verfuegbar)
+      .tage.filter((tag) => tag.available)
+      .flatMap((tag) => tag.slots)
+      .find((x) => x.available);
+    assert.ok(slot, 'in drei Wochen ab nächster Woche kein freies Zeitfenster — Einsatzzeiten befüllt?');
+
+    const antwort = await post<{ data: { id: string } }>('/api/public/bookings', {
+      leistungen,
+      frequency: 'ONCE',
+      scheduledStart: slot.start,
+      propertyKind: 'OFFICE',
+      squareMeters: 80,
+      hasPets: false,
+      firstName: 'Protokoll',
+      lastName: `Gast${RUN}`,
+      email: adresse('buchung'),
+      phone: '+41 79 123 45 67',
+      address: { street: 'Bundesgasse', streetNo: '5', postalCode: '3011', city: 'Bern', canton: 'BE', country: 'CH' },
+      acceptTerms: true,
+      website: '',
+    });
+    assert.equal(antwort.status, 201, antwort.text);
+    const buchungId = data(antwort).id;
+    const eintraege = await eintraegeZu('Booking', buchungId);
+    erwarteOeffentlich(eintraege, { entity: 'Booking', entityId: buchungId, action: 'CREATE', summary: /über die Website/ }, 'Gastbuchung');
+    keineGeheimnisse(eintraege, 'Gastbuchung', { geheimnisse: await zugangsgeheimnisse(buchungId) });
+  });
+
+  it('Newsletter-Anmeldung: CREATE am Eintrag, eine erneute Anmeldung UPDATE — ohne Adresse und ohne Token in der Zeile', async () => {
+    const email = adresse('newsletter');
+    const antwort = await post('/api/public/newsletter', { email, locale: 'DE', website: '' });
+    assert.equal(antwort.status, 201, antwort.text);
+    const eintrag = await db!.newsletterSubscriber.findFirstOrThrow({ where: { email }, select: { id: true, confirmToken: true, unsubscribeToken: true } });
+    const eintraege = await eintraegeZu('NewsletterSubscriber', eintrag.id);
+    erwarteOeffentlich(eintraege, { entity: 'NewsletterSubscriber', entityId: eintrag.id, action: 'CREATE' }, 'Newsletter-Anmeldung');
+
+    const { ergebnis, neu } = await beobachten({ entity: 'NewsletterSubscriber', entityId: eintrag.id }, () =>
+      post('/api/public/newsletter', { email, locale: 'DE', website: '' }),
+    );
+    assert.equal(ergebnis.status, 201, ergebnis.text);
+    erwarteOeffentlich(neu, { entity: 'NewsletterSubscriber', entityId: eintrag.id, action: 'UPDATE' }, 'Erneute Newsletter-Anmeldung');
+
+    const tokens = await db!.newsletterSubscriber.findUniqueOrThrow({ where: { id: eintrag.id }, select: { confirmToken: true, unsubscribeToken: true } });
+    const alle = [...eintraege, ...neu];
+    keineGeheimnisse(alle, 'Newsletter-Anmeldung', {
+      geheimnisse: [eintrag.confirmToken, eintrag.unsubscribeToken, tokens.confirmToken, tokens.unsubscribeToken],
+    });
+    for (const zeile of alle) {
+      assert.ok(!JSON.stringify(zeile).toLowerCase().includes(email), 'die E-Mail-Adresse steht im Protokoll — die Zeile soll verweisen, nicht kopieren');
+    }
+  });
+
+  it('Bewerbung: CREATE an der Bewerbung, ohne Name und E-Mail-Adresse in der Zeile', async () => {
+    const inserat = await db!.jobPosting.findFirst({ where: { organizationId: stamm.org, status: 'PUBLISHED' }, select: { id: true } });
+    assert.ok(inserat, 'Vorbedingung: ein veröffentlichtes Stelleninserat im Demobestand');
+    const email = adresse('bewerbung');
+    const antwort = await post<{ data: { id: string } }>('/api/public/applications', {
+      postingId: inserat.id,
+      firstName: 'Protokoll',
+      lastName: `Bewerbung${RUN}`,
+      email,
+      phone: '+41 79 123 45 68',
+      message: 'Ich arbeite seit fünf Jahren in der Unterhaltsreinigung.',
+      acceptPrivacy: true,
+      website: '',
+    });
+    assert.equal(antwort.status, 201, antwort.text);
+    const bewerbungId = data(antwort).id;
+    const eintraege = await eintraegeZu('JobApplication', bewerbungId);
+    erwarteOeffentlich(eintraege, { entity: 'JobApplication', entityId: bewerbungId, action: 'CREATE' }, 'Bewerbung');
+    keineGeheimnisse(eintraege, 'Bewerbung');
+    for (const zeile of eintraege) {
+      const text = JSON.stringify(zeile).toLowerCase();
+      assert.ok(!text.includes(email) && !text.includes(`bewerbung${RUN}`), 'Personendaten der Bewerbung stehen im Protokoll');
+    }
+  });
+
+  it('Offertablehnung über den Link: UPDATE an der Offerte, ohne Person, mit der Browser-Angabe', async (t) => {
+    const angelegt = await post<{ data: { id: string } }>(
+      '/api/quotes',
+      {
+        customerId: stamm.kundeId,
+        title: `${MARKE_OFFERTE} Ablehnung ${RUN}`,
+        validUntil: tagIn(30),
+        items: [{ name: 'Unterhaltsreinigung', quantity: 2, unit: 'Std.', unitPrice: 55, discount: 0, vatRate: 8.1, optional: false }],
+        discountValue: 0,
+      },
+      { jar: jars.admin },
+    );
+    assert.equal(angelegt.status, 201, angelegt.text);
+    const offerteId = data(angelegt).id;
+    const versand = await post(`/api/quotes/${offerteId}/send`, { attachPdf: false }, { jar: jars.admin });
+    assert.equal(versand.status, 200, versand.text);
+
+    // Der tatsächlich verschickte Link — der rohe Token steht nur in der Nachricht.
+    const mail = letzteMail({ entityId: offerteId });
+    const token = mail ? linksIn(mail).map((l) => /\/offerte\/([0-9a-f]{64})(?:$|[?#])/.exec(l)?.[1]).find(Boolean) : undefined;
+    if (!token) return t.skip('kein Postausgang des Testservers — der Link lässt sich nicht lesen');
+
+    const { ergebnis, neu } = await beobachten({ entity: 'Quote', entityId: offerteId }, () =>
+      post(`/api/public/quotes/${token}/respond`, { decision: 'REJECT', reason: 'Budget überschritten' }, { headers: { 'user-agent': BROWSER } }),
+    );
+    assert.equal(ergebnis.status, 200, ergebnis.text);
+    const eintrag = erwarteEintrag(
+      neu,
+      { entity: 'Quote', entityId: offerteId, action: 'UPDATE', userId: null, summary: /über den Link abgelehnt/ },
+      'Offertablehnung über den Link',
+    );
+    assert.equal(eintrag.userAgent, BROWSER, 'die Zeile trägt die Browser-Angabe der Anfrage nicht');
+    keineGeheimnisse(neu, 'Offertablehnung über den Link', { geheimnisse: [token, ...(await zugangsgeheimnisse(offerteId))] });
   });
 });

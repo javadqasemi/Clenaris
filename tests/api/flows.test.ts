@@ -1,8 +1,10 @@
-import { describe, it } from 'node:test';
+import { after, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { call, get, post, requireServer } from '../helpers/client';
+import { call, data, get, post, requireServer } from '../helpers/client';
 import { loginAs } from '../helpers/accounts';
+import { resetRateLimits } from '../helpers/rate-limit';
+import { testDb, testDbGrund, testDbSchliessen } from '../helpers/testdb';
 
 /**
  * Die Abläufe, die Geld und Verbindlichkeiten erzeugen.
@@ -612,5 +614,271 @@ describe('Zugriffsschutz', { concurrency: 1 }, async () => {
       headers: { authorization: `Bearer ${secret}` },
     });
     assert.equal(response.status, 200, 'stimmt CRON_SECRET in .env mit dem Test überein?');
+  });
+});
+
+// ---------------------------------------------------------------------------
+
+/**
+ * Alles, was die beiden folgenden Blöcke anlegen, trägt diese Marke — im
+ * Betreff der Verläufe, im Titel der Offerten, im Nachnamen der Anfragen —
+ * und wird am Ende der Datei über die Testdatenbank entfernt. Anders als die
+ * Rechnungen oben ist nichts davon aufbewahrungspflichtig.
+ */
+const BEZUG_MARKE = 'Prüfreihe Bezug';
+
+after(async () => {
+  const db = testDb();
+  if (db) {
+    await db.messageThread.deleteMany({ where: { subject: { startsWith: BEZUG_MARKE } } });
+    await db.quote.deleteMany({ where: { title: { startsWith: BEZUG_MARKE } } });
+    await db.lead.deleteMany({ where: { lastName: BEZUG_MARKE } });
+  }
+  await testDbSchliessen();
+});
+
+/**
+ * Nachrichten: gleichzeitige Antworten und Abschluss (2026-09-27, Testmatrix
+ * `nachrichten.nebenlaeufigkeit` und `nachrichten.idempotenz`).
+ *
+ * `replyToThread` prüfte „geschlossen?" ausserhalb jeder Sperre und schrieb
+ * `lastMessageAt` mit dem Zeitpunkt der eigenen Nachricht, gleich ob schon
+ * eine neuere dastand. Antwortete die Kundschaft im selben Augenblick, in dem
+ * das Büro abschloss, konnte ihre Antwort *nach* der abschliessenden Nachricht
+ * im geschlossenen Verlauf landen — unsichtbar, weil die Liste geschlossene
+ * Verläufe ausblendet. Jetzt sperrt die Antwort die Verlaufszeile und liest
+ * den Zustand dahinter erneut.
+ *
+ * **Was nicht geprüft wird, und warum.** Eine doppelt abgeschickte Antwort
+ * (zweimal derselbe Text) ergibt zwei Nachrichten: Die Antwort trägt keinen
+ * Idempotenzschlüssel, und das Produkt verspricht nirgends, gleichen Text zu
+ * verschmelzen — zwei gleiche Sätze können gewollt sein. Belegt wird, was
+ * versprochen ist: keine Antwort geht verloren, `lastMessageAt` dreht nicht
+ * zurück, und ein zweites Abschliessen ist eine Absage ohne Nachricht.
+ */
+describe('Nachrichtenverlauf unter Gleichzeitigkeit', { concurrency: 1 }, async () => {
+  await requireServer();
+  const admin = await loginAs('admin');
+  const customer = await loginAs('customer');
+
+  const verlaufEroeffnen = async (zusatz: string): Promise<string> => {
+    const eroeffnet = await post<{ data: { id: string } }>(
+      '/api/messages',
+      { subject: `${BEZUG_MARKE} ${zusatz} ${Date.now()}`, body: 'Erste Nachricht der Kundschaft.' },
+      { jar: customer },
+    );
+    assert.equal(eroeffnet.status, 201, eroeffnet.text);
+    return data(eroeffnet).id;
+  };
+
+  /** Bestand eines Verlaufs aus der Datenbank — die HTTP-Sicht sortiert und blendet nichts aus, was hier fehlen dürfte. */
+  const bestand = async (threadId: string) => {
+    const db = testDb()!;
+    const thread = await db.messageThread.findUniqueOrThrow({ where: { id: threadId }, select: { closed: true, lastMessageAt: true } });
+    const nachrichten = await db.message.findMany({ where: { threadId }, orderBy: { createdAt: 'asc' }, select: { authorType: true, body: true, createdAt: true } });
+    return { thread, nachrichten };
+  };
+
+  it('sechs gleichzeitige Antworten: alle angenommen, keine verloren, lastMessageAt ist die neueste Nachricht', async () => {
+    assert.ok(testDb(), `kein Zugang zur Testdatenbank: ${testDbGrund()}`);
+    resetRateLimits();
+    const threadId = await verlaufEroeffnen('gleichzeitig');
+
+    const antworten = await Promise.all(
+      Array.from({ length: 6 }, (_, i) =>
+        post(`/api/messages/${threadId}`, { body: `Gleichzeitige Antwort ${i + 1}` }, { jar: i % 2 === 0 ? customer : admin }),
+      ),
+    );
+    assert.deepEqual(antworten.map((a) => a.status), [201, 201, 201, 201, 201, 201], antworten.map((a) => a.text).join(' | '));
+
+    const { thread, nachrichten } = await bestand(threadId);
+    assert.equal(nachrichten.length, 7, 'eine Antwort ist verloren gegangen');
+    const neueste = Math.max(...nachrichten.map((n) => n.createdAt.getTime()));
+    assert.equal(thread.lastMessageAt.getTime(), neueste, 'lastMessageAt zeigt nicht auf die neueste Nachricht (verlorene Aktualisierung)');
+  });
+
+  it('Antworten gegen Abschliessen, fünf Runden: nach dem Abschluss steht keine Antwort mehr im Verlauf, jede Absage ist 422 ohne Nachricht', async () => {
+    resetRateLimits();
+    for (let runde = 1; runde <= 5; runde += 1) {
+      const threadId = await verlaufEroeffnen(`Abschluss Runde ${runde}`);
+
+      // Das Büro schliesst mitten zwischen sechs Antworten der Kundschaft ab.
+      const auftraege = Array.from({ length: 7 }, (_, i) =>
+        i === 3
+          ? post(`/api/messages/${threadId}`, { body: `Abschluss Runde ${runde}`, close: true }, { jar: admin })
+          : post(`/api/messages/${threadId}`, { body: `Kundschaft ${runde}.${i}` }, { jar: customer }),
+      );
+      const antworten = await Promise.all(auftraege);
+      const abschluss = antworten[3]!;
+      assert.equal(abschluss.status, 201, `Runde ${runde}: Abschluss ${abschluss.text}`);
+
+      const kundschaft = antworten.filter((_, i) => i !== 3);
+      for (const a of kundschaft) {
+        assert.ok([201, 422].includes(a.status), `Runde ${runde}: unerwartet HTTP ${a.status} ${a.text}`);
+      }
+      const angenommen = kundschaft.filter((a) => a.status === 201).length;
+
+      const { thread, nachrichten } = await bestand(threadId);
+      assert.equal(thread.closed, true, `Runde ${runde}: Verlauf nicht geschlossen`);
+      assert.equal(nachrichten.length, 1 + angenommen + 1, `Runde ${runde}: ${nachrichten.length} Nachrichten, erwartet ${2 + angenommen} — eine Absage hat doch geschrieben oder eine Annahme fehlt`);
+
+      const abschlussNachricht = nachrichten.find((n) => n.body === `Abschluss Runde ${runde}`)!;
+      const danach = nachrichten.filter((n) => n.authorType === 'CUSTOMER' && n.createdAt.getTime() > abschlussNachricht.createdAt.getTime());
+      assert.equal(danach.length, 0, `Runde ${runde}: ${danach.length} Antwort(en) der Kundschaft nach dem Abschluss angenommen`);
+
+      const neueste = Math.max(...nachrichten.map((n) => n.createdAt.getTime()));
+      assert.equal(thread.lastMessageAt.getTime(), neueste, `Runde ${runde}: lastMessageAt dreht zurück`);
+    }
+  });
+
+  it('ein zweites Abschliessen ist eine Absage (422) und schreibt keine Nachricht', async () => {
+    const threadId = await verlaufEroeffnen('doppelt abgeschlossen');
+    assert.equal((await post(`/api/messages/${threadId}`, { body: 'Erledigt.', close: true }, { jar: admin })).status, 201);
+    const vorher = await bestand(threadId);
+
+    const nochmals = await post(`/api/messages/${threadId}`, { body: 'Erledigt.', close: true }, { jar: admin });
+    assert.equal(nochmals.status, 422, nochmals.text);
+
+    const nachher = await bestand(threadId);
+    assert.equal(nachher.nachrichten.length, vorher.nachrichten.length, 'das zweite Abschliessen hat eine Nachricht geschrieben');
+    assert.equal(nachher.thread.lastMessageAt.getTime(), vorher.thread.lastMessageAt.getTime());
+    assert.equal(nachher.thread.closed, true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+
+/**
+ * Anfrage, Kundschaft und Objekt einer Offerte passen zusammen (2026-09-27,
+ * Testmatrix `crm.falscherBezug`).
+ *
+ * Jede der drei Kennungen wurde nur gegen die Organisation geprüft. Eine
+ * Offerte für Kundschaft B liess sich an die bereits umgewandelte Anfrage von
+ * Kundschaft A hängen — nahm B an, galt A's Anfrage als gewonnen —, und ein
+ * Objekt durfte jeder Kundschaft gehören, sobald die Offerte keine nannte.
+ * Die Regel steht in `pruefeOffertBezug` (`quote.service.ts`).
+ *
+ * Die Anfrage wird mit der E-Mail-Adresse der Kundschaft A erfasst und
+ * umgewandelt; `convertLeadToCustomer` verknüpft sie dann mit A statt eine
+ * neue Akte anzulegen. So entsteht keine Kundschaft, die aufzuräumen wäre.
+ */
+describe('Offerte: Anfrage, Kundschaft und Objekt passen zusammen', { concurrency: 1 }, async () => {
+  await requireServer();
+  const admin = await loginAs('admin');
+
+  type Objekt = { id: string; customerId?: string; customer?: { id: string } };
+  const objekte = data(await get<{ data: Objekt[] }>('/api/properties?pageSize=100', { jar: admin })) ?? [];
+  const kundeVon = (o: Objekt) => o.customerId ?? o.customer?.id ?? '';
+  const objektA = objekte.find((o) => kundeVon(o));
+  const objektB = objekte.find((o) => kundeVon(o) && objektA && kundeVon(o) !== kundeVon(objektA));
+  const kundeA = objektA ? kundeVon(objektA) : '';
+  const kundeB = objektB ? kundeVon(objektB) : '';
+
+  const offerte = (bezug: { customerId?: string; leadId?: string; propertyId?: string }, titel: string) =>
+    post<{ data: { id: string } }>(
+      '/api/quotes',
+      {
+        ...bezug,
+        title: `${BEZUG_MARKE} ${titel}`,
+        validUntil: dateOnly(inDays(30)),
+        items: [{ name: 'Unterhaltsreinigung', quantity: 1, unit: 'Std.', unitPrice: 60, discount: 0, vatRate: 8.1, optional: false }],
+        discountValue: 0,
+      },
+      { jar: admin },
+    );
+
+  const offertenMitTitel = (titel: string) => testDb()!.quote.count({ where: { title: `${BEZUG_MARKE} ${titel}` } });
+
+  let anfrageVonA = '';
+  let offeneAnfrage = '';
+
+  it('Vorbereitung: zwei Kundschaften mit Objekt, eine mit A verknüpfte und eine offene Anfrage', async () => {
+    assert.ok(testDb(), `kein Zugang zur Testdatenbank: ${testDbGrund()}`);
+    assert.ok(objektA && objektB, 'der Demobestand braucht Objekte zweier verschiedener Kundschaften');
+
+    // Aus der Testdatenbank: Die Detailantwort der Kundschaft verpackt den
+    // Datensatz, und hier zählt nur die Adresse, über die die Umwandlung
+    // verknüpft.
+    const a = await testDb()!.customer.findUniqueOrThrow({ where: { id: kundeA }, select: { email: true } });
+    assert.ok(a.email, 'E-Mail-Adresse der Kundschaft A fehlt');
+
+    const erfasst = await post<{ data: { id: string } }>(
+      '/api/leads',
+      { firstName: 'Anfrage', lastName: BEZUG_MARKE, email: a.email, source: 'PHONE', tagIds: [] },
+      { jar: admin },
+    );
+    assert.equal(erfasst.status, 201, erfasst.text);
+    anfrageVonA = data(erfasst).id;
+    const umgewandelt = await post<{ data: { id: string } }>(`/api/leads/${anfrageVonA}/convert`, undefined, { jar: admin });
+    assert.equal(umgewandelt.status, 201, umgewandelt.text);
+    assert.equal(data(umgewandelt).id, kundeA, 'die Anfrage wurde nicht mit Kundschaft A verknüpft');
+
+    const offen = await post<{ data: { id: string } }>(
+      '/api/leads',
+      { firstName: 'Offen', lastName: BEZUG_MARKE, email: `bezug.offen.${Date.now()}@example.ch`, source: 'PHONE', tagIds: [] },
+      { jar: admin },
+    );
+    assert.equal(offen.status, 201, offen.text);
+    offeneAnfrage = data(offen).id;
+  });
+
+  it('die umgewandelte Anfrage von A in einer Offerte für B: 422, keine Offerte, die Anfrage bleibt gewonnen', async () => {
+    const r = await offerte({ customerId: kundeB, leadId: anfrageVonA }, 'Anfrage A Kundschaft B');
+    assert.equal(r.status, 422, r.text);
+    assert.equal(await offertenMitTitel('Anfrage A Kundschaft B'), 0, 'Offerte mit fremder Anfrage entstanden');
+    const anfrage = await testDb()!.lead.findUniqueOrThrow({ where: { id: anfrageVonA }, select: { status: true, customerId: true } });
+    assert.deepEqual(anfrage, { status: 'WON', customerId: kundeA }, 'die Anfrage von A wurde durch die abgewiesene Offerte verändert');
+  });
+
+  it('die Anfrage von A ohne Kundschaft, aber mit dem Objekt von B: 404, keine Offerte', async () => {
+    const r = await offerte({ leadId: anfrageVonA, propertyId: objektB!.id }, 'Anfrage A Objekt B');
+    assert.equal(r.status, 404, r.text);
+    assert.equal(await offertenMitTitel('Anfrage A Objekt B'), 0, 'Offerte mit dem Objekt einer anderen Kundschaft entstanden');
+  });
+
+  it('ein Objekt ohne jede Kundschaft (weder in der Offerte noch an der Anfrage): 422, keine Offerte', async () => {
+    const ohne = await offerte({ propertyId: objektA!.id }, 'Objekt ohne Kundschaft');
+    assert.equal(ohne.status, 422, ohne.text);
+    const mitOffenerAnfrage = await offerte({ leadId: offeneAnfrage, propertyId: objektA!.id }, 'offene Anfrage mit Objekt');
+    assert.equal(mitOffenerAnfrage.status, 422, mitOffenerAnfrage.text);
+    assert.equal(await offertenMitTitel('Objekt ohne Kundschaft'), 0);
+    assert.equal(await offertenMitTitel('offene Anfrage mit Objekt'), 0);
+  });
+
+  /**
+   * Dieselbe Regel an der Besichtigung (2026-09-27): `pruefeBezug` im
+   * Besichtigungsdienst prüfte nur die Organisation. Gegen den alten Stand
+   * entstanden beide Besichtigungen (201).
+   */
+  it('Besichtigung: die Anfrage von A für Kundschaft B → 422, mit dem Objekt von B → 404; nichts entsteht', async () => {
+    const notiz = `${BEZUG_MARKE} Besichtigung`;
+    const besichtigung = (bezug: Record<string, string>) =>
+      post('/api/site-visits', { ...bezug, scheduledAt: inDays(3).toISOString(), accessNotes: notiz }, { jar: admin });
+    try {
+      const falscheKundschaft = await besichtigung({ leadId: anfrageVonA, customerId: kundeB });
+      assert.equal(falscheKundschaft.status, 422, falscheKundschaft.text);
+      const falschesObjekt = await besichtigung({ leadId: anfrageVonA, propertyId: objektB!.id });
+      assert.equal(falschesObjekt.status, 404, falschesObjekt.text);
+      assert.equal(await testDb()!.siteVisit.count({ where: { accessNotes: notiz } }), 0, 'eine Besichtigung mit unpassendem Bezug ist entstanden');
+    } finally {
+      await testDb()!.siteVisit.deleteMany({ where: { accessNotes: notiz } });
+    }
+  });
+
+  it('Kundschaft A mit dem Objekt von B: 404, keine Offerte', async () => {
+    const r = await offerte({ customerId: kundeA, propertyId: objektB!.id }, 'Kundschaft A Objekt B');
+    assert.equal(r.status, 404, r.text);
+    assert.equal(await offertenMitTitel('Kundschaft A Objekt B'), 0);
+  });
+
+  it('Gegenprobe: passende Bezüge werden angenommen — mit und ohne ausdrückliche Kundschaft, und eine offene Anfrage zu jeder Kundschaft', async () => {
+    const voll = await offerte({ customerId: kundeA, leadId: anfrageVonA, propertyId: objektA!.id }, 'passend voll');
+    assert.equal(voll.status, 201, voll.text);
+    // Ohne `customerId` gilt die Kundschaft der Anfrage — ihr Objekt passt.
+    const ueberAnfrage = await offerte({ leadId: anfrageVonA, propertyId: objektA!.id }, 'passend über Anfrage');
+    assert.equal(ueberAnfrage.status, 201, ueberAnfrage.text);
+    // Eine noch nicht umgewandelte Anfrage darf mit jeder Kundschaft zusammenstehen.
+    const offen = await offerte({ customerId: kundeB, leadId: offeneAnfrage, propertyId: objektB!.id }, 'offene Anfrage Kundschaft B');
+    assert.equal(offen.status, 201, offen.text);
   });
 });

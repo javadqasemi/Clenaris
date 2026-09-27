@@ -5,7 +5,7 @@
 > Quelle, aus der sowohl diese Referenz als auch die Laufzeitvalidierung
 > stammen.
 
-Stand: 538 Endpunkte. Die maschinenlesbare Fassung liegt in
+Stand: 540 Endpunkte. Die maschinenlesbare Fassung liegt in
 [`openapi.yaml`](./openapi.yaml) bzw. [`openapi.json`](./openapi.json).
 
 ## Grundlagen
@@ -538,6 +538,36 @@ Familie.
 | `locale` | string | – | `DE` \| `EN` \| `FR` \| `IT`, Standard `"DE"` |
 | `source` | string | – | max. 80 Zeichen |
 | `website` | union | ja | – |
+
+### `POST /api/public/newsletter/bestaetigen`
+
+**Newsletter-Anmeldung bestätigen.** Double-Opt-in mit dem Token aus der E-Mail (im Körper). Erst der Klick bestätigt, nicht der Seitenaufruf — Mailfilter rufen Links vorab auf. Unbekannter oder verbrauchter Token: 404.
+
+- **Zugriff:** Öffentlich — keine Anmeldung nötig.
+- **Rate-Limit-Klasse:** `publicTokenAction`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 422, 429, 500
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `token` | string | ja | min. 10 Zeichen, max. 100 Zeichen |
+
+### `POST /api/public/newsletter/abmelden`
+
+**Newsletter abbestellen.** Abmeldung mit dem Token aus der E-Mail (im Körper), ein Klick, ohne Anmeldung. Unbekannter Token: 404; eine zweite Abmeldung ändert nichts.
+
+- **Zugriff:** Öffentlich — keine Anmeldung nötig.
+- **Rate-Limit-Klasse:** `publicTokenAction`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 422, 429, 500
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `token` | string | ja | min. 10 Zeichen, max. 100 Zeichen |
 
 ### `POST /api/public/applications`
 

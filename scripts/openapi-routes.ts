@@ -433,6 +433,32 @@ export const ROUTES: RouteDoc[] = [
   },
   {
     method: 'post',
+    path: '/api/public/newsletter/bestaetigen',
+    tag: 'Öffentlich',
+    summary: 'Newsletter-Anmeldung bestätigen',
+    description:
+      'Double-Opt-in mit dem Token aus der E-Mail (im Körper). Erst der Klick bestätigt, nicht ' +
+      'der Seitenaufruf — Mailfilter rufen Links vorab auf. Unbekannter oder verbrauchter Token: 404.',
+    guard: { kind: 'public' },
+    rateLimit: 'publicTokenAction',
+    body: crm.newsletterTokenSchema,
+    status: 200,
+  },
+  {
+    method: 'post',
+    path: '/api/public/newsletter/abmelden',
+    tag: 'Öffentlich',
+    summary: 'Newsletter abbestellen',
+    description:
+      'Abmeldung mit dem Token aus der E-Mail (im Körper), ein Klick, ohne Anmeldung. ' +
+      'Unbekannter Token: 404; eine zweite Abmeldung ändert nichts.',
+    guard: { kind: 'public' },
+    rateLimit: 'publicTokenAction',
+    body: crm.newsletterTokenSchema,
+    status: 200,
+  },
+  {
+    method: 'post',
     path: '/api/public/applications',
     tag: 'Öffentlich',
     summary: 'Auf eine Stelle bewerben',

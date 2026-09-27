@@ -54,17 +54,31 @@ async function pruefeBezug(
   organizationId: string,
   input: { leadId?: string | null; customerId?: string | null; propertyId?: string | null; assessorId?: string | null },
 ) {
+  /*
+    Dieselbe Regel wie bei der Offerte (`pruefeOffertBezug`, 2026-09-27):
+    Anfrage, Kundschaft und Objekt passen **untereinander**. Vorher genügte
+    hier die Organisation — eine Besichtigung für Kundschaft B liess sich an
+    die schon umgewandelte Anfrage von A hängen, und ohne `customerId` war
+    jedes Objekt des Betriebs zulässig. Die Offerte aus der Besichtigung fing
+    das inzwischen ab, die Besichtigung selbst nicht.
+  */
+  let kundschaftDerAnfrage: string | null = null;
   if (input.leadId) {
-    const l = await prisma.lead.findFirst({ where: { id: input.leadId, organizationId }, select: { id: true } });
+    const l = await prisma.lead.findFirst({ where: { id: input.leadId, organizationId }, select: { id: true, customerId: true } });
     if (!l) throw new NotFoundError('Anfrage');
+    kundschaftDerAnfrage = l.customerId;
   }
   if (input.customerId) {
     const k = await prisma.customer.findFirst({ where: { id: input.customerId, organizationId }, select: { id: true } });
     if (!k) throw new NotFoundError('Kundschaft');
+    if (kundschaftDerAnfrage && kundschaftDerAnfrage !== input.customerId) {
+      throw new BusinessRuleError('Die Anfrage gehört zu einer anderen Kundschaft als diese Besichtigung.');
+    }
   }
   if (input.propertyId) {
+    const kundschaft = input.customerId ?? kundschaftDerAnfrage;
     const o = await prisma.property.findFirst({
-      where: { id: input.propertyId, customer: { organizationId }, ...(input.customerId ? { customerId: input.customerId } : {}) },
+      where: { id: input.propertyId, customer: { organizationId }, ...(kundschaft ? { customerId: kundschaft } : {}) },
       select: { id: true },
     });
     if (!o) throw new NotFoundError('Objekt');

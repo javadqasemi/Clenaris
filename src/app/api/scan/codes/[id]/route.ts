@@ -8,9 +8,20 @@ export const runtime = 'nodejs';
 
 /**
  * DELETE /api/scan/codes/:id — ein Etikett sperren (verloren, beschädigt,
- * ersetzt). Der Eintrag bleibt als Nachweis stehen; danach löst der Code
- * nichts mehr auf, und ein neues Etikett bekommt einen neuen Code. Wer die
- * Art des Datensatzes nicht pflegen darf, bekommt 404 wie bei einer fremden ID.
+ * ersetzt). Der Eintrag bleibt als Nachweis stehen, und ein neues Etikett
+ * bekommt einen neuen Code. Wer die Art des Datensatzes nicht pflegen darf,
+ * bekommt 404 wie bei einer fremden ID.
+ *
+ * **Was ein gesperrter Code danach tut** (`nachInternemCode` in
+ * `scan.service.ts`): Er löst weiterhin auf — aber nur lesend, mit dem
+ * Hinweis „gesperrt" und **ohne Schnellaktionen**. Bis 2026-09-27 stand hier,
+ * er löse „nichts mehr auf"; das war nie die Regel. Ein Code, der stumm ins
+ * Leere liefe, sähe am Einsatzort aus wie ein Lesefehler: Man scannt noch
+ * einmal, tippt die Nummer von Hand ein und arbeitet mit dem alten Aufkleber
+ * weiter. Der Hinweis sagt stattdessen, *warum* nichts zu buchen ist, und
+ * wer den Datensatz lesen darf, findet ihn. Ohne Leserecht bleibt auch der
+ * gesperrte Code stumm (`scan.test.ts`: „gesperrt: Hinweis für wer lesen
+ * darf, keine Schnellaktionen mehr; …").
  */
 export const DELETE = defineRoute({
   permissions: ['inventory:manage', 'equipment:manage', 'property:update', 'job:update'],

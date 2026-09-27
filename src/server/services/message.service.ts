@@ -241,6 +241,28 @@ export async function replyToThread({
   const isCustomer = session.role === 'CUSTOMER';
 
   const message = await prisma.$transaction(async (tx) => {
+    /*
+      Zeile sperren, dann „geschlossen?" erneut lesen (2026-09-27, Testmatrix
+      `nachrichten.nebenlaeufigkeit`).
+
+      Die Prüfung oben liest ausserhalb jeder Sperre. Schloss das Büro den
+      Verlauf, während die Kundschaft gleichzeitig antwortete, lasen beide
+      „offen": Die Antwort der Kundschaft landete *nach* der abschliessenden
+      Nachricht in einem geschlossenen Verlauf — genau das, was die Regel
+      „wer nachfragen will, eröffnet einen neuen" ausschliessen soll, und
+      niemand im Büro sah sie, weil die Liste geschlossene Verläufe ausblendet.
+      Die Sperre reiht Antworten und Abschluss desselben Verlaufs hintereinander;
+      wer nach dem Abschluss an die Reihe kommt, sieht `closed` und bekommt 422.
+
+      Die Prüfung oben bleibt: Sie beantwortet den gewöhnlichen Fall ohne
+      Transaktion und ohne Sperre.
+    */
+    await tx.$queryRaw`SELECT "id" FROM "message_threads" WHERE "id" = ${thread.id} FOR UPDATE`;
+    const stand = await tx.messageThread.findUniqueOrThrow({ where: { id: thread.id }, select: { closed: true, lastMessageAt: true } });
+    if (stand.closed) {
+      throw new BusinessRuleError('Dieser Verlauf ist abgeschlossen. Bitte eröffnen Sie einen neuen.');
+    }
+
     const createdMessage = await tx.message.create({
       data: {
         threadId: thread.id,
@@ -259,10 +281,23 @@ export async function replyToThread({
       await dateienBinden(tx, { organizationId, fileIds: input.fileIds, uploadedById: session.id, scope: 'DOCUMENT', ziel: 'messageId', zielId: createdMessage.id });
     }
 
+    /*
+      Nie zurückdrehen: `lastMessageAt` ist der späteste Zeitpunkt, nicht der
+      zuletzt geschriebene. Zwei gleichzeitige Antworten schrieben vorher in
+      beliebiger Reihenfolge; gewann die ältere, stand der Verlauf in der
+      Liste weiter unten, als seine neueste Nachricht es verlangt. Hinter der
+      Sperre ist das kaum noch möglich — der Vergleich hält es auch dann, wenn
+      die Uhr zweier Prozesse nicht übereinstimmt.
+    */
+    const spaetester =
+      stand.lastMessageAt && stand.lastMessageAt.getTime() > createdMessage.createdAt.getTime()
+        ? stand.lastMessageAt
+        : createdMessage.createdAt;
+
     await tx.messageThread.update({
       where: { id: thread.id },
       data: {
-        lastMessageAt: createdMessage.createdAt,
+        lastMessageAt: spaetester,
         // Nur das Büro darf abschliessen.
         ...(!isCustomer && input.close ? { closed: true } : {}),
       },

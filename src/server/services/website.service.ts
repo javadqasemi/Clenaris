@@ -450,9 +450,12 @@ function revalidateCareers(): void {
 export async function submitApplication({
   organizationId,
   input,
+  ip,
 }: {
   organizationId: string;
   input: PublicApplicationInput;
+  /** Die Adresse der anfragenden Stelle, wie die Route sie kennt — für das Protokoll. */
+  ip?: string;
 }): Promise<{ id: string }> {
   const posting = await prisma.jobPosting.findFirst({
     where: { id: input.postingId, organizationId, status: 'PUBLISHED' },
@@ -502,6 +505,27 @@ export async function submitApplication({
       data: { applicationId: application.id },
     });
   }
+
+  /*
+    Eine Protokollzeile für den Eingang (2026-09-27). Die übrigen
+    öffentlichen Eingänge — Kontaktanfrage, Offertanfrage, Gastbuchung,
+    Offertablehnung über den Link — schrieben ihre Zeile seit je; die
+    Bewerbung als einzige nicht. Dabei ist sie der heikelste der Reihe:
+    Bewerbungsunterlagen sind besonders schützenswerte Personendaten, und auf
+    die Frage „wann ist diese Bewerbung eingegangen, und auf welchem Weg?"
+    — etwa bei einem Auskunfts- oder Löschbegehren — gab das Protokoll keine
+    Antwort. Ohne handelnde Person (niemand ist angemeldet), mit der Adresse,
+    die die Route kennt. Name und E-Mail-Adresse stehen bewusst nicht in der
+    Zusammenfassung: Die Zeile verweist auf die Bewerbung, sie kopiert sie
+    nicht — und bleibt stehen, wenn die Bewerbung gelöscht wird.
+  */
+  await audit.created({
+    organizationId,
+    entity: 'JobApplication',
+    entityId: application.id,
+    summary: `Bewerbung auf „${posting.title}" über die Website eingegangen${lebenslauf ? ' (mit Lebenslauf)' : ''}`,
+    ip,
+  });
 
   // Eingangsbestätigung an die bewerbende Person.
   await sendEmail({

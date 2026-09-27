@@ -18,9 +18,9 @@ export const runtime = 'nodejs';
 export const POST = definePublicRoute({
   body: publicApplicationSchema,
   rateLimit: 'contactForm',
-  handler: async ({ body }) => {
+  handler: async ({ body, ip }) => {
     const organizationId = await getOrganizationId();
-    const application = await submitApplication({ organizationId, input: body });
+    const application = await submitApplication({ organizationId, input: body, ip });
     return created({ id: application.id, status: 'received' });
   },
 });

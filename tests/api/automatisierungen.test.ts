@@ -1,5 +1,6 @@
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 
 import { bedingungenErfuellt, wertAn } from '../../src/lib/automation/conditions';
 import { fuelleVorlage, platzhalterIn } from '../../src/lib/automation/template';
@@ -1164,5 +1165,330 @@ describe('F-12/N-07 — Umwandlung, Regeländerung, liegengebliebene Ereignisse'
       });
       await db.automationEvent.delete({ where: { id: ereignis.id } });
     }
+  });
+});
+
+// ===========================================================================
+//  Falscher Bezug — eine Aktion wirkt nur auf den auslösenden Vorgang
+// ===========================================================================
+
+/**
+ * Testmatrix „Automatisierung / falscherBezug" (2026-09-27).
+ *
+ * Eine Regel läuft für **einen** Vorgang. Was sie tut — Status setzen,
+ * Aufgabe anlegen, Meldung schreiben, Platzhalter füllen —, muss an genau
+ * diesem Vorgang hängen. Die zwei Wege, auf denen das schiefgehen könnte:
+ *
+ *  • **Eine Kennung in der Konfiguration.** `config` wird als freies Json
+ *    gespeichert; das Schema je Aktionsart prüft die Felder, die es kennt,
+ *    und lässt weitere stehen. Läse eine Aktion `config.id` oder
+ *    `config.entityId`, wäre jede Regel ein Weg, einen beliebigen Datensatz
+ *    zu ändern — für jede Person mit `automation:update`, also auch für die
+ *    Betriebsleitung. Die Prüfung legt deshalb die Kennung einer **anderen**
+ *    Buchung in die Konfiguration und verlangt, dass diese unberührt bleibt.
+ *  • **Ein Ziel einer anderen Art.** `UPDATE_STATUS` mit `ziel: 'lead'` an
+ *    einer Buchungsregel hat keinen Lead, auf den es sich beziehen könnte —
+ *    es darf sich keinen suchen.
+ *
+ * Die Gegenprobe-Buchung entsteht, **bevor** es die Regel gibt. Sonst löste
+ * sie die Regel selbst aus, und ihr Storno wäre richtig statt falsch — die
+ * Prüfung könnte dann nicht unterscheiden.
+ */
+describe('Falscher Bezug — eine Aktion wirkt nur auf den auslösenden Vorgang', () => {
+  const RUN = Date.now();
+  const TITEL = `Bezugsprüfung ${RUN}`;
+  let regelId = '';
+
+  before(async () => {
+    await requireServer();
+    jars = await loginAll();
+    const db = testDb();
+    if (db) {
+      // Reste eines abgebrochenen Laufs — über das Präfix, nicht über die Laufnummer.
+      await db.task.deleteMany({ where: { title: { startsWith: 'Bezugsprüfung ' } } });
+      await db.notification.deleteMany({ where: { title: { startsWith: 'Bezugsprüfung ' } } });
+      for (const alt of await db.automation.findMany({ where: { name: { startsWith: 'Bezugsprüfung ' } }, select: { id: true } })) {
+        await del(`/api/automations/${alt.id}`, { jar: jars.admin }).catch(() => {});
+      }
+    }
+  });
+
+  after(async () => {
+    const db = testDb();
+    if (regelId) await del(`/api/automations/${regelId}`, { jar: jars.admin }).catch(() => {});
+    if (db) {
+      await db.task.deleteMany({ where: { title: { startsWith: TITEL } } });
+      await db.notification.deleteMany({ where: { title: { startsWith: TITEL } } });
+    }
+    await testDbSchliessen();
+  });
+
+  const stuendlich = () => get('/api/cron/hourly', { headers: { authorization: `Bearer ${process.env.CRON_SECRET ?? 'dev-cron-secret'}` } });
+
+  it('Status, Aufgabe, Meldung und Platzhalter treffen nur die auslösende Buchung — auch mit der Kennung einer anderen in der Konfiguration', async (t) => {
+    const db = testDb();
+    if (!db) return t.skip(`kein Zugang zur Testdatenbank: ${testDbGrund()}`);
+
+    const kunden = data(await get<{ data: { id: string }[] }>('/api/customers?pageSize=2', { jar: jars.admin })) ?? [];
+    const dienst = data(await get<{ data: { id: string }[] }>('/api/services', { jar: jars.admin }))?.[0];
+    if (kunden.length < 2 || !dienst) return t.skip('Bestand reicht nicht (zwei Kundenakten, eine Leistung)');
+    const [kundeAusloeser, kundeGegenprobe] = [kunden[0]!, kunden[1]!];
+
+    // Die Gegenprobe — vor der Regel angelegt, löst sie also nicht aus.
+    const gegenprobe = await erfasseBuchung(kundeGegenprobe.id, dienst.id, 42);
+    assert.equal(gegenprobe.status, 201, gegenprobe.text);
+    const gegenprobeId = data(gegenprobe).id;
+    const gegenprobeVorher = await db.booking.findUniqueOrThrow({ where: { id: gegenprobeId }, select: { status: true, updatedAt: true } });
+    const verloreneAnfragenVorher = await db.lead.count({ where: { status: 'LOST' } });
+
+    const aktionen = (fremdeKennung: boolean) => [
+      { type: 'CREATE_TASK', config: { titel: `${TITEL} {{nummer}} {{entityId}} {{kunde.id}}`, faelligInTagen: 1 } },
+      { type: 'CREATE_NOTIFICATION', config: { titel: `${TITEL} {{nummer}}`, empfaenger: 'MANAGEMENT' } },
+      {
+        type: 'UPDATE_STATUS',
+        config: {
+          ziel: 'booking',
+          status: 'CANCELLED',
+          // Die Kennung der Gegenprobe unter jedem Namen, den eine Aktion
+          // fälschlich lesen könnte.
+          ...(fremdeKennung ? { id: gegenprobeId, entityId: gegenprobeId, bookingId: gegenprobeId } : {}),
+        },
+      },
+      // Ein Ziel einer anderen Art: An einer Buchungsregel gibt es keinen Lead.
+      { type: 'UPDATE_STATUS', config: { ziel: 'lead', status: 'LOST' } },
+    ];
+    const regelDaten = (fremdeKennung: boolean) => ({
+      name: `${TITEL} Regel`,
+      trigger: 'BOOKING_CREATED',
+      delayMinutes: 0,
+      active: true,
+      actions: aktionen(fremdeKennung),
+    });
+
+    let regel = await post<{ data: { id: string } }>('/api/automations', regelDaten(true), { jar: jars.admin });
+    // Weist die Maske die zusätzlichen Felder ab, ist das die strengere und
+    // ebenso richtige Antwort; geprüft wird dann der Bezug ohne sie.
+    if (regel.status === 422) regel = await post<{ data: { id: string } }>('/api/automations', regelDaten(false), { jar: jars.admin });
+    assert.equal(regel.status, 201, regel.text);
+    regelId = data(regel).id;
+
+    const ausloeser = await erfasseBuchung(kundeAusloeser.id, dienst.id, 49);
+    assert.equal(ausloeser.status, 201, ausloeser.text);
+    const { id: buchungId, number: nummer } = data(ausloeser);
+
+    assert.equal(await db.automationRun.count({ where: { automationId: regelId, entityId: buchungId } }), 1, 'Vorbedingung: ein Lauf für die auslösende Buchung');
+    assert.equal(await db.automationRun.count({ where: { automationId: regelId, entityId: gegenprobeId } }), 0, 'Vorbedingung: kein Lauf für die Gegenprobe');
+
+    await db.automationRun.updateMany({ where: { automationId: regelId, entityId: buchungId }, data: { scheduledFor: new Date(Date.now() - 60_000) } });
+    const takt = await stuendlich();
+
+    const lauf = await db.automationRun.findFirstOrThrow({
+      where: { automationId: regelId, entityId: buchungId },
+      include: { aktionen: { orderBy: { position: 'asc' } } },
+    });
+    assert.equal(
+      lauf.status,
+      'SUCCESS',
+      `Lauf ${lauf.status}, Fehler ${lauf.error ?? '—'}, Aktionen ${JSON.stringify(lauf.aktionen.map((a) => [a.type, a.status, a.error]))}, Takt HTTP ${takt.status}`,
+    );
+
+    // UPDATE_STATUS: die auslösende Buchung storniert, die Gegenprobe unberührt.
+    assert.equal((await db.booking.findUniqueOrThrow({ where: { id: buchungId }, select: { status: true } })).status, 'CANCELLED');
+    const gegenprobeNachher = await db.booking.findUniqueOrThrow({ where: { id: gegenprobeId }, select: { status: true, updatedAt: true } });
+    assert.equal(gegenprobeNachher.status, gegenprobeVorher.status, 'die Kennung in der Konfiguration hat eine fremde Buchung umgestellt');
+    assert.equal(gegenprobeNachher.updatedAt.getTime(), gegenprobeVorher.updatedAt.getTime(), 'die fremde Buchung wurde angefasst');
+
+    // UPDATE_STATUS mit fremder Art: übersprungen, kein Lead geändert.
+    assert.equal(lauf.aktionen[3]?.status, 'SKIPPED', `Lead-Ziel an einer Buchungsregel: ${lauf.aktionen[3]?.status}`);
+    assert.equal(await db.lead.count({ where: { status: 'LOST' } }), verloreneAnfragenVorher, 'eine Buchungsregel hat einen Lead auf „verloren" gesetzt');
+
+    // CREATE_TASK: genau eine Aufgabe, Platzhalter aus der auslösenden Buchung, an deren Kundschaft.
+    const aufgaben = await db.task.findMany({ where: { title: { startsWith: TITEL } }, select: { title: true, customerId: true } });
+    assert.equal(aufgaben.length, 1, `Aufgaben: ${JSON.stringify(aufgaben)}`);
+    assert.equal(aufgaben[0]!.title, `${TITEL} ${nummer} ${buchungId} ${kundeAusloeser.id}`, 'die Platzhalter tragen Daten eines anderen Vorgangs');
+    assert.equal(aufgaben[0]!.customerId, kundeAusloeser.id, 'die Aufgabe hängt an einer anderen Kundschaft');
+
+    // CREATE_NOTIFICATION: jede Meldung verweist auf die auslösende Buchung und nennt deren Nummer.
+    const meldungen = await db.notification.findMany({ where: { title: { startsWith: TITEL } }, select: { title: true, meta: true } });
+    assert.ok(meldungen.length > 0, 'keine Meldung angelegt');
+    for (const meldung of meldungen) {
+      assert.equal(meldung.title, `${TITEL} ${nummer}`);
+      assert.deepEqual(meldung.meta, { entity: 'Booking', entityId: buchungId }, `Meldung mit fremdem Bezug: ${JSON.stringify(meldung.meta)}`);
+    }
+  });
+});
+
+// ===========================================================================
+//  N-07 — ein abgebrochener Versand wird ohne die schon Erreichten fortgesetzt
+// ===========================================================================
+
+/**
+ * Der dritte Teil von N-07 (2026-09-27), der bis hierher ohne Beleg war.
+ *
+ * `sendeNachricht` schreibt in das Ergebnis der Aktion, wen sie schon
+ * erreicht hat (`result.zugestellt`) — auch wenn die Aktion als Ganzes
+ * scheitert. Der nächste Versuch liest diese Liste und schreibt nur noch
+ * denen, die fehlen. Vorher bekam, wer beim ersten Versuch erreicht wurde,
+ * dieselbe Nachricht bei jedem weiteren Versuch erneut.
+ *
+ * **Warum der Abbruch gelegt und nicht herbeigeführt wird.** Ein echter
+ * Zustellfehler braucht einen Anbieter, der ablehnt. Der Testserver hat
+ * keinen — der simulierte Versand gelingt immer (`src/lib/email/client.ts`),
+ * und ein Anbieter-Zugang in der Prüfreihe wäre ein echter Versand. Deshalb
+ * wird der Zustand **nach** einem abgebrochenen ersten Versuch gelegt, wie in
+ * „eine Aktion mit Aussenwirkung, die mittendrin abbrach" oben: ein
+ * gescheiterter Aktionsstand mit derselben Kennung, die die Maschine selbst
+ * schriebe, und einer Person in `zugestellt`. Geprüft wird, was die Maschine
+ * daraus macht — und das am E-Mail-Protokoll, also an dem, was tatsächlich
+ * hinausging.
+ *
+ * Der Auslöser ist `QUOTE_ACCEPTED` an einer frischen Offerte: kein
+ * zeitbezogener Auslöser, den der stündliche Lauf für Demodaten mitmelden
+ * würde, und eine Offerte, zu der es sonst keine E-Mail gibt — jede Zeile im
+ * Protokoll zu ihr stammt aus dieser Prüfung.
+ */
+describe('N-07 — ein abgebrochener Versand schreibt beim nächsten Versuch nur denen, die fehlen', () => {
+  const RUN = Date.now();
+  const VORLAGE = `pruef_n07_${RUN}`;
+  const MARKE = 'N-07 Versandprüfung';
+  let regelId = '';
+  let offerteId = '';
+
+  before(async () => {
+    await requireServer();
+    jars = await loginAll();
+  });
+
+  after(async () => {
+    const db = testDb();
+    if (regelId) await del(`/api/automations/${regelId}`, { jar: jars.admin }).catch(() => {});
+    if (offerteId) await del(`/api/quotes/${offerteId}`, { jar: jars.admin }).catch(() => {});
+    if (db) {
+      await db.emailTemplate.deleteMany({ where: { key: { startsWith: 'pruef_n07_' } } });
+      if (offerteId) await db.quote.deleteMany({ where: { id: offerteId } }).catch(() => {});
+    }
+    await testDbSchliessen();
+  });
+
+  const stuendlich = () => get('/api/cron/hourly', { headers: { authorization: `Bearer ${process.env.CRON_SECRET ?? 'dev-cron-secret'}` } });
+
+  /** Dieselbe Kennung, die `aktionsKennung` im Dienst bildet: Art und Konfiguration, Schlüssel sortiert. */
+  function stabilesJson(wert: unknown): string {
+    if (Array.isArray(wert)) return `[${wert.map(stabilesJson).join(',')}]`;
+    if (wert !== null && typeof wert === 'object') {
+      const objekt = wert as Record<string, unknown>;
+      return `{${Object.keys(objekt)
+        .sort()
+        .map((k) => `${JSON.stringify(k)}:${stabilesJson(objekt[k])}`)
+        .join(',')}}`;
+    }
+    return JSON.stringify(wert) ?? 'null';
+  }
+  const kennung = (type: string, config: unknown) =>
+    createHash('sha256').update(`${type}\n${stabilesJson(config ?? {})}`).digest('hex').slice(0, 32);
+
+  it('wer vor dem Abbruch erreicht wurde, bekommt beim Wiederholen keine zweite Nachricht — die übrigen genau eine', async (t) => {
+    const db = testDb();
+    if (!db) return t.skip(`kein Zugang zur Testdatenbank: ${testDbGrund()}`);
+    const organizationId = await eigeneOrganisationId();
+    if (!organizationId) return t.skip('keine Organisation im Bestand');
+
+    // Der Empfängerkreis „MANAGEMENT", wie ihn `empfaengerKonten` bildet —
+    // und davon, wer per E-Mail erreichbar ist.
+    const leitung = await db.user.findMany({
+      where: { organizationId, deletedAt: null, status: 'ACTIVE', role: { in: ['SUPER_ADMIN', 'ADMIN', 'MANAGER'] } },
+      select: { id: true, email: true, notifyByEmail: true },
+      orderBy: { id: 'asc' },
+    });
+    const erreichbar = leitung.filter((u) => u.notifyByEmail && u.email);
+    if (erreichbar.length < 2) return t.skip('Vorbedingung: mindestens zwei per E-Mail erreichbare Leitungskonten');
+    const schonErreicht = erreichbar[0]!;
+
+    await db.emailTemplate.create({
+      data: { organizationId, key: VORLAGE, subject: `${MARKE} {{nummer}}`, bodyHtml: '<p>Offerte {{nummer}}</p>' },
+    });
+
+    const regel = await post<{ data: { id: string } }>(
+      '/api/automations',
+      {
+        name: `${MARKE} ${RUN}`,
+        trigger: 'QUOTE_ACCEPTED',
+        delayMinutes: 0,
+        active: true,
+        actions: [{ type: 'SEND_EMAIL', config: { templateKey: VORLAGE, empfaenger: 'MANAGEMENT' } }],
+      },
+      { jar: jars.admin },
+    );
+    assert.equal(regel.status, 201, regel.text);
+    regelId = data(regel).id;
+
+    const kunde = data(await get<{ data: { id: string }[] }>('/api/customers?pageSize=1', { jar: jars.admin }))?.[0];
+    if (!kunde) return t.skip('keine Kundenakte im Bestand');
+    const offerte = await post<{ data: { id: string } }>(
+      '/api/quotes',
+      {
+        customerId: kunde.id,
+        title: `${MARKE} ${RUN}`,
+        validUntil: new Date(Date.now() + 30 * 86_400_000).toISOString().slice(0, 10),
+        items: [{ name: 'Unterhaltsreinigung', quantity: 2, unit: 'Std.', unitPrice: 55, discount: 0, vatRate: 8.1, optional: false }],
+        discountValue: 0,
+      },
+      { jar: jars.admin },
+    );
+    assert.equal(offerte.status, 201, offerte.text);
+    offerteId = data(offerte).id;
+
+    // Der Zustand nach dem abgebrochenen ersten Versuch: eine Person erreicht,
+    // die Aktion gescheitert, der Lauf wartet auf die Wiederholung.
+    const aktion = await db.automationAction.findFirstOrThrow({ where: { automationId: regelId, position: 0 } });
+    const lauf = await db.automationRun.create({
+      data: {
+        automationId: regelId,
+        entity: 'Quote',
+        entityId: offerteId,
+        status: 'PENDING',
+        scheduledFor: new Date(Date.now() - 60_000),
+        attempts: 1,
+        error: 'Prüfreihe: Versand abgebrochen',
+      },
+    });
+    await db.automationActionRun.create({
+      data: {
+        runId: lauf.id,
+        position: 0,
+        type: 'SEND_EMAIL',
+        status: 'FAILED',
+        attempts: 1,
+        startedAt: new Date(Date.now() - 120_000),
+        finishedAt: new Date(Date.now() - 110_000),
+        error: `1 von ${leitung.length} Nachrichten nicht zugestellt: Prüfreihe`,
+        result: { ergebnis: 'fehler', versandt: 1, zugestellt: [schonErreicht.id], kennung: kennung(aktion.type, aktion.config) },
+      },
+    });
+
+    const takt = await stuendlich();
+
+    const nachher = await db.automationRun.findUniqueOrThrow({ where: { id: lauf.id }, include: { aktionen: true } });
+    assert.equal(
+      nachher.status,
+      'SUCCESS',
+      `Lauf ${nachher.status}, Fehler ${nachher.error ?? '—'}, Aktionen ${JSON.stringify(nachher.aktionen.map((a) => [a.status, a.error]))}, Takt HTTP ${takt.status}`,
+    );
+    const stand = nachher.aktionen[0]!;
+    assert.equal(stand.status, 'SUCCEEDED');
+    assert.equal(stand.attempts, 2, 'die Aktion wurde fortgesetzt, nicht neu begonnen');
+
+    // Das E-Mail-Protokoll zur Offerte: Zu ihr geht sonst nichts hinaus.
+    const versandt = await db.emailLog.findMany({ where: { entity: 'Quote', entityId: offerteId }, select: { to: true } });
+    const an = (email: string) => versandt.filter((m) => m.to.toLowerCase() === email.toLowerCase()).length;
+    assert.equal(an(schonErreicht.email!), 0, 'wer vor dem Abbruch erreicht wurde, bekam die Nachricht ein zweites Mal');
+    for (const person of erreichbar.slice(1)) {
+      assert.equal(an(person.email!), 1, `${person.email}: ${an(person.email!)} Nachrichten statt einer`);
+    }
+
+    // Der Stand trägt alle Erreichten weiter — auch die aus dem ersten Versuch,
+    // damit ein dritter Versuch sie ebenfalls überspränge.
+    const zugestellt = [...(((stand.result ?? {}) as { zugestellt?: string[] }).zugestellt ?? [])].sort();
+    assert.deepEqual(zugestellt, erreichbar.map((u) => u.id).sort(), 'die Liste der Erreichten ist unvollständig');
   });
 });

@@ -16,7 +16,7 @@ Schweizer DSG und DSGVO.
 | | |
 | --- | --- |
 | **Stack** | Next.js 15 (App Router) · React 19 · TypeScript · Tailwind · Prisma 6 · PostgreSQL 16+ |
-| **Umfang** | <!-- kennzahlen:umfang -->166 Seiten · 373 Route-Dateien mit 538 Endpunkten · 151 Datenmodelle · 84 Dienste · 97 Prüfdateien<!-- /kennzahlen:umfang --> (gezählt von `scripts/kennzahlen.ts`) |
+| **Umfang** | <!-- kennzahlen:umfang -->166 Seiten · 375 Route-Dateien mit 540 Endpunkten · 151 Datenmodelle · 85 Dienste · 99 Prüfdateien<!-- /kennzahlen:umfang --> (gezählt von `scripts/kennzahlen.ts`) |
 | **Rollen** | SUPER_ADMIN · ADMIN · MANAGER · EMPLOYEE · CUSTOMER |
 | **Sprache** | Deutsch (Schema und Endpunkte für FR/IT/EN vorbereitet) |
 | **Betrieb** | Eigener Server: Internet → Cloudflare → Cloud Firewall → Nginx → Next.js auf `127.0.0.1:3000`, ausgeliefert über GitHub Actions → SSH → PM2 · Postgres & Objektspeicher · Redis empfohlen |
@@ -177,7 +177,7 @@ src/
     (public)/              Website
     (auth)/                Anmeldung, Registrierung, Passwort
     (app)/admin|portal|konto
-    api/                   <!-- kennzahlen:api -->373 Route-Dateien, 538 Endpunkte<!-- /kennzahlen:api -->
+    api/                   <!-- kennzahlen:api -->375 Route-Dateien, 540 Endpunkte<!-- /kennzahlen:api -->
   components/
     ui/                    Basiskomponenten
     marketing/ app/ charts/
@@ -242,6 +242,6 @@ Vollständige Liste mit Beispielwerten: `.env.example`.
 - **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** — die Entscheide und ihre Begründung
 - **[docs/NEXT_DEVELOPMENT_AUDIT.md](docs/NEXT_DEVELOPMENT_AUDIT.md)** — wo die Plattform steht und was als Nächstes kommt
 - **[docs/DATABASE.md](docs/DATABASE.md)** — ER-Diagramme je Fachbereich
-- **[docs/API.md](docs/API.md)** — <!-- kennzahlen:api-doku -->alle 538 Endpunkte<!-- /kennzahlen:api-doku --> mit Feldern und Regeln
+- **[docs/API.md](docs/API.md)** — <!-- kennzahlen:api-doku -->alle 540 Endpunkte<!-- /kennzahlen:api-doku --> mit Feldern und Regeln
 - **[docs/openapi.yaml](docs/openapi.yaml)** — maschinenlesbare Spezifikation
 - **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)** — Inbetriebnahme, Betrieb, Sicherung

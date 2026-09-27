@@ -326,6 +326,12 @@ export const newsletterSchema = z.object({
 });
 export type NewsletterInput = z.infer<typeof newsletterSchema>;
 
+/** Bestätigen oder Abmelden über den Link aus der E-Mail — der Token im Körper, nicht im Pfad. */
+export const newsletterTokenSchema = z.object({
+  token: z.string().trim().min(10).max(100),
+});
+export type NewsletterTokenInput = z.infer<typeof newsletterTokenSchema>;
+
 export const jobApplicationSchema = z.object({
   postingId: cuidSchema,
   firstName: nameSchema,

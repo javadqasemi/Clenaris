@@ -18,6 +18,8 @@
     { "weg": "POST /api/public/bookings", "begruendung": "Online-Buchung; bookingCreate-Limit, Preis serverseitig, Kapazität in der Transaktion." },
     { "weg": "POST /api/public/contact", "begruendung": "Kontaktformular; contactForm-Limit." },
     { "weg": "POST /api/public/newsletter", "begruendung": "Anmeldung mit Bestätigung; newsletter-Limit." },
+    { "weg": "POST /api/public/newsletter/bestaetigen", "begruendung": "Double-Opt-in per Token aus der E-Mail; Token im Körper, organisationsgebunden, einmalig; publicTokenAction-Limit." },
+    { "weg": "POST /api/public/newsletter/abmelden", "begruendung": "Widerruf per Token aus der E-Mail, ohne Anmeldung (DSGVO); organisationsgebunden; publicTokenAction-Limit." },
     { "weg": "POST /api/public/applications", "begruendung": "Bewerbung; contactForm-Limit, Dateien über Ticket und Prüfung." },
     { "weg": "POST /api/public/ai/chat", "begruendung": "Chat der Website ohne Personendaten; aiChat-Limit, abschaltbar." },
     { "weg": "POST /api/public/quotes", "begruendung": "Offertanfrage; quoteRequest-Limit." },

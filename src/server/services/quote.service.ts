@@ -157,17 +157,46 @@ async function pruefeOffertBezug(tx: Tx, organizationId: string, input: Pick<Cre
     const k = await tx.customer.findFirst({ where: { id: input.customerId, organizationId }, select: { id: true } });
     if (!k) throw new NotFoundError('Kunde');
   }
+
+  /*
+    Anfrage, Kundschaft und Objekt müssen **untereinander** passen, nicht nur
+    je für sich zur Organisation gehören (2026-09-27, Testmatrix
+    `crm.falscherBezug`).
+
+    Bis dahin genügte es, dass jede der drei Kennungen im Betrieb existierte.
+    Eine Offerte für Kundschaft B liess sich an die Anfrage von Kundschaft A
+    hängen, und ein Objekt durfte jeder beliebigen Kundschaft gehören, sobald
+    `customerId` fehlte. Die Folgen blieben nicht in der Offerte: Nahm B an,
+    setzte `afterQuoteAccepted` die Anfrage von A auf WON; lehnte B ab, galt
+    A als verloren — und das Offerten-PDF druckte die Adresse eines Objekts,
+    das niemandem in dieser Offerte gehört.
+
+    Die Regel: Ist die Anfrage schon einer Kundschaft zugeordnet
+    (`convertLeadToCustomer`), muss die Offerte dieselbe Kundschaft nennen —
+    sonst 422, denn die Kennungen sind gültig, nur ihre Kombination ist
+    unmöglich. Das Objekt muss der Kundschaft der Offerte gehören, und fehlt
+    diese, der Kundschaft der Anfrage; ohne jede Kundschaft gibt es kein
+    Objekt, dem es gehören könnte. Eine noch nicht umgewandelte Anfrage darf
+    mit jeder Kundschaft zusammenstehen — das ist der gewöhnliche Weg, bevor
+    das Büro die Anfrage umwandelt.
+  */
+  let kundschaftDerAnfrage: string | null = null;
   if (input.leadId) {
-    const l = await tx.lead.findFirst({ where: { id: input.leadId, organizationId }, select: { id: true } });
+    const l = await tx.lead.findFirst({ where: { id: input.leadId, organizationId }, select: { id: true, customerId: true } });
     if (!l) throw new NotFoundError('Lead');
+    kundschaftDerAnfrage = l.customerId;
   }
+  if (input.customerId && kundschaftDerAnfrage && kundschaftDerAnfrage !== input.customerId) {
+    throw new BusinessRuleError('Die Anfrage gehört zu einer anderen Kundschaft als diese Offerte.');
+  }
+
   if (input.propertyId) {
+    const kundschaft = input.customerId ?? kundschaftDerAnfrage;
+    if (!kundschaft) {
+      throw new BusinessRuleError('Ein Objekt lässt sich nur zusammen mit der Kundschaft angeben, der es gehört.');
+    }
     const o = await tx.property.findFirst({
-      where: {
-        id: input.propertyId,
-        customer: { organizationId },
-        ...(input.customerId ? { customerId: input.customerId } : {}),
-      },
+      where: { id: input.propertyId, customerId: kundschaft, customer: { organizationId } },
       select: { id: true },
     });
     if (!o) throw new NotFoundError('Objekt');
@@ -332,6 +361,12 @@ export async function createQuoteFromRequest(params: {
   organizationId: string;
   leadId: string;
   input: QuoteRequestInput;
+  /**
+   * Die Adresse der anfragenden Stelle, wie die Route sie kennt. Ohne sie
+   * stand der Entwurf als einzige Zeile dieses öffentlichen Eingangs ohne
+   * Adresse im Protokoll — der Lead derselben Anfrage trug sie.
+   */
+  ip?: string;
 }): Promise<Quote> {
   const { input } = params;
 
@@ -433,6 +468,7 @@ export async function createQuoteFromRequest(params: {
     entity: 'Quote',
     entityId: quote.id,
     summary: `Offertentwurf ${quote.number} aus Website-Anfrage erstellt`,
+    ip: params.ip,
   });
 
   return quote;

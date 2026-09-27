@@ -480,39 +480,68 @@ export async function saveContentDraft(params: {
       });
       if (!existing) continue;
 
+      /*
+        `updateMany`/`deleteMany` mit der Kennung statt `update`/`delete`
+        (2026-09-27). Zwei gleichzeitige Speicherungen desselben geleerten
+        Bausteins lasen beide die Zeile; die zweite Löschung fand sie nicht
+        mehr und warf P2025 — die Redaktion bekam einen 500 für einen
+        Vorgang, dessen Ergebnis („Baustein zurückgesetzt") längst stand.
+        Ist die Zeile schon weg, ist das Ziel erreicht; gezählt wird nur,
+        was dieser Aufruf tatsächlich geschrieben hat.
+      */
       if (existing.publishedAt) {
-        await prisma.contentBlock.update({
+        const geleert = await prisma.contentBlock.updateMany({
           where: { id: existing.id },
           data: { draftValue: definition.kind === 'list' ? [] : '', updatedById: params.actorId },
         });
-        saved++;
+        saved += geleert.count;
       } else {
-        await prisma.contentBlock.delete({ where: { id: existing.id } });
-        removed++;
+        const entfernt = await prisma.contentBlock.deleteMany({ where: { id: existing.id } });
+        removed += entfernt.count;
       }
       continue;
     }
 
-    await prisma.contentBlock.upsert({
-      where: {
-        organizationId_key_locale: { organizationId: params.organizationId, key, locale: 'DE' },
-      },
-      create: {
-        organizationId: params.organizationId,
-        key,
-        locale: 'DE',
-        // Ein neuer Baustein beginnt als reiner Entwurf: `value` trägt den
-        // Auslieferungstext, damit die Website unverändert bleibt, bis jemand
-        // veröffentlicht.
-        value: (definition.default ?? '') as Prisma.InputJsonValue,
-        draftValue: value as Prisma.InputJsonValue,
-        updatedById: params.actorId,
-      },
-      update: {
-        draftValue: value as Prisma.InputJsonValue,
-        updatedById: params.actorId,
-      },
-    });
+    const upsert = () =>
+      prisma.contentBlock.upsert({
+        where: {
+          organizationId_key_locale: { organizationId: params.organizationId, key, locale: 'DE' },
+        },
+        create: {
+          organizationId: params.organizationId,
+          key,
+          locale: 'DE',
+          // Ein neuer Baustein beginnt als reiner Entwurf: `value` trägt den
+          // Auslieferungstext, damit die Website unverändert bleibt, bis jemand
+          // veröffentlicht.
+          value: (definition.default ?? '') as Prisma.InputJsonValue,
+          draftValue: value as Prisma.InputJsonValue,
+          updatedById: params.actorId,
+        },
+        update: {
+          draftValue: value as Prisma.InputJsonValue,
+          updatedById: params.actorId,
+        },
+      });
+
+    /*
+      Ein zweiter Versuch bei P2002 (2026-09-27). Prisma führt `upsert` nur
+      unter bestimmten Bedingungen als einzelnes `INSERT … ON CONFLICT` aus;
+      sonst liest es erst und legt dann an. Speichern zwei Fenster denselben,
+      noch nie gespeicherten Baustein gleichzeitig — die Vorschau speichert
+      beim Verlassen des Feldes, ein Doppelklick genügt —, finden beide
+      „keine Zeile", und das zweite Anlegen scheitert am eindeutigen Index.
+      Beim zweiten Versuch gibt es die Zeile, und aus dem Anlegen wird ein
+      Ändern: Der spätere Entwurf gewinnt, wie bei jeder anderen Speicherung
+      auch. Ein 500 für „gleichzeitig getippt" wäre ein Fehler ohne Ursache
+      auf Seiten der Redaktion.
+    */
+    try {
+      await upsert();
+    } catch (fehler) {
+      if (!(fehler instanceof Prisma.PrismaClientKnownRequestError && fehler.code === 'P2002')) throw fehler;
+      await upsert();
+    }
     saved++;
   }
 
@@ -539,19 +568,62 @@ export async function publishContent(params: {
   keys?: string[];
   actorId: string;
 }): Promise<number> {
-  const blocks = await prisma.contentBlock.findMany({
+  const kandidaten = await prisma.contentBlock.findMany({
     where: {
       organizationId: params.organizationId,
       locale: 'DE',
       NOT: { draftValue: { equals: Prisma.DbNull } },
       ...(params.keys?.length ? { key: { in: params.keys } } : {}),
     },
+    select: { id: true },
   });
 
-  if (blocks.length === 0) return 0;
+  if (kandidaten.length === 0) return 0;
 
-  await prisma.$transaction(async (tx) => {
+  /*
+    Sperren, dann neu lesen — und nur echte Änderungen veröffentlichen
+    (2026-09-27).
+
+    **Gleichzeitig.** Bis hierher lasen alle Aufrufe die offenen Entwürfe
+    *vor* der Transaktion. Zwei gleichzeitige Freigaben — zwei Fenster, ein
+    Doppelklick — sahen denselben Entwurf, und jede legte die abgelöste
+    Fassung als eigene Revision ab und schrieb eine eigene Zeile
+    „veröffentlicht". Die Historie zeigte zwei Wechsel, wo einer war, und
+    das Protokoll zwei Personen, die „diesen Text" freigegeben haben. Jetzt
+    sperrt die Transaktion die Zeilen (`FOR UPDATE`, in fester Reihenfolge,
+    damit sich zwei Freigaben mit verschiedenen Schlüsselmengen nicht
+    gegenseitig blockieren) und liest sie **danach** neu. Die zweite
+    Freigabe wartet auf die erste und findet dann keinen offenen Entwurf
+    mehr — sie veröffentlicht nichts, legt keine Revision an und schreibt
+    keine Zeile. Eine Prüfung „gibt es noch einen Entwurf?" vor der
+    Transaktion bestünden beide.
+
+    **Ohne Änderung.** Die Vorschau speichert beim Verlassen eines Feldes,
+    auch wenn niemand etwas geändert hat; der Entwurf trägt dann den
+    veröffentlichten Wortlaut. Veröffentlicht wurde er trotzdem — mit einer
+    Revision, die denselben Text noch einmal ablegte, und einer Zeile
+    „veröffentlicht" für einen Text, der sich nicht geändert hat. Die
+    Historie soll beantworten, was *vorher* auf der Website stand; eine
+    Fassung, die gleich der geltenden ist, beantwortet nichts. Ein solcher
+    Entwurf wird jetzt nur verworfen (er ist keiner), ohne Revision, ohne
+    Protokollzeile, ohne neuen Veröffentlichungszeitpunkt.
+  */
+  const veroeffentlicht = await prisma.$transaction(async (tx) => {
+    const ids = kandidaten.map((k) => k.id).sort();
+    await tx.$queryRaw`SELECT id FROM content_blocks WHERE id IN (${Prisma.join(ids)}) ORDER BY id FOR UPDATE`;
+
+    const blocks = await tx.contentBlock.findMany({
+      where: { id: { in: ids }, NOT: { draftValue: { equals: Prisma.DbNull } } },
+      orderBy: { id: 'asc' },
+    });
+
+    const echt: typeof blocks = [];
     for (const block of blocks) {
+      if (block.publishedAt && gleicherInhalt(block.draftValue, block.value)) {
+        await tx.contentBlock.update({ where: { id: block.id }, data: { draftValue: Prisma.DbNull } });
+        continue;
+      }
+
       // Erst die abgelöste Fassung sichern, dann überschreiben — sonst wäre
       // sie weg, bevor die Historie sie kennt.
       if (block.publishedAt) {
@@ -576,8 +648,12 @@ export async function publishContent(params: {
           updatedById: params.actorId,
         },
       });
+      echt.push(block);
     }
+    return echt;
   });
+
+  if (veroeffentlicht.length === 0) return 0;
 
   await invalidateContent(params.organizationId);
 
@@ -585,7 +661,7 @@ export async function publishContent(params: {
   // (2026-09-27). Vorher eine Sammelzeile mit der Organisation als
   // `entityId` und nur einer Zahl — welcher Text wann live ging, stand
   // nirgends. Die Fassung selbst liegt in der Historie (`ContentRevision`).
-  for (const block of blocks) {
+  for (const block of veroeffentlicht) {
     await audit.updated({
       organizationId: params.organizationId,
       userId: params.actorId,
@@ -596,7 +672,19 @@ export async function publishContent(params: {
     });
   }
 
-  return blocks.length;
+  return veroeffentlicht.length;
+}
+
+/**
+ * Tragen Entwurf und veröffentlichter Wert denselben Inhalt?
+ *
+ * Die Werte sind Zeichenketten oder Listen von Zeichenketten (siehe
+ * `coerce`); `JSON.stringify` vergleicht beide Formen genau, auch die
+ * Reihenfolge einer Liste — und die ist Inhalt, denn sie ist die Reihenfolge
+ * auf der Website.
+ */
+function gleicherInhalt(a: unknown, b: unknown): boolean {
+  return JSON.stringify(a) === JSON.stringify(b);
 }
 
 /** Offene Entwürfe verwerfen — der veröffentlichte Stand bleibt. */
