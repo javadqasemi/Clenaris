@@ -3,6 +3,7 @@
 import * as React from 'react';
 
 import { ResourceForm, type FieldSpec } from '@/components/app/resource-form';
+import { zuercherTagText } from '@/lib/zuerich';
 
 import { qualifikationenAus } from './contract-panels';
 
@@ -65,7 +66,7 @@ export function ContractForm({
     [kundeId, objekte],
   );
 
-  const heute = new Date().toISOString().slice(0, 10);
+  const heute = zuercherTagText();
 
   const fields: FieldSpec[] = [
     { name: 'customerId', label: 'Kundschaft', type: 'select', options: kunden, required: true },

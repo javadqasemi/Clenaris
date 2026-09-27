@@ -6,6 +6,7 @@ import { Plus, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { api, ApiError } from '@/lib/api/client';
+import { zuercherTagText } from '@/lib/zuerich';
 import { bewerte, beurteile } from '@/lib/quality/bewertung';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/form';
@@ -91,7 +92,7 @@ export function BegehungDialog({
 }) {
   const router = useRouter();
   const [offen, setOffen] = React.useState(false);
-  const [datum, setDatum] = React.useState(() => new Date().toISOString().slice(0, 10));
+  const [datum, setDatum] = React.useState(() => zuercherTagText());
   const [positionen, setPositionen] = React.useState<Position[]>(VORLAGE);
   const [notiz, setNotiz] = React.useState('');
   const [interneNotiz, setInterneNotiz] = React.useState('');
@@ -102,7 +103,7 @@ export function BegehungDialog({
   // nächsten Öffnen nicht als halbe Begehung wieder dastehen.
   React.useEffect(() => {
     if (!offen) return;
-    setDatum(new Date().toISOString().slice(0, 10));
+    setDatum(zuercherTagText());
     setPositionen(VORLAGE);
     setNotiz('');
     setInterneNotiz('');

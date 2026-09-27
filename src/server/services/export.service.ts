@@ -5,6 +5,7 @@ import ExcelJS from 'exceljs';
 import { prisma, toNumber } from '@/lib/db';
 import { round2 } from '@/lib/utils';
 import { csvZeile } from '@/lib/csv';
+import { tagPlus, zuercherFelder, zuercherTag, zuercherTagesbeginn } from '@/lib/zuerich';
 import { audit } from '@/lib/audit';
 import type { AccountingExportInput } from '@/lib/validation/finance';
 
@@ -229,10 +230,16 @@ export async function exportTimesheetsXlsx(params: {
   to: Date;
   actorId: string;
 }): Promise<{ buffer: Buffer; filename: string }> {
+  /**
+   * `from`/`to` sind Kalendertage (auch wenn ein Zeitpunkt kommt: sein
+   * Zürcher Tag zählt), `startedAt` ist ein Zeitpunkt (2026-09-27). Vorher
+   * `lte: to` bis UTC-Mitternacht des letzten Tages — der letzte Tag fehlte
+   * im Export fast ganz, der erste in den ersten ein, zwei Stunden.
+   */
   const entries = await prisma.timeEntry.findMany({
     where: {
       employee: { organizationId: params.organizationId },
-      startedAt: { gte: params.from, lte: params.to },
+      startedAt: { gte: zuercherTagesbeginn(zuercherTag(params.from)), lt: zuercherTagesbeginn(tagPlus(zuercherTag(params.to), 1)) },
       endedAt: { not: null },
     },
     orderBy: [{ employeeId: 'asc' }, { startedAt: 'asc' }],
@@ -430,10 +437,19 @@ export async function exportAccounting(params: {
   }
 
   if (params.input.include.includes('payments')) {
+    /**
+     * `paidAt` ist ein Zeitpunkt, `from`/`to` sind Kalendertage (2026-09-27).
+     *
+     * Vorher stand hier `gte: from, lte: to` — also bis UTC-Mitternacht *des
+     * letzten Tages*. Ein Export für September liess praktisch jede Zahlung
+     * vom 30. September weg, und die ersten ein, zwei Stunden des 1. fehlten
+     * ebenfalls. Jetzt: vom Zürcher Beginn des ersten Tages bis vor den
+     * Zürcher Beginn des Tages nach dem letzten.
+     */
     const payments = await prisma.payment.findMany({
       where: {
         status: 'SUCCEEDED',
-        paidAt: { gte: from, lte: to },
+        paidAt: { gte: zuercherTagesbeginn(from), lt: zuercherTagesbeginn(tagPlus(to, 1)) },
         invoice: { organizationId: params.organizationId },
       },
       orderBy: { paidAt: 'asc' },
@@ -591,11 +607,17 @@ function formatDateCh(date: Date): string {
   }).format(date);
 }
 
-/** DATEV erwartet TTMM. */
+/**
+ * DATEV erwartet TTMM — der Zürcher Tag.
+ *
+ * Vorher mit `getDate()`/`getMonth()` in der Zone des Servers: Eine Zahlung
+ * am 1. um 00:30 Uhr stand als Letzter des Vormonats in der Buchhaltung, in
+ * der falschen Periode. Für Kalendertage (`@db.Date`, UTC-Mitternacht) ergibt
+ * der Zürcher Tag denselben Tag.
+ */
 function formatDateShort(date: Date): string {
-  const day = String(date.getDate()).padStart(2, '0');
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  return `${day}${month}`;
+  const f = zuercherFelder(date);
+  return `${String(f.tag).padStart(2, '0')}${String(f.monat).padStart(2, '0')}`;
 }
 
 function formatFileDate(date: Date): string {

@@ -6,6 +6,7 @@ import { prisma } from '@/lib/db';
 import { requirePermission } from '@/lib/auth/session';
 import { can } from '@/lib/auth/rbac';
 import { cn, formatDate, formatRelative } from '@/lib/utils';
+import { zuercherTagesgrenzen } from '@/lib/zuerich';
 import { TaskRowActions } from '@/features/admin/task-row-actions';
 import { getOrganizationId } from '@/server/services/organization.service';
 import { Badge } from '@/components/ui/badge';
@@ -33,7 +34,8 @@ export default async function TasksPage() {
   const organizationId = await getOrganizationId();
 
   const now = new Date();
-  const endOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+  // Ende des Zürcher Tages (2026-09-27), nicht Mitternacht in der Zone des Servers.
+  const endOfToday = zuercherTagesgrenzen(now).bis;
 
   const [tasks, staff, overdue, dueToday] = await Promise.all([
     prisma.task.findMany({

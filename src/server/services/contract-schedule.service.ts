@@ -903,7 +903,7 @@ export async function einsaetzeAbgleichen(params: {
 }
 
 function anmerkung(bisher: string | null, zusatz: string): string {
-  const zeile = `${new Date().toISOString().slice(0, 10)} · ${zusatz}`;
+  const zeile = `${tagSchluessel(zuercherHeute())} · ${zusatz}`;
   return (bisher ? `${bisher}\n${zeile}` : zeile).slice(-4000);
 }
 
@@ -1012,7 +1012,8 @@ export async function runContractScheduling(organizationId: string): Promise<{
  * ist, dass niemand eine Frist verpasst, weil sie in keiner Liste stand.
  */
 export async function contractDeadlines(organizationId: string, tage = 45) {
-  const heute = alsTag(new Date());
+  // Zürcher Tag statt UTC-Tag (2026-09-27).
+  const heute = zuercherHeute();
   const horizont = plusTage(heute, tage);
 
   const [fristen, enden, preisPruefungen] = await Promise.all([

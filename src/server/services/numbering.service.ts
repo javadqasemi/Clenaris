@@ -1,6 +1,7 @@
 import 'server-only';
 
 import { prisma, type Tx } from '@/lib/db';
+import { zuercherJahr } from '@/lib/zuerich';
 
 /**
  * Lückenlose Belegnummern.
@@ -86,7 +87,11 @@ export async function nextNumber(
   scope: SequenceScope,
   at: Date = new Date(),
 ): Promise<NextNumberResult> {
-  const year = at.getUTCFullYear();
+  // Das Zürcher Jahr, nicht das UTC-Jahr (2026-09-27). Mit `getUTCFullYear`
+  // bekam eine Rechnung vom 1. Januar zwischen 00:00 und 01:00 die Nummer —
+  // und den Nummernkreis — des alten Jahres; der neue Kreis begann erst eine
+  // Stunde nach Mitternacht.
+  const year = zuercherJahr(at);
 
   // `upsert` + `increment` ist auf PostgreSQL atomar: der UPDATE-Zweig sperrt
   // die Zeile bis zum Commit, konkurrierende Transaktionen warten.
@@ -134,7 +139,7 @@ async function resolvePrefix(
 export async function peekSequence(
   organizationId: string,
   scope: SequenceScope,
-  year = new Date().getUTCFullYear(),
+  year = zuercherJahr(),
 ): Promise<number> {
   const row = await prisma.numberSequence.findUnique({
     where: { organizationId_scope_year: { organizationId, scope, year } },

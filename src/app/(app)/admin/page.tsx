@@ -13,6 +13,8 @@ import { prisma, toNumber } from '@/lib/db';
 import { can } from '@/lib/auth/rbac';
 import { requirePermission } from '@/lib/auth/session';
 import { formatCurrency, formatDate, formatDateTime, formatNumber, formatTime } from '@/lib/utils';
+import { periodOf } from '@/lib/bi/periods';
+import { zuercherTagesgrenzen } from '@/lib/zuerich';
 import { getOrganizationId } from '@/server/services/organization.service';
 import { ARTNAMEN, ZUSTANDSNAMEN, neuesteVerfuegbare } from '@/server/services/release.service';
 import {
@@ -59,9 +61,11 @@ export default async function AdminDashboardPage({
   const [kpis, timeSeries, serviceRevenue, utilization, cashflow, todayJobs, attention, version] =
     await Promise.all([
       getDashboardKpis(organizationId, range),
+      // Das Zürcher Jahr ab dessen Mitternacht (2026-09-27; vorher das Jahr
+      // und die Mitternacht in der Zone des Servers).
       getRevenueTimeSeries({
         organizationId,
-        from: new Date(new Date().getFullYear(), 0, 1),
+        from: periodOf('YEAR', new Date()).from,
         to: new Date(),
         granularity: 'month',
       }),
@@ -341,9 +345,10 @@ async function TopCustomers({ organizationId }: { organizationId: string }) {
 }
 
 async function loadTodayJobs(organizationId: string) {
-  const start = new Date();
-  start.setHours(0, 0, 0, 0);
-  const end = new Date(start.getTime() + 86_400_000);
+  // Der Zürcher Tag (2026-09-27). `setHours(0, 0, 0, 0)` rechnete in der Zone
+  // des Servers — auf einem UTC-Server von 01:00/02:00 bis 01:00/02:00, und
+  // zwischen Mitternacht und zwei Uhr standen die Einsätze von gestern da.
+  const { von: start, bis: end } = zuercherTagesgrenzen();
 
   return prisma.job.findMany({
     where: {

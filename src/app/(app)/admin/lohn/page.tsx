@@ -6,6 +6,7 @@ import { requirePermission } from '@/lib/auth/session';
 import { can } from '@/lib/auth/rbac';
 import { prisma, toNumber } from '@/lib/db';
 import { formatCurrency, formatDate, formatDateTime } from '@/lib/utils';
+import { zuercherFelder } from '@/lib/zuerich';
 import { getOrganizationId } from '@/server/services/organization.service';
 import { listPayslips, monatsfenster } from '@/server/services/payroll.service';
 import { ART_BESCHRIFTUNG, listPayrollRates } from '@/server/services/payroll-rates.service';
@@ -52,11 +53,12 @@ export default async function PayrollPage({ searchParams }: { searchParams: Prom
   const params = await searchParams;
   const organizationId = await getOrganizationId();
 
-  const vormonat = new Date();
-  vormonat.setUTCDate(1);
-  vormonat.setUTCMonth(vormonat.getUTCMonth() - 1);
-  const jahr = Number(params.jahr) || vormonat.getUTCFullYear();
-  const monat = Math.min(12, Math.max(1, Number(params.monat) || vormonat.getUTCMonth() + 1));
+  // Der Vormonat in Zürcher Zeit (2026-09-27). In UTC öffnete die Seite am 1.
+  // zwischen 00:00 und 02:00 den Monat vor dem Vormonat.
+  const heute = zuercherFelder(new Date());
+  const vormonat = heute.monat === 1 ? { jahr: heute.jahr - 1, monat: 12 } : { jahr: heute.jahr, monat: heute.monat - 1 };
+  const jahr = Number(params.jahr) || vormonat.jahr;
+  const monat = Math.min(12, Math.max(1, Number(params.monat) || vormonat.monat));
 
   const darfRechnen = can(session.role, 'payslip:create');
   const darfVeroeffentlichen = can(session.role, 'payslip:publish');

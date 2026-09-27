@@ -5,6 +5,7 @@ import { GitFork } from 'lucide-react';
 import { requirePermission } from '@/lib/auth/session';
 import { can } from '@/lib/auth/rbac';
 import { formatCurrency } from '@/lib/utils';
+import { zuercherJahr } from '@/lib/zuerich';
 import { SCENARIO_KIND_LABELS, optionsOf } from '@/lib/bi/labels';
 import type { ScenarioResult } from '@/lib/bi/math';
 import { getOrganizationId } from '@/server/services/organization.service';
@@ -28,7 +29,7 @@ export default async function ScenariosPage({ searchParams }: { searchParams: Pr
   const organizationId = await getOrganizationId();
   const scenarios = await listScenarios(organizationId, {});
   const years = [...new Set(scenarios.map((s) => s.fiscalYear))].sort((a, b) => b - a);
-  const year = Number(params.jahr) || years[0] || new Date().getFullYear() + 1;
+  const year = Number(params.jahr) || years[0] || zuercherJahr() + 1;
   const compare = scenarios.length > 0 ? await compareScenarios(organizationId, { fiscalYear: year }) : [];
 
   return (

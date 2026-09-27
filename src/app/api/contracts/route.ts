@@ -10,7 +10,7 @@ import {
   contractVersionSchema,
 } from '@/lib/validation/contracts';
 import { z } from 'zod';
-import { alsTag, plusTage } from '@/lib/contracts/serie';
+import { plusTage, zuercherHeute } from '@/lib/contracts/serie';
 import { contractVisibilityWhere, createContract } from '@/server/services/contract.service';
 import { getOrganizationId } from '@/server/services/organization.service';
 
@@ -45,7 +45,9 @@ export const GET = defineRoute({
       nurKundeId = kunde?.id ?? '__ohne_akte__';
     }
 
-    const heute = alsTag(new Date());
+    // Der Zürcher Tag (2026-09-27). `alsTag(new Date())` ist der UTC-Tag —
+    // `serie.ts` selbst warnt davor.
+    const heute = zuercherHeute();
     const where = {
       ...contractVisibilityWhere({ organizationId, nurKundeId }),
       ...(query.status ? { status: query.status } : {}),

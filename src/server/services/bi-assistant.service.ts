@@ -6,7 +6,8 @@ import type { SessionUser } from '@/lib/auth/session';
 import { ConfigurationError, NotFoundError } from '@/lib/errors';
 import { hasIntegration } from '@/lib/env';
 import { formatKpiValue } from '@/lib/bi/labels';
-import { periodFromKey, periodOf, zurichMidnight } from '@/lib/bi/periods';
+import { periodOf, zurichMidnight } from '@/lib/bi/periods';
+import { tagPlus, zuercherTagesbeginn, zuercherTagText } from '@/lib/zuerich';
 import type { BiAssistantInput } from '@/lib/validation/bi-ai';
 import {
   draftAnalysisBoard,
@@ -201,7 +202,9 @@ export async function runAssistant(session: SessionUser, organizationId: string,
     }
     case 'analyzeFeedback': {
       const reviews = await prisma.review.findMany({
-        where: { organizationId, createdAt: { gte: input.from, lte: input.to } },
+        // `from`/`to` sind Kalendertage, `createdAt` ein Zeitpunkt (2026-09-27):
+        // Mit `lte: to` (UTC-Mitternacht) fehlte der ganze letzte Tag.
+        where: { organizationId, createdAt: { gte: zuercherTagesbeginn(input.from), lt: zuercherTagesbeginn(tagPlus(input.to, 1)) } },
         select: { rating: true, title: true, body: true, serviceKind: true, createdAt: true, authorName: true },
         orderBy: { createdAt: 'desc' },
         take: 200,
@@ -215,7 +218,7 @@ export async function runAssistant(session: SessionUser, organizationId: string,
         .map((r, i) => {
           const eigene = [...namen, r.authorName, ...r.authorName.split(/\s+/)];
           const text = namenErsetzen(`${r.title ? `${r.title} — ` : ''}${r.body.slice(0, 600)}`, eigene).text;
-          return `#${i + 1} ${r.createdAt.toISOString().slice(0, 10)} ${r.rating}/5${r.serviceKind ? ` ${r.serviceKind}` : ''}: ${text}`;
+          return `#${i + 1} ${zuercherTagText(r.createdAt)} ${r.rating}/5${r.serviceKind ? ` ${r.serviceKind}` : ''}: ${text}`;
         })
         .join('\n');
       result = await draftFeedbackAnalysis({ data });
@@ -230,7 +233,7 @@ export async function runAssistant(session: SessionUser, organizationId: string,
     }
   }
 
-  const bounds = periodFromKey('MONTH', new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), 1)));
+  const bounds = periodOf('MONTH', new Date());
   await audit.created({ organizationId, userId: session.id, entity: 'AssistantDraft', summary: `Führungsassistent: ${input.kind} (${bounds.label})` });
   return { kind: input.kind, generatedAt: new Date().toISOString(), ...(result as object) };
 }

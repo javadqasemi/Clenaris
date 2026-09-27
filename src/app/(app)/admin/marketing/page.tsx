@@ -6,6 +6,8 @@ import { prisma, toNumber } from '@/lib/db';
 import { requirePermission } from '@/lib/auth/session';
 import { can } from '@/lib/auth/rbac';
 import { formatCurrency, formatDate, formatNumber } from '@/lib/utils';
+import { periodOf } from '@/lib/bi/periods';
+import { zuercherJahr } from '@/lib/zuerich';
 import { getOrganizationId } from '@/server/services/organization.service';
 import { listNewsletterSubscribers } from '@/server/services/operations-admin.service';
 import { Badge } from '@/components/ui/badge';
@@ -53,7 +55,8 @@ export default async function MarketingPage() {
   const canManageCoupons = can(session.role, 'coupon:update');
 
   const organizationId = await getOrganizationId();
-  const yearStart = new Date(new Date().getFullYear(), 0, 1);
+  // Beginn des Zürcher Jahres für `createdAt` (Zeitpunkt), 2026-09-27.
+  const yearStart = periodOf('YEAR', new Date()).from;
 
   const [coupons, giftCards, subscribers, confirmedSubscribers, leadsBySource, wonLeads, totalLeads, subscriberList] =
     await Promise.all([
@@ -139,7 +142,7 @@ export default async function MarketingPage() {
               description="Sobald Anfragen eingehen, sehen Sie hier, welcher Kanal tatsächlich Aufträge bringt."
             />
           ) : (
-            <ListCard title={`Anfragen ${new Date().getFullYear()}`}>
+            <ListCard title={`Anfragen ${zuercherJahr()}`}>
               <TableScroll>
                 <table className="data-table">
                   <caption className="sr-only">Leistung je Kanal</caption>

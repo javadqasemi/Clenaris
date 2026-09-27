@@ -6,6 +6,7 @@ import { requirePermission } from '@/lib/auth/session';
 import { can } from '@/lib/auth/rbac';
 import { prisma } from '@/lib/db';
 import { formatDate, formatDuration, formatTime, toQueryString } from '@/lib/utils';
+import { periodOf } from '@/lib/bi/periods';
 import { getOrganizationId } from '@/server/services/organization.service';
 import { listJobs } from '@/server/services/job.service';
 import { JobCreateButton } from '@/features/admin/job-create-dialog';
@@ -239,17 +240,23 @@ export default async function AdminJobsPage({
   );
 }
 
+/**
+ * Filterzeiträume in Zürcher Zeit (2026-09-27). Vorher begannen „Heute" und
+ * „Diese Woche" um Mitternacht in der Zone des Servers, also um 01:00/02:00
+ * Zürcher Zeit, und der Montag war ein UTC-Montag.
+ */
 function resolvePeriod(value: string | undefined): { from?: Date; to?: Date } {
   const now = new Date();
-  const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const startOfDay = periodOf('DAY', now).from;
 
   switch (value) {
-    case 'heute':
-      return { from: startOfDay, to: new Date(startOfDay.getTime() + 86_400_000) };
+    case 'heute': {
+      const p = periodOf('DAY', now);
+      return { from: p.from, to: p.to };
+    }
     case 'woche': {
-      const monday = new Date(startOfDay);
-      monday.setDate(monday.getDate() - ((monday.getDay() + 6) % 7));
-      return { from: monday, to: new Date(monday.getTime() + 7 * 86_400_000) };
+      const p = periodOf('WEEK', now);
+      return { from: p.from, to: p.to };
     }
     case 'vergangen':
       return { to: now };

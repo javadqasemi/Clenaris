@@ -8,6 +8,7 @@ import { BusinessRuleError, NotFoundError } from '@/lib/errors';
 import { calculatePrice, FREQUENCY_LABEL } from '@/lib/pricing/engine';
 import type { PriceBreakdown } from '@/lib/pricing/types';
 import { round2 } from '@/lib/utils';
+import { tagPlus, zuercherTag } from '@/lib/zuerich';
 import type { SiteVisitAreaInput, SiteVisitCreateInput, SiteVisitQuoteInput, SiteVisitUpdateInput } from '@/lib/validation/verkauf';
 
 import { nextNumber } from './numbering.service';
@@ -435,8 +436,9 @@ export async function createQuoteFromSiteVisit(params: {
     throw new BusinessRuleError(`Für „${stellen}" gibt es keine Preisgrundlage (Preis auf Anfrage). Diese Stelle wird von Hand offeriert.`);
   }
 
-  const heute = new Date();
-  const gueltigBis = new Date(Date.UTC(heute.getUTCFullYear(), heute.getUTCMonth(), heute.getUTCDate() + params.input.validDays));
+  // Ab dem Zürcher Tag (2026-09-27): Mit dem UTC-Tag endete die Gültigkeit
+  // einer Offerte, die zwischen Mitternacht und 02:00 entstand, einen Tag früh.
+  const gueltigBis = tagPlus(zuercherTag(), params.input.validDays);
   const items = r.flaechen.map((f) => ({
     serviceId: f.serviceId,
     name: `${f.serviceName} — ${f.label}`,

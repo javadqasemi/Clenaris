@@ -4,7 +4,9 @@ import type { Customer, Lead, Prisma } from '@prisma/client';
 
 import { prisma, toNumber } from '@/lib/db';
 import { ConflictError, NotFoundError } from '@/lib/errors';
-import { absoluteUrl } from '@/lib/utils';
+import { absoluteUrl, formatDate } from '@/lib/utils';
+import { tagPlus, zuercherTag } from '@/lib/zuerich';
+import { zuercherZeitpunkt } from '@/lib/contracts/serie';
 import { orderByFor, resolveSort, type SortOrder } from '@/lib/sort';
 import { randomToken } from '@/lib/auth/jwt';
 import { audit } from '@/lib/audit';
@@ -915,7 +917,7 @@ export async function mergeCustomers(params: {
         deletedAt: new Date(),
         internalNotes: [
           source.internalNotes,
-          `Zusammengeführt mit ${target.number} am ${new Date().toLocaleDateString('de-CH')}.`,
+          `Zusammengeführt mit ${target.number} am ${formatDate(new Date())}.`,
         ]
           .filter(Boolean)
           .join('\n'),
@@ -1192,12 +1194,16 @@ export async function getCustomerDetail(params: {
 // ---------------------------------------------------------------------------
 
 /** Nächster Werktag um 09:00 Uhr — Standard für die erste Nachfassaktion. */
+/**
+ * Der nächste Werktag um 09:00 Uhr in Zürich (2026-09-27).
+ *
+ * Vorher `setHours(9)` in der Zone des Servers — auf dem UTC-Server stand
+ * jedes Nachfassen auf 10:00 bzw. 11:00 Zürcher Zeit, und Tag wie Wochentag
+ * waren UTC-Tage. `zuercherZeitpunkt` liest den Versatz am Zieltag selbst ab,
+ * damit „09:00" auch an Umstellungstagen neun Uhr in Bern heisst.
+ */
 function nextBusinessDay(): Date {
-  const date = new Date();
-  date.setHours(9, 0, 0, 0);
-  date.setDate(date.getDate() + 1);
-  while (date.getDay() === 0 || date.getDay() === 6) {
-    date.setDate(date.getDate() + 1);
-  }
-  return date;
+  let tag = tagPlus(zuercherTag(), 1);
+  while (tag.getUTCDay() === 0 || tag.getUTCDay() === 6) tag = tagPlus(tag, 1);
+  return zuercherZeitpunkt(tag, 9 * 60);
 }

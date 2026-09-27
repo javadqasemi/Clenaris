@@ -8,6 +8,7 @@ import { Plus, Save, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { formatCurrency, round2 } from '@/lib/utils';
+import { tagPlus, zuercherTag, zuercherTagText } from '@/lib/zuerich';
 import { api, ApiError } from '@/lib/api/client';
 import { createInvoiceSchema, type CreateInvoiceInput } from '@/lib/validation/finance';
 import { Button } from '@/components/ui/button';
@@ -69,14 +70,18 @@ export function InvoiceForm({
   const router = useRouter();
   const [error, setError] = React.useState<string | null>(null);
 
-  const today = new Date().toISOString().slice(0, 10);
+  // Zürcher Kalendertage (2026-09-27). `toISOString()` lieferte den UTC-Tag:
+  // Zwischen Mitternacht und 02:00 stand die Rechnung auf gestern, die Frist
+  // einen Tag zu früh. `zuercherTagText` rechnet im Browser wie auf dem
+  // Server gleich — die Voreinstellung ist beim Hydrieren dieselbe.
+  const today = zuercherTagText();
 
   const form = useForm<CreateInvoiceInput>({
     resolver: zodResolver(createInvoiceSchema),
     defaultValues: {
       customerId: defaultCustomerId ?? '',
       issueDate: today as unknown as Date,
-      dueDate: new Date(Date.now() + 30 * 86_400_000).toISOString().slice(0, 10) as unknown as Date,
+      dueDate: zuercherTagText(tagPlus(zuercherTag(), 30)) as unknown as Date,
       discountAmount: 0,
       issueImmediately: false,
       outroText: 'Vielen Dank für Ihr Vertrauen. Zahlbar innert der angegebenen Frist.',
@@ -95,8 +100,7 @@ export function InvoiceForm({
   React.useEffect(() => {
     const customer = customers.find((entry) => entry.id === customerId);
     if (!customer) return;
-    const due = new Date(Date.now() + customer.paymentTermDays * 86_400_000);
-    form.setValue('dueDate', due.toISOString().slice(0, 10) as unknown as Date);
+    form.setValue('dueDate', zuercherTagText(tagPlus(zuercherTag(), customer.paymentTermDays)) as unknown as Date);
   }, [customerId, customers, form]);
 
   const totals = React.useMemo(() => {

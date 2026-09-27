@@ -7,7 +7,7 @@ import { BusinessRuleError, ForbiddenError, NotFoundError } from '@/lib/errors';
 import { calculateBookingPrice } from '@/lib/pricing/engine';
 import type { LeistungInput, PriceBreakdown } from '@/lib/pricing/types';
 import { leistungsnamen } from '@/lib/booking/leistungen';
-import { absoluteUrl, round2 } from '@/lib/utils';
+import { absoluteUrl, formatDate, formatDateTime, round2 } from '@/lib/utils';
 import { orderByFor, resolveSort, type SortOrder } from '@/lib/sort';
 import { randomToken } from '@/lib/auth/jwt';
 import { can, type ActorRole } from '@/lib/auth/rbac';
@@ -571,7 +571,7 @@ export async function confirmBooking(params: {
     phone: booking.customer.mobile ?? booking.customer.phone,
     channels: ['IN_APP', 'EMAIL', 'SMS'],
     title: 'Termin bestätigt',
-    body: `Ihr Termin am ${booking.scheduledStart.toLocaleDateString('de-CH')} ist bestätigt.`,
+    body: `Ihr Termin am ${formatDate(booking.scheduledStart)} ist bestätigt.`,
     link: `/konto/buchungen/${booking.id}`,
     emailAttachments: confirmationPdf,
     emailContent: bookingConfirmedEmail({
@@ -586,7 +586,7 @@ export async function confirmBooking(params: {
       manageUrl: absoluteUrl(`/konto/buchungen/${booking.id}`),
     }),
     smsBody: smsTemplates.bookingConfirmed({
-      date: booking.scheduledStart.toLocaleDateString('de-CH'),
+      date: formatDate(booking.scheduledStart),
       time: booking.scheduledStart.toLocaleTimeString('de-CH', {
         hour: '2-digit',
         minute: '2-digit',
@@ -765,7 +765,7 @@ export async function rescheduleBooking(params: {
     email: booking.customer.email,
     channels: ['IN_APP', 'EMAIL'],
     title: 'Termin verschoben',
-    body: `Ihr Termin wurde auf den ${params.newStart.toLocaleDateString('de-CH')} verschoben.`,
+    body: `Ihr Termin wurde auf den ${formatDate(params.newStart)} verschoben.`,
     link: `/konto/buchungen/${booking.id}`,
     emailContent: bookingRescheduledEmail({
       firstName: booking.customer.firstName,
@@ -1250,7 +1250,8 @@ async function assertCatalogOwnership(
 
 function format(value: unknown): string {
   if (value === null || value === undefined || value === '') return '—';
-  if (value instanceof Date) return value.toLocaleString('de-CH');
+  // Zürcher Zeit — in der Änderungsspur stand sonst die Uhrzeit des Servers.
+  if (value instanceof Date) return formatDateTime(value);
   return String(value);
 }
 

@@ -28,9 +28,9 @@ import { eigeneOrganisationId, fremdeOrganisation, schutzfreiAufraeumen, testDb,
 let jars: Record<AccountName, string>;
 const RUN = Date.now();
 const SKU = `PRUEF-${RUN}`;
-const zuercherHeute = () =>
-  new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Zurich', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
-const zuercherStunde = () => Number(new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/Zurich', hour: '2-digit', hour12: false }).format(new Date()));
+/** Der Zürcher Kalendertag vor `tage` Tagen, als `JJJJ-MM-TT`. */
+const zuercherTag = (tage = 0) =>
+  new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Zurich', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(Date.now() - tage * 86_400_000));
 
 let kundeId = ''; // Demokundschaft (Kundenkonto)
 let objektId = '';
@@ -100,15 +100,24 @@ before(async () => {
   andereKundeId = kundeVon(anderes);
   andereObjektId = anderes.id;
 
-  // Ein laufender Vertrag mit 4 Stunden Reaktionszeit, ab heute (Zürich).
+  /**
+   * Ein laufender Vertrag mit 4 Stunden Reaktionszeit, seit einer Woche.
+   *
+   * Bis 2026-09-27 begann er „heute (Zürich)", und die Prüfung einer
+   * verpassten Frist — gemeldet vor fünf Stunden — übersprang sich deshalb
+   * zwischen Mitternacht und drei Uhr: Der Meldetag lag dann vor der ersten
+   * Vertragsfassung. Das war eine Eigenschaft der Prüfanordnung, nicht des
+   * Produkts; mit einem Beginn vor einer Woche gilt die Fassung für jeden
+   * Meldezeitpunkt, den die Reihe erzeugt, und nichts wird übersprungen.
+   */
   const leistung = data(await get<{ data: { id: string }[] }>('/api/services?pageSize=1', { jar: jars.admin }))[0]!.id;
-  const heute = zuercherHeute();
+  const beginn = zuercherTag(7);
   const entwurf = await post<{ data: { id: string } }>(
     '/api/contracts',
     {
-      contract: { customerId: kundeId, propertyId: objektId, title: `Prüfreihe Betrieb ${RUN}`, startDate: heute },
+      contract: { customerId: kundeId, propertyId: objektId, title: `Prüfreihe Betrieb ${RUN}`, startDate: beginn },
       version: {
-        effectiveFrom: heute,
+        effectiveFrom: beginn,
         reason: 'Prüfreihe Betrieb',
         billingCycle: 'MONTHLY',
         paymentTermDays: 30,
@@ -198,8 +207,7 @@ describe('Reklamationen mit Reaktionsfrist', () => {
     assert.equal(data(mitFrist).responseHours, 4);
   });
 
-  it('eine verstrichene Frist ohne Reaktion ist verpasst', async (t) => {
-    if (zuercherStunde() < 3) return t.skip('kurz nach Mitternacht liegt „vor zwei Stunden" vor der ersten Vertragsfassung');
+  it('eine verstrichene Frist ohne Reaktion ist verpasst', async () => {
     const antwort = await post<{ data: Meldung }>(
       '/api/complaints',
       { customerId: kundeId, propertyId: objektId, title: 'Prüfreihe: spät erfasst', description: 'x', reportedAt: new Date(Date.now() - 5 * 3_600_000).toISOString() },
@@ -401,7 +409,7 @@ describe('Geräte', () => {
   it('Wartung: keine in der Zukunft; der Beleg setzt die nächste Fälligkeit und ist unveränderlich', async () => {
     const morgen = new Date(Date.now() + 2 * 86_400_000).toISOString().slice(0, 10);
     assert.equal((await post(`/api/equipment/${geraetId}/maintenance`, { performedOn: morgen }, { jar: jars.admin })).status, 422);
-    const heute = zuercherHeute();
+    const heute = zuercherTag();
     const w = await post(`/api/equipment/${geraetId}/maintenance`, { performedOn: heute, kind: 'Wartung', cost: 120 }, { jar: jars.admin });
     assert.equal(w.status, 201, JSON.stringify(w.payload));
     const g = data(await get<{ data: { nextMaintenanceOn: string } }>(`/api/equipment/${geraetId}`, { jar: jars.admin }));

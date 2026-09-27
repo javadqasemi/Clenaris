@@ -6,6 +6,7 @@ import { Sparkles } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { cn } from '@/lib/utils';
+import { zuercherFelder, zuercherTagText } from '@/lib/zuerich';
 import { api, ApiError } from '@/lib/api/client';
 import { ANALYSIS_BUCKET_LABELS, RISK_CATEGORY_LABELS } from '@/lib/bi/labels';
 import { Badge } from '@/components/ui/badge';
@@ -51,10 +52,16 @@ interface Envelope {
 
 const CONFIDENCE_VARIANT: Record<string, 'success' | 'warning' | 'destructive'> = { hoch: 'success', mittel: 'warning', niedrig: 'destructive' };
 
+/**
+ * Der Zürcher Tag vor `n` Monaten, am Monatsende gekappt (2026-09-27).
+ *
+ * `setMonth` lief am 31. über („vor drei Monaten" vom 31. Mai war der
+ * 3. März), und `toISOString()` gab den UTC-Tag.
+ */
 function monthsAgo(n: number): string {
-  const d = new Date();
-  d.setMonth(d.getMonth() - n);
-  return d.toISOString().slice(0, 10);
+  const heute = zuercherFelder(new Date());
+  const letzter = new Date(Date.UTC(heute.jahr, heute.monat - 1 - n + 1, 0)).getUTCDate();
+  return zuercherTagText(new Date(Date.UTC(heute.jahr, heute.monat - 1 - n, Math.min(heute.tag, letzter))));
 }
 
 export function AssistantPanel({
@@ -71,7 +78,7 @@ export function AssistantPanel({
   const router = useRouter();
   const [kind, setKind] = React.useState<Capability>(defaultKind);
   const [from, setFrom] = React.useState(monthsAgo(3));
-  const [to, setTo] = React.useState(new Date().toISOString().slice(0, 10));
+  const [to, setTo] = React.useState(zuercherTagText());
   const [question, setQuestion] = React.useState('');
   const [budgetId, setBudgetId] = React.useState(budgets[0]?.id ?? '');
   const [notes, setNotes] = React.useState('');
@@ -107,7 +114,7 @@ export function AssistantPanel({
       const created = await api.post<{ id: string }>('/api/bi/analysis', {
         kind: kind === 'draftSwot' ? 'SWOT' : 'PESTEL',
         title: `${kind === 'draftSwot' ? 'SWOT' : 'PESTEL'}-Entwurf ${new Date().toLocaleDateString('de-CH')}`,
-        preparedOn: new Date().toISOString().slice(0, 10),
+        preparedOn: zuercherTagText(),
         summary: result.summary,
         entries,
       });

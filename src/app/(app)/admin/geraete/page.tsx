@@ -6,6 +6,7 @@ import { requirePermission } from '@/lib/auth/session';
 import { can } from '@/lib/auth/rbac';
 import { prisma } from '@/lib/db';
 import { formatDate } from '@/lib/utils';
+import { zuercherTagText } from '@/lib/zuerich';
 import { getOrganizationId } from '@/server/services/organization.service';
 import { listEquipment } from '@/server/services/equipment.service';
 import { Badge } from '@/components/ui/badge';
@@ -49,7 +50,7 @@ export default async function EquipmentPage({ searchParams }: { searchParams: Pr
   ]);
   const darf = can(session.role, 'equipment:manage');
   const personen = personal.map((p) => ({ value: p.id, label: `${p.user.firstName} ${p.user.lastName} (${p.employeeNumber})` }));
-  const heute = new Date().toISOString().slice(0, 10);
+  const heute = zuercherTagText();
 
   return (
     <div className="space-y-8">

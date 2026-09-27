@@ -4,6 +4,7 @@ import { Download, Wallet } from 'lucide-react';
 import { prisma, toNumber } from '@/lib/db';
 import { requireEmployeeId } from '@/lib/auth/session';
 import { formatCurrency, formatNumber } from '@/lib/utils';
+import { zuercherJahr } from '@/lib/zuerich';
 import { Button } from '@/components/ui/button';
 import { Alert } from '@/components/ui/primitives';
 import { EmptyState, ListCard, PageHeader, TableScroll } from '@/components/app/page-parts';
@@ -55,7 +56,7 @@ export default async function PayslipsPage() {
     }),
   ]);
 
-  const currentYear = new Date().getFullYear();
+  const currentYear = zuercherJahr();
   const yearTotal = payslips
     .filter((slip) => slip.year === currentYear)
     .reduce((sum, slip) => sum + toNumber(slip.grossPay), 0);

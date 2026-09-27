@@ -4,6 +4,7 @@ import { prisma, toNumber } from '@/lib/db';
 import { audit, diff } from '@/lib/audit';
 import { BusinessRuleError, NotFoundError } from '@/lib/errors';
 import { updatePaymentSchema } from '@/lib/validation/finance';
+import { zuercherTagText } from '@/lib/zuerich';
 import { getOrganizationId } from '@/server/services/organization.service';
 import { saldoNeuBilden } from '@/server/services/invoice.service';
 
@@ -111,7 +112,7 @@ export const DELETE = defineRoute({
         where: { id: params.id },
         data: {
           status: 'CANCELLED',
-          note: [payment.note, `Storniert am ${new Date().toISOString().slice(0, 10)}`].filter(Boolean).join('\n'),
+          note: [payment.note, `Storniert am ${zuercherTagText()}`].filter(Boolean).join('\n'),
         },
       });
 

@@ -4,7 +4,7 @@ import type { Prisma, Quote } from '@prisma/client';
 
 import { prisma, toNumber, type Tx } from '@/lib/db';
 import { BusinessRuleError, NotFoundError } from '@/lib/errors';
-import { absoluteUrl, round2 } from '@/lib/utils';
+import { absoluteUrl, formatDate, round2 } from '@/lib/utils';
 import { orderByFor, resolveSort, type SortOrder } from '@/lib/sort';
 import { audit } from '@/lib/audit';
 import { automationEreignisseAbarbeiten, automationEreignisVormerken } from './automation-engine.service';
@@ -377,7 +377,7 @@ export async function createQuoteFromRequest(params: {
         internalNote: [
           'Automatisch aus der Offertanfrage auf der Website erstellt.',
           input.preferredDate
-            ? `Wunschtermin: ${new Date(input.preferredDate).toLocaleDateString('de-CH')}`
+            ? `Wunschtermin: ${formatDate(new Date(input.preferredDate))}`
             : null,
           '',
           input.message,
@@ -1484,7 +1484,7 @@ export async function processExpiringQuotes(organizationId: string): Promise<{
       email,
       channels: ['EMAIL'],
       title: 'Offerte läuft ab',
-      body: `Offerte ${quote.number} läuft am ${quote.validUntil.toLocaleDateString('de-CH')} ab.`,
+      body: `Offerte ${quote.number} läuft am ${formatDate(quote.validUntil)} ab.`,
       emailContent: quoteExpiringEmail({
         firstName: quote.customer?.firstName ?? quote.lead?.firstName ?? 'Kundin/Kunde',
         quoteNumber: quote.number,

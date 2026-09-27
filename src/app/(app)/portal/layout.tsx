@@ -4,6 +4,7 @@ import { prisma } from '@/lib/db';
 import { serverEnv } from '@/lib/env';
 import { getSession } from '@/lib/auth/session';
 import { can, guardForPath, homeRouteFor } from '@/lib/auth/rbac';
+import { zuercherTagesgrenzen } from '@/lib/zuerich';
 import { AppShell, type NavGroup } from '@/components/app/app-shell';
 
 /**
@@ -37,8 +38,10 @@ export default async function PortalLayout({ children }: { children: React.React
             deletedAt: null,
             status: { notIn: ['CANCELLED', 'COMPLETED', 'VERIFIED'] },
             scheduledStart: {
-              gte: startOfToday(),
-              lt: new Date(startOfToday().getTime() + 86_400_000),
+              // Das ausschliessende Ende ist der Beginn des nächsten Zürcher
+              // Tages — an Umstellungstagen nicht 24 Stunden später.
+              gte: zuercherTagesgrenzen().von,
+              lt: zuercherTagesgrenzen().bis,
             },
             assignments: { some: { employeeId: session.profileId } },
           },
@@ -94,10 +97,4 @@ export default async function PortalLayout({ children }: { children: React.React
       {children}
     </AppShell>
   );
-}
-
-function startOfToday(): Date {
-  const date = new Date();
-  date.setHours(0, 0, 0, 0);
-  return date;
 }

@@ -4,7 +4,8 @@ import type { Absence, Employee, Prisma } from '@prisma/client';
 
 import { prisma, toNumber } from '@/lib/db';
 import { BusinessRuleError, ConflictError, NotFoundError } from '@/lib/errors';
-import { round2 } from '@/lib/utils';
+import { formatDate, round2 } from '@/lib/utils';
+import { zuercherJahr, zuercherTagText } from '@/lib/zuerich';
 import { audit } from '@/lib/audit';
 import { CRYPTO_CONTEXT, decryptNullable, encryptNullable } from '@/lib/crypto';
 import type {
@@ -657,7 +658,11 @@ export async function requestAbsence(params: {
 
   // Feriensaldo prüfen (nur für Ferien, nicht für Krankheit/Unfall).
   if (params.input.type === 'VACATION') {
-    const balance = await getVacationBalance(params.employeeId);
+    // Der Saldo des Jahres, in dem die Ferien beginnen (2026-09-27) — vorher
+    // immer der des laufenden Jahres, auch für Ferien im nächsten Januar.
+    // `startDate` ist ein Kalendertag (UTC-Mitternacht), sein UTC-Jahr ist das
+    // Kalenderjahr.
+    const balance = await getVacationBalance(params.employeeId, params.input.startDate.getUTCFullYear());
     if (days > balance.remaining) {
       throw new BusinessRuleError(
         `Der Feriensaldo reicht nicht aus: beantragt ${days} Tage, verfügbar ${balance.remaining} Tage.`,
@@ -681,7 +686,7 @@ export async function requestAbsence(params: {
   await notifyStaff({
     organizationId: params.organizationId,
     title: 'Neuer Abwesenheitsantrag',
-    body: `${employee.user.firstName} ${employee.user.lastName} · ${days} Tage ab ${params.input.startDate.toLocaleDateString('de-CH')}`,
+    body: `${employee.user.firstName} ${employee.user.lastName} · ${days} Tage ab ${formatDate(params.input.startDate)}`,
     link: `/admin/personal/abwesenheiten`,
     permission: 'absence:read_all',
   });
@@ -750,7 +755,7 @@ export async function decideAbsence(params: {
     title: params.status === 'APPROVED' ? 'Abwesenheit bewilligt' : 'Abwesenheit abgelehnt',
     body:
       params.status === 'APPROVED'
-        ? `Dein Antrag vom ${absence.startDate.toLocaleDateString('de-CH')} wurde bewilligt.`
+        ? `Dein Antrag vom ${formatDate(absence.startDate)} wurde bewilligt.`
         : `Dein Antrag wurde abgelehnt.${params.note ? ` Begründung: ${params.note}` : ''}`,
     link: '/portal/abwesenheiten',
   });
@@ -825,7 +830,9 @@ export async function withdrawAbsence(params: {
 
 export async function getVacationBalance(
   employeeId: string,
-  year = new Date().getFullYear(),
+  // Das Zürcher Jahr (2026-09-27), nicht das des Servers — am Neujahrsmorgen
+  // bis 01:00 galt sonst noch das alte Ferienjahr.
+  year = zuercherJahr(),
 ): Promise<{ entitlement: number; taken: number; pending: number; remaining: number }> {
   const employee = await prisma.employee.findUniqueOrThrow({
     where: { id: employeeId },
@@ -906,7 +913,9 @@ export async function getTimesheet(params: {
   const totalMinutes = entries.reduce((sum, entry) => sum + entry.minutes, 0);
   const byDay = new Map<string, number>();
   for (const entry of entries) {
-    const key = entry.startedAt.toISOString().slice(0, 10);
+    // Der Zürcher Tag des Arbeitsbeginns (2026-09-27): Mit dem UTC-Tag zählte
+    // eine Schicht, die um 00:30 begann, zum Vortag.
+    const key = zuercherTagText(entry.startedAt);
     byDay.set(key, (byDay.get(key) ?? 0) + entry.minutes);
   }
 

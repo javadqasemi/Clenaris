@@ -5,6 +5,8 @@ import { prisma, toNumber } from '@/lib/db';
 import { activeStaffWhere } from './profile.service';
 import { cache, cacheKeys } from '@/lib/redis';
 import { growthPercent, round2 } from '@/lib/utils';
+import { periodOf } from '@/lib/bi/periods';
+import { tagPlus, zuercherTag, zuercherTagesbeginn, zuercherTagesgrenzen, zuercherTagText } from '@/lib/zuerich';
 
 /**
  * Kennzahlen und Auswertungen.
@@ -46,15 +48,26 @@ export interface DashboardKpis {
 
 type Range = 'today' | 'week' | 'month' | 'quarter' | 'year' | 'custom';
 
+/**
+ * Zeitraum einer Auswertung — Grenzen in Zürcher Zeit (2026-09-27).
+ *
+ * Vorher begannen Tag, Monat, Quartal und Jahr mit `new Date(y, m, d)` in der
+ * Zone des Servers, also um 00:00 UTC = 01:00/02:00 in Zürich. Buchungen,
+ * Zahlungen und Neukundschaft der ersten ein, zwei Stunden des Monats zählten
+ * zum Vormonat, und am 1. bis 02:00 zeigte „Aktueller Monat" noch den
+ * vergangenen. `periodOf` rechnet die Grenze als Zürcher Mitternacht.
+ * Selbst gewählte Tage gelten ganz: von 00:00 des ersten bis 24:00 des
+ * letzten Tages.
+ */
 export function resolveRange(range: Range, from?: Date, to?: Date) {
   const now = new Date();
-  const end = to ?? now;
+  const end = to ? zuercherTagesbeginn(tagPlus(zuercherTag(to), 1)) : now;
   let start: Date;
   let label: string;
 
   switch (range) {
     case 'today':
-      start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      start = periodOf('DAY', now).from;
       label = 'Heute';
       break;
     case 'week':
@@ -62,30 +75,43 @@ export function resolveRange(range: Range, from?: Date, to?: Date) {
       label = 'Letzte 7 Tage';
       break;
     case 'quarter':
-      start = new Date(now.getFullYear(), Math.floor(now.getMonth() / 3) * 3, 1);
+      start = periodOf('QUARTER', now).from;
       label = 'Aktuelles Quartal';
       break;
     case 'year':
-      start = new Date(now.getFullYear(), 0, 1);
+      start = periodOf('YEAR', now).from;
       label = 'Laufendes Jahr';
       break;
     case 'custom':
-      start = from ?? new Date(now.getFullYear(), now.getMonth(), 1);
+      start = from ? zuercherTagesbeginn(zuercherTag(from)) : periodOf('MONTH', now).from;
       label = 'Benutzerdefiniert';
       break;
     case 'month':
     default:
-      start = new Date(now.getFullYear(), now.getMonth(), 1);
+      start = periodOf('MONTH', now).from;
       label = 'Aktueller Monat';
   }
 
   const durationMs = end.getTime() - start.getTime();
+  const previousFrom = new Date(start.getTime() - durationMs);
   return {
+    /** Zeitpunkte — für `timestamptz`-Spalten (Zahlung, Buchung, Anlage). */
     from: start,
     to: end,
     label,
-    previousFrom: new Date(start.getTime() - durationMs),
+    previousFrom,
     previousTo: start,
+    /**
+     * Dieselben Grenzen als Kalendertage — für `@db.Date`-Spalten
+     * (Rechnungs- und Belegdatum). Prisma kürzt einen Zeitpunkt für eine
+     * Datumsspalte auf den UTC-Tag; die Zürcher Mitternacht des 1. September
+     * (31. August 22:00 UTC) hätte den 31. August mitgezählt. `toDay` ist
+     * einschliesslich, `fromDay` des laufenden Zeitraums ist das
+     * ausschliessende Ende des vorigen.
+     */
+    fromDay: zuercherTag(start),
+    toDay: zuercherTag(new Date(end.getTime() - 1)),
+    previousFromDay: zuercherTag(previousFrom),
   };
 }
 
@@ -100,8 +126,8 @@ export async function getDashboardKpis(
   return cache.remember(cacheKey, 300, async () => {
     const period = resolveRange(range, customFrom, customTo);
     const now = new Date();
-    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    const todayEnd = new Date(todayStart.getTime() + 86_400_000);
+    // Der Zürcher Tag, nicht der UTC-Tag — „Einsätze heute" (2026-09-27).
+    const { von: todayStart, bis: todayEnd } = zuercherTagesgrenzen(now);
 
     const invoiceScope = { organizationId, deletedAt: null, status: { not: 'CANCELLED' as const } };
 
@@ -137,11 +163,11 @@ export async function getDashboardKpis(
       ratingAgg,
     ] = await Promise.all([
       prisma.invoice.aggregate({
-        where: { ...invoiceScope, issueDate: { gte: period.from, lte: period.to } },
+        where: { ...invoiceScope, issueDate: { gte: period.fromDay, lte: period.toDay } },
         _sum: { netTotal: true },
       }),
       prisma.invoice.aggregate({
-        where: { ...invoiceScope, issueDate: { gte: period.previousFrom, lt: period.previousTo } },
+        where: { ...invoiceScope, issueDate: { gte: period.previousFromDay, lt: period.fromDay } },
         _sum: { netTotal: true },
       }),
       prisma.payment.aggregate({
@@ -161,11 +187,11 @@ export async function getDashboardKpis(
         _sum: { amount: true },
       }),
       prisma.expense.aggregate({
-        where: { organizationId, expenseDate: { gte: period.from, lte: period.to } },
+        where: { organizationId, expenseDate: { gte: period.fromDay, lte: period.toDay } },
         _sum: { netAmount: true },
       }),
       prisma.expense.aggregate({
-        where: { organizationId, expenseDate: { gte: period.previousFrom, lt: period.previousTo } },
+        where: { organizationId, expenseDate: { gte: period.previousFromDay, lt: period.fromDay } },
         _sum: { netAmount: true },
       }),
       prisma.invoice.aggregate({
@@ -380,9 +406,20 @@ export async function getRevenueTimeSeries(params: {
 }): Promise<TimeSeriesPoint[]> {
   const { organizationId, from, to, granularity } = params;
 
+  /**
+   * Eimer als Zürcher Kalendertag (2026-09-27).
+   *
+   * Rechnungs- und Belegdatum sind Kalendertage und werden als solche
+   * gekürzt. Buchungen und Kundschaft tragen einen Zeitpunkt; `date_trunc`
+   * ohne Zone kürzte ihn in UTC — eine Buchung vom 1. um 00:30 fiel in den
+   * Vormonat, und die Schlüssel beider Arten lagen um die Zonenverschiebung
+   * auseinander. Jetzt wird der Zeitpunkt in Zürcher Zeit gekürzt und wie die
+   * Kalendertage als `date` geliefert; alle vier Reihen teilen dieselben
+   * Schlüssel.
+   */
   const [revenueRows, expenseRows, bookingRows, customerRows] = await Promise.all([
     prisma.$queryRaw<{ bucket: Date; total: number }[]>`
-      SELECT date_trunc(${granularity}, "issueDate")::timestamptz AS bucket,
+      SELECT date_trunc(${granularity}, "issueDate")::date AS bucket,
              COALESCE(SUM("netTotal"), 0)::float8 AS total
       FROM invoices
       WHERE "organizationId" = ${organizationId}
@@ -392,7 +429,7 @@ export async function getRevenueTimeSeries(params: {
       GROUP BY 1 ORDER BY 1
     `,
     prisma.$queryRaw<{ bucket: Date; total: number }[]>`
-      SELECT date_trunc(${granularity}, "expenseDate")::timestamptz AS bucket,
+      SELECT date_trunc(${granularity}, "expenseDate")::date AS bucket,
              COALESCE(SUM("netAmount"), 0)::float8 AS total
       FROM expenses
       WHERE "organizationId" = ${organizationId}
@@ -400,7 +437,7 @@ export async function getRevenueTimeSeries(params: {
       GROUP BY 1 ORDER BY 1
     `,
     prisma.$queryRaw<{ bucket: Date; total: bigint }[]>`
-      SELECT date_trunc(${granularity}, "createdAt")::timestamptz AS bucket,
+      SELECT (date_trunc(${granularity}, "createdAt", 'Europe/Zurich') AT TIME ZONE 'Europe/Zurich')::date AS bucket,
              COUNT(*) AS total
       FROM bookings
       WHERE "organizationId" = ${organizationId}
@@ -409,7 +446,7 @@ export async function getRevenueTimeSeries(params: {
       GROUP BY 1 ORDER BY 1
     `,
     prisma.$queryRaw<{ bucket: Date; total: bigint }[]>`
-      SELECT date_trunc(${granularity}, "createdAt")::timestamptz AS bucket,
+      SELECT (date_trunc(${granularity}, "createdAt", 'Europe/Zurich') AT TIME ZONE 'Europe/Zurich')::date AS bucket,
              COUNT(*) AS total
       FROM customers
       WHERE "organizationId" = ${organizationId}
@@ -560,15 +597,25 @@ export async function getEmployeeUtilization(params: {
   }));
 }
 
+/** Werktage zwischen den Zürcher Tagen von `from` und `to`, beide eingeschlossen. */
 function countWorkdays(from: Date, to: Date): number {
   let count = 0;
-  const cursor = new Date(from);
-  while (cursor <= to) {
-    const day = cursor.getDay();
-    if (day !== 0 && day !== 6) count++;
-    cursor.setDate(cursor.getDate() + 1);
+  const bis = zuercherTag(to);
+  for (let tag = zuercherTag(from); tag <= bis; tag = tagPlus(tag, 1)) {
+    const wochentag = tag.getUTCDay();
+    if (wochentag !== 0 && wochentag !== 6) count++;
   }
   return count;
+}
+
+/**
+ * Kalendertage für `@db.Date`-Spalten aus Grenzen, die als Zeitpunkt oder
+ * als Tag kommen können. Prisma kürzt einen Zeitpunkt für eine Datumsspalte
+ * auf den UTC-Tag — die Zürcher Mitternacht des 1. (22:00 UTC am Vortag)
+ * zählte sonst den Vortag mit.
+ */
+function tage(from: Date, to: Date): { von: Date; bis: Date } {
+  return { von: zuercherTag(from), bis: zuercherTag(to) };
 }
 
 /** Erfolgsrechnung nach Kostenkategorie. */
@@ -577,13 +624,14 @@ export async function getProfitAndLoss(params: {
   from: Date;
   to: Date;
 }) {
+  const t = tage(params.from, params.to);
   const [revenue, expensesByCategory, laborCost] = await Promise.all([
     prisma.invoice.aggregate({
       where: {
         organizationId: params.organizationId,
         deletedAt: null,
         status: { not: 'CANCELLED' },
-        issueDate: { gte: params.from, lte: params.to },
+        issueDate: { gte: t.von, lte: t.bis },
       },
       _sum: { netTotal: true, vatAmount: true },
     }),
@@ -591,7 +639,7 @@ export async function getProfitAndLoss(params: {
       by: ['category'],
       where: {
         organizationId: params.organizationId,
-        expenseDate: { gte: params.from, lte: params.to },
+        expenseDate: { gte: t.von, lte: t.bis },
       },
       _sum: { netAmount: true, vatAmount: true },
     }),
@@ -633,6 +681,7 @@ export async function getVatReport(params: {
   from: Date;
   to: Date;
 }) {
+  const t = tage(params.from, params.to);
   const [output, input] = await Promise.all([
     prisma.invoice.groupBy({
       by: ['status'],
@@ -640,7 +689,7 @@ export async function getVatReport(params: {
         organizationId: params.organizationId,
         deletedAt: null,
         status: { not: 'CANCELLED' },
-        issueDate: { gte: params.from, lte: params.to },
+        issueDate: { gte: t.von, lte: t.bis },
       },
       _sum: { netTotal: true, vatAmount: true },
     }),
@@ -648,7 +697,7 @@ export async function getVatReport(params: {
       where: {
         organizationId: params.organizationId,
         vatDeductible: true,
-        expenseDate: { gte: params.from, lte: params.to },
+        expenseDate: { gte: t.von, lte: t.bis },
       },
       _sum: { netAmount: true, vatAmount: true },
     }),
@@ -711,11 +760,12 @@ export async function getCashflowForecast(params: {
 
   const buckets = new Map<string, { week: string; inflow: number; outflow: number }>();
 
+  // Montag der Zürcher Woche (2026-09-27): Tag und Wochentag in Zürcher Zeit,
+  // nicht in der des Servers — eine Buchung am Montag um 00:30 gehörte sonst
+  // in die Vorwoche.
   const weekKey = (date: Date) => {
-    const monday = new Date(date);
-    monday.setDate(monday.getDate() - ((monday.getDay() + 6) % 7));
-    monday.setHours(0, 0, 0, 0);
-    return monday.toISOString().slice(0, 10);
+    const tag = zuercherTag(date);
+    return zuercherTagText(tagPlus(tag, -((tag.getUTCDay() + 6) % 7)));
   };
 
   const ensure = (date: Date) => {

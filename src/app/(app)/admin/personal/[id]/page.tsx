@@ -117,7 +117,7 @@ export default async function StaffDetailPage({
   }
 
   const [vacation, documents, logins, lohnprofil] = await Promise.all([
-    getVacationBalance(employee.id, new Date().getFullYear()),
+    getVacationBalance(employee.id),
     prisma.managedDocument.findMany({
       where: {
         AND: [documentVisibilityWhere(session, organizationId), { subjectEmployeeId: employee.id }],

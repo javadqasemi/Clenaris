@@ -7,6 +7,7 @@ import { toast } from 'sonner';
 
 import { api, ApiError } from '@/lib/api/client';
 import { optionsOf, REPORT_CADENCE_LABELS, REPORT_FORMAT_LABELS, REPORT_KIND_LABELS } from '@/lib/bi/labels';
+import { zuercherFelder, zuercherTagText } from '@/lib/zuerich';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/form';
@@ -17,11 +18,19 @@ import { FormDialog } from './resource-form';
 /** Bericht sofort erzeugen. */
 export function GenerateReportForm() {
   const router = useRouter();
-  const now = new Date();
   const [kind, setKind] = React.useState('BUSINESS_PERFORMANCE');
   const [format, setFormat] = React.useState('PDF');
-  const [from, setFrom] = React.useState(new Date(now.getFullYear(), now.getMonth() - 1, 1).toISOString().slice(0, 10));
-  const [to, setTo] = React.useState(new Date(now.getFullYear(), now.getMonth(), 0).toISOString().slice(0, 10));
+  /**
+   * Der Vormonat als Zürcher Kalendertage (2026-09-27).
+   *
+   * Vorher `new Date(y, m - 1, 1).toISOString()`: Die Ortsmitternacht des
+   * Browsers, in UTC umgerechnet, ist in Mitteleuropa der Vortag — der
+   * vorgeschlagene Zeitraum lag **immer** einen Tag daneben (31.07.–30.08.
+   * statt 01.08.–31.08.).
+   */
+  const heute = zuercherFelder(new Date());
+  const [from, setFrom] = React.useState(zuercherTagText(new Date(Date.UTC(heute.jahr, heute.monat - 2, 1))));
+  const [to, setTo] = React.useState(zuercherTagText(new Date(Date.UTC(heute.jahr, heute.monat - 1, 0))));
   const [busy, setBusy] = React.useState(false);
 
   const generate = async () => {

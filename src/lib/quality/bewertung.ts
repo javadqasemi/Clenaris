@@ -30,6 +30,8 @@
  * einfach; das ist der Normalfall und braucht keine Konfiguration.
  */
 
+import { zuercherTag } from '../zuerich';
+
 /** Eine Einzelbewertung: 0 bis `maximum` Punkte, mit optionalem Gewicht. */
 export interface Kriterium {
   /** Erreichte Punkte. */
@@ -146,9 +148,16 @@ export function beurteile(prozent: number | null, zielwert: number | null | unde
 //  Fälligkeit der nächsten Kontrolle
 // ---------------------------------------------------------------------------
 
-/** Ein Kalendertag in Zürcher Ortszeit, auf Mitternacht UTC normiert. */
+/**
+ * Ein Kalendertag in Zürcher Ortszeit, auf Mitternacht UTC normiert.
+ *
+ * Der Kommentar stand schon so da, die Rechnung nahm aber die UTC-Felder
+ * (bis 2026-09-27): Eine Kontrolle um 00:30 Uhr zählte als gestern, und die
+ * Fälligkeit hinkte zwischen Mitternacht und 02:00 um einen Tag nach. Für
+ * einen reinen Kalendertag (`@db.Date`) ergibt der Zürcher Tag denselben Tag.
+ */
 function alsTag(wert: Date): Date {
-  return new Date(Date.UTC(wert.getUTCFullYear(), wert.getUTCMonth(), wert.getUTCDate()));
+  return zuercherTag(wert);
 }
 
 function plusTage(tag: Date, tage: number): Date {

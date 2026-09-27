@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
 
 import { api, ApiError } from '@/lib/api/client';
+import { zuercherTagText } from '@/lib/zuerich';
 import { RHYTHMUS, uhrzeit, WOCHENTAG } from '@/lib/contracts/bezeichnungen';
 import { Button } from '@/components/ui/button';
 import { Checkbox, Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/controls';
@@ -188,18 +189,25 @@ interface PlanWerte {
   active: boolean;
 }
 
-const LEERER_PLAN: PlanWerte = {
+/**
+ * Ein leerer Plan — als Funktion, nicht als Konstante (2026-09-27).
+ *
+ * Als Konstante auf Modulebene wurde „ab heute" beim Laden des Bündels
+ * festgelegt: Ein Tab, der über Nacht offen blieb, schlug am Folgetag
+ * gestern vor. Dazu war es der UTC-Tag.
+ */
+const leererPlan = (): PlanWerte => ({
   frequency: 'WEEKLY',
   interval: 1,
   weekdays: [1],
   monthDay: null,
   startMinute: 360,
   endMinute: 600,
-  effectiveFrom: new Date().toISOString().slice(0, 10),
+  effectiveFrom: zuercherTagText(),
   effectiveUntil: null,
   holidayHandling: 'SKIP',
   active: true,
-};
+});
 
 /**
  * Die Maske des Einsatzplans — eigene Komponente statt `FormDialog`.
@@ -223,14 +231,14 @@ export function EinsatzplanDialog({
 }) {
   const router = useRouter();
   const [offen, setOffen] = React.useState(false);
-  const [werte, setWerte] = React.useState<PlanWerte>(plan ?? LEERER_PLAN);
+  const [werte, setWerte] = React.useState<PlanWerte>(() => plan ?? leererPlan());
   const [speichert, setSpeichert] = React.useState(false);
   const [fehler, setFehler] = React.useState<string | null>(null);
 
   // Beim Öffnen zurück auf den gespeicherten Stand: Ein abgebrochener Versuch
   // soll beim nächsten Öffnen nicht als halbe Eingabe wieder dastehen.
   React.useEffect(() => {
-    if (offen) setWerte(plan ?? LEERER_PLAN);
+    if (offen) setWerte(plan ?? leererPlan());
   }, [offen, plan]);
 
   const wochenrhythmus = werte.frequency === 'WEEKLY' || werte.frequency === 'BIWEEKLY';

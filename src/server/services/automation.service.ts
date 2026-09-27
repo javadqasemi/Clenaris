@@ -1,7 +1,7 @@
 import 'server-only';
 
 import { prisma, toNumber } from '@/lib/db';
-import { absoluteUrl } from '@/lib/utils';
+import { absoluteUrl, formatDate } from '@/lib/utils';
 import { leistungsnamen } from '@/lib/booking/leistungen';
 import {
   birthdayEmail,
@@ -128,7 +128,9 @@ export async function sendBookingReminders(organizationId: string): Promise<{
       link: `/konto/buchungen/${booking.id}`,
       emailContent,
       smsBody: smsTemplates.bookingReminder({
-        date: booking.scheduledStart.toLocaleDateString('de-CH'),
+        // Zürcher Datum — die Uhrzeit daneben hatte die Zone schon, das Datum
+        // nicht (bis 2026-09-27): ein Termin um 00:30 stand mit dem Vortag.
+        date: formatDate(booking.scheduledStart),
         time: booking.scheduledStart.toLocaleTimeString('de-CH', {
           hour: '2-digit',
           minute: '2-digit',

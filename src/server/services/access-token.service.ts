@@ -9,6 +9,7 @@ import { NotFoundError } from '@/lib/errors';
 import { randomToken } from '@/lib/auth/jwt';
 import { legacyTokensAllowed, purposesSatisfying } from '@/lib/auth/public-token-policy';
 import { sha256Hex } from '@/lib/crypto';
+import { zuercherTagText } from '@/lib/zuerich';
 
 /**
  * Öffentliche Zugriffstokens — die eine Stelle für Links ohne Anmeldung.
@@ -186,7 +187,7 @@ export async function issuePublicToken(params: {
     summary:
       `Zugangslink ausgestellt — Zweck ${params.purpose}, ` +
       `Ressource ${PURPOSE_RESOURCE[params.purpose]} ${params.resourceId}, ` +
-      `gültig bis ${expiresAt.toISOString().slice(0, 10)}` +
+      `gültig bis ${zuercherTagText(expiresAt)}` +
       (params.maxUses ? `, höchstens ${params.maxUses} Verwendung(en)` : ''),
   });
 
@@ -209,7 +210,7 @@ export async function issuePublicToken(params: {
     context: {
       zweck: params.purpose,
       ressource: params.resourceId,
-      gueltigBis: expiresAt.toISOString().slice(0, 10),
+      gueltigBis: zuercherTagText(expiresAt),
       maxVerwendungen: params.maxUses ?? null,
     },
   });

@@ -12,6 +12,7 @@ import {
 import { toast } from 'sonner';
 
 import { cn } from '@/lib/utils';
+import { zuercherTagText } from '@/lib/zuerich';
 import { api, ApiError } from '@/lib/api/client';
 import { Button } from '@/components/ui/button';
 import { Input, Textarea } from '@/components/ui/input';
@@ -93,7 +94,7 @@ export function AiWorkspace({ defaultTool }: { defaultTool?: string }) {
   const [tone, setTone] = React.useState('freundlich');
   const [context, setContext] = React.useState('');
   const [language, setLanguage] = React.useState('FR');
-  const [date, setDate] = React.useState(() => new Date().toISOString().slice(0, 10));
+  const [date, setDate] = React.useState(() => zuercherTagText());
 
   const run = async () => {
     setPending(true);

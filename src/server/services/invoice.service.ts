@@ -4,8 +4,9 @@ import { Prisma, type Invoice, type PaymentMethod, type PaymentStatus } from '@p
 
 import { prisma, toNumber } from '@/lib/db';
 import { aufRappen, geld, max0 } from '@/lib/money';
+import { tagPlus, zuercherTag, zuercherTagesbeginn } from '@/lib/zuerich';
 import { BusinessRuleError, ConflictError, NotFoundError } from '@/lib/errors';
-import { absoluteUrl, round2 } from '@/lib/utils';
+import { absoluteUrl, formatDate, round2 } from '@/lib/utils';
 import { orderByFor, resolveSort, type SortOrder } from '@/lib/sort';
 import { audit } from '@/lib/audit';
 import { automationEreignisseAbarbeiten, automationEreignisVormerken } from './automation-engine.service';
@@ -136,10 +137,11 @@ export async function createInvoice(params: {
 
   const totals = computeInvoiceTotals(params.input.items, params.input.discountAmount);
 
-  const issueDate = params.input.issueDate ?? new Date();
-  const dueDate =
-    params.input.dueDate ??
-    new Date(issueDate.getTime() + customer.paymentTermDays * 86_400_000);
+  // Kalendertage in Zürich (2026-09-27). `new Date()` landete in der
+  // `@db.Date`-Spalte als UTC-Tag — zwischen Mitternacht und 01:00/02:00 als
+  // gestern, und die Frist zählte von dort.
+  const issueDate = params.input.issueDate ?? zuercherTag();
+  const dueDate = params.input.dueDate ?? tagPlus(issueDate, customer.paymentTermDays);
 
   const billing = customer.addresses[0];
 
@@ -533,14 +535,31 @@ export async function issueInvoice(params: {
       ISSUED und scheitert, bevor er eine Nummer zieht.
     */
     await tx.$queryRaw`SELECT "id" FROM "invoices" WHERE "id" = ${invoice.id} FOR UPDATE`;
-    const stand = await tx.invoice.findUniqueOrThrow({ where: { id: invoice.id }, select: { status: true } });
+    const stand = await tx.invoice.findUniqueOrThrow({ where: { id: invoice.id }, select: { status: true, issueDate: true, dueDate: true } });
     if (stand.status !== 'DRAFT') throw new BusinessRuleError('Diese Rechnung wurde bereits ausgestellt.');
-    const seq = await nextNumber(tx, params.organizationId, 'invoice', invoice.issueDate);
+
+    /**
+     * Das Rechnungsdatum ist der Tag der Ausstellung (2026-09-27).
+     *
+     * Der Entwurf behielt vorher das Datum, an dem er angelegt wurde: Wer am
+     * 3. einen Entwurf anlegte und ihn am 28. ausstellte, verschickte eine
+     * Rechnung vom 3., die beim Eintreffen schon fällig war — und deren Nummer
+     * aus dem Kreis jenes Datums kam, im Januar also aus dem alten Jahr.
+     * Zurückdatieren ist keine Funktion; vordatieren bleibt möglich (ein
+     * späteres Entwurfsdatum wird übernommen). Die Frist wandert mit: so
+     * viele Tage wie im Entwurf zwischen Datum und Fälligkeit lagen.
+     */
+    const heute = zuercherTag();
+    const rechnungsdatum = stand.issueDate < heute ? heute : stand.issueDate;
+    const frist = Math.round((stand.dueDate.getTime() - stand.issueDate.getTime()) / 86_400_000);
+    const seq = await nextNumber(tx, params.organizationId, 'invoice', zuercherTagesbeginn(rechnungsdatum));
     const ausgestellt = await tx.invoice.update({
       where: { id: invoice.id },
       data: {
         number: seq.number,
         status: 'ISSUED',
+        issueDate: rechnungsdatum,
+        dueDate: tagPlus(rechnungsdatum, Math.max(0, frist)),
         qrReference: buildQrReference({ invoiceSequence: seq.sequence }),
       },
     });
@@ -937,7 +956,10 @@ export async function processOverdueInvoices(organizationId: string): Promise<{
       organizationId,
       deletedAt: null,
       status: { in: ['ISSUED', 'SENT', 'PARTIALLY_PAID'] },
-      dueDate: { lt: now },
+      // Überfällig ist, was *vor* dem heutigen Zürcher Tag fällig war. Prisma
+      // kürzte den Zeitpunkt für die `@db.Date`-Spalte bisher stillschweigend
+      // auf den UTC-Tag; der Vergleich sagt jetzt selbst, was er meint.
+      dueDate: { lt: zuercherTag(now) },
       balance: { gt: 0 },
     },
     data: { status: 'OVERDUE' },
@@ -985,7 +1007,7 @@ export async function processOverdueInvoices(organizationId: string): Promise<{
       phone: invoice.customer.mobile ?? invoice.customer.phone,
       channels: level >= 2 ? ['IN_APP', 'EMAIL', 'SMS'] : ['IN_APP', 'EMAIL'],
       title: level === 1 ? 'Zahlungserinnerung' : `${level - 1}. Mahnung`,
-      body: `Rechnung ${invoice.number} ist seit ${invoice.dueDate.toLocaleDateString('de-CH')} fällig.`,
+      body: `Rechnung ${invoice.number} ist seit ${formatDate(invoice.dueDate)} fällig.`,
       link: `/konto/rechnungen/${invoice.id}`,
       emailContent: paymentReminderEmail({
         firstName: invoice.customer.firstName,
@@ -1137,7 +1159,8 @@ export async function createCreditNote(params: {
         invoiceId: params.invoiceId ?? null,
         customerId: params.customerId,
         reason: params.reason,
-        issueDate: params.issueDate ?? new Date(),
+        // Zürcher Tag, nicht UTC-Tag (siehe `createInvoice`).
+        issueDate: params.issueDate ?? zuercherTag(),
         netTotal,
         vatAmount,
         grossTotal,

@@ -4,7 +4,7 @@ import type { Job, Prisma, Service, ServiceKind } from '@prisma/client';
 
 import { prisma, toNumber, type Tx } from '@/lib/db';
 import { BusinessRuleError, ForbiddenError, NotFoundError } from '@/lib/errors';
-import { absoluteUrl, round2 } from '@/lib/utils';
+import { absoluteUrl, formatDate, formatDateTime, round2 } from '@/lib/utils';
 import { orderByFor, resolveSort, type SortOrder } from '@/lib/sort';
 import { haversineMeters } from '@/lib/maps/google';
 import { CRYPTO_CONTEXT, decryptNullable } from '@/lib/crypto';
@@ -654,7 +654,9 @@ async function notifyAssignees(jobId: string, employeeIds: string[]) {
         userId: employee.user.id,
         channels: ['IN_APP', 'EMAIL', 'SMS'],
         title: 'Neuer Einsatz zugeteilt',
-        body: `${job.title} · ${job.scheduledStart.toLocaleString('de-CH')}`,
+        // Zürcher Zeit (2026-09-27) — ohne Zone stand die UTC-Uhrzeit in der
+        // Meldung, eine bis zwei Stunden zu früh.
+        body: `${job.title} · ${formatDateTime(job.scheduledStart)}`,
         link: `/portal/einsaetze/${job.id}`,
         emailContent: jobAssignedEmail({
           firstName: employee.user.firstName,
@@ -665,7 +667,7 @@ async function notifyAssignees(jobId: string, employeeIds: string[]) {
           portalUrl: absoluteUrl(`/portal/einsaetze/${job.id}`),
         }),
         smsBody: smsTemplates.jobAssigned({
-          date: job.scheduledStart.toLocaleDateString('de-CH'),
+          date: formatDate(job.scheduledStart),
           time: job.scheduledStart.toLocaleTimeString('de-CH', {
             hour: '2-digit',
             minute: '2-digit',

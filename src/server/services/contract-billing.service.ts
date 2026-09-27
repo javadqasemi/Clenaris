@@ -11,6 +11,7 @@ import {
 } from '@/lib/contracts/serie';
 import { isUniqueConstraintError, prisma, toNumber } from '@/lib/db';
 import { BusinessRuleError, NotFoundError } from '@/lib/errors';
+import { zuercherTagText } from '@/lib/zuerich';
 
 import { contractBillingBasis } from './contract.service';
 import { createInvoice } from './invoice.service';
@@ -227,7 +228,9 @@ export async function createContractInvoice(params: {
     grundlage.pricingModel === 'FIXED_PER_VISIT' && grundlage.positionen.length > 0
       ? grundlage.positionen.map((einsatz) => ({
           jobId: einsatz.jobId,
-          name: `Einsatz ${einsatz.number} vom ${einsatz.scheduledStart.toISOString().slice(0, 10)}`,
+          // Der Zürcher Tag des Einsatzes (2026-09-27) — der UTC-Tag stand bei
+          // einem Einsatz ab Mitternacht als Vortag auf der Rechnung.
+          name: `Einsatz ${einsatz.number} vom ${zuercherTagText(einsatz.scheduledStart)}`,
           description: `${vertrag.title} · Fassung ${fassung.versionNumber}`,
           quantity: 1,
           unit: 'Einsatz',

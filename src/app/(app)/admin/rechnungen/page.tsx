@@ -5,6 +5,7 @@ import { Download, Plus, Receipt } from 'lucide-react';
 import { toNumber } from '@/lib/db';
 import { requirePermission } from '@/lib/auth/session';
 import { formatCurrency, formatDate, toQueryString } from '@/lib/utils';
+import { zuercherJahr } from '@/lib/zuerich';
 import { getOrganizationId } from '@/server/services/organization.service';
 import { listInvoices } from '@/server/services/invoice.service';
 import { StatusBadge } from '@/components/ui/badge';
@@ -70,7 +71,7 @@ export default async function AdminInvoicesPage({
     order: params.order,
   })}`;
 
-  const year = new Date().getFullYear();
+  const year = zuercherJahr();
 
   return (
     <div className="space-y-6">

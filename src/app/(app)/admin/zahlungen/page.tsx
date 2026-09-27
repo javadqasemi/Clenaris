@@ -3,6 +3,7 @@ import Link from 'next/link';
 import { CreditCard } from 'lucide-react';
 
 import { prisma, toNumber } from '@/lib/db';
+import { periodOf } from '@/lib/bi/periods';
 import { requirePermission } from '@/lib/auth/session';
 import { can } from '@/lib/auth/rbac';
 import { formatCurrency, formatDate, toQueryString } from '@/lib/utils';
@@ -58,7 +59,8 @@ export default async function PaymentsPage({
 
   const page = Math.max(1, Number(params.seite) || 1);
   const pageSize = 30;
-  const monthStart = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
+  // Zürcher Monatsbeginn für `paidAt` (Zeitpunkt), nicht der des Servers.
+  const monthStart = periodOf('MONTH', new Date()).from;
 
   const where = {
     invoice: { organizationId },

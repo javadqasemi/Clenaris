@@ -4,7 +4,7 @@ import { FileSignature, Plus } from 'lucide-react';
 
 import { can } from '@/lib/auth/rbac';
 import { requirePermission } from '@/lib/auth/session';
-import { alsTag, plusTage } from '@/lib/contracts/serie';
+import { plusTage, zuercherHeute } from '@/lib/contracts/serie';
 import { prisma, toNumber } from '@/lib/db';
 import type { Prisma } from '@/lib/db';
 import { formatCurrency, formatDate, toQueryString } from '@/lib/utils';
@@ -71,7 +71,8 @@ export default async function AdminContractsPage({
   const page = Math.max(1, Number(params.seite) || 1);
   const pageSize = 25;
   const sicht = params.sicht ?? '';
-  const heute = alsTag(new Date());
+  // Der Zürcher Tag, nicht der UTC-Tag (2026-09-27).
+  const heute = zuercherHeute();
   const fenster = plusTage(heute, KUENDIGUNGSFENSTER_TAGE);
 
   const sichtWhere: Prisma.ContractWhereInput =

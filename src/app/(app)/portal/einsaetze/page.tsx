@@ -4,6 +4,7 @@ import { CalendarCheck, Clock, MapPin } from 'lucide-react';
 
 import { requireEmployeeId } from '@/lib/auth/session';
 import { formatDate, formatDuration, timeRangeLabel } from '@/lib/utils';
+import { zuercherTagesgrenzen } from '@/lib/zuerich';
 import { getEmployeeSchedule } from '@/server/services/employee.service';
 import { StatusBadge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/primitives';
@@ -33,8 +34,9 @@ export default async function PortalJobsPage({
   const { employeeId } = await requireEmployeeId();
   const alle = (await searchParams).alle === '1';
 
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
+  // Beginn des Zürcher Tages (2026-09-27): Mit der Mitternacht des Servers
+  // stand ein Einsatz von heute 00:30 unter „vergangen".
+  const today = zuercherTagesgrenzen().von;
 
   const [upcoming, past] = await Promise.all([
     getEmployeeSchedule({
