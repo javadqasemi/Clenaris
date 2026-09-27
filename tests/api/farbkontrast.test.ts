@@ -1,7 +1,7 @@
 import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { kontrast, lesbareFarben, MIN_KONTRAST } from '../../src/lib/farbkontrast';
+import { kontrast, lesbareFarben, lesbareSchrift, MIN_KONTRAST } from '../../src/lib/farbkontrast';
 import { data, get, requireServer } from '../helpers/client';
 import { loginAll, type AccountName } from '../helpers/accounts';
 import { testDb, testDbGrund, testDbSchliessen } from '../helpers/testdb';
@@ -49,6 +49,16 @@ describe('Farbkontrast — die Rechnung', () => {
     assert.notEqual(paar.hintergrund, '#2B8A3E');
     const [r, g, b] = [1, 3, 5].map((i) => parseInt(paar.hintergrund.slice(i, i + 2), 16));
     assert.ok(g > r && g > b, `noch grün: ${paar.hintergrund}`);
+  });
+
+  it('Etikettschrift auf Weiss: die Befunde der Kundenliste halten danach die Schwelle, starke Farben bleiben', () => {
+    // Die Werte aus dem sauberen Release-Lauf: Stammkunde 4.36, Orange 3.58.
+    for (const farbe of ['#2B8A3E', '#E8590C', '#F59F00', '#94A3B8']) {
+      const schrift = lesbareSchrift(farbe);
+      assert.ok(kontrast(schrift, '#FFFFFF') >= MIN_KONTRAST, `${farbe} → ${schrift}`);
+    }
+    assert.equal(lesbareSchrift('#0B7285'), '#0B7285');
+    assert.equal(lesbareSchrift('kein-hex'), '#0F172A');
   });
 
   it('eine unlesbare Eingabe geht nicht ungeprüft durch', () => {

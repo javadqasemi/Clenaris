@@ -45,6 +45,7 @@ import { CustomerMerge } from '@/features/admin/customer-merge';
 import { AddressManager } from '@/features/shared/address-manager';
 import { PropertyCreateButton, PropertyRowActions } from '@/features/shared/property-dialog';
 import { can } from '@/lib/auth/rbac';
+import { lesbareSchrift } from '@/lib/farbkontrast';
 import { listAddresses } from '@/server/services/address.service';
 
 export const metadata: Metadata = {
@@ -188,7 +189,7 @@ export default async function AdminCustomerDetailPage({
             <Badge
               key={link.tagId}
               variant="outline"
-              style={{ borderColor: `${link.tag.color}55`, color: link.tag.color }}
+              style={{ borderColor: `${link.tag.color}55`, color: lesbareSchrift(link.tag.color) }}
             >
               {link.tag.name}
             </Badge>

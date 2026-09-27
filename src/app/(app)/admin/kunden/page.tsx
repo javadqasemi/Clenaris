@@ -12,6 +12,7 @@ import { Button } from '@/components/ui/button';
 import { PersonAvatar } from '@/components/ui/primitives';
 import { FilterBar } from '@/components/app/filter-bar';
 import { SortHeader } from '@/components/app/sort-header';
+import { lesbareSchrift } from '@/lib/farbkontrast';
 import {
   EmptyState,
   ListCard,
@@ -161,7 +162,7 @@ export default async function AdminCustomersPage({
                                   key={link.tagId}
                                   size="sm"
                                   variant="outline"
-                                  style={{ borderColor: `${link.tag.color}55`, color: link.tag.color }}
+                                  style={{ borderColor: `${link.tag.color}55`, color: lesbareSchrift(link.tag.color) }}
                                 >
                                   {link.tag.name}
                                 </Badge>

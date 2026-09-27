@@ -10,6 +10,7 @@ import { cn, formatCurrency, formatRelative } from '@/lib/utils';
 import { api, ApiError } from '@/lib/api/client';
 import { statusZurStufe } from '@/lib/crm/pipeline';
 import { Badge } from '@/components/ui/badge';
+import { lesbareSchrift } from '@/lib/farbkontrast';
 
 /**
  * Verkaufspipeline als Kanban.
@@ -185,7 +186,7 @@ export function LeadPipeline({ columns }: { columns: PipelineColumn[] }) {
                       key={tag.id}
                       size="sm"
                       variant="outline"
-                      style={{ borderColor: `${tag.color}55`, color: tag.color }}
+                      style={{ borderColor: `${tag.color}55`, color: lesbareSchrift(tag.color) }}
                     >
                       {tag.name}
                     </Badge>

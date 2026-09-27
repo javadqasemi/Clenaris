@@ -57,6 +57,26 @@ export function kontrast(a: string, b: string): number {
 }
 
 /**
+ * Eine Farbe als **Schrift** auf einer hellen Fläche lesbar machen — für
+ * Etiketten, deren Farbe ein Datenwert ist (`Tag.color`).
+ *
+ * Der Befund (2026-09-27, im sauberen Release-Lauf auf frischer Datenbank):
+ * Die Etiketten der Kundenliste setzten ihre Farbe unverändert als Schrift auf
+ * Weiss — „Stammkunde" in `#2B8A3E` mit 4.36 : 1, ein orangefarbenes Etikett
+ * mit 3.58 : 1. Die Farbe bleibt als Rahmen, wie sie ist; nur die Schrift
+ * wird so weit abgedunkelt, bis sie die Schwelle hält. Unlesbare Eingaben
+ * ergeben die dunkle Schrift der Oberfläche.
+ */
+export function lesbareSchrift(farbe: string, flaeche = WEISS): string {
+  let kanal = kanaele(farbe);
+  if (!kanal) return DUNKEL;
+  while (kontrast(alsHex(kanal), flaeche) < MIN_KONTRAST) {
+    kanal = [kanal[0] * 0.92, kanal[1] * 0.92, kanal[2] * 0.92];
+  }
+  return alsHex(kanal);
+}
+
+/**
  * Fläche und Schrift, die zusammen mindestens `MIN_KONTRAST` erreichen.
  *
  * Reihenfolge: Hält dunkle Schrift auf der unveränderten Fläche, bleibt die
