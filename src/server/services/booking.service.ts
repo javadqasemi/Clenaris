@@ -34,7 +34,7 @@ import { assertAssignable } from './assignment.service';
 import { notify, notifyStaff } from './notification.service';
 import { createJobsForBooking } from './job.service';
 import { dateienBinden } from './file.service';
-import { issuePublicToken, resolvePublicToken, tokenRejectionError } from './access-token.service';
+import { issuePublicToken, resolvePublicToken, revokeTokensFor, tokenRejectionError } from './access-token.service';
 
 /**
  * Buchungslogik.
@@ -56,7 +56,13 @@ const RECURRENCE_HORIZON_DAYS = 84; // 12 Wochen
 
 export interface CreateBookingResult {
   booking: Booking;
-  confirmationUrl: string;
+  /**
+   * Der Verwaltungslink — `null`, wenn ihn die anfragende Person nicht sehen
+   * darf: bei einer Gastbuchung auf eine bestehende Kundenakte (siehe
+   * `AufgeloesteKundschaft.nachgewiesen`). Der Link geht dann nur per E-Mail
+   * an die Adresse der Akte.
+   */
+  confirmationUrl: string | null;
   isNewCustomer: boolean;
 }
 
@@ -122,15 +128,40 @@ export async function createBooking(params: {
     : { discountPercent: 0, blocked: false, blockedReason: null, totalBookings: 0 };
 
   if (customer.blocked) {
+    // Der Sperrgrund ist eine Notiz des Büros über diese Kundschaft. Wer nur
+    // ihre E-Mail-Adresse eingetippt hat, bekommt die allgemeine Meldung —
+    // sonst liesse sich die Notiz mit einer einzigen Anfrage auslesen.
     throw new BusinessRuleError(
-      customer.blockedReason ??
+      (kunde.nachgewiesen ? customer.blockedReason : null) ??
         'Für dieses Kundenkonto sind zurzeit keine Online-Buchungen möglich. Bitte kontaktieren Sie uns.',
     );
   }
 
+  /**
+   * Der Dauerrabatt gilt nur, wo die Identität nachgewiesen ist (F-03,
+   * 2026-09-27).
+   *
+   * Er ist eine Vereinbarung mit **dieser** Kundschaft. Vorher bekam ihn jede
+   * Gastbuchung mit der passenden E-Mail-Adresse: Wer die Adresse eines
+   * Grosskunden kannte, buchte zu dessen Konditionen — und las den Satz am
+   * Gesamtbetrag der Antwort ab, verglichen mit der Sofortschätzung. Ohne
+   * Nachweis rechnet der Server den Listenpreis; das Büro kann nach
+   * Rücksprache korrigieren, und angemeldet gilt der Rabatt wie bisher.
+   * Gutscheinregeln (Erstbuchung, Einlösungen je Kundschaft) laufen dagegen
+   * weiter gegen die Akte: Dort ist die strengere Auslegung die sichere, eine
+   * anonyme Buchung darf eine bereits genutzte Einlösung nicht erneuern.
+   */
+  const rabattProzent = kunde.nachgewiesen ? toNumber(customer.discountPercent) : 0;
+
+  /**
+   * Adresse und Objekt nur aus dem Bestand einer **nachgewiesenen**
+   * Kundschaft (F-03). Eine per E-Mail-Adresse zugeordnete Gastbuchung
+   * hat keinen Bestand, auf den sie verweisen darf — sonst wäre die
+   * E-Mail-Adresse der Schlüssel zu fremden Adressen samt Zugangsnotiz.
+   */
   const bezuege = await buchungsbezuegePruefen({
     organizationId,
-    customerId: kunde.customerId,
+    customerId: kunde.nachgewiesen ? kunde.customerId : null,
     addressId: input.addressId ?? null,
     propertyId: input.propertyId ?? null,
     fileIds: input.fileIds,
@@ -151,7 +182,7 @@ export async function createBooking(params: {
       // Für eine neue Kundschaft eine Kennung, die keine Buchung trifft: Die
       // Gutscheinprüfung zählt Einlösungen je Kundschaft, und es gibt keine.
       customer: { id: kunde.customerId ?? '__neue_kundschaft__', totalBookings: customer.totalBookings },
-      customerDiscountPercent: toNumber(customer.discountPercent),
+      customerDiscountPercent: rabattProzent,
       urgent: input.urgent,
     },
     organizationId,
@@ -178,7 +209,7 @@ export async function createBooking(params: {
     input.scheduledStart.getTime() + breakdown.durationMinutes * 60_000,
   );
 
-  const booking = await prisma.$transaction(async (tx) => {
+  const { booking, offenlegen } = await prisma.$transaction(async (tx) => {
     /**
      * Die Kapazitätsprüfung hält den öffentlichen Buchungstrichter davon ab,
      * mehr zuzusagen, als das Team schafft. Im Büro ist sie eine Empfehlung:
@@ -216,12 +247,31 @@ export async function createBooking(params: {
 
     // Erst jetzt, nach allen Prüfungen und in derselben Transaktion wie die
     // Buchung: Scheitert danach noch etwas, rollt die Kundschaft mit zurück.
-    const customerId = kunde.customerId ?? (await gastkundschaftAnlegen(tx, organizationId, kunde.neu!));
+    /**
+     * `offenlegen`: Darf die anfragende Person sehen, was an der Akte steht?
+     * Ja bei einer nachgewiesenen Kundschaft und bei einer Akte, die diese
+     * Anfrage gerade selbst angelegt hat. Nein, wenn die Gastbuchung auf eine
+     * bestehende Akte fällt — auch dann, wenn diese erst zwischen Auflösen und
+     * hier entstanden ist (`gastkundschaftAnlegen` findet sie dann vor): Eine
+     * Akte, die jemand anderes angelegt hat, gehört nicht deshalb der
+     * anfragenden Person, weil beide dieselbe Adresse eingetippt haben.
+     */
+    let customerId: string;
+    let offenlegen: boolean;
+    if (kunde.customerId) {
+      customerId = kunde.customerId;
+      offenlegen = kunde.nachgewiesen;
+    } else {
+      const akte = await gastkundschaftAnlegen(tx, organizationId, kunde.neu!);
+      customerId = akte.id;
+      offenlegen = akte.angelegt;
+    }
 
     const { number } = await nextNumber(tx, organizationId, 'booking');
 
-    // Adresse übernehmen oder neu anlegen.
-    const addressId = input.addressId ?? (await createAddress(tx, customerId, input));
+    // Adresse übernehmen oder neu anlegen. Die Kennung ist oben geprüft und
+    // kommt nur bei einer nachgewiesenen Kundschaft durch.
+    const addressId = input.addressId ?? (await createAddress(tx, customerId, input, { bestandSchonen: !offenlegen }));
 
     // Wiederholungsregel.
     let recurrenceRuleId: string | null = null;
@@ -323,7 +373,7 @@ export async function createBooking(params: {
     });
 
     await automationEreignisVormerken(tx, { organizationId, trigger: 'BOOKING_CREATED', entityId: created.id });
-    return created;
+    return { booking: created, offenlegen };
   });
 
   // --- 5) Folgeaktionen ausserhalb der Transaktion -------------------------
@@ -400,7 +450,11 @@ export async function createBooking(params: {
     summary: office
       ? `Buchung ${booking.number} im Büro erfasst (${office.source})` +
         (office.overrideCapacity ? ' — Kapazitätsprüfung übergangen' : '')
-      : `Buchung ${booking.number} über die Website erstellt`,
+      : `Buchung ${booking.number} über die Website erstellt` +
+        // Das Büro soll sehen, dass hier niemand angemeldet war und die
+        // Zuordnung allein an der eingetippten E-Mail-Adresse hängt — bevor
+        // es bestätigt, ist eine Rückfrage bei der Kundschaft angebracht.
+        (offenlegen ? '' : ' — Gastbuchung auf eine bestehende Kundenakte, Identität nicht nachgewiesen'),
     ip: params.ip,
   });
 
@@ -417,7 +471,31 @@ export async function createBooking(params: {
    */
   await automationEreignisseAbarbeiten({ organizationId });
 
-  return { booking, confirmationUrl, isNewCustomer };
+  /**
+   * Der Link geht an die anfragende Person nur, wenn sie die Akte sehen darf
+   * (F-03, 2026-09-27).
+   *
+   * Der Verwaltungslink öffnet Name, E-Mail-Adresse und Einsatzort der
+   * Kundschaft (`/buchung/…`, `/buchen/bestaetigt?t=…`). Vorher kam er in
+   * jeder Antwort zurück — auch bei einer anonymen Buchung, die über die
+   * eingetippte E-Mail-Adresse einer fremden Akte zugeordnet worden war. Wer
+   * eine Adresse kannte, las so die Stammdaten dazu aus. Ausgestellt wird er
+   * trotzdem: Er steht in der Bestätigung an die Adresse der Akte, und wer
+   * dieses Postfach hat, ist die Kundschaft.
+   *
+   * Dass der Link fehlt, verrät, dass es zur Adresse eine Akte gibt. Das ist
+   * hingenommen: Eine solche Probe kostet eine echte Buchung, läuft durch das
+   * Buchungslimit und landet als Bestätigung im Postfach der Kundschaft —
+   * sie bleibt nicht unbemerkt. Den Link auch neuen Gästen vorzuenthalten,
+   * nähme allen die vollständige Bestätigungsseite, um eine Auskunft zu
+   * verbergen, die die Registrierung für Adressen mit Konto ohnehin gibt
+   * („Für diese E-Mail-Adresse besteht bereits ein Konto").
+   */
+  return {
+    booking,
+    confirmationUrl: offenlegen ? confirmationUrl : null,
+    isNewCustomer: isNewCustomer && offenlegen,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -659,6 +737,26 @@ export async function cancelBooking(params: {
       data: { totalBookings: { decrement: 1 } },
     });
 
+    /**
+     * Verwaltungslinks mit dem Storno entwerten (N-04, 2026-09-27).
+     *
+     * Bis hierher lebte ein Buchungslink bis zu seinem Ablauf — 90 Tage nach
+     * dem Termin, auch für eine längst stornierte Buchung. Er zeigt Name,
+     * E-Mail-Adresse und Einsatzort; nach dem Storno braucht ihn niemand mehr
+     * zum Verwalten, und jeder weitergeleitete oder mitgelesene Link bliebe
+     * ein offener Zugang zu diesen Daten. Offerten und Rechnungen verfahren
+     * genauso (`revokeTokensFor` vor dem Neuversand). In derselben
+     * Transaktion wie der Statuswechsel: Ein Storno, dessen Widerruf
+     * scheitert, soll nicht als erledigt dastehen. Die Stornobestätigung per
+     * E-Mail unten trägt keinen Verwaltungslink, es entsteht also kein neuer.
+     */
+    await revokeTokensFor({
+      tx,
+      purpose: 'BOOKING_MANAGE',
+      resourceId: booking.id,
+      revokedById: params.actorId ?? null,
+    });
+
     await automationEreignisVormerken(tx, { organizationId: params.organizationId, trigger: 'BOOKING_CANCELLED', entityId: booking.id });
     return result;
   });
@@ -856,6 +954,16 @@ async function einsaetzeNachfuehren(
     zeitOderOrt: boolean;
   },
 ): Promise<void> {
+  /*
+    Die Einsatzzeilen sperren, bevor sie gelesen und geprüft werden
+    (2026-09-27, F-06). Dieselbe Sperre wie `einsatzSperren` in
+    `job.service.ts`: Ohne sie prüfte eine Terminänderung über die Buchung das
+    alte Team, während gleichzeitig ein Teamwechsel am Einsatz die neuen
+    Personen zur alten Zeit prüfte — beide gingen durch, und das Ergebnis war
+    ein nie geprüftes Paar aus neuem Team und neuer Zeit. Nach Kennung
+    sortiert, damit zwei Wege die Sperren in derselben Reihenfolge nehmen.
+  */
+  await tx.$queryRaw`SELECT id FROM jobs WHERE "bookingId" = ${params.bookingId} AND "organizationId" = ${params.organizationId} AND "deletedAt" IS NULL ORDER BY id FOR UPDATE`;
   const einsaetze = await tx.job.findMany({
     where: { bookingId: params.bookingId, deletedAt: null, status: { notIn: [...EINSATZ_ABGESCHLOSSEN] } },
     select: {
@@ -1308,6 +1416,18 @@ export async function updateBooking(params: {
       Object.keys(data).length > 0
         ? await tx.booking.update({ where: { id: booking.id }, data })
         : await tx.booking.findUniqueOrThrow({ where: { id: booking.id } });
+
+    /*
+      Wechselt die Kundschaft, verlieren die bisherigen Verwaltungslinks ihre
+      Gültigkeit (N-04). Der Link zeigt die Stammdaten der *aktuellen*
+      Kundschaft der Buchung — nach einer Umbuchung auf eine andere Akte
+      läse die bisherige Empfängerin sonst Name und E-Mail-Adresse der neuen.
+      Einen neuen stellt erst die nächste Mitteilung aus, die einen trägt
+      (die Terminerinnerung an Kundschaft ohne Konto).
+    */
+    if (data.customer) {
+      await revokeTokensFor({ tx, purpose: 'BOOKING_MANAGE', resourceId: booking.id, revokedById: params.actorId ?? null });
+    }
 
     /**
      * Was die offenen Einsätze wissen müssen, an sie weiterreichen.
@@ -1839,12 +1959,34 @@ export async function buchungslinkAusstellen(params: {
   const expiresAt = new Date(
     Math.max(params.scheduledEnd.getTime(), Date.now()) + BUCHUNGSLINK_TAGE * tag,
   );
-  const { raw } = await issuePublicToken({
-    organizationId: params.organizationId,
-    purpose: 'BOOKING_MANAGE',
-    resourceId: params.bookingId,
-    createdById: params.createdById ?? null,
-    expiresAt,
+  /**
+   * Vor jeder Ausstellung die bisherigen Links derselben Buchung widerrufen
+   * (N-04, 2026-09-27) — dieselbe Regel wie beim Neuversand einer Offerte.
+   *
+   * Vorher legte jede Erinnerung einen weiteren gültigen Link daneben; eine
+   * Buchung sammelte so mehrere Schlüssel in mehreren E-Mails, jeder bis 90
+   * Tage nach dem Termin gültig, und keiner liess sich einzeln zuordnen.
+   * Gültig ist jetzt immer der zuletzt versendete. Widerruf und Ausstellung
+   * in einer Transaktion: Scheitert die Ausstellung, bleibt der alte Link
+   * gültig, statt dass die Buchung gar keinen mehr hat. Die Kehrseite ist
+   * gewollt: Der Link aus der ersten Bestätigung erlischt mit der Erinnerung,
+   * die einen neuen trägt.
+   */
+  const { raw } = await prisma.$transaction(async (tx) => {
+    await revokeTokensFor({
+      tx,
+      purpose: 'BOOKING_MANAGE',
+      resourceId: params.bookingId,
+      revokedById: params.createdById ?? null,
+    });
+    return issuePublicToken({
+      tx,
+      organizationId: params.organizationId,
+      purpose: 'BOOKING_MANAGE',
+      resourceId: params.bookingId,
+      createdById: params.createdById ?? null,
+      expiresAt,
+    });
   });
   return absoluteUrl(`/buchung/${raw}`);
 }
@@ -1916,6 +2058,17 @@ async function bookingPdfAttachment(
 interface AufgeloesteKundschaft {
   customerId: string | null;
   neu?: NeueGastkundschaft;
+  /**
+   * Ist belegt, dass die anfragende Person diese Kundschaft *ist* oder für
+   * sie handeln darf? Ja bei angemeldeter Kundschaft (ihr eigenes Profil)
+   * und im Büro (`booking:create`, Kundschaft ausdrücklich gewählt). Nein,
+   * wenn eine Gastbuchung über die eingetippte E-Mail-Adresse einer
+   * bestehenden Akte zugeordnet wird: Eine E-Mail-Adresse ist kein Nachweis,
+   * jede Kundenliste und jede Visitenkarte nennt sie (F-03, 2026-09-27).
+   * Ohne Nachweis: kein Verweis auf Bestand, kein Rabatt, kein
+   * Verwaltungslink und kein Sperrgrund in der Antwort.
+   */
+  nachgewiesen: boolean;
   isNewCustomer: boolean;
   customerEmail: string;
   customerName: string;
@@ -1934,6 +2087,7 @@ async function resolveOfficeCustomer(params: {
 
   return {
     customerId: customer.id,
+    nachgewiesen: true,
     isNewCustomer: false,
     customerEmail: customer.email,
     customerName: customer.companyName ?? `${customer.firstName} ${customer.lastName}`,
@@ -1969,8 +2123,10 @@ const ANHAENGBAR = {
  * Die Regeln, ausdrücklich:
  *
  *  • Adresse und Objekt nur aus dem Bestand **dieser** Kundschaft, in dieser
- *    Organisation. Eine Gastbuchung ohne bestehende Kundschaft hat keinen
- *    Bestand — sie gibt eine neue Adresse an, keine Kennung.
+ *    Organisation. Eine Gastbuchung hat keinen Bestand — auch dann nicht,
+ *    wenn ihre E-Mail-Adresse zu einer bestehenden Akte passt: Der Aufrufer
+ *    übergibt `customerId` nur bei nachgewiesener Kundschaft (F-03). Ein
+ *    Gast gibt eine neue Adresse an, keine Kennung.
  *  • Dateien nur von der **angemeldeten** Person selbst hochgeladen, als
  *    Buchungsfoto, noch ungebunden, geprüft und sauber. Ein Gast hat keine
  *    Identität, an die sich eine Datei binden liesse; das Buchungsformular
@@ -2027,6 +2183,7 @@ async function resolveCustomer(params: {
     });
     return {
       customerId: customer.id,
+      nachgewiesen: true,
       isNewCustomer: false,
       customerEmail: customer.email,
       customerName: `${customer.firstName} ${customer.lastName}`,
@@ -2034,26 +2191,25 @@ async function resolveCustomer(params: {
     };
   }
 
-  // Fall 2: Mitarbeitende buchen im Namen eines Kunden — dann muss die
-  // Kunden-ID aus einer bestehenden Adresse oder Liegenschaft hervorgehen.
-  // Nur Adressen der eigenen Organisation (2026-09-27): `Address` trägt keine
-  // Organisation, die Grenze läuft über die Kundschaft.
-  if (session && session.role !== 'CUSTOMER' && input.addressId) {
-    const address = await prisma.address.findFirst({
-      where: { id: input.addressId, customer: { organizationId, deletedAt: null } },
-      include: { customer: { select: { id: true, email: true, firstName: true, lastName: true, userId: true } } },
-    });
-    if (!address) throw new NotFoundError('Adresse');
-    return {
-      customerId: address.customer.id,
-      isNewCustomer: false,
-      customerEmail: address.customer.email,
-      customerName: `${address.customer.firstName} ${address.customer.lastName}`,
-      userId: address.customer.userId,
-    };
-  }
+  /*
+    Einen Fall 2 gibt es nicht mehr (F-03, 2026-09-27).
 
-  // Fall 3: Gastbuchung — Kontaktangaben sind Pflicht.
+    Hier stand: Jede angemeldete Person, die nicht Kundschaft ist, bucht über
+    eine bestehende `addressId` auf deren Kundschaft. Geprüft wurde nur die
+    Organisation, keine Berechtigung — die öffentliche Route verlangt keine.
+    Eine Reinigungskraft ohne `booking:create` konnte so auf jede Adresse der
+    Organisation buchen und bekam den Verwaltungslink samt Stammdaten zurück.
+
+    Eine Berechtigungsprüfung an dieser Stelle nachzuziehen wäre der falsche
+    Weg: Für die Erfassung im Büro gibt es `POST /api/bookings`, mit
+    `booking:create`, ausdrücklicher Kundschaft, Herkunft und Protokoll. Ein
+    zweiter Büroweg durch die öffentliche Route wäre eine zweite
+    Sicherheitsstufe für dieselbe Handlung. Wer angemeldet, aber nicht
+    Kundschaft ist, bucht hier deshalb wie ein Gast — mit Kontaktangaben und
+    neuer Adresse, ohne Zugriff auf Bestand.
+  */
+
+  // Gastbuchung — Kontaktangaben sind Pflicht.
   if (!input.email || !input.firstName || !input.lastName || !input.phone) {
     throw new BusinessRuleError(
       'Bitte geben Sie Vorname, Nachname, E-Mail und Telefonnummer an oder melden Sie sich an.',
@@ -2065,9 +2221,24 @@ async function resolveCustomer(params: {
     select: { id: true, email: true, firstName: true, lastName: true, userId: true },
   });
 
+  /**
+   * Eine bestehende Akte mit dieser E-Mail-Adresse: Die Buchung kommt dorthin,
+   * aber **ohne Nachweis** (F-03, 2026-09-27).
+   *
+   * Eine zweite Akte anzulegen, wäre die scheinbar sichere Alternative und
+   * ist verworfen: Die Adresse ist je Organisation die Identität einer
+   * Kundschaft (`kundenakte-sperre.ts` serialisiert jeden Anlageweg genau
+   * darauf), Registrierung und Büro fänden danach zwei Akten, und die
+   * Kundschaft, die ohne Anmeldung ein zweites Mal bucht, sähe ihre
+   * Buchungen verstreut. Die Zuordnung bleibt also — nur verschafft sie der
+   * anfragenden Person nichts: keinen Verweis auf Adressen und Objekte der
+   * Akte, keinen Rabatt, keinen Verwaltungslink, keinen Sperrgrund. Die
+   * Bestätigung geht an die Adresse der Akte; dort liest sie, wem sie gehört.
+   */
   if (existing) {
     return {
       customerId: existing.id,
+      nachgewiesen: false,
       isNewCustomer: false,
       customerEmail: existing.email,
       customerName: `${existing.firstName} ${existing.lastName}`,
@@ -2086,6 +2257,9 @@ async function resolveCustomer(params: {
       email: input.email,
       phone: input.phone,
     },
+    // Die Akte entsteht erst mit dieser Buchung; ob die anfragende Person sie
+    // sehen darf, entscheidet `gastkundschaftAnlegen` (hat sie sie angelegt?).
+    nachgewiesen: false,
     isNewCustomer: true,
     customerEmail: input.email,
     customerName: `${input.firstName} ${input.lastName}`,
@@ -2110,7 +2284,11 @@ interface NeueGastkundschaft {
  * beide; die zweite findet hier die Akte der ersten, statt eine Doppelakte
  * anzulegen.
  */
-async function gastkundschaftAnlegen(tx: Tx, organizationId: string, neu: NeueGastkundschaft): Promise<string> {
+async function gastkundschaftAnlegen(
+  tx: Tx,
+  organizationId: string,
+  neu: NeueGastkundschaft,
+): Promise<{ id: string; angelegt: boolean }> {
   // Dieselbe Sperre wie jeder andere Anlageweg (`kundenakte-sperre.ts`): Die
   // Buchungssperre serialisiert nur Buchungen untereinander, nicht die
   // Buchung gegen das Büro oder die Registrierung.
@@ -2119,7 +2297,9 @@ async function gastkundschaftAnlegen(tx: Tx, organizationId: string, neu: NeueGa
     where: { organizationId, email: neu.email, deletedAt: null },
     select: { id: true },
   });
-  if (vorhanden) return vorhanden.id;
+  // `angelegt: false` — die Akte stammt nicht aus dieser Anfrage und wird
+  // behandelt wie jede bestehende: ohne Nachweis (siehe `createBooking`).
+  if (vorhanden) return { id: vorhanden.id, angelegt: false };
   const { number } = await nextNumber(tx, organizationId, 'customer');
   const customer = await tx.customer.create({
     data: {
@@ -2135,7 +2315,7 @@ async function gastkundschaftAnlegen(tx: Tx, organizationId: string, neu: NeueGa
     },
     select: { id: true },
   });
-  return customer.id;
+  return { id: customer.id, angelegt: true };
 }
 
 /**
@@ -2173,17 +2353,37 @@ async function gastkundschaftAnlegen(tx: Tx, organizationId: string, neu: NeueGa
  * Wohnung der Hauswartin umzuleiten, weil dort zuletzt geputzt wurde, wäre
  * die schlechtere Vorgabe. Wer die Rechnungsadresse ändern will, tut das in
  * der Kundenakte.
+ *
+ * **Ohne Nachweis** (`bestandSchonen`, F-03, 2026-09-27): Fällt eine
+ * Gastbuchung über die E-Mail-Adresse auf eine bestehende Akte, entsteht die
+ * Adresse dort, aber sie verdrängt nichts. Sonst hätte jede anonyme Anfrage
+ * mit einer bekannten E-Mail-Adresse die Standardadresse einer fremden
+ * Kundschaft umgestellt — und die nächste Buchung der Kundschaft selbst,
+ * die ihre Standardadresse vorbelegt, führte das Team an den Ort, den die
+ * fremde Anfrage eingetragen hat. Ebenso wenig wird sie Rechnungsadresse,
+ * auch bei einer Akte ohne eine: Die Rechnungen der Kundschaft gingen sonst
+ * an einen Ort, den eine unbelegte Anfrage bestimmt hat. Beide Markierungen
+ * setzt in diesem Fall das Büro oder die angemeldete Kundschaft selbst.
  */
-async function createAddress(tx: Tx, customerId: string, input: BookingCoreInput): Promise<string> {
+async function createAddress(
+  tx: Tx,
+  customerId: string,
+  input: BookingCoreInput,
+  optionen: { bestandSchonen: boolean },
+): Promise<string> {
   const address = input.address!;
 
-  const [, hatRechnungsadresse] = await Promise.all([
-    tx.address.updateMany({
-      where: { customerId, isDefault: true },
-      data: { isDefault: false },
-    }),
-    tx.address.count({ where: { customerId, isBilling: true } }),
-  ]);
+  let wirdRechnungsadresse = false;
+  if (!optionen.bestandSchonen) {
+    const [, hatRechnungsadresse] = await Promise.all([
+      tx.address.updateMany({
+        where: { customerId, isDefault: true },
+        data: { isDefault: false },
+      }),
+      tx.address.count({ where: { customerId, isBilling: true } }),
+    ]);
+    wirdRechnungsadresse = hatRechnungsadresse === 0;
+  }
 
   const created = await tx.address.create({
     data: {
@@ -2200,8 +2400,8 @@ async function createAddress(tx: Tx, customerId: string, input: BookingCoreInput
       lng: address.lng ?? null,
       placeId: address.placeId ?? null,
       accessNote: input.accessNote ?? address.accessNote ?? null,
-      isDefault: true,
-      isBilling: hatRechnungsadresse === 0,
+      isDefault: !optionen.bestandSchonen,
+      isBilling: wirdRechnungsadresse,
     },
   });
   return created.id;

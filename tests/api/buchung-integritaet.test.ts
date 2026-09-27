@@ -419,6 +419,204 @@ describe('Buchung → Rechnung, Gastbuchung, Terminänderung', { concurrency: 1 
   });
 
   /**
+   * A8 (F-03, 2026-09-27) — eine E-Mail-Adresse ist kein Besitznachweis.
+   *
+   * A4 schloss fremde Kennungen für Gäste mit *neuer* E-Mail-Adresse aus.
+   * Offen blieb der Weg daneben: Ein anonymer Gast, der die E-Mail-Adresse
+   * einer bestehenden Kundschaft eintippte, wurde deren Akte zugeordnet und
+   * galt damit als diese Kundschaft — ihre Adressen und Objekte liessen sich
+   * referenzieren, ihr Dauerrabatt galt, ihre Standardadresse wurde
+   * umgestellt, und der Verwaltungslink in der Antwort zeigte Name,
+   * E-Mail-Adresse und Einsatzort. Daneben buchte jede angemeldete
+   * Nicht-Kundschaft über eine bestehende `addressId` auf deren Akte, ohne
+   * `booking:create`. Jede Prüfung hier war auf dem Stand davor rot.
+   */
+  describe('A8 — Gastbuchung mit bekannter E-Mail-Adresse: kein Zugriff auf die Akte', () => {
+    const MARKE = `A8-OPFER-${RUN}`;
+    const opfer = { adresse: '', objekt: '', email: '' };
+    const eigeneBuchungen: string[] = [];
+    let freiesFenster = '';
+
+    const anfrage = (extra: Record<string, unknown>) => ({
+      leistungen: [{ serviceId: S.fenster, extras: [] }],
+      // Die Abweisungen fallen vor der Kapazitätsprüfung; für sie genügt
+      // ein gültiger Zeitpunkt, falls der Kalender keinen freien anbietet.
+      scheduledStart: freiesFenster || termin(30, '09:00'),
+      propertyKind: 'OFFICE',
+      acceptTerms: true,
+      website: '',
+      firstName: 'Fremd',
+      lastName: `Anfrage${RUN}`,
+      email: opfer.email,
+      phone: '+41 79 000 00 00',
+      address: adresse,
+      ...extra,
+    });
+
+    async function aufraeumenA8() {
+      if (!db) return;
+      await db.publicAccessToken.deleteMany({ where: { purpose: 'BOOKING_MANAGE', resourceId: { in: eigeneBuchungen } } });
+      // Auf dem fehlerhaften Stand hängt eine Buchung am Objekt; der
+      // Fremdschlüssel hielte das Objekt sonst bis zum Aufräumen am Ende fest.
+      await db.booking.updateMany({ where: { property: { label: { startsWith: MARKE } } }, data: { propertyId: null } });
+      await db.property.deleteMany({ where: { label: { startsWith: MARKE } } });
+    }
+
+    before(async () => {
+      if (!db) return;
+      await aufraeumenA8();
+      const k = await db.customer.findUniqueOrThrow({ where: { id: kundeId }, select: { email: true } });
+      opfer.email = k.email;
+      // Genau eine Standardadresse, und zwar diese — daran lässt sich unten
+      // ablesen, ob die fremde Anfrage sie verdrängt hat.
+      await db.address.updateMany({ where: { customerId: kundeId }, data: { isDefault: false } });
+      opfer.adresse = (
+        await db.address.create({
+          data: { customerId: kundeId, street: 'Opfergasse', streetNo: '9', postalCode: '3011', city: 'Bern', canton: 'BE', isDefault: true, accessNote: `${MARKE} Schlüssel im Milchkasten` },
+        })
+      ).id;
+      opfer.objekt = (await db.property.create({ data: { customerId: kundeId, label: `${MARKE} Objekt` } })).id;
+
+      // Ein Termin, den der öffentliche Kalender tatsächlich anbietet —
+      // innerhalb von Vorlauf und Horizont, mit freier Person.
+      const kalender = await post<{ data: { tage: { slots: { start: string; capacity: number }[] }[] } }>('/api/public/availability', {
+        leistungen: [{ serviceId: S.fenster, extras: [] }],
+        von: new Date(Date.now() + 21 * 86_400_000).toISOString().slice(0, 10),
+        tage: 28,
+      });
+      assert.equal(kalender.status, 200, kalender.text);
+      freiesFenster = data(kalender).tage.flatMap((d) => d.slots).find((s) => s.capacity >= 1)?.start ?? '';
+    });
+
+    after(async () => {
+      await aufraeumenA8();
+    });
+
+    it('Gast mit der E-Mail-Adresse einer Kundschaft und deren Adresse → 404, nichts angelegt', async (t) => {
+      if (!db) return t.skip('keine Testdatenbank');
+      resetRateLimits();
+      const r = await post<{ data: { id: string } }>('/api/public/bookings', anfrage({ address: undefined, addressId: opfer.adresse }));
+      if (r.status === 201) eigeneBuchungen.push(data(r).id);
+      assert.equal(r.status, 404, `fremde Adresse über die bekannte E-Mail-Adresse angenommen: ${r.text}`);
+      assert.ok(!r.text.includes('Opfergasse'), 'Die Antwort nennt die Adresse der Kundschaft');
+      assert.equal(await db.booking.count({ where: { addressId: opfer.adresse } }), 0, 'Buchung auf die Adresse der Kundschaft entstanden');
+    });
+
+    it('Gast mit der E-Mail-Adresse einer Kundschaft und deren Objekt → 404', async (t) => {
+      if (!db) return t.skip('keine Testdatenbank');
+      const r = await post<{ data: { id: string } }>('/api/public/bookings', anfrage({ propertyId: opfer.objekt }));
+      if (r.status === 201) eigeneBuchungen.push(data(r).id);
+      assert.equal(r.status, 404, `fremdes Objekt über die bekannte E-Mail-Adresse angenommen: ${r.text}`);
+      assert.equal(await db.booking.count({ where: { propertyId: opfer.objekt } }), 0, 'Buchung auf das Objekt der Kundschaft entstanden');
+    });
+
+    it('Gast mit bekannter E-Mail-Adresse und neuer Adresse: bucht, erfährt nichts über die Kundschaft, bekommt keinen Rabatt und verdrängt nichts', async (t) => {
+      if (!db) return t.skip('keine Testdatenbank');
+      assert.ok(freiesFenster, 'kein freier Termin im öffentlichen Kalender');
+      const r = await post<{ data: { id: string; confirmationUrl: string; isNewCustomer: boolean } }>(
+        '/api/public/bookings',
+        anfrage({ scheduledStart: freiesFenster, address: { ...adresse, street: 'Fremdweg', streetNo: '4' } }),
+      );
+      assert.equal(r.status, 201, r.text);
+      const { id, confirmationUrl } = data(r);
+      eigeneBuchungen.push(id);
+      buchungen.push(id);
+
+      // Nichts in der Antwort selbst …
+      for (const geheim of [`Prüfung${RUN}`, 'Integra', opfer.email, 'Opfergasse', MARKE]) {
+        assert.ok(!r.text.includes(geheim), `Die Antwort enthält „${geheim}"`);
+      }
+      // … und nichts hinter dem Link, falls einer mitkommt.
+      if (confirmationUrl) {
+        const seite = await call('GET', new URL(confirmationUrl, 'http://x').pathname);
+        assert.ok(!seite.text.includes(`Prüfung${RUN}`), 'Der Verwaltungslink in der Antwort zeigt den Namen der Kundschaft');
+      }
+      assert.equal(confirmationUrl, '', 'Die Antwort trägt den Verwaltungslink der fremden Akte');
+
+      const buchung = await db.booking.findUniqueOrThrow({ where: { id }, include: { address: true } });
+      // Die Buchung gehört zur Akte der E-Mail-Adresse — dort geht die
+      // Bestätigung hin, eine Doppelakte entsteht nicht.
+      assert.equal(buchung.customerId, kundeId);
+      assert.equal(await db.customer.count({ where: { organizationId: org, email: opfer.email } }), 1, 'Doppelakte angelegt');
+      assert.equal(n(buchung.discountAmount), 0, 'Der Dauerrabatt der Kundschaft galt für eine anonyme Anfrage');
+      assert.equal(buchung.address?.street, 'Fremdweg');
+      assert.equal(buchung.address?.isDefault, false, 'Die fremde Adresse wurde Standardadresse der Kundschaft');
+      assert.equal(buchung.address?.isBilling, false, 'Die fremde Adresse wurde Rechnungsadresse der Kundschaft');
+      const standard = await db.address.findMany({ where: { customerId: kundeId, isDefault: true }, select: { id: true } });
+      assert.deepEqual(standard.map((a) => a.id), [opfer.adresse], 'Die Standardadresse der Kundschaft wurde umgestellt');
+    });
+
+    /**
+     * Die öffentliche Route ist mit `definePublicRoute` ohne `permissions`
+     * erklärt: Die Anmeldung gibt dort keine Rechte, eine angemeldete
+     * Nicht-Kundschaft ist Besucherin wie jede andere. Für eine fremde
+     * Adresse heisst das dieselbe Antwort wie für einen Gast — 404, nicht
+     * 403: Es gibt kein Recht, das ihr fehlt, nur einen Bestand, der nicht
+     * ihrer ist. Die Büroerfassung mit `booking:create` ist `POST /api/bookings`.
+     */
+    it('Mitarbeiterin ohne booking:create bucht über die öffentliche Route auf keine fremde Adresse (404)', async (t) => {
+      if (!db) return t.skip('keine Testdatenbank');
+      resetRateLimits();
+      const email = `integritaet.gast.${RUN}.personal@example.ch`;
+      const versuch = async (extra: Record<string, unknown>) => {
+        const r = await post<{ data: { id: string } }>('/api/public/bookings', anfrage({ address: undefined, addressId: opfer.adresse, ...extra }), { jar: jars.employee });
+        if (r.status === 201) {
+          eigeneBuchungen.push(data(r).id);
+          buchungen.push(data(r).id);
+        }
+        assert.ok(!r.text.includes('Opfergasse') && !r.text.includes(`Prüfung${RUN}`), 'Die Antwort nennt Adresse oder Name der Kundschaft');
+        return r;
+      };
+
+      // Mit Kontaktangaben: Die Adresse ist nicht ihre → 404, wie beim Gast.
+      const mit = await versuch({ email });
+      assert.equal(mit.status, 404, `Mitarbeiterin buchte auf die Adresse der Kundschaft: ${mit.text}`);
+      // Ohne: Zuerst fehlen die Angaben, die jede Besucherin machen muss → 422.
+      // Vorher genügte hier die Adresskennung allein.
+      const ohne = await versuch({ firstName: undefined, lastName: undefined, email: undefined, phone: undefined });
+      assert.equal(ohne.status, 422, `Mitarbeiterin buchte ohne Kontaktangaben über die Adresskennung: ${ohne.text}`);
+
+      assert.equal(await db.booking.count({ where: { addressId: opfer.adresse } }), 0, 'Buchung auf die Adresse der Kundschaft entstanden');
+      assert.equal(await db.customer.count({ where: { email } }), 0, 'Kundenakte trotz Abweisung');
+    });
+  });
+
+  /**
+   * A9 (N-04, 2026-09-27) — ein Storno entwertet den Verwaltungslink.
+   *
+   * Vorher lebte der Link bis 90 Tage nach dem Termin, auch für eine
+   * stornierte Buchung, und zeigte weiter Name, E-Mail-Adresse und
+   * Einsatzort. Kein Aufrufer widerrief `BOOKING_MANAGE`.
+   */
+  describe('A9 — Buchungslink nach dem Storno', () => {
+    it('nach dem Storno öffnet der alte Link weder Seite noch PDF (404), und der Token ist widerrufen', async (t) => {
+      if (!db) return t.skip('keine Testdatenbank');
+      const r = await post<{ data: { id: string; confirmationUrl: string } }>(
+        '/api/bookings',
+        { customerId: kundeId, leistungen: [{ serviceId: S.fenster, extras: [] }], scheduledStart: termin(306, '09:00'), address: adresse, propertyKind: 'OFFICE', source: 'PHONE', overrideCapacity: true },
+        { jar: jars.admin },
+      );
+      assert.equal(r.status, 201, r.text);
+      const { id, confirmationUrl } = data(r);
+      buchungen.push(id);
+      const roh = confirmationUrl.split('/').pop() ?? '';
+      try {
+        assert.equal((await call('GET', `/buchung/${roh}`)).status, 200, 'der frische Link öffnet die Buchung nicht');
+
+        const storno = await post(`/api/bookings/${id}/cancel`, { reason: 'Prüfreihe: Link nach Storno' }, { jar: jars.admin });
+        assert.equal(storno.status, 200, storno.text);
+
+        assert.equal((await call('GET', `/buchung/${roh}`)).status, 404, 'der Link öffnet die stornierte Buchung');
+        assert.equal((await call('GET', `/api/public/bookings/${roh}/pdf`)).status, 404, 'der Link liefert das PDF der stornierten Buchung');
+        const offen = await db.publicAccessToken.count({ where: { purpose: 'BOOKING_MANAGE', resourceId: id, revokedAt: null } });
+        assert.equal(offen, 0, 'nach dem Storno ist noch ein Buchungslink gültig');
+      } finally {
+        await db.publicAccessToken.deleteMany({ where: { purpose: 'BOOKING_MANAGE', resourceId: id } });
+      }
+    });
+  });
+
+  /**
    * A5 (2026-09-27) — ein Einsatz wird höchstens einmal verrechnet.
    *
    * `createInvoiceFromJobs` prüfte „schon verrechnet?" vor der Transaktion,

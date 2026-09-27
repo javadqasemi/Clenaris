@@ -35,7 +35,16 @@ export const POST = definePublicRoute({
       scheduledStart: booking.scheduledStart,
       scheduledEnd: booking.scheduledEnd,
       grossTotal: booking.grossTotal,
-      confirmationUrl,
+      /*
+        Leer statt `null`, wenn der Dienst den Link zurückhält (Gastbuchung
+        auf eine bestehende Kundenakte, F-03). Der Buchungsassistent liest
+        das letzte Pfadsegment als Token; aus einer leeren Zeichenkette wird
+        kein Token, und die Abschlussseite zeigt die knappe Fassung ohne
+        Stammdaten („Die Angaben finden Sie in der Bestätigungs-E-Mail").
+        `null` liesse den Assistenten nach einer gelungenen Buchung mit einem
+        Fehler abbrechen — und die Kundschaft ein zweites Mal buchen.
+      */
+      confirmationUrl: confirmationUrl ?? '',
       isNewCustomer,
     });
   },
