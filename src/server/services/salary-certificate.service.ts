@@ -8,7 +8,7 @@ import { BusinessRuleError, NotFoundError } from '@/lib/errors';
 import { rappen } from '@/lib/payroll/beitraege';
 import { renderSalaryCertificatePdf } from '@/lib/pdf/render';
 
-import { lohnPdfAblegen, lohnPdfLesen } from './payroll.service';
+import { lohnPdfAblegen, lohnPdfLesen, lohnPdfVerwerfen } from './payroll.service';
 
 /**
  * Lohnausweis-Aufstellung (Wave 9, 2026-09-23).
@@ -182,7 +182,9 @@ export async function finalizeSalaryCertificate(params: {
   });
   const { assetId, checksum } = await lohnPdfAblegen({
     organizationId: params.organizationId,
-    path: `${params.organizationId}/payroll/certificates/${ausweis.id}.pdf`,
+    // Eigener Pfad je Inhalt, nie überschrieben — dieselbe Regel wie bei der
+    // Lohnabrechnung (`lohnPdfAblegen`, 2026-09-27).
+    pfadOhneEndung: `${params.organizationId}/payroll/certificates/${ausweis.id}`,
     filename: `Lohnausweis-Aufstellung-${ausweis.year}-${ausweis.employee.employeeNumber}-v${ausweis.version}.pdf`,
     bytes,
   });
@@ -191,7 +193,10 @@ export async function finalizeSalaryCertificate(params: {
     where: { id: ausweis.id, status: 'DRAFT', updatedAt: ausweis.updatedAt },
     data: { status: 'FINAL', finalizedAt: jetzt, finalizedById: params.actorId, pdfFileId: assetId, pdfChecksum: checksum },
   });
-  if (treffer.count === 0) throw new BusinessRuleError('Der Entwurf hat sich eben geändert — bitte neu laden.');
+  if (treffer.count === 0) {
+    await lohnPdfVerwerfen(params.organizationId, assetId);
+    throw new BusinessRuleError('Der Entwurf hat sich eben geändert — bitte neu laden.');
+  }
 
   await audit.updated({
     organizationId: params.organizationId,

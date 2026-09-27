@@ -1201,4 +1201,34 @@ describe('Lohnausbau — ganze Abrechnung über HTTP', () => {
     assert.ok(!oktober.lines.some((z) => z.label === 'Fremd'), 'eine fremde Position fliesst nicht ein');
     assert.equal(Number(oktober.ktg), 31, 'der fremde KTG-Satz greift nicht');
   });
+
+  /**
+   * Gleichzeitig veröffentlichen (2026-09-27). Die Bytes wurden unter einem
+   * festen Pfad abgelegt und überschrieben — **vor** dem Anspruch aufs
+   * Veröffentlichen. Der Verlierer überschrieb die Datei des Gewinners; die
+   * Abrechnung trug danach die Prüfsumme des einen und die Bytes des
+   * anderen und liess sich nie mehr herunterladen (nachgestellt: 422 beim
+   * Herunterladen). Jetzt: eigener Pfad je Fassung, der Verlierer räumt nur
+   * die eigene weg.
+   *
+   * Am Ende der Reihe, weil ein veröffentlichter Dezember die
+   * Jahresaufstellung (Lohnausweis) und den 13. Monatslohn davor verändert.
+   */
+  it('drei gleichzeitige Veröffentlichungen: eine gewinnt, das PDF stimmt, keine Waise bleibt', async () => {
+    const dezember = (await lauf(a, 2021, 12)).payslipId!;
+    assert.ok(dezember, 'Dezember liess sich rechnen');
+    const antworten = await Promise.all(
+      [1, 2, 3].map(() => post<{ data: { veroeffentlicht: number } }>('/api/payroll/publish', { payslipIds: [dezember], trotzUngepruefterSaetze: true }, { jar: jars.admin })),
+    );
+    const summe = antworten.reduce((s, r) => s + (r.status === 200 ? data(r).veroeffentlicht : 0), 0);
+    assert.equal(summe, 1, `veröffentlicht: ${antworten.map((r) => r.text).join(' | ')}`);
+
+    const pdf = await bytesVon(`/api/payroll/payslips/${dezember}/pdf`, jars.admin);
+    assert.equal(pdf.status, 200, 'die veröffentlichte Abrechnung lässt sich herunterladen');
+    const gespeichert = await testDb()!.payslip.findUniqueOrThrow({ where: { id: dezember }, select: { pdfChecksum: true } });
+    assert.equal(createHash('sha256').update(pdf.bytes).digest('hex'), gespeichert.pdfChecksum);
+
+    const fassungen = await testDb()!.fileAsset.count({ where: { scope: 'PAYROLL', path: { contains: `/payroll/payslips/${dezember}` } } });
+    assert.equal(fassungen, 1, 'verlorene Fassungen wurden weggeräumt');
+  });
 });

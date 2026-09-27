@@ -23,7 +23,7 @@ import {
   type QuellensteuerGrundlage,
 } from '@/lib/payroll/lohnbestandteile';
 import { renderPayslipPdf } from '@/lib/pdf/render';
-import { readLocalBytes, readStoredBytes, uploadBuffer } from '@/lib/storage';
+import { deleteFile, readAssetBytes, uploadBuffer } from '@/lib/storage';
 import { round2 } from '@/lib/utils';
 
 import { letzterTagDesMonats, saetzeZumStichtag } from './payroll-rates.service';
@@ -920,7 +920,7 @@ export async function publishPayslips(params: {
     });
     const { assetId, checksum } = await lohnPdfAblegen({
       organizationId: params.organizationId,
-      path: `${params.organizationId}/payroll/payslips/${k.id}.pdf`,
+      pfadOhneEndung: `${params.organizationId}/payroll/payslips/${k.id}`,
       filename: `Lohnabrechnung-${k.year}-${String(k.month).padStart(2, '0')}-${k.employee.employeeNumber}.pdf`,
       bytes,
     });
@@ -930,6 +930,9 @@ export async function publishPayslips(params: {
       data: { published: true, publishedAt: jetzt, pdfFileId: assetId, pdfChecksum: checksum },
     });
     if (treffer.count === 0) {
+      // Verloren — die eigene, nie referenzierte Fassung wieder wegräumen.
+      // Die des Gewinners liegt unter einem anderen Pfad und bleibt unberührt.
+      await lohnPdfVerwerfen(params.organizationId, assetId);
       gruende.push({ payslipId: k.id, grund: 'Die Abrechnung hat sich während des Veröffentlichens geändert — bitte erneut versuchen.' });
       continue;
     }
@@ -962,35 +965,40 @@ export async function publishPayslips(params: {
  */
 export async function lohnPdfAblegen(p: {
   organizationId: string;
-  path: string;
+  /** Pfad ohne Endung; die Prüfsumme wird angehängt — jede Fassung hat ihren eigenen. */
+  pfadOhneEndung: string;
   filename: string;
   bytes: Buffer;
 }): Promise<{ assetId: string; checksum: string }> {
+  /*
+    Unveränderlich ablegen (2026-09-27). Bis dahin lag jede Fassung unter
+    demselben Pfad, mit `upsert`, und das bestehende Asset wurde
+    überschrieben — **bevor** das Veröffentlichen gewonnen war. Zwei
+    gleichzeitige Veröffentlichungen schrieben nacheinander dieselbe Datei;
+    die Abrechnung trug danach die Prüfsumme des Gewinners und die Bytes des
+    Verlierers und liess sich nie wieder herunterladen („stimmt nicht mit der
+    veröffentlichten Fassung überein"). Jetzt: eigener Pfad je Inhalt, nie
+    überschreiben, immer ein neues Asset. Referenziert wird nur, was das
+    Veröffentlichen gewinnt; der Verlierer räumt seine Fassung weg.
+  */
+  const checksum = sha256Hex(p.bytes);
+  const path = `${p.pfadOhneEndung}-${checksum.slice(0, 16)}.pdf`;
   const stored = await uploadBuffer({
     organizationId: p.organizationId,
-    path: p.path,
+    path,
     content: p.bytes,
     contentType: 'application/pdf',
-    upsert: true,
+    upsert: false,
   });
-  const checksum = stored.checksum ?? sha256Hex(p.bytes);
-  const vorhanden = await prisma.fileAsset.findFirst({
-    where: { organizationId: p.organizationId, path: p.path, scope: 'PAYROLL' },
-    select: { id: true },
-  });
-  if (vorhanden) {
-    await prisma.fileAsset.update({
-      where: { id: vorhanden.id },
-      data: { url: stored.publicUrl, sizeBytes: p.bytes.byteLength, checksum, storedFileId: stored.storedFileId ?? null },
-    });
-    return { assetId: vorhanden.id, checksum };
-  }
   const asset = await prisma.fileAsset.create({
     data: {
       organizationId: p.organizationId,
       scope: 'PAYROLL',
-      path: p.path,
-      url: stored.publicUrl,
+      path,
+      // Beim externen Speicher der Pfad, nicht die öffentliche Adresse: Eine
+      // Lohnabrechnung ist privat, und eine gespeicherte öffentliche Adresse
+      // wäre eine Einladung, den Behälter einmal falsch einzustellen.
+      url: stored.storedFileId ? stored.publicUrl : path,
       filename: p.filename,
       mimeType: 'application/pdf',
       sizeBytes: p.bytes.byteLength,
@@ -1006,19 +1014,27 @@ export async function lohnPdfAblegen(p: {
   return { assetId: asset.id, checksum };
 }
 
+/** Eine nie referenzierte Fassung wegräumen — nur wenn nichts auf sie zeigt. */
+export async function lohnPdfVerwerfen(organizationId: string, assetId: string): Promise<void> {
+  const asset = await prisma.fileAsset.findFirst({ where: { id: assetId, organizationId, scope: 'PAYROLL' }, select: { id: true, path: true } });
+  if (!asset) return;
+  const verwendet =
+    (await prisma.payslip.count({ where: { pdfFileId: asset.id } })) +
+    (await prisma.salaryCertificate.count({ where: { pdfFileId: asset.id } }));
+  if (verwendet > 0) return;
+  await prisma.fileAsset.delete({ where: { id: asset.id } });
+  await deleteFile(asset.path).catch((error) => log.warn('Verworfene Lohnfassung liess sich nicht löschen', { error }));
+}
+
 /** Die gespeicherten Bytes eines Lohndokuments — mit Prüfsummenvergleich. */
 export async function lohnPdfLesen(organizationId: string, assetId: string, erwartet: string | null): Promise<Buffer> {
   const asset = await prisma.fileAsset.findFirst({
     where: { id: assetId, organizationId, scope: 'PAYROLL' },
-    select: { url: true, storedFile: { select: { id: true, path: true, driver: true } } },
+    select: { url: true, path: true, storedFile: { select: { id: true, path: true, driver: true } } },
   });
   if (!asset) throw new NotFoundError('Dokument');
-  let bytes: Buffer | null = null;
-  if (asset.storedFile) bytes = await readStoredBytes(asset.storedFile);
-  else {
-    const treffer = /^\/api\/files\/blob\/([A-Za-z0-9_-]+)$/.exec(asset.url);
-    bytes = treffer ? await readLocalBytes(treffer[1]!) : null;
-  }
+  // Ein Weg für beide Treiber (`readAssetBytes`) — vorher nur lokal lesbar.
+  const bytes = await readAssetBytes(asset);
   if (!bytes) throw new NotFoundError('Dokument');
   /**
    * Weicht die Prüfsumme ab, wird **nicht** ausgeliefert. Eine veränderte

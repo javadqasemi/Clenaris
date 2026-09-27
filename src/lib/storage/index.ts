@@ -174,6 +174,28 @@ export async function readStoredBytes(ticket: {
   return local.readLocalBytes(ticket.id);
 }
 
+/**
+ * Die Bytes eines `FileAsset` — **ein** Weg für beide Treiber (2026-09-27).
+ *
+ * Servererzeugte Dateien (Lohnabrechnung, Lohnausweis) haben beim externen
+ * Speicher keine Ablagezeile. Die Lesefunktion der Lohndokumente kannte bis
+ * dahin nur die Ablagezeile und die lokale Blob-Adresse: Mit Supabase wurde
+ * jede Lohnabrechnung geschrieben und liess sich nie mehr lesen. Jetzt
+ * entscheidet hier, woher gelesen wird — Ablagezeile, lokaler Altbestand
+ * oder der externe Speicher über den Pfad.
+ */
+export async function readAssetBytes(asset: {
+  path: string;
+  url: string;
+  storedFile: { id: string; path: string; driver: 'LOCAL' | 'SUPABASE' } | null;
+}): Promise<Buffer | null> {
+  if (asset.storedFile) return readStoredBytes(asset.storedFile);
+  const lokal = /^\/api\/files\/blob\/([A-Za-z0-9_-]+)$/.exec(asset.url);
+  if (lokal) return local.readLocalBytes(lokal[1]!);
+  if (usesRemoteStorage()) return remote.downloadObject(asset.path);
+  return null;
+}
+
 export async function deleteFile(path: string): Promise<void> {
   if (usesRemoteStorage()) return remote.deleteFile(path);
   return local.deleteLocalFile(path);
