@@ -367,7 +367,8 @@ export async function createFollowUpTasks(organizationId: string): Promise<numbe
 
   await prisma.task.createMany({
     data: leads.map((lead) => ({
-      title: `Nachfassen: ${lead.company ?? `${lead.firstName} ${lead.lastName}`}`,
+      organizationId,
+      title: `Nachfassen:${lead.company ?? `${lead.firstName} ${lead.lastName}`}`,
       description: `Die Anfrage ist seit ${Math.floor((Date.now() - lead.createdAt.getTime()) / 86_400_000)} Tagen offen. Bitte telefonisch nachfassen.`,
       priority: lead.score >= 70 ? 'HIGH' : 'NORMAL',
       dueAt: new Date(Date.now() + 86_400_000),

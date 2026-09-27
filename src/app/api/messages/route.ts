@@ -22,7 +22,11 @@ export const GET = defineRoute({
   query: threadListQuery,
   rateLimit: 'apiRead',
   handler: async ({ query, session }) => {
+    // Die Organisation steht vor jeder Rollenregel (2026-09-27). Vorher filterte
+    // die Liste gar nicht danach, und das Büro sah die Verläufe jeder
+    // Organisation — der Rollenfilter darunter engt nur *innerhalb* ein.
     const where: Prisma.MessageThreadWhereInput = {
+      organizationId: await getOrganizationId(),
       ...(query.status === 'all' ? {} : { closed: query.status === 'closed' }),
     };
 
@@ -121,6 +125,7 @@ export const POST = defineRoute({
       const booking = await prisma.booking.findFirst({
         where: {
           id: body.bookingId,
+          organizationId,
           ...(customer ? { customerId: customer.id } : {}),
         },
         select: { id: true },
@@ -130,6 +135,7 @@ export const POST = defineRoute({
 
     const thread = await prisma.messageThread.create({
       data: {
+        organizationId,
         subject: body.subject,
         customerId: customer?.id ?? null,
         jobId: body.jobId ?? null,

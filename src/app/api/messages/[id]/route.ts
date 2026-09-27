@@ -21,8 +21,11 @@ async function loadThread(
   threadId: string,
   session: { id: string; role: string; profileId: string | null },
 ) {
-  const thread = await prisma.messageThread.findUnique({
-    where: { id: threadId },
+  // Die Organisation in der `where`-Klausel (2026-09-27): Ein fremder Verlauf
+  // wird schlicht nicht gefunden. Vorher fand das Büro jeden Verlauf über die
+  // Kennung und konnte in fremde Korrespondenz antworten.
+  const thread = await prisma.messageThread.findFirst({
+    where: { id: threadId, organizationId: await getOrganizationId() },
     include: {
       customer: { select: { id: true, userId: true, firstName: true, lastName: true, companyName: true } },
       job: { select: { assignments: { select: { employeeId: true } } } },

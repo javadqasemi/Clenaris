@@ -5,6 +5,7 @@ import { prisma } from '@/lib/db';
 import { hasIntegration, serverEnv } from '@/lib/env';
 import { absoluteUrl, normalizePhone } from '@/lib/utils';
 import { logger } from '@/lib/logger';
+import { protokollOrganisation } from '@/lib/email/client';
 
 const log = logger('sms');
 
@@ -30,6 +31,8 @@ export interface SendSmsInput {
   body: string;
   entity?: string;
   entityId?: string;
+  /** Wie bei `sendEmail`: ohne Angabe die Organisation dieser Installation. */
+  organizationId?: string;
 }
 
 export async function sendSms(input: SendSmsInput): Promise<{ ok: boolean; id?: string; error?: string }> {
@@ -39,6 +42,7 @@ export async function sendSms(input: SendSmsInput): Promise<{ ok: boolean; id?: 
   const segments = Math.ceil(body.length / 153) || 1;
 
   const logBase = {
+    organizationId: await protokollOrganisation(input.organizationId),
     to,
     body: body.slice(0, 500),
     segments,

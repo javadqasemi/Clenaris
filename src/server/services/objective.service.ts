@@ -462,6 +462,7 @@ export async function createObjectiveTask(session: SessionUser, organizationId: 
   const objective = await requireObjectiveForWrite(session, organizationId, objectiveId);
   const task = await prisma.task.create({
     data: {
+      organizationId,
       title: input.title,
       description: input.description ?? null,
       priority: input.priority,

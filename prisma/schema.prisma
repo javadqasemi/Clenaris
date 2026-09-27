@@ -558,6 +558,10 @@ model Organization {
   contentRevisions  ContentRevision[]
   storedFiles       StoredFile[]
   publicTokens      PublicAccessToken[]
+  messageThreads    MessageThread[]
+  tasks             Task[]
+  emailLogs         EmailLog[]
+  smsLogs           SmsLog[]
   signatureRequests SignatureRequest[]
   deviceHandoffs    DeviceHandoffSession[]
   seoMeta           SeoMeta[]
@@ -1572,6 +1576,10 @@ model Activity {
 /// Aufgabe mit Fälligkeit, Zuständigkeit und Erinnerung.
 model Task {
   id           String       @id @default(cuid())
+  /// Seit 2026-09-27. Eine Aufgabe kann an niemandem und nichts hängen, also
+  /// liess sich die Organisation nicht über eine Beziehung erschliessen — und
+  /// Liste, Änderung und Löschen filterten gar nicht danach.
+  organizationId String
   title        String
   description  String?
   status       TaskStatus   @default(OPEN)
@@ -1604,7 +1612,9 @@ model Task {
   objective Objective?        @relation(fields: [objectiveId], references: [id], onDelete: SetNull)
   meeting   Meeting?          @relation(fields: [meetingId], references: [id], onDelete: SetNull)
   action    CorrectiveAction?
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
+  @@index([organizationId, status, dueAt])
   @@index([assigneeId, status])
   @@index([dueAt])
   @@index([objectiveId])
@@ -1613,7 +1623,13 @@ model Task {
 
 /// Nachrichtenverlauf mit der Kundschaft, gebunden an Kundschaft oder Einsatz.
 model MessageThread {
-  id            String   @id @default(cuid())
+  id             String   @id @default(cuid())
+  /// Seit 2026-09-27. Vorher hing die Zugehörigkeit nur an Kundschaft oder
+  /// Einsatz, und Liste wie Einzelansicht filterten gar nicht danach — das Büro
+  /// sah die Verläufe jeder Organisation. Eine eigene Spalte statt eines
+  /// Filters über die Beziehung: Ein Verlauf zu einem Einsatz hat keine
+  /// Kundschaft, und eine Regel, die zwei Wege kennen muss, vergisst einen.
+  organizationId String
   customerId    String?
   jobId         String?
   subject       String
@@ -1621,11 +1637,13 @@ model MessageThread {
   lastMessageAt DateTime @default(now()) @db.Timestamptz(6)
   createdAt     DateTime @default(now()) @db.Timestamptz(6)
 
-  customer Customer? @relation(fields: [customerId], references: [id], onDelete: Cascade)
-  job      Job?      @relation(fields: [jobId], references: [id], onDelete: Cascade)
-  messages Message[]
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  customer     Customer?    @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  job          Job?         @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  messages     Message[]
 
   /// Posteingang des Büros: alle offenen Verläufe, neueste zuerst.
+  @@index([organizationId, closed, lastMessageAt])
   @@index([closed, lastMessageAt])
   @@index([customerId, lastMessageAt])
   @@map("message_threads")
@@ -3400,6 +3418,10 @@ model SmsTemplate {
 /// Protokoll jedes E-Mail-Versands inkl. Öffnungen und Zustellfehlern.
 model EmailLog {
   id          String    @id @default(cuid())
+  /// Seit 2026-09-27; leer bei Zeilen aus der Zeit davor, die sich keiner
+  /// Organisation sicher zuordnen liessen (siehe Migration
+  /// `…_kommunikation_mandant`). Das Zustellprotokoll zeigt nur eigene.
+  organizationId String?
   to          String
   from        String
   subject     String
@@ -3417,6 +3439,9 @@ model EmailLog {
   entityId    String?
   createdAt   DateTime  @default(now()) @db.Timestamptz(6)
 
+  organization Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, createdAt])
   @@index([to])
   @@index([entity, entityId])
   @@index([providerId])
@@ -3427,6 +3452,8 @@ model EmailLog {
 /// Protokoll jedes SMS-Versands inkl. Kosten.
 model SmsLog {
   id         String   @id @default(cuid())
+  /// Seit 2026-09-27 — wie `EmailLog.organizationId`.
+  organizationId String?
   to         String
   body       String
   providerId String?
@@ -3441,6 +3468,9 @@ model SmsLog {
   statusAt    DateTime? @db.Timestamptz(6)
   createdAt  DateTime @default(now()) @db.Timestamptz(6)
 
+  organization Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, createdAt])
   @@index([to])
   @@index([providerId])
   @@index([entity, entityId])

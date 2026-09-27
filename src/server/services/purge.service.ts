@@ -181,12 +181,32 @@ export const PURGE_AREAS: PurgeArea[] = [
     label: 'Kommunikation und Aufgaben',
     description: 'Nachrichtenverläufe, Aufgaben, Aktivitäten, Benachrichtigungen, E-Mail- und SMS-Versandprotokolle, Automationsläufe.',
     steps: [
-      // Die vier Modelle ohne Organisation: die Anwendung ist ein Mandant.
-      { model: 'messageThread', label: 'Nachrichtenverläufe', where: () => ({}) },
-      { model: 'task', label: 'Aufgaben', where: () => ({}) },
-      { model: 'activity', label: 'Aktivitäten', where: () => ({}) },
-      { model: 'emailLog', label: 'E-Mail-Protokolle', where: () => ({}) },
-      { model: 'smsLog', label: 'SMS-Protokolle', where: () => ({}) },
+      // Verläufe, Aufgaben und Protokolle tragen seit 2026-09-27 eine
+      // Organisation; vorher leerte dieser Schritt sie für alle Organisationen.
+      { model: 'messageThread', label: 'Nachrichtenverläufe', where: byOrganization },
+      { model: 'task', label: 'Aufgaben', where: byOrganization },
+      /**
+       * Aktivitäten haben keine eigene Spalte, aber immer einen Bezug. Über die
+       * Beziehungen gefiltert: Eine Aktivität ohne jeden Bezug bleibt stehen —
+       * sie gehört niemandem nachweislich, und ein Leerlauf, der im Zweifel
+       * fremde Zeilen löscht, ist der schlechtere Irrtum.
+       */
+      {
+        model: 'activity',
+        label: 'Aktivitäten',
+        where: ({ organizationId }) => ({
+          OR: [
+            { customer: { organizationId } },
+            { lead: { organizationId } },
+            { job: { organizationId } },
+            { booking: { organizationId } },
+            { quote: { organizationId } },
+            { invoice: { organizationId } },
+          ],
+        }),
+      },
+      { model: 'emailLog', label: 'E-Mail-Protokolle', where: byOrganization },
+      { model: 'smsLog', label: 'SMS-Protokolle', where: byOrganization },
       {
         model: 'notification',
         label: 'Benachrichtigungen',

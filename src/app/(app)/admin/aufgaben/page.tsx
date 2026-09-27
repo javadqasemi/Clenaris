@@ -37,15 +37,10 @@ export default async function TasksPage() {
 
   const [tasks, staff, overdue, dueToday] = await Promise.all([
     prisma.task.findMany({
-      where: {
-        status: { in: ['OPEN', 'IN_PROGRESS'] },
-        OR: [
-          { customer: { organizationId } },
-          { lead: { organizationId } },
-          { job: { organizationId } },
-          { customerId: null, leadId: null, jobId: null },
-        ],
-      },
+      // Die eigene Spalte statt der Beziehungen (2026-09-27): Der Zweig „ohne
+      // Bezug" liess jede unverknüpfte Aufgabe jeder Organisation durch, und
+      // die beiden Zähler darunter filterten gar nicht.
+      where: { organizationId, status: { in: ['OPEN', 'IN_PROGRESS'] } },
       orderBy: [{ dueAt: 'asc' }, { priority: 'desc' }],
       take: 100,
       include: {
@@ -61,10 +56,10 @@ export default async function TasksPage() {
       select: { id: true, firstName: true, lastName: true },
     }),
     prisma.task.count({
-      where: { status: { in: ['OPEN', 'IN_PROGRESS'] }, dueAt: { lt: now } },
+      where: { organizationId, status: { in: ['OPEN', 'IN_PROGRESS'] }, dueAt: { lt: now } },
     }),
     prisma.task.count({
-      where: { status: { in: ['OPEN', 'IN_PROGRESS'] }, dueAt: { gte: now, lt: endOfToday } },
+      where: { organizationId, status: { in: ['OPEN', 'IN_PROGRESS'] }, dueAt: { gte: now, lt: endOfToday } },
     }),
   ]);
 

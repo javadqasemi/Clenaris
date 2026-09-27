@@ -63,13 +63,14 @@ async function validParticipants(organizationId: string, ids: string[]): Promise
 async function createActionItems(
   tx: Prisma.TransactionClient,
   session: SessionUser,
-  meeting: { id: string; title: string },
+  meeting: { id: string; title: string; organizationId: string },
   items: CreateMeetingInput['actionItems'],
 ) {
   const created = [];
   for (const item of items) {
     const task = await tx.task.create({
       data: {
+        organizationId: meeting.organizationId,
         title: item.title,
         description: `Pendenz aus der Sitzung „${meeting.title}"`,
         priority: item.priority,

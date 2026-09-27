@@ -77,10 +77,19 @@ export async function meldeSmsZustellung(params: {
   return { gefunden: true, geaendert: true };
 }
 
-export async function listeZustellprotokoll(params: { kanal: 'email' | 'sms'; status?: string; suche?: string; seit?: Date }) {
+/**
+ * Das Zustellprotokoll einer Organisation.
+ *
+ * `organizationId` ist Pflicht und steht in jeder Abfrage, auch in der
+ * Zählung je Status — bis 2026-09-27 hatten die Protokolle keine Spalte dafür,
+ * und die Ansicht zeigte die Zeilen aller Organisationen.
+ */
+export async function listeZustellprotokoll(params: { organizationId: string; kanal: 'email' | 'sms'; status?: string; suche?: string; seit?: Date }) {
   const seit = params.seit ?? new Date(Date.now() - 30 * 86_400_000);
+  const organizationId = params.organizationId;
   if (params.kanal === 'email') {
     const where: Prisma.EmailLogWhereInput = {
+      organizationId,
       createdAt: { gte: seit },
       ...(params.status ? { status: params.status } : {}),
       ...(params.suche ? { OR: [{ to: { contains: params.suche, mode: 'insensitive' } }, { subject: { contains: params.suche, mode: 'insensitive' } }] } : {}),
@@ -92,11 +101,12 @@ export async function listeZustellprotokoll(params: { kanal: 'email' | 'sms'; st
         take: 300,
         select: { id: true, to: true, subject: true, templateKey: true, status: true, error: true, createdAt: true, deliveredAt: true, openedAt: true, entity: true },
       }),
-      prisma.emailLog.groupBy({ by: ['status'], where: { createdAt: { gte: seit } }, _count: { _all: true } }),
+      prisma.emailLog.groupBy({ by: ['status'], where: { organizationId, createdAt: { gte: seit } }, _count: { _all: true } }),
     ]);
     return { eintraege, jeStatus: jeStatus.map((s) => ({ status: s.status, anzahl: s._count._all })) };
   }
   const where: Prisma.SmsLogWhereInput = {
+    organizationId,
     createdAt: { gte: seit },
     ...(params.status ? { status: params.status } : {}),
     ...(params.suche ? { to: { contains: params.suche } } : {}),
@@ -108,7 +118,7 @@ export async function listeZustellprotokoll(params: { kanal: 'email' | 'sms'; st
       take: 300,
       select: { id: true, to: true, status: true, error: true, createdAt: true, deliveredAt: true, entity: true, segments: true },
     }),
-    prisma.smsLog.groupBy({ by: ['status'], where: { createdAt: { gte: seit } }, _count: { _all: true } }),
+    prisma.smsLog.groupBy({ by: ['status'], where: { organizationId, createdAt: { gte: seit } }, _count: { _all: true } }),
   ]);
   return { eintraege, jeStatus: jeStatus.map((s) => ({ status: s.status, anzahl: s._count._all })) };
 }

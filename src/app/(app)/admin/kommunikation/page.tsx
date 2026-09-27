@@ -6,6 +6,7 @@ import { requirePermission } from '@/lib/auth/session';
 import { formatDateTime } from '@/lib/utils';
 import { STATUS_BESCHRIFTUNG, istZustellstatus } from '@/lib/kommunikation/zustellung';
 import { listeZustellprotokoll } from '@/server/services/kommunikation.service';
+import { getOrganizationId } from '@/server/services/organization.service';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { DetailSection, EmptyState, ListCard, PageHeader, TableScroll } from '@/components/app/page-parts';
@@ -39,7 +40,7 @@ export default async function ZustellprotokollPage({ searchParams }: { searchPar
   await requirePermission('template:read');
   const params = await searchParams;
   const kanal = params.kanal === 'sms' ? 'sms' : 'email';
-  const protokoll = await listeZustellprotokoll({ kanal, status: params.status || undefined });
+  const protokoll = await listeZustellprotokoll({ organizationId: await getOrganizationId(), kanal, status: params.status || undefined });
   const beschriftung = (s: string) => (istZustellstatus(s) ? STATUS_BESCHRIFTUNG[s] : s);
 
   return (

@@ -1163,6 +1163,7 @@ async function legeAufgabeAn(params: {
 
   const aufgabe = await prisma.task.create({
     data: {
+      organizationId: params.organizationId,
       title: titel.slice(0, 200),
       description: beschreibung,
       priority: String(params.config.prioritaet ?? 'NORMAL') as

@@ -4,7 +4,7 @@
 > Diagramme sind damit nie älter als das Schema. Prosa und Bereichseinteilung
 > stehen in `scripts/generate-erd.ts`.
 
-**151 Modelle, 119 Aufzählungstypen, 2890 Felder.**
+**151 Modelle, 119 Aufzählungstypen, 2902 Felder.**
 PostgreSQL 16+; alle Zeitstempel als `timestamptz` in UTC, Anzeige in Europe/Zurich.
 
 ## Vier Entscheidungen, die das ganze Schema prägen
@@ -128,7 +128,7 @@ erDiagram
 
 | Modell | Tabelle | Felder | Zweck |
 | --- | --- | --- | --- |
-| `Organization` | `organizations` | 129 | Mandant — Firmendaten, Bankverbindung, Erscheinungsbild. Wurzel fast aller Beziehungen. |
+| `Organization` | `organizations` | 133 | Mandant — Firmendaten, Bankverbindung, Erscheinungsbild. Wurzel fast aller Beziehungen. |
 | `NumberSequence` | `number_sequences` | 6 | Fortlaufende, lückenlose Belegnummern (Schweizer Buchhaltungsanforderung). |
 | `OpeningHours` | `opening_hours` | 10 | Öffnungszeiten je Wochentag und die Einsatzzeiten, falls sie davon abweichen. |
 | `Holiday` | `holidays` | 7 | Feiertage und Betriebsferien. Sperren Termine und zählen nicht als Abwesenheitstage. |
@@ -434,13 +434,13 @@ erDiagram
   }
   Task {
     String id PK
+    String organizationId
     String title
     String description
     TaskStatus status
     TaskPriority priority
     DateTime dueAt
     DateTime completedAt
-    DateTime reminderAt
   }
   PipelineStage |o--o{ Lead : "stage"
   Customer |o--o{ Lead : "customer"
@@ -474,7 +474,7 @@ erDiagram
 | `LeadTag` | `lead_tags` | 4 | Zuordnung Etikett ↔ Anfrage. |
 | `CustomerTag` | `customer_tags` | 4 | Zuordnung Etikett ↔ Kundschaft. |
 | `Activity` | `activities` | 24 | Verlaufseintrag: Notiz, Telefonat, E-Mail, Termin, Statuswechsel. |
-| `Task` | `tasks` | 26 | Aufgabe mit Fälligkeit, Zuständigkeit und Erinnerung. |
+| `Task` | `tasks` | 28 | Aufgabe mit Fälligkeit, Zuständigkeit und Erinnerung. |
 | `PaymentMethodRef` | `payment_methods` | 12 | Hinterlegtes Zahlungsmittel — nur der Verweis beim Anbieter, nie die Kartendaten. |
 
 ## Leistungskatalog und Preislogik
@@ -1220,6 +1220,7 @@ Jeder ausgehende Versand wird protokolliert (`EmailLog`, `SmsLog`) — bei einer
 erDiagram
   MessageThread {
     String id PK
+    String organizationId
     String customerId
     String jobId
     String subject
@@ -1266,23 +1267,23 @@ erDiagram
   }
   EmailLog {
     String id PK
+    String organizationId
     String to
     String from
     String subject
     String templateKey
     String providerId
     String status
-    String error
   }
   SmsLog {
     String id PK
+    String organizationId
     String to
     String body
     String providerId
     String status
     String error
     Int segments
-    Decimal cost
   }
   Automation {
     String id PK
@@ -1339,13 +1340,13 @@ erDiagram
 
 | Modell | Tabelle | Felder | Zweck |
 | --- | --- | --- | --- |
-| `MessageThread` | `message_threads` | 10 | Nachrichtenverlauf mit der Kundschaft, gebunden an Kundschaft oder Einsatz. |
+| `MessageThread` | `message_threads` | 12 | Nachrichtenverlauf mit der Kundschaft, gebunden an Kundschaft oder Einsatz. |
 | `Message` | `messages` | 10 | Einzelne Nachricht im Verlauf, mit Lesevermerk und Anhängen. |
 | `Notification` | `notifications` | 13 | In-App-, E-Mail- oder SMS-Meldung an eine Person, mit Zustellstand. |
 | `EmailTemplate` | `email_templates` | 11 | E-Mail-Vorlage je Sprache, mit Platzhaltern. |
 | `SmsTemplate` | `sms_templates` | 7 | SMS-Vorlage je Sprache. |
-| `EmailLog` | `email_logs` | 15 | Protokoll jedes E-Mail-Versands inkl. Öffnungen und Zustellfehlern. |
-| `SmsLog` | `sms_logs` | 13 | Protokoll jedes SMS-Versands inkl. Kosten. |
+| `EmailLog` | `email_logs` | 17 | Protokoll jedes E-Mail-Versands inkl. Öffnungen und Zustellfehlern. |
+| `SmsLog` | `sms_logs` | 15 | Protokoll jedes SMS-Versands inkl. Kosten. |
 | `Automation` | `automations` | 13 | Regel aus Auslöser und Aktionen, als Daten statt als Code. |
 | `AutomationAction` | `automation_actions` | 6 | Einzelne Aktion einer Regel, mit Verzögerung und Reihenfolge. |
 | `AutomationRun` | `automation_runs` | 14 | Ausführung einer Regel mit Ergebnis — macht Automatisierungen nachvollziehbar. |

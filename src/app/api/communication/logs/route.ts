@@ -2,6 +2,7 @@ import { defineRoute } from '@/lib/api/handler';
 import { ok } from '@/lib/api/response';
 import { zustellprotokollQuerySchema } from '@/lib/validation/kommunikation';
 import { listeZustellprotokoll } from '@/server/services/kommunikation.service';
+import { getOrganizationId } from '@/server/services/organization.service';
 
 export const runtime = 'nodejs';
 
@@ -20,6 +21,7 @@ export const GET = defineRoute({
   handler: async ({ query }) =>
     ok(
       await listeZustellprotokoll({
+        organizationId: await getOrganizationId(),
         kanal: query.kanal,
         status: query.status,
         suche: query.suche,

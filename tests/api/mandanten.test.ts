@@ -35,6 +35,7 @@ const fremd: Record<string, string> = {};
 async function aufraeumen() {
   const db = testDb();
   if (!db || !org) return;
+  await db.task.deleteMany({ where: { title: { startsWith: MARKE } } });
   await db.job.deleteMany({ where: { organizationId: org, title: { startsWith: MARKE } } });
   await db.invoice.deleteMany({ where: { organizationId: org, billToName: { startsWith: MARKE } } });
   await db.quote.deleteMany({ where: { organizationId: org, title: { startsWith: MARKE } } });
@@ -87,6 +88,12 @@ before(async () => {
   ).id;
   fremd.expense = (await db.expense.create({ data: { organizationId: org, description: `${MARKE} Ausgabe`, expenseDate: new Date(), netAmount: 10, grossAmount: 10.81 } })).id;
   fremd.supplier = (await db.supplier.create({ data: { organizationId: org, name: `${MARKE} Lieferant` } })).id;
+  fremd.thread = (
+    await db.messageThread.create({
+      data: { organizationId: org, customerId: kunde.id, subject: `${MARKE} Verlauf`, messages: { create: { authorType: 'CUSTOMER', body: `${MARKE} Nachricht` } } },
+    })
+  ).id;
+  fremd.task = (await db.task.create({ data: { organizationId: org, customerId: kunde.id, title: `${MARKE} Aufgabe` } })).id;
 });
 
 after(async () => {
@@ -103,7 +110,16 @@ const BEREICHE: { name: string; liste: string; detail: (id: string) => string; s
   { name: 'Rechnungen', liste: '/api/invoices?pageSize=100', detail: (id) => `/api/invoices/${id}`, schluessel: 'invoice', aendern: { notes: 'übernommen' } },
   { name: 'Ausgaben', liste: '/api/expenses?pageSize=100', detail: (id) => `/api/expenses/${id}`, schluessel: 'expense', aendern: { description: 'übernommen' } },
   { name: 'Lieferanten', liste: '/api/suppliers?pageSize=100', detail: (id) => `/api/suppliers/${id}`, schluessel: 'supplier', aendern: { name: 'übernommen' } },
+  // 2026-09-27: Verläufe hatten keine Organisation, und Liste wie Einzelansicht
+  // filterten nicht danach — das Büro las die Korrespondenz jeder Organisation.
+  { name: 'Nachrichten', liste: '/api/messages?status=all', detail: (id) => `/api/messages/${id}`, schluessel: 'thread' },
+  // Ebenso Aufgaben: keine Spalte, kein Filter — fremde Aufgaben liessen sich
+  // lesen, ändern (200) und löschen.
+  { name: 'Aufgaben', liste: '/api/tasks?pageSize=100', detail: (id) => `/api/tasks/${id}`, schluessel: 'task', aendern: { title: 'übernommen' } },
 ];
+
+/** Prisma-Modell je Schlüssel, wo der Name abweicht. */
+const MODELL: Record<string, string> = { thread: 'messageThread' };
 
 describe('Fremde Daten erscheinen nicht und lassen sich nicht anfassen', () => {
   for (const b of BEREICHE) {
@@ -124,7 +140,7 @@ describe('Fremde Daten erscheinen nicht und lassen sich nicht anfassen', () => {
       assert.ok([404, 405].includes(loeschen.status), `${b.name} DELETE: ${loeschen.status}`);
 
       const unveraendert = await (testDb() as unknown as Record<string, { findUnique: (a: unknown) => Promise<{ deletedAt?: Date | null } | null> }>)[
-        b.schluessel === 'customer' ? 'customer' : b.schluessel
+        MODELL[b.schluessel] ?? b.schluessel
       ]!.findUnique({ where: { id } });
       assert.ok(unveraendert, `${b.name}: der fremde Datensatz existiert noch`);
       assert.ok(!unveraendert.deletedAt, `${b.name}: der fremde Datensatz wurde nicht (weich) gelöscht`);
@@ -148,6 +164,18 @@ describe('Verweise auf fremde Datensätze werden abgewiesen', () => {
   it('Besichtigung und Reklamation für fremde Kundschaft', async () => {
     assert.equal((await post('/api/site-visits', { customerId: fremd.customer, scheduledAt: new Date().toISOString() }, { jar: jars.admin })).status, 404);
     assert.equal((await post('/api/complaints', { customerId: fremd.customer, title: 'Querverweis', description: 'x' }, { jar: jars.admin })).status, 404);
+  });
+
+  it('Antwort in einen fremden Verlauf', async () => {
+    const r = await post(`/api/messages/${fremd.thread}`, { body: 'Querverweis' }, { jar: jars.admin });
+    assert.equal(r.status, 404, r.text);
+    assert.equal(await testDb()!.message.count({ where: { threadId: fremd.thread } }), 1, 'die Antwort steht im fremden Verlauf');
+  });
+
+  it('Aufgabe an fremder Kundschaft', async () => {
+    const r = await post('/api/tasks', { title: `${MARKE} Querverweis`, customerId: fremd.customer }, { jar: jars.admin });
+    assert.equal(r.status, 404, r.text);
+    assert.equal(await testDb()!.task.count({ where: { title: `${MARKE} Querverweis` } }), 0, 'die Aufgabe entstand trotzdem');
   });
 
   it('Objekt der fremden Kundschaft an eigener Offerte', async () => {

@@ -12,7 +12,7 @@ import {
 } from '../../src/lib/kommunikation/zustellung';
 import { BASE_URL, data, get, requireServer } from '../helpers/client';
 import { loginAll, type AccountName } from '../helpers/accounts';
-import { testDb, testDbGrund, testDbSchliessen } from '../helpers/testdb';
+import { eigeneOrganisationId, fremdeOrganisation, testDb, testDbGrund, testDbSchliessen } from '../helpers/testdb';
 import { PRUEF_RESEND_GEHEIMNIS } from '../helpers/webhooks';
 
 /**
@@ -75,6 +75,7 @@ describe('Zustellmeldungen über HTTP', () => {
   const RUN = Date.now();
   const providerId = `pruef-${RUN}`;
   let zeileId = '';
+  let fremdeZeileId = '';
 
   const melde = async (typ: string, geheimnis = PRUEF_RESEND_GEHEIMNIS, alterSek = 0, id = providerId) => {
     const text = JSON.stringify({ type: typ, created_at: new Date().toISOString(), data: { email_id: id } });
@@ -94,9 +95,15 @@ describe('Zustellmeldungen über HTTP', () => {
     assert.ok(db, `kein Zugang zur Testdatenbank: ${testDbGrund()}`);
     await db.emailLog.deleteMany({ where: { providerId: { startsWith: 'pruef-' } } });
     const zeile = await db.emailLog.create({
-      data: { to: 'pruef.zustellung@example.ch', from: 'noreply@clenaris.ch', subject: 'Prüfreihe Zustellung', providerId, status: 'sent', templateKey: 'pruefreihe' },
+      data: { organizationId: (await eigeneOrganisationId())!, to: 'pruef.zustellung@example.ch', from: 'noreply@clenaris.ch', subject: 'Prüfreihe Zustellung', providerId, status: 'sent', templateKey: 'pruefreihe' },
     });
     zeileId = zeile.id;
+    // Dieselbe Suche, eine fremde Organisation: darf im Protokoll nicht stehen.
+    fremdeZeileId = (
+      await db.emailLog.create({
+        data: { organizationId: (await fremdeOrganisation())!, to: 'pruef.zustellung@example.ch', from: 'noreply@fremd.example.ch', subject: 'Prüfreihe Zustellung fremd', providerId: `${providerId}-fremd`, status: 'sent' },
+      })
+    ).id;
   });
 
   after(async () => {
@@ -147,6 +154,7 @@ describe('Zustellmeldungen über HTTP', () => {
     const liste = await get<{ data: { eintraege: { id: string; status: string }[] } }>('/api/communication/logs?kanal=email&suche=pruef.zustellung', { jar: jars.admin });
     assert.equal(liste.status, 200);
     assert.equal(data(liste).eintraege.find((e) => e.id === zeileId)?.status, 'bounced');
+    assert.ok(!data(liste).eintraege.some((e) => e.id === fremdeZeileId), 'die Zeile einer fremden Organisation steht im Protokoll');
     for (const rolle of ['employee', 'customer'] as AccountName[]) {
       assert.equal((await get('/api/communication/logs', { jar: jars[rolle] })).status, 403, rolle);
     }

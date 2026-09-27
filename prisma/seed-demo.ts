@@ -1359,7 +1359,7 @@ Ein Abzieher nach jedem Duschen reduziert die Kalkbildung um schätzungsweise 80
   const vehicleRisk = await prisma.riskEntry.findFirst({ where: { organizationId: org.id, title: risks[0].title } });
   if (vehicleRisk && !(await prisma.correctiveAction.findFirst({ where: { riskId: vehicleRisk.id } }))) {
     const task = await prisma.task.create({
-      data: { title: 'Massnahme: Mietvertrag für Ersatzfahrzeug abschliessen', priority: 'HIGH', dueAt: daysFromNow(21, 17), assigneeId: manager?.id ?? admin.id, creatorId: admin.id },
+      data: { organizationId: org.id, title: 'Massnahme: Mietvertrag für Ersatzfahrzeug abschliessen', priority: 'HIGH', dueAt: daysFromNow(21, 17), assigneeId: manager?.id ?? admin.id, creatorId: admin.id },
     });
     await prisma.correctiveAction.create({
       data: { organizationId: org.id, kind: 'PREVENTIVE', title: 'Mietvertrag für Ersatzfahrzeug abschliessen', rootCause: 'Nur ein Fahrzeug für alle Einsätze.', riskId: vehicleRisk.id, taskId: task.id, dueOn: dateOnly(21), createdById: admin.id },
@@ -1454,7 +1454,7 @@ Ein Abzieher nach jedem Duschen reduziert die Kalkbildung um schätzungsweise 80
         participants: { create: [{ userId: admin.id }, ...(manager ? [{ userId: manager.id }] : [])] },
       },
     });
-    await prisma.task.create({ data: { title: 'Preisklausel mit Treuhand abstimmen', priority: 'NORMAL', dueAt: daysFromNow(10, 17), assigneeId: admin.id, creatorId: admin.id, meetingId: meeting.id, description: `Pendenz aus der Sitzung „${meeting.title}"` } });
+    await prisma.task.create({ data: { organizationId: org.id, title: 'Preisklausel mit Treuhand abstimmen', priority: 'NORMAL', dueAt: daysFromNow(10, 17), assigneeId: admin.id, creatorId: admin.id, meetingId: meeting.id, description: `Pendenz aus der Sitzung „${meeting.title}"` } });
   }
 
   // Ein Berichtszeitplan, ohne Empfänger — Versand erst nach ausdrücklicher Einrichtung.

@@ -8,6 +8,7 @@ import { Resend } from 'resend';
 import { prisma } from '@/lib/db';
 import { hasIntegration, serverEnv } from '@/lib/env';
 import { logger } from '@/lib/logger';
+import { getOrganizationId } from '@/server/services/organization.service';
 
 const log = logger('email');
 
@@ -43,6 +44,21 @@ export interface SendEmailInput {
   entity?: string;
   entityId?: string;
   tags?: { name: string; value: string }[];
+  /** Für die Protokollzeile; ohne Angabe die Organisation dieser Installation. */
+  organizationId?: string;
+}
+
+/**
+ * Die Organisation der Protokollzeile (2026-09-27).
+ *
+ * Das Zustellprotokoll filtert danach; eine Zeile ohne Organisation erscheint
+ * in keinem. Die Installation ist einmandantig, deshalb genügt als Rückfall
+ * `getOrganizationId()` — und weil Versand nie scheitern darf (siehe oben),
+ * wird ein Fehler dort zu einer leeren Spalte, nicht zu einem verlorenen Mail.
+ */
+export async function protokollOrganisation(explizit?: string): Promise<string | null> {
+  if (explizit) return explizit;
+  return getOrganizationId().catch(() => null);
 }
 
 export interface SendEmailResult {
@@ -57,6 +73,7 @@ export async function sendEmail(input: SendEmailInput): Promise<SendEmailResult>
   const from = env.EMAIL_FROM;
 
   const logBase = {
+    organizationId: await protokollOrganisation(input.organizationId),
     to: recipients.join(', ').slice(0, 300),
     from,
     subject: input.subject.slice(0, 300),
