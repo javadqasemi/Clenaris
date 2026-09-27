@@ -244,8 +244,17 @@ export async function resolvePublicToken(params: {
    */
   purpose: PublicTokenPurpose;
 }): Promise<{ ok: true; token: ResolvedToken } | { ok: false; reason: TokenRejection }> {
-  // Ein offensichtlich falsch geformter Wert wird gar nicht erst gesucht.
-  if (!/^[0-9a-f]{64}$/.test(params.raw)) return { ok: false, reason: 'UNKNOWN' };
+  /**
+   * Ein offensichtlich falsch geformter Wert wird gar nicht erst gesucht.
+   *
+   * 64 Hexzeichen stellt `issuePublicToken` aus. 48 sind die Buchungslinks
+   * aus der Zeit vor 2026-09-27 (`randomToken(24)`), die die Migration
+   * `…_buchungslink_hash` als Hash übernommen hat — bereits versendete Mails
+   * sollen weiter funktionieren. 192 Bit bleiben unerratbar; eine Form
+   * zuzulassen heisst nicht, einen schwächeren Weg zu öffnen, denn gefunden
+   * wird ohnehin nur, was als Hash mit passendem Zweck in der Tabelle steht.
+   */
+  if (!/^[0-9a-f]{48}(?:[0-9a-f]{16})?$/.test(params.raw)) return { ok: false, reason: 'UNKNOWN' };
 
   const record = await prisma.publicAccessToken.findUnique({
     where: { tokenHash: sha256Hex(params.raw) },

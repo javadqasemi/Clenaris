@@ -347,6 +347,50 @@ describe('Buchung → Rechnung, Gastbuchung, Terminänderung', { concurrency: 1 
   });
 
   /**
+   * A6 (2026-09-27) — der Verwaltungslink einer Buchung liegt nur als Hash vor.
+   *
+   * `Booking.confirmationToken` stand im Klartext in der Datenbank, ohne
+   * Ablauf und ohne Widerruf — ein Datenbankabzug war ein Schlüsselbund für
+   * jede Gastbuchung samt Adresse und Zugangshinweis. Offerten und Rechnungen
+   * waren längst auf `PublicAccessToken` umgestellt, die Buchung nicht; der
+   * Zweck `BOOKING_MANAGE` existierte, wurde aber nie ausgestellt.
+   */
+  describe('A6 — Buchungslinks: Hash statt Klartext, widerrufbar', () => {
+    it('die Spalte ist weg, der Link löst über den Hash auf und lässt sich widerrufen', async (t) => {
+      if (!db) return t.skip('keine Testdatenbank');
+      const r = await post<{ data: { id: string; confirmationUrl: string } }>(
+        '/api/bookings',
+        { customerId: kundeId, leistungen: [{ serviceId: S.fenster, extras: [] }], scheduledStart: termin(242, '09:00'), address: adresse, propertyKind: 'OFFICE', source: 'PHONE', overrideCapacity: true },
+        { jar: jars.admin },
+      );
+      assert.equal(r.status, 201, r.text);
+      const { id, confirmationUrl } = data(r);
+      buchungen.push(id);
+      const roh = confirmationUrl.split('/').pop() ?? '';
+
+      const spalten = await db.$queryRaw<{ n: bigint }[]>`
+        SELECT count(*) AS n FROM information_schema.columns
+        WHERE table_name = 'bookings' AND column_name = 'confirmationToken'`;
+      assert.equal(Number(spalten[0]!.n), 0, 'bookings.confirmationToken besteht noch — der Link liegt im Klartext');
+
+      const { createHash } = await import('node:crypto');
+      const zeile = await db.publicAccessToken.findUnique({ where: { tokenHash: createHash('sha256').update(roh).digest('hex') } });
+      assert.ok(zeile, 'kein Zugriffstoken zum versendeten Link');
+      assert.equal(zeile.purpose, 'BOOKING_MANAGE');
+      assert.equal(zeile.resourceId, id);
+      assert.ok(zeile.expiresAt.getTime() > Date.now(), 'der Link ist schon abgelaufen');
+
+      assert.equal((await call('GET', `/buchung/${roh}`)).status, 200);
+      assert.equal((await call('GET', `/api/public/bookings/${roh}/pdf`)).status, 200);
+
+      await db.publicAccessToken.update({ where: { id: zeile.id }, data: { revokedAt: new Date() } });
+      assert.equal((await call('GET', `/buchung/${roh}`)).status, 404, 'ein widerrufener Link öffnet die Buchung');
+      assert.equal((await call('GET', `/api/public/bookings/${roh}/pdf`)).status, 404);
+      await db.publicAccessToken.delete({ where: { id: zeile.id } });
+    });
+  });
+
+  /**
    * A5 (2026-09-27) — ein Einsatz wird höchstens einmal verrechnet.
    *
    * `createInvoiceFromJobs` prüfte „schon verrechnet?" vor der Transaktion,

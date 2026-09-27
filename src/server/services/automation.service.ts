@@ -10,6 +10,7 @@ import {
 } from '@/lib/email/templates';
 import { smsTemplates } from '@/lib/sms/client';
 
+import { buchungslinkAusstellen } from './booking.service';
 import { notify } from './notification.service';
 
 /**
@@ -83,26 +84,49 @@ export async function sendBookingReminders(organizationId: string): Promise<{
         )
       : '—';
 
+    /**
+     * Der Link in der Erinnerung: mit Konto die Kontoseite, ohne Konto ein
+     * frisch ausgestellter Verwaltungslink.
+     *
+     * Bis 2026-09-27 stand hier `booking.confirmationToken` — derselbe
+     * Klartextwert, der auch in der Datenbank lag. Seit dort nur noch Hashes
+     * liegen, gibt es den alten Wert nicht mehr; ein neuer Link je Erinnerung
+     * ist die Folge, und er ist im Prüfprotokoll sichtbar wie jeder andere.
+     * Deshalb nur, wenn eine E-Mail hinausgeht: Die SMS zwei Stunden vorher
+     * trägt keinen Link, und ein Link, der nirgends ankommt, wäre ein Zugang
+     * ohne Empfänger.
+     */
+    const perMail = hoursBefore > 3;
+    const emailContent = perMail
+      ? bookingReminderEmail({
+          firstName: booking.customer.firstName,
+          bookingNumber: booking.number,
+          serviceName: leistungsnamen(booking.items),
+          scheduledStart: booking.scheduledStart,
+          scheduledEnd: booking.scheduledEnd,
+          address,
+          grossTotal: toNumber(booking.grossTotal),
+          manageUrl: booking.customer.user
+            ? absoluteUrl(`/konto/buchungen/${booking.id}`)
+            : await buchungslinkAusstellen({
+                organizationId: booking.organizationId,
+                bookingId: booking.id,
+                scheduledEnd: booking.scheduledEnd,
+              }),
+          hoursBefore,
+        })
+      : undefined;
+
     await notify({
       userId: booking.customer.user?.id ?? null,
       email: booking.customer.email,
       phone: booking.customer.mobile ?? booking.customer.phone,
       // Zwei Stunden vorher zusätzlich per SMS — E-Mail wird dann oft nicht mehr gelesen.
-      channels: hoursBefore <= 3 ? ['IN_APP', 'SMS'] : ['IN_APP', 'EMAIL'],
+      channels: perMail ? ['IN_APP', 'EMAIL'] : ['IN_APP', 'SMS'],
       title: 'Terminerinnerung',
       body: `Ihr Reinigungstermin beginnt in ca. ${hoursBefore} Stunden.`,
       link: `/konto/buchungen/${booking.id}`,
-      emailContent: bookingReminderEmail({
-        firstName: booking.customer.firstName,
-        bookingNumber: booking.number,
-        serviceName: leistungsnamen(booking.items),
-        scheduledStart: booking.scheduledStart,
-        scheduledEnd: booking.scheduledEnd,
-        address,
-        grossTotal: toNumber(booking.grossTotal),
-        manageUrl: absoluteUrl(`/buchung/${booking.confirmationToken}`),
-        hoursBefore,
-      }),
+      emailContent,
       smsBody: smsTemplates.bookingReminder({
         date: booking.scheduledStart.toLocaleDateString('de-CH'),
         time: booking.scheduledStart.toLocaleTimeString('de-CH', {

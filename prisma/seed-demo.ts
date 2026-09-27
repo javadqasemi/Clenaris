@@ -410,7 +410,6 @@ async function main() {
           source: 'WEBSITE',
           confirmedAt: seed.status !== 'PENDING' ? new Date() : null,
           completedAt: seed.status === 'COMPLETED' ? end : null,
-          confirmationToken: randomCode(24).toLowerCase(),
           items: {
             create: {
               serviceId,

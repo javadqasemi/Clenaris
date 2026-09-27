@@ -36,7 +36,6 @@ import {
 } from '@/lib/contracts/bezeichnungen';
 import { FREQUENCY_LABEL } from '@/lib/pricing/engine';
 import { leistungsnamen } from '@/lib/booking/leistungen';
-import { absoluteUrl } from '@/lib/utils';
 import { STATUS_MAP } from '@/components/ui/badge';
 import { logger } from '@/lib/logger';
 
@@ -776,6 +775,14 @@ export async function renderCreditNotePdf(creditNoteId: string): Promise<{
  */
 export async function renderBookingConfirmationPdf(
   bookingId: string,
+  /**
+   * Der Verwaltungslink, falls der Aufrufer einen hat — beim Anlegen der
+   * frisch ausgestellte, über den öffentlichen Download der vorgelegte. Das
+   * PDF stellt selbst keinen aus: Ein Link entsteht nur dort, wo er auch
+   * versendet wird. Wer das Dokument über die Sitzung lädt, verwaltet die
+   * Buchung im Konto und braucht keinen.
+   */
+  optionen: { manageUrl?: string } = {},
 ): Promise<{ buffer: Buffer; filename: string }> {
   const booking = await prisma.booking.findFirst({
     where: { id: bookingId, deletedAt: null },
@@ -847,7 +854,7 @@ export async function renderBookingConfirmationPdf(
       grossTotal: toNumber(booking.grossTotal),
       customerNote: booking.customerNote,
       accessNote: booking.accessNote,
-      manageUrl: absoluteUrl(`/buchung/${booking.confirmationToken}`),
+      manageUrl: optionen.manageUrl,
     }) as never,
   );
 

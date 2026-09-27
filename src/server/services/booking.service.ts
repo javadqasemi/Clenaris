@@ -31,6 +31,7 @@ import { invalidateAvailability, isSlotBookable } from './availability.service';
 import { notify, notifyStaff } from './notification.service';
 import { createJobsForBooking } from './job.service';
 import { dateienBinden } from './file.service';
+import { issuePublicToken, resolvePublicToken, tokenRejectionError } from './access-token.service';
 
 /**
  * Buchungslogik.
@@ -272,7 +273,6 @@ export async function createBooking(params: {
         // jede Auswertung darüber, woher die Aufträge kommen.
         source: office?.source ?? 'WEBSITE',
         bookedByIp: params.ip ?? null,
-        confirmationToken: randomToken(24),
         items: { create: positionenAusHerleitung(breakdown, leistungen) },
         extras: { create: zusatzleistungenAusHerleitung(breakdown) },
       },
@@ -328,8 +328,13 @@ export async function createBooking(params: {
   const service = { name: breakdown.positionen.map((p) => p.name).join(' + ') };
 
   const addressLabel = await formatBookingAddress(booking.addressId);
-  const confirmationUrl = absoluteUrl(`/buchung/${booking.confirmationToken}`);
-  const confirmationPdf = await bookingPdfAttachment(booking.id);
+  const confirmationUrl = await buchungslinkAusstellen({
+    organizationId,
+    bookingId: booking.id,
+    scheduledEnd: booking.scheduledEnd,
+    createdById: session?.id ?? null,
+  });
+  const confirmationPdf = await bookingPdfAttachment(booking.id, confirmationUrl);
 
   await notify({
     userId,
@@ -1437,7 +1442,6 @@ export async function generateRecurringBookings(organizationId: string): Promise
             priceBreakdown: template.priceBreakdown ?? undefined,
             source: template.source,
             confirmedAt: new Date(),
-            confirmationToken: randomToken(24),
             items: {
               create: template.items.map((item) => ({
                 serviceId: item.serviceId,
@@ -1621,10 +1625,59 @@ export async function getBookingDetail(params: {
   return booking;
 }
 
-/** Zugriff über den Magic-Link-Token (Gastbuchung ohne Konto). */
+/**
+ * Frist eines Verwaltungslinks: 90 Tage nach Terminende, mindestens 90 Tage
+ * ab heute. Der Link dient vor dem Termin der Verwaltung und danach als Beleg;
+ * länger braucht ihn niemand, und ein Link ohne Ende ist ein Zugang ohne Ende —
+ * genau der Mangel der alten Klartextspalte.
+ */
+const BUCHUNGSLINK_TAGE = 90;
+
+/**
+ * Einen Verwaltungslink ausstellen und die URL zurückgeben.
+ *
+ * Bis 2026-09-27 hatte jede Buchung *einen* Link, im Klartext an der Buchung
+ * gespeichert und von jeder Stelle wiederverwendet, die ihn brauchte —
+ * Bestätigung, PDF, Erinnerung. Mit Hash-Speicherung gibt es den rohen Wert
+ * nach der Ausstellung nicht mehr; wer später einen Link verschickt, stellt
+ * einen neuen aus. Das ist kein Umweg, sondern der Sinn: Jeder versendete Link
+ * steht im Prüfprotokoll (`issuePublicToken`), und ein widerrufener Link
+ * lässt sich nicht aus der Datenbank wiederbeleben.
+ */
+export async function buchungslinkAusstellen(params: {
+  organizationId: string;
+  bookingId: string;
+  scheduledEnd: Date;
+  createdById?: string | null;
+}): Promise<string> {
+  const tag = 86_400_000;
+  const expiresAt = new Date(
+    Math.max(params.scheduledEnd.getTime(), Date.now()) + BUCHUNGSLINK_TAGE * tag,
+  );
+  const { raw } = await issuePublicToken({
+    organizationId: params.organizationId,
+    purpose: 'BOOKING_MANAGE',
+    resourceId: params.bookingId,
+    createdById: params.createdById ?? null,
+    expiresAt,
+  });
+  return absoluteUrl(`/buchung/${raw}`);
+}
+
+/**
+ * Zugriff über den Verwaltungslink (Gastbuchung ohne Konto).
+ *
+ * Aufgelöst über `resolvePublicToken`: Zweck, Ablauf und Widerruf werden dort
+ * geprüft, und die Buchungs-ID kommt aus dem Token, nicht aus der Anfrage. Ein
+ * abgelaufener oder widerrufener Link bekommt eine Meldung, die das sagt; ein
+ * geratener dieselbe wie eine fehlende Buchung.
+ */
 export async function getBookingByToken(token: string) {
-  const booking = await prisma.booking.findUnique({
-    where: { confirmationToken: token },
+  const aufgeloest = await resolvePublicToken({ raw: token, purpose: 'BOOKING_MANAGE' });
+  if (!aufgeloest.ok) throw tokenRejectionError(aufgeloest.reason, 'Buchung');
+
+  const booking = await prisma.booking.findFirst({
+    where: { id: aufgeloest.token.resourceId, organizationId: aufgeloest.token.organizationId },
     include: {
       customer: { select: { firstName: true, lastName: true, email: true } },
       address: true,
@@ -1652,9 +1705,10 @@ const log = logger('booking');
  */
 async function bookingPdfAttachment(
   bookingId: string,
+  manageUrl?: string,
 ): Promise<{ filename: string; content: Buffer }[] | undefined> {
   try {
-    const pdf = await renderBookingConfirmationPdf(bookingId);
+    const pdf = await renderBookingConfirmationPdf(bookingId, { manageUrl });
     return [{ filename: pdf.filename, content: pdf.buffer }];
   } catch (error) {
     log.error('Buchungsbestätigung konnte nicht gerendert werden', { bookingId, error });

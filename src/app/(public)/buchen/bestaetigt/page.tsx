@@ -253,17 +253,22 @@ export default async function BookingConfirmedPage({
           )}
 
           {/* Druck und Download — nur am Bildschirm */}
-          {booking ? (
+          {/*
+            Der Link ist der vorgelegte Token `t` — an der Buchung steht seit
+            2026-09-27 nur noch sein Hash, und `booking` ist nur gesetzt, wenn
+            `t` gerade aufgelöst wurde.
+          */}
+          {booking && t ? (
             <div className="print-hidden flex flex-wrap gap-2 border-t border-border bg-surface px-6 py-4">
               <PrintButton variant="outline" size="sm" />
               <Button asChild variant="outline" size="sm">
-                <a href={`/api/public/bookings/${booking.confirmationToken}/pdf`}>
+                <a href={`/api/public/bookings/${t}/pdf`}>
                   <FileDown aria-hidden />
                   PDF herunterladen
                 </a>
               </Button>
               <Button asChild variant="ghost" size="sm">
-                <Link href={`/buchung/${booking.confirmationToken}`}>
+                <Link href={`/buchung/${t}`}>
                   <Settings2 aria-hidden />
                   Buchung verwalten
                 </Link>

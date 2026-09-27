@@ -4,7 +4,7 @@
 > Diagramme sind damit nie älter als das Schema. Prosa und Bereichseinteilung
 > stehen in `scripts/generate-erd.ts`.
 
-**151 Modelle, 119 Aufzählungstypen, 2891 Felder.**
+**151 Modelle, 119 Aufzählungstypen, 2890 Felder.**
 PostgreSQL 16+; alle Zeitstempel als `timestamptz` in UTC, Anzeige in Europe/Zurich.
 
 ## Vier Entscheidungen, die das ganze Schema prägen
@@ -751,7 +751,7 @@ erDiagram
 
 | Modell | Tabelle | Felder | Zweck |
 | --- | --- | --- | --- |
-| `Booking` | `bookings` | 61 | Vereinbarung mit der Kundschaft: Termin, Objekt, Leistungen und Preis als Momentaufnahme. |
+| `Booking` | `bookings` | 60 | Vereinbarung mit der Kundschaft: Termin, Objekt, Leistungen und Preis als Momentaufnahme. |
 | `BookingItem` | `booking_items` | 15 | Leistungsposition einer Buchung, mit Preis zum Buchungszeitpunkt. |
 | `BookingExtra` | `booking_extras` | 10 | Gebuchte Zusatzleistung mit Menge und Preis. |
 | `Quote` | `quotes` | 50 | Offerte mit Positionen, Gültigkeit, Magic-Link-Token und elektronischer Signatur. |

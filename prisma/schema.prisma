@@ -1918,7 +1918,9 @@ model Booking {
   // Kanäle & Herkunft
   source            LeadSource @default(WEBSITE)
   bookedByIp        String?
-  confirmationToken String?    @unique // Zugriff ohne Login (Magic Link)
+  // Der Verwaltungslink ohne Login ist ein `PublicAccessToken` (BOOKING_MANAGE):
+  // nur der Hash liegt in der Datenbank. Bis 2026-09-27 stand hier
+  // `confirmationToken` im Klartext — siehe Migration `…_buchungslink_hash`.
 
   confirmedAt     DateTime? @db.Timestamptz(6)
   cancelledAt     DateTime? @db.Timestamptz(6)

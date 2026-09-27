@@ -871,8 +871,12 @@ export interface BookingConfirmationPdfProps {
   grossTotal: number;
   customerNote?: string | null;
   accessNote?: string | null;
-  /** Öffentlicher Verwaltungslink — steht im Dokument, damit der Ausdruck allein genügt. */
-  manageUrl: string;
+  /**
+   * Öffentlicher Verwaltungslink — steht im Dokument, damit der Ausdruck allein
+   * genügt. Fehlt beim Download über die Sitzung: Links liegen nur als Hash vor
+   * und entstehen nur dort, wo sie versendet werden (`buchungslinkAusstellen`).
+   */
+  manageUrl?: string;
 }
 
 /**
@@ -997,7 +1001,9 @@ export function BookingConfirmationDocument(props: BookingConfirmationPdfProps) 
             Bezahlt wird erst nach dem Einsatz — per QR-Rechnung mit 30 Tagen Frist oder online.
             Bis 24 Stunden vor dem Termin verschieben oder stornieren Sie kostenlos.
           </Text>
-          <Text style={{ marginTop: 4 }}>Buchung verwalten: {props.manageUrl}</Text>
+          {props.manageUrl ? (
+            <Text style={{ marginTop: 4 }}>Buchung verwalten: {props.manageUrl}</Text>
+          ) : null}
         </View>
 
         <Footer company={company} label={`${title} ${props.number}`} />
