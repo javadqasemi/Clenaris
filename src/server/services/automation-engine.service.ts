@@ -1,5 +1,7 @@
 import 'server-only';
 
+import { createHash } from 'node:crypto';
+
 import { Prisma, type AutomationTrigger } from '@prisma/client';
 
 import { bedingungenErfuellt, type Nutzlast } from '@/lib/automation/conditions';
@@ -14,7 +16,7 @@ import {
 } from '@/lib/validation/automation-config';
 
 import { ZEITREGELN } from './automation-zeittrigger.service';
-import { notify } from './notification.service';
+import { notify, notifyStaff } from './notification.service';
 
 const log = logger('automation');
 
@@ -456,7 +458,94 @@ export async function automationEreignisseAbarbeiten(params: { organizationId?: 
   } catch (fehler) {
     log.error('Ereignisse konnten nicht gelesen werden', { error: fehler });
   }
+  await liegengebliebeneEreignisseMelden(params.organizationId);
   return verarbeitet;
+}
+
+/** Kennzeichen der Alarmmeldung — zugleich der Schlüssel, der sie nur einmal entstehen lässt. */
+const ALARM_ENTITY = 'AutomationEvent';
+
+/**
+ * Ereignisse, die ihre Versuche aufgebraucht haben, der Leitung melden (N-07,
+ * 2026-09-27).
+ *
+ * Bis hierher blieb ein solches Ereignis still liegen: Die Abfrage oben
+ * überspringt es (`attempts < EREIGNIS_MAX_VERSUCHE`), und ausser einer
+ * Logzeile erfuhr niemand, dass zu einer Buchung, einer Rechnung, einem
+ * Einsatz **keine** Regel gelaufen ist — die Bestätigungsmail fehlte, und das
+ * fiel erst der Kundschaft auf. „Sichtbar liegen bleiben" war damit nur eine
+ * Behauptung im Kommentar.
+ *
+ * **Warum als Durchgang über die Tabelle und nicht im `catch` oben.** Im
+ * `catch` gäbe es den Alarm nur für Ereignisse, die in genau diesem Aufruf den
+ * letzten Versuch verbrauchen. Ein Ereignis, das vor dieser Änderung liegen
+ * blieb, oder eines, dessen Meldung am Absturz des Prozesses scheiterte, wäre
+ * nie gemeldet worden. Der Durchgang findet jedes liegengebliebene Ereignis,
+ * gleich wann es liegen blieb.
+ *
+ * **Einmal je Ereignis.** Die Meldung trägt Art und Kennung des Ereignisses
+ * (`meta.entity`/`meta.entityId`); gibt es sie schon, wird nicht erneut
+ * gemeldet. Eine eigene Spalte „gemeldet am" wäre sauberer, bräuchte aber eine
+ * Migration — und die Meldung selbst ist genau der Beleg, um den es geht.
+ * Zwei gleichzeitige Durchgänge könnten im selben Augenblick doppelt melden;
+ * das ist der kleinere Fehler gegenüber einer Meldung, die nie kommt.
+ *
+ * Der Empfängerkreis folgt der Rechtematrix (`automation:update`): wer Regeln
+ * ändern darf, kann die Ursache beheben. Dieselbe Bauart wie der Alarm eines
+ * ausgebliebenen Nachtlaufs (`cron-monitor.service.ts`), nur ohne
+ * Sicherheitsereignis — ein liegengebliebenes Ereignis ist ein
+ * Betriebsbefund, kein Sicherheitsvorfall, und der Katalog in
+ * `lib/security/events.ts` soll nicht mit Betriebsmeldungen verwässern.
+ *
+ * **Wirft nie** — wie der Rest der Ereignisverarbeitung.
+ */
+async function liegengebliebeneEreignisseMelden(organizationId?: string): Promise<void> {
+  try {
+    const liegen = await prisma.automationEvent.findMany({
+      where: {
+        processedAt: null,
+        attempts: { gte: EREIGNIS_MAX_VERSUCHE },
+        ...(organizationId ? { organizationId } : {}),
+      },
+      orderBy: { createdAt: 'asc' },
+      take: 50,
+      select: { id: true, organizationId: true, trigger: true, entityId: true, attempts: true, createdAt: true },
+    });
+    for (const ereignis of liegen) {
+      const gemeldet = await prisma.notification.count({
+        where: {
+          createdAt: { gte: ereignis.createdAt },
+          AND: [
+            { meta: { path: ['entity'], equals: ALARM_ENTITY } },
+            { meta: { path: ['entityId'], equals: ereignis.id } },
+          ],
+        },
+      });
+      if (gemeldet > 0) continue;
+
+      // Nur Art und Kennung des Vorgangs — keine Personendaten in der Meldung.
+      const text =
+        `Das Ereignis „${ereignis.trigger}" zu ${TRIGGER_ENTITY[ereignis.trigger]} ${ereignis.entityId} ` +
+        `liess sich nach ${ereignis.attempts} Versuchen nicht verarbeiten. Für diesen Vorgang ist keine ` +
+        `Automatisierungsregel gelaufen. Bitte die Regeln und das Protokoll prüfen.`;
+      log.error('Automatisierungsereignis liegen geblieben — Leitung benachrichtigt', {
+        ereignisId: ereignis.id,
+        trigger: ereignis.trigger,
+        versuche: ereignis.attempts,
+      });
+      await notifyStaff({
+        organizationId: ereignis.organizationId,
+        title: 'Automatisierung: Ereignis liegen geblieben',
+        body: text,
+        link: '/admin/einstellungen',
+        permission: 'automation:update',
+        entity: ALARM_ENTITY,
+        entityId: ereignis.id,
+      });
+    }
+  } catch (fehler) {
+    log.error('Liegengebliebene Ereignisse konnten nicht gemeldet werden', { error: fehler });
+  }
 }
 
 /** Der Kern von `emitAutomationTrigger` — wirft, damit die Ereignisverarbeitung einen Fehlschlag erkennt. */
@@ -760,6 +849,48 @@ async function fuehreLaufAus(organizationId: string, runId: string): Promise<Aus
     return 'uebersprungen';
   }
 
+  /**
+   * Passt der gespeicherte Stand noch zur Regel? (N-07, 2026-09-27)
+   *
+   * Der Stand einer Aktion ist an ihre **Stelle** gebunden
+   * (`@@unique([runId, position])`), und `updateAutomation` ersetzt die
+   * Aktionsliste als Ganzes. Wird eine Regel geändert, während ein Lauf auf
+   * seine Wiederholung wartet, steht an Stelle N womöglich eine andere
+   * Aktion. Bis hierher galt dann der Stand der alten als der der neuen:
+   * „Webhook gescheitert" an Stelle 0 wurde als „Aufgabe anlegen, fortsetzen"
+   * gelesen, und ein „erledigt" übersprang eine Aktion, die nie lief.
+   *
+   * Verglichen werden Art und Kennung (Art plus Konfiguration, gehasht, im
+   * Ergebnis des Stands). Stände aus der Zeit vor der Kennung vergleichen nur
+   * die Art — mehr wissen sie nicht.
+   *
+   * Bei einer Abweichung endet der Lauf **endgültig als FAILED** und führt
+   * nichts aus. Die Alternativen sind beide schlechter: den alten Stand
+   * verwerfen und neu beginnen hiesse, erledigte Aktionen mit Aussenwirkung
+   * (E-Mail, Webhook) ein zweites Mal auszuführen — genau das, was der Stand je
+   * Aktion verhindern soll; weitermachen hiesse, einer Aktion einen Stand
+   * zuzuschreiben, den sie nie hatte. Ein Wiederholungsversuch änderte an der
+   * Abweichung nichts, deshalb keine Wartezeit.
+   */
+  const bisherigeStaende = await prisma.automationActionRun.findMany({
+    where: { runId },
+    select: { position: true, type: true, result: true },
+  });
+  const abweichung = bisherigeStaende.find((stand) => {
+    const aktuell = lauf.automation.actions[stand.position];
+    if (!aktuell || aktuell.type !== stand.type) return true;
+    const kennung = kennungAusErgebnis(stand.result);
+    return kennung !== null && kennung !== aktionsKennung(aktuell.type, aktuell.config);
+  });
+  if (abweichung) {
+    const grund =
+      `Regel geändert, während der Lauf auf seine Wiederholung wartete — die Aktion an Stelle ${abweichung.position + 1} ` +
+      `ist nicht mehr dieselbe. Nicht fortgesetzt, damit keine Aktion doppelt oder unter falschem Stand läuft. Bitte prüfen.`;
+    await abschliessen(runId, 'FAILED', { grund, position: abweichung.position, bisherigeArt: abweichung.type }, grund);
+    log.warn('Automatisierung nach Regeländerung nicht fortgesetzt', { runId, regel: lauf.automation.name, position: abweichung.position });
+    return 'gescheitert';
+  }
+
   const protokoll: unknown[] = [];
   let gescheitertMit: string | null = null;
   let endgueltig = false;
@@ -785,6 +916,7 @@ async function fuehreLaufAus(organizationId: string, runId: string): Promise<Aus
    *    Wirkung. Zielzustände (Statusänderung) sind wiederholbar.
    */
   for (const [position, aktion] of lauf.automation.actions.entries()) {
+    const kennung = aktionsKennung(aktion.type, aktion.config);
     const vorher = await prisma.automationActionRun.findUnique({ where: { runId_position: { runId, position } } });
     if (vorher && (vorher.status === 'SUCCEEDED' || vorher.status === 'SKIPPED')) {
       protokoll.push({ aktion: aktion.type, ergebnis: 'bereits erledigt' });
@@ -808,7 +940,7 @@ async function fuehreLaufAus(organizationId: string, runId: string): Promise<Aus
        * und ein Ausführen mit geratenen Werten wäre die schlechtere
        * Alternative.
        */
-      await aktionsstandSetzen(runId, position, aktion.type, 'SKIPPED', { grund: befund.grund });
+      await aktionsstandSetzen(runId, position, aktion.type, kennung, 'SKIPPED', { grund: befund.grund });
       protokoll.push({ aktion: aktion.type, ergebnis: 'uebersprungen', grund: befund.grund });
       continue;
     }
@@ -816,7 +948,7 @@ async function fuehreLaufAus(organizationId: string, runId: string): Promise<Aus
     // Vor der Wirkung auf RUNNING — damit ein Absturz mittendrin erkennbar bleibt.
     await prisma.automationActionRun.upsert({
       where: { runId_position: { runId, position } },
-      create: { runId, position, type: aktion.type, status: 'RUNNING', attempts: 1, startedAt: new Date() },
+      create: { runId, position, type: aktion.type, status: 'RUNNING', attempts: 1, startedAt: new Date(), result: { kennung } },
       update: { status: 'RUNNING', attempts: { increment: 1 }, startedAt: new Date(), error: null },
     });
 
@@ -832,14 +964,14 @@ async function fuehreLaufAus(organizationId: string, runId: string): Promise<Aus
       });
       protokoll.push({ aktion: aktion.type, ...teilErgebnis });
       const stand = teilErgebnis.ergebnis === 'ok' ? 'SUCCEEDED' : teilErgebnis.ergebnis === 'uebersprungen' ? 'SKIPPED' : 'FAILED';
-      await aktionsstandSetzen(runId, position, aktion.type, stand, teilErgebnis, stand === 'FAILED' ? teilErgebnis.grund : undefined);
+      await aktionsstandSetzen(runId, position, aktion.type, kennung, stand, teilErgebnis, stand === 'FAILED' ? teilErgebnis.grund : undefined);
       if (teilErgebnis.ergebnis === 'fehler') {
         gescheitertMit = teilErgebnis.grund ?? 'Unbekannter Fehler';
         break;
       }
     } catch (fehler) {
       const meldung = fehler instanceof Error ? fehler.message : String(fehler);
-      await aktionsstandSetzen(runId, position, aktion.type, 'FAILED', vorher?.result ?? null, meldung);
+      await aktionsstandSetzen(runId, position, aktion.type, kennung, 'FAILED', vorher?.result ?? null, meldung);
       protokoll.push({ aktion: aktion.type, ergebnis: 'fehler', grund: meldung });
       gescheitertMit = meldung;
       break;
@@ -880,18 +1012,60 @@ async function fuehreLaufAus(organizationId: string, runId: string): Promise<Aus
  */
 const WIEDERHOLBAR = new Set(['UPDATE_STATUS', 'AI_GENERATE']);
 
+/**
+ * Die Kennung einer Aktion: Art und Konfiguration, gehasht.
+ *
+ * Steht im Ergebnis jedes Aktionsstands, damit ein Wiederholungsversuch
+ * erkennt, ob an derselben Stelle noch dieselbe Aktion steht (N-07). Die Art
+ * allein genügte nicht: Zwei E-Mail-Aktionen mit verschiedenen Vorlagen haben
+ * dieselbe Art, und „an die Kundschaft zugestellt" aus der einen darf die
+ * andere nicht überspringen. Eine eigene Spalte bräuchte eine Migration; das
+ * Ergebnis ist ohnehin der Ort, an dem der Stand seine Einzelheiten trägt.
+ *
+ * Die Schlüssel werden sortiert, bevor gehasht wird — dieselbe Konfiguration
+ * in anderer Reihenfolge ist dieselbe Aktion und soll keinen Lauf beenden.
+ */
+function aktionsKennung(type: string, config: unknown): string {
+  return createHash('sha256').update(`${type}\n${stabilesJson(config ?? {})}`).digest('hex').slice(0, 32);
+}
+
+function stabilesJson(wert: unknown): string {
+  if (Array.isArray(wert)) return `[${wert.map(stabilesJson).join(',')}]`;
+  if (wert !== null && typeof wert === 'object') {
+    const objekt = wert as Record<string, unknown>;
+    return `{${Object.keys(objekt)
+      .sort()
+      .map((k) => `${JSON.stringify(k)}:${stabilesJson(objekt[k])}`)
+      .join(',')}}`;
+  }
+  return JSON.stringify(wert) ?? 'null';
+}
+
+function kennungAusErgebnis(result: unknown): string | null {
+  if (result === null || typeof result !== 'object' || Array.isArray(result)) return null;
+  const kennung = (result as { kennung?: unknown }).kennung;
+  return typeof kennung === 'string' ? kennung : null;
+}
+
 async function aktionsstandSetzen(
   runId: string,
   position: number,
   type: string,
+  kennung: string,
   status: 'SUCCEEDED' | 'FAILED' | 'SKIPPED',
   result: unknown,
   fehler?: string,
 ): Promise<void> {
+  // Das Ergebnis trägt immer die Kennung — auch ein Fehlschlag, denn gerade
+  // der wird fortgesetzt und muss sich beim nächsten Versuch zuordnen lassen.
+  const mitKennung = {
+    ...(result !== null && typeof result === 'object' && !Array.isArray(result) ? (result as Record<string, unknown>) : {}),
+    kennung,
+  } as Prisma.InputJsonValue;
   await prisma.automationActionRun.upsert({
     where: { runId_position: { runId, position } },
-    create: { runId, position, type, status, attempts: 1, result: (result ?? undefined) as Prisma.InputJsonValue, error: fehler?.slice(0, 500) ?? null, finishedAt: new Date() },
-    update: { status, result: (result ?? undefined) as Prisma.InputJsonValue, error: fehler?.slice(0, 500) ?? null, finishedAt: new Date() },
+    create: { runId, position, type, status, attempts: 1, result: mitKennung, error: fehler?.slice(0, 500) ?? null, finishedAt: new Date() },
+    update: { status, result: mitKennung, error: fehler?.slice(0, 500) ?? null, finishedAt: new Date() },
   });
 }
 
@@ -1055,6 +1229,26 @@ async function sendeNachricht(params: {
    */
   const zugestellt = [...(params.bereitsZugestellt ?? [])];
 
+  /**
+   * Ein Versand, der **wirft** statt eine Absage zu melden (die Datenbank
+   * antwortet nicht, ein Anbieter-Client bricht ab), zählt als Zustellfehler
+   * dieses Empfängers — und die Schleife läuft weiter (N-07, 2026-09-27).
+   * Bis hierher sprang der Fehler aus der Aktion heraus; der Aufrufer schrieb
+   * dann den Stand **vor** diesem Versuch zurück, und wer in diesem Versuch
+   * schon erreicht worden war, bekam die Nachricht beim nächsten ein zweites
+   * Mal. So endet die Aktion regulär als Fehler, mit `zugestellt` im Ergebnis.
+   */
+  const sicherZustellen = async (eingabe: Parameters<typeof notify>[0]) => {
+    try {
+      return await notify(eingabe);
+    } catch (fehler) {
+      const meldung = fehler instanceof Error ? fehler.message : String(fehler);
+      return perMail
+        ? { email: { ok: false, fehler: meldung }, sms: null }
+        : { email: null, sms: { ok: false, fehler: meldung } };
+    }
+  };
+
   for (const userId of konten) {
     if (zugestellt.includes(userId)) continue;
     if (perMail) {
@@ -1066,7 +1260,7 @@ async function sendeNachricht(params: {
       betreff.fehlendePlatzhalter.forEach((p) => fehlend.add(p));
       html.fehlendePlatzhalter.forEach((p) => fehlend.add(p));
 
-      const zustellung = await notify({
+      const zustellung = await sicherZustellen({
         userId,
         channels: ['EMAIL'],
         title: betreff.text,
@@ -1085,7 +1279,7 @@ async function sendeNachricht(params: {
       const sms = fuelleVorlage(v.body, params.nutzlast);
       sms.fehlendePlatzhalter.forEach((p) => fehlend.add(p));
 
-      const zustellung = await notify({
+      const zustellung = await sicherZustellen({
         userId,
         channels: ['SMS'],
         title: '',

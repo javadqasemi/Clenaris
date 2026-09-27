@@ -7,7 +7,7 @@ import { istPrivateAdresse, pruefendeVerbindungsaufloesung, pruefeZiel, sendeWeb
 import { pruefeAktionsKonfiguration } from '../../src/lib/validation/automation-config';
 import { get, post, patch, del, data, requireServer } from '../helpers/client';
 import { loginAll, type AccountName } from '../helpers/accounts';
-import { testDb, testDbGrund, testDbSchliessen } from '../helpers/testdb';
+import { eigeneOrganisationId, testDb, testDbGrund, testDbSchliessen } from '../helpers/testdb';
 
 /**
  * Wave 6 — die Automatisierungsmaschine.
@@ -956,5 +956,213 @@ describe('Automatisierung — jede Aktion höchstens einmal', () => {
     assert.equal(nachher.status, 'FAILED', 'endgültig beendet, nicht wiederholt');
     assert.match(nachher.error ?? '', /ungewiss/i);
     assert.equal(await db.task.count({ where: { title: { startsWith: `Folgeaufgabe Einmal ${RUN} Einmal abgebrochen` } } }), 0, 'keine zweite Wirkung');
+  });
+});
+
+/**
+ * F-12 und N-07 (2026-09-27) — Erzeugerparität der Umwandlung, Identität einer
+ * Aktion über eine Regeländerung hinweg, Alarm für liegengebliebene Ereignisse.
+ *
+ * Die Paritätsprüfung oben liest nur Quelltext: Sie findet `trigger:
+ * 'BOOKING_CONFIRMED'` in `booking.service.ts` und ist zufrieden — dass die
+ * Umwandlung einer Offerte eine bestätigte Buchung anlegt, ohne einen der
+ * beiden Auslöser zu vermerken, sah sie nicht. Deshalb hier derselbe Weg wie
+ * in der Kernprüfung der Wave: echter Vorgang über HTTP, dann in den Tabellen
+ * nachsehen.
+ */
+describe('F-12/N-07 — Umwandlung, Regeländerung, liegengebliebene Ereignisse', () => {
+  const RUN = Date.now();
+  const regeln: string[] = [];
+  const aufgaben: string[] = [];
+
+  before(async () => {
+    await requireServer();
+    jars = await loginAll();
+  });
+
+  after(async () => {
+    const db = testDb();
+    for (const id of regeln) await del(`/api/automations/${id}`, { jar: jars.admin }).catch(() => {});
+    for (const id of aufgaben) await del(`/api/tasks/${id}`, { jar: jars.admin }).catch(() => {});
+    if (db) await db.task.deleteMany({ where: { title: { startsWith: `Folgeaufgabe Umgestellt ${RUN}` } } });
+    await testDbSchliessen();
+  });
+
+  const stuendlich = () => get('/api/cron/hourly', { headers: { authorization: `Bearer ${process.env.CRON_SECRET ?? 'dev-cron-secret'}` } });
+
+  async function regelAnlegen(body: Record<string, unknown>): Promise<string> {
+    const antwort = await post<{ data: { id: string } }>('/api/automations', body, { jar: jars.admin });
+    assert.equal(antwort.status, 201, antwort.text);
+    regeln.push(data(antwort).id);
+    return data(antwort).id;
+  }
+
+  it('die Umwandlung Offerte → Buchung löst BOOKING_CREATED und BOOKING_CONFIRMED aus', async (t) => {
+    const db = testDb();
+    if (!db) return t.skip(`kein Zugang zur Testdatenbank: ${testDbGrund()}`);
+
+    // Verzögert, damit die Läufe nur entstehen und nicht schon ausgeführt
+    // werden — gefragt ist hier, ob sie entstehen.
+    const regelAngelegt = await regelAnlegen({
+      name: `Umwandlung angelegt ${RUN}`,
+      trigger: 'BOOKING_CREATED',
+      delayMinutes: 60,
+      active: true,
+      actions: [{ type: 'CREATE_NOTIFICATION', config: { titel: 'Buchung {{nummer}} angelegt', empfaenger: 'MANAGEMENT' } }],
+    });
+    const regelBestaetigt = await regelAnlegen({
+      name: `Umwandlung bestätigt ${RUN}`,
+      trigger: 'BOOKING_CONFIRMED',
+      delayMinutes: 60,
+      active: true,
+      actions: [{ type: 'CREATE_NOTIFICATION', config: { titel: 'Buchung {{nummer}} bestätigt', empfaenger: 'MANAGEMENT' } }],
+    });
+
+    const kunde = data(await get<{ data: { id: string }[] }>('/api/customers?pageSize=1', { jar: jars.admin }))?.[0];
+    const dienst = data(await get<{ data: { id: string }[] }>('/api/services', { jar: jars.admin }))?.[0];
+    if (!kunde || !dienst) return t.skip('Bestand reicht nicht');
+
+    const offerte = await post<{ data: { id: string } }>(
+      '/api/quotes',
+      {
+        customerId: kunde.id,
+        title: `Umwandlungsprüfung ${RUN}`,
+        validUntil: new Date(Date.now() + 30 * 86_400_000).toISOString().slice(0, 10),
+        items: [
+          { serviceId: dienst.id, name: 'Unterhaltsreinigung', quantity: 3, unit: 'Std.', unitPrice: 64, discount: 0, vatRate: 8.1, optional: false },
+        ],
+        discountValue: 0,
+      },
+      { jar: jars.admin },
+    );
+    assert.equal(offerte.status, 201, offerte.text);
+    // Angenommen wie im Altbestand — der Signaturweg ist nicht Gegenstand
+    // dieser Prüfung (`offertannahme.test.ts`), sondern was danach geschieht.
+    await db.quote.update({ where: { id: data(offerte).id }, data: { status: 'ACCEPTED', acceptedAt: new Date() } });
+
+    const termin = new Date(Date.now() + 20 * 86_400_000);
+    termin.setUTCHours(8, 0, 0, 0);
+    const umwandlung = await post<{ data: { id: string } }>(
+      `/api/quotes/${data(offerte).id}/convert`,
+      { target: 'BOOKING', scheduledStart: termin.toISOString() },
+      { jar: jars.admin },
+    );
+    assert.equal(umwandlung.status, 201, umwandlung.text);
+    const bookingId = data(umwandlung).id;
+
+    const ereignisse = await db.automationEvent.findMany({ where: { entityId: bookingId }, select: { trigger: true, processedAt: true } });
+    const ausloeser = ereignisse.map((e) => e.trigger);
+    assert.ok(ausloeser.includes('BOOKING_CREATED'), `kein BOOKING_CREATED vermerkt (vermerkt: ${ausloeser.join(', ') || '—'})`);
+    assert.ok(ausloeser.includes('BOOKING_CONFIRMED'), `kein BOOKING_CONFIRMED vermerkt (vermerkt: ${ausloeser.join(', ') || '—'})`);
+    assert.ok(
+      ereignisse.filter((e) => e.trigger === 'BOOKING_CREATED' || e.trigger === 'BOOKING_CONFIRMED').every((e) => e.processedAt),
+      'die Vermerke wurden nach dem Commit abgearbeitet',
+    );
+    assert.equal(await db.automationRun.count({ where: { automationId: regelAngelegt, entityId: bookingId } }), 1, 'Lauf für „Buchung angelegt"');
+    assert.equal(await db.automationRun.count({ where: { automationId: regelBestaetigt, entityId: bookingId } }), 1, 'Lauf für „Buchung bestätigt"');
+  });
+
+  /**
+   * Die Regel wird geändert, während ein Lauf auf seine Wiederholung wartet:
+   * Vorher stand an Stelle 0 ein Webhook, der scheiterte; danach steht dort
+   * „Aufgabe anlegen". Der gespeicherte Stand „Stelle 0 gescheitert" gehört
+   * zum Webhook. Bis 2026-09-27 wurde er als Stand der neuen Aktion gelesen
+   * und die Aufgabe als „Fortsetzung" angelegt.
+   */
+  it('eine während der Wiederholung geänderte Regel führt an derselben Stelle keine andere Aktion als Fortsetzung aus', async (t) => {
+    const db = testDb();
+    if (!db) return t.skip(`kein Zugang zur Testdatenbank: ${testDbGrund()}`);
+
+    const webhook = { type: 'WEBHOOK', config: { url: 'https://gegenstelle.pruef.invalid/umgestellt' } };
+    const regelId = await regelAnlegen({
+      name: `Umgestellt ${RUN}`,
+      trigger: 'TASK_DUE',
+      delayMinutes: 0,
+      active: true,
+      actions: [webhook],
+    });
+
+    const aufgabe = await post<{ data: { id: string } }>(
+      '/api/tasks',
+      { title: `Umgestellt ${RUN}`, dueAt: new Date(Date.now() + 30 * 60_000).toISOString() },
+      { jar: jars.admin },
+    );
+    assert.equal(aufgabe.status, 201, aufgabe.text);
+    aufgaben.push(data(aufgabe).id);
+    const eigene = { automationId: regelId, entityId: data(aufgabe).id };
+
+    // Erster Versuch: Der Webhook scheitert, der Lauf wartet auf die Wiederholung.
+    await stuendlich();
+    await db.automationRun.updateMany({ where: eigene, data: { scheduledFor: new Date(Date.now() - 60_000) } });
+    await stuendlich();
+    const wartend = await db.automationRun.findFirstOrThrow({ where: eigene, include: { aktionen: true } });
+    assert.equal(wartend.status, 'PENDING', `Vorbedingung: Der Lauf wartet auf die Wiederholung (${wartend.status}, ${wartend.error ?? '—'})`);
+    assert.equal(wartend.aktionen[0]?.type, 'WEBHOOK');
+    assert.equal(wartend.aktionen[0]?.status, 'FAILED');
+
+    // Die Regel umstellen: „Aufgabe anlegen" rückt an Stelle 0.
+    const umgestellt = await patch(
+      `/api/automations/${regelId}`,
+      { actions: [{ type: 'CREATE_TASK', config: { titel: `Folgeaufgabe Umgestellt ${RUN} {{titel}}`, faelligInTagen: 1 } }, webhook] },
+      { jar: jars.admin },
+    );
+    assert.ok([200, 204].includes(umgestellt.status), `Umstellen: HTTP ${umgestellt.status} ${umgestellt.text}`);
+
+    await db.automationRun.updateMany({ where: eigene, data: { scheduledFor: new Date(Date.now() - 60_000) } });
+    await stuendlich();
+
+    const folge = await db.task.count({ where: { title: `Folgeaufgabe Umgestellt ${RUN} Umgestellt ${RUN}` } });
+    assert.equal(folge, 0, 'die neue Aktion an Stelle 0 lief unter dem Stand der alten');
+    const nachher = await db.automationRun.findFirstOrThrow({ where: eigene });
+    assert.equal(nachher.status, 'FAILED', 'endgültig beendet, nicht still weitergeführt');
+    assert.match(nachher.error ?? '', /Regel geändert/);
+  });
+
+  /**
+   * Ein Ereignis, das `EREIGNIS_MAX_VERSUCHE` (5) erreicht hat, wird nicht
+   * mehr verarbeitet. Bis 2026-09-27 blieb es danach still liegen — keine
+   * Regel lief für den Vorgang, und ausser einer Logzeile erfuhr es niemand.
+   *
+   * Der Fehlschlag selbst lässt sich über HTTP nicht herbeiführen (die
+   * Verarbeitung scheitert nur an der Datenbank oder an einem Programmfehler).
+   * Deshalb wird der Zustand danach gelegt: ein Ereignis mit aufgebrauchten
+   * Versuchen. Geprüft wird, was der Betrieb davon sieht.
+   */
+  it('ein Ereignis mit aufgebrauchten Versuchen wird der Leitung gemeldet — genau einmal', async (t) => {
+    const db = testDb();
+    if (!db) return t.skip(`kein Zugang zur Testdatenbank: ${testDbGrund()}`);
+    const organizationId = await eigeneOrganisationId();
+    if (!organizationId) return t.skip('keine Organisation im Bestand');
+
+    const ereignis = await db.automationEvent.create({
+      data: { organizationId, trigger: 'BOOKING_CREATED', entityId: `liegen-${RUN}`, attempts: 5 },
+    });
+    const meldungen = () =>
+      db.notification.count({
+        where: {
+          AND: [
+            { meta: { path: ['entity'], equals: 'AutomationEvent' } },
+            { meta: { path: ['entityId'], equals: ereignis.id } },
+          ],
+        },
+      });
+    try {
+      await stuendlich();
+      const erste = await meldungen();
+      assert.ok(erste > 0, 'das liegengebliebene Ereignis wurde niemandem gemeldet');
+
+      await stuendlich();
+      assert.equal(await meldungen(), erste, 'ein zweiter Takt meldet dasselbe Ereignis nicht noch einmal');
+    } finally {
+      await db.notification.deleteMany({
+        where: {
+          AND: [
+            { meta: { path: ['entity'], equals: 'AutomationEvent' } },
+            { meta: { path: ['entityId'], equals: ereignis.id } },
+          ],
+        },
+      });
+      await db.automationEvent.delete({ where: { id: ereignis.id } });
+    }
   });
 });

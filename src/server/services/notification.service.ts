@@ -191,6 +191,13 @@ export async function notifyStaff(params: {
   permission?: Permission;
   /** Die auslösende Person selbst nicht benachrichtigen. */
   excludeUserId?: string;
+  /**
+   * Worauf sich die Meldung bezieht — landet in `meta`. Wer eine Meldung nur
+   * einmal auslösen will (der Alarm zu einem liegengebliebenen
+   * Automatisierungsereignis), findet sie darüber wieder, ohne eigene Spalte.
+   */
+  entity?: string;
+  entityId?: string;
 }): Promise<void> {
   const roles = params.roles ?? STAFF_ROLES;
 
@@ -218,6 +225,8 @@ export async function notifyStaff(params: {
         body: params.body,
         link: params.link,
         emailContent: params.emailContent,
+        entity: params.entity,
+        entityId: params.entityId,
       }),
     ),
   );

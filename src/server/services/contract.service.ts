@@ -183,6 +183,44 @@ async function ladeVertrag(organizationId: string, contractId: string) {
   return vertrag;
 }
 
+/**
+ * Den Vertragskopf sperren, den Übergang am **gesperrten** Zustand prüfen und
+ * den Vertrag in dieser Transaktion frisch lesen (N-02, 2026-09-27).
+ *
+ * Pausieren, Fortsetzen, Kündigen, Kündigung zurücknehmen und Beenden
+ * schrieben bis hierher ohne Sperre, auf Grund eines Zustands, der vor der
+ * Transaktion gelesen war, und mit `update` nur über die Kennung. Zwei
+ * gleichzeitige Handlungen bestanden beide die Prüfung, und die spätere
+ * überschrieb die frühere: „Beenden" und „Fortsetzen" auf einem pausierten
+ * Vertrag ergaben einen Vertrag mit Enddatum im Zustand ACTIVE — beendet in
+ * der Akte, laufend für den Planer, der weiter Einsätze erzeugt.
+ *
+ * Jetzt serialisieren sich alle Lebenslaufschritte über dieselbe Zeile wie
+ * Stornieren und Unterschreiben (`vertragSperren`, Sperrreihenfolge
+ * `Contract → …`). Wer als zweiter kommt, wartet, liest danach den
+ * bestätigten Zustand des ersten und prüft den Übergang **daran** — beim
+ * Beispiel oben gewinnt entweder das Beenden (Fortsetzen: 422) oder das
+ * Fortsetzen (danach Beenden aus ACTIVE: zulässig). Beide Reihenfolgen enden
+ * in einem Zustand, den eine einzelne Handlung auch erreicht hätte.
+ *
+ * Frisch gelesen wird der ganze Vertrag samt Fassungen, nicht nur der
+ * Zustand: Das Beenden nimmt das Wirkungsdatum der Kündigung, die Kündigung
+ * die Frist der geltenden Fassung — beides kann ein gleichzeitiger Schritt
+ * gerade geändert haben. Die Mandantenprüfung steht im `where`; die Sperre
+ * allein kennt nur die Kennung.
+ */
+async function gesperrtLaden(tx: Tx, organizationId: string, contractId: string, nach: ContractStatus) {
+  const gesperrt = await vertragSperren(tx, { contractId });
+  if (!gesperrt || gesperrt.deletedAt) throw new NotFoundError('Vertrag nicht gefunden.');
+  pruefeUebergang(gesperrt.status as ContractStatus, nach);
+  const frisch = await tx.contract.findFirst({
+    where: { id: contractId, organizationId, deletedAt: null },
+    include: { versions: { orderBy: { versionNumber: 'desc' } } },
+  });
+  if (!frisch) throw new NotFoundError('Vertrag nicht gefunden.');
+  return frisch;
+}
+
 /** Die geltende Fassung — oder der jüngste Entwurf, solange keine gilt. */
 export function aktiveVersion<T extends { status: string; versionNumber: number }>(
   versionen: readonly T[],
@@ -1280,18 +1318,27 @@ async function withdrawNotice(params: {
 }) {
   const vertrag = await ladeVertrag(params.organizationId, params.contractId);
   pruefeUebergang(vertrag.status, 'ACTIVE');
-  const geltend = aktiveVersion(vertrag.versions);
 
-  const aktualisiert = await prisma.contract.update({
-    where: { id: vertrag.id },
-    data: {
-      status: 'ACTIVE',
-      noticeGivenAt: null,
-      noticeGivenBy: null,
-      terminationEffectiveAt: null,
-      terminationReason: null,
-      noticeDeadline: geltend ? kuendigungsfrist(vertrag.endDate, geltend.noticePeriodDays) : vertrag.noticeDeadline,
-    },
+  const aktualisiert = await prisma.$transaction(async (tx) => {
+    const frisch = await gesperrtLaden(tx, params.organizationId, vertrag.id, 'ACTIVE');
+    // Zurücknehmen lässt sich nur eine Kündigung. Ohne diese Prüfung am
+    // gesperrten Zustand würde ein gleichzeitig pausierter Vertrag hier
+    // „fortgesetzt" — ACTIVE ist aus PAUSED ebenfalls erreichbar.
+    if (frisch.status !== 'NOTICE_GIVEN') {
+      throw new BusinessRuleError('Der Vertrag hat sich inzwischen geändert. Bitte die Seite neu laden.');
+    }
+    const geltend = aktiveVersion(frisch.versions);
+    return tx.contract.update({
+      where: { id: vertrag.id },
+      data: {
+        status: 'ACTIVE',
+        noticeGivenAt: null,
+        noticeGivenBy: null,
+        terminationEffectiveAt: null,
+        terminationReason: null,
+        noticeDeadline: geltend ? kuendigungsfrist(frisch.endDate, geltend.noticePeriodDays) : frisch.noticeDeadline,
+      },
+    });
   });
 
   await audit.updated({
@@ -1345,9 +1392,12 @@ export async function pauseContract(params: {
     throw new BusinessRuleError('Das Ende der Pause liegt vor ihrem Beginn.');
   }
 
-  const aktualisiert = await prisma.contract.update({
-    where: { id: vertrag.id },
-    data: { status: 'PAUSED', pausedFrom: von, pausedUntil: bis, pauseReason: params.reason },
+  const aktualisiert = await prisma.$transaction(async (tx) => {
+    await gesperrtLaden(tx, params.organizationId, vertrag.id, 'PAUSED');
+    return tx.contract.update({
+      where: { id: vertrag.id },
+      data: { status: 'PAUSED', pausedFrom: von, pausedUntil: bis, pauseReason: params.reason },
+    });
   });
 
   await audit.updated({
@@ -1391,9 +1441,17 @@ export async function resumeContract(params: {
     throw new BusinessRuleError('Fortsetzen lässt sich nur ein pausierter Vertrag.');
   }
 
-  const aktualisiert = await prisma.contract.update({
-    where: { id: vertrag.id },
-    data: { status: 'ACTIVE', pausedFrom: null, pausedUntil: null, pauseReason: null },
+  const aktualisiert = await prisma.$transaction(async (tx) => {
+    const frisch = await gesperrtLaden(tx, params.organizationId, vertrag.id, 'ACTIVE');
+    // Wie oben beim Zurücknehmen: ACTIVE ist auch aus NOTICE_GIVEN
+    // erreichbar, Fortsetzen aber nur aus der Pause.
+    if (frisch.status !== 'PAUSED') {
+      throw new BusinessRuleError('Fortsetzen lässt sich nur ein pausierter Vertrag.');
+    }
+    return tx.contract.update({
+      where: { id: vertrag.id },
+      data: { status: 'ACTIVE', pausedFrom: null, pausedUntil: null, pauseReason: null },
+    });
   });
 
   await audit.updated({
@@ -1445,33 +1503,50 @@ export async function giveNotice(params: {
   const vertrag = await ladeVertrag(params.organizationId, params.contractId);
   pruefeUebergang(vertrag.status, 'NOTICE_GIVEN');
 
-  const geltend = aktiveVersion(vertrag.versions);
-  if (!geltend) throw new BusinessRuleError('Der Vertrag hat keine geltende Fassung.');
+  if (!aktiveVersion(vertrag.versions)) throw new BusinessRuleError('Der Vertrag hat keine geltende Fassung.');
 
-  const gekuendigtAm = params.noticeGivenAt ? alsTag(params.noticeGivenAt) : alsTag(new Date());
-  const wirkung =
-    params.terminationEffectiveAt
-      ? alsTag(params.terminationEffectiveAt)
-      : kuendigungswirkung({
-          gekuendigtAm,
-          noticePeriodDays: geltend.noticePeriodDays,
-          vertragsende: vertrag.endDate,
-          renewalType: geltend.renewalType,
-          renewalPeriodMonths: geltend.renewalPeriodMonths,
-        });
+  /**
+   * Ohne Angabe: **heute in Zürich**, nicht der UTC-Tag (N-02, 2026-09-27).
+   * `alsTag(new Date())` schnitt die Uhrzeit in UTC ab; zwischen Mitternacht
+   * und 01:00 (Winter) bzw. 02:00 (Sommer) Zürcher Zeit ist das noch der
+   * Vortag. Eine Kündigung, die kurz nach Mitternacht erfasst wurde, trug so
+   * das Datum von gestern — und rechnete ihre Frist ab dort, einen Tag zu
+   * früh. Alle anderen Vorgaben dieses Dienstes nehmen bereits
+   * `zuercherHeute()`.
+   */
+  const gekuendigtAm = params.noticeGivenAt ? alsTag(params.noticeGivenAt) : zuercherHeute();
 
-  const aktualisiert = await prisma.contract.update({
-    where: { id: vertrag.id },
-    data: {
-      status: 'NOTICE_GIVEN',
-      // Der Tag, an dem gekündigt wurde — nicht der, an dem es jemand
-      // erfasst hat. Bis 2026-09-23 stand hier `new Date()`, und eine
-      // nachgetragene Kündigung trug das falsche Datum.
-      noticeGivenAt: gekuendigtAm,
-      noticeGivenBy: params.noticeGivenBy,
-      terminationEffectiveAt: wirkung,
-      terminationReason: params.reason ?? null,
-    },
+  const { aktualisiert, wirkung } = await prisma.$transaction(async (tx) => {
+    const frisch = await gesperrtLaden(tx, params.organizationId, vertrag.id, 'NOTICE_GIVEN');
+    // Die Frist der Fassung, die **jetzt** gilt — ein gleichzeitiger
+    // Fassungswechsel hält dieselbe Sperre und ist vorher oder nachher fertig.
+    const geltend = aktiveVersion(frisch.versions);
+    if (!geltend) throw new BusinessRuleError('Der Vertrag hat keine geltende Fassung.');
+    const wirkung =
+      params.terminationEffectiveAt
+        ? alsTag(params.terminationEffectiveAt)
+        : kuendigungswirkung({
+            gekuendigtAm,
+            noticePeriodDays: geltend.noticePeriodDays,
+            vertragsende: frisch.endDate,
+            renewalType: geltend.renewalType,
+            renewalPeriodMonths: geltend.renewalPeriodMonths,
+          });
+
+    const aktualisiert = await tx.contract.update({
+      where: { id: vertrag.id },
+      data: {
+        status: 'NOTICE_GIVEN',
+        // Der Tag, an dem gekündigt wurde — nicht der, an dem es jemand
+        // erfasst hat. Bis 2026-09-23 stand hier `new Date()`, und eine
+        // nachgetragene Kündigung trug das falsche Datum.
+        noticeGivenAt: gekuendigtAm,
+        noticeGivenBy: params.noticeGivenBy,
+        terminationEffectiveAt: wirkung,
+        terminationReason: params.reason ?? null,
+      },
+    });
+    return { aktualisiert, wirkung };
   });
 
   await audit.updated({
@@ -1507,7 +1582,8 @@ export async function endContract(params: {
   const vertrag = await ladeVertrag(params.organizationId, params.contractId);
   pruefeUebergang(vertrag.status, 'ENDED');
 
-  const heute = alsTag(new Date());
+  // Heute in Zürich, nicht der UTC-Tag — siehe `giveNotice` (N-02).
+  const heute = zuercherHeute();
 
   /**
    * Mit dem Ende verlangt der Vertrag nichts mehr.
@@ -1520,14 +1596,20 @@ export async function endContract(params: {
    * (`solltermine`). Stattdessen werden bereits geplante Einsätze nach dem
    * Ende abgesagt.
    */
-  const ende = vertrag.terminationEffectiveAt ?? vertrag.endDate ?? heute;
-  const aktualisiert = await prisma.contract.update({
-    where: { id: vertrag.id },
-    data: {
-      status: 'ENDED',
-      endDate: ende,
-      terminationReason: params.reason ?? vertrag.terminationReason,
-    },
+  const { aktualisiert, ende } = await prisma.$transaction(async (tx) => {
+    // Wirkungsdatum und Grund vom gesperrten Stand: Eine gleichzeitig
+    // zurückgenommene Kündigung hat beides womöglich gerade geleert.
+    const frisch = await gesperrtLaden(tx, params.organizationId, vertrag.id, 'ENDED');
+    const ende = frisch.terminationEffectiveAt ?? frisch.endDate ?? heute;
+    const aktualisiert = await tx.contract.update({
+      where: { id: vertrag.id },
+      data: {
+        status: 'ENDED',
+        endDate: ende,
+        terminationReason: params.reason ?? frisch.terminationReason,
+      },
+    });
+    return { aktualisiert, ende };
   });
 
   await einsaetzeAbgleichen({

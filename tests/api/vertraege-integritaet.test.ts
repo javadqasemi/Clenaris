@@ -437,6 +437,107 @@ describe('RB-004 — Pause, Kündigung und Rücknahme verändern keine Fassung',
   });
 });
 
+/**
+ * N-02 — Lebenslaufschritte unter der Sperre des Vertragskopfs (2026-09-27).
+ *
+ * Pausieren, Fortsetzen, Kündigen, Zurücknehmen und Beenden prüften den
+ * Übergang an einem Zustand, der vor dem Schreiben gelesen war, und schrieben
+ * ohne Sperre. Zwei gleichzeitige Schritte bestanden beide die Prüfung; der
+ * spätere überschrieb den früheren. Ein beendeter Vertrag konnte so als
+ * pausiert oder aktiv stehen bleiben — mit Enddatum, aber für den Planer
+ * lebendig.
+ *
+ * Gemessen wird am Endzustand in der Datenbank, über mehrere Runden: Ein
+ * Wettlauf zeigt sich nicht bei jedem Versuch, und eine einzelne Runde, die
+ * zufällig richtig ausgeht, belegt nichts. Mit der Sperre ist jede
+ * Reihenfolge zulässig, aber jede endet beendet — Beenden ist aus ACTIVE,
+ * PAUSED und NOTICE_GIVEN erreichbar, und nach ENDED geht nichts mehr.
+ */
+describe('N-02 — Lebenslaufschritte gleichzeitig', () => {
+  const RUNDEN = 4;
+
+  it('Pausieren und Beenden gleichzeitig: am Ende beendet, nie pausiert mit Enddatum', ohneDb, async () => {
+    for (let runde = 0; runde < RUNDEN; runde++) {
+      const { id } = await vertragMitSerie();
+      const [pause, ende] = await Promise.all([
+        post(`/api/contracts/${id}/pause`, { pausedFrom: tagIn(3), reason: 'Gleichzeitig mit dem Beenden' }, { jar: jars.admin }),
+        post(`/api/contracts/${id}/end`, { reason: 'Gleichzeitig mit der Pause' }, { jar: jars.admin }),
+      ]);
+      // Gewinnt die Pause, ist Beenden aus PAUSED zulässig; gewinnt das Beenden,
+      // findet die Pause einen beendeten Vertrag vor und wird abgewiesen.
+      assert.equal(ende.status, 200, JSON.stringify(ende.payload));
+      assert.ok([200, 422].includes(pause.status), `Pause: HTTP ${pause.status} ${JSON.stringify(pause.payload)}`);
+
+      const vertrag = await db!.contract.findUniqueOrThrow({ where: { id } });
+      assert.equal(vertrag.status, 'ENDED', `Runde ${runde + 1}: Die Pause hat das Beenden überschrieben`);
+      assert.ok(vertrag.endDate, 'Ein beendeter Vertrag trägt sein Enddatum');
+    }
+  });
+
+  it('Fortsetzen und Beenden gleichzeitig: am Ende beendet, nie aktiv mit Enddatum', ohneDb, async () => {
+    for (let runde = 0; runde < RUNDEN; runde++) {
+      const { id } = await vertragMitSerie();
+      const pause = await post(`/api/contracts/${id}/pause`, { pausedFrom: tagIn(3), reason: 'Vor dem Wettlauf' }, { jar: jars.admin });
+      assert.equal(pause.status, 200, JSON.stringify(pause.payload));
+
+      const [weiter, ende] = await Promise.all([
+        post(`/api/contracts/${id}/resume`, {}, { jar: jars.admin }),
+        post(`/api/contracts/${id}/end`, { reason: 'Gleichzeitig mit dem Fortsetzen' }, { jar: jars.admin }),
+      ]);
+      assert.equal(ende.status, 200, JSON.stringify(ende.payload));
+      assert.ok([200, 422].includes(weiter.status), `Fortsetzen: HTTP ${weiter.status} ${JSON.stringify(weiter.payload)}`);
+
+      const vertrag = await db!.contract.findUniqueOrThrow({ where: { id } });
+      assert.equal(vertrag.status, 'ENDED', `Runde ${runde + 1}: Das Fortsetzen hat das Beenden überschrieben`);
+    }
+  });
+
+  /**
+   * Die Vorgabe „heute" ist der Zürcher Tag. `giveNotice` und `endContract`
+   * nahmen `alsTag(new Date())` — den UTC-Tag, zwischen 00:00 und 01:00/02:00
+   * Zürcher Zeit noch gestern.
+   *
+   * **Was diese Prüfung belegen kann und was nicht:** Die Uhr des Servers
+   * lässt sich über HTTP nicht verstellen. Gegen den alten Stand scheitert
+   * sie deshalb nur, wenn sie in diesem Fenster nach Mitternacht läuft —
+   * tagsüber sind beide Tage gleich. Die Rechnung selbst (`zuercherHeute` um
+   * 23:30 UTC, Sommer und Winter) prüft `vertraege-rechenkern.test.ts`
+   * direkt; hier steht die Zusicherung, dass der Dienst sie auch benutzt. Der
+   * Vergleich lässt beide Tage um die Anfrage herum zu, damit ein Lauf genau
+   * über Mitternacht nicht falsch scheitert.
+   */
+  it('Kündigung und Ende ohne Datum tragen den Zürcher Tag, nicht den UTC-Tag', ohneDb, async () => {
+    const tagText = (d: Date) => d.toISOString().slice(0, 10);
+
+    const { id } = await vertragMitSerie();
+    const vorKuendigung = tagText(zuercherHeute());
+    const kuendigung = await post<{ data: { noticeGivenAt: string } }>(
+      `/api/contracts/${id}/notice`,
+      { noticeGivenBy: 'CUSTOMER' },
+      { jar: jars.admin },
+    );
+    const nachKuendigung = tagText(zuercherHeute());
+    assert.equal(kuendigung.status, 200, JSON.stringify(kuendigung.payload));
+    assert.ok(
+      [vorKuendigung, nachKuendigung].includes(data(kuendigung).noticeGivenAt.slice(0, 10)),
+      `Kündigung am ${data(kuendigung).noticeGivenAt.slice(0, 10)}, Zürich ${vorKuendigung}`,
+    );
+
+    // Ohne Kündigung und ohne Vertragsende nimmt das Beenden „heute".
+    const { id: zweiter } = await vertragMitSerie();
+    const vorEnde = tagText(zuercherHeute());
+    const ende = await post(`/api/contracts/${zweiter}/end`, { reason: 'Ende ohne Datum' }, { jar: jars.admin });
+    const nachEnde = tagText(zuercherHeute());
+    assert.equal(ende.status, 200, JSON.stringify(ende.payload));
+    const beendet = await db!.contract.findUniqueOrThrow({ where: { id: zweiter } });
+    assert.ok(beendet.endDate, 'Das Ende steht fest');
+    assert.ok(
+      [vorEnde, nachEnde].includes(tagText(beendet.endDate)),
+      `Beendet per ${tagText(beendet.endDate)}, Zürich ${vorEnde}`,
+    );
+  });
+});
+
 // ---------------------------------------------------------------------------
 //  C2 — Unveränderlichkeit in der Datenbank
 // ---------------------------------------------------------------------------
@@ -682,6 +783,33 @@ describe('RB-008 — periodengerechte Abrechnung', () => {
       }),
       /ueberlappungsfrei|23P01|exclusion/i,
       'Die Ausschlussbedingung verhindert jede zeitliche Überlappung',
+    );
+
+    // N-06 (2026-09-27): Eine Zeile mit Beginn und ohne Ende entging der
+    // Ausschlussbedingung (sie gilt nur `WHERE "contractPeriodEnd" IS NOT
+    // NULL`) und überlappte unbemerkt. Die Bedingung
+    // `invoices_vertragsperiode_vollstaendig` weist sie jetzt ab — gegen den
+    // alten Stand legte dieser Aufruf eine Rechnung an.
+    await assert.rejects(
+      db!.invoice.create({
+        data: {
+          organizationId: vorlage.organizationId,
+          customerId: vorlage.customerId,
+          number: `TEST-HALBE-PERIODE-${Date.now()}`,
+          contractId: id,
+          contractVersionId: vorlage.contractVersionId,
+          contractPeriodStart: new Date(vorlage.contractPeriodStart!.getTime() + 2 * TAG),
+          contractPeriodEnd: null,
+          issueDate: vorlage.issueDate,
+          dueDate: vorlage.dueDate,
+          billToName: vorlage.billToName,
+          billToStreet: vorlage.billToStreet,
+          billToZip: vorlage.billToZip,
+          billToCity: vorlage.billToCity,
+        },
+      }),
+      /vertragsperiode_vollstaendig|23514|check/i,
+      'Eine halbe Vertragsperiode entgeht der Überlappungsprüfung',
     );
   });
 
