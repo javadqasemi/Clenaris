@@ -48005,6 +48005,232 @@ paths:
             'application/json':
               schema:
                 '$ref': '#/components/schemas/ErrorEnvelope'
+  '/api/cron/release-auftraege':
+    get:
+      tags:
+        - 'System'
+      summary: 'Fällige Aktualisierungsaufträge (Ausführer)'
+      description: |-
+          Nur für den Release-Ausführer ausserhalb der Anwendung: Bearer `RELEASE_EXECUTOR_TOKEN` **und** HMAC-Signatur (`x-clenaris-zeit`, `x-clenaris-signatur`, höchstens 5 Minuten alt). Liefert terminierte, fällige Aufträge der eigenen Umgebung mit Commit, Artefakt-Prüfsumme, CI-Stand, Migrationen, Rücksprungangaben und gegebenenfalls dem Hindernis. 422 bei fremder Umgebung, 503 ohne `CLENARIS_UMGEBUNG`/Signaturschlüssel.
+
+          **Zugriff:** Nur für den Scheduler: `Authorization: Bearer $CRON_SECRET`.
+      operationId: 'getCronReleaseAuftraege'
+      security:
+        - cronSecret: []
+      parameters:
+        - name: 'umgebung'
+          in: 'query'
+          required: true
+          schema:
+            type: 'string'
+            enum:
+              - 'production'
+              - 'staging'
+              - 'preview'
+              - 'test'
+      responses:
+        '200':
+          description: 'Erfolg'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/SuccessEnvelope'
+        '400':
+          description: 'VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 'UNAUTHORIZED — keine oder abgelaufene Sitzung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: 'BUSINESS_RULE — fachlich nicht zulässig, etwa eine bereits ausgestellte Rechnung ändern.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '503':
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+  '/api/cron/release-auftraege/uebernehmen':
+    post:
+      tags:
+        - 'System'
+      summary: 'Auftrag übernehmen (Ausführer)'
+      description: |-
+          SCHEDULED → DEPLOYING. Nur fällige Aufträge der eigenen Umgebung, Version neuer als die laufende, CI bestanden, gemessene Prüfsumme = Prüfsumme des Release. Idempotent über `ausfuehrungsSchluessel`; ein anderer Schlüssel → 409. Steht im Prüfprotokoll. Die Anwendung führt nichts aus.
+
+          **Zugriff:** Nur für den Scheduler: `Authorization: Bearer $CRON_SECRET`.
+      operationId: 'postCronReleaseAuftraegeUebernehmen'
+      security:
+        - cronSecret: []
+      requestBody:
+        required: true
+        content:
+          'application/json':
+            schema:
+              type: 'object'
+              properties:
+                auftragId:
+                  type: 'string'
+                umgebung:
+                  type: 'string'
+                  enum:
+                    - 'production'
+                    - 'staging'
+                    - 'preview'
+                    - 'test'
+                ausfuehrer:
+                  type: 'string'
+                  pattern: '^[a-z0-9][a-z0-9._/-]{2,79}$'
+                ausfuehrungsSchluessel:
+                  type: 'string'
+                  pattern: '^[A-Za-z0-9._:-]{16,120}$'
+                artefaktSha256:
+                  type: 'string'
+                  pattern: '^[0-9a-f]{64}$'
+                ciNachweis:
+                  type: 'string'
+                  format: 'uri'
+                  maxLength: 300
+              required:
+                - 'auftragId'
+                - 'umgebung'
+                - 'ausfuehrer'
+                - 'ausfuehrungsSchluessel'
+                - 'artefaktSha256'
+                - 'ciNachweis'
+      responses:
+        '200':
+          description: 'Erfolg'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/SuccessEnvelope'
+        '400':
+          description: 'VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 'UNAUTHORIZED — keine oder abgelaufene Sitzung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '409':
+          description: 'CONFLICT — verstösst gegen eine Eindeutigkeitsregel.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: 'BUSINESS_RULE — fachlich nicht zulässig, etwa eine bereits ausgestellte Rechnung ändern.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '503':
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+  '/api/cron/release-auftraege/ergebnis':
+    post:
+      tags:
+        - 'System'
+      summary: 'Ergebnis melden (Ausführer)'
+      description: |-
+          DEPLOYING → SUCCEEDED, FAILED oder ROLLED_BACK, nur mit dem Schlüssel der Übernahme. SUCCEEDED verlangt die Zielversion als `laufendeVersion`. Dieselbe Meldung erneut → 200; eine abweichende → 409.
+
+          **Zugriff:** Nur für den Scheduler: `Authorization: Bearer $CRON_SECRET`.
+      operationId: 'postCronReleaseAuftraegeErgebnis'
+      security:
+        - cronSecret: []
+      requestBody:
+        required: true
+        content:
+          'application/json':
+            schema:
+              type: 'object'
+              properties:
+                auftragId:
+                  type: 'string'
+                ausfuehrungsSchluessel:
+                  type: 'string'
+                  pattern: '^[A-Za-z0-9._:-]{16,120}$'
+                ergebnis:
+                  type: 'string'
+                  enum:
+                    - 'SUCCEEDED'
+                    - 'FAILED'
+                    - 'ROLLED_BACK'
+                laufendeVersion:
+                  type: 'string'
+                  pattern: '^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$'
+                meldung:
+                  type: 'string'
+                  maxLength: 2000
+              required:
+                - 'auftragId'
+                - 'ausfuehrungsSchluessel'
+                - 'ergebnis'
+      responses:
+        '200':
+          description: 'Erfolg'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/SuccessEnvelope'
+        '400':
+          description: 'VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 'UNAUTHORIZED — keine oder abgelaufene Sitzung.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '409':
+          description: 'CONFLICT — verstösst gegen eine Eindeutigkeitsregel.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: 'BUSINESS_RULE — fachlich nicht zulässig, etwa eine bereits ausgestellte Rechnung ändern.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
 components:
   securitySchemes:
     sessionCookie:

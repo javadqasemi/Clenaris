@@ -98,6 +98,23 @@ const serverSchema = z.object({
   SECURITY_REPORT_TOKEN: z.string().optional(),
 
   /**
+   * Schnittstelle des Release-Ausführers (`/api/cron/release-auftraege`,
+   * 2026-09-27). Zwei Geheimnisse, weil sie Verschiedenes beweisen: Das
+   * Token öffnet die Tür (Bearer, wie jeder Scheduler-Endpunkt), der
+   * Signaturschlüssel beweist, dass genau dieser Rumpf zu genau dieser Zeit
+   * vom Ausführer kommt — er reist nie mit, nur die HMAC darüber. Ohne beide
+   * und ohne `CLENARIS_UMGEBUNG` nimmt die Schnittstelle nichts an.
+   */
+  RELEASE_EXECUTOR_TOKEN: z.string().optional(),
+  RELEASE_EXECUTOR_SIGNING_KEY: z.string().optional(),
+  /**
+   * Name der Umgebung dieser Instanz. Ein Ausführer für die Vorschau kann
+   * damit keinen Auftrag der Produktion übernehmen — die Instanz vergleicht
+   * seine Angabe mit ihrer eigenen, nicht mit einem Feld im Auftrag.
+   */
+  CLENARIS_UMGEBUNG: z.enum(['production', 'staging', 'preview', 'test']).optional(),
+
+  /**
    * Herkunft dieser Instanz (`https://clenaris.qasemi.ch`) — zur Laufzeit,
    * für Links, Mails, Zahlungsrücksprünge und die Herkunftsprüfung. Geprüft
    * und gelesen in `laufzeit-konfiguration.ts` (`ursprungAus`), dort mit

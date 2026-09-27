@@ -45,6 +45,9 @@
     { "weg": "GET /api/cron/hourly", "begruendung": "Bearer CRON_SECRET, zeitkonstanter Vergleich." },
     { "weg": "GET /api/cron/daily", "begruendung": "Bearer CRON_SECRET, zeitkonstanter Vergleich." },
     { "weg": "GET /api/cron/status", "begruendung": "Bearer CRON_SECRET oder SECURITY_REPORT_TOKEN (nur lesend; hourly/daily nehmen weiter nur CRON_SECRET); Zustand der Läufe, Erreichbarkeit des Schadsoftwareprüfers, Alter von Sicherung und Wiederherstellungsprobe — Zeitpunkte und Zahlen, keine Inhalte." },
-    { "weg": "POST /api/cron/security-report", "begruendung": "Bearer SECURITY_REPORT_TOKEN (eigenes Geheimnis, nicht CRON_SECRET), zeitkonstant; Grösse vor dem Lesen begrenzt, Inhalt gegen securityReportSchema; speichert nur, führt nichts aus." }
+    { "weg": "POST /api/cron/security-report", "begruendung": "Bearer SECURITY_REPORT_TOKEN (eigenes Geheimnis, nicht CRON_SECRET), zeitkonstant; Grösse vor dem Lesen begrenzt, Inhalt gegen securityReportSchema; speichert nur, führt nichts aus." },
+    { "weg": "GET /api/cron/release-auftraege", "begruendung": "Bearer RELEASE_EXECUTOR_TOKEN (eigenes Geheimnis) und HMAC-Signatur mit RELEASE_EXECUTOR_SIGNING_KEY über Methode, Pfad, Zeit (±5 min) und Rohrumpf; nur die eigene Umgebung (CLENARIS_UMGEBUNG); liest fällige Aufträge, führt nichts aus." },
+    { "weg": "POST /api/cron/release-auftraege/uebernehmen", "begruendung": "Token und Signatur wie oben, Rumpf höchstens 16 kB, Schema streng; übernimmt nur fällige, freigegebene Aufträge mit bestandener CI und gleicher Artefakt-Prüfsumme; idempotent; im Prüfprotokoll." },
+    { "weg": "POST /api/cron/release-auftraege/ergebnis", "begruendung": "Token und Signatur wie oben; nur mit dem Ausführungsschlüssel der Übernahme; setzt den Endzustand eines Auftrags, führt nichts aus; im Prüfprotokoll." }
   ]
 }

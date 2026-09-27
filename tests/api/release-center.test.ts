@@ -1,10 +1,16 @@
 import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import { BASE_URL, call, data, get, post, put, requireServer } from '../helpers/client';
 import { ACCOUNTS, loginAll, type AccountName } from '../helpers/accounts';
-import { testDb, testDbSchliessen } from '../helpers/testdb';
-import { PRUEF_SICHERHEITSBERICHT_TOKEN } from '../helpers/webhooks';
+import { eigeneOrganisationId, testDb, testDbSchliessen } from '../helpers/testdb';
+import { PRUEF_AUSFUEHRER_SCHLUESSEL, PRUEF_AUSFUEHRER_TOKEN, PRUEF_SICHERHEITSBERICHT_TOKEN } from '../helpers/webhooks';
+import { SIGNATUR_KOPF, ZEIT_KOPF, signieren } from '../../src/lib/release/ausfuehrer-signatur';
 
 /**
  * Update Center der Systemverantwortung (Produktsprint 2026-09-26).
@@ -19,6 +25,10 @@ import { PRUEF_SICHERHEITSBERICHT_TOKEN } from '../helpers/webhooks';
 const RUN = Date.now();
 const NEU = `9.${RUN % 1_000_000}.0`;
 const ALT = `0.0.${RUN % 1_000_000}`;
+/** Versionen für den Block „Release-Ausführer". */
+const AUSF = `9.${RUN % 1_000_000}.1`;
+const AUSF_ROT = `9.${RUN % 1_000_000}.2`;
+const AUSF_WERKZEUG = `9.${RUN % 1_000_000}.3`;
 /** Eine gültig geformte Schweizer IBAN im Freitext — sie darf nicht ins Protokoll. */
 const IBAN_IM_GRUND = 'CH93 0076 2011 6238 5295 7';
 const db = testDb();
@@ -32,7 +42,12 @@ const zustandVon = async (id: string) =>
 
 async function aufraeumen() {
   if (!db) return;
-  const releases = await db.release.findMany({ where: { version: { in: [NEU, ALT] } }, select: { id: true } });
+  // Auch Reste abgebrochener Läufe (andere RUN-Nummer): Ein liegengebliebener,
+  // fälliger Prüfauftrag würde sonst vom Werkzeug im nächsten Lauf abgeholt.
+  const releases = await db.release.findMany({
+    where: { OR: [{ version: { in: [NEU, ALT, AUSF, AUSF_ROT, AUSF_WERKZEUG] } }, { summary: { startsWith: 'Prüfversion' } }] },
+    select: { id: true },
+  });
   const ids = releases.map((r) => r.id);
   await db.releaseDeferral.deleteMany({ where: { releaseId: { in: ids } } });
   await db.releaseRequest.deleteMany({ where: { releaseId: { in: ids } } });
@@ -235,7 +250,16 @@ describe('Update Center', { concurrency: 1 }, () => {
     assert.ok(termin?.from && termin.to && termin.from !== termin.to, 'alter und neuer Termin fehlen');
   });
 
-  it('nichts wird ausgeführt: kein Auftrag trägt ein Ziel, kein Zustand behauptet eine Ausführung', async (t) => {
+  /**
+   * Bis 2026-09-27 hiess dieser Fall „kein Zustand behauptet eine Ausführung"
+   * und verlangte genau drei Auftragszustände — richtig, solange es keinen
+   * Ausführer gab. Seither gibt es ihn (Block unten), und die Zustände
+   * DEPLOYING bis ROLLED_BACK haben einen Weg. Was bleibt und hier geprüft
+   * wird: Die Anwendung selbst führt nichts aus — kein Auftrag trägt ein Ziel
+   * oder einen Befehl, und kein Endpunkt der Oberfläche führt in einen
+   * Ausführungszustand.
+   */
+  it('die Anwendung führt nichts aus: kein Ziel, kein Befehl, Ausführungszustände nur über den Ausführer', async (t) => {
     if (!db) return t.skip('keine Testdatenbank');
     const spalten = await db!.$queryRaw<{ column_name: string }[]>`
       SELECT column_name FROM information_schema.columns WHERE table_name = 'release_requests'`;
@@ -244,8 +268,231 @@ describe('Update Center', { concurrency: 1 }, () => {
       assert.ok(!namen.some((n) => n.includes(verboten)), `Spalte mit ${verboten}`);
     }
     const werte = await db!.$queryRaw<{ v: string }[]>`SELECT unnest(enum_range(NULL::"ReleaseRequestStatus"))::text AS v`;
-    assert.deepEqual(werte.map((w) => w.v).sort(), ['APPROVED', 'CANCELLED', 'SCHEDULED']);
+    assert.deepEqual(werte.map((w) => w.v).sort(), ['APPROVED', 'CANCELLED', 'DEPLOYING', 'FAILED', 'ROLLED_BACK', 'SCHEDULED', 'SUCCEEDED']);
     // Kein Endpunkt nimmt eine Versionsbeschreibung an.
     assert.ok([404, 405].includes((await call('POST', '/api/system/releases', { jar: jars.super, body: { version: '99.0.0' } })).status));
+  });
+});
+
+// ===========================================================================
+//  Release-Ausführer (2026-09-27)
+// ===========================================================================
+
+/**
+ * Die Schnittstelle, über die ein vertrauenswürdiger Ausführer ausserhalb der
+ * Anwendung fällige Aufträge abholt, übernimmt und das Ergebnis meldet —
+ * geprüft mit echten Signaturen gegen den Testserver (Umgebung `test`).
+ */
+describe('Release-Ausführer', { concurrency: 1 }, () => {
+  const SUMME = createHash('sha256').update(`artefakt-${RUN}`).digest('hex');
+  const COMMIT = createHash('sha1').update(`commit-${RUN}`).digest('hex');
+  let org = '';
+  let superId = '';
+  let auftragId = '';
+  let rotAuftragId = '';
+
+  async function ausfuehrer(
+    methode: 'GET' | 'POST',
+    pfad: string,
+    rumpf?: unknown,
+    o: { token?: string | null; schluessel?: string; zeit?: number; signaturPfad?: string } = {},
+  ) {
+    const text = rumpf === undefined ? '' : JSON.stringify(rumpf);
+    const zeit = o.zeit ?? Math.floor(Date.now() / 1000);
+    const headers: Record<string, string> = {
+      [ZEIT_KOPF]: String(zeit),
+      [SIGNATUR_KOPF]: signieren(o.schluessel ?? PRUEF_AUSFUEHRER_SCHLUESSEL, { methode, pfad: o.signaturPfad ?? pfad, zeit, rumpf: text }),
+    };
+    if (o.token !== null) headers.authorization = `Bearer ${o.token ?? PRUEF_AUSFUEHRER_TOKEN}`;
+    if (rumpf !== undefined) headers['content-type'] = 'application/json';
+    const r = await fetch(`${BASE_URL}${pfad}`, { method: methode, headers, body: rumpf === undefined ? undefined : text });
+    const inhalt = await r.text();
+    let daten: Record<string, unknown> | null = null;
+    try {
+      daten = (JSON.parse(inhalt) as { data?: Record<string, unknown> }).data ?? null;
+    } catch {
+      /* kein JSON */
+    }
+    return { status: r.status, text: inhalt, daten };
+  }
+
+  const uebernahme = (ueber: Record<string, unknown> = {}) => ({
+    auftragId,
+    umgebung: 'test',
+    ausfuehrer: 'pruefreihe/test',
+    ausfuehrungsSchluessel: `lauf-${RUN}-eins`,
+    artefaktSha256: SUMME,
+    ciNachweis: `https://github.com/beispiel/clenaris/actions/runs/${RUN}`,
+    ...ueber,
+  });
+
+  before(async () => {
+    if (!db) return;
+    org = (await eigeneOrganisationId())!;
+    superId = (await db.user.findUniqueOrThrow({ where: { email: ACCOUNTS.super.email }, select: { id: true } })).id;
+    const basis = {
+      releasedAt: new Date(),
+      summary: 'Prüfversion für den Release-Ausführer.',
+      migrations: [],
+      expectedDowntimeMinutes: 2,
+      commit: COMMIT,
+      artifactSha256: SUMME,
+      artifactSizeBytes: 1024,
+    };
+    const gruen = await db.release.create({ data: { ...basis, version: AUSF, kind: 'MINOR', ciStatus: 'PASSED' } });
+    const rot = await db.release.create({ data: { ...basis, version: AUSF_ROT, kind: 'MINOR', ciStatus: 'FAILED' } });
+    // Terminiert und fällig — über die Oberfläche geht das nur 15 Minuten
+    // voraus; die Prüfung legt den Zustand direkt an, wie er nach Ablauf wäre.
+    const faellig = { organizationId: org, status: 'SCHEDULED' as const, fromVersion: '1.0.0', scheduledFor: new Date(Date.now() - 60_000), approvedById: superId, approvedAt: new Date(), scheduledById: superId, scheduledAt: new Date() };
+    auftragId = (await db.releaseRequest.create({ data: { ...faellig, releaseId: gruen.id, toVersion: AUSF } })).id;
+    rotAuftragId = (await db.releaseRequest.create({ data: { ...faellig, releaseId: rot.id, toVersion: AUSF_ROT } })).id;
+  });
+
+  it('ohne Token, ohne gültige Signatur, mit alter Zeit oder anderem Pfad: 401 — nichts übernommen', async (t) => {
+    if (!db) return t.skip('keine Testdatenbank');
+    const pfad = '/api/cron/release-auftraege/uebernehmen';
+    assert.equal((await ausfuehrer('POST', pfad, uebernahme(), { token: null })).status, 401, 'ohne Token');
+    assert.equal((await ausfuehrer('POST', pfad, uebernahme(), { token: 'falsch' })).status, 401, 'falsches Token');
+    assert.equal((await ausfuehrer('POST', pfad, uebernahme(), { schluessel: 'falscher-schluessel' })).status, 401, 'falscher Schlüssel');
+    assert.equal((await ausfuehrer('POST', pfad, uebernahme(), { zeit: Math.floor(Date.now() / 1000) - 600 })).status, 401, 'zehn Minuten alt');
+    assert.equal(
+      (await ausfuehrer('POST', pfad, uebernahme(), { signaturPfad: '/api/cron/release-auftraege/ergebnis' })).status,
+      401,
+      'Signatur für einen anderen Pfad',
+    );
+    // Das Cron-Geheimnis öffnet diese Tür nicht.
+    assert.equal((await ausfuehrer('GET', '/api/cron/release-auftraege?umgebung=test', undefined, { token: process.env.CRON_SECRET ?? 'cron' })).status, 401);
+    assert.equal((await db.releaseRequest.findUniqueOrThrow({ where: { id: auftragId } })).status, 'SCHEDULED');
+  });
+
+  it('fällige Aufträge: nur die eigene Umgebung, mit Rücksprung und Hindernis', async (t) => {
+    if (!db) return t.skip('keine Testdatenbank');
+    assert.equal((await ausfuehrer('GET', '/api/cron/release-auftraege?umgebung=production')).status, 422, 'fremde Umgebung');
+    const r = await ausfuehrer('GET', '/api/cron/release-auftraege?umgebung=test');
+    assert.equal(r.status, 200, r.text);
+    const liste = (r.daten!.auftraege as { auftragId: string; commit: string; artefaktSha256: string; hindernis: string | null; ruecksprung: { aufVersion: string } }[]);
+    const gruen = liste.find((a) => a.auftragId === auftragId);
+    const rot = liste.find((a) => a.auftragId === rotAuftragId);
+    assert.ok(gruen && rot, 'fällige Aufträge fehlen');
+    assert.equal(gruen.hindernis, null);
+    assert.equal(gruen.commit, COMMIT);
+    assert.equal(gruen.artefaktSha256, SUMME);
+    assert.equal(gruen.ruecksprung.aufVersion, '1.0.0');
+    assert.match(rot.hindernis ?? '', /Prüfstufe/);
+  });
+
+  it('Übernahme: falsche Summe, CI rot, fremde Umgebung → 422; richtig → 200; Wiederholung → 200; zweiter Ausführer → 409', async (t) => {
+    if (!db) return t.skip('keine Testdatenbank');
+    const pfad = '/api/cron/release-auftraege/uebernehmen';
+    assert.equal((await ausfuehrer('POST', pfad, uebernahme({ artefaktSha256: 'f'.repeat(64) }))).status, 422, 'falsche Summe');
+    assert.equal((await ausfuehrer('POST', pfad, uebernahme({ auftragId: rotAuftragId }))).status, 422, 'CI nicht bestanden');
+    assert.equal((await ausfuehrer('POST', pfad, uebernahme({ umgebung: 'production' }))).status, 422, 'fremde Umgebung');
+    assert.equal((await db.releaseRequest.findUniqueOrThrow({ where: { id: auftragId } })).status, 'SCHEDULED');
+
+    const erst = await ausfuehrer('POST', pfad, uebernahme());
+    assert.equal(erst.status, 200, erst.text);
+    assert.equal(erst.daten!.wiederholt, false);
+    const nochmal = await ausfuehrer('POST', pfad, uebernahme());
+    assert.equal(nochmal.status, 200, nochmal.text);
+    assert.equal(nochmal.daten!.wiederholt, true);
+    const zweiter = await ausfuehrer('POST', pfad, uebernahme({ ausfuehrungsSchluessel: `lauf-${RUN}-zwei`, ausfuehrer: 'pruefreihe/zweiter' }));
+    assert.equal(zweiter.status, 409, zweiter.text);
+
+    const zeile = await db.releaseRequest.findUniqueOrThrow({ where: { id: auftragId } });
+    assert.equal(zeile.status, 'DEPLOYING');
+    assert.equal(zeile.verifiedSha256, SUMME);
+    assert.equal(zeile.environment, 'test');
+    assert.match(zeile.ciEvidence ?? '', /actions\/runs/);
+  });
+
+  it('während der Ausführung: das Dashboard entscheidet nicht mit und zeigt die Ausführung', async (t) => {
+    if (!db) return t.skip('keine Testdatenbank');
+    const release = await db.release.findUniqueOrThrow({ where: { version: AUSF } });
+    assert.equal(await zustandVon(release.id), 'DEPLOYING');
+    assert.equal((await post(`/api/system/releases/${release.id}/freigabe`, undefined, { jar: jars.super })).status, 422);
+    assert.equal((await put(`/api/system/releases/${release.id}/termin`, { scheduledFor: new Date(Date.now() + 86_400_000).toISOString() }, { jar: jars.super })).status, 422);
+    const seite = (await get(`/admin/updates/${release.id}`, { jar: jars.super })).text.replace(/<!-- -->/g, '');
+    for (const text of ['Wird installiert', 'In Ausführung', 'pruefreihe/test', 'CI-Lauf']) {
+      assert.ok(seite.includes(text), `fehlt: ${text}`);
+    }
+  });
+
+  it('Ergebnis: fremder Schlüssel 409, „erfolgreich" ohne Zielversion 422, fehlgeschlagen 200, Wiederholung 200, Widerspruch 409', async (t) => {
+    if (!db) return t.skip('keine Testdatenbank');
+    const pfad = '/api/cron/release-auftraege/ergebnis';
+    const meldung = (ueber: Record<string, unknown>) => ({ auftragId, ausfuehrungsSchluessel: `lauf-${RUN}-eins`, ...ueber });
+    assert.equal((await ausfuehrer('POST', pfad, meldung({ ausfuehrungsSchluessel: `lauf-${RUN}-zwei`, ergebnis: 'FAILED' }))).status, 409);
+    assert.equal((await ausfuehrer('POST', pfad, meldung({ ergebnis: 'SUCCEEDED', laufendeVersion: '1.0.0' }))).status, 422);
+    const fehl = await ausfuehrer('POST', pfad, meldung({ ergebnis: 'FAILED', meldung: 'Health Check meldete die alte Version.' }));
+    assert.equal(fehl.status, 200, fehl.text);
+    assert.equal((await ausfuehrer('POST', pfad, meldung({ ergebnis: 'FAILED' }))).daten?.wiederholt, true);
+    assert.equal((await ausfuehrer('POST', pfad, meldung({ ergebnis: 'SUCCEEDED', laufendeVersion: AUSF }))).status, 409);
+    const zeile = await db.releaseRequest.findUniqueOrThrow({ where: { id: auftragId } });
+    assert.equal(zeile.status, 'FAILED');
+    assert.ok(zeile.finishedAt);
+  });
+
+  it('Prüfprotokoll: Übernahme und Ergebnis, ohne Benutzer, mit Ausführer und Nachweis', async (t) => {
+    if (!db) return t.skip('keine Testdatenbank');
+    const eintraege = await db.auditLog.findMany({ where: { entity: 'ReleaseRequest', entityId: auftragId }, orderBy: { createdAt: 'asc' } });
+    assert.deepEqual(
+      eintraege.map((e) => (e.changes as { status?: { to: string } }).status?.to),
+      ['DEPLOYING', 'FAILED'],
+    );
+    for (const e of eintraege) {
+      assert.equal(e.userId, null);
+      assert.equal((e.changes as { ausfuehrer?: string }).ausfuehrer, 'pruefreihe/test');
+    }
+    assert.equal((eintraege[0]!.changes as { artefaktSha256?: string }).artefaktSha256, SUMME);
+    const alles = JSON.stringify(eintraege);
+    assert.ok(!alles.includes(PRUEF_AUSFUEHRER_TOKEN) && !alles.includes(PRUEF_AUSFUEHRER_SCHLUESSEL), 'Geheimnis im Protokoll');
+  });
+
+  it('das Werkzeug scripts/release-ausfuehrer.ts: misst, übernimmt, meldet — mit derselben Signatur', async (t) => {
+    if (!db) return t.skip('keine Testdatenbank');
+    // Ein eigenes Artefakt: Bytes, Prüfsummendatei, Manifest — wie
+    // `scripts/release-artefakt.ts` sie ablegt.
+    const verzeichnis = mkdtempSync(join(tmpdir(), 'clenaris-ausfuehrer-'));
+    const commit = createHash('sha1').update(`werkzeug-${RUN}`).digest('hex');
+    const name = `clenaris-${commit.slice(0, 12)}`;
+    const bytes = Buffer.from(`Prüfartefakt ${RUN}`);
+    const summe = createHash('sha256').update(bytes).digest('hex');
+    writeFileSync(join(verzeichnis, `${name}.tar.gz`), bytes);
+    writeFileSync(join(verzeichnis, `${name}.tar.gz.sha256`), `${summe}  ${name}.tar.gz\n`);
+    writeFileSync(join(verzeichnis, `${name}.json`), JSON.stringify({ commit, auslieferbar: true, archivSha256: summe }));
+    const release = await db.release.create({
+      data: { version: AUSF_WERKZEUG, releasedAt: new Date(), kind: 'PATCH', summary: 'Prüfversion für das Werkzeug.', ciStatus: 'PASSED', commit, artifactSha256: summe },
+    });
+    const auftrag = await db.releaseRequest.create({
+      data: { organizationId: org, releaseId: release.id, status: 'SCHEDULED', fromVersion: '1.0.0', toVersion: AUSF_WERKZEUG, scheduledFor: new Date(Date.now() - 60_000), approvedById: superId, approvedAt: new Date() },
+    });
+    // Der rote Auftrag liegt noch fällig da; das Werkzeug überspringt ihn mit Begründung.
+    const umgebung = { ...process.env, CLENARIS_URL: BASE_URL, RELEASE_EXECUTOR_TOKEN: PRUEF_AUSFUEHRER_TOKEN, RELEASE_EXECUTOR_SIGNING_KEY: PRUEF_AUSFUEHRER_SCHLUESSEL, GITHUB_OUTPUT: '' };
+    const werkzeug = (...args: string[]) =>
+      spawnSync(process.execPath, [join('node_modules', 'tsx', 'dist', 'cli.mjs'), 'scripts/release-ausfuehrer.ts', ...args], { env: umgebung, encoding: 'utf8' });
+    try {
+      const abholen = werkzeug('abholen', '--umgebung', 'test', '--artefakte', verzeichnis, '--ausfuehrer', 'pruefreihe/werkzeug', '--schluessel', `werkzeug-${RUN}-lauf`, '--ci-nachweis', `https://github.com/beispiel/clenaris/actions/runs/${RUN}`);
+      assert.equal(abholen.status, 0, `${abholen.stdout}\n${abholen.stderr}`);
+      assert.match(abholen.stdout, new RegExp(`auftrag=${auftrag.id}`));
+      assert.match(abholen.stdout, /Übersprungen .*Prüfstufe/);
+      assert.equal((await db.releaseRequest.findUniqueOrThrow({ where: { id: auftrag.id } })).status, 'DEPLOYING');
+
+      const melden = werkzeug('melden', '--auftrag', auftrag.id, '--schluessel', `werkzeug-${RUN}-lauf`, '--ergebnis', 'ROLLED_BACK', '--meldung', 'Health Check fehlgeschlagen, Rücksprung.');
+      assert.equal(melden.status, 0, `${melden.stdout}\n${melden.stderr}`);
+      const zeile = await db.releaseRequest.findUniqueOrThrow({ where: { id: auftrag.id } });
+      assert.equal(zeile.status, 'ROLLED_BACK');
+      assert.equal(zeile.rollbackVersion, '1.0.0');
+
+      // Ein Artefakt, dessen Bytes nicht zur Summe passen, wird nicht übernommen.
+      const faelschung = await db.releaseRequest.create({
+        data: { organizationId: org, releaseId: release.id, status: 'SCHEDULED', fromVersion: '1.0.0', toVersion: AUSF_WERKZEUG, scheduledFor: new Date(Date.now() - 60_000), approvedById: superId, approvedAt: new Date() },
+      });
+      writeFileSync(join(verzeichnis, `${name}.tar.gz`), Buffer.from('andere Bytes'));
+      const falsch = werkzeug('abholen', '--umgebung', 'test', '--artefakte', verzeichnis, '--ausfuehrer', 'pruefreihe/werkzeug', '--schluessel', `werkzeug-${RUN}-zwei`, '--ci-nachweis', `https://github.com/beispiel/clenaris/actions/runs/${RUN}`);
+      assert.notEqual(falsch.status, 0, 'eine falsche Summe wurde übernommen');
+      assert.equal((await db.releaseRequest.findUniqueOrThrow({ where: { id: faelschung.id } })).status, 'SCHEDULED');
+    } finally {
+      rmSync(verzeichnis, { recursive: true, force: true });
+    }
   });
 });

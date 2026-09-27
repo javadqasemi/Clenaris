@@ -118,3 +118,59 @@ export const releaseDeferSchema = z
     tage: z.number().int().min(1).max(90).default(7),
   })
   .strict();
+
+// ---------------------------------------------------------------------------
+//  Release-Ausführer (2026-09-27) — `/api/cron/release-auftraege`
+// ---------------------------------------------------------------------------
+
+const UMGEBUNGEN = ['production', 'staging', 'preview', 'test'] as const;
+
+/** Welche Umgebung fragt — die Instanz vergleicht mit ihrer eigenen. */
+export const releaseAuftraegeQuery = z
+  .object({
+    umgebung: z.enum(UMGEBUNGEN),
+  })
+  .strict();
+
+const ausfuehrungsSchluessel = z
+  .string()
+  .regex(/^[A-Za-z0-9._:-]{16,120}$/, 'Ausführungsschlüssel: 16–120 Zeichen aus Buchstaben, Ziffern, . _ : -');
+
+/**
+ * Einen fälligen Auftrag übernehmen.
+ *
+ * Der Ausführer meldet, was er **gemessen** hat: die Prüfsumme des
+ * heruntergeladenen Artefakts und die Adresse des CI-Laufs, aus dem es
+ * stammt. Die Anwendung vergleicht die Summe mit der des Release; eine
+ * Übernahme „auf Treu und Glauben" gibt es nicht.
+ */
+export const releaseUebernahmeSchema = z
+  .object({
+    auftragId: z.string().cuid(),
+    umgebung: z.enum(UMGEBUNGEN),
+    ausfuehrer: z.string().regex(/^[a-z0-9][a-z0-9._/-]{2,79}$/, 'Kennung des Ausführers: 3–80 Zeichen, klein.'),
+    ausfuehrungsSchluessel,
+    artefaktSha256: z.string().regex(/^[0-9a-f]{64}$/, 'SHA-256 als 64 Hexadezimalzeichen.'),
+    ciNachweis: z.string().url().max(300).refine((u) => u.startsWith('https://'), 'Nachweis als https-Adresse.'),
+  })
+  .strict();
+
+/**
+ * Ergebnis einer Ausführung melden.
+ *
+ * `laufendeVersion` ist, was der Gesundheitsendpunkt der Instanz nach dem
+ * Umschalten meldete. Für SUCCEEDED muss sie die Zielversion sein — ein
+ * „erfolgreich", nach dem die alte Version weiterläuft, ist keines.
+ */
+export const releaseErgebnisSchema = z
+  .object({
+    auftragId: z.string().cuid(),
+    ausfuehrungsSchluessel,
+    ergebnis: z.enum(['SUCCEEDED', 'FAILED', 'ROLLED_BACK']),
+    laufendeVersion: z.string().regex(/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/).optional(),
+    meldung: z.string().trim().max(2000).optional(),
+  })
+  .strict();
+
+export type ReleaseUebernahme = z.infer<typeof releaseUebernahmeSchema>;
+export type ReleaseErgebnis = z.infer<typeof releaseErgebnisSchema>;

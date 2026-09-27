@@ -4,7 +4,7 @@
 > Diagramme sind damit nie älter als das Schema. Prosa und Bereichseinteilung
 > stehen in `scripts/generate-erd.ts`.
 
-**151 Modelle, 119 Aufzählungstypen, 2902 Felder.**
+**151 Modelle, 119 Aufzählungstypen, 2911 Felder.**
 PostgreSQL 16+; alle Zeitstempel als `timestamptz` in UTC, Anzeige in Europe/Zurich.
 
 ## Vier Entscheidungen, die das ganze Schema prägen
@@ -1937,7 +1937,7 @@ erDiagram
 | Modell | Tabelle | Felder | Zweck |
 | --- | --- | --- | --- |
 | `Release` | `releases` | 23 | Eine Clenaris-Version mit ihrem Änderungsprotokoll — Metadaten, keine Ausführung. |
-| `ReleaseRequest` | `release_requests` | 18 | Die Entscheidung eines Betriebs über eine Version: freigegeben, terminiert, storniert. |
+| `ReleaseRequest` | `release_requests` | 27 | Die Entscheidung eines Betriebs über eine Version: freigegeben, terminiert, storniert. |
 | `ReleaseDeferral` | `release_deferrals` | 8 | „Nicht jetzt" — eine Version bewusst zurückgestellt, bis zu einem Datum. |
 
 ## Aufzählungstypen
@@ -2066,7 +2066,7 @@ exakte TypeScript-Typen.
 | `ReleaseKind` | `PATCH`, `MINOR`, `MAJOR`, `SECURITY` |
 | `ReleaseSeverity` | `LOW`, `MEDIUM`, `HIGH`, `CRITICAL` |
 | `ReleaseCiStatus` | `PASSED`, `FAILED`, `PENDING` |
-| `ReleaseRequestStatus` | `APPROVED`, `SCHEDULED`, `CANCELLED` |
+| `ReleaseRequestStatus` | `APPROVED`, `SCHEDULED`, `CANCELLED`, `DEPLOYING`, `SUCCEEDED`, `FAILED`, `ROLLED_BACK` |
 
 ## Migrationen
 

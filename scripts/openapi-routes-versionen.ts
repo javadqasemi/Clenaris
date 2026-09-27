@@ -90,4 +90,46 @@ export const VERSIONEN_ROUTES: RouteDoc[] = [
     params: q.idParam,
     body: system.releaseDeferSchema,
   },
+
+  // --- Release-Ausführer (2026-09-27) --------------------------------------
+  {
+    method: 'get',
+    path: '/api/cron/release-auftraege',
+    tag: 'System',
+    summary: 'Fällige Aktualisierungsaufträge (Ausführer)',
+    description:
+      'Nur für den Release-Ausführer ausserhalb der Anwendung: Bearer `RELEASE_EXECUTOR_TOKEN` **und** ' +
+      'HMAC-Signatur (`x-clenaris-zeit`, `x-clenaris-signatur`, höchstens 5 Minuten alt). Liefert ' +
+      'terminierte, fällige Aufträge der eigenen Umgebung mit Commit, Artefakt-Prüfsumme, CI-Stand, ' +
+      'Migrationen, Rücksprungangaben und gegebenenfalls dem Hindernis. 422 bei fremder Umgebung, ' +
+      '503 ohne `CLENARIS_UMGEBUNG`/Signaturschlüssel.',
+    guard: { kind: 'cron' },
+    query: system.releaseAuftraegeQuery,
+    extraErrors: [422, 503],
+  },
+  {
+    method: 'post',
+    path: '/api/cron/release-auftraege/uebernehmen',
+    tag: 'System',
+    summary: 'Auftrag übernehmen (Ausführer)',
+    description:
+      'SCHEDULED → DEPLOYING. Nur fällige Aufträge der eigenen Umgebung, Version neuer als die laufende, ' +
+      'CI bestanden, gemessene Prüfsumme = Prüfsumme des Release. Idempotent über `ausfuehrungsSchluessel`; ' +
+      'ein anderer Schlüssel → 409. Steht im Prüfprotokoll. Die Anwendung führt nichts aus.',
+    guard: { kind: 'cron' },
+    body: system.releaseUebernahmeSchema,
+    extraErrors: [409, 422, 503],
+  },
+  {
+    method: 'post',
+    path: '/api/cron/release-auftraege/ergebnis',
+    tag: 'System',
+    summary: 'Ergebnis melden (Ausführer)',
+    description:
+      'DEPLOYING → SUCCEEDED, FAILED oder ROLLED_BACK, nur mit dem Schlüssel der Übernahme. SUCCEEDED ' +
+      'verlangt die Zielversion als `laufendeVersion`. Dieselbe Meldung erneut → 200; eine abweichende → 409.',
+    guard: { kind: 'cron' },
+    body: system.releaseErgebnisSchema,
+    extraErrors: [409, 422],
+  },
 ];

@@ -458,7 +458,7 @@ function secretsMatch(provided: string, expected: string): boolean {
  * Endpunkt, der ausschliesslich vom Scheduler aufgerufen werden darf.
  * Vercel Cron sendet `Authorization: Bearer $CRON_SECRET`.
  */
-type CronGeheimnis = 'CRON_SECRET' | 'SECURITY_REPORT_TOKEN';
+type CronGeheimnis = 'CRON_SECRET' | 'SECURITY_REPORT_TOKEN' | 'RELEASE_EXECUTOR_TOKEN';
 
 export function defineCronRoute(config: {
   handler: (request: NextRequest) => Promise<Response> | Response;

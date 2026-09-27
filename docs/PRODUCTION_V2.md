@@ -70,7 +70,7 @@ Health Check verlangt **genau diesen Commit**; sonst Verweis zurück.
 |---|---|---|
 | ~~V2-1~~ | **Geschlossen 2026-09-26** — siehe [Abschnitt 5](#5-v2-1-laufzeitkonfiguration-geschlossen-2026-09-26) | Umgebungsabhängiges steht zur Laufzeit; derselbe Bau unter zwei Umgebungen bewiesen (`tests/api/laufzeit-konfiguration.test.ts`). Bewusst beim Bau bleibt nur die kanonische Domain der statischen Website |
 | **V2-2** | Bau auf **Linux** mit derselben Node-Hauptversion wie der Server | `node_modules` enthält die Prisma-Engine für die Bauplattform. Die Node-Hälfte ist seit 2026-09-26 erledigt (`.nvmrc` 22, `engines` ≥ 22, CI baut damit); offen bleibt, dass der Server Node 22 hat |
-| **V2-3** | Aktivierung auf einem **Probeserver** durchspielen: Erstinstallation, zweites Release, absichtlich kaputtes Release (Rücksprung), Artefakt mit falscher Summe, fehlendes `APP_URL`, `auslieferbar=false` | Das Skript ist nie gelaufen |
+| **V2-3** | Aktivierung auf einem **Probeserver** durchspielen: Erstinstallation, zweites Release, absichtlich kaputtes Release (Rücksprung), Artefakt mit falscher Summe, fehlendes `APP_URL`, `auslieferbar=false` — dazu der Release-Ausführer ([Abschnitt 6](#6-release-ausführer-vom-update-center-zum-artefakt-2026-09-27)) mit echter GitHub-Umgebung | Das Skript ist nie auf einem Server gelaufen; der Ausführer ist nur gegen den Testserver geprüft |
 | **V2-4** | Verzeichnisaufbau `releases/`, `shared/.env`, `shared/logs` einrichten; `ecosystem.config.js` aus `current/` | Heute liegt alles in einem Arbeitsbaum |
 | **V2-5** | CI-Ablage: Grösse des Artefakts mit `node_modules` messen (örtliche Probe ohne Module: 18 MB) und Aufbewahrung festlegen | Nicht gemessen |
 | **V2-6** | Sicherungs-Blocker aus `docs/BACKUP_DR.md` (B-DR-1 bis B-DR-3) | Eine schnellere Auslieferung ändert nichts daran, dass die Daten nicht gesichert sind |
@@ -195,3 +195,55 @@ statt sich zu überspringen.
 `--pruefen` und bricht ab, statt sie anzuwenden. Einzig `prisma migrate
 deploy` schreibt — ins Schema, nicht in den Baum, und nur nach geprüfter
 Sicherung.
+
+## 6. Release-Ausführer: vom Update Center zum Artefakt (2026-09-27)
+
+Bis hierher hielt das Update Center (`/admin/updates`) Entscheidungen fest —
+freigegeben, terminiert — und dann geschah nichts. Der Weg dazwischen ist
+jetzt im Repository gebaut und geprüft; angeschlossen wird er mit dem
+Umstieg auf V2.
+
+```
+Update Center: Version freigeben + terminieren          (Systemverantwortung, Prüfprotokoll)
+  → Ausführer liest fällige Aufträge                    GET  /api/cron/release-auftraege
+  → findet den grünen CI-Lauf des Commits               (gh run list … --status success)
+  → lädt dessen Artefakt, misst SHA-256                  = Release.artifactSha256, sonst Abbruch
+  → übernimmt den Auftrag                                POST …/uebernehmen   SCHEDULED → DEPLOYING
+  → aktiviert                                            release-aktivieren.sh (Abschnitt 2)
+  → meldet                                               POST …/ergebnis      → SUCCEEDED | FAILED | ROLLED_BACK
+```
+
+| Teil | Wo |
+|---|---|
+| Schnittstelle der Anwendung | `src/app/api/cron/release-auftraege/**`, `src/server/services/release-ausfuehrung.service.ts` |
+| Signatur (beide Seiten dieselbe Datei) | `src/lib/release/ausfuehrer-signatur.ts` |
+| Werkzeug | `scripts/release-ausfuehrer.ts` (`liste`, `version`, `abholen`, `melden`) |
+| Workflow-Vorlage | `deploy/v2/release-ausfuehrer.yml` — **nicht** unter `.github/workflows` |
+| Prüfung | `tests/api/release-center.test.ts`, Block „Release-Ausführer" (echte Signaturen, echtes Werkzeug gegen den Testserver) |
+
+**Was die Anwendung prüft, bevor sie einen Auftrag hergibt:** Bearer
+`RELEASE_EXECUTOR_TOKEN` *und* HMAC-SHA256 mit `RELEASE_EXECUTOR_SIGNING_KEY`
+über Methode, Pfad, Zeit (±5 Minuten) und Rohrumpf · Umgebung des Ausführers =
+`CLENARIS_UMGEBUNG` der Instanz · Auftrag terminiert und fällig · Version neuer
+als die laufende · CI bestanden, Commit und Prüfsumme eingetragen · gemessene
+Prüfsumme = Prüfsumme des Release. Idempotent über den Ausführungsschlüssel
+(Lauf-ID): derselbe Lauf erneut → dieselbe Antwort; ein anderer → 409.
+„Erfolgreich" nur, wenn die Instanz danach die Zielversion meldet. Jeder
+Übergang steht im Prüfprotokoll (ohne Benutzer, mit Ausführer, Commit,
+Prüfsumme, CI-Nachweis).
+
+**Was die Anwendung nicht bekommt:** SSH-Schlüssel, GitHub-Token, Zieladresse.
+Sie ruft niemanden an; der Ausführer holt ab. Ein übernommenes Konto der
+Systemverantwortung kann einen Termin setzen — ausgeführt wird nur, was CI
+bestanden hat und dessen Bytes stimmen.
+
+**Rücksprung:** Jeder Auftrag nennt `ruecksprung.aufVersion` (die Version beim
+Freigeben) und ob das Schema zurückbleibt (`schemaBleibt`, sobald Migrationen
+dabei sind — Migrationen laufen nur vorwärts). `release-aktivieren.sh`
+springt bei fehlgeschlagenem Health Check selbst zurück; der Workflow meldet
+dann ROLLED_BACK.
+
+**Offen (mit V2-3):** den Workflow gegen einen Probeserver laufen lassen —
+fälliger Auftrag, erfolgreiche Aktivierung, absichtlich kaputtes Artefakt
+(Summe), fehlgeschlagener Health Check (Rücksprung). Keine Ausführung gegen
+die Produktion ohne gesonderte Freigabe — **EXTERNAL VERIFICATION REQUIRED**.

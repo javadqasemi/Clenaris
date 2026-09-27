@@ -31,16 +31,17 @@ import type { ReleaseManifest } from '@/lib/validation/system';
  * Anmeldung einer Web-Anwendung ist dafür die falsche Schranke.
  *
  * Die Ausführung gehört einem vertrauenswürdigen Werkzeug ausserhalb der
- * Anwendung (Production V2, `deploy/v2/`), das die offenen Aufträge dieser
- * Tabelle liest und das Release-Artefakt anhand seiner Prüfsumme
- * (`artifactSha256`) ausrollt. Dieses Werkzeug ist heute **nicht** gebaut —
- * Production V2 ist nicht freigegeben. Deshalb kennt der Auftragszustand
- * nur APPROVED, SCHEDULED und CANCELLED: DEPLOYING, SUCCEEDED, FAILED oder
- * ROLLED_BACK hätten keinen Weg, auf dem sie entstehen, und ein Zustand ohne
- * Weg wäre eine Behauptung in der Oberfläche. Der Auftrag trägt auch kein
- * Ziel (Host, Adresse): Wohin ausgerollt wird, entscheidet der Ausführer aus
- * seiner eigenen Konfiguration, nicht ein Datensatz, den ein Browser
- * mitgestalten könnte.
+ * Anwendung (Production V2, `deploy/v2/`), das die fälligen Aufträge dieser
+ * Tabelle abholt und das Release-Artefakt anhand seiner Prüfsumme
+ * (`artifactSha256`) ausrollt. Seit 2026-09-27 gibt es dafür die signierte
+ * Schnittstelle `/api/cron/release-auftraege` (`release-ausfuehrung.service.ts`),
+ * das Werkzeug `scripts/release-ausfuehrer.ts` und die Vorlage
+ * `deploy/v2/release-ausfuehrer.yml` — angeschlossen wird sie erst mit der
+ * Freigabe von Production V2. Die Zustände DEPLOYING, SUCCEEDED, FAILED und
+ * ROLLED_BACK setzt nur der Ausführer; keine Handlung hier führt in sie. Der
+ * Auftrag trägt auch kein Ziel (Host, Adresse): Wohin ausgerollt wird,
+ * entscheidet der Ausführer aus seiner eigenen Konfiguration, nicht ein
+ * Datensatz, den ein Browser mitgestalten könnte.
  *
  * ---------------------------------------------------------------------------
  *  Zustandsmaschine (je Organisation und Version)
@@ -64,15 +65,35 @@ import type { ReleaseManifest } from '@/lib/validation/system';
  * ab; wer ihn trifft, bekommt 409.
  */
 
-export type ReleaseZustand = 'AVAILABLE' | 'APPROVED' | 'SCHEDULED' | 'INSTALLED' | 'OLDER';
+export type ReleaseZustand = 'AVAILABLE' | 'APPROVED' | 'SCHEDULED' | 'DEPLOYING' | 'INSTALLED' | 'OLDER';
 
 export const ZUSTANDSNAMEN: Record<ReleaseZustand, string> = {
   AVAILABLE: 'Update verfügbar',
   APPROVED: 'Freigegeben',
   SCHEDULED: 'Terminiert',
+  DEPLOYING: 'Wird installiert',
   INSTALLED: 'Installiert',
   OLDER: 'Älter als die laufende Version',
 };
+
+/** Auftragszustände in Worten — für die Verlaufsliste der Detailansicht. */
+export const AUFTRAGSNAMEN: Record<ReleaseRequestStatus, string> = {
+  APPROVED: 'Freigegeben',
+  SCHEDULED: 'Terminiert',
+  CANCELLED: 'Storniert',
+  DEPLOYING: 'In Ausführung',
+  SUCCEEDED: 'Installiert',
+  FAILED: 'Fehlgeschlagen',
+  ROLLED_BACK: 'Zurückgesetzt',
+};
+
+/**
+ * Offen heisst: Es ist entschieden, aber noch nicht erledigt. Ein Auftrag in
+ * Ausführung gehört dazu (2026-09-27) — sonst liesse sich dieselbe Version
+ * während der Installation neu freigeben, und der Teilindex
+ * `release_requests_offen_einmal` sähe es genauso.
+ */
+const OFFEN: ReleaseRequestStatus[] = ['APPROVED', 'SCHEDULED', 'DEPLOYING'];
 
 export const ARTNAMEN: Record<Release['kind'], string> = {
   PATCH: 'Patch',
@@ -97,6 +118,7 @@ function zustandVon(release: Release, offen: ReleaseRequest | null, laufend: str
   const vergleich = vergleicheVersionen(release.version, laufend);
   if (vergleich === 0) return 'INSTALLED';
   if (vergleich < 0) return 'OLDER';
+  if (offen?.status === 'DEPLOYING') return 'DEPLOYING';
   if (offen?.status === 'SCHEDULED') return 'SCHEDULED';
   if (offen?.status === 'APPROVED') return 'APPROVED';
   return 'AVAILABLE';
@@ -109,7 +131,7 @@ export async function listReleases(organizationId: string): Promise<{ laufend: s
   const [releases, offene, zurueckgestellt] = await Promise.all([
     prisma.release.findMany(),
     prisma.releaseRequest.findMany({
-      where: { organizationId, status: { in: ['APPROVED', 'SCHEDULED'] } },
+      where: { organizationId, status: { in: OFFEN } },
     }),
     prisma.releaseDeferral.findMany({
       where: { organizationId, deferredUntil: { gt: jetzt } },
@@ -163,7 +185,7 @@ export async function getReleaseDetail(organizationId: string, releaseId: string
       orderBy: { deferredUntil: 'desc' },
     }),
   ]);
-  const offen = auftraege.find((a) => a.status === 'APPROVED' || a.status === 'SCHEDULED') ?? null;
+  const offen = auftraege.find((a) => OFFEN.includes(a.status)) ?? null;
 
   // Namen der Entscheidenden — nur Vor- und Nachname, für die Zeile „von wem".
   const ids = [
@@ -210,7 +232,7 @@ async function ladeUnterSperre(tx: Tx, organizationId: string, releaseId: string
   const gesperrt = await tx.$queryRaw<{ id: string }[]>`
     SELECT id FROM release_requests
     WHERE "organizationId" = ${organizationId} AND "releaseId" = ${releaseId}
-      AND status IN ('APPROVED', 'SCHEDULED')
+      AND status IN ('APPROVED', 'SCHEDULED', 'DEPLOYING')
     FOR UPDATE`;
   const offen = gesperrt[0] ? await tx.releaseRequest.findUnique({ where: { id: gesperrt[0].id } }) : null;
   const laufend = aktuelleVersion();
@@ -218,6 +240,12 @@ async function ladeUnterSperre(tx: Tx, organizationId: string, releaseId: string
 }
 
 function pruefeNeuer(zustand: ReleaseZustand, release: Release, laufend: string) {
+  // In Ausführung entscheidet der Ausführer, nicht das Dashboard — weder
+  // freigeben noch terminieren noch zurückstellen greift in einen laufenden
+  // Auftrag ein. Seine Meldung (erfolgreich, fehlgeschlagen) schliesst ihn.
+  if (zustand === 'DEPLOYING') {
+    throw new BusinessRuleError(`Version ${release.version} wird gerade installiert. Das Ergebnis meldet der Ausführer.`);
+  }
   if (zustand === 'INSTALLED') {
     throw new BusinessRuleError(`Version ${release.version} ist bereits installiert.`);
   }

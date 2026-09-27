@@ -5,7 +5,7 @@
 > Quelle, aus der sowohl diese Referenz als auch die Laufzeitvalidierung
 > stammen.
 
-Stand: 535 Endpunkte. Die maschinenlesbare Fassung liegt in
+Stand: 538 Endpunkte. Die maschinenlesbare Fassung liegt in
 [`openapi.yaml`](./openapi.yaml) bzw. [`openapi.json`](./openapi.json).
 
 ## Grundlagen
@@ -7027,6 +7027,57 @@ Familie.
 | Feld | Typ | Pflicht | Regeln |
 | --- | --- | --- | --- |
 | `tage` | integer | – | ≥ 1, ≤ 90, Standard `7` |
+
+### `GET /api/cron/release-auftraege`
+
+**Fällige Aktualisierungsaufträge (Ausführer).** Nur für den Release-Ausführer ausserhalb der Anwendung: Bearer `RELEASE_EXECUTOR_TOKEN` **und** HMAC-Signatur (`x-clenaris-zeit`, `x-clenaris-signatur`, höchstens 5 Minuten alt). Liefert terminierte, fällige Aufträge der eigenen Umgebung mit Commit, Artefakt-Prüfsumme, CI-Stand, Migrationen, Rücksprungangaben und gegebenenfalls dem Hindernis. 422 bei fremder Umgebung, 503 ohne `CLENARIS_UMGEBUNG`/Signaturschlüssel.
+
+- **Zugriff:** Nur für den Scheduler: `Authorization: Bearer $CRON_SECRET`.
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 422, 500, 503
+
+**Query-Parameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `umgebung` | string | ja | `production` \| `staging` \| `preview` \| `test` |
+
+### `POST /api/cron/release-auftraege/uebernehmen`
+
+**Auftrag übernehmen (Ausführer).** SCHEDULED → DEPLOYING. Nur fällige Aufträge der eigenen Umgebung, Version neuer als die laufende, CI bestanden, gemessene Prüfsumme = Prüfsumme des Release. Idempotent über `ausfuehrungsSchluessel`; ein anderer Schlüssel → 409. Steht im Prüfprotokoll. Die Anwendung führt nichts aus.
+
+- **Zugriff:** Nur für den Scheduler: `Authorization: Bearer $CRON_SECRET`.
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 409, 422, 500, 503
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `auftragId` | string | ja | – |
+| `umgebung` | string | ja | `production` \| `staging` \| `preview` \| `test` |
+| `ausfuehrer` | string | ja | – |
+| `ausfuehrungsSchluessel` | string | ja | – |
+| `artefaktSha256` | string | ja | – |
+| `ciNachweis` | string | ja | uri, max. 300 Zeichen |
+
+### `POST /api/cron/release-auftraege/ergebnis`
+
+**Ergebnis melden (Ausführer).** DEPLOYING → SUCCEEDED, FAILED oder ROLLED_BACK, nur mit dem Schlüssel der Übernahme. SUCCEEDED verlangt die Zielversion als `laufendeVersion`. Dieselbe Meldung erneut → 200; eine abweichende → 409.
+
+- **Zugriff:** Nur für den Scheduler: `Authorization: Bearer $CRON_SECRET`.
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 409, 422, 500
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `auftragId` | string | ja | – |
+| `ausfuehrungsSchluessel` | string | ja | – |
+| `ergebnis` | string | ja | `SUCCEEDED` \| `FAILED` \| `ROLLED_BACK` |
+| `laufendeVersion` | string | – | – |
+| `meldung` | string | – | max. 2000 Zeichen |
 
 ## Betrieb
 

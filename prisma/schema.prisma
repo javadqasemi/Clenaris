@@ -7220,13 +7220,23 @@ enum ReleaseCiStatus {
   PENDING
 }
 
-/// Zustand eines Aktualisierungsauftrags. Bewusst ohne DEPLOYING/SUCCEEDED/
-/// FAILED: Solange es keinen Ausführer gibt, gäbe es keinen Weg in diese
-/// Zustände, und ein Zustand ohne Weg ist eine Behauptung.
+/// Zustand eines Aktualisierungsauftrags.
+///
+/// Bis 2026-09-27 nur APPROVED/SCHEDULED/CANCELLED — ohne Ausführer gab es
+/// keinen Weg in die übrigen, und ein Zustand ohne Weg ist eine Behauptung.
+/// Seither übernimmt ein vertrauenswürdiger Ausführer ausserhalb der
+/// Anwendung fällige Aufträge über `/api/cron/release-auftraege`
+/// (`release-ausfuehrung.service.ts`): SCHEDULED → DEPLOYING → SUCCEEDED,
+/// FAILED oder ROLLED_BACK. Die Anwendung setzt diese Zustände nur auf
+/// signierte Meldung des Ausführers, nie selbst.
 enum ReleaseRequestStatus {
   APPROVED
   SCHEDULED
   CANCELLED
+  DEPLOYING
+  SUCCEEDED
+  FAILED
+  ROLLED_BACK
 }
 
 /// Eine Clenaris-Version mit ihrem Änderungsprotokoll — Metadaten, keine Ausführung.
@@ -7287,6 +7297,28 @@ model ReleaseRequest {
   cancelledById  String?
   cancelledAt    DateTime?            @db.Timestamptz(6)
   cancelReason   String?
+
+  /// Ausführung (2026-09-27) — gesetzt nur über die signierte Schnittstelle
+  /// des Ausführers, nie über die Oberfläche.
+  ///
+  /// `executionKey` ist der Idempotenzschlüssel der Übernahme: Derselbe
+  /// Ausführer, der nach einem Abbruch mit demselben Schlüssel wiederkommt,
+  /// bekommt denselben Auftrag zurück; ein zweiter mit anderem Schlüssel
+  /// bekommt 409. Eindeutig, damit ein Schlüssel nie zwei Aufträge trägt.
+  executorId      String?
+  executionKey    String?   @unique
+  /// Zielumgebung, gegen die Umgebung der Instanz geprüft (`CLENARIS_UMGEBUNG`).
+  environment     String?
+  /// Die Prüfsumme, die der Ausführer am Artefakt gemessen hat — muss der
+  /// des Release entsprechen, sonst keine Übernahme.
+  verifiedSha256  String?
+  /// Nachweis der Prüfstufe für genau diesen Commit (Adresse des CI-Laufs).
+  ciEvidence      String?
+  claimedAt       DateTime? @db.Timestamptz(6)
+  finishedAt      DateTime? @db.Timestamptz(6)
+  resultMessage   String?
+  /// Bei ROLLED_BACK: die Version, auf die zurückgesprungen wurde (= `fromVersion`).
+  rollbackVersion String?
 
   createdAt DateTime @default(now()) @db.Timestamptz(6)
   updatedAt DateTime @updatedAt @db.Timestamptz(6)

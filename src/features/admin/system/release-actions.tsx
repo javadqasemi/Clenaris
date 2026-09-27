@@ -34,13 +34,15 @@ export function ReleaseActions({
 }: {
   releaseId: string;
   version: string;
-  zustand: 'AVAILABLE' | 'APPROVED' | 'SCHEDULED' | 'INSTALLED' | 'OLDER';
+  zustand: 'AVAILABLE' | 'APPROVED' | 'SCHEDULED' | 'DEPLOYING' | 'INSTALLED' | 'OLDER';
   /** Bestehender Termin als ISO-Zeichenkette, zum Vorbelegen beim Verschieben. */
   termin: string | null;
 }) {
   const basis = `/api/system/releases/${releaseId}`;
 
-  if (zustand === 'INSTALLED' || zustand === 'OLDER') return null;
+  // In Ausführung entscheidet der Ausführer; das Dashboard bietet nichts an,
+  // was der Server ohnehin abwiese (`pruefeNeuer`).
+  if (zustand === 'INSTALLED' || zustand === 'OLDER' || zustand === 'DEPLOYING') return null;
 
   return (
     <div className="flex flex-wrap items-center gap-2">

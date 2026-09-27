@@ -25,3 +25,11 @@ export const PRUEF_SICHERHEITSBERICHT_TOKEN = 'clenaris-pruefreihe-sicherheitsbe
  * Literal, damit die Geheimnisprüfung kein Muster sieht, wo keines ist.
  */
 export const PRUEF_STRIPE_GEHEIMNIS = `whsec_${Buffer.from('clenaris-pruefreihe-stripe-webhook').toString('hex')}`;
+
+/**
+ * Release-Ausführer (2026-09-27, `release-center.test.ts`): Token und
+ * Signaturschlüssel sind zwei verschiedene Werte — die Prüfreihe beweist,
+ * dass das Token allein nichts übernimmt. Umgebung des Testservers: `test`.
+ */
+export const PRUEF_AUSFUEHRER_TOKEN = `ausf_${Buffer.from('clenaris-pruefreihe-release-token').toString('hex')}`;
+export const PRUEF_AUSFUEHRER_SCHLUESSEL = `sig_${Buffer.from('clenaris-pruefreihe-release-signatur').toString('hex')}`;

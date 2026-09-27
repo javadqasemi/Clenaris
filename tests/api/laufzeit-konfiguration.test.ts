@@ -69,6 +69,8 @@ const MARKER = {
   RESEND_API_KEY: 're_marker0123456789',
   TWILIO_AUTH_TOKEN: 'marker-twilio-token',
   SECURITY_REPORT_TOKEN: 'marker-sicherheitsbericht-token',
+  RELEASE_EXECUTOR_TOKEN: 'marker-release-ausfuehrer-token',
+  RELEASE_EXECUTOR_SIGNING_KEY: 'marker-release-ausfuehrer-signatur',
   SSH_PRIVATE_KEY: 'marker-ssh-privat',
   SENTRY_AUTH_TOKEN: 'marker-monitoring-token',
   GOOGLE_MAPS_SERVER_KEY: 'marker-maps-server',
@@ -403,9 +405,19 @@ describe('Dasselbe Artefakt unter zwei Laufzeitumgebungen (ohne Neubau)', () => 
        * feststeht, nennt ein Fehlschlag die Instanz, ihren Prozesszustand und
        * das Ende ihres Serverprotokolls — die Erwartung selbst bleibt dieselbe.
        */
-      const { status, text } = await anfrage(instanz.port, '/api/public/runtime-config').catch((fehler: Error) => {
+      const { status, text } = await anfrage(instanz.port, '/api/public/runtime-config').catch(async (fehler: Error) => {
+        // Zweite Diagnose (2026-09-27): Die Instanz hatte beim Start schon mit
+        // 200 geantwortet, das Protokoll zeigt keinen Fehler. Eine sofortige
+        // zweite Anfrage unterscheidet „Prozess hängt" von „diese eine
+        // Verbindung ging verloren". Der Test scheitert in beiden Fällen.
+        const t0 = Date.now();
+        const nachfrage = await anfrage(instanz.port, '/api/health').then(
+          (r) => `Nachfrage /api/health: ${r.status} nach ${Date.now() - t0} ms`,
+          (e: Error) => `Nachfrage /api/health: ${e.message} nach ${Date.now() - t0} ms`,
+        );
         throw new Error(
           `Instanz ${instanz.name} (Port ${instanz.port}, Prozess ${instanz.prozess.exitCode === null ? 'läuft' : `beendet mit ${instanz.prozess.exitCode}`}): ${fehler.message}\n` +
+            `${nachfrage}\n` +
             `Serverprotokoll (Ende):\n${instanz.protokoll.join('').slice(-2500)}`,
         );
       });

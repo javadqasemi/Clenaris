@@ -40,7 +40,13 @@ import { join } from 'node:path';
 import { config } from 'dotenv';
 
 import { databaseNameOf, istTestdatenbank } from '../prisma/seed-guard';
-import { PRUEF_RESEND_GEHEIMNIS, PRUEF_SICHERHEITSBERICHT_TOKEN, PRUEF_STRIPE_GEHEIMNIS } from '../tests/helpers/webhooks';
+import {
+  PRUEF_AUSFUEHRER_SCHLUESSEL,
+  PRUEF_AUSFUEHRER_TOKEN,
+  PRUEF_RESEND_GEHEIMNIS,
+  PRUEF_SICHERHEITSBERICHT_TOKEN,
+  PRUEF_STRIPE_GEHEIMNIS,
+} from '../tests/helpers/webhooks';
 
 // `.env` nur, um `DATABASE_URL` abzuleiten — `next start` liest sie ohnehin selbst.
 config();
@@ -117,6 +123,14 @@ function main(): void {
        * bleibt für alle anderen Prüfungen abgeschaltet, wie bisher.
        */
       STRIPE_WEBHOOK_SECRET: PRUEF_STRIPE_GEHEIMNIS,
+      /**
+       * Schnittstelle des Release-Ausführers (`release-center.test.ts`). Die
+       * Instanz heisst `test` — ein Ausführer, der „production" verlangt,
+       * wird abgewiesen, und genau das prüft die Reihe.
+       */
+      RELEASE_EXECUTOR_TOKEN: PRUEF_AUSFUEHRER_TOKEN,
+      RELEASE_EXECUTOR_SIGNING_KEY: PRUEF_AUSFUEHRER_SCHLUESSEL,
+      CLENARIS_UMGEBUNG: 'test',
     },
   });
   const beenden = () => kind.kill();

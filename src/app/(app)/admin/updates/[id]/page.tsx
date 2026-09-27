@@ -13,7 +13,7 @@ import { Alert } from '@/components/ui/primitives';
 import { DetailRow, DetailSection, PageHeader } from '@/components/app/page-parts';
 import { ReleaseActions } from '@/features/admin/system/release-actions';
 import { getOrganizationId } from '@/server/services/organization.service';
-import { ARTNAMEN, ZUSTANDSNAMEN, getReleaseDetail } from '@/server/services/release.service';
+import { ARTNAMEN, AUFTRAGSNAMEN, ZUSTANDSNAMEN, getReleaseDetail } from '@/server/services/release.service';
 
 export const metadata: Metadata = {
   title: 'Update',
@@ -35,10 +35,15 @@ const CI: Record<string, { text: string; variant: 'success' | 'destructive' | 'w
   PENDING: { text: 'Ausstehend', variant: 'warning' },
 };
 
-const AUFTRAGSSTATUS: Record<string, string> = {
-  APPROVED: 'Freigegeben',
-  SCHEDULED: 'Terminiert',
-  CANCELLED: 'Storniert',
+/** Farbe je Auftragszustand; die Wörter stehen in `AUFTRAGSNAMEN` (Dienst). */
+const AUFTRAGSFARBE: Record<string, 'neutral' | 'info' | 'success' | 'destructive' | 'warning'> = {
+  APPROVED: 'info',
+  SCHEDULED: 'info',
+  CANCELLED: 'neutral',
+  DEPLOYING: 'warning',
+  SUCCEEDED: 'success',
+  FAILED: 'destructive',
+  ROLLED_BACK: 'destructive',
 };
 
 /** Eine Liste aus dem Änderungsprotokoll — oder ein ehrliches „keine". */
@@ -197,8 +202,8 @@ export default async function UpdateDetailPage({ params }: { params: Promise<{ i
                 {auftraege.map((a) => (
                   <li key={a.id} className="space-y-1 py-3 text-sm">
                     <p className="flex items-center gap-2 font-medium">
-                      <Badge size="sm" variant={a.status === 'CANCELLED' ? 'neutral' : 'info'}>
-                        {AUFTRAGSSTATUS[a.status]}
+                      <Badge size="sm" variant={AUFTRAGSFARBE[a.status] ?? 'info'}>
+                        {AUFTRAGSNAMEN[a.status]}
                       </Badge>
                       v{a.fromVersion} → v{a.toVersion}
                     </p>
@@ -215,6 +220,37 @@ export default async function UpdateDetailPage({ params }: { params: Promise<{ i
                       <p className="text-muted-foreground">
                         Storniert {formatDateTime(a.cancelledAt)} von {namen[a.cancelledById ?? ''] ?? 'unbekannt'}
                         {a.cancelReason ? ` — ${a.cancelReason}` : ''}
+                      </p>
+                    ) : null}
+                    {/*
+                      Die Ausführung — gemeldet vom Ausführer ausserhalb der
+                      Anwendung, nie hier ausgelöst. Der CI-Nachweis ist der
+                      Beleg, dass genau dieses Artefakt geprüft wurde.
+                    */}
+                    {a.claimedAt ? (
+                      <p className="text-muted-foreground">
+                        Übernommen {formatDateTime(a.claimedAt)} von <code className="text-xs">{a.executorId}</code> ({a.environment})
+                        {a.verifiedSha256 ? (
+                          <>
+                            {' · Artefakt '}
+                            <code className="text-xs">{a.verifiedSha256.slice(0, 12)}</code>
+                          </>
+                        ) : null}
+                        {a.ciEvidence ? (
+                          <>
+                            {' · '}
+                            <a href={a.ciEvidence} className="underline underline-offset-2" rel="noreferrer noopener" target="_blank">
+                              CI-Lauf
+                            </a>
+                          </>
+                        ) : null}
+                      </p>
+                    ) : null}
+                    {a.finishedAt ? (
+                      <p className="text-muted-foreground">
+                        {AUFTRAGSNAMEN[a.status]} {formatDateTime(a.finishedAt)}
+                        {a.rollbackVersion ? ` · zurück auf v${a.rollbackVersion}` : ''}
+                        {a.resultMessage ? ` — ${a.resultMessage}` : ''}
                       </p>
                     ) : null}
                   </li>
