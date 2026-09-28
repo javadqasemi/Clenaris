@@ -28,6 +28,68 @@ function refreshOnly(jar: string): string {
     .join('; ');
 }
 
+/**
+ * Die Laufzeit der Sitzungscookies (2026-09-28).
+ *
+ * Bis dahin setzte jede Anmeldung einen Erneuerungscookie mit dreissig Tagen
+ * `Max-Age` — auch ohne „Angemeldet bleiben". Das Kästchen stand in der Maske,
+ * `rememberMe` wurde geprüft und danach verworfen: eine Scheinfunktion. Gegen
+ * den alten Stand scheitert der erste Fall (`Max-Age=2592000` ohne Wahl).
+ */
+function sitzungscookies(headers: Headers): Record<string, string> {
+  const alle = headers.getSetCookie();
+  const je = (name: string) => alle.find((c) => c.startsWith(`${name}=`)) ?? '';
+  return { at: je('clenaris_at'), rt: je('clenaris_rt') };
+}
+
+const laufzeit = (setCookie: string) => /max-age=(\d+)/i.exec(setCookie)?.[1];
+const ablauf = (setCookie: string) => /expires=/i.test(setCookie);
+
+describe('Sitzungscookies: an den Browser gebunden, ausser „Angemeldet bleiben"', { concurrency: 1 }, async () => {
+  await requireServer();
+
+  it('ohne Wahl: Zugangs- und Erneuerungscookie ohne Max-Age und ohne Expires — auch nach der Erneuerung', async () => {
+    resetRateLimits();
+    const anmeldung = await post('/api/auth/login', { email: ACCOUNTS.manager.email, password: ACCOUNTS.manager.password });
+    assert.equal(anmeldung.status, 200, anmeldung.text);
+    const { at, rt } = sitzungscookies(anmeldung.headers);
+    assert.ok(at && rt, 'Sitzungscookies fehlen');
+    for (const [name, c] of [['Zugang', at], ['Erneuerung', rt]] as const) {
+      assert.equal(laufzeit(c), undefined, `${name}: Max-Age gesetzt — ${c.replace(/=[^;]+/, '=…')}`);
+      assert.equal(ablauf(c), false, `${name}: Expires gesetzt`);
+      assert.match(c, /httponly/i, `${name}: nicht HttpOnly`);
+    }
+
+    const erneuert = await post('/api/auth/refresh', undefined, { jar: refreshOnly(anmeldung.cookies) });
+    assert.equal(erneuert.status, 200, erneuert.text);
+    const nachher = sitzungscookies(erneuert.headers);
+    assert.equal(laufzeit(nachher.rt), undefined, 'die Erneuerung machte aus der Browsersitzung eine dauerhafte');
+  });
+
+  it('mit „Angemeldet bleiben": Erneuerungscookie mit Laufzeit — und die Wahl überlebt die Rotation', async () => {
+    resetRateLimits();
+    const anmeldung = await post('/api/auth/login', { email: ACCOUNTS.manager.email, password: ACCOUNTS.manager.password, rememberMe: true });
+    assert.equal(anmeldung.status, 200, anmeldung.text);
+    const vorher = Number(laufzeit(sitzungscookies(anmeldung.headers).rt));
+    assert.ok(vorher >= 86_400, `Erneuerungscookie ohne mehrtägige Laufzeit: ${vorher}`);
+
+    const erneuert = await post('/api/auth/refresh', undefined, { jar: refreshOnly(anmeldung.cookies) });
+    assert.equal(erneuert.status, 200, erneuert.text);
+    assert.equal(Number(laufzeit(sitzungscookies(erneuert.headers).rt)), vorher, '„Angemeldet bleiben" ging bei der Erneuerung verloren');
+  });
+
+  it('die Abmeldung löscht beide Cookies und widerruft den Erneuerungstoken', async () => {
+    resetRateLimits();
+    const anmeldung = await post('/api/auth/login', { email: ACCOUNTS.manager.email, password: ACCOUNTS.manager.password, rememberMe: true });
+    const abmeldung = await post('/api/auth/logout', undefined, { jar: anmeldung.cookies });
+    assert.ok(abmeldung.status < 300, abmeldung.text);
+    const nachher = sitzungscookies(abmeldung.headers);
+    for (const c of [nachher.at, nachher.rt]) assert.ok(/max-age=0|expires=thu, 01 jan 1970/i.test(c), `Cookie nicht gelöscht: ${c.replace(/=[^;]+/, '=…')}`);
+    const wieder = await post('/api/auth/refresh', undefined, { jar: refreshOnly(anmeldung.cookies) });
+    assert.equal(wieder.status, 401, 'der Erneuerungstoken taugt nach der Abmeldung noch');
+  });
+});
+
 describe('Sitzungserneuerung', { concurrency: 1 }, async () => {
   await requireServer();
   const session = await login(ACCOUNTS.manager.email, ACCOUNTS.manager.password);

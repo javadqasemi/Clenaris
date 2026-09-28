@@ -55,14 +55,23 @@ export function LoginForm() {
   const reason = searchParams.get('grund');
   const notice =
     reason === 'inaktiv'
-      ? 'Sie wurden nach 15 Minuten ohne Aktivität abgemeldet. Nach der Anmeldung geht es dort weiter, wo Sie waren.'
+      ? 'Sie wurden nach längerer Inaktivität abgemeldet. Nach der Anmeldung geht es dort weiter, wo Sie waren.'
+      : reason === 'abgemeldet'
+        ? 'Sie wurden in einem anderen Fenster abgemeldet.'
       : reason === 'abgelaufen'
         ? 'Ihre Sitzung ist abgelaufen. Bitte melden Sie sich erneut an.'
         : null;
 
+  /*
+    „Angemeldet bleiben" ist **aus**, bis jemand es wählt (2026-09-28). Vorher
+    stand es vorausgewählt — und wirkte nicht: Jede Sitzung bekam dreissig
+    Tage. Seit der Server die Wahl umsetzt, entscheidet sie über eine Sitzung,
+    die das Schliessen des Browsers überlebt; auf einem geteilten Gerät soll
+    das niemand versehentlich bekommen.
+  */
   const form = useForm<LoginInput>({
     resolver: zodResolver(loginSchema),
-    defaultValues: { email: '', password: '', rememberMe: true },
+    defaultValues: { email: '', password: '', rememberMe: false },
   });
 
   const onSubmit = async (values: LoginInput) => {
@@ -177,9 +186,13 @@ export function LoginForm() {
             render={({ field }) => (
               <FormItem>
                 <label className="flex cursor-pointer items-center gap-2.5 text-sm">
-                  <Checkbox checked={field.value} onCheckedChange={field.onChange} />
+                  <Checkbox checked={field.value} onCheckedChange={field.onChange} aria-describedby="angemeldet-bleiben-hinweis" />
                   Angemeldet bleiben
                 </label>
+                <p id="angemeldet-bleiben-hinweis" className="pl-7 text-meta text-muted-foreground">
+                  Nur auf einem eigenen Gerät. Ohne diese Wahl endet die Anmeldung mit dem Browser und
+                  nach 15 Minuten ohne Aktivität.
+                </p>
               </FormItem>
             )}
           />

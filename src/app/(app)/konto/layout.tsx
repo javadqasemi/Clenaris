@@ -1,8 +1,7 @@
 import { redirect } from 'next/navigation';
 
 import { prisma } from '@/lib/db';
-import { serverEnv } from '@/lib/env';
-import { getSession } from '@/lib/auth/session';
+import { getSession, sessionIdleSecondsFor } from '@/lib/auth/session';
 import { guardForPath, homeRouteFor } from '@/lib/auth/rbac';
 import { AppShell, type NavGroup } from '@/components/app/app-shell';
 
@@ -90,7 +89,7 @@ export default async function AccountLayout({ children }: { children: React.Reac
       navigation={navigation}
       areaLabel="Kundenbereich"
       areaHref="/konto"
-      sessionIdleSeconds={serverEnv().SESSION_IDLE_TTL}
+      sessionIdleSeconds={sessionIdleSecondsFor(session.persistent)}
       user={{
         id: session.id,
         name: session.name,

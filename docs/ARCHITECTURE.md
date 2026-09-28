@@ -109,6 +109,14 @@ mit jeder Erneuerung. Wer eine Viertelstunde nichts tut, wird abgemeldet und
 sieht auf der Anmeldeseite den Grund; die dreissig Tage des Refresh-Tokens
 sind nur noch die absolute Obergrenze.
 
+**Sitzungscookies, ausser „Angemeldet bleiben" (seit 2026-09-28).** Ohne die
+Wahl tragen beide Cookies keine Laufzeit und enden mit dem Browser; mit ihr
+bekommt der Erneuerungscookie `JWT_REFRESH_TTL` und das Leerlauffenster
+`SESSION_REMEMBER_IDLE_TTL`. Die Wahl steht signiert im Token (`rem`). Alle
+Tabs teilen die Aktivität, zwei Minuten vor Ablauf warnt ein Dialog, und eine
+Abmeldung erreicht jeden Tab. Das Schliessen des Browsers wird bewusst nicht
+per `beforeunload` erkannt — Begründung und Grenzen in `docs/SITZUNG.md`.
+
 Passwörter mit Argon2id über `@node-rs/argon2` (19 MiB, t=2, p=1, OWASP 2024).
 
 Gegen fremd ausgelöste Anfragen (CSRF) stehen zwei Linien: `SameSite=Lax` auf
