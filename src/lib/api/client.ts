@@ -209,7 +209,13 @@ export const api = {
   list: <T, M = PaginationMeta>(path: string, params?: Record<string, unknown>) =>
     requestWithMeta<T, M>(path, { method: 'GET', params }),
 
-  post: <T>(path: string, body?: unknown) => request<T>(path, { method: 'POST', body }),
+  /**
+   * `signal` wie bei `get`, für Berechnungen, die mit jeder Eingabe neu
+   * gestellt werden (Preisrechner der Startseite, 2026-09-28): Ohne Abbruch
+   * überschrieb eine späte Antwort auf eine ältere Eingabe die aktuelle.
+   */
+  post: <T>(path: string, body?: unknown, init?: { signal?: AbortSignal }) =>
+    request<T>(path, { method: 'POST', body, signal: init?.signal }),
 
   patch: <T>(path: string, body?: unknown) => request<T>(path, { method: 'PATCH', body }),
 

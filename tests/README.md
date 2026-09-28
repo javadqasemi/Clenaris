@@ -248,7 +248,10 @@ Seit 2026-09-28:
   und `e2e/besuchsmessung.browser.spec.ts` (ohne Einwilligung keine Zeile, mit
   Einwilligung gespeichert und bereinigt, gesperrter Endpunkt ohne Seitenfehler)
   und `e2e/vor-hydration.browser.spec.ts` (vor der Hydration Eingetipptes geht
-  nicht verloren; Skripte verzögert, damit das Ausfüllen sicher vorher liegt).
+  nicht verloren; Skripte verzögert, damit das Ausfüllen sicher vorher liegt)
+  und `e2e/preisrechner.browser.spec.ts` (eine späte Antwort auf eine ältere
+  Eingabe überschreibt den Preis nicht; ungültige Eingabe lässt kein
+  „wird berechnet" stehen).
 - **Firefox fährt zusätzlich** `offerte-rabatt`, `scan` und `sitzung-tabs`
   (`MEHRERE_ENGINES`). WebKit nicht: Es schickt die `Secure`-Anmeldecookies
   nicht über `http://127.0.0.1` (Pendenz W-02) — angemeldete Fälle in WebKit
