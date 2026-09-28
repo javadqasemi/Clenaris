@@ -2720,7 +2720,7 @@ paths:
                   maximum: 1073741824
                 scopeId:
                   type: 'string'
-                  maxLength: 60
+                  pattern: '^[A-Za-z0-9_-]{1,60}$'
               required:
                 - 'profile'
                 - 'filename'

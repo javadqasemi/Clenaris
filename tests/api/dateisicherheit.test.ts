@@ -475,6 +475,21 @@ describe('Upload über HTTP — Politik, Prüfer und Sperre hängen zusammen', (
    * Adresse, die nicht auf den eigenen Ursprung zeigt, wäre derselbe Umweg
    * unter anderem Namen.
    */
+  /**
+   * B-20 (2026-09-28): `scopeId` wurde ungeprüft ein Segment des
+   * Speicherschlüssels — auch anonym. `../` verliess das Präfix der
+   * Organisation. Gegen den alten Stand: 201 mit dem Pfad im Ticket.
+   */
+  it('eine Zuordnung mit Pfadzeichen wird abgewiesen — angemeldet und anonym', async () => {
+    for (const scopeId of ['../../fremd/payslips', 'a/b', '..', 'x%2F..']) {
+      const angemeldet = await post('/api/files/upload-url', { profile: 'document', filename: 'a.txt', mimeType: 'text/plain', sizeBytes: 12, scopeId }, { jar: jars.admin });
+      assert.equal(angemeldet.status, 422, `${scopeId}: HTTP ${angemeldet.status} ${angemeldet.text}`);
+      const anonym = await post('/api/files/upload-url', { profile: 'cv', filename: 'a.pdf', mimeType: 'application/pdf', sizeBytes: 12, scopeId });
+      assert.ok([401, 403, 422].includes(anonym.status), `${scopeId} anonym: HTTP ${anonym.status} ${anonym.text}`);
+      assert.doesNotMatch(anonym.text, /\.\.\//, 'der Pfad mit ../ steht in der Antwort');
+    }
+  });
+
   it('das Upload-Ticket gibt keine Leseadresse heraus', async () => {
     const ticket = await post<{ data: Record<string, unknown> }>(
       '/api/files/upload-url',

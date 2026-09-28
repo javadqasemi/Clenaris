@@ -14,6 +14,7 @@ import {
 } from '@/lib/contracts/serie';
 import type { SessionUser } from '@/lib/auth/session';
 import { prisma, toNumber, type Tx } from '@/lib/db';
+import { abrechnungsbetrag } from '@/lib/contracts/abrechnungsbetrag';
 import { BusinessRuleError, NotFoundError } from '@/lib/errors';
 import { renderContractVersionSnapshot } from '@/lib/pdf/render';
 import type {
@@ -232,6 +233,46 @@ export function aktiveVersion<T extends { status: string; versionNumber: number 
 //  Anlegen und ändern
 // ---------------------------------------------------------------------------
 
+/**
+ * Objekt und Zuständige gehören zum Vertrag (2026-09-28).
+ *
+ * Bis dahin wurden `propertyId` und die drei Personenkennungen beim Anlegen
+ * und Ändern ungeprüft geschrieben. Ein Vertrag für Kundschaft A mit dem
+ * Objekt von B schickte das Team des Planers an Bs Adresse, und As
+ * Kundenkonto (`contract:read_own`) zeigte Bs Objekt. Die Personen liessen
+ * sich über die Organisationsgrenze setzen, der Fremdschlüssel allein hielt
+ * das nicht auf.
+ *
+ * Fremd heisst hier 404 wie nicht vorhanden — die Antwort verrät nicht, dass
+ * es das Objekt bei einer anderen Kundschaft gibt. Nur gesetzte Werte werden
+ * geprüft; `null` (Bezug entfernen) ist immer erlaubt.
+ */
+async function vertragsbezuegePruefen(
+  organizationId: string,
+  customerId: string,
+  bezug: {
+    propertyId?: string | null;
+    responsibleEmployeeId?: string | null;
+    salesOwnerId?: string | null;
+    serviceManagerId?: string | null;
+  },
+): Promise<void> {
+  if (bezug.propertyId) {
+    const objekt = await prisma.property.findFirst({
+      where: { id: bezug.propertyId, customerId, customer: { organizationId }, deletedAt: null },
+      select: { id: true },
+    });
+    if (!objekt) throw new NotFoundError('Objekt nicht gefunden.');
+  }
+  const personen = [bezug.responsibleEmployeeId, bezug.salesOwnerId, bezug.serviceManagerId].filter(
+    (id): id is string => Boolean(id),
+  );
+  if (personen.length > 0) {
+    const gefunden = await prisma.employee.count({ where: { id: { in: [...new Set(personen)] }, organizationId } });
+    if (gefunden !== new Set(personen).size) throw new NotFoundError('Person nicht gefunden.');
+  }
+}
+
 export async function createContract(params: {
   organizationId: string;
   actorId: string;
@@ -247,9 +288,14 @@ export async function createContract(params: {
   });
   if (!kunde) throw new NotFoundError('Kundschaft nicht gefunden.');
 
+  await vertragsbezuegePruefen(params.organizationId, kunde.id, params.input);
+
   if (params.input.quoteId) {
+    // Die Offerte derselben Kundschaft (2026-09-28) — vorher genügte die
+    // Organisation, und ein Vertrag für A liess sich auf Bs angenommene
+    // Offerte stützen.
     const offerte = await prisma.quote.findFirst({
-      where: { id: params.input.quoteId, organizationId: params.organizationId, deletedAt: null },
+      where: { id: params.input.quoteId, organizationId: params.organizationId, customerId: kunde.id, deletedAt: null },
       select: { id: true, status: true },
     });
     if (!offerte) throw new NotFoundError('Offerte nicht gefunden.');
@@ -338,6 +384,8 @@ export async function updateContract(params: {
       'Das Objekt eines Vertrags, der in Kraft ist oder war, lässt sich nicht ändern. Ein anderer Einsatzort ist eine Vertragsänderung.',
     );
   }
+
+  await vertragsbezuegePruefen(params.organizationId, vorher.customerId, params.input);
 
   const aktualisiert = await prisma.contract.update({
     where: { id: vorher.id },
@@ -1818,23 +1866,23 @@ export async function contractBillingBasis(params: {
   });
   const freigegebeneMinuten = stunden._sum.minutes ?? 0;
 
-  let netto = 0;
+  // Der Betrag selbst entsteht dezimal in `abrechnungsbetrag` (2026-09-28,
+  // Begründung dort); hier wird nur gesammelt, was er braucht, und die
+  // Herleitung in Worten gebildet.
   let herleitung = '';
+  let gesamtmenge: Prisma.Decimal | number | null = 0;
 
   switch (geltend.pricingModel) {
     case 'FIXED_PERIOD':
-      netto = toNumber(geltend.baseAmount) * anteil;
       herleitung =
         anteil < 1
           ? `Pauschale je Periode (${geltend.billingCycle}) ${toNumber(geltend.baseAmount).toFixed(2)} × ${(anteil * 100).toFixed(2)} % Zeitanteil (Kalendertage)`
           : `Pauschale je Periode (${geltend.billingCycle})`;
       break;
     case 'FIXED_PER_VISIT':
-      netto = toNumber(geltend.baseAmount) * einsaetze.length;
       herleitung = `${einsaetze.length} Einsätze × ${toNumber(geltend.baseAmount).toFixed(2)}`;
       break;
     case 'HOURLY':
-      netto = (freigegebeneMinuten / 60) * toNumber(geltend.hourlyRate ?? 0);
       herleitung = `${(freigegebeneMinuten / 60).toFixed(2)} freigegebene Stunden × ${toNumber(geltend.hourlyRate ?? 0).toFixed(2)}`;
       break;
     case 'UNIT_BASED': {
@@ -1842,22 +1890,30 @@ export async function contractBillingBasis(params: {
         where: { contractVersionId: geltend.id },
         _sum: { quantity: true },
       });
-      const gesamtmenge = toNumber(menge._sum.quantity);
-      netto = gesamtmenge * toNumber(geltend.unitPrice ?? 0) * anteil;
+      gesamtmenge = menge._sum.quantity;
       herleitung =
-        `${gesamtmenge} ${geltend.unitLabel ?? 'Einheiten'} × ${toNumber(geltend.unitPrice ?? 0).toFixed(4)}` +
+        `${toNumber(gesamtmenge)} ${geltend.unitLabel ?? 'Einheiten'} × ${toNumber(geltend.unitPrice ?? 0).toFixed(4)}` +
         (anteil < 1 ? ` × ${(anteil * 100).toFixed(2)} % Zeitanteil (Kalendertage)` : '');
       break;
     }
     default:
-      netto = toNumber(geltend.baseAmount) * anteil;
       herleitung =
         'Abweichende Vereinbarung — Betrag aus der Vertragsversion' +
         (anteil < 1 ? `, ${(anteil * 100).toFixed(2)} % Zeitanteil (Kalendertage)` : '');
   }
 
   const mwstSatz = toNumber(geltend.vatRate);
-  const mwst = Math.round(netto * mwstSatz) / 100;
+  const { netto, mwst, brutto } = abrechnungsbetrag({
+    pricingModel: geltend.pricingModel,
+    baseAmount: geltend.baseAmount,
+    hourlyRate: geltend.hourlyRate,
+    unitPrice: geltend.unitPrice,
+    vatRate: geltend.vatRate,
+    einsaetze: einsaetze.length,
+    minuten: freigegebeneMinuten,
+    menge: gesamtmenge,
+    anteil,
+  });
 
   return {
     contractId: vertrag.id,
@@ -1870,10 +1926,10 @@ export async function contractBillingBasis(params: {
     bis: params.bis,
     einsaetze: einsaetze.length,
     freigegebeneMinuten,
-    netto: Math.round(netto * 100) / 100,
+    netto,
     mwstSatz,
     mwst,
-    brutto: Math.round((netto + mwst) * 100) / 100,
+    brutto,
     herleitung,
     /**
      * Die Einsätze mit ihrer Vertragsversion — damit später beantwortbar

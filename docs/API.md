@@ -753,7 +753,7 @@ Familie.
 | `filename` | string | ja | min. 1 Zeichen, max. 255 Zeichen |
 | `mimeType` | string | ja | min. 3 Zeichen, max. 120 Zeichen |
 | `sizeBytes` | integer | ja | ≥ 1, ≤ 1073741824 |
-| `scopeId` | string | – | max. 60 Zeichen |
+| `scopeId` | string | – | – |
 
 ### `POST /api/files/finalize`
 

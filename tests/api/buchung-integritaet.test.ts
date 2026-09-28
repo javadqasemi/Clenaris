@@ -211,6 +211,81 @@ describe('Buchung → Rechnung, Gastbuchung, Terminänderung', { concurrency: 1 
       for (const i of rechnung.items) assert.equal(Math.round(n(i.netAmount) * 100) / 100, n(i.netAmount));
     });
 
+    /**
+     * B-22 (2026-09-28): Die Gutscheingrenzen wurden nur vor der Transaktion
+     * geprüft und danach ohne Bedingung hochgezählt. Fünf gleichzeitige
+     * Buchungen beim Limit 2 lösten gegen den alten Stand alle fünf ein.
+     */
+    it('Gutschein mit Limit 2, fünf Buchungen gleichzeitig: genau zwei lösen ihn ein', async (t) => {
+      if (!db) return t.skip('keine Testdatenbank');
+      const code = `${gutschein}L`;
+      await db.coupon.create({
+        data: { organizationId: org, code, discountType: 'PERCENT', discountValue: 5, validFrom: new Date(Date.now() - 86_400_000), usageLimit: 2, perCustomerLimit: 10 },
+      });
+      try {
+        const antworten = await Promise.all(
+          [0, 1, 2, 3, 4].map((i) =>
+            post<{ data: { id: string } }>(
+              '/api/bookings',
+              { customerId: kundeId, leistungen: [{ serviceId: S.fenster, extras: [] }], scheduledStart: termin(300 + i * 7, '09:00'), address: adresse, propertyKind: 'OFFICE', source: 'PHONE', overrideCapacity: true, couponCode: code },
+              { jar: jars.admin },
+            ),
+          ),
+        );
+        for (const a of antworten) if (a.status === 201) buchungen.push(data(a).id);
+        const codes = antworten.map((a) => a.status).sort();
+        assert.deepEqual(codes, [201, 201, 422, 422, 422], antworten.map((a) => a.text.slice(0, 160)).join('\n'));
+        const stand = await db.coupon.findUniqueOrThrow({ where: { organizationId_code: { organizationId: org, code } }, select: { usageCount: true } });
+        assert.equal(stand.usageCount, 2, 'der Zähler steht über dem Limit');
+        assert.equal(await db.booking.count({ where: { couponCode: code } }), 2, 'mehr Buchungen mit dem Gutschein als erlaubt');
+      } finally {
+        await schutzfreiAufraeumen(async (tx) => {
+          const ids = (await tx.booking.findMany({ where: { couponCode: code }, select: { id: true } })).map((b) => b.id);
+          await tx.bookingItem.deleteMany({ where: { bookingId: { in: ids } } });
+          await tx.bookingExtra.deleteMany({ where: { bookingId: { in: ids } } });
+          await tx.activity.deleteMany({ where: { bookingId: { in: ids } } });
+          await tx.booking.deleteMany({ where: { id: { in: ids } } });
+          await tx.coupon.deleteMany({ where: { organizationId: org, code } });
+        });
+      }
+    });
+
+    /**
+     * Und die Grenze je Kundschaft zählte die Grossschreibung, gespeichert war
+     * aber, was getippt wurde: „integ…k" in Kleinbuchstaben zählte nie gegen
+     * das Limit 1. Gegen den alten Stand: zweite Buchung 201.
+     */
+    it('Gutschein je Kundschaft einmal — auch in Kleinbuchstaben getippt', async (t) => {
+      if (!db) return t.skip('keine Testdatenbank');
+      const code = `${gutschein}K`;
+      await db.coupon.create({
+        data: { organizationId: org, code, discountType: 'PERCENT', discountValue: 5, validFrom: new Date(Date.now() - 86_400_000), perCustomerLimit: 1 },
+      });
+      try {
+        const buchen = (i: number) =>
+          post<{ data: { id: string } }>(
+            '/api/bookings',
+            { customerId: kundeId, leistungen: [{ serviceId: S.fenster, extras: [] }], scheduledStart: termin(340 + i * 7, '09:00'), address: adresse, propertyKind: 'OFFICE', source: 'PHONE', overrideCapacity: true, couponCode: code.toLowerCase() },
+            { jar: jars.admin },
+          );
+        const erste = await buchen(0);
+        assert.equal(erste.status, 201, erste.text);
+        buchungen.push(data(erste).id);
+        const zweite = await buchen(1);
+        if (zweite.status === 201) buchungen.push(data(zweite).id);
+        assert.equal(zweite.status, 422, `zweite Einlösung: HTTP ${zweite.status}`);
+      } finally {
+        await schutzfreiAufraeumen(async (tx) => {
+          const ids = (await tx.booking.findMany({ where: { couponCode: { equals: code, mode: 'insensitive' } }, select: { id: true } })).map((b) => b.id);
+          await tx.bookingItem.deleteMany({ where: { bookingId: { in: ids } } });
+          await tx.bookingExtra.deleteMany({ where: { bookingId: { in: ids } } });
+          await tx.activity.deleteMany({ where: { bookingId: { in: ids } } });
+          await tx.booking.deleteMany({ where: { id: { in: ids } } });
+          await tx.coupon.deleteMany({ where: { organizationId: org, code } });
+        });
+      }
+    });
+
     it('mehrere Leistungen: jede Leistung, dieselbe Summe', async (t) => {
       if (!db) return t.skip('keine Testdatenbank');
       const id = await bueroBuchung([{ serviceId: S.buero, extras: [] }, { serviceId: S.fenster, extras: [] }], termin(207, '09:00'));

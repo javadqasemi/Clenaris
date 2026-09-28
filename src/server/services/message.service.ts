@@ -70,15 +70,22 @@ export async function openThread(params: {
   // (2026-09-27). Vorher nur für Mitarbeitende; Büro und Leitung konnten einen
   // Verlauf an die Einsatz-ID einer fremden Organisation hängen — die
   // Buchungs-ID darunter war längst mandantengebunden, die Einsatz-ID nicht.
+  //
+  // Und die Kundschaft nur zu einem **eigenen** Einsatz (2026-09-28). Vorher
+  // galt für sie allein die Organisation: Ein Kundenkonto konnte seinen
+  // Verlauf an den Einsatz einer anderen Kundschaft hängen, und die
+  // Einsatzansicht des Büros zeigte ihn dort als Nachricht zu diesem Auftrag.
   if (input.jobId) {
     const gefunden = await prisma.job.count({
       where: {
         id: input.jobId,
         organizationId,
         deletedAt: null,
-        ...(session.role === 'EMPLOYEE'
-          ? { assignments: { some: { employeeId: session.profileId ?? '__keines__' } } }
-          : {}),
+        ...(customer
+          ? { customerId: customer.id }
+          : session.role === 'EMPLOYEE'
+            ? { assignments: { some: { employeeId: session.profileId ?? '__keines__' } } }
+            : {}),
       },
     });
     if (!gefunden) throw new NotFoundError('Einsatz');

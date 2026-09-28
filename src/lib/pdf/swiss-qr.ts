@@ -83,17 +83,28 @@ export function mod10Recursive(input: string): number {
 }
 
 /**
- * Erzeugt eine 27-stellige QR-Referenz aus einer laufenden Nummer.
- * Aufbau: [optionale Kundennummer][laufende Nummer] auf 26 Stellen mit
- * führenden Nullen + Prüfziffer.
+ * Erzeugt eine 27-stellige QR-Referenz: 26 Ziffern + Prüfziffer (Modulo 10
+ * rekursiv).
+ *
+ * Aufbau: `[Jahr, 4][laufende Nummer, 22]`.
+ *
+ * **Warum das Jahr darin steht (seit 2026-09-28).** Der Rechnungszähler
+ * beginnt jedes Jahr bei 1 (`RE-2026-00001`, `RE-2027-00001`). Die Referenz
+ * bestand aber nur aus der laufenden Nummer — beide Rechnungen trugen also
+ * **dieselbe** QR-Referenz. Die Bank meldet eine Zahlung genau mit dieser
+ * Referenz zurück; mit zwei gleichen gehört eine Gutschrift im Januar ebenso
+ * gut zur Rechnung des Vorjahres, und der Scanner (`scan.service.ts`) fand zwei
+ * Treffer. Das Jahr macht sie über die Jahre eindeutig.
+ *
+ * Bereits ausgestellte Rechnungen behalten ihre gespeicherte Referenz — ein
+ * ausgestellter Beleg ist unveränderlich, und die Kundschaft hat sie schon
+ * erhalten. Die alte Form beginnt mit sechs Nullen, die neue mit der
+ * Jahreszahl; die beiden können sich darum nicht überschneiden.
  */
-export function buildQrReference(params: {
-  invoiceSequence: number;
-  customerSequence?: number;
-}): string {
-  const customerPart = String(params.customerSequence ?? 0).padStart(6, '0');
-  const invoicePart = String(params.invoiceSequence).padStart(20, '0');
-  const base = `${customerPart}${invoicePart}`.slice(-26);
+export function buildQrReference(params: { invoiceSequence: number; year: number }): string {
+  const jahr = String(params.year).padStart(4, '0').slice(-4);
+  const nummer = String(params.invoiceSequence).padStart(22, '0').slice(-22);
+  const base = `${jahr}${nummer}`;
   return `${base}${mod10Recursive(base)}`;
 }
 

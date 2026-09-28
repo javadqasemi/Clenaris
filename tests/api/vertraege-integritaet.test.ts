@@ -220,13 +220,17 @@ const unterschreiben = (publicId: string, jar: string) =>
 
 before(async () => {
   jars = await loginAll();
-  const kunden = await get<{ data: { id: string }[] }>('/api/customers?pageSize=1', { jar: jars.admin });
-  kundeId = data(kunden)[0]!.id;
-  const objekte = await get<{ data: { id: string; customerId: string }[] }>('/api/properties?pageSize=100', {
+  // Objekt und seine Kundschaft (2026-09-28). Die Liste liefert `customer.id`,
+  // kein `customerId`: Der frühere Vergleich traf nie — `objektId` war das
+  // erste Objekt überhaupt, und „fremdes Objekt" konnte das eigene sein.
+  const objekte = await get<{ data: { id: string; customer?: { id: string } | null }[] }>('/api/properties?pageSize=100', {
     jar: jars.admin,
   });
-  objektId = data(objekte).find((o) => o.customerId === kundeId)?.id ?? data(objekte)[0]!.id;
-  fremdesObjektId = data(objekte).find((o) => o.customerId !== kundeId)?.id ?? '';
+  const objekt = data(objekte).find((o) => o.customer?.id);
+  assert.ok(objekt?.customer, 'kein Objekt mit Kundschaft im Bestand');
+  objektId = objekt.id;
+  kundeId = objekt.customer.id;
+  fremdesObjektId = data(objekte).find((o) => o.customer?.id && o.customer.id !== kundeId)?.id ?? '';
   const leistungen = await get<{ data: { id: string }[] }>('/api/services?pageSize=1', { jar: jars.admin });
   leistungId = data(leistungen)[0]!.id;
 });

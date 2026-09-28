@@ -23,7 +23,7 @@ import { Prisma } from '@prisma/client';
  */
 
 export type Geld = Prisma.Decimal;
-type Eingabe = Prisma.Decimal | number | string | null | undefined;
+export type Eingabe = Prisma.Decimal | number | string | null | undefined;
 
 const RAPPEN_STELLEN = 2;
 

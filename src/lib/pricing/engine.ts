@@ -812,7 +812,9 @@ async function checkCoupon(params: {
       where: {
         organizationId: params.organizationId,
         customerId: params.customer.id,
-        couponCode: code,
+        // Ohne Rücksicht auf die Schreibweise: Buchungen vor 2026-09-28
+        // speicherten den Code, wie er getippt war.
+        couponCode: { equals: code, mode: 'insensitive' },
         status: { not: 'CANCELLED' },
       },
     });
