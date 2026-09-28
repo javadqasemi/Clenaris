@@ -71,19 +71,24 @@ export const PRUEFUNGEN: Pruefung[] = [
   {
     schluessel: 'rechnung_saldo',
     art: 'fehler',
-    beschreibung: 'Offener Posten = max(0, Brutto − (Zahlungen − Erstattungen) − Gutschriften); storniert/abgeschrieben: 0',
+    // Bezahlt: 0 — ein Rest bis fünf Rappen ist Rundungsdifferenz (B-08,
+    // 2026-09-28, `saldoNeuBilden`). Grösser darf der Rest dann nicht sein.
+    beschreibung: 'Offener Posten = max(0, Brutto − (Zahlungen − Erstattungen) − Gutschriften); storniert/abgeschrieben/bezahlt: 0',
     sql: `SELECT i.id FROM invoices i
           LEFT JOIN (SELECT "invoiceId", sum(amount - "refundedAmount") s FROM payments WHERE status IN ('SUCCEEDED', 'PARTIALLY_REFUNDED', 'REFUNDED') GROUP BY 1) p ON p."invoiceId" = i.id
           LEFT JOIN (SELECT "invoiceId", sum("grossTotal") s FROM credit_notes GROUP BY 1) g ON g."invoiceId" = i.id
           WHERE i.status <> 'DRAFT' AND abs(i.balance -
-            CASE WHEN i.status IN ('CANCELLED', 'WRITTEN_OFF') THEN 0
+            CASE WHEN i.status IN ('CANCELLED', 'WRITTEN_OFF', 'PAID') THEN 0
                  ELSE greatest(0, i."grossTotal" - coalesce(p.s, 0) - coalesce(g.s, 0)) END) > 0.01`,
   },
   {
     schluessel: 'rechnung_status_bezahlt',
     art: 'fehler',
-    beschreibung: '„Bezahlt" nur ohne offenen Posten (Toleranz 5 Rappen)',
-    sql: `SELECT id FROM invoices WHERE status = 'PAID' AND balance > 0.05`,
+    beschreibung: '„Bezahlt" nur, wenn höchstens 5 Rappen Rundungsdifferenz fehlen',
+    sql: `SELECT i.id FROM invoices i
+          LEFT JOIN (SELECT "invoiceId", sum(amount - "refundedAmount") s FROM payments WHERE status IN ('SUCCEEDED', 'PARTIALLY_REFUNDED', 'REFUNDED') GROUP BY 1) p ON p."invoiceId" = i.id
+          LEFT JOIN (SELECT "invoiceId", sum("grossTotal") s FROM credit_notes GROUP BY 1) g ON g."invoiceId" = i.id
+          WHERE i.status = 'PAID' AND i."grossTotal" - coalesce(p.s, 0) - coalesce(g.s, 0) > 0.05`,
   },
   {
     schluessel: 'gutschrift_obergrenze',

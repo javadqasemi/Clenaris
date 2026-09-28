@@ -868,11 +868,22 @@ export async function saldoNeuBilden(tx: Prisma.TransactionClient, invoiceId: st
           : 'ISSUED'
         : rechnung.status;
 
+  /*
+    Bezahlt heisst: nichts mehr offen (2026-09-28, B-08). Ein Rest bis fünf
+    Rappen ist eine Rundungsdifferenz — typisch, wenn jemand CHF 108.12 auf
+    108.10 abrundet. Vorher bekam die Rechnung zwar den Status „bezahlt",
+    behielt aber den Saldo 0.02. Jede Stelle, die „offen" an `balance > 0`
+    erkennt — Kundenkonto, offene Posten, Kennzahlen, die Online-Zahlung —,
+    führte sie danach weiter als offen, und die Kundschaft konnte zwei Rappen
+    mit der Karte bezahlen. Die Differenz steht weiterhin nachvollziehbar in
+    `grossTotal − paidAmount`; die Integritätsprüfung
+    (`scripts/datenintegritaet.ts`) kennt genau diese Regel.
+  */
   return tx.invoice.update({
     where: { id: invoiceId },
     data: {
       paidAmount: bezahlt,
-      balance: max0(offen),
+      balance: voll ? 0 : max0(offen),
       status,
       paidAt: voll ? (rechnung.paidAt ?? new Date()) : null,
     },

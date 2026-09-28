@@ -11,6 +11,7 @@ import { prisma, toNumber } from '@/lib/db';
 import { logger } from '@/lib/logger';
 import {
   ERLAUBTE_STATUSAENDERUNGEN,
+  ausgangszustaendeFuer,
   pruefeAktionsKonfiguration,
   type StatusZiel,
 } from '@/lib/validation/automation-config';
@@ -807,8 +808,31 @@ async function fuehreLaufAus(organizationId: string, runId: string): Promise<Aus
     },
   });
 
+  /**
+   * Der Versuch dieses Workers — sein Pachtzeichen (B-17, 2026-09-28).
+   *
+   * `haengendeLaeufeFreigeben` gibt einen Lauf, der länger als
+   * `HAENGT_NACH_MINUTEN` auf RUNNING steht, wieder frei. Ein Worker, der nur
+   * *stand* statt abzustürzen (lange Speicherbereinigung, eingefrorener
+   * Prozess), lebte danach weiter — neben dem Worker, der den Lauf neu
+   * beansprucht hatte. Zwischen Aktion 0 und Aktion 1 angehalten, fanden beide
+   * für Aktion 1 noch keinen Stand und führten sie beide aus: zwei E-Mails,
+   * zwei Webhooks.
+   *
+   * Jedes Beanspruchen erhöht `attempts`. Der Wert nach dem eigenen
+   * Beanspruchen ist deshalb ein Zeichen, das nur dieser Worker hält: Vor
+   * jeder Aktion und bei jedem abschliessenden Schreiben muss der Lauf noch
+   * RUNNING mit genau diesem Versuch sein. Wer es nicht mehr ist, hört auf,
+   * ohne etwas zu schreiben. Die Aktion selbst wird ausserdem bedingt
+   * beansprucht (siehe unten) — das deckt den Moment zwischen Prüfung und
+   * Beanspruchen.
+   */
+  const versuch = lauf?.attempts ?? 0;
+  const nochMeinLauf = async () =>
+    (await prisma.automationRun.count({ where: { id: runId, status: 'RUNNING', attempts: versuch } })) === 1;
+
   if (!lauf || lauf.automation.organizationId !== organizationId) {
-    await abschliessen(runId, 'SKIPPED', { grund: 'Regel gehört zu einer anderen Organisation.' });
+    await abschliessen(runId, versuch, 'SKIPPED', { grund: 'Regel gehört zu einer anderen Organisation.' });
     return 'uebersprungen';
   }
 
@@ -821,7 +845,7 @@ async function fuehreLaufAus(organizationId: string, runId: string): Promise<Aus
    * Versuch änderte daran nichts.
    */
   if (!nutzlast) {
-    await abschliessen(runId, 'SKIPPED', { grund: 'Der Vorgang existiert nicht mehr.' });
+    await abschliessen(runId, versuch, 'SKIPPED', { grund: 'Der Vorgang existiert nicht mehr.' });
     return 'uebersprungen';
   }
 
@@ -831,7 +855,7 @@ async function fuehreLaufAus(organizationId: string, runId: string): Promise<Aus
    */
   const bedingungen = (lauf.automation.conditions ?? {}) as Record<string, unknown>;
   if (!bedingungenErfuellt(bedingungen, nutzlast)) {
-    await abschliessen(runId, 'SKIPPED', {
+    await abschliessen(runId, versuch, 'SKIPPED', {
       grund: 'Die Bedingungen treffen zum Ausführungszeitpunkt nicht mehr zu.',
     });
     return 'uebersprungen';
@@ -845,7 +869,7 @@ async function fuehreLaufAus(organizationId: string, runId: string): Promise<Aus
    */
   const zeitregel = ZEITREGELN[lauf.automation.trigger];
   if (zeitregel && !(await zeitregel.gilt(organizationId, lauf.entityId, new Date()))) {
-    await abschliessen(runId, 'SKIPPED', { grund: 'Der Anlass besteht zum Ausführungszeitpunkt nicht mehr.' });
+    await abschliessen(runId, versuch, 'SKIPPED', { grund: 'Der Anlass besteht zum Ausführungszeitpunkt nicht mehr.' });
     return 'uebersprungen';
   }
 
@@ -886,7 +910,7 @@ async function fuehreLaufAus(organizationId: string, runId: string): Promise<Aus
     const grund =
       `Regel geändert, während der Lauf auf seine Wiederholung wartete — die Aktion an Stelle ${abweichung.position + 1} ` +
       `ist nicht mehr dieselbe. Nicht fortgesetzt, damit keine Aktion doppelt oder unter falschem Stand läuft. Bitte prüfen.`;
-    await abschliessen(runId, 'FAILED', { grund, position: abweichung.position, bisherigeArt: abweichung.type }, grund);
+    await abschliessen(runId, versuch, 'FAILED', { grund, position: abweichung.position, bisherigeArt: abweichung.type }, grund);
     log.warn('Automatisierung nach Regeländerung nicht fortgesetzt', { runId, regel: lauf.automation.name, position: abweichung.position });
     return 'gescheitert';
   }
@@ -916,6 +940,12 @@ async function fuehreLaufAus(organizationId: string, runId: string): Promise<Aus
    *    Wirkung. Zielzustände (Statusänderung) sind wiederholbar.
    */
   for (const [position, aktion] of lauf.automation.actions.entries()) {
+    // Pacht noch da? Sonst hat ein anderer Worker übernommen (B-17) — aufhören,
+    // ohne irgendetwas zu schreiben.
+    if (!(await nochMeinLauf())) {
+      log.warn('Automatisierungslauf während der Ausführung übernommen — hier beendet', { runId, position });
+      return 'uebersprungen';
+    }
     const kennung = aktionsKennung(aktion.type, aktion.config);
     const vorher = await prisma.automationActionRun.findUnique({ where: { runId_position: { runId, position } } });
     if (vorher && (vorher.status === 'SUCCEEDED' || vorher.status === 'SKIPPED')) {
@@ -945,12 +975,38 @@ async function fuehreLaufAus(organizationId: string, runId: string): Promise<Aus
       continue;
     }
 
-    // Vor der Wirkung auf RUNNING — damit ein Absturz mittendrin erkennbar bleibt.
-    await prisma.automationActionRun.upsert({
-      where: { runId_position: { runId, position } },
-      create: { runId, position, type: aktion.type, status: 'RUNNING', attempts: 1, startedAt: new Date(), result: { kennung } },
-      update: { status: 'RUNNING', attempts: { increment: 1 }, startedAt: new Date(), error: null },
-    });
+    /*
+      Vor der Wirkung auf RUNNING — damit ein Absturz mittendrin erkennbar
+      bleibt. Und **bedingt** (B-17): Bis 2026-09-28 stand hier ein `upsert`,
+      das jeden vorgefundenen Stand überschrieb. Zwei Worker beanspruchten
+      damit dieselbe Aktion beide. Jetzt legt nur an, wer als Erster kommt
+      (eindeutiger Index `runId, position`), und fortgesetzt wird nur der
+      Stand, der noch genau so aussieht wie eben gelesen.
+    */
+    let beanspruchtAktion: boolean;
+    if (vorher) {
+      beanspruchtAktion =
+        (
+          await prisma.automationActionRun.updateMany({
+            where: { id: vorher.id, status: vorher.status, attempts: vorher.attempts },
+            data: { status: 'RUNNING', attempts: { increment: 1 }, startedAt: new Date(), error: null },
+          })
+        ).count === 1;
+    } else {
+      try {
+        await prisma.automationActionRun.create({
+          data: { runId, position, type: aktion.type, status: 'RUNNING', attempts: 1, startedAt: new Date(), result: { kennung } },
+        });
+        beanspruchtAktion = true;
+      } catch (fehler) {
+        if (fehler instanceof Prisma.PrismaClientKnownRequestError && fehler.code === 'P2002') beanspruchtAktion = false;
+        else throw fehler;
+      }
+    }
+    if (!beanspruchtAktion) {
+      log.warn('Aktion bereits von einem anderen Worker beansprucht — hier beendet', { runId, position });
+      return 'uebersprungen';
+    }
 
     try {
       const bereitsZugestellt = ((vorher?.result ?? {}) as { zugestellt?: string[] }).zugestellt ?? [];
@@ -979,14 +1035,15 @@ async function fuehreLaufAus(organizationId: string, runId: string): Promise<Aus
   }
 
   if (!gescheitertMit) {
-    await abschliessen(runId, 'SUCCESS', { aktionen: protokoll });
+    await abschliessen(runId, versuch, 'SUCCESS', { aktionen: protokoll });
     return 'erfolgreich';
   }
 
   if (!endgueltig && lauf.attempts < MAX_VERSUCHE) {
     const minuten = BACKOFF_MINUTEN[Math.min(lauf.attempts - 1, BACKOFF_MINUTEN.length - 1)];
-    await prisma.automationRun.update({
-      where: { id: runId },
+    // Nur mit der eigenen Pacht zurück in die Warteschlange (B-17).
+    await prisma.automationRun.updateMany({
+      where: { id: runId, status: 'RUNNING', attempts: versuch },
       data: {
         status: 'PENDING',
         scheduledFor: new Date(Date.now() + minuten * 60_000),
@@ -997,7 +1054,7 @@ async function fuehreLaufAus(organizationId: string, runId: string): Promise<Aus
     return 'wiederholen';
   }
 
-  await abschliessen(runId, 'FAILED', { aktionen: protokoll }, gescheitertMit);
+  await abschliessen(runId, versuch, 'FAILED', { aktionen: protokoll }, gescheitertMit);
   log.warn('Automatisierung endgültig gescheitert', {
     runId,
     regel: lauf.automation.name,
@@ -1069,14 +1126,20 @@ async function aktionsstandSetzen(
   });
 }
 
+/**
+ * Den Lauf beenden — nur, solange dieser Worker ihn noch hält (B-17): RUNNING
+ * mit genau dem Versuch, den er beim Beanspruchen erzeugt hat. Hat inzwischen
+ * ein anderer Worker übernommen, schreibt der ältere nichts mehr darüber.
+ */
 async function abschliessen(
   runId: string,
+  versuch: number,
   status: 'SUCCESS' | 'FAILED' | 'SKIPPED',
   result: unknown,
   fehler?: string,
 ): Promise<void> {
-  await prisma.automationRun.update({
-    where: { id: runId },
+  await prisma.automationRun.updateMany({
+    where: { id: runId, status: 'RUNNING', attempts: versuch },
     data: {
       status,
       finishedAt: new Date(),
@@ -1438,18 +1501,24 @@ async function aendereStatus(params: {
     };
   }
 
-  const wo = { id: params.nutzlast.entityId, organizationId: params.organizationId };
+  // Nur aus einem zulässigen Ausgangszustand (B-19) — im `where`, damit der
+  // Zustand im Moment des Schreibens zählt, nicht der beim Auslösen.
+  const von = ausgangszustaendeFuer(ziel, status);
+  const wo = { id: params.nutzlast.entityId, organizationId: params.organizationId, status: { in: [...von] as never[] } };
 
   const treffer =
     ziel === 'lead'
       ? await prisma.lead.updateMany({ where: wo, data: { status: status as never } })
       : ziel === 'booking'
         ? await prisma.booking.updateMany({ where: wo, data: { status: status as never } })
-        : await prisma.job.updateMany({ where: wo, data: { status: status as never } });
+        : await prisma.job.updateMany({ where: { ...wo, deletedAt: null }, data: { status: status as never } });
 
   return treffer.count > 0
     ? { ergebnis: 'ok', ziel, status }
-    : { ergebnis: 'uebersprungen', grund: 'Der Datensatz wurde nicht gefunden.' };
+    : {
+        ergebnis: 'uebersprungen',
+        grund: 'Der Datensatz wurde nicht gefunden oder steht in einem Zustand, aus dem diese Regel ihn nicht ändern darf.',
+      };
 }
 
 async function rufeAuf(params: {

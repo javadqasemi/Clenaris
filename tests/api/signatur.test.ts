@@ -833,8 +833,22 @@ describe('Unterzeichnung — Ablehnen, Abbrechen, Ergebnis, Nachtlauf', () => {
 
     const nachgeholt = await vorgangLesen(fertig.vorgang.id);
     assert.equal(nachgeholt.status, 'COMPLETED');
-    assert.equal(nachgeholt.evidenceArtifactId, vorher.evidenceArtifactId, 'derselbe Pfad, dasselbe Asset — kein zweites Protokoll');
-    assert.ok(nachgeholt.evidenceArtifactHash);
+    assert.ok(nachgeholt.evidenceArtifactId && nachgeholt.evidenceArtifactHash, 'Protokoll nachgeholt');
+    /*
+      Bis 2026-09-28 stand hier „derselbe Pfad, dasselbe Asset": Das
+      Nachholen schrieb die Bytes des verlorenen Protokolls an derselben Stelle
+      neu. Genau dieses Überschreiben ist B-16 — ein hängender und ein
+      übernehmender Abschluss veränderten so einen Beleg, dessen Hash schon
+      eingetragen war. Jetzt legt jeder Versuch eine eigene Datei an; die
+      Zusage „kein zweites Protokoll" heisst: genau **eines** ist verknüpft
+      (bedingtes Eintragen), und das frühere wurde **nicht** überschrieben.
+    */
+    const altesAsset = await db!.fileAsset.findUniqueOrThrow({ where: { id: vorher.evidenceArtifactId! }, select: { checksum: true, path: true } });
+    assert.equal(altesAsset.checksum, vorher.evidenceArtifactHash, 'das frühere Protokoll wurde überschrieben');
+    if (nachgeholt.evidenceArtifactId !== vorher.evidenceArtifactId) {
+      const neuesAsset = await db!.fileAsset.findUniqueOrThrow({ where: { id: nachgeholt.evidenceArtifactId }, select: { path: true } });
+      assert.notEqual(neuesAsset.path, altesAsset.path, 'zwei Protokolle unter demselben Pfad');
+    }
     const integritaet = await get<{ data: { evidence: { status: string } } }>(`/api/signatures/${fertig.vorgang.id}/integrity`, { jar: jars.admin });
     assert.equal(data(integritaet).evidence.status, 'ok');
   });

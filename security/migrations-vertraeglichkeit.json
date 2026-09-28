@@ -55,6 +55,11 @@
     "20260927190000_release_ausfuehrung_zustaende": { "einstufung": "RUECKWAERTSVERTRAEGLICH", "notiz": "Neue Werte ReleaseRequestStatus." },
     "20260927190100_release_ausfuehrung": { "einstufung": "PROGRAMMWECHSEL", "notiz": "Eindeutigkeiten auf release_requests." },
     "20260927200000_vertragsperiode_vollstaendig": { "einstufung": "PROGRAMMWECHSEL", "notiz": "Prüfregel: Periodenbeginn und -ende nur zusammen." },
-    "20260927200100_eine_offene_zeiterfassung": { "einstufung": "PROGRAMMWECHSEL", "notiz": "Teilindex: eine laufende Zeiterfassung je Person." }
+    "20260927200100_eine_offene_zeiterfassung": { "einstufung": "PROGRAMMWECHSEL", "notiz": "Teilindex: eine laufende Zeiterfassung je Person." },
+    "20260928090000_bezahlt_ohne_restsaldo": { "einstufung": "RUECKFUELLUNG", "notiz": "balance bezahlter Rechnungen mit Rundungsrest ≤ 0.05 auf 0; die alte Fassung liest und schreibt die Spalte unverändert weiter." },
+    "20260928091000_buchung_absendekennung": {
+      "einstufung": "RUECKWAERTSVERTRAEGLICH",
+      "begruendung": "Neue, freiwillige Spalte bookings.idempotencyKey mit eindeutigem Index auf (organizationId, idempotencyKey). Die vorherige Fassung kennt die Spalte nicht und schreibt NULL; NULL-Werte verletzen den eindeutigen Index nicht. Bestand bleibt gültig."
+    }
   }
 }
