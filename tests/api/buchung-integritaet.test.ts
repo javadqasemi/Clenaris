@@ -286,6 +286,31 @@ describe('Buchung → Rechnung, Gastbuchung, Terminänderung', { concurrency: 1 
       }
     });
 
+    /**
+     * B-23 (2026-09-28): Ein Doppelklick oder eine Wiederholung nach
+     * Zeitüberschreitung legte eine zweite Buchung an. Mit derselben Kennung
+     * des Absendens gibt es genau eine — auch bei drei gleichzeitigen
+     * Versuchen. Gegen den alten Stand: drei Buchungen.
+     */
+    it('dreimal gleichzeitig mit derselben Absendekennung: eine Buchung, dieselbe Antwort', async (t) => {
+      if (!db) return t.skip('keine Testdatenbank');
+      const kennung = `pruefung${RUN}absenden`;
+      const antworten = await Promise.all(
+        [0, 1, 2].map(() =>
+          post<{ data: { id: string } }>(
+            '/api/bookings',
+            { customerId: kundeId, leistungen: [{ serviceId: S.fenster, extras: [] }], scheduledStart: termin(380, '09:00'), address: adresse, propertyKind: 'OFFICE', source: 'PHONE', overrideCapacity: true, idempotencyKey: kennung },
+            { jar: jars.admin },
+          ),
+        ),
+      );
+      for (const a of antworten) assert.ok(a.status === 201 || a.status === 200, a.text);
+      const ids = new Set(antworten.map((a) => data(a).id));
+      assert.equal(ids.size, 1, `verschiedene Buchungen: ${[...ids].join(', ')}`);
+      buchungen.push(...ids);
+      assert.equal(await db.booking.count({ where: { idempotencyKey: kennung } }), 1);
+    });
+
     it('mehrere Leistungen: jede Leistung, dieselbe Summe', async (t) => {
       if (!db) return t.skip('keine Testdatenbank');
       const id = await bueroBuchung([{ serviceId: S.buero, extras: [] }, { serviceId: S.fenster, extras: [] }], termin(207, '09:00'));

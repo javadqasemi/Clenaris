@@ -162,6 +162,21 @@ const bookingCoreShape = {
   accessNote: z.string().trim().max(500).optional(),
   couponCode: z.string().trim().max(40).optional(),
   fileIds: z.array(cuidSchema).max(10).default([]),
+  /**
+   * Kennung dieses einen Absendens (2026-09-28, B-23).
+   *
+   * Der Buchungsassistent erzeugt sie einmal je Buchungsvorgang (zufällig,
+   * 128 Bit) und schickt sie bei jedem Versuch mit. Ein Doppelklick, eine
+   * Wiederholung des Browsers nach einer Zeitüberschreitung oder ein zweites
+   * Absenden nach „Zurück" legte vorher eine zweite Buchung an, sobald der
+   * Termin Platz für zwei hatte. Mit der Kennung antwortet der Server beim
+   * zweiten Mal mit der ersten Buchung. Freiwillig: Wer sie nicht schickt
+   * (Büro, ältere Clients), bekommt das bisherige Verhalten.
+   */
+  idempotencyKey: z
+    .string()
+    .regex(/^[A-Za-z0-9_-]{16,64}$/, 'Die Kennung des Absendens ist ungültig.')
+    .optional(),
 
   // Wiederholung
   recurrence: z

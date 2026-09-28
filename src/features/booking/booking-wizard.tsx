@@ -152,6 +152,28 @@ export function BookingWizard({
     }
   }, [scheduledStart, verfuegbarkeit.data, verfuegbarkeit.isFetching, patch]);
 
+  /**
+   * Eine Kennung je Buchungsvorgang, bei jedem Absenden dieselbe (B-23,
+   * 2026-09-28). Schickt der Browser nach einer Zeitüberschreitung erneut
+   * oder klickt jemand zweimal, antwortet der Server mit der bereits
+   * angelegten Buchung statt einer zweiten. `getRandomValues` statt
+   * `randomUUID`: Letzteres fehlt ausserhalb sicherer Ursprünge (Vorschau im
+   * lokalen Netz über http), Ersteres nicht. Fehlt beides, geht die Buchung
+   * ohne Kennung — wie bisher.
+   */
+  const absendeKennung = React.useRef<string | null>(null);
+  const kennungFuerAbsenden = () => {
+    if (absendeKennung.current) return absendeKennung.current;
+    try {
+      const bytes = new Uint8Array(16);
+      crypto.getRandomValues(bytes);
+      absendeKennung.current = Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+    } catch {
+      absendeKennung.current = null;
+    }
+    return absendeKennung.current ?? undefined;
+  };
+
   const submit = async () => {
     const state = useBookingStore.getState();
     setSubmitting(true);
@@ -161,6 +183,7 @@ export function BookingWizard({
       const result = await api.post<{ id: string; number: string; confirmationUrl: string }>(
         '/api/public/bookings',
         {
+          idempotencyKey: kennungFuerAbsenden(),
           // Alle Leistungen mit ihren Angaben und Zusätzen — dieselbe Form wie
           // für Preis und Kalender (`leistungenPayload`). Preis, Dauer und
           // Verfügbarkeit rechnet der Server beim Abschluss neu.

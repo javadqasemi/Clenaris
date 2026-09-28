@@ -102,6 +102,45 @@ export const ERLAUBTE_STATUSAENDERUNGEN = {
 
 export type StatusZiel = keyof typeof ERLAUBTE_STATUSAENDERUNGEN;
 
+/**
+ * Aus welchem Zustand eine Regel wechseln darf (2026-09-28, B-19).
+ *
+ * Die Liste oben begrenzte nur das **Ziel**. Geschrieben wurde ohne
+ * Bedingung — eine Regel „bei … Einsatz auf offen setzen" holte damit einen
+ * abgesagten Einsatz zurück, samt altem Team und ohne die
+ * Überschneidungsprüfung der Zuteilung (`assignment.service.ts`), und eine
+ * Regel „absagen" traf auch einen abgeschlossenen oder geprüften Einsatz —
+ * die Grundlage der Verrechnung. Von Hand ginge beides nicht.
+ *
+ * Jetzt nur aus Zuständen, in denen der Übergang auch von Hand ohne weitere
+ * Folgen ginge: nichts Begonnenes, nichts Abgeschlossenes, nichts Abgesagtes
+ * zurück. Der Zustand steht im `where` der Änderung, also entscheidet die
+ * Datenbank im Moment des Schreibens — nicht eine Lektüre davor.
+ */
+export const ERLAUBTE_AUSGANGSZUSTAENDE: {
+  [Z in StatusZiel]: Record<(typeof ERLAUBTE_STATUSAENDERUNGEN)[Z][number], readonly string[]>;
+} = {
+  lead: {
+    CONTACTED: ['NEW'],
+    QUALIFIED: ['NEW', 'CONTACTED'],
+    LOST: ['NEW', 'CONTACTED', 'QUALIFIED', 'PROPOSAL'],
+  },
+  booking: {
+    CONFIRMED: ['PENDING'],
+    CANCELLED: ['PENDING', 'CONFIRMED'],
+  },
+  job: {
+    UNASSIGNED: ['SCHEDULED', 'DISPATCHED', 'ON_HOLD'],
+    CANCELLED: ['UNASSIGNED', 'SCHEDULED', 'DISPATCHED', 'ON_HOLD'],
+  },
+};
+
+/** Die zulässigen Ausgangszustände für `ziel` → `status`; leer, wenn der Wechsel nicht zugelassen ist. */
+export function ausgangszustaendeFuer(ziel: string, status: string): readonly string[] {
+  const jeZiel = (ERLAUBTE_AUSGANGSZUSTAENDE as Record<string, Record<string, readonly string[]>>)[ziel];
+  return jeZiel?.[status] ?? [];
+}
+
 export const updateStatusConfigSchema = z
   .object({
     ziel: z.enum(['lead', 'booking', 'job']),

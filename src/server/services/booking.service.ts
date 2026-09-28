@@ -209,7 +209,7 @@ export async function createBooking(params: {
     input.scheduledStart.getTime() + breakdown.durationMinutes * 60_000,
   );
 
-  const { booking, offenlegen } = await prisma.$transaction(async (tx) => {
+  const { booking, offenlegen, wiederholt } = await prisma.$transaction(async (tx) => {
     /**
      * Die Kapazitätsprüfung hält den öffentlichen Buchungstrichter davon ab,
      * mehr zuzusagen, als das Team schafft. Im Büro ist sie eine Empfehlung:
@@ -230,6 +230,31 @@ export async function createBooking(params: {
      * bei den Buchungszahlen eines Reinigungsbetriebs ist das kein Engpass.
      */
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`buchung:${organizationId}`}))`;
+
+    /**
+     * Dasselbe Absenden ein zweites Mal (B-23, 2026-09-28): die erste Buchung
+     * zurückgeben, nichts Neues anlegen.
+     *
+     * Unter der Buchungssperre gelesen — zwei gleichzeitige Versuche mit
+     * derselben Kennung reihen sich an ihr auf, der zweite sieht die Buchung
+     * des ersten. Der eindeutige Index `(organizationId, idempotencyKey)` hält
+     * zusätzlich, falls je ein Weg an der Sperre vorbeiführte.
+     *
+     * Zurück kommt die Buchung **ohne** Verwaltungslink (`offenlegen: false`):
+     * Der Link ist ein Einmalwert, der nur als Hash gespeichert ist, und eine
+     * Wiederholung stellt keinen zweiten aus. Der Assistent zeigt dann die
+     * knappe Bestätigung — dieselbe wie bei einer Gastbuchung auf eine
+     * bestehende Akte. Die Kennung selbst ist ein Zufallswert, den nur der
+     * absendende Browser kennt; wer sie hat, hat die Buchung angelegt.
+     */
+    if (input.idempotencyKey) {
+      const schon = await tx.booking.findFirst({
+        where: { organizationId, idempotencyKey: input.idempotencyKey },
+        include: { customer: true, address: true },
+      });
+      if (schon) return { booking: schon, offenlegen: false, wiederholt: true };
+    }
+
     if (!office?.overrideCapacity) {
       const bedarf = await leistungsbedarf(tx, organizationId, leistungen.map((l) => l.serviceId));
       const slotCheck = await isSlotBookable({
@@ -331,6 +356,7 @@ export async function createBooking(params: {
         // jede Auswertung darüber, woher die Aufträge kommen.
         source: office?.source ?? 'WEBSITE',
         bookedByIp: params.ip ?? null,
+        idempotencyKey: input.idempotencyKey ?? null,
         items: { create: positionenAusHerleitung(breakdown, leistungen) },
         extras: { create: zusatzleistungenAusHerleitung(breakdown) },
       },
@@ -409,8 +435,12 @@ export async function createBooking(params: {
     });
 
     await automationEreignisVormerken(tx, { organizationId, trigger: 'BOOKING_CREATED', entityId: created.id });
-    return { booking: created, offenlegen };
+    return { booking: created, offenlegen, wiederholt: false };
   });
+
+  // Eine Wiederholung löst nichts noch einmal aus: keine zweite E-Mail, kein
+  // zweiter Link, kein zweiter Protokolleintrag (B-23).
+  if (wiederholt) return { booking, confirmationUrl: null, isNewCustomer: false };
 
   // --- 5) Folgeaktionen ausserhalb der Transaktion -------------------------
   await invalidateAvailability(organizationId, input.scheduledStart);

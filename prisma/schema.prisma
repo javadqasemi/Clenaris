@@ -1954,6 +1954,10 @@ model Booking {
   // Kanäle & Herkunft
   source            LeadSource @default(WEBSITE)
   bookedByIp        String?
+  /// Kennung des Absendens aus dem Buchungsassistenten — ein zweites Absenden
+  /// mit derselben Kennung bekommt diese Buchung zurück statt einer neuen
+  /// (B-23, 2026-09-28). Eindeutig je Organisation; `NULL` für Büro und Altbestand.
+  idempotencyKey    String?
   // Der Verwaltungslink ohne Login ist ein `PublicAccessToken` (BOOKING_MANAGE):
   // nur der Hash liegt in der Datenbank. Bis 2026-09-27 stand hier
   // `confirmationToken` im Klartext — siehe Migration `…_buchungslink_hash`.
@@ -1989,6 +1993,7 @@ model Booking {
   reviews    Review[]
 
   @@unique([organizationId, number])
+  @@unique([organizationId, idempotencyKey])
   @@index([organizationId, status, scheduledStart])
   @@index([customerId, scheduledStart])
   @@index([scheduledStart])

@@ -131,10 +131,13 @@ async function artefaktBytes(asset: {
 /**
  * Ein erzeugtes Artefakt ablegen und als privates `FileAsset` registrieren.
  *
- * Der Pfad ist deterministisch (`signatures/<Vorgang>/<Art>.pdf`): Beim
- * eingebauten Speicher ersetzt ein zweiter Versuch die Zeile statt eine
- * neue anzulegen; beim externen wird mit `upsert` überschrieben. Das ist der
- * Grund, warum eine Wiederholung nie `signed-2.pdf` erzeugt.
+ * Der Pfad ist deterministisch (`signatures/<Vorgang>/<Art>[-<suffix>].pdf`):
+ * Beim eingebauten Speicher ersetzt ein zweiter Versuch mit demselben Pfad
+ * die Zeile statt eine neue anzulegen; beim externen wird mit `upsert`
+ * überschrieben. Signiertes Artefakt und Protokoll bekommen seit 2026-09-28
+ * eine Kennung je Abschlussversuch als `suffix` (B-16, Begründung in
+ * `finalizeSignatureRequest`) — gleichzeitige Versuche überschreiben
+ * einander damit nicht mehr.
  */
 async function artefaktAblegen(params: {
   organizationId: string;
@@ -1793,6 +1796,28 @@ export async function finalizeSignatureRequest(requestId: string, ctx?: AnfrageK
 
   await appendSignatureEvent(prisma, { requestId, type: 'FINALIZATION_STARTED', ctx });
 
+  /**
+   * Eine Kennung je Abschlussversuch — im Dateinamen von B und C (B-16,
+   * 2026-09-28).
+   *
+   * Der Pfad war deterministisch (`signatures/<Vorgang>/signed.pdf`), damit
+   * eine Wiederholung keine zweite Datei anlegt. Genau das ermöglichte ein
+   * Überschreiben: Hängt ein Abschluss länger als `FINALIZING_STALE_MS` und
+   * übernimmt ein zweiter, schreiben beide dieselbe Datei. Das bedingte
+   * `updateMany` darunter lässt nur einen Hash eintragen — aber der
+   * Verlierer kann die Bytes **danach** noch überschreiben. Der eingetragene
+   * Hash B passte dann nicht mehr zu den abgelegten Bytes, die Prüfung beim
+   * Lesen stellte das Artefakt unter Quarantäne, und der unterschriebene Beleg
+   * war nicht mehr abrufbar.
+   *
+   * Mit eigener Datei je Versuch überschreibt keiner den anderen; welches
+   * Artefakt gilt, entscheidet weiterhin allein das bedingte Eintragen. Der
+   * Verlierer hinterlässt eine private, nirgends verknüpfte Datei — ein
+   * harmloser Rest statt eines beschädigten Belegs. A bleibt unberührt: Sein
+   * Pfad trug schon immer eine frische `publicId`.
+   */
+  const abschlussVersuch = randomToken(6);
+
   try {
     const request = await prisma.signatureRequest.findUniqueOrThrow({
       where: { id: requestId },
@@ -1857,6 +1882,9 @@ export async function finalizeSignatureRequest(requestId: string, ctx?: AnfrageK
         organizationId: request.organizationId,
         requestId: request.id,
         art: 'signed',
+        // Je Abschlussversuch eine eigene Datei (B-16, 2026-09-28) — siehe
+        // `abschlussVersuch` weiter unten beim Protokoll.
+        suffix: abschlussVersuch,
         bytes: signedBytes,
         contentType: 'application/pdf',
         filename: `${request.title.replace(/[^\w.-]+/g, '-')}-unterzeichnet.pdf`,
@@ -1931,6 +1959,7 @@ export async function finalizeSignatureRequest(requestId: string, ctx?: AnfrageK
         organizationId: request.organizationId,
         requestId: request.id,
         art: 'evidence',
+        suffix: abschlussVersuch,
         bytes: evidenceBytes,
         contentType: 'application/pdf',
         filename: `Signaturprotokoll-${request.publicId}.pdf`,
