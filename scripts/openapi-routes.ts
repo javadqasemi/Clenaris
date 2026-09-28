@@ -394,6 +394,19 @@ export const ROUTES: RouteDoc[] = [
     query: q.postalCodeQuery,
   },
   {
+    method: 'get',
+    path: '/api/public/kontakt/vcard',
+    tag: 'Öffentlich',
+    summary: 'Visitenkarte der Firma (.vcf)',
+    description:
+      'vCard 3.0 mit Firmenname, Telefon, E-Mail, Website und Postadresse — dieselbe Zeichenkette ' +
+      'wie im QR-Code auf `/kontakt`. Nur öffentliche Stammdaten (keine IBAN, keine MWST-Nummer, keine ' +
+      'Personen). `Content-Disposition: attachment`, `Cache-Control: public, max-age=3600`.',
+    guard: { kind: 'public' },
+    rateLimit: 'apiRead',
+    produces: 'text/vcard',
+  },
+  {
     method: 'post',
     path: '/api/public/bookings',
     tag: 'Öffentlich',

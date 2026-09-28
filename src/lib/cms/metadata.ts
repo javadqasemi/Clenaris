@@ -2,6 +2,8 @@ import 'server-only';
 
 import type { Metadata } from 'next';
 
+import { SEITEN_URL } from '@/lib/seiten-url';
+import { seitenMetadaten } from '@/lib/seo/metadaten';
 import { getOrganizationId } from '@/server/services/organization.service';
 import { getPageSeo } from '@/server/services/content.service';
 
@@ -17,6 +19,13 @@ import { getPageSeo } from '@/server/services/content.service';
  * die Datenbank nicht erreichbar, gilt der Auslieferungstext. Eine Seite ohne
  * Titel wäre in den Suchergebnissen unbrauchbar.
  *
+ * Das Objekt selbst baut `seitenMetadaten()` (seit 2026-09-28): Klartext statt
+ * Markup in Titel und Beschreibung, Canonical und `og:url` nur aus
+ * `SEITEN_URL` und dem geprüften Pfad, das Vorschaubild nur als `https` oder
+ * eigene Adresse, und `og:site_name`/`og:locale`, die vorher auf jeder
+ * dieser Seiten fehlten, weil ein eigenes `openGraph` das des Layouts
+ * ersetzt. Dieselbe Funktion rechnet die Übersicht in `/admin/seo`.
+ *
  * Aufruf in der Seite:
  *
  *   export const generateMetadata = () => pageMetadata('/preise');
@@ -25,31 +34,15 @@ export async function pageMetadata(path: string): Promise<Metadata> {
   const organizationId = await getOrganizationId();
   const seo = await getPageSeo(organizationId, path);
 
-  return {
-    title: seo.title,
-    description: seo.description,
-    ...(seo.keywords.length > 0 ? { keywords: seo.keywords } : {}),
-    alternates: { canonical: path },
-    openGraph: {
-      title: seo.title,
-      description: seo.description,
-      url: path,
-      ...(seo.ogImageUrl ? { images: [{ url: seo.ogImageUrl }] } : {}),
+  return seitenMetadaten(
+    {
+      pfad: path,
+      titel: seo.title,
+      beschreibung: seo.description,
+      schluesselwoerter: seo.keywords,
+      ogBildUrl: seo.ogImageUrl,
+      noIndex: seo.noIndex,
     },
-    twitter: {
-      card: 'summary_large_image',
-      title: seo.title,
-      description: seo.description,
-      ...(seo.ogImageUrl ? { images: [seo.ogImageUrl] } : {}),
-    },
-    // `noIndex` wirkt hier *und* über den Robots-Header; die Redaktion soll
-    // sich nicht darauf verlassen müssen, dass beides gepflegt ist.
-    robots: seo.noIndex
-      ? { index: false, follow: true }
-      : {
-          index: true,
-          follow: true,
-          googleBot: { index: true, follow: true, 'max-image-preview': 'large', 'max-snippet': -1 },
-        },
-  };
+    SEITEN_URL,
+  );
 }

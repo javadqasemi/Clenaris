@@ -1,16 +1,15 @@
 import type { Metadata } from 'next';
 
 import { LegalBody } from '@/components/marketing/legal-body';
+import { SEITEN_URL } from '@/lib/seiten-url';
+import { seitenMetadaten } from '@/lib/seo/metadaten';
+import { rechtstextSeo } from '@/lib/seo/rechtstexte';
 
 import { getPublicCompanyInfo } from '@/server/services/organization.service';
 import { ConsentSettingsLink } from '@/features/public/consent-settings-link';
 
-export const metadata: Metadata = {
-  title: 'Datenschutzerklärung',
-  description:
-    'Wie wir Personendaten bearbeiten — nach dem revidierten Schweizer Datenschutzgesetz (DSG) und der DSGVO.',
-  alternates: { canonical: '/legal/datenschutz' },
-};
+// Titel und Beschreibung in `lib/seo/rechtstexte.ts` — dieselbe Quelle wie die SEO-Übersicht.
+export const metadata: Metadata = seitenMetadaten(rechtstextSeo('/legal/datenschutz'), SEITEN_URL);
 
 export const revalidate = 86400;
 

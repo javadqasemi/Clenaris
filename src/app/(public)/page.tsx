@@ -1,6 +1,5 @@
 import type { Metadata } from 'next';
 
-import { jsonLd } from '@/lib/json-ld';
 import Link from 'next/link';
 import {
   ArrowRight,
@@ -380,24 +379,13 @@ export default async function HomePage() {
         </div>
       </Section>
 
-      {/* Strukturierte Daten für FAQ-Rich-Results */}
-      {faqs.length > 0 ? (
-        <script
-          type="application/ld+json"
-          // eslint-disable-next-line react/no-danger -- serverseitig erzeugter, kontrollierter JSON-LD-Block
-          dangerouslySetInnerHTML={{
-            __html: jsonLd({
-              '@context': 'https://schema.org',
-              '@type': 'FAQPage',
-              mainEntity: faqs.map((faq) => ({
-                '@type': 'Question',
-                name: faq.question,
-                acceptedAnswer: { '@type': 'Answer', text: faq.answer },
-              })),
-            }),
-          }}
-        />
-      ) : null}
+      {/*
+        Kein `FAQPage` hier (SEO-Prüfung 2026-09-28). Die Startseite zeigt die
+        ersten sechs Fragen, `/faq` alle — beide trugen dasselbe `FAQPage`.
+        Google verlangt, eine wiederholte Frage nur an *einer* Stelle
+        auszuzeichnen, und die vollständige Seite ist die richtige. Firma und
+        Website kommen aus dem Layout.
+      */}
     </>
   );
 }

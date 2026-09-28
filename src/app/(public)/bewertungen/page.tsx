@@ -1,11 +1,12 @@
 import type { Metadata } from 'next';
 
-import { jsonLd } from '@/lib/json-ld';
-
 import { prisma } from '@/lib/db';
+import { SEITEN_URL } from '@/lib/seiten-url';
+import { bewertungsKnoten } from '@/lib/seo/structured-data';
+import { JsonLd } from '@/components/marketing/json-ld';
 import { formatDate } from '@/lib/utils';
 import { pageMetadata } from '@/lib/cms/metadata';
-import { getOrganizationId } from '@/server/services/organization.service';
+import { getOrganizationId, getPublicCompanyInfo } from '@/server/services/organization.service';
 import { getContent } from '@/server/services/content.service';
 import { createCms } from '@/lib/cms/editable';
 import { isPreview } from '@/lib/cms/preview';
@@ -37,7 +38,7 @@ export default async function ReviewsPage() {
   const content = await getContent(organizationId);
   const cms = createCms(content, await isPreview());
 
-  const [reviews, aggregate, distribution] = await Promise.all([
+  const [reviews, aggregate, distribution, company] = await Promise.all([
     prisma.review.findMany({
       where: { organizationId, status: 'PUBLISHED' },
       orderBy: [{ featured: 'desc' }, { createdAt: 'desc' }],
@@ -53,6 +54,7 @@ export default async function ReviewsPage() {
       where: { organizationId, status: 'PUBLISHED' },
       _count: true,
     }),
+    getPublicCompanyInfo(),
   ]);
 
   const average = aggregate._avg.rating ?? 0;
@@ -171,38 +173,22 @@ export default async function ReviewsPage() {
         </div>
       </Section>
 
-      {total > 0 ? (
-        <script
-          type="application/ld+json"
-          // eslint-disable-next-line react/no-danger -- serverseitig erzeugter JSON-LD-Block
-          dangerouslySetInnerHTML={{
-            __html: jsonLd({
-              '@context': 'https://schema.org',
-              '@type': 'LocalBusiness',
-              name: 'Clenaris Reinigungen GmbH',
-              aggregateRating: {
-                '@type': 'AggregateRating',
-                ratingValue: average.toFixed(1),
-                reviewCount: total,
-                bestRating: 5,
-                worstRating: 1,
-              },
-              review: reviews.slice(0, 10).map((review) => ({
-                '@type': 'Review',
-                author: { '@type': 'Person', name: review.authorName },
-                datePublished: review.createdAt.toISOString().slice(0, 10),
-                reviewBody: review.body,
-                reviewRating: {
-                  '@type': 'Rating',
-                  ratingValue: review.rating,
-                  bestRating: 5,
-                  worstRating: 1,
-                },
-              })),
-            }),
-          }}
-        />
-      ) : null}
+      {/*
+        Schnitt, Anzahl und die ersten zehn Bewertungen — dieselben Werte,
+        die oben sichtbar stehen. Der Knoten trägt die `@id` der Firma aus dem
+        Layout und ergänzt sie; vorher war er ein zweites `LocalBusiness` mit
+        fest eingetragenem Namen. Ohne Bewertungen gibt `bewertungsKnoten`
+        null zurück.
+      */}
+      <JsonLd
+        daten={bewertungsKnoten({
+          firma: company,
+          herkunft: SEITEN_URL,
+          durchschnitt: average,
+          anzahl: total,
+          bewertungen: reviews.slice(0, 10),
+        })}
+      />
     </>
   );
 }

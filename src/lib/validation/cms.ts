@@ -163,7 +163,27 @@ export const updateSeoSchema = z.object({
   title: z.string().trim().max(120).optional(),
   description: z.string().trim().max(320).optional(),
   keywords: z.array(z.string().trim().min(2).max(60)).max(15).default([]),
-  ogImageUrl: z.string().url().max(500).optional().or(z.literal('')),
+  /**
+   * Vorschaubild: `https`-Adresse oder Pfad dieser Website (eingebaute
+   * Ablage `/api/files/…`). Bis 2026-09-28 stand hier `.url()` — das nahm
+   * jede Adresse an, die `new URL()` versteht, also auch `javascript:…`,
+   * `data:…` und Klartext-`http`, lehnte aber den Pfad der eigenen Ablage ab.
+   * Die Website verwirft solche Werte beim Lesen ohnehin
+   * (`sichereBildUrl`); die Prüfung hier sagt es der Redaktion gleich beim
+   * Speichern, statt dass das Bild still fehlt.
+   */
+  ogImageUrl: z
+    .string()
+    .trim()
+    .max(500)
+    .refine(
+      (value) =>
+        value === '' ||
+        /^https:\/\/[^/\s]/i.test(value) ||
+        (value.startsWith('/') && !value.startsWith('//') && !/[\s\\]/.test(value)),
+      'Bitte eine https-Adresse oder einen Pfad dieser Website angeben.',
+    )
+    .optional(),
   noIndex: z.boolean().default(false),
 });
 export type UpdateSeoInput = z.infer<typeof updateSeoSchema>;

@@ -296,6 +296,46 @@ describe('Suchmaschinenangaben', { concurrency: 1 }, async () => {
     assert.match(page.text, /name="robots"[^>]*content="[^"]*noindex/);
   });
 
+  it('weist ein Vorschaubild ohne https oder eigenen Pfad ab (422)', async () => {
+    // Vorher `.url()`: `javascript:` und `data:` gingen durch, der Pfad der
+    // eigenen Ablage (`/api/files/…`) nicht.
+    for (const ogImageUrl of ['javascript:alert(1)', 'data:image/png;base64,AAAA', 'http://fremd.example/x.jpg', '//fremd.example/x.jpg']) {
+      const response = await patchSeo(jars.admin, { path: '/preise', keywords: [], noIndex: false, ogImageUrl });
+      assert.equal(response.status, 422, ogImageUrl);
+    }
+    const eigen = await patchSeo(jars.admin, {
+      path: '/preise',
+      keywords: [],
+      noIndex: false,
+      ogImageUrl: '/api/files/blob/vorschau.jpg',
+    });
+    assert.equal(eigen.status, 200);
+    const page = await get('/preise');
+    assert.match(page.text, /property="og:image" content="https?:\/\/[^"]+\/api\/files\/blob\/vorschau\.jpg"/);
+    assert.match(page.text, /name="twitter:card" content="summary_large_image"/);
+  });
+
+  it('schreibt Markup in Titel und Beschreibung als Klartext', async () => {
+    const saved = await patchSeo(jars.admin, {
+      path: '/preise',
+      title: `<b>${TITLE}</b>`,
+      description: `<i>${DESCRIPTION}</i>`,
+      keywords: [],
+      noIndex: false,
+    });
+    assert.equal(saved.status, 200);
+    const page = await get('/preise');
+    assert.ok(pageTitle(page.text)?.startsWith(TITLE), `Titel ist „${pageTitle(page.text)}"`);
+    assert.equal(page.text.includes('&lt;b&gt;'), false, 'Tag als Text im Titel');
+    assert.ok(page.text.includes(`content="${DESCRIPTION}"`));
+  });
+
+  it('nimmt eine noindex-Seite aus der Sitemap', async () => {
+    await patchSeo(jars.admin, { path: '/preise', title: TITLE, keywords: [], noIndex: true });
+    const sitemap = (await get('/sitemap.xml')).text;
+    assert.equal(/<loc>[^<]*\/preise<\/loc>/.test(sitemap), false, 'noindex-Seite steht in der Sitemap');
+  });
+
   it('stellt nach dem Leeren die Standardangaben wieder her', async () => {
     const saved = await patchSeo(jars.admin, {
       path: '/preise',

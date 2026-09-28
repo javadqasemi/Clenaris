@@ -1,13 +1,16 @@
 import type { Metadata } from 'next';
 
-import { jsonLd } from '@/lib/json-ld';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { ArrowLeft, Check, MapPin } from 'lucide-react';
 
 import { prisma, toNumber } from '@/lib/db';
 import { formatCurrency, formatDate } from '@/lib/utils';
-import { getOrganizationId } from '@/server/services/organization.service';
+import { SEITEN_URL } from '@/lib/seiten-url';
+import { seitenMetadaten, stellenSeo } from '@/lib/seo/metadaten';
+import { brotkrumen, stellenKnoten } from '@/lib/seo/structured-data';
+import { JsonLd } from '@/components/marketing/json-ld';
+import { getOrganizationId, getPublicCompanyInfo } from '@/server/services/organization.service';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Markdown } from '@/components/markdown';
@@ -26,8 +29,10 @@ const EMPLOYMENT_LABELS: Record<string, string> = {
 };
 
 export async function generateStaticParams() {
+  // Mit Organisation — siehe Leistungsseite.
+  const organizationId = await getOrganizationId();
   const postings = await prisma.jobPosting.findMany({
-    where: { status: 'PUBLISHED' },
+    where: { organizationId, status: 'PUBLISHED' },
     select: { slug: true },
   });
   return postings.map((posting) => ({ slug: posting.slug }));
@@ -43,16 +48,14 @@ export async function generateMetadata({
 
   const posting = await prisma.jobPosting.findUnique({
     where: { organizationId_slug: { organizationId, slug } },
-    select: { title: true, description: true, location: true },
+    select: { slug: true, status: true, title: true, description: true, location: true },
   });
 
-  if (!posting) return { title: 'Stelle nicht gefunden' };
+  // Eine geschlossene oder unveröffentlichte Stelle antwortet 404.
+  if (!posting || posting.status !== 'PUBLISHED') return { title: 'Stelle nicht gefunden', robots: { index: false } };
 
-  return {
-    title: `${posting.title} — ${posting.location}`,
-    description: posting.description.slice(0, 155),
-    alternates: { canonical: `/karriere/${slug}` },
-  };
+  // Vorher ohne `openGraph`: Die Seite erbte `og:url` der Startseite.
+  return seitenMetadaten(stellenSeo(posting), SEITEN_URL);
 }
 
 export default async function JobPostingPage({ params }: { params: Promise<{ slug: string }> }) {
@@ -64,6 +67,8 @@ export default async function JobPostingPage({ params }: { params: Promise<{ slu
   });
 
   if (!posting || posting.status !== 'PUBLISHED') notFound();
+
+  const company = await getPublicCompanyInfo();
 
   return (
     <>
@@ -159,47 +164,38 @@ export default async function JobPostingPage({ params }: { params: Promise<{ slu
         </div>
       </Section>
 
-      <script
-        type="application/ld+json"
-        // eslint-disable-next-line react/no-danger -- serverseitig erzeugter JSON-LD-Block
-        dangerouslySetInnerHTML={{
-          __html: jsonLd({
-            '@context': 'https://schema.org',
-            '@type': 'JobPosting',
+      {/*
+        Stelleninserat und Brotkrumen (Start › Karriere › Stelle; die Seite
+        zeigt „Alle Stellen" als Rückweg). Arbeitgeber, Kanton und Land aus
+        den Stammdaten statt fest eingetragen; Lehrstelle und Stundenlohn als
+        `OTHER` statt fälschlich `PART_TIME`.
+      */}
+      <JsonLd
+        daten={stellenKnoten({
+          stelle: {
+            slug: posting.slug,
             title: posting.title,
             description: posting.description,
-            datePosted: posting.publishedAt?.toISOString(),
-            validThrough: posting.closesAt?.toISOString(),
-            employmentType: posting.employmentType === 'FULL_TIME' ? 'FULL_TIME' : 'PART_TIME',
-            hiringOrganization: {
-              '@type': 'Organization',
-              name: 'Clenaris Reinigungen GmbH',
-            },
-            jobLocation: {
-              '@type': 'Place',
-              address: {
-                '@type': 'PostalAddress',
-                addressLocality: posting.location,
-                addressRegion: 'BE',
-                addressCountry: 'CH',
-              },
-            },
-            ...(posting.salaryFrom
-              ? {
-                  baseSalary: {
-                    '@type': 'MonetaryAmount',
-                    currency: 'CHF',
-                    value: {
-                      '@type': 'QuantitativeValue',
-                      minValue: toNumber(posting.salaryFrom),
-                      maxValue: posting.salaryTo ? toNumber(posting.salaryTo) : undefined,
-                      unitText: 'MONTH',
-                    },
-                  },
-                }
-              : {}),
-          }),
-        }}
+            location: posting.location,
+            employmentType: posting.employmentType,
+            publishedAt: posting.publishedAt,
+            closesAt: posting.closesAt,
+            salaryFrom: posting.salaryFrom ? toNumber(posting.salaryFrom) : null,
+            salaryTo: posting.salaryTo ? toNumber(posting.salaryTo) : null,
+          },
+          firma: company,
+          herkunft: SEITEN_URL,
+        })}
+      />
+      <JsonLd
+        daten={brotkrumen(
+          [
+            { name: 'Start', pfad: '/' },
+            { name: 'Karriere', pfad: '/karriere' },
+            { name: posting.title, pfad: `/karriere/${posting.slug}` },
+          ],
+          SEITEN_URL,
+        )}
       />
     </>
   );

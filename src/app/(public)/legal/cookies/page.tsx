@@ -1,15 +1,14 @@
 import type { Metadata } from 'next';
 
 import { LegalBody } from '@/components/marketing/legal-body';
+import { SEITEN_URL } from '@/lib/seiten-url';
+import { seitenMetadaten } from '@/lib/seo/metadaten';
+import { rechtstextSeo } from '@/lib/seo/rechtstexte';
 
 import { ConsentSettingsLink } from '@/features/public/consent-settings-link';
 
-export const metadata: Metadata = {
-  title: 'Cookie-Erklärung',
-  description:
-    'Welche Cookies wir setzen, wozu, und wie Sie Ihre Einwilligung jederzeit ändern können.',
-  alternates: { canonical: '/legal/cookies' },
-};
+// Titel und Beschreibung in `lib/seo/rechtstexte.ts` — dieselbe Quelle wie die SEO-Übersicht.
+export const metadata: Metadata = seitenMetadaten(rechtstextSeo('/legal/cookies'), SEITEN_URL);
 
 export const revalidate = 86400;
 

@@ -1,13 +1,16 @@
 import type { Metadata } from 'next';
 
-import { jsonLd } from '@/lib/json-ld';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { ArrowLeft, ArrowRight, Clock } from 'lucide-react';
 
 import { prisma } from '@/lib/db';
 import { formatDate } from '@/lib/utils';
-import { getOrganizationId } from '@/server/services/organization.service';
+import { SEITEN_URL } from '@/lib/seiten-url';
+import { beitragsSeo, seitenMetadaten } from '@/lib/seo/metadaten';
+import { artikelKnoten, brotkrumen } from '@/lib/seo/structured-data';
+import { JsonLd } from '@/components/marketing/json-ld';
+import { getOrganizationId, getPublicCompanyInfo } from '@/server/services/organization.service';
 import { getContent } from '@/server/services/content.service';
 import { createCms } from '@/lib/cms/editable';
 import { isPreview } from '@/lib/cms/preview';
@@ -20,8 +23,10 @@ import { ctasFor } from '@/server/services/cta.service';
 export const revalidate = 1800;
 
 export async function generateStaticParams() {
+  // Mit Organisation — siehe Leistungsseite.
+  const organizationId = await getOrganizationId();
   const posts = await prisma.blogPost.findMany({
-    where: { status: 'PUBLISHED', locale: 'DE' },
+    where: { organizationId, status: 'PUBLISHED', locale: 'DE' },
     select: { slug: true },
   });
   return posts.map((post) => ({ slug: post.slug }));
@@ -38,6 +43,8 @@ export async function generateMetadata({
   const post = await prisma.blogPost.findUnique({
     where: { organizationId_slug_locale: { organizationId, slug, locale: 'DE' } },
     select: {
+      slug: true,
+      status: true,
       title: true,
       excerpt: true,
       seoTitle: true,
@@ -47,20 +54,10 @@ export async function generateMetadata({
     },
   });
 
-  if (!post) return { title: 'Beitrag nicht gefunden' };
+  // Ein Entwurf antwortet 404 — sein Titel gehört nicht in die Metadaten.
+  if (!post || post.status !== 'PUBLISHED') return { title: 'Beitrag nicht gefunden', robots: { index: false } };
 
-  return {
-    title: post.seoTitle ?? post.title,
-    description: post.seoDescription ?? post.excerpt,
-    keywords: post.keywords,
-    alternates: { canonical: `/blog/${slug}` },
-    openGraph: {
-      type: 'article',
-      title: post.seoTitle ?? post.title,
-      description: post.seoDescription ?? post.excerpt,
-      publishedTime: post.publishedAt?.toISOString(),
-    },
-  };
+  return seitenMetadaten(beitragsSeo(post), SEITEN_URL);
 }
 
 export default async function BlogPostPage({ params }: { params: Promise<{ slug: string }> }) {
@@ -79,6 +76,7 @@ export default async function BlogPostPage({ params }: { params: Promise<{ slug:
 
   const content = await getContent(organizationId);
   const cms = createCms(content, await isPreview());
+  const company = await getPublicCompanyInfo();
 
   const related = await prisma.blogPost.findMany({
     where: {
@@ -180,26 +178,34 @@ export default async function BlogPostPage({ params }: { params: Promise<{ slug:
         </div>
       </Section>
 
-      <script
-        type="application/ld+json"
-        // eslint-disable-next-line react/no-danger -- serverseitig erzeugter JSON-LD-Block
-        dangerouslySetInnerHTML={{
-          __html: jsonLd({
-            '@context': 'https://schema.org',
-            '@type': 'Article',
-            headline: post.title,
-            description: post.excerpt,
-            datePublished: post.publishedAt?.toISOString(),
-            dateModified: post.updatedAt.toISOString(),
-            author: post.author
-              ? { '@type': 'Person', name: `${post.author.firstName} ${post.author.lastName}` }
-              : { '@type': 'Organization', name: 'Clenaris Reinigungen GmbH' },
-            publisher: {
-              '@type': 'Organization',
-              name: 'Clenaris Reinigungen GmbH',
-            },
-          }),
-        }}
+      {/*
+        Beitrag und Brotkrumen (Start › Ratgeber › Beitrag — die Seite zeigt
+        „Alle Beiträge" als Rückweg; die Hierarchie ist eindeutig). Verlag ist
+        die Firma aus den Stammdaten, nicht ein fest eingetragener Name.
+      */}
+      <JsonLd
+        daten={artikelKnoten({
+          beitrag: {
+            slug: post.slug,
+            title: post.title,
+            excerpt: post.excerpt,
+            publishedAt: post.publishedAt,
+            updatedAt: post.updatedAt,
+            autor: post.author ? `${post.author.firstName} ${post.author.lastName}` : null,
+          },
+          firma: company,
+          herkunft: SEITEN_URL,
+        })}
+      />
+      <JsonLd
+        daten={brotkrumen(
+          [
+            { name: 'Start', pfad: '/' },
+            { name: 'Ratgeber', pfad: '/blog' },
+            { name: post.title, pfad: `/blog/${post.slug}` },
+          ],
+          SEITEN_URL,
+        )}
       />
     </>
   );
