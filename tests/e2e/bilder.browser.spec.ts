@@ -182,6 +182,20 @@ test.describe('Bilder der Website', () => {
         );
       }
 
+      /*
+        Neu geladen wird, wenn die Seite ruhig ist — nicht mitten in der
+        Preisschätzung, die die Startseite mit der Vorgabe 80 m² sofort
+        stellt (2026-09-28). Im Release-Lauf auf frisch gestartetem, kaltem
+        Server traf das Neuladen in WebKit einmal eine laufende Schätzung;
+        WebKit schrieb dazu „Fetch API cannot load … due to access control
+        checks" als Konsolenfehler, den Playwright als `pageerror` meldet.
+        Die Anwendung fängt den Abbruch ab (ein abgefangener Netzfehler
+        erzeugt in WebKit keinen `pageerror`, nachgemessen); lokal war der
+        Zeitpunkt mit schnellem Server nicht zu treffen (Pendenz W-08). Die
+        Meldung wird nicht gefiltert — geprüft werden hier Bilder, und ein
+        Mensch lädt eine fertige Seite neu.
+      */
+      await page.waitForLoadState('networkidle');
       await page.reload();
       alleGeladen(await bilderPruefen(page), `${pfad} neu geladen`);
 
