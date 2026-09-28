@@ -4,7 +4,6 @@ import { randomInt } from 'node:crypto';
 
 import type { Prisma, ScanEntity } from '@prisma/client';
 
-import type { ScanAktionSchluessel } from '@/features/shared/scan-aktionen';
 import { audit } from '@/lib/audit';
 import { can } from '@/lib/auth/rbac';
 import type { Permission } from '@/lib/auth/permissions';
@@ -19,6 +18,14 @@ import {
   scanEinordnen,
   type ScanEingabe,
 } from '@/lib/scan/kennung';
+import {
+  einsatzRegeln,
+  geraetRegeln,
+  materialRegeln,
+  rechnungRegeln,
+  type ScanAktionSchluessel,
+  type ScanVerweis,
+} from '@/lib/scan/regeln';
 import { formatCurrency } from '@/lib/utils';
 import { propertyVisibilityWhere } from '@/server/services/property.service';
 
@@ -67,11 +74,13 @@ import { propertyVisibilityWhere } from '@/server/services/property.service';
  * wird nur der erkannte Text.
  */
 
-export type ScanTrefferArt = 'MATERIAL' | 'GERAET' | 'EINSATZ' | 'RECHNUNG' | 'KUNDSCHAFT' | 'OBJEKT';
+export type ScanTrefferArt = 'MATERIAL' | 'GERAET' | 'EINSATZ' | 'RECHNUNG' | 'KUNDSCHAFT' | 'OBJEKT' | 'VERTRAG';
 
 export interface ScanAktion {
   schluessel: ScanAktionSchluessel;
   label: string;
+  /** Auswahl für die Maske — nur „Zuteilen" (aktive Personen). */
+  optionen?: { value: string; label: string }[];
 }
 
 export interface ScanTreffer {
@@ -83,6 +92,11 @@ export interface ScanTreffer {
   link: string | null;
   merkmale: { label: string; wert: string }[];
   aktionen: ScanAktion[];
+  /**
+   * Weitere Ziele zum *Lesen* (PDF, Rapport) — seit 2026-09-28. Nie ein
+   * Schreibweg; jedes Ziel prüft beim Abruf selbst (`src/lib/scan/regeln.ts`).
+   */
+  verweise: ScanVerweis[];
   /** Etikettseite, wenn die Rolle den Datensatz pflegen darf. */
   etikett: string | null;
 }
@@ -105,8 +119,6 @@ export const ETIKETT_RECHT: Record<ScanEntity, Permission> = {
   JOB: 'job:update',
 };
 
-const EINSTEMPELBAR = new Set(['SCHEDULED', 'DISPATCHED', 'EN_ROUTE', 'IN_PROGRESS', 'ON_HOLD']);
-const ZAHLBAR = new Set(['ISSUED', 'SENT', 'PARTIALLY_PAID', 'OVERDUE']);
 const GERAET_STATUS: Record<string, string> = {
   AVAILABLE: 'verfügbar',
   IN_USE: 'im Einsatz',
@@ -167,18 +179,26 @@ async function materialTreffer(k: Kontext, where: Prisma.MaterialWhereInput): Pr
         ...(m.active ? [] : [{ label: 'Status', wert: 'inaktiv' }]),
       ],
       // Ein inaktiver Artikel wird nicht mehr bewegt; die Liste blendet ihn
-      // aus, der Scan zeigt ihn — ohne Buchungsknöpfe.
-      aktionen:
-        pflegen && m.active
-          ? [
-              { schluessel: 'material.eingang' as const, label: 'Wareneingang' },
-              { schluessel: 'material.entnahme' as const, label: 'Entnahme' },
-              { schluessel: 'material.korrektur' as const, label: 'Inventurkorrektur' },
-            ]
-          : [],
+      // aus, der Scan zeigt ihn — ohne Buchungsknöpfe (`materialRegeln`).
+      ...materialRegeln({ darf: k.darf, aktiv: m.active }),
       etikett: pflegen ? `/admin/etikett/MATERIAL/${m.id}` : null,
     };
   });
+}
+
+/**
+ * Die Personen für „Zuteilen" — nur geladen, wenn ein Treffer die Aktion
+ * tatsächlich anbietet. Derselbe Kreis wie in der Geräteliste und in
+ * `assignEquipment` (aktiv, eigene Organisation); der Endpunkt prüft ihn beim
+ * Senden noch einmal, eine inzwischen ausgetretene Person ergibt dort 404.
+ */
+async function zuteilbarePersonen(org: string): Promise<{ value: string; label: string }[]> {
+  const personal = await prisma.employee.findMany({
+    where: { organizationId: org, active: true },
+    select: { id: true, employeeNumber: true, user: { select: { firstName: true, lastName: true } } },
+    orderBy: { employeeNumber: 'asc' },
+  });
+  return personal.map((p) => ({ value: p.id, label: `${p.user.firstName} ${p.user.lastName} (${p.employeeNumber})` }));
 }
 
 async function geraetTreffer(k: Kontext, where: Prisma.EquipmentWhereInput): Promise<ScanTreffer[]> {
@@ -190,14 +210,11 @@ async function geraetTreffer(k: Kontext, where: Prisma.EquipmentWhereInput): Pro
     include: { assignedEmployee: { select: { user: { select: { firstName: true, lastName: true } } } } },
   });
   const pflegen = k.darf('equipment:manage');
-  return geraete.map((g) => {
-    const aktiv = g.status !== 'RETIRED';
-    const aktionen: ScanAktion[] = [];
-    if (pflegen && aktiv) {
-      aktionen.push({ schluessel: 'geraet.wartung', label: 'Wartung erfassen' });
-      if (g.status === 'MAINTENANCE') aktionen.push({ schluessel: 'geraet.verfuegbar', label: 'Wieder verfügbar' });
-      else aktionen.push({ schluessel: 'geraet.defekt', label: 'Defekt melden' });
-    }
+  const regeln = geraete.map((g) => geraetRegeln({ darf: k.darf, status: g.status, zugeteilt: Boolean(g.assignedEmployeeId) }));
+  const personen = regeln.some((r) => r.aktionen.some((a) => a.schluessel === 'geraet.zuteilen')) ? await zuteilbarePersonen(k.org) : [];
+  return geraete.map((g, i) => {
+    const { aktionen: regelAktionen, verweise } = regeln[i]!;
+    const aktionen: ScanAktion[] = regelAktionen.map((a) => (a.schluessel === 'geraet.zuteilen' ? { ...a, optionen: personen } : a));
     const person = g.assignedEmployee?.user;
     return {
       art: 'GERAET' as const,
@@ -211,6 +228,7 @@ async function geraetTreffer(k: Kontext, where: Prisma.EquipmentWhereInput): Pro
         ...(g.nextMaintenanceOn ? [{ label: 'Nächste Wartung', wert: g.nextMaintenanceOn.toISOString().slice(0, 10).split('-').reverse().join('.') }] : []),
       ],
       aktionen,
+      verweise,
       etikett: pflegen ? `/admin/etikett/EQUIPMENT/${g.id}` : null,
     };
   });
@@ -231,6 +249,23 @@ async function einsatzTreffer(k: Kontext, where: Prisma.JobWhereInput): Promise<
     select: { id: true, number: true, title: true, status: true, scheduledStart: true, assignments: { select: { employeeId: true } } },
   });
   const zeit = new Intl.DateTimeFormat('de-CH', { timeZone: 'Europe/Zurich', dateStyle: 'medium', timeStyle: 'short' });
+  /*
+    Läuft die *eigene* Zeit auf einem dieser Einsätze? Dann bietet der Treffer
+    „Ausstempeln" statt „Einstempeln" (`einsatzRegeln`). Gefragt wird nur mit
+    eigenem Profil und Stempelrecht, und nur nach der eigenen Person — fremde
+    Zeiterfassungen verraten sich so nicht, auch nicht dem Büro.
+  */
+  const laufend =
+    k.session.profileId && k.darf('timetracking:own') && einsaetze.length > 0
+      ? new Set(
+          (
+            await prisma.timeEntry.findMany({
+              where: { employeeId: k.session.profileId, endedAt: null, jobId: { in: einsaetze.map((j) => j.id) } },
+              select: { jobId: true },
+            })
+          ).map((t) => t.jobId),
+        )
+      : new Set<string | null>();
   return einsaetze.map((j) => {
     const zugeteilt = Boolean(k.session.profileId) && j.assignments.some((a) => a.employeeId === k.session.profileId);
     return {
@@ -240,10 +275,7 @@ async function einsatzTreffer(k: Kontext, where: Prisma.JobWhereInput): Promise<
       untertitel: zeit.format(j.scheduledStart),
       link: k.buero ? `/admin/einsaetze/${j.id}` : `/portal/einsaetze/${j.id}`,
       merkmale: [{ label: 'Status', wert: j.status }],
-      aktionen:
-        k.darf('timetracking:own') && zugeteilt && EINSTEMPELBAR.has(j.status)
-          ? [{ schluessel: 'einsatz.einstempeln' as const, label: 'Einstempeln' }]
-          : [],
+      ...einsatzRegeln({ darf: k.darf, buero: k.buero, id: j.id, status: j.status, zugeteilt, laeuftHier: laufend.has(j.id) }),
       etikett: k.darf('job:update') && k.buero ? `/admin/etikett/JOB/${j.id}` : null,
     };
   });
@@ -268,7 +300,40 @@ async function rechnungTreffer(k: Kontext, where: Prisma.InvoiceWhereInput): Pro
       { label: 'Betrag', wert: formatCurrency(toNumber(r.grossTotal)) },
       { label: 'Offen', wert: formatCurrency(toNumber(r.balance)) },
     ],
-    aktionen: k.darf('payment:create') && ZAHLBAR.has(r.status) ? [{ schluessel: 'rechnung.zahlung' as const, label: 'Zahlung erfassen' }] : [],
+    ...rechnungRegeln({ darf: k.darf, id: r.id, status: r.status }),
+    etikett: null,
+  }));
+}
+
+/**
+ * Vertrag über seine Nummer (seit 2026-09-28) — wer einen ausgedruckten
+ * Vertrag oder eine Vertragsrechnung in der Hand hat, tippt oder scannt die
+ * Nummer (Code 128 eines Handscanners ist Text). Nur im Büro und nur mit
+ * `contract:read`: Mitarbeitende halten das Recht nicht, die Kundschaft hat
+ * keinen Scanner. Ein Entwurf hat noch keine Nummer und ist darum nie ein
+ * Treffer — die Nummer vergibt erst das Aktivieren.
+ *
+ * Keine Schnellaktion: Jeder Schritt am Vertrag (Pausieren, Kündigen, neue
+ * Fassung) verlangt eine Begründung und einen Blick auf Laufzeit und
+ * Konditionen, also die Vertragsseite — nicht eine Maske im Scandialog.
+ */
+async function vertragTreffer(k: Kontext, where: Prisma.ContractWhereInput): Promise<ScanTreffer[]> {
+  if (!k.buero || !k.darf('contract:read')) return [];
+  const vertraege = await prisma.contract.findMany({
+    where: { AND: [where, { organizationId: k.org, deletedAt: null, number: { not: null } }] },
+    take: HOECHSTENS,
+    orderBy: { createdAt: 'desc' },
+    select: { id: true, number: true, title: true, status: true, customer: { select: { companyName: true, firstName: true, lastName: true } } },
+  });
+  return vertraege.map((v) => ({
+    art: 'VERTRAG' as const,
+    id: v.id,
+    titel: `${v.number} — ${v.title}`,
+    untertitel: v.customer.companyName ?? `${v.customer.firstName} ${v.customer.lastName}`,
+    link: `/admin/vertraege/${v.id}`,
+    merkmale: [{ label: 'Status', wert: v.status }],
+    aktionen: [],
+    verweise: [],
     etikett: null,
   }));
 }
@@ -288,6 +353,7 @@ async function kundschaftTreffer(k: Kontext, where: Prisma.CustomerWhereInput): 
     link: `/admin/kunden/${c.id}`,
     merkmale: [],
     aktionen: [],
+    verweise: [],
     etikett: null,
   }));
 }
@@ -334,6 +400,7 @@ async function objektTreffer(k: Kontext, where: Prisma.PropertyWhereInput): Prom
     link: k.buero ? `/admin/kunden/${o.customerId}` : naechste.has(o.id) ? `/portal/einsaetze/${naechste.get(o.id)}` : null,
     merkmale: [],
     aktionen: [],
+    verweise: [],
     etikett: k.buero && k.darf('property:update') ? `/admin/etikett/PROPERTY/${o.id}` : null,
   }));
 }
@@ -351,6 +418,7 @@ async function nachNummer(k: Kontext, text: string): Promise<ScanTreffer[]> {
     einsatzTreffer(k, { number: gleich }),
     rechnungTreffer(k, { number: gleich }),
     kundschaftTreffer(k, { number: gleich }),
+    vertragTreffer(k, { number: gleich }),
   ]);
   return gruppen.flat();
 }
@@ -414,6 +482,15 @@ export async function scanAufloesen(params: { organizationId: string; session: S
     }
     case 'QR_RECHNUNG':
     case 'QR_REFERENZ': {
+      /*
+        Zwei Formen der eigenen QR-Referenz sind im Umlauf (`buildQrReference`
+        in `src/lib/pdf/swiss-qr.ts`): bis 2026-09-27 nur die laufende Nummer,
+        mit sechs führenden Nullen; seither Jahr und laufende Nummer. Gesucht
+        wird darum **nicht** nach einem nachgerechneten Aufbau, sondern genau
+        nach der gespeicherten Referenz — sie ist, was auf dem ausgestellten
+        (unveränderlichen) Beleg steht und was die Bank zurückmeldet. So findet
+        der Scan beide Formen, ohne dass jemand die alte je umrechnen müsste.
+      */
       const referenz = eingabe.referenz;
       const nummer = eingabe.art === 'QR_RECHNUNG' ? eingabe.rechnungsnummer : null;
       const bedingungen: Prisma.InvoiceWhereInput[] = [];

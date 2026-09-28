@@ -203,29 +203,36 @@ export default async function PortalJobPage({ params }: { params: Promise<{ id: 
         </div>
       ) : null}
 
-      {/* Checkliste, Fotos, Abschluss */}
-      <JobWorkspace
-        jobId={job.id}
-        status={job.status}
-        canComplete={isAssigned}
-        customerAccepted={Boolean(job.customerAcceptedAt)}
-        checklist={job.checklist.map((item) => ({
-          id: item.id,
-          label: item.label,
-          room: item.room,
-          required: item.required,
-          done: item.done,
-          note: item.note,
-        }))}
-        photos={job.photos.map((photo) => ({
-          id: photo.id,
-          type: photo.type,
-          url: photo.url,
-          thumbnailUrl: photo.thumbnailUrl,
-          caption: photo.caption,
-          room: photo.room,
-        }))}
-      />
+      {/*
+        Checkliste, Fotos, Abschluss — der Rapport der Mitarbeitenden. Der
+        Anker `#rapport` ist das Ziel des Verweises „Rapport" im Scanner
+        (`src/lib/scan/regeln.ts`): Wer vor der Tür den Einsatz scannt, will
+        zur Checkliste, nicht zuerst an Adresse und Team vorbeiblättern.
+      */}
+      <div id="rapport" className="scroll-mt-24">
+        <JobWorkspace
+          jobId={job.id}
+          status={job.status}
+          canComplete={isAssigned}
+          customerAccepted={Boolean(job.customerAcceptedAt)}
+          checklist={job.checklist.map((item) => ({
+            id: item.id,
+            label: item.label,
+            room: item.room,
+            required: item.required,
+            done: item.done,
+            note: item.note,
+          }))}
+          photos={job.photos.map((photo) => ({
+            id: photo.id,
+            type: photo.type,
+            url: photo.url,
+            thumbnailUrl: photo.thumbnailUrl,
+            caption: photo.caption,
+            room: photo.room,
+          }))}
+        />
+      </div>
     </div>
   );
 }

@@ -1,12 +1,13 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
-import { ArrowLeft, Check, Clock, Download, MapPin, Navigation, X } from 'lucide-react';
+import { ArrowLeft, Check, Clock, Download, MapPin, Navigation, Tag, X } from 'lucide-react';
 
 import { prisma, toNumber } from '@/lib/db';
 import { requirePermission } from '@/lib/auth/session';
 import { can } from '@/lib/auth/rbac';
 import { NotFoundError } from '@/lib/errors';
+import { hasIntegration } from '@/lib/env';
 import {
   formatDateLong,
   formatDateTime,
@@ -174,11 +175,29 @@ export default async function AdminJobDetailPage({
                 Bericht (PDF)
               </a>
             </Button>
+            {/*
+              Etikett des Einsatzes (2026-09-28). Die Etikettart JOB gab es
+              seit der Scanplattform, aber keinen Weg dorthin ausser über einen
+              Scan — also über ein Etikett, das es noch nicht gab. Dasselbe
+              Recht wie die Etikettseite (`ETIKETT_RECHT.JOB`).
+            */}
+            {canEdit ? (
+              <Button asChild variant="ghost">
+                <Link href={`/admin/etikett/JOB/${job.id}`}>
+                  <Tag aria-hidden />
+                  Etikett
+                </Link>
+              </Button>
+            ) : null}
             <JobActions
               jobId={job.id}
               status={job.status}
               canEdit={canEdit}
               canDelete={can(session.role, 'job:delete')}
+              // Dieselben Bedingungen wie `POST /api/jobs/:id/report/draft`
+              // (`ai:use` + `job:update`) plus ein eingerichteter Anbieter —
+              // sonst endete der Menüpunkt in einer Fehlermeldung (2026-09-28).
+              canDraftReport={canEdit && can(session.role, 'ai:use') && hasIntegration('ai')}
             />
           </>
         }
