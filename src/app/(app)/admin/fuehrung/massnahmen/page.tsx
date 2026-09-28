@@ -31,12 +31,25 @@ export default async function ActionsPage({ searchParams }: { searchParams: Prom
   const organizationId = await getOrganizationId();
   const actions = await listActions(organizationId, { status: params.status === 'alle' ? 'alle' : 'offen' });
   const canUpdate = can(session.role, 'action:update');
+  // Den Bezug nur verlinken, wo die Rolle das Register öffnen darf: Die
+  // Betriebsleitung hält `action:read`, aber nicht `risk:read` — der Link
+  // „Risiko: …" führte sie auf eine 404 (2026-09-28). Der Titel bleibt als
+  // Text stehen, denn er erklärt, woher die Massnahme kommt.
+  const canReadRisk = can(session.role, 'risk:read');
+  const canReadControl = can(session.role, 'control:read');
+  const canReadReviews = can(session.role, 'review:read');
   const now = new Date();
 
   return (
     <div className="space-y-6">
       <PageHeader title="Massnahmen" description="Korrektur-, Vorbeugungs- und Verbesserungsmassnahmen aus Risiken, Kontrollen und Reklamationen. Abgeschlossen ist eine Massnahme erst, wenn ihre Wirksamkeit bestätigt ist.">
-        <FilterBar searchPlaceholder="—" filters={[{ param: 'status', label: 'Status', options: [{ value: 'offen', label: 'Offene' }, { value: 'alle', label: 'Alle' }] }]} />
+        {/*
+          Ohne Parameter zeigt die Seite die offenen Massnahmen; „alle" steht
+          deshalb ausdrücklich als `?status=alle` in der URL (`defaultValue`).
+          Kein Suchfeld: `listActions` wertet `q` nicht aus, und ein Feld, das
+          nichts filtert, wäre eine Behauptung ohne Wirkung.
+        */}
+        <FilterBar search={false} filters={[{ param: 'status', label: 'Status', defaultValue: 'offen', options: [{ value: 'offen', label: 'Offene' }] }]} />
       </PageHeader>
 
       {actions.length === 0 ? (
@@ -59,7 +72,13 @@ export default async function ActionsPage({ searchParams }: { searchParams: Prom
               <tbody>
                 {actions.map((a) => {
                   const overdue = !a.completedAt && a.dueOn && a.dueOn < now;
-                  const ref = a.risk ? { href: `/admin/fuehrung/risiken/${a.risk.id}`, label: `Risiko: ${a.risk.title}` } : a.control ? { href: `/admin/fuehrung/qualitaet/${a.control.id}`, label: `Kontrolle: ${a.control.title}` } : a.review ? { href: '/admin/bewertungen', label: `Bewertung: ${a.review.authorName} (${a.review.rating}/5)` } : null;
+                  const ref: { href: string | null; label: string } | null = a.risk
+                    ? { href: canReadRisk ? `/admin/fuehrung/risiken/${a.risk.id}` : null, label: `Risiko: ${a.risk.title}` }
+                    : a.control
+                      ? { href: canReadControl ? `/admin/fuehrung/qualitaet/${a.control.id}` : null, label: `Kontrolle: ${a.control.title}` }
+                      : a.review
+                        ? { href: canReadReviews ? '/admin/bewertungen' : null, label: `Bewertung: ${a.review.authorName} (${a.review.rating}/5)` }
+                        : null;
                   return (
                     <tr key={a.id}>
                       <td>
@@ -69,7 +88,7 @@ export default async function ActionsPage({ searchParams }: { searchParams: Prom
                           {a.rootCause ? <span className="ml-2">Ursache: {a.rootCause}</span> : null}
                         </span>
                       </td>
-                      <td className="text-muted-foreground">{ref ? <Link href={ref.href} className="hover:text-primary">{ref.label}</Link> : '—'}</td>
+                      <td className="text-muted-foreground">{ref ? ref.href ? <Link href={ref.href} className="hover:text-primary">{ref.label}</Link> : ref.label : '—'}</td>
                       <td className="text-muted-foreground">{a.task?.assignee ? `${a.task.assignee.firstName} ${a.task.assignee.lastName}` : '—'}</td>
                       <td className={overdue ? 'font-medium text-destructive' : 'text-muted-foreground'}>{a.dueOn ? formatDate(a.dueOn) : '—'}</td>
                       <td>

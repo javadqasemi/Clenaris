@@ -400,11 +400,42 @@ export function profileRouteFor(role: ActorRole): string {
   return `${homeRouteFor(role)}/profil/einstellungen`;
 }
 
+/**
+ * Wohin eine Benachrichtigung über eine Aufgabe führt — abhängig davon, wer
+ * sie bekommt.
+ *
+ * Aufgaben gehen an Büro *und* Mitarbeitende (Sitzungspendenzen, Massnahmen,
+ * Erinnerungen, direkt zugewiesene Aufgaben). Bis 2026-09-28 zeigte jede
+ * dieser Benachrichtigungen in die Verwaltung (`/admin/aufgaben`,
+ * `/admin/fuehrung/…`) — Mitarbeitende wurden dort von der Middleware auf
+ * `/portal` zurückgeworfen und fanden die Aufgabe nirgends, obwohl sie
+ * `task:read`/`task:update` halten.
+ *
+ * Wer die Verwaltung betreten darf (`ROUTE_GUARDS`), bekommt den Verweis der
+ * Aufrufstelle (die Aufgabenliste oder den genaueren Ort, etwa die Sitzung);
+ * alle anderen die eigene Aufgabenliste im Portal. Die Entscheidung steht an
+ * einer Stelle, damit keine neue Benachrichtigung sie wieder vergisst.
+ */
+export function taskLinkFor(role: ActorRole, adminHref = '/admin/aufgaben'): string {
+  const admin = ROUTE_GUARDS.find((g) => g.prefix === '/admin');
+  return role !== 'GUEST' && admin?.roles.includes(role) ? adminHref : '/portal/aufgaben';
+}
+
 /** Welche Rollen dürfen einen Pfad-Präfix betreten? Wird von der Middleware genutzt. */
 export const ROUTE_GUARDS: { prefix: string; roles: UserRole[] }[] = [
   { prefix: '/admin', roles: ['SUPER_ADMIN', 'ADMIN', 'MANAGER'] },
   { prefix: '/portal', roles: ['SUPER_ADMIN', 'ADMIN', 'MANAGER', 'EMPLOYEE'] },
-  { prefix: '/konto', roles: ['SUPER_ADMIN', 'ADMIN', 'MANAGER', 'EMPLOYEE', 'CUSTOMER'] },
+  /*
+   * Nur Kundschaft (2026-09-28). Vorher durfte jede Rolle hinein, aber jede
+   * Seite des Kundenbereichs verlangt ein Kundenprofil (`requireCustomerId`)
+   * und warf für das Personal einen Fehler — ein offener Bereich, der nur aus
+   * Fehlerseiten besteht. Das eigene Profil und die persönlichen
+   * Einstellungen des Personals liegen unter `/admin/profil` bzw.
+   * `/portal/profil` (dieselbe Seite, re-exportiert); dafür braucht es den
+   * Kundenbereich nicht. Personal wird jetzt von Middleware und Layout auf die
+   * eigene Startseite umgeleitet.
+   */
+  { prefix: '/konto', roles: ['CUSTOMER'] },
 ];
 
 /** Anzeigename einer Rolle — für Oberfläche und Prüfprotokoll. */
@@ -512,6 +543,10 @@ const PERMISSION_ROUTES: { prefix: string; permission: Permission }[] = [
   { prefix: '/admin/fuehrung/sitzungen', permission: 'meeting:read' },
   { prefix: '/admin/fuehrung/berichte', permission: 'bireport:read' },
   { prefix: '/admin/fuehrung/kennzahlen', permission: 'kpi:read' },
+  // Reine Eingabemaske vor ihrem Präfix (2026-09-28): Die Betriebsleitung
+  // liest Ziele, legt aber keine an — dieselbe Begründung wie bei
+  // `/admin/personal/neu`, sonst stünde der Statuscode vor der Seitenprüfung fest.
+  { prefix: '/admin/fuehrung/ziele/neu', permission: 'objective:create' },
   { prefix: '/admin/fuehrung/ziele', permission: 'objective:read' },
   { prefix: '/admin/fuehrung', permission: 'cockpit:view' },
 ];

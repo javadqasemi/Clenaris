@@ -3,7 +3,9 @@ import Link from 'next/link';
 import { ArrowLeft } from 'lucide-react';
 
 import { prisma, toNumber } from '@/lib/db';
-import { requirePermission } from '@/lib/auth/session';
+import { requirePagePermission } from '@/lib/auth/session';
+import { can } from '@/lib/auth/rbac';
+import { hasIntegration } from '@/lib/env';
 import { getOrganizationId } from '@/server/services/organization.service';
 import { Button } from '@/components/ui/button';
 import { PageHeader } from '@/components/app/page-parts';
@@ -21,7 +23,8 @@ export default async function NewQuotePage({
 }: {
   searchParams: Promise<{ kunde?: string }>;
 }) {
-  await requirePermission('quote:create');
+  // Reine Eingabemaske: ohne Schreibrecht 404 statt Fehlergrenze (Audit 2026-09-28).
+  const session = await requirePagePermission('quote:create');
 
   const params = await searchParams;
   const organizationId = await getOrganizationId();
@@ -70,6 +73,8 @@ export default async function NewQuotePage({
       />
 
       <QuoteEditor
+        // KI-Entwurf nur mit Recht und eingerichtetem Anbieter (2026-09-28).
+        canDraft={can(session.role, 'ai:use') && hasIntegration('ai')}
         customers={customers.map((customer) => ({
           id: customer.id,
           label: `${customer.companyName ?? `${customer.firstName} ${customer.lastName}`} · ${customer.number}`,

@@ -8,6 +8,7 @@ import { toast } from 'sonner';
 import { api, ApiError } from '@/lib/api/client';
 import { formatCurrency } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
+import { ActionButton } from '@/components/app/action-button';
 import { Input, Textarea } from '@/components/ui/input';
 import { Label } from '@/components/ui/form';
 import { Alert } from '@/components/ui/primitives';
@@ -98,24 +99,36 @@ export function InvoiceActions({
   const canSend = !['CANCELLED', 'PAID'].includes(status);
   const canRecordPayment = balance > 0 && !['DRAFT', 'CANCELLED'].includes(status);
   const canCancel = !['CANCELLED', 'PAID', 'PARTIALLY_PAID'].includes(status);
+  /*
+   * Ob das Menü überhaupt einen Eintrag hätte (2026-09-28). Bei bezahlten und
+   * stornierten Rechnungen trifft keiner zu — der Knopf öffnete dann ein
+   * leeres Menü. Dieselben Bedingungen wie die Einträge unten.
+   */
+  const hasMenuItems = canRecordPayment || (!isDraft && canSend) || canCancel || (isDraft && canDelete);
 
   return (
     <>
       <div className="flex items-center gap-2">
         {isDraft ? (
-          <Button
-            loading={pending === 'issue'}
-            onClick={() =>
-              run(
-                'issue',
-                () => api.post(`/api/invoices/${invoiceId}/issue`),
-                'Rechnung ausgestellt und nummeriert.',
-              )
-            }
+          /*
+           * Ausstellen mit Rückfrage (2026-09-28). Der Kopfkommentar dieser
+           * Datei nannte den Schritt schon immer „bestätigt" — der Knopf stellte
+           * trotzdem beim ersten Klick aus. Das Ausstellen zieht die nächste
+           * Nummer der lückenlosen Folge (Art. 957a OR) und macht den Beleg
+           * unveränderlich; ein Fehlklick lässt sich danach nur noch mit einer
+           * Stornierung samt verbrauchter Nummer beheben.
+           */
+          <ActionButton
+            endpoint={`/api/invoices/${invoiceId}/issue`}
+            label="Ausstellen"
+            confirmTitle="Rechnung ausstellen?"
+            confirm="Die Rechnung erhält die nächste Rechnungsnummer und ist danach unveränderlich. Das lässt sich nicht rückgängig machen — Korrekturen sind anschliessend nur noch über eine Stornierung oder eine Gutschrift möglich."
+            successMessage="Rechnung ausgestellt und nummeriert."
+            variant="default"
+            size="default"
           >
             <FileCheck2 aria-hidden />
-            Ausstellen
-          </Button>
+          </ActionButton>
         ) : canSend ? (
           <Button
             loading={pending === 'send'}
@@ -132,6 +145,7 @@ export function InvoiceActions({
           </Button>
         ) : null}
 
+        {hasMenuItems ? (
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button variant="outline" size="icon" aria-label="Weitere Aktionen">
@@ -182,6 +196,7 @@ export function InvoiceActions({
             ) : null}
           </DropdownMenuContent>
         </DropdownMenu>
+        ) : null}
       </div>
 
       {/* Entwurf löschen */}

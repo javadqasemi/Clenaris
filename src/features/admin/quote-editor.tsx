@@ -83,12 +83,15 @@ export function QuoteEditor({
   defaultCustomerId,
   initial,
   quoteId,
+  canDraft = false,
 }: {
   services: QuoteEditorService[];
   customers: QuoteEditorCustomer[];
   defaultCustomerId?: string;
   initial?: Partial<CreateQuoteInput>;
   quoteId?: string;
+  /** KI-Entwurf anbieten — entscheidet die Seite auf dem Server. */
+  canDraft?: boolean;
 }) {
   const router = useRouter();
   const [error, setError] = React.useState<string | null>(null);
@@ -299,7 +302,13 @@ export function QuoteEditor({
       <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-8" noValidate>
         {error ? <Alert variant="destructive">{error}</Alert> : null}
 
-        {/* KI-Entwurf */}
+        {/*
+          KI-Entwurf — nur, wenn die Seite ihn freigibt (`ai:use` +
+          `quote:create` wie `POST /api/ai/quote-draft`, Anbieter eingerichtet).
+          Bis 2026-09-28 stand der Abschnitt immer da und endete ohne Anbieter
+          in einer Fehlermeldung, nachdem man die Anfrage eingefügt hatte.
+        */}
+        {canDraft ? (
         <section className="space-y-3 rounded-2xl border border-primary/25 bg-primary/[0.04] p-5">
           <div className="flex items-center gap-2">
             <Sparkles className="size-4 text-primary" aria-hidden />
@@ -321,6 +330,7 @@ export function QuoteEditor({
             Entwurf erstellen
           </Button>
         </section>
+        ) : null}
 
         {/* Kopfdaten */}
         <div className="grid gap-5 sm:grid-cols-2">

@@ -3,7 +3,7 @@ import Link from 'next/link';
 import { ArrowLeft } from 'lucide-react';
 
 import { prisma } from '@/lib/db';
-import { requirePermission } from '@/lib/auth/session';
+import { requirePagePermission } from '@/lib/auth/session';
 import { fullName } from '@/lib/utils';
 import { getOrganizationId } from '@/server/services/organization.service';
 import { activeStaffWhere } from '@/server/services/profile.service';
@@ -19,7 +19,8 @@ export const metadata: Metadata = {
 export const dynamic = 'force-dynamic';
 
 export default async function NewLeadPage() {
-  await requirePermission('lead:create');
+  // Reine Eingabemaske: ohne Schreibrecht 404 statt Fehlergrenze (Audit 2026-09-28).
+  await requirePagePermission('lead:create');
   const organizationId = await getOrganizationId();
 
   const [stages, employees] = await Promise.all([

@@ -4,7 +4,7 @@ import { notFound } from 'next/navigation';
 import { ArrowLeft } from 'lucide-react';
 
 import { prisma, toNumber, type Prisma } from '@/lib/db';
-import { requirePermission } from '@/lib/auth/session';
+import { requirePagePermission } from '@/lib/auth/session';
 import { can } from '@/lib/auth/rbac';
 import { NotFoundError } from '@/lib/errors';
 import { getOrganizationId } from '@/server/services/organization.service';
@@ -36,7 +36,8 @@ export default async function EditBookingPage({
 }: {
   params: Promise<{ id: string }>;
 }) {
-  const session = await requirePermission('booking:update');
+  // Reine Bearbeitungsmaske: ohne Schreibrecht 404 statt Fehlergrenze (Audit 2026-09-28).
+  const session = await requirePagePermission('booking:update');
 
   const { id } = await params;
   const organizationId = await getOrganizationId();

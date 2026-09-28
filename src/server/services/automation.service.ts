@@ -11,7 +11,7 @@ import {
 import { smsTemplates } from '@/lib/sms/client';
 
 import { buchungslinkAusstellen } from './booking.service';
-import { notify } from './notification.service';
+import { notify, taskLinkForUser } from './notification.service';
 
 /**
  * Zeitgesteuerte Abläufe.
@@ -261,10 +261,18 @@ export async function requestReviews(organizationId: string): Promise<number> {
      * E-Mail-Protokoll und die Mitteilung im Konto, deren Verweis je Buchung
      * eindeutig ist.
      */
-    const bewertungsLink = `/konto/bewertungen/neu?buchung=${booking.id}`;
+    /*
+     * Seit 2026-09-28 `/konto/bewertungen?buchung=…`: `/konto/bewertungen/neu`
+     * gab es nie, die Bitte in Mail und Konto führte auf eine 404. Die Seite
+     * wählt die Buchung aus dem Parameter im Formular vor. Die Doppelprüfung
+     * sucht zusätzlich den alten Verweis — sonst bekäme jede Kundschaft, deren
+     * Bitte noch mit dem alten Link im Konto steht, eine zweite.
+     */
+    const bewertungsLink = `/konto/bewertungen?buchung=${booking.id}`;
+    const alterLink = `/konto/bewertungen/neu?buchung=${booking.id}`;
     const [perMail, imKonto] = await Promise.all([
       prisma.emailLog.findFirst({ where: { entity: 'Booking', entityId: booking.id, templateKey: 'review_request' }, select: { id: true } }),
-      prisma.notification.findFirst({ where: { link: bewertungsLink }, select: { id: true } }),
+      prisma.notification.findFirst({ where: { link: { in: [bewertungsLink, alterLink] } }, select: { id: true } }),
     ]);
     if (perMail || imKonto) continue;
 
@@ -408,7 +416,8 @@ export async function sendTaskReminders(): Promise<number> {
       channels: ['IN_APP'],
       title: 'Aufgabe fällig',
       body: task.title,
-      link: '/admin/aufgaben',
+      // Nach Rolle der Person: Mitarbeitende kommen nicht in die Verwaltung.
+      link: await taskLinkForUser(task.assigneeId!),
       entity: 'Task',
       entityId: task.id,
     });

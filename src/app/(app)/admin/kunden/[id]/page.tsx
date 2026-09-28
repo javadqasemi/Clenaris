@@ -171,8 +171,16 @@ export default async function AdminCustomerDetailPage({
                 Offerte
               </Link>
             </Button>
+            {/*
+              Ohne `?kunde=` (2026-09-28): `/buchen` wertete den Parameter nie
+              aus, der Link versprach eine Vorauswahl, die es nicht gibt. Der
+              Buchungsassistent ist auch für das Büro der eine Erfassungsweg
+              (wie „Buchung erfassen" in der Buchungsliste); dort gibt das
+              Personal die Kundschaft an. Eine Vorauswahl gehört in den
+              Assistenten selbst, nicht in einen Parameter, der still verfällt.
+            */}
             <Button asChild>
-              <Link href={`/buchen?kunde=${customer.id}`}>
+              <Link href="/buchen">
                 <CalendarPlus aria-hidden />
                 Termin buchen
               </Link>

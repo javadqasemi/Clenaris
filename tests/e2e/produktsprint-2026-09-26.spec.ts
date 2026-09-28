@@ -118,7 +118,8 @@ test.describe('B — Profil → Einstellungen', () => {
   test('Administration: „Einstellungen" im Kontomenü ist nicht mehr die Firmenkonfiguration', async ({ page }) => {
     await imBrowserAnmelden(page, 'admin', /\/admin/);
     await page.getByRole('button', { name: 'Konto-Menü öffnen' }).click();
-    await page.getByRole('menuitem', { name: 'Einstellungen' }).click();
+    // Seit 2026-09-28 heisst der Eintrag „Persönliche Einstellungen" (L-19).
+    await page.getByRole('menuitem', { name: 'Persönliche Einstellungen', exact: true }).click();
     await page.waitForURL(/\/admin\/profil\/einstellungen$/);
     expect(new URL(page.url()).pathname).not.toBe('/admin/einstellungen');
     await expect(page.getByRole('heading', { level: 1, name: 'Persönliche Einstellungen' })).toBeVisible();

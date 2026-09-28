@@ -2,7 +2,7 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 import { ArrowLeft } from 'lucide-react';
 
-import { requirePermission } from '@/lib/auth/session';
+import { requirePagePermission } from '@/lib/auth/session';
 import { ANALYSIS_KIND_LABELS } from '@/lib/bi/labels';
 import { Button } from '@/components/ui/button';
 import { PageHeader } from '@/components/app/page-parts';
@@ -16,7 +16,8 @@ export const metadata: Metadata = {
 export const dynamic = 'force-dynamic';
 
 export default async function NewAnalysisPage({ searchParams }: { searchParams: Promise<{ art?: string; abloesen?: string }> }) {
-  await requirePermission('market:manage');
+  // Reine Eingabemaske: ohne Schreibrecht 404 statt Fehlergrenze (Audit 2026-09-28).
+  await requirePagePermission('market:manage');
   const params = await searchParams;
   const kind = params.art === 'PESTEL' ? 'PESTEL' : 'SWOT';
 

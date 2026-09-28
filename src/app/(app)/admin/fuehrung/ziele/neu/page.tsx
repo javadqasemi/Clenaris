@@ -2,7 +2,7 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 import { ArrowLeft } from 'lucide-react';
 
-import { requirePermission } from '@/lib/auth/session';
+import { requirePagePermission } from '@/lib/auth/session';
 import { zuercherFelder } from '@/lib/zuerich';
 import { getOrganizationId } from '@/server/services/organization.service';
 import { listObjectiveOptions, listStaffOptions } from '@/server/services/fuehrung-options.service';
@@ -19,7 +19,9 @@ export const metadata: Metadata = {
 export const dynamic = 'force-dynamic';
 
 export default async function NewObjectivePage({ searchParams }: { searchParams: Promise<{ flughoehe?: string; eltern?: string }> }) {
-  await requirePermission('objective:create');
+  // Reine Eingabemaske: Die Betriebsleitung hat kein `objective:create` und
+  // bekommt 404 statt der Fehlergrenze (Audit 2026-09-28).
+  await requirePagePermission('objective:create');
   const params = await searchParams;
   const organizationId = await getOrganizationId();
   const [staff, parents] = await Promise.all([listStaffOptions(organizationId), listObjectiveOptions(organizationId)]);

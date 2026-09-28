@@ -4,7 +4,9 @@ import { notFound } from 'next/navigation';
 import { ArrowLeft } from 'lucide-react';
 
 import { prisma, toNumber } from '@/lib/db';
-import { requirePermission } from '@/lib/auth/session';
+import { requirePagePermission } from '@/lib/auth/session';
+import { can } from '@/lib/auth/rbac';
+import { hasIntegration } from '@/lib/env';
 import { NotFoundError } from '@/lib/errors';
 import { getOrganizationId } from '@/server/services/organization.service';
 import { getQuoteDetail } from '@/server/services/quote.service';
@@ -33,7 +35,8 @@ export default async function EditQuotePage({
 }: {
   params: Promise<{ id: string }>;
 }) {
-  await requirePermission('quote:update');
+  // Reine Bearbeitungsmaske: ohne Schreibrecht 404 statt Fehlergrenze (Audit 2026-09-28).
+  const session = await requirePagePermission('quote:update');
 
   const { id } = await params;
   const organizationId = await getOrganizationId();
@@ -91,6 +94,9 @@ export default async function EditQuotePage({
       ) : (
         <QuoteEditor
           quoteId={quote.id}
+          // Der Entwurfsendpunkt verlangt `ai:use` und `quote:create`; dazu ein
+          // eingerichteter Anbieter (2026-09-28).
+          canDraft={can(session.role, 'ai:use') && can(session.role, 'quote:create') && hasIntegration('ai')}
           customers={customers.map((customer) => ({
             id: customer.id,
             label: `${customer.companyName ?? `${customer.firstName} ${customer.lastName}`} · ${customer.number}`,

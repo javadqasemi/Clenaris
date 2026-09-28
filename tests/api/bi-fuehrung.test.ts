@@ -48,6 +48,66 @@ describe('Unternehmensführung', { concurrency: 1 }, async () => {
       }
     });
 
+    /*
+     * Audit 2026-09-28 (L-01): Das Cockpit lud Risikomatrix und ablaufende
+     * Dokumente für jede Rolle — die Betriebsleitung sah Risikotitel und
+     * Dokumentnamen aus Registern, die ihr `risk:read`/`document:read` gerade
+     * verschliessen. Geprüft wird die JSON-Antwort *und* das HTML der Seite,
+     * denn Ausblenden allein in der Seite liesse die API-Antwort unverändert.
+     */
+    it('die Betriebsleitung bekommt im Cockpit keine Risiken und keine Dokumente', async () => {
+      const riskTitle = 'Cockpitgrenze Prüfrisiko';
+      const docTitle = 'Cockpitgrenze Prüfpolice';
+      // Vorher aufräumen — ein abgebrochener Lauf lässt die Einträge stehen.
+      const oldRisks = await get<Envelope<{ id: string; title: string }[]>>(`/api/bi/risks?q=${encodeURIComponent(riskTitle)}`, { jar: jars.admin });
+      for (const r of (oldRisks.payload.data ?? []).filter((x) => x.title === riskTitle)) await del(`/api/bi/risks/${r.id}`, { jar: jars.admin });
+      const oldDocs = await get<Envelope<{ id: string; title: string }[]>>(`/api/bi/documents?q=${encodeURIComponent(docTitle)}`, { jar: jars.admin });
+      for (const d of (oldDocs.payload.data ?? []).filter((x) => x.title === docTitle)) await del(`/api/bi/documents/${d.id}`, { jar: jars.admin });
+
+      const risk = await post<Envelope<{ id: string }>>('/api/bi/risks', { title: riskTitle, probability: 5, impact: 5 }, { jar: jars.admin });
+      assert.equal(risk.status, 201);
+      track(`/api/bi/risks/${risk.payload.data.id}`);
+      const inTenDays = new Date(Date.now() + 10 * 86_400_000).toISOString().slice(0, 10);
+      const doc = await post<Envelope<{ id: string }>>('/api/bi/documents', { title: docTitle, category: 'INSURANCE', expiresOn: inTenDays }, { jar: jars.admin });
+      assert.equal(doc.status, 201);
+      track(`/api/bi/documents/${doc.payload.data.id}`);
+
+      type CockpitBody = Envelope<{ risks: unknown; expiringDocuments: { title: string }[]; due: { risks: number; market: number; documents: number } }>;
+      const admin = await get<CockpitBody>('/api/bi/cockpit', { jar: jars.admin });
+      assert.equal(admin.status, 200);
+      assert.ok(admin.payload.data.risks, 'Geschäftsleitung ohne Risikomatrix');
+      assert.ok(admin.text.includes(riskTitle), 'Geschäftsleitung sieht das Risiko nicht');
+      assert.ok(admin.payload.data.expiringDocuments.some((d) => d.title === docTitle), 'Geschäftsleitung sieht das ablaufende Dokument nicht');
+
+      const manager = await get<CockpitBody>('/api/bi/cockpit', { jar: jars.manager });
+      assert.equal(manager.status, 200);
+      assert.equal(manager.payload.data.risks, null, 'Risikomatrix an die Betriebsleitung ausgeliefert');
+      assert.deepEqual(manager.payload.data.expiringDocuments, [], 'Dokumente an die Betriebsleitung ausgeliefert');
+      assert.equal(manager.payload.data.due.risks, 0);
+      assert.equal(manager.payload.data.due.market, 0);
+      assert.equal(manager.payload.data.due.documents, 0);
+      assert.ok(!manager.text.includes(riskTitle) && !manager.text.includes(docTitle), 'Registertitel in der Cockpit-Antwort');
+
+      const insights = await get<Envelope<{ key: string; href: string; detail: string }[]>>('/api/bi/cockpit/insights', { jar: jars.manager });
+      assert.equal(insights.status, 200);
+      for (const i of insights.payload.data) {
+        assert.ok(!i.href.startsWith('/admin/fuehrung/risiken'), `Auffälligkeit verlinkt ins Risikoregister: ${i.href}`);
+        assert.ok(!/Risiken|Marktbeobachtungen|ablaufende Dokumente/.test(i.detail), `Auffälligkeit nennt verschlossene Register: ${i.detail}`);
+        // Ohne `cockpit:financials` auch keine Finanz-Auffälligkeit (2026-09-28):
+        // Die Route lieferte vorher Liquidität und den Namen der grössten
+        // Kundschaft (`concentration`), das Cockpit filterte sie nur selbst.
+        assert.ok(!['liquidity-overdue', 'concentration', 'trend-margin.gross'].includes(i.key), `Finanz-Auffälligkeit ohne Finanzrecht: ${i.key}`);
+      }
+
+      const managerPage = await get('/admin/fuehrung', { jar: jars.manager });
+      assert.equal(managerPage.status, 200);
+      assert.ok(!managerPage.text.includes(riskTitle) && !managerPage.text.includes(docTitle), 'Registertitel im Cockpit-HTML der Betriebsleitung');
+      assert.ok(!managerPage.text.includes('href="/admin/fuehrung/risiken'), 'Link ins Risikoregister im Cockpit der Betriebsleitung');
+      assert.ok(!managerPage.text.includes('href="/admin/fuehrung/dokumente'), 'Link in die Dokumentenablage im Cockpit der Betriebsleitung');
+      const adminPage = await get('/admin/fuehrung', { jar: jars.admin });
+      assert.ok(adminPage.text.includes('href="/admin/fuehrung/risiken'), 'Geschäftsleitung ohne Link ins Risikoregister');
+    });
+
     it('Mitarbeitende dürfen Ziele lesen, aber nicht anlegen', async () => {
       assert.equal((await get('/api/bi/objectives', { jar: jars.employee })).status, 200);
       assert.equal((await post('/api/bi/objectives', { title: 'Unerlaubt' }, { jar: jars.employee })).status, 403);
@@ -213,6 +273,44 @@ describe('Unternehmensführung', { concurrency: 1 }, async () => {
       assert.equal((await patch(`/api/bi/actions/${action.payload.data.id}`, { completed: true }, { jar: jars.admin })).status, 200);
       assert.equal((await patch(`/api/bi/actions/${action.payload.data.id}`, { effectivenessChecked: true, effectivenessNote: 'Bestätigt' }, { jar: jars.admin })).status, 200);
       assert.equal((await post('/api/bi/actions', { title: 'Ohne Bezug' }, { jar: jars.admin })).status, 422);
+    });
+
+    /*
+     * Audit 2026-09-28 (L-02, L-07, L-15): Die Massnahmenliste
+     *  – liess „Alle" nicht wählen — die Filterleiste strich `alle` aus der URL,
+     *    die Seite fiel auf „offen" zurück;
+     *  – verlinkte „Risiko: …" auch für die Betriebsleitung, die das
+     *    Risikoregister nicht öffnen darf (404);
+     *  – zeigte ein Suchfeld, obwohl die Seite `q` nicht auswertet.
+     * Massnahmen lassen sich nicht löschen; die Titel tragen deshalb eine
+     * Laufkennung, damit Reste früherer Läufe nichts vortäuschen.
+     */
+    it('Massnahmenliste: „alle" zeigt Abgeschlossene, Risikobezug nur mit risk:read verlinkt, kein Suchfeld', async () => {
+      const lauf = Date.now().toString(36);
+      const risk = await post<Envelope<{ id: string }>>('/api/bi/risks', { title: `Filterrisiko ${lauf}`, probability: 2, impact: 2 }, { jar: jars.admin });
+      assert.equal(risk.status, 201);
+      track(`/api/bi/risks/${risk.payload.data.id}`);
+      const offen = await post<Envelope<{ id: string }>>('/api/bi/actions', { title: `Offene Filtermassnahme ${lauf}`, riskId: risk.payload.data.id }, { jar: jars.admin });
+      assert.equal(offen.status, 201);
+      const erledigt = await post<Envelope<{ id: string }>>('/api/bi/actions', { title: `Erledigte Filtermassnahme ${lauf}`, riskId: risk.payload.data.id }, { jar: jars.admin });
+      assert.equal(erledigt.status, 201);
+      assert.equal((await patch(`/api/bi/actions/${erledigt.payload.data.id}`, { completed: true }, { jar: jars.admin })).status, 200);
+
+      const standard = await get('/admin/fuehrung/massnahmen', { jar: jars.admin });
+      assert.equal(standard.status, 200);
+      assert.ok(standard.text.includes(`Offene Filtermassnahme ${lauf}`), 'offene Massnahme fehlt in der Standardansicht');
+      assert.ok(!standard.text.includes(`Erledigte Filtermassnahme ${lauf}`), 'Standardansicht zeigt Abgeschlossene');
+      assert.ok(!standard.text.includes('Liste durchsuchen'), 'Suchfeld ohne Wirkung');
+
+      const alle = await get('/admin/fuehrung/massnahmen?status=alle', { jar: jars.admin });
+      assert.equal(alle.status, 200);
+      assert.ok(alle.text.includes(`Erledigte Filtermassnahme ${lauf}`), '„alle" zeigt die abgeschlossene Massnahme nicht');
+      assert.ok(alle.text.includes(`href="/admin/fuehrung/risiken/${risk.payload.data.id}"`), 'Geschäftsleitung ohne Link zum Risiko');
+
+      const manager = await get('/admin/fuehrung/massnahmen?status=alle', { jar: jars.manager });
+      assert.equal(manager.status, 200);
+      assert.ok(manager.text.includes(`Filterrisiko ${lauf}`), 'Bezug als Text fehlt');
+      assert.ok(!manager.text.includes('href="/admin/fuehrung/risiken/'), 'Link ins Risikoregister für die Betriebsleitung');
     });
 
     it('Betriebsleitung liest Kontrollen, legt aber keine an', async () => {

@@ -2,8 +2,9 @@
 
 import * as React from 'react';
 import Link from 'next/link';
-import { AlertTriangle, RotateCcw } from 'lucide-react';
+import { AlertTriangle, Lock, RotateCcw } from 'lucide-react';
 
+import { FORBIDDEN_DIGEST } from '@/lib/errors';
 import { Button } from '@/components/ui/button';
 
 /**
@@ -36,6 +37,36 @@ export function AreaError({
     // wenn jemand mit offener Entwicklerkonsole meldet, was passiert ist.
     console.error('[clenaris] Fehler im Bereich:', error);
   }, [error]);
+
+  /*
+   * Fehlende Berechtigung ist kein Fehler „bei uns" (2026-09-28). Erkannt an
+   * der Kennung, die `ForbiddenError` mitbringt (`FORBIDDEN_DIGEST`) — die
+   * einzige Eigenschaft, die Next im Produktionsbau unverändert an den Browser
+   * gibt. Kein „Erneut versuchen": Ein zweiter Versuch mit denselben Rechten
+   * endet gleich, und die Aufforderung dazu schickt Leute in eine Schleife.
+   */
+  if (error.digest === FORBIDDEN_DIGEST) {
+    return (
+      <div
+        role="alert"
+        className="flex min-h-[24rem] flex-col items-center justify-center gap-6 rounded-2xl border border-dashed border-border bg-card/50 px-6 py-16 text-center"
+      >
+        <span className="flex size-12 items-center justify-center rounded-2xl bg-muted text-muted-foreground">
+          <Lock className="size-6" aria-hidden />
+        </span>
+        <div className="max-w-md space-y-2">
+          <h2 className="font-display text-lg font-semibold tracking-tight">Keine Berechtigung</h2>
+          <p className="text-sm leading-relaxed text-muted-foreground">
+            Dieser Bereich ist für Ihre Rolle nicht freigegeben. Wenn Sie ihn für Ihre Arbeit brauchen,
+            wenden Sie sich an die Administration Ihres Betriebs.
+          </p>
+        </div>
+        <Button asChild variant="outline">
+          <Link href={homeHref}>{homeLabel}</Link>
+        </Button>
+      </div>
+    );
+  }
 
   return (
     <div

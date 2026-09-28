@@ -702,7 +702,9 @@ export async function requestAbsence(params: {
     organizationId: params.organizationId,
     title: 'Neuer Abwesenheitsantrag',
     body: `${employee.user.firstName} ${employee.user.lastName} · ${days} Tage ab ${formatDate(params.input.startDate)}`,
-    link: `/admin/personal/abwesenheiten`,
+    // Der Reiter der Personalliste, nicht eine eigene Seite: `/admin/personal/abwesenheiten`
+    // gab es nie, der Pfad landete auf `personal/[id]` und damit auf einer 404.
+    link: '/admin/personal?reiter=abwesenheiten',
     permission: 'absence:read_all',
   });
 
