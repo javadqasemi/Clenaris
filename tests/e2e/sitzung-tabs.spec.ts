@@ -1,5 +1,5 @@
 import { test, expect } from './helpers/basis';
-import { imBrowserAnmelden, konsoleUeberwachen } from './helpers/browser';
+import { imBrowserAnmelden, konsoleUeberwachen, ressourcenfehler } from './helpers/browser';
 
 /**
  * Sitzung über mehrere Tabs (2026-09-28).
@@ -56,12 +56,24 @@ test.describe('Sitzung in mehreren Tabs', () => {
     await expect(tabB.getByRole('dialog')).toHaveCount(0);
     await expect(tabB).toHaveURL(/\/admin/);
 
+    // Bis hierher kein einziger Fehler — auch keine abgewiesene Erneuerung.
+    konsole.keineFehler();
+
     // Wieder untätig bis zur Warnung, dann „Abmelden" in Tab B: Tab A folgt.
     await context.clock.runFor(13 * 60_000 + 10_000);
     await tabB.getByRole('button', { name: 'Abmelden' }).click();
     await expect(tabB).toHaveURL(/\/auth\/anmelden/);
     await expect(page).toHaveURL(/\/auth\/anmelden.*grund=abgemeldet/);
 
+    /*
+      Zwischen dem Abmelden in Tab B und der Nachricht an Tab A liegt ein
+      Augenblick, in dem Tab A mit den eben widerrufenen Cookies noch eine
+      Erneuerung versuchen kann (Wächter, Glocke) — die Antwort ist dann 401,
+      und genau das ist richtig: Die Sitzung ist beendet. Erlaubt ist deshalb
+      ausschliesslich ein 401, und erst nach dem Abmelden; vor diesem Schritt
+      prüft `keineFehler()` oben ohne Ausnahme.
+    */
+    konsole.erwartet(ressourcenfehler(401));
     konsole.keineFehler();
   });
 });
