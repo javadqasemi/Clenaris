@@ -1,8 +1,27 @@
 #!/usr/bin/env bash
 #
-# Auslieferung auf den Produktionsserver.
+# Auslieferung auf den Produktionsserver — ABGELÖST, verweigert den Dienst.
 #
-#   bash scripts/deploy.sh
+#   bash scripts/deploy.sh      → bricht ab
+#
+# Seit dem Notfallauftrag vom 2026-09-27 (Phase 8) ist dieser Weg nicht mehr
+# vorgesehen. Er holt den Quelltext mit `git reset --hard`, installiert mit
+# `npm ci`, migriert und baut **auf dem Server** — und zwar in dieser
+# Reihenfolge: Die Datenbank war migriert, während der Bau noch zehn Minuten
+# lief, und die alte Fassung lief so lange gegen das neue Schema. Ausgeliefert
+# wurde ausserdem ein Bau, den keine Prüfung je gesehen hatte, erzeugt auf
+# einer Maschine, der niemand mehr traute (2.29.18.45, Beweismaterial).
+#
+# Der Weg für Production V2: Die Pipeline packt das Artefakt aus dem geprüften
+# Bau (`scripts/release-artefakt.ts`), der Server prüft Summe und Vorprüfung
+# und schaltet um (`deploy/v2/release-aktivieren.sh`). Dieses Skript bleibt
+# zur Nachvollziehbarkeit im Repository und bricht ab, statt stillschweigend
+# den alten Weg zu gehen. Kein Schalter öffnet es wieder: Ein Notweg, der auf
+# dem Server baut, ist genau der Weg, den der Vorfall verboten hat.
+#
+echo "scripts/deploy.sh ist abgelöst (Notfallauftrag 2026-09-27): kein Bau auf dem Server." >&2
+echo "Auslieferung nur noch über das geprüfte Artefakt: deploy/v2/release-aktivieren.sh — siehe docs/NOTFALL_WIEDERHERSTELLUNG.md." >&2
+exit 1
 #
 # Mit `bash` davor, nicht als `./scripts/deploy.sh`: Das Repository wird unter
 # Windows gepflegt, und Git überträgt das Ausführungsrecht von dort nicht. Wer

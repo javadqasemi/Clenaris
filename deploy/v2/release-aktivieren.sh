@@ -4,10 +4,11 @@
 #
 #   bash release-aktivieren.sh <archiv.tar.gz>
 #
-# ENTWURF (Wave 22). Nicht an `.github/workflows/deploy.yml` angeschlossen und
-# auf keinem Server ausgeführt. Unter Windows ohne Bash nicht einmal örtlich
-# gelaufen — vor dem ersten Einsatz auf einem Probeserver durchspielen
-# (docs/PRODUCTION_V2.md, „Abnahme").
+# Seit 2026-09-27 der einzige vorgesehene Auslieferungsweg (Notfallauftrag,
+# Phase 8): `.github/workflows/deploy.yml` überträgt das in CI gepackte
+# Artefakt und ruft dieses Skript. Auf keinem Server ausgeführt und unter
+# Windows ohne Bash nicht einmal örtlich gelaufen — vor dem ersten Einsatz auf
+# einem Probeserver durchspielen (docs/PRODUCTION_V2.md, V2-3).
 #
 # ---------------------------------------------------------------------------
 #  Unterschied zu scripts/deploy.sh
@@ -106,6 +107,26 @@ node scripts/react-hydrationskorrektur.mjs --pruefen >/dev/null \
 # `migrate deploy` bliebe sonst mitten in der Reihe stehen, und der Rücksprung
 # stellt nur die Anwendung wieder her, nie das Schema. (Ergänzt 2026-09-26;
 # vorher fehlte die Vorprüfung hier, während `deploy.sh` sie kannte.)
+#
+# Seit dem Notfallauftrag 2026-09-27 mit zwei festen Regeln davor:
+#
+#  • **Erst das Artefakt, dann das Schema.** Hier liegt das Release bereits
+#    geprüft und entpackt vor — die Migration läuft also erst, wenn feststeht,
+#    dass das Programm, das zu ihr passt, sofort startbereit ist. Die
+#    Auslieferung auf den alten Server hatte das umgekehrt: Sie migrierte und
+#    baute danach zehn Minuten lang, während die alte Fassung gegen das neue
+#    Schema lief.
+#  • **Produktionsvorprüfung vor jeder Schreibhandlung** (`--phase
+#    vor-migration`): Umgebung, Geheimnisse, Demozugänge, Konten mit
+#    veröffentlichten Passwörtern, Scanner, Proxy — und die Einstufung der
+#    offenen Migrationen aus `security/migrations-vertraeglichkeit.json`. Eine
+#    BRECHENDE Migration hält hier an, ausser `CLENARIS_WARTUNGSFENSTER=ja`
+#    ist bewusst gesetzt.
+wartung=()
+[[ "${CLENARIS_WARTUNGSFENSTER:-}" == "ja" ]] && wartung=(--wartungsfenster)
+npx tsx scripts/production-preflight.ts --phase vor-migration "${wartung[@]}" \
+  || fail "Produktionsvorprüfung (vor der Migration) nicht bestanden — nichts migriert, nichts umgeschaltet."
+
 if ! npx prisma migrate status >/dev/null 2>&1; then
   log "Migrationen stehen an — Vorprüfung, dann Sicherung."
   npx tsx scripts/migration-preflight.ts \
@@ -114,6 +135,11 @@ if ! npx prisma migrate status >/dev/null 2>&1; then
     || fail "Sicherung fehlgeschlagen — keine Migration."
   npx prisma migrate deploy
 fi
+
+# Nach der Migration noch einmal, jetzt ohne offene Migration: Das Programm,
+# das gleich startet, muss zu genau diesem Schema passen.
+npx tsx scripts/production-preflight.ts \
+  || fail "Produktionsvorprüfung (vor dem Umschalten) nicht bestanden — nicht umgeschaltet. Achtung: Migrationen sind bereits angewandt."
 
 # --- 6. Umschalten ----------------------------------------------------------
 VORHER=""

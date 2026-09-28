@@ -112,7 +112,16 @@ const serverSchema = z.object({
    * damit keinen Auftrag der Produktion übernehmen — die Instanz vergleicht
    * seine Angabe mit ihrer eigenen, nicht mit einem Feld im Auftrag.
    */
-  CLENARIS_UMGEBUNG: z.enum(['production', 'staging', 'preview', 'test']).optional(),
+  //
+  // Ein **leerer** Wert gilt als nicht gesetzt (2026-09-27). `.env.example`
+  // liefert `CLENARIS_UMGEBUNG=` aus; wer die Datei kopiert, hat den leeren
+  // String in der Umgebung, und `z.enum` wies ihn ab — `serverEnv()` warf,
+  // und jede Route, die es brauchte (darunter die Anmeldung), antwortete 500.
+  // Gefunden über die Produktionsinstanz in `produktions-vorpruefung.test.ts`.
+  CLENARIS_UMGEBUNG: z.preprocess(
+    (wert) => (typeof wert === 'string' && wert.trim() === '' ? undefined : wert),
+    z.enum(['production', 'staging', 'preview', 'test']).optional(),
+  ),
 
   /**
    * Herkunft dieser Instanz (`https://clenaris.qasemi.ch`) — zur Laufzeit,

@@ -162,6 +162,32 @@ und schreibt es in die Beschreibung des Commits oder Pull Requests.
 | [ ] | CI grün | Lauf auf dem Arbeitszweig |
 | [ ] | Keine Auslieferung versehentlich ausgelöst | `DEPLOY_ENABLED` nicht gesetzt; Auslieferungsauftrag im Lauf „übersprungen" |
 
+## Checkliste H — Produktionsauslieferung (seit dem Notfallauftrag 2026-09-27)
+
+Jede Auslieferung in eine Produktion belegt **jeden** Punkt. Anlass: Eine
+Auslieferung auf einen nicht vertrauenswürdigen Server baute dort, migrierte
+vor dem Bau, liess Demozugänge offen und lief ohne Scanner — und galt als
+„erfolgreich". `docs/NOTFALL_WIEDERHERSTELLUNG.md` hat die Einzelheiten.
+
+| | Punkt | Nachweis |
+|---|---|---|
+| [ ] | CI sauber | grüner Lauf des Commits, Auftrag „Prüfung" |
+| [ ] | Geheimnisprüfung bestanden | `npm run security:secrets` im Lauf |
+| [ ] | Sicherheitsprüfung bestanden | `security:check` 7/7 (mit Prüfreihen), nicht nur statisch |
+| [ ] | Unveränderliches Artefakt | `release-<sha>` aus genau diesem Lauf, kein Bau am Server |
+| [ ] | Prüfsumme | SHA-256 aus der Laufzusammenfassung = Summe am Server |
+| [ ] | Produktionsvorprüfung | `npm run production:preflight` Ausgang 0 (vor und nach der Migration) |
+| [ ] | Keine Demozugänge | Vorprüfung „konten-oeffentliche-passwoerter" OK |
+| [ ] | Sicherung vollständig | `db-backup.ts` unmittelbar vor der Migration, gelesen |
+| [ ] | Migrations-Vorprüfung | `migration-preflight.ts` ohne Konflikt |
+| [ ] | Verträglichkeit durchgesehen | `npm run migration:vertraeglichkeit`; BRECHEND nur mit Wartungsfenster oder Erweitern → Umschalten → Rückbau |
+| [ ] | Scanner gesund | clamd `PONG`; Abnahme `scripts/abnahme/clamd.ts` einmal je Server |
+| [ ] | Überwachung gesund | externe Überwachung meldet, `SECURITY_REPORT_TOKEN` gesetzt |
+| [ ] | Ursprung geschützt | direkter Zugriff auf die IP von aussen geprüft: geschlossen |
+| [ ] | Keine öffentlichen internen Ports | 3000, 5432, 5433, 6379, 4444 von aussen gefiltert |
+| [ ] | Rauchtest | Health meldet genau diesen Commit; Anmeldung, eine Leseseite |
+| [ ] | Rücksprung | vorheriges Release unter `releases/`, Schema-Folgen der Migrationen bekannt |
+
 ---
 
 ## Automatisiert

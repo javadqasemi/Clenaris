@@ -276,6 +276,83 @@ describe('Abgeleitete Geheimnisse überstehen die Rotation', () => {
 });
 
 // ===========================================================================
+//  Notfallauftrag 2026-09-27: vom abgeleiteten Schlüssel weg, ohne Datenverlust
+// ===========================================================================
+
+describe('Migration vom aus JWT_SECRET abgeleiteten Schlüssel', () => {
+  /**
+   * Nach dem Vorfall wird `JWT_SECRET` rotiert. Lief die Produktion ohne
+   * `ENCRYPTION_KEY`, hängt jedes verschlüsselte Feld an ihm — ein blinder
+   * Wechsel machte TOTP-Geheimnisse, AHV-Nummern und Alarmcodes unlesbar.
+   * `scripts/schluessel-aus-jwt-ableiten.ts` legt den alten, abgeleiteten
+   * Schlüssel als Hexwert ab, damit er als `ENCRYPTION_KEY_PREVIOUS` lesbar
+   * bleibt. Dieser Fall beweist den ganzen Weg in einem eigenen Prozess (der
+   * Konfigurationszwischenspeicher von `serverEnv` hielte sonst den
+   * `JWT_SECRET` des Prüfprozesses fest): verschlüsseln mit dem abgeleiteten
+   * Schlüssel, `JWT_SECRET` und `ENCRYPTION_KEY` wechseln, lesen.
+   *
+   * Scheitert er, stimmen die Parameter des Skripts nicht mehr mit `bund()` in
+   * `src/lib/crypto.ts` überein — und die Migrationsanleitung führte in den
+   * Datenverlust.
+   */
+  it('der abgelegte Schlüssel liest, was der abgeleitete geschrieben hat', async () => {
+    const { mkdtempSync, readFileSync, rmSync } = await import('node:fs');
+    const { spawnSync } = await import('node:child_process');
+    const { join } = await import('node:path');
+    const { tmpdir } = await import('node:os');
+
+    const wurzel = join(__dirname, '..', '..');
+    const tsx = join(wurzel, 'node_modules', 'tsx', 'dist', 'cli.mjs');
+    const ordner = mkdtempSync(join(tmpdir(), 'clenaris-schluessel-'));
+    const alt = `alt-${randomBytes(24).toString('hex')}`;
+    const neu = randomBytes(32).toString('hex');
+    try {
+      const datei = join(ordner, 'alt.hex');
+      const ableiten = spawnSync(process.execPath, [tsx, join(wurzel, 'scripts', 'schluessel-aus-jwt-ableiten.ts'), datei], {
+        cwd: wurzel,
+        encoding: 'utf8',
+        env: { ...process.env, ALT_JWT_SECRET: alt },
+      });
+      assert.equal(ableiten.status, 0, ableiten.stderr);
+      assert.ok(!ableiten.stdout.includes(readFileSync(datei, 'utf8').trim()), 'der Schlüssel steht nicht auf der Konsole');
+
+      // Als file://-URL: Ein nackter Windows-Pfad (`c:\…`) ist für den
+      // ESM-Lader ein unbekanntes Schema.
+      const { pathToFileURL } = await import('node:url');
+      const kryptoPfad = JSON.stringify(pathToFileURL(join(wurzel, 'src', 'lib', 'crypto.ts')).href);
+      const programm = `
+        const k = await import(${kryptoPfad});
+        const chiffrat = k.encrypt('756.1234.5678.97', k.CRYPTO_CONTEXT.ahvNumber);
+        process.env.ENCRYPTION_KEY = process.env.NEU_SCHLUESSEL;
+        process.env.ENCRYPTION_KEY_PREVIOUS = process.env.ALT_ABGELEGT;
+        process.env.JWT_SECRET = 'neu-' + 'x'.repeat(40);
+        k.resetEncryptionKeyCache();
+        const klar = k.decrypt(chiffrat, k.CRYPTO_CONTEXT.ahvNumber);
+        const neuVerschluesselt = k.encrypt(klar, k.CRYPTO_CONTEXT.ahvNumber);
+        console.log(JSON.stringify({ klar, aktuell: k.istAktuellVerschluesselt(neuVerschluesselt), altNochAktuell: k.istAktuellVerschluesselt(chiffrat) }));
+      `;
+      const env: NodeJS.ProcessEnv = {
+        ...process.env,
+        JWT_SECRET: alt,
+        DATABASE_URL: 'postgresql://pruef@pruef-db.invalid:5432/clenaris_test',
+        NEU_SCHLUESSEL: neu,
+        ALT_ABGELEGT: readFileSync(datei, 'utf8').trim(),
+      };
+      delete env.ENCRYPTION_KEY;
+      delete env.ENCRYPTION_KEY_PREVIOUS;
+      const lauf = spawnSync(process.execPath, [tsx, '--eval', `(async () => { ${programm} })()`], { cwd: wurzel, encoding: 'utf8', env });
+      assert.equal(lauf.status, 0, lauf.stderr);
+      const ergebnis = JSON.parse(lauf.stdout.trim().split('\n').pop()!) as { klar: string; aktuell: boolean; altNochAktuell: boolean };
+      assert.equal(ergebnis.klar, '756.1234.5678.97', 'nach dem Wechsel von JWT_SECRET lesbar');
+      assert.equal(ergebnis.aktuell, true, 'neu geschrieben wird mit dem neuen Schlüssel');
+      assert.equal(ergebnis.altNochAktuell, false, 'der Altbestand gilt als umzuschlüsseln');
+    } finally {
+      rmSync(ordner, { recursive: true, force: true });
+    }
+  });
+});
+
+// ===========================================================================
 //  Über HTTP: die IBAN liegt verschlüsselt in der Spalte
 // ===========================================================================
 

@@ -60,18 +60,75 @@ const TESTMUSTER = /(^|[_-])test($|[_-])|_test$|test_|demo|scratch|sandbox/i;
  * Umgebung; dann wird hier nichts gelesen.
  */
 function datenbankUrl(): string | undefined {
-  if (process.env.DATABASE_URL) return process.env.DATABASE_URL;
+  return umgebungswert('DATABASE_URL');
+}
+
+/**
+ * Einen Wert aus der Umgebung lesen, notfalls aus `.env`.
+ *
+ * Seit dem Notfallauftrag 2026-09-27 nicht mehr nur für `DATABASE_URL`. Auf
+ * einem Server läuft `npx tsx prisma/seed.ts` in einer Shell, die `.env`
+ * nicht geladen hat — `NODE_ENV=production` steht dann nur in der Datei,
+ * nicht im Prozess. Eine Produktionsschranke, die ausschliesslich
+ * `process.env.NODE_ENV` fragte, war auf genau dem System blind, für das sie
+ * gebaut ist, und liess den Seed die Demokonten mit veröffentlichtem Passwort
+ * anlegen. Gesetzte Umgebungsvariablen gehen vor; die Datei ist der Rückfall.
+ */
+export function umgebungswert(name: string): string | undefined {
+  const gesetzt = process.env[name];
+  if (gesetzt !== undefined && gesetzt !== '') return gesetzt;
 
   const datei = resolve(process.cwd(), '.env');
   if (!existsSync(datei)) return undefined;
 
+  const muster = new RegExp(`^\\s*${name}\\s*=\\s*(.*)$`);
   for (const zeile of readFileSync(datei, 'utf8').split(/\r?\n/)) {
-    const treffer = /^\s*DATABASE_URL\s*=\s*(.*)$/.exec(zeile);
+    const treffer = muster.exec(zeile);
     if (!treffer) continue;
     // Anführungszeichen und ein angehängter Kommentar gehören nicht zum Wert.
-    return treffer[1]!.trim().replace(/^["']|["']$/g, '');
+    const wert = treffer[1]!.trim().replace(/^["']|["']$/g, '');
+    return wert === '' ? undefined : wert;
   }
   return undefined;
+}
+
+/**
+ * Läuft dieser Seed gegen ein produktives System?
+ *
+ * Ja, wenn `NODE_ENV=production` **oder** `CLENARIS_UMGEBUNG` `production`
+ * bzw. `staging` ist — aus der Umgebung oder aus `.env`. Zwei Merkmale statt
+ * eines, weil jedes für sich auf einem Server fehlen kann; wer eines davon
+ * setzt, hat damit gesagt, dass hier nicht geübt wird.
+ */
+export function produktivesSystem(): boolean {
+  const umgebung = umgebungswert('CLENARIS_UMGEBUNG');
+  return (
+    umgebungswert('NODE_ENV') === 'production' ||
+    umgebung === 'production' ||
+    umgebung === 'staging'
+  );
+}
+
+/**
+ * Dürfen Seeds Konten mit **veröffentlichten** Passwörtern anlegen?
+ *
+ * Nur ausserhalb eines produktiven Systems, und dort nur gegen eine
+ * Wegwerf-Datenbank (`clenaris_test`, `clenaris_preview`, …) oder nach dem
+ * bewussten `ALLOW_DEMO_SEED=ja`. Dieselbe Schwelle wie für den Demo-Seed,
+ * aus demselben Grund: Ein Konto mit einem Passwort aus dem Repository ist
+ * auf einer Datenbank, die weiterlebt, kein Komfort, sondern eine offene Tür.
+ *
+ * Die Vorschaudatenbank zählt dazu — anders als beim Demo-Seed, der sie über
+ * seinen eigenen, zeichengenauen Namensschutz abweist.
+ */
+export function oeffentlicheKontenErlaubt(): boolean {
+  if (produktivesSystem()) return false;
+  const name = databaseNameOf(datenbankUrl());
+  return (
+    umgebungswert('ALLOW_DEMO_SEED') === 'ja' ||
+    istTestdatenbank(name) ||
+    (name !== null && /(^|[_-])preview($|[_-])/i.test(name))
+  );
 }
 
 /** Datenbankname aus einer Postgres-Verbindungszeichenfolge. */
@@ -105,6 +162,30 @@ export function assertDemoSeedErlaubt(): void {
 }
 
 function pruefen(): void {
+  /**
+   * Ein produktives System schlägt jede Übersteuerung (Notfallauftrag
+   * 2026-09-27). `ALLOW_DEMO_SEED=ja` ist für die Entwicklungsdatenbank
+   * gedacht, die jemand schlicht `clenaris` genannt hat — nicht für einen
+   * Server, dessen `.env` `NODE_ENV=production` trägt. Dort legte der
+   * Demo-Seed eine Kundin mit veröffentlichtem Passwort an; kein Schalter
+   * darf das erlauben.
+   */
+  if (produktivesSystem()) {
+    console.error(
+      [
+        '',
+        '❌  Demo-Seed abgebrochen — produktives System.',
+        '',
+        '    NODE_ENV=production oder CLENARIS_UMGEBUNG=production/staging ist gesetzt',
+        '    (in der Umgebung oder in .env). Demodaten und Demokonten mit öffentlich',
+        '    bekannten Passwörtern werden dort nie angelegt — auch nicht mit',
+        '    ALLOW_DEMO_SEED=ja.',
+        '',
+      ].join('\n'),
+    );
+    process.exit(1);
+  }
+
   if (process.env.ALLOW_DEMO_SEED === 'ja') {
     console.log('⚠️   ALLOW_DEMO_SEED=ja — Schutzschalter übersprungen.\n');
     return;

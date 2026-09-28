@@ -90,29 +90,48 @@ describe('Auslieferungs-Workflow — fail-closed', () => {
   });
 
   /**
-   * `schema.prisma` deklariert `directUrl = env("DIRECT_URL")`. Ohne die
-   * Variable bricht Prisma mit P1012 ab, und ein leerer Wert zählt als
-   * fehlend. Ohne diese Prüfung käme der Abbruch erst auf dem Server, mitten
-   * in der Auslieferung.
+   * Notfallauftrag 2026-09-27, Phase 8. Bis dahin prüften zwei Fälle hier,
+   * dass der Workflow `DIRECT_URL` und `TRUSTED_PROXY_MODE` vor dem Übertragen
+   * in die Server-`.env` prüft. Die Übertragung selbst ist entfallen: Die
+   * Pipeline kennt keine Anwendungsgeheimnisse mehr, sie liegen nur noch in
+   * `shared/.env` auf dem Server. Dieselben Prüfungen macht jetzt
+   * `scripts/production-preflight.ts` auf dem Server, gegen die Werte, die
+   * die Anwendung wirklich liest (`produktions-vorpruefung.test.ts`). Hier
+   * bleibt, was die Pipeline betrifft: dass sie sie nicht mehr anfasst.
    */
-  it('bricht ohne DIRECT_URL ab', () => {
-    assert.match(workflow, /test -n "\$\{DIRECT_URL:-\}" \|\| \{/);
-    const schema = readFileSync(join(wurzel, 'prisma', 'schema.prisma'), 'utf8');
-    assert.match(
-      schema,
-      /directUrl\s*=\s*env\("DIRECT_URL"\)/,
-      'die Prüfung im Workflow hat nur solange einen Grund, wie das Schema die Variable verlangt',
+  it('der Auslieferungsauftrag liest keine Anwendungsgeheimnisse', () => {
+    const auftrag = workflow.slice(workflow.indexOf('\n  auslieferung:'));
+    assert.doesNotMatch(
+      auftrag,
+      /secrets\.(DATABASE_URL|DIRECT_URL|JWT_SECRET|CRON_SECRET|ENCRYPTION_KEY|STRIPE|RESEND|TWILIO|SUPABASE|ANTHROPIC)/,
+      'jedes Geheimnis, das die Pipeline kennt, ist eines mehr, das nach einem Vorfall rotiert werden muss',
     );
   });
 
-  /**
-   * Ein Tippfehler im Modus wirkt lautlos: `client-ip.ts` fällt bei jedem
-   * unbekannten Wert auf `NONE` zurück. Im Anfragepfad ist das richtig —
-   * beim Ausliefern wäre es eine Falle.
-   */
-  it('weist einen unbekannten TRUSTED_PROXY_MODE zurück, statt ihn stillschweigend zu verwerfen', () => {
-    assert.match(workflow, /NONE\|SINGLE_REVERSE_PROXY\|CLOUDFLARE\)/);
-    assert.match(workflow, /TRUSTED_PROXY_MODE hat den unbekannten Wert/);
+  it('baut nicht auf dem Server — er aktiviert das geprüfte Artefakt', () => {
+    const auftrag = workflow.slice(workflow.indexOf('\n  auslieferung:'));
+    const befehle = auftrag
+      .split(/\r?\n/)
+      .filter((z) => !/^\s*#/.test(z))
+      .join('\n');
+    assert.doesNotMatch(befehle, /scripts\/deploy\.sh|npm ci|npm install|npm run build|git (pull|reset|fetch)/);
+    assert.match(befehle, /release-aktivieren\.sh/);
+    assert.match(befehle, /sha256sum -c/, 'die Summe wird vor der Übertragung geprüft');
+    const tor = workflow.slice(workflow.indexOf('\n  qualitaet:'), workflow.indexOf('\n  auslieferung:'));
+    assert.match(tor, /scripts\/release-artefakt\.ts/, 'das Artefakt entsteht im Qualitätstor, aus dem geprüften Bau');
+  });
+
+  it('die Vorprüfung auf dem Server kennt DIRECT_URL, weil das Schema sie verlangt', () => {
+    const schema = readFileSync(join(wurzel, 'prisma', 'schema.prisma'), 'utf8');
+    assert.match(schema, /directUrl\s*=\s*env\("DIRECT_URL"\)/);
+    const vorpruefung = readFileSync(join(wurzel, 'scripts', 'production-preflight.ts'), 'utf8');
+    assert.match(vorpruefung, /'DIRECT_URL'/);
+    const aktivieren = readFileSync(join(wurzel, 'deploy', 'v2', 'release-aktivieren.sh'), 'utf8');
+    assert.match(aktivieren, /production-preflight\.ts --phase vor-migration/, 'vor der Migration');
+    const vor = aktivieren.indexOf('production-preflight.ts --phase vor-migration');
+    const migration = aktivieren.indexOf('npx prisma migrate deploy');
+    const umschalten = aktivieren.indexOf('umschalten "${ZIEL}"');
+    assert.ok(vor > 0 && vor < migration && migration < umschalten, 'Vorprüfung → Migration → Umschalten');
   });
 
   it('verlangt den gepinnten Wirtsschlüssel und kennt keinen ssh-keyscan-Rückfall', () => {
