@@ -118,8 +118,11 @@ schlimmer als keine.
   CDP), aus denen Chromium Pointer-Events ableitet. Druck, Radius, Vorhersage
   und das Zusammenfassen mehrerer Bewegungen eines echten Geräts sind damit
   nicht geprüft.
-- **Andere Browser.** Gefahren wird Chromium. Firefox und WebKit sind nicht
-  Teil dieser Reihe.
+- **Andere Browser.** Die Gate-Fälle (Signatur, Gerätesperre, PDF) laufen nur
+  in Chromium. Seit 2026-09-28 fährt Firefox die `*.browser.spec.ts` sowie
+  Rabattauswahl, Scanner und Sitzungstabs, WebKit nur die `*.browser.spec.ts`
+  — angemeldet kann WebKit über `http://127.0.0.1` nicht arbeiten, weil es die
+  `Secure`-Cookies dort nicht mitschickt (`docs/PENDENZEN.md`, W-02).
 - **PDF-JavaScript in jeder Form.** Geprüft ist ein Prüfobjekt mit
   `/OpenAction` und benanntem `/JavaScript`-Baum. Dass PDF.js nichts davon
   ausführt, ist an zwei unabhängigen Stellen gemessen (kein Dialog, keine

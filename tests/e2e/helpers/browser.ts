@@ -178,9 +178,11 @@ export async function imBrowserAnmelden(
   page: Page,
   konto: keyof typeof ACCOUNTS,
   erwartetesZiel: RegExp,
+  /** Rücksprungziel wie nach einer abgelaufenen Sitzung (`?weiter=`), sonst die Startseite der Rolle. */
+  weiter?: string,
 ): Promise<void> {
   const { email, password } = ACCOUNTS[konto];
-  await page.goto('/auth/anmelden');
+  await page.goto(weiter ? `/auth/anmelden?weiter=${encodeURIComponent(weiter)}` : '/auth/anmelden');
   await page.locator('input[type="email"]').fill(email);
   await page.locator('input[autocomplete="current-password"]').fill(password);
   await page.getByRole('button', { name: 'Anmelden', exact: true }).click();

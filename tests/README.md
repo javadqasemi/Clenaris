@@ -245,7 +245,13 @@ Seit 2026-09-28:
   `e2e/bilder.browser.spec.ts` (jedes Websitebild dekodiert und sichtbar —
   kalt, warm, Linkwechsel, langsames Netz, Telefon; echte, hochgeladene JPEGs)
   und `e2e/besuchsmessung.browser.spec.ts` (ohne Einwilligung keine Zeile, mit
-  Einwilligung gespeichert und bereinigt, gesperrter Endpunkt ohne Seitenfehler).
+  Einwilligung gespeichert und bereinigt, gesperrter Endpunkt ohne Seitenfehler)
+  und `e2e/vor-hydration.browser.spec.ts` (vor der Hydration Eingetipptes geht
+  nicht verloren; Skripte verzögert, damit das Ausfüllen sicher vorher liegt).
+- **Firefox fährt zusätzlich** `offerte-rabatt`, `scan` und `sitzung-tabs`
+  (`MEHRERE_ENGINES`). WebKit nicht: Es schickt die `Secure`-Anmeldecookies
+  nicht über `http://127.0.0.1` (Pendenz W-02) — angemeldete Fälle in WebKit
+  brauchen einen HTTPS-Prüfserver.
 
 Sie läuft gegen denselben Testserver und dieselbe Testdatenbank. Einzelheiten
 — und vor allem die Trennung zwischen dem, was empirisch bewiesen ist, und dem,
