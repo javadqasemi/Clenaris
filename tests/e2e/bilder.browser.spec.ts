@@ -140,8 +140,10 @@ test.describe('Bilder der Website', () => {
   let vorherUrl = '';
   let nachherUrl = '';
 
+  let jar = '';
+
   test.beforeAll(async () => {
-    const jar = await frischAnmelden('admin');
+    jar = await frischAnmelden('admin');
     const db = testDb();
     if (!db) throw new Error('Keine Testdatenbank.');
     // Der Demobestand veröffentlicht keine Galerie ohne echte Fotos (D-03);
@@ -154,7 +156,8 @@ test.describe('Bilder der Website', () => {
     if (!eintrag) throw new Error('Kein Galerieeintrag im Bestand.');
     galerieId = eintrag.id;
     vorherStand = { beforeUrl: eintrag.beforeUrl, afterUrl: eintrag.afterUrl, published: eintrag.published, featured: eintrag.featured };
-    await db.galleryItem.update({ where: { id: galerieId }, data: { published: true, featured: true } });
+    const sichtbar = await patch(`/api/gallery/${galerieId}`, { published: true, featured: true }, { jar });
+    if (sichtbar.status !== 200) throw new Error(`Galerie veröffentlichen: HTTP ${sichtbar.status} — ${sichtbar.text}`);
 
     vorherUrl = await galeriebildHochladen(await jpeg({ r: 120, g: 110, b: 95 }), 'browserpruefung-vorher.jpg', jar);
     nachherUrl = await galeriebildHochladen(await jpeg({ r: 20, g: 130, b: 140 }), 'browserpruefung-nachher.jpg', jar);
@@ -164,8 +167,20 @@ test.describe('Bilder der Website', () => {
     }
   });
 
+  /*
+    Zurückgesetzt über die Schnittstelle, nicht direkt in der Datenbank
+    (2026-09-28). Der direkte Weg liess die zwischengespeicherte Startseite
+    (ISR, eine Stunde) mit den Adressen der Prüfbilder stehen. Wurde die
+    Testdatenbank danach frisch aufgesetzt — `verify:release` —, lieferte der
+    nächste Lauf dieselbe Seite mit Bildern aus, die es nicht mehr gab: zwei
+    404 im ersten Fall der Stressreihe, der gar nichts mit Bildern zu tun hat.
+    `PATCH /api/gallery/:id` erneuert die öffentlichen Seiten wie bei jeder
+    Änderung aus der Verwaltung.
+  */
   test.afterAll(async () => {
-    if (galerieId && vorherStand) await testDb()?.galleryItem.update({ where: { id: galerieId }, data: vorherStand });
+    if (!galerieId || !vorherStand) return;
+    const zurueck = await patch(`/api/gallery/${galerieId}`, vorherStand, { jar });
+    if (zurueck.status !== 200) throw new Error(`Galerie zurücksetzen: HTTP ${zurueck.status} — ${zurueck.text}`);
   });
 
   for (const pfad of ['/', '/galerie']) {
