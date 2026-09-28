@@ -17,6 +17,8 @@
     { "weg": "GET /api/public/service-areas/check", "begruendung": "Postleitzahl im Einsatzgebiet ja/nein." },
     { "weg": "POST /api/public/bookings", "begruendung": "Online-Buchung; bookingCreate-Limit, Preis serverseitig, Kapazität in der Transaktion." },
     { "weg": "POST /api/public/contact", "begruendung": "Kontaktformular; contactForm-Limit." },
+    { "weg": "GET /api/public/kontakt/vcard", "begruendung": "Visitenkarte der Firma (.vcf) für „Kontakt speichern“ auf /kontakt: nur Angaben, die die Fusszeile ohnehin zeigt, nichts aus der Anfrage fliesst in die Antwort; Dateiname ASCII ohne Anführungszeichen, nosniff; apiRead-Limit. Durchgesehen 2026-09-28." },
+    { "weg": "POST /api/public/traffic", "begruendung": "Eigene Besuchsmessung (TA): nur mit Einwilligung im Browser gesendet, Herkunftsprüfung der Fabrik (fremder Origin 403), traffic-Limit je IP, strenges Schema (höchstens 20 Ereignisse, unbekannte Felder 422); gespeichert werden Pfad ohne Abfrage (nur utm_*), Tages-Hash der Sitzung, Geräteklasse — keine IP, kein Token, Sec-GPC/DNT und Automaten verworfen; Antwort immer 204. Durchgesehen 2026-09-28." },
     { "weg": "POST /api/public/newsletter", "begruendung": "Anmeldung mit Bestätigung; newsletter-Limit." },
     { "weg": "POST /api/public/newsletter/bestaetigen", "begruendung": "Double-Opt-in per Token aus der E-Mail; Token im Körper, organisationsgebunden, einmalig; publicTokenAction-Limit." },
     { "weg": "POST /api/public/newsletter/abmelden", "begruendung": "Widerruf per Token aus der E-Mail, ohne Anmeldung (DSGVO); organisationsgebunden; publicTokenAction-Limit." },
