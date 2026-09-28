@@ -18,6 +18,7 @@ import type {
   UpdateControlInput,
   UpdateRiskInput,
 } from '@/lib/validation/bi-governance';
+import { organisationsbezugPruefen } from './bezug.service';
 import { notify } from './notification.service';
 
 /**
@@ -92,6 +93,9 @@ export async function getRisk(organizationId: string, id: string) {
 }
 
 export async function createRisk(session: SessionUser, organizationId: string, input: CreateRiskInput) {
+  // Verantwortung nur für eigene Konten (B-13, 2026-09-28) — sonst ginge die
+  // Benachrichtigung unten an eine Person einer anderen Organisation.
+  await organisationsbezugPruefen('user', input.ownerId, organizationId, 'Verantwortliche Person');
   const residual = input.residualProbability && input.residualImpact ? riskSeverity(input.residualProbability, input.residualImpact) : null;
   const risk = await prisma.riskEntry.create({
     data: {
@@ -124,6 +128,7 @@ export async function createRisk(session: SessionUser, organizationId: string, i
 export async function updateRisk(session: SessionUser, organizationId: string, id: string, input: UpdateRiskInput) {
   const before = await prisma.riskEntry.findFirst({ where: { id, organizationId, deletedAt: null } });
   if (!before) throw new NotFoundError('Risiko');
+  await organisationsbezugPruefen('user', input.ownerId, organizationId, 'Verantwortliche Person');
   const probability = input.probability ?? before.probability;
   const impact = input.impact ?? before.impact;
   const rp = input.residualProbability === undefined ? before.residualProbability : input.residualProbability;
@@ -248,6 +253,7 @@ export async function getControl(organizationId: string, id: string) {
 }
 
 export async function createControl(session: SessionUser, organizationId: string, input: CreateControlInput) {
+  await organisationsbezugPruefen('user', input.ownerId, organizationId, 'Verantwortliche Person');
   const control = await prisma.controlEntry.create({
     data: {
       organizationId,
@@ -269,6 +275,7 @@ export async function createControl(session: SessionUser, organizationId: string
 export async function updateControl(session: SessionUser, organizationId: string, id: string, input: UpdateControlInput) {
   const before = await prisma.controlEntry.findFirst({ where: { id, organizationId, deletedAt: null } });
   if (!before) throw new NotFoundError('Kontrolle');
+  await organisationsbezugPruefen('user', input.ownerId, organizationId, 'Verantwortliche Person');
   const control = await prisma.controlEntry.update({
     where: { id },
     data: {
@@ -341,6 +348,10 @@ export async function createAction(session: SessionUser, organizationId: string,
   if (input.riskId && !(await prisma.riskEntry.findFirst({ where: { id: input.riskId, organizationId } }))) throw new NotFoundError('Risiko');
   if (input.controlId && !(await prisma.controlEntry.findFirst({ where: { id: input.controlId, organizationId } }))) throw new NotFoundError('Kontrolle');
   if (input.reviewId && !(await prisma.review.findFirst({ where: { id: input.reviewId, organizationId } }))) throw new NotFoundError('Bewertung');
+  // Ebenso die zuständige Person (B-13, 2026-09-28). Vorher fehlte sie in
+  // dieser Liste: Die Transaktion legte eine Aufgabe für ein Konto einer
+  // anderen Organisation an, und `notify()` benachrichtigte es danach.
+  await organisationsbezugPruefen('user', input.assigneeId, organizationId, 'Zuständige Person');
 
   const action = await prisma.$transaction(async (tx) => {
     // Die Durchführung läuft über `Task`: Frist, Zuweisung, Erinnerung und
