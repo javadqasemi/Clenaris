@@ -32,6 +32,7 @@ import {
   ABRECHNUNGSZYKLUS,
   PREISMODELL,
   VERLAENGERUNG,
+  preisText,
   rhythmusText,
 } from '@/lib/contracts/bezeichnungen';
 import { FREQUENCY_LABEL } from '@/lib/pricing/engine';
@@ -379,19 +380,15 @@ export async function renderContractVersionSnapshot(
    * Der Preis steht ausgeschrieben, nicht als Modellname. „UNIT_BASED" ist
    * in einem Dokument, das jemand unterschreibt, keine Preisvereinbarung.
    */
-  const preis = (() => {
-    const satz = toNumber(version.vatRate);
-    switch (version.pricingModel) {
-      case 'HOURLY':
-        return `${version.currency} ${toNumber(version.hourlyRate).toFixed(2)} je Stunde · zzgl. ${satz} % MWST`;
-      case 'UNIT_BASED':
-        return `${version.currency} ${toNumber(version.unitPrice).toFixed(4)} je ${version.unitLabel ?? 'Einheit'} · zzgl. ${satz} % MWST`;
-      case 'FIXED_PER_VISIT':
-        return `${version.currency} ${toNumber(version.baseAmount).toFixed(2)} je Einsatz · zzgl. ${satz} % MWST`;
-      default:
-        return `${version.currency} ${toNumber(version.baseAmount).toFixed(2)} je Abrechnungsperiode · zzgl. ${satz} % MWST`;
-    }
-  })();
+  const preis = preisText({
+    pricingModel: version.pricingModel,
+    currency: version.currency,
+    baseAmount: toNumber(version.baseAmount),
+    hourlyRate: toNumber(version.hourlyRate),
+    unitPrice: toNumber(version.unitPrice),
+    unitLabel: version.unitLabel,
+    vatRate: toNumber(version.vatRate),
+  });
 
   const konditionen: { label: string; value: string }[] = [
     { label: 'Preismodell', value: PREISMODELL[version.pricingModel] ?? version.pricingModel },

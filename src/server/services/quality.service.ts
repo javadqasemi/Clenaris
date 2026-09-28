@@ -593,6 +593,64 @@ export async function listInspections(params: {
 }
 
 /**
+ * Die Kontrollen der eigenen Objekte und Verträge für `/konto/qualitaet`
+ * (L-18, 2026-09-28).
+ *
+ * **Dieselbe Sichtregel wie die Schnittstelle** — `qualityVisibilityWhere`
+ * mit der Rolle `CUSTOMER`, also nur abgeschlossene Begehungen. Eine zweite,
+ * für die Seite nachgebaute Regel wäre die Stelle, an der die beiden Wege
+ * auseinanderlaufen; die Seite und `GET /api/quality-inspections` zeigen
+ * derselben Kundschaft deshalb dieselben Datensätze.
+ *
+ * Eine eigene Funktion statt `listInspections`, weil die Auswahl enger ist:
+ * Ohne Prüfperson und ohne Filterparameter. Wer begangen hat, ist eine
+ * Personalangabe, keine Aussage über die Qualität, und die Kundschaft hat im
+ * Kundenkonto keinen Anlass, Entwürfe oder Zeiträume anzufragen. Die interne
+ * Notiz fehlt aus demselben Grund wie oben: nicht geladen heisst nicht
+ * auslieferbar.
+ */
+export async function listCustomerInspections(params: {
+  organizationId: string;
+  customerId: string;
+  page: number;
+  perPage: number;
+}) {
+  const where: Prisma.QualityInspectionWhereInput = {
+    AND: [
+      { organizationId: params.organizationId, deletedAt: null },
+      qualityVisibilityWhere('CUSTOMER', params.customerId),
+    ],
+  };
+  const [items, total] = await Promise.all([
+    prisma.qualityInspection.findMany({
+      where,
+      orderBy: { inspectedAt: 'desc' },
+      skip: (params.page - 1) * params.perPage,
+      take: params.perPage,
+      select: {
+        id: true,
+        number: true,
+        inspectedAt: true,
+        scorePercent: true,
+        targetScore: true,
+        outcome: true,
+        note: true,
+        /*
+          Der Zustand kommt mit, damit die Seite den Vertrag nur nennt, wenn
+          die Kundschaft ihn auch unter „Verträge" sieht. Eine Begehung an
+          einem Vertrag, der intern noch Entwurf ist, gibt es kaum — aber
+          ihren Titel zu zeigen, verriete einen Entwurf durch die Hintertür.
+        */
+        contract: { select: { id: true, number: true, title: true, status: true } },
+        property: { select: { label: true } },
+      },
+    }),
+    prisma.qualityInspection.count({ where }),
+  ]);
+  return { items, total };
+}
+
+/**
  * Die Fälligkeit je Vertrag — für die Akte und den Nachtlauf.
  *
  * Gerechnet aus dem Intervall der geltenden Fassung und der letzten

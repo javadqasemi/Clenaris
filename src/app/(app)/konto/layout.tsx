@@ -3,6 +3,7 @@ import { redirect } from 'next/navigation';
 import { prisma } from '@/lib/db';
 import { getSession, sessionIdleSecondsFor } from '@/lib/auth/session';
 import { guardForPath, homeRouteFor } from '@/lib/auth/rbac';
+import { filterNavigation, type GuardedNavGroup } from '@/lib/auth/navigation';
 import { AppShell, type NavGroup } from '@/components/app/app-shell';
 
 /**
@@ -59,7 +60,17 @@ export default async function AccountLayout({ children }: { children: React.Reac
       ])
     : [0, 0, 0];
 
-  const navigation: NavGroup[] = [
+  /**
+   * Gefiltert wie Portal und Verwaltung (L-18, 2026-09-28).
+   *
+   * Bis hierher verlangte kein Eintrag des Kundenbereichs ein eigenes Recht —
+   * jede Seite stand jeder Kundschaft offen. Verträge und Kontrollen hängen an
+   * `contract:read_own` und `quality:read_own`, und ihre Seiten prüfen genau
+   * diese Rechte. Der Eintrag nennt dasselbe Recht, damit Navigation und Seite
+   * nicht auseinanderlaufen: Wird ein Recht entzogen, verschwindet der Weg
+   * mit der Tür, statt auf eine Fehlerseite zu führen.
+   */
+  const allNavigation: GuardedNavGroup[] = [
     {
       items: [
         { href: '/konto', label: 'Übersicht', icon: 'home', exact: true },
@@ -70,6 +81,7 @@ export default async function AccountLayout({ children }: { children: React.Reac
       label: 'Dokumente',
       items: [
         { href: '/konto/offerten', label: 'Offerten', icon: 'quotes', badge: openQuotes },
+        { href: '/konto/vertraege', label: 'Verträge', icon: 'contract', permission: 'contract:read_own' },
         { href: '/konto/rechnungen', label: 'Rechnungen', icon: 'invoices', badge: openInvoices },
       ],
     },
@@ -79,10 +91,12 @@ export default async function AccountLayout({ children }: { children: React.Reac
         { href: '/konto/objekte', label: 'Meine Objekte', icon: 'building' },
         { href: '/konto/nachrichten', label: 'Nachrichten', icon: 'messages', badge: unreadMessages },
         { href: '/konto/bewertungen', label: 'Bewertungen', icon: 'reviews' },
+        { href: '/konto/qualitaet', label: 'Qualitätskontrollen', icon: 'checklist', permission: 'quality:read_own' },
         { href: '/konto/reklamationen', label: 'Reklamationen', icon: 'quality' },
       ],
     },
   ];
+  const navigation: NavGroup[] = filterNavigation(allNavigation, session.role);
 
   return (
     <AppShell
