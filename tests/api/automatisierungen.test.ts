@@ -788,7 +788,15 @@ describe('RB-012 — vom zeitbezogenen Auslöser bis zur ausgeführten Aktion', 
     }
 
     // Zeit vergehen lassen: die Läufe fällig machen; eine Aufgabe erledigen.
-    await db.automationRun.updateMany({ where: eigene, data: { scheduledFor: new Date(Date.now() - 60_000) } });
+    //
+    // Fällig **vor allen anderen** (2026-09-28): Der Takt arbeitet höchstens
+    // 200 fällige Läufe ab, die ältesten zuerst — die gerechte Reihenfolge des
+    // Produkts. In einer vollen Prüfreihe legen die Dateien davor aber
+    // hunderte Läufe an (Nebenläufigkeit, Automatisierungen), und mit „vor
+    // einer Minute fällig" stand dieser Lauf dahinter und blieb PENDING. Das
+    // war eine Störung durch den geteilten Bestand, keine Aussage über die
+    // Regel. Ein Fälligkeitsdatum weit in der Vergangenheit stellt ihn nach vorn.
+    await db.automationRun.updateMany({ where: eigene, data: { scheduledFor: new Date('2000-01-01T00:00:00Z') } });
     await db.task.update({ where: { id: erledigt }, data: { status: 'DONE', completedAt: new Date() } });
 
     const zweiter = await stuendlich();
