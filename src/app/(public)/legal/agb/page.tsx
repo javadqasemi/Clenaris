@@ -1,15 +1,14 @@
 import type { Metadata } from 'next';
 
 import { LegalBody } from '@/components/marketing/legal-body';
+import { SEITEN_URL } from '@/lib/seiten-url';
+import { seitenMetadaten } from '@/lib/seo/metadaten';
+import { rechtstextSeo } from '@/lib/seo/rechtstexte';
 
 import { getPublicCompanyInfo } from '@/server/services/organization.service';
 
-export const metadata: Metadata = {
-  title: 'Allgemeine Geschäftsbedingungen',
-  description:
-    'AGB der Clenaris Reinigungen GmbH: Vertragsschluss, Preise, Stornierung, Abgabegarantie, Haftung und Gerichtsstand.',
-  alternates: { canonical: '/legal/agb' },
-};
+// Titel und Beschreibung in `lib/seo/rechtstexte.ts` — dieselbe Quelle wie die SEO-Übersicht.
+export const metadata: Metadata = seitenMetadaten(rechtstextSeo('/legal/agb'), SEITEN_URL);
 
 export const revalidate = 86400;
 

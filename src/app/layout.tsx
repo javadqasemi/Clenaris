@@ -3,6 +3,7 @@ import { Archivo, Bricolage_Grotesque } from 'next/font/google';
 
 import { Providers } from '@/components/providers';
 import { GOOGLE_SITE_VERIFICATION, SEITEN_URL } from '@/lib/seiten-url';
+import { OG_LOCALE, SEITENNAME, TITEL_VORLAGE } from '@/lib/seo/metadaten';
 
 import './globals.css';
 
@@ -33,7 +34,8 @@ export const metadata: Metadata = {
   metadataBase: new URL(SEITEN_URL),
   title: {
     default: 'Clenaris — Reinigungsfirma in Bern',
-    template: '%s | Clenaris',
+    // Dieselbe Vorlage, mit der `/admin/seo` die Titellänge misst.
+    template: TITEL_VORLAGE,
   },
   description:
     'Professionelle Reinigung im Kanton Bern: Unterhaltsreinigung, Umzugsreinigung mit Abgabegarantie, Büroreinigung und Fensterreinigung. Preis online berechnen und in zwei Minuten buchen.',
@@ -50,17 +52,22 @@ export const metadata: Metadata = {
     'Abgabegarantie',
   ],
   formatDetection: { telephone: true, address: true, email: true },
+  // Ohne `url`: Next ersetzt `openGraph` einer Seite nicht, wenn sie keines
+  // setzt — jede solche Seite (Rechtstexte bis 2026-09-28, Anmeldung,
+  // Belegseiten) meldete sonst die Startseite als ihre Adresse. Die
+  // öffentlichen Seiten setzen `og:url` selbst über `seitenMetadaten()`.
   openGraph: {
     type: 'website',
-    locale: 'de_CH',
-    url: SEITEN_URL,
-    siteName: 'Clenaris',
+    locale: OG_LOCALE,
+    siteName: SEITENNAME,
     title: 'Clenaris — Reinigungsfirma in Bern',
     description:
       'Preis online berechnen, Termin wählen, fertig. Umzugsreinigung mit Abgabegarantie, Unterhalts- und Büroreinigung im Kanton Bern.',
   },
   twitter: {
-    card: 'summary_large_image',
+    // `summary`, nicht `summary_large_image`: Es gibt kein Standard-Vorschaubild,
+    // und die grosse Karte ohne Bild zeigt eine leere Fläche.
+    card: 'summary',
     title: 'Clenaris — Reinigungsfirma in Bern',
     description: 'Preis online berechnen, Termin wählen, fertig.',
   },
@@ -72,10 +79,21 @@ export const metadata: Metadata = {
   ...(GOOGLE_SITE_VERIFICATION
     ? { verification: { google: GOOGLE_SITE_VERIFICATION } }
     : {}),
-  alternates: {
-    canonical: '/',
-    languages: { 'de-CH': '/', 'en-CH': '/en', 'fr-CH': '/fr', 'it-CH': '/it' },
-  },
+  /*
+   * Bewusst **keine** `alternates` auf dieser Ebene (SEO-Prüfung 2026-09-28).
+   *
+   *  • `canonical: '/'` stand hier und wurde von jeder Seite geerbt, die
+   *    keine eigene Angabe machte — Rechnung, Buchung, Anmeldung und alle
+   *    Applikationsseiten erklärten damit die *Startseite* zu ihrer
+   *    kanonischen Fassung. Eine Seite ohne Canonical ist harmlos; eine mit
+   *    falschem Canonical bittet Google, sie mit einer anderen
+   *    zusammenzulegen. Jede öffentliche Seite setzt ihre Adresse jetzt
+   *    selbst (`seitenMetadaten()` in `lib/seo/metadaten.ts`).
+   *  • `hreflang` auf `/en`, `/fr` und `/it`: Diese Seiten gibt es nicht, alle
+   *    drei antworten 404. Ein hreflang auf eine 404-Seite ist ein Fehler in
+   *    der Search Console, und bei einer einsprachigen Website ist gar kein
+   *    hreflang nötig — `lang="de-CH"` am `<html>` genügt.
+   */
 };
 
 export const viewport: Viewport = {

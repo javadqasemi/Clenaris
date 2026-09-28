@@ -1,7 +1,10 @@
 import type { Metadata } from 'next';
-import { Clock, Mail, MapPin, Phone } from 'lucide-react';
+import { Clock, Download, Mail, MapPin, Phone } from 'lucide-react';
 
+import { qrSvg } from '@/lib/kontakt/qr';
+import { Button } from '@/components/ui/button';
 import { getPublicCompanyInfo } from '@/server/services/organization.service';
+import { firmenVisitenkarte } from '@/server/services/visitenkarte.service';
 import { ContactForm } from '@/features/public/contact-form';
 import { Section } from '@/components/marketing/sections';
 import { pageMetadata } from '@/lib/cms/metadata';
@@ -17,7 +20,10 @@ export const revalidate = 3600;
 const WEEKDAYS = ['Sonntag', 'Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freitag', 'Samstag'];
 
 export default async function ContactPage() {
-  const company = await getPublicCompanyInfo();
+  const [company, visitenkarte] = await Promise.all([getPublicCompanyInfo(), firmenVisitenkarte()]);
+  // Serverseitig, einmal je Neuaufbau der Seite (stündlich) — kein fremder Dienst, kein Skript.
+  const qr = qrSvg(visitenkarte.vcard);
+  const { dateiname } = visitenkarte;
 
   return (
     <>
@@ -49,7 +55,8 @@ export default async function ContactPage() {
 
           {/* Kontaktangaben */}
           <aside className="space-y-8">
-            <div className="space-y-5 rounded-2xl border border-border bg-card p-6">
+            {/* Im Druck hell: Ein dunkler Kartengrund aus dem Dunkelmodus kostet Toner und nimmt dem Code den Kontrast. */}
+            <div className="space-y-5 rounded-2xl border border-border bg-card p-6 print:bg-white print:text-black">
               <h2 className="font-display text-lg font-semibold tracking-tight">Direkt erreichen</h2>
 
               {/*
@@ -107,6 +114,53 @@ export default async function ContactPage() {
                   </dd>
                 </div>
               </dl>
+
+              {/*
+                Visitenkarte als QR-Code und als Datei (Teil I, 2026-09-28).
+
+                Beides trägt dieselbe Zeichenkette aus `firmenVisitenkarte()`.
+                Der Code steht für den Fall „Seite am Bildschirm, Telefon in
+                der Hand"; die Schaltfläche für den Fall, dass die Seite schon
+                auf dem Telefon offen ist — einen Code auf dem eigenen
+                Bildschirm scannt niemand.
+
+                Das SVG entsteht als JSX aus der Modulmatrix (`qrSvg`), nicht
+                als fremdes Markup. Die Ruhezone ist **immer weiss**, auch im
+                Dunkelmodus: Ein QR-Code braucht hellen Rand und dunkle Module,
+                und ein invertierter Code wird von vielen Kameras nicht
+                erkannt. `crispEdges` hält die Modulkanten beim Skalieren und
+                im Druck scharf; die Grösse folgt der Kartenbreite bis 14 rem
+                (rund 3 px je Modul bei einer vollständigen Karte), im Druck
+                fest 4 cm (rund 0.55 mm je Modul, siehe
+                `vcard-rechenkern.test.ts`).
+              */}
+              <figure className="space-y-3 border-t border-border pt-5 print:break-inside-avoid">
+                <svg
+                  viewBox={`0 0 ${qr.kante} ${qr.kante}`}
+                  role="img"
+                  aria-labelledby="kontakt-qr-titel"
+                  shapeRendering="crispEdges"
+                  className="mx-auto block aspect-square w-full max-w-56 rounded-lg border border-border [print-color-adjust:exact] print:w-[4cm] print:max-w-none print:rounded-none print:border-0"
+                  data-kontakt-qr=""
+                >
+                  <title id="kontakt-qr-titel">
+                    {`QR-Code mit der Visitenkarte von ${company.name} — mit der Kamera scannen, um den Kontakt zu speichern`}
+                  </title>
+                  <rect width={qr.kante} height={qr.kante} fill="#ffffff" />
+                  <path d={qr.pfad} fill="#000000" />
+                </svg>
+                <figcaption className="text-center text-sm leading-relaxed text-muted-foreground">
+                  Mit der Handykamera scannen und uns direkt im Adressbuch speichern.
+                </figcaption>
+              </figure>
+
+              {/* `print-hidden` aus `globals.css` („Druck"): Eine Schaltfläche auf Papier führt nirgends hin. */}
+              <Button asChild variant="outline" className="print-hidden w-full">
+                <a href="/api/public/kontakt/vcard" download={dateiname}>
+                  <Download aria-hidden />
+                  Kontakt speichern
+                </a>
+              </Button>
             </div>
 
             {/* Öffnungszeiten */}

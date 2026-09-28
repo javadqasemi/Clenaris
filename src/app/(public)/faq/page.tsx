@@ -1,6 +1,5 @@
 import type { Metadata } from 'next';
 
-import { jsonLd } from '@/lib/json-ld';
 import Link from 'next/link';
 import { Mail, Phone } from 'lucide-react';
 
@@ -15,6 +14,8 @@ import {
 } from '@/components/ui/controls';
 import { Button } from '@/components/ui/button';
 import { Section } from '@/components/marketing/sections';
+import { JsonLd } from '@/components/marketing/json-ld';
+import { faqSeite } from '@/lib/seo/structured-data';
 
 /**
  * Titel, Beschreibung und Vorschaubild kommen aus der Redaktion
@@ -105,23 +106,8 @@ export default async function FaqPage() {
         </div>
       </Section>
 
-      {faqs.length > 0 ? (
-        <script
-          type="application/ld+json"
-          // eslint-disable-next-line react/no-danger -- serverseitig erzeugter JSON-LD-Block
-          dangerouslySetInnerHTML={{
-            __html: jsonLd({
-              '@context': 'https://schema.org',
-              '@type': 'FAQPage',
-              mainEntity: faqs.map((faq) => ({
-                '@type': 'Question',
-                name: faq.question,
-                acceptedAnswer: { '@type': 'Answer', text: faq.answer },
-              })),
-            }),
-          }}
-        />
-      ) : null}
+      {/* Die einzige `FAQPage` der Website — ohne Fragen gibt `faqSeite` null zurück. */}
+      <JsonLd daten={faqSeite(faqs)} />
     </>
   );
 }
