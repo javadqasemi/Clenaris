@@ -2,7 +2,8 @@ import { after, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { call, get, put, requireServer } from '../helpers/client';
-import { loginAll, ROLE_ORDER, type AccountName } from '../helpers/accounts';
+import { ACCOUNTS, loginAll, ROLE_ORDER, type AccountName } from '../helpers/accounts';
+import { testDb, testDbSchliessen } from '../helpers/testdb';
 
 /**
  * Die Einstellungen — und die Frage, ob sich der Betrieb ohne Quelltext
@@ -46,6 +47,7 @@ describe('Einstellungen', { concurrency: 1 }, async () => {
   after(async () => {
     if (company) await call('PATCH', '/api/company', { jar: jars.admin, body: company });
     if (settings) await call('PATCH', '/api/settings', { jar: jars.admin, body: settings });
+    await testDbSchliessen();
   });
 
   // -------------------------------------------------------------------------
@@ -290,6 +292,101 @@ describe('Einstellungen', { concurrency: 1 }, async () => {
     it('lässt einen Schalter nach einem abgewiesenen Aufruf unverändert', async () => {
       const after = await get<{ data: Settings }>('/api/settings', { jar: jars.admin });
       assert.equal(after.payload.data.moderateReviews, settings.moderateReviews);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  /**
+   * Persönliche Einstellungen gegen Betriebseinstellungen (Produktsprint
+   * 2026-09-26).
+   *
+   * Der Fehler, der hier nicht wiederkommen soll: „Einstellungen" im
+   * Kontomenü führte in die Firmenkonfiguration. Geprüft wird beides — dass
+   * jede Rolle ihre eigenen Einstellungen erreicht und dort das findet, was
+   * ihr eigenes Konto betrifft, und dass der Weg dorthin keine Tür zu Firma,
+   * Preisen oder Arbeitszeiten öffnet, weder als Seite noch als Endpunkt.
+   */
+  describe('Persönliche Einstellungen', () => {
+    const BEREICH: Record<AccountName, string> = {
+      super: '/admin',
+      admin: '/admin',
+      manager: '/admin',
+      employee: '/portal',
+      customer: '/konto',
+    };
+
+    for (const role of ROLE_ORDER) {
+      it(`${role}: ${BEREICH[role]}/profil/einstellungen zeigt das eigene Konto, nicht die Firma`, async () => {
+        const page = await get(`${BEREICH[role]}/profil/einstellungen`, { jar: jars[role] });
+        assert.equal(page.status, 200, `HTTP ${page.status}`);
+        assert.ok(page.text.includes('Persönliche Einstellungen'), 'Seitentitel fehlt');
+        assert.ok(page.text.includes('Passwort ändern'), 'Passwortformular fehlt');
+        assert.ok(page.text.includes('Benachrichtigungen'), 'Benachrichtigungen fehlen');
+        // Nichts aus der Firmenmaske: weder das Register der Arbeitszeiten
+        // noch die Firmenangaben als Eingabefeld.
+        assert.ok(!page.text.includes('bereich=zeiten'), 'Register der Betriebseinstellungen auf der persönlichen Seite');
+        if (company) {
+          assert.ok(!page.text.includes(`value="${company.email}"`), 'Firmenangaben auf der persönlichen Seite');
+        }
+      });
+    }
+
+    it('das Profil verweist auf die persönlichen Einstellungen seines eigenen Bereichs', async () => {
+      for (const role of ['admin', 'employee', 'customer'] as const) {
+        const page = await get(`${BEREICH[role]}/profil`, { jar: jars[role] });
+        assert.equal(page.status, 200);
+        assert.ok(
+          page.text.includes(`href="${BEREICH[role]}/profil/einstellungen"`),
+          `${role}: kein Reiter „Einstellungen" auf dem Profil`,
+        );
+      }
+    });
+
+    it('Mitarbeitende und Kundschaft erreichen die Betriebseinstellungen weder als Seite noch als Endpunkt', async () => {
+      for (const role of ['employee', 'customer'] as const) {
+        const page = await get('/admin/einstellungen', { jar: jars[role] });
+        assert.ok([302, 303, 307, 308, 404].includes(page.status), `${role}: Seite HTTP ${page.status}`);
+
+        for (const [method, path, body] of [
+          ['PATCH', '/api/company', { name: 'Übernahme' }],
+          ['PATCH', '/api/settings', { bookingLeadDays: 1 }],
+          ['PUT', '/api/opening-hours', { hours: [] }],
+        ] as const) {
+          const response = await call(method, path, { jar: jars[role], body });
+          assert.equal(response.status, 403, `${role}: ${method} ${path} HTTP ${response.status}`);
+        }
+      }
+    });
+
+    it('über das eigene Profil lässt sich weder Rolle noch Organisation ändern', async () => {
+      const vorher = await get<{ data: { firstName: string; role: string } }>('/api/auth/session', { jar: jars.employee });
+      assert.equal(vorher.payload.data.role, 'EMPLOYEE');
+      const antwort = await call('PATCH', '/api/account/profile', {
+        jar: jars.employee,
+        body: {
+          firstName: vorher.payload.data.firstName,
+          lastName: 'Keller',
+          role: 'SUPER_ADMIN',
+          organizationId: 'fremd',
+          email: 'uebernahme@example.ch',
+        },
+      });
+      // Unbekannte Felder werden entweder abgewiesen oder verworfen — beides
+      // ist in Ordnung. Nicht in Ordnung wäre, dass eines davon wirkt.
+      assert.ok([200, 400, 422].includes(antwort.status), `HTTP ${antwort.status}`);
+      const nachher = await get<{ data: { role: string } }>('/api/auth/session', { jar: jars.employee });
+      assert.equal(nachher.payload.data.role, 'EMPLOYEE', 'die Rolle hat sich über das Profil geändert');
+      // Die Sitzung trägt die Rolle aus dem Token — massgeblich ist die Zeile.
+      const db = testDb();
+      if (db) {
+        const zeile = await db.user.findUnique({
+          where: { email: ACCOUNTS.employee.email },
+          select: { role: true, email: true, organizationId: true },
+        });
+        assert.equal(zeile?.role, 'EMPLOYEE');
+        assert.equal(zeile?.email, ACCOUNTS.employee.email);
+        assert.notEqual(zeile?.organizationId, 'fremd');
+      }
     });
   });
 });

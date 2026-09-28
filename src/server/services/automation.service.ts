@@ -1,7 +1,8 @@
 import 'server-only';
 
 import { prisma, toNumber } from '@/lib/db';
-import { absoluteUrl } from '@/lib/utils';
+import { absoluteUrl, formatDate } from '@/lib/utils';
+import { leistungsnamen } from '@/lib/booking/leistungen';
 import {
   birthdayEmail,
   bookingReminderEmail,
@@ -9,6 +10,7 @@ import {
 } from '@/lib/email/templates';
 import { smsTemplates } from '@/lib/sms/client';
 
+import { buchungslinkAusstellen } from './booking.service';
 import { notify } from './notification.service';
 
 /**
@@ -47,7 +49,7 @@ export async function sendBookingReminders(organizationId: string): Promise<{
       include: {
         customer: { include: { user: { select: { id: true } } } },
         address: true,
-        items: { select: { name: true }, take: 1 },
+        items: { select: { name: true, serviceId: true, position: true } },
       },
       take: 200,
     }),
@@ -65,7 +67,7 @@ export async function sendBookingReminders(organizationId: string): Promise<{
       include: {
         customer: { include: { user: { select: { id: true } } } },
         address: true,
-        items: { select: { name: true }, take: 1 },
+        items: { select: { name: true, serviceId: true, position: true } },
       },
       take: 100,
     }),
@@ -82,28 +84,53 @@ export async function sendBookingReminders(organizationId: string): Promise<{
         )
       : '—';
 
+    /**
+     * Der Link in der Erinnerung: mit Konto die Kontoseite, ohne Konto ein
+     * frisch ausgestellter Verwaltungslink.
+     *
+     * Bis 2026-09-27 stand hier `booking.confirmationToken` — derselbe
+     * Klartextwert, der auch in der Datenbank lag. Seit dort nur noch Hashes
+     * liegen, gibt es den alten Wert nicht mehr; ein neuer Link je Erinnerung
+     * ist die Folge, und er ist im Prüfprotokoll sichtbar wie jeder andere.
+     * Deshalb nur, wenn eine E-Mail hinausgeht: Die SMS zwei Stunden vorher
+     * trägt keinen Link, und ein Link, der nirgends ankommt, wäre ein Zugang
+     * ohne Empfänger.
+     */
+    const perMail = hoursBefore > 3;
+    const emailContent = perMail
+      ? bookingReminderEmail({
+          firstName: booking.customer.firstName,
+          bookingNumber: booking.number,
+          serviceName: leistungsnamen(booking.items),
+          scheduledStart: booking.scheduledStart,
+          scheduledEnd: booking.scheduledEnd,
+          address,
+          grossTotal: toNumber(booking.grossTotal),
+          manageUrl: booking.customer.user
+            ? absoluteUrl(`/konto/buchungen/${booking.id}`)
+            : await buchungslinkAusstellen({
+                organizationId: booking.organizationId,
+                bookingId: booking.id,
+                scheduledEnd: booking.scheduledEnd,
+              }),
+          hoursBefore,
+        })
+      : undefined;
+
     await notify({
       userId: booking.customer.user?.id ?? null,
       email: booking.customer.email,
       phone: booking.customer.mobile ?? booking.customer.phone,
       // Zwei Stunden vorher zusätzlich per SMS — E-Mail wird dann oft nicht mehr gelesen.
-      channels: hoursBefore <= 3 ? ['IN_APP', 'SMS'] : ['IN_APP', 'EMAIL'],
+      channels: perMail ? ['IN_APP', 'EMAIL'] : ['IN_APP', 'SMS'],
       title: 'Terminerinnerung',
       body: `Ihr Reinigungstermin beginnt in ca. ${hoursBefore} Stunden.`,
       link: `/konto/buchungen/${booking.id}`,
-      emailContent: bookingReminderEmail({
-        firstName: booking.customer.firstName,
-        bookingNumber: booking.number,
-        serviceName: booking.items[0]?.name ?? 'Reinigung',
-        scheduledStart: booking.scheduledStart,
-        scheduledEnd: booking.scheduledEnd,
-        address,
-        grossTotal: toNumber(booking.grossTotal),
-        manageUrl: absoluteUrl(`/buchung/${booking.confirmationToken}`),
-        hoursBefore,
-      }),
+      emailContent,
       smsBody: smsTemplates.bookingReminder({
-        date: booking.scheduledStart.toLocaleDateString('de-CH'),
+        // Zürcher Datum — die Uhrzeit daneben hatte die Zone schon, das Datum
+        // nicht (bis 2026-09-27): ein Termin um 00:30 stand mit dem Vortag.
+        date: formatDate(booking.scheduledStart),
         time: booking.scheduledStart.toLocaleTimeString('de-CH', {
           hour: '2-digit',
           minute: '2-digit',
@@ -216,7 +243,7 @@ export async function requestReviews(organizationId: string): Promise<number> {
     },
     include: {
       customer: { include: { user: { select: { id: true } } } },
-      items: { select: { name: true }, take: 1 },
+      items: { select: { name: true, serviceId: true, position: true } },
     },
     take: 100,
   });
@@ -224,11 +251,22 @@ export async function requestReviews(organizationId: string): Promise<number> {
   let sent = 0;
 
   for (const booking of bookings) {
-    // Doppelte Anfragen verhindern: nur eine Bitte pro Buchung.
-    const alreadyAsked = await prisma.emailLog.findFirst({
-      where: { entity: 'Booking', entityId: booking.id, templateKey: 'review_request' },
-    });
-    if (alreadyAsked) continue;
+    /**
+     * Doppelte Anfragen verhindern: nur eine Bitte pro Buchung.
+     *
+     * Bis 2026-09-23 griff diese Prüfung nie — `notify()` gab den
+     * Vorlagenschlüssel nicht an das E-Mail-Protokoll weiter, und die Suche
+     * nach `review_request` fand nichts. Wer keine E-Mails wünscht, bekam
+     * zudem gar keine Protokollzeile. Geprüft wird deshalb beides: das
+     * E-Mail-Protokoll und die Mitteilung im Konto, deren Verweis je Buchung
+     * eindeutig ist.
+     */
+    const bewertungsLink = `/konto/bewertungen/neu?buchung=${booking.id}`;
+    const [perMail, imKonto] = await Promise.all([
+      prisma.emailLog.findFirst({ where: { entity: 'Booking', entityId: booking.id, templateKey: 'review_request' }, select: { id: true } }),
+      prisma.notification.findFirst({ where: { link: bewertungsLink }, select: { id: true } }),
+    ]);
+    if (perMail || imKonto) continue;
 
     await notify({
       userId: booking.customer.user?.id ?? null,
@@ -236,14 +274,15 @@ export async function requestReviews(organizationId: string): Promise<number> {
       channels: ['IN_APP', 'EMAIL'],
       title: 'Wie war unsere Reinigung?',
       body: 'Ihre Rückmeldung dauert eine Minute und hilft uns weiter.',
-      link: `/konto/bewertungen/neu?buchung=${booking.id}`,
+      link: bewertungsLink,
       emailContent: reviewRequestEmail({
         firstName: booking.customer.firstName,
-        serviceName: booking.items[0]?.name ?? 'Reinigung',
-        reviewUrl: absoluteUrl(`/konto/bewertungen/neu?buchung=${booking.id}`),
+        serviceName: leistungsnamen(booking.items),
+        reviewUrl: absoluteUrl(bewertungsLink),
       }),
       entity: 'Booking',
       entityId: booking.id,
+      templateKey: 'review_request',
     });
 
     sent++;
@@ -330,7 +369,8 @@ export async function createFollowUpTasks(organizationId: string): Promise<numbe
 
   await prisma.task.createMany({
     data: leads.map((lead) => ({
-      title: `Nachfassen: ${lead.company ?? `${lead.firstName} ${lead.lastName}`}`,
+      organizationId,
+      title: `Nachfassen:${lead.company ?? `${lead.firstName} ${lead.lastName}`}`,
       description: `Die Anfrage ist seit ${Math.floor((Date.now() - lead.createdAt.getTime()) / 86_400_000)} Tagen offen. Bitte telefonisch nachfassen.`,
       priority: lead.score >= 70 ? 'HIGH' : 'NORMAL',
       dueAt: new Date(Date.now() + 86_400_000),

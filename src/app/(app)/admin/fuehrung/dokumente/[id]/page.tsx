@@ -1,7 +1,7 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
-import { ArrowLeft, Download } from 'lucide-react';
+import { ArrowLeft, Download, Eye } from 'lucide-react';
 
 import { requirePermission } from '@/lib/auth/session';
 import { can } from '@/lib/auth/rbac';
@@ -10,14 +10,17 @@ import { formatBytes, formatDate, formatDateTime } from '@/lib/utils';
 import { DOCUMENT_CATEGORY_LABELS, DOCUMENT_VISIBILITY_LABELS, optionsOf } from '@/lib/bi/labels';
 import { getOrganizationId } from '@/server/services/organization.service';
 import { getDocument } from '@/server/services/document.service';
+import { listSignatureRequestsForDocument } from '@/server/services/signature.service';
 import { listEmployeeOptions, listSupplierOptions } from '@/server/services/fuehrung-options.service';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Alert } from '@/components/ui/primitives';
 import { DetailRow, DetailSection, PageHeader } from '@/components/app/page-parts';
+import { PdfViewer } from '@/components/app/pdf-viewer';
 import { ActionButton } from '@/features/fuehrung/action-button';
 import { FormDialog } from '@/features/fuehrung/resource-form';
 import { DocumentUploadDialog } from '@/features/fuehrung/document-upload';
+import { SignatureRequestPanel } from '@/features/fuehrung/signature-request-panel';
 
 export const metadata: Metadata = {
   title: 'Dokument',
@@ -26,9 +29,16 @@ export const metadata: Metadata = {
 
 export const dynamic = 'force-dynamic';
 
-export default async function DocumentDetailPage({ params }: { params: Promise<{ id: string }> }) {
+export default async function DocumentDetailPage({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ id: string }>;
+  searchParams: Promise<{ fassung?: string }>;
+}) {
   const session = await requirePermission('document:read');
   const { id } = await params;
+  const { fassung } = await searchParams;
   const organizationId = await getOrganizationId();
   const document = await getDocument(session, organizationId, id).catch((error) => {
     if (error instanceof NotFoundError) notFound();
@@ -37,6 +47,28 @@ export default async function DocumentDetailPage({ params }: { params: Promise<{
   const [employees, suppliers] = await Promise.all([listEmployeeOptions(organizationId), listSupplierOptions(organizationId)]);
   const canEdit = can(session.role, 'document:update');
   const expired = document.expiresOn && document.expiresOn < new Date();
+
+  /**
+   * Unterzeichnungsvorgänge sieht nur, wer `signature:read` hält — der Dienst
+   * prüft das noch einmal. Ohne Recht bleibt der Abschnitt ganz weg, statt
+   * leer zu erscheinen.
+   */
+  const canReadSignatures = can(session.role, 'signature:read');
+  const signatureRequests = canReadSignatures ? await listSignatureRequestsForDocument(session, organizationId, id) : [];
+
+  /**
+   * Welche Fassung gezeigt wird, steht ausdrücklich in der Adresse
+   * (`?fassung=N`) — ohne Angabe die geltende. Der Viewer weiss damit immer,
+   * *welche* Fassung er zeigt, und die Seite sagt es dazu. Gate 4 wird eine
+   * Signatur an genau eine Fassung binden; ein stillschweigendes „die
+   * aktuelle" wäre dafür die falsche Grundlage.
+   */
+  const gewuenscht = Number.parseInt(fassung ?? '', 10);
+  const angezeigt =
+    (Number.isInteger(gewuenscht) ? document.versions.find((v) => v.version === gewuenscht) : undefined) ??
+    document.versions.find((v) => v.id === document.currentVersionId) ??
+    null;
+  const istPdf = angezeigt?.file.mimeType === 'application/pdf';
 
   return (
     <div className="space-y-6">
@@ -92,6 +124,47 @@ export default async function DocumentDetailPage({ params }: { params: Promise<{
 
       {expired ? <Alert variant="destructive" title="Abgelaufen">Dieses Dokument ist seit {formatDate(document.expiresOn!)} abgelaufen.</Alert> : null}
 
+      {angezeigt ? (
+        <DetailSection
+          title={`Fassung ${angezeigt.version}${angezeigt.id === document.currentVersionId ? ' (geltend)' : ''}`}
+          description={istPdf ? angezeigt.file.filename : `${angezeigt.file.filename} — kein PDF, nur zum Herunterladen.`}
+          body="flush"
+        >
+          {istPdf ? (
+            <div className="p-3">
+              <PdfViewer
+                source={`/api/bi/documents/${id}/content?version=${angezeigt.version}`}
+                downloadUrl={`/api/bi/documents/${id}/download?version=${angezeigt.version}`}
+                fileName={angezeigt.file.filename}
+              />
+            </div>
+          ) : (
+            <div className="flex flex-wrap items-center justify-between gap-3 px-6 py-5 text-sm text-muted-foreground">
+              <span>
+                {angezeigt.file.filename} · {formatBytes(angezeigt.file.sizeBytes)}
+              </span>
+              <Button asChild variant="outline" size="sm">
+                <a href={`/api/bi/documents/${id}/download?version=${angezeigt.version}`}>
+                  <Download aria-hidden />
+                  Herunterladen
+                </a>
+              </Button>
+            </div>
+          )}
+        </DetailSection>
+      ) : null}
+
+      {canReadSignatures ? (
+        <SignatureRequestPanel
+          documentId={id}
+          currentVersion={document.currentVersion?.version ?? null}
+          isPdf={document.currentVersion?.file.mimeType === 'application/pdf'}
+          requests={signatureRequests}
+          canCreate={can(session.role, 'signature:create')}
+          canCancel={can(session.role, 'signature:cancel')}
+        />
+      ) : null}
+
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_20rem]">
         <DetailSection title="Fassungen" description="Die neueste Fassung gilt; ältere bleiben zum Nachweis erhalten." body="flush">
           {document.versions.length === 0 ? (
@@ -108,12 +181,22 @@ export default async function DocumentDetailPage({ params }: { params: Promise<{
                       {v.changeNote ? ` · ${v.changeNote}` : ''}
                     </span>
                   </span>
-                  <Button asChild variant="ghost" size="sm">
-                    <a href={`/api/bi/documents/${id}/download?version=${v.version}`}>
-                      <Download aria-hidden />
-                      Öffnen
-                    </a>
-                  </Button>
+                  <span className="flex items-center gap-1">
+                    {v.file.mimeType === 'application/pdf' ? (
+                      <Button asChild variant={v.id === angezeigt?.id ? 'secondary' : 'ghost'} size="sm">
+                        <Link href={`/admin/fuehrung/dokumente/${id}?fassung=${v.version}`} aria-current={v.id === angezeigt?.id ? 'true' : undefined}>
+                          <Eye aria-hidden />
+                          Anzeigen
+                        </Link>
+                      </Button>
+                    ) : null}
+                    <Button asChild variant="ghost" size="sm">
+                      <a href={`/api/bi/documents/${id}/download?version=${v.version}`}>
+                        <Download aria-hidden />
+                        Herunterladen
+                      </a>
+                    </Button>
+                  </span>
                 </li>
               ))}
             </ul>

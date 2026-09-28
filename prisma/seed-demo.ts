@@ -28,6 +28,17 @@ import { hash } from '@node-rs/argon2';
 
 // Derselbe Rechenkern wie in der Anwendung — der Seed erfindet kein Ergebnis.
 import { computeScenario, type ScenarioDriverKey } from '../src/lib/bi/math';
+import { assertDemoSeedErlaubt, databaseNameOf } from './seed-guard';
+
+/**
+ * Vor allem anderen: Zeigt `DATABASE_URL` auf eine Testdatenbank?
+ *
+ * Die Prüfung steht hier oben und nicht in `main()`, damit sie auch dann
+ * greift, wenn jemand die Datei künftig anders einhängt. Sie beendet den
+ * Prozess, bevor eine Verbindung zustande kommt — ein Schutzschalter, der
+ * erst nach dem ersten Schreibvorgang auslöst, ist keiner.
+ */
+assertDemoSeedErlaubt();
 
 const prisma = new PrismaClient();
 
@@ -47,7 +58,7 @@ function randomCode(length = 6): string {
 }
 
 async function main() {
-  console.log('🌱  Demodaten …\n');
+  console.log(`🌱  Demodaten in „${databaseNameOf(process.env.DATABASE_URL) ?? '?'}" …\n`);
 
   /**
    * Was der Konfigurations-Seed angelegt hat, wird hier nachgeschlagen statt
@@ -399,7 +410,6 @@ async function main() {
           source: 'WEBSITE',
           confirmedAt: seed.status !== 'PENDING' ? new Date() : null,
           completedAt: seed.status === 'COMPLETED' ? end : null,
-          confirmationToken: randomCode(24).toLowerCase(),
           items: {
             create: {
               serviceId,
@@ -1349,7 +1359,7 @@ Ein Abzieher nach jedem Duschen reduziert die Kalkbildung um schätzungsweise 80
   const vehicleRisk = await prisma.riskEntry.findFirst({ where: { organizationId: org.id, title: risks[0].title } });
   if (vehicleRisk && !(await prisma.correctiveAction.findFirst({ where: { riskId: vehicleRisk.id } }))) {
     const task = await prisma.task.create({
-      data: { title: 'Massnahme: Mietvertrag für Ersatzfahrzeug abschliessen', priority: 'HIGH', dueAt: daysFromNow(21, 17), assigneeId: manager?.id ?? admin.id, creatorId: admin.id },
+      data: { organizationId: org.id, title: 'Massnahme: Mietvertrag für Ersatzfahrzeug abschliessen', priority: 'HIGH', dueAt: daysFromNow(21, 17), assigneeId: manager?.id ?? admin.id, creatorId: admin.id },
     });
     await prisma.correctiveAction.create({
       data: { organizationId: org.id, kind: 'PREVENTIVE', title: 'Mietvertrag für Ersatzfahrzeug abschliessen', rootCause: 'Nur ein Fahrzeug für alle Einsätze.', riskId: vehicleRisk.id, taskId: task.id, dueOn: dateOnly(21), createdById: admin.id },
@@ -1444,7 +1454,7 @@ Ein Abzieher nach jedem Duschen reduziert die Kalkbildung um schätzungsweise 80
         participants: { create: [{ userId: admin.id }, ...(manager ? [{ userId: manager.id }] : [])] },
       },
     });
-    await prisma.task.create({ data: { title: 'Preisklausel mit Treuhand abstimmen', priority: 'NORMAL', dueAt: daysFromNow(10, 17), assigneeId: admin.id, creatorId: admin.id, meetingId: meeting.id, description: `Pendenz aus der Sitzung „${meeting.title}"` } });
+    await prisma.task.create({ data: { organizationId: org.id, title: 'Preisklausel mit Treuhand abstimmen', priority: 'NORMAL', dueAt: daysFromNow(10, 17), assigneeId: admin.id, creatorId: admin.id, meetingId: meeting.id, description: `Pendenz aus der Sitzung „${meeting.title}"` } });
   }
 
   // Ein Berichtszeitplan, ohne Empfänger — Versand erst nach ausdrücklicher Einrichtung.
@@ -1454,6 +1464,148 @@ Ein Abzieher nach jedem Duschen reduziert die Kalkbildung um schätzungsweise 80
   }
 
   console.log('✓ Unternehmensführung: Ziele, Budget, Anlagen, Risiken, Kontrollen, Wissen, Markt, Sitzung');
+
+  // =========================================================================
+  //  Ein laufender Unterhaltsvertrag (Wave 10)
+  // =========================================================================
+  //
+  //  Genau einer, und zwar ein vollständiger: Vertrag, geltende Fassung,
+  //  Leistung, Einsatzplan. Ohne ihn wäre die Vertragsakte eine leere Seite,
+  //  und die Seitenprüfung (`tests/pages/smoke.test.ts`) hätte keine
+  //  Beispielkennung.
+  //
+  //  **Es werden hier keine Einsätze erzeugt.** Das tut der Planer, und dass
+  //  er es tut, ist gerade die Zusage, die geprüft werden soll. Ein Seed, der
+  //  sie vorwegnimmt, verdeckt sie.
+  const vertragsKunde = await prisma.customer.findFirst({
+    where: { organizationId: org.id, type: 'BUSINESS', deletedAt: null },
+    select: { id: true, properties: { where: { deletedAt: null }, take: 1, select: { id: true } } },
+  });
+
+  if (vertragsKunde && !(await prisma.contract.findFirst({ where: { organizationId: org.id } }))) {
+    const beginn = dateOnly(-120);
+    const ende = dateOnly(245);
+
+    const vertrag = await prisma.contract.create({
+      data: {
+        organizationId: org.id,
+        number: `VT-${year}-00001`,
+        customerId: vertragsKunde.id,
+        propertyId: vertragsKunde.properties[0]?.id ?? null,
+        title: 'Unterhaltsreinigung Bürogeschoss',
+        description:
+          'Zweimal wöchentlich Büro und Sanitär, monatlich Treppenhaus. Material stellt Clenaris.',
+        status: 'ACTIVE',
+        startDate: beginn,
+        endDate: ende,
+        // 90 Tage vor dem Ende — dieselbe Rechnung wie im Dienst.
+        noticeDeadline: dateOnly(155),
+        createdById: admin.id,
+      },
+    });
+
+    /**
+     * Erst als Entwurf, dann in Kraft — nicht gleich als ACTIVE anlegen.
+     *
+     * Seit der Migration `20260923100000_vertragsintegritaet` sperrt die
+     * Datenbank den Leistungsumfang einer geltenden Fassung
+     * (`contract_services_unveraenderlich`): Leistung und Einsatzplan lassen
+     * sich an eine ACTIVE-Fassung nicht mehr anhängen. Aufgefallen ist das
+     * erst beim Aufsetzen einer frischen Testdatenbank am 2026-09-26 — auf
+     * einer bestehenden überspringt der Seed diesen Block, weil der Vertrag
+     * schon da ist. Der Weg unten ist derselbe, den der Dienst geht: Entwurf
+     * vollständig machen, dann DRAFT → ACTIVE, der einzige Übergang, den der
+     * Auslöser an dieser Stelle zulässt.
+     */
+    const version = await prisma.contractVersion.create({
+      data: {
+        contractId: vertrag.id,
+        versionNumber: 1,
+        status: 'DRAFT',
+        effectiveFrom: beginn,
+        reason: 'Erstfassung nach angenommener Offerte',
+        minimumTermMonths: 12,
+        renewalType: 'AUTOMATIC',
+        renewalPeriodMonths: 12,
+        noticePeriodDays: 90,
+        billingCycle: 'MONTHLY',
+        paymentTermDays: 30,
+        pricingModel: 'FIXED_PERIOD',
+        baseAmount: 1480,
+        vatRate: 8.1,
+        indexReference: 'LIK Dezember',
+        nextReviewAt: dateOnly(200),
+        targetQualityScore: 85,
+        inspectionIntervalDays: 90,
+        responseHours: 24,
+        terms:
+          'Leistungen gemäss Leistungsverzeichnis. Zutritt über Schlüsseldepot. ' +
+          'Reklamationen innert zwei Werktagen nach Leistungserbringung.',
+        createdById: admin.id,
+      },
+    });
+
+    const unterhalt = await prisma.service.findFirst({
+      where: { organizationId: org.id, slug: 'unterhaltsreinigung' },
+      select: { id: true },
+    });
+
+    const leistung = await prisma.contractService.create({
+      data: {
+        contractVersionId: version.id,
+        serviceId: unterhalt?.id ?? null,
+        label: 'Büro und Sanitär',
+        description: 'Arbeitsplätze, Sitzungszimmer, Küche, WC-Anlagen.',
+        estimatedMinutes: 150,
+        requiredCrewSize: 1,
+        requiredSkills: ['Unterhaltsreinigung'],
+        qualityRequirement: 'Sichtkontrolle durch die Hauswartung, Protokoll je Monat.',
+        specialInstructions: 'Zutritt ab 06:00 über Schlüsseldepot Eingang Nord.',
+        materialsBy: 'PROVIDER',
+        position: 0,
+      },
+    });
+
+    await prisma.serviceSchedule.create({
+      data: {
+        contractServiceId: leistung.id,
+        frequency: 'WEEKLY',
+        interval: 1,
+        weekdays: [1, 4], // Montag und Donnerstag
+        startMinute: 6 * 60,
+        endMinute: 9 * 60,
+        effectiveFrom: beginn,
+        holidayHandling: 'SKIP',
+        active: true,
+      },
+    });
+
+    await prisma.contractVersion.update({ where: { id: version.id }, data: { status: 'ACTIVE' } });
+
+    /**
+     * Den Nummernkreis nachziehen — die Nummer oben ist von Hand vergeben.
+     *
+     * Ohne das zieht die erste Vertragsaktivierung danach `VT-…-00001` aus dem
+     * Zähler und scheitert an der Eindeutigkeit (409). Auf einer gewachsenen
+     * Datenbank fiel das nie auf, weil der Zähler längst weiter war; auf einer
+     * frischen war der Block bis 2026-09-26 gar nicht erreichbar (siehe oben).
+     * Dieselbe Regel wie `raiseSequence` für Buchungen und Rechnungen: nie
+     * zurückstellen, nur anheben.
+     */
+    const vertragsZaehler = await prisma.numberSequence.findUnique({
+      where: { organizationId_scope_year: { organizationId: org.id, scope: 'contract', year } },
+      select: { current: true },
+    });
+    if (!vertragsZaehler || vertragsZaehler.current < 1) {
+      await prisma.numberSequence.upsert({
+        where: { organizationId_scope_year: { organizationId: org.id, scope: 'contract', year } },
+        update: { current: 1 },
+        create: { organizationId: org.id, scope: 'contract', year, current: 1 },
+      });
+    }
+
+    console.log('✓ Ein laufender Unterhaltsvertrag mit Fassung, Leistung und Einsatzplan');
+  }
 
   console.log('\n✅  Demodaten angelegt.\n');
   console.log('   Kundin     nicole.wyss@example.ch / Demo#2026Clenaris\n');

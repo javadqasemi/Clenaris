@@ -1,41 +1,38 @@
-import { z } from 'zod';
-
 import { defineRoute } from '@/lib/api/handler';
-import { created, ok } from '@/lib/api/response';
+import { userListQuery } from '@/lib/validation/queries';
+import { buildPagination, created, paginated } from '@/lib/api/response';
 import { ForbiddenError } from '@/lib/errors';
 import { assignableRoles } from '@/lib/auth/rbac';
-import { inviteUserSchema, USER_ROLES, USER_STATUS } from '@/lib/validation/users';
+import { inviteUserSchema } from '@/lib/validation/users';
 import { inviteUser } from '@/server/services/auth.service';
 import { listUsers } from '@/server/services/user.service';
 import { getOrganizationId } from '@/server/services/organization.service';
 
 export const runtime = 'nodejs';
 
-const listQuery = z.object({
-  q: z.string().trim().max(120).optional(),
-  role: z.enum(USER_ROLES).optional(),
-  status: z.enum(USER_STATUS).optional(),
-  papierkorb: z
-    .enum(['0', '1'])
-    .default('0')
-    .transform((v) => v === '1'),
-});
 
-/** GET /api/users — Benutzerkonten der Organisation. */
+/**
+ * GET /api/users — Benutzerkonten der Organisation, seitenweise.
+ *
+ * `data` bleibt eine Liste; Seite und Gesamtzahl stehen in `meta`
+ * (2026-09-27, vorher ungebremst die ganze Tabelle).
+ */
 export const GET = defineRoute({
   permissions: ['user:read'],
-  query: listQuery,
+  query: userListQuery,
   rateLimit: 'apiRead',
-  handler: async ({ query }) =>
-    ok(
-      await listUsers({
-        organizationId: await getOrganizationId(),
-        q: query.q,
-        role: query.role,
-        status: query.status,
-        includeDeleted: query.papierkorb,
-      }),
-    ),
+  handler: async ({ query }) => {
+    const { items, total } = await listUsers({
+      organizationId: await getOrganizationId(),
+      q: query.q,
+      role: query.role,
+      status: query.status,
+      includeDeleted: query.papierkorb,
+      page: query.page,
+      pageSize: query.pageSize,
+    });
+    return paginated(items, buildPagination(query.page, query.pageSize, total));
+  },
 });
 
 /**

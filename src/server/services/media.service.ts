@@ -42,10 +42,33 @@ export interface MediaFilter {
   pageSize: number;
 }
 
+/**
+ * Bereiche, deren Dateien die Mediathek nicht anfasst.
+ *
+ * Signaturartefakte und Lohndokumente sind **Belege mit Prüfsumme**: Die
+ * Abrechnung bzw. der Signaturvorgang zeigt auf genau diese Bytes. Sie in der
+ * Mediathek zu löschen hinterliesse eine veröffentlichte Lohnabrechnung ohne
+ * PDF; sie umzuordnen (`PAYROLL` → `GALLERY`) hätte den Zugriff von
+ * `payslip:read_all` auf `media:read` gelockert — und die Betriebsleitung
+ * hält `media:read`, aber bewusst keinen Lohneinblick. Aufgefallen beim
+ * Einführen des Bereichs `PAYROLL` (Wave 9, 2026-09-23); `SIGNATURE` hatte
+ * dieselbe Lücke seit Gate 4B.
+ */
+export const GESCHUETZTE_BEREICHE: readonly FileScope[] = ['SIGNATURE', 'PAYROLL'];
+
 export async function listMedia(filter: MediaFilter) {
   const where: Prisma.FileAssetWhereInput = {
     organizationId: filter.organizationId,
-    ...(filter.scope ? { scope: filter.scope } : {}),
+    /**
+     * Lohndokumente erscheinen gar nicht: Schon der Dateiname
+     * („Lohnabrechnung-2026-03-M0012.pdf") verrät, wer in welchem Monat
+     * abgerechnet wurde. Sie sind über die Lohnverwaltung erreichbar.
+     */
+    ...(filter.scope === 'PAYROLL'
+      ? { scope: { in: [] } }
+      : filter.scope
+        ? { scope: filter.scope }
+        : { scope: { not: 'PAYROLL' } }),
     ...(filter.imagesOnly ? { mimeType: { startsWith: 'image/' } } : {}),
     ...(filter.q ? { filename: { contains: filter.q, mode: 'insensitive' } } : {}),
   };
@@ -127,7 +150,10 @@ export async function deleteMedia({
   force?: boolean;
 }) {
   const file = await prisma.fileAsset.findFirst({ where: { id: fileId, organizationId } });
-  if (!file) throw new NotFoundError('Datei');
+  if (!file || file.scope === 'PAYROLL') throw new NotFoundError('Datei');
+  if (GESCHUETZTE_BEREICHE.includes(file.scope)) {
+    throw new BusinessRuleError('Signaturbelege werden nicht über die Mediathek gelöscht — sie sind Teil eines abgeschlossenen Vorgangs.');
+  }
 
   const links = attachmentsOf(file);
   if (links.length > 0 && !force) {
@@ -186,7 +212,10 @@ export async function updateMedia({
   scope?: FileScope;
 }) {
   const before = await prisma.fileAsset.findFirst({ where: { id: fileId, organizationId } });
-  if (!before) throw new NotFoundError('Datei');
+  if (!before || before.scope === 'PAYROLL') throw new NotFoundError('Datei');
+  if (GESCHUETZTE_BEREICHE.includes(before.scope) || (scope !== undefined && GESCHUETZTE_BEREICHE.includes(scope))) {
+    throw new BusinessRuleError('Signatur- und Lohnbelege lassen sich in der Mediathek weder umbenennen noch umordnen.');
+  }
 
   const file = await prisma.fileAsset.update({
     where: { id: fileId },
@@ -216,50 +245,18 @@ export async function updateMedia({
   return file;
 }
 
-/** Datei nach dem Upload registrieren. */
-export async function registerMedia({
-  organizationId,
-  actorId,
-  ip,
-  input,
-}: {
-  organizationId: string;
-  actorId: string;
-  ip?: string | null;
-  input: {
-    bucket: string;
-    path: string;
-    url: string;
-    filename: string;
-    mimeType: string;
-    sizeBytes: number;
-    scope: FileScope;
-    isPublic: boolean;
-  };
-}) {
-  const file = await prisma.fileAsset.create({
-    data: {
-      organizationId,
-      bucket: input.bucket,
-      path: input.path,
-      url: input.url,
-      filename: input.filename,
-      mimeType: input.mimeType,
-      sizeBytes: input.sizeBytes,
-      scope: input.scope,
-      isPublic: input.isPublic,
-      uploadedById: actorId,
-    },
-  });
-
-  await audit.created({
-    organizationId,
-    userId: actorId,
-    entity: 'FileAsset',
-    entityId: file.id,
-    summary: `Datei „${file.filename}" hochgeladen (${Math.round(file.sizeBytes / 1024)} kB)`,
-    ip,
-  });
-
-  return file;
-}
+/**
+ * `registerMedia` ist entfallen.
+ *
+ * Die Funktion legte ein `FileAsset` aus dem an, was der Client meldete:
+ * Pfad, Adresse, Typ, Grösse, Bereich und Sichtbarkeit. Keiner dieser Werte
+ * wurde gegen den Speicher geprüft, und niemand hatte die Datei je gesehen.
+ *
+ * Es gibt jetzt genau einen Weg, auf dem eine Benutzerdatei entsteht:
+ * `finalizeUpload` in `file.service.ts`. Er liest die tatsächlich
+ * gespeicherten Bytes zurück, prüft sie und leitet Bereich und Sichtbarkeit
+ * aus dem Upload-Profil ab. Eine zweite Eintrittsstelle daneben wäre eine
+ * zweite, schwächere Tür — und sie stehenzulassen, nur weil kein Aufrufer
+ * mehr da ist, verschöbe das Problem auf die nächste Person, die eine
+ * praktische Funktion sucht.
+ */

@@ -23,7 +23,10 @@ export default async function ContactPage() {
     <>
       <section className="relative overflow-hidden border-b border-border">
         <div className="aare-wash pointer-events-none absolute inset-0" aria-hidden />
-        <div className="container relative py-16 sm:py-20">
+        {/* Auch der Kopfbereich trägt `form-measure`: Sonst begänne die
+            Überschrift auf einem sehr breiten Bildschirm weiter links als das
+            Formular darunter, und die Seite hätte zwei linke Kanten. */}
+        <div className="form-measure container relative py-16 sm:py-20">
           <div className="max-w-2xl space-y-5">
             <h1 className="text-display font-bold text-balance">Sprechen wir darüber</h1>
             <p className="text-lg leading-relaxed text-muted-foreground">
@@ -35,7 +38,9 @@ export default async function ContactPage() {
       </section>
 
       <Section>
-        <div className="container grid gap-12 lg:grid-cols-[minmax(0,1fr)_22rem] lg:gap-16">
+        {/* `form-measure`: Höchstbreite auf sehr grossen Bildschirmen, siehe
+            `globals.css`. */}
+        <div className="form-measure container grid gap-12 lg:grid-cols-[minmax(0,1fr)_22rem] lg:gap-16">
           {/* Formular */}
           <div className="space-y-6">
             <h2 className="text-headline font-bold">Schreiben Sie uns</h2>
@@ -47,51 +52,59 @@ export default async function ContactPage() {
             <div className="space-y-5 rounded-2xl border border-border bg-card p-6">
               <h2 className="font-display text-lg font-semibold tracking-tight">Direkt erreichen</h2>
 
+              {/*
+                In einer `dl` darf zwischen ihr und `dt`/`dd` genau *ein* `div`
+                stehen. Vorher lag das Icon daneben und das Paar in einem
+                zweiten `div` — Screenreader lasen die Angaben dann nicht als
+                Begriff und Wert (axe: definition-list, dlitem). Das Icon sitzt
+                jetzt im `dt`, absolut in den linken Einzug gesetzt; das Bild
+                bleibt dasselbe.
+              */}
               <dl className="protocol-list">
                 {company.phone ? (
-                  <div className="flex items-start gap-3 py-3.5">
-                    <Phone className="mt-0.5 size-4 shrink-0 text-primary" aria-hidden />
-                    <div>
-                      <dt className="text-sm text-muted-foreground">Telefon</dt>
-                      <dd>
-                        <a
-                          href={`tel:${company.phone.replace(/\s/g, '')}`}
-                          className="font-medium tabular-nums text-primary underline-offset-4 hover:underline"
-                        >
-                          {company.phone}
-                        </a>
-                      </dd>
-                    </div>
-                  </div>
-                ) : null}
-
-                <div className="flex items-start gap-3 py-3.5">
-                  <Mail className="mt-0.5 size-4 shrink-0 text-primary" aria-hidden />
-                  <div className="min-w-0">
-                    <dt className="text-sm text-muted-foreground">E-Mail</dt>
-                    <dd className="truncate">
+                  <div className="relative py-3.5 pl-7">
+                    <dt className="text-sm text-muted-foreground">
+                      <Phone className="absolute left-0 top-[1.0625rem] size-4 text-primary" aria-hidden />
+                      Telefon
+                    </dt>
+                    <dd>
                       <a
-                        href={`mailto:${company.email}`}
-                        className="font-medium text-primary underline-offset-4 hover:underline"
+                        href={`tel:${company.phone.replace(/\s/g, '')}`}
+                        className="font-medium tabular-nums text-primary underline-offset-4 hover:underline"
                       >
-                        {company.email}
+                        {company.phone}
                       </a>
                     </dd>
                   </div>
+                ) : null}
+
+                <div className="relative min-w-0 py-3.5 pl-7">
+                  <dt className="text-sm text-muted-foreground">
+                    <Mail className="absolute left-0 top-[1.0625rem] size-4 text-primary" aria-hidden />
+                    E-Mail
+                  </dt>
+                  <dd className="truncate">
+                    <a
+                      href={`mailto:${company.email}`}
+                      className="font-medium text-primary underline-offset-4 hover:underline"
+                    >
+                      {company.email}
+                    </a>
+                  </dd>
                 </div>
 
-                <div className="flex items-start gap-3 py-3.5">
-                  <MapPin className="mt-0.5 size-4 shrink-0 text-primary" aria-hidden />
-                  <div>
-                    <dt className="text-sm text-muted-foreground">Adresse</dt>
-                    <dd className="font-medium not-italic">
-                      {company.name}
-                      <br />
-                      {company.address.street}
-                      <br />
-                      {company.address.postalCode} {company.address.city}
-                    </dd>
-                  </div>
+                <div className="relative py-3.5 pl-7">
+                  <dt className="text-sm text-muted-foreground">
+                    <MapPin className="absolute left-0 top-[1.0625rem] size-4 text-primary" aria-hidden />
+                    Adresse
+                  </dt>
+                  <dd className="font-medium not-italic">
+                    {company.name}
+                    <br />
+                    {company.address.street}
+                    <br />
+                    {company.address.postalCode} {company.address.city}
+                  </dd>
                 </div>
               </dl>
             </div>

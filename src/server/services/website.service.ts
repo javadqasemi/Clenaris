@@ -6,6 +6,11 @@ import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/db';
 import { audit, diff } from '@/lib/audit';
 import { BusinessRuleError, ConflictError, NotFoundError } from '@/lib/errors';
+import { absoluteUrl } from '@/lib/utils';
+import { sendEmail } from '@/lib/email/client';
+import { button, renderEmail } from '@/lib/email/layout';
+import type { PublicApplicationInput, UpdateApplicationInput } from '@/lib/validation/content';
+import { notifyStaff } from '@/server/services/notification.service';
 import type {
   CreateFaqInput,
   CreateGalleryItemInput,
@@ -18,7 +23,8 @@ import type {
 
 /**
  * Redaktionelle Objekte der Website: häufige Fragen, Referenzbilder,
- * Stellenangebote.
+ * Stellenangebote — und die Bewerbungen darauf (seit 2026-09-27 hier statt
+ * in den Endpunkten, siehe Abschnitt „Bewerbungen").
  *
  * Architekturentscheide:
  *
@@ -420,6 +426,218 @@ export async function deleteJobPosting({
 function revalidateCareers(): void {
   revalidatePath('/karriere');
   revalidatePath('/karriere/[slug]', 'page');
+}
+
+// ---------------------------------------------------------------------------
+//  Bewerbungen
+// ---------------------------------------------------------------------------
+//
+// Vorher in den Endpunkten `/api/public/applications` und
+// `/api/applications/:id` geschrieben (bis 2026-09-27). Sie stehen neben den
+// Stellenangeboten, weil eine Bewerbung ohne ihr Inserat nicht existiert:
+// Die Organisation einer Bewerbung ist die ihres Inserats
+// (`posting: { organizationId }`), und die Löschsperre von
+// `deleteJobPosting` hängt an genau diesen Zeilen. Zwei Schichten für
+// dieselbe Beziehung liefen auseinander.
+
+/**
+ * Bewerbung auf eine ausgeschriebene Stelle aufnehmen (öffentlich).
+ *
+ * Bewerbungsunterlagen sind besonders schützenswerte Personendaten: sie
+ * landen nur in der Datenbank und im internen Bereich, nie in einer E-Mail an
+ * eine Sammeladresse.
+ */
+export async function submitApplication({
+  organizationId,
+  input,
+  ip,
+}: {
+  organizationId: string;
+  input: PublicApplicationInput;
+  /** Die Adresse der anfragenden Stelle, wie die Route sie kennt — für das Protokoll. */
+  ip?: string;
+}): Promise<{ id: string }> {
+  const posting = await prisma.jobPosting.findFirst({
+    where: { id: input.postingId, organizationId, status: 'PUBLISHED' },
+    select: { id: true, title: true },
+  });
+  if (!posting) throw new NotFoundError('Stelleninserat');
+
+  /**
+   * Die Adresse der Unterlage kommt aus dem geprüften `FileAsset`, nicht
+   * aus dem Formular. Vorher schickte der Browser `cvUrl` mit, und sie
+   * wurde so übernommen — es liess sich also jede beliebige Adresse als
+   * Lebenslauf einer Bewerbung eintragen.
+   *
+   * Die Bedingung `checksum: { not: null }` ist dabei die eigentliche
+   * Prüfung: Ohne Prüfsumme ist der Upload nicht abgeschlossen, und eine
+   * nicht abgeschlossene Datei hängt sich hier nicht an.
+   */
+  const lebenslauf = input.cvFileId
+    ? await prisma.fileAsset.findFirst({
+        where: {
+          id: input.cvFileId,
+          organizationId,
+          scope: 'APPLICATION',
+          checksum: { not: null },
+          applicationId: null,
+        },
+        select: { id: true, url: true },
+      })
+    : null;
+
+  const application = await prisma.jobApplication.create({
+    data: {
+      postingId: posting.id,
+      firstName: input.firstName,
+      lastName: input.lastName,
+      email: input.email,
+      phone: input.phone,
+      message: input.message ?? null,
+      cvUrl: lebenslauf?.url ?? null,
+      availableFrom: input.availableFrom ?? null,
+    },
+  });
+
+  if (lebenslauf) {
+    await prisma.fileAsset.update({
+      where: { id: lebenslauf.id },
+      data: { applicationId: application.id },
+    });
+  }
+
+  /*
+    Eine Protokollzeile für den Eingang (2026-09-27). Die übrigen
+    öffentlichen Eingänge — Kontaktanfrage, Offertanfrage, Gastbuchung,
+    Offertablehnung über den Link — schrieben ihre Zeile seit je; die
+    Bewerbung als einzige nicht. Dabei ist sie der heikelste der Reihe:
+    Bewerbungsunterlagen sind besonders schützenswerte Personendaten, und auf
+    die Frage „wann ist diese Bewerbung eingegangen, und auf welchem Weg?"
+    — etwa bei einem Auskunfts- oder Löschbegehren — gab das Protokoll keine
+    Antwort. Ohne handelnde Person (niemand ist angemeldet), mit der Adresse,
+    die die Route kennt. Name und E-Mail-Adresse stehen bewusst nicht in der
+    Zusammenfassung: Die Zeile verweist auf die Bewerbung, sie kopiert sie
+    nicht — und bleibt stehen, wenn die Bewerbung gelöscht wird.
+  */
+  await audit.created({
+    organizationId,
+    entity: 'JobApplication',
+    entityId: application.id,
+    summary: `Bewerbung auf „${posting.title}" über die Website eingegangen${lebenslauf ? ' (mit Lebenslauf)' : ''}`,
+    ip,
+  });
+
+  // Eingangsbestätigung an die bewerbende Person.
+  await sendEmail({
+    to: input.email,
+    subject: `Ihre Bewerbung als ${posting.title}`,
+    html: renderEmail(
+      'Bewerbung erhalten',
+      `<p>Guten Tag ${input.firstName}</p>
+         <p>Vielen Dank für Ihre Bewerbung als <strong>${posting.title}</strong>. Wir sichten Ihre Unterlagen und melden uns innerhalb von fünf Arbeitstagen — auch dann, wenn es diesmal nicht passt.</p>
+         <p>Falls Sie in der Zwischenzeit Fragen haben, antworten Sie einfach auf diese E-Mail.</p>`,
+      { preheader: 'Wir melden uns innerhalb von fünf Arbeitstagen.' },
+    ),
+    templateKey: 'application_received',
+    entity: 'JobApplication',
+    entityId: application.id,
+  });
+
+  await notifyStaff({
+    organizationId,
+    title: 'Neue Bewerbung',
+    body: `${input.firstName} ${input.lastName} · ${posting.title}`,
+    link: '/admin/personal/bewerbungen',
+    permission: 'application:read',
+    emailContent: {
+      subject: `Neue Bewerbung: ${posting.title}`,
+      html: renderEmail(
+        'Neue Bewerbung',
+        `<p><strong>${input.firstName} ${input.lastName}</strong> hat sich als ${posting.title} beworben.</p>
+           <p>E-Mail: ${input.email}<br>Telefon: ${input.phone}</p>
+           ${input.message ? `<p style="background:#F8FAFC;border-radius:12px;padding:16px;white-space:pre-wrap;">${input.message}</p>` : ''}
+           ${button('Bewerbung öffnen', absoluteUrl('/admin/personal/bewerbungen'))}`,
+      ),
+    },
+  });
+
+  return { id: application.id };
+}
+
+/**
+ * Bewerbung im Verfahren weiterbewegen.
+ *
+ * Bewusst ohne automatische Absage-E-Mail: eine Absage schreibt man selbst,
+ * oder man lässt sie den KI-Assistenten entwerfen und liest sie vor dem
+ * Versand. Automatisch generierte Absagen kosten Ruf, den ein Betrieb mit
+ * ständigem Personalbedarf nicht verschenken kann.
+ */
+export async function updateApplication({
+  organizationId,
+  actorId,
+  applicationId,
+  input,
+}: Omit<Actor, 'ip'> & { applicationId: string; input: UpdateApplicationInput }) {
+  const application = await prisma.jobApplication.findFirst({
+    where: { id: applicationId, posting: { organizationId } },
+    select: { id: true, status: true, firstName: true, lastName: true },
+  });
+  if (!application) throw new NotFoundError('Bewerbung');
+
+  const updated = await prisma.jobApplication.update({
+    where: { id: application.id },
+    data: {
+      ...(input.status ? { status: input.status } : {}),
+      ...(input.rating !== undefined ? { rating: input.rating } : {}),
+      ...(input.internalNote !== undefined ? { internalNote: input.internalNote } : {}),
+    },
+    select: { id: true, status: true, rating: true },
+  });
+
+  await audit.updated({
+    organizationId,
+    userId: actorId,
+    entity: 'JobApplication',
+    entityId: application.id,
+    summary: `Bewerbung ${application.firstName} ${application.lastName}: ${application.status} → ${updated.status}`,
+  });
+
+  return updated;
+}
+
+/**
+ * Bewerbung löschen.
+ *
+ * Bewerbungsunterlagen sind Personendaten. Nach DSG dürfen sie nur so lange
+ * aufbewahrt werden, wie es der Zweck erfordert — nach einer Absage sind das
+ * wenige Monate. Das Löschen ist deshalb ausdrücklich vorgesehen und nicht,
+ * wie sonst in dieser Anwendung, durch eine Aufbewahrungsregel gesperrt.
+ *
+ * Die angehängten Dateien im Objektspeicher gehen über die Fremdschlüssel-
+ * Kaskade mit.
+ */
+export async function deleteApplication({
+  organizationId,
+  actorId,
+  ip,
+  applicationId,
+}: Actor & { applicationId: string }) {
+  const application = await prisma.jobApplication.findFirst({
+    where: { id: applicationId, posting: { organizationId } },
+    select: { id: true, firstName: true, lastName: true },
+  });
+  if (!application) throw new NotFoundError('Bewerbung');
+
+  await prisma.jobApplication.delete({ where: { id: applicationId } });
+
+  await audit.deleted({
+    organizationId,
+    userId: actorId,
+    entity: 'JobApplication',
+    entityId: applicationId,
+    summary: `Bewerbung von ${application.firstName} ${application.lastName} gelöscht`,
+    ip,
+  });
 }
 
 // ---------------------------------------------------------------------------

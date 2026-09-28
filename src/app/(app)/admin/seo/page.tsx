@@ -2,7 +2,7 @@ import type { Metadata } from 'next';
 
 import { prisma } from '@/lib/db';
 import { requirePagePermission } from '@/lib/auth/session';
-import { clientEnv } from '@/lib/env';
+import { SEITEN_URL } from '@/lib/seiten-url';
 import { SEO_PAGES } from '@/lib/cms/registry';
 import { getOrganizationId } from '@/server/services/organization.service';
 import { Alert } from '@/components/ui/primitives';
@@ -75,7 +75,8 @@ export default async function SeoPage() {
         </Alert>
       ) : null}
 
-      <SeoEditor pages={pages} siteUrl={clientEnv.NEXT_PUBLIC_APP_URL} />
+      {/* Die Suchvorschau zeigt die kanonische Domain — dieselbe wie im HTML der Website. */}
+      <SeoEditor pages={pages} siteUrl={SEITEN_URL} />
     </div>
   );
 }

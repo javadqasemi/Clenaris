@@ -37,7 +37,9 @@ const SelectTrigger = React.forwardRef<
     className={cn(
       'flex h-11 w-full items-center justify-between gap-2 rounded-xl border border-input bg-card px-3.5 py-2 text-sm',
       'transition-[border-color,box-shadow] duration-200',
-      'data-[placeholder]:text-muted-foreground/80',
+      // Volle Deckkraft: Der Platzhalter einer Auswahl ist echter Text im
+      // Knopf und braucht 4.5 : 1 — mit /80 lag er bei 3.7 (axe, Wave 18).
+      'data-[placeholder]:text-muted-foreground',
       'focus:outline-none focus:border-primary focus:ring-4 focus:ring-primary/12',
       'disabled:cursor-not-allowed disabled:bg-muted disabled:opacity-70',
       '[&>span]:line-clamp-1 [&>span]:text-left',
@@ -124,12 +126,67 @@ SelectLabel.displayName = 'SelectLabel';
 //  Checkbox
 // ---------------------------------------------------------------------------
 
+/**
+ * Der Anker, der Radix' verstecktes Eingabefeld stehen lässt.
+ *
+ * ---------------------------------------------------------------------------
+ *  Der Fehler, den das behebt
+ * ---------------------------------------------------------------------------
+ *
+ * Radix rendert zu jeder Checkbox, jedem Schalter und jedem Optionsfeld ein
+ * verstecktes `<input>`, damit ein Formular auch ohne JavaScript etwas
+ * abschickt. Ob es gebraucht wird, entscheidet es so:
+ *
+ *     const isFormControl = control ? !!form || !!control.closest('form') : true;
+ *
+ * Auf dem **Server** gibt es kein `control` — der Wert ist `true`, und das
+ * `<input>` steht im ausgelieferten HTML. Im **Browser** setzt der
+ * Ref-Rückruf `control`, und steht das Feld in keinem Formular, wird das
+ * `<input>` wieder **entfernt**.
+ *
+ * Genau diese Entfernung fällt in das Zeitfenster der Hydration. React 19
+ * hydriert nebenläufig und schreibt Teilbäume einzeln fest; der Ref eines
+ * frühen Feldes kann laufen, während spätere noch hydriert werden. Dann
+ * findet React ein Element weniger vor, als das HTML hatte, verwirft den Baum
+ * und baut ihn neu — `Minified React error #418 (HTML)`.
+ *
+ * Gemessen am 2026-09-22 auf dem Produktionsbau: `/portal/einsaetze/‹id›`
+ * (fünf Checkboxen) **13 von 400 Ladevorgängen**, `/portal` 4 von 400,
+ * `/portal/profil` (keine) 0 von 400. Das ausgelieferte HTML enthielt fünf
+ * `input[type=checkbox]`, das DOM nach dem Laden keines mehr. Die vollständige
+ * Untersuchung steht in `docs/HYDRATION.md`.
+ *
+ * ---------------------------------------------------------------------------
+ *  Warum ausgerechnet so
+ * ---------------------------------------------------------------------------
+ *
+ * Mit gesetztem `form` ist der erste Term `!!form` wahr — unabhängig davon,
+ * ob ein Formular in der Nähe steht. Server und Browser rendern damit
+ * **dieselbe** Elementmenge, und nichts wird mehr entfernt.
+ *
+ * Verworfene Alternativen: jede Liste in ein `<form>` zu hüllen wäre eine
+ * Formularsemantik, die es nicht gibt, und liesse die Lücke überall offen, wo
+ * es jemand vergisst. Ein eigener Baustein anstelle von Radix wäre der
+ * gründlichste Weg und kostet Tastaturverhalten, Zustände und
+ * Zugänglichkeit, die hier schon stimmen.
+ *
+ * Die Kennung zeigt absichtlich auf **kein** Formular. Ein `<input>` mit
+ * `form="…"` gehört zu genau diesem einen Formular; gibt es keines, gehört es
+ * zu keinem und schickt nirgends etwas mit. Die Schreibwege dieser Anwendung
+ * laufen ohnehin über `fetch`, nicht über native Formularübermittlung.
+ *
+ * Wer ausdrücklich ein Formular angibt, behält es: `form` aus den Props
+ * gewinnt.
+ */
+const KEIN_FORMULAR = 'clenaris-kein-formular';
+
 const Checkbox = React.forwardRef<
   React.ElementRef<typeof CheckboxPrimitive.Root>,
   React.ComponentPropsWithoutRef<typeof CheckboxPrimitive.Root>
->(({ className, ...props }, ref) => (
+>(({ className, form, ...props }, ref) => (
   <CheckboxPrimitive.Root
     ref={ref}
+    form={form ?? KEIN_FORMULAR}
     className={cn(
       'peer size-5 shrink-0 rounded-md border-2 border-input bg-card transition-colors',
       'focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-primary/15',
@@ -158,12 +215,14 @@ const RadioGroup = React.forwardRef<
 ));
 RadioGroup.displayName = 'RadioGroup';
 
+/** Dieselbe Regel wie bei der Checkbox — siehe `KEIN_FORMULAR`. */
 const RadioGroupItem = React.forwardRef<
   React.ElementRef<typeof RadioGroupPrimitive.Item>,
   React.ComponentPropsWithoutRef<typeof RadioGroupPrimitive.Item>
->(({ className, ...props }, ref) => (
+>(({ className, form, ...props }, ref) => (
   <RadioGroupPrimitive.Item
     ref={ref}
+    form={form ?? KEIN_FORMULAR}
     className={cn(
       'aspect-square size-5 rounded-full border-2 border-input bg-card transition-colors',
       'focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-primary/15',
@@ -191,9 +250,10 @@ export const OptionCard = React.forwardRef<
     meta?: React.ReactNode;
     icon?: React.ReactNode;
   }
->(({ className, title, description, meta, icon, ...props }, ref) => (
+>(({ className, title, description, meta, icon, form, ...props }, ref) => (
   <RadioGroupPrimitive.Item
     ref={ref}
+    form={form ?? KEIN_FORMULAR}
     className={cn(
       'group relative flex w-full items-start gap-4 rounded-2xl border-2 border-border bg-card p-4 text-left transition-all duration-200 ease-spring',
       'hover:border-primary/40 hover:shadow-soft',
@@ -230,12 +290,14 @@ OptionCard.displayName = 'OptionCard';
 //  Switch
 // ---------------------------------------------------------------------------
 
+/** Dieselbe Regel wie bei der Checkbox — siehe `KEIN_FORMULAR`. */
 const Switch = React.forwardRef<
   React.ElementRef<typeof SwitchPrimitive.Root>,
   React.ComponentPropsWithoutRef<typeof SwitchPrimitive.Root>
->(({ className, ...props }, ref) => (
+>(({ className, form, ...props }, ref) => (
   <SwitchPrimitive.Root
     ref={ref}
+    form={form ?? KEIN_FORMULAR}
     className={cn(
       'peer inline-flex h-6 w-11 shrink-0 cursor-pointer items-center rounded-full border-2 border-transparent transition-colors',
       'focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-primary/15',

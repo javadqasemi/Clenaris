@@ -5,6 +5,7 @@ import { prisma, toNumber } from '@/lib/db';
 import { requirePermission } from '@/lib/auth/session';
 import { can } from '@/lib/auth/rbac';
 import { formatCurrency, formatDate, toQueryString } from '@/lib/utils';
+import { zuercherJahr } from '@/lib/zuerich';
 import { getOrganizationId } from '@/server/services/organization.service';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTriggerUnderline } from '@/components/ui/controls';
@@ -63,7 +64,10 @@ export default async function ExpensesPage({
 
   const page = Math.max(1, Number(params.seite) || 1);
   const pageSize = 25;
-  const year = new Date().getFullYear();
+  // Das Zürcher Jahr; `expenseDate` ist ein Kalendertag, verglichen wird mit
+  // dem 1. Januar als UTC-Mitternacht (2026-09-27 — vorher `new Date(y, 0, 1)`
+  // in der Zone des Servers).
+  const year = zuercherJahr();
 
   const where = {
     organizationId,
@@ -89,7 +93,7 @@ export default async function ExpensesPage({
     }),
     prisma.expense.count({ where }),
     prisma.expense.aggregate({
-      where: { organizationId, expenseDate: { gte: new Date(year, 0, 1) } },
+      where: { organizationId, expenseDate: { gte: new Date(Date.UTC(year, 0, 1)) } },
       _sum: { netAmount: true, vatAmount: true },
     }),
     prisma.expense.aggregate({

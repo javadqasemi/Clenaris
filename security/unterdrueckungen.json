@@ -1,0 +1,33 @@
+{
+  "_zweck": "Durchgesehene Treffer der Musterprüfung (scripts/security/muster.ts). Jede Unterdrückung gilt für eine Regel in einer Datei und höchstens `anzahl` Treffer; kommt einer dazu, gilt sie nicht mehr und die Datei muss neu durchgesehen werden. Durchgesehen am 2026-09-26.",
+  "unterdrueckungen": [
+    { "regel": "html-roh", "datei": "src/components/markdown.tsx", "anzahl": 6, "begruendung": "inline() maskiert zuerst alles (escapeHtml), erst danach entstehen die eigenen Auszeichnungen; Linkziele laufen durch safeHref (kein javascript:, data:, vbscript:)." },
+    { "regel": "html-roh", "datei": "src/app/(public)/bewertungen/page.tsx", "anzahl": 1, "begruendung": "JSON-LD über jsonLd() aus src/lib/json-ld.ts, das <, > und & als \\u-Folgen maskiert — ein </script> im Inhalt kann den Block nicht schliessen." },
+    { "regel": "html-roh", "datei": "src/app/(public)/blog/[slug]/page.tsx", "anzahl": 1, "begruendung": "JSON-LD über jsonLd() aus src/lib/json-ld.ts, das <, > und & als \\u-Folgen maskiert." },
+    { "regel": "html-roh", "datei": "src/app/(public)/faq/page.tsx", "anzahl": 1, "begruendung": "JSON-LD über jsonLd() aus src/lib/json-ld.ts, das <, > und & als \\u-Folgen maskiert." },
+    { "regel": "html-roh", "datei": "src/app/(public)/karriere/[slug]/page.tsx", "anzahl": 1, "begruendung": "JSON-LD über jsonLd() aus src/lib/json-ld.ts, das <, > und & als \\u-Folgen maskiert." },
+    { "regel": "html-roh", "datei": "src/app/(public)/layout.tsx", "anzahl": 1, "begruendung": "JSON-LD über jsonLd() aus src/lib/json-ld.ts, das <, > und & als \\u-Folgen maskiert." },
+    { "regel": "html-roh", "datei": "src/app/(public)/leistungen/[slug]/page.tsx", "anzahl": 1, "begruendung": "JSON-LD über jsonLd() aus src/lib/json-ld.ts, das <, > und & als \\u-Folgen maskiert." },
+    { "regel": "html-roh", "datei": "src/app/(public)/page.tsx", "anzahl": 1, "begruendung": "JSON-LD über jsonLd() aus src/lib/json-ld.ts, das <, > und & als \\u-Folgen maskiert." },
+
+    { "regel": "route-ohne-factory", "datei": "src/app/api/webhooks/stripe/route.ts", "anzahl": 1, "begruendung": "Braucht den unveränderten Rohtext für die Signaturprüfung (constructWebhookEvent); die Factory würde den Rumpf als JSON lesen. Ohne gültige Signatur 400, Verarbeitung idempotent über die Anbieter-ID." },
+    { "regel": "route-ohne-factory", "datei": "src/app/api/webhooks/resend/route.ts", "anzahl": 1, "begruendung": "Svix-Signatur über den Rohtext mit höchstens fünf Minuten altem Zeitstempel (pruefeSvixSignatur); ohne Geheimnis oder mit falscher Signatur 401." },
+    { "regel": "route-ohne-factory", "datei": "src/app/api/webhooks/twilio/route.ts", "anzahl": 1, "begruendung": "X-Twilio-Signature über die öffentliche Adresse und die Formularfelder; die Factory kennt keinen Formular-Rohtext." },
+    { "regel": "route-ohne-factory", "datei": "src/app/api/files/blob/[id]/route.ts", "anzahl": 1, "begruendung": "Binärer Transfer für den lokalen Speichertreiber. PUT verlangt ein gültiges Upload-Ticket (die Schreibberechtigung selbst) und läuft durch fileTransfer-Limit; GET prüft Sitzung, FileAsset-Berechtigung und Malware-Befund. Die Factory liest JSON." },
+    { "regel": "route-ohne-factory", "datei": "src/app/api/content/preview/route.ts", "anzahl": 1, "begruendung": "Schaltet nur den Entwurfsmodus der eigenen Sitzung (draftMode-Cookie) ein; prüft Sitzung und content:update selbst und leitet nur auf eigene Pfade weiter." },
+
+    { "regel": "rate-limit-fehlt", "datei": "src/app/api/handoff/unlock/route.ts", "anzahl": 1, "begruendung": "Das Kontingent sitzt im Dienst (enforceRateLimit('handoffUnlock', handoff.id) in device-handoff.service.ts) und zählt je Übergabe statt je Adresse — genau das, was ein Passwortraten am übergebenen Gerät begrenzen muss." },
+    { "regel": "rate-limit-fehlt", "datei": "src/app/api/webhooks/stripe/route.ts", "anzahl": 1, "begruendung": "Nur mit gültiger Anbietersignatur wirksam; ein Kontingent je IP träfe die wenigen Absenderadressen des Anbieters und verwürfe dessen Wiederholungen. Ungültige Signaturen enden vor jeder Datenbankarbeit." },
+    { "regel": "rate-limit-fehlt", "datei": "src/app/api/webhooks/resend/route.ts", "anzahl": 1, "begruendung": "Svix-Signatur mit Zeitfenster vor jeder Datenbankarbeit; ein Kontingent je IP träfe die Absenderadressen des Anbieters." },
+    { "regel": "rate-limit-fehlt", "datei": "src/app/api/webhooks/twilio/route.ts", "anzahl": 1, "begruendung": "Twilio-Signatur vor jeder Datenbankarbeit; ein Kontingent je IP träfe die Absenderadressen des Anbieters." },
+    { "regel": "oeffentliches-geheimnis", "datei": "src/lib/laufzeit-konfiguration.ts", "anzahl": 1, "begruendung": "NEXT_PUBLIC_GOOGLE_MAPS_API_KEY ist nach Googles Bauart ein Browserschlüssel und öffentlich; er muss in der Google-Konsole auf die eigene Domain (HTTP-Referrer) und auf die Maps-APIs beschränkt sein (docs/KEY_MANAGEMENT.md). Seit V2-1 nur noch hier und zur Laufzeit gelesen (vorher env.ts und maps/google.ts)." },
+    { "regel": "oeffentliches-geheimnis", "datei": ".env.example", "anzahl": 1, "begruendung": "Platzhalter ohne Wert für den öffentlichen, Referrer-beschränkten Maps-Browserschlüssel." },
+
+    { "regel": "sql-unsafe", "datei": "src/server/services/purge.service.ts", "anzahl": 1, "begruendung": "Konstanter Text (SET LOCAL clenaris.bereinigung = 'on'); kein Wert aus einer Anfrage." },
+    { "regel": "sql-unsafe", "datei": "scripts/datenintegritaet.ts", "anzahl": 1, "begruendung": "Führt nur die festen Prüfabfragen aus PRUEFUNGEN im selben Skript aus; kein Wert von aussen." },
+    { "regel": "sql-unsafe", "datei": "scripts/db-restore-verify.ts", "anzahl": 3, "begruendung": "Tabellennamen aus der festen Liste TABELLEN; Trigger- und Indexabfragen konstant. Nur von Hand gestartet." },
+    { "regel": "sql-unsafe", "datei": "scripts/migration-preflight.ts", "anzahl": 4, "begruendung": "Konstante Abfragen mit $1-Parametern; die Duplikatabfrage setzt Tabellen- und Spaltennamen aus Migrationsdateien des Repositorys ein, auf Wortzeichen geprüft und Anführungszeichen entfernt." },
+    { "regel": "sql-unsafe", "datei": "scripts/setup-test-db.ts", "anzahl": 3, "begruendung": "DROP/CREATE DATABASE vertragen keine Parameter; der Name stammt aus DATABASE_URL, muss auf _test enden und wird vor beiden Anweisungen auf Anführungszeichen geprüft. Die Existenzabfrage ist parametrisiert." },
+    { "regel": "sql-unsafe", "datei": "scripts/setup-preview-db.ts", "anzahl": 3, "begruendung": "Der Datenbankname ist die Konstante PREVIEW_DB (clenaris_preview); die Existenzabfrage ist parametrisiert." }
+  ]
+}

@@ -40,7 +40,9 @@ async function main() {
   }
   const role: UserRole = roleArg;
 
-  const org = await prisma.organization.findFirstOrThrow();
+  // Über den Slug wie `getOrganizationId()` — ein Konto in „der ersten" Organisation
+  // landete bei mehr als einer Organisation womöglich in der falschen.
+  const org = await prisma.organization.findUniqueOrThrow({ where: { slug: process.env.ORGANIZATION_SLUG ?? 'clenaris' } });
   const passwordHash = await hash(password, ARGON_OPTIONS);
 
   const user = await prisma.user.upsert({

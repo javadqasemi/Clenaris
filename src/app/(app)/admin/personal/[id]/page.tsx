@@ -5,6 +5,10 @@ import { ArrowLeft, ExternalLink, FileText, Mail, Phone, ShieldCheck } from 'luc
 
 import { prisma, toNumber } from '@/lib/db';
 import { requirePermission } from '@/lib/auth/session';
+import {
+  EmployeeAvailabilityDialog,
+  EmployeeSkillsDialog,
+} from '@/features/admin/employee-qualifications';
 import { can, ROLE_LABELS, type ActorRole } from '@/lib/auth/rbac';
 import { NotFoundError } from '@/lib/errors';
 import { USER_STATUS_LABELS } from '@/lib/validation/users';
@@ -27,6 +31,9 @@ import {
 } from '@/lib/utils';
 import { getOrganizationId } from '@/server/services/organization.service';
 import { getEmployeeDetail, getVacationBalance } from '@/server/services/employee.service';
+import { getPayrollProfile } from '@/server/services/payroll-stamm.service';
+import { DREIZEHNTER_ARTEN, payrollProfileFields } from '@/features/admin/payroll-fields';
+import { FormDialog } from '@/components/app/resource-form';
 import { documentVisibilityWhere } from '@/server/services/document.service';
 import { Badge, StatusBadge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -109,8 +116,8 @@ export default async function StaffDetailPage({
     throw error;
   }
 
-  const [vacation, documents, logins] = await Promise.all([
-    getVacationBalance(employee.id, new Date().getFullYear()),
+  const [vacation, documents, logins, lohnprofil] = await Promise.all([
+    getVacationBalance(employee.id),
     prisma.managedDocument.findMany({
       where: {
         AND: [documentVisibilityWhere(session, organizationId), { subjectEmployeeId: employee.id }],
@@ -135,6 +142,9 @@ export default async function StaffDetailPage({
           select: { id: true, createdAt: true, ip: true, userAgent: true },
         })
       : Promise.resolve([]),
+    // Dieselbe Schranke wie der Endpunkt: `payslip:create`, nicht die Akte —
+    // die Betriebsleitung liest die Akte, aber keine Lohnvereinbarungen.
+    canSeeWages ? getPayrollProfile(organizationId, employee.id) : Promise.resolve(null),
   ]);
 
   const name = fullName(employee.user.firstName, employee.user.lastName);
@@ -448,6 +458,55 @@ export default async function StaffDetailPage({
         )}
       </div>
 
+      {/*
+        Die Lohnvereinbarungen hatten Endpunkt, Dienst und sogar fertige
+        Feldliste (`payrollProfileFields`) — aber keine Stelle, an der man sie
+        setzen konnte (Merkmalsprüfung, Wave 23). Ohne sie rechnet der Lohnlauf
+        jede Person mit „kein 13., keine Entschädigung". Sie stehen hier und
+        nicht auf der Lohnseite, weil sie zur Person gehören und nicht zum Monat.
+      */}
+      {lohnprofil ? (
+        <DetailSection
+          title="Lohnvereinbarungen"
+          description="13. Monatslohn, Ferien- und Feiertagsentschädigung. Eine Änderung markiert unveröffentlichte Abrechnungen dieser Person als veraltet."
+          action={
+            <FormDialog
+              title="Lohnvereinbarungen"
+              triggerLabel="Bearbeiten"
+              triggerVariant="outline"
+              triggerSize="sm"
+              plainTrigger
+              endpoint={`/api/payroll/profiles/${employee.id}`}
+              method="PUT"
+              submitLabel="Änderungen speichern"
+              successMessage="Vereinbarungen gespeichert."
+              fields={payrollProfileFields()}
+              values={{
+                thirteenthMode: lohnprofil.thirteenthMode,
+                thirteenthPayoutMonth: lohnprofil.thirteenthPayoutMonth,
+                vacationPayInWage: lohnprofil.vacationPayInWage,
+                holidayPayPct: lohnprofil.holidayPayPct === null ? undefined : toNumber(lohnprofil.holidayPayPct),
+                note: lohnprofil.note ?? undefined,
+              }}
+            />
+          }
+        >
+          <dl className="protocol-list">
+            <DetailRow label="13. Monatslohn">
+              {DREIZEHNTER_ARTEN.find((a) => a.value === lohnprofil.thirteenthMode)?.label ?? lohnprofil.thirteenthMode}
+              {lohnprofil.thirteenthMode === 'NONE' ? null : `, Auszahlung im Monat ${lohnprofil.thirteenthPayoutMonth}`}
+            </DetailRow>
+            <DetailRow label="Ferienentschädigung">
+              {lohnprofil.vacationPayInWage ? 'mit dem Stundenlohn' : 'nicht mit dem Lohn'}
+            </DetailRow>
+            <DetailRow label="Feiertagsentschädigung">
+              {lohnprofil.holidayPayPct === null ? '—' : `${toNumber(lohnprofil.holidayPayPct)} %`}
+            </DetailRow>
+            {lohnprofil.note ? <DetailRow label="Notiz">{lohnprofil.note}</DetailRow> : null}
+          </dl>
+        </DetailSection>
+      ) : null}
+
       {employee.notes || canEdit ? (
         <DetailSection title="Interne Notizen" description="Nur für die Personalverwaltung sichtbar.">
           {employee.notes ? (
@@ -508,8 +567,37 @@ export default async function StaffDetailPage({
         )}
       </DetailSection>
 
-      {employee.availability.length > 0 ? (
-        <DetailSection title="Verfügbarkeit">
+      {/*
+        Beide Abschnitte standen bis Wave 7 unter `length > 0` — sie
+        verschwanden also genau dann, wenn nichts erfasst war. Das war
+        folgerichtig, solange es keinen Weg zum Erfassen gab: ein leerer
+        Abschnitt ohne Schaltfläche ist nur Platz.
+
+        Mit der Bearbeitung ist es umgekehrt: Wer nichts hinterlegt hat, ist
+        genau die Person, die den Abschnitt sehen muss. Angezeigt wird jetzt
+        immer — mit einem Satz, der sagt, was fehlt und was das bedeutet.
+      */}
+      <DetailSection
+        title="Arbeitszeiten"
+        action={
+          canEdit ? (
+            <EmployeeAvailabilityDialog
+              employeeId={employee.id}
+              availability={employee.availability.map((slot) => ({
+                weekday: slot.weekday,
+                startTime: slot.startTime,
+                endTime: slot.endTime,
+              }))}
+            />
+          ) : null
+        }
+      >
+        {employee.availability.length === 0 ? (
+          <p className="py-6 text-sm text-muted-foreground">
+            Keine Arbeitszeiten hinterlegt. Beim Zuteilen entfällt damit der Hinweis, ob
+            ein Einsatz ausserhalb der üblichen Zeiten liegt.
+          </p>
+        ) : (
           <dl className="protocol-list">
             {employee.availability.map((slot) => (
               <DetailRow key={slot.id} label={WEEKDAYS[slot.weekday] ?? String(slot.weekday)}>
@@ -517,11 +605,32 @@ export default async function StaffDetailPage({
               </DetailRow>
             ))}
           </dl>
-        </DetailSection>
-      ) : null}
+        )}
+      </DetailSection>
 
-      {employee.skills.length > 0 ? (
-        <DetailSection title="Qualifikationen">
+      <DetailSection
+        title="Qualifikationen"
+        action={
+          canEdit ? (
+            <EmployeeSkillsDialog
+              employeeId={employee.id}
+              skills={employee.skills.map((skill) => ({
+                name: skill.name,
+                level: skill.level,
+                certifiedUntil: skill.certifiedUntil
+                  ? skill.certifiedUntil.toISOString().slice(0, 10)
+                  : null,
+              }))}
+            />
+          ) : null
+        }
+      >
+        {employee.skills.length === 0 ? (
+          <p className="py-6 text-sm text-muted-foreground">
+            Keine Qualifikationen erfasst. Sie bestimmen mit, wer einen Einsatz übernehmen
+            kann, und fliessen in den Personalvorschlag ein.
+          </p>
+        ) : (
           <div className="flex flex-wrap gap-2 py-4">
             {employee.skills.map((skill) => (
               <Badge key={skill.id} variant="neutral">
@@ -530,8 +639,8 @@ export default async function StaffDetailPage({
               </Badge>
             ))}
           </div>
-        </DetailSection>
-      ) : null}
+        )}
+      </DetailSection>
 
       <DetailSection title="Letzte Einsätze">
         {employee.assignments.length === 0 ? (

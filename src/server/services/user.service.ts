@@ -1,16 +1,22 @@
-import 'server-only';
+import "server-only";
 
-import { Prisma, type UserRole } from '@prisma/client';
+import { Prisma, type UserRole } from "@prisma/client";
 
-import { prisma } from '@/lib/db';
-import { audit, diff } from '@/lib/audit';
-import { BusinessRuleError, ConflictError, ForbiddenError, NotFoundError } from '@/lib/errors';
-import { assignableRoles, ROLE_LABELS, type ActorRole } from '@/lib/auth/rbac';
-import type { UpdateUserInput } from '@/lib/validation/users';
+import { prisma, type Tx } from "@/lib/db";
+import { audit, diff, recordAuditInTx } from "@/lib/audit";
+import { recordSecurityEvent } from "@/lib/security/record";
+import {
+  BusinessRuleError,
+  ConflictError,
+  ForbiddenError,
+  NotFoundError,
+} from "@/lib/errors";
+import { assignableRoles, ROLE_LABELS, type ActorRole } from "@/lib/auth/rbac";
+import type { UpdateUserInput } from "@/lib/validation/users";
 
-import { revokeAllSessions } from '@/lib/auth/session';
+import { revokeAllSessions } from "@/lib/auth/session";
 
-import { ensureCustomerProfile } from './profile.service';
+import { ensureCustomerProfile } from "./profile.service";
 
 /**
  * Benutzerkonten.
@@ -40,36 +46,63 @@ export interface UserListFilter {
   organizationId: string;
   q?: string;
   role?: UserRole;
-  status?: 'PENDING' | 'ACTIVE' | 'SUSPENDED' | 'DISABLED';
+  status?: "PENDING" | "ACTIVE" | "SUSPENDED" | "DISABLED";
   includeDeleted?: boolean;
+  /** Nur gelöschte Konten — der Papierkorb-Reiter der Maske. */
+  nurGeloescht?: boolean;
+  page?: number;
+  pageSize?: number;
 }
 
-export async function listUsers(filter: UserListFilter) {
-  const where: Prisma.UserWhereInput = {
+/**
+ * Benutzerkonten, seitenweise (Phase 23, 2026-09-27).
+ *
+ * Bis hierher lud die Liste **alle** Konten samt gelöschten und trennte sie
+ * erst im Speicher. Zu den Konten gehören auch die Kundschaft, die sich auf
+ * der Website registriert — die Liste wächst also mit dem Kundenstamm, nicht
+ * mit dem Personal. Jetzt entscheidet die Datenbank: Filter, Zählung und
+ * eine Seite von höchstens 100 Konten.
+ */
+export async function listUsers(filter: UserListFilter): Promise<{ items: Awaited<ReturnType<typeof kontenLaden>>; total: number }> {
+  const pageSize = Math.min(100, Math.max(1, filter.pageSize ?? 50));
+  const page = Math.max(1, filter.page ?? 1);
+  const where = kontenFilter(filter);
+  const [items, total] = await Promise.all([kontenLaden(where, (page - 1) * pageSize, pageSize), prisma.user.count({ where })]);
+  return { items, total };
+}
+
+function kontenFilter(filter: UserListFilter): Prisma.UserWhereInput {
+  return {
     organizationId: filter.organizationId,
-    ...(filter.includeDeleted ? {} : { deletedAt: null }),
+    ...(filter.nurGeloescht ? { deletedAt: { not: null } } : filter.includeDeleted ? {} : { deletedAt: null }),
     ...(filter.role ? { role: filter.role } : {}),
     ...(filter.status ? { status: filter.status } : {}),
     ...(filter.q
       ? {
           OR: [
-            { firstName: { contains: filter.q, mode: 'insensitive' } },
-            { lastName: { contains: filter.q, mode: 'insensitive' } },
-            { email: { contains: filter.q, mode: 'insensitive' } },
+            { firstName: { contains: filter.q, mode: "insensitive" } },
+            { lastName: { contains: filter.q, mode: "insensitive" } },
+            { email: { contains: filter.q, mode: "insensitive" } },
           ],
         }
       : {}),
   };
+}
 
+function kontenLaden(where: Prisma.UserWhereInput, skip: number, take: number) {
   return prisma.user.findMany({
     where,
+    skip,
+    take,
     // Nach Name, nicht nach Rolle. Die Liste war nach Rolle gruppiert, und
     // das hatte eine tückische Folge: Ein Rollenwechsel verschob die Zeile an
     // eine andere Stelle, alle anderen rückten nach — und die Tabelle sah
     // aus, als hätte *jedes* Konto die Rolle gewechselt. Wer danach „die
     // Zeile" korrigieren wollte, traf eine andere Person. Ein Name bleibt, wo
     // er ist; die Rolle steht in der Spalte daneben.
-    orderBy: [{ lastName: 'asc' }, { firstName: 'asc' }],
+    // `id` zuletzt: Zwei „Anna Keller" hätten sonst beim Blättern keine feste
+    // Reihenfolge, und dieselbe Person erschiene auf zwei Seiten.
+    orderBy: [{ lastName: "asc" }, { firstName: "asc" }, { id: "asc" }],
     select: {
       id: true,
       email: true,
@@ -92,8 +125,10 @@ export async function listUsers(filter: UserListFilter) {
 }
 
 async function findOwn(organizationId: string, userId: string) {
-  const user = await prisma.user.findFirst({ where: { id: userId, organizationId } });
-  if (!user) throw new NotFoundError('Benutzerkonto');
+  const user = await prisma.user.findFirst({
+    where: { id: userId, organizationId },
+  });
+  if (!user) throw new NotFoundError("Benutzerkonto");
   return user;
 }
 
@@ -110,50 +145,62 @@ export async function updateUser({
   ip,
   userId,
   input,
-}: Omit<Actor, 'actorRole'> & { userId: string; input: UpdateUserInput }) {
+}: Omit<Actor, "actorRole"> & { userId: string; input: UpdateUserInput }) {
   const before = await findOwn(organizationId, userId);
 
-  if (userId === actorId && input.status && input.status !== 'ACTIVE') {
+  if (userId === actorId && input.status && input.status !== "ACTIVE") {
     throw new BusinessRuleError(
-      'Das eigene Konto lässt sich nicht sperren. Bitten Sie eine andere berechtigte Person darum.',
+      "Das eigene Konto lässt sich nicht sperren. Bitten Sie eine andere berechtigte Person darum.",
     );
   }
 
-  if (input.status && input.status !== 'ACTIVE') {
-    await assertNotLastSuperAdmin(organizationId, before.id, before.role);
-  }
-
   try {
-    const user = await prisma.user.update({
-      where: { id: userId },
-      data: {
-        ...(input.firstName !== undefined ? { firstName: input.firstName } : {}),
-        ...(input.lastName !== undefined ? { lastName: input.lastName } : {}),
-        ...(input.phone !== undefined ? { phone: input.phone ?? null } : {}),
-        ...(input.email !== undefined ? { email: input.email } : {}),
-        ...(input.locale !== undefined ? { locale: input.locale } : {}),
-        ...(input.status !== undefined ? { status: input.status } : {}),
-        ...(input.notifyByEmail !== undefined ? { notifyByEmail: input.notifyByEmail } : {}),
-        ...(input.notifyBySms !== undefined ? { notifyBySms: input.notifyBySms } : {}),
-        ...(input.avatarUrl !== undefined ? { avatarUrl: input.avatarUrl || null } : {}),
-        ...(input.mustChangePassword !== undefined
-          ? { mustChangePassword: input.mustChangePassword }
-          : {}),
-      },
+    const user = await prisma.$transaction(async (tx) => {
+      if (input.status && input.status !== "ACTIVE") {
+        await assertNotLastSuperAdmin(tx, organizationId, before.id);
+      }
+      return tx.user.update({
+        where: { id: userId },
+        data: {
+          ...(input.firstName !== undefined
+            ? { firstName: input.firstName }
+            : {}),
+          ...(input.lastName !== undefined ? { lastName: input.lastName } : {}),
+          ...(input.phone !== undefined ? { phone: input.phone ?? null } : {}),
+          ...(input.email !== undefined ? { email: input.email } : {}),
+          ...(input.locale !== undefined ? { locale: input.locale } : {}),
+          ...(input.status !== undefined ? { status: input.status } : {}),
+          ...(input.notifyByEmail !== undefined
+            ? { notifyByEmail: input.notifyByEmail }
+            : {}),
+          ...(input.notifyBySms !== undefined
+            ? { notifyBySms: input.notifyBySms }
+            : {}),
+          ...(input.avatarUrl !== undefined
+            ? { avatarUrl: input.avatarUrl || null }
+            : {}),
+          ...(input.mustChangePassword !== undefined
+            ? { mustChangePassword: input.mustChangePassword }
+            : {}),
+        },
+      });
     });
 
     // Eine Sperre muss sofort wirken, nicht erst nach Ablauf des Zugangstokens.
     // Dasselbe gilt für den erzwungenen Passwortwechsel: Er greift bei der
     // nächsten Anmeldung — die es ohne Sitzungsende erst in einer Viertelstunde
     // gäbe.
-    if ((input.status && input.status !== 'ACTIVE') || input.mustChangePassword === true) {
+    if (
+      (input.status && input.status !== "ACTIVE") ||
+      input.mustChangePassword === true
+    ) {
       await revokeAllSessions(userId);
     }
 
     await audit.updated({
       organizationId,
       userId: actorId,
-      entity: 'User',
+      entity: "User",
       entityId: userId,
       summary: `Konto ${user.email} geändert`,
       changes: diff(
@@ -163,10 +210,37 @@ export async function updateUser({
       ip,
     });
 
+    /**
+     * Nur der Statuswechsel erzeugt ein Sicherheitsereignis, nicht jede
+     * Änderung an einem Konto.
+     *
+     * Eine geänderte Telefonnummer gehört ins Prüfprotokoll und nirgendwo
+     * sonst hin. Stilllegen und Wiederaktivieren sind etwas anderes: Sie
+     * entscheiden, ob sich jemand anmelden kann, und beide Richtungen sind
+     * interessant — die Sperre, weil sie jemanden aussperrt, die Aufhebung,
+     * weil sie jemandem den Zugang zurückgibt.
+     */
+    if (input.status !== undefined && input.status !== before.status) {
+      await recordSecurityEvent({
+        organizationId,
+        userId,
+        kind: input.status === "ACTIVE" ? "USER_REACTIVATED" : "USER_SUSPENDED",
+        summary:
+          input.status === "ACTIVE"
+            ? "Konto wieder aktiviert"
+            : `Konto stillgelegt (${input.status})`,
+        context: { von: before.status, zu: input.status, durch: actorId },
+        ip,
+      });
+    }
+
     return user;
   } catch (error) {
-    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
-      throw new ConflictError('Diese E-Mail-Adresse ist bereits vergeben.');
+    if (
+      error instanceof Prisma.PrismaClientKnownRequestError &&
+      error.code === "P2002"
+    ) {
+      throw new ConflictError("Diese E-Mail-Adresse ist bereits vergeben.");
     }
     throw error;
   }
@@ -201,14 +275,14 @@ export async function assignRole({
 
   if (userId === actorId) {
     throw new BusinessRuleError(
-      'Die eigene Rolle lässt sich nicht ändern — sonst könnte man sich selbst höherstufen.',
+      "Die eigene Rolle lässt sich nicht ändern — sonst könnte man sich selbst höherstufen.",
     );
   }
 
   const allowed = assignableRoles(actorRole);
   if (!allowed.includes(role)) {
     throw new ForbiddenError(
-      `Sie können höchstens die Rolle „${ROLE_LABELS[allowed[allowed.length - 1] ?? 'CUSTOMER']}" vergeben.`,
+      `Sie können höchstens die Rolle „${ROLE_LABELS[allowed[allowed.length - 1] ?? "CUSTOMER"]}" vergeben.`,
     );
   }
   if (!allowed.includes(target.role)) {
@@ -217,11 +291,7 @@ export async function assignRole({
     );
   }
 
-  if (target.role === 'SUPER_ADMIN' && role !== 'SUPER_ADMIN') {
-    await assertNotLastSuperAdmin(organizationId, target.id, target.role);
-  }
-
-  if (role === 'CUSTOMER') {
+  if (role === "CUSTOMER") {
     const activeEmployee = await prisma.employee.findFirst({
       where: { userId, active: true },
       select: { employeeNumber: true },
@@ -229,18 +299,35 @@ export async function assignRole({
     if (activeEmployee) {
       throw new BusinessRuleError(
         `Dieses Konto hat eine aktive Personalakte (${activeEmployee.employeeNumber}). ` +
-          'Solange sie aktiv ist, stünde die Person weiterhin in Einsatzplanung und Team. ' +
-          'Legen Sie die Personalakte zuerst still (Mitarbeitende → Akte → Stilllegen), ' +
-          'dann lässt sich die Rolle auf Kundschaft setzen.',
+          "Solange sie aktiv ist, stünde die Person weiterhin in Einsatzplanung und Team. " +
+          "Legen Sie die Personalakte zuerst still (Mitarbeitende → Akte → Stilllegen), " +
+          "dann lässt sich die Rolle auf Kundschaft setzen.",
       );
     }
   }
 
   const user = await prisma.$transaction(async (tx) => {
-    const updated = await tx.user.update({ where: { id: userId }, data: { role } });
-    if (role === 'CUSTOMER') {
+    if (role !== "SUPER_ADMIN")
+      await assertNotLastSuperAdmin(tx, organizationId, target.id);
+    const updated = await tx.user.update({
+      where: { id: userId },
+      data: { role },
+    });
+    if (role === "CUSTOMER") {
       await ensureCustomerProfile(tx, { organizationId, userId });
     }
+    // Eine vergebene Rolle ohne Protokolleintrag darf es nicht geben — der
+    // Eintrag steht deshalb in derselben Transaktion (`recordAuditInTx`).
+    await recordAuditInTx(tx, {
+      organizationId,
+      userId: actorId,
+      action: "PERMISSION_CHANGE",
+      entity: "User",
+      entityId: userId,
+      summary: `Rolle von ${updated.email}: ${ROLE_LABELS[target.role]} → ${ROLE_LABELS[role]}`,
+      changes: { role: { from: target.role, to: role } },
+      ip,
+    });
     return updated;
   });
 
@@ -249,13 +336,30 @@ export async function assignRole({
   // Zeit, die man nicht will.
   await revokeAllSessions(userId);
 
-  await audit.updated({
+  /**
+   * `CRITICAL` und damit bestätigungspflichtig — auch bei einer Herabstufung.
+   *
+   * Der Gedanke „nur Höherstufungen sind interessant" ist naheliegend und
+   * falsch: Eine Herabstufung, die niemand veranlasst hat, ist genauso ein
+   * Zeichen wie eine Höherstufung, und wer die Rechteverwaltung übernommen
+   * hat, probiert beide Richtungen. Die Zeile steht am **betroffenen** Konto,
+   * wer sie ausgelöst hat, steht im Zusammenhang.
+   */
+  await recordSecurityEvent({
     organizationId,
-    userId: actorId,
-    entity: 'User',
-    entityId: userId,
-    summary: `Rolle von ${user.email}: ${ROLE_LABELS[target.role]} → ${ROLE_LABELS[role]}`,
-    changes: { role: { from: target.role, to: role } },
+    userId,
+    kind: "ROLE_ASSIGNED",
+    summary: `Rolle geändert: ${ROLE_LABELS[target.role]} → ${ROLE_LABELS[role]}`,
+    context: { von: target.role, zu: role, durch: actorId },
+    ip,
+  });
+
+  await recordSecurityEvent({
+    organizationId,
+    userId,
+    kind: "SESSIONS_REVOKED",
+    summary: "Alle Sitzungen beendet — Rollenänderung",
+    context: { durch: actorId },
     ip,
   });
 
@@ -267,30 +371,33 @@ export async function deleteUser({
   actorId,
   ip,
   userId,
-}: Omit<Actor, 'actorRole'> & { userId: string }) {
+}: Omit<Actor, "actorRole"> & { userId: string }) {
   const user = await findOwn(organizationId, userId);
 
   if (userId === actorId) {
-    throw new BusinessRuleError('Das eigene Konto lässt sich nicht löschen.');
+    throw new BusinessRuleError("Das eigene Konto lässt sich nicht löschen.");
   }
-  if (user.deletedAt) throw new BusinessRuleError('Dieses Konto liegt bereits im Papierkorb.');
+  if (user.deletedAt)
+    throw new BusinessRuleError("Dieses Konto liegt bereits im Papierkorb.");
 
-  await assertNotLastSuperAdmin(organizationId, user.id, user.role);
-
-  await prisma.user.update({
-    where: { id: userId },
-    data: { deletedAt: new Date(), status: 'DISABLED' },
+  await prisma.$transaction(async (tx) => {
+    await assertNotLastSuperAdmin(tx, organizationId, user.id);
+    await tx.user.update({
+      where: { id: userId },
+      data: { deletedAt: new Date(), status: "DISABLED" },
+    });
+    // Ein Konto verschwindet nicht ohne Eintrag — in derselben Transaktion.
+    await recordAuditInTx(tx, {
+      organizationId,
+      userId: actorId,
+      action: "DELETE",
+      entity: "User",
+      entityId: userId,
+      summary: `Konto ${user.email} gelöscht (wiederherstellbar)`,
+      ip,
+    });
   });
   await revokeAllSessions(userId);
-
-  await audit.deleted({
-    organizationId,
-    userId: actorId,
-    entity: 'User',
-    entityId: userId,
-    summary: `Konto ${user.email} gelöscht (wiederherstellbar)`,
-    ip,
-  });
 }
 
 export async function restoreUser({
@@ -298,20 +405,21 @@ export async function restoreUser({
   actorId,
   ip,
   userId,
-}: Omit<Actor, 'actorRole'> & { userId: string }) {
+}: Omit<Actor, "actorRole"> & { userId: string }) {
   const user = await findOwn(organizationId, userId);
-  if (!user.deletedAt) throw new BusinessRuleError('Dieses Konto liegt nicht im Papierkorb.');
+  if (!user.deletedAt)
+    throw new BusinessRuleError("Dieses Konto liegt nicht im Papierkorb.");
 
   const restored = await prisma.user.update({
     where: { id: userId },
     // Gesperrt zurück: wer wiederherstellt, soll bewusst entsperren.
-    data: { deletedAt: null, status: 'SUSPENDED' },
+    data: { deletedAt: null, status: "SUSPENDED" },
   });
 
   await audit.updated({
     organizationId,
     userId: actorId,
-    entity: 'User',
+    entity: "User",
     entityId: userId,
     summary: `Konto ${user.email} wiederhergestellt (gesperrt)`,
     ip,
@@ -329,17 +437,34 @@ export async function restoreUser({
  * in die Datenbank.
  */
 async function assertNotLastSuperAdmin(
+  tx: Tx,
   organizationId: string,
   userId: string,
-  role: UserRole,
 ): Promise<void> {
-  if (role !== 'SUPER_ADMIN') return;
+  /**
+   * In der Transaktion, hinter einer Sperre je Organisation (2026-09-27).
+   *
+   * Die Prüfung lief vorher vor dem Schreiben und ohne Sperre. Zwei
+   * Systemverantwortliche, die sich gleichzeitig gegenseitig herabstufen,
+   * sahen beide die andere Person noch als aktiv, beide schrieben — und es gab
+   * keine mehr (nachgewiesen in `rbac.test.ts`: 200, 200). Jetzt nimmt jede
+   * Änderung an einer Systemverantwortung zuerst dieselbe Sperre, liest den
+   * Bestand danach und schreibt in derselben Transaktion. Die zweite Anfrage
+   * wartet und sieht die erste als geschehen. Die Rolle des Ziels wird hier
+   * ebenfalls frisch gelesen — die von vor der Transaktion kann überholt sein.
+   */
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`systemverantwortung:${organizationId}`}))`;
+  const ziel = await tx.user.findFirst({
+    where: { id: userId, organizationId },
+    select: { role: true },
+  });
+  if (ziel?.role !== "SUPER_ADMIN") return;
 
-  const others = await prisma.user.count({
+  const others = await tx.user.count({
     where: {
       organizationId,
-      role: 'SUPER_ADMIN',
-      status: 'ACTIVE',
+      role: "SUPER_ADMIN",
+      status: "ACTIVE",
       deletedAt: null,
       id: { not: userId },
     },
@@ -347,7 +472,7 @@ async function assertNotLastSuperAdmin(
 
   if (others === 0) {
     throw new BusinessRuleError(
-      'Dies ist die letzte aktive Systemverantwortung. Ernennen Sie zuerst eine weitere — sonst kann danach niemand mehr Rollen vergeben.',
+      "Dies ist die letzte aktive Systemverantwortung. Ernennen Sie zuerst eine weitere — sonst kann danach niemand mehr Rollen vergeben.",
     );
   }
 }

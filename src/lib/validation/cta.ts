@@ -195,6 +195,9 @@ function ctaRules(
 export const createCtaSchema = z.object(ctaFields).superRefine(ctaRules);
 export const updateCtaSchema = z.object(ctaFields).partial().superRefine(ctaRules);
 
+/** POST /api/cta/:id/publish — ein- oder ausschalten. */
+export const publishCtaSchema = z.object({ active: z.boolean() });
+
 export type CreateCtaInput = z.infer<typeof createCtaSchema>;
 export type UpdateCtaInput = z.infer<typeof updateCtaSchema>;
 

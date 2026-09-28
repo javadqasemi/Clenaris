@@ -3,7 +3,8 @@ import { redirect } from 'next/navigation';
 import { prisma } from '@/lib/db';
 import { serverEnv } from '@/lib/env';
 import { getSession } from '@/lib/auth/session';
-import { guardForPath, homeRouteFor } from '@/lib/auth/rbac';
+import { can, guardForPath, homeRouteFor } from '@/lib/auth/rbac';
+import { zuercherTagesgrenzen } from '@/lib/zuerich';
 import { AppShell, type NavGroup } from '@/components/app/app-shell';
 
 /**
@@ -17,6 +18,15 @@ import { AppShell, type NavGroup } from '@/components/app/app-shell';
 export default async function PortalLayout({ children }: { children: React.ReactNode }) {
   const session = await getSession();
   if (!session) redirect('/auth/anmelden');
+  /**
+   * Gerät übergeben → zur Rückgabeseite, bevor irgendetwas rendert.
+   *
+   * Die Middleware leitet bereits um, wenn das Zugangstoken die Sperre
+   * trägt; sie läuft aber auf der Edge und kann nicht nachschlagen. Ein
+   * Token, das vor der Übergabe ausgestellt wurde, kommt dort also durch.
+   * Hier ist die Sperre nachgeschlagen (`getSession`) und damit verbindlich.
+   */
+  if (session.handoffId) redirect('/geraet-uebernehmen');
   // Zugelassene Rollen zentral aus `ROUTE_GUARDS`, nicht hier aufgezählt.
   const guard = guardForPath('/portal')!;
   if (!guard.roles.includes(session.role)) redirect(homeRouteFor(session.role));
@@ -28,8 +38,10 @@ export default async function PortalLayout({ children }: { children: React.React
             deletedAt: null,
             status: { notIn: ['CANCELLED', 'COMPLETED', 'VERIFIED'] },
             scheduledStart: {
-              gte: startOfToday(),
-              lt: new Date(startOfToday().getTime() + 86_400_000),
+              // Das ausschliessende Ende ist der Beginn des nächsten Zürcher
+              // Tages — an Umstellungstagen nicht 24 Stunden später.
+              gte: zuercherTagesgrenzen().von,
+              lt: zuercherTagesgrenzen().bis,
             },
             assignments: { some: { employeeId: session.profileId } },
           },
@@ -67,6 +79,9 @@ export default async function PortalLayout({ children }: { children: React.React
       navigation={navigation}
       areaLabel="Mitarbeitendenportal"
       areaHref="/portal"
+      // Im Portal löst der Scanner nur eigene Einsätze und deren Objekte auf
+      // (`scan.service.ts`), mit Links ins Portal.
+      scan={can(session.role, 'dashboard:view')}
       sessionIdleSeconds={serverEnv().SESSION_IDLE_TTL}
       user={{
         id: session.id,
@@ -82,10 +97,4 @@ export default async function PortalLayout({ children }: { children: React.React
       {children}
     </AppShell>
   );
-}
-
-function startOfToday(): Date {
-  const date = new Date();
-  date.setHours(0, 0, 0, 0);
-  return date;
 }

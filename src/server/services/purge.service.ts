@@ -1,7 +1,6 @@
 import 'server-only';
 
-import type { Prisma } from '@prisma/client';
-
+import { recordAuditInTx } from '@/lib/audit';
 import { prisma, type Tx } from '@/lib/db';
 import { BusinessRuleError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
@@ -181,12 +180,32 @@ export const PURGE_AREAS: PurgeArea[] = [
     label: 'Kommunikation und Aufgaben',
     description: 'Nachrichtenverläufe, Aufgaben, Aktivitäten, Benachrichtigungen, E-Mail- und SMS-Versandprotokolle, Automationsläufe.',
     steps: [
-      // Die vier Modelle ohne Organisation: die Anwendung ist ein Mandant.
-      { model: 'messageThread', label: 'Nachrichtenverläufe', where: () => ({}) },
-      { model: 'task', label: 'Aufgaben', where: () => ({}) },
-      { model: 'activity', label: 'Aktivitäten', where: () => ({}) },
-      { model: 'emailLog', label: 'E-Mail-Protokolle', where: () => ({}) },
-      { model: 'smsLog', label: 'SMS-Protokolle', where: () => ({}) },
+      // Verläufe, Aufgaben und Protokolle tragen seit 2026-09-27 eine
+      // Organisation; vorher leerte dieser Schritt sie für alle Organisationen.
+      { model: 'messageThread', label: 'Nachrichtenverläufe', where: byOrganization },
+      { model: 'task', label: 'Aufgaben', where: byOrganization },
+      /**
+       * Aktivitäten haben keine eigene Spalte, aber immer einen Bezug. Über die
+       * Beziehungen gefiltert: Eine Aktivität ohne jeden Bezug bleibt stehen —
+       * sie gehört niemandem nachweislich, und ein Leerlauf, der im Zweifel
+       * fremde Zeilen löscht, ist der schlechtere Irrtum.
+       */
+      {
+        model: 'activity',
+        label: 'Aktivitäten',
+        where: ({ organizationId }) => ({
+          OR: [
+            { customer: { organizationId } },
+            { lead: { organizationId } },
+            { job: { organizationId } },
+            { booking: { organizationId } },
+            { quote: { organizationId } },
+            { invoice: { organizationId } },
+          ],
+        }),
+      },
+      { model: 'emailLog', label: 'E-Mail-Protokolle', where: byOrganization },
+      { model: 'smsLog', label: 'SMS-Protokolle', where: byOrganization },
       {
         model: 'notification',
         label: 'Benachrichtigungen',
@@ -336,6 +355,33 @@ export interface PurgeResultArea {
  */
 const ROLLBACK = Symbol('purge-rollback');
 
+/**
+ * Signaturbeweise sind von der Bereinigung ausgenommen — und sie halten
+ * fest, woran sie hängen.
+ *
+ * `SignatureRequest` steht in keinem Bereich, und die Fremdschlüssel zu
+ * Offerte, Einsatz und Dokumentfassung sind `Restrict`. Ein Bereich, der
+ * solche Datensätze enthält, liesse sich nicht löschen — PostgreSQL würde
+ * die Einschränkung melden, mitten im Lauf. Deshalb wird vorher gezählt und
+ * mit einer verständlichen Meldung abgebrochen, statt die Datenbank sprechen
+ * zu lassen.
+ *
+ * Was eine Betreiberin mit abgeschlossenen Vorgängen tun darf, entscheidet
+ * ein späterer Governance-Ablauf; eine pauschale Aufbewahrungsfrist wird hier
+ * nicht erfunden.
+ */
+async function assertKeineSignaturbeweise(organizationId: string, areas: PurgeAreaKey[]): Promise<void> {
+  const relevant = areas.some((a) => a === 'auftraege' || a === 'fuehrung');
+  if (!relevant) return;
+  const anzahl = await prisma.signatureRequest.count({ where: { organizationId } });
+  if (anzahl > 0) {
+    throw new BusinessRuleError(
+      `${anzahl} Unterzeichnungsvorgang/-vorgänge hängen an Offerten, Einsätzen oder Dokumentfassungen dieser Bereiche. ` +
+        'Signaturbeweise werden nicht mitbereinigt; sie müssen zuerst bewusst behandelt werden.',
+    );
+  }
+}
+
 export async function runPurge(params: {
   organizationId: string;
   actorId: string;
@@ -362,6 +408,8 @@ export async function runPurge(params: {
   const ctx: StepContext = { organizationId, actorId };
 
   // In der festen Reihenfolge der Definition, nicht in der der Anfrage.
+  await assertKeineSignaturbeweise(organizationId, params.areas);
+
   const selected = PURGE_AREAS.filter((area) => params.areas.includes(area.key));
   if (selected.length === 0) {
     throw new BusinessRuleError('Es wurde kein Bereich ausgewählt.');
@@ -394,6 +442,17 @@ export async function runPurge(params: {
   await prisma
     .$transaction(
     async (tx) => {
+      /**
+       * Die Unveränderlichkeitstrigger der Finanzbelege (Wave 13) verweigern
+       * das Löschen ausgestellter Rechnungen, Gutschriften, Mahnungen und
+       * Zahlungen. Die Datenbereinigung ist der eine, ausdrückliche Weg, das
+       * doch zu tun — für Demo- und Testbestände, als Systemverantwortung,
+       * mit Protokolleintrag. Die Freigabe gilt nur für diese Transaktion
+       * (`SET LOCAL`) und verlangt keine Superuser-Rolle, anders als
+       * `session_replication_role`, die in der Produktion nicht zur Verfügung
+       * steht.
+       */
+      await tx.$executeRawUnsafe(`SET LOCAL clenaris.bereinigung = 'on'`);
       for (const area of selected) {
         const deleted: PurgeResultArea['deleted'] = [];
         for (const step of area.steps) {
@@ -419,23 +478,22 @@ export async function runPurge(params: {
           (sequencesReset.length > 0 ? ` · Nummernkreise zurückgesetzt: ${sequencesReset.join(', ')}` : '');
 
         // Im selben Commit wie das Löschen. Scheitert das Protokoll, rollt
-        // alles zurück — ein unprotokolliertes Löschen gibt es nicht.
-        await tx.auditLog.create({
-          data: {
-            organizationId,
-            userId: actorId,
-            action: 'DELETE',
-            entity: 'Datenbereinigung',
-            entityId: area.key,
-            summary: summary.slice(0, 500),
-            changes: {
-              bereich: area.key,
-              geloescht: Object.fromEntries(deleted.map((entry) => [entry.label, entry.count])),
-              nummernkreiseZurueckgesetzt: sequencesReset,
-            } as Prisma.InputJsonValue,
-            ip: params.ip ?? null,
-            userAgent: params.userAgent?.slice(0, 300) ?? null,
+        // alles zurück — ein unprotokolliertes Löschen gibt es nicht. Über
+        // `recordAuditInTx`, damit dieselbe Schwärzung greift wie überall.
+        await recordAuditInTx(tx, {
+          organizationId,
+          userId: actorId,
+          action: 'DELETE',
+          entity: 'Datenbereinigung',
+          entityId: area.key,
+          summary,
+          changes: {
+            bereich: area.key,
+            geloescht: Object.fromEntries(deleted.map((entry) => [entry.label, entry.count])),
+            nummernkreiseZurueckgesetzt: sequencesReset,
           },
+          ip: params.ip ?? null,
+          userAgent: params.userAgent ?? null,
         });
 
         out.push({ key: area.key, label: area.label, deleted, total, sequencesReset });

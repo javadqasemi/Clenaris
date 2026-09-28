@@ -8,6 +8,7 @@ import { Save } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { api, ApiError } from '@/lib/api/client';
+import { zuercherTagText } from '@/lib/zuerich';
 import { createEmployeeSchema, type CreateEmployeeInput } from '@/lib/validation/operations';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -80,7 +81,7 @@ export function EmployeeForm() {
       role: 'EMPLOYEE',
       employmentType: 'FULL_TIME',
       position: 'Reinigungskraft',
-      hiredAt: new Date().toISOString().slice(0, 10) as unknown as Date,
+      hiredAt: zuercherTagText() as unknown as Date,
       workloadPct: 100,
       vacationDaysPerYear: 20,
       driverLicense: false,

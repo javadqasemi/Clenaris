@@ -44,11 +44,29 @@ export interface NotifyInput {
 
   entity?: string;
   entityId?: string;
+  /** Schlüssel der Vorlage — landet im E-Mail-Protokoll und macht Versände wiederauffindbar. */
+  templateKey?: string;
   /** Marketing-Nachrichten nur mit Einwilligung. */
   isMarketing?: boolean;
 }
 
-export async function notify(input: NotifyInput): Promise<void> {
+/**
+ * Was je Kanal geschah — `null`, wenn der Kanal gar nicht vorgesehen war
+ * (nicht angefragt, keine Adresse, abbestellt, Konto gesperrt).
+ *
+ * Bis 2026-09-23 lieferte `notify` nichts zurück und schluckte Fehler der
+ * Zustellung. Für eine Meldung aus dem Büro ist das richtig — ein
+ * Mailausfall soll keine Buchung scheitern lassen. Die Automatisierung aber
+ * verbuchte daraus „versandt", und ein Lauf, dessen E-Mail nie ankam, stand
+ * als SUCCESS im Protokoll (RB-012). Wer es wissen muss, liest jetzt die
+ * Rückgabe; alle anderen Aufrufer bleiben, wie sie sind.
+ */
+export interface Zustellung {
+  email: { ok: boolean; fehler?: string } | null;
+  sms: { ok: boolean; fehler?: string } | null;
+}
+
+export async function notify(input: NotifyInput): Promise<Zustellung> {
   const user = input.userId
     ? await prisma.user.findUnique({
         where: { id: input.userId },
@@ -64,9 +82,11 @@ export async function notify(input: NotifyInput): Promise<void> {
       })
     : null;
 
+  const zustellung: Zustellung = { email: null, sms: null };
+
   // Gesperrte Konten erhalten keine Nachrichten mehr.
-  if (user && user.status !== 'ACTIVE') return;
-  if (input.isMarketing && user && !user.marketingOptIn) return;
+  if (user && user.status !== 'ACTIVE') return zustellung;
+  if (input.isMarketing && user && !user.marketingOptIn) return zustellung;
 
   const email = input.email ?? user?.email ?? null;
   const phone = input.phone ?? user?.phone ?? null;
@@ -100,9 +120,19 @@ export async function notify(input: NotifyInput): Promise<void> {
         subject: input.emailContent.subject,
         html: input.emailContent.html,
         attachments: input.emailAttachments,
+        // Bis 2026-09-23 fehlte der Schlüssel hier: Jede E-Mail über `notify()`
+        // stand ohne Vorlagenschlüssel im Protokoll, und Prüfungen wie „nur eine
+        // Bewertungsbitte je Buchung" konnten nie greifen.
+        templateKey: input.templateKey,
         entity: input.entity,
         entityId: input.entityId,
-      }),
+      })
+        .then((r) => {
+          zustellung.email = r.ok ? { ok: true } : { ok: false, fehler: r.error ?? 'Versand fehlgeschlagen' };
+        })
+        .catch((fehler: unknown) => {
+          zustellung.email = { ok: false, fehler: fehler instanceof Error ? fehler.message : String(fehler) };
+        }),
     );
   }
 
@@ -115,11 +145,18 @@ export async function notify(input: NotifyInput): Promise<void> {
         body: input.smsBody,
         entity: input.entity,
         entityId: input.entityId,
-      }),
+      })
+        .then((r) => {
+          zustellung.sms = r.ok ? { ok: true } : { ok: false, fehler: r.error ?? 'SMS-Versand fehlgeschlagen' };
+        })
+        .catch((fehler: unknown) => {
+          zustellung.sms = { ok: false, fehler: fehler instanceof Error ? fehler.message : String(fehler) };
+        }),
     );
   }
 
   await Promise.allSettled(tasks);
+  return zustellung;
 }
 
 /**
@@ -154,6 +191,13 @@ export async function notifyStaff(params: {
   permission?: Permission;
   /** Die auslösende Person selbst nicht benachrichtigen. */
   excludeUserId?: string;
+  /**
+   * Worauf sich die Meldung bezieht — landet in `meta`. Wer eine Meldung nur
+   * einmal auslösen will (der Alarm zu einem liegengebliebenen
+   * Automatisierungsereignis), findet sie darüber wieder, ohne eigene Spalte.
+   */
+  entity?: string;
+  entityId?: string;
 }): Promise<void> {
   const roles = params.roles ?? STAFF_ROLES;
 
@@ -181,6 +225,8 @@ export async function notifyStaff(params: {
         body: params.body,
         link: params.link,
         emailContent: params.emailContent,
+        entity: params.entity,
+        entityId: params.entityId,
       }),
     ),
   );

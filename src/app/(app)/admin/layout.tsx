@@ -3,11 +3,12 @@ import { redirect } from 'next/navigation';
 import { prisma } from '@/lib/db';
 import { serverEnv } from '@/lib/env';
 import { getSession } from '@/lib/auth/session';
-import { guardForPath, homeRouteFor } from '@/lib/auth/rbac';
+import { can, guardForPath, homeRouteFor } from '@/lib/auth/rbac';
 import { AppShell } from '@/components/app/app-shell';
 import { filterNavigation, type GuardedNavGroup } from '@/lib/auth/navigation';
 import { getOrganizationId } from '@/server/services/organization.service';
 import { countDueReviews } from '@/server/services/insight.service';
+import { neuesteVerfuegbare } from '@/server/services/release.service';
 
 /**
  * Rahmen der Administration.
@@ -27,6 +28,8 @@ export default async function AdminLayout({ children }: { children: React.ReactN
   // auch die Middleware prüft. Eine zweite, hier ausgeschriebene Aufzählung
   // wäre beim nächsten Rollenzuwachs stillschweigend falsch (genau das ist mit
   // SUPER_ADMIN passiert).
+  // Gerät übergeben → zur Rückgabeseite (siehe `portal/layout.tsx`).
+  if (session.handoffId) redirect('/geraet-uebernehmen');
   const guard = guardForPath('/admin')!;
   if (!guard.roles.includes(session.role)) redirect(homeRouteFor(session.role));
 
@@ -76,6 +79,12 @@ export default async function AdminLayout({ children }: { children: React.ReactN
       countDueReviews(organizationId),
     ]);
 
+  // Nur für die Systemverantwortung abfragen — für alle anderen gibt es den
+  // Eintrag nicht, und eine Abfrage ohne Anzeige wäre verschenkte Zeit.
+  const updatesOffen = can(session.role, 'release:read')
+    ? (await neuesteVerfuegbare(organizationId)).anzahlOffen
+    : 0;
+
   /**
    * Die Navigation der Administration.
    *
@@ -89,6 +98,11 @@ export default async function AdminLayout({ children }: { children: React.ReactN
     {
       items: [
         { href: '/admin', label: 'Übersicht', icon: 'dashboard', exact: true, permission: 'dashboard:view' },
+        // Die globale Suche (Wave 17) steht seit 2026-09-26 in der Kopfzeile
+        // und nicht mehr hier: Die Seitenleiste ist die Karte der Bereiche,
+        // die Suche ein Sprung quer dazu — und sie soll von jeder Seite aus
+        // ohne Umweg über eine eigene Suchseite erreichbar sein. Die Seite
+        // `/admin/suche` bleibt als Vollansicht aller Treffer bestehen.
         { href: '/admin/kalender', label: 'Einsatzkalender', icon: 'calendar', permission: 'job:read' },
       ],
     },
@@ -98,6 +112,27 @@ export default async function AdminLayout({ children }: { children: React.ReactN
         { href: '/admin/buchungen', label: 'Buchungen', icon: 'bookings', badge: pendingBookings, permission: 'booking:read' },
         { href: '/admin/einsaetze', label: 'Einsätze', icon: 'jobs', badge: unassignedJobs, permission: 'job:read' },
         { href: '/admin/offerten', label: 'Offerten', icon: 'quotes', permission: 'quote:read' },
+        // Wave 12: die Vorstufe der Offerte für Objekte, die man gesehen haben muss.
+        { href: '/admin/besichtigungen', label: 'Besichtigungen', icon: 'checklist', permission: 'quote:read' },
+        /*
+          Verträge stehen bei der Auftragsabwicklung und nicht bei der
+          Kundschaft: Ein Vertrag ist hier kein Stammdatum, sondern der
+          Ursprung wiederkehrender Einsätze — er gehört neben Buchungen und
+          Offerten, aus denen ebenfalls Arbeit entsteht.
+        */
+        { href: '/admin/vertraege', label: 'Verträge', icon: 'contract', permission: 'contract:read' },
+        /*
+          Die Qualitätskontrolle steht hier und nicht bei der
+          Unternehmensführung: Dort liegt das Kontrollregister der Steuerung
+          (`ControlEntry`) — eine Frage der Governance. Dies hier ist die
+          Begehung vor Ort, die misst, ob die im Vertrag zugesagte Qualität
+          erreicht wurde. Sie gehört zu der Arbeit, die sie beurteilt.
+        */
+        { href: '/admin/qualitaet', label: 'Qualität', icon: 'quality', permission: 'quality:read' },
+        // Wave 11: Reklamationen neben der Qualität — beide messen, ob die Zusage gehalten wurde.
+        { href: '/admin/reklamationen', label: 'Reklamationen', icon: 'messages', permission: 'complaint:read' },
+        { href: '/admin/material', label: 'Material', icon: 'checklist', permission: 'inventory:read' },
+        { href: '/admin/geraete', label: 'Geräte', icon: 'actions', permission: 'equipment:read' },
       ],
     },
     {
@@ -106,6 +141,8 @@ export default async function AdminLayout({ children }: { children: React.ReactN
         { href: '/admin/leads', label: 'Leads', icon: 'leads', badge: openLeads, permission: 'lead:read' },
         { href: '/admin/kunden', label: 'Kunden', icon: 'customers', permission: 'customer:read' },
         { href: '/admin/nachrichten', label: 'Nachrichten', icon: 'messages', badge: unreadMessages, permission: 'message:read' },
+        // Wave 14: was hinausging und was ankam — E-Mail und SMS mit Zustellstatus.
+        { href: '/admin/kommunikation', label: 'Zustellprotokoll', icon: 'protocol', permission: 'template:read' },
         { href: '/admin/objekte', label: 'Objekte', icon: 'building', permission: 'property:read' },
         { href: '/admin/aufgaben', label: 'Aufgaben', icon: 'tasks', permission: 'task:read' },
       ],
@@ -165,6 +202,8 @@ export default async function AdminLayout({ children }: { children: React.ReactN
       label: 'Betrieb',
       items: [
         { href: '/admin/personal', label: 'Mitarbeitende', icon: 'staff', badge: openAbsences, permission: 'employee:read' },
+        // Nur mit Einsicht in alle Abrechnungen — die Betriebsleitung hat bewusst keinen Lohneinblick.
+        { href: '/admin/lohn', label: 'Lohn', icon: 'expenses', permission: 'payslip:read_all' },
         { href: '/admin/einstellungen', label: 'Einstellungen', icon: 'settings', permission: 'settings:read' },
       ],
     },
@@ -174,12 +213,19 @@ export default async function AdminLayout({ children }: { children: React.ReactN
         { href: '/admin/benutzer', label: 'Benutzerkonten', icon: 'users', permission: 'user:read' },
         { href: '/admin/rollen', label: 'Rollen und Rechte', icon: 'roles', permission: 'role:read' },
         { href: '/admin/protokoll', label: 'Prüfprotokoll', icon: 'protocol', permission: 'audit:read' },
+        // Steht bewusst *nach* dem Prüfprotokoll: Das eine sagt, wer was
+        // geändert hat, das andere, was an Zugängen geschehen ist. Beide nur
+        // für die Systemverantwortung, aus derselben Überlegung.
+        { href: '/admin/sicherheit', label: 'Sicherheit', icon: 'shield', permission: 'security:read' },
         // Wer löschen darf, darf wiederherstellen — dieselbe Schwelle wie die
         // Seite selbst (`booking:delete` haben Leitung und Administration).
         { href: '/admin/papierkorb', label: 'Papierkorb', icon: 'trash', permission: 'booking:delete' },
         // Endgültiges Löschen ganzer Bereiche: nur die Systemverantwortung,
         // jeder Lauf steht im Prüfprotokoll darüber.
         { href: '/admin/datenbereinigung', label: 'Datenbereinigung', icon: 'eraser', permission: 'data:purge' },
+        // Versionsverwaltung — die Zahl nennt Versionen, über die noch nicht
+        // entschieden ist (verfügbar oder freigegeben ohne Ausführung).
+        { href: '/admin/updates', label: 'Updates', icon: 'updates', badge: updatesOffen, permission: 'release:read' },
       ],
     },
   ];
@@ -191,7 +237,10 @@ export default async function AdminLayout({ children }: { children: React.ReactN
       navigation={navigation}
       areaLabel="Administration"
       areaHref="/admin"
-      settingsHref="/admin/einstellungen"
+      // Die Suche nur, wenn der Endpunkt sie beantwortet (`dashboard:view`);
+      // welche Bereiche sie durchsucht, entscheidet der Dienst je Recht.
+      search={can(session.role, 'dashboard:view')}
+      scan={can(session.role, 'dashboard:view')}
       sessionIdleSeconds={serverEnv().SESSION_IDLE_TTL}
       user={{
         id: session.id,

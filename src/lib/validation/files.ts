@@ -10,6 +10,32 @@ import { z } from 'zod';
  * auseinander, schlägt `tsc` fehl, nicht erst die Laufzeit.
  */
 
+/**
+ * Zwecke, die die Mediathek zeigt und zuordnen lässt. Stand bis 2026-09-27
+ * doppelt als Konstante in `api/media/route.ts` und `api/media/[id]/route.ts`.
+ */
+export const MEDIA_SCOPES = [
+  'BOOKING',
+  'QUOTE',
+  'INVOICE',
+  'JOB',
+  'CUSTOMER',
+  'EMPLOYEE',
+  'PROPERTY',
+  'BLOG',
+  'GALLERY',
+  'APPLICATION',
+  'EXPENSE',
+  'MESSAGE',
+  'OTHER',
+] as const;
+
+/** PATCH /api/media/:id — Dateiname und Zuordnung. */
+export const mediaUpdateSchema = z.object({
+  filename: z.string().trim().min(1).max(255).optional(),
+  scope: z.enum(MEDIA_SCOPES).optional(),
+});
+
 export const UPLOAD_PROFILE_NAMES = [
   'jobPhoto',
   'bookingPhoto',
@@ -57,3 +83,26 @@ export const uploadUrlSchema = z.object({
   scopeId: z.string().max(60).optional(),
 });
 export type UploadUrlInput = z.infer<typeof uploadUrlSchema>;
+
+/**
+ * Der Abschluss eines Uploads.
+ *
+ * **Bemerkenswert ist, was hier fehlt.** Kein Pfad, keine Adresse, kein
+ * MIME-Typ, keine Grösse, kein `isPublic`, kein Bereich. Alles davon stand
+ * früher im Körper von `POST /api/media` und wurde übernommen, wie es kam —
+ * womit sich jede beliebige Adresse als vertrauenswürdige Datei registrieren
+ * liess.
+ *
+ * Übrig bleiben die Kennung des serverseitig ausgestellten Tickets und ein
+ * Namensvorschlag. Alles andere schlägt der Server am Ticket nach oder
+ * leitet es aus dem Upload-Profil ab.
+ */
+export const finalizeUploadSchema = z.object({
+  ticketId: z.string().min(1).max(60),
+  /**
+   * Nur der Anzeigename. Er landet nie in einem Pfad — der steht längst am
+   * Ticket — und wird beim Ausliefern zusätzlich entschärft.
+   */
+  filename: z.string().trim().min(1).max(255),
+});
+export type FinalizeUploadInput = z.infer<typeof finalizeUploadSchema>;

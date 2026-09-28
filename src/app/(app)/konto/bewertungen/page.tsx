@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 import { Star } from 'lucide-react';
 
 import { prisma } from '@/lib/db';
+import { leistungsnamen } from '@/lib/booking/leistungen';
 import { requireCustomerId } from '@/lib/auth/session';
 import { cn, formatDate } from '@/lib/utils';
 import { Badge } from '@/components/ui/badge';
@@ -23,7 +24,8 @@ const STATUS_LABEL: Record<string, { label: string; variant: 'success' | 'warnin
 
 function Stars({ rating }: { rating: number }) {
   return (
-    <span className="flex gap-0.5" aria-label={`${rating} von 5 Sternen`}>
+    // `role="img"` — ohne Rolle ist `aria-label` auf einem `span` unzulässig.
+    <span role="img" className="flex gap-0.5" aria-label={`${rating} von 5 Sternen`}>
       {[1, 2, 3, 4, 5].map((value) => (
         <Star
           key={value}
@@ -77,7 +79,7 @@ export default async function AccountReviewsPage() {
         id: true,
         number: true,
         scheduledStart: true,
-        items: { orderBy: { position: 'asc' }, take: 1, select: { name: true } },
+        items: { orderBy: { position: 'asc' }, select: { name: true, serviceId: true, position: true } },
       },
     }),
   ]);
@@ -86,7 +88,7 @@ export default async function AccountReviewsPage() {
     id: booking.id,
     number: booking.number,
     scheduledStart: booking.scheduledStart.toISOString(),
-    serviceName: booking.items[0]?.name ?? 'Reinigung',
+    serviceName: leistungsnamen(booking.items),
   }));
 
   return (

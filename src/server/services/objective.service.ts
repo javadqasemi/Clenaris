@@ -38,7 +38,10 @@ export function objectiveVisibilityWhere(session: SessionUser, organizationId: s
       OR: [{ ownerId: session.id }, { level: 'COMPANY', status: { in: ['ACTIVE', 'AT_RISK', 'ACHIEVED'] } }],
     };
   }
-  return { ...base, id: '__keines__' };
+  // Die Sperre als `AND`-Glied, nicht als `id` (2026-09-27): Aufrufer
+  // verbreiten die Sichtregel und setzen danach ihr eigenes `id` — das hätte
+  // die Sperre still ersetzt.
+  return { ...base, AND: [{ id: '__keines__' }] };
 }
 
 const ARCHIVED: ObjectiveStatus[] = ['ACHIEVED', 'MISSED', 'CANCELLED'];
@@ -273,14 +276,21 @@ export async function getObjectiveTimeline(
   filter: { from?: Date; to?: Date; horizon?: string; status?: string },
 ) {
   return prisma.objective.findMany({
+    // Sicht und Zeitraum als zwei Glieder eines `AND` (2026-09-27). Vorher
+    // überschrieb das `OR` des Zeitraums das `OR` der Sichtregel, und wer nur
+    // `objective:read_own` hat, sah in der Zeitachse die Ziele aller.
     where: {
-      ...objectiveVisibilityWhere(session, organizationId),
+      AND: [
+        objectiveVisibilityWhere(session, organizationId),
+        {
+          OR: [
+            { AND: [{ startsOn: { not: null } }, ...(filter.to ? [{ startsOn: { lte: filter.to } }] : []), ...(filter.from ? [{ endsOn: { gte: filter.from } }] : [])] },
+            { AND: [{ startsOn: null }, { fiscalYear: { not: null } }] },
+          ],
+        },
+      ],
       ...(filter.horizon ? { horizon: filter.horizon as never } : {}),
       ...(filter.status ? { status: filter.status as never } : { status: { notIn: ['CANCELLED'] } }),
-      OR: [
-        { AND: [{ startsOn: { not: null } }, ...(filter.to ? [{ startsOn: { lte: filter.to } }] : []), ...(filter.from ? [{ endsOn: { gte: filter.from } }] : [])] },
-        { AND: [{ startsOn: null }, { fiscalYear: { not: null } }] },
-      ],
     },
     include: listInclude,
     orderBy: [{ startsOn: 'asc' }, { fiscalYear: 'asc' }, { quarter: 'asc' }],
@@ -462,6 +472,7 @@ export async function createObjectiveTask(session: SessionUser, organizationId: 
   const objective = await requireObjectiveForWrite(session, organizationId, objectiveId);
   const task = await prisma.task.create({
     data: {
+      organizationId,
       title: input.title,
       description: input.description ?? null,
       priority: input.priority,

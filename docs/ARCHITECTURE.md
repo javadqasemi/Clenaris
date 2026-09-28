@@ -32,7 +32,7 @@ Components lesen direkt — schreiben aber nie.
 
 ---
 
-## Die zwölf Entscheide
+## Die vierzehn Entscheide
 
 ### 1. Server Components zum Lesen, Route Handler zum Schreiben
 
@@ -177,15 +177,103 @@ ist ein reines JavaScript-Paket, kaltstartfähig und in derselben Sprache
 geschrieben wie der Rest. Der Preis: kein volles CSS. Für Offerten, Rechnungen
 und Einsatzberichte reicht das Flexbox-Modell.
 
-### 10. Dateien laufen am Server vorbei
+### 10. Dateien laufen am Server vorbei — geprüft werden sie trotzdem
 
-Der Server erstellt eine signierte Upload-Adresse, der Browser lädt direkt zu
-Supabase Storage. Das umgeht das 4.5-MB-Limit für Function-Bodies, spart
-Bandbreite und hält den Upload auch bei zwölf Baustellenfotos schnell.
+Der Server stellt ein Upload-Ticket aus, der Browser lädt direkt zu Supabase
+Storage. Das umgeht das 4.5-MB-Limit für Function-Bodies, spart Bandbreite und
+hält den Upload auch bei zwölf Baustellenfotos schnell. Ohne Anmeldung sind nur
+die Profile des Buchungs- und Bewerbungsformulars erlaubt.
 
-Die Kontrolle bleibt beim Server: er bestimmt Profil, Pfad, Grössen- und
-Typgrenze und legt den `FileAsset`-Datensatz erst *nach* dem Upload an. Ohne
-Anmeldung sind nur die Profile des Buchungs- und Bewerbungsformulars erlaubt.
+**Der Preis dieses Entscheids war lange unbezahlt.** Wenn die Datei nie durch
+die Anwendung läuft, sieht der Server sie nie — und bis Gate 2 sah er sie
+tatsächlich nicht. `mimeType` und `sizeBytes` kamen aus dem Formular, `path`,
+`url`, `scope` und `isPublic` standen frei im Körper von `POST /api/media`, und
+alles davon wurde übernommen, wie es kam. Eine beliebige Datei als PDF
+anzumelden kostete nichts.
+
+Der fehlende Schritt heisst **Abschluss** (`POST /api/files/finalize`). Der
+Upload-Weg bleibt wie er war; danach liest der Server das *gespeicherte* Objekt
+einmal zurück, prüft die tatsächliche Grösse, die Signatur der ersten Bytes und
+den angemeldeten Typ gegen das Profil des Tickets, bildet den SHA-256 und legt
+erst dann das `FileAsset` an. Vorher existiert die Datei fachlich nicht: kein
+Asset, keine Verknüpfung, kein Abruf.
+
+Die Prüfung sagt nur, dass die Datei ist, was sie zu sein behauptet.
+`Signatur gültig` ist nicht `Datei sicher` — ein PDF kann JavaScript und
+eingebettete Dateien enthalten, und davon sieht man in den ersten acht Bytes
+nichts.
+
+### 10a. Zwei Dateiebenen, zwei Aufgaben
+
+`StoredFile` ist die **physische** Ebene: Treiber (`LOCAL` oder `SUPABASE`),
+Pfad, Bytes oder Speicherverweis, tatsächliche Grösse, Prüfsumme, Upload-Profil,
+Ablauf. Es ist zugleich das Ticket — die Zeile entsteht beim Anfordern der
+Adresse und ist die Aufzeichnung, gegen die der Abschluss prüfen kann, ob dieser
+Pfad je genehmigt wurde. `FileAsset` ist die **fachliche** Ebene: Organisation,
+Bereich, Beziehung zum Geschäftsobjekt, Dateiname, öffentlich oder nicht.
+
+Die Trennung ist nicht historisch gewachsen, sie trägt: Die Berechtigung
+entsteht ausschliesslich fachlich, über die Kette
+
+```
+StoredFile → FileAsset → FileScope/Fachobjekt → Rolle
+```
+
+`FileAsset.isPublic` ist die einzige Quelle der Public/Private-Entscheidung;
+`StoredFile` trägt sie bewusst nicht, weil zwei Kopien derselben Aussage
+auseinanderlaufen können. `FileAsset.checksum` ist eine Momentaufnahme von
+`StoredFile.checksum` — beim Anlegen identisch, danach nie unabhängig geändert.
+
+**Eine Kennung ist keine Berechtigung.** `GET /api/files/blob/:id` gab bis
+Gate 2 jede Datei heraus, deren `cuid` jemand nannte, mit der Begründung, die
+sei „nicht erratbar". Sie ist es nicht: Von 25 Zeichen sind acht der
+Erstellungszeitpunkt, vier ein Zähler, vier ein pro Prozess konstanter
+Fingerabdruck. Heute liefert die Route nur aus, was ein `FileAsset` hat — und
+nur an den, der laut Fachbeziehung darf.
+
+Extern geteilte Dateien sind keine dritte Speicherklasse, sondern ein
+Zugriffsweg: Die Datei bleibt privat, und der `PublicAccessToken` aus Gate 1
+autorisiert an der Fachroute. Eine zweite, schwächere Tür daneben gibt es nicht.
+
+### 10b. PDFs werden im Browser gezeigt — die Berechtigung bleibt auf dem Server
+
+Eine Komponente (`src/components/app/pdf-viewer.tsx`) für jede Stelle, an der
+ein PDF erscheint: Rechnung und Offerte in Verwaltung und Kundenkonto, die
+öffentlichen Seiten mit Capability-Link, die Dokumentfassungen der
+Unternehmensführung. Sie bekommt eine bereits autorisierte Adresse und lädt
+von dort; ob dahinter eine Sitzung, eine Eigentümerprüfung oder ein
+`PublicAccessToken` steht, weiss sie nicht und darf es nicht wissen.
+`canDownload` und `canPrint` blenden Schaltflächen aus — sie sind Bedienung,
+keine Sperre. Wer die Bytes hat, kann sie kopieren; ein Viewer, der etwas
+anderes verspräche, löge.
+
+**Warum der Viewer die Bytes selbst holt** statt PDF.js die Adresse zu geben:
+Erst so lässt sich unterscheiden, *warum* nichts erscheint. 403 ist etwas
+anderes als 404, und beides ist etwas anderes als eine Datei, die PDF.js
+nicht lesen kann. Eine gültige Signatur (Gate 2) heisst nicht, dass das
+Dokument lesbar ist — was hier scheitert, wird als beschädigt gemeldet, nicht
+als unbedenklich durchgereicht.
+
+**PDF.js kommt aus dem eigenen Ursprung.** Worker, WebAssembly-Decoder,
+CJK-Zeichensätze und Standardschriften liegen unter `/pdfjs/<Version>/`,
+kopiert aus dem installierten Paket (`scripts/copy-pdfjs-assets.ts`, vor
+`dev` und `build`). Kein CDN: Die Version muss exakt passen, die CSP bleibt
+bei `'self'`, und kein Dritter erfährt, welche Dokumente hier angesehen
+werden. `react-pdf` pinnt `pdfjs-dist` fest, deshalb gibt es keine zweite
+Versionsangabe, die auseinanderlaufen könnte.
+
+**Was ein hochgeladenes PDF hier nicht kann.** `enableScripting: false` —
+eingebettetes JavaScript wird nicht ausgeführt; das ist die PDF.js-Vorgabe,
+ausdrücklich gesetzt, damit sie niemand versehentlich kippt.
+`isEvalSupported: false` — auch für PostScript-Funktionen in
+Schriftprogrammen kein `eval`. Verknüpfungen aus dem Dokument öffnen mit
+`noopener noreferrer nofollow` in einem neuen Fenster; Launch-Actions und
+automatische Navigation setzt PDF.js nicht um.
+
+**Die Fassung steht in der Adresse.** `?fassung=N` bei Dokumenten; der
+Content-Endpunkt antwortet mit `X-Document-Version`. Gate 4 wird eine
+Signatur an genau eine Fassung binden — ein Viewer, der stillschweigend „die
+aktuelle" zeigt, wäre dafür die falsche Grundlage.
 
 ### 11. Zahlungen werden über den Webhook gebucht, nicht über die Rückkehr-URL
 
@@ -211,6 +299,65 @@ mitgegeben: das Modell verteilt Aufwand auf Positionen, es erfindet keine
 Tarife. Verwendet werden `claude-opus-5` für anspruchsvolle Aufgaben und
 `claude-haiku-4-5` für schnelle, mit adaptivem Denken statt fester Budgets.
 Der Website-Chat streamt über Server-Sent-Events.
+
+### 13. Eine Regel entscheidet, wer eingeteilt werden darf
+
+Ob eine Person zu einer bestimmten Zeit auf einen Einsatz darf, beantwortet
+ausschliesslich `src/server/services/assignment.service.ts`.
+
+Vorher gab es die Frage an fünf Stellen und vier verschiedene Antworten:
+`assignJob` und `setJobTeam` prüften Doppelbelegung mit zwei wortgleichen
+Kopien, `createJob` prüfte nur, ob die Person zum aktiven Personal gehört,
+`moveJob` und `updateJob` prüften **gar nichts** — obwohl beide den Termin
+unter einem bereits eingeteilten Team wegschieben können. **Abwesenheiten
+prüfte keine der fünf Stellen**, und die Routendokumentation versprach genau
+das seit jeher.
+
+Die Regel unterscheidet zwei Schweregrade, weil nicht jeder Befund gleich
+schwer wiegt:
+
+| Befund | Verhalten |
+|---|---|
+| Person unbekannt oder nicht im aktiven Personal | blockiert |
+| Bewilligte Abwesenheit | blockiert |
+| Überschneidender Einsatz | blockiert |
+| Beantragte, noch nicht entschiedene Abwesenheit | warnt |
+| Ausserhalb der hinterlegten Arbeitszeit | warnt |
+
+Gewarnt statt blockiert wird dort, wo die Sperre mehr kaputt machte als sie
+verhindert: Ein unbeantwortetes Ferienbegehren darf die Planung nicht
+aufhalten, und `Availability` ist eine Planungshilfe, keine Zusage — ein
+Samstagseinsatz nach Absprache ist normal, und ihn zu verbieten hiesse, das
+Büro zu zwingen, zuerst ein Stammdatum zu ändern.
+
+Die Prüfung läuft **innerhalb der Transaktion**, in der auch geschrieben wird.
+Vorher lag sie davor: lesen, entscheiden, später schreiben — zwei gleichzeitige
+Zuteilungen sahen beide eine freie Person. Vollständig dicht wäre nur eine
+Ausschlussbedingung in der Datenbank (`EXCLUDE USING gist`); der Fensterschluss
+hier deckt den Fall ab, der in der Praxis auftritt: zweimal klicken.
+
+Geworfen wird ein `BusinessRuleError` (422) mit maschinenlesbaren Kennungen in
+`details.conflicts` — `EMPLOYEE_ABSENT`, `ASSIGNMENT_OVERLAP`,
+`EMPLOYEE_NOT_ACTIVE`, `EMPLOYEE_NOT_FOUND`, `OUTSIDE_AVAILABILITY`,
+`ABSENCE_REQUESTED` — und einem fertigen deutschen Satz als Meldung. Die
+Gegenrichtung gilt ebenso: `decideAbsence` verweigert die Bewilligung, solange
+im Zeitraum Einsätze zugeteilt sind. Erst umplanen, dann bewilligen.
+
+### 14. Zugangsgeheimnisse verlassen den Dienst nur auf Anforderung
+
+Der Alarmcode eines Objekts liegt verschlüsselt in der Spalte
+(`src/lib/crypto.ts`). Entschlüsselt wird er an genau einer Stelle:
+`getJobDetail` liefert ihn nur mit `includeAccessSecrets`, und die einzige
+Seite, die das setzt, ist der Einsatzrapport im Mitarbeitendenportal — dort
+steht die Person vor der Tür. Für Mitarbeitende hat dieselbe Funktion den
+Einsatz zuvor bereits auf die eigenen Zuteilungen eingegrenzt; die
+Entschlüsselung erbt die Schranke, statt sie ein zweites Mal zu formulieren.
+
+Die Einsatzliste enthält das Feld gar nicht, und das Einsatzdetail der
+Schnittstelle liefert es nicht mit. Vorher zog ein `property: true` die ganze
+Objektzeile samt Chiffrat in jede Antwort — unlesbar zwar, aber in einer
+Nutzlast, die es nicht braucht, hat es nichts verloren. Ins Prüfprotokoll
+gelangt der Code nie; `src/lib/audit.ts` redigiert das Feld ohnehin.
 
 ---
 
@@ -257,8 +404,16 @@ Zeitstempel als `timestamptz` in UTC, Anzeige in Europe/Zurich. Sommerzeit ist
 im Kanton Bern real: ein Einsatz um 07:00 ist im März ein anderer Moment als im
 Juli, und `DateTime` ohne Zone hätte das verschluckt.
 
-Beträge als `Decimal(12,2)`. Fliesskomma hat in einer Buchhaltung nichts
-verloren; `toNumber()` wandelt erst an der Anzeigekante um.
+Beträge als `Decimal(12,2)` — gespeichert **und gerechnet**. Fliesskomma hat
+in einer Buchhaltung nichts verloren: Rechnungen, Gutschriften und Salden
+(`src/lib/rechnungsbetraege.ts`), die Preis-Engine, die Auftragssummen und
+die Lohnabrechnung rechnen seit 2026-09-27 mit `Prisma.Decimal`
+(`src/lib/money.ts`: `produkt`, `prozentVon`, `summeZahl`) und runden einmal
+kaufmännisch auf Rappen. Auslöser waren gemessene Rappenfehler: CHF 30.15 ×
+1.5 Std. ergab binär 45.22 statt 45.23, AHV 5.3 % von CHF 1085.00 57.50 statt
+57.51 (`tests/api/geldrechnung.test.ts`). `toNumber()` wandelt erst an der
+Anzeigekante um. Auswertungen und Kennzahlen (`lib/bi`) rechnen weiterhin in
+`number` — sie zeigen an, sie buchen nicht.
 
 ### Prüfprotokoll
 
@@ -331,7 +486,7 @@ dort, wo sie eine Handlung beantwortet — keine Einblendanimation pro Abschnitt
 Ehrlich benannt, statt stillschweigend übergangen:
 
 - **Unit-Tests.** Es gibt bewusst keine — geprüft wird die laufende Anwendung
-  über echtes HTTP (`tests/`, rund 470 Prüfungen zu Rechtematrix, Abläufen,
+  über echtes HTTP (`tests/`, Prüfungen zu Rechtematrix, Abläufen,
   Eigentümerschaft, Redaktion und ausgelieferten Seiten; siehe
   `tests/README.md`). Was dabei ungeprüft bleibt, sind die reinen Rechenkerne:
   Preis-Engine, QR-Referenz-Prüfziffer und Token-Rotation verdienen gezielte

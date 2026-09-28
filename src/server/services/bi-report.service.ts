@@ -11,7 +11,13 @@ import { audit } from '@/lib/audit';
 import type { SessionUser } from '@/lib/auth/session';
 import { BusinessRuleError, NotFoundError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
-import { createSignedDownloadUrl, uploadBuffer } from '@/lib/storage';
+import {
+  createSignedDownloadUrl,
+  readLocalBytes,
+  uploadBuffer,
+  usesRemoteStorage,
+  type Dateiauslieferung,
+} from '@/lib/storage';
 import { sendEmail } from '@/lib/email/client';
 import { escapeHtml, renderEmail } from '@/lib/email/layout';
 import { formatDate } from '@/lib/utils';
@@ -19,6 +25,8 @@ import { changePct, healthStatus, riskBand } from '@/lib/bi/math';
 import { formatKpiValue, HEALTH_STATUS_LABELS, OBJECTIVE_STATUS_LABELS, REPORT_KIND_LABELS, RISK_BAND_LABELS } from '@/lib/bi/labels';
 import { dateOnly, periodOf, shiftPeriod, toDateOnly, zurichMidnight, type PeriodBounds } from '@/lib/bi/periods';
 import type { CreateReportScheduleInput, GenerateReportInput, UpdateReportScheduleInput } from '@/lib/validation/bi-reports';
+import { geprueftLesen } from './document.service';
+import { mappeSchreiben } from './export.service';
 import { computeHealth, type HealthComponent } from './health.service';
 import { getInsights, type Insight } from './insight.service';
 
@@ -236,7 +244,9 @@ async function renderXlsx(content: ReportContent): Promise<Buffer> {
     r.getRow(1).font = { bold: true };
   }
 
-  return Buffer.from(await workbook.xlsx.writeBuffer());
+  // Über denselben entschärfenden Schreibweg wie die Datenexporte: Ziel- und
+  // Risikotitel sind Freitext (2026-09-27).
+  return mappeSchreiben(workbook);
 }
 
 async function renderDocx(content: ReportContent): Promise<Buffer> {
@@ -365,6 +375,13 @@ export async function generateReport(params: {
         scope: 'REPORT',
         isPublic: false,
         uploadedById: params.actorId,
+        /**
+         * Der Bericht entsteht zwei Zeilen weiter oben aus unseren eigenen
+         * Daten (`buildReportContent` → `renderReport`). Es gibt keinen Weg,
+         * auf dem fremder Inhalt in diese Bytes käme — `uploadedById` ist die
+         * auslösende Person, nicht die Quelle des Inhalts.
+         */
+        provenance: 'SYSTEM_GENERATED',
       },
     });
     const finished = await prisma.reportRun.update({
@@ -405,13 +422,53 @@ export async function listReportRuns(organizationId: string, filter: { kind?: st
   });
 }
 
-export async function resolveReportDownload(session: SessionUser, organizationId: string, id: string, ip?: string | null) {
-  const run = await prisma.reportRun.findFirst({ where: { id, organizationId }, include: { file: true } });
+export async function resolveReportDownload(
+  session: SessionUser,
+  organizationId: string,
+  id: string,
+  ip?: string | null,
+): Promise<Dateiauslieferung> {
+  const run = await prisma.reportRun.findFirst({
+    where: { id, organizationId },
+    include: { file: { include: { storedFile: true } } },
+  });
   if (!run) throw new NotFoundError('Bericht');
   if (run.status !== 'READY' || !run.file) throw new BusinessRuleError('Dieser Bericht ist nicht bereit — er ist fehlgeschlagen oder wird noch erzeugt.');
-  const url = await createSignedDownloadUrl(run.file.path, 600);
-  await audit.exported({ organizationId, userId: session.id, entity: 'ReportRun', entityId: id, summary: `Bericht „${run.file.filename}" heruntergeladen`, ip });
-  return { url, filename: run.file.filename, mimeType: run.file.mimeType };
+
+  const file = run.file;
+
+  /**
+   * Derselbe Befund wie bei den Dokumenten (siehe `Dateiauslieferung`): Ohne
+   * Objektspeicher gibt `createSignedDownloadUrl` den Ablagepfad zurück, und
+   * eine Weiterleitung darauf führte ins Leere. Ein Bericht enthält
+   * Kennzahlen, Budget und Risiken — er darf nicht an einer Route hängen, die
+   * nur `document:read` kennt. Also liefert dieser Dienst die Bytes selbst,
+   * nachdem er den Mandanten geprüft hat.
+   */
+  // Mit Ablagezeile: selbst ausliefern, gegen die Prüfsumme gelesen, für
+  // beide Treiber (2026-09-27, F-09 c) — dieselbe Regel wie beim Dokument.
+  if (file.storedFile) {
+    const bytes = await geprueftLesen(file.storedFile, file.checksum);
+    await audit.exported({ organizationId, userId: session.id, entity: 'ReportRun', entityId: id, summary: `Bericht „${file.filename}" heruntergeladen`, ip });
+    return { art: 'bytes', bytes, filename: file.filename, mimeType: file.mimeType };
+  }
+  if (usesRemoteStorage()) {
+    const url = await createSignedDownloadUrl(file.path, 600);
+    await audit.exported({ organizationId, userId: session.id, entity: 'ReportRun', entityId: id, summary: `Bericht „${file.filename}" heruntergeladen`, ip });
+    return { art: 'weiterleitung', url, filename: file.filename, mimeType: file.mimeType };
+  }
+
+  // Altbestand ohne Ablagezeile (die mit Zeile sind oben ausgeliefert):
+  // Berichte legte `putLocalBuffer` ab, ohne das Asset an die Ablagezeile zu
+  // hängen; ihre Adresse ist dann die einzige Spur. Exakt diese Form, nichts
+  // erraten.
+  let bytes: Buffer | null = null;
+  const treffer = /^\/api\/files\/blob\/([A-Za-z0-9_-]+)$/.exec(file.url);
+  if (treffer) bytes = await readLocalBytes(treffer[1]!);
+  if (!bytes) throw new NotFoundError('Datei');
+
+  await audit.exported({ organizationId, userId: session.id, entity: 'ReportRun', entityId: id, summary: `Bericht „${file.filename}" heruntergeladen`, ip });
+  return { art: 'bytes', bytes, filename: file.filename, mimeType: file.mimeType };
 }
 
 // ---------------------------------------------------------------------------

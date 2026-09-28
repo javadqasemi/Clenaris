@@ -6,6 +6,7 @@ import { Plus, Save, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { cn } from '@/lib/utils';
+import { zuercherTagText } from '@/lib/zuerich';
 import { api, ApiError } from '@/lib/api/client';
 import { ANALYSIS_BUCKET_LABELS } from '@/lib/bi/labels';
 import { Button } from '@/components/ui/button';
@@ -64,7 +65,7 @@ export function AnalysisBoardEditor({
   const buckets = kind === 'SWOT' ? SWOT : PESTEL;
   const [title, setTitle] = React.useState(initialTitle ?? `${kind}-Analyse ${new Date().getFullYear()}`);
   const [summary, setSummary] = React.useState(initialSummary ?? '');
-  const [date, setDate] = React.useState(preparedOn ?? new Date().toISOString().slice(0, 10));
+  const [date, setDate] = React.useState(preparedOn ?? zuercherTagText());
   const [entries, setEntries] = React.useState<BoardEntry[]>(initialEntries ?? []);
   const [saving, setSaving] = React.useState(false);
 

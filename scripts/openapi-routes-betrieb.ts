@@ -1,0 +1,276 @@
+import type { Permission } from '../src/lib/auth/permissions';
+import * as betrieb from '../src/lib/validation/betrieb';
+import { idParam } from '../src/lib/validation/queries';
+
+import type { Guard, RouteDoc } from './openapi-routes';
+
+/**
+ * Die Endpunkte des Betriebs aus Wave 11 — Reklamationen, Material und Lager,
+ * Geräte. Eigene Datei wie Verträge und Qualität; `npm run openapi` prüft
+ * Pfad, Methode, Schutz und Schemas gegen die Routendateien.
+ */
+
+const perm = (mode: 'all' | 'any', ...permissions: Permission[]): Guard => ({
+  kind: 'permissions',
+  permissions,
+  mode,
+});
+
+export const BETRIEB_ROUTES: RouteDoc[] = [
+  // --- Reklamationen ---------------------------------------------------------
+  {
+    method: 'get',
+    path: '/api/complaints',
+    tag: 'Betrieb',
+    summary: 'Reklamationen und Vorfälle',
+    description:
+      'Mit dem gerechneten Stand der Reaktionsfrist (`frist`: KEINE_ZUSAGE, LAEUFT, EINGEHALTEN, ' +
+      'VERPASST). Filter: Status, Kundschaft, nur offene, nur überfällige.',
+    guard: perm('all', 'complaint:read'),
+    rateLimit: 'apiRead',
+    query: betrieb.complaintQuerySchema,
+  },
+  {
+    method: 'post',
+    path: '/api/complaints',
+    tag: 'Betrieb',
+    summary: 'Reklamation erfassen',
+    description:
+      'Die Reaktionsfrist rechnet der Server aus der Vertragsfassung, die am Meldetag galt — kein ' +
+      'Feld setzt sie. Ohne Vertrag oder Zusage: keine Frist. Meldezeitpunkt nicht in der Zukunft ' +
+      'und höchstens 30 Tage zurück (422).',
+    guard: perm('all', 'complaint:create'),
+    rateLimit: 'apiWrite',
+    body: betrieb.complaintCreateSchema,
+    extraErrors: [422],
+  },
+  {
+    method: 'get',
+    path: '/api/complaints/{id}',
+    tag: 'Betrieb',
+    summary: 'Eine Reklamation',
+    description: 'Mit Vertrag, Einsatz, Zuständigkeit, Massnahme und Fristenstand.',
+    guard: perm('all', 'complaint:read'),
+    rateLimit: 'apiRead',
+    params: idParam,
+  },
+  {
+    method: 'patch',
+    path: '/api/complaints/{id}',
+    tag: 'Betrieb',
+    summary: 'Reklamation ändern',
+    description: 'Schweregrad, Titel (solange offen), Zuständigkeit, interne Notiz. Frist und Meldezeitpunkt sind nicht änderbar.',
+    guard: perm('all', 'complaint:update'),
+    rateLimit: 'apiWrite',
+    params: idParam,
+    body: betrieb.complaintUpdateSchema,
+    extraErrors: [422],
+  },
+  {
+    method: 'post',
+    path: '/api/complaints/{id}/transition',
+    tag: 'Betrieb',
+    summary: 'Status einer Reklamation',
+    description:
+      'Bestätigen, bearbeiten, erledigen, abschliessen, ablehnen, wieder öffnen. Der erste Schritt ' +
+      'aus „Offen" hält die Reaktion einmal fest. Unzulässige oder gleichzeitige Übergänge: 422.',
+    guard: perm('all', 'complaint:update'),
+    rateLimit: 'apiWrite',
+    params: idParam,
+    body: betrieb.complaintTransitionSchema,
+    extraErrors: [422],
+  },
+  {
+    method: 'post',
+    path: '/api/complaints/{id}/corrective-action',
+    tag: 'Betrieb',
+    summary: 'Korrekturmassnahme ableiten',
+    description: 'Erscheint in den Massnahmen der Unternehmensführung. Je Reklamation eine (422).',
+    guard: perm('all', 'complaint:update'),
+    rateLimit: 'apiWrite',
+    params: idParam,
+    body: betrieb.complaintCorrectiveActionSchema,
+    extraErrors: [422],
+  },
+  {
+    method: 'get',
+    path: '/api/account/complaints',
+    tag: 'Betrieb',
+    summary: 'Eigene Reklamationen',
+    description: 'Nur kundensichtbare Felder; die interne Notiz steht nicht in der Abfrage.',
+    guard: perm('all', 'complaint:read_own'),
+    rateLimit: 'apiRead',
+  },
+  {
+    method: 'post',
+    path: '/api/account/complaints',
+    tag: 'Betrieb',
+    summary: 'Reklamation melden (Kundschaft)',
+    description: 'Zu einem eigenen Objekt oder Einsatz; Fremdes existiert für diesen Weg nicht (404).',
+    guard: perm('all', 'complaint:create_own'),
+    rateLimit: 'apiWrite',
+    body: betrieb.complaintOwnCreateSchema,
+  },
+  {
+    method: 'get',
+    path: '/api/account/complaints/{id}',
+    tag: 'Betrieb',
+    summary: 'Eine eigene Reklamation',
+    description: 'Fremde Reklamationen existieren nicht (404).',
+    guard: perm('all', 'complaint:read_own'),
+    rateLimit: 'apiRead',
+    params: idParam,
+  },
+
+  // --- Material und Lager ------------------------------------------------------
+  {
+    method: 'get',
+    path: '/api/materials',
+    tag: 'Betrieb',
+    summary: 'Material mit Bestand',
+    description: 'Bestand = Summe der Bewegungen; Lagerwert; Meldebestand (`nachbestellen=true`).',
+    guard: perm('all', 'inventory:read'),
+    rateLimit: 'apiRead',
+    query: betrieb.materialQuerySchema,
+  },
+  {
+    method: 'post',
+    path: '/api/materials',
+    tag: 'Betrieb',
+    summary: 'Material anlegen',
+    description: 'Artikelnummer je Organisation eindeutig (409).',
+    guard: perm('all', 'inventory:manage'),
+    rateLimit: 'apiWrite',
+    body: betrieb.materialCreateSchema,
+    extraErrors: [409],
+  },
+  {
+    method: 'get',
+    path: '/api/materials/{id}',
+    tag: 'Betrieb',
+    summary: 'Ein Material mit Bewegungen',
+    description: 'Bestand und die letzten 200 Bewegungen.',
+    guard: perm('all', 'inventory:read'),
+    rateLimit: 'apiRead',
+    params: idParam,
+  },
+  {
+    method: 'patch',
+    path: '/api/materials/{id}',
+    tag: 'Betrieb',
+    summary: 'Material ändern',
+    description: 'Stammdaten und Aktivität — kein Bestandsfeld.',
+    guard: perm('all', 'inventory:manage'),
+    rateLimit: 'apiWrite',
+    params: idParam,
+    body: betrieb.materialUpdateSchema,
+  },
+  {
+    method: 'post',
+    path: '/api/materials/{id}/movements',
+    tag: 'Betrieb',
+    summary: 'Lagerbewegung buchen',
+    description:
+      'Eingang, Entnahme, Rückgabe, Inventurkorrektur (mit Begründung). Nur anfügen — die Datenbank ' +
+      'verweigert Änderung und Löschung. Negativer Bestand: 422.',
+    guard: perm('all', 'inventory:manage'),
+    rateLimit: 'apiWrite',
+    params: idParam,
+    body: betrieb.stockMovementCreateSchema,
+    extraErrors: [422],
+  },
+  {
+    method: 'post',
+    path: '/api/jobs/{id}/material-issue',
+    tag: 'Betrieb',
+    summary: 'Material für einen Einsatz entnehmen',
+    description:
+      'Verbrauchszeile, Lagerentnahme und Materialaufwand in einer Transaktion; Preis aus dem ' +
+      'Materialstamm. Nach der Vor-Ort-Abnahme eingefroren (422).',
+    guard: perm('all', 'inventory:manage'),
+    rateLimit: 'apiWrite',
+    params: idParam,
+    body: betrieb.jobMaterialIssueSchema,
+    extraErrors: [422],
+  },
+
+  // --- Geräte ----------------------------------------------------------------
+  {
+    method: 'get',
+    path: '/api/equipment',
+    tag: 'Betrieb',
+    summary: 'Geräte',
+    description: 'Mit Zuteilung und Wartungsfälligkeit; `wartungFaellig=true` für die nächsten 14 Tage.',
+    guard: perm('all', 'equipment:read'),
+    rateLimit: 'apiRead',
+    query: betrieb.equipmentQuerySchema,
+  },
+  {
+    method: 'post',
+    path: '/api/equipment',
+    tag: 'Betrieb',
+    summary: 'Gerät erfassen',
+    description: 'Die Inventarnummer vergibt der Server.',
+    guard: perm('all', 'equipment:manage'),
+    rateLimit: 'apiWrite',
+    body: betrieb.equipmentCreateSchema,
+  },
+  {
+    method: 'get',
+    path: '/api/equipment/{id}',
+    tag: 'Betrieb',
+    summary: 'Ein Gerät',
+    description: 'Mit Zuteilung und Wartungsbelegen.',
+    guard: perm('all', 'equipment:read'),
+    rateLimit: 'apiRead',
+    params: idParam,
+  },
+  {
+    method: 'patch',
+    path: '/api/equipment/{id}',
+    tag: 'Betrieb',
+    summary: 'Gerät ändern',
+    description: 'Stammdaten und Wartungsplanung; nicht nach der Ausmusterung.',
+    guard: perm('all', 'equipment:manage'),
+    rateLimit: 'apiWrite',
+    params: idParam,
+    body: betrieb.equipmentUpdateSchema,
+    extraErrors: [422],
+  },
+  {
+    method: 'post',
+    path: '/api/equipment/{id}/assign',
+    tag: 'Betrieb',
+    summary: 'Gerät zuteilen oder zurücknehmen',
+    description: 'Nur an aktive Personen; nicht in Wartung oder ausgemustert (422).',
+    guard: perm('all', 'equipment:manage'),
+    rateLimit: 'apiWrite',
+    params: idParam,
+    body: betrieb.equipmentAssignSchema,
+    extraErrors: [422],
+  },
+  {
+    method: 'post',
+    path: '/api/equipment/{id}/maintenance',
+    tag: 'Betrieb',
+    summary: 'Wartung festhalten',
+    description: 'Unveränderlicher Beleg; nächste Fälligkeit aus Wartungstag und Intervall. Zukunft: 422.',
+    guard: perm('all', 'equipment:manage'),
+    rateLimit: 'apiWrite',
+    params: idParam,
+    body: betrieb.equipmentMaintenanceSchema,
+    extraErrors: [422],
+  },
+  {
+    method: 'post',
+    path: '/api/equipment/{id}/status',
+    tag: 'Betrieb',
+    summary: 'Gerätestatus',
+    description: 'In Wartung, zurück in Betrieb, ausmustern (mit Grund, endgültig).',
+    guard: perm('all', 'equipment:manage'),
+    rateLimit: 'apiWrite',
+    params: idParam,
+    body: betrieb.equipmentStatusSchema,
+    extraErrors: [422],
+  },
+];

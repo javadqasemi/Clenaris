@@ -1,6 +1,7 @@
 import { defineRoute, idParam } from '@/lib/api/handler';
-import { createPropertySchema } from '@/lib/validation/crm';
+import { updatePropertySchema } from '@/lib/validation/crm';
 import { NotFoundError } from '@/lib/errors';
+import { CRYPTO_CONTEXT, encryptNullable } from '@/lib/crypto';
 import { audit, diff } from '@/lib/audit';
 import { prisma } from '@/lib/db';
 import { noContent, ok } from '@/lib/api/response';
@@ -82,7 +83,7 @@ export const GET = defineRoute({
 export const PATCH = defineRoute({
   permissions: ['property:update'],
   params: idParam,
-  body: createPropertySchema.innerType().partial(),
+  body: updatePropertySchema,
   rateLimit: 'apiWrite',
   handler: async ({ params, body, session, ip }) => {
     const organizationId = await getOrganizationId();
@@ -109,6 +110,10 @@ export const PATCH = defineRoute({
         ...(body.hasElevator !== undefined ? { hasElevator: body.hasElevator } : {}),
         ...(body.parkingInfo !== undefined ? { parkingInfo: body.parkingInfo ?? null } : {}),
         ...(body.keyLocation !== undefined ? { keyLocation: body.keyLocation ?? null } : {}),
+        // Verschlüsselt, siehe `src/lib/crypto.ts` und den Kommentar in `../route.ts`.
+        ...(body.alarmCode !== undefined
+          ? { alarmCode: encryptNullable(body.alarmCode, CRYPTO_CONTEXT.alarmCode) }
+          : {}),
         ...(body.accessNote !== undefined ? { accessNote: body.accessNote ?? null } : {}),
         ...(body.notes !== undefined ? { notes: body.notes ?? null } : {}),
       },

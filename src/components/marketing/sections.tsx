@@ -138,7 +138,15 @@ export function ServiceRow({
   );
 }
 
-/** Kennzahlenleiste — vier harte Zahlen, keine Marketingfloskeln. */
+/**
+ * Kennzahlenleiste — harte Zahlen, keine Marketingfloskeln.
+ *
+ * Wie viele Kacheln kommen, entscheidet die aufrufende Seite: Eine Kennzahl,
+ * für die es noch keinen Bestand gibt, wird dort weggelassen und nicht mit
+ * einem erfundenen Wert aufgefüllt. Deshalb richtet sich das Raster nach der
+ * Anzahl und steht nicht fest auf vier Spalten — sonst bliebe bei drei
+ * Kacheln eine Lücke, die wie ein Ladefehler aussieht.
+ */
 export function StatStrip({
   stats,
   className,
@@ -146,18 +154,33 @@ export function StatStrip({
   stats: { value: React.ReactNode; label: React.ReactNode }[];
   className?: string;
 }) {
+  if (stats.length === 0) return null;
+
+  // Bei einer einzelnen Kachel bleibt es bei einer Spalte: Ein
+  // Zweispaltenraster liesse die zweite Hälfte als graue Fläche stehen, was
+  // wie ein Ladefehler aussieht und nicht wie eine Kennzahl.
+  const columns =
+    stats.length >= 4
+      ? 'sm:grid-cols-2 lg:grid-cols-4'
+      : stats.length === 3
+        ? 'sm:grid-cols-3'
+        : stats.length === 2
+          ? 'sm:grid-cols-2'
+          : 'grid-cols-1';
+
   return (
     <dl
       className={cn(
-        'grid gap-px overflow-hidden rounded-2xl border border-border bg-border sm:grid-cols-2 lg:grid-cols-4',
+        'grid gap-px overflow-hidden rounded-2xl border border-border bg-border',
+        columns,
         className,
       )}
     >
       {/*
-        Die Position ist hier der richtige Schlüssel: Die Leiste ist eine feste
-        Folge von vier Kennzahlen, die weder umsortiert noch gefiltert wird.
-        Vorher stand die Beschriftung als Schlüssel — die ist nun redaktionell
-        änderbar und taugt nicht mehr als Identität.
+        Die Position ist hier der richtige Schlüssel: Die Leiste wird in einem
+        Zug serverseitig gerendert und nie umsortiert. Vorher stand die
+        Beschriftung als Schlüssel — die ist nun redaktionell änderbar und
+        taugt nicht mehr als Identität.
       */}
       {stats.map((stat, index) => (
         <div key={index} className="bg-card px-6 py-7">
@@ -173,7 +196,10 @@ export function StatStrip({
 
 export function Stars({ rating, className }: { rating: number; className?: string }) {
   return (
-    <div className={cn('flex items-center gap-0.5', className)} aria-label={`${rating} von 5 Sternen`}>
+    // `role="img"`: Ein `aria-label` auf einem rollenlosen `div` ist nach ARIA
+    // verboten und wird von Screenreadern verschluckt — die Bewertung wäre
+    // dann nur fünf stumme Sterne (axe: aria-prohibited-attr).
+    <div role="img" className={cn('flex items-center gap-0.5', className)} aria-label={`${rating} von 5 Sternen`}>
       {Array.from({ length: 5 }).map((_, index) => (
         <Star
           key={index}

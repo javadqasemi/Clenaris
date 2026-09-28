@@ -65,22 +65,20 @@ export const sendQuoteSchema = z.object({
   attachPdf: z.boolean().default(true),
 });
 
-/** Kundenantwort auf eine Offerte über den öffentlichen Link. */
-export const respondQuoteSchema = z
-  .object({
-    decision: z.enum(['ACCEPT', 'REJECT']),
-    signatureDataUrl: z
-      .string()
-      .max(500_000, 'Die Unterschrift ist zu gross.')
-      .regex(/^data:image\/(png|jpeg);base64,/, 'Ungültiges Unterschriftsformat.')
-      .optional(),
-    signatureName: z.string().trim().max(120).optional(),
-    reason: z.string().trim().max(1000).optional(),
-  })
-  .refine((d) => d.decision !== 'ACCEPT' || Boolean(d.signatureDataUrl && d.signatureName), {
-    message: 'Zur Annahme sind Name und Unterschrift erforderlich.',
-    path: ['signatureName'],
-  });
+/**
+ * Kundenantwort auf eine Offerte — über den Link oder im Kundenkonto.
+ *
+ * Seit Gate 4C trägt die Annahme **keine** Unterschrift mehr: `ACCEPT`
+ * startet den Unterzeichnungsvorgang (Snapshot, Zustimmung, gezeichnete
+ * oder getippte Unterschrift, Protokoll) und antwortet mit dem Weg dorthin.
+ * Name und Bild kommen im Signaturkern an, mit Prüfsumme und Ereignissen —
+ * nicht mehr als zwei Felder in der Offertzeile. `REJECT` bleibt eine
+ * direkte Entscheidung; eine Ablehnung braucht keine Unterschrift.
+ */
+export const respondQuoteSchema = z.object({
+  decision: z.enum(['ACCEPT', 'REJECT']),
+  reason: z.string().trim().max(1000).optional(),
+});
 export type RespondQuoteInput = z.infer<typeof respondQuoteSchema>;
 
 export const convertQuoteSchema = z.object({
@@ -172,14 +170,23 @@ export const assignJobSchema = z.object({
   notify: z.boolean().default(true),
 });
 
+/**
+ * Einsatz abschliessen — seit Gate 4D **ohne** Unterschrift.
+ *
+ * Hier standen `signatureDataUrl` und `signatureName`: Das Team liess die
+ * Kundschaft auf demselben Bildschirm unterschreiben, auf dem es gerade den
+ * Rapport getippt hatte, und beides ging in einem Aufruf an den Server. Was
+ * unterschrieben wurde, stand nirgends — der Rapport liess sich danach
+ * ändern, und das Bild hing an nichts.
+ *
+ * Der Abschluss ist jetzt wieder, was er heisst: Das Team meldet die
+ * Ausführung. Die Abnahme durch die Kundschaft ist ein eigener Vorgang auf
+ * dem Signaturkern (`startCustomerHandoff`), mit eingefrorenem Rapport,
+ * Zustimmung und Protokoll — und mit einer Gerätesperre dazwischen, damit
+ * die beiden Personen am selben Gerät nicht dieselbe Sitzung teilen.
+ */
 export const completeJobSchema = z.object({
   completionNote: z.string().trim().max(4000).optional(),
-  signatureDataUrl: z
-    .string()
-    .max(500_000)
-    .regex(/^data:image\/(png|jpeg);base64,/, 'Ungültiges Unterschriftsformat.')
-    .optional(),
-  signatureName: z.string().trim().max(120).optional(),
   materials: z
     .array(
       z.object({
@@ -365,13 +372,19 @@ export const manualTimeEntrySchema = z.object({
 
 export const jobPhotoSchema = z.object({
   type: z.enum(['BEFORE', 'AFTER', 'DAMAGE', 'DOCUMENT', 'OTHER']).default('BEFORE'),
-  url: assetUrlSchema,
+  /**
+   * Die Kennung des geprüften `FileAsset`. Die Adresse setzt der Endpunkt
+   * daraus — vorher kam sie als `url` aus dem Browser und wurde übernommen,
+   * womit sich jede beliebige Adresse als Einsatzfoto eintragen liess.
+   */
+  fileId: cuidSchema,
   thumbnailUrl: assetUrlSchema.optional(),
   caption: z.string().trim().max(300).optional(),
   room: z.string().trim().max(80).optional(),
   lat: z.number().min(-90).max(90).optional(),
   lng: z.number().min(-180).max(180).optional(),
 });
+export type JobPhotoInput = z.infer<typeof jobPhotoSchema>;
 
 // ---------------------------------------------------------------------------
 //  Personal
@@ -488,6 +501,169 @@ export const updateEmployeeSchema = z.object({
 });
 export type UpdateEmployeeInput = z.infer<typeof updateEmployeeSchema>;
 
+// ---------------------------------------------------------------------------
+//  Qualifikationen und Arbeitszeiten
+// ---------------------------------------------------------------------------
+
+/**
+ * Beide Listen werden **als Ganzes** ersetzt, nicht Zeile für Zeile.
+ *
+ * Die Alternative wären Endpunkte zum Anlegen, Ändern und Löschen einzelner
+ * Einträge — sechs statt zwei, jeder mit eigener Rechteprüfung, und die
+ * Oberfläche müsste die Unterschiede zwischen altem und neuem Stand selbst
+ * ausrechnen und einzeln schicken. Bei Listen dieser Grösse (eine Handvoll
+ * Qualifikationen, höchstens ein paar Zeitfenster je Woche) ist das
+ * Aufwand ohne Gewinn.
+ *
+ * Dazu kommt ein handfester Vorteil: Ersetzen ist **wettlauffrei**. Wer eine
+ * Liste in zwei Browserfenstern bearbeitet, bekommt am Ende die zuletzt
+ * gespeicherte Fassung — und nicht eine Mischung aus beiden, bei der ein
+ * gelöschter Eintrag wieder auftaucht.
+ */
+
+const ZEIT = /^([01]\d|2[0-3]):[0-5]\d$/;
+
+export const employeeSkillSchema = z.object({
+  name: z.string().trim().min(2, 'Ein Name ist erforderlich.').max(80),
+  /**
+   * 1 bis 5. Die Stufen sind bewusst unbenannt: „Grundkenntnisse" bis
+   * „Experte" klingt genauer, als eine Selbsteinschätzung je sein kann, und
+   * die Zahl steht ohnehin nur neben dem Namen.
+   */
+  level: z.number().int().min(1).max(5).default(1),
+  certifiedUntil: dateOnlySchema.optional().nullable(),
+});
+
+export const employeeSkillsSchema = z.object({
+  skills: z
+    .array(employeeSkillSchema)
+    .max(30, 'Höchstens 30 Qualifikationen.')
+    .superRefine((liste, ctx) => {
+      /**
+       * Doppelte Namen fängt sonst erst der eindeutige Index ab — als 409 mit
+       * einer Meldung über eine Datenbankeinschränkung. Hier kommt ein Satz,
+       * der sagt, welcher Name doppelt ist.
+       */
+      const gesehen = new Set<string>();
+      liste.forEach((eintrag, index) => {
+        const schluessel = eintrag.name.toLowerCase();
+        if (gesehen.has(schluessel)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: [index, 'name'],
+            message: `„${eintrag.name}" steht zweimal in der Liste.`,
+          });
+        }
+        gesehen.add(schluessel);
+      });
+    }),
+});
+
+export const availabilitySlotSchema = z
+  .object({
+    /** 0 = Sonntag, wie `Date.getDay()`. */
+    weekday: z.number().int().min(0).max(6),
+    startTime: z.string().regex(ZEIT, 'Uhrzeit im Format HH:MM.'),
+    endTime: z.string().regex(ZEIT, 'Uhrzeit im Format HH:MM.'),
+  })
+  .refine((slot) => slot.startTime < slot.endTime, {
+    path: ['endTime'],
+    message: 'Das Ende muss nach dem Beginn liegen.',
+  });
+
+export const employeeAvailabilitySchema = z.object({
+  availability: z
+    .array(availabilitySlotSchema)
+    .max(21, 'Höchstens drei Fenster je Wochentag.')
+    .superRefine((liste, ctx) => {
+      /**
+       * Überschneidungen innerhalb eines Tages.
+       *
+       * Der eindeutige Index deckt nur `(employee, weekday, startTime)` ab —
+       * zwei Fenster 07:00–12:00 und 09:00–17:00 gingen glatt durch. Sie
+       * ergäben keine falsche Antwort (die Eignungsprüfung nimmt jedes
+       * Fenster einzeln), aber eine Verfügbarkeit, die sich nicht mehr lesen
+       * lässt: Wer soll sagen, wann diese Person arbeitet?
+       */
+      const jeTag = new Map<number, { startTime: string; endTime: string; index: number }[]>();
+
+      liste.forEach((slot, index) => {
+        const tag = jeTag.get(slot.weekday) ?? [];
+        for (const vorhanden of tag) {
+          if (slot.startTime < vorhanden.endTime && vorhanden.startTime < slot.endTime) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: [index, 'startTime'],
+              message: `Überschneidet sich mit ${vorhanden.startTime}–${vorhanden.endTime} am selben Tag.`,
+            });
+            break;
+          }
+        }
+        tag.push({ startTime: slot.startTime, endTime: slot.endTime, index });
+        jeTag.set(slot.weekday, tag);
+      });
+    }),
+});
+
+export type EmployeeSkillsInput = z.infer<typeof employeeSkillsSchema>;
+export type EmployeeAvailabilityInput = z.infer<typeof employeeAvailabilitySchema>;
+
+// ---------------------------------------------------------------------------
+//  Zeiterfassung — ansehen, korrigieren, freigeben
+// ---------------------------------------------------------------------------
+
+/**
+ * **`minutes` kommt in keinem dieser Schemata vor**, und das ist der Punkt.
+ *
+ * Die Dauer rechnet der Server aus Beginn, Ende und Pause — dieselbe Regel wie
+ * bei den Preisen. Ein Feld, in das der Client eine Minutenzahl schreiben
+ * könnte, wäre ein Feld, in das jemand eine Lohnsumme schreiben kann.
+ */
+export const timeEntryQuerySchema = z.object({
+  employeeId: z.string().cuid().optional(),
+  jobId: z.string().cuid().optional(),
+  from: z.coerce.date().optional(),
+  to: z.coerce.date().optional(),
+  /** Als Zeichenkette, weil eine Abfragezeichenfolge nichts anderes kennt. */
+  approved: z.enum(['true', 'false']).optional(),
+  nurOffen: z.literal('true').optional(),
+  page: z.coerce.number().int().min(1).optional(),
+  pageSize: z.coerce.number().int().min(1).max(200).optional(),
+});
+
+export const createTimeEntrySchema = z.object({
+  employeeId: z.string().cuid(),
+  jobId: z.string().cuid().optional().nullable(),
+  startedAt: z.coerce.date(),
+  endedAt: z.coerce.date(),
+  breakMin: z.number().int().min(0).max(8 * 60).default(0),
+  note: z.string().trim().max(500).optional().nullable(),
+});
+
+export const updateTimeEntrySchema = z
+  .object({
+    startedAt: z.coerce.date().optional(),
+    endedAt: z.coerce.date().optional().nullable(),
+    breakMin: z.number().int().min(0).max(8 * 60).optional(),
+    note: z.string().trim().max(500).optional().nullable(),
+  })
+  .refine((wert) => Object.keys(wert).length > 0, {
+    message: 'Es wurde nichts zum Ändern angegeben.',
+  });
+
+export const approveTimeEntriesSchema = z.object({
+  /**
+   * Mehrere auf einmal, weil das der Arbeitsablauf ist: Am Monatsende geht
+   * jemand die Liste durch. Die Obergrenze verhindert, dass ein Aufruf den
+   * ganzen Bestand anfasst.
+   */
+  entryIds: z.array(z.string().cuid()).min(1).max(200),
+});
+
+export type TimeEntryQuery = z.infer<typeof timeEntryQuerySchema>;
+export type CreateTimeEntryInput = z.infer<typeof createTimeEntrySchema>;
+export type UpdateTimeEntryInput = z.infer<typeof updateTimeEntrySchema>;
+
 export const absenceRequestSchema = z.object({
   type: z
     .enum([
@@ -501,6 +677,20 @@ export const absenceRequestSchema = z.object({
   reason: z.string().trim().max(1000).optional(),
 }).refine((d) => d.endDate >= d.startDate, {
   message: 'Das Enddatum darf nicht vor dem Startdatum liegen.',
+  path: ['endDate'],
+})
+/**
+ * Ein halber Tag ist *ein* Tag (2026-09-27).
+ *
+ * Die Maske schickte bei „halber Tag" schon immer Start = Ende, der Server
+ * verlangte es nicht: Ein Antrag „halber Tag" über zwei Wochen ging durch,
+ * zählte 0.5 Tage vom Feriensaldo ab und blockierte die Person trotzdem
+ * zwei Wochen lang in der Disposition. Über mehrere Tage hinweg halbe Tage
+ * wären zwei Anträge — oder eine Angabe, welcher Tag halb ist, die es nicht
+ * gibt.
+ */
+.refine((d) => !d.halfDay || d.endDate.getTime() === d.startDate.getTime(), {
+  message: 'Ein halber Tag beginnt und endet am selben Tag.',
   path: ['endDate'],
 });
 export type AbsenceRequestInput = z.infer<typeof absenceRequestSchema>;

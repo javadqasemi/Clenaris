@@ -4,8 +4,10 @@ import type { Absence, Employee, Prisma } from '@prisma/client';
 
 import { prisma, toNumber } from '@/lib/db';
 import { BusinessRuleError, ConflictError, NotFoundError } from '@/lib/errors';
-import { round2 } from '@/lib/utils';
+import { formatDate, round2 } from '@/lib/utils';
+import { tagPlus, zuercherJahr, zuercherTagesbeginn, zuercherTagText } from '@/lib/zuerich';
 import { audit } from '@/lib/audit';
+import { CRYPTO_CONTEXT, decryptNullable, encryptNullable } from '@/lib/crypto';
 import type {
   AbsenceRequestInput,
   CreateEmployeeInput,
@@ -15,6 +17,7 @@ import type {
 import { nextNumber } from './numbering.service';
 import { inviteUser } from './auth.service';
 import { notify, notifyStaff } from './notification.service';
+import { markiereMonateVeraltet, markiereVeraltet, monateZwischen } from './payroll-veraltet';
 import { activeStaffWhere } from './profile.service';
 
 /**
@@ -104,8 +107,8 @@ export async function createEmployee(params: {
         monthlySalary: params.input.monthlySalary ?? null,
         workloadPct: params.input.workloadPct,
         vacationDaysPerYear: params.input.vacationDaysPerYear,
-        ahvNumber: params.input.ahvNumber ?? null,
-        iban: params.input.iban ?? null,
+        ahvNumber: encryptNullable(params.input.ahvNumber, CRYPTO_CONTEXT.ahvNumber),
+        iban: encryptNullable(params.input.iban, CRYPTO_CONTEXT.iban),
         nationality: params.input.nationality ?? null,
         permitType: params.input.permitType ?? null,
         permitValidUntil: params.input.permitValidUntil ?? null,
@@ -250,8 +253,12 @@ export async function updateEmployee(params: {
       : {}),
     ...(input.hourlyRate !== undefined ? { hourlyRate: input.hourlyRate ?? null } : {}),
     ...(input.monthlySalary !== undefined ? { monthlySalary: input.monthlySalary ?? null } : {}),
-    ...(input.ahvNumber !== undefined ? { ahvNumber: input.ahvNumber ?? null } : {}),
-    ...(input.iban !== undefined ? { iban: input.iban ?? null } : {}),
+    ...(input.ahvNumber !== undefined
+      ? { ahvNumber: encryptNullable(input.ahvNumber, CRYPTO_CONTEXT.ahvNumber) }
+      : {}),
+    ...(input.iban !== undefined
+      ? { iban: encryptNullable(input.iban, CRYPTO_CONTEXT.iban) }
+      : {}),
     ...(input.nationality !== undefined ? { nationality: input.nationality ?? null } : {}),
     ...(input.permitType !== undefined ? { permitType: input.permitType ?? null } : {}),
     ...(input.permitValidUntil !== undefined
@@ -307,6 +314,15 @@ export async function updateEmployee(params: {
 
     return result;
   });
+
+  /**
+   * Lohn, Pensum, Eintritt oder Austritt geändert: Eine schon berechnete,
+   * noch nicht veröffentlichte Abrechnung rechnete mit dem alten Stand und
+   * würde sonst mit ihm veröffentlicht (`payroll-veraltet.ts`).
+   */
+  if (salaryChanged || input.hiredAt !== undefined || input.terminatedAt !== undefined || leaving || returning) {
+    await markiereVeraltet({ employeeId: employee.id }, 'Lohnstamm oder Anstellung geändert');
+  }
 
   await audit.updated({
     organizationId: params.organizationId,
@@ -418,40 +434,207 @@ export async function getEmployeeDetail(params: {
     };
   }
 
-  return employee;
+  /**
+   * AHV-Nummer und Auszahlungs-IBAN liegen verschlüsselt in der Spalte
+   * (`src/lib/crypto.ts`) und werden erst hier zurückgewandelt — also genau an
+   * der einzigen Stelle, die sie überhaupt herausgibt, und nur für Rollen mit
+   * `payslip:create`.
+   *
+   * Die Reihenfolge zählt: Der Zweig oben (`!includeSensitive`) gibt beide als
+   * `null` zurück und kommt **vor** dieser Entschlüsselung. Wer sie nicht
+   * sehen darf, löst also gar keine Entschlüsselung aus — der Klartext
+   * entsteht nie, statt zu entstehen und dann verworfen zu werden.
+   */
+  return {
+    ...employee,
+    ahvNumber: decryptNullable(employee.ahvNumber, CRYPTO_CONTEXT.ahvNumber),
+    iban: decryptNullable(employee.iban, CRYPTO_CONTEXT.iban),
+  };
+}
+
+// ---------------------------------------------------------------------------
+//  Qualifikationen und Arbeitszeiten
+// ---------------------------------------------------------------------------
+
+/**
+ * Beide Listen werden **als Ganzes** ersetzt: löschen, neu anlegen, in einer
+ * Transaktion.
+ *
+ * ---------------------------------------------------------------------------
+ *  Warum nicht abgleichen
+ * ---------------------------------------------------------------------------
+ *
+ * Der feinere Weg wäre, alt und neu zu vergleichen und nur die Unterschiede zu
+ * schreiben. Er hätte einen Zweck, wenn an den Zeilen etwas hinge, das ihre
+ * Kennung braucht — eine Historie, ein Fremdschlüssel, ein Prüfpfad. Nichts
+ * davon ist der Fall: `EmployeeSkill` und `Availability` sind Stammdaten ohne
+ * Bezug nach aussen, und ihre Kennungen tauchen nirgends sonst auf.
+ *
+ * Ohne diesen Zweck ist der Abgleich nur eine zweite Stelle, an der etwas
+ * falsch sein kann — und die Sorte Fehler, die dabei entsteht (ein Eintrag
+ * bleibt stehen, weil der Vergleich ihn für gleich hielt), fällt erst auf,
+ * wenn jemand sich über die Planung wundert.
+ */
+export async function replaceEmployeeSkills(params: {
+  organizationId: string;
+  employeeId: string;
+  actorId: string;
+  ip?: string | null;
+  skills: { name: string; level: number; certifiedUntil?: Date | null }[];
+}): Promise<{ anzahl: number }> {
+  const employee = await prisma.employee.findFirst({
+    // Employee kennt kein deletedAt; ein Austritt steht in ctive.
+    // Auch eine ausgetretene Person darf nachgepflegt werden — etwa um ein
+    // abgelaufenes Zertifikat zu korrigieren.
+    where: { id: params.employeeId, organizationId: params.organizationId },
+    select: { id: true, employeeNumber: true, skills: { select: { name: true } } },
+  });
+  if (!employee) throw new NotFoundError('Mitarbeitende/r');
+
+  await prisma.$transaction([
+    prisma.employeeSkill.deleteMany({ where: { employeeId: employee.id } }),
+    prisma.employeeSkill.createMany({
+      data: params.skills.map((s) => ({
+        employeeId: employee.id,
+        name: s.name,
+        level: s.level,
+        certifiedUntil: s.certifiedUntil ?? null,
+      })),
+    }),
+  ]);
+
+  await audit.updated({
+    organizationId: params.organizationId,
+    userId: params.actorId,
+    entity: 'Employee',
+    entityId: employee.id,
+    summary: `Qualifikationen von ${employee.employeeNumber} gesetzt (${params.skills.length})`,
+    /**
+     * Vorher/nachher als Namensliste, nicht als Zeilenkennungen: Wer das
+     * Protokoll liest, will wissen, welche Qualifikation dazukam — nicht,
+     * welche cuid verschwunden ist.
+     */
+    changes: {
+      skills: {
+        from: employee.skills.map((s) => s.name),
+        to: params.skills.map((s) => s.name),
+      },
+    },
+    ip: params.ip,
+  });
+
+  return { anzahl: params.skills.length };
+}
+
+export async function replaceEmployeeAvailability(params: {
+  organizationId: string;
+  employeeId: string;
+  actorId: string;
+  ip?: string | null;
+  availability: { weekday: number; startTime: string; endTime: string }[];
+}): Promise<{ anzahl: number }> {
+  const employee = await prisma.employee.findFirst({
+    where: { id: params.employeeId, organizationId: params.organizationId },
+    select: {
+      id: true,
+      employeeNumber: true,
+      availability: { select: { weekday: true, startTime: true, endTime: true } },
+    },
+  });
+  if (!employee) throw new NotFoundError('Mitarbeitende/r');
+
+  await prisma.$transaction([
+    prisma.availability.deleteMany({ where: { employeeId: employee.id } }),
+    prisma.availability.createMany({
+      data: params.availability.map((a) => ({
+        employeeId: employee.id,
+        weekday: a.weekday,
+        startTime: a.startTime,
+        endTime: a.endTime,
+      })),
+    }),
+  ]);
+
+  const alsText = (liste: { weekday: number; startTime: string; endTime: string }[]) =>
+    liste
+      .slice()
+      .sort((a, b) => a.weekday - b.weekday || a.startTime.localeCompare(b.startTime))
+      .map((a) => `${a.weekday}:${a.startTime}-${a.endTime}`);
+
+  await audit.updated({
+    organizationId: params.organizationId,
+    userId: params.actorId,
+    entity: 'Employee',
+    entityId: employee.id,
+    summary: `Arbeitszeiten von ${employee.employeeNumber} gesetzt (${params.availability.length} Fenster)`,
+    changes: {
+      availability: { from: alsText(employee.availability), to: alsText(params.availability) },
+    },
+    ip: params.ip,
+  });
+
+  /**
+   * **Kein Eingriff in bestehende Zuteilungen.**
+   *
+   * Die Verfügbarkeit ist eine Planungshilfe, keine Zusage — das steht so in
+   * `assignment.service.ts` und ist dort begründet: Ein Sonntagseinsatz nach
+   * Absprache ist normal, und ihn zu blockieren hiesse, das Büro zu zwingen,
+   * zuerst ein Stammdatum zu ändern.
+   *
+   * Aus derselben Überlegung folgt hier das Gegenstück: Wer die Arbeitszeiten
+   * einschränkt, wirft damit keine bereits geplanten Einsätze um. Die
+   * Eignungsprüfung **warnt** beim nächsten Zuteilen; entscheiden tut die
+   * Disposition.
+   */
+  return { anzahl: params.availability.length };
 }
 
 // ---------------------------------------------------------------------------
 //  Abwesenheiten
 // ---------------------------------------------------------------------------
 
-/** Netto-Abwesenheitstage: Wochenenden und Feiertage zählen nicht. */
+/**
+ * Netto-Abwesenheitstage: Wochenenden und Feiertage zählen nicht.
+ *
+ * Zwei Korrekturen vom 2026-09-27:
+ *
+ *  • **Der halbe Tag ging an der Rechnung vorbei.** Er ergab immer 0.5 —
+ *    auch an einem Samstag oder am Nationalfeiertag, an dem gar nicht
+ *    gearbeitet wird. Jetzt zählt er als die Hälfte dessen, was der Tag
+ *    sonst zählte: 0.5 an einem Arbeitstag, 0 an einem freien, und 0 führt
+ *    wie beim ganzen Tag zur Meldung „keine Arbeitstage".
+ *  • **Wiederkehrende Feiertage zählten nur im Jahr ihres Eintrags.**
+ *    Neujahr 2026 als „jährlich" eingetragen, Ferien über Neujahr 2027 — der
+ *    1. Januar ging als Ferientag vom Saldo ab. Die Verfügbarkeit
+ *    (`availability.service.ts`) vergleicht wiederkehrende Einträge seit
+ *    2026-09-26 nach Monat und Tag; hier jetzt ebenso.
+ */
 async function countAbsenceDays(params: {
   organizationId: string;
   from: Date;
   to: Date;
   halfDay: boolean;
 }): Promise<number> {
-  if (params.halfDay) return 0.5;
-
   const holidays = await prisma.holiday.findMany({
     where: {
       organizationId: params.organizationId,
-      date: { gte: params.from, lte: params.to },
+      OR: [{ date: { gte: params.from, lte: params.to } }, { recurring: true }],
     },
-    select: { date: true },
+    select: { date: true, recurring: true },
   });
-  const holidayKeys = new Set(holidays.map((h) => h.date.toISOString().slice(0, 10)));
+  const festeTage = new Set(holidays.filter((h) => !h.recurring).map((h) => h.date.toISOString().slice(0, 10)));
+  const jaehrlich = new Set(holidays.filter((h) => h.recurring).map((h) => h.date.toISOString().slice(5, 10)));
 
   let days = 0;
   const cursor = new Date(params.from);
   while (cursor <= params.to) {
     const weekday = cursor.getUTCDay();
     const key = cursor.toISOString().slice(0, 10);
-    if (weekday !== 0 && weekday !== 6 && !holidayKeys.has(key)) days++;
+    if (weekday !== 0 && weekday !== 6 && !festeTage.has(key) && !jaehrlich.has(key.slice(5))) days++;
     cursor.setUTCDate(cursor.getUTCDate() + 1);
   }
-  return days;
+  // Das Schema verlangt für den halben Tag Start = Ende; `days` ist dann 0 oder 1.
+  return params.halfDay ? days * 0.5 : days;
 }
 
 export async function requestAbsence(params: {
@@ -490,7 +673,11 @@ export async function requestAbsence(params: {
 
   // Feriensaldo prüfen (nur für Ferien, nicht für Krankheit/Unfall).
   if (params.input.type === 'VACATION') {
-    const balance = await getVacationBalance(params.employeeId);
+    // Der Saldo des Jahres, in dem die Ferien beginnen (2026-09-27) — vorher
+    // immer der des laufenden Jahres, auch für Ferien im nächsten Januar.
+    // `startDate` ist ein Kalendertag (UTC-Mitternacht), sein UTC-Jahr ist das
+    // Kalenderjahr.
+    const balance = await getVacationBalance(params.employeeId, params.input.startDate.getUTCFullYear());
     if (days > balance.remaining) {
       throw new BusinessRuleError(
         `Der Feriensaldo reicht nicht aus: beantragt ${days} Tage, verfügbar ${balance.remaining} Tage.`,
@@ -514,7 +701,7 @@ export async function requestAbsence(params: {
   await notifyStaff({
     organizationId: params.organizationId,
     title: 'Neuer Abwesenheitsantrag',
-    body: `${employee.user.firstName} ${employee.user.lastName} · ${days} Tage ab ${params.input.startDate.toLocaleDateString('de-CH')}`,
+    body: `${employee.user.firstName} ${employee.user.lastName} · ${days} Tage ab ${formatDate(params.input.startDate)}`,
     link: `/admin/personal/abwesenheiten`,
     permission: 'absence:read_all',
   });
@@ -539,35 +726,65 @@ export async function decideAbsence(params: {
     throw new BusinessRuleError('Dieser Antrag wurde bereits entschieden.');
   }
 
-  // Konflikte mit bereits zugeteilten Einsätzen sichtbar machen.
-  if (params.status === 'APPROVED') {
-    const conflicts = await prisma.jobAssignment.count({
-      where: {
-        employeeId: absence.employeeId,
-        job: {
-          deletedAt: null,
-          status: { notIn: ['CANCELLED', 'COMPLETED', 'VERIFIED'] },
-          scheduledStart: { lte: absence.endDate },
-          scheduledEnd: { gte: absence.startDate },
+  /*
+    Prüfen und entscheiden in einer Transaktion, hinter derselben Sperre wie
+    die Zuteilung (`zuteilung:<employeeId>`, `assignment.service.ts`) —
+    2026-09-27. Vorher lagen Konfliktzählung und Statuswechsel getrennt und
+    ohne Sperre: Eine Zuteilung und eine Bewilligung für dieselbe Person und
+    Zeit liefen gleichzeitig beide durch, und die Person stand eingeteilt in
+    ihren bewilligten Ferien. Der Statuswechsel ist bedingt (`status:
+    REQUESTED`), damit auch zwei gleichzeitige Entscheide nicht beide gelten.
+
+    Der Zeitraum nach Zürcher Kalender, den letzten Tag eingeschlossen. Vorher
+    wurde `scheduledStart <= endDate` verglichen — `endDate` ist ein
+    Kalendertag um UTC-Mitternacht, ein Einsatz am letzten Ferientag lag
+    also danach und zählte nicht als Konflikt.
+  */
+  const von = zuercherTagesbeginn(absence.startDate);
+  const bisAusschliesslich = zuercherTagesbeginn(tagPlus(absence.endDate, 1));
+
+  const updated = await prisma.$transaction(async (tx) => {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`zuteilung:${absence.employeeId}`}))`;
+
+    if (params.status === 'APPROVED') {
+      const conflicts = await tx.jobAssignment.count({
+        where: {
+          employeeId: absence.employeeId,
+          job: {
+            deletedAt: null,
+            status: { notIn: ['CANCELLED', 'COMPLETED', 'VERIFIED'] },
+            scheduledStart: { lt: bisAusschliesslich },
+            scheduledEnd: { gt: von },
+          },
         },
+      });
+      if (conflicts > 0) {
+        throw new BusinessRuleError(
+          `In diesem Zeitraum sind noch ${conflicts} Einsätze zugeteilt. Bitte planen Sie diese zuerst um.`,
+        );
+      }
+    }
+
+    const entschieden = await tx.absence.updateMany({
+      where: { id: absence.id, status: 'REQUESTED' },
+      data: {
+        status: params.status,
+        decidedById: params.actorId,
+        decidedAt: new Date(),
+        decisionNote: params.note ?? null,
       },
     });
-    if (conflicts > 0) {
-      throw new BusinessRuleError(
-        `In diesem Zeitraum sind noch ${conflicts} Einsätze zugeteilt. Bitte planen Sie diese zuerst um.`,
-      );
-    }
-  }
-
-  const updated = await prisma.absence.update({
-    where: { id: absence.id },
-    data: {
-      status: params.status,
-      decidedById: params.actorId,
-      decidedAt: new Date(),
-      decisionNote: params.note ?? null,
-    },
+    if (entschieden.count === 0) throw new BusinessRuleError('Dieser Antrag wurde bereits entschieden.');
+    return tx.absence.findUniqueOrThrow({ where: { id: absence.id } });
   });
+
+  // Unbezahlter Urlaub mindert den Monatslohn — eine schon berechnete Abrechnung stimmt nicht mehr.
+  if (params.status === 'APPROVED' && absence.type === 'UNPAID') {
+    await markiereMonateVeraltet(
+      monateZwischen(absence.startDate, absence.endDate).map((m) => ({ employeeId: absence.employeeId, ...m })),
+      'unbezahlter Urlaub bewilligt',
+    );
+  }
 
   await notify({
     userId: absence.employee.user.id,
@@ -575,7 +792,7 @@ export async function decideAbsence(params: {
     title: params.status === 'APPROVED' ? 'Abwesenheit bewilligt' : 'Abwesenheit abgelehnt',
     body:
       params.status === 'APPROVED'
-        ? `Dein Antrag vom ${absence.startDate.toLocaleDateString('de-CH')} wurde bewilligt.`
+        ? `Dein Antrag vom ${formatDate(absence.startDate)} wurde bewilligt.`
         : `Dein Antrag wurde abgelehnt.${params.note ? ` Begründung: ${params.note}` : ''}`,
     link: '/portal/abwesenheiten',
   });
@@ -650,7 +867,9 @@ export async function withdrawAbsence(params: {
 
 export async function getVacationBalance(
   employeeId: string,
-  year = new Date().getFullYear(),
+  // Das Zürcher Jahr (2026-09-27), nicht das des Servers — am Neujahrsmorgen
+  // bis 01:00 galt sonst noch das alte Ferienjahr.
+  year = zuercherJahr(),
 ): Promise<{ entitlement: number; taken: number; pending: number; remaining: number }> {
   const employee = await prisma.employee.findUniqueOrThrow({
     where: { id: employeeId },
@@ -731,7 +950,9 @@ export async function getTimesheet(params: {
   const totalMinutes = entries.reduce((sum, entry) => sum + entry.minutes, 0);
   const byDay = new Map<string, number>();
   for (const entry of entries) {
-    const key = entry.startedAt.toISOString().slice(0, 10);
+    // Der Zürcher Tag des Arbeitsbeginns (2026-09-27): Mit dem UTC-Tag zählte
+    // eine Schicht, die um 00:30 begann, zum Vortag.
+    const key = zuercherTagText(entry.startedAt);
     byDay.set(key, (byDay.get(key) ?? 0) + entry.minutes);
   }
 
@@ -835,21 +1056,34 @@ export async function generatePayslip(params: {
   return payslip;
 }
 
-/** Einsatzplan einer Person für das Mitarbeiterportal. */
+/**
+ * Einsatzplan einer Person für das Mitarbeiterportal.
+ *
+ * `take` begrenzt die Liste, `gesamt` nennt trotzdem die volle Zahl. Die
+ * Einsatzliste des Portals zeigte ohne Grenze 60 Tage vollständig — bei einer
+ * dicht verplanten Person (im Prüfbestand 317 Einsätze) wurden das 1.4 MB HTML
+ * und 300 ms statt der sonst üblichen 30 ms (Wave 19, `docs/LEISTUNG.md`).
+ * Auf dem Telefon, für das die Seite gebaut ist, zählt beides doppelt.
+ */
 export async function getEmployeeSchedule(params: {
   employeeId: string;
   from: Date;
   to: Date;
+  take?: number;
+  /** Neueste zuerst — für die Liste erledigter Einsätze. */
+  absteigend?: boolean;
 }) {
-  const [jobs, absences, openEntry] = await Promise.all([
+  const where: Prisma.JobWhereInput = {
+    deletedAt: null,
+    status: { notIn: ['CANCELLED'] },
+    scheduledStart: { gte: params.from, lte: params.to },
+    assignments: { some: { employeeId: params.employeeId } },
+  };
+  const [jobs, absences, openEntry, gesamt] = await Promise.all([
     prisma.job.findMany({
-      where: {
-        deletedAt: null,
-        status: { notIn: ['CANCELLED'] },
-        scheduledStart: { gte: params.from, lte: params.to },
-        assignments: { some: { employeeId: params.employeeId } },
-      },
-      orderBy: { scheduledStart: 'asc' },
+      where,
+      take: params.take,
+      orderBy: { scheduledStart: params.absteigend ? 'desc' : 'asc' },
       include: {
         customer: { select: { firstName: true, lastName: true, companyName: true, phone: true } },
         address: true,
@@ -879,6 +1113,7 @@ export async function getEmployeeSchedule(params: {
       where: { employeeId: params.employeeId, endedAt: null },
       include: { job: { select: { id: true, number: true, title: true } } },
     }),
+    params.take === undefined ? null : prisma.job.count({ where }),
   ]);
 
   return {
@@ -886,6 +1121,7 @@ export async function getEmployeeSchedule(params: {
       ...job,
       checklistDone: job.checklist.filter((item) => item.done).length,
     })),
+    gesamt: gesamt ?? jobs.length,
     absences,
     activeTimeEntry: openEntry,
   };

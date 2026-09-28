@@ -18,7 +18,8 @@ import { navigationUrl } from '@/lib/maps/google';
 import { getOrganizationId } from '@/server/services/organization.service';
 import { breakdownForJob, getJobDetail } from '@/server/services/job.service';
 import { activeStaffWhere } from '@/server/services/profile.service';
-import { StatusBadge } from '@/components/ui/badge';
+import { Badge, StatusBadge } from '@/components/ui/badge';
+import { ActionButton } from '@/components/app/action-button';
 import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/primitives';
 import { DetailRow, DetailSection, PageHeader } from '@/components/app/page-parts';
@@ -29,6 +30,8 @@ import { JobTeamEditor } from '@/features/admin/job-team-editor';
 import { JobCostingEditor } from '@/features/admin/job-costing-editor';
 import { JobMaterialsEditor } from '@/features/admin/job-materials-editor';
 import { JobPhotos } from '@/features/admin/job-photos';
+import { FormDialog } from '@/components/app/resource-form';
+import { jobIssueFields } from '@/features/admin/betrieb-fields';
 
 export const metadata: Metadata = {
   title: 'Einsatz',
@@ -67,6 +70,7 @@ export default async function AdminJobDetailPage({
   // erstellt, darf Ansätze je Person sehen; die Betriebsleitung sieht die
   // Marge, aber nicht, was eine bestimmte Person verdient.
   const canSeeWages = can(session.role, 'payslip:create');
+  const canApproveTime = can(session.role, 'timetracking:approve');
   const closed = ['COMPLETED', 'VERIFIED', 'CANCELLED'].includes(job.status);
 
   // Für die Teamzuteilung: das aktive Personal zur Auswahl — Personalakte
@@ -111,6 +115,17 @@ export default async function AdminJobDetailPage({
         ' ',
       )
     : null;
+
+  // Nur mit `inventory:manage` — dieselbe Berechtigung wie der Endpunkt.
+  const lagerMaterial = can(session.role, 'inventory:manage')
+    ? (
+        await prisma.material.findMany({
+          where: { organizationId, active: true },
+          orderBy: { name: 'asc' },
+          select: { id: true, sku: true, name: true, unit: true },
+        })
+      ).map((m) => ({ value: m.id, label: `${m.name} (${m.sku}, ${m.unit})` }))
+    : [];
 
   const doneCount = job.checklist.filter((item) => item.done).length;
   const progress = job.checklist.length > 0 ? (doneCount / job.checklist.length) * 100 : 0;
@@ -319,8 +334,37 @@ export default async function AdminJobDetailPage({
                   ? 'Menge mal Stückpreis ergibt den Materialaufwand der Nachkalkulation.'
                   : undefined
               }
+              action={
+                /*
+                  Die Lagerentnahme hatte seit Wave 11 einen Endpunkt, aber
+                  keinen Knopf (Merkmalsprüfung, Wave 23). Sie bucht in einem
+                  Zug die Verbrauchszeile, die Entnahme im Lager und den
+                  Materialaufwand. Nach der Vor-Ort-Abnahme antwortet der
+                  Endpunkt 422 — der Knopf fragt deshalb nicht selbst nach dem
+                  Status, sondern zeigt die Meldung des Servers.
+                */
+                lagerMaterial.length > 0 ? (
+                  <FormDialog
+                    title="Material aus dem Lager entnehmen"
+                    triggerLabel="Aus dem Lager"
+                    triggerVariant="outline"
+                    triggerSize="sm"
+                    endpoint={`/api/jobs/${job.id}/material-issue`}
+                    successMessage="Entnahme gebucht."
+                    fields={jobIssueFields(lagerMaterial)}
+                    values={{ billable: false }}
+                  />
+                ) : undefined
+              }
             >
               <JobMaterialsEditor
+                // Der Editor übernimmt die Zeilen einmal in seinen Zustand.
+                // Nach einer Lagerentnahme lädt die Seite neu, der Zustand
+                // bliebe aber alt — die neue Zeile erschien erst nach einem
+                // harten Neuladen (gefunden von `wave23-masken.spec.ts`). Der
+                // Schlüssel aus den Zeilenkennungen baut ihn neu auf, sobald
+                // sich der Bestand auf dem Server geändert hat.
+                key={job.materials.map((material) => material.id).join(',')}
                 jobId={job.id}
                 readOnly={!canEdit}
                 materials={job.materials.map((material) => ({
@@ -373,6 +417,12 @@ export default async function AdminJobDetailPage({
           </DetailSection>
 
           <DetailSection title={`Team (${job.assignments.length}/${job.crewSize})`}>
+            {job.requiredSkills.length > 0 ? (
+              <p className="mb-3 text-meta text-muted-foreground">
+                Verlangte Qualifikationen: <span className="text-foreground">{job.requiredSkills.join(', ')}</span> — wer sie
+                nicht (oder nur abgelaufen) hat, lässt sich nicht einteilen.
+              </p>
+            ) : null}
             <JobTeamEditor
               jobId={job.id}
               crewSize={job.crewSize}
@@ -417,8 +467,26 @@ export default async function AdminJobDetailPage({
                       <Clock className="size-3.5 text-muted-foreground" aria-hidden />
                       {entry.employee.user.firstName} {entry.employee.user.lastName}
                     </span>
-                    <span className="text-sm tabular-nums text-muted-foreground">
+                    <span className="flex items-center gap-2 text-sm tabular-nums text-muted-foreground">
                       {entry.endedAt ? formatDuration(entry.minutes) : 'läuft'}
+                      {entry.approved ? <Badge size="sm" variant="success">freigegeben</Badge> : null}
+                      {/*
+                        Freigabe aufheben (2026-09-27) — der Endpunkt bestand,
+                        eine Schaltfläche nicht. Einzeln und mit Rückfrage, wie
+                        der Endpunkt es begründet; in einem veröffentlichten
+                        Lohnmonat verweigert ihn der Dienst.
+                      */}
+                      {entry.approved && canApproveTime ? (
+                        <ActionButton
+                          endpoint={`/api/time/${entry.id}/reopen`}
+                          label="Freigabe aufheben"
+                          confirmTitle="Freigabe aufheben?"
+                          confirm="Die Zeit lässt sich danach wieder korrigieren und muss erneut freigegeben werden."
+                          successMessage="Freigabe aufgehoben."
+                          variant="ghost"
+                          size="sm"
+                        />
+                      ) : null}
                     </span>
                   </li>
                 ))}

@@ -1,5 +1,7 @@
+import { binaerAntwort } from '@/lib/api/binary-response';
 import { defineRoute, idParam } from '@/lib/api/handler';
 import { renderJobReportPdf } from '@/lib/pdf/render';
+import { getOrganizationId } from '@/server/services/organization.service';
 
 export const runtime = 'nodejs';
 export const maxDuration = 60;
@@ -15,15 +17,16 @@ export const GET = defineRoute({
   permissions: ['job:read'],
   params: idParam,
   rateLimit: 'apiRead',
-  handler: async ({ params }) => {
-    const { buffer, filename } = await renderJobReportPdf(params.id);
+  handler: async ({ params, request }) => {
+    const { buffer, filename } = await renderJobReportPdf(await getOrganizationId(), params.id);
 
-    return new Response(new Uint8Array(buffer), {
-      headers: {
-        'Content-Type': 'application/pdf',
-        'Content-Disposition': `attachment; filename="${filename}"`,
-        'Cache-Control': 'private, no-store',
-      },
+    return binaerAntwort({
+      bytes: buffer,
+      mimeType: 'application/pdf',
+      filename,
+      disposition: 'attachment',
+      request,
+      cacheControl: 'private, no-store',
     });
   },
 });

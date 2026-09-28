@@ -1,13 +1,21 @@
 import 'server-only';
 
-import type { DocumentVisibility, Prisma } from '@prisma/client';
+import type { DocumentVisibility, FileProvenance, FileScanStatus, Prisma } from '@prisma/client';
+import { darfAusgeliefertWerden as pruefeAuslieferung } from '@/lib/security/malware/auslieferung';
 
 import { prisma } from '@/lib/db';
 import { audit } from '@/lib/audit';
 import { can } from '@/lib/auth/rbac';
 import type { SessionUser } from '@/lib/auth/session';
 import { BusinessRuleError, NotFoundError } from '@/lib/errors';
-import { createSignedDownloadUrl } from '@/lib/storage';
+import {
+  createSignedDownloadUrl,
+  leseAblageGeprueft,
+  readLocalBytes,
+  readStoredBytes,
+  usesRemoteStorage,
+  type Dateiauslieferung,
+} from '@/lib/storage';
 import { addDays, today } from '@/lib/bi/periods';
 import type { AddDocumentVersionInput, CreateDocumentInput, UpdateDocumentInput } from '@/lib/validation/bi-knowledge';
 import { notify } from './notification.service';
@@ -45,7 +53,10 @@ export function documentVisibilityWhere(session: SessionUser, organizationId: st
   if (can(session.role, 'document:read_own')) {
     return { ...base, OR: [{ visibility: 'STAFF' }, ...(own ? [own] : [])] };
   }
-  return { ...base, id: '__keines__' };
+  // Die Sperre als `AND`-Glied, nicht als `id` (2026-09-27): Aufrufer
+  // verbreiten die Sichtregel und setzen danach ihr eigenes `id` — das hätte
+  // die Sperre still ersetzt.
+  return { ...base, AND: [{ id: '__keines__' }] };
 }
 
 const include = {
@@ -100,6 +111,61 @@ function defaultVisibility(input: { category: string; visibility?: string }): Do
   return input.category === 'EMPLOYEE' ? 'EMPLOYEE_PRIVATE' : 'MANAGEMENT';
 }
 
+/**
+ * Eine bereits geprüfte Datei für dieses Dokument beanspruchen.
+ *
+ * **Warum das Dokument keine Datei mehr anlegt.** Vorher kamen `path`, `url`,
+ * `mimeType` und `sizeBytes` aus dem Formular und wurden unbesehen zu einem
+ * `FileAsset` — eine zweite Stelle neben `POST /api/media`, an der der Client
+ * eine Datei erfinden konnte, und ausgerechnet für Personal- und
+ * Vertragsdokumente.
+ *
+ * Jetzt wird nur beansprucht, was der Abschluss bereits geprüft hat. Die
+ * Bedingungen in der Abfrage sind die Prüfung: richtige Organisation,
+ * Prüfsumme vorhanden (also abgeschlossen) und noch keiner Fassung
+ * zugeordnet. Trifft eine davon nicht zu, gibt es keine Fassung.
+ *
+ * **Dieselben Bindungsregeln wie `dateienBinden`** (2026-09-27): nur ein
+ * eigener Upload, an nichts anderem gebunden (Nachricht, Buchung, Beleg),
+ * nicht öffentlich, nicht als schädlich oder unprüfbar markiert. Vorher
+ * reichten Organisation und Zweck — die Verwaltung konnte den Upload einer
+ * Kundin oder den Anhang einer Nachricht zur Fassung einer Führungsakte
+ * machen, und damit unter eine ganz andere Sichtbarkeit stellen. Und die
+ * Zeile wird gesperrt (`FOR UPDATE`): Ohne Sperre konnten zwei
+ * gleichzeitige Fassungen dieselbe Datei beanspruchen, weil „noch keiner
+ * Fassung zugeordnet" für beide stimmte.
+ */
+async function beanspruchteDatei(
+  tx: Prisma.TransactionClient,
+  organizationId: string,
+  fileId: string,
+  uploadedById: string,
+) {
+  await tx.$queryRaw`SELECT id FROM file_assets WHERE id = ${fileId} FOR UPDATE`;
+  const file = await tx.fileAsset.findFirst({
+    where: {
+      id: fileId,
+      organizationId,
+      uploadedById,
+      checksum: { not: null },
+      scope: 'DOCUMENT',
+      isPublic: false,
+      scanStatus: { notIn: ['INFECTED', 'QUARANTINED', 'ERROR'] },
+      messageId: null,
+      bookingId: null,
+      expenseId: null,
+      versions: { none: {} },
+    },
+    select: { id: true },
+  });
+  // 404 wie `dateienBinden` (2026-09-27): eine Datei, die nicht gebunden
+  // werden darf — fremd, schon vergeben, nicht die eigene —, ist für diesen
+  // Weg nicht vorhanden. Vorher 422; die Antwort verriet zwar nichts, wich aber
+  // als einzige Bindungsstelle von der gemeinsamen Regel ab.
+  if (!file) throw new NotFoundError('Datei');
+  return file;
+}
+
 export async function createDocument(session: SessionUser, organizationId: string, input: CreateDocumentInput) {
   const visibility = defaultVisibility(input);
   if (visibility === 'EMPLOYEE_PRIVATE' && !input.subjectEmployeeId) {
@@ -126,10 +192,8 @@ export async function createDocument(session: SessionUser, organizationId: strin
         createdById: session.id,
       },
     });
-    if (input.file) {
-      const file = await tx.fileAsset.create({
-        data: { organizationId, path: input.file.path, url: input.file.url, filename: input.file.filename, mimeType: input.file.mimeType, sizeBytes: input.file.sizeBytes, scope: 'DOCUMENT', isPublic: false, uploadedById: session.id },
-      });
+    if (input.fileId) {
+      const file = await beanspruchteDatei(tx, organizationId, input.fileId, session.id);
       const version = await tx.documentVersion.create({
         data: { documentId: doc.id, version: 1, fileAssetId: file.id, changeNote: input.changeNote ?? null, uploadedById: session.id },
       });
@@ -171,21 +235,29 @@ export async function updateDocument(session: SessionUser, organizationId: strin
 export async function addDocumentVersion(session: SessionUser, organizationId: string, id: string, input: AddDocumentVersionInput) {
   const document = await prisma.managedDocument.findFirst({
     where: { ...documentVisibilityWhere(session, organizationId), id },
-    include: { versions: { orderBy: { version: 'desc' }, take: 1 } },
+    select: { id: true, title: true },
   });
   if (!document) throw new NotFoundError('Dokument');
-  const nextVersion = (document.versions[0]?.version ?? 0) + 1;
+  /*
+    Die nächste Nummer in der Transaktion, hinter einer Zeilensperre am
+    Dokument (2026-09-27). Vorher wurde sie davor gelesen: Fünf gleichzeitige
+    Fassungen rechneten alle mit derselben Nummer, vier scheiterten am
+    eindeutigen Index mit 409 — und die hochgeladene Datei war verloren,
+    obwohl niemand etwas falsch gemacht hatte. Jetzt kommen alle fünf durch,
+    lückenlos nummeriert, und die höchste gilt.
+  */
   const version = await prisma.$transaction(async (tx) => {
-    const file = await tx.fileAsset.create({
-      data: { organizationId, path: input.file.path, url: input.file.url, filename: input.file.filename, mimeType: input.file.mimeType, sizeBytes: input.file.sizeBytes, scope: 'DOCUMENT', isPublic: false, uploadedById: session.id },
-    });
+    await tx.$queryRaw`SELECT id FROM managed_documents WHERE id = ${id} FOR UPDATE`;
+    const letzte = await tx.documentVersion.findFirst({ where: { documentId: id }, orderBy: { version: 'desc' }, select: { version: true } });
+    const nextVersion = (letzte?.version ?? 0) + 1;
+    const file = await beanspruchteDatei(tx, organizationId, input.fileId, session.id);
     const created = await tx.documentVersion.create({
       data: { documentId: id, version: nextVersion, fileAssetId: file.id, changeNote: input.changeNote ?? null, uploadedById: session.id },
     });
     await tx.managedDocument.update({ where: { id }, data: { currentVersionId: created.id } });
     return created;
   });
-  await audit.updated({ organizationId, userId: session.id, entity: 'ManagedDocument', entityId: id, summary: `Dokument „${document.title}": Fassung ${nextVersion} hochgeladen` });
+  await audit.updated({ organizationId, userId: session.id, entity: 'ManagedDocument', entityId: id, summary: `Dokument „${document.title}": Fassung ${version.version} hochgeladen` });
   return version;
 }
 
@@ -203,17 +275,49 @@ export async function deleteDocument(session: SessionUser, organizationId: strin
  * Dokument geprüft, nie über die Datei: eine `FileAsset`-ID allein öffnet
  * hier nichts.
  */
-export async function resolveDocumentDownload(session: SessionUser, organizationId: string, id: string, version?: number, ip?: string | null) {
+export async function resolveDocumentDownload(
+  session: SessionUser,
+  organizationId: string,
+  id: string,
+  version?: number,
+  ip?: string | null,
+): Promise<Dateiauslieferung> {
   const document = await prisma.managedDocument.findFirst({
     where: { ...documentVisibilityWhere(session, organizationId), id },
-    include: { currentVersion: { include: { file: true } } },
+    include: { currentVersion: { include: { file: { include: { storedFile: true } } } } },
   });
   if (!document) throw new NotFoundError('Dokument');
   const target = version
-    ? await prisma.documentVersion.findFirst({ where: { documentId: id, version }, include: { file: true } })
+    ? await prisma.documentVersion.findFirst({
+        where: { documentId: id, version },
+        include: { file: { include: { storedFile: true } } },
+      })
     : document.currentVersion;
   if (!target) throw new NotFoundError('Fassung');
-  const url = await createSignedDownloadUrl(target.file.path, 600);
+
+  const file = target.file;
+  auslieferbarOderNicht(file);
+
+  /**
+   * Ohne externen Objektspeicher gibt es keine befristete Adresse, auf die
+   * sich weiterleiten liesse (siehe `Dateiauslieferung`). Dann liefert dieser
+   * Dienst die Bytes selbst aus — hier, wo `documentVisibilityWhere` bereits
+   * in der `where`-Klausel steht und `EMPLOYEE_PRIVATE` mitgeprüft ist.
+   */
+  /*
+    Mit Ablagezeile liefert der Dienst die Bytes selbst aus, für **beide**
+    Treiber und gegen die Prüfsumme gelesen (2026-09-27, F-09 c). Vorher
+    leitete er beim externen Speicher auf eine befristete Supabase-Adresse
+    weiter: Die Berechtigung war geprüft, die Bytes aber nicht — eine
+    veränderte Datei im Bucket ging unbemerkt hinaus. Nur Fassungen ohne
+    Ablagezeile (Altbestand vor F-09 c) nehmen noch den alten Weg.
+  */
+  const ausgeliefert: Dateiauslieferung = file.storedFile
+    ? { art: 'bytes', bytes: await geprueftLesen(file.storedFile, file.checksum), filename: file.filename, mimeType: file.mimeType }
+    : usesRemoteStorage()
+      ? { art: 'weiterleitung', url: await createSignedDownloadUrl(file.path, 600), filename: file.filename, mimeType: file.mimeType }
+      : { art: 'bytes', bytes: await fassungsBytes(file), filename: file.filename, mimeType: file.mimeType };
+
   await audit.exported({
     organizationId,
     userId: session.id,
@@ -222,7 +326,133 @@ export async function resolveDocumentDownload(session: SessionUser, organization
     summary: `Dokument „${document.title}" (Fassung ${target.version}) heruntergeladen`,
     ip,
   });
-  return { url, filename: target.file.filename, mimeType: target.file.mimeType };
+  return ausgeliefert;
+}
+
+/**
+ * Das Auslieferungstor der Schadsoftwareprüfung — dasselbe wie in der
+ * Dateiroute (2026-09-27).
+ *
+ * Dokumente gingen bis dahin daran vorbei: Die Sichtbarkeit wurde geprüft,
+ * der Prüfstand nicht. Eine Fassung im Status PENDING, INFECTED oder
+ * QUARANTINED liess sich herunterladen und ansehen, solange man das Dokument
+ * sehen durfte. Die Antwort ist 404, nicht „in Quarantäne": Sie soll nicht
+ * mehr verraten als die Dateiroute.
+ */
+function auslieferbarOderNicht(file: { scanStatus: FileScanStatus; provenance: FileProvenance }): void {
+  if (!pruefeAuslieferung(file).erlaubt) throw new NotFoundError('Datei');
+}
+
+/**
+ * Die Bytes einer Fassung — aus der Ablagezeile, sonst über den einen
+ * zugelassenen Altbestandsweg.
+ *
+ * Herausgezogen, weil Ansehen und Herunterladen dieselbe Datei meinen. Zwei
+ * Abschriften dieser Auflösung liefen bei der nächsten Änderung auseinander,
+ * und die Abweichung fiele erst auf, wenn ein Dokument sich ansehen, aber
+ * nicht herunterladen lässt.
+ */
+/**
+ * Bytes aus der Ablage lesen und gegen die Prüfsumme halten — scheitert
+ * geschlossen: fehlt die Datei oder weicht sie ab, gibt es sie auf diesem Weg
+ * nicht (404), statt anderer Bytes. Die Quarantäne einer abweichenden Datei
+ * setzt die Dateiroute (`liesFreigegebeneDatei`); hier genügt die Absage.
+ * Auch vom Berichtsdownload benutzt.
+ */
+export async function geprueftLesen(
+  ablage: { id: string; path: string; driver: 'LOCAL' | 'SUPABASE'; checksum: string | null },
+  assetChecksum: string | null,
+): Promise<Buffer> {
+  const gelesen = await leseAblageGeprueft(ablage, assetChecksum);
+  if (gelesen.status !== 'ok') throw new NotFoundError('Datei');
+  return gelesen.bytes;
+}
+
+async function fassungsBytes(file: {
+  url: string;
+  scanStatus: FileScanStatus;
+  provenance: FileProvenance;
+  storedFile: { id: string; path: string; driver: 'LOCAL' | 'SUPABASE' } | null;
+}): Promise<Buffer> {
+  auslieferbarOderNicht(file);
+  let bytes: Buffer | null = null;
+
+  if (file.storedFile) {
+    bytes = await readStoredBytes({
+      id: file.storedFile.id,
+      path: file.storedFile.path,
+      driver: file.storedFile.driver,
+    });
+  } else {
+    /**
+     * Altbestand vor Gate 2: kein Fremdschlüssel zur Ablage, nur die
+     * gespeicherte Adresse. Der kontrollierte Legacy-Weg — exakt diese eine
+     * Adressform, nichts erraten. Passt sie nicht, gibt es die Datei über
+     * diesen Weg nicht.
+     */
+    const treffer = /^\/api\/files\/blob\/([A-Za-z0-9_-]+)$/.exec(file.url);
+    if (treffer) bytes = await readLocalBytes(treffer[1]!);
+  }
+
+  if (!bytes) throw new NotFoundError('Datei');
+  return bytes;
+}
+
+/**
+ * Die Bytes einer Dokumentfassung für die Anzeige — mit derselben
+ * Sichtbarkeitsprüfung wie alles andere in diesem Dienst.
+ *
+ * **Warum nicht die Download-Route wiederverwendet wird.** Sie leitet auf
+ * eine Speicheradresse weiter. Für den Viewer taugt das nicht: Er lädt die
+ * Bytes selbst, um Zugriff, „nicht gefunden" und Beschädigung
+ * auseinanderzuhalten, und eine Weiterleitung nimmt ihm diese Auskunft.
+ * Vor allem aber prüft die Speicheradresse (`/api/files/blob/…`) die
+ * Berechtigung gröber als dieses Modul: Sie kennt `document:read`, nicht
+ * `EMPLOYEE_PRIVATE` und die betroffene Person. `documentVisibilityWhere`
+ * ist die Quelle, und sie steht hier in der `where`-Klausel.
+ *
+ * **Welche Fassung.** Immer eine ausdrücklich benannte oder die geltende —
+ * und die Antwort sagt, welche es war. Gate 4 wird eine Signatur an genau
+ * eine Fassung binden; ein Viewer, der stillschweigend „die aktuelle" zeigt,
+ * wäre dafür die falsche Grundlage.
+ *
+ * Angesehen wird protokolliert wie heruntergeladen: Ein Personaldokument zu
+ * öffnen ist ein Zugriff, egal ob der Browser es speichert oder zeigt.
+ */
+export async function resolveDocumentContent(
+  session: SessionUser,
+  organizationId: string,
+  id: string,
+  version?: number,
+  ip?: string | null,
+): Promise<{ bytes: Buffer; filename: string; mimeType: string; version: number }> {
+  const document = await prisma.managedDocument.findFirst({
+    where: { ...documentVisibilityWhere(session, organizationId), id },
+    include: { currentVersion: { include: { file: { include: { storedFile: true } } } } },
+  });
+  if (!document) throw new NotFoundError('Dokument');
+
+  const target = version
+    ? await prisma.documentVersion.findFirst({
+        where: { documentId: id, version },
+        include: { file: { include: { storedFile: true } } },
+      })
+    : document.currentVersion;
+  if (!target) throw new NotFoundError('Fassung');
+
+  const file = target.file;
+  const bytes = await fassungsBytes(file);
+
+  await audit.exported({
+    organizationId,
+    userId: session.id,
+    entity: 'ManagedDocument',
+    entityId: id,
+    summary: `Dokument „${document.title}" (Fassung ${target.version}) angesehen`,
+    ip,
+  });
+
+  return { bytes, filename: file.filename, mimeType: file.mimeType, version: target.version };
 }
 
 /** Nachtlauf: ablaufende Dokumente einmal melden. */

@@ -3,9 +3,13 @@ import Link from 'next/link';
 import { CalendarDays, Truck } from 'lucide-react';
 
 import { requirePermission } from '@/lib/auth/session';
+import { can } from '@/lib/auth/rbac';
+import { prisma } from '@/lib/db';
 import { formatDate, formatDuration, formatTime, toQueryString } from '@/lib/utils';
+import { periodOf } from '@/lib/bi/periods';
 import { getOrganizationId } from '@/server/services/organization.service';
 import { listJobs } from '@/server/services/job.service';
+import { JobCreateButton } from '@/features/admin/job-create-dialog';
 import { StatusBadge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { PersonAvatar } from '@/components/ui/primitives';
@@ -47,10 +51,37 @@ export default async function AdminJobsPage({
 }: {
   searchParams: Promise<Record<string, string | undefined>>;
 }) {
-  await requirePermission('job:read');
+  const session = await requirePermission('job:read');
 
   const params = await searchParams;
   const organizationId = await getOrganizationId();
+
+  /**
+   * Auswahllisten für das Anlegeformular — nur geladen, wenn die Rolle den
+   * Einsatz überhaupt anlegen darf. Sonst zahlte jede Listenansicht zwei
+   * Abfragen für ein Formular, das sie nie zu sehen bekommt.
+   *
+   * Gedeckelt auf 200 Kundschaften: Ein Auswahlfeld mit mehr Einträgen ist
+   * ohnehin unbedienbar. Wächst der Bestand darüber hinaus, braucht das Feld
+   * eine Suche — und die gehört dann in die Kundenauswahl insgesamt, nicht
+   * nur hierher.
+   */
+  const darfAnlegen = can(session.role, 'job:create');
+  const [kundschaft, leistungen] = darfAnlegen
+    ? await Promise.all([
+        prisma.customer.findMany({
+          where: { organizationId, deletedAt: null },
+          select: { id: true, number: true, firstName: true, lastName: true, companyName: true },
+          orderBy: [{ companyName: 'asc' }, { lastName: 'asc' }],
+          take: 200,
+        }),
+        prisma.service.findMany({
+          where: { organizationId, active: true },
+          select: { id: true, name: true },
+          orderBy: { name: 'asc' },
+        }),
+      ])
+    : [[], []];
 
   const page = Math.max(1, Number(params.seite) || 1);
   const pageSize = 25;
@@ -85,12 +116,23 @@ export default async function AdminJobsPage({
         title="Einsätze"
         description="Die Betriebssicht auf jeden Auftrag: wer, wann, wo, mit welcher Checkliste. Zum Disponieren nutzen Sie den Kalender."
         actions={
-          <Button asChild variant="outline">
-            <Link href="/admin/kalender">
-              <CalendarDays aria-hidden />
-              Kalender
-            </Link>
-          </Button>
+          <>
+            <Button asChild variant="outline">
+              <Link href="/admin/kalender">
+                <CalendarDays aria-hidden />
+                Kalender
+              </Link>
+            </Button>
+            {darfAnlegen ? (
+              <JobCreateButton
+                customers={kundschaft.map((kunde) => ({
+                  id: kunde.id,
+                  label: `${kunde.companyName ?? `${kunde.firstName} ${kunde.lastName}`} · ${kunde.number}`,
+                }))}
+                services={leistungen}
+              />
+            ) : null}
+          </>
         }
       >
         <FilterBar
@@ -198,17 +240,23 @@ export default async function AdminJobsPage({
   );
 }
 
+/**
+ * Filterzeiträume in Zürcher Zeit (2026-09-27). Vorher begannen „Heute" und
+ * „Diese Woche" um Mitternacht in der Zone des Servers, also um 01:00/02:00
+ * Zürcher Zeit, und der Montag war ein UTC-Montag.
+ */
 function resolvePeriod(value: string | undefined): { from?: Date; to?: Date } {
   const now = new Date();
-  const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const startOfDay = periodOf('DAY', now).from;
 
   switch (value) {
-    case 'heute':
-      return { from: startOfDay, to: new Date(startOfDay.getTime() + 86_400_000) };
+    case 'heute': {
+      const p = periodOf('DAY', now);
+      return { from: p.from, to: p.to };
+    }
     case 'woche': {
-      const monday = new Date(startOfDay);
-      monday.setDate(monday.getDate() - ((monday.getDay() + 6) % 7));
-      return { from: monday, to: new Date(monday.getTime() + 7 * 86_400_000) };
+      const p = periodOf('WEEK', now);
+      return { from: p.from, to: p.to };
     }
     case 'vergangen':
       return { to: now };

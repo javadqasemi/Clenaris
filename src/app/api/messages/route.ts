@@ -1,11 +1,11 @@
 import { defineRoute } from '@/lib/api/handler';
 import { created, ok } from '@/lib/api/response';
 import { prisma, type Prisma } from '@/lib/db';
-import { ForbiddenError, NotFoundError } from '@/lib/errors';
+import { ForbiddenError } from '@/lib/errors';
 import { createThreadSchema } from '@/lib/validation/messaging';
 import { threadListQuery } from '@/lib/validation/queries';
+import { openThread } from '@/server/services/message.service';
 import { getOrganizationId } from '@/server/services/organization.service';
-import { notifyStaff } from '@/server/services/notification.service';
 
 export const runtime = 'nodejs';
 
@@ -22,7 +22,11 @@ export const GET = defineRoute({
   query: threadListQuery,
   rateLimit: 'apiRead',
   handler: async ({ query, session }) => {
+    // Die Organisation steht vor jeder Rollenregel (2026-09-27). Vorher filterte
+    // die Liste gar nicht danach, und das Büro sah die Verläufe jeder
+    // Organisation — der Rollenfilter darunter engt nur *innerhalb* ein.
     const where: Prisma.MessageThreadWhereInput = {
+      organizationId: await getOrganizationId(),
       ...(query.status === 'all' ? {} : { closed: query.status === 'closed' }),
     };
 
@@ -80,85 +84,13 @@ export const GET = defineRoute({
 /**
  * POST /api/messages — neuen Verlauf eröffnen.
  *
- * Der Thread wird immer an die Kundschaft gebunden, auch wenn ihn das Büro
- * anlegt: sonst taucht die Antwort im Kundenkonto nicht auf.
+ * Die Regeln (Sicht, Einsatz- und Buchungsbezug, Mitteilung ans Büro) stehen
+ * in `openThread` (`message.service.ts`); hier bleibt, was HTTP ist.
  */
 export const POST = defineRoute({
   permissions: ['message:create', 'message:write_own'],
   anyPermission: true,
   body: createThreadSchema,
   rateLimit: 'apiWrite',
-  handler: async ({ body, session }) => {
-    const organizationId = await getOrganizationId();
-
-    const customer = await prisma.customer.findFirst({
-      where: { userId: session.id },
-      select: { id: true, firstName: true, lastName: true, companyName: true },
-    });
-
-    // Mitarbeitende ohne Kundenkonto dürfen nur zu einem Auftrag schreiben.
-    if (!customer && !body.jobId) {
-      throw new ForbiddenError(
-        'Ohne verknüpftes Kundenkonto lässt sich nur zu einem Einsatz schreiben.',
-      );
-    }
-
-    // …und nur zu einem, dem sie zugeteilt sind. Die Einsatz-ID kommt aus dem
-    // Körper; ohne Prüfung liesse sich an jeden Einsatz des Betriebs schreiben.
-    if (body.jobId && session.role === 'EMPLOYEE') {
-      const assigned = await prisma.job.count({
-        where: {
-          id: body.jobId,
-          organizationId,
-          deletedAt: null,
-          assignments: { some: { employeeId: session.profileId ?? '__keines__' } },
-        },
-      });
-      if (!assigned) throw new NotFoundError('Einsatz');
-    }
-
-    if (body.bookingId) {
-      const booking = await prisma.booking.findFirst({
-        where: {
-          id: body.bookingId,
-          ...(customer ? { customerId: customer.id } : {}),
-        },
-        select: { id: true },
-      });
-      if (!booking) throw new NotFoundError('Buchung');
-    }
-
-    const thread = await prisma.messageThread.create({
-      data: {
-        subject: body.subject,
-        customerId: customer?.id ?? null,
-        jobId: body.jobId ?? null,
-        lastMessageAt: new Date(),
-        messages: {
-          create: {
-            authorId: session.id,
-            authorType: session.role === 'CUSTOMER' ? 'CUSTOMER' : 'STAFF',
-            body: body.body,
-          },
-        },
-      },
-      select: { id: true, subject: true },
-    });
-
-    const senderName = customer
-      ? (customer.companyName ?? `${customer.firstName} ${customer.lastName}`)
-      : `${session.firstName} ${session.lastName}`;
-
-    if (session.role === 'CUSTOMER') {
-      await notifyStaff({
-        organizationId,
-        title: 'Neue Nachricht von der Kundschaft',
-        body: `${senderName}: ${thread.subject}`,
-        link: `/admin/nachrichten?verlauf=${thread.id}`,
-        permission: 'message:read',
-      });
-    }
-
-    return created({ id: thread.id, subject: thread.subject });
-  },
+  handler: async ({ body, session }) => created(await openThread({ session, input: body })),
 });

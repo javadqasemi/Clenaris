@@ -3,7 +3,9 @@ import assert from 'node:assert/strict';
 
 import { del, get, nextSecond, patch, post, requireServer, sleep } from '../helpers/client';
 import { ACCOUNTS, login, loginAs } from '../helpers/accounts';
+import { resetRateLimits } from '../helpers/rate-limit';
 import { totp } from '../helpers/totp';
+import { eigeneOrganisationId, testDb, testDbGrund, testDbSchliessen } from '../helpers/testdb';
 
 /**
  * Zwei-Faktor-Anmeldung, von aussen über HTTP.
@@ -30,7 +32,8 @@ describe('Zwei-Faktor-Anmeldung', { concurrency: 1 }, () => {
     await requireServer();
     superJar = await loginAs('super');
 
-    const list = await get<{ data: { id: string; email: string }[] }>('/api/users?perPage=100', {
+    // `perPage` gab es nie (ignoriert); seit die Liste seitenweise ist, wird gezielt gesucht.
+    const list = await get<{ data: { id: string; email: string }[] }>(`/api/users?q=${encodeURIComponent(SUBJECT.email)}`, {
       jar: superJar,
     });
     const found = list.payload?.data?.find((user) => user.email === SUBJECT.email);
@@ -391,5 +394,141 @@ describe('Zwei-Faktor-Anmeldung', { concurrency: 1 }, () => {
 
       await patch(`/api/users/${subjectId}/role`, { role: 'MANAGER' }, { jar: superJar });
     });
+  });
+});
+
+// ===========================================================================
+//  Nebenläufigkeit: derselbe Ersatzcode, fünfmal gleichzeitig
+// ===========================================================================
+
+/**
+ * Ein Wiederherstellungscode öffnet genau **eine** Sitzung — auch dann, wenn
+ * er fünfmal im selben Augenblick vorgelegt wird.
+ *
+ * Nacheinander war das belegt („nimmt denselben Code kein zweites Mal"),
+ * gleichzeitig nicht. Gerade dort lag der Fehler: `completeMfaLogin` las den
+ * Vorrat, prüfte zehn Argon2-Hashes und schrieb danach die Liste ohne den
+ * Code zurück. Alle fünf Anfragen lasen denselben Vorrat, bevor die erste
+ * schrieb, und bekamen alle eine Sitzung. Wer einen abgeschriebenen Code in
+ * die Hände bekommt, hätte ihn so parallel zur Besitzerin mitbenutzen können.
+ *
+ * **Wegwerfkonto statt Demokonto.** Die Betriebsleitung oben teilen alle
+ * Dateien über den Sitzungs-Cache; ein nach einem Abbruch stehen gebliebener
+ * Faktor legte die ganze folgende Reihe lahm. Das Konto dieser Domain räumt
+ * `ersatzcodeAufraeumen()` vor und nach dem Lauf weg, samt Protokollzeilen.
+ *
+ * Alle fünf Anfragen tragen **denselben** Zwischenschein. Das ist nicht
+ * geschönt: Der Schein ist zustandslos und bis zu seinem Ablauf beliebig oft
+ * vorlegbar — die Einmaligkeit hängt allein am Code. Fünf eigene Anmeldungen
+ * verbrauchten zudem das Anmeldelimit (acht je fünf Minuten und Adresse), auf
+ * dem auch `/api/auth/2fa/verify` liegt.
+ */
+const ERSATZ_DOMAIN = '@zweifaktor-nebenlaeufig-pruef.example.ch';
+const ERSATZ_PASSWORT = 'Ersatz#2026Gleichzeitig';
+
+async function ersatzcodeAufraeumen(): Promise<void> {
+  const db = testDb();
+  if (!db) return;
+  const konten = await db.user.findMany({ where: { email: { endsWith: ERSATZ_DOMAIN } }, select: { id: true } });
+  const ids = konten.map((konto) => konto.id);
+  if (ids.length === 0) return;
+  await db.securityEvent.deleteMany({ where: { userId: { in: ids } } });
+  await db.auditLog.deleteMany({ where: { OR: [{ userId: { in: ids } }, { entityId: { in: ids } }] } });
+  await db.refreshToken.deleteMany({ where: { userId: { in: ids } } });
+  await db.user.deleteMany({ where: { id: { in: ids } } });
+}
+
+describe('Zwei-Faktor-Anmeldung: Nebenläufigkeit der Ersatzcodes', { concurrency: 1 }, () => {
+  const email = `gleichzeitig.${Date.now()}${ERSATZ_DOMAIN}`;
+  let userId = '';
+  let codes: string[] = [];
+
+  before(async () => {
+    await requireServer();
+    const db = testDb();
+    assert.ok(db, `kein Zugang zur Testdatenbank: ${testDbGrund()}`);
+    await ersatzcodeAufraeumen();
+
+    const org = await eigeneOrganisationId();
+    assert.ok(org, 'eigene Organisation nicht gefunden');
+    const { hashPassword } = await import('../../src/lib/auth/password');
+    const user = await db.user.create({
+      data: {
+        organizationId: org,
+        email,
+        passwordHash: await hashPassword(ERSATZ_PASSWORT),
+        firstName: 'Ersatz',
+        lastName: 'Gleichzeitig',
+        role: 'CUSTOMER',
+        status: 'ACTIVE',
+      },
+      select: { id: true },
+    });
+    userId = user.id;
+
+    // Volles Kontingent: eine Anmeldung zum Einrichten, eine für den
+    // Zwischenschein, fünf Einlösungen — sieben von acht.
+    resetRateLimits();
+    const anmeldung = await login(email, ERSATZ_PASSWORT);
+    assert.equal(anmeldung.status, 200, anmeldung.text);
+    const setup = await post<{ data: { secret: string } }>('/api/auth/2fa/setup', undefined, { jar: anmeldung.jar });
+    assert.equal(setup.status, 200, setup.text);
+    const confirm = await post<{ data: { recoveryCodes: string[] } }>(
+      '/api/auth/2fa/confirm',
+      { token: totp(setup.payload.data.secret) },
+      { jar: anmeldung.jar },
+    );
+    assert.equal(confirm.status, 200, confirm.text);
+    codes = confirm.payload.data.recoveryCodes;
+    assert.equal(codes.length, 10);
+  });
+
+  after(async () => {
+    await ersatzcodeAufraeumen();
+    await testDbSchliessen();
+  });
+
+  it('derselbe Ersatzcode fünfmal gleichzeitig eingelöst: genau eine Sitzung, vier 401, ein Code weniger im Vorrat', async () => {
+    const db = testDb()!;
+    const schritt1 = await login(email, ERSATZ_PASSWORT);
+    assert.equal(schritt1.status, 200, schritt1.text);
+    assert.equal(schritt1.payload.data.twoFactorRequired, true);
+
+    const sitzungenVorher = await db.refreshToken.count({ where: { userId } });
+
+    const antworten = await Promise.all(
+      Array.from({ length: 5 }, () =>
+        post<{ data: { usedRecoveryCode: boolean; remainingRecoveryCodes: number } }>(
+          '/api/auth/2fa/verify',
+          { token: codes[0] },
+          { jar: schritt1.jar },
+        ),
+      ),
+    );
+    const status = antworten.map((antwort) => antwort.status).sort();
+
+    assert.deepEqual(status, [200, 401, 401, 401, 401], `Statuscodes: ${status.join(', ')}`);
+
+    const gewinner = antworten.find((antwort) => antwort.status === 200)!;
+    assert.equal(gewinner.payload.data.usedRecoveryCode, true);
+    assert.equal(gewinner.payload.data.remainingRecoveryCodes, 9, 'der Gewinner meldet einen falschen Restvorrat');
+
+    // Die Verlierer dürfen kein Zugangstoken erhalten haben — ein 401 mit
+    // gesetztem Cookie wäre eine geöffnete Sitzung mit falschem Statuscode.
+    const mitToken = antworten.filter((antwort) => /clenaris_at=[^;\s]/.test(antwort.cookies));
+    assert.equal(mitToken.length, 1, `${mitToken.length} Zugangstoken ausgestellt`);
+
+    // Und der Bestand: eine neue Sitzung, genau ein Code verbraucht, genau
+    // eine Anmeldung per Ersatzcode in den Sicherheitsereignissen.
+    assert.equal(await db.refreshToken.count({ where: { userId } }), sitzungenVorher + 1, 'mehr als eine Sitzung entstanden');
+    const vorrat = await db.user.findUniqueOrThrow({ where: { id: userId }, select: { twoFactorRecoveryCodes: true } });
+    assert.equal(vorrat.twoFactorRecoveryCodes.length, 9);
+    assert.equal(
+      await db.securityEvent.count({
+        where: { userId, kind: 'LOGIN_SUCCEEDED', summary: { contains: 'Wiederherstellungscode' } },
+      }),
+      1,
+      'mehr als eine Anmeldung per Ersatzcode protokolliert',
+    );
   });
 });

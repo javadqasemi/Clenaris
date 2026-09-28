@@ -6,6 +6,8 @@ import { prisma, toNumber } from '@/lib/db';
 import { requirePermission } from '@/lib/auth/session';
 import { can, ROLE_LABELS } from '@/lib/auth/rbac';
 import { formatDate, formatDuration } from '@/lib/utils';
+import { periodOf } from '@/lib/bi/periods';
+import { zuercherTag } from '@/lib/zuerich';
 import { getOrganizationId } from '@/server/services/organization.service';
 import { listEmployees, getVacationBalance } from '@/server/services/employee.service';
 import { Badge, StatusBadge } from '@/components/ui/badge';
@@ -51,9 +53,12 @@ export default async function StaffPage({
 
   const organizationId = await getOrganizationId();
   const now = new Date();
-  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+  // Zürcher Monatsbeginn (für `startedAt`) und Zürcher Tag (für die
+  // `@db.Date`-Spalten der Abwesenheit), 2026-09-27 — vorher Monat und Tag in
+  // der Zone des Servers: zwischen Mitternacht und 02:00 „abwesend gestern".
+  const monthStart = periodOf('MONTH', now).from;
 
-  const today = new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()));
+  const today = zuercherTag(now);
 
   const [employees, pendingAbsences, monthTime, workingNow, absentToday] = await Promise.all([
     listEmployees({ organizationId, includeInactive: true, q: filter.q }),

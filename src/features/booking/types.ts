@@ -39,6 +39,8 @@ export interface PriceLineDto {
 
 export interface PriceBreakdownDto {
   service: { id: string; name: string; kind: string; pricingModel: string };
+  /** Alle gewählten Leistungen mit ihrer Dauer. */
+  positionen: PricePositionDto[];
   lines: PriceLineDto[];
   durationMinutes: number;
   crewSize: number;
@@ -85,7 +87,29 @@ export interface AvailabilityDto {
   date: string;
   closed: boolean;
   reason?: string;
+  /** Hat der Tag mindestens ein buchbares Zeitfenster? */
+  available?: boolean;
   slots: TimeSlotDto[];
+}
+
+/** Antwort von `POST /api/public/availability` — der Kalender für die Auswahl. */
+export interface VerfuegbarkeitDto {
+  /** Dauer der ganzen Auswahl in Minuten, vom Server gerechnet. */
+  dauerMin: number;
+  crew: number;
+  tage: (AvailabilityDto & { available: boolean })[];
+}
+
+/** Eine Leistung in der Preisherleitung. */
+export interface PricePositionDto {
+  serviceId: string;
+  name: string;
+  kind: string;
+  durationMinutes: number;
+  crewSize: number;
+  subtotal: number;
+  extrasTotal: number;
+  onRequest: boolean;
 }
 
 export interface SavedAddressDto {

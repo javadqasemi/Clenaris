@@ -4,13 +4,16 @@ import type { Booking, Frequency, Prisma } from '@prisma/client';
 
 import { prisma, toNumber, type Tx } from '@/lib/db';
 import { BusinessRuleError, ForbiddenError, NotFoundError } from '@/lib/errors';
-import { calculatePrice } from '@/lib/pricing/engine';
-import { absoluteUrl, round2 } from '@/lib/utils';
+import { calculateBookingPrice } from '@/lib/pricing/engine';
+import type { LeistungInput, PriceBreakdown } from '@/lib/pricing/types';
+import { leistungsnamen } from '@/lib/booking/leistungen';
+import { absoluteUrl, formatDate, formatDateTime, round2 } from '@/lib/utils';
+import { produkt, prozentVon, summeZahl } from '@/lib/money';
 import { orderByFor, resolveSort, type SortOrder } from '@/lib/sort';
 import { randomToken } from '@/lib/auth/jwt';
 import { can, type ActorRole } from '@/lib/auth/rbac';
 import type { SessionUser } from '@/lib/auth/session';
-import type { CreateBookingInput, UpdateBookingInput } from '@/lib/validation/booking';
+import type { BookingCoreInput, UpdateBookingInput } from '@/lib/validation/booking';
 import {
   bookingCancelledEmail,
   bookingConfirmedEmail,
@@ -20,13 +23,18 @@ import {
 } from '@/lib/email/templates';
 import { smsTemplates } from '@/lib/sms/client';
 import { audit } from '@/lib/audit';
+import { automationEreignisseAbarbeiten, automationEreignisVormerken } from './automation-engine.service';
 import { logger } from '@/lib/logger';
 import { renderBookingConfirmationPdf } from '@/lib/pdf/render';
 
+import { kundenakteSperren } from './kundenakte-sperre';
 import { nextNumber } from './numbering.service';
-import { invalidateAvailability, isSlotBookable } from './availability.service';
+import { invalidateAvailability, isSlotBookable, leistungsbedarf } from './availability.service';
+import { assertAssignable } from './assignment.service';
 import { notify, notifyStaff } from './notification.service';
 import { createJobsForBooking } from './job.service';
+import { dateienBinden } from './file.service';
+import { issuePublicToken, resolvePublicToken, revokeTokensFor, tokenRejectionError } from './access-token.service';
 
 /**
  * Buchungslogik.
@@ -48,61 +56,133 @@ const RECURRENCE_HORIZON_DAYS = 84; // 12 Wochen
 
 export interface CreateBookingResult {
   booking: Booking;
-  confirmationUrl: string;
+  /**
+   * Der Verwaltungslink — `null`, wenn ihn die anfragende Person nicht sehen
+   * darf: bei einer Gastbuchung auf eine bestehende Kundenakte (siehe
+   * `AufgeloesteKundschaft.nachgewiesen`). Der Link geht dann nur per E-Mail
+   * an die Adresse der Akte.
+   */
+  confirmationUrl: string | null;
   isNewCustomer: boolean;
 }
 
 /**
- * Legt eine Buchung an — funktioniert für eingeloggte Kunden und Gäste.
+ * Zusatzangaben, wenn die Buchung im Büro entsteht statt auf der Website.
+ *
+ * Gemeinsamer Dienst, zwei Wege hinein: Preisberechnung, Serienanlage,
+ * Adresslogik, Gutscheinzähler und Kundenstatistik sind in beiden Fällen
+ * dieselben, und ein zweiter Buchungsweg wäre ein zweiter Ort, an dem der
+ * Preis entstehen kann. Was sich unterscheidet, steht hier — und nur hier.
+ */
+export interface OfficeBookingContext {
+  /** Für wen gebucht wird. Im Büro bekannt, wird nicht aus der Adresse erraten. */
+  customerId: string;
+  source: Booking['source'];
+  internalNote?: string;
+  /**
+   * Kapazitätsprüfung übergehen.
+   *
+   * Keine eigene Berechtigung: Wer im Büro buchen darf, darf auch entscheiden,
+   * dass ein dringender Auftrag trotz voller Tagesplanung angenommen wird —
+   * das ist dieselbe Entscheidung, nicht eine weiterreichende. Der
+   * Protokolleintrag hält sie fest.
+   */
+  overrideCapacity: boolean;
+}
+
+/**
+ * Legt eine Buchung an — für eingeloggte Kunden, Gäste und das Büro.
  */
 export async function createBooking(params: {
   organizationId: string;
-  input: CreateBookingInput;
+  input: BookingCoreInput;
   session: SessionUser | null;
   ip?: string;
+  /** Gesetzt = Erfassung im Büro über `POST /api/bookings`. */
+  office?: OfficeBookingContext;
 }): Promise<CreateBookingResult> {
-  const { organizationId, input, session } = params;
+  const { organizationId, input, session, office } = params;
 
-  // --- 1) Kunde auflösen oder anlegen --------------------------------------
-  const { customerId, isNewCustomer, customerEmail, customerName, userId } =
-    await resolveCustomer({ organizationId, input, session });
+  // --- 1) Kunde auflösen — anlegen erst in der Transaktion unten -----------
+  /**
+   * Eine neue Gastkundschaft entsteht erst zusammen mit der Buchung
+   * (Befund A2, 2026-09-26). Vorher legte `resolveCustomer` sie in einer
+   * eigenen Transaktion an, *bevor* Preis und Termin geprüft waren: Eine
+   * abgewiesene Buchung — Termin voll, Gutschein ungültig, Postleitzahl
+   * ausserhalb — hinterliess eine Kundenakte ohne Buchung, mit Nummer, im
+   * CRM. Wer abgewiesen wird, ist keine Kundschaft geworden; eine Anfrage
+   * daraus zu machen wäre eine eigene, ausdrückliche Entscheidung.
+   */
+  const kunde = office
+    ? await resolveOfficeCustomer({ organizationId, customerId: office.customerId })
+    : await resolveCustomer({ organizationId, input, session });
+  const { isNewCustomer, customerEmail, customerName, userId } = kunde;
 
   // --- 2) Preis serverseitig berechnen -------------------------------------
-  const customer = await prisma.customer.findUniqueOrThrow({
-    where: { id: customerId },
-    select: { discountPercent: true, blocked: true, blockedReason: true, totalBookings: true },
-  });
+  // Eine neue Kundschaft hat weder Rabatt noch Buchungen noch eine Sperre.
+  const customer = kunde.customerId
+    ? await prisma.customer.findUniqueOrThrow({
+        where: { id: kunde.customerId },
+        select: { discountPercent: true, blocked: true, blockedReason: true, totalBookings: true },
+      })
+    : { discountPercent: 0, blocked: false, blockedReason: null, totalBookings: 0 };
 
   if (customer.blocked) {
+    // Der Sperrgrund ist eine Notiz des Büros über diese Kundschaft. Wer nur
+    // ihre E-Mail-Adresse eingetippt hat, bekommt die allgemeine Meldung —
+    // sonst liesse sich die Notiz mit einer einzigen Anfrage auslesen.
     throw new BusinessRuleError(
-      customer.blockedReason ??
+      (kunde.nachgewiesen ? customer.blockedReason : null) ??
         'Für dieses Kundenkonto sind zurzeit keine Online-Buchungen möglich. Bitte kontaktieren Sie uns.',
     );
   }
 
-  const postalCode =
-    input.address?.postalCode ??
-    (input.addressId
-      ? (await prisma.address.findUnique({ where: { id: input.addressId } }))?.postalCode
-      : undefined);
+  /**
+   * Der Dauerrabatt gilt nur, wo die Identität nachgewiesen ist (F-03,
+   * 2026-09-27).
+   *
+   * Er ist eine Vereinbarung mit **dieser** Kundschaft. Vorher bekam ihn jede
+   * Gastbuchung mit der passenden E-Mail-Adresse: Wer die Adresse eines
+   * Grosskunden kannte, buchte zu dessen Konditionen — und las den Satz am
+   * Gesamtbetrag der Antwort ab, verglichen mit der Sofortschätzung. Ohne
+   * Nachweis rechnet der Server den Listenpreis; das Büro kann nach
+   * Rücksprache korrigieren, und angemeldet gilt der Rabatt wie bisher.
+   * Gutscheinregeln (Erstbuchung, Einlösungen je Kundschaft) laufen dagegen
+   * weiter gegen die Akte: Dort ist die strengere Auslegung die sichere, eine
+   * anonyme Buchung darf eine bereits genutzte Einlösung nicht erneuern.
+   */
+  const rabattProzent = kunde.nachgewiesen ? toNumber(customer.discountPercent) : 0;
 
-  const breakdown = await calculatePrice(
+  /**
+   * Adresse und Objekt nur aus dem Bestand einer **nachgewiesenen**
+   * Kundschaft (F-03). Eine per E-Mail-Adresse zugeordnete Gastbuchung
+   * hat keinen Bestand, auf den sie verweisen darf — sonst wäre die
+   * E-Mail-Adresse der Schlüssel zu fremden Adressen samt Zugangsnotiz.
+   */
+  const bezuege = await buchungsbezuegePruefen({
+    organizationId,
+    customerId: kunde.nachgewiesen ? kunde.customerId : null,
+    addressId: input.addressId ?? null,
+    propertyId: input.propertyId ?? null,
+    fileIds: input.fileIds,
+    uploaderId: session?.id ?? null,
+  });
+  const postalCode = input.address?.postalCode ?? bezuege.postalCode ?? undefined;
+
+  const leistungen = leistungenAusEingabe(input);
+  const breakdown = await calculateBookingPrice(
     {
-      serviceId: input.serviceId,
-      squareMeters: input.squareMeters,
-      rooms: input.rooms,
-      bathrooms: input.bathrooms,
-      windows: input.windows,
+      leistungen,
       propertyKind: input.propertyKind,
       frequency: input.frequency,
-      extras: input.extras,
       scheduledStart: input.scheduledStart,
       postalCode: postalCode ?? null,
       hasPets: input.hasPets,
-      manualHours: input.manualHours,
       couponCode: input.couponCode ?? null,
-      customer: { id: customerId, totalBookings: customer.totalBookings },
-      customerDiscountPercent: toNumber(customer.discountPercent),
+      // Für eine neue Kundschaft eine Kennung, die keine Buchung trifft: Die
+      // Gutscheinprüfung zählt Einlösungen je Kundschaft, und es gibt keine.
+      customer: { id: kunde.customerId ?? '__neue_kundschaft__', totalBookings: customer.totalBookings },
+      customerDiscountPercent: rabattProzent,
       urgent: input.urgent,
     },
     organizationId,
@@ -110,7 +190,9 @@ export async function createBooking(params: {
 
   if (breakdown.onRequest) {
     throw new BusinessRuleError(
-      'Für diese Dienstleistung erstellen wir eine individuelle Offerte. Bitte nutzen Sie das Offertformular.',
+      leistungen.length > 1
+        ? 'Mindestens eine der gewählten Leistungen offerieren wir individuell. Bitte nutzen Sie das Offertformular oder buchen Sie sie getrennt.'
+        : 'Für diese Dienstleistung erstellen wir eine individuelle Offerte. Bitte nutzen Sie das Offertformular.',
     );
   }
 
@@ -122,25 +204,74 @@ export async function createBooking(params: {
     throw new BusinessRuleError(breakdown.coupon.message);
   }
 
-  // --- 3) Kapazität prüfen --------------------------------------------------
-  const slotCheck = await isSlotBookable({
-    organizationId,
-    start: input.scheduledStart,
-    durationMin: breakdown.durationMinutes,
-    crewSize: breakdown.crewSize,
-  });
-  if (!slotCheck.ok) throw new BusinessRuleError(slotCheck.reason!);
-
-  // --- 4) Buchung + Job in einer Transaktion -------------------------------
+  // --- 3) + 4) Kapazität prüfen und Buchung schreiben, in einem Zug -------
   const scheduledEnd = new Date(
     input.scheduledStart.getTime() + breakdown.durationMinutes * 60_000,
   );
 
-  const booking = await prisma.$transaction(async (tx) => {
+  const { booking, offenlegen } = await prisma.$transaction(async (tx) => {
+    /**
+     * Die Kapazitätsprüfung hält den öffentlichen Buchungstrichter davon ab,
+     * mehr zuzusagen, als das Team schafft. Im Büro ist sie eine Empfehlung:
+     * Wer anruft, weil es brennt, bekommt einen Termin, und die Disposition
+     * löst es. Deshalb übergehbar — aber nur ausdrücklich, und der
+     * Protokolleintrag unten hält fest, dass es geschehen ist.
+     *
+     * **Warum innerhalb der Transaktion und hinter einer Sperre**
+     * (2026-09-26): Vorher lief die Prüfung vor der Transaktion. Zwei
+     * Anfragen für den letzten freien Platz lasen beide „frei" und schrieben
+     * beide — der Kalender hatte den Platz beiden angeboten, und beide bekamen
+     * ihn. Jetzt nimmt jede Buchung zuerst eine Transaktionssperre je
+     * Organisation (`pg_advisory_xact_lock`), prüft dann mit den Daten *in*
+     * der Transaktion und schreibt. Die zweite Anfrage wartet, bis die erste
+     * festgeschrieben ist, und sieht deren Buchung als Belegung — seit diesem
+     * Sprint zählen auch unbestätigte Buchungen (siehe `availability.service`).
+     * Die Sperre gilt je Organisation und nur für die Dauer einer Buchung;
+     * bei den Buchungszahlen eines Reinigungsbetriebs ist das kein Engpass.
+     */
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`buchung:${organizationId}`}))`;
+    if (!office?.overrideCapacity) {
+      const bedarf = await leistungsbedarf(tx, organizationId, leistungen.map((l) => l.serviceId));
+      const slotCheck = await isSlotBookable({
+        organizationId,
+        start: input.scheduledStart,
+        durationMin: breakdown.durationMinutes,
+        crewSize: breakdown.crewSize,
+        bufferMin: breakdown.bufferMinutes,
+        qualifikationen: bedarf.qualifikationen,
+        kanal: office ? 'buero' : 'oeffentlich',
+        db: tx,
+      });
+      if (!slotCheck.ok) throw new BusinessRuleError(slotCheck.reason!);
+    }
+
+    // Erst jetzt, nach allen Prüfungen und in derselben Transaktion wie die
+    // Buchung: Scheitert danach noch etwas, rollt die Kundschaft mit zurück.
+    /**
+     * `offenlegen`: Darf die anfragende Person sehen, was an der Akte steht?
+     * Ja bei einer nachgewiesenen Kundschaft und bei einer Akte, die diese
+     * Anfrage gerade selbst angelegt hat. Nein, wenn die Gastbuchung auf eine
+     * bestehende Akte fällt — auch dann, wenn diese erst zwischen Auflösen und
+     * hier entstanden ist (`gastkundschaftAnlegen` findet sie dann vor): Eine
+     * Akte, die jemand anderes angelegt hat, gehört nicht deshalb der
+     * anfragenden Person, weil beide dieselbe Adresse eingetippt haben.
+     */
+    let customerId: string;
+    let offenlegen: boolean;
+    if (kunde.customerId) {
+      customerId = kunde.customerId;
+      offenlegen = kunde.nachgewiesen;
+    } else {
+      const akte = await gastkundschaftAnlegen(tx, organizationId, kunde.neu!);
+      customerId = akte.id;
+      offenlegen = akte.angelegt;
+    }
+
     const { number } = await nextNumber(tx, organizationId, 'booking');
 
-    // Adresse übernehmen oder neu anlegen.
-    const addressId = input.addressId ?? (await createAddress(tx, customerId, input));
+    // Adresse übernehmen oder neu anlegen. Die Kennung ist oben geprüft und
+    // kommt nur bei einer nachgewiesenen Kundschaft durch.
+    const addressId = input.addressId ?? (await createAddress(tx, customerId, input, { bestandSchonen: !offenlegen }));
 
     // Wiederholungsregel.
     let recurrenceRuleId: string | null = null;
@@ -174,10 +305,14 @@ export async function createBooking(params: {
         recurrenceRuleId,
         frequency: input.frequency,
         propertyKind: input.propertyKind,
-        squareMeters: input.squareMeters ?? null,
-        rooms: input.rooms ?? null,
-        windows: input.windows ?? null,
+        // Die Objektangaben an der Buchung bleiben, was sie waren: das
+        // Objekt. Bei mehreren Leistungen die grösste angegebene Fläche und
+        // Zimmerzahl — die Angaben je Leistung stehen an den Positionen.
+        squareMeters: objektwert(input.squareMeters, leistungen.map((l) => l.squareMeters)),
+        rooms: objektwert(input.rooms, leistungen.map((l) => l.rooms)),
+        windows: objektwert(input.windows, leistungen.map((l) => l.windows)),
         customerNote: input.customerNote ?? null,
+        internalNote: office?.internalNote ?? null,
         accessNote: input.accessNote ?? null,
         subtotal: breakdown.subtotal,
         extrasTotal: breakdown.extrasTotal,
@@ -189,48 +324,38 @@ export async function createBooking(params: {
         vatAmount: breakdown.vatAmount,
         grossTotal: breakdown.grossTotal,
         priceBreakdown: breakdown as unknown as Prisma.InputJsonValue,
-        source: 'WEBSITE',
+        // Eine telefonische Buchung als „Website" zu verbuchen, verfälscht
+        // jede Auswertung darüber, woher die Aufträge kommen.
+        source: office?.source ?? 'WEBSITE',
         bookedByIp: params.ip ?? null,
-        confirmationToken: randomToken(24),
-        items: {
-          create: breakdown.lines
-            .filter((line) => line.kind === 'base')
-            .map((line, index) => ({
-              serviceId: input.serviceId,
-              name: line.label,
-              quantity: line.quantity,
-              unit: line.unit,
-              unitPrice: line.unitPrice,
-              vatRate: breakdown.vatRate,
-              lineTotal: line.amount,
-              durationMin: index === 0 ? breakdown.durationMinutes : 0,
-              position: index,
-            })),
-        },
-        extras: {
-          create: input.extras.map((extra) => {
-            const line = breakdown.lines.find(
-              (l) => l.kind === 'extra' && l.meta?.extraId === extra.extraId,
-            );
-            return {
-              extraId: extra.extraId,
-              name: line?.label ?? 'Zusatzleistung',
-              quantity: extra.quantity,
-              unitPrice: line?.unitPrice ?? 0,
-              lineTotal: line?.amount ?? 0,
-            };
-          }),
-        },
+        items: { create: positionenAusHerleitung(breakdown, leistungen) },
+        extras: { create: zusatzleistungenAusHerleitung(breakdown) },
       },
       include: { customer: true, address: true },
     });
 
-    // Hochgeladene Fotos der Buchung zuordnen.
+    /**
+     * Hochgeladene Fotos der Buchung zuordnen — nur die eigenen, nur einmal.
+     *
+     * Bis 2026-09-27 standen hier nur Organisation und Prüfsumme als
+     * Bedingung, und die Zuordnung **überschrieb den Zweck** (`scope`). Wer
+     * die Kennung irgendeiner Datei kannte — Lohnabrechnung, Bewerbung,
+     * Dokument einer anderen Kundschaft —, hängte sie an die eigene Buchung,
+     * machte sie damit zu einem Buchungsfoto und las sie über die eigene
+     * Buchungsansicht aus. Die Kennung war der Schlüssel; eine Kennung ist
+     * keine Berechtigung.
+     *
+     * Jetzt ist die Zuordnung ein einziger bedingter Übergang: Die Datei muss
+     * von **dieser** angemeldeten Person hochgeladen sein, als Buchungsfoto,
+     * noch an keiner Buchung hängen, fertig geprüft und sauber sein. Trifft
+     * das nicht auf jede genannte Kennung zu, scheitert die ganze Buchung —
+     * eine stillschweigend übergangene Kennung verdeckte genau den Versuch,
+     * der hier abgewiesen wird. Die Vorprüfung (`buchungsbezuegePruefen`)
+     * meldet den Fehler früh; dieser Übergang entscheidet, auch wenn eine
+     * zweite Buchung dieselbe Datei gleichzeitig beansprucht.
+     */
     if (input.fileIds.length > 0) {
-      await tx.fileAsset.updateMany({
-        where: { id: { in: input.fileIds }, organizationId },
-        data: { bookingId: created.id, scope: 'BOOKING' },
-      });
+      await dateienBinden(tx, { organizationId, fileIds: input.fileIds, uploadedById: session!.id, scope: 'BOOKING', ziel: 'bookingId', zielId: created.id });
     }
 
     // Gutscheinzähler erhöhen.
@@ -247,20 +372,24 @@ export async function createBooking(params: {
       data: { totalBookings: { increment: 1 }, lastBookingAt: new Date() },
     });
 
-    return created;
+    await automationEreignisVormerken(tx, { organizationId, trigger: 'BOOKING_CREATED', entityId: created.id });
+    return { booking: created, offenlegen };
   });
 
   // --- 5) Folgeaktionen ausserhalb der Transaktion -------------------------
   await invalidateAvailability(organizationId, input.scheduledStart);
 
-  const service = await prisma.service.findUnique({
-    where: { id: input.serviceId },
-    select: { name: true },
-  });
+  // Für Mitteilungen: alle Leistungen beim Namen, nicht nur die erste.
+  const service = { name: breakdown.positionen.map((p) => p.name).join(' + ') };
 
   const addressLabel = await formatBookingAddress(booking.addressId);
-  const confirmationUrl = absoluteUrl(`/buchung/${booking.confirmationToken}`);
-  const confirmationPdf = await bookingPdfAttachment(booking.id);
+  const confirmationUrl = await buchungslinkAusstellen({
+    organizationId,
+    bookingId: booking.id,
+    scheduledEnd: booking.scheduledEnd,
+    createdById: session?.id ?? null,
+  });
+  const confirmationPdf = await bookingPdfAttachment(booking.id, confirmationUrl);
 
   await notify({
     userId,
@@ -285,32 +414,195 @@ export async function createBooking(params: {
     entityId: booking.id,
   });
 
-  await notifyStaff({
-    organizationId,
-    title: 'Neue Online-Buchung',
-    body: `${customerName} · ${service?.name ?? 'Reinigung'} · ${booking.number}`,
-    link: `/admin/buchungen/${booking.id}`,
-    permission: 'booking:read',
-    emailContent: newBookingInternalEmail({
-      bookingNumber: booking.number,
-      customerName,
-      serviceName: service?.name ?? 'Reinigung',
-      scheduledStart: booking.scheduledStart,
-      grossTotal: toNumber(booking.grossTotal),
-      adminUrl: absoluteUrl(`/admin/buchungen/${booking.id}`),
-    }),
-  });
+  /**
+   * Die Meldung ans Büro entfällt bei einer Erfassung im Büro.
+   *
+   * „Neue Online-Buchung" an alle mit `booking:read` zu schicken, während eine
+   * dieser Personen sie gerade selbst eingetippt hat, ist kein Hinweis,
+   * sondern Lärm — und Lärm ist der Grund, warum Abzeichen und Meldungen nach
+   * zwei Tagen ignoriert werden. Die Bestätigung an die Kundschaft geht
+   * dagegen weiter hinaus: Sie hat die Buchung nicht selbst erfasst und
+   * braucht den Beleg samt Verwaltungslink.
+   */
+  if (!office) {
+    await notifyStaff({
+      organizationId,
+      title: 'Neue Online-Buchung',
+      body: `${customerName} · ${service?.name ?? 'Reinigung'} · ${booking.number}`,
+      link: `/admin/buchungen/${booking.id}`,
+      permission: 'booking:read',
+      emailContent: newBookingInternalEmail({
+        bookingNumber: booking.number,
+        customerName,
+        serviceName: service?.name ?? 'Reinigung',
+        scheduledStart: booking.scheduledStart,
+        grossTotal: toNumber(booking.grossTotal),
+        adminUrl: absoluteUrl(`/admin/buchungen/${booking.id}`),
+      }),
+    });
+  }
 
   await audit.created({
     organizationId,
     userId: session?.id ?? null,
     entity: 'Booking',
     entityId: booking.id,
-    summary: `Buchung ${booking.number} über die Website erstellt`,
+    summary: office
+      ? `Buchung ${booking.number} im Büro erfasst (${office.source})` +
+        (office.overrideCapacity ? ' — Kapazitätsprüfung übergangen' : '')
+      : `Buchung ${booking.number} über die Website erstellt` +
+        // Das Büro soll sehen, dass hier niemand angemeldet war und die
+        // Zuordnung allein an der eingetippten E-Mail-Adresse hängt — bevor
+        // es bestätigt, ist eine Rückfrage bei der Kundschaft angebracht.
+        (offenlegen ? '' : ' — Gastbuchung auf eine bestehende Kundenakte, Identität nicht nachgewiesen'),
     ip: params.ip,
   });
 
-  return { booking, confirmationUrl, isNewCustomer };
+  /**
+   * Der Auslöser: **vermerkt** in der Transaktion der Buchung (oben),
+   * **abgearbeitet** hier — nach allem, was fachlich zur Buchung gehört
+   * (Outbox, 2026-09-27).
+   *
+   * Abgearbeitet wird nach dem Commit, weil die Maschine den Datensatz neu
+   * lädt und ihn innerhalb der Transaktion nicht sähe, und weil eine Regel
+   * die Buchung nicht scheitern lassen darf (`automationEreignisseAbarbeiten`
+   * wirft nie). Vermerkt wird davor, damit ein Absturz dazwischen das
+   * Ereignis nicht verliert — der stündliche Lauf holt es nach.
+   */
+  await automationEreignisseAbarbeiten({ organizationId });
+
+  /**
+   * Der Link geht an die anfragende Person nur, wenn sie die Akte sehen darf
+   * (F-03, 2026-09-27).
+   *
+   * Der Verwaltungslink öffnet Name, E-Mail-Adresse und Einsatzort der
+   * Kundschaft (`/buchung/…`, `/buchen/bestaetigt?t=…`). Vorher kam er in
+   * jeder Antwort zurück — auch bei einer anonymen Buchung, die über die
+   * eingetippte E-Mail-Adresse einer fremden Akte zugeordnet worden war. Wer
+   * eine Adresse kannte, las so die Stammdaten dazu aus. Ausgestellt wird er
+   * trotzdem: Er steht in der Bestätigung an die Adresse der Akte, und wer
+   * dieses Postfach hat, ist die Kundschaft.
+   *
+   * Dass der Link fehlt, verrät, dass es zur Adresse eine Akte gibt. Das ist
+   * hingenommen: Eine solche Probe kostet eine echte Buchung, läuft durch das
+   * Buchungslimit und landet als Bestätigung im Postfach der Kundschaft —
+   * sie bleibt nicht unbemerkt. Den Link auch neuen Gästen vorzuenthalten,
+   * nähme allen die vollständige Bestätigungsseite, um eine Auskunft zu
+   * verbergen, die die Registrierung für Adressen mit Konto ohnehin gibt
+   * („Für diese E-Mail-Adresse besteht bereits ein Konto").
+   */
+  return {
+    booking,
+    confirmationUrl: offenlegen ? confirmationUrl : null,
+    isNewCustomer: isNewCustomer && offenlegen,
+  };
+}
+
+// ---------------------------------------------------------------------------
+//  Mehrere Leistungen (Produktsprint 2026-09-26)
+// ---------------------------------------------------------------------------
+
+/**
+ * Die Leistungen einer Buchungseingabe — aus der neuen Liste oder aus der
+ * alten Einzelform.
+ *
+ * Die Einzelform (`serviceId` plus Angaben auf oberster Ebene) bleibt gültig:
+ * Offertformular, Büroerfassung und ältere Aufrufer schicken sie, und sie ist
+ * nichts anderes als eine Liste mit einem Eintrag. Fläche, Zimmer, Bäder und
+ * Fenster auf oberster Ebene beschreiben das Objekt; eine Leistung ohne eigene
+ * Angabe übernimmt sie von dort.
+ */
+export function leistungenAusEingabe(input: BookingCoreInput): LeistungInput[] {
+  if (input.leistungen?.length) {
+    return input.leistungen.map((l) => ({
+      serviceId: l.serviceId,
+      squareMeters: l.squareMeters ?? input.squareMeters ?? null,
+      rooms: l.rooms ?? input.rooms ?? null,
+      bathrooms: l.bathrooms ?? input.bathrooms ?? null,
+      windows: l.windows ?? input.windows ?? null,
+      manualHours: l.manualHours ?? null,
+      extras: l.extras,
+    }));
+  }
+  if (!input.serviceId) throw new BusinessRuleError('Bitte wählen Sie mindestens eine Dienstleistung.');
+  return [
+    {
+      serviceId: input.serviceId,
+      squareMeters: input.squareMeters ?? null,
+      rooms: input.rooms ?? null,
+      bathrooms: input.bathrooms ?? null,
+      windows: input.windows ?? null,
+      manualHours: input.manualHours ?? null,
+      extras: input.extras,
+    },
+  ];
+}
+
+/** Objektangabe der Buchung: die ausdrückliche, sonst die grösste der Leistungen. */
+function objektwert(oben: number | null | undefined, jeLeistung: (number | null | undefined)[]): number | null {
+  if (oben !== null && oben !== undefined) return oben;
+  const werte = jeLeistung.filter((w): w is number => typeof w === 'number');
+  return werte.length ? Math.max(...werte) : null;
+}
+
+/**
+ * Buchungspositionen aus der Herleitung der Preis-Engine.
+ *
+ * Eine Position je Grundzeile, wie bisher — mit der Leistung, zu der die
+ * Zeile gehört (`meta.serviceId`), statt immer der einen `input.serviceId`.
+ * Die erste Zeile einer Leistung trägt deren Dauer und ihre Angaben
+ * (`details`); so bleibt für Disposition, Einsatz und Rechnung ablesbar,
+ * welche Leistung wie lange dauert und womit sie gebucht wurde.
+ */
+export function positionenAusHerleitung(breakdown: PriceBreakdown, leistungen: LeistungInput[]) {
+  const gesehen = new Set<string>();
+  return breakdown.lines
+    .filter((line) => line.kind === 'base')
+    .map((line, index) => {
+      const serviceId = (line.meta?.serviceId as string | undefined) ?? breakdown.service.id;
+      const erste = !gesehen.has(serviceId);
+      gesehen.add(serviceId);
+      const position = breakdown.positionen.find((p) => p.serviceId === serviceId);
+      const eingabe = leistungen.find((l) => l.serviceId === serviceId);
+      return {
+        serviceId,
+        name: line.label,
+        quantity: line.quantity,
+        unit: line.unit,
+        unitPrice: line.unitPrice,
+        vatRate: breakdown.vatRate,
+        lineTotal: line.amount,
+        durationMin: erste ? (position?.durationMinutes ?? 0) : 0,
+        position: index,
+        ...(erste && eingabe ? { details: eingabe as unknown as Prisma.InputJsonValue } : {}),
+      };
+    });
+}
+
+/**
+ * Zusatzleistungen der Buchung — je Zusatzleistung eine Zeile.
+ *
+ * Wählen zwei Leistungen dieselbe Zusatzleistung, wird sie zusammengezählt:
+ * `@@unique([bookingId, extraId])` erlaubt nur eine Zeile, und fachlich ist
+ * es eine Menge. Es entstehen nur Zeilen für Zusatzleistungen, die die Engine
+ * gefunden und bepreist hat — eine unbekannte ID aus dem Browser erzeugte
+ * früher eine Zeile zum Preis null.
+ */
+export function zusatzleistungenAusHerleitung(breakdown: PriceBreakdown) {
+  const karte = new Map<string, { extraId: string; name: string; quantity: number; unitPrice: number; lineTotal: number }>();
+  for (const line of breakdown.lines) {
+    if (line.kind !== 'extra') continue;
+    const extraId = line.meta?.extraId as string | undefined;
+    if (!extraId) continue;
+    const bestehend = karte.get(extraId);
+    if (bestehend) {
+      bestehend.quantity += line.quantity;
+      bestehend.lineTotal = summeZahl(bestehend.lineTotal, line.amount);
+    } else {
+      karte.set(extraId, { extraId, name: line.label, quantity: line.quantity, unitPrice: line.unitPrice, lineTotal: line.amount });
+    }
+  }
+  return [...karte.values()];
 }
 
 // ---------------------------------------------------------------------------
@@ -346,10 +638,11 @@ export async function confirmBooking(params: {
     // Einsatz (Job) für die Disposition anlegen.
     await createJobsForBooking(tx, booking.id);
 
+    await automationEreignisVormerken(tx, { organizationId: params.organizationId, trigger: 'BOOKING_CONFIRMED', entityId: booking.id });
     return result;
   });
 
-  const serviceName = booking.items[0]?.service.name ?? 'Reinigung';
+  const serviceName = leistungsnamen(booking.items);
   const addressLabel = await formatBookingAddress(booking.addressId);
   // Nach dem Statuswechsel rendern — das Dokument soll „Terminbestätigung"
   // heissen, nicht „Buchungsbestätigung (wird geprüft)".
@@ -361,7 +654,7 @@ export async function confirmBooking(params: {
     phone: booking.customer.mobile ?? booking.customer.phone,
     channels: ['IN_APP', 'EMAIL', 'SMS'],
     title: 'Termin bestätigt',
-    body: `Ihr Termin am ${booking.scheduledStart.toLocaleDateString('de-CH')} ist bestätigt.`,
+    body: `Ihr Termin am ${formatDate(booking.scheduledStart)} ist bestätigt.`,
     link: `/konto/buchungen/${booking.id}`,
     emailAttachments: confirmationPdf,
     emailContent: bookingConfirmedEmail({
@@ -376,7 +669,7 @@ export async function confirmBooking(params: {
       manageUrl: absoluteUrl(`/konto/buchungen/${booking.id}`),
     }),
     smsBody: smsTemplates.bookingConfirmed({
-      date: booking.scheduledStart.toLocaleDateString('de-CH'),
+      date: formatDate(booking.scheduledStart),
       time: booking.scheduledStart.toLocaleTimeString('de-CH', {
         hour: '2-digit',
         minute: '2-digit',
@@ -395,6 +688,8 @@ export async function confirmBooking(params: {
     entityId: booking.id,
     summary: `Buchung ${booking.number} bestätigt`,
   });
+
+  await automationEreignisseAbarbeiten({ organizationId: params.organizationId });
 
   return updated;
 }
@@ -442,6 +737,27 @@ export async function cancelBooking(params: {
       data: { totalBookings: { decrement: 1 } },
     });
 
+    /**
+     * Verwaltungslinks mit dem Storno entwerten (N-04, 2026-09-27).
+     *
+     * Bis hierher lebte ein Buchungslink bis zu seinem Ablauf — 90 Tage nach
+     * dem Termin, auch für eine längst stornierte Buchung. Er zeigt Name,
+     * E-Mail-Adresse und Einsatzort; nach dem Storno braucht ihn niemand mehr
+     * zum Verwalten, und jeder weitergeleitete oder mitgelesene Link bliebe
+     * ein offener Zugang zu diesen Daten. Offerten und Rechnungen verfahren
+     * genauso (`revokeTokensFor` vor dem Neuversand). In derselben
+     * Transaktion wie der Statuswechsel: Ein Storno, dessen Widerruf
+     * scheitert, soll nicht als erledigt dastehen. Die Stornobestätigung per
+     * E-Mail unten trägt keinen Verwaltungslink, es entsteht also kein neuer.
+     */
+    await revokeTokensFor({
+      tx,
+      purpose: 'BOOKING_MANAGE',
+      resourceId: booking.id,
+      revokedById: params.actorId ?? null,
+    });
+
+    await automationEreignisVormerken(tx, { organizationId: params.organizationId, trigger: 'BOOKING_CANCELLED', entityId: booking.id });
     return result;
   });
 
@@ -456,7 +772,7 @@ export async function cancelBooking(params: {
     emailContent: bookingCancelledEmail({
       firstName: booking.customer.firstName,
       bookingNumber: booking.number,
-      serviceName: booking.items[0]?.name ?? 'Reinigung',
+      serviceName: leistungsnamen(booking.items),
       scheduledStart: booking.scheduledStart,
       reason: params.reason,
     }),
@@ -471,6 +787,8 @@ export async function cancelBooking(params: {
     entityId: booking.id,
     summary: `Buchung ${booking.number} storniert: ${params.reason}`,
   });
+
+  await automationEreignisseAbarbeiten({ organizationId: params.organizationId });
 
   return updated;
 }
@@ -488,7 +806,7 @@ export async function rescheduleBooking(params: {
   });
   if (!booking) throw new NotFoundError('Buchung');
 
-  if (['CANCELLED', 'COMPLETED', 'IN_PROGRESS'].includes(booking.status)) {
+  if (['CANCELLED', 'COMPLETED', 'IN_PROGRESS', 'NO_SHOW'].includes(booking.status)) {
     throw new BusinessRuleError('Diese Buchung kann nicht mehr verschoben werden.');
   }
 
@@ -499,17 +817,37 @@ export async function rescheduleBooking(params: {
     );
   }
 
-  const check = await isSlotBookable({
-    organizationId: params.organizationId,
-    start: params.newStart,
-    durationMin: booking.durationMin,
-    crewSize: booking.crewSize,
-  });
-  if (!check.ok) throw new BusinessRuleError(check.reason!);
-
   const newEnd = new Date(params.newStart.getTime() + booking.durationMin * 60_000);
 
   const updated = await prisma.$transaction(async (tx) => {
+    /**
+     * Dieselbe Sperre und dieselbe Prüfung wie beim Anlegen (siehe
+     * `createBooking`). `ohneBuchungId`: Die Buchung selbst und ihr Einsatz
+     * belegen den alten Termin — beim Verschieben um eine halbe Stunde zählte
+     * sie sonst gegen sich selbst, und ein voller Tag liess sich nicht einmal
+     * innerhalb seiner eigenen Belegung umstellen.
+     */
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`buchung:${params.organizationId}`}))`;
+    /*
+      Puffer und Qualifikationen der Leistungen gehören zur Prüfung wie beim
+      Anlegen. Bis 2026-09-27 fehlten beide: Die Umbuchung prüfte ohne
+      Puffer, und ein Termin direkt hinter einem anderen Einsatz ging durch,
+      den die Buchung selbst nie angeboten hätte.
+    */
+    const bedarf = await leistungsbedarf(tx, params.organizationId, booking.items.map((i) => i.serviceId));
+    const check = await isSlotBookable({
+      organizationId: params.organizationId,
+      start: params.newStart,
+      durationMin: booking.durationMin,
+      crewSize: booking.crewSize,
+      bufferMin: bedarf.pufferMin,
+      qualifikationen: bedarf.qualifikationen,
+      kanal: params.byStaff ? 'buero' : 'oeffentlich',
+      ohneBuchungId: booking.id,
+      db: tx,
+    });
+    if (!check.ok) throw new BusinessRuleError(check.reason!);
+
     const result = await tx.booking.update({
       where: { id: booking.id },
       data: {
@@ -521,9 +859,12 @@ export async function rescheduleBooking(params: {
       },
     });
 
-    await tx.job.updateMany({
-      where: { bookingId: booking.id, status: { notIn: ['COMPLETED', 'VERIFIED', 'CANCELLED'] } },
-      data: { scheduledStart: params.newStart, scheduledEnd: newEnd },
+    await einsaetzeNachfuehren(tx, {
+      organizationId: params.organizationId,
+      bookingId: booking.id,
+      daten: { scheduledStart: params.newStart, scheduledEnd: newEnd },
+      zuteilungPruefen: true,
+      zeitOderOrt: true,
     });
 
     return result;
@@ -539,12 +880,12 @@ export async function rescheduleBooking(params: {
     email: booking.customer.email,
     channels: ['IN_APP', 'EMAIL'],
     title: 'Termin verschoben',
-    body: `Ihr Termin wurde auf den ${params.newStart.toLocaleDateString('de-CH')} verschoben.`,
+    body: `Ihr Termin wurde auf den ${formatDate(params.newStart)} verschoben.`,
     link: `/konto/buchungen/${booking.id}`,
     emailContent: bookingRescheduledEmail({
       firstName: booking.customer.firstName,
       bookingNumber: booking.number,
-      serviceName: booking.items[0]?.name ?? 'Reinigung',
+      serviceName: leistungsnamen(booking.items),
       scheduledStart: params.newStart,
       scheduledEnd: newEnd,
       address: await formatBookingAddress(booking.addressId),
@@ -565,6 +906,100 @@ export async function rescheduleBooking(params: {
   });
 
   return updated;
+}
+
+/**
+ * Einsatzstatus, in denen ein Einsatz der Buchung noch folgt.
+ *
+ * Bis 2026-09-27 folgten alle nicht abgeschlossenen — auch `EN_ROUTE` und
+ * `IN_PROGRESS`. Eine Umbuchung auf morgen, während das Team schon vor der
+ * Tür steht, verschob dessen laufenden Einsatz mit: Zeiterfassung und
+ * Rapport hingen danach an einem Termin, der noch nicht war. Was begonnen
+ * hat, ist Geschehen und wird nicht umgeplant; die Buchung selbst lässt
+ * sich dann nicht mehr verschieben.
+ */
+const EINSATZ_FOLGT = ['UNASSIGNED', 'SCHEDULED', 'DISPATCHED'] as const;
+const EINSATZ_ABGESCHLOSSEN = ['COMPLETED', 'VERIFIED', 'CANCELLED'] as const;
+
+/**
+ * Die offenen Einsätze einer Buchung nachführen — eine Stelle für
+ * Verschieben und Bearbeiten (2026-09-27).
+ *
+ * Vorher führte jede der beiden Funktionen die Einsätze mit einem eigenen
+ * `updateMany` nach, und beide vergassen dasselbe: Die eingeteilten Personen
+ * wurden am neuen Termin nicht geprüft. Wer um 14 Uhr frei war, war es um
+ * 9 Uhr vielleicht nicht — Ferien, ein anderer Einsatz, eine abgelaufene
+ * Qualifikation —, und die Umbuchung setzte ihn trotzdem dort ein. Jetzt
+ * läuft für jeden besetzten Einsatz dieselbe Prüfung wie bei der Zuteilung
+ * (`assertAssignable`), in derselben Transaktion; scheitert sie, scheitert
+ * die Änderung mit der Begründung, und die Disposition entscheidet.
+ *
+ * Ein Einsatz, der schon begonnen hat, wird nicht angefasst — und wenn die
+ * Änderung ihn beträfe (Termin, Adresse), wird sie abgewiesen, statt ihn
+ * stillschweigend zurückzulassen.
+ */
+async function einsaetzeNachfuehren(
+  tx: Tx,
+  params: {
+    organizationId: string;
+    bookingId: string;
+    daten: Prisma.JobUncheckedUpdateInput;
+    /** Termin, Team oder Qualifikationen geändert — dann Personen neu prüfen. */
+    zuteilungPruefen: boolean;
+    /**
+     * Betrifft die Änderung Zeit oder Ort? Dann darf kein Einsatz begonnen
+     * haben. Eine blosse Notiz dagegen erreicht die begonnenen nicht und
+     * hält die übrigen nicht auf.
+     */
+    zeitOderOrt: boolean;
+  },
+): Promise<void> {
+  /*
+    Die Einsatzzeilen sperren, bevor sie gelesen und geprüft werden
+    (2026-09-27, F-06). Dieselbe Sperre wie `einsatzSperren` in
+    `job.service.ts`: Ohne sie prüfte eine Terminänderung über die Buchung das
+    alte Team, während gleichzeitig ein Teamwechsel am Einsatz die neuen
+    Personen zur alten Zeit prüfte — beide gingen durch, und das Ergebnis war
+    ein nie geprüftes Paar aus neuem Team und neuer Zeit. Nach Kennung
+    sortiert, damit zwei Wege die Sperren in derselben Reihenfolge nehmen.
+  */
+  await tx.$queryRaw`SELECT id FROM jobs WHERE "bookingId" = ${params.bookingId} AND "organizationId" = ${params.organizationId} AND "deletedAt" IS NULL ORDER BY id FOR UPDATE`;
+  const einsaetze = await tx.job.findMany({
+    where: { bookingId: params.bookingId, deletedAt: null, status: { notIn: [...EINSATZ_ABGESCHLOSSEN] } },
+    select: {
+      id: true,
+      number: true,
+      status: true,
+      scheduledStart: true,
+      scheduledEnd: true,
+      requiredSkills: true,
+      assignments: { select: { employeeId: true } },
+    },
+  });
+  if (einsaetze.length === 0) return;
+
+  const folgt = (e: { status: string }) => (EINSATZ_FOLGT as readonly string[]).includes(e.status);
+  const begonnen = einsaetze.filter((e) => !folgt(e));
+  if (begonnen.length > 0 && params.zeitOderOrt) {
+    throw new BusinessRuleError(
+      `Der Einsatz ${begonnen.map((e) => e.number).join(', ')} hat bereits begonnen; Termin und Einsatzort lassen sich deshalb nicht mehr ändern. ` +
+        'Schliessen Sie ihn ab oder brechen Sie ihn in der Disposition ab.',
+    );
+  }
+
+  for (const einsatz of einsaetze.filter(folgt)) {
+    const neu = await tx.job.update({ where: { id: einsatz.id }, data: params.daten });
+    if (params.zuteilungPruefen && einsatz.assignments.length > 0) {
+      await assertAssignable(tx, {
+        organizationId: params.organizationId,
+        employeeIds: einsatz.assignments.map((a) => a.employeeId),
+        scheduledStart: neu.scheduledStart,
+        scheduledEnd: neu.scheduledEnd,
+        ignoreJobId: einsatz.id,
+        requiredSkills: neu.requiredSkills,
+      });
+    }
+  }
 }
 
 /**
@@ -632,28 +1067,65 @@ export async function updateBooking(params: {
   const { input } = params;
   assertFieldPermissions(input, params.actorRole);
 
-  // --- Statuswechsel mit Nebenwirkungen zuerst -------------------------------
-  if (input.status && input.status !== booking.status) {
-    if (input.status === 'CANCELLED') {
-      if (!input.changeReason || input.changeReason.trim().length < 3) {
-        throw new BusinessRuleError(
-          'Bitte begründen Sie den Storno — die Begründung geht an die Kundschaft.',
-        );
-      }
-      await cancelBooking({
-        organizationId: params.organizationId,
-        bookingId: booking.id,
-        reason: input.changeReason,
-        actorId: params.actorId,
-        byStaff: true,
-      });
-    } else if (input.status === 'CONFIRMED') {
-      await confirmBooking({
-        organizationId: params.organizationId,
-        bookingId: booking.id,
-        actorId: params.actorId,
-      });
+  /**
+   * Was an einer erledigten Buchung noch geändert werden darf (2026-09-27).
+   *
+   * Bis hierher nahm die Maske jede Änderung an, auch an einer stornierten
+   * oder abgeschlossenen Buchung: Termin, Adresse, Kundschaft, Status. Eine
+   * abgeschlossene Buchung, deren Termin nachträglich verschoben wird,
+   * erzählt danach eine andere Geschichte als ihr Rapport und ihre
+   * Zeiterfassung; eine stornierte liess sich per Statusfeld wieder auf
+   * „offen" stellen, ohne dass ihre abgesagten Einsätze zurückkamen.
+   *
+   * Notizen, Objektangaben und — mit Preisrecht — Positionen bleiben
+   * änderbar: Eine Korrektur vor der Rechnung ist ein normaler Vorgang.
+   */
+  const erledigt = ['CANCELLED', 'COMPLETED', 'NO_SHOW'].includes(booking.status);
+  if (erledigt) {
+    const gesperrt = (
+      [
+        ['scheduledStart', 'Termin'],
+        ['durationMin', 'Dauer'],
+        ['crewSize', 'Teamgrösse'],
+        ['addressId', 'Adresse'],
+        ['address', 'Adresse'],
+        ['propertyId', 'Objekt'],
+        ['customerId', 'Kundschaft'],
+        ['frequency', 'Rhythmus'],
+      ] as const
+    ).filter(([feld]) => {
+      const wert = input[feld];
+      if (wert === undefined) return false;
+      if (feld === 'scheduledStart') return (wert as Date).getTime() !== booking.scheduledStart.getTime();
+      if (feld === 'address') return true;
+      return String(wert ?? '') !== String((booking as Record<string, unknown>)[feld] ?? '');
+    });
+    const statusWechsel = input.status !== undefined && input.status !== booking.status;
+    if (gesperrt.length > 0 || statusWechsel) {
+      const was = [...new Set(gesperrt.map(([, name]) => name)), ...(statusWechsel ? ['Status'] : [])];
+      throw new BusinessRuleError(
+        `Diese Buchung ist ${booking.status === 'CANCELLED' ? 'storniert' : 'erledigt'}; ${was.join(', ')} lassen sich nicht mehr ändern. ` +
+          'Für einen neuen Termin legen Sie eine neue Buchung an.',
+      );
     }
+  }
+
+  /**
+   * Statuswechsel mit Nebenwirkungen: erst prüfen, **nach** allem anderen
+   * ausführen (2026-09-27).
+   *
+   * Vorher lief Storno bzw. Bestätigung als Erstes — mit eigener Transaktion,
+   * eigener Mitteilung an die Kundschaft und eigenem Prüfprotokoll. Scheiterte
+   * danach die übrige Änderung (Kapazität, fremde Adresse, fehlende
+   * Berechtigung), antwortete die Maske mit einem Fehler, die Kundschaft hatte
+   * aber schon die Stornomitteilung. Jetzt werden die Voraussetzungen vorab
+   * geprüft, die Felder in einer Transaktion geschrieben, und erst danach
+   * folgt der Wechsel — auf die dann schon aktualisierte Buchung, sodass eine
+   * Bestätigung die Einsätze mit dem neuen Termin anlegt.
+   */
+  const statusWechsel = input.status && input.status !== booking.status ? input.status : null;
+  if (statusWechsel === 'CANCELLED' && (!input.changeReason || input.changeReason.trim().length < 3)) {
+    throw new BusinessRuleError('Bitte begründen Sie den Storno — die Begründung geht an die Kundschaft.');
   }
 
   const data: Prisma.BookingUpdateInput = {};
@@ -731,28 +1203,27 @@ export async function updateBooking(params: {
     if (!address) throw new NotFoundError('Adresse');
     track('addressId', booking.addressId, input.addressId);
     data.address = { connect: { id: input.addressId } };
-  } else if (input.address) {
-    const created = await prisma.address.create({
-      data: {
-        customerId: customerIdAfter,
-        label: input.address.label ?? 'Einsatzadresse',
-        street: input.address.street,
-        streetNo: input.address.streetNo ?? null,
-        addition: input.address.addition ?? null,
-        postalCode: input.address.postalCode,
-        city: input.address.city,
-        canton: input.address.canton,
-        country: input.address.country,
-        lat: input.address.lat ?? null,
-        lng: input.address.lng ?? null,
-        placeId: input.address.placeId ?? null,
-      },
-    });
-    track('addressId', booking.addressId, created.id);
-    data.address = { connect: { id: created.id } };
   }
+  /*
+    Eine neu erfasste Adresse entsteht in der Transaktion unten, nicht hier
+    (2026-09-27). Vorher wurde sie vor allen weiteren Prüfungen angelegt;
+    scheiterte danach die Kapazität oder ein fremder Objektbezug, blieb eine
+    Adresse ohne Auftrag in der Akte der Kundschaft zurück — bei jedem
+    erneuten Versuch eine weitere.
+  */
+  const neueAdresse = !input.addressId || input.addressId === booking.addressId ? input.address : undefined;
 
   if (input.propertyId !== undefined) {
+    // Dieselbe Regel wie für die Adresse zwei Absätze weiter oben — und bis
+    // 2026-09-27 fehlte sie hier: Ein fremdes Objekt (samt Schlüsselort und
+    // Zugangsnotiz) liess sich an einen Auftrag hängen.
+    if (input.propertyId && input.propertyId !== booking.propertyId) {
+      const objekt = await prisma.property.findFirst({
+        where: { id: input.propertyId, customerId: customerIdAfter, customer: { organizationId: params.organizationId } },
+        select: { id: true },
+      });
+      if (!objekt) throw new NotFoundError('Objekt');
+    }
     track('propertyId', booking.propertyId, input.propertyId);
     data.property = input.propertyId
       ? { connect: { id: input.propertyId } }
@@ -835,7 +1306,77 @@ export async function updateBooking(params: {
     });
   }
 
+  /**
+   * Termin, Dauer, Team oder Leistungen geändert? Dann dieselbe Prüfung wie
+   * beim Anlegen (Befund A3, 2026-09-26).
+   *
+   * Vorher schrieb die Bearbeitungsmaske einen neuen Termin oder eine längere
+   * Dauer ohne jede Verfügbarkeitsprüfung — ein Einsatz liess sich auf
+   * 21:00–01:00 in ein Fenster bis 22:00 schieben oder auf einen Termin, an
+   * dem niemand frei ist. Geprüft wird nur, was noch Kapazität bindet
+   * (Entwurf, offen, bestätigt); die eigene Belegung zählt nicht mit. Das Büro
+   * ist wie beim Anlegen an Vorlauf und Horizont nicht gebunden und kann die
+   * Kapazitätsprüfung ausdrücklich übergehen — das steht dann im Protokoll.
+   */
+  // Nach dem Wechsel gemeint — ein Storno bindet keine Kapazität mehr, eine
+  // Bestätigung schon (bis 2026-09-27 zählte hier der alte Status).
+  const statusDanach = input.status ?? booking.status;
+  const verfuegbarkeitBetroffen =
+    Boolean(data.scheduledStart || data.durationMin || data.crewSize || input.items) &&
+    ['DRAFT', 'PENDING', 'CONFIRMED'].includes(statusDanach);
+  const bedarf = await leistungsbedarf(
+    prisma,
+    params.organizationId,
+    (input.items ?? booking.items).map((i) => i.serviceId),
+  );
+
+  if (statusWechsel === 'CONFIRMED' && ['CANCELLED', 'COMPLETED'].includes(booking.status)) {
+    throw new BusinessRuleError('Diese Buchung kann nicht mehr bestätigt werden.');
+  }
+
   const updated = await prisma.$transaction(async (tx) => {
+    if (neueAdresse) {
+      const created = await tx.address.create({
+        data: {
+          customerId: customerIdAfter,
+          label: neueAdresse.label ?? 'Einsatzadresse',
+          street: neueAdresse.street,
+          streetNo: neueAdresse.streetNo ?? null,
+          addition: neueAdresse.addition ?? null,
+          postalCode: neueAdresse.postalCode,
+          city: neueAdresse.city,
+          canton: neueAdresse.canton,
+          country: neueAdresse.country,
+          lat: neueAdresse.lat ?? null,
+          lng: neueAdresse.lng ?? null,
+          placeId: neueAdresse.placeId ?? null,
+        },
+      });
+      track('addressId', booking.addressId, created.id);
+      data.address = { connect: { id: created.id } };
+    }
+
+    if (verfuegbarkeitBetroffen && !input.overrideCapacity) {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`buchung:${params.organizationId}`}))`;
+      const start = (data.scheduledStart as Date | undefined) ?? booking.scheduledStart;
+      const pruefung = await isSlotBookable({
+        organizationId: params.organizationId,
+        start,
+        durationMin: (data.durationMin as number | undefined) ?? booking.durationMin,
+        crewSize: (data.crewSize as number | undefined) ?? booking.crewSize,
+        bufferMin: bedarf.pufferMin,
+        qualifikationen: bedarf.qualifikationen,
+        kanal: 'buero',
+        ohneBuchungId: booking.id,
+        db: tx,
+      });
+      if (!pruefung.ok) {
+        throw new BusinessRuleError(
+          `${pruefung.reason} Wer den Termin trotzdem so setzen will, übergeht die Kapazitätsprüfung ausdrücklich.`,
+        );
+      }
+    }
+
     if (input.items) {
       await tx.bookingItem.deleteMany({ where: { bookingId: booking.id } });
       await tx.bookingItem.createMany({
@@ -848,7 +1389,7 @@ export async function updateBooking(params: {
           unit: item.unit,
           unitPrice: item.unitPrice,
           vatRate: pricing.vatRate,
-          lineTotal: round2(item.quantity * item.unitPrice),
+          lineTotal: produkt(item.quantity, item.unitPrice),
           durationMin: item.durationMin,
           position: index,
         })),
@@ -865,7 +1406,7 @@ export async function updateBooking(params: {
             name: extra.name,
             quantity: extra.quantity,
             unitPrice: extra.unitPrice,
-            lineTotal: round2(extra.quantity * extra.unitPrice),
+            lineTotal: produkt(extra.quantity, extra.unitPrice),
           })),
         });
       }
@@ -876,26 +1417,61 @@ export async function updateBooking(params: {
         ? await tx.booking.update({ where: { id: booking.id }, data })
         : await tx.booking.findUniqueOrThrow({ where: { id: booking.id } });
 
-    // Termin- und Teamänderungen an die noch offenen Einsätze weiterreichen —
-    // ein Einsatz, der auf den alten Termin zeigt, führt das Team an die
-    // falsche Tür.
-    if (data.scheduledStart || data.crewSize) {
+    /*
+      Wechselt die Kundschaft, verlieren die bisherigen Verwaltungslinks ihre
+      Gültigkeit (N-04). Der Link zeigt die Stammdaten der *aktuellen*
+      Kundschaft der Buchung — nach einer Umbuchung auf eine andere Akte
+      läse die bisherige Empfängerin sonst Name und E-Mail-Adresse der neuen.
+      Einen neuen stellt erst die nächste Mitteilung aus, die einen trägt
+      (die Terminerinnerung an Kundschaft ohne Konto).
+    */
+    if (data.customer) {
+      await revokeTokensFor({ tx, purpose: 'BOOKING_MANAGE', resourceId: booking.id, revokedById: params.actorId ?? null });
+    }
+
+    /**
+     * Was die offenen Einsätze wissen müssen, an sie weiterreichen.
+     *
+     * Bis 2026-09-27 nur bei Termin- oder Teamänderung — und die Adresse
+     * ritt nur mit, wenn gleichzeitig der Termin geändert wurde. Eine
+     * reine Adresskorrektur liess den Einsatz auf die alte Tür zeigen; ein
+     * Wechsel von Kundschaft, Objekt oder Leistungen erreichte ihn nie, und
+     * die Qualifikationen des Einsatzes blieben die der alten Leistungen.
+     */
+    const terminNeu = Boolean(data.scheduledStart || data.durationMin);
+    const einsatzDaten = {
+      ...(terminNeu
+        ? { scheduledStart: result.scheduledStart, scheduledEnd: result.scheduledEnd, estimatedMin: result.durationMin }
+        : {}),
+      ...(data.crewSize ? { crewSize: result.crewSize } : {}),
+      ...(data.address ? { addressId: result.addressId } : {}),
+      ...(data.property ? { propertyId: result.propertyId } : {}),
+      ...(data.customer ? { customerId: result.customerId } : {}),
+      ...(input.customerNote !== undefined ? { customerNote: result.customerNote } : {}),
+      ...(input.items
+        ? { requiredSkills: bedarf.qualifikationen, serviceId: input.items[0]?.serviceId ?? null }
+        : {}),
+    };
+    if (Object.keys(einsatzDaten).length > 0) {
+      await einsaetzeNachfuehren(tx, {
+        organizationId: params.organizationId,
+        bookingId: booking.id,
+        daten: einsatzDaten,
+        zuteilungPruefen: terminNeu || Boolean(input.items),
+        zeitOderOrt: terminNeu || Boolean(data.address || data.property || data.customer),
+      });
+    }
+
+    /*
+      Der Zugangshinweis wurde beim Anlegen des Einsatzes in dessen interne
+      Notiz übernommen. Nachgeführt wird er nur, wo die Disposition diese
+      Notiz seither nicht selbst geändert hat — sonst überschriebe die
+      Buchungsmaske eine Anweisung ans Team.
+    */
+    if (input.accessNote !== undefined && (input.accessNote ?? null) !== booking.accessNote) {
       await tx.job.updateMany({
-        where: {
-          bookingId: booking.id,
-          status: { notIn: ['COMPLETED', 'VERIFIED', 'CANCELLED'] },
-        },
-        data: {
-          ...(data.scheduledStart
-            ? {
-                scheduledStart: result.scheduledStart,
-                scheduledEnd: result.scheduledEnd,
-                estimatedMin: result.durationMin,
-              }
-            : {}),
-          ...(data.crewSize ? { crewSize: result.crewSize } : {}),
-          ...(data.address ? { addressId: result.addressId } : {}),
-        },
+        where: { bookingId: booking.id, deletedAt: null, status: { in: [...EINSATZ_FOLGT] }, internalNote: booking.accessNote },
+        data: { internalNote: input.accessNote ?? null },
       });
     }
 
@@ -933,9 +1509,25 @@ export async function updateBooking(params: {
     userId: params.actorId,
     entity: 'Booking',
     entityId: booking.id,
-    summary: `Buchung ${booking.number} bearbeitet`,
+    summary:
+      `Buchung ${booking.number} bearbeitet` +
+      (verfuegbarkeitBetroffen && input.overrideCapacity ? ' — Kapazitätsprüfung übergangen' : ''),
     changes,
   });
+
+  // Der Wechsel zuletzt — siehe den Abschnitt „Statuswechsel" oben.
+  if (statusWechsel === 'CANCELLED') {
+    return cancelBooking({
+      organizationId: params.organizationId,
+      bookingId: booking.id,
+      reason: input.changeReason!,
+      actorId: params.actorId,
+      byStaff: true,
+    });
+  }
+  if (statusWechsel === 'CONFIRMED') {
+    return confirmBooking({ organizationId: params.organizationId, bookingId: booking.id, actorId: params.actorId });
+  }
 
   return updated;
 }
@@ -961,7 +1553,8 @@ async function assertCatalogOwnership(
 
 function format(value: unknown): string {
   if (value === null || value === undefined || value === '') return '—';
-  if (value instanceof Date) return value.toLocaleString('de-CH');
+  // Zürcher Zeit — in der Änderungsspur stand sonst die Uhrzeit des Servers.
+  if (value instanceof Date) return formatDateTime(value);
   return String(value);
 }
 
@@ -1019,30 +1612,31 @@ export function recalculateBookingTotals(input: {
   discountAmount: number;
   vatRate: number;
 }) {
+  /*
+    Dezimal, und die Summen aus den gerundeten Zeilen (Phase 25, 2026-09-27).
+    Vorher: jede Zeile binär multipliziert (1.5 × 30.15 ergab 45.22), und das
+    Zwischentotal aus den *ungerundeten* Produkten — Zeilen und Total konnten
+    um einen Rappen auseinanderliegen. Die Rechnung rundet je Position
+    (`rechnungsbetraege.ts`); der Auftrag jetzt ebenso.
+  */
+  const artikel = input.items.map((item) => produkt(item.quantity, item.unitPrice));
+  const zusatz = input.extras.map((extra) => produkt(extra.quantity, extra.unitPrice));
   const lines = [
-    ...input.items.map((item) => ({
-      key: 'item',
-      kind: 'base' as const,
-      amount: round2(item.quantity * item.unitPrice),
-    })),
-    ...input.extras.map((extra) => ({
-      key: 'extra',
-      kind: 'extra' as const,
-      amount: round2(extra.quantity * extra.unitPrice),
-    })),
+    ...artikel.map((amount) => ({ key: 'item', kind: 'base' as const, amount })),
+    ...zusatz.map((amount) => ({ key: 'extra', kind: 'extra' as const, amount })),
   ];
 
-  const subtotal = round2(input.items.reduce((sum, i) => sum + i.quantity * i.unitPrice, 0));
-  const extrasTotal = round2(input.extras.reduce((sum, e) => sum + e.quantity * e.unitPrice, 0));
-  const travelFee = round2(input.travelFee);
+  const subtotal = summeZahl(...artikel);
+  const extrasTotal = summeZahl(...zusatz);
+  const travelFee = summeZahl(input.travelFee);
 
   // Der Rabatt kann den Auftrag höchstens auf null bringen, nie darunter.
-  const beforeDiscount = round2(subtotal + extrasTotal + travelFee);
-  const discountAmount = round2(Math.min(input.discountAmount, beforeDiscount));
+  const beforeDiscount = summeZahl(subtotal, extrasTotal, travelFee);
+  const discountAmount = summeZahl(Math.min(input.discountAmount, beforeDiscount));
 
-  const netTotal = round2(beforeDiscount - discountAmount);
+  const netTotal = summeZahl(beforeDiscount, -discountAmount);
   const vatRate = input.vatRate;
-  const vatAmount = round2(netTotal * (vatRate / 100));
+  const vatAmount = prozentVon(netTotal, vatRate);
 
   return {
     lines,
@@ -1053,7 +1647,7 @@ export function recalculateBookingTotals(input: {
     netTotal,
     vatRate,
     vatAmount,
-    grossTotal: round2(netTotal + vatAmount),
+    grossTotal: summeZahl(netTotal, vatAmount),
   };
 }
 
@@ -1153,7 +1747,6 @@ export async function generateRecurringBookings(organizationId: string): Promise
             priceBreakdown: template.priceBreakdown ?? undefined,
             source: template.source,
             confirmedAt: new Date(),
-            confirmationToken: randomToken(24),
             items: {
               create: template.items.map((item) => ({
                 serviceId: item.serviceId,
@@ -1186,7 +1779,17 @@ export async function generateRecurringBookings(organizationId: string): Promise
           where: { id: rule.id },
           data: { generatedUntil: instanceStart },
         });
+        await automationEreignisVormerken(tx, { organizationId, trigger: 'RECURRING_BOOKING_GENERATE', entityId: instance.id });
+        return instance.id;
       });
+
+      /**
+       * `RECURRING_BOOKING_GENERATE` — bis 2026-09-23 wählbar und nie gemeldet
+       * (RB-012). Vermerkt in der Transaktion der Instanz (Outbox,
+       * 2026-09-27), abgearbeitet nach dem Commit, damit eine Regel nie eine
+       * Buchung sieht, die noch zurückrollen könnte; wirft nie.
+       */
+      await automationEreignisseAbarbeiten({ organizationId });
 
       created++;
       generated++;
@@ -1265,7 +1868,8 @@ export async function listBookings(filter: BookingListFilter) {
           select: { id: true, firstName: true, lastName: true, companyName: true, email: true },
         },
         address: { select: { street: true, streetNo: true, postalCode: true, city: true } },
-        items: { select: { name: true }, take: 1 },
+        // Alle Positionen, nicht nur die erste — die Liste nennt jede Leistung.
+        items: { select: { name: true, serviceId: true, position: true, service: { select: { name: true } } } },
         jobs: { select: { id: true, number: true, status: true } },
       },
     }),
@@ -1326,10 +1930,81 @@ export async function getBookingDetail(params: {
   return booking;
 }
 
-/** Zugriff über den Magic-Link-Token (Gastbuchung ohne Konto). */
+/**
+ * Frist eines Verwaltungslinks: 90 Tage nach Terminende, mindestens 90 Tage
+ * ab heute. Der Link dient vor dem Termin der Verwaltung und danach als Beleg;
+ * länger braucht ihn niemand, und ein Link ohne Ende ist ein Zugang ohne Ende —
+ * genau der Mangel der alten Klartextspalte.
+ */
+const BUCHUNGSLINK_TAGE = 90;
+
+/**
+ * Einen Verwaltungslink ausstellen und die URL zurückgeben.
+ *
+ * Bis 2026-09-27 hatte jede Buchung *einen* Link, im Klartext an der Buchung
+ * gespeichert und von jeder Stelle wiederverwendet, die ihn brauchte —
+ * Bestätigung, PDF, Erinnerung. Mit Hash-Speicherung gibt es den rohen Wert
+ * nach der Ausstellung nicht mehr; wer später einen Link verschickt, stellt
+ * einen neuen aus. Das ist kein Umweg, sondern der Sinn: Jeder versendete Link
+ * steht im Prüfprotokoll (`issuePublicToken`), und ein widerrufener Link
+ * lässt sich nicht aus der Datenbank wiederbeleben.
+ */
+export async function buchungslinkAusstellen(params: {
+  organizationId: string;
+  bookingId: string;
+  scheduledEnd: Date;
+  createdById?: string | null;
+}): Promise<string> {
+  const tag = 86_400_000;
+  const expiresAt = new Date(
+    Math.max(params.scheduledEnd.getTime(), Date.now()) + BUCHUNGSLINK_TAGE * tag,
+  );
+  /**
+   * Vor jeder Ausstellung die bisherigen Links derselben Buchung widerrufen
+   * (N-04, 2026-09-27) — dieselbe Regel wie beim Neuversand einer Offerte.
+   *
+   * Vorher legte jede Erinnerung einen weiteren gültigen Link daneben; eine
+   * Buchung sammelte so mehrere Schlüssel in mehreren E-Mails, jeder bis 90
+   * Tage nach dem Termin gültig, und keiner liess sich einzeln zuordnen.
+   * Gültig ist jetzt immer der zuletzt versendete. Widerruf und Ausstellung
+   * in einer Transaktion: Scheitert die Ausstellung, bleibt der alte Link
+   * gültig, statt dass die Buchung gar keinen mehr hat. Die Kehrseite ist
+   * gewollt: Der Link aus der ersten Bestätigung erlischt mit der Erinnerung,
+   * die einen neuen trägt.
+   */
+  const { raw } = await prisma.$transaction(async (tx) => {
+    await revokeTokensFor({
+      tx,
+      purpose: 'BOOKING_MANAGE',
+      resourceId: params.bookingId,
+      revokedById: params.createdById ?? null,
+    });
+    return issuePublicToken({
+      tx,
+      organizationId: params.organizationId,
+      purpose: 'BOOKING_MANAGE',
+      resourceId: params.bookingId,
+      createdById: params.createdById ?? null,
+      expiresAt,
+    });
+  });
+  return absoluteUrl(`/buchung/${raw}`);
+}
+
+/**
+ * Zugriff über den Verwaltungslink (Gastbuchung ohne Konto).
+ *
+ * Aufgelöst über `resolvePublicToken`: Zweck, Ablauf und Widerruf werden dort
+ * geprüft, und die Buchungs-ID kommt aus dem Token, nicht aus der Anfrage. Ein
+ * abgelaufener oder widerrufener Link bekommt eine Meldung, die das sagt; ein
+ * geratener dieselbe wie eine fehlende Buchung.
+ */
 export async function getBookingByToken(token: string) {
-  const booking = await prisma.booking.findUnique({
-    where: { confirmationToken: token },
+  const aufgeloest = await resolvePublicToken({ raw: token, purpose: 'BOOKING_MANAGE' });
+  if (!aufgeloest.ok) throw tokenRejectionError(aufgeloest.reason, 'Buchung');
+
+  const booking = await prisma.booking.findFirst({
+    where: { id: aufgeloest.token.resourceId, organizationId: aufgeloest.token.organizationId },
     include: {
       customer: { select: { firstName: true, lastName: true, email: true } },
       address: true,
@@ -1357,9 +2032,10 @@ const log = logger('booking');
  */
 async function bookingPdfAttachment(
   bookingId: string,
+  manageUrl?: string,
 ): Promise<{ filename: string; content: Buffer }[] | undefined> {
   try {
-    const pdf = await renderBookingConfirmationPdf(bookingId);
+    const pdf = await renderBookingConfirmationPdf(bookingId, { manageUrl });
     return [{ filename: pdf.filename, content: pdf.buffer }];
   } catch (error) {
     log.error('Buchungsbestätigung konnte nicht gerendert werden', { bookingId, error });
@@ -1367,17 +2043,136 @@ async function bookingPdfAttachment(
   }
 }
 
-async function resolveCustomer(params: {
-  organizationId: string;
-  input: CreateBookingInput;
-  session: SessionUser | null;
-}): Promise<{
-  customerId: string;
+/**
+ * Kundschaft für eine Erfassung im Büro — aus der ID, nicht aus der Adresse.
+ *
+ * Der Mandantenfilter steht in der `where`-Klausel, nicht in einer Prüfung
+ * danach: Eine fremde Kundennummer wird schlicht nicht gefunden und ist von
+ * einer erfundenen nicht zu unterscheiden. Eine gesperrte Kundschaft läuft
+ * weiter unten in dieselbe Regel wie im öffentlichen Weg.
+ */
+/**
+ * Wer bucht. `customerId: null` heisst: eine neue Gastkundschaft, die erst
+ * mit der Buchung angelegt wird (`neu` trägt ihre Angaben).
+ */
+interface AufgeloesteKundschaft {
+  customerId: string | null;
+  neu?: NeueGastkundschaft;
+  /**
+   * Ist belegt, dass die anfragende Person diese Kundschaft *ist* oder für
+   * sie handeln darf? Ja bei angemeldeter Kundschaft (ihr eigenes Profil)
+   * und im Büro (`booking:create`, Kundschaft ausdrücklich gewählt). Nein,
+   * wenn eine Gastbuchung über die eingetippte E-Mail-Adresse einer
+   * bestehenden Akte zugeordnet wird: Eine E-Mail-Adresse ist kein Nachweis,
+   * jede Kundenliste und jede Visitenkarte nennt sie (F-03, 2026-09-27).
+   * Ohne Nachweis: kein Verweis auf Bestand, kein Rabatt, kein
+   * Verwaltungslink und kein Sperrgrund in der Antwort.
+   */
+  nachgewiesen: boolean;
   isNewCustomer: boolean;
   customerEmail: string;
   customerName: string;
   userId: string | null;
-}> {
+}
+
+async function resolveOfficeCustomer(params: {
+  organizationId: string;
+  customerId: string;
+}): Promise<AufgeloesteKundschaft> {
+  const customer = await prisma.customer.findFirst({
+    where: { id: params.customerId, organizationId: params.organizationId, deletedAt: null },
+    select: { id: true, email: true, firstName: true, lastName: true, companyName: true, userId: true },
+  });
+  if (!customer) throw new NotFoundError('Kundschaft');
+
+  return {
+    customerId: customer.id,
+    nachgewiesen: true,
+    isNewCustomer: false,
+    customerEmail: customer.email,
+    customerName: customer.companyName ?? `${customer.firstName} ${customer.lastName}`,
+    userId: customer.userId,
+  };
+}
+
+/**
+ * Was eine Datei erfüllen muss, um an eine Buchung zu kommen — neben der
+ * Organisation und der hochladenden Person, die der Aufrufer ergänzt.
+ * Dieselben Bedingungen wie `dateienBinden` (die Bindung selbst); hier nur
+ * für die frühe, verständliche Antwort vor Preis und Transaktion.
+ */
+const ANHAENGBAR = {
+  scope: 'BOOKING',
+  bookingId: null,
+  isPublic: false,
+  scanStatus: { notIn: ['INFECTED', 'QUARANTINED', 'ERROR'] },
+  checksum: { not: null },
+} satisfies Prisma.FileAssetWhereInput;
+
+/**
+ * Die Verweise einer Buchung prüfen, **bevor** gerechnet oder geschrieben
+ * wird (2026-09-27).
+ *
+ * Die öffentliche Buchung nahm `addressId`, `propertyId` und `fileIds`
+ * entgegen und schrieb sie ungeprüft an die Buchung. `Address` und `Property`
+ * tragen keine Organisation, und niemand verglich die Kundschaft: Wer eine
+ * Kennung kannte, buchte auf die Adresse einer fremden Kundschaft — und bekam
+ * sie in Bestätigung, PDF und Buchungsansicht zurück, beim Objekt samt
+ * Schlüsselort und Zugangsnotiz. Eine Kennung ist kein Beweis von Besitz.
+ *
+ * Die Regeln, ausdrücklich:
+ *
+ *  • Adresse und Objekt nur aus dem Bestand **dieser** Kundschaft, in dieser
+ *    Organisation. Eine Gastbuchung hat keinen Bestand — auch dann nicht,
+ *    wenn ihre E-Mail-Adresse zu einer bestehenden Akte passt: Der Aufrufer
+ *    übergibt `customerId` nur bei nachgewiesener Kundschaft (F-03). Ein
+ *    Gast gibt eine neue Adresse an, keine Kennung.
+ *  • Dateien nur von der **angemeldeten** Person selbst hochgeladen, als
+ *    Buchungsfoto, noch ungebunden, geprüft und sauber. Ein Gast hat keine
+ *    Identität, an die sich eine Datei binden liesse; das Buchungsformular
+ *    hat heute ohnehin keinen Bildupload.
+ *
+ * Unbekannt, fremd und nicht erlaubt ergeben dieselbe Antwort (404): Die
+ * Antwort soll nicht verraten, ob es eine Kennung anderswo gibt.
+ */
+async function buchungsbezuegePruefen(params: {
+  organizationId: string;
+  customerId: string | null;
+  addressId: string | null;
+  propertyId: string | null;
+  fileIds: string[];
+  uploaderId: string | null;
+}): Promise<{ postalCode: string | null }> {
+  const { organizationId, customerId } = params;
+  const eigene = customerId ? { customerId, customer: { organizationId, deletedAt: null } } : null;
+
+  let postalCode: string | null = null;
+  if (params.addressId) {
+    const adresse = eigene ? await prisma.address.findFirst({ where: { id: params.addressId, ...eigene }, select: { postalCode: true } }) : null;
+    if (!adresse) throw new NotFoundError('Adresse');
+    postalCode = adresse.postalCode;
+  }
+  if (params.propertyId) {
+    const objekt = eigene ? await prisma.property.findFirst({ where: { id: params.propertyId, ...eigene }, select: { id: true } }) : null;
+    if (!objekt) throw new NotFoundError('Objekt');
+  }
+  if (params.fileIds.length > 0) {
+    if (!params.uploaderId) {
+      throw new BusinessRuleError('Fotos lassen sich nur mit Anmeldung an eine Buchung anhängen.');
+    }
+    const passend = await prisma.fileAsset.count({
+      where: { id: { in: params.fileIds }, ...ANHAENGBAR, organizationId, uploadedById: params.uploaderId },
+    });
+    if (passend !== new Set(params.fileIds).size) throw new NotFoundError('Datei');
+  }
+  return { postalCode };
+}
+
+async function resolveCustomer(params: {
+  organizationId: string;
+  input: BookingCoreInput;
+  session: SessionUser | null;
+}): Promise<AufgeloesteKundschaft> {
   const { organizationId, input, session } = params;
 
   // Fall 1: eingeloggter Kunde
@@ -1388,6 +2183,7 @@ async function resolveCustomer(params: {
     });
     return {
       customerId: customer.id,
+      nachgewiesen: true,
       isNewCustomer: false,
       customerEmail: customer.email,
       customerName: `${customer.firstName} ${customer.lastName}`,
@@ -1395,24 +2191,25 @@ async function resolveCustomer(params: {
     };
   }
 
-  // Fall 2: Mitarbeitende buchen im Namen eines Kunden — dann muss die
-  // Kunden-ID aus einer bestehenden Adresse oder Liegenschaft hervorgehen.
-  if (session && session.role !== 'CUSTOMER' && input.addressId) {
-    const address = await prisma.address.findUnique({
-      where: { id: input.addressId },
-      include: { customer: { select: { id: true, email: true, firstName: true, lastName: true, userId: true } } },
-    });
-    if (!address) throw new NotFoundError('Adresse');
-    return {
-      customerId: address.customer.id,
-      isNewCustomer: false,
-      customerEmail: address.customer.email,
-      customerName: `${address.customer.firstName} ${address.customer.lastName}`,
-      userId: address.customer.userId,
-    };
-  }
+  /*
+    Einen Fall 2 gibt es nicht mehr (F-03, 2026-09-27).
 
-  // Fall 3: Gastbuchung — Kontaktangaben sind Pflicht.
+    Hier stand: Jede angemeldete Person, die nicht Kundschaft ist, bucht über
+    eine bestehende `addressId` auf deren Kundschaft. Geprüft wurde nur die
+    Organisation, keine Berechtigung — die öffentliche Route verlangt keine.
+    Eine Reinigungskraft ohne `booking:create` konnte so auf jede Adresse der
+    Organisation buchen und bekam den Verwaltungslink samt Stammdaten zurück.
+
+    Eine Berechtigungsprüfung an dieser Stelle nachzuziehen wäre der falsche
+    Weg: Für die Erfassung im Büro gibt es `POST /api/bookings`, mit
+    `booking:create`, ausdrücklicher Kundschaft, Herkunft und Protokoll. Ein
+    zweiter Büroweg durch die öffentliche Route wäre eine zweite
+    Sicherheitsstufe für dieselbe Handlung. Wer angemeldet, aber nicht
+    Kundschaft ist, bucht hier deshalb wie ein Gast — mit Kontaktangaben und
+    neuer Adresse, ohne Zugriff auf Bestand.
+  */
+
+  // Gastbuchung — Kontaktangaben sind Pflicht.
   if (!input.email || !input.firstName || !input.lastName || !input.phone) {
     throw new BusinessRuleError(
       'Bitte geben Sie Vorname, Nachname, E-Mail und Telefonnummer an oder melden Sie sich an.',
@@ -1424,9 +2221,24 @@ async function resolveCustomer(params: {
     select: { id: true, email: true, firstName: true, lastName: true, userId: true },
   });
 
+  /**
+   * Eine bestehende Akte mit dieser E-Mail-Adresse: Die Buchung kommt dorthin,
+   * aber **ohne Nachweis** (F-03, 2026-09-27).
+   *
+   * Eine zweite Akte anzulegen, wäre die scheinbar sichere Alternative und
+   * ist verworfen: Die Adresse ist je Organisation die Identität einer
+   * Kundschaft (`kundenakte-sperre.ts` serialisiert jeden Anlageweg genau
+   * darauf), Registrierung und Büro fänden danach zwei Akten, und die
+   * Kundschaft, die ohne Anmeldung ein zweites Mal bucht, sähe ihre
+   * Buchungen verstreut. Die Zuordnung bleibt also — nur verschafft sie der
+   * anfragenden Person nichts: keinen Verweis auf Adressen und Objekte der
+   * Akte, keinen Rabatt, keinen Verwaltungslink, keinen Sperrgrund. Die
+   * Bestätigung geht an die Adresse der Akte; dort liest sie, wem sie gehört.
+   */
   if (existing) {
     return {
       customerId: existing.id,
+      nachgewiesen: false,
       isNewCustomer: false,
       customerEmail: existing.email,
       customerName: `${existing.firstName} ${existing.lastName}`,
@@ -1434,34 +2246,145 @@ async function resolveCustomer(params: {
     };
   }
 
-  const customer = await prisma.$transaction(async (tx) => {
-    const { number } = await nextNumber(tx, organizationId, 'customer');
-    return tx.customer.create({
-      data: {
-        organizationId,
-        number,
-        type: input.companyName ? 'BUSINESS' : 'PRIVATE',
-        companyName: input.companyName ?? null,
-        firstName: input.firstName!,
-        lastName: input.lastName!,
-        email: input.email!,
-        phone: input.phone!,
-        referralCode: randomToken(4).toUpperCase(),
-      },
-    });
-  });
-
+  // Neue Kundschaft: noch nichts schreiben — `createBooking` legt sie in der
+  // Transaktion der Buchung an (Begründung dort).
   return {
-    customerId: customer.id,
+    customerId: null,
+    neu: {
+      companyName: input.companyName ?? null,
+      firstName: input.firstName,
+      lastName: input.lastName,
+      email: input.email,
+      phone: input.phone,
+    },
+    // Die Akte entsteht erst mit dieser Buchung; ob die anfragende Person sie
+    // sehen darf, entscheidet `gastkundschaftAnlegen` (hat sie sie angelegt?).
+    nachgewiesen: false,
     isNewCustomer: true,
-    customerEmail: customer.email,
-    customerName: `${customer.firstName} ${customer.lastName}`,
+    customerEmail: input.email,
+    customerName: `${input.firstName} ${input.lastName}`,
     userId: null,
   };
 }
 
-async function createAddress(tx: Tx, customerId: string, input: CreateBookingInput): Promise<string> {
+interface NeueGastkundschaft {
+  companyName: string | null;
+  firstName: string;
+  lastName: string;
+  email: string;
+  phone: string;
+}
+
+/**
+ * Die Gastkundschaft einer Buchung anlegen — innerhalb der Buchungstransaktion.
+ *
+ * Zuerst noch einmal nach der Adresse suchen: Zwischen dem Auflösen vor der
+ * Preisberechnung und diesem Punkt kann eine zweite Buchung derselben Person
+ * die Akte angelegt haben. Die Transaktionssperre der Buchung serialisiert
+ * beide; die zweite findet hier die Akte der ersten, statt eine Doppelakte
+ * anzulegen.
+ */
+async function gastkundschaftAnlegen(
+  tx: Tx,
+  organizationId: string,
+  neu: NeueGastkundschaft,
+): Promise<{ id: string; angelegt: boolean }> {
+  // Dieselbe Sperre wie jeder andere Anlageweg (`kundenakte-sperre.ts`): Die
+  // Buchungssperre serialisiert nur Buchungen untereinander, nicht die
+  // Buchung gegen das Büro oder die Registrierung.
+  await kundenakteSperren(tx, organizationId, neu.email);
+  const vorhanden = await tx.customer.findFirst({
+    where: { organizationId, email: neu.email, deletedAt: null },
+    select: { id: true },
+  });
+  // `angelegt: false` — die Akte stammt nicht aus dieser Anfrage und wird
+  // behandelt wie jede bestehende: ohne Nachweis (siehe `createBooking`).
+  if (vorhanden) return { id: vorhanden.id, angelegt: false };
+  const { number } = await nextNumber(tx, organizationId, 'customer');
+  const customer = await tx.customer.create({
+    data: {
+      organizationId,
+      number,
+      type: neu.companyName ? 'BUSINESS' : 'PRIVATE',
+      companyName: neu.companyName,
+      firstName: neu.firstName,
+      lastName: neu.lastName,
+      email: neu.email,
+      phone: neu.phone,
+      referralCode: randomToken(4).toUpperCase(),
+    },
+    select: { id: true },
+  });
+  return { id: customer.id, angelegt: true };
+}
+
+/**
+ * Eine bei der Buchung eingegebene Adresse anlegen.
+ *
+ * ---------------------------------------------------------------------------
+ *  Der Fehler, den diese Funktion hatte
+ * ---------------------------------------------------------------------------
+ *
+ * Sie setzte `isDefault: true` und `isBilling: true` **bedingungslos**. Wer
+ * dreimal mit einer neuen Adresse buchte, hatte danach drei Standard- und drei
+ * Rechnungsadressen — während die Adressverwaltung genau eine erzwingt und
+ * `addresses.test.ts` das auch prüft. Die Buchung ging an dieser Regel vorbei.
+ *
+ * Das ist nicht nur Unordnung. `invoice.service.ts` holt die Rechnungsadresse
+ * mit `where: { isBilling: true }, take: 1` — **ohne Sortierung**. Bei mehreren
+ * Treffern entscheidet die Datenbank, welcher zurückkommt, und der
+ * Rechnungsempfänger wäre damit von Lauf zu Lauf ein anderer.
+ *
+ * Gefunden hat den Fehler die Prüfreihe aus Wave 6: Sie erfasst Buchungen mit
+ * Adresse, und `addresses.test.ts` fand danach drei Standardadressen. Der
+ * Fehlschlag stand in einer anderen Datei als seine Ursache — und die Ursache
+ * war diesmal nicht die Prüfreihe, sondern das Produkt.
+ *
+ * ---------------------------------------------------------------------------
+ *  Was jetzt gilt
+ * ---------------------------------------------------------------------------
+ *
+ * **Standard:** Die neue Adresse wird es, und die bisherige verliert die
+ * Markierung. Das entspricht der Absicht — wer eine neue Adresse eingibt,
+ * bucht dort — und hält die Regel „genau eine" ein.
+ *
+ * **Rechnung:** Nur, wenn es noch keine gibt. Eine Einsatzadresse ist nicht
+ * zwangsläufig die Rechnungsadresse; die Rechnung einer Firma still an die
+ * Wohnung der Hauswartin umzuleiten, weil dort zuletzt geputzt wurde, wäre
+ * die schlechtere Vorgabe. Wer die Rechnungsadresse ändern will, tut das in
+ * der Kundenakte.
+ *
+ * **Ohne Nachweis** (`bestandSchonen`, F-03, 2026-09-27): Fällt eine
+ * Gastbuchung über die E-Mail-Adresse auf eine bestehende Akte, entsteht die
+ * Adresse dort, aber sie verdrängt nichts. Sonst hätte jede anonyme Anfrage
+ * mit einer bekannten E-Mail-Adresse die Standardadresse einer fremden
+ * Kundschaft umgestellt — und die nächste Buchung der Kundschaft selbst,
+ * die ihre Standardadresse vorbelegt, führte das Team an den Ort, den die
+ * fremde Anfrage eingetragen hat. Ebenso wenig wird sie Rechnungsadresse,
+ * auch bei einer Akte ohne eine: Die Rechnungen der Kundschaft gingen sonst
+ * an einen Ort, den eine unbelegte Anfrage bestimmt hat. Beide Markierungen
+ * setzt in diesem Fall das Büro oder die angemeldete Kundschaft selbst.
+ */
+async function createAddress(
+  tx: Tx,
+  customerId: string,
+  input: BookingCoreInput,
+  optionen: { bestandSchonen: boolean },
+): Promise<string> {
   const address = input.address!;
+
+  let wirdRechnungsadresse = false;
+  if (!optionen.bestandSchonen) {
+    const [, hatRechnungsadresse] = await Promise.all([
+      tx.address.updateMany({
+        where: { customerId, isDefault: true },
+        data: { isDefault: false },
+      }),
+      tx.address.count({ where: { customerId, isBilling: true } }),
+    ]);
+    wirdRechnungsadresse = hatRechnungsadresse === 0;
+  }
+
   const created = await tx.address.create({
     data: {
       customerId,
@@ -1477,8 +2400,8 @@ async function createAddress(tx: Tx, customerId: string, input: CreateBookingInp
       lng: address.lng ?? null,
       placeId: address.placeId ?? null,
       accessNote: input.accessNote ?? address.accessNote ?? null,
-      isDefault: true,
-      isBilling: true,
+      isDefault: !optionen.bestandSchonen,
+      isBilling: wirdRechnungsadresse,
     },
   });
   return created.id;
@@ -1507,3 +2430,4 @@ export async function assertBookingOwnership(bookingId: string, customerId: stri
 }
 
 export { round2 };
+

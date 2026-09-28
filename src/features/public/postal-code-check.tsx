@@ -22,6 +22,13 @@ interface CheckResult {
   city?: string;
   travelFee?: number;
   travelMinutes?: number;
+  /**
+   * Die Prüfung selbst ist gescheitert (Netz, Kontingent, Server) — nicht
+   * „ausserhalb". Bis 2026-09-27 zeigte jeder Fehler „liegt ausserhalb
+   * unseres Standardgebiets": Eine Kundin in Bern las, dass wir nicht zu ihr
+   * kommen, weil ihre Verbindung kurz weg war.
+   */
+  fehler?: boolean;
 }
 
 export function PostalCodeCheck() {
@@ -35,7 +42,7 @@ export function PostalCodeCheck() {
       const data = await api.get<CheckResult>('/api/public/service-areas/check', { postalCode });
       setResult(data);
     } catch {
-      setResult({ covered: false });
+      setResult({ covered: false, fehler: true });
     } finally {
       setLoading(false);
     }
@@ -83,6 +90,13 @@ export function PostalCodeCheck() {
               ? 'Bitte vier Ziffern eingeben.'
               : 'Zum Beispiel 3011 für die Berner Innenstadt.'}
           </p>
+        ) : result.fehler ? (
+          <div className="flex flex-wrap items-center gap-3 rounded-xl border border-border bg-muted/40 p-4 text-sm">
+            <p className="flex-1">Die Prüfung ist gerade nicht erreichbar. Bitte erneut versuchen oder direkt buchen — die Postleitzahl wird dort ebenfalls geprüft.</p>
+            <Button type="button" variant="outline" size="sm" onClick={() => void check(value)}>
+              Erneut prüfen
+            </Button>
+          </div>
         ) : result.covered ? (
           <div className="space-y-4">
             <div className="flex items-start gap-3 rounded-xl border border-success/25 bg-success/8 p-4">

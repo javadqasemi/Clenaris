@@ -4,6 +4,7 @@ import { noContent, ok } from '@/lib/api/response';
 import { prisma } from '@/lib/db';
 import { ForbiddenError, NotFoundError } from '@/lib/errors';
 import { updateTaskSchema } from '@/lib/validation/crm';
+import { getOrganizationId } from '@/server/services/organization.service';
 
 export const runtime = 'nodejs';
 
@@ -19,11 +20,17 @@ export const PATCH = defineRoute({
   body: updateTaskSchema,
   rateLimit: 'apiWrite',
   handler: async ({ params, body, session }) => {
-    const task = await prisma.task.findUnique({ where: { id: params.id } });
+    const organizationId = await getOrganizationId();
+    const task = await prisma.task.findFirst({ where: { id: params.id, organizationId } });
     if (!task) throw new NotFoundError('Aufgabe');
 
     if (session.role === 'EMPLOYEE' && task.assigneeId !== session.id) {
       throw new ForbiddenError('Diese Aufgabe ist Ihnen nicht zugewiesen.');
+    }
+
+    // Eine Neuzuweisung nur an eine Person der eigenen Organisation.
+    if (body.assigneeId && !(await prisma.user.count({ where: { id: body.assigneeId, organizationId, deletedAt: null } }))) {
+      throw new NotFoundError('Person');
     }
 
     const updated = await prisma.task.update({
@@ -55,24 +62,23 @@ export const PATCH = defineRoute({
  * irrtümlich angelegt hat, entfernt sie.
  *
  * Mitarbeitende dürfen nur eigene Aufgaben löschen — dieselbe Schranke wie
- * beim Ändern. `Task` trägt kein `organizationId` (eine Aufgabe kann an
- * niemandem und nichts hängen); die Mandantenzuordnung ergibt sich im
- * Einmandantenbetrieb aus der Session. Das ist die Stelle, die eine spätere
- * Mehrmandantenfähigkeit als Erstes anfassen müsste.
+ * beim Ändern. Seit 2026-09-27 trägt `Task` eine `organizationId`; hier stand
+ * vorher, die Zuordnung ergebe sich „aus der Session" — tatsächlich prüfte
+ * niemand sie, und eine fremde Aufgabe liess sich löschen.
  */
 export const DELETE = defineRoute({
   permissions: ['task:delete'],
   params: idParam,
   rateLimit: 'apiWrite',
   handler: async ({ params, session, ip }) => {
-    const task = await prisma.task.findUnique({ where: { id: params.id } });
+    const task = await prisma.task.findFirst({ where: { id: params.id, organizationId: await getOrganizationId() } });
     if (!task) throw new NotFoundError('Aufgabe');
 
     if (session.role === 'EMPLOYEE' && task.assigneeId !== session.id) {
       throw new ForbiddenError('Diese Aufgabe ist Ihnen nicht zugewiesen.');
     }
 
-    await prisma.task.delete({ where: { id: params.id } });
+    await prisma.task.delete({ where: { id: task.id } });
 
     await audit.deleted({
       organizationId: session.organizationId,

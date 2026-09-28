@@ -37,6 +37,18 @@ export function ChatWidget() {
   const [streaming, setStreaming] = React.useState(false);
   const scrollRef = React.useRef<HTMLDivElement>(null);
   const inputRef = React.useRef<HTMLInputElement>(null);
+  const toggleRef = React.useRef<HTMLButtonElement>(null);
+
+  /*
+    Escape schliesst und gibt den Fokus dem Knopf zurück (2026-09-27). Das
+    Fenster ist bewusst **nicht modal** — die Seite bleibt bedienbar, deshalb
+    keine Fokusfalle —, aber wer es mit der Tastatur geöffnet hat, muss es
+    auch so wieder schliessen können und danach wissen, wo er steht.
+  */
+  const schliessen = () => {
+    setOpen(false);
+    toggleRef.current?.focus();
+  };
 
   React.useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
@@ -120,6 +132,7 @@ export function ChatWidget() {
   return (
     <>
       <button
+        ref={toggleRef}
         type="button"
         onClick={() => setOpen((value) => !value)}
         aria-expanded={open}
@@ -138,7 +151,14 @@ export function ChatWidget() {
       {open ? (
         <div
           role="dialog"
+          aria-modal="false"
           aria-label="Assistent"
+          onKeyDown={(event) => {
+            if (event.key === 'Escape') {
+              event.stopPropagation();
+              schliessen();
+            }
+          }}
           className="fixed bottom-24 right-5 z-40 flex h-[min(30rem,70dvh)] w-[min(24rem,calc(100vw-2.5rem))] animate-fade-up flex-col overflow-hidden rounded-2xl border border-border bg-card shadow-elevated"
         >
           <header className="flex items-center gap-3 border-b border-border px-4 py-3.5">

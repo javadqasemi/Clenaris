@@ -349,6 +349,7 @@ export async function createAction(session: SessionUser, organizationId: string,
     const task = input.assigneeId
       ? await tx.task.create({
           data: {
+            organizationId,
             title: `Massnahme: ${input.title}`,
             description: input.description ?? null,
             priority: input.priority,

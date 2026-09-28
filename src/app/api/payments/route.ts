@@ -1,19 +1,10 @@
-import { z } from 'zod';
-
 import { defineRoute } from '@/lib/api/handler';
 import { buildPagination, paginated } from '@/lib/api/response';
-import { prisma, toNumber } from '@/lib/db';
-import { paginationQuery } from '@/lib/validation/queries';
+import { prisma, toNumber, type Prisma } from '@/lib/db';
+import { paymentListQuery } from '@/lib/validation/queries';
 import { getOrganizationId } from '@/server/services/organization.service';
 
 export const runtime = 'nodejs';
-
-const listQuery = paginationQuery.extend({
-  status: z.enum(['PENDING', 'PROCESSING', 'SUCCEEDED', 'FAILED', 'REFUNDED', 'CANCELLED']).optional(),
-  from: z.coerce.date().optional(),
-  to: z.coerce.date().optional(),
-  q: z.string().trim().max(120).optional(),
-});
 
 /**
  * GET /api/payments — Zahlungseingänge.
@@ -28,13 +19,34 @@ const listQuery = paginationQuery.extend({
  */
 export const GET = defineRoute({
   permissions: ['payment:read'],
-  query: listQuery,
+  query: paymentListQuery,
   rateLimit: 'apiRead',
   handler: async ({ query }) => {
     const organizationId = await getOrganizationId();
 
-    const where = {
-      OR: [{ invoice: { organizationId } }, { customer: { organizationId } }],
+    /*
+      Mandant und Suche als zwei Glieder eines `AND` (2026-09-27). Vorher
+      standen beide als `OR` im selben Objekt, und das zweite überschrieb das
+      erste: Mit einem Suchbegriff fiel die Organisationsbedingung weg, die
+      Liste zeigte die Zahlungen jeder Organisation und summierte sie in
+      „erhalten" und „erstattet". Ein Schlüssel, der in einem Objekt doppelt
+      vorkommt, gewinnt still — deshalb hier keine Verbreitung mehr, die ein
+      `OR` tragen kann.
+    */
+    const where: Prisma.PaymentWhereInput = {
+      AND: [
+        { OR: [{ invoice: { organizationId } }, { customer: { organizationId } }] },
+        ...(query.q
+          ? [
+              {
+                OR: [
+                  { reference: { contains: query.q, mode: 'insensitive' as const } },
+                  { invoice: { number: { contains: query.q, mode: 'insensitive' as const } } },
+                ],
+              },
+            ]
+          : []),
+      ],
       ...(query.status ? { status: query.status } : {}),
       ...(query.from || query.to
         ? {
@@ -42,14 +54,6 @@ export const GET = defineRoute({
               ...(query.from ? { gte: query.from } : {}),
               ...(query.to ? { lte: query.to } : {}),
             },
-          }
-        : {}),
-      ...(query.q
-        ? {
-            OR: [
-              { reference: { contains: query.q, mode: 'insensitive' as const } },
-              { invoice: { number: { contains: query.q, mode: 'insensitive' as const } } },
-            ],
           }
         : {}),
     };

@@ -2,6 +2,7 @@ import 'server-only';
 
 import { cache } from '@/lib/redis';
 import { IntegrationError } from '@/lib/errors';
+import { mapsBrowserSchluessel } from '@/lib/laufzeit-konfiguration';
 
 /**
  * Google-Maps-Anbindung (Server-Seite).
@@ -17,7 +18,7 @@ const GEOCODE_URL = 'https://maps.googleapis.com/maps/api/geocode/json';
 const DISTANCE_URL = 'https://maps.googleapis.com/maps/api/distancematrix/json';
 
 function serverKey(): string {
-  const key = process.env.GOOGLE_MAPS_SERVER_KEY ?? process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY;
+  const key = process.env.GOOGLE_MAPS_SERVER_KEY ?? mapsBrowserSchluessel();
   if (!key) throw new IntegrationError('Google Maps', 'Kein API-Key konfiguriert.');
   return key;
 }
@@ -173,7 +174,9 @@ export function staticMapUrl(params: {
   width?: number;
   height?: number;
 }): string {
-  const key = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY ?? '';
+  // Zur Laufzeit (V2-1): Der Browser-Schlüssel ist auf die Domain der
+  // Umgebung beschränkt und deshalb je Umgebung verschieden.
+  const key = mapsBrowserSchluessel() ?? '';
   const { center, zoom = 15, width = 640, height = 320 } = params;
   return (
     `https://maps.googleapis.com/maps/api/staticmap?center=${center.lat},${center.lng}` +

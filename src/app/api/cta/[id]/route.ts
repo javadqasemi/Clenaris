@@ -1,8 +1,7 @@
-import { z } from 'zod';
-
 import { defineRoute, idParam } from '@/lib/api/handler';
 import { noContent, ok } from '@/lib/api/response';
 import { updateCtaSchema } from '@/lib/validation/cta';
+import { ctaDeleteQuery } from '@/lib/validation/queries';
 import { deleteCta, getCta, purgeCta, updateCta } from '@/server/services/cta.service';
 import { getOrganizationId } from '@/server/services/organization.service';
 
@@ -34,14 +33,6 @@ export const PATCH = defineRoute({
   },
 });
 
-const deleteQuery = z.object({
-  /** `1` löscht endgültig statt in den Papierkorb. */
-  endgueltig: z
-    .enum(['0', '1'])
-    .default('0')
-    .transform((v) => v === '1'),
-});
-
 /**
  * DELETE /api/cta/:id
  *
@@ -53,7 +44,7 @@ const deleteQuery = z.object({
 export const DELETE = defineRoute({
   permissions: ['cta:delete'],
   params: idParam,
-  query: deleteQuery,
+  query: ctaDeleteQuery,
   rateLimit: 'apiWrite',
   handler: async ({ params, query, session, ip }) => {
     const context = {

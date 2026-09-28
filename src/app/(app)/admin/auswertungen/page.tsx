@@ -3,6 +3,7 @@ import { Download, FileSpreadsheet } from 'lucide-react';
 
 import { requirePermission } from '@/lib/auth/session';
 import { formatCurrency, formatDate, formatNumber } from '@/lib/utils';
+import { zuercherTagText } from '@/lib/zuerich';
 import { getOrganizationId } from '@/server/services/organization.service';
 import {
   getCashflowForecast,
@@ -77,8 +78,10 @@ export default async function ReportsPage({
       getTopCustomers({ organizationId, limit: 10 }),
     ]);
 
-  const fromIso = period.from.toISOString().slice(0, 10);
-  const toIso = period.to.toISOString().slice(0, 10);
+  // Die Zürcher Tage des Zeitraums (2026-09-27) — `period.from` ist die
+  // Zürcher Mitternacht, deren UTC-Tag der Vortag ist.
+  const fromIso = zuercherTagText(period.fromDay);
+  const toIso = zuercherTagText(period.toDay);
 
   return (
     <div className="space-y-8">

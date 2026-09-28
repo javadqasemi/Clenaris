@@ -19,6 +19,10 @@ export const runtime = 'nodejs';
  * angemeldet sind.
  */
 export const GET = definePublicRoute({
+  // Jede Seite der Website fragt hier einmal nach, und `getSession` liest die
+  // Datenbank (Widerruf, Gerätesperre). Ohne Kontingent war das der billigste
+  // Weg, von aussen Datenbanklast zu erzeugen (C9, `security:check`).
+  rateLimit: 'apiRead',
   handler: async () => {
     const session = await getSession();
 

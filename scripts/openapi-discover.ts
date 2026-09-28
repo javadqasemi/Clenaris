@@ -23,6 +23,15 @@ export interface DiscoveredMethod {
   method: string;
   /** `null`, wenn der Handler nicht über die Fabrik läuft. */
   guard: Guard | null;
+  /**
+   * Deklariert die Fabrik einen Körper bzw. eine Abfrage (2026-09-27)? Dann
+   * muss die Routenliste ihn ebenfalls nennen. Vorher prüfte der Abgleich nur
+   * den Schutz: Routen mit einem Schema im eigenen Quelltext standen in der
+   * Dokumentation ohne Körper — `PUT /api/opening-hours` etwa, dessen ganzer
+   * Wochenplan nirgends beschrieben war.
+   */
+  hatKoerper: boolean;
+  hatAbfrage: boolean;
 }
 
 export interface DiscoveredRoute {
@@ -75,9 +84,15 @@ export function discoverRoutes(apiDir: string, dir = apiDir): DiscoveredRoute[] 
     const methods = matches.map((match, index) => {
       const start = match.index ?? 0;
       const end = matches[index + 1]?.index ?? source.length;
+      const block = source.slice(start, end);
+      const fabrik = /define(?:Public|Cron)?Route\(/.test(block);
       return {
         method: match[1].toLowerCase(),
-        guard: guardFromBlock(source.slice(start, end)),
+        guard: guardFromBlock(block),
+        // Genau die Ebene der Fabrikangaben (zwei Leerzeichen) — tiefer
+        // eingerückte `body:` sind Felder einer Antwort, kein Schema.
+        hatKoerper: fabrik && /^ {2}body:\s*[A-Za-z]/m.test(block),
+        hatAbfrage: fabrik && /^ {2}query:\s*[A-Za-z]/m.test(block),
       };
     });
 

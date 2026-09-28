@@ -138,8 +138,53 @@ const DOMAINS: Domain[] = [
       'die erst später ein Login erhalten. `RefreshToken` speichert nur den SHA-256-Hash und ' +
       'eine Familien-ID — daran erkennt die Rotation die Wiederverwendung eines bereits ' +
       'verbrauchten Tokens. `AuditLog` und `Consent` sind die Nachweisschicht für das ' +
-      'Schweizer DSG und die DSGVO.',
-    models: ['User', 'RefreshToken', 'VerificationToken', 'Consent', 'AuditLog'],
+      'Schweizer DSG und die DSGVO. `PublicAccessToken` ist die eine Stelle für Links, die ' +
+      'ohne Anmeldung funktionieren — Offerte, Rechnung, später Signatur: nur der SHA-256-Hash ' +
+      'liegt in der Datenbank, dazu Zweck, Ressource, Ablauf und Widerruf. ' +
+      '`SecurityEvent` steht bewusst **neben** `AuditLog` und nicht darin: Das Prüfprotokoll ' +
+      'sagt, wer welchen Datensatz geändert hat, der Sicherheitsstrom, was an Zugängen ' +
+      'geschehen ist. Ein fehlgeschlagener Anmeldeversuch ändert keinen Datensatz, und ' +
+      'Sicherheitsereignisse brauchen einen Bearbeitungszustand, den ein Protokolleintrag nicht ' +
+      'kennt.',
+    models: [
+      'User',
+      'RefreshToken',
+      'VerificationToken',
+      'PublicAccessToken',
+      'Consent',
+      'AuditLog',
+      'SecurityEvent',
+      // Laufprotokoll der geplanten Aufträge (RB-014) — Betriebszustand, wie
+      // die Ereignisse der Kategorie SYSTEM, deshalb hier.
+      'CronRun',
+      'SecurityReport',
+    ],
+  },
+  {
+    key: 'signatur',
+    title: 'Elektronische Unterzeichnung',
+    purpose:
+      'Ein `SignatureRequest` bindet sich an exakte Bytes (`originalDocumentHash`), nie an ein ' +
+      'veränderliches Geschäftsobjekt; genau eine Quelle (Offerte, Einsatz oder Dokumentfassung), ' +
+      'per CHECK erzwungen, `Restrict` in alle Richtungen. `SignatureParticipant` friert die ' +
+      'Kontaktdaten ein und trägt nach dem Abschluss Zustimmung, Methode und technische Angaben. ' +
+      '`SignatureEvent` ist das fachliche Protokoll — nur anhängen, in der Datenbank per Trigger ' +
+      'erzwungen. `SignatureOtpChallenge` hält Bestätigungscodes als Argon2id über einen HMAC; ' +
+      'der Hash ist kein Beweis und wird bereinigt. Alle Artefakte liegen in der Gate-2-Ablage ' +
+      '(`FileAsset` scope SIGNATURE). `ceremonyMode` hält den *Hergang* fest — Link, Kundenkonto ' +
+      'oder Übergabe vor Ort — und ist bewusst getrennt vom `assuranceLevel`, das den Zugangsweg ' +
+      'beschreibt; keines steht für das andere ein. `DeviceHandoffSession` sperrt bei der ' +
+      'Vor-Ort-Abnahme die Mitarbeitersitzung *dieses* Browsers (Bindung an ' +
+      '`RefreshToken.family`, nicht an die Person, damit ein zweites Gerät weiterläuft); ' +
+      'freigegeben wird sie ausschliesslich durch Passwortbestätigung, nie durch Ablauf. ' +
+      'Keine qualifizierte Signatur; Entwurf in `docs/SIGNATUR_GATE4A.md`.',
+    models: [
+      'SignatureRequest',
+      'SignatureParticipant',
+      'SignatureEvent',
+      'SignatureOtpChallenge',
+      'DeviceHandoffSession',
+    ],
   },
   {
     key: 'crm',
@@ -196,11 +241,47 @@ const DOMAINS: Domain[] = [
       'BookingExtra',
       'Quote',
       'QuoteItem',
+      'SiteVisit',
+      'SiteVisitArea',
       'Job',
       'JobAssignment',
       'JobChecklistItem',
       'JobPhoto',
       'MaterialUsage',
+      'Material',
+      'StockMovement',
+      'Equipment',
+      'EquipmentMaintenance',
+      'ScanCode',
+    ],
+  },
+  {
+    key: 'vertraege',
+    title: 'Verträge und Einsatzpläne',
+    purpose:
+      'Der betriebliche Ursprung wiederkehrender Leistungen: angenommene Offerte → `Contract` ' +
+      '→ `ContractVersion` → `ContractService` → `ServiceSchedule` → `Job`. Der Vertragskopf ' +
+      'trägt die Identität und den Lebenslauf, die **Version** alle kaufmännischen ' +
+      'Konditionen — ein laufender Vertrag wird nie umgeschrieben, sondern abgelöst. ' +
+      'Leistungen und Pläne hängen deshalb an der Version und werden beim Versionieren ' +
+      'kopiert. Jeder erzeugte Einsatz trägt `contractId`, `contractVersionId` und ' +
+      '`serviceScheduleId`, damit später beantwortbar bleibt, unter welchen Konditionen er ' +
+      'erbracht wurde. `@@unique([serviceScheduleId, scheduleDate])` ist die Doppelsperre des ' +
+      'Planers: Derselbe Serientermin kann keinen zweiten Einsatz erzeugen, auch bei ' +
+      'gleichzeitigen Läufen nicht. `QualityInspection` misst die Zusage der Fassung ' +
+      '(`targetQualityScore`) und hält den Massstab als Schnappschuss fest — eine Begehung, ' +
+      'die nach einer Vertragsänderung anders ausfiele, wäre kein Beleg.',
+    models: [
+      'Contract',
+      'ContractVersion',
+      'ContractService',
+      'ServiceSchedule',
+      'ScheduleException',
+      'ContractAmendment',
+      'ContractPriceAdjustment',
+      'QualityInspection',
+      'Complaint',
+      'QualityInspectionItem',
     ],
   },
   {
@@ -217,6 +298,14 @@ const DOMAINS: Domain[] = [
       'Availability',
       'Absence',
       'Payslip',
+      'PayslipLine',
+      'PayrollSetting',
+      'PayrollRate',
+      'EmployeePayrollProfile',
+      'PayrollItem',
+      'WithholdingTaxProfile',
+      'WithholdingTaxRate',
+      'SalaryCertificate',
       'TimeEntry',
       'GpsEvent',
     ],
@@ -228,11 +317,15 @@ const DOMAINS: Domain[] = [
       'Finanzbelege sind fortschreibend, nie überschreibend: eine ausgestellte `Invoice` ' +
       'wird nicht mehr geändert, Korrekturen laufen über `CreditNote`. Das verlangt die ' +
       'Aufbewahrungspflicht nach Art. 957a OR. `Payment.providerPaymentId` ist eindeutig — ' +
-      'daran erkennt der Stripe-Webhook eine bereits gebuchte Zahlung und bleibt idempotent.',
+      'daran erkennt der Stripe-Webhook eine bereits gebuchte Zahlung. `ProviderWebhookEvent` ' +
+      'hält jedes verarbeitete Anbieterereignis fest, in der Transaktion seiner Wirkung: Eine ' +
+      'erneute Zustellung bucht nichts zweimal. Erstattungen stehen als kumulierter Stand an der ' +
+      'Zahlung (`refundedAmount`, `refundSyncedAt`); den Saldo bildet allein `saldoNeuBilden`.',
     models: [
       'Invoice',
       'InvoiceItem',
       'Payment',
+      'ProviderWebhookEvent',
       'PaymentReminder',
       'CreditNote',
       'Supplier',
@@ -258,6 +351,8 @@ const DOMAINS: Domain[] = [
       'Automation',
       'AutomationAction',
       'AutomationRun',
+      'AutomationActionRun',
+      'AutomationEvent',
     ],
   },
   {
@@ -335,6 +430,19 @@ const DOMAINS: Domain[] = [
       'ReportSchedule',
       'ReportRun',
     ],
+  },
+  {
+    key: 'versionen',
+    title: 'Versionsverwaltung',
+    purpose:
+      '`Release` beschreibt eine Clenaris-Version — Änderungsprotokoll, Migrationen, Ausfallzeit, ' +
+      'Prüfstufe —, produktweit und nach dem Eintragen unveränderlich; eingetragen wird sie nur über ' +
+      '`scripts/release-registrieren.ts`, nie über einen Endpunkt. `ReleaseRequest` ist die ' +
+      'Entscheidung eines Betriebs darüber (freigegeben, terminiert, storniert), höchstens ein ' +
+      'offener Auftrag je Version per partiellem Index. `ReleaseDeferral` hält das „Nicht jetzt" ' +
+      'fest. Ausgeführt wird von der Anwendung aus nichts: Den Auftrag liest ein externer, ' +
+      'vertrauenswürdiger Ausführer, der heute noch nicht existiert.',
+    models: ['Release', 'ReleaseRequest', 'ReleaseDeferral'],
   },
 ];
 

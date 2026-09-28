@@ -3,6 +3,7 @@ import Link from 'next/link';
 import { CalendarPlus, ShoppingBag } from 'lucide-react';
 
 import { toNumber } from '@/lib/db';
+import { leistungenDerBuchung } from '@/lib/booking/leistungen';
 import { requirePermission } from '@/lib/auth/session';
 import { formatCurrency, formatDate, formatDuration, formatTime, toQueryString } from '@/lib/utils';
 import { getOrganizationId } from '@/server/services/organization.service';
@@ -146,7 +147,15 @@ export default async function AdminBookingsPage({
                           : booking.customer.email}
                       </span>
                     </td>
-                    <td className="text-muted-foreground">{booking.items[0]?.name ?? '—'}</td>
+                    <td className="text-muted-foreground">
+                      {/* Alle Leistungen je als Zeile — bei Büro- und
+                          Fensterreinigung stand hier früher nur die erste. */}
+                      {leistungenDerBuchung(booking.items).map((name) => (
+                        <span key={name} className="block">
+                          {name}
+                        </span>
+                      ))}
+                    </td>
                     <td>
                       <span className="block tabular-nums">{formatDate(booking.scheduledStart)}</span>
                       <span className="block text-xs tabular-nums text-muted-foreground">

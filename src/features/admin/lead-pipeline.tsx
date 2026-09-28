@@ -8,7 +8,9 @@ import { toast } from 'sonner';
 
 import { cn, formatCurrency, formatRelative } from '@/lib/utils';
 import { api, ApiError } from '@/lib/api/client';
+import { statusZurStufe } from '@/lib/crm/pipeline';
 import { Badge } from '@/components/ui/badge';
+import { lesbareSchrift } from '@/lib/farbkontrast';
 
 /**
  * Verkaufspipeline als Kanban.
@@ -184,7 +186,7 @@ export function LeadPipeline({ columns }: { columns: PipelineColumn[] }) {
                       key={tag.id}
                       size="sm"
                       variant="outline"
-                      style={{ borderColor: `${tag.color}55`, color: tag.color }}
+                      style={{ borderColor: `${tag.color}55`, color: lesbareSchrift(tag.color) }}
                     >
                       {tag.name}
                     </Badge>
@@ -266,16 +268,9 @@ function ScoreBadge({ score }: { score: number }) {
   );
 }
 
+/** Dieselbe Zuordnung wie auf dem Server (`lib/crm/pipeline.ts`), der sie seit 2026-09-27 durchsetzt. */
 function stageKeyToStatus(key: string): string {
-  const map: Record<string, string> = {
-    new: 'NEW',
-    contacted: 'CONTACTED',
-    qualified: 'QUALIFIED',
-    proposal: 'PROPOSAL',
-    won: 'WON',
-    lost: 'LOST',
-  };
-  return map[key] ?? 'NEW';
+  return statusZurStufe(key);
 }
 
 export { Building2, UserCheck };

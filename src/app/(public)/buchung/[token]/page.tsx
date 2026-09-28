@@ -4,6 +4,7 @@ import { notFound } from 'next/navigation';
 import { CalendarCheck, Clock, FileDown, MapPin, UserPlus } from 'lucide-react';
 
 import { toNumber } from '@/lib/db';
+import { leistungsnamen } from '@/lib/booking/leistungen';
 import { NotFoundError } from '@/lib/errors';
 import { formatCurrency, formatDateLong, formatDuration, timeRangeLabel } from '@/lib/utils';
 import { getBookingByToken } from '@/server/services/booking.service';
@@ -57,7 +58,7 @@ export default async function GuestBookingPage({
         <div className="space-y-3">
           <p className="text-sm text-muted-foreground">Buchung {booking.number}</p>
           <h1 className="text-headline font-bold text-balance">
-            {booking.items[0]?.service.name ?? 'Ihre Reinigung'}
+            {leistungsnamen(booking.items, 'Ihre Reinigung')}
           </h1>
           <StatusBadge status={booking.status} />
         </div>

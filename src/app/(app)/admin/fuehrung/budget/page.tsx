@@ -4,6 +4,7 @@ import { PiggyBank } from 'lucide-react';
 import { requirePermission } from '@/lib/auth/session';
 import { can } from '@/lib/auth/rbac';
 import { formatCurrency, formatDate } from '@/lib/utils';
+import { zuercherJahr } from '@/lib/zuerich';
 import { BUDGET_STATUS_LABELS } from '@/lib/bi/labels';
 import { getOrganizationId } from '@/server/services/organization.service';
 import { listBudgets } from '@/server/services/budget.service';
@@ -26,7 +27,7 @@ export default async function BudgetListPage() {
   const session = await requirePermission('budget:read');
   const organizationId = await getOrganizationId();
   const budgets = await listBudgets(organizationId, {});
-  const year = new Date().getFullYear();
+  const year = zuercherJahr();
 
   return (
     <div className="space-y-6">

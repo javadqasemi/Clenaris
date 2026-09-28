@@ -1,0 +1,59 @@
+{
+  "_zweck": "Maschinenlesbare Form der Bewertungen in docs/LIEFERKETTE.md (dort die ausführliche Begründung; beide müssen übereinstimmen). Bewertete Befunde aus `npm audit --omit=dev`. Ein Befund der Stufe high ohne gültige Bewertung blockiert `npm run security:check`; critical blockiert immer. Eine Bewertung läuft ab (`bis`) — danach blockiert der Befund wieder, bis jemand neu bewertet. Einordnung nach docs/SECURITY_STANDARD.md C18.",
+  "befunde": [
+    {
+      "id": "GHSA-ggr8-5vv4-36mx",
+      "paket": "deepmerge-ts (über @prisma/config, prisma)",
+      "schwere": "high",
+      "einordnung": "EXTERNE ABHÄNGIGKEIT",
+      "begruendung": "Stapelüberlauf beim Zusammenführen rekursiver Objektgraphen. Nur im Prisma-Werkzeug beim Laden der eigenen Konfiguration (Bau, Migration), keine fremden Eingaben; die Laufzeit nutzt @prisma/client. prisma 6.19.3 pinnt deepmerge-ts 7.1.5 exakt; das von npm audit gemeldete „fix available“ ist der Sprung auf Prisma 7 (Hauptversion). Gleichlautend in docs/LIEFERKETTE.md.",
+      "bewertetAm": "2026-09-26",
+      "bis": "2026-12-31"
+    },
+    {
+      "id": "GHSA-qx2v-qp2m-jg93",
+      "paket": "postcss (über next)",
+      "schwere": "moderate",
+      "einordnung": "EXTERNE ABHÄNGIGKEIT",
+      "begruendung": "XSS über unmaskiertes </style> in der CSS-Ausgabe von PostCSS. PostCSS verarbeitet ausschliesslich die eigenen Stylesheets beim Bau; kein fremdes CSS erreicht es. Behebung verlangt Next 16 (Hauptversion) — eigenes Vorhaben.",
+      "bewertetAm": "2026-09-26",
+      "bis": "2026-12-31"
+    },
+    {
+      "id": "GHSA-6g55-p6wh-862q",
+      "paket": "postcss (über next)",
+      "schwere": "high",
+      "einordnung": "EXTERNE ABHÄNGIGKEIT",
+      "begruendung": "Dateilesen über einen fremdbestimmten sourceMappingURL in CSS-Kommentaren. Nur beim Bau über eigene Dateien; kein fremdes CSS. Behebung mit Next 16.",
+      "bewertetAm": "2026-09-26",
+      "bis": "2026-12-31"
+    },
+    {
+      "id": "GHSA-fxqj-rqcc-2cmp",
+      "paket": "postcss (über next)",
+      "schwere": "moderate",
+      "einordnung": "EXTERNE ABHÄNGIGKEIT",
+      "begruendung": "Unvollständige Behebung von GHSA-6g55-p6wh-862q; dieselbe Einordnung — nur eigene Stylesheets beim Bau.",
+      "bewertetAm": "2026-09-26",
+      "bis": "2026-12-31"
+    },
+    {
+      "id": "GHSA-r28c-9q8g-f849",
+      "paket": "postcss (über next)",
+      "schwere": "high",
+      "einordnung": "EXTERNE ABHÄNGIGKEIT",
+      "begruendung": "Pfadüberschreitung beim automatischen Laden vorheriger Source Maps; dieselbe Einordnung — nur eigene Stylesheets beim Bau.",
+      "bewertetAm": "2026-09-26",
+      "bis": "2026-12-31"
+    },
+    {
+      "id": "GHSA-w5hq-g745-h8pq",
+      "paket": "uuid (über exceljs)",
+      "schwere": "moderate",
+      "einordnung": "EXTERNE ABHÄNGIGKEIT",
+      "begruendung": "Fehlende Grenzprüfung in uuid v3/v5/v6, nur wenn ein Ausgabepuffer übergeben wird. Nicht betroffen: exceljs ruft nur uuidv4() ohne Puffer auf (cf-rule-ext-xform.js, geprüft in docs/LIEFERKETTE.md). Die angebotene Behebung (exceljs 3.4.0) wäre ein Rückschritt um Hauptversionen.",
+      "bewertetAm": "2026-09-26",
+      "bis": "2026-12-31"
+    }
+  ]
+}

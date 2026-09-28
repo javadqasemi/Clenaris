@@ -1,8 +1,10 @@
+import { binaerAntwort } from '@/lib/api/binary-response';
 import { defineRoute, idParam } from '@/lib/api/handler';
 import { prisma } from '@/lib/db';
 import { ForbiddenError, NotFoundError } from '@/lib/errors';
 import { renderQuotePdf } from '@/lib/pdf/render';
 import { getOrganizationId } from '@/server/services/organization.service';
+import { getSignedQuoteArtifact } from '@/server/services/quote.service';
 
 export const runtime = 'nodejs';
 export const maxDuration = 60;
@@ -13,7 +15,7 @@ export const GET = defineRoute({
   anyPermission: true,
   params: idParam,
   rateLimit: 'apiRead',
-  handler: async ({ params, session }) => {
+  handler: async ({ params, session, request }) => {
     const organizationId = await getOrganizationId();
 
     const quote = await prisma.quote.findFirst({
@@ -26,14 +28,18 @@ export const GET = defineRoute({
       throw new ForbiddenError('Diese Offerte gehört nicht zu Ihrem Konto.');
     }
 
-    const { buffer, filename } = await renderQuotePdf(quote.id);
+    // Nach einer Annahme über den Signaturkern das signierte Artefakt (B),
+    // nie eine Neuberechnung — siehe die öffentliche PDF-Route.
+    const signiert = await getSignedQuoteArtifact(quote.id);
+    const { buffer, filename } = signiert ? { buffer: signiert.bytes, filename: signiert.filename } : await renderQuotePdf(quote.id);
 
-    return new Response(new Uint8Array(buffer), {
-      headers: {
-        'Content-Type': 'application/pdf',
-        'Content-Disposition': `attachment; filename="${filename}"`,
-        'Cache-Control': 'private, no-store',
-      },
+    return binaerAntwort({
+      bytes: buffer,
+      mimeType: 'application/pdf',
+      filename,
+      disposition: 'attachment',
+      request,
+      cacheControl: 'private, no-store',
     });
   },
 });

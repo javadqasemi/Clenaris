@@ -61,10 +61,22 @@
     /* Wappengold — sparsam, für Auszeichnungen */
     --accent: 38 61% 47%;
     --accent-foreground: 40 60% 98%;
+    /*
+       Gold als *Schrift* (Abzeichen „Hervorgehoben", „Offerte"): 47 %
+       Helligkeit auf dem eigenen hellen Grund ergab 2.6 : 1 (axe, 2026-09-27,
+       Bewertungen). 28 % hält den Ton und liegt über 6 : 1 — dieselbe Lösung
+       wie bei der Warnung darunter.
+    */
+    --accent-text: 34 70% 28%;
 
     --success: 156 47% 33%;
     --success-foreground: 156 40% 97%;
-    --warning: 36 100% 35%;
+    /*
+       Warnung als *Schrift* auf hellem Grund braucht 4.5 : 1. 35 % Helligkeit
+       lag bei 4.2 auf Weiss und unter 4 auf der Seitenfläche (axe, Wave 18);
+       28 % hält den Bernstein-Ton und trägt auch noch `text-warning/90`.
+    */
+    --warning: 36 100% 28%;
     --warning-foreground: 40 60% 98%;
     --info: 200 70% 35%;
     --info-foreground: 200 40% 98%;
@@ -113,6 +125,8 @@
 
     --accent: 38 70% 55%;
     --accent-foreground: 192 52% 6%;
+    /* Im Dunkeln hell genug auf dunklem Grund — das Gold selbst reicht hier. */
+    --accent-text: 38 70% 60%;
 
     --success: 156 45% 48%;
     --success-foreground: 192 52% 6%;
@@ -402,12 +416,17 @@
     border: 1px solid hsl(var(--border) / 0.8);
   }
 
-  /* Feiner Rasterhintergrund für Hero-Flächen. */
+  /* Feiner Rasterhintergrund für Hero-Flächen.
+
+     Die Maschenweite steht in `rem`, nicht in Pixeln. Auf einem sehr breiten
+     Bildschirm wächst die Grundschriftgrösse mit (siehe ganz unten); eine
+     feste 56-px-Masche würde dort zu einem dichten Millimeterpapier
+     zusammenlaufen, während alles andere grösser wird. */
   .grid-backdrop {
     background-image:
       linear-gradient(to right, hsl(var(--foreground) / 0.045) 1px, transparent 1px),
       linear-gradient(to bottom, hsl(var(--foreground) / 0.045) 1px, transparent 1px);
-    background-size: 56px 56px;
+    background-size: 3.5rem 3.5rem;
     mask-image: radial-gradient(ellipse 80% 60% at 50% 0%, #000 30%, transparent 78%);
   }
 
@@ -791,4 +810,166 @@
   --rdp-accent-color: hsl(var(--primary));
   --rdp-background-color: hsl(var(--primary) / 0.12);
   margin: 0;
+}
+
+/* ===========================================================================
+ * Sehr grosse Bildschirme — bis 49 Zoll
+ * ===========================================================================
+ *
+ * Bis 1920 px ändert dieser Block nichts. Das ist die wichtigste Eigenschaft
+ * daran: der mit Abstand häufigste Desktop-Bildschirm und jedes Notebook
+ * sehen danach exakt so aus wie vorher. Erst darüber beginnt die Anpassung.
+ *
+ * **Warum überhaupt.** Auf einem 49-Zoll-Bildschirm (5120 × 1440, 32:9) stand
+ * bisher ein 1360 px breiter Streifen in der Mitte, links und rechts je
+ * 1880 px leer. Zwei Dinge sind daran falsch, und man muss beide beheben:
+ *
+ *  1. **Die Spalte ist zu schmal.** Nur die Spalte zu verbreitern reicht aber
+ *     nicht — bei gleicher Schriftgrösse ergäbe das Zeilen mit 150 Zeichen,
+ *     und lange Zeilen sind schwerer zu lesen, nicht leichter.
+ *  2. **Die Schrift ist zu klein.** Ein 49-Zöller steht weiter weg als ein
+ *     24-Zöller. 16 px sind dort physisch dasselbe wie 11 px auf einem
+ *     Notebook.
+ *
+ * Deshalb wachsen **beide** Grössen, und zwar im Gleichschritt: Die Spalte
+ * steht in `rem` und die Grundschriftgrösse steigt stufenweise. Das Verhältnis
+ * von Zeilenlänge zu Schriftgrad — das, was Lesbarkeit tatsächlich bestimmt —
+ * bleibt damit fast konstant, während beides physisch grösser wird.
+ *
+ * **Warum die Grundschriftgrösse und nicht eine Handvoll Klassen.** Das ganze
+ * Projekt bemisst Schrift, Abstände, Radien und Symbolgrössen in `rem`. Eine
+ * einzige Stellschraube an der Wurzel skaliert damit die gesamte Oberfläche
+ * proportional — Website *und* Applikation, inklusive Komponenten, an die
+ * beim Schreiben dieses Blocks niemand gedacht hat. Die Alternative wäre
+ * gewesen, in hundert Dateien `3xl:`-Varianten nachzutragen: mehr Arbeit,
+ * unvollständig, und beim nächsten neuen Bauteil wieder unvollständig.
+ *
+ * **Warum Prozent und nicht Pixel.** `font-size: 20px` überschreibt die im
+ * Browser eingestellte Grundschriftgrösse und nimmt damit Menschen, die sie
+ * aus gutem Grund hochgesetzt haben, ihre Einstellung weg. Ein Prozentwert
+ * ist relativ zu genau dieser Einstellung und multipliziert sie, statt sie zu
+ * ersetzen.
+ *
+ * **Warum ausserhalb von `@layer`.** Die `.container`-Regeln müssen die von
+ * Tailwind erzeugte Behälterklasse überschreiben. Gleiche Spezifität
+ * entscheidet über die Quellreihenfolge; am Dateiende stehen sie garantiert
+ * dahinter, ohne dass jemand die Reihenfolge innerhalb der Ebenen kennen
+ * muss.
+ *
+ * Die Schwellen sind dieselben wie die Umbruchpunkte `3xl`–`6xl` in
+ * `tailwind.config.ts`. Sie müssen es bleiben: verschöbe man eine davon,
+ * wüchse an dieser Stelle die Schrift, ohne dass die Spalte mitwächst.
+ */
+
+/* 3xl — WQHD-Klasse. Beginnt oberhalb von 1920, damit FHD und ein 4K-Schirm
+   mit 200 % Skalierung unberührt bleiben. */
+@media (min-width: 2000px) {
+  :root {
+    font-size: 106.25%; /* 17 px bei Browservorgabe */
+  }
+
+  .container {
+    max-width: 92rem; /* ≈ 1564 px */
+  }
+}
+
+/* 4xl — WQHD-Ultrawide (3440), 4K bei 150 %. */
+@media (min-width: 2560px) {
+  :root {
+    font-size: 112.5%; /* 18 px */
+  }
+
+  .container {
+    max-width: 102rem; /* ≈ 1836 px */
+  }
+}
+
+/* 5xl — 4K bei 125 %. */
+@media (min-width: 3200px) {
+  :root {
+    font-size: 125%; /* 20 px */
+  }
+
+  .container {
+    max-width: 112rem; /* ≈ 2240 px */
+  }
+}
+
+/* 6xl — 4K nativ. */
+@media (min-width: 3840px) {
+  :root {
+    font-size: 137.5%; /* 22 px */
+  }
+
+  .container {
+    max-width: 120rem; /* ≈ 2640 px */
+  }
+}
+
+/*
+ * Die letzte Stufe gilt dem 49-Zöller selbst (5120 × 1440) und allem
+ * darüber. Sie hat bewusst keinen eigenen Umbruchpunkt in der
+ * Tailwind-Konfiguration: eine fünfte Variante, die nur ein einziges
+ * Bildschirmformat trifft, würde im Quelltext mehr Verwirrung stiften als
+ * Nutzen bringen. Hier genügt es, dass Spalte und Schrift ein letztes Mal
+ * mitwachsen — die Rasterspalten aus `6xl` passen auch noch bei 5120 px.
+ */
+@media (min-width: 4600px) {
+  :root {
+    font-size: 150%; /* 24 px */
+  }
+
+  .container {
+    max-width: 128rem; /* ≈ 3072 px, je 1024 px Rand auf 5120 px */
+  }
+}
+
+/*
+ * Formularspalte auf sehr breiten Bildschirmen.
+ *
+ * Der wachsende Behälter ist für Listen, Tabellen und Fliesstext richtig und
+ * für ein Formular falsch. Die Formularseiten (`/buchen`, `/offerte`,
+ * `/kontakt`) stellen das Formular in eine `minmax(0,1fr)`-Spalte neben eine
+ * schmale Seitenspalte; bei 3000 px Behälterbreite stünden dort zwei
+ * Eingabefelder von je rund 1250 px nebeneinander. Der Weg von der
+ * Feldbeschriftung zum Feld wäre dann breiter als der Bildschirm eines
+ * Notebooks, und ein Formular wird durch Breite nicht schneller auszufüllen,
+ * sondern langsamer.
+ *
+ * 80 rem sind bei 2000 px Bildschirmbreite exakt die 1360 px, die diese
+ * Seiten vorher hatten — die Deckelung setzt also sprungfrei genau dort ein,
+ * wo der Behälter zu wachsen beginnt. Danach wächst sie im selben Takt wie
+ * die Grundschrift: Das Formular bleibt *im Verhältnis zur Schrift* immer
+ * gleich breit und wird nur physisch grösser.
+ *
+ * Die Klasse steht hier und nicht als Utility-Kette an jeder Aufrufstelle,
+ * damit die Zahl einmal existiert. Vier Seiten mit vier Kopien von
+ * `3xl:max-w-[80rem]` laufen beim ersten Nachjustieren auseinander.
+ */
+@media (min-width: 2000px) {
+  .form-measure {
+    margin-inline: auto;
+    max-width: 80rem;
+  }
+}
+
+/*
+ * Letztes Sicherheitsnetz gegen waagrechtes Scrollen der ganzen Seite.
+ *
+ * Auf einem Telefon ist ein einzelnes zu breites Element besonders teuer: die
+ * *ganze* Seite lässt sich dann seitlich schieben, jeder Abschnitt bekommt
+ * einen weissen Streifen rechts, und die Ursache ist von Hand kaum zu finden.
+ *
+ * `clip` und ausdrücklich nicht `hidden`: `overflow-x: hidden` zwingt die
+ * Gegenachse auf `auto` und macht das Element damit zu einem Scrollbehälter.
+ * Sowohl die Kopfzeile der Website als auch die der Applikation sind
+ * `position: sticky` — an einem scrollenden Vorfahren kleben sie nicht mehr
+ * am Bildschirm, sondern hören am Ende von dessen Inhalt auf. `clip`
+ * erzeugt keinen Scrollbehälter und lässt „sticky" unberührt.
+ *
+ * Das ist ein Netz, keine Lösung. Wer hier einen abgeschnittenen Inhalt
+ * bemerkt, hat ein zu breites Element gefunden und soll *dieses* reparieren.
+ */
+html {
+  overflow-x: clip;
 }

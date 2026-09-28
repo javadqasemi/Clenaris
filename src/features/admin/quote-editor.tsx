@@ -8,6 +8,7 @@ import { GripVertical, Plus, Save, Sparkles, Trash2, UserPlus } from 'lucide-rea
 import { toast } from 'sonner';
 
 import { cn, formatCurrency, round2 } from '@/lib/utils';
+import { tagPlus, zuercherTag, zuercherTagText } from '@/lib/zuerich';
 import { api, ApiError } from '@/lib/api/client';
 import { rateForService, unitForService } from '@/lib/pricing/units';
 import { createQuoteSchema, type CreateQuoteInput } from '@/lib/validation/operations';
@@ -106,7 +107,9 @@ export function QuoteEditor({
       customerId: initial?.customerId ?? defaultCustomerId,
       title: initial?.title ?? '',
       validUntil:
-        initial?.validUntil ?? (new Date(Date.now() + 30 * 86_400_000) as unknown as Date),
+        // 30 Zürcher Tage ab heute (2026-09-27) — `toDateInput` machte aus dem
+        // Zeitpunkt den UTC-Tag, zwischen Mitternacht und 02:00 einen Tag früh.
+        initial?.validUntil ?? (zuercherTagText(tagPlus(zuercherTag(), 30)) as unknown as Date),
       introText: initial?.introText ?? '',
       outroText:
         initial?.outroText ??

@@ -14,7 +14,8 @@ const badgeVariants = cva(
         warning: 'border-transparent bg-warning/14 text-warning',
         destructive: 'border-transparent bg-destructive/12 text-destructive',
         info: 'border-transparent bg-info/12 text-info',
-        accent: 'border-transparent bg-accent/15 text-accent',
+        // Schrift in `--accent-text`, nicht im Gold selbst: 2.6 : 1 war zu wenig (globals.css).
+        accent: 'border-transparent bg-accent/15 text-[hsl(var(--accent-text))]',
         solid: 'border-transparent bg-primary text-primary-foreground',
       },
       size: {
@@ -91,6 +92,43 @@ const STATUS_MAP: Record<string, { label: string; variant: BadgeProps['variant']
   SUCCEEDED: { label: 'Erfolgreich', variant: 'success' },
   FAILED: { label: 'Fehlgeschlagen', variant: 'destructive' },
   REFUNDED: { label: 'Rückerstattet', variant: 'neutral' },
+
+  /*
+    Verträge (Wave 10).
+
+    `DRAFT`, `ACTIVE`, `CANCELLED` und `APPROVED` stehen schon oben und gelten
+    hier mit — das ist der Sinn einer gemeinsamen Tabelle: „Entwurf" heisst
+    überall dasselbe und sieht überall gleich aus. Neu sind nur die
+    Zustände, die es bisher nirgends gab.
+  */
+  IN_REVIEW: { label: 'In Prüfung', variant: 'info' },
+  OFFERED: { label: 'Offeriert', variant: 'accent' },
+  ACTIVE: { label: 'Aktiv', variant: 'success' },
+  PAUSED: { label: 'Pausiert', variant: 'warning' },
+  /* Warnend, nicht zerstörend: Der Vertrag läuft bis zum Wirkungsdatum weiter. */
+  NOTICE_GIVEN: { label: 'Gekündigt', variant: 'warning' },
+  ENDED: { label: 'Beendet', variant: 'neutral' },
+  SUPERSEDED: { label: 'Abgelöst', variant: 'neutral' },
+  DISCARDED: { label: 'Verworfen', variant: 'neutral' },
+  EFFECTIVE: { label: 'Wirksam', variant: 'success' },
+  PLANNED: { label: 'Geplant', variant: 'neutral' },
+  APPLIED: { label: 'Angewandt', variant: 'success' },
+  REVIEW: { label: 'In Prüfung', variant: 'info' },
+
+  /*
+    Qualitätskontrolle (Wave 11).
+
+    `KNAPP` ist warnend und nicht zerstörend: Der Zielwert ist verfehlt, aber
+    innerhalb der Toleranz — das ist ein Hinweis, keine Massnahme. Die
+    Unterscheidung wäre wertlos, wenn beides gleich aussähe.
+
+    `OHNE_ZIEL` ist bewusst neutral und heisst „gemessen, nicht beurteilt".
+    Eine grüne Färbung suggerierte ein Bestehen, das niemand zugesagt hat.
+  */
+  BESTANDEN: { label: 'Bestanden', variant: 'success' },
+  KNAPP: { label: 'Knapp verfehlt', variant: 'warning' },
+  NICHT_BESTANDEN: { label: 'Nicht bestanden', variant: 'destructive' },
+  OHNE_ZIEL: { label: 'Ohne Zielwert', variant: 'neutral' },
 };
 
 export function StatusBadge({

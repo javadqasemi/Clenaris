@@ -64,7 +64,10 @@ export const quoteRequestSchema = contactFormSchema.extend({
     .enum(['ONCE', 'WEEKLY', 'BIWEEKLY', 'MONTHLY', 'QUARTERLY', 'SEMIANNUAL', 'ANNUAL', 'CUSTOM'])
     .default('ONCE'),
   preferredDate: dateOnlySchema.optional(),
-  fileIds: z.array(cuidSchema).max(10).default([]),
+  // `fileIds` entfernt (2026-09-27): Das Formular hat keinen Upload, und der
+  // Dienst setzte den Zweck jeder genannten Datei der Organisation auf
+  // `OTHER` — ohne sie an die Anfrage zu hängen. Eine Kennung aus einem
+  // öffentlichen Formular ist keine Berechtigung auf eine Datei.
 });
 export type QuoteRequestInput = z.infer<typeof quoteRequestSchema>;
 
@@ -221,6 +224,23 @@ export const createPropertySchema = z.object({
   });
 export type CreatePropertyInput = z.infer<typeof createPropertySchema>;
 
+/**
+ * Körper von `POST /api/properties`: das Objektschema plus die Kundschaft, zu
+ * der es gehört. Stand bis 2026-09-27 in der Route selbst.
+ *
+ * `z.intersection` statt `.extend()`, weil `createPropertySchema` mit einem
+ * `.refine()` endet (Adresse ist Pflicht) und damit kein einfaches
+ * `ZodObject` mehr ist. Die Prüfung bleibt dadurch an genau einer Stelle —
+ * die Adressregel gilt hier wie überall sonst.
+ */
+export const createPropertyBodySchema = z.intersection(
+  createPropertySchema,
+  z.object({ customerId: z.string().min(1, 'Eine Kundschaft ist erforderlich.') }),
+);
+
+/** Körper von `PATCH /api/properties/:id` — jedes Feld freiwillig, ohne die Adressregel. */
+export const updatePropertySchema = createPropertySchema.innerType().partial();
+
 export const createContactSchema = z.object({
   firstName: nameSchema,
   lastName: nameSchema,
@@ -305,6 +325,12 @@ export const newsletterSchema = z.object({
   website: honeypotSchema,
 });
 export type NewsletterInput = z.infer<typeof newsletterSchema>;
+
+/** Bestätigen oder Abmelden über den Link aus der E-Mail — der Token im Körper, nicht im Pfad. */
+export const newsletterTokenSchema = z.object({
+  token: z.string().trim().min(10).max(100),
+});
+export type NewsletterTokenInput = z.infer<typeof newsletterTokenSchema>;
 
 export const jobApplicationSchema = z.object({
   postingId: cuidSchema,

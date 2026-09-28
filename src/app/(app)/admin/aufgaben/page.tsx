@@ -6,6 +6,7 @@ import { prisma } from '@/lib/db';
 import { requirePermission } from '@/lib/auth/session';
 import { can } from '@/lib/auth/rbac';
 import { cn, formatDate, formatRelative } from '@/lib/utils';
+import { zuercherTagesgrenzen } from '@/lib/zuerich';
 import { TaskRowActions } from '@/features/admin/task-row-actions';
 import { getOrganizationId } from '@/server/services/organization.service';
 import { Badge } from '@/components/ui/badge';
@@ -33,19 +34,15 @@ export default async function TasksPage() {
   const organizationId = await getOrganizationId();
 
   const now = new Date();
-  const endOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+  // Ende des Zürcher Tages (2026-09-27), nicht Mitternacht in der Zone des Servers.
+  const endOfToday = zuercherTagesgrenzen(now).bis;
 
   const [tasks, staff, overdue, dueToday] = await Promise.all([
     prisma.task.findMany({
-      where: {
-        status: { in: ['OPEN', 'IN_PROGRESS'] },
-        OR: [
-          { customer: { organizationId } },
-          { lead: { organizationId } },
-          { job: { organizationId } },
-          { customerId: null, leadId: null, jobId: null },
-        ],
-      },
+      // Die eigene Spalte statt der Beziehungen (2026-09-27): Der Zweig „ohne
+      // Bezug" liess jede unverknüpfte Aufgabe jeder Organisation durch, und
+      // die beiden Zähler darunter filterten gar nicht.
+      where: { organizationId, status: { in: ['OPEN', 'IN_PROGRESS'] } },
       orderBy: [{ dueAt: 'asc' }, { priority: 'desc' }],
       take: 100,
       include: {
@@ -61,10 +58,10 @@ export default async function TasksPage() {
       select: { id: true, firstName: true, lastName: true },
     }),
     prisma.task.count({
-      where: { status: { in: ['OPEN', 'IN_PROGRESS'] }, dueAt: { lt: now } },
+      where: { organizationId, status: { in: ['OPEN', 'IN_PROGRESS'] }, dueAt: { lt: now } },
     }),
     prisma.task.count({
-      where: { status: { in: ['OPEN', 'IN_PROGRESS'] }, dueAt: { gte: now, lt: endOfToday } },
+      where: { organizationId, status: { in: ['OPEN', 'IN_PROGRESS'] }, dueAt: { gte: now, lt: endOfToday } },
     }),
   ]);
 

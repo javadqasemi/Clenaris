@@ -3,6 +3,7 @@ import Link from 'next/link';
 import { ArrowLeft } from 'lucide-react';
 
 import { requirePermission } from '@/lib/auth/session';
+import { zuercherJahr } from '@/lib/zuerich';
 import { getOrganizationId } from '@/server/services/organization.service';
 import { getObjectiveTimeline } from '@/server/services/objective.service';
 import { Button } from '@/components/ui/button';
@@ -29,7 +30,7 @@ export default async function RoadmapPage({ searchParams }: { searchParams: Prom
   const session = await requirePermission('objective:read');
   const params = await searchParams;
   const view = params.ansicht === 'kanban' ? 'kanban' : 'zeitachse';
-  const year = Number(params.jahr) || new Date().getFullYear();
+  const year = Number(params.jahr) || zuercherJahr();
   const organizationId = await getOrganizationId();
   const items = await getObjectiveTimeline(session, organizationId, {
     from: new Date(Date.UTC(year, 0, 1)),

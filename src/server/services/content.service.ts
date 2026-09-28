@@ -7,8 +7,9 @@ import { isPreview } from '@/lib/cms/preview';
 import { prisma, Prisma } from '@/lib/db';
 import { cache, cacheKeys } from '@/lib/redis';
 import { logger } from '@/lib/logger';
-import { audit } from '@/lib/audit';
-import { NotFoundError } from '@/lib/errors';
+import { audit, diff } from '@/lib/audit';
+import { BusinessRuleError, NotFoundError } from '@/lib/errors';
+import type { UpdateSeoInput } from '@/lib/validation/cms';
 import {
   CONTENT_DEFINITIONS,
   defaultContent,
@@ -267,6 +268,109 @@ export async function invalidateSeo(organizationId: string, path: string): Promi
   revalidatePath(path);
 }
 
+/**
+ * Suchmaschinenangaben einer Seite pflegen (`PATCH /api/seo`).
+ *
+ * Vorher im Endpunkt geschrieben (bis 2026-09-27). Die Regeln unten sind
+ * Inhaltsregeln, keine HTTP-Details, und sie gehören neben `getPageSeo` und
+ * `invalidateSeo`, die dieselbe Zeile lesen und ihren Cache leeren — sonst
+ * stünden Lese- und Schreibregel derselben Tabelle in zwei Schichten.
+ *
+ * Architekturentscheide:
+ *
+ *  • **Leeren heisst zurücksetzen**, wie bei den Textbausteinen: ein leeres
+ *    Feld löscht die Zeile, und es gilt wieder der Registerwert. So kann die
+ *    Redaktion einen misslungenen Titel jederzeit rückgängig machen.
+ *
+ *  • **`noIndex` wird gesondert protokolliert.** Es ist die einzige Schaltung
+ *    hier, die eine Seite aus den Suchergebnissen wirft — versehentlich
+ *    gesetzt kostet sie Umsatz, und man will nachvollziehen können, wer sie
+ *    wann gesetzt hat.
+ *
+ *  • **Der Seitencache wird geleert.** Der Titel steckt im erzeugten HTML;
+ *    ohne Neuaufbau bliebe der alte stehen.
+ */
+export async function updateSeoMeta(params: {
+  organizationId: string;
+  actorId: string;
+  input: UpdateSeoInput;
+}): Promise<{ path: string; reset: boolean }> {
+  const { organizationId, actorId, input } = params;
+  const definition = seoDefinitionFor(input.path);
+
+  const before = await prisma.seoMeta.findUnique({
+    where: { organizationId_path_locale: { organizationId, path: input.path, locale: 'DE' } },
+    select: { title: true, description: true, keywords: true, ogImageUrl: true, noIndex: true },
+  });
+
+  const title = input.title?.trim() ?? '';
+  const description = input.description?.trim() ?? '';
+  const ogImageUrl = input.ogImageUrl?.trim() ?? '';
+
+  // Nichts gepflegt und nicht ausgeblendet → die Zeile hat keinen Zweck.
+  const isEmpty =
+    title === '' &&
+    description === '' &&
+    ogImageUrl === '' &&
+    input.keywords.length === 0 &&
+    !input.noIndex;
+
+  if (isEmpty) {
+    if (before) {
+      await prisma.seoMeta.delete({
+        where: { organizationId_path_locale: { organizationId, path: input.path, locale: 'DE' } },
+      });
+    }
+  } else {
+    await prisma.seoMeta.upsert({
+      where: { organizationId_path_locale: { organizationId, path: input.path, locale: 'DE' } },
+      create: {
+        organizationId,
+        path: input.path,
+        locale: 'DE',
+        title: title || null,
+        description: description || null,
+        keywords: input.keywords,
+        ogImageUrl: ogImageUrl || null,
+        noIndex: input.noIndex,
+        updatedById: actorId,
+      },
+      update: {
+        title: title || null,
+        description: description || null,
+        keywords: input.keywords,
+        ogImageUrl: ogImageUrl || null,
+        noIndex: input.noIndex,
+        updatedById: actorId,
+      },
+    });
+  }
+
+  await invalidateSeo(organizationId, input.path);
+
+  const after = {
+    title: title || null,
+    description: description || null,
+    keywords: input.keywords,
+    ogImageUrl: ogImageUrl || null,
+    noIndex: input.noIndex,
+  };
+
+  await audit.updated({
+    organizationId,
+    userId: actorId,
+    entity: 'SeoMeta',
+    entityId: input.path,
+    summary:
+      `Suchmaschinenangaben für „${definition?.label ?? input.path}" geändert` +
+      (input.noIndex && !before?.noIndex ? ' — Seite aus dem Index genommen' : '') +
+      (!input.noIndex && before?.noIndex ? ' — Seite wieder freigegeben' : ''),
+    changes: diff(before as never, after as never),
+  });
+
+  return { path: input.path, reset: isEmpty };
+}
+
 /** Zählt, wie viele Bausteine tatsächlich gepflegt sind — für die Übersicht. */
 export async function countCuratedContent(organizationId: string): Promise<{
   curated: number;
@@ -376,39 +480,68 @@ export async function saveContentDraft(params: {
       });
       if (!existing) continue;
 
+      /*
+        `updateMany`/`deleteMany` mit der Kennung statt `update`/`delete`
+        (2026-09-27). Zwei gleichzeitige Speicherungen desselben geleerten
+        Bausteins lasen beide die Zeile; die zweite Löschung fand sie nicht
+        mehr und warf P2025 — die Redaktion bekam einen 500 für einen
+        Vorgang, dessen Ergebnis („Baustein zurückgesetzt") längst stand.
+        Ist die Zeile schon weg, ist das Ziel erreicht; gezählt wird nur,
+        was dieser Aufruf tatsächlich geschrieben hat.
+      */
       if (existing.publishedAt) {
-        await prisma.contentBlock.update({
+        const geleert = await prisma.contentBlock.updateMany({
           where: { id: existing.id },
           data: { draftValue: definition.kind === 'list' ? [] : '', updatedById: params.actorId },
         });
-        saved++;
+        saved += geleert.count;
       } else {
-        await prisma.contentBlock.delete({ where: { id: existing.id } });
-        removed++;
+        const entfernt = await prisma.contentBlock.deleteMany({ where: { id: existing.id } });
+        removed += entfernt.count;
       }
       continue;
     }
 
-    await prisma.contentBlock.upsert({
-      where: {
-        organizationId_key_locale: { organizationId: params.organizationId, key, locale: 'DE' },
-      },
-      create: {
-        organizationId: params.organizationId,
-        key,
-        locale: 'DE',
-        // Ein neuer Baustein beginnt als reiner Entwurf: `value` trägt den
-        // Auslieferungstext, damit die Website unverändert bleibt, bis jemand
-        // veröffentlicht.
-        value: (definition.default ?? '') as Prisma.InputJsonValue,
-        draftValue: value as Prisma.InputJsonValue,
-        updatedById: params.actorId,
-      },
-      update: {
-        draftValue: value as Prisma.InputJsonValue,
-        updatedById: params.actorId,
-      },
-    });
+    const upsert = () =>
+      prisma.contentBlock.upsert({
+        where: {
+          organizationId_key_locale: { organizationId: params.organizationId, key, locale: 'DE' },
+        },
+        create: {
+          organizationId: params.organizationId,
+          key,
+          locale: 'DE',
+          // Ein neuer Baustein beginnt als reiner Entwurf: `value` trägt den
+          // Auslieferungstext, damit die Website unverändert bleibt, bis jemand
+          // veröffentlicht.
+          value: (definition.default ?? '') as Prisma.InputJsonValue,
+          draftValue: value as Prisma.InputJsonValue,
+          updatedById: params.actorId,
+        },
+        update: {
+          draftValue: value as Prisma.InputJsonValue,
+          updatedById: params.actorId,
+        },
+      });
+
+    /*
+      Ein zweiter Versuch bei P2002 (2026-09-27). Prisma führt `upsert` nur
+      unter bestimmten Bedingungen als einzelnes `INSERT … ON CONFLICT` aus;
+      sonst liest es erst und legt dann an. Speichern zwei Fenster denselben,
+      noch nie gespeicherten Baustein gleichzeitig — die Vorschau speichert
+      beim Verlassen des Feldes, ein Doppelklick genügt —, finden beide
+      „keine Zeile", und das zweite Anlegen scheitert am eindeutigen Index.
+      Beim zweiten Versuch gibt es die Zeile, und aus dem Anlegen wird ein
+      Ändern: Der spätere Entwurf gewinnt, wie bei jeder anderen Speicherung
+      auch. Ein 500 für „gleichzeitig getippt" wäre ein Fehler ohne Ursache
+      auf Seiten der Redaktion.
+    */
+    try {
+      await upsert();
+    } catch (fehler) {
+      if (!(fehler instanceof Prisma.PrismaClientKnownRequestError && fehler.code === 'P2002')) throw fehler;
+      await upsert();
+    }
     saved++;
   }
 
@@ -435,19 +568,62 @@ export async function publishContent(params: {
   keys?: string[];
   actorId: string;
 }): Promise<number> {
-  const blocks = await prisma.contentBlock.findMany({
+  const kandidaten = await prisma.contentBlock.findMany({
     where: {
       organizationId: params.organizationId,
       locale: 'DE',
       NOT: { draftValue: { equals: Prisma.DbNull } },
       ...(params.keys?.length ? { key: { in: params.keys } } : {}),
     },
+    select: { id: true },
   });
 
-  if (blocks.length === 0) return 0;
+  if (kandidaten.length === 0) return 0;
 
-  await prisma.$transaction(async (tx) => {
+  /*
+    Sperren, dann neu lesen — und nur echte Änderungen veröffentlichen
+    (2026-09-27).
+
+    **Gleichzeitig.** Bis hierher lasen alle Aufrufe die offenen Entwürfe
+    *vor* der Transaktion. Zwei gleichzeitige Freigaben — zwei Fenster, ein
+    Doppelklick — sahen denselben Entwurf, und jede legte die abgelöste
+    Fassung als eigene Revision ab und schrieb eine eigene Zeile
+    „veröffentlicht". Die Historie zeigte zwei Wechsel, wo einer war, und
+    das Protokoll zwei Personen, die „diesen Text" freigegeben haben. Jetzt
+    sperrt die Transaktion die Zeilen (`FOR UPDATE`, in fester Reihenfolge,
+    damit sich zwei Freigaben mit verschiedenen Schlüsselmengen nicht
+    gegenseitig blockieren) und liest sie **danach** neu. Die zweite
+    Freigabe wartet auf die erste und findet dann keinen offenen Entwurf
+    mehr — sie veröffentlicht nichts, legt keine Revision an und schreibt
+    keine Zeile. Eine Prüfung „gibt es noch einen Entwurf?" vor der
+    Transaktion bestünden beide.
+
+    **Ohne Änderung.** Die Vorschau speichert beim Verlassen eines Feldes,
+    auch wenn niemand etwas geändert hat; der Entwurf trägt dann den
+    veröffentlichten Wortlaut. Veröffentlicht wurde er trotzdem — mit einer
+    Revision, die denselben Text noch einmal ablegte, und einer Zeile
+    „veröffentlicht" für einen Text, der sich nicht geändert hat. Die
+    Historie soll beantworten, was *vorher* auf der Website stand; eine
+    Fassung, die gleich der geltenden ist, beantwortet nichts. Ein solcher
+    Entwurf wird jetzt nur verworfen (er ist keiner), ohne Revision, ohne
+    Protokollzeile, ohne neuen Veröffentlichungszeitpunkt.
+  */
+  const veroeffentlicht = await prisma.$transaction(async (tx) => {
+    const ids = kandidaten.map((k) => k.id).sort();
+    await tx.$queryRaw`SELECT id FROM content_blocks WHERE id IN (${Prisma.join(ids)}) ORDER BY id FOR UPDATE`;
+
+    const blocks = await tx.contentBlock.findMany({
+      where: { id: { in: ids }, NOT: { draftValue: { equals: Prisma.DbNull } } },
+      orderBy: { id: 'asc' },
+    });
+
+    const echt: typeof blocks = [];
     for (const block of blocks) {
+      if (block.publishedAt && gleicherInhalt(block.draftValue, block.value)) {
+        await tx.contentBlock.update({ where: { id: block.id }, data: { draftValue: Prisma.DbNull } });
+        continue;
+      }
+
       // Erst die abgelöste Fassung sichern, dann überschreiben — sonst wäre
       // sie weg, bevor die Historie sie kennt.
       if (block.publishedAt) {
@@ -472,20 +648,43 @@ export async function publishContent(params: {
           updatedById: params.actorId,
         },
       });
+      echt.push(block);
     }
+    return echt;
   });
+
+  if (veroeffentlicht.length === 0) return 0;
 
   await invalidateContent(params.organizationId);
 
-  await audit.updated({
-    organizationId: params.organizationId,
-    userId: params.actorId,
-    entity: 'ContentBlock',
-    entityId: params.organizationId,
-    summary: `${blocks.length} Website-Baustein(e) veröffentlicht`,
-  });
+  // Eine Zeile je Baustein, mit seiner Kennung und seinem Schlüssel
+  // (2026-09-27). Vorher eine Sammelzeile mit der Organisation als
+  // `entityId` und nur einer Zahl — welcher Text wann live ging, stand
+  // nirgends. Die Fassung selbst liegt in der Historie (`ContentRevision`).
+  for (const block of veroeffentlicht) {
+    await audit.updated({
+      organizationId: params.organizationId,
+      userId: params.actorId,
+      entity: 'ContentBlock',
+      entityId: block.id,
+      summary: `Website-Baustein „${block.key}" veröffentlicht`,
+      changes: { key: block.key },
+    });
+  }
 
-  return blocks.length;
+  return veroeffentlicht.length;
+}
+
+/**
+ * Tragen Entwurf und veröffentlichter Wert denselben Inhalt?
+ *
+ * Die Werte sind Zeichenketten oder Listen von Zeichenketten (siehe
+ * `coerce`); `JSON.stringify` vergleicht beide Formen genau, auch die
+ * Reihenfolge einer Liste — und die ist Inhalt, denn sie ist die Reihenfolge
+ * auf der Website.
+ */
+function gleicherInhalt(a: unknown, b: unknown): boolean {
+  return JSON.stringify(a) === JSON.stringify(b);
 }
 
 /** Offene Entwürfe verwerfen — der veröffentlichte Stand bleibt. */
@@ -653,6 +852,25 @@ export async function updateAssetField(params: {
 }): Promise<{ url: string | null }> {
   if (!isAssetField(params.entity, params.field)) {
     throw new NotFoundError('Bildfeld');
+  }
+
+  /*
+    Eine Adresse der eigenen Ablage nur, wenn sie eine **öffentliche** Datei
+    dieser Organisation bezeichnet (2026-09-27, Standard C12). Vorher nahm
+    das Bildfeld jeden Pfad `/api/files/blob/…` — auch den eines privaten
+    Nachrichtenanhangs. Ausgeliefert hätte ihn die Ablage zwar nicht (sie
+    prüft selbst), aber die Website hätte auf eine private Datei verwiesen und
+    ihre Kennung jedem Besucher gezeigt. Bilder für die Website kommen über
+    die Mediathek, und die legt sie öffentlich ab.
+  */
+  const ablage = params.url ? /^\/api\/files\/blob\/([^/?#]+)/.exec(params.url) : null;
+  if (ablage) {
+    const oeffentlich = await prisma.fileAsset.count({
+      where: { storedFileId: ablage[1], organizationId: params.organizationId, isPublic: true },
+    });
+    if (oeffentlich === 0) {
+      throw new BusinessRuleError('Dieses Bild ist nicht für die Website freigegeben. Bitte über die Mediathek hochladen.');
+    }
   }
 
   /**

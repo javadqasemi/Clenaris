@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 
 import { call, del, get, post, put, requireServer, sleep } from '../helpers/client';
 import { loginAll, type AccountName } from '../helpers/accounts';
+import { eigeneOrganisationId, testDb, testDbGrund, testDbSchliessen } from '../helpers/testdb';
 
 /**
  * Die Website- und Betriebsbereiche: Fragen, Galerie, Navigation, Rechtstexte,
@@ -32,6 +33,7 @@ describe('Website- und Betriebsbereiche', { concurrency: 1 }, async () => {
     for (const path of cleanup) {
       await del(path, { jar: jars.admin });
     }
+    await testDbSchliessen();
   });
 
   // -------------------------------------------------------------------------
@@ -396,21 +398,60 @@ describe('Website- und Betriebsbereiche', { concurrency: 1 }, async () => {
       assert.ok(true);
     });
 
-    it('löscht kein Angebot mit Bewerbungen', async (t) => {
-      // Die Bewerbungen hingen sonst im Nichts — und ihre Daten unterliegen
-      // einer Aufbewahrungsfrist.
-      const list = await get<{ data: Posting[] }>('/api/job-postings', { jar: jars.admin });
-      const withApplications = list.payload.data.find(
-        (posting) => (posting._count?.applications ?? 0) > 0,
+    /**
+     * Die Bewerbungen hingen sonst im Nichts — und ihre Daten unterliegen
+     * einer Aufbewahrungsfrist.
+     *
+     * Bis Wave 23 suchte der Fall ein Angebot mit Bewerbungen im Demobestand
+     * und übersprang sich, wenn keines da war — in jedem vollen Lauf der eine
+     * `skip` der Reihe, und damit eine Regel, die nie geprüft wurde. Jetzt legt
+     * er Angebot und Bewerbung selbst an: das Angebot über die API (derselbe
+     * Weg wie in der Verwaltung), die Bewerbung direkt in der Datenbank, weil
+     * es hier um die Löschsperre geht und nicht um das Bewerbungsformular.
+     */
+    it('löscht kein Angebot mit Bewerbungen', async () => {
+      const db = testDb();
+      assert.ok(db, `kein Zugang zur Testdatenbank: ${testDbGrund()}`);
+      const organizationId = await eigeneOrganisationId();
+      assert.ok(organizationId);
+      const slug = 'pruefstelle-mit-bewerbung';
+
+      // Reste eines abgebrochenen Laufs: erst die Bewerbungen, dann das Angebot.
+      await db.jobApplication.deleteMany({ where: { posting: { organizationId, slug } } });
+      await db.jobPosting.deleteMany({ where: { organizationId, slug } });
+
+      const angelegt = await post<{ data: Posting }>(
+        '/api/job-postings',
+        {
+          title: 'Prüfstelle mit Bewerbung',
+          slug,
+          description:
+            'Eine Stellenausschreibung, die nur während einer automatisierten Prüfung besteht und danach entfernt wird.',
+          workloadFrom: 50,
+          workloadTo: 80,
+        },
+        { jar: jars.admin },
       );
+      assert.equal(angelegt.status, 201, JSON.stringify(angelegt.payload));
+      const postingId = angelegt.payload.data.id;
 
-      if (!withApplications) {
-        t.skip('kein Angebot mit Bewerbungen im Bestand');
-        return;
+      try {
+        await db.jobApplication.create({
+          data: { postingId, firstName: 'Prüf', lastName: 'Bewerbung', email: 'pruef.bewerbung@example.ch' },
+        });
+
+        const response = await del(`/api/job-postings/${postingId}`, { jar: jars.admin });
+        assert.equal(response.status, 422);
+        assert.ok(await db.jobPosting.findUnique({ where: { id: postingId } }), 'Angebot trotz 422 gelöscht');
+
+        // Die Gegenprobe: Ohne Bewerbung geht es — die Sperre hängt an den
+        // Bewerbungen, nicht am Angebot.
+        await db.jobApplication.deleteMany({ where: { postingId } });
+        assert.equal((await del(`/api/job-postings/${postingId}`, { jar: jars.admin })).status, 204);
+      } finally {
+        await db.jobApplication.deleteMany({ where: { postingId } });
+        await db.jobPosting.deleteMany({ where: { id: postingId } });
       }
-
-      const response = await del(`/api/job-postings/${withApplications.id}`, { jar: jars.admin });
-      assert.equal(response.status, 422);
     });
 
     it('weist ein Pensum von 100 bis 50 ab', async () => {

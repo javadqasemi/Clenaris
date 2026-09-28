@@ -199,6 +199,13 @@ const serviceFields = {
     .max(240, 'Höchstens 240 Minuten Puffer.')
     .default(30),
 
+  /**
+   * Qualifikationen, die jede Ausführung verlangt — dieselben Namen wie in
+   * der Personalakte (`EmployeeSkill.name`). Die Zuteilung weist Personen
+   * ohne gültige Qualifikation ab (2026-09-27).
+   */
+  requiredSkills: bulletList(20),
+
   // Marketing und Suchmaschinen
   bulletPoints: bulletList(12),
   includes: bulletList(30),

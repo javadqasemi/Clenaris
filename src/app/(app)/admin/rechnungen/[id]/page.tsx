@@ -15,7 +15,10 @@ import { StatusBadge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Alert } from '@/components/ui/primitives';
 import { DetailRow, DetailSection, PageHeader } from '@/components/app/page-parts';
+import { PdfViewer } from '@/components/app/pdf-viewer';
 import { InvoiceActions } from '@/features/admin/invoice-actions';
+import { FormDialog } from '@/components/app/resource-form';
+import { creditNoteFields } from '@/features/admin/finance-fields';
 
 export const metadata: Metadata = {
   title: 'Rechnung',
@@ -108,6 +111,21 @@ export default async function AdminInvoiceDetailPage({
 
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_22rem] lg:items-start">
         <div className="space-y-6">
+          {!isDraft ? (
+            <DetailSection
+              title="Dokument"
+              description="So sieht die Rechnung bei der Kundschaft aus — mit QR-Zahlteil."
+              body="flush"
+            >
+              <div className="p-3">
+                <PdfViewer
+                  source={`/api/invoices/${invoice.id}/pdf`}
+                  fileName={`Rechnung-${invoice.number}.pdf`}
+                />
+              </div>
+            </DetailSection>
+          ) : null}
+
           <DetailSection title="Positionen">
             <div className="overflow-x-auto py-2">
               <table className="data-table">
@@ -303,15 +321,21 @@ export default async function AdminInvoiceDetailPage({
               {invoice.paidAt ? (
                 <DetailRow label="Bezahlt am">{formatDate(invoice.paidAt)}</DetailRow>
               ) : null}
+              {/*
+                Hier stand der Zahlungslink mit `invoice.publicToken` — einer
+                cuid, die als Geheimnis gedacht war und keines ist. Der
+                sichere Link entsteht jetzt beim Versand und liegt nur als
+                Hash in der Datenbank; anzeigen lässt er sich nicht, und ein
+                zweites Feld dafür wäre genau die Abkürzung, die das Verfahren
+                entwertet. Die Verwaltung braucht ihn auch nicht: Sie sieht
+                die Rechnung hier.
+              */}
               <DetailRow label="Zahlungslink">
-                <a
-                  href={`/rechnung/${invoice.publicToken}`}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="break-all text-primary underline-offset-4 hover:underline"
-                >
-                  /rechnung/{invoice.publicToken.slice(0, 12)}…
-                </a>
+                <span className="text-muted-foreground">
+                  {invoice.sentAt
+                    ? 'Beim Versand ausgestellt und nur in der E-Mail enthalten. Für einen neuen Link die Rechnung erneut senden.'
+                    : 'Noch nicht versendet.'}
+                </span>
               </DetailRow>
             </dl>
           </DetailSection>
@@ -343,12 +367,36 @@ export default async function AdminInvoiceDetailPage({
             </DetailSection>
           ) : null}
 
-          {invoice.creditNotes.length > 0 ? (
-            <DetailSection title="Gutschriften">
+          {/*
+            Gutschriften (Wave 13): Bis 2026-09-23 wurden sie hier nur
+            aufgelistet — erstellen liess sich keine, obwohl der Storno einer
+            teilweise bezahlten Rechnung genau darauf verweist.
+          */}
+          {invoice.creditNotes.length > 0 || (!isDraft && invoice.status !== 'CANCELLED' && can(session.role, 'creditnote:create')) ? (
+            <DetailSection
+              title="Gutschriften"
+              action={
+                !isDraft && invoice.status !== 'CANCELLED' && can(session.role, 'creditnote:create') ? (
+                  <FormDialog
+                    title="Gutschrift ausstellen"
+                    description="Nummer aus dem lückenlosen Nummernkreis; danach unveränderlich. Der offene Posten sinkt um den Bruttobetrag."
+                    triggerLabel="Gutschrift"
+                    triggerVariant="outline"
+                    triggerSize="sm"
+                    endpoint={`/api/invoices/${invoice.id}/credit-note`}
+                    successMessage="Gutschrift ausgestellt."
+                    fields={creditNoteFields()}
+                    values={{ quantity: 1, vatRate: 8.1 }}
+                  />
+                ) : null
+              }
+            >
               <ul className="protocol-list">
                 {invoice.creditNotes.map((note) => (
                   <li key={note.id} className="flex items-center justify-between gap-3 py-3">
-                    <span className="text-sm tabular-nums">{note.number}</span>
+                    <a href={`/api/credit-notes/${note.id}/pdf`} className="text-sm tabular-nums hover:text-primary" download>
+                      {note.number}
+                    </a>
                     <span className="text-sm tabular-nums text-muted-foreground">
                       {formatCurrency(toNumber(note.grossTotal))}
                     </span>

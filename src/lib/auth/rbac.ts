@@ -76,6 +76,26 @@ const CUSTOMER_PERMISSIONS: Permission[] = [
   'booking:write_own',
   'quote:read_own',
   'quote:respond_own',
+  // Die eigenen Verträge einsehen — Laufzeit, Leistungen, Termine, Preis.
+  // Ein Dauerschuldverhältnis, dessen Inhalt die Kundschaft im Kundenbereich
+  // nicht nachlesen kann, ist eine Bringschuld, die auf Anruf hinausläuft.
+  'contract:read_own',
+  /**
+   * Die Kontrollen der eigenen Objekte.
+   *
+   * Eine zugesagte Qualität, deren Messung die Kundschaft nicht sehen darf,
+   * ist eine Zusage an niemanden. Sichtbar ist deshalb das Ergebnis — nicht
+   * die interne Notiz; die Einschränkung steht in der Prisma-`where`-Klausel
+   * und in der Auswahl, nicht in der Anzeige.
+   */
+  'quality:read_own',
+  /**
+   * Reklamationen zu den eigenen Objekten melden und verfolgen (Wave 11).
+   * Eine Reaktionsfrist, deren Stand die meldende Kundschaft nicht sieht,
+   * ist eine Zusage ohne Gegenüber. Die Eigentümerschaft steht in der Abfrage.
+   */
+  'complaint:read_own',
+  'complaint:create_own',
   'invoice:read_own',
   'invoice:pay_own',
   'property:read',
@@ -98,7 +118,17 @@ const EMPLOYEE_PERMISSIONS: Permission[] = [
   'employee:read_own',
   'absence:request',
   'payslip:read_own',
-  'customer:read',
+  /*
+   * Kein `customer:read` mehr (2026-09-27). Die Begründung war „sie müssen
+   * wissen, wohin sie fahren" — das beantwortet der zugeteilte Einsatz mit
+   * seiner Adresse, und für Objekte zieht `propertyVisibilityWhere` genau
+   * diese Linie. Das Recht öffnete dagegen `GET /api/customers` (der ganze
+   * Kundenstamm mit Namen und E-Mail), `GET /api/customers/:id` (die volle
+   * Akte samt Rechnungen und Zeitachse), die Adressen jeder Kundschaft und die
+   * Kundensuche. Keine Seite des Portals brauchte es; mehrere Stellen mussten
+   * die Rolle ausdrücklich wieder ausnehmen (`role !== 'EMPLOYEE'`) — ein
+   * Zeichen, dass das Recht nicht passte.
+   */
   'property:read',
   'message:read_own',
   'message:write_own',
@@ -145,6 +175,32 @@ const MANAGER_PERMISSIONS: Permission[] = [
 
   'booking:read', 'booking:create', 'booking:update', 'booking:delete',
   'quote:read', 'quote:create', 'quote:update', 'quote:delete', 'quote:send', 'quote:convert',
+  // Verträge: vorbereiten ja, in Kraft setzen nein.
+  //
+  // Dieselbe Linie wie bei Preisen und Website, nur schärfer: Ein Vertrag
+  // bindet den Betrieb über Monate. Entwerfen, ändern, eine neue Version
+  // vorschlagen und daraus abrechnen gehört zum Tagesgeschäft. **Aktivieren,
+  // freigeben, zur Unterschrift geben und kündigen** sind vier Zusagen nach
+  // aussen — die trifft die Geschäftsleitung. Wer eine Änderung vorschlägt,
+  // soll sie nicht selbst genehmigen; das ist das Vier-Augen-Prinzip und der
+  // eigentliche Grund für die feine Zerlegung dieser Rechte.
+  'contract:read', 'contract:create', 'contract:update', 'contract:delete_draft',
+  'contract:version', 'contract:billing',
+  /**
+   * Qualitätskontrolle: begehen **und** abschliessen.
+   *
+   * Anders als bei Verträgen liegt die Linie hier nicht zwischen Entwurf und
+   * Zusage nach aussen: Eine Begehung ist eine Feststellung über die eigene
+   * Arbeit, und wer sie macht, schliesst sie auch ab. Die Betriebsleitung
+   * davon auszuschliessen hiesse, die Person mit der Zange in der Hand auf
+   * eine Freigabe warten zu lassen — und in der Zwischenzeit steht ein
+   * halber Beleg im System.
+   */
+  'quality:read', 'quality:inspect', 'quality:complete',
+  // Reklamationen, Material und Geräte sind laufender Betrieb (Wave 11).
+  'complaint:read', 'complaint:create', 'complaint:update',
+  'inventory:read', 'inventory:manage',
+  'equipment:read', 'equipment:manage',
   'job:read', 'job:create', 'job:update', 'job:delete', 'job:assign', 'job:dispatch',
   'serviceArea:read',
 
@@ -175,6 +231,10 @@ const MANAGER_PERMISSIONS: Permission[] = [
   'control:read',
   'knowledge:read',
   'meeting:read', 'meeting:create', 'meeting:update',
+  // Unterzeichnung: Vorgänge anstossen und verfolgen gehört zum Tagesgeschäft.
+  // Abbrechen nicht — ein laufender Vorgang beim Kunden ist eine Zusage, die
+  // die Geschäftsleitung zurücknimmt, nicht die Betriebsleitung.
+  'signature:read', 'signature:create',
 
   'message:read', 'message:create',
   'notification:read_own',
@@ -207,7 +267,7 @@ const MANAGER_PERMISSIONS: Permission[] = [
  * Der Systemverantwortung vorbehalten.
  *
  * Bewusst schmal. Die Administration führt den Betrieb vollständig;
- * SUPER_ADMIN kommt nur für drei Dinge dazu, die man nicht delegieren will:
+ * SUPER_ADMIN kommt nur für das dazu, was man nicht delegieren will:
  * **Rollen vergeben** (sonst könnte sich jede Administration selbst
  * höherstufen), **das Prüfprotokoll lesen** (wer überwacht wird, soll die
  * Überwachung nicht einsehen) und **sich als jemand anderes anmelden**.
@@ -218,11 +278,40 @@ const MANAGER_PERMISSIONS: Permission[] = [
  * ist unumkehrbar, und wer sie ausführt, soll im Protokoll stehen, das nur
  * diese Rolle liest.
  */
+/**
+ * `security:read` und `security:manage` folgen `audit:read` — aus demselben
+ * Grund und mit einer zusätzlichen Schärfe.
+ *
+ * Das Sicherheitszentrum zeigt, wessen Anmeldungen scheitern, wessen Konto
+ * gesperrt wurde und wer seinen zweiten Faktor abgeschaltet hat. Das ist eine
+ * Aufsicht über Personen, und wer beaufsichtigt wird, darf sie nicht öffnen —
+ * sonst sieht die Administration, die sich selbst zu weit vorgewagt hat, als
+ * Erste, dass es aufgefallen ist.
+ *
+ * `security:manage` kommt hinzu, weil die Handlungen dort dieselbe Tragweite
+ * haben wie das Lesen: Ein Konto entsperren heisst, eine Sperre aufzuheben,
+ * die aus einem Grund zugeschlagen hat, und ein Ereignis zu bestätigen heisst,
+ * es als angesehen zu erklären. Beides ist keine Betriebsführung.
+ */
+/**
+ * `release:read` und `release:manage` (2026-09-26): die Versionsverwaltung.
+ *
+ * Wer eine neue Version freigibt, entscheidet über Ausfallzeit,
+ * Datenbankmigrationen und darüber, ob eine Sicherheitslücke offen bleibt —
+ * für alle, die mit dem System arbeiten. Das ist Systemverantwortung, nicht
+ * Betriebsführung. Auch das Lesen bleibt hier: Ein Änderungsprotokoll mit
+ * offenen Sicherheitskorrekturen beschreibt, wo das laufende System
+ * verwundbar ist.
+ */
 const SUPER_ADMIN_ONLY: Permission[] = [
   'role:assign',
   'audit:read',
+  'security:read',
+  'security:manage',
   'user:impersonate',
   'data:purge',
+  'release:read',
+  'release:manage',
 ];
 
 const ADMIN_PERMISSIONS: Permission[] = PERMISSIONS.filter(
@@ -291,15 +380,18 @@ export function homeRouteFor(role: ActorRole): string {
 }
 
 /**
- * Die Profilseite der Rolle — dort steht das Passwortformular.
+ * Die persönlichen Einstellungen der Rolle — dort steht das Passwortformular.
  *
  * Gebraucht, wenn ein Konto sein Passwort wechseln *muss*: Die Anmeldung
  * leitete zuvor auf `/auth/passwort-aendern`, eine Seite, die es nie gab; wer
  * mit einem Startpasswort kam, landete auf einem 404. Das Passwort ändert man
- * auf der Profilseite, und die gibt es in jedem Bereich.
+ * in den persönlichen Einstellungen, und die gibt es in jedem Bereich. Bis
+ * 2026-09-26 stand das Formular direkt auf `…/profil`; seit der Trennung von
+ * Profil und Einstellungen führt der Weg eine Ebene tiefer, sonst landete die
+ * erzwungene Änderung auf einer Seite ohne Passwortfeld.
  */
 export function profileRouteFor(role: ActorRole): string {
-  return `${homeRouteFor(role)}/profil`;
+  return `${homeRouteFor(role)}/profil/einstellungen`;
 }
 
 /** Welche Rollen dürfen einen Pfad-Präfix betreten? Wird von der Middleware genutzt. */
@@ -322,7 +414,7 @@ export const ROLE_LABELS: Record<ActorRole, string> = {
 /** Ein Satz je Rolle — steht in der Rechtematrix über der Spalte. */
 export const ROLE_DESCRIPTIONS: Record<ActorRole, string> = {
   SUPER_ADMIN:
-    'Alles, plus Rollenvergabe, Prüfprotokoll, Kontoübernahme und Datenbereinigung. Für genau eine oder zwei Personen gedacht.',
+    'Alles, plus Rollenvergabe, Prüfprotokoll, Kontoübernahme, Datenbereinigung und Versionsfreigabe. Für genau eine oder zwei Personen gedacht.',
   ADMIN:
     'Führt den Betrieb vollständig und gestaltet Website, Katalog und Preise. Vergibt keine Rollen und sieht das Prüfprotokoll nicht.',
   MANAGER:
@@ -387,9 +479,14 @@ const PERMISSION_ROUTES: { prefix: string; permission: Permission }[] = [
   { prefix: '/admin/personal/neu', permission: 'employee:create' },
   { prefix: '/admin/rollen', permission: 'role:read' },
   { prefix: '/admin/protokoll', permission: 'audit:read' },
+  // Dieselbe Klasse wie das Prüfprotokoll: Es gibt keinen Lesemodus für
+  // andere Rollen, die Seite existiert für sie nicht.
+  { prefix: '/admin/sicherheit', permission: 'security:read' },
   // Reine Handlungsmaske ohne Lesemodus: wer nicht löschen darf, soll die
   // Seite gar nicht sehen — sie antwortet mit 404, nicht mit 403.
   { prefix: '/admin/datenbereinigung', permission: 'data:purge' },
+  // Versionsverwaltung: dieselbe Klasse — für andere Rollen gibt es sie nicht.
+  { prefix: '/admin/updates', permission: 'release:read' },
   { prefix: '/admin/papierkorb', permission: 'booking:delete' },
   { prefix: '/admin/einstellungen', permission: 'settings:read' },
   /**

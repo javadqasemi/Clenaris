@@ -2,6 +2,7 @@ import { z } from 'zod';
 import type { AutomationActionType, AutomationTrigger } from '@prisma/client';
 
 import { moneySchema, postalCodeSchema } from './common';
+import { pruefeAktionsKonfiguration } from './automation-config';
 
 /**
  * Betriebseinstellungen, die keine Fachdomäne für sich sind: Einsatzgebiet,
@@ -118,11 +119,38 @@ export const AUTOMATION_ENUMS_IN_SYNC: [
   Exact<AutomationActionType, (typeof AUTOMATION_ACTION_TYPES)[number]>,
 ] = [true, true];
 
-const automationActionSchema = z.object({
-  type: z.enum(AUTOMATION_ACTION_TYPES),
-  config: z.record(z.unknown()).default({}),
-  position: z.number().int().min(0).max(99).default(0),
-});
+/**
+ * Eine Aktion samt ihrer Konfiguration.
+ *
+ * **`config` war bis Wave 6 ein `z.record(z.unknown())`** — also alles.
+ * Solange die Regeln nie liefen, war das folgenlos: ein Feld, das niemand
+ * liest, kann nichts anrichten. Mit der Automatisierungsmaschine bestimmt
+ * `config` jetzt, an wen eine E-Mail geht, welcher Datensatz seinen Status
+ * ändert und welche Adresse der Server aufruft. Unvalidiert wäre das eine
+ * Eingabemaske für alles, was der Server kann — für jede Person mit
+ * `automation:update`.
+ *
+ * Die Schemata je Art stehen in `lib/validation/automation-config.ts`; hier
+ * werden sie angewandt, damit eine unbrauchbare Regel gar nicht erst entsteht.
+ * Die Maschine prüft beim Ausführen noch einmal, weil eine Regel im Bestand
+ * aus der Zeit vor dieser Prüfung stammen kann.
+ */
+const automationActionSchema = z
+  .object({
+    type: z.enum(AUTOMATION_ACTION_TYPES),
+    config: z.record(z.unknown()).default({}),
+    position: z.number().int().min(0).max(99).default(0),
+  })
+  .superRefine((wert, ctx) => {
+    const befund = pruefeAktionsKonfiguration(wert.type, wert.config);
+    if (!befund.ok) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['config'],
+        message: befund.grund ?? 'Die Konfiguration dieser Aktion ist unvollständig.',
+      });
+    }
+  });
 
 const automationFields = {
   name: z.string().trim().min(3, 'Ein Name ist erforderlich.').max(120),

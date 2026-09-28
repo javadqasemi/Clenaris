@@ -95,7 +95,10 @@ export interface UserRow {
 
 export function UserWorkspace({
   users,
+  gesamt,
+  aktiv,
   trashed,
+  trashedTotal,
   currentUserId,
   assignableRoles,
   canCreate,
@@ -103,8 +106,13 @@ export function UserWorkspace({
   canDelete,
   canAssignRole,
 }: {
+  /** Eine Seite — die Liste wird auf dem Server geblättert. */
   users: UserRow[];
+  /** Zahlen über alle Seiten, gezählt in der Datenbank. */
+  gesamt: number;
+  aktiv: number;
   trashed: UserRow[];
+  trashedTotal: number;
   currentUserId: string;
   assignableRoles: string[];
   canCreate: boolean;
@@ -164,8 +172,7 @@ export function UserWorkspace({
     <>
       <div className="flex flex-wrap items-center justify-between gap-3">
         <p className="text-sm text-muted-foreground">
-          {users.length} {users.length === 1 ? 'Konto' : 'Konten'} ·{' '}
-          {users.filter((u) => u.status === 'ACTIVE').length} aktiv
+          {gesamt} {gesamt === 1 ? 'Konto' : 'Konten'} · {aktiv} aktiv
         </p>
         {canCreate ? (
           <Button onClick={() => setInviting(true)}>
@@ -337,7 +344,7 @@ export function UserWorkspace({
       )}
 
       {trashed.length > 0 ? (
-        <ListCard title={`Papierkorb (${trashed.length})`}>
+        <ListCard title={trashedTotal > trashed.length ? `Papierkorb (${trashed.length} von ${trashedTotal})` : `Papierkorb (${trashedTotal})`}>
           <Alert variant="info" className="mx-5 mt-5">
             Gelöschte Konten behalten ihre Historie in Aktivitäten, Nachrichten und Prüfprotokoll.
             Wiederhergestellte Konten kommen gesperrt zurück.

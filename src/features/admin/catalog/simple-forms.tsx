@@ -8,6 +8,7 @@ import { Save } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { api } from '@/lib/api/client';
+import { zuercherTagText } from '@/lib/zuerich';
 import {
   createCategorySchema,
   createCouponSchema,
@@ -445,7 +446,9 @@ export interface CouponRow {
   serviceKinds: string[];
 }
 
-const EMPTY_COUPON: CreateCouponInput = {
+// Als Funktion, nicht als Konstante auf Modulebene (2026-09-27): „gültig ab
+// heute" war sonst der UTC-Tag beim Laden des Bündels — über Nacht gestern.
+const emptyCoupon = (): CreateCouponInput => ({
   code: '',
   description: undefined,
   discountType: 'PERCENT',
@@ -453,13 +456,13 @@ const EMPTY_COUPON: CreateCouponInput = {
   minOrderValue: 0,
   maxDiscount: null,
   status: 'ACTIVE',
-  validFrom: new Date().toISOString().slice(0, 10),
+  validFrom: zuercherTagText(),
   validUntil: undefined,
   usageLimit: null,
   perCustomerLimit: 1,
   firstOrderOnly: false,
   serviceKinds: [],
-};
+});
 
 const COUPON_STATUS = [
   { value: 'ACTIVE', label: 'Aktiv' },
@@ -482,7 +485,7 @@ export function CouponForm({
 
   const form = useForm<CreateCouponInput>({
     resolver: zodResolver(createCouponSchema),
-    defaultValues: EMPTY_COUPON,
+    defaultValues: emptyCoupon(),
   });
 
   React.useEffect(() => {
@@ -504,7 +507,7 @@ export function CouponForm({
             firstOrderOnly: coupon.firstOrderOnly,
             serviceKinds: coupon.serviceKinds as CreateCouponInput['serviceKinds'],
           }
-        : EMPTY_COUPON,
+        : emptyCoupon(),
     );
     setError(null);
   }, [open, coupon, form]);

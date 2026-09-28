@@ -4,6 +4,7 @@ import { prisma, toNumber } from '@/lib/db';
 import { generateQuoteDraft } from '@/lib/ai/features';
 import { quoteDraftSchema } from '@/lib/validation/ai';
 import { getOrganizationId } from '@/server/services/organization.service';
+import { protokolliereKiNutzung } from '@/server/services/ai-governance.service';
 
 export const runtime = 'nodejs';
 export const maxDuration = 120;
@@ -21,7 +22,7 @@ export const POST = defineRoute({
   permissions: ['ai:use', 'quote:create'],
   body: quoteDraftSchema,
   rateLimit: 'aiGenerate',
-  handler: async ({ body }) => {
+  handler: async ({ body, session, ip }) => {
     const organizationId = await getOrganizationId();
 
     // Kontext aus den Stammdaten anreichern, damit das Modell nicht raten muss.
@@ -31,6 +32,10 @@ export const POST = defineRoute({
             where: { id: body.customerId, organizationId },
             select: {
               type: true,
+              // Nur, um sie im Anfragetext zu schwärzen — sie gehen nicht hinaus.
+              firstName: true,
+              lastName: true,
+              companyName: true,
               addresses: {
                 where: { isDefault: true },
                 take: 1,
@@ -42,7 +47,7 @@ export const POST = defineRoute({
       body.leadId
         ? prisma.lead.findFirst({
             where: { id: body.leadId, organizationId },
-            select: { serviceKind: true, city: true, company: true },
+            select: { serviceKind: true, city: true, company: true, firstName: true, lastName: true },
           })
         : Promise.resolve(null),
       prisma.service.findFirst({
@@ -68,7 +73,14 @@ export const POST = defineRoute({
       // Fällt der Katalog aus, gilt der interne Mindestansatz.
       hourlyRate: toNumber(service?.hourlyRate) || 62,
       city: customer?.addresses[0]?.city ?? lead?.city ?? null,
+      /*
+        F-15: Die Anfrage nennt oft die Person oder Firma selbst („Guten Tag,
+        hier ist Anna Keller von der Keller Treuhand AG"). Für die Kalkulation
+        ist das unnötig; die bekannten Namen gehen als `[NAME]` hinaus.
+      */
+      bekannteNamen: [customer?.firstName, customer?.lastName, customer?.companyName, lead?.firstName, lead?.lastName, lead?.company],
     });
+    await protokolliereKiNutzung({ organizationId, userId: session.id, funktion: 'Offertentwurf', ip });
 
     return ok(draft);
   },

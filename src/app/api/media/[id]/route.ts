@@ -1,36 +1,17 @@
-import { z } from 'zod';
-
 import { defineRoute, idParam } from '@/lib/api/handler';
 import { noContent, ok } from '@/lib/api/response';
+import { mediaUpdateSchema } from '@/lib/validation/files';
+import { mediaDeleteQuery } from '@/lib/validation/queries';
 import { deleteMedia, updateMedia } from '@/server/services/media.service';
 import { getOrganizationId } from '@/server/services/organization.service';
 
 export const runtime = 'nodejs';
 
-const FILE_SCOPES = [
-  'BOOKING',
-  'QUOTE',
-  'INVOICE',
-  'JOB',
-  'CUSTOMER',
-  'EMPLOYEE',
-  'PROPERTY',
-  'BLOG',
-  'GALLERY',
-  'APPLICATION',
-  'EXPENSE',
-  'MESSAGE',
-  'OTHER',
-] as const;
-
 /** PATCH /api/media/:id — Dateiname und Zuordnung ändern. */
 export const PATCH = defineRoute({
   permissions: ['media:update'],
   params: idParam,
-  body: z.object({
-    filename: z.string().trim().min(1).max(255).optional(),
-    scope: z.enum(FILE_SCOPES).optional(),
-  }),
+  body: mediaUpdateSchema,
   rateLimit: 'apiWrite',
   handler: async ({ params, body, session, ip }) => {
     const file = await updateMedia({
@@ -58,12 +39,7 @@ export const PATCH = defineRoute({
 export const DELETE = defineRoute({
   permissions: ['media:delete'],
   params: idParam,
-  query: z.object({
-    trotzdem: z
-      .enum(['0', '1'])
-      .default('0')
-      .transform((v) => v === '1'),
-  }),
+  query: mediaDeleteQuery,
   rateLimit: 'apiWrite',
   handler: async ({ params, query, session, ip }) => {
     await deleteMedia({

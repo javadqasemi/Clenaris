@@ -5,13 +5,18 @@ import {
   ArrowRight,
   CalendarClock,
   CircleDollarSign,
+  PackageCheck,
   Users,
 } from 'lucide-react';
 
 import { prisma, toNumber } from '@/lib/db';
+import { can } from '@/lib/auth/rbac';
 import { requirePermission } from '@/lib/auth/session';
-import { formatCurrency, formatDate, formatNumber, formatTime } from '@/lib/utils';
+import { formatCurrency, formatDate, formatDateTime, formatNumber, formatTime } from '@/lib/utils';
+import { periodOf } from '@/lib/bi/periods';
+import { zuercherTagesgrenzen } from '@/lib/zuerich';
 import { getOrganizationId } from '@/server/services/organization.service';
+import { ARTNAMEN, ZUSTANDSNAMEN, neuesteVerfuegbare } from '@/server/services/release.service';
 import {
   getCashflowForecast,
   getDashboardKpis,
@@ -46,19 +51,21 @@ export default async function AdminDashboardPage({
 }: {
   searchParams: Promise<{ zeitraum?: string }>;
 }) {
-  await requirePermission('dashboard:view');
+  const session = await requirePermission('dashboard:view');
 
   const params = await searchParams;
   const range = (params.zeitraum ?? 'month') as Range;
   const organizationId = await getOrganizationId();
   const period = resolveRange(range);
 
-  const [kpis, timeSeries, serviceRevenue, utilization, cashflow, todayJobs, attention] =
+  const [kpis, timeSeries, serviceRevenue, utilization, cashflow, todayJobs, attention, version] =
     await Promise.all([
       getDashboardKpis(organizationId, range),
+      // Das Zürcher Jahr ab dessen Mitternacht (2026-09-27; vorher das Jahr
+      // und die Mitternacht in der Zone des Servers).
       getRevenueTimeSeries({
         organizationId,
-        from: new Date(new Date().getFullYear(), 0, 1),
+        from: periodOf('YEAR', new Date()).from,
         to: new Date(),
         granularity: 'month',
       }),
@@ -67,6 +74,9 @@ export default async function AdminDashboardPage({
       getCashflowForecast({ organizationId, weeks: 12 }),
       loadTodayJobs(organizationId),
       loadAttentionItems(organizationId),
+      // Nur für die Systemverantwortung — für alle anderen existiert das
+      // Update Center nicht, also auch nicht sein Hinweis.
+      can(session.role, 'release:read') ? neuesteVerfuegbare(organizationId) : Promise.resolve(null),
     ]);
 
   return (
@@ -112,6 +122,15 @@ export default async function AdminDashboardPage({
           ))}
         </section>
       ) : null}
+
+      {/*
+        Clenaris-Version — die Karte der Systemverantwortung. Sie steht vor
+        den Kennzahlen, wenn eine Entscheidung aussteht, und sagt in einem
+        Blick, was zu entscheiden ist: welche Version, welche Art, ob
+        Sicherheit betroffen ist. Zurückgestellte oder bereits terminierte
+        Versionen drängen sich nicht vor — dann steht nur der Stand da.
+      */}
+      {version ? <VersionCard daten={version} /> : null}
 
       {/* Kennzahlen */}
       <section aria-label="Kennzahlen" className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
@@ -326,9 +345,10 @@ async function TopCustomers({ organizationId }: { organizationId: string }) {
 }
 
 async function loadTodayJobs(organizationId: string) {
-  const start = new Date();
-  start.setHours(0, 0, 0, 0);
-  const end = new Date(start.getTime() + 86_400_000);
+  // Der Zürcher Tag (2026-09-27). `setHours(0, 0, 0, 0)` rechnete in der Zone
+  // des Servers — auf einem UTC-Server von 01:00/02:00 bis 01:00/02:00, und
+  // zwischen Mitternacht und zwei Uhr standen die Einsätze von gestern da.
+  const { von: start, bis: end } = zuercherTagesgrenzen();
 
   return prisma.job.findMany({
     where: {
@@ -387,4 +407,81 @@ async function loadAttentionItems(organizationId: string) {
     { count: overdueInvoices, label: 'Überfällige Rechnungen', href: '/admin/rechnungen?status=OVERDUE' },
     { count: staleLeads, label: 'Leads seit 3 Tagen offen', href: '/admin/leads' },
   ].filter((item) => item.count > 0);
+}
+
+/** Die Versionskarte der Systemverantwortung (siehe Kommentar an der Einbindung). */
+function VersionCard({ daten }: { daten: Awaited<ReturnType<typeof neuesteVerfuegbare>> }) {
+  const neueste = daten.neueste;
+  const offen = neueste && neueste.zustand === 'AVAILABLE' && !neueste.zurueckgestelltBis;
+  const sicherheit = neueste?.release.kind === 'SECURITY';
+
+  return (
+    <section
+      aria-label="Clenaris-Version"
+      className={
+        offen
+          ? sicherheit
+            ? 'rounded-2xl border border-destructive/30 bg-destructive/8 p-5'
+            : 'rounded-2xl border border-primary/25 bg-primary/8 p-5'
+          : 'rounded-2xl border border-border bg-card p-5 shadow-soft'
+      }
+    >
+      <div className="flex flex-wrap items-center justify-between gap-4">
+        <div className="flex items-start gap-3">
+          <PackageCheck className="mt-0.5 size-5 shrink-0 text-primary" aria-hidden />
+          <div className="space-y-1">
+            <p className="text-2xs font-semibold uppercase tracking-wider text-muted-foreground">Clenaris-Version</p>
+            {offen ? (
+              <p className="font-display text-base font-semibold">
+                Eine neue Clenaris-Version ist verfügbar: v{neueste.release.version}
+              </p>
+            ) : (
+              <p className="font-display text-base font-semibold">v{daten.laufend} installiert</p>
+            )}
+            <dl className="flex flex-wrap gap-x-5 gap-y-1 text-sm text-muted-foreground">
+              <div className="flex gap-1.5">
+                <dt>Aktuell:</dt>
+                <dd className="tabular-nums text-foreground">v{daten.laufend}</dd>
+              </div>
+              {neueste ? (
+                <>
+                  <div className="flex gap-1.5">
+                    <dt>Verfügbar:</dt>
+                    <dd className="tabular-nums text-foreground">v{neueste.release.version}</dd>
+                  </div>
+                  <div className="flex gap-1.5">
+                    <dt>Typ:</dt>
+                    <dd className={sicherheit ? 'font-medium text-destructive' : 'text-foreground'}>
+                      {ARTNAMEN[neueste.release.kind]}
+                    </dd>
+                  </div>
+                  <div className="flex gap-1.5">
+                    <dt>Status:</dt>
+                    <dd className="text-foreground">
+                      {neueste.zustand === 'AVAILABLE' && neueste.zurueckgestelltBis
+                        ? `Zurückgestellt bis ${formatDate(neueste.zurueckgestelltBis)}`
+                        : neueste.zustand === 'SCHEDULED' && neueste.offenerAuftrag?.scheduledFor
+                          ? `Terminiert auf ${formatDateTime(neueste.offenerAuftrag.scheduledFor)}`
+                          : ZUSTANDSNAMEN[neueste.zustand]}
+                    </dd>
+                  </div>
+                </>
+              ) : (
+                <div className="flex gap-1.5">
+                  <dt>Status:</dt>
+                  <dd className="text-foreground">Aktuell</dd>
+                </div>
+              )}
+            </dl>
+          </div>
+        </div>
+        <Button asChild variant={offen ? 'default' : 'outline'} size="sm">
+          <Link href={neueste ? `/admin/updates/${neueste.release.id}` : '/admin/updates'}>
+            {offen ? 'Details ansehen' : 'Update Center'}
+            <ArrowRight aria-hidden />
+          </Link>
+        </Button>
+      </div>
+    </section>
+  );
 }

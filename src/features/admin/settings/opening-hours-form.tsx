@@ -29,6 +29,13 @@ import { DetailSection } from '@/components/app/page-parts';
  *
  *  • **Geschlossen blendet die Uhrzeiten aus, statt sie auszugrauen.** Ein
  *    ausgegrautes Feld mit „08:00" darin ist eine Behauptung, die nicht gilt.
+ *
+ *  • **Einsatzzeiten je Tag als zweite Zeile** (Produktsprint 2026-09-26).
+ *    Vorgabe ist „wie Öffnungszeiten" — so verhielt sich das System bisher,
+ *    und für die meisten Betriebe stimmt es. Wer abends reinigt, während das
+ *    Büro tagsüber offen ist, stellt hier „eigene Zeiten" ein; die
+ *    Öffnungszeiten auf der Website bleiben dabei, was sie sind. „Keine
+ *    Einsätze" sperrt den Tag für Buchungen, auch wenn das Büro offen ist.
  */
 
 export interface OpeningHourRow {
@@ -36,6 +43,17 @@ export interface OpeningHourRow {
   opensAt: string | null;
   closesAt: string | null;
   closed: boolean;
+  serviceOpensAt?: string | null;
+  serviceClosesAt?: string | null;
+  serviceClosed?: boolean;
+}
+
+type Einsatzmodus = 'wie' | 'eigene' | 'keine';
+
+function modusVon(row: OpeningHourRow): Einsatzmodus {
+  if (row.serviceClosed) return 'keine';
+  if (row.serviceOpensAt || row.serviceClosesAt) return 'eigene';
+  return 'wie';
 }
 
 const WEEKDAYS = ['Sonntag', 'Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freitag', 'Samstag'];
@@ -78,12 +96,18 @@ export function OpeningHoursForm({ hours }: { hours: OpeningHourRow[] }) {
     setError(null);
     try {
       await api.put('/api/opening-hours', {
-        hours: rows.map((row) => ({
-          weekday: row.weekday,
-          opensAt: row.closed ? '' : (row.opensAt ?? ''),
-          closesAt: row.closed ? '' : (row.closesAt ?? ''),
-          closed: row.closed,
-        })),
+        hours: rows.map((row) => {
+          const modus = modusVon(row);
+          return {
+            weekday: row.weekday,
+            opensAt: row.closed ? '' : (row.opensAt ?? ''),
+            closesAt: row.closed ? '' : (row.closesAt ?? ''),
+            closed: row.closed,
+            serviceOpensAt: modus === 'eigene' ? (row.serviceOpensAt ?? '') : '',
+            serviceClosesAt: modus === 'eigene' ? (row.serviceClosesAt ?? '') : '',
+            serviceClosed: modus === 'keine',
+          };
+        }),
       });
       initial.current = JSON.stringify(rows);
       toast.success('Zeiten gespeichert.');
@@ -151,13 +175,58 @@ export function OpeningHoursForm({ hours }: { hours: OpeningHourRow[] }) {
                 />
                 geschlossen
               </label>
+
+              <span className="text-xs text-muted-foreground sm:pl-3">Einsätze</span>
+              <span className="flex flex-wrap items-center gap-2 sm:col-span-2">
+                <select
+                  aria-label={`${WEEKDAYS[day]}, Einsatzzeiten`}
+                  value={modusVon(row)}
+                  onChange={(event) => {
+                    const modus = event.target.value as Einsatzmodus;
+                    update(day,
+                      modus === 'keine'
+                        ? { serviceClosed: true, serviceOpensAt: null, serviceClosesAt: null }
+                        : modus === 'eigene'
+                          ? { serviceClosed: false, serviceOpensAt: row.serviceOpensAt || row.opensAt || '18:00', serviceClosesAt: row.serviceClosesAt || row.closesAt || '22:00' }
+                          : { serviceClosed: false, serviceOpensAt: null, serviceClosesAt: null },
+                    );
+                  }}
+                  className="h-9 rounded-lg border border-input bg-background px-2 text-sm"
+                >
+                  <option value="wie">wie Öffnungszeiten</option>
+                  <option value="eigene">eigene Einsatzzeiten</option>
+                  <option value="keine">keine Einsätze</option>
+                </select>
+                {modusVon(row) === 'eigene' ? (
+                  <>
+                    <Input
+                      type="time"
+                      aria-label={`${WEEKDAYS[day]}, Einsätze ab`}
+                      value={row.serviceOpensAt ?? ''}
+                      onChange={(event) => update(day, { serviceOpensAt: event.target.value })}
+                      className="max-w-[8rem] tabular-nums"
+                    />
+                    <span className="text-muted-foreground" aria-hidden>
+                      –
+                    </span>
+                    <Input
+                      type="time"
+                      aria-label={`${WEEKDAYS[day]}, Einsätze bis`}
+                      value={row.serviceClosesAt ?? ''}
+                      onChange={(event) => update(day, { serviceClosesAt: event.target.value })}
+                      className="max-w-[8rem] tabular-nums"
+                    />
+                  </>
+                ) : null}
+              </span>
             </div>
           );
         })}
 
         <p className="prose-measure pt-2 text-meta leading-relaxed text-muted-foreground">
-          Der Buchungsassistent bietet nur Zeitfenster innerhalb dieser Zeiten an. Ausserhalb buchen
-          kann das Büro jederzeit von Hand.
+          Der Buchungsassistent bietet nur Anfangszeiten an, zu denen die ganze gewählte Leistung in die
+          Einsatzzeit passt — und nur, wenn genug Mitarbeitende laut ihrer hinterlegten Arbeitszeit frei
+          sind. Ausserhalb buchen kann das Büro jederzeit von Hand.
         </p>
 
         {dirty ? (
@@ -189,6 +258,9 @@ function fill(hours: OpeningHourRow[]): OpeningHourRow[] {
         opensAt: null,
         closesAt: null,
         closed: true,
+        serviceOpensAt: null,
+        serviceClosesAt: null,
+        serviceClosed: false,
       },
   );
 }

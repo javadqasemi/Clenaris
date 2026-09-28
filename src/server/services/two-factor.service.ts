@@ -5,10 +5,12 @@ import QRCode from 'qrcode';
 
 import { prisma } from '@/lib/db';
 import { audit, recordAudit } from '@/lib/audit';
+import { recordSecurityEvent } from '@/lib/security/record';
 import { hashPassword, verifyPassword } from '@/lib/auth/password';
 import { signAccessToken, verifyAccessToken } from '@/lib/auth/jwt';
 import { createSession, revokeAllSessions } from '@/lib/auth/session';
 import { BusinessRuleError, NotFoundError, UnauthorizedError } from '@/lib/errors';
+import { CRYPTO_CONTEXT, decrypt, encrypt } from '@/lib/crypto';
 import {
   generateRecoveryCodes,
   generateSecret,
@@ -42,6 +44,15 @@ import {
  *    markiert.** Er soll kein zweites Mal funktionieren, und eine Liste mit
  *    „schon benutzt" wäre eine Liste, aus der man versehentlich wieder
  *    auswählt.
+ *
+ *  • **Das TOTP-Geheimnis liegt verschlüsselt in der Datenbank**
+ *    (`src/lib/crypto.ts`). Gehasht ginge nicht — im Gegensatz zu einem
+ *    Passwort muss die Anwendung es zurückbekommen, um den Code der
+ *    Authenticator-App nachzurechnen. Im Klartext wäre die
+ *    Zwei-Faktor-Anmeldung für jede Person, die einen Datenbankabzug in die
+ *    Hand bekommt, nur noch ein zusätzliches Eingabefeld. Altbestand im
+ *    Klartext bleibt lesbar und wandert beim nächsten Einrichten ins neue
+ *    Format.
  */
 
 /** Der Zwischenschein zwischen Passwort und Code. */
@@ -86,7 +97,11 @@ export async function beginTwoFactorSetup(params: {
     where: { id: user.id },
     // Das Geheimnis wird gespeichert, der Schutz aber noch nicht scharf
     // gestellt: erst der bestätigte Code schaltet ihn ein.
-    data: { twoFactorSecret: secret, twoFactorEnabled: false, twoFactorConfirmedAt: null },
+    data: {
+      twoFactorSecret: encrypt(secret, CRYPTO_CONTEXT.twoFactorSecret),
+      twoFactorEnabled: false,
+      twoFactorConfirmedAt: null,
+    },
   });
 
   return {
@@ -120,7 +135,7 @@ export async function confirmTwoFactor(params: {
     throw new BusinessRuleError('Beginnen Sie mit der Einrichtung, bevor Sie einen Code bestätigen.');
   }
 
-  if (!verifyToken(user.twoFactorSecret, params.token)) {
+  if (!verifyToken(decrypt(user.twoFactorSecret, CRYPTO_CONTEXT.twoFactorSecret), params.token)) {
     throw new UnauthorizedError(
       'Der Code stimmt nicht. Prüfen Sie, ob die Uhrzeit Ihres Telefons stimmt — TOTP hängt daran.',
     );
@@ -147,6 +162,13 @@ export async function confirmTwoFactor(params: {
     entity: 'User',
     entityId: user.id,
     summary: 'Zwei-Faktor-Anmeldung eingeschaltet',
+    ip: params.ip,
+  });
+
+  await recordSecurityEvent({
+    organizationId: user.organizationId,
+    userId: user.id,
+    kind: 'TWO_FACTOR_ENABLED',
     ip: params.ip,
   });
 
@@ -186,7 +208,10 @@ export async function disableTwoFactor(params: {
     throw new UnauthorizedError('Das Passwort stimmt nicht.');
   }
 
-  const byToken = verifyToken(user.twoFactorSecret, params.token);
+  const byToken = verifyToken(
+    decrypt(user.twoFactorSecret, CRYPTO_CONTEXT.twoFactorSecret),
+    params.token,
+  );
   const byRecovery = byToken ? false : await matchRecoveryCode(user.twoFactorRecoveryCodes, params.token);
 
   if (!byToken && byRecovery === null) {
@@ -210,6 +235,19 @@ export async function disableTwoFactor(params: {
     entity: 'User',
     entityId: user.id,
     summary: 'Zwei-Faktor-Anmeldung ausgeschaltet',
+    ip: params.ip,
+  });
+
+  /**
+   * `CRITICAL` — siehe die Begründung im Katalog. Das Abschalten ist regulär
+   * und verlangt Passwort *und* Code; trotzdem ist es der Schritt, den jemand
+   * als Erstes geht, der ein Konto übernommen hat. Wer es selbst getan hat,
+   * bestätigt den Eintrag in zehn Sekunden.
+   */
+  await recordSecurityEvent({
+    organizationId: user.organizationId,
+    userId: user.id,
+    kind: 'TWO_FACTOR_DISABLED',
     ip: params.ip,
   });
 }
@@ -301,10 +339,45 @@ export async function completeMfaLogin(params: {
     throw new UnauthorizedError('Anmeldung nicht möglich.');
   }
 
-  const byToken = verifyToken(user.twoFactorSecret, params.token);
+  const byToken = verifyToken(
+    decrypt(user.twoFactorSecret, CRYPTO_CONTEXT.twoFactorSecret),
+    params.token,
+  );
   const recoveryIndex = byToken ? null : await matchRecoveryCode(user.twoFactorRecoveryCodes, params.token);
 
-  if (!byToken && recoveryIndex === null) {
+  /**
+   * Den Ersatzcode verbrauchen, **bevor** eine Sitzung entsteht — und nur,
+   * wenn er in diesem Augenblick noch im Vorrat steht.
+   *
+   * Früher stand hier: Liste lesen, Hash prüfen, gefilterte Liste
+   * zurückschreiben. Zwischen Lesen und Schreiben liegen zehn Argon2-Prüfungen,
+   * also Hunderte Millisekunden. Fünf gleichzeitige Anfragen mit demselben
+   * Code lasen alle denselben Vorrat, fanden alle den Code, schrieben alle
+   * dieselbe „Liste ohne ihn" — und bekamen alle eine Sitzung. Ein
+   * Einmalcode, der fünfmal öffnet, ist kein Einmalcode.
+   *
+   * Deshalb entscheidet die Datenbank in *einer* Anweisung: Entfernt wird nur,
+   * solange der Hash noch enthalten ist; genau eine Anfrage findet ihn, alle
+   * anderen ändern keine Zeile und gelten als falscher Code. `array_remove`
+   * statt „gefilterte Liste zurückschreiben", damit zwei *verschiedene* Codes,
+   * gleichzeitig eingelöst, einander nicht wiederbeleben — eine Liste aus
+   * einem alten Stand stellte den anderen, eben verbrauchten Code wieder her.
+   * Die Hashes sind gesalzen und damit eindeutig; `array_remove` trifft nur
+   * diesen einen.
+   */
+  let remainingAfterRecovery: number | null = null;
+  if (recoveryIndex !== null) {
+    const hash = user.twoFactorRecoveryCodes[recoveryIndex];
+    const rows = await prisma.$queryRaw<{ rest: number }[]>`
+      UPDATE "users"
+         SET "twoFactorRecoveryCodes" = array_remove("twoFactorRecoveryCodes", ${hash})
+       WHERE "id" = ${user.id}
+         AND ${hash} = ANY("twoFactorRecoveryCodes")
+      RETURNING cardinality("twoFactorRecoveryCodes")::int AS rest`;
+    remainingAfterRecovery = rows[0]?.rest ?? null;
+  }
+
+  if (!byToken && remainingAfterRecovery === null) {
     await audit.denied({
       organizationId: user.organizationId,
       userId: user.id,
@@ -313,18 +386,26 @@ export async function completeMfaLogin(params: {
       summary: 'Zweiter Faktor falsch',
       ip: params.ip,
     });
+
+    /**
+     * Wiegt schwerer als ein falsches Passwort und wird trotzdem gleich
+     * eingestuft — die Aussage steckt in der Häufung, nicht im Einzelfall.
+     * Wer hier landet, hat das Passwort bereits gehabt; eine Reihe solcher
+     * Einträge auf ein Konto ist deshalb der deutlichste Hinweis auf ein
+     * abgeflossenes Passwort, den dieses System überhaupt geben kann.
+     */
+    await recordSecurityEvent({
+      organizationId: user.organizationId,
+      userId: user.id,
+      kind: 'TWO_FACTOR_FAILED',
+      summary: 'Zweiter Faktor falsch — das Passwort war richtig',
+      ip: params.ip,
+    });
+
     throw new UnauthorizedError('Der Code stimmt nicht.');
   }
 
-  let remaining = user.twoFactorRecoveryCodes.length;
-  if (recoveryIndex !== null) {
-    const rest = user.twoFactorRecoveryCodes.filter((_, index) => index !== recoveryIndex);
-    remaining = rest.length;
-    await prisma.user.update({
-      where: { id: user.id },
-      data: { twoFactorRecoveryCodes: rest },
-    });
-  }
+  const remaining = remainingAfterRecovery ?? user.twoFactorRecoveryCodes.length;
 
   store.delete(MFA_COOKIE);
   await createSession({ userId: user.id });
@@ -344,6 +425,20 @@ export async function completeMfaLogin(params: {
       recoveryIndex !== null
         ? `Anmeldung mit Wiederherstellungscode (${remaining} verbleibend)`
         : 'Anmeldung mit zweitem Faktor',
+    ip: params.ip,
+  });
+
+  await recordSecurityEvent({
+    organizationId: user.organizationId,
+    userId: user.id,
+    kind: 'LOGIN_SUCCEEDED',
+    summary:
+      recoveryIndex !== null
+        ? `Anmeldung mit Wiederherstellungscode (${remaining} verbleibend)`
+        : 'Anmeldung mit zweitem Faktor',
+    // Die Zahl der verbleibenden Codes gehört in den Zusammenhang: Wer bei
+    // null ankommt, sperrt sich aus, und das soll vorher jemand sehen.
+    context: recoveryIndex !== null ? { verbleibendeCodes: remaining } : undefined,
     ip: params.ip,
   });
 
@@ -391,6 +486,31 @@ export async function resetTwoFactorFor(params: {
     entity: 'User',
     entityId: user.id,
     summary: `Zwei-Faktor-Anmeldung von ${user.email} zurückgesetzt und alle Sitzungen beendet`,
+    ip: params.ip,
+  });
+
+  /**
+   * Zwei Ereignisse, weil zwei Dinge geschehen sind — und beide betreffen
+   * dasselbe Konto, nicht die handelnde Person. `userId` ist deshalb `user.id`
+   * und nicht `params.actorId`; wer es getan hat, steht im Zusammenhang. Die
+   * Übersicht filtert nach dem betroffenen Konto, und genau dort sollen beide
+   * Zeilen auftauchen.
+   */
+  await recordSecurityEvent({
+    organizationId: params.organizationId,
+    userId: user.id,
+    kind: 'TWO_FACTOR_DISABLED',
+    summary: 'Zweiter Faktor durch die Systemverantwortung zurückgesetzt',
+    context: { durch: params.actorId },
+    ip: params.ip,
+  });
+
+  await recordSecurityEvent({
+    organizationId: params.organizationId,
+    userId: user.id,
+    kind: 'SESSIONS_REVOKED',
+    summary: 'Alle Sitzungen beendet — Rücksetzung des zweiten Faktors',
+    context: { durch: params.actorId },
     ip: params.ip,
   });
 }

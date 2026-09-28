@@ -1,4 +1,4 @@
-import type { Metadata } from 'next';
+﻿import type { Metadata } from 'next';
 import Link from 'next/link';
 import { ArrowRight, Download, FileText } from 'lucide-react';
 
@@ -39,7 +39,7 @@ export default async function AccountQuotesPage() {
         title="Offerten"
         description={
           open.length > 0
-            ? `${open.length} ${open.length === 1 ? 'Offerte wartet' : 'Offerten warten'} auf Ihre Antwort. Sie können online annehmen — mit digitaler Unterschrift.`
+            ? `${open.length} ${open.length === 1 ? 'Offerte wartet' : 'Offerten warten'} auf Ihre Antwort. Sie können online annehmen — mit elektronischer Unterzeichnung.`
             : 'Alle Ihre Angebote auf einen Blick.'
         }
       />
@@ -91,7 +91,7 @@ export default async function AccountQuotesPage() {
                     </Button>
                     {isOpen ? (
                       <Button asChild size="sm">
-                        <Link href={`/offerte/${quote.publicToken}`}>
+                        <Link href={`/konto/offerten/${quote.id}`}>
                           Ansehen und antworten
                           <ArrowRight aria-hidden />
                         </Link>

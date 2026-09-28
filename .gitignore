@@ -5,12 +5,22 @@ node_modules/
 
 # next.js
 .next/
+# Die Diagnosebauten aus Wave 9.1 stehen neben dem Produktionsbau
+# (`NEXT_DIST_DIR`): Entwicklungsserver, Produktionsbündel mit unminifiziertem
+# React, Gegenproben. Keiner davon gehört ins Repository.
+.next-*/
 out/
 build/
 next-env.d.ts
 
 # production
 dist/
+
+# Erzeugte Prüfberichte. Der Merkmalsbericht ist eine Momentaufnahme des
+# Quelltextes — im Repository wäre er am Tag nach dem nächsten Commit falsch,
+# und ein falscher Bericht ist schlimmer als keiner. Die CI hängt ihn als
+# Artefakt an den Lauf.
+artifacts/
 
 # misc
 .DS_Store
@@ -24,9 +34,18 @@ yarn-error.log*
 .pnpm-debug.log*
 
 # env
+# Jede Umgebungsdatei, ausser den Beispielen. Bis 2026-09-27 standen hier nur
+# `.env`, `.env*.local` und `.env.production` — eine `.env.staging` oder
+# `.env.preview` wäre beim nächsten `git add -A` verfolgt worden (nachgeprüft
+# mit `git check-ignore`). Eine Ausnahmeliste der erlaubten Namen ist
+# sicherer als eine Liste der verbotenen: Was neu dazukommt, ist zuerst
+# ignoriert. Massgebend bleibt die Geheimnisprüfung (scripts/security/
+# geheimnisse.ts), die jede verfolgte Umgebungsdatei ausser den Beispielen
+# meldet.
 .env
-.env*.local
-.env.production
+.env.*
+!.env.example
+!.env.*.example
 
 # vercel
 .vercel
@@ -40,6 +59,18 @@ prisma/*.db-journal
 
 # testing
 coverage/
+# Playwright: Spuren, Bildschirmfotos und Berichte entstehen bei jedem Lauf.
+# Sie gehören nicht ins Repository — eine Spur der Unterzeichnungsseite trägt
+# den rohen Zugangstoken aus dem Fragment und Namen aus dem Demobestand.
+test-results/
+playwright-report/
+blob-report/
+.playwright/
+# Hydrationsbefunde liegen bewusst **ausserhalb** von `test-results/`: Playwright
+# leert sein Ausgabeverzeichnis zu Beginn jedes Laufs, und genau dadurch war der
+# Beweis eines zeitweisen Fehlers beim nächsten Lauf wieder weg (gemessen in
+# Wave 9.1). Die Dateien sind redigiert, gehören aber trotzdem nicht ins Repo.
+hydrationsbefunde/
 
 # editors
 .idea/
@@ -49,15 +80,34 @@ coverage/
 # generated
 public/sitemap*.xml
 public/robots.txt
+# PDF.js-Laufzeitdateien — Ableitung aus node_modules, siehe scripts/copy-pdfjs-assets.ts
+public/pdfjs/
 
 # deployment
 # Protokolle der Auslieferung und von PM2 entstehen auf dem Server bei jedem
 # Lauf. Sie gehören zum Betrieb, nicht zum Quelltext — und ein Protokoll im
 # Repository wäre beim nächsten `git reset --hard` ohnehin weg.
-logs/
+#
+# Verankert (`/logs/`), nicht `logs/`: Das unverankerte Muster traf jedes
+# Verzeichnis dieses Namens — auch `src/app/api/communication/logs/`. Die
+# Route aus Wave 14 lag deshalb nur örtlich; im Repository fehlte sie, und
+# erst ein sauberer Bau aus `git archive` fiel darüber (Wave 25).
+/logs/
 # Gesicherte Builds und die Sperrdatei der Auslieferung.
 .deploy/
 # Zwischenstufen der Secret-Übertragung. Sie werden nach dem Zusammenführen
 # gelöscht; stehen sie hier, können sie nie versehentlich verfolgt werden.
 .env.incoming
 .env.tmp.*
+# Release-Artefakte (Production V2, scripts/release-artefakt.ts) — sie
+# enthalten `node_modules` und gehören in die CI-Ablage, nicht ins Repository.
+# Verankert an der Wurzel (2026-09-27): Ohne `/` traf die Regel jeden Ordner
+# namens `release` — auch `src/lib/release/` mit der Signatur des
+# Release-Ausführers, der so stillschweigend nicht mit eingecheckt wurde.
+/release/
+/RELEASE.json
+# Berichte von `npm run security:check` und `security:sbom`. Sie beschreiben
+# einen Stand, nicht den Code; in die Sicherheitszentrale kommen sie über
+# `--melden`, in die Freigabe als CI-Artefakt. Verankert, damit kein
+# gleichnamiges Quellverzeichnis mitgemeint ist.
+/security-reports/

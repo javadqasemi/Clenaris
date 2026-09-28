@@ -4,6 +4,8 @@ import Stripe from 'stripe';
 import { hasIntegration, serverEnv } from '@/lib/env';
 import { IntegrationError } from '@/lib/errors';
 
+import { CHECKOUT_PURPOSE } from './checkout-refs';
+
 /**
  * Zahlungsabwicklung.
  *
@@ -42,6 +44,7 @@ export function fromRappen(amountRappen: number): number {
 export interface CheckoutParams {
   invoiceId: string;
   invoiceNumber: string;
+  organizationId: string;
   amount: number;
   currency?: string;
   customerEmail: string;
@@ -51,6 +54,8 @@ export interface CheckoutParams {
   cancelUrl: string;
   description?: string;
 }
+
+export { CHECKOUT_PURPOSE, CHECKOUT_RETURN_PATHS } from './checkout-refs';
 
 /**
  * Stripe-Checkout-Session für eine Rechnung.
@@ -85,9 +90,17 @@ export async function createCheckoutSession(params: CheckoutParams): Promise<{
         quantity: 1,
       },
     ],
+    /**
+     * Referenzen, keine Geheimnisse. `invoiceId` und `organizationId` sind
+     * interne Kennungen; wer sie hat, kann damit ohne Sitzung oder Token
+     * nichts anfangen. Ein Capability-Token stünde hier falsch — er wäre ein
+     * Schlüssel in fremder Datenhaltung.
+     */
     metadata: {
+      purpose: CHECKOUT_PURPOSE,
       invoiceId: params.invoiceId,
       invoiceNumber: params.invoiceNumber,
+      organizationId: params.organizationId,
       method: params.method,
     },
     payment_intent_data: {
@@ -105,6 +118,57 @@ export async function createCheckoutSession(params: CheckoutParams): Promise<{
   }
 
   return { id: session.id, url: session.url };
+}
+
+export interface CheckoutRueckkehr {
+  invoiceId: string;
+  organizationId: string;
+  /** Was Stripe über den Zahlungsstand sagt — zur Anzeige, nicht zur Buchung. */
+  bezahlt: boolean;
+}
+
+/**
+ * Eine Checkout-Sitzung nach der Rückkehr serverseitig auflösen.
+ *
+ * **Was hier bewusst nicht passiert: buchen.** Der Zahlungsstand kommt aus
+ * dem Webhook, nicht aus einer Adresse, auf der ein Browser landet. Wer den
+ * Tab nach der Zahlung schliesst, sieht diese Seite nie — die Buchung darf
+ * nicht daran hängen. Umgekehrt beweist das blosse Aufrufen dieser Adresse
+ * nichts; `bezahlt` dient allein der Formulierung auf der Seite.
+ *
+ * Geprüft wird, dass die Sitzung tatsächlich von dieser Anwendung stammt
+ * (`purpose`) und eine Rechnungsreferenz trägt. Fehlt eines von beidem, gibt
+ * es keine Rückkehr — und damit auch keinen neuen Token.
+ */
+export async function resolveCheckoutSession(
+  sessionId: string,
+): Promise<CheckoutRueckkehr | null> {
+  // Stripe-Sitzungskennungen sehen so aus: `cs_test_…` bzw. `cs_live_…`.
+  // Ein offensichtlich fremdes Format wird nicht erst abgefragt.
+  if (!/^cs_[A-Za-z0-9_]{10,200}$/.test(sessionId)) return null;
+
+  let session: Stripe.Checkout.Session;
+  try {
+    session = await stripe().checkout.sessions.retrieve(sessionId);
+  } catch {
+    // Unbekannte Kennung, fremdes Konto, Stripe nicht erreichbar: In allen
+    // Fällen gibt es nichts aufzulösen, und keiner davon soll dem Aufrufer
+    // verraten, welcher es war.
+    return null;
+  }
+
+  const meta = session.metadata ?? {};
+  if (meta.purpose !== CHECKOUT_PURPOSE) return null;
+
+  const invoiceId = meta.invoiceId ?? session.client_reference_id ?? null;
+  const organizationId = meta.organizationId ?? null;
+  if (!invoiceId || !organizationId) return null;
+
+  return {
+    invoiceId,
+    organizationId,
+    bezahlt: session.payment_status === 'paid',
+  };
 }
 
 /** Stripe-Kunde anlegen oder bestehenden zurückgeben. */
@@ -158,7 +222,12 @@ export function constructWebhookEvent(payload: string, signature: string): Strip
     throw new IntegrationError('Stripe', 'Webhook-Secret ist nicht konfiguriert.');
   }
   try {
-    return stripe().webhooks.constructEvent(payload, signature, secret);
+    // Statisch statt über den API-Klienten (2026-09-27): Die Signaturprüfung
+    // braucht nur das Webhook-Geheimnis, keinen API-Schlüssel. Über
+    // `stripe()` scheiterte sie ohne `STRIPE_SECRET_KEY` — eine Installation,
+    // die Zahlungen nur empfängt, oder die Prüfreihe mit signierten
+    // Ereignissen, konnte den Endpunkt nie erreichen.
+    return Stripe.webhooks.constructEvent(payload, signature, secret);
   } catch (error) {
     throw new IntegrationError(
       'Stripe',

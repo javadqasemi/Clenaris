@@ -16,10 +16,11 @@ Schweizer DSG und DSGVO.
 | | |
 | --- | --- |
 | **Stack** | Next.js 15 (App Router) · React 19 · TypeScript · Tailwind · Prisma 6 · PostgreSQL 16+ |
-| **Umfang** | 88 Seiten · 96 API-Endpunkte · 77 Datenmodelle · ~50 000 Zeilen |
-| **Rollen** | ADMIN · MANAGER · EMPLOYEE · CUSTOMER |
+| **Umfang** | <!-- kennzahlen:umfang -->166 Seiten · 375 Route-Dateien mit 540 Endpunkten · 151 Datenmodelle · 85 Dienste · 99 Prüfdateien<!-- /kennzahlen:umfang --> (gezählt von `scripts/kennzahlen.ts`) |
+| **Rollen** | SUPER_ADMIN · ADMIN · MANAGER · EMPLOYEE · CUSTOMER |
 | **Sprache** | Deutsch (Schema und Endpunkte für FR/IT/EN vorbereitet) |
-| **Betrieb** | Vercel (Region `fra1`) · Supabase Postgres & Storage · Redis optional |
+| **Betrieb** | Eigener Server: Internet → Cloudflare → Cloud Firewall → Nginx → Next.js auf `127.0.0.1:3000`, ausgeliefert über GitHub Actions → SSH → PM2 · Postgres & Objektspeicher · Redis empfohlen |
+| **Prüfung** | 20 Testdateien gegen die laufende Anwendung über HTTP; die CI führt sie bei jedem Pull Request gegen `main` und bei jedem Push auf `main` aus — ausgeliefert wird nur aus `main`, nie aus einem Pull Request |
 
 ## Loslegen
 
@@ -29,23 +30,36 @@ Voraussetzungen: **Node.js ≥ 20.11** und ein erreichbarer **PostgreSQL 16+**.
 npm install
 cp .env.example .env          # DATABASE_URL und JWT_SECRET eintragen
 npm run db:deploy             # Migrationen anwenden
-npm run db:seed               # Schweizer Demodaten
+npm run db:seed:demo          # Konfiguration plus Schweizer Demodaten
 npm run dev                   # http://localhost:3000
 ```
 
-Der Seed ist idempotent — er lässt sich beliebig oft ausführen — und legt einen
-vollständigen Betrieb an: Firma, Öffnungszeiten, 33 Postleitzahlen im
-Einsatzgebiet, 6 Leistungen mit 12 Zusätzen und 6 Preisregeln, 7 Konten,
-5 Kundschaften mit Buchungen, Einsätzen und Rechnungen, dazu Website-Inhalte.
+Beide Seeds sind idempotent und lassen sich beliebig oft ausführen. Sie sind
+getrennt, weil sie verschiedene Zwecke haben:
+
+- **`db:seed`** legt den Betrieb an — Firma, Öffnungszeiten, 33 Postleitzahlen
+  im Einsatzgebiet, 6 Leistungen mit 12 Zusätzen und 6 Preisregeln, die Konten
+  und das Team, dazu die Website-Inhalte. Das ist auch der Seed für ein echtes
+  System.
+- **`db:seed:demo`** führt `db:seed` aus und legt obendrauf Geschäftsdaten an:
+  Kundschaft, Buchungen, Einsätze, Offerten, Rechnungen. Das ist der Seed für
+  die Entwicklung und für die Prüfungen. Auf einem System, das in Betrieb geht,
+  gehört er nicht ausgeführt.
 
 ### Demozugänge
 
 | Rolle | E-Mail | Passwort |
 | --- | --- | --- |
+| Systemverantwortung | `system@clenaris.ch` | `System#2026Clenaris` |
 | Administration | `admin@clenaris.ch` | `Admin#2026Clenaris` |
 | Betriebsleitung | `manager@clenaris.ch` | `Demo#2026Clenaris` |
 | Mitarbeitende | `anna.keller@clenaris.ch` | `Demo#2026Clenaris` |
 | Kundschaft | `nicole.wyss@example.ch` | `Demo#2026Clenaris` |
+
+Die beiden Verwaltungskonten folgen `SEED_ADMIN_EMAIL`/`SEED_ADMIN_PASSWORD`
+bzw. `SEED_SUPERADMIN_*`, sobald diese in der `.env` stehen; die Tabelle nennt
+die Rückfallwerte. Auf einem erreichbaren System müssen sie gesetzt sein —
+sonst bricht der Seed ab.
 
 Nach der Anmeldung führt die Rolle an den richtigen Ort: `/admin`, `/portal`
 oder `/konto`.
@@ -62,12 +76,24 @@ npm run format       # Prettier
 
 npm run db:migrate   # Migration erzeugen und anwenden (Entwicklung)
 npm run db:deploy    # Migrationen anwenden (Produktion)
-npm run db:seed      # Demodaten
+npm run db:seed      # nur die Konfiguration: Firma, Leistungen, Preise, Gebiet, Team
+npm run db:seed:demo # Konfiguration plus Demodaten — das, was die Prüfungen brauchen
 npm run db:studio    # Prisma Studio
-npm run db:reset     # Datenbank zurücksetzen und neu befüllen
+
+npm test             # ganze Prüfreihe gegen einen laufenden Server
+npm run test:api     # nur die Endpunkte
+npm run test:pages   # nur die ausgelieferten Seiten
 
 npm run docs         # OpenAPI, API-Referenz und ER-Diagramm neu erzeugen
 ```
+
+`npm run db:reset` steht zwar in `package.json`, ist hier aber tabu: Frühere
+Migrationen sind von Hand nachbearbeitet, ein Zurücksetzen verwirft sie. Der
+nicht zerstörende Weg steht in `CLAUDE.md`.
+
+Die Prüfungen fahren die **laufende Anwendung** über echtes HTTP an und
+brauchen deshalb eine gefüllte Datenbank *und* einen gestarteten Server —
+Einzelheiten in [`tests/README.md`](tests/README.md).
 
 `npm run docs` prüft dabei, ob Routenbaum und dokumentierte Endpunkte
 übereinstimmen, und bricht ab, wenn ein Endpunkt undokumentiert ist.
@@ -93,14 +119,18 @@ Teamzuteilung mit Überschneidungsprüfung und einem KI-Tourenvorschlag, der
 Fahrwege verkürzt (vorschlagen, nicht ausführen).
 
 **Mitarbeitendenportal** fürs Telefon: Tagesübersicht, Ein- und Ausstempeln
-mit Standort, Checkliste, Vorher-Nachher-Fotos, Materialverbrauch,
-Unterschrift der Kundschaft, Ferienanträge, Lohnabrechnungen.
+mit Standort, Checkliste, Zugangshinweise samt verschlüsseltem Alarmcode,
+Vorher-Nachher-Fotos, Materialverbrauch, Unterschrift der Kundschaft,
+Ferienanträge, Lohnabrechnungen (Anzeige — das Erzeugen fehlt noch, siehe
+Audit).
 
 **Kundenkonto** mit Terminen, Offerten, Rechnungen samt Online-Zahlung per
 TWINT oder Karte, Objekten, Nachrichten und Bewertungen.
 
-**Fakturierung** mit QR-Einzahlungsschein, Mahnläufen, Gutschriften,
-Teilzahlungen, Ausgaben, Lieferanten und Buchhaltungsexport.
+**Fakturierung** mit QR-Einzahlungsschein, Mahnläufen, Teilzahlungen,
+Ausgaben, Lieferanten und Buchhaltungsexport. *Gutschriften sind als Dienst
+vorhanden, aber noch ohne Endpunkt und ohne Schaltfläche — siehe
+[`docs/NEXT_DEVELOPMENT_AUDIT.md`](docs/NEXT_DEVELOPMENT_AUDIT.md), Abschnitt 6.*
 
 **Auswertungen** zu Umsatz, Kosten, Deckungsbeitrag, Auslastung und
 Cashflow-Prognose, als Excel und PDF exportierbar.
@@ -126,29 +156,35 @@ liefern Entwürfe; ausgeführt oder versendet wird nichts ohne Freigabe.
 ## Aufbau
 
 ```
+.github/workflows/         Prüfung bei jedem Pull Request, Auslieferung nur aus main
 prisma/
-  schema.prisma            77 Modelle, 39 Aufzählungstypen
-  migrations/              Erstmigration
-  seed.ts                  idempotente Schweizer Demodaten
+  schema.prisma            <!-- kennzahlen:schema -->151 Modelle, 119 Aufzählungstypen<!-- /kennzahlen:schema -->
+  migrations/              <!-- kennzahlen:migrationen -->51 Migrationen<!-- /kennzahlen:migrationen -->
+  seed.ts                  Konfiguration (idempotent)
+  seed-demo.ts             Demodaten obendrauf
 docs/
   ARCHITECTURE.md          Architekturentscheide
+  NEXT_DEVELOPMENT_AUDIT.md  Standortbestimmung und Entwicklungsphasen
+  PROJECT_IMPLEMENTATION_CHECKLIST.md  Feature-für-Feature-Prüfung
   DATABASE.md              ER-Diagramme (erzeugt)
   API.md                   Endpunktreferenz (erzeugt)
   openapi.yaml / .json     OpenAPI 3.1 (erzeugt)
   DEPLOYMENT.md            Inbetriebnahme und Betrieb
-scripts/                   Generatoren für Doku und Spezifikation
+  bi/                      Bauplan der Unternehmensführung
+scripts/                   Generatoren, Deployment, KPI-Backfill
 src/
   app/
     (public)/              Website
     (auth)/                Anmeldung, Registrierung, Passwort
     (app)/admin|portal|konto
-    api/                   83 Route-Dateien, 96 Endpunkte
+    api/                   <!-- kennzahlen:api -->375 Route-Dateien, 540 Endpunkte<!-- /kennzahlen:api -->
   components/
     ui/                    Basiskomponenten
     marketing/ app/ charts/
   features/                fachliche Oberflächen je Bereich
-  lib/                     Auth, Preis-Engine, PDF, Zahlungen, KI, Validierung
-  server/services/         Geschäftslogik (14 Dienste)
+  lib/                     Auth, Preis-Engine, PDF, Zahlungen, KI, Validierung, Verschlüsselung
+  server/services/         Geschäftslogik (47 Dienste)
+tests/                     HTTP-Prüfungen gegen die laufende Anwendung
 ```
 
 Ausführlich: **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**.
@@ -165,7 +201,8 @@ versendet.
 | `DATABASE_URL` | ja | PostgreSQL-Verbindung |
 | `DIRECT_URL` | – | Direktverbindung für Migrationen (bei Pooling) |
 | `JWT_SECRET` | ja | mindestens 32 Zeichen |
-| `NEXT_PUBLIC_APP_URL` | ja | Basisadresse für Magic Links und PDFs |
+| `APP_URL` | ja | Adresse dieser Instanz für Links in E-Mails, PDFs, Zahlungen, Signaturen und die Herkunftsprüfung — zur Laufzeit gelesen (älterer Name `NEXT_PUBLIC_APP_URL` gilt als Rückfall) |
+| `NEXT_PUBLIC_SITE_URL` | beim Bau | kanonische Domain der Website (Canonical, Sitemap, robots.txt), für jede Umgebung dieselbe |
 | `REDIS_URL` | – | Rate-Limits und Cache über Prozessgrenzen hinweg |
 | `NEXT_PUBLIC_SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` | – | Dateiablage |
 | `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` | – | Karten- und TWINT-Zahlung |
@@ -174,15 +211,21 @@ versendet.
 | `ANTHROPIC_API_KEY` | – | KI-Funktionen |
 | `NEXT_PUBLIC_GOOGLE_MAPS_API_KEY` | – | Navigation und Geokodierung |
 | `CRON_SECRET` | ja¹ | schützt die Scheduler-Endpunkte |
+| `ENCRYPTION_KEY` | ja¹ | verschlüsselt TOTP-Geheimnis, AHV-Nummer und Alarmcode (64 Hex-Zeichen) |
 
-¹ In der Produktion zwingend — ohne ihn weisen die Cron-Endpunkte jede Anfrage
-ab, auch die von Vercel.
+¹ In der Produktion zwingend. Ohne `CRON_SECRET` weisen die Scheduler-Endpunkte
+jede Anfrage ab. Ohne `ENCRYPTION_KEY` läuft die Anwendung zwar, leitet den
+Schlüssel aber aus `JWT_SECRET` ab — ein Wechsel von `JWT_SECRET` machte die
+verschlüsselten Felder dann unlesbar.
 
 Vollständige Liste mit Beispielwerten: `.env.example`.
 
 ## Datenschutz und Aufbewahrung
 
 - Passwörter als Argon2id-Hash (19 MiB, t=2, p=1 — OWASP-Empfehlung 2024).
+- TOTP-Geheimnis, AHV-Nummer und Alarmcode verschlüsselt (AES-256-GCM,
+  `src/lib/crypto.ts`) — gegen einen Datenbankabzug, nicht gegen einen
+  Angreifer im laufenden Prozess.
 - Sitzungen über httpOnly-Cookies; Refresh-Token rotieren, Wiederverwendung
   eines verbrauchten Tokens verwirft die ganze Familie.
 - Kartendaten erreichen die Applikation nie — die Zahlung läuft über Stripe
@@ -197,7 +240,8 @@ Vollständige Liste mit Beispielwerten: `.env.example`.
 ## Weiterführend
 
 - **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** — die Entscheide und ihre Begründung
+- **[docs/NEXT_DEVELOPMENT_AUDIT.md](docs/NEXT_DEVELOPMENT_AUDIT.md)** — wo die Plattform steht und was als Nächstes kommt
 - **[docs/DATABASE.md](docs/DATABASE.md)** — ER-Diagramme je Fachbereich
-- **[docs/API.md](docs/API.md)** — alle 96 Endpunkte mit Feldern und Regeln
+- **[docs/API.md](docs/API.md)** — <!-- kennzahlen:api-doku -->alle 540 Endpunkte<!-- /kennzahlen:api-doku --> mit Feldern und Regeln
 - **[docs/openapi.yaml](docs/openapi.yaml)** — maschinenlesbare Spezifikation
 - **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)** — Inbetriebnahme, Betrieb, Sicherung

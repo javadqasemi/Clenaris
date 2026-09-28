@@ -6,6 +6,7 @@ import { Download, PenLine, Trash2, Upload } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { api, ApiError } from '@/lib/api/client';
+import { csvZeile } from '@/lib/csv';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/input';
 import { Label } from '@/components/ui/form';
@@ -232,15 +233,17 @@ export function ServiceAreaExportButton({ areas }: { areas: ServiceAreaRow[] }) 
   const download = () => {
     const lines = [
       'PLZ;Ort;Kanton;Anfahrtspauschale;Fahrzeit;Aktiv',
+      // `csvZeile`: Anführungszeichen und Formelanfänge entschärft
+      // (2026-09-27) — vorher nur mit `;` verbunden, ohne jede Maskierung.
       ...areas.map((area) =>
-        [
+        csvZeile([
           area.postalCode,
           area.city,
           area.canton,
           area.travelFee.toFixed(2),
           String(area.travelMinutes),
           area.active ? 'ja' : 'nein',
-        ].join(';'),
+        ]),
       ),
     ];
     const blob = new Blob([`﻿${lines.join('\r\n')}`], { type: 'text/csv;charset=utf-8' });

@@ -50,7 +50,7 @@ export default async function PortalObjectivesPage({ searchParams }: { searchPar
               {statusBadge(selected.status)}
             </div>
             {selected.description ? <p className="mt-2 text-sm text-muted-foreground">{selected.description}</p> : null}
-            <Progress value={selected.progressPct} className="mt-3" />
+            <Progress value={selected.progressPct} className="mt-3" aria-label={`Fortschritt ${selected.title}`} />
             <p className="mt-1 text-xs text-muted-foreground">{selected.progressPct} % · {selected.endsOn ? `bis ${formatDate(selected.endsOn)}` : selected.quarter ? `Q${selected.quarter} ${selected.fiscalYear}` : ''}</p>
           </div>
           <KeyResultsPanel objectiveId={selected.id} keyResults={selected.keyResults as never} kpis={[]} canEdit={false} canCheckin={can(session.role, 'objective:checkin') && selected.ownerId === session.id} />
@@ -70,7 +70,7 @@ export default async function PortalObjectivesPage({ searchParams }: { searchPar
                         <p className="font-medium leading-snug">{o.title}</p>
                         {statusBadge(o.status)}
                       </div>
-                      <Progress value={o.progressPct} />
+                      <Progress value={o.progressPct} aria-label={`Fortschritt ${o.title}`} />
                       <p className="text-xs text-muted-foreground">{o.progressPct} % · {o._count.keyResults} Schlüsselergebnisse{o.endsOn ? ` · bis ${formatDate(o.endsOn)}` : ''}</p>
                     </Link>
                   </li>

@@ -8,6 +8,7 @@ import { Save } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { api, ApiError } from '@/lib/api/client';
+import { zuercherTagText } from '@/lib/zuerich';
 import { LEGAL_LABELS, updateLegalSchema, type UpdateLegalInput } from '@/lib/validation/navigation';
 import { Button } from '@/components/ui/button';
 import { Input, Textarea } from '@/components/ui/input';
@@ -77,7 +78,7 @@ export function LegalForm({
       body: document.body,
       effectiveFrom: document.effectiveFrom
         ? new Date(document.effectiveFrom).toISOString().slice(0, 10)
-        : new Date().toISOString().slice(0, 10),
+        : zuercherTagText(),
       newVersion: false,
     });
     setError(null);

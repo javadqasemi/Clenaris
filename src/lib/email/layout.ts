@@ -7,6 +7,8 @@
  * wahrgenommen werden. Dark-Mode-Hinweise via `color-scheme`.
  */
 
+import { laufzeitUrsprung } from '@/lib/laufzeit-konfiguration';
+
 export interface EmailBrand {
   companyName: string;
   logoUrl?: string | null;
@@ -22,7 +24,11 @@ export const defaultBrand: EmailBrand = {
   companyName: process.env.COMPANY_NAME ?? 'Clenaris Reinigungen GmbH',
   logoUrl: null,
   primaryColor: '#0B7285',
-  appUrl: process.env.NEXT_PUBLIC_APP_URL ?? 'https://clenaris.ch',
+  // Getter statt Wert: zur Laufzeit gelesen, wenn eine Mail entsteht (V2-1),
+  // nicht beim Laden des Moduls und nicht beim Bau.
+  get appUrl() {
+    return laufzeitUrsprung();
+  },
   address: `${process.env.COMPANY_STREET ?? 'Bahnhofstrasse 1'}, ${process.env.COMPANY_ZIP ?? '3011'} ${process.env.COMPANY_CITY ?? 'Bern'}`,
   phone: process.env.COMPANY_PHONE ?? '+41 31 000 00 00',
   email: process.env.COMPANY_EMAIL ?? 'info@clenaris.ch',

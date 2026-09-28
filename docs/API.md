@@ -5,7 +5,7 @@
 > Quelle, aus der sowohl diese Referenz als auch die Laufzeitvalidierung
 > stammen.
 
-Stand: 374 Endpunkte. Die maschinenlesbare Fassung liegt in
+Stand: 540 Endpunkte. Die maschinenlesbare Fassung liegt in
 [`openapi.yaml`](./openapi.yaml) bzw. [`openapi.json`](./openapi.json).
 
 ## Grundlagen
@@ -39,6 +39,7 @@ Familie.
 - [Benutzer & Rollen](#benutzer-rollen)
 - [Öffentlich](#öffentlich)
 - [Dateien](#dateien)
+- [Unterzeichnung](#unterzeichnung)
 - [CRM](#crm)
 - [Nachrichten](#nachrichten)
 - [Buchungen](#buchungen)
@@ -60,6 +61,8 @@ Familie.
 - [Führung: Risiko und Qualität](#führung-risiko-und-qualität)
 - [Führung: Wissen und Markt](#führung-wissen-und-markt)
 - [Führung: Berichte](#führung-berichte)
+- [Verträge](#verträge)
+- [Qualität](#qualität)
 
 ## Authentifizierung
 
@@ -109,8 +112,9 @@ Familie.
 **Abmelden.** Widerruft den Refresh-Token in der Datenbank und löscht beide Cookies. Ein blosses Löschen im Browser würde einen gestohlenen Token weiterleben lassen.
 
 - **Zugriff:** Öffentlich — keine Anmeldung nötig.
+- **Rate-Limit-Klasse:** `apiWrite`
 - **Erfolg:** 200
-- **Mögliche Fehler:** 422, 500
+- **Mögliche Fehler:** 422, 429, 500
 
 ### `POST /api/auth/refresh`
 
@@ -141,8 +145,9 @@ Familie.
 **Sitzungsstatus.** Beantwortet „bin ich angemeldet, und wohin gehöre ich?". Existiert, damit die öffentliche Website die Sitzung nicht im Layout lesen muss — ein Cookie-Zugriff dort würde jede Marketingseite dynamisch machen und jeden Besuch zu einer Datenbankabfrage. Die Antwort ist absichtlich mager und wird nicht zwischengespeichert.
 
 - **Zugriff:** Öffentlich — keine Anmeldung nötig.
+- **Rate-Limit-Klasse:** `apiRead`
 - **Erfolg:** 200
-- **Mögliche Fehler:** 500
+- **Mögliche Fehler:** 429, 500
 
 ### `POST /api/auth/password`
 
@@ -315,6 +320,14 @@ Familie.
 
 | Feld | Typ | Pflicht | Regeln |
 | --- | --- | --- | --- |
+| `leistungen` | object[] | – | min. 1 Einträge, max. 5 Einträge |
+| `leistungen[].serviceId` | string | ja | min. 1 Zeichen |
+| `leistungen[].squareMeters` | integer | – | ≥ 5, ≤ 5000 |
+| `leistungen[].rooms` | number | – | ≥ 0.5, ≤ 40 |
+| `leistungen[].bathrooms` | integer | – | ≥ 0, ≤ 20 |
+| `leistungen[].windows` | integer | – | ≥ 0, ≤ 500 |
+| `leistungen[].manualHours` | number | – | ≥ 0.5, ≤ 80 |
+| `leistungen[].extras` | object[] | – | max. 20 Einträge, Standard `[]` |
 | `squareMeters` | integer | – | ≥ 5, ≤ 5000 |
 | `rooms` | number | – | ≥ 0.5, ≤ 40 |
 | `bathrooms` | integer | – | ≥ 0, ≤ 20 |
@@ -342,9 +355,18 @@ Familie.
 - **Erfolg:** 200
 - **Mögliche Fehler:** 429, 500, 503
 
+### `GET /api/public/runtime-config`
+
+**Öffentliche Laufzeitkonfiguration.** Was der Browser über diese Umgebung wissen darf — zur Laufzeit gelesen, nicht beim Bau eingesetzt (V2-1): die Herkunft dieser Instanz (`appUrl`) und die Analyse-Kennungen in engem Format. Die Felder stehen einzeln in `PublicRuntimeConfigSchema`; nie die Umgebung als Ganzes, nichts aus der Anfrage. `Cache-Control: no-cache`. Eine ungültige Herkunft in der Umgebung ergibt 500 statt einer erfundenen Antwort.
+
+- **Zugriff:** Öffentlich — keine Anmeldung nötig.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 429, 500
+
 ### `GET /api/public/availability`
 
-**Freie Zeitfenster eines Tages.** Berücksichtigt Öffnungszeiten, Feiertage, bestehende Einsätze, Abwesenheiten und die benötigte Teamgrösse. Ein Fenster erscheint nur, wenn genügend Personal frei ist.
+**Freie Zeitfenster eines Tages (eine Leistung).** Berücksichtigt Einsatzzeiten (sonst Öffnungszeiten), Feiertage, bestehende Einsätze und unbestätigte Buchungen, Arbeitszeiten und Abwesenheiten sowie die benötigte Teamgrösse. Ohne `durationMin` rechnet der Server die Dauer mit derselben Funktion wie den Preis. Ein Fenster erscheint nur, wenn der ganze Einsatz ins Einsatzfenster passt.
 
 - **Zugriff:** Öffentlich — keine Anmeldung nötig.
 - **Rate-Limit-Klasse:** `apiRead`
@@ -360,6 +382,31 @@ Familie.
 | `durationMin` | integer | – | ≥ 30, ≤ 1440 |
 | `crewSize` | integer | – | ≥ 1, ≤ 20 |
 | `squareMeters` | integer | – | ≥ 5, ≤ 5000 |
+
+### `POST /api/public/availability`
+
+**Kalender für eine Auswahl aus einer oder mehreren Leistungen.** Nimmt die gewählten Leistungen samt Angaben, nicht eine Dauer: Dauer (Summe, nacheinander vom selben Team), Teamgrösse und Puffer rechnet der Server. Liefert je Tag, ob er ein buchbares Zeitfenster hat, und die Zeitfenster. Vorlauf und Horizont aus den Einstellungen (`bookingMinNoticeHours`, `bookingLeadDays`).
+
+- **Zugriff:** Öffentlich — keine Anmeldung nötig.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 422, 429, 500
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `leistungen` | object[] | ja | min. 1 Einträge, max. 5 Einträge |
+| `leistungen[].serviceId` | string | ja | min. 1 Zeichen |
+| `leistungen[].squareMeters` | integer | – | ≥ 5, ≤ 5000 |
+| `leistungen[].rooms` | number | – | ≥ 0.5, ≤ 40 |
+| `leistungen[].bathrooms` | integer | – | ≥ 0, ≤ 20 |
+| `leistungen[].windows` | integer | – | ≥ 0, ≤ 500 |
+| `leistungen[].manualHours` | number | – | ≥ 0.5, ≤ 80 |
+| `leistungen[].extras` | object[] | – | max. 20 Einträge, Standard `[]` |
+| `hasPets` | boolean | – | Standard `false` |
+| `von` | string | ja | – |
+| `tage` | integer | – | ≥ 1, ≤ 42, Standard `21` |
 
 ### `GET /api/public/service-areas/check`
 
@@ -389,7 +436,15 @@ Familie.
 
 | Feld | Typ | Pflicht | Regeln |
 | --- | --- | --- | --- |
-| `serviceId` | string | ja | min. 1 Zeichen |
+| `serviceId` | string | – | min. 1 Zeichen |
+| `leistungen` | object[] | – | min. 1 Einträge, max. 5 Einträge |
+| `leistungen[].serviceId` | string | ja | min. 1 Zeichen |
+| `leistungen[].squareMeters` | integer | – | ≥ 5, ≤ 5000 |
+| `leistungen[].rooms` | number | – | ≥ 0.5, ≤ 40 |
+| `leistungen[].bathrooms` | integer | – | ≥ 0, ≤ 20 |
+| `leistungen[].windows` | integer | – | ≥ 0, ≤ 500 |
+| `leistungen[].manualHours` | number | – | ≥ 0.5, ≤ 80 |
+| `leistungen[].extras` | object[] | – | max. 20 Einträge, Standard `[]` |
 | `extras` | object[] | – | max. 20 Einträge, Standard `[]` |
 | `extras[].extraId` | string | ja | min. 1 Zeichen |
 | `extras[].quantity` | integer | – | ≥ 1, ≤ 50, Standard `1` |
@@ -484,6 +539,36 @@ Familie.
 | `source` | string | – | max. 80 Zeichen |
 | `website` | union | ja | – |
 
+### `POST /api/public/newsletter/bestaetigen`
+
+**Newsletter-Anmeldung bestätigen.** Double-Opt-in mit dem Token aus der E-Mail (im Körper). Erst der Klick bestätigt, nicht der Seitenaufruf — Mailfilter rufen Links vorab auf. Unbekannter oder verbrauchter Token: 404.
+
+- **Zugriff:** Öffentlich — keine Anmeldung nötig.
+- **Rate-Limit-Klasse:** `publicTokenAction`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 422, 429, 500
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `token` | string | ja | min. 10 Zeichen, max. 100 Zeichen |
+
+### `POST /api/public/newsletter/abmelden`
+
+**Newsletter abbestellen.** Abmeldung mit dem Token aus der E-Mail (im Körper), ein Klick, ohne Anmeldung. Unbekannter Token: 404; eine zweite Abmeldung ändert nichts.
+
+- **Zugriff:** Öffentlich — keine Anmeldung nötig.
+- **Rate-Limit-Klasse:** `publicTokenAction`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 422, 429, 500
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `token` | string | ja | min. 10 Zeichen, max. 100 Zeichen |
+
 ### `POST /api/public/applications`
 
 **Auf eine Stelle bewerben.** Der Lebenslauf wird vorab direkt zu Supabase Storage geladen; hier kommt nur seine Adresse an.
@@ -507,7 +592,6 @@ Familie.
 | `availableFrom` | string | – | – |
 | `acceptPrivacy` | object | ja | – |
 | `website` | union | ja | – |
-| `cvUrl` | string | – | max. 2000 Zeichen |
 
 ### `POST /api/public/ai/chat`
 
@@ -559,10 +643,10 @@ Familie.
 
 ### `POST /api/public/quotes/{token}/respond`
 
-**Offerte annehmen oder ablehnen.** Bei Annahme werden Unterschrift, Name, IP und Zeitpunkt festgehalten — das ist der Nachweis des Vertragsschlusses.
+**Offerte annehmen oder ablehnen.** `REJECT` entscheidet sofort und endgültig. `ACCEPT` entscheidet nicht selbst (Gate 4C): Es legt den Unterzeichnungsvorgang an — unveränderlicher Snapshot der Offerte, SHA-256 (Hash A) — und antwortet mit `requiresSignature: true` und `signatureUrl` (`/signieren#t=…`, Token nur im Fragment). Erst der Abschluss des Vorgangs (Zustimmung, gezeichnete oder getippte Unterschrift, Protokoll) setzt die Offerte auf ACCEPTED. Ein bereits begonnener Vorgang wird fortgesetzt, nicht verdoppelt. Gezählt je Link (`publicTokenAction`).
 
 - **Zugriff:** Öffentlich — keine Anmeldung nötig.
-- **Rate-Limit-Klasse:** `apiWrite`
+- **Rate-Limit-Klasse:** `publicTokenAction`
 - **Erfolg:** 200
 - **Mögliche Fehler:** 400, 404, 422, 429, 500
 
@@ -577,8 +661,6 @@ Familie.
 | Feld | Typ | Pflicht | Regeln |
 | --- | --- | --- | --- |
 | `decision` | string | ja | `ACCEPT` \| `REJECT` |
-| `signatureDataUrl` | string | – | max. 500000 Zeichen |
-| `signatureName` | string | – | max. 120 Zeichen |
 | `reason` | string | – | max. 1000 Zeichen |
 
 ### `GET /api/public/invoices/{token}/pdf`
@@ -651,7 +733,6 @@ Familie.
 | `rooms` | number | – | ≥ 0.5, ≤ 100 |
 | `frequency` | string | – | `ONCE` \| `WEEKLY` \| `BIWEEKLY` \| `MONTHLY` \| `QUARTERLY` \| `SEMIANNUAL` \| `ANNUAL` \| `CUSTOM`, Standard `"ONCE"` |
 | `preferredDate` | string | – | – |
-| `fileIds` | string[] | – | max. 10 Einträge, Standard `[]` |
 
 ## Dateien
 
@@ -674,9 +755,25 @@ Familie.
 | `sizeBytes` | integer | ja | ≥ 1, ≤ 1073741824 |
 | `scopeId` | string | – | max. 60 Zeichen |
 
+### `POST /api/files/finalize`
+
+**Upload abschliessen und prüfen.** Erst dieser Aufruf macht aus abgelegten Bytes eine Datei, mit der die Anwendung arbeitet. Der Server liest das gespeicherte Objekt zurück, prüft die tatsächliche Grösse, die Signatur der ersten Bytes und den angemeldeten Typ gegen das Upload-Profil des Tickets, bildet den SHA-256 und legt danach das FileAsset an. Ohne diesen Schritt trägt die Ablage keine Prüfsumme und lässt sich weder abrufen noch verknüpfen. Wiederholbar: Ein zweiter Aufruf liefert dasselbe Asset, nicht ein zweites.
+
+- **Zugriff:** Öffentlich — keine Anmeldung nötig.
+- **Rate-Limit-Klasse:** `fileTransfer`
+- **Erfolg:** 201
+- **Mögliche Fehler:** 400, 409, 422, 429, 500
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `ticketId` | string | ja | min. 1 Zeichen, max. 60 Zeichen |
+| `filename` | string | ja | min. 1 Zeichen, max. 255 Zeichen |
+
 ### `PUT /api/files/blob/{id}`
 
-**Datei an die Upload-Adresse schreiben.** Gegenstück zur signierten Adresse von Supabase, wenn kein externer Speicher eingerichtet ist. Der Körper sind die rohen Bytes; die Adresse ist die Berechtigung — sie entsteht in `/api/files/upload-url`, ist nicht erratbar, genau einmal und nur zwei Stunden lang beschreibbar. Höchstens 256 MB — die allgemeine Grenze von 1 GB gilt für den externen Speicher; die Datenbank-Rückfallebene trägt nicht mehr.
+**Datei an die Upload-Adresse schreiben.** Gegenstück zur signierten Adresse von Supabase, wenn kein externer Speicher eingerichtet ist. Der Körper sind die rohen Bytes. Die Schreibberechtigung ist das Upload-Ticket aus /api/files/upload-url: serverseitig für genau einen Pfad ausgestellt, genau einmal und nur zwei Stunden lang beschreibbar. Die Bytes werden schon hier gegen das Profil des Tickets geprüft; angenommen ist die Datei damit noch nicht — das entscheidet /api/files/finalize. Höchstens 256 MB: Die allgemeine Grenze von 1 GB gilt für den externen Speicher, die Datenbank-Rückfallebene trägt nicht mehr.
 
 - **Zugriff:** Öffentlich — keine Anmeldung nötig.
 - **Erfolg:** 200
@@ -690,7 +787,7 @@ Familie.
 
 ### `GET /api/files/blob/{id}`
 
-**Datei ausliefern.** Öffentlich lesbar wie ein öffentlicher Bucket: Profilbilder und Einsatzfotos erscheinen in E-Mails und PDF-Berichten ohne Sitzung. Der Schutz ist die nicht erratbare Adresse.
+**Datei ausliefern.** Die Kennung allein öffnet nichts. Ausgeliefert wird nur, was ein FileAsset hat: ist es öffentlich (Teambild, Galerie, Kopfbild), ohne Anmeldung und mit langem Zwischenspeicher; sonst nur mit Sitzung, gleicher Organisation, passender Rolle und tatsächlicher Beziehung zum Geschäftsobjekt, und ohne öffentliche Cachebarkeit. Alles andere ist 404 — auch eine vorhandene Datei, die dieser Person nicht gehört. Extern geteilte Dokumente laufen nicht über diesen Weg, sondern über ihre Fachroute mit PublicAccessToken.
 
 - **Zugriff:** Öffentlich — keine Anmeldung nötig.
 - **Erfolg:** 200 (`application/octet-stream`)
@@ -701,6 +798,271 @@ Familie.
 | Feld | Typ | Pflicht | Regeln |
 | --- | --- | --- | --- |
 | `id` | string | ja | min. 1 Zeichen |
+
+## Unterzeichnung
+
+### `POST /api/public/signatures/exchange`
+
+**Zugangstoken gegen Sitzung tauschen.** Der einzige Aufruf, der den rohen Token trägt — im Körper, nie im Pfad oder in der Abfrage, damit er in keinem Zugriffsprotokoll steht. Die Seite `/signieren` liest ihn aus dem URL-Fragment, entfernt ihn aus der Adresse und ruft hierher. Antwort: die nicht geheime Kennung des Vorgangs und der Bereich (`sign` oder `result`); die Sitzung liegt im Cookie `clenaris_sig` (HttpOnly, 60 Minuten). Unbekannte, abgelaufene und widerrufene Tokens antworten gleich (404).
+
+- **Zugriff:** Öffentlich — keine Anmeldung nötig.
+- **Rate-Limit-Klasse:** `signatureExchange`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 404, 422, 429, 500
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `token` | string | ja | – |
+
+### `GET /api/public/signatures/{publicId}`
+
+**Stand des Vorgangs für die unterzeichnende Person.** Titel, Modus, Prüfstufe, Ablauf, Zustimmungstext (serverseitig, versioniert) und der eigene Stand. E-Mail und Mobilnummer nur verschleiert. Ohne gültige Sitzung 404.
+
+- **Zugriff:** Öffentlich — keine Anmeldung nötig.
+- **Rate-Limit-Klasse:** `publicTokenRead`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 404, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `publicId` | string | ja | – |
+
+### `GET /api/public/signatures/{publicId}/document`
+
+**Das zu unterzeichnende Original.** Die Bytes der gebundenen Fassung für den Viewer, `inline`, nie zwischengespeichert. Ereignis `DOCUMENT_VIEWED` einmal je Sitzung.
+
+- **Zugriff:** Öffentlich — keine Anmeldung nötig.
+- **Rate-Limit-Klasse:** `publicTokenRead`
+- **Erfolg:** 200 (`application/pdf`)
+- **Mögliche Fehler:** 400, 404, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `publicId` | string | ja | – |
+
+### `POST /api/public/signatures/{publicId}/otp/request`
+
+**Bestätigungscode anfordern.** Nur bei Prüfstufe mit Code (422 sonst). Sechs Ziffern aus dem CSPRNG, zehn Minuten gültig, fünf Versuche, sechzig Sekunden Sperre bis zum nächsten Versand; ein neuer Code entwertet alle offenen. Gespeichert wird nur ein Argon2id-Hash über ein HMAC des Codes. Das Limit zählt je Vorgang, nicht je Adresse.
+
+- **Zugriff:** Öffentlich — keine Anmeldung nötig.
+- **Rate-Limit-Klasse:** `otpRequest`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `publicId` | string | ja | – |
+
+### `POST /api/public/signatures/{publicId}/otp/verify`
+
+**Bestätigungscode prüfen.** Der Versuch wird gezählt, bevor der Code verglichen wird — ein abgebrochener Vergleich schenkt keinen Versuch. Nach dem fünften Fehlversuch ist der Code verbraucht (422). Einmalig: Ein bestätigter Code gilt nie ein zweites Mal.
+
+- **Zugriff:** Öffentlich — keine Anmeldung nötig.
+- **Rate-Limit-Klasse:** `otpVerify`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `publicId` | string | ja | – |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `code` | string | ja | – |
+
+### `POST /api/public/signatures/{publicId}/complete`
+
+**Verbindlich unterzeichnen.** Die eine Handlung. Der Server prüft Sitzung, Code (falls verlangt), Zustimmung, die PNG-Bytes der gezeichneten Unterschrift und rechnet die Prüfsumme des Originals **aus den gespeicherten Bytes** neu — stimmt sie nicht mehr, entsteht `INTEGRITY_FAILED` und die Unterzeichnung wird verweigert (422). Text und Fassung der Zustimmung bestimmt der Server. Haben alle unterzeichnet, beginnt der Abschluss (`FINALIZING`): signiertes Dokument (nur EMBEDDED_VISUAL), Signaturprotokoll, `COMPLETED`, Ergebnislinks per E-Mail.
+
+- **Zugriff:** Öffentlich — keine Anmeldung nötig.
+- **Rate-Limit-Klasse:** `signatureFinalize`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `publicId` | string | ja | – |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `accepted` | object | ja | – |
+| `method` | string | ja | `DRAWN` \| `TYPED` |
+| `name` | string | ja | min. 2 Zeichen, max. 120 Zeichen |
+| `imageDataUrl` | string | – | max. 700000 Zeichen |
+
+### `POST /api/public/signatures/{publicId}/decline`
+
+**Unterzeichnung ablehnen.** Beendet den Vorgang für alle (`DECLINED`), widerruft die Links und meldet es der Verwaltung.
+
+- **Zugriff:** Öffentlich — keine Anmeldung nötig.
+- **Rate-Limit-Klasse:** `signatureFinalize`
+- **Erfolg:** 204
+- **Mögliche Fehler:** 400, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `publicId` | string | ja | – |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `reason` | string | – | max. 500 Zeichen |
+
+### `GET /api/public/signatures/{publicId}/result`
+
+**Ergebnis nach Abschluss.** Mit der Ergebnis-Sitzung (eigener Zweck `SIGNATURE_RESULT_VIEW`, dreissig Tage): Titel, Modus, die drei Prüfsummen und welche Dateien vorliegen. Ein Unterzeichnungslink öffnet kein Ergebnis und umgekehrt.
+
+- **Zugriff:** Öffentlich — keine Anmeldung nötig.
+- **Rate-Limit-Klasse:** `publicTokenRead`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 404, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `publicId` | string | ja | – |
+
+### `GET /api/public/signatures/{publicId}/result/{artifact}`
+
+**Original, signiertes Dokument oder Signaturprotokoll.** `original` (A), `signed` (B, nur EMBEDDED_VISUAL) oder `evidence` (C). Nie zwischengespeichert, kein Referrer. Das Protokoll als Anhang, die Dokumente `inline`.
+
+- **Zugriff:** Öffentlich — keine Anmeldung nötig.
+- **Rate-Limit-Klasse:** `publicTokenRead`
+- **Erfolg:** 200 (`application/pdf`)
+- **Mögliche Fehler:** 400, 404, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `publicId` | string | ja | – |
+| `artifact` | string | ja | `original` \| `signed` \| `evidence` |
+
+### `GET /api/handoff`
+
+**Läuft auf diesem Gerät eine Kundenabnahme?.** Einer von zwei Endpunkten, die während einer Geräteübergabe antworten (`allowDuringHandoff`) — sonst gäbe es keinen Weg zurück in den Mitarbeiterbereich. Liefert Einsatznummer, Zeitpunkte und den Zustand des Vorgangs, keine Rapport- oder Kundendaten.
+
+- **Zugriff:** Erfordert eine angemeldete Sitzung.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 401, 429, 500
+
+### `POST /api/handoff/unlock`
+
+**Gerät nach der Kundenabnahme wieder übernehmen.** Bestätigung mit dem Passwort des bereits angemeldeten Kontos — keine Anmeldung: Die Sitzung und ihre Rotationsfamilie bleiben dieselben, nur die Sperre fällt. Das Kontingent zählt je Übergabe, damit falsches Tippen niemanden auf seinen übrigen Geräten aussperrt.
+
+- **Zugriff:** Erfordert eine angemeldete Sitzung.
+- **Rate-Limit-Klasse:** `handoffUnlock`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 422, 429, 500
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `password` | string | ja | min. 1 Zeichen, max. 200 Zeichen |
+
+### `GET /api/signatures/{id}`
+
+**Vorgang für die Verwaltung.** Mit Teilnehmenden, dem vollständigen Ereignisprotokoll und den drei Artefakten. Sichtbarkeit des Dokuments gilt auch hier.
+
+- **Zugriff:** Erfordert die Berechtigung: `signature:read`.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+### `GET /api/signatures/{id}/integrity`
+
+**Prüfsummen nachrechnen.** A, B und C werden aus den tatsächlich gespeicherten Bytes neu gebildet und mit den festgehaltenen Werten verglichen — die Antwort sagt je Datei `ok`, `abweichend` oder `fehlt`.
+
+- **Zugriff:** Erfordert die Berechtigung: `signature:read`.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+### `GET /api/signatures/{id}/artifacts/{artifact}`
+
+**Artefakt für die Verwaltung.** `original` (A), `signed` (B) oder `evidence` (C) mit Sitzung und `signature:read`; bei Vorgängen zu Offerten zusätzlich `quote:read`. Der Abruf steht im Prüfprotokoll. Nie zwischengespeichert.
+
+- **Zugriff:** Erfordert die Berechtigung: `signature:read`.
+- **Rate-Limit-Klasse:** `fileDownload`
+- **Erfolg:** 200 (`application/pdf`)
+- **Mögliche Fehler:** 400, 401, 403, 404, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+| `artifact` | string | ja | `original` \| `signed` \| `evidence` |
+
+### `POST /api/signatures/{id}/send`
+
+**Links (erneut) versenden.** Stellt je Person einen frischen Zugangstoken aus und widerruft die alten. Der rohe Token steht nur in der E-Mail, als Fragment der Adresse `/signieren#t=…`. Nicht bei beendeten Vorgängen (422).
+
+- **Zugriff:** Erfordert die Berechtigung: `signature:create`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+### `POST /api/signatures/{id}/cancel`
+
+**Vorgang abbrechen.** Widerruft alle Links und offenen Codes. Ein abgeschlossener Vorgang lässt sich nicht abbrechen (422) — seine Beweise bleiben.
+
+- **Zugriff:** Erfordert die Berechtigung: `signature:cancel`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `reason` | string | – | max. 500 Zeichen |
 
 ## CRM
 
@@ -1243,7 +1605,14 @@ Familie.
 - **Zugriff:** Erfordert die Berechtigung: `property:read`.
 - **Rate-Limit-Klasse:** `apiRead`
 - **Erfolg:** 200
-- **Mögliche Fehler:** 401, 403, 429, 500
+- **Mögliche Fehler:** 400, 401, 403, 429, 500
+
+**Query-Parameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `customerId` | string | – | min. 1 Zeichen |
+| `q` | string | – | max. 120 Zeichen |
 
 ### `POST /api/properties`
 
@@ -1252,7 +1621,12 @@ Familie.
 - **Zugriff:** Erfordert die Berechtigung: `property:create`.
 - **Rate-Limit-Klasse:** `apiWrite`
 - **Erfolg:** 201
-- **Mögliche Fehler:** 401, 403, 409, 422, 429, 500
+- **Mögliche Fehler:** 400, 401, 403, 409, 422, 429, 500
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
 
 ### `GET /api/properties/{id}`
 
@@ -1283,6 +1657,41 @@ Familie.
 | Feld | Typ | Pflicht | Regeln |
 | --- | --- | --- | --- |
 | `id` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `label` | string | – | min. 2 Zeichen, max. 80 Zeichen |
+| `kind` | string | – | `APARTMENT` \| `HOUSE` \| `OFFICE` \| `COMMERCIAL` \| `INDUSTRIAL` \| `CONSTRUCTION_SITE` \| `PRACTICE` \| `RESTAURANT` \| `SCHOOL` \| `OTHER`, Standard `"APARTMENT"` |
+| `addressId` | string | – | min. 1 Zeichen |
+| `address` | object | – | – |
+| `address.label` | string | – | max. 60 Zeichen |
+| `address.street` | string | ja | min. 2 Zeichen, max. 120 Zeichen |
+| `address.streetNo` | string | – | max. 20 Zeichen |
+| `address.addition` | string | – | max. 120 Zeichen |
+| `address.postalCode` | string | ja | – |
+| `address.city` | string | ja | min. 2 Zeichen, max. 80 Zeichen |
+| `address.canton` | string | – | Standard `"BE"` |
+| `address.country` | string | – | Standard `"CH"` |
+| `address.lat` | number | – | ≥ -90, ≤ 90 |
+| `address.lng` | number | – | ≥ -180, ≤ 180 |
+| `address.placeId` | string | – | max. 200 Zeichen |
+| `address.accessNote` | string | – | max. 500 Zeichen |
+| `squareMeters` | integer | – | ≥ 5, ≤ 50000 |
+| `rooms` | number | – | ≥ 0.5, ≤ 200 |
+| `bathrooms` | integer | – | ≥ 0, ≤ 50 |
+| `windows` | integer | – | ≥ 0, ≤ 2000 |
+| `floor` | integer | – | ≥ -5, ≤ 60 |
+| `hasBalcony` | boolean | – | Standard `false` |
+| `hasGarden` | boolean | – | Standard `false` |
+| `hasPets` | boolean | – | Standard `false` |
+| `hasElevator` | boolean | – | Standard `false` |
+| `parkingInfo` | string | – | max. 300 Zeichen |
+| `keyLocation` | string | – | max. 300 Zeichen |
+| `alarmCode` | string | – | max. 60 Zeichen |
+| `accessNote` | string | – | max. 1000 Zeichen |
+| `notes` | string | – | max. 2000 Zeichen |
 
 ### `GET /api/customers/{id}/merge`
 
@@ -1586,7 +1995,90 @@ Familie.
 - **Zugriff:** Erfordert die Berechtigung: `booking:read`.
 - **Rate-Limit-Klasse:** `apiRead`
 - **Erfolg:** 200
-- **Mögliche Fehler:** 401, 403, 429, 500
+- **Mögliche Fehler:** 400, 401, 403, 429, 500
+
+**Query-Parameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `page` | integer | – | ≥ 1, Standard `1` |
+| `pageSize` | integer | – | ≥ 1, ≤ 100, Standard `20` |
+| `q` | string | – | max. 120 Zeichen |
+| `sort` | string | – | max. 60 Zeichen |
+| `order` | string | – | `asc` \| `desc`, Standard `"desc"` |
+| `status` | string | – | `PENDING` \| `CONFIRMED` \| `IN_PROGRESS` \| `COMPLETED` \| `CANCELLED` \| `NO_SHOW` |
+| `customerId` | string | – | min. 1 Zeichen |
+| `from` | string | – | date-time |
+| `to` | string | – | date-time |
+
+### `POST /api/bookings`
+
+**Buchung im Büro erfassen.** Telefonisch, am Schalter oder aus einer E-Mail. Derselbe Dienst wie die öffentliche Buchung — Preis, Dauer, Mannschaft und Mehrwertsteuer rechnet ausschliesslich der Server. Unterschiede: die Kundschaft kommt als customerId statt über die Adresse, die Herkunft ist wählbar (eine telefonische Buchung als „Website" zu verbuchen verfälscht jede Auswertung), eine interne Notiz ist möglich, und die Kapazitätsprüfung lässt sich ausdrücklich übergehen — protokolliert. Die Meldung „Neue Online-Buchung" ans Büro entfällt, die Bestätigung an die Kundschaft nicht.
+
+- **Zugriff:** Erfordert die Berechtigung: `booking:create`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 201
+- **Mögliche Fehler:** 400, 401, 403, 409, 422, 429, 500
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `serviceId` | string | – | min. 1 Zeichen |
+| `leistungen` | object[] | – | min. 1 Einträge, max. 5 Einträge |
+| `leistungen[].serviceId` | string | ja | min. 1 Zeichen |
+| `leistungen[].squareMeters` | integer | – | ≥ 5, ≤ 5000 |
+| `leistungen[].rooms` | number | – | ≥ 0.5, ≤ 40 |
+| `leistungen[].bathrooms` | integer | – | ≥ 0, ≤ 20 |
+| `leistungen[].windows` | integer | – | ≥ 0, ≤ 500 |
+| `leistungen[].manualHours` | number | – | ≥ 0.5, ≤ 80 |
+| `leistungen[].extras` | object[] | – | max. 20 Einträge, Standard `[]` |
+| `extras` | object[] | – | max. 20 Einträge, Standard `[]` |
+| `extras[].extraId` | string | ja | min. 1 Zeichen |
+| `extras[].quantity` | integer | – | ≥ 1, ≤ 50, Standard `1` |
+| `frequency` | string | – | `ONCE` \| `WEEKLY` \| `BIWEEKLY` \| `MONTHLY` \| `QUARTERLY` \| `SEMIANNUAL` \| `ANNUAL` \| `CUSTOM`, Standard `"ONCE"` |
+| `scheduledStart` | union | ja | – |
+| `manualHours` | number | – | ≥ 0.5, ≤ 80 |
+| `urgent` | boolean | – | Standard `false` |
+| `propertyKind` | string | – | `APARTMENT` \| `HOUSE` \| `OFFICE` \| `COMMERCIAL` \| `INDUSTRIAL` \| `CONSTRUCTION_SITE` \| `PRACTICE` \| `RESTAURANT` \| `SCHOOL` \| `OTHER`, Standard `"APARTMENT"` |
+| `squareMeters` | integer | – | ≥ 5, ≤ 5000 |
+| `rooms` | number | – | ≥ 0.5, ≤ 40 |
+| `bathrooms` | integer | – | ≥ 0, ≤ 20 |
+| `windows` | integer | – | ≥ 0, ≤ 500 |
+| `hasPets` | boolean | – | Standard `false` |
+| `propertyId` | string | – | min. 1 Zeichen |
+| `firstName` | string | – | min. 2 Zeichen, max. 80 Zeichen |
+| `lastName` | string | – | min. 2 Zeichen, max. 80 Zeichen |
+| `email` | string | – | email, min. 1 Zeichen, max. 255 Zeichen |
+| `phone` | string | – | – |
+| `companyName` | string | – | max. 120 Zeichen |
+| `addressId` | string | – | min. 1 Zeichen |
+| `address` | object | – | – |
+| `address.label` | string | – | max. 60 Zeichen |
+| `address.street` | string | ja | min. 2 Zeichen, max. 120 Zeichen |
+| `address.streetNo` | string | – | max. 20 Zeichen |
+| `address.addition` | string | – | max. 120 Zeichen |
+| `address.postalCode` | string | ja | – |
+| `address.city` | string | ja | min. 2 Zeichen, max. 80 Zeichen |
+| `address.canton` | string | – | Standard `"BE"` |
+| `address.country` | string | – | Standard `"CH"` |
+| `address.lat` | number | – | ≥ -90, ≤ 90 |
+| `address.lng` | number | – | ≥ -180, ≤ 180 |
+| `address.placeId` | string | – | max. 200 Zeichen |
+| `address.accessNote` | string | – | max. 500 Zeichen |
+| `customerNote` | string | – | max. 2000 Zeichen |
+| `accessNote` | string | – | max. 500 Zeichen |
+| `couponCode` | string | – | max. 40 Zeichen |
+| `fileIds` | string[] | – | max. 10 Einträge, Standard `[]` |
+| `recurrence` | object | – | – |
+| `recurrence.interval` | integer | – | ≥ 1, ≤ 12, Standard `1` |
+| `recurrence.weekdays` | integer[] | – | max. 7 Einträge, Standard `[]` |
+| `recurrence.endDate` | union | – | – |
+| `recurrence.count` | integer | – | ≥ 2, ≤ 104 |
+| `customerId` | string | ja | min. 1 Zeichen |
+| `source` | string | – | `PHONE` \| `EMAIL` \| `WALK_IN` \| `REFERRAL` \| `PARTNER` \| `WEBSITE` \| `OTHER`, Standard `"PHONE"` |
+| `internalNote` | string | – | max. 4000 Zeichen |
+| `overrideCapacity` | boolean | – | Standard `false` |
 
 ### `GET /api/bookings/{id}`
 
@@ -1687,6 +2179,7 @@ Familie.
 | `customerNote` | string | – | max. 2000 Zeichen |
 | `accessNote` | string | – | max. 500 Zeichen |
 | `changeReason` | string | – | max. 500 Zeichen |
+| `overrideCapacity` | boolean | – | – |
 
 ## Offerten
 
@@ -1879,6 +2372,28 @@ Familie.
 | --- | --- | --- | --- |
 | `id` | string | ja | min. 1 Zeichen |
 
+### `POST /api/quotes/{id}/respond`
+
+**Offerte im Kundenkonto annehmen oder ablehnen.** Der angemeldete Weg neben dem öffentlichen Link. Wer eine Sitzung hat und die Offerte besitzt, braucht keine Capability; die Eigentümerprüfung steht in der where-Klausel. `REJECT` ist die direkte, atomare Ablehnung. `ACCEPT` startet denselben Unterzeichnungsvorgang wie der öffentliche Weg, setzt direkt das teilnehmergebundene Signatur-Cookie und antwortet mit `signatureUrl` (`/signieren/s/<publicId>`, kein Token). Ablehnung und Abschluss der Unterzeichnung sind gegeneinander race-safe: genau eine terminale Entscheidung.
+
+- **Zugriff:** Erfordert die Berechtigung: `quote:respond_own`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `decision` | string | ja | `ACCEPT` \| `REJECT` |
+| `reason` | string | – | max. 1000 Zeichen |
+
 ### `DELETE /api/quotes/{id}`
 
 **Offerte in den Papierkorb legen.** Eine angenommene Offerte ist eine vertragliche Zusage und bleibt erhalten. Weich gelöscht: der Datensatz verschwindet aus allen Listen, bleibt aber wiederherstellbar. Verknüpfte Datensätze werden nicht mitgelöscht.
@@ -1909,7 +2424,310 @@ Familie.
 | --- | --- | --- | --- |
 | `id` | string | ja | min. 1 Zeichen |
 
+### `GET /api/site-visits`
+
+**Besichtigungen.** Optional je Status, Anfrage oder Kundschaft.
+
+- **Zugriff:** Erfordert die Berechtigung: `quote:read`.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 429, 500
+
+**Query-Parameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `status` | string | – | `PLANNED` \| `DONE` \| `CANCELLED` |
+| `leadId` | string | – | min. 1 Zeichen, max. 64 Zeichen |
+| `customerId` | string | – | min. 1 Zeichen, max. 64 Zeichen |
+
+### `POST /api/site-visits`
+
+**Besichtigung planen.** Zu einer Anfrage oder Kundschaft; alle Bezüge müssen der Organisation gehören (404/422).
+
+- **Zugriff:** Erfordert die Berechtigung: `quote:create`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 422, 429, 500
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `leadId` | string | – | min. 1 Zeichen, max. 64 Zeichen |
+| `customerId` | string | – | min. 1 Zeichen, max. 64 Zeichen |
+| `propertyId` | string | – | min. 1 Zeichen, max. 64 Zeichen |
+| `scheduledAt` | string | ja | date-time |
+| `assessorId` | string | – | min. 1 Zeichen, max. 64 Zeichen |
+| `propertyKind` | string | – | `APARTMENT` \| `HOUSE` \| `OFFICE` \| `COMMERCIAL` \| `INDUSTRIAL` \| `CONSTRUCTION_SITE` \| `PRACTICE` \| `RESTAURANT` \| `SCHOOL` \| `OTHER`, Standard `"OFFICE"` |
+| `hasPets` | boolean | – | Standard `false` |
+| `accessNotes` | string | – | max. 2000 Zeichen |
+| `street` | string | – | max. 160 Zeichen |
+| `postalCode` | string | – | – |
+| `city` | string | – | max. 80 Zeichen |
+
+### `GET /api/site-visits/{id}`
+
+**Eine Besichtigung.** Mit Flächen, Leistungen und der letzten Berechnung.
+
+- **Zugriff:** Erfordert die Berechtigung: `quote:read`.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+### `PATCH /api/site-visits/{id}`
+
+**Besichtigung ändern.** Nicht mehr nach der Offerte (422); verwirft die gespeicherte Berechnung.
+
+- **Zugriff:** Erfordert die Berechtigung: `quote:update`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `scheduledAt` | string | – | date-time |
+| `assessorId` | string | – | min. 1 Zeichen, max. 64 Zeichen |
+| `propertyKind` | string | – | `APARTMENT` \| `HOUSE` \| `OFFICE` \| `COMMERCIAL` \| `INDUSTRIAL` \| `CONSTRUCTION_SITE` \| `PRACTICE` \| `RESTAURANT` \| `SCHOOL` \| `OTHER` |
+| `hasPets` | boolean | – | – |
+| `accessNotes` | string | – | max. 2000 Zeichen |
+| `findings` | string | – | max. 8000 Zeichen |
+| `street` | string | – | max. 160 Zeichen |
+| `postalCode` | string | – | – |
+| `city` | string | – | max. 80 Zeichen |
+
+### `PUT /api/site-visits/{id}/areas`
+
+**Flächen aufnehmen.** Als Ganzes; Leistungen aus dem aktiven Katalog, Zusatzleistungen nur die der Leistung. Kein Preisfeld.
+
+- **Zugriff:** Erfordert die Berechtigung: `quote:update`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `areas` | object[] | ja | min. 1 Einträge, max. 50 Einträge |
+| `areas[].label` | string | ja | min. 1 Zeichen, max. 120 Zeichen |
+| `areas[].serviceId` | string | ja | min. 1 Zeichen, max. 64 Zeichen |
+| `areas[].squareMeters` | integer | – | ≥ 1, ≤ 100000 |
+| `areas[].rooms` | number | – | ≥ 0.5, ≤ 500 |
+| `areas[].bathrooms` | integer | – | ≥ 0, ≤ 200 |
+| `areas[].windows` | integer | – | ≥ 0, ≤ 5000 |
+| `areas[].frequency` | string | – | `ONCE` \| `WEEKLY` \| `BIWEEKLY` \| `MONTHLY` \| `QUARTERLY` \| `SEMIANNUAL` \| `ANNUAL`, Standard `"ONCE"` |
+| `areas[].extras` | object[] | – | max. 30 Einträge, Standard `[]` |
+| `areas[].manualHours` | number | – | ≥ 0.25, ≤ 500 |
+| `areas[].note` | string | – | max. 1000 Zeichen |
+
+### `POST /api/site-visits/{id}/areas`
+
+**Eine Fläche anhängen.** Dieselben Prüfungen wie beim Setzen aller Flächen.
+
+- **Zugriff:** Erfordert die Berechtigung: `quote:update`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `label` | string | ja | min. 1 Zeichen, max. 120 Zeichen |
+| `serviceId` | string | ja | min. 1 Zeichen, max. 64 Zeichen |
+| `squareMeters` | integer | – | ≥ 1, ≤ 100000 |
+| `rooms` | number | – | ≥ 0.5, ≤ 500 |
+| `bathrooms` | integer | – | ≥ 0, ≤ 200 |
+| `windows` | integer | – | ≥ 0, ≤ 5000 |
+| `frequency` | string | – | `ONCE` \| `WEEKLY` \| `BIWEEKLY` \| `MONTHLY` \| `QUARTERLY` \| `SEMIANNUAL` \| `ANNUAL`, Standard `"ONCE"` |
+| `extras` | object[] | – | max. 30 Einträge, Standard `[]` |
+| `extras[].extraId` | string | ja | min. 1 Zeichen, max. 64 Zeichen |
+| `extras[].quantity` | integer | ja | ≥ 1, ≤ 100 |
+| `manualHours` | number | – | ≥ 0.25, ≤ 500 |
+| `note` | string | – | max. 1000 Zeichen |
+
+### `DELETE /api/site-visits/{id}/areas/{areaId}`
+
+**Eine Fläche entfernen.** Nicht nach der Offerte (422); verwirft die gespeicherte Berechnung.
+
+- **Zugriff:** Erfordert die Berechtigung: `quote:update`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen, max. 64 Zeichen |
+| `areaId` | string | ja | min. 1 Zeichen, max. 64 Zeichen |
+
+### `POST /api/site-visits/{id}/complete`
+
+**Besichtigung abschliessen.** Mindestens eine Fläche (422).
+
+- **Zugriff:** Erfordert die Berechtigung: `quote:update`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `findings` | string | – | max. 8000 Zeichen |
+
+### `POST /api/site-visits/{id}/cancel`
+
+**Besichtigung absagen.** Mit Grund; nicht nach der Offerte.
+
+- **Zugriff:** Erfordert die Berechtigung: `quote:update`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `reason` | string | ja | min. 3 Zeichen, max. 500 Zeichen |
+
+### `POST /api/site-visits/{id}/calculate`
+
+**Besichtigung berechnen.** Jede Fläche durch dieselbe Preisberechnung wie die Online-Buchung; Ergebnis als Vorschau festgehalten.
+
+- **Zugriff:** Erfordert die Berechtigung: `quote:update`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+### `POST /api/site-visits/{id}/quote`
+
+**Offerte aus Besichtigung.** Neu gerechnet, eine Position je Fläche, Preise aus der Berechnung; höchstens eine Offerte je Besichtigung, „Preis auf Anfrage" wird nicht geraten (422).
+
+- **Zugriff:** Erfordert die Berechtigung: `quote:create`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `title` | string | – | min. 3 Zeichen, max. 200 Zeichen |
+| `validDays` | integer | – | ≥ 1, ≤ 180, Standard `30` |
+| `introText` | string | – | max. 4000 Zeichen |
+
 ## Einsätze
+
+### `GET /api/jobs`
+
+**Einsätze auflisten.** Filter nach Status, Zeitraum, Kundschaft, zugeteilter Person und **Vertrag**, dazu Sortierung und Blätterung. Wer nur `job:read_assigned` hat, bekommt ausschliesslich die eigenen Einsätze — die Einschränkung steht in der where-Klausel, nicht in der Darstellung. Objektangaben wie Schlüsseldepot und Alarmcode sind nicht Teil der Liste; sie gehören auf den Rapport des einzelnen Einsatzes.
+
+- **Zugriff:** Erfordert eine der Berechtigungen: `job:read`, `job:read_assigned`.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 429, 500
+
+**Query-Parameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `page` | integer | – | ≥ 1, Standard `1` |
+| `pageSize` | integer | – | ≥ 1, ≤ 100, Standard `20` |
+| `q` | string | – | max. 120 Zeichen |
+| `sort` | string | – | max. 60 Zeichen |
+| `order` | string | – | `asc` \| `desc`, Standard `"desc"` |
+| `status` | string | – | `UNASSIGNED` \| `SCHEDULED` \| `DISPATCHED` \| `EN_ROUTE` \| `IN_PROGRESS` \| `ON_HOLD` \| `COMPLETED` \| `VERIFIED` \| `CANCELLED` |
+| `employeeId` | string | – | min. 1 Zeichen |
+| `customerId` | string | – | min. 1 Zeichen |
+| `contractId` | string | – | min. 1 Zeichen |
+| `from` | string | – | date-time |
+| `to` | string | – | date-time |
+
+### `POST /api/jobs`
+
+**Einsatz anlegen.** Für Einsätze ohne vorangehende Buchung — Nachbesserung, Sonderauftrag, Hauswartung auf Zuruf. Kundschaft, Adresse, Objekt, Leistung und Buchung werden gegen den Mandanten und gegen die Kundschaft geprüft. Ein Team mitzugeben verlangt zusätzlich `job:assign`; ob es zur geplanten Zeit kann, entscheidet dieselbe Regel wie beim Zuteilen.
+
+- **Zugriff:** Erfordert die Berechtigung: `job:create`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 201
+- **Mögliche Fehler:** 400, 401, 403, 409, 422, 429, 500
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `bookingId` | string | – | min. 1 Zeichen |
+| `customerId` | string | ja | min. 1 Zeichen |
+| `addressId` | string | – | min. 1 Zeichen |
+| `propertyId` | string | – | min. 1 Zeichen |
+| `serviceId` | string | – | min. 1 Zeichen |
+| `title` | string | ja | min. 3 Zeichen, max. 200 Zeichen |
+| `scheduledStart` | string | ja | date-time |
+| `scheduledEnd` | string | ja | date-time |
+| `crewSize` | integer | – | ≥ 1, ≤ 20, Standard `1` |
+| `estimatedMin` | integer | – | ≥ 15, ≤ 1440, Standard `120` |
+| `travelMin` | integer | – | ≥ 0, ≤ 480, Standard `0` |
+| `description` | string | – | max. 4000 Zeichen |
+| `internalNote` | string | – | max. 4000 Zeichen |
+| `customerNote` | string | – | max. 4000 Zeichen |
+| `employeeIds` | string[] | – | max. 20 Einträge, Standard `[]` |
+| `checklist` | object[] | – | max. 100 Einträge, Standard `[]` |
+| `checklist[].label` | string | ja | min. 2 Zeichen, max. 200 Zeichen |
+| `checklist[].room` | string | – | max. 80 Zeichen |
+| `checklist[].required` | boolean | – | Standard `true` |
 
 ### `GET /api/jobs/calendar`
 
@@ -2022,7 +2840,7 @@ Familie.
 
 ### `POST /api/jobs/{id}/complete`
 
-**Einsatz abschliessen.** Erfasst Abschlussbericht, Materialverbrauch und die Unterschrift der Kundschaft und stoppt laufende Zeiterfassungen.
+**Einsatz abschliessen.** Erfasst Abschlussbericht und Materialverbrauch und stoppt laufende Zeiterfassungen. Seit Gate 4D ohne Unterschrift — die Abnahme durch die Kundschaft ist ein eigener Vorgang auf dem Signaturkern.
 
 - **Zugriff:** Erfordert eine der Berechtigungen: `job:complete_assigned`, `job:update`.
 - **Rate-Limit-Klasse:** `apiWrite`
@@ -2040,8 +2858,6 @@ Familie.
 | Feld | Typ | Pflicht | Regeln |
 | --- | --- | --- | --- |
 | `completionNote` | string | – | max. 4000 Zeichen |
-| `signatureDataUrl` | string | – | max. 500000 Zeichen |
-| `signatureName` | string | – | max. 120 Zeichen |
 | `materials` | object[] | – | max. 50 Einträge, Standard `[]` |
 | `materials[].name` | string | ja | min. 2 Zeichen, max. 120 Zeichen |
 | `materials[].sku` | string | – | max. 60 Zeichen |
@@ -2049,6 +2865,36 @@ Familie.
 | `materials[].unit` | string | – | max. 20 Zeichen, Standard `"Stk."` |
 | `materials[].unitCost` | number | – | ≥ 0, ≤ 9999999, Standard `0` |
 | `materials[].billable` | boolean | – | Standard `false` |
+
+### `POST /api/jobs/{id}/handoff`
+
+**Kundenabnahme beginnen und Gerät übergeben.** Rendert den Rapport serverseitig, legt ihn unveränderlich ab (Hash A), erzeugt den Unterzeichnungsvorgang mit ceremonyMode IN_PERSON_HANDOFF und sperrt die Mitarbeitersitzung dieses Browsers. Antwortet mit der nicht geheimen Adresse des Kundenmodus; die Signatursitzung wird als Cookie gesetzt, nie als Token ausgegeben.
+
+- **Zugriff:** Erfordert eine der Berechtigungen: `job:complete_assigned`, `job:update`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+### `DELETE /api/jobs/{id}/handoff`
+
+**Begonnene Kundenabnahme abbrechen.** Bricht den offenen Abnahmevorgang ab und gibt den Rapport wieder zur Bearbeitung frei. Erreichbar erst nach dem Entsperren des Geräts — während der Übergabe antwortet die Route 423.
+
+- **Zugriff:** Erfordert eine der Berechtigungen: `job:complete_assigned`, `job:update`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
 
 ### `POST /api/jobs/{id}/photos`
 
@@ -2070,7 +2916,7 @@ Familie.
 | Feld | Typ | Pflicht | Regeln |
 | --- | --- | --- | --- |
 | `type` | string | – | `BEFORE` \| `AFTER` \| `DAMAGE` \| `DOCUMENT` \| `OTHER`, Standard `"BEFORE"` |
-| `url` | string | ja | max. 2000 Zeichen |
+| `fileId` | string | ja | min. 1 Zeichen |
 | `thumbnailUrl` | string | – | max. 2000 Zeichen |
 | `caption` | string | – | max. 300 Zeichen |
 | `room` | string | – | max. 80 Zeichen |
@@ -2711,6 +3557,684 @@ Familie.
 | --- | --- | --- | --- |
 | `id` | string | ja | min. 1 Zeichen |
 
+### `POST /api/payroll/run`
+
+**Lohnlauf eines Monats.** Erzeugt die Abrechnungen. **Nur freigegebene Zeiten** fliessen in den Bruttolohn — offene werden gezählt und gemeldet, aber nicht bezahlt. Ein **laufender** Monat wird abgewiesen (422): Ein Lauf am 12. sähe aus wie eine Abrechnung und wäre um zwei Drittel zu tief. Idempotent je Person und Monat — ein zweiter Lauf überschreibt die noch nicht veröffentlichten und lässt die veröffentlichten unberührt. `saetzeGeprueft: false` heisst, dass UVG-Satz und BVG-Plan noch Vorbelegungen sind.
+
+- **Zugriff:** Erfordert die Berechtigung: `payslip:create`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 422, 429, 500
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `year` | integer | ja | ≥ 2020, ≤ 2100 |
+| `month` | integer | ja | ≥ 1, ≤ 12 |
+| `employeeIds` | string[] | – | max. 500 Einträge |
+
+### `POST /api/payroll/publish`
+
+**Abrechnungen veröffentlichen.** Macht sie unter `/portal/lohn` sichtbar und **unveränderlich** — dieselbe Schwelle wie beim Ausstellen einer Rechnung. **Es gibt kein Zurücknehmen:** Eine Abrechnung, die wieder verschwindet, ist schlimmer als eine falsche, die korrigiert wird. Korrekturen laufen über die Abrechnung des Folgemonats. Eigene Berechtigung, weil Erstellen ein wiederholbarer Rechenlauf ist und Veröffentlichen endgültig. Erzeugt je Abrechnung das PDF (einmal, mit Prüfsumme). Offene Prüfungen werden übersprungen und gemeldet; mit ungeprüften Sätzen nur mit `trotzUngepruefterSaetze: true`, sonst 422.
+
+- **Zugriff:** Erfordert die Berechtigung: `payslip:publish`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 422, 429, 500
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `payslipIds` | string[] | ja | min. 1 Einträge, max. 500 Einträge |
+| `trotzUngepruefterSaetze` | boolean | – | – |
+
+### `GET /api/payroll/payslips`
+
+**Abrechnungen einsehen.** Filterbar nach Jahr, Monat, Person und Veröffentlichungsstand, mit den Summen über alle Treffer. Ohne diese Ansicht lässt sich ein Lohnlauf nicht prüfen, bevor er veröffentlicht wird.
+
+- **Zugriff:** Erfordert die Berechtigung: `payslip:read_all`.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 429, 500
+
+**Query-Parameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `year` | integer | – | ≥ 2020, ≤ 2100 |
+| `month` | integer | – | ≥ 1, ≤ 12 |
+| `employeeId` | string | – | – |
+| `published` | string | – | `true` \| `false` |
+
+### `GET /api/payroll/payslips/{id}`
+
+**Eine Abrechnung samt Herleitung.** Zwei Wege hinein: Mit `payslip:read_all` jede Abrechnung, mit `payslip:read_own` nur die eigene **und nur, wenn sie veröffentlicht ist** — eine unveröffentlichte ist ein Entwurf, und eine Zahl, die sich ändert, nachdem jemand sie gesehen hat, ist schlimmer als keine. Beides steht in der Prisma-`where`-Klausel und nicht in einer Prüfung danach. `breakdown` trägt die angewandten Sätze, den koordinierten Jahreslohn und den BVG-Altersband-Satz als Momentaufnahme.
+
+- **Zugriff:** Erfordert eine der Berechtigungen: `payslip:read_own`.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+### `GET /api/payroll/payslips/{id}/pdf`
+
+**Abrechnung als PDF.** Das beim Veröffentlichen erzeugte PDF — gespeicherte Bytes nach Prüfsummenvergleich, nichts wird neu gerechnet. Mit `payslip:read_own` nur die eigene veröffentlichte Abrechnung (Bedingung in der Abfrage). Jeder Abruf wird protokolliert.
+
+- **Zugriff:** Erfordert eine der Berechtigungen: `payslip:read_own`, `payslip:read_all`.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200 (`application/pdf`)
+- **Mögliche Fehler:** 400, 401, 403, 404, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+### `POST /api/payroll/payslips/{id}/review`
+
+**Prüfung einer Abrechnung freigeben.** Für Abrechnungen mit `reviewRequired` (etwa Quellensteuer ohne Tarif). Notiz ist Pflicht. Eine veraltete Abrechnung (Grundlagen seit der Berechnung geändert) wird nicht freigegeben, sondern neu gerechnet (422).
+
+- **Zugriff:** Erfordert die Berechtigung: `payslip:publish`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `note` | string | ja | min. 3 Zeichen, max. 500 Zeichen |
+
+### `GET /api/payroll/rates`
+
+**Satzversionen der Sozialbeiträge.** Je Beitragsart Versionen mit Gültigkeit, Arbeitnehmer- und Arbeitgeberanteil, Schwellen, Herkunft (`source`, `reference`) und Prüfstand. `benutzt: true` heisst: in eine veröffentlichte Abrechnung eingeflossen und damit unveränderlich. Ersetzt `/api/payroll/settings`.
+
+- **Zugriff:** Erfordert die Berechtigung: `payslip:create`.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 429, 500
+
+**Query-Parameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `year` | integer | – | ≥ 2020, ≤ 2100 |
+| `code` | string | – | `AHV_IV_EO` \| `ALV` \| `ALV_SOLIDARITY` \| `UVG_NBU` \| `UVG_BU` \| `KTG` \| `FAK` \| `VK` \| `BVG` |
+
+### `POST /api/payroll/rates`
+
+**Neue Satzversion.** Die Vorgängerin wird am Vortag geschlossen, aber nie so, dass ein veröffentlichter Monat seine Version verlöre. `source` ist Pflicht; eine neue Version ist ungeprüft. BVG: Arbeitnehmeranteil höchstens 50 % (Art. 66 BVG), Schwellen und Altersbänder in `parameters`.
+
+- **Zugriff:** Erfordert die Berechtigung: `payslip:publish`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 422, 429, 500
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `code` | string | ja | `AHV_IV_EO` \| `ALV` \| `ALV_SOLIDARITY` \| `UVG_NBU` \| `UVG_BU` \| `KTG` \| `FAK` \| `VK` \| `BVG` |
+| `validFrom` | string | ja | – |
+| `validUntil` | string | – | – |
+| `source` | string | ja | min. 3 Zeichen, max. 300 Zeichen |
+| `employeePct` | number | – | ≥ 0, ≤ 100 |
+| `employerPct` | number | – | ≥ 0, ≤ 100 |
+| `thresholdMin` | number | – | ≥ 0, ≤ 1000000 |
+| `thresholdMax` | number | – | ≥ 0, ≤ 1000000 |
+| `parameters` | object | – | – |
+| `parameters.eintrittsschwelle` | number | ja | ≥ 0, ≤ 1000000 |
+| `parameters.koordinationsabzug` | number | ja | ≥ 0, ≤ 1000000 |
+| `parameters.mindestKoordiniert` | number | ja | ≥ 0, ≤ 1000000 |
+| `parameters.obergrenze` | number | ja | ≥ 0, ≤ 1000000 |
+| `parameters.baender` | object[] | ja | min. 1 Einträge, max. 10 Einträge |
+| `reference` | string | – | max. 300 Zeichen |
+
+### `PATCH /api/payroll/rates/{id}`
+
+**Satzversion ändern.** Nur solange keine veröffentlichte Abrechnung mit ihr gerechnet wurde (sonst 422; die Datenbank verweigert es ebenfalls). Setzt den Prüfstand zurück und markiert berechnete, unveröffentlichte Abrechnungen als veraltet.
+
+- **Zugriff:** Erfordert die Berechtigung: `payslip:publish`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen, max. 64 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `source` | string | – | min. 3 Zeichen, max. 300 Zeichen |
+| `employeePct` | number | – | ≥ 0, ≤ 100 |
+| `employerPct` | number | – | ≥ 0, ≤ 100 |
+| `thresholdMin` | number | – | ≥ 0, ≤ 1000000 |
+| `thresholdMax` | number | – | ≥ 0, ≤ 1000000 |
+| `parameters` | object | – | – |
+| `parameters.eintrittsschwelle` | number | ja | ≥ 0, ≤ 1000000 |
+| `parameters.koordinationsabzug` | number | ja | ≥ 0, ≤ 1000000 |
+| `parameters.mindestKoordiniert` | number | ja | ≥ 0, ≤ 1000000 |
+| `parameters.obergrenze` | number | ja | ≥ 0, ≤ 1000000 |
+| `parameters.baender` | object[] | ja | min. 1 Einträge, max. 10 Einträge |
+| `reference` | string | – | max. 300 Zeichen |
+
+### `POST /api/payroll/rates/{id}/verify`
+
+**Satzversion als geprüft bestätigen.** Vermerk, wer bestätigt hat und worauf gestützt. Eine Aussage der bestätigenden Person — das System prüft keinen Satz gegen eine amtliche Quelle.
+
+- **Zugriff:** Erfordert die Berechtigung: `payslip:publish`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen, max. 64 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `note` | string | ja | min. 3 Zeichen, max. 500 Zeichen |
+
+### `GET /api/payroll/profiles/{employeeId}`
+
+**Lohnvereinbarungen einer Person.** 13. Monatslohn (keiner, jährlich, anteilig, monatlich), Ferien- und Feiertagsentschädigung. Ohne Eintrag: nichts vereinbart erfasst — keine Aussage über die Rechtslage.
+
+- **Zugriff:** Erfordert die Berechtigung: `payslip:create`.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `employeeId` | string | ja | – |
+
+### `PUT /api/payroll/profiles/{employeeId}`
+
+**Lohnvereinbarungen setzen.** Ganzheitlich. Berechnete, unveröffentlichte Abrechnungen der Person werden als veraltet markiert.
+
+- **Zugriff:** Erfordert die Berechtigung: `payslip:create`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `employeeId` | string | ja | – |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `thirteenthMode` | string | ja | `NONE` \| `ANNUAL` \| `PRO_RATA` \| `MONTHLY` |
+| `thirteenthPayoutMonth` | integer | – | ≥ 1, ≤ 12, Standard `12` |
+| `vacationPayInWage` | boolean | – | Standard `false` |
+| `holidayPayPct` | number | – | ≥ 0, ≤ 20 |
+| `note` | string | – | max. 500 Zeichen |
+
+### `GET /api/payroll/items`
+
+**Lohnpositionen.** Überstunden, Zulagen, Familienzulagen, Spesen, Korrekturen, Abzüge und Quellensteuer von Hand.
+
+- **Zugriff:** Erfordert die Berechtigung: `payslip:create`.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 429, 500
+
+**Query-Parameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `year` | integer | – | ≥ 2020, ≤ 2100 |
+| `month` | integer | – | ≥ 1, ≤ 12 |
+| `employeeId` | string | – | – |
+
+### `POST /api/payroll/items`
+
+**Lohnposition erfassen.** Überstunden: Betrag rechnet der Server (Stunden × Ansatz × Zuschlag). Nur Korrekturen dürfen negativ sein. Nicht in einen veröffentlichten Monat (422) — eine Korrektur gehört in einen offenen Monat und verweist auf die korrigierte Abrechnung.
+
+- **Zugriff:** Erfordert die Berechtigung: `payslip:create`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 422, 429, 500
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `employeeId` | string | ja | – |
+| `year` | integer | ja | ≥ 2020, ≤ 2100 |
+| `month` | integer | ja | ≥ 1, ≤ 12 |
+| `type` | string | ja | `OVERTIME` \| `ALLOWANCE` \| `FAMILY_ALLOWANCE` \| `EXPENSE` \| `CORRECTION` \| `NET_CORRECTION` \| `DEDUCTION` \| `WITHHOLDING_TAX_MANUAL` |
+| `label` | string | ja | min. 2 Zeichen, max. 120 Zeichen |
+| `quantity` | number | – | ≥ 0, ≤ 744 |
+| `rate` | number | – | ≥ 0, ≤ 1000000 |
+| `surchargePct` | number | – | ≥ 0, ≤ 200 |
+| `amount` | number | – | ≥ -1000000, ≤ 1000000 |
+| `note` | string | – | max. 500 Zeichen |
+| `correctsPayslipId` | string | – | – |
+
+### `PATCH /api/payroll/items/{id}`
+
+**Lohnposition ändern.** Nur solange sie in keine veröffentlichte Abrechnung eingeflossen ist.
+
+- **Zugriff:** Erfordert die Berechtigung: `payslip:create`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen, max. 64 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `label` | string | – | min. 2 Zeichen, max. 120 Zeichen |
+| `quantity` | number | – | ≥ 0, ≤ 744 |
+| `rate` | number | – | ≥ 0, ≤ 1000000 |
+| `surchargePct` | number | – | ≥ 0, ≤ 200 |
+| `amount` | number | – | ≥ -1000000, ≤ 1000000 |
+| `note` | string | – | max. 500 Zeichen |
+
+### `DELETE /api/payroll/items/{id}`
+
+**Lohnposition entfernen.** Ausblenden (`deletedAt`), nur solange nicht veröffentlicht.
+
+- **Zugriff:** Erfordert die Berechtigung: `payslip:create`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen, max. 64 Zeichen |
+
+### `GET /api/payroll/withholding/profiles`
+
+**Quellensteuerprofile.** Kanton, Tarifcode, Kirchensteuer, Kinder — mit Gültigkeit. Im Prüfprotokoll geschwärzt.
+
+- **Zugriff:** Erfordert die Berechtigung: `payslip:create`.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 429, 500
+
+**Query-Parameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `employeeId` | string | – | – |
+
+### `POST /api/payroll/withholding/profiles`
+
+**Quellensteuerprofil erfassen.** Überschneidungen je Person verweigert die Datenbank (422).
+
+- **Zugriff:** Erfordert die Berechtigung: `payslip:create`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 422, 429, 500
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `employeeId` | string | ja | – |
+| `validFrom` | string | ja | – |
+| `validUntil` | string | – | – |
+| `canton` | string | ja | – |
+| `tariffCode` | string | ja | – |
+| `churchTax` | boolean | – | Standard `false` |
+| `children` | integer | – | ≥ 0, ≤ 20, Standard `0` |
+| `note` | string | – | max. 500 Zeichen |
+
+### `PATCH /api/payroll/withholding/profiles/{id}`
+
+**Quellensteuerprofil ändern.** Mit veröffentlichter Abrechnung im Zeitraum nur Ende und Notiz — ein Tarifwechsel ist ein neues Profil ab dem Wechseltag.
+
+- **Zugriff:** Erfordert die Berechtigung: `payslip:create`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen, max. 64 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `validUntil` | string | – | – |
+| `canton` | string | – | – |
+| `tariffCode` | string | – | – |
+| `churchTax` | boolean | – | – |
+| `children` | integer | – | ≥ 0, ≤ 20 |
+| `note` | string | – | max. 500 Zeichen |
+
+### `DELETE /api/payroll/withholding/profiles/{id}`
+
+**Quellensteuerprofil entfernen.** Nur ohne veröffentlichte Abrechnung im Zeitraum; sonst beenden statt löschen.
+
+- **Zugriff:** Erfordert die Berechtigung: `payslip:create`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen, max. 64 Zeichen |
+
+### `GET /api/payroll/withholding/rates`
+
+**Eingelesene Quellensteuertarife.** Tarifzeilen und Importstapel mit Quelle und Prüfstand.
+
+- **Zugriff:** Erfordert die Berechtigung: `payslip:create`.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 429, 500
+
+**Query-Parameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `canton` | string | – | – |
+| `year` | integer | – | ≥ 2020, ≤ 2100 |
+| `tariffCode` | string | – | – |
+
+### `POST /api/payroll/withholding/rates`
+
+**Quellensteuertarif einlesen.** Clenaris liefert keine Tarife mit. Zeilen aus der Datei der kantonalen Steuerverwaltung, `source` Pflicht, eingelesen ungeprüft; bestehende Stufen werden nicht überschrieben (422).
+
+- **Zugriff:** Erfordert die Berechtigung: `payslip:publish`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 422, 429, 500
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `canton` | string | ja | – |
+| `year` | integer | ja | ≥ 2020, ≤ 2100 |
+| `source` | string | ja | min. 3 Zeichen, max. 300 Zeichen |
+| `reference` | string | – | max. 300 Zeichen |
+| `rows` | object[] | ja | min. 1 Einträge, max. 5000 Einträge |
+| `rows[].tariffCode` | string | ja | – |
+| `rows[].incomeFrom` | number | ja | ≥ 0, ≤ 1000000 |
+| `rows[].incomeTo` | number | – | ≥ 0, ≤ 1000000 |
+| `rows[].ratePct` | number | ja | ≥ 0, ≤ 100 |
+
+### `POST /api/payroll/withholding/rates/verify`
+
+**Tarifstapel als geprüft bestätigen.** Abgleich mit der Quelle, mit Vermerk.
+
+- **Zugriff:** Erfordert die Berechtigung: `payslip:publish`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 422, 429, 500
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `importBatch` | string | ja | min. 1 Zeichen, max. 64 Zeichen |
+| `note` | string | ja | min. 3 Zeichen, max. 500 Zeichen |
+
+### `GET /api/payroll/certificates`
+
+**Lohnausweis-Aufstellungen.** Verdichtung veröffentlichter Abrechnungen auf die Ziffern des Lohnausweises — **nicht** das amtliche Formular 11. Mit `payslip:read_own` nur die eigenen abgeschlossenen.
+
+- **Zugriff:** Erfordert eine der Berechtigungen: `payslip:read_own`, `payslip:read_all`.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 429, 500
+
+**Query-Parameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `employeeId` | string | – | – |
+| `year` | integer | – | ≥ 2020, ≤ 2100 |
+
+### `POST /api/payroll/certificates`
+
+**Lohnausweis-Aufstellung verdichten.** Erstellt oder erneuert den Entwurf eines Jahres. Ohne veröffentlichte Abrechnung 422.
+
+- **Zugriff:** Erfordert die Berechtigung: `payslip:create`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 422, 429, 500
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `employeeId` | string | ja | – |
+| `year` | integer | ja | ≥ 2020, ≤ 2100 |
+
+### `POST /api/payroll/certificates/{id}/finalize`
+
+**Lohnausweis-Aufstellung abschliessen.** PDF erzeugen, ablegen, unveränderlich machen. Eine Korrektur danach ist eine neue Version.
+
+- **Zugriff:** Erfordert die Berechtigung: `payslip:publish`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen, max. 64 Zeichen |
+
+### `GET /api/payroll/certificates/{id}/pdf`
+
+**Lohnausweis-Aufstellung als PDF.** Gespeicherte Bytes mit Prüfsummenvergleich; für die eigene Person nur der eigene, abgeschlossene.
+
+- **Zugriff:** Erfordert eine der Berechtigungen: `payslip:read_own`, `payslip:read_all`.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200 (`application/pdf`)
+- **Mögliche Fehler:** 400, 401, 403, 404, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen, max. 64 Zeichen |
+
+### `GET /api/time`
+
+**Erfasste Zeiten.** Filterbar nach Person, Einsatz, Zeitraum, Freigabestand und „nur laufende". Die Summe der Minuten kommt über **alle** Treffer, nicht über die angezeigte Seite — eine Seitensumme sähe aus wie die Monatssumme und wäre keine. `timetracking:read_all` gab es seit jeher und wurde bis Wave 8 von genau einem Endpunkt geprüft (dem Buchhaltungsexport): Es gab keinen Weg, die Zeiten anzusehen, ohne sie zu exportieren.
+
+- **Zugriff:** Erfordert die Berechtigung: `timetracking:read_all`.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 429, 500
+
+**Query-Parameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `employeeId` | string | – | – |
+| `jobId` | string | – | – |
+| `from` | string | – | date-time |
+| `to` | string | – | date-time |
+| `approved` | string | – | `true` \| `false` |
+| `nurOffen` | object | – | – |
+| `page` | integer | – | ≥ 1 |
+| `pageSize` | integer | – | ≥ 1, ≤ 200 |
+
+### `POST /api/time`
+
+**Zeit von Hand erfassen.** Für vergessenes Stempeln, fehlenden Empfang oder einen Gerätewechsel. `minutes` kommt **nicht** aus dem Körper — die Dauer rechnet der Server aus Beginn, Ende und Pause, dieselbe Regel wie bei den Preisen. Der Eintrag wird als `manual` gekennzeichnet. Überschneidungen mit einer anderen Erfassung derselben Person werden abgewiesen (422): zwei gleichzeitige Zeiten ergäben doppelten Lohn für dieselbe Stunde.
+
+- **Zugriff:** Erfordert die Berechtigung: `timetracking:approve`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 422, 429, 500
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `employeeId` | string | ja | – |
+| `jobId` | string | – | – |
+| `startedAt` | string | ja | date-time |
+| `endedAt` | string | ja | date-time |
+| `breakMin` | integer | – | ≥ 0, ≤ 480, Standard `0` |
+| `note` | string | – | max. 500 Zeichen |
+
+### `PATCH /api/time/{id}`
+
+**Zeit korrigieren.** Eine **freigegebene** Zeit lässt sich nicht ändern (422) — sie ist Grundlage einer Abrechnung. Zuerst die Freigabe aufheben. Die Lohnkosten des Einsatzes werden um die Differenz angepasst, damit die Nachkalkulation nicht auseinanderläuft.
+
+- **Zugriff:** Erfordert die Berechtigung: `timetracking:approve`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `startedAt` | string | – | date-time |
+| `endedAt` | string | – | date-time |
+| `breakMin` | integer | – | ≥ 0, ≤ 480 |
+| `note` | string | – | max. 500 Zeichen |
+
+### `DELETE /api/time/{id}`
+
+**Zeit entfernen.** Nur solange sie nicht freigegeben ist. Der Fall dahinter ist der Doppeleintrag; ihn auf null Minuten zu korrigieren wäre eine Zeile, die aussieht wie Arbeit ohne Dauer.
+
+- **Zugriff:** Erfordert die Berechtigung: `timetracking:approve`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+### `POST /api/time/approve`
+
+**Zeiten freigeben.** Mehrere auf einmal — das ist der Arbeitsablauf am Monatsende. Eine **laufende** Erfassung wird übersprungen und nicht abgewiesen: Wer dreissig Zeilen markiert und eine laufende dabei hat, soll die neunundzwanzig freigeben können. Die Antwort sagt beides.
+
+- **Zugriff:** Erfordert die Berechtigung: `timetracking:approve`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 422, 429, 500
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `entryIds` | string[] | ja | min. 1 Einträge, max. 200 Einträge |
+
+### `POST /api/time/{id}/reopen`
+
+**Freigabe aufheben.** Bewusst **einzeln** und nicht als Stapel — anders als das Freigeben. Der häufige Weg ist bequem, der seltene ist einzeln.
+
+- **Zugriff:** Erfordert die Berechtigung: `timetracking:approve`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+### `PUT /api/employees/{id}/skills`
+
+**Qualifikationen setzen.** Ersetzt die Liste **als Ganzes** — deshalb `PUT` und nicht `PATCH`. Diese Zeilen haben keinen Bezug nach aussen; ein Abgleich wäre nur eine zweite Stelle, an der etwas falsch sein kann, und Ersetzen ist wettlauffrei. Doppelte Namen und mehr als 30 Einträge werden abgewiesen.
+
+- **Zugriff:** Erfordert die Berechtigung: `employee:update`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `skills` | object[] | ja | max. 30 Einträge |
+| `skills[].name` | string | ja | min. 2 Zeichen, max. 80 Zeichen |
+| `skills[].level` | integer | – | ≥ 1, ≤ 5, Standard `1` |
+| `skills[].certifiedUntil` | string | – | – |
+
+### `PUT /api/employees/{id}/availability`
+
+**Arbeitszeiten setzen.** Ersetzt die Zeitfenster als Ganzes. Überschneidungen am selben Tag werden abgewiesen — der eindeutige Index deckt nur gleiche Startzeiten ab, und zwei sich überlappende Fenster ergäben eine Verfügbarkeit, die sich nicht mehr lesen lässt. Die Arbeitszeit bleibt eine **Planungshilfe**: Die Eignungsprüfung warnt bei einem Einsatz ausserhalb und blockiert ihn nicht. Bereits geplante Einsätze bleiben unberührt.
+
+- **Zugriff:** Erfordert die Berechtigung: `employee:update`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `availability` | object[] | ja | max. 21 Einträge |
+| `availability[].weekday` | integer | ja | ≥ 0, ≤ 6 |
+| `availability[].startTime` | string | ja | – |
+| `availability[].endTime` | string | ja | – |
+
 ### `GET /api/employees/{id}`
 
 **Personalakte abrufen.** Lohn, AHV-Nummer und Bankverbindung erscheinen nur mit payslip:create. Die Schwelle ist bewusst nicht das Lesen der Akte: wer Einsätze plant und Ferien bewilligt, braucht die Zahlen nicht. Es sind besonders schützenswerte Personendaten nach DSG.
@@ -2786,7 +4310,16 @@ Familie.
 - **Zugriff:** Erfordert eine der Berechtigungen: `absence:read_all`, `absence:request`.
 - **Rate-Limit-Klasse:** `apiRead`
 - **Erfolg:** 200
-- **Mögliche Fehler:** 401, 403, 429, 500
+- **Mögliche Fehler:** 400, 401, 403, 429, 500
+
+**Query-Parameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `status` | string | – | `REQUESTED` \| `APPROVED` \| `REJECTED` \| `CANCELLED` |
+| `employeeId` | string | – | min. 1 Zeichen |
+| `from` | string | – | date-time |
+| `to` | string | – | date-time |
 
 ### `DELETE /api/applications/{id}`
 
@@ -2855,6 +4388,7 @@ Familie.
 | `order` | string | – | `asc` \| `desc`, Standard `"desc"` |
 | `status` | string | – | `DRAFT` \| `ISSUED` \| `SENT` \| `PARTIALLY_PAID` \| `PAID` \| `OVERDUE` \| `CANCELLED` \| `WRITTEN_OFF` |
 | `customerId` | string | – | min. 1 Zeichen |
+| `contractId` | string | – | min. 1 Zeichen |
 | `from` | string | – | date-time |
 | `to` | string | – | date-time |
 
@@ -2991,6 +4525,27 @@ Familie.
 | --- | --- | --- | --- |
 | `id` | string | ja | min. 1 Zeichen |
 
+### `POST /api/invoices/{id}/pay`
+
+**Zahlung aus dem Kundenkonto starten.** Der angemeldete Weg neben dem öffentlichen Zahllink. Vorher verwendete der Kundenbereich invoice.publicToken — eine angemeldete Person brauchte also eine Capability, um ihre eigene Rechnung zu bezahlen. Der Betrag stammt ausschliesslich aus der Datenbank; gebucht wird über den Webhook, nicht über die Rückkehr-URL.
+
+- **Zugriff:** Erfordert die Berechtigung: `invoice:pay_own`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `method` | string | – | `CARD` \| `TWINT`, Standard `"CARD"` |
+
 ### `GET /api/expenses`
 
 **Ausgaben auflisten.** Mit Kategorie, Lieferant und Belegdatei.
@@ -3073,7 +4628,14 @@ Familie.
 - **Zugriff:** Erfordert die Berechtigung: `supplier:read`.
 - **Rate-Limit-Klasse:** `apiRead`
 - **Erfolg:** 200
-- **Mögliche Fehler:** 401, 403, 429, 500
+- **Mögliche Fehler:** 400, 401, 403, 429, 500
+
+**Query-Parameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `q` | string | – | max. 120 Zeichen |
+| `includeInactive` | string | – | `0` \| `1`, Standard `"0"` |
 
 ### `POST /api/suppliers`
 
@@ -3116,6 +4678,24 @@ Familie.
 | --- | --- | --- | --- |
 | `id` | string | ja | min. 1 Zeichen |
 
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `name` | string | – | min. 2 Zeichen, max. 140 Zeichen |
+| `contactName` | string | – | max. 120 Zeichen |
+| `email` | union | – | – |
+| `phone` | string | – | max. 30 Zeichen |
+| `street` | string | – | max. 120 Zeichen |
+| `postalCode` | string | – | max. 10 Zeichen |
+| `city` | string | – | max. 80 Zeichen |
+| `country` | string | – | Standard `"CH"` |
+| `vatNumber` | string | – | max. 40 Zeichen |
+| `iban` | string | – | max. 40 Zeichen |
+| `paymentTermDays` | integer | – | ≥ 0, ≤ 180, Standard `30` |
+| `notes` | string | – | max. 2000 Zeichen |
+| `active` | boolean | – | – |
+
 ### `DELETE /api/suppliers/{id}`
 
 **Lieferant löschen.** Nur ohne gebuchte Ausgaben. Eine Ausgabe ohne ihren Lieferanten liesse sich in der Buchhaltung nicht mehr zuordnen — setzen Sie ihn stattdessen auf inaktiv.
@@ -3138,7 +4718,18 @@ Familie.
 - **Zugriff:** Erfordert die Berechtigung: `payment:read`.
 - **Rate-Limit-Klasse:** `apiRead`
 - **Erfolg:** 200
-- **Mögliche Fehler:** 401, 403, 429, 500
+- **Mögliche Fehler:** 400, 401, 403, 429, 500
+
+**Query-Parameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `page` | integer | – | ≥ 1, Standard `1` |
+| `pageSize` | integer | – | ≥ 1, ≤ 100, Standard `20` |
+| `status` | string | – | `PENDING` \| `PROCESSING` \| `SUCCEEDED` \| `FAILED` \| `REFUNDED` \| `CANCELLED` |
+| `from` | string | – | date-time |
+| `to` | string | – | date-time |
+| `q` | string | – | max. 120 Zeichen |
 
 ### `PATCH /api/expenses/{id}`
 
@@ -3202,6 +4793,32 @@ Familie.
 | --- | --- | --- | --- |
 | `id` | string | ja | min. 1 Zeichen |
 
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `customerId` | string | – | min. 1 Zeichen |
+| `bookingId` | string | – | min. 1 Zeichen |
+| `quoteId` | string | – | min. 1 Zeichen |
+| `issueDate` | string | – | – |
+| `dueDate` | string | – | – |
+| `periodFrom` | string | – | – |
+| `periodTo` | string | – | – |
+| `introText` | string | – | max. 4000 Zeichen |
+| `outroText` | string | – | max. 4000 Zeichen |
+| `notes` | string | – | max. 4000 Zeichen |
+| `discountAmount` | number | – | ≥ 0, ≤ 9999999, Standard `0` |
+| `items` | object[] | – | min. 1 Einträge, max. 200 Einträge |
+| `items[].id` | string | – | min. 1 Zeichen |
+| `items[].jobId` | string | – | min. 1 Zeichen |
+| `items[].name` | string | ja | min. 2 Zeichen, max. 200 Zeichen |
+| `items[].description` | string | – | max. 2000 Zeichen |
+| `items[].quantity` | number | ja | ≥ 0.01, ≤ 10000 |
+| `items[].unit` | string | – | max. 20 Zeichen, Standard `"Std."` |
+| `items[].unitPrice` | number | ja | ≥ 0, ≤ 9999999 |
+| `items[].discount` | number | – | ≥ 0, ≤ 100, Standard `0` |
+| `items[].vatRate` | number | – | ≥ 0, ≤ 30, Standard `8.1` |
+
 ### `PATCH /api/payments/{id}`
 
 **Zahlung korrigieren.** Beleg, Notiz und Zahlungsdatum. Der Betrag ist nicht änderbar: er stammt vom Zahlungsanbieter oder wurde beim Verbuchen gegen den offenen Posten gerechnet. Ihn nachträglich zu verstellen liesse Rechnungssaldo und Zahlungssumme auseinanderlaufen — und das fiele erst beim Jahresabschluss auf. Ein falscher Betrag wird storniert und neu verbucht.
@@ -3227,12 +4844,92 @@ Familie.
 
 ### `DELETE /api/payments/{id}`
 
-**Zahlung stornieren.** Nur von Hand erfasste Zahlungen. Was über Stripe oder Datatrans hereinkam, ist beim Zahlungsanbieter eine Tatsache; die Zeile zu entfernen hiesse, die eigene Buchhaltung gegen den Kontoauszug laufen zu lassen. Der offene Posten der Rechnung wird in derselben Transaktion zurückgesetzt — sonst bliebe sie als bezahlt stehen, obwohl kein Geld da ist.
+**Zahlung stornieren.** Nur von Hand erfasste Zahlungen. Was über Stripe oder Datatrans hereinkam, ist beim Zahlungsanbieter eine Tatsache; die Zeile zu entfernen hiesse, die eigene Buchhaltung gegen den Kontoauszug laufen zu lassen. Der offene Posten der Rechnung wird in derselben Transaktion zurückgesetzt — sonst bliebe sie als bezahlt stehen, obwohl kein Geld da ist. Seit Wave 13 bleibt die Zeile als `CANCELLED` stehen (Storno statt Löschen); die Datenbank verweigert das Löschen von Zahlungen. Eine bereits stornierte Zahlung: 422.
 
 - **Zugriff:** Erfordert die Berechtigung: `payment:delete`.
 - **Rate-Limit-Klasse:** `apiWrite`
 - **Erfolg:** 204
 - **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+### `GET /api/credit-notes`
+
+**Gutschriften.** Optional je Kundschaft oder Rechnung.
+
+- **Zugriff:** Erfordert die Berechtigung: `creditnote:read`.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 429, 500
+
+**Query-Parameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `customerId` | string | – | min. 1 Zeichen |
+| `invoiceId` | string | – | min. 1 Zeichen |
+
+### `POST /api/credit-notes`
+
+**Gutschrift ausstellen.** Nummer aus dem lückenlosen Nummernkreis in derselben Transaktion. Mit Bezugsrechnung: gleiche Kundschaft, ausgestellt und nicht storniert, über alle Gutschriften nie mehr als der Rechnungsbetrag (422); der offene Posten sinkt entsprechend. Danach unveränderlich.
+
+- **Zugriff:** Erfordert die Berechtigung: `creditnote:create`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 422, 429, 500
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `invoiceId` | string | – | min. 1 Zeichen |
+| `customerId` | string | ja | min. 1 Zeichen |
+| `reason` | string | ja | min. 3 Zeichen, max. 500 Zeichen |
+| `issueDate` | string | – | – |
+| `items` | object[] | ja | min. 1 Einträge, max. 100 Einträge |
+| `items[].name` | string | ja | min. 2 Zeichen, max. 200 Zeichen |
+| `items[].quantity` | number | – | ≥ 0.01, ≤ 10000, Standard `1` |
+| `items[].unit` | string | – | max. 20 Zeichen, Standard `"Stk."` |
+| `items[].unitPrice` | number | ja | ≥ 0, ≤ 9999999 |
+| `items[].vatRate` | number | – | ≥ 0, ≤ 30, Standard `8.1` |
+
+### `POST /api/invoices/{id}/credit-note`
+
+**Gutschrift zu einer Rechnung.** Eine Zeile, Kundschaft aus der Rechnung; dieselben Regeln wie `POST /api/credit-notes`.
+
+- **Zugriff:** Erfordert die Berechtigung: `creditnote:create`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `reason` | string | ja | min. 3 Zeichen, max. 500 Zeichen |
+| `name` | string | ja | min. 2 Zeichen, max. 200 Zeichen |
+| `quantity` | number | – | ≥ 0.01, ≤ 10000, Standard `1` |
+| `unitPrice` | number | ja | ≥ 0, ≤ 9999999 |
+| `vatRate` | number | – | ≥ 0, ≤ 30, Standard `8.1` |
+
+### `GET /api/credit-notes/{id}/pdf`
+
+**Gutschrift als PDF.** Gerendert aus den unveränderlichen Daten der Gutschrift.
+
+- **Zugriff:** Erfordert die Berechtigung: `creditnote:read`.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200 (`application/pdf`)
+- **Mögliche Fehler:** 400, 401, 403, 404, 429, 500
 
 **Pfadparameter**
 
@@ -3479,8 +5176,9 @@ Familie.
 **Vorschaumodus schalten.** Setzt das Draft-Mode-Cookie von Next.js. Mit `nur=1` antwortet der Endpunkt mit 204 statt weiterzuleiten (nötig im `iframe` der Redaktionsmaske), mit `aus=1` schaltet er den Modus ab (`aus=1&nur=1` ebenfalls mit 204). `pfad` ist ein geprüftes Rücksprungziel auf dieser Domain. Das Cookie wirkt nur zusammen mit einer Sitzung mit `content:update` und nur im Rahmen der Maske (`Sec-Fetch-Dest: iframe`); ausserhalb liefert die Website den veröffentlichten Stand ohne Bearbeitungsmarken.
 
 - **Zugriff:** Erfordert die Berechtigung: `content:update`.
+- **Rate-Limit-Klasse:** `apiWrite`
 - **Erfolg:** 200
-- **Mögliche Fehler:** 400, 401, 403, 500
+- **Mögliche Fehler:** 400, 401, 403, 429, 500
 
 **Query-Parameter**
 
@@ -3536,6 +5234,7 @@ Familie.
 | `minutesPerSqm` | number | – | ≥ 0, ≤ 60, Standard `1.2` |
 | `defaultCrewSize` | integer | – | ≥ 1, ≤ 20, Standard `1` |
 | `bufferMinutes` | integer | – | ≥ 0, ≤ 240, Standard `30` |
+| `requiredSkills` | string[] | – | max. 20 Einträge, Standard `[]` |
 | `bulletPoints` | string[] | – | max. 12 Einträge, Standard `[]` |
 | `includes` | string[] | – | max. 30 Einträge, Standard `[]` |
 | `excludes` | string[] | – | max. 30 Einträge, Standard `[]` |
@@ -3599,6 +5298,7 @@ Familie.
 | `minutesPerSqm` | number | – | ≥ 0, ≤ 60, Standard `1.2` |
 | `defaultCrewSize` | integer | – | ≥ 1, ≤ 20, Standard `1` |
 | `bufferMinutes` | integer | – | ≥ 0, ≤ 240, Standard `30` |
+| `requiredSkills` | string[] | – | max. 20 Einträge, Standard `[]` |
 | `bulletPoints` | string[] | – | max. 12 Einträge, Standard `[]` |
 | `includes` | string[] | – | max. 30 Einträge, Standard `[]` |
 | `excludes` | string[] | – | max. 30 Einträge, Standard `[]` |
@@ -4038,7 +5738,13 @@ Familie.
 - **Zugriff:** Erfordert die Berechtigung: `cta:read`.
 - **Rate-Limit-Klasse:** `apiRead`
 - **Erfolg:** 200
-- **Mögliche Fehler:** 401, 403, 429, 500
+- **Mögliche Fehler:** 400, 401, 403, 429, 500
+
+**Query-Parameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `papierkorb` | string | – | `0` \| `1`, Standard `"0"` |
 
 ### `POST /api/cta`
 
@@ -4134,6 +5840,12 @@ Familie.
 | --- | --- | --- | --- |
 | `id` | string | ja | min. 1 Zeichen |
 
+**Query-Parameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `endgueltig` | string | – | `0` \| `1`, Standard `"0"` |
+
 ### `POST /api/cta/{id}/publish`
 
 **Handlungsaufruf ein- oder ausschalten.** Eigene Berechtigung, weil dies die einzige Handlung ist, die etwas auf der öffentlichen Website erscheinen lässt. Wer Texte vorbereiten darf, muss nicht veröffentlichen dürfen.
@@ -4148,6 +5860,12 @@ Familie.
 | Feld | Typ | Pflicht | Regeln |
 | --- | --- | --- | --- |
 | `id` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `active` | boolean | ja | – |
 
 ### `POST /api/cta/{id}/restore`
 
@@ -4187,16 +5905,33 @@ Familie.
 - **Zugriff:** Erfordert die Berechtigung: `media:read`.
 - **Rate-Limit-Klasse:** `apiRead`
 - **Erfolg:** 200
-- **Mögliche Fehler:** 401, 403, 429, 500
+- **Mögliche Fehler:** 400, 401, 403, 429, 500
+
+**Query-Parameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `page` | integer | – | ≥ 1, Standard `1` |
+| `pageSize` | integer | – | ≥ 1, ≤ 100, Standard `20` |
+| `q` | string | – | max. 120 Zeichen |
+| `scope` | string | – | `BOOKING` \| `QUOTE` \| `INVOICE` \| `JOB` \| `CUSTOMER` \| `EMPLOYEE` \| `PROPERTY` \| `BLOG` \| `GALLERY` \| `APPLICATION` \| `EXPENSE` \| `MESSAGE` \| `OTHER` |
+| `nurBilder` | string | – | `0` \| `1`, Standard `"0"` |
 
 ### `POST /api/media`
 
-**Hochgeladene Datei registrieren.** Der Upload selbst läuft direkt zu Supabase (/api/files/upload-url). Dieser Endpunkt hält nur fest, was dort gelandet ist — sonst gäbe es Dateien, die in keiner Liste erscheinen.
+**Hochgeladene Datei registrieren.** Wie /api/files/finalize, aber mit der Berechtigung media:upload. Der Körper enthält nur die Kennung des serverseitig ausgestellten Upload-Tickets; Pfad, Adresse, Typ, Grösse, Bereich und Sichtbarkeit bestimmt der Server. Vorher kamen all diese Werte aus dem Client und wurden ungeprüft übernommen.
 
 - **Zugriff:** Erfordert die Berechtigung: `media:upload`.
 - **Rate-Limit-Klasse:** `apiWrite`
 - **Erfolg:** 201
-- **Mögliche Fehler:** 401, 403, 409, 422, 429, 500
+- **Mögliche Fehler:** 400, 401, 403, 409, 422, 429, 500
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `ticketId` | string | ja | min. 1 Zeichen, max. 60 Zeichen |
+| `filename` | string | ja | min. 1 Zeichen, max. 255 Zeichen |
 
 ### `PATCH /api/media/{id}`
 
@@ -4213,6 +5948,13 @@ Familie.
 | --- | --- | --- | --- |
 | `id` | string | ja | min. 1 Zeichen |
 
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `filename` | string | – | min. 1 Zeichen, max. 255 Zeichen |
+| `scope` | string | – | `BOOKING` \| `QUOTE` \| `INVOICE` \| `JOB` \| `CUSTOMER` \| `EMPLOYEE` \| `PROPERTY` \| `BLOG` \| `GALLERY` \| `APPLICATION` \| `EXPENSE` \| `MESSAGE` \| `OTHER` |
+
 ### `DELETE /api/media/{id}`
 
 **Datei endgültig löschen.** Kein Papierkorb — die Datei liegt im Objektspeicher und kostet dort Geld. Hängt sie an einem Beleg, antwortet der Endpunkt mit 422 und nennt woran; `?trotzdem=1` setzt sich darüber hinweg.
@@ -4227,6 +5969,12 @@ Familie.
 | Feld | Typ | Pflicht | Regeln |
 | --- | --- | --- | --- |
 | `id` | string | ja | min. 1 Zeichen |
+
+**Query-Parameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `trotzdem` | string | – | `0` \| `1`, Standard `"0"` |
 
 ### `GET /api/faq`
 
@@ -4541,7 +6289,14 @@ Familie.
 - **Zugriff:** Erfordert die Berechtigung: `blog:read`.
 - **Rate-Limit-Klasse:** `apiRead`
 - **Erfolg:** 200
-- **Mögliche Fehler:** 401, 403, 429, 500
+- **Mögliche Fehler:** 400, 401, 403, 429, 500
+
+**Query-Parameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `status` | string | – | `DRAFT` \| `SCHEDULED` \| `PUBLISHED` \| `ARCHIVED` |
+| `q` | string | – | max. 120 Zeichen |
 
 ### `GET /api/blog/{id}`
 
@@ -4610,7 +6365,18 @@ Familie.
 - **Zugriff:** Erfordert die Berechtigung: `user:read`.
 - **Rate-Limit-Klasse:** `apiRead`
 - **Erfolg:** 200
-- **Mögliche Fehler:** 401, 403, 429, 500
+- **Mögliche Fehler:** 400, 401, 403, 429, 500
+
+**Query-Parameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `page` | integer | – | ≥ 1, Standard `1` |
+| `pageSize` | integer | – | ≥ 1, ≤ 100, Standard `50` |
+| `q` | string | – | max. 120 Zeichen |
+| `role` | string | – | `CUSTOMER` \| `EMPLOYEE` \| `MANAGER` \| `ADMIN` \| `SUPER_ADMIN` |
+| `status` | string | – | `PENDING` \| `ACTIVE` \| `SUSPENDED` \| `DISABLED` |
+| `papierkorb` | string | – | `0` \| `1`, Standard `"0"` |
 
 ### `POST /api/users`
 
@@ -4682,6 +6448,68 @@ Familie.
 | Feld | Typ | Pflicht | Regeln |
 | --- | --- | --- | --- |
 | `role` | string | ja | `CUSTOMER` \| `EMPLOYEE` \| `MANAGER` \| `ADMIN` \| `SUPER_ADMIN` |
+
+### `GET /api/metrics`
+
+**Kennzahlen des laufenden Prozesses.** Je Route und Methode: Anfragen, Verteilung auf Statusklassen, Dauer als Mittelwert, p50, p95 und Maximum. Die Reihen laufen über **Vorlagen** (`/api/jobs/:id`) — es gibt keine Zeile je Datensatz und keine Angabe darüber, wer eine Anfrage gestellt hat. Die Zahlen gelten je Prozess und überleben keinen Neustart; `prozessId` und `prozessStartzeit` sagen, ob zwei Antworten vergleichbar sind. Nur die Systemverantwortung: offen wäre der Endpunkt eine Echtzeitauskunft darüber, ob ein Angriff auffällt.
+
+- **Zugriff:** Erfordert die Berechtigung: `security:read`.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 401, 403, 429, 500
+
+### `GET /api/security/events`
+
+**Sicherheitsereignisse.** Der Strom aus Anmeldungen, Fehlversuchen, Sperren, Sitzungswiderrufen, Rollenwechseln, Zugangslinks und Dateibefunden. Nur die Systemverantwortung — die Liste ist eine Aufsicht über Personen. Enthält keine Geheimnisse: `context` ist beim Schreiben redigiert, rohe Tokenwerte und Hashes kommen gar nicht erst hinein.
+
+- **Zugriff:** Erfordert die Berechtigung: `security:read`.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 429, 500
+
+**Query-Parameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `category` | string | – | `AUTHENTICATION` \| `SESSION` \| `ACCESS` \| `PUBLIC_LINK` \| `FILE` \| `SYSTEM` |
+| `severity` | string | – | `INFO` \| `WARNING` \| `CRITICAL` |
+| `nurOffen` | object | – | – |
+| `userId` | string | – | – |
+| `seite` | integer | – | ≥ 1 |
+| `proSeite` | integer | – | ≥ 1, ≤ 200 |
+
+### `POST /api/security/events/{id}/acknowledge`
+
+**Sicherheitsereignis bestätigen.** Erklärt ein Ereignis als gesehen. Die Zeile bleibt unverändert stehen; Zeitpunkt, Person und Notiz kommen hinzu — bestätigen heisst nicht löschen. Ein bereits bestätigtes Ereignis antwortet mit 200 und `bestaetigt: false`.
+
+- **Zugriff:** Erfordert die Berechtigung: `security:manage`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 422, 429, 500
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `note` | string | – | max. 1000 Zeichen |
+
+### `POST /api/security/users/{id}/unlock`
+
+**Kontosperre aufheben.** Setzt Fehlversuchszähler und Sperrfrist zurück — mehr nicht. Kein neues Passwort, keine Sitzung: Wer entsperrt wird, meldet sich selbst an.
+
+- **Zugriff:** Erfordert die Berechtigung: `security:manage`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 401, 403, 422, 429, 500
+
+### `POST /api/security/users/{id}/revoke-sessions`
+
+**Alle Sitzungen eines Kontos beenden.** Widerruft alle Erneuerungstokens **und** setzt `sessionsRevokedAt`. Nur das Erste liesse die bereits ausgestellten Zugangstokens ihre restlichen fünfzehn Minuten weiterlaufen.
+
+- **Zugriff:** Erfordert die Berechtigung: `security:manage`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 401, 403, 422, 429, 500
 
 ### `GET /api/system/purge`
 
@@ -4801,7 +6629,20 @@ Familie.
 - **Zugriff:** Erfordert die Berechtigung: `company:update`.
 - **Rate-Limit-Klasse:** `apiWrite`
 - **Erfolg:** 200
-- **Mögliche Fehler:** 401, 403, 422, 429, 500
+- **Mögliche Fehler:** 400, 401, 403, 422, 429, 500
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `hours` | object[] | ja | min. 1 Einträge, max. 7 Einträge |
+| `hours[].weekday` | integer | ja | ≥ 0, ≤ 6 |
+| `hours[].opensAt` | union | – | – |
+| `hours[].closesAt` | union | – | – |
+| `hours[].closed` | boolean | – | Standard `false` |
+| `hours[].serviceOpensAt` | union | – | – |
+| `hours[].serviceClosesAt` | union | – | – |
+| `hours[].serviceClosed` | boolean | – | Standard `false` |
 
 ### `GET /api/holidays`
 
@@ -4980,7 +6821,7 @@ Familie.
 
 ### `GET /api/cron/hourly`
 
-**Stündliche Aufgaben.** Terminerinnerungen 24 h und 2 h vorher, fällige Aufgabenerinnerungen. Authentifiziert über `Authorization: Bearer $CRON_SECRET`.
+**Stündliche Aufgaben.** Terminerinnerungen 24 h und 2 h vorher, zeitbezogene Auslöser der Automatisierung und fällige Läufe. Authentifiziert über `Authorization: Bearer $CRON_SECRET`. Jeder Lauf hinterlässt ein `CronRun`; **500**, sobald eine Teilaufgabe gescheitert ist.
 
 - **Zugriff:** Nur für den Scheduler: `Authorization: Bearer $CRON_SECRET`.
 - **Erfolg:** 200
@@ -4988,11 +6829,49 @@ Familie.
 
 ### `GET /api/cron/daily`
 
-**Tägliche Aufgaben.** Mahnläufe, ablaufende Offerten, Wiederholungsbuchungen, Bewertungsanfragen, Geburtstagsgrüsse, Automatisierungen.
+**Tägliche Aufgaben.** Mahnläufe, ablaufende Offerten, Wiederholungsbuchungen, Bewertungsanfragen, Geburtstagsgrüsse, Automatisierungen, Vertragsplanung, Nachläufe. Jeder Lauf hinterlässt ein `CronRun`; **500**, sobald eine Teilaufgabe gescheitert ist.
 
 - **Zugriff:** Nur für den Scheduler: `Authorization: Bearer $CRON_SECRET`.
 - **Erfolg:** 200
 - **Mögliche Fehler:** 401, 500
+
+### `GET /api/cron/status`
+
+**Zustand der geplanten Läufe.** Für eine Überwachung von aussen: 200, wenn jeder Auftrag frisch ist, keiner hängt und keiner wiederholt scheitert; sonst **503**. Bleiben stündlicher und nächtlicher Lauf beide aus, meldet von innen niemand etwas — diese Adresse schon. Zeitpunkte und Zahlen, keine Inhalte. Dazu `betrieb`: Erreichbarkeit des Schadsoftwareprüfers, Alter der letzten Sicherung und der letzten bestandenen Wiederherstellungsprobe (ohne Einfluss auf den Statuscode). Bearer `CRON_SECRET` oder `SECURITY_REPORT_TOKEN` — Letzteres öffnet nur diesen lesenden Endpunkt, keinen Lauf.
+
+- **Zugriff:** Nur für den Scheduler: `Authorization: Bearer $CRON_SECRET`.
+- **Erfolg:** 200
+- **Mögliche Fehler:** 401, 500
+
+### `POST /api/cron/security-report`
+
+**Sicherheitsbericht entgegennehmen.** Bericht von security:check, externer Überwachung, ZAP-Grundprüfung oder Sicherung. Bearer `SECURITY_REPORT_TOKEN` — ein eigenes Geheimnis, **nicht** `CRON_SECRET`. Höchstens 512 kB, alle Felder begrenzt; ungültig 422, zu gross 400. Die Anwendung speichert und zeigt den Bericht in der Sicherheitszentrale; sie führt nichts aus. Ein kritischer Bericht wird beim Wechsel in diesen Zustand ein Sicherheitsereignis.
+
+- **Zugriff:** Nur für den Scheduler: `Authorization: Bearer $CRON_SECRET`.
+- **Erfolg:** 201
+- **Mögliche Fehler:** 400, 401, 409, 422, 500
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `quelle` | string | ja | `SECURITY_CHECK` \| `EXTERNAL_MONITOR` \| `ZAP_BASELINE` \| `DEPENDENCY_CHECK` \| `BACKUP` \| `HOST_INTEGRITY` |
+| `status` | string | ja | `OK` \| `WARNUNG` \| `KRITISCH` \| `NICHT_GEPRUEFT` |
+| `version` | string | – | max. 80 Zeichen |
+| `erstelltAm` | string | ja | date-time |
+| `zusammenfassung` | string | ja | min. 1 Zeichen, max. 500 Zeichen |
+| `pruefungen` | object[] | – | max. 50 Einträge, Standard `[]` |
+| `pruefungen[].id` | string | ja | min. 1 Zeichen, max. 60 Zeichen |
+| `pruefungen[].titel` | string | ja | min. 1 Zeichen, max. 160 Zeichen |
+| `pruefungen[].status` | string | ja | `BESTANDEN` \| `BEFUND` \| `NICHT_GEPRUEFT` \| `FEHLER` |
+| `pruefungen[].befunde` | integer | ja | ≥ 0, ≤ 100000 |
+| `befunde` | object[] | – | max. 200 Einträge, Standard `[]` |
+| `befunde[].id` | string | – | max. 120 Zeichen |
+| `befunde[].titel` | string | ja | min. 1 Zeichen, max. 300 Zeichen |
+| `befunde[].schwere` | string | ja | `kritisch` \| `hoch` \| `mittel` \| `niedrig` \| `info` |
+| `befunde[].ort` | string | – | max. 300 Zeichen |
+| `befunde[].details` | string | – | max. 1000 Zeichen |
+| `kennzahlen` | object | – | Standard `{}` |
 
 ### `POST /api/webhooks/stripe`
 
@@ -5001,6 +6880,236 @@ Familie.
 - **Zugriff:** Öffentlich — keine Anmeldung nötig.
 - **Erfolg:** 200
 - **Mögliche Fehler:** 422, 500
+
+### `POST /api/webhooks/resend`
+
+**Resend-Zustellmeldungen.** Svix-Signatur gegen den Rohtext, Zeitstempel höchstens fünf Minuten alt; ohne `RESEND_WEBHOOK_SECRET` 503, ungültige Signatur 401. Aktualisiert das E-Mail-Protokoll über die Anbieterkennung — ordnungsfest und idempotent (ein Abprall überschreibt eine Zustellung, eine späte „gesendet"-Meldung nicht). Fehler beim Verarbeiten: 500.
+
+- **Zugriff:** Öffentlich — keine Anmeldung nötig.
+- **Erfolg:** 200
+- **Mögliche Fehler:** 422, 500
+
+### `POST /api/webhooks/twilio`
+
+**Twilio-Zustellmeldungen.** Status-Callback für SMS. Signatur `X-Twilio-Signature` über die öffentliche Adresse und die Formularfelder, geprüft mit `TWILIO_AUTH_TOKEN`; ohne Token 503, ungültig 401.
+
+- **Zugriff:** Öffentlich — keine Anmeldung nötig.
+- **Erfolg:** 200
+- **Mögliche Fehler:** 422, 500
+
+### `GET /api/search`
+
+**Globale Suche.** Über die Bereiche, die die Rolle lesen darf, je höchstens fünf Treffer; `mehr` nennt die Bereiche mit weiteren, `hinweis` die Meldung des Scanners zu einem Etikettcode (etwa „gesperrt"). Jeder Bereich nur mit seiner Leseberechtigung, die Organisation in jeder Abfrage, keine sensiblen Felder als Treffergrund (kein Lohn, keine IBAN, keine AHV-Nummer, keine Notizen). Mindestens zwei Zeichen. Nur für die Rollen der Verwaltung — jeder Treffer führt nach /admin.
+
+- **Zugriff:** Erfordert die Rolle SUPER_ADMIN oder ADMIN oder MANAGER.
+- **Rate-Limit-Klasse:** `search`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 429, 500
+
+**Query-Parameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `q` | string | ja | min. 2 Zeichen, max. 80 Zeichen |
+
+### `POST /api/scan/resolve`
+
+**Scan auflösen.** Einen gescannten oder eingefügten Text (Etikettcode, EAN/GTIN, QR-Rechnung, Nummer) einordnen und im Leserecht der Rolle auflösen. Liest nur: die Antwort nennt Treffer und die Schlüssel der Schnellaktionen, ausgeführt wird nichts. Unbekannt, fremde Organisation, gelöscht und ohne Recht ergeben dieselbe leere Antwort. Adressen werden weder aufgelöst noch als Link zurückgegeben. Kontingent je Person: 60 pro Minute.
+
+- **Zugriff:** Erfordert die Berechtigung: `dashboard:view`.
+- **Rate-Limit-Klasse:** `scanResolve`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 422, 429, 500
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `text` | string | ja | min. 1 Zeichen, max. 1000 Zeichen |
+
+### `POST /api/scan/codes`
+
+**Etikettcode erzeugen.** Den aktiven Etikettcode eines Datensatzes liefern (200) oder erzeugen (201). Ein aktiver Code je Datensatz, erzwungen durch einen Teilindex. Verlangt das Pflegerecht der Art: Material `inventory:manage`, Gerät `equipment:manage`, Objekt `property:update`, Einsatz `job:update` (sonst 403). Fremde oder unbekannte IDs: 404.
+
+- **Zugriff:** Erfordert eine der Berechtigungen: `inventory:manage`, `equipment:manage`, `property:update`, `job:update`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 422, 429, 500
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `entityType` | string | ja | `MATERIAL` \| `EQUIPMENT` \| `PROPERTY` \| `JOB` |
+| `entityId` | string | ja | min. 1 Zeichen, max. 40 Zeichen |
+
+### `DELETE /api/scan/codes/{id}`
+
+**Etikettcode sperren.** Endgültig. Der Eintrag bleibt als Nachweis; der Code löst danach nichts mehr auf. Ohne Pflegerecht für die Art des Datensatzes: 404 wie bei einer fremden ID.
+
+- **Zugriff:** Erfordert eine der Berechtigungen: `inventory:manage`, `equipment:manage`, `property:update`, `job:update`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+### `GET /api/system/releases`
+
+**Bekannte Clenaris-Versionen.** Laufende Version und je bekannte Version ihr Zustand für diesen Betrieb: verfügbar, freigegeben, terminiert, installiert oder älter. Nur die Systemverantwortung.
+
+- **Zugriff:** Erfordert die Berechtigung: `release:read`.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 401, 403, 429, 500
+
+### `GET /api/system/releases/{id}`
+
+**Eine Version mit Änderungsprotokoll.** Änderungsprotokoll in Administrationssprache und der Verlauf der Entscheidungen dazu.
+
+- **Zugriff:** Erfordert die Berechtigung: `release:read`.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+### `POST /api/system/releases/{id}/freigabe`
+
+**Version freigeben.** Legt einen Aktualisierungsauftrag (APPROVED) an und schreibt ihn im selben Commit ins Prüfprotokoll. Führt nichts aus. 422, wenn die Version installiert, älter oder bereits freigegeben ist; 409, wenn gleichzeitig entschieden wurde.
+
+- **Zugriff:** Erfordert die Berechtigung: `release:manage`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 409, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+### `PUT /api/system/releases/{id}/termin`
+
+**Aktualisierung terminieren oder verschieben.** Aus „verfügbar" schliesst das die Freigabe ein. Termin frühestens in 15 Minuten, spätestens in 90 Tagen. Alter und neuer Termin stehen im Prüfprotokoll.
+
+- **Zugriff:** Erfordert die Berechtigung: `release:manage`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 409, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `scheduledFor` | string | ja | date-time |
+
+### `POST /api/system/releases/{id}/termin/stornieren`
+
+**Termin stornieren.** Nur aus „terminiert". Der Auftrag wird CANCELLED und bleibt als Nachweis; die Version ist danach wieder verfügbar.
+
+- **Zugriff:** Erfordert die Berechtigung: `release:manage`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `grund` | string | – | max. 500 Zeichen |
+
+### `POST /api/system/releases/{id}/zurueckstellen`
+
+**Version zurückstellen („Nicht jetzt").** Blendet eine verfügbare Version für einige Tage aus. Keine Freigabe, kein Auftrag.
+
+- **Zugriff:** Erfordert die Berechtigung: `release:manage`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `tage` | integer | – | ≥ 1, ≤ 90, Standard `7` |
+
+### `GET /api/cron/release-auftraege`
+
+**Fällige Aktualisierungsaufträge (Ausführer).** Nur für den Release-Ausführer ausserhalb der Anwendung: Bearer `RELEASE_EXECUTOR_TOKEN` **und** HMAC-Signatur (`x-clenaris-zeit`, `x-clenaris-signatur`, höchstens 5 Minuten alt). Liefert terminierte, fällige Aufträge der eigenen Umgebung mit Commit, Artefakt-Prüfsumme, CI-Stand, Migrationen, Rücksprungangaben und gegebenenfalls dem Hindernis. 422 bei fremder Umgebung, 503 ohne `CLENARIS_UMGEBUNG`/Signaturschlüssel.
+
+- **Zugriff:** Nur für den Scheduler: `Authorization: Bearer $CRON_SECRET`.
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 422, 500, 503
+
+**Query-Parameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `umgebung` | string | ja | `production` \| `staging` \| `preview` \| `test` |
+
+### `POST /api/cron/release-auftraege/uebernehmen`
+
+**Auftrag übernehmen (Ausführer).** SCHEDULED → DEPLOYING. Nur fällige Aufträge der eigenen Umgebung, Version neuer als die laufende, CI bestanden, gemessene Prüfsumme = Prüfsumme des Release. Idempotent über `ausfuehrungsSchluessel`; ein anderer Schlüssel → 409. Steht im Prüfprotokoll. Die Anwendung führt nichts aus.
+
+- **Zugriff:** Nur für den Scheduler: `Authorization: Bearer $CRON_SECRET`.
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 409, 422, 500, 503
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `auftragId` | string | ja | – |
+| `umgebung` | string | ja | `production` \| `staging` \| `preview` \| `test` |
+| `ausfuehrer` | string | ja | – |
+| `ausfuehrungsSchluessel` | string | ja | – |
+| `artefaktSha256` | string | ja | – |
+| `ciNachweis` | string | ja | uri, max. 300 Zeichen |
+
+### `POST /api/cron/release-auftraege/ergebnis`
+
+**Ergebnis melden (Ausführer).** DEPLOYING → SUCCEEDED, FAILED oder ROLLED_BACK, nur mit dem Schlüssel der Übernahme. SUCCEEDED verlangt die Zielversion als `laufendeVersion`. Dieselbe Meldung erneut → 200; eine abweichende → 409.
+
+- **Zugriff:** Nur für den Scheduler: `Authorization: Bearer $CRON_SECRET`.
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 409, 422, 500
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `auftragId` | string | ja | – |
+| `ausfuehrungsSchluessel` | string | ja | – |
+| `ergebnis` | string | ja | `SUCCEEDED` \| `FAILED` \| `ROLLED_BACK` |
+| `laufendeVersion` | string | – | – |
+| `meldung` | string | – | max. 2000 Zeichen |
 
 ## Betrieb
 
@@ -5102,6 +7211,451 @@ Familie.
 | `areas[].lng` | number | – | ≥ -180, ≤ 180 |
 | `overwrite` | boolean | – | Standard `false` |
 
+### `GET /api/complaints`
+
+**Reklamationen und Vorfälle.** Mit dem gerechneten Stand der Reaktionsfrist (`frist`: KEINE_ZUSAGE, LAEUFT, EINGEHALTEN, VERPASST). Filter: Status, Kundschaft, nur offene, nur überfällige.
+
+- **Zugriff:** Erfordert die Berechtigung: `complaint:read`.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 429, 500
+
+**Query-Parameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `status` | string | – | `OPEN` \| `ACKNOWLEDGED` \| `IN_PROGRESS` \| `RESOLVED` \| `CLOSED` \| `REJECTED` |
+| `customerId` | string | – | min. 1 Zeichen |
+| `ueberfaellig` | string | – | `true` \| `false` |
+| `offen` | string | – | `true` \| `false` |
+
+### `POST /api/complaints`
+
+**Reklamation erfassen.** Die Reaktionsfrist rechnet der Server aus der Vertragsfassung, die am Meldetag galt — kein Feld setzt sie. Ohne Vertrag oder Zusage: keine Frist. Meldezeitpunkt nicht in der Zukunft und höchstens 30 Tage zurück (422).
+
+- **Zugriff:** Erfordert die Berechtigung: `complaint:create`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 422, 429, 500
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `customerId` | string | ja | min. 1 Zeichen |
+| `propertyId` | string | – | min. 1 Zeichen |
+| `contractId` | string | – | min. 1 Zeichen |
+| `jobId` | string | – | min. 1 Zeichen |
+| `kind` | string | – | `COMPLAINT` \| `INCIDENT` \| `DAMAGE`, Standard `"COMPLAINT"` |
+| `severity` | string | – | `LOW` \| `MEDIUM` \| `HIGH` \| `CRITICAL`, Standard `"MEDIUM"` |
+| `channel` | string | – | `PHONE` \| `EMAIL` \| `PORTAL` \| `ON_SITE` \| `OTHER`, Standard `"PHONE"` |
+| `title` | string | ja | min. 1 Zeichen, max. 160 Zeichen |
+| `description` | string | ja | min. 1 Zeichen, max. 4000 Zeichen |
+| `reportedAt` | string | – | date-time |
+| `assigneeId` | string | – | min. 1 Zeichen |
+
+### `GET /api/complaints/{id}`
+
+**Eine Reklamation.** Mit Vertrag, Einsatz, Zuständigkeit, Massnahme und Fristenstand.
+
+- **Zugriff:** Erfordert die Berechtigung: `complaint:read`.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+### `PATCH /api/complaints/{id}`
+
+**Reklamation ändern.** Schweregrad, Titel (solange offen), Zuständigkeit, interne Notiz. Frist und Meldezeitpunkt sind nicht änderbar.
+
+- **Zugriff:** Erfordert die Berechtigung: `complaint:update`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `severity` | string | – | `LOW` \| `MEDIUM` \| `HIGH` \| `CRITICAL` |
+| `assigneeId` | string | – | min. 1 Zeichen |
+| `internalNote` | string | – | max. 4000 Zeichen |
+| `title` | string | – | min. 1 Zeichen, max. 160 Zeichen |
+
+### `POST /api/complaints/{id}/transition`
+
+**Status einer Reklamation.** Bestätigen, bearbeiten, erledigen, abschliessen, ablehnen, wieder öffnen. Der erste Schritt aus „Offen" hält die Reaktion einmal fest. Unzulässige oder gleichzeitige Übergänge: 422.
+
+- **Zugriff:** Erfordert die Berechtigung: `complaint:update`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `action` | string | ja | `ACKNOWLEDGE` \| `START` \| `RESOLVE` \| `CLOSE` \| `REJECT` \| `REOPEN` |
+| `resolution` | string | – | max. 4000 Zeichen |
+
+### `POST /api/complaints/{id}/corrective-action`
+
+**Korrekturmassnahme ableiten.** Erscheint in den Massnahmen der Unternehmensführung. Je Reklamation eine (422).
+
+- **Zugriff:** Erfordert die Berechtigung: `complaint:update`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `title` | string | ja | min. 1 Zeichen, max. 160 Zeichen |
+| `rootCause` | string | – | max. 2000 Zeichen |
+| `dueOn` | string | – | – |
+
+### `GET /api/account/complaints`
+
+**Eigene Reklamationen.** Nur kundensichtbare Felder; die interne Notiz steht nicht in der Abfrage.
+
+- **Zugriff:** Erfordert die Berechtigung: `complaint:read_own`.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 401, 403, 429, 500
+
+### `POST /api/account/complaints`
+
+**Reklamation melden (Kundschaft).** Zu einem eigenen Objekt oder Einsatz; Fremdes existiert für diesen Weg nicht (404).
+
+- **Zugriff:** Erfordert die Berechtigung: `complaint:create_own`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 422, 429, 500
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `propertyId` | string | – | min. 1 Zeichen |
+| `jobId` | string | – | min. 1 Zeichen |
+| `kind` | string | – | `COMPLAINT` \| `INCIDENT` \| `DAMAGE`, Standard `"COMPLAINT"` |
+| `title` | string | ja | min. 1 Zeichen, max. 160 Zeichen |
+| `description` | string | ja | min. 1 Zeichen, max. 4000 Zeichen |
+
+### `GET /api/account/complaints/{id}`
+
+**Eine eigene Reklamation.** Fremde Reklamationen existieren nicht (404).
+
+- **Zugriff:** Erfordert die Berechtigung: `complaint:read_own`.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+### `GET /api/materials`
+
+**Material mit Bestand.** Bestand = Summe der Bewegungen; Lagerwert; Meldebestand (`nachbestellen=true`).
+
+- **Zugriff:** Erfordert die Berechtigung: `inventory:read`.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 429, 500
+
+**Query-Parameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `nachbestellen` | string | – | `true` \| `false` |
+| `inaktive` | string | – | `true` \| `false` |
+
+### `POST /api/materials`
+
+**Material anlegen.** Artikelnummer je Organisation eindeutig (409).
+
+- **Zugriff:** Erfordert die Berechtigung: `inventory:manage`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 409, 422, 429, 500
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `sku` | string | ja | min. 1 Zeichen, max. 40 Zeichen |
+| `name` | string | ja | min. 1 Zeichen, max. 120 Zeichen |
+| `barcode` | string | – | max. 20 Zeichen |
+| `unit` | string | – | min. 1 Zeichen, max. 20 Zeichen, Standard `"Stk."` |
+| `unitCost` | number | – | ≥ 0, ≤ 1000000, Standard `0` |
+| `minStock` | number | – | ≥ 0, ≤ 1000000, Standard `0` |
+| `note` | string | – | max. 1000 Zeichen |
+
+### `GET /api/materials/{id}`
+
+**Ein Material mit Bewegungen.** Bestand und die letzten 200 Bewegungen.
+
+- **Zugriff:** Erfordert die Berechtigung: `inventory:read`.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+### `PATCH /api/materials/{id}`
+
+**Material ändern.** Stammdaten und Aktivität — kein Bestandsfeld.
+
+- **Zugriff:** Erfordert die Berechtigung: `inventory:manage`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `name` | string | – | min. 1 Zeichen, max. 120 Zeichen |
+| `barcode` | string | – | max. 20 Zeichen |
+| `unit` | string | – | min. 1 Zeichen, max. 20 Zeichen |
+| `unitCost` | number | – | ≥ 0, ≤ 1000000 |
+| `minStock` | number | – | ≥ 0, ≤ 1000000 |
+| `active` | boolean | – | – |
+| `note` | string | – | max. 1000 Zeichen |
+
+### `POST /api/materials/{id}/movements`
+
+**Lagerbewegung buchen.** Eingang, Entnahme, Rückgabe, Inventurkorrektur (mit Begründung). Nur anfügen — die Datenbank verweigert Änderung und Löschung. Negativer Bestand: 422.
+
+- **Zugriff:** Erfordert die Berechtigung: `inventory:manage`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `kind` | string | ja | `RECEIPT` \| `ISSUE` \| `RETURN` \| `ADJUSTMENT` |
+| `quantity` | number | ja | – |
+| `unitCost` | number | – | ≥ 0, ≤ 1000000 |
+| `jobId` | string | – | min. 1 Zeichen |
+| `reference` | string | – | max. 120 Zeichen |
+| `note` | string | – | max. 1000 Zeichen |
+
+### `POST /api/jobs/{id}/material-issue`
+
+**Material für einen Einsatz entnehmen.** Verbrauchszeile, Lagerentnahme und Materialaufwand in einer Transaktion; Preis aus dem Materialstamm. Nach der Vor-Ort-Abnahme eingefroren (422).
+
+- **Zugriff:** Erfordert die Berechtigung: `inventory:manage`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `materialId` | string | ja | min. 1 Zeichen |
+| `quantity` | number | ja | ≥ 0, ≤ 100000 |
+| `billable` | boolean | – | Standard `false` |
+
+### `GET /api/equipment`
+
+**Geräte.** Mit Zuteilung und Wartungsfälligkeit; `wartungFaellig=true` für die nächsten 14 Tage.
+
+- **Zugriff:** Erfordert die Berechtigung: `equipment:read`.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 429, 500
+
+**Query-Parameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `status` | string | – | `AVAILABLE` \| `IN_USE` \| `MAINTENANCE` \| `RETIRED` |
+| `wartungFaellig` | string | – | `true` \| `false` |
+
+### `POST /api/equipment`
+
+**Gerät erfassen.** Die Inventarnummer vergibt der Server.
+
+- **Zugriff:** Erfordert die Berechtigung: `equipment:manage`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 422, 429, 500
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `name` | string | ja | min. 1 Zeichen, max. 120 Zeichen |
+| `category` | string | – | max. 60 Zeichen |
+| `serialNumber` | string | – | max. 80 Zeichen |
+| `purchasedOn` | string | – | – |
+| `purchaseCost` | number | – | ≥ 0, ≤ 1000000 |
+| `maintenanceIntervalDays` | integer | – | ≥ 1, ≤ 3650 |
+| `nextMaintenanceOn` | string | – | – |
+| `note` | string | – | max. 1000 Zeichen |
+
+### `GET /api/equipment/{id}`
+
+**Ein Gerät.** Mit Zuteilung und Wartungsbelegen.
+
+- **Zugriff:** Erfordert die Berechtigung: `equipment:read`.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+### `PATCH /api/equipment/{id}`
+
+**Gerät ändern.** Stammdaten und Wartungsplanung; nicht nach der Ausmusterung.
+
+- **Zugriff:** Erfordert die Berechtigung: `equipment:manage`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `name` | string | – | min. 1 Zeichen, max. 120 Zeichen |
+| `category` | string | – | max. 60 Zeichen |
+| `serialNumber` | string | – | max. 80 Zeichen |
+| `maintenanceIntervalDays` | integer | – | ≥ 1, ≤ 3650 |
+| `nextMaintenanceOn` | string | – | – |
+| `note` | string | – | max. 1000 Zeichen |
+
+### `POST /api/equipment/{id}/assign`
+
+**Gerät zuteilen oder zurücknehmen.** Nur an aktive Personen; nicht in Wartung oder ausgemustert (422).
+
+- **Zugriff:** Erfordert die Berechtigung: `equipment:manage`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `employeeId` | string | – | min. 1 Zeichen |
+
+### `POST /api/equipment/{id}/maintenance`
+
+**Wartung festhalten.** Unveränderlicher Beleg; nächste Fälligkeit aus Wartungstag und Intervall. Zukunft: 422.
+
+- **Zugriff:** Erfordert die Berechtigung: `equipment:manage`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `performedOn` | string | ja | – |
+| `kind` | string | – | min. 1 Zeichen, max. 60 Zeichen, Standard `"Wartung"` |
+| `note` | string | – | max. 1000 Zeichen |
+| `cost` | number | – | ≥ 0, ≤ 1000000 |
+| `wiederVerfuegbar` | boolean | – | Standard `true` |
+
+### `POST /api/equipment/{id}/status`
+
+**Gerätestatus.** In Wartung, zurück in Betrieb, ausmustern (mit Grund, endgültig).
+
+- **Zugriff:** Erfordert die Berechtigung: `equipment:manage`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `status` | string | ja | `AVAILABLE` \| `MAINTENANCE` \| `RETIRED` |
+| `reason` | string | – | max. 500 Zeichen |
+
 ## Kommunikation
 
 ### `GET /api/newsletter`
@@ -5111,7 +7665,16 @@ Familie.
 - **Zugriff:** Erfordert die Berechtigung: `newsletter:read`.
 - **Rate-Limit-Klasse:** `apiRead`
 - **Erfolg:** 200
-- **Mögliche Fehler:** 401, 403, 429, 500
+- **Mögliche Fehler:** 400, 401, 403, 429, 500
+
+**Query-Parameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `q` | string | – | max. 120 Zeichen |
+| `confirmed` | string | – | `0` \| `1` |
+| `page` | integer | – | ≥ 1, Standard `1` |
+| `pageSize` | integer | – | ≥ 1, ≤ 200, Standard `50` |
 
 ### `DELETE /api/newsletter/{id}`
 
@@ -5182,6 +7745,24 @@ Familie.
 | --- | --- | --- | --- |
 | `body` | string | ja | min. 10 Zeichen, max. 480 Zeichen |
 | `active` | boolean | – | – |
+
+### `GET /api/communication/logs`
+
+**Zustellprotokoll.** E-Mail oder SMS mit Status laut Anbieter, Zustell- und Öffnungszeitpunkt; ohne Inhalt.
+
+- **Zugriff:** Erfordert die Berechtigung: `template:read`.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 429, 500
+
+**Query-Parameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `kanal` | string | – | `email` \| `sms`, Standard `"email"` |
+| `status` | string | – | max. 40 Zeichen |
+| `suche` | string | – | max. 120 Zeichen |
+| `tage` | integer | – | ≥ 1, ≤ 365, Standard `30` |
 
 ## Führung: Kennzahlen
 
@@ -6622,12 +9203,7 @@ Familie.
 | `validFrom` | string | – | – |
 | `expiresOn` | string | – | – |
 | `reminderDaysBefore` | integer | – | ≥ 0, ≤ 365, Standard `30` |
-| `file` | object | – | – |
-| `file.path` | string | ja | min. 1 Zeichen, max. 500 Zeichen |
-| `file.url` | string | ja | max. 2000 Zeichen |
-| `file.filename` | string | ja | min. 1 Zeichen, max. 255 Zeichen |
-| `file.mimeType` | string | ja | min. 1 Zeichen, max. 120 Zeichen |
-| `file.sizeBytes` | integer | ja | ≥ 0, ≤ 1073741824 |
+| `fileId` | string | – | min. 1 Zeichen, max. 60 Zeichen |
 | `changeNote` | string | – | max. 500 Zeichen |
 
 ### `GET /api/bi/documents/{id}`
@@ -6709,12 +9285,7 @@ Familie.
 
 | Feld | Typ | Pflicht | Regeln |
 | --- | --- | --- | --- |
-| `file` | object | ja | – |
-| `file.path` | string | ja | min. 1 Zeichen, max. 500 Zeichen |
-| `file.url` | string | ja | max. 2000 Zeichen |
-| `file.filename` | string | ja | min. 1 Zeichen, max. 255 Zeichen |
-| `file.mimeType` | string | ja | min. 1 Zeichen, max. 120 Zeichen |
-| `file.sizeBytes` | integer | ja | ≥ 0, ≤ 1073741824 |
+| `fileId` | string | ja | min. 1 Zeichen, max. 60 Zeichen |
 | `changeNote` | string | – | max. 500 Zeichen |
 
 ### `GET /api/bi/documents/{id}/download`
@@ -6737,6 +9308,78 @@ Familie.
 | Feld | Typ | Pflicht | Regeln |
 | --- | --- | --- | --- |
 | `version` | integer | – | ≥ 1, ≤ 10000 |
+
+### `GET /api/bi/documents/{id}/content`
+
+**Fassung anzeigen.** Die Bytes einer Fassung für den PDF-Viewer — dieselbe Sichtbarkeitsprüfung wie der Download, aber die Datei selbst statt einer Weiterleitung, damit der Viewer 403, 404 und ein unlesbares PDF unterscheiden kann. `X-Document-Version` nennt die ausgelieferte Fassung; PDF `inline`, alles andere `attachment`; nie zwischengespeichert. Protokolliert wie ein Download.
+
+- **Zugriff:** Erfordert eine der Berechtigungen: `document:read`, `document:read_own`.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200 (`application/pdf`)
+- **Mögliche Fehler:** 400, 401, 403, 404, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+**Query-Parameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `version` | integer | – | ≥ 1, ≤ 10000 |
+
+### `GET /api/bi/documents/{id}/signature-requests`
+
+**Unterzeichnungsvorgänge eines Dokuments.** Alle Vorgänge über Fassungen dieses Dokuments, neueste zuerst, mit Teilnehmenden und Prüfsummen. Die Sichtbarkeit des Dokuments gilt auch hier.
+
+- **Zugriff:** Erfordert die Berechtigung: `signature:read`.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+### `POST /api/bi/documents/{id}/signature-requests`
+
+**Zur Unterschrift senden.** Bindet **genau eine Fassung** (ohne Angabe die geltende) über ihre SHA-256-Prüfsumme; nur PDF. `EMBEDDED_VISUAL` wird bei vorhandenen Signaturfeldern oder -strukturen verweigert (422), `DETACHED_EVIDENCE` lässt das Original unangetastet. Bis drei Personen, Prüfstufe `LINK_ONLY`, `LINK_PLUS_EMAIL_CODE` oder `LINK_PLUS_SMS_CODE` (Mobilnummer nötig), Ablauf 1–90 Tage. Mit `send` (Standard) gehen die Links sofort per E-Mail.
+
+- **Zugriff:** Erfordert die Berechtigung: `signature:create`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 201
+- **Mögliche Fehler:** 400, 401, 403, 404, 409, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `version` | integer | – | ≥ 1, ≤ 10000 |
+| `title` | string | – | min. 2 Zeichen, max. 200 Zeichen |
+| `assuranceLevel` | string | – | `LINK_ONLY` \| `LINK_PLUS_EMAIL_CODE` \| `LINK_PLUS_SMS_CODE`, Standard `"LINK_ONLY"` |
+| `artifactMode` | string | – | `EMBEDDED_VISUAL` \| `DETACHED_EVIDENCE`, Standard `"DETACHED_EVIDENCE"` |
+| `expiresInDays` | integer | – | ≥ 1, ≤ 90, Standard `14` |
+| `placement` | object | – | – |
+| `placement.page` | integer | ja | ≥ 1, ≤ 10000 |
+| `placement.x` | number | ja | ≥ 0, ≤ 20000 |
+| `placement.y` | number | ja | ≥ 0, ≤ 20000 |
+| `placement.width` | number | ja | ≥ 1, ≤ 20000 |
+| `placement.height` | number | ja | ≥ 1, ≤ 20000 |
+| `participants` | object[] | ja | min. 1 Einträge, max. 3 Einträge |
+| `participants[].name` | string | ja | min. 2 Zeichen, max. 80 Zeichen |
+| `participants[].email` | string | ja | email, min. 1 Zeichen, max. 255 Zeichen |
+| `participants[].phone` | string | – | – |
+| `send` | boolean | – | Standard `true` |
 
 ### `GET /api/bi/knowledge`
 
@@ -7365,3 +10008,1025 @@ Familie.
 
 | Feld | Typ | Pflicht | Regeln |
 | --- | --- | --- | --- |
+
+## Verträge
+
+### `GET /api/contracts`
+
+**Verträge auflisten.** Filtert nach Zustand, Kundschaft, Suchbegriff sowie nach nahender Kündigungsfrist und nahendem Vertragsende. **Die Einschränkung steht in der `where`-Klausel:** Wer nur `contract:read_own` hat, sieht ausschliesslich die Verträge der eigenen Kundenakte — verstecktes HTML wäre auf der Leitung trotzdem sichtbar.
+
+- **Zugriff:** Erfordert eine der Berechtigungen: `contract:read`, `contract:read_own`.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 429, 500
+
+**Query-Parameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `status` | string | – | `DRAFT` \| `IN_REVIEW` \| `OFFERED` \| `ACTIVE` \| `PAUSED` \| `NOTICE_GIVEN` \| `ENDED` \| `CANCELLED` |
+| `customerId` | string | – | – |
+| `q` | string | – | max. 120 Zeichen |
+| `fristInTagen` | integer | – | ≥ 1, ≤ 365 |
+| `endeInTagen` | integer | – | ≥ 1, ≤ 365 |
+| `page` | integer | – | ≥ 1, Standard `1` |
+| `perPage` | integer | – | ≥ 1, ≤ 100, Standard `25` |
+
+### `POST /api/contracts`
+
+**Vertragsentwurf anlegen.** Der Vertrag entsteht **immer mit seiner ersten Version** — ein Vertrag ohne Konditionen wäre ein Datensatz ohne Inhalt. Nummer und Zustand entstehen nicht hier: Die Nummer wird beim Aktivieren gezogen, damit ein verworfener Entwurf keine Lücke hinterlässt. Mit `quoteId` nur aus einer **angenommenen** Offerte (sonst 422).
+
+- **Zugriff:** Erfordert die Berechtigung: `contract:create`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 201
+- **Mögliche Fehler:** 400, 401, 403, 409, 422, 429, 500
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `contract` | object | ja | – |
+| `contract.customerId` | string | ja | – |
+| `contract.propertyId` | union | – | – |
+| `contract.quoteId` | union | – | – |
+| `contract.title` | string | ja | min. 3 Zeichen, max. 160 Zeichen |
+| `contract.description` | string | – | max. 4000 Zeichen |
+| `contract.startDate` | string | ja | – |
+| `contract.endDate` | string | – | – |
+| `contract.responsibleEmployeeId` | union | – | – |
+| `contract.salesOwnerId` | union | – | – |
+| `contract.serviceManagerId` | union | – | – |
+| `contract.costCenter` | string | – | max. 60 Zeichen |
+| `contract.internalNote` | string | – | max. 4000 Zeichen |
+| `version` | object | ja | – |
+| `version.effectiveFrom` | string | ja | – |
+| `version.reason` | string | ja | min. 5 Zeichen, max. 2000 Zeichen |
+| `version.minimumTermMonths` | integer | – | ≥ 0, ≤ 240 |
+| `version.renewalType` | string | – | `NONE` \| `AUTOMATIC` \| `MANUAL`, Standard `"NONE"` |
+| `version.renewalPeriodMonths` | integer | – | ≥ 1, ≤ 120 |
+| `version.noticePeriodDays` | integer | – | ≥ 0, ≤ 730, Standard `90` |
+| `version.billingCycle` | string | – | `PER_VISIT` \| `MONTHLY` \| `QUARTERLY` \| `SEMIANNUAL` \| `ANNUAL`, Standard `"MONTHLY"` |
+| `version.paymentTermDays` | integer | – | ≥ 0, ≤ 180, Standard `30` |
+| `version.currency` | string | – | Standard `"CHF"` |
+| `version.pricingModel` | string | – | `FIXED_PERIOD` \| `FIXED_PER_VISIT` \| `HOURLY` \| `UNIT_BASED` \| `CUSTOM`, Standard `"FIXED_PERIOD"` |
+| `version.baseAmount` | number | – | ≥ 0, ≤ 9999999, Standard `0` |
+| `version.hourlyRate` | number | – | ≥ 0, ≤ 9999999 |
+| `version.unitPrice` | number | – | ≥ 0, ≤ 999999 |
+| `version.unitLabel` | string | – | max. 40 Zeichen |
+| `version.vatRate` | number | – | ≥ 0, ≤ 100, Standard `8.1` |
+| `version.indexReference` | string | – | max. 120 Zeichen |
+| `version.indexBaseValue` | number | – | ≥ 0, ≤ 999999 |
+| `version.nextReviewAt` | string | – | – |
+| `version.targetQualityScore` | integer | – | ≥ 0, ≤ 100 |
+| `version.inspectionIntervalDays` | integer | – | ≥ 1, ≤ 3650 |
+| `version.responseHours` | integer | – | ≥ 1, ≤ 8760 |
+| `version.slaNote` | string | – | max. 2000 Zeichen |
+| `version.terms` | string | – | max. 20000 Zeichen |
+| `version.internalNote` | string | – | max. 4000 Zeichen |
+| `services` | object[] | – | max. 100 Einträge |
+| `services[].id` | union | – | – |
+| `services[].serviceId` | union | – | – |
+| `services[].label` | string | ja | min. 2 Zeichen, max. 160 Zeichen |
+| `services[].description` | string | – | max. 2000 Zeichen |
+| `services[].buildingId` | object | – | – |
+| `services[].zone` | string | – | max. 120 Zeichen |
+| `services[].estimatedMinutes` | integer | – | ≥ 5, ≤ 1440, Standard `120` |
+| `services[].requiredCrewSize` | integer | – | ≥ 1, ≤ 50, Standard `1` |
+| `services[].requiredSkills` | string[] | – | max. 20 Einträge, Standard `[]` |
+| `services[].qualityRequirement` | string | – | max. 2000 Zeichen |
+| `services[].specialInstructions` | string | – | max. 2000 Zeichen |
+| `services[].materialsBy` | string | – | `PROVIDER` \| `CUSTOMER`, Standard `"PROVIDER"` |
+| `services[].quantity` | number | – | ≥ 0, ≤ 9999999 |
+| `services[].position` | integer | – | ≥ 0, ≤ 999, Standard `0` |
+
+### `GET /api/contracts/deadlines`
+
+**Fristen, die auf jemanden warten.** Nahende Kündigungsfristen, auslaufende Verträge und fällige Preisüberprüfungen. Der Lauf **erinnert, er handelt nicht**: Verlängern, kündigen und Preise anpassen sind Verpflichtungen über Monate, die ein Mensch trifft.
+
+- **Zugriff:** Erfordert die Berechtigung: `contract:read`.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 429, 500
+
+**Query-Parameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `tage` | integer | – | ≥ 1, ≤ 365, Standard `45` |
+
+### `GET /api/contracts/{id}`
+
+**Vertragsakte.** Der Vertrag mit allen Versionen, Leistungen, Einsatzplänen, Ausnahmen, Änderungsanträgen und Preisanpassungen — **eine** Abfrage statt sechs. Sechs Abrufe hintereinander wären sechs Momente, in denen sich der Zustand zwischen zwei Antworten ändern kann. Jede Version meldet zusätzlich, wie viele Einsätze an ihr hängen.
+
+- **Zugriff:** Erfordert eine der Berechtigungen: `contract:read`, `contract:read_own`.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+### `PATCH /api/contracts/{id}`
+
+**Kopfdaten ändern.** Bezeichnung, Objekt, Betreuung, Kostenstelle, Notizen. **Konditionen sind hier nicht dabei** — auch nicht bei einem Entwurf. Sie stehen an der Version, und zwei Türen zu denselben Feldern wären zwei Stellen, an denen die Versionsregel durchzusetzen wäre. Beginn und Ende fehlen aus demselben Grund: Wer das Ende verschiebt, verlängert den Vertrag.
+
+- **Zugriff:** Erfordert die Berechtigung: `contract:update`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `title` | string | – | min. 3 Zeichen, max. 160 Zeichen |
+| `description` | string | – | max. 4000 Zeichen |
+| `propertyId` | union | – | – |
+| `responsibleEmployeeId` | union | – | – |
+| `salesOwnerId` | union | – | – |
+| `serviceManagerId` | union | – | – |
+| `costCenter` | string | – | max. 60 Zeichen |
+| `internalNote` | string | – | max. 4000 Zeichen |
+
+### `DELETE /api/contracts/{id}`
+
+**Entwurf verwerfen.** Weiches Löschen, **nur für Verträge, die nie in Kraft waren** (sonst 422). Ein gelaufener Vertrag ist ein Beleg; er wird beendet, nicht entfernt. Deshalb heisst das Recht `contract:delete_draft` und nicht `contract:delete`.
+
+- **Zugriff:** Erfordert die Berechtigung: `contract:delete_draft`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 204
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+### `POST /api/contracts/{id}/activate`
+
+**In Kraft setzen, Pause oder Kündigung zurücknehmen.** **Erstmals:** Nummer, geltende Fassung und Zustand entstehen in **einer** Transaktion. Der Stichtag ist der der Fassung; ein abweichender nur an einer freien Fassung — an einer angenommenen steht er im unterschriebenen Dokument (422). **Aus Pause:** wie `/resume`. **Aus Kündigung:** die Kündigung wird zurückgenommen. In keinem Fall wird eine Fassung, die schon galt, verändert — bis 2026-09-23 setzte dieser Weg beide Gültigkeiten auf den Vertragsbeginn. Den Wechsel auf eine Folgefassung macht `/versions/{versionId}/activate`. Eigene Berechtigung: Die Betriebsleitung hat sie ausdrücklich nicht.
+
+- **Zugriff:** Erfordert die Berechtigung: `contract:activate`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `effectiveFrom` | string | – | – |
+| `note` | string | – | max. 1000 Zeichen |
+
+### `POST /api/contracts/{id}/pause`
+
+**Aussetzen.** Der Vertrag besteht weiter, es wird nur in einem Zeitraum nicht geleistet — Bauarbeiten, Leerstand, Saison. Beginn frühestens heute (422). Bereits geplante offene Einsätze im Zeitraum werden **abgesagt**; der Planer erzeugt darin keine neuen. Mit Enddatum setzt der nächtliche Lauf den Vertrag am Tag danach von selbst fort.
+
+- **Zugriff:** Erfordert die Berechtigung: `contract:activate`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `pausedFrom` | string | ja | – |
+| `pausedUntil` | string | – | – |
+| `reason` | string | ja | min. 5 Zeichen, max. 2000 Zeichen |
+
+### `POST /api/contracts/{id}/resume`
+
+**Pause beenden.** Kein Rumpf: Es gibt genau eine mögliche Wirkung. Geplant wird **ab heute** — Tage der Pause, die vorbei sind, werden nicht nachgeholt. Bis 2026-09-23 erzeugte der nächste Lauf Einsätze für das ganze Pausenfenster, rückwirkend.
+
+- **Zugriff:** Erfordert die Berechtigung: `contract:activate`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+### `POST /api/contracts/{id}/notice`
+
+**Kündigung erfassen.** **Keine Rechtsauskunft.** Festgehalten wird, wer wann gekündigt hat; das Wirkungsdatum ist eine *Rechnung* aus Kündigungsfrist, Laufzeit und Verlängerungsart der geltenden Version und lässt sich überschreiben. Ob die Kündigung wirksam ist, entscheidet dieses System nicht.
+
+- **Zugriff:** Erfordert die Berechtigung: `contract:terminate`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `noticeGivenBy` | string | ja | `CUSTOMER` \| `PROVIDER` |
+| `noticeGivenAt` | string | – | – |
+| `terminationEffectiveAt` | string | – | – |
+| `reason` | string | – | max. 2000 Zeichen |
+
+### `POST /api/contracts/{id}/end`
+
+**Beenden.** Mit dem Ende laufen die Serien aus: Alle Einsatzpläne werden stillgelegt und bekommen ein Enddatum — sonst erzeugte der nächtliche Planer weiter Einsätze für einen beendeten Vertrag. Die Pläne werden **nicht gelöscht**; die Einsätze zeigen weiterhin auf sie. `ENDED` ist ein Endzustand.
+
+- **Zugriff:** Erfordert die Berechtigung: `contract:terminate`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `reason` | string | – | max. 2000 Zeichen |
+
+### `POST /api/contracts/{id}/cancel`
+
+**Entwurf stornieren.** Behält die Zeile, im Gegensatz zum Löschen. Gedacht für den im Verkauf häufigeren Fall — die Kundschaft springt ab, nachdem der Vertrag schon vorlag. Dass es einen Vertrag gab und woran er scheiterte, ist eine Auskunft; ein gelöschter Entwurf ist keine.
+
+- **Zugriff:** Erfordert die Berechtigung: `contract:delete_draft`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `reason` | string | – | max. 2000 Zeichen |
+
+### `POST /api/contracts/{id}/renew`
+
+**Laufzeit verlängern.** **Auch die „automatische" Verlängerung läuft hierüber.** Der nächtliche Lauf erinnert; verlängern tut ein Mensch, und wer es tut, gehört ins Protokoll. `renewalType: AUTOMATIC` sagt etwas über den *Vertrag* aus, nicht über den Server. Ein unbefristeter Vertrag wird abgewiesen (422).
+
+- **Zugriff:** Erfordert die Berechtigung: `contract:activate`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `months` | integer | – | ≥ 1, ≤ 120 |
+| `reason` | string | ja | min. 5 Zeichen, max. 2000 Zeichen |
+
+### `POST /api/contracts/{id}/versions`
+
+**Neue Vertragsversion anlegen.** Die neue Fassung entsteht als **Entwurf**; in Kraft tritt sie über `/activate`. Ohne `services` wird der Leistungsumfang der geltenden Fassung samt Einsatzplänen **kopiert** — eine Version, die auf die Leistungen ihrer Vorgängerin zeigte, wäre kein eigener Stand, sondern ein Zeiger, und eine spätere Änderung veränderte rückwirkend, was unter der alten Fassung galt. Ein zweiter offener Entwurf wird abgewiesen (422).
+
+- **Zugriff:** Erfordert die Berechtigung: `contract:version`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 201
+- **Mögliche Fehler:** 400, 401, 403, 404, 409, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `version` | object | ja | – |
+| `version.effectiveFrom` | string | ja | – |
+| `version.reason` | string | ja | min. 5 Zeichen, max. 2000 Zeichen |
+| `version.minimumTermMonths` | integer | – | ≥ 0, ≤ 240 |
+| `version.renewalType` | string | – | `NONE` \| `AUTOMATIC` \| `MANUAL`, Standard `"NONE"` |
+| `version.renewalPeriodMonths` | integer | – | ≥ 1, ≤ 120 |
+| `version.noticePeriodDays` | integer | – | ≥ 0, ≤ 730, Standard `90` |
+| `version.billingCycle` | string | – | `PER_VISIT` \| `MONTHLY` \| `QUARTERLY` \| `SEMIANNUAL` \| `ANNUAL`, Standard `"MONTHLY"` |
+| `version.paymentTermDays` | integer | – | ≥ 0, ≤ 180, Standard `30` |
+| `version.currency` | string | – | Standard `"CHF"` |
+| `version.pricingModel` | string | – | `FIXED_PERIOD` \| `FIXED_PER_VISIT` \| `HOURLY` \| `UNIT_BASED` \| `CUSTOM`, Standard `"FIXED_PERIOD"` |
+| `version.baseAmount` | number | – | ≥ 0, ≤ 9999999, Standard `0` |
+| `version.hourlyRate` | number | – | ≥ 0, ≤ 9999999 |
+| `version.unitPrice` | number | – | ≥ 0, ≤ 999999 |
+| `version.unitLabel` | string | – | max. 40 Zeichen |
+| `version.vatRate` | number | – | ≥ 0, ≤ 100, Standard `8.1` |
+| `version.indexReference` | string | – | max. 120 Zeichen |
+| `version.indexBaseValue` | number | – | ≥ 0, ≤ 999999 |
+| `version.nextReviewAt` | string | – | – |
+| `version.targetQualityScore` | integer | – | ≥ 0, ≤ 100 |
+| `version.inspectionIntervalDays` | integer | – | ≥ 1, ≤ 3650 |
+| `version.responseHours` | integer | – | ≥ 1, ≤ 8760 |
+| `version.slaNote` | string | – | max. 2000 Zeichen |
+| `version.terms` | string | – | max. 20000 Zeichen |
+| `version.internalNote` | string | – | max. 4000 Zeichen |
+| `services` | object[] | – | max. 100 Einträge |
+| `services[].id` | union | – | – |
+| `services[].serviceId` | union | – | – |
+| `services[].label` | string | ja | min. 2 Zeichen, max. 160 Zeichen |
+| `services[].description` | string | – | max. 2000 Zeichen |
+| `services[].buildingId` | object | – | – |
+| `services[].zone` | string | – | max. 120 Zeichen |
+| `services[].estimatedMinutes` | integer | – | ≥ 5, ≤ 1440, Standard `120` |
+| `services[].requiredCrewSize` | integer | – | ≥ 1, ≤ 50, Standard `1` |
+| `services[].requiredSkills` | string[] | – | max. 20 Einträge, Standard `[]` |
+| `services[].qualityRequirement` | string | – | max. 2000 Zeichen |
+| `services[].specialInstructions` | string | – | max. 2000 Zeichen |
+| `services[].materialsBy` | string | – | `PROVIDER` \| `CUSTOMER`, Standard `"PROVIDER"` |
+| `services[].quantity` | number | – | ≥ 0, ≤ 9999999 |
+| `services[].position` | integer | – | ≥ 0, ≤ 999, Standard `0` |
+
+### `PATCH /api/contracts/{id}/versions/{versionId}`
+
+**Versionsentwurf ändern.** **Nur Entwürfe** (sonst 422). Der Preis eines laufenden Vertrags ist die Grundlage ausgestellter Rechnungen; wer ihn ändern will, legt eine neue Version an. Der Rumpf trägt die vollständigen Konditionen, nicht eine Teilmenge.
+
+- **Zugriff:** Erfordert die Berechtigung: `contract:version`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+| `versionId` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `effectiveFrom` | string | ja | – |
+| `reason` | string | ja | min. 5 Zeichen, max. 2000 Zeichen |
+| `minimumTermMonths` | integer | – | ≥ 0, ≤ 240 |
+| `renewalType` | string | – | `NONE` \| `AUTOMATIC` \| `MANUAL`, Standard `"NONE"` |
+| `renewalPeriodMonths` | integer | – | ≥ 1, ≤ 120 |
+| `noticePeriodDays` | integer | – | ≥ 0, ≤ 730, Standard `90` |
+| `billingCycle` | string | – | `PER_VISIT` \| `MONTHLY` \| `QUARTERLY` \| `SEMIANNUAL` \| `ANNUAL`, Standard `"MONTHLY"` |
+| `paymentTermDays` | integer | – | ≥ 0, ≤ 180, Standard `30` |
+| `currency` | string | – | Standard `"CHF"` |
+| `pricingModel` | string | – | `FIXED_PERIOD` \| `FIXED_PER_VISIT` \| `HOURLY` \| `UNIT_BASED` \| `CUSTOM`, Standard `"FIXED_PERIOD"` |
+| `baseAmount` | number | – | ≥ 0, ≤ 9999999, Standard `0` |
+| `hourlyRate` | number | – | ≥ 0, ≤ 9999999 |
+| `unitPrice` | number | – | ≥ 0, ≤ 999999 |
+| `unitLabel` | string | – | max. 40 Zeichen |
+| `vatRate` | number | – | ≥ 0, ≤ 100, Standard `8.1` |
+| `indexReference` | string | – | max. 120 Zeichen |
+| `indexBaseValue` | number | – | ≥ 0, ≤ 999999 |
+| `nextReviewAt` | string | – | – |
+| `targetQualityScore` | integer | – | ≥ 0, ≤ 100 |
+| `inspectionIntervalDays` | integer | – | ≥ 1, ≤ 3650 |
+| `responseHours` | integer | – | ≥ 1, ≤ 8760 |
+| `slaNote` | string | – | max. 2000 Zeichen |
+| `terms` | string | – | max. 20000 Zeichen |
+| `internalNote` | string | – | max. 4000 Zeichen |
+
+### `DELETE /api/contracts/{id}/versions/{versionId}`
+
+**Versionsentwurf verwerfen.** Der Entwurf wird `DISCARDED`, nicht gelöscht — ein zurückgezogener Signaturvorgang zeigt auf ihn und ist ein Beleg. Eine laufende Unterzeichnung wird in derselben Transaktion abgebrochen. Abgewiesen (422): eine Fassung, die gilt oder galt; eine angenommene; die erste Fassung eines Entwurfs. Ohne diesen Weg blockierte ein ungewollter Entwurf jede weitere Änderung.
+
+- **Zugriff:** Erfordert die Berechtigung: `contract:version`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+| `versionId` | string | ja | min. 1 Zeichen |
+
+### `POST /api/contracts/{id}/versions/{versionId}/activate`
+
+**Folgefassung in Kraft setzen (Fassung wechseln).** V1 aktiv → V2 Entwurf → V2 aktiv, V1 abgelöst — beliebig fortsetzbar. In einer Transaktion hinter der Sperre des Vertragskopfs; genau eine Fassung gilt (Teilindex). Der Stichtag liegt nicht vor heute und nach dem Beginn der geltenden Fassung; die bisherige endet an ihm und bleibt sonst unverändert (Trigger). Danach werden offene Einsätze ab dem Stichtag umgestellt oder abgesagt und fehlende angelegt; Einsätze davor bleiben bei der bisherigen Fassung. Abgewiesen (422): laufende Unterzeichnung, abweichender Stichtag an einer angenommenen Fassung, keine Leistungen, Vertrag läuft nicht.
+
+- **Zugriff:** Erfordert die Berechtigung: `contract:activate`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+| `versionId` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `effectiveFrom` | string | – | – |
+| `note` | string | – | max. 1000 Zeichen |
+
+### `PUT /api/contracts/{id}/versions/{versionId}/services`
+
+**Leistungsumfang setzen.** **`PUT` und als Ganzes** — dieselbe Entscheidung wie bei Qualifikationen und Arbeitszeiten: `PATCH` verspricht eine Teiländerung, und wer das erwartet, schickt eine Position und verliert die anderen. Nur auf einem Entwurf möglich; an den Leistungen einer geltenden Fassung hängen Einsatzpläne und Einsätze.
+
+- **Zugriff:** Erfordert die Berechtigung: `contract:version`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+| `versionId` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `services` | object[] | ja | max. 100 Einträge |
+| `services[].id` | union | – | – |
+| `services[].serviceId` | union | – | – |
+| `services[].label` | string | ja | min. 2 Zeichen, max. 160 Zeichen |
+| `services[].description` | string | – | max. 2000 Zeichen |
+| `services[].buildingId` | object | – | – |
+| `services[].zone` | string | – | max. 120 Zeichen |
+| `services[].estimatedMinutes` | integer | – | ≥ 5, ≤ 1440, Standard `120` |
+| `services[].requiredCrewSize` | integer | – | ≥ 1, ≤ 50, Standard `1` |
+| `services[].requiredSkills` | string[] | – | max. 20 Einträge, Standard `[]` |
+| `services[].qualityRequirement` | string | – | max. 2000 Zeichen |
+| `services[].specialInstructions` | string | – | max. 2000 Zeichen |
+| `services[].materialsBy` | string | – | `PROVIDER` \| `CUSTOMER`, Standard `"PROVIDER"` |
+| `services[].quantity` | number | – | ≥ 0, ≤ 9999999 |
+| `services[].position` | integer | – | ≥ 0, ≤ 999, Standard `0` |
+
+### `POST /api/contracts/{id}/schedule`
+
+**Einsätze aus den Serien erzeugen.** **Idempotent, und zwar in der Datenbank:** `@@unique([serviceScheduleId, scheduleDate])`. Der Planer *versucht* anzulegen und wertet einen Verstoss gegen den Index als „war schon da" — eine Prüfung im Code allein reichte nicht, weil zwischen „gibt es schon?" und `INSERT` ein Moment liegt, in den ein zweiter Lauf hineinpasst. Die Kennung ist der **Serientag**, nicht der tatsächliche Termin: Ein wegen eines Feiertags verschobener Einsatz behält ihn, sonst entstünde beim Nachtragen eines Feiertags ein zweiter. Die Antwort zeigt `angelegt` und `uebersprungen`; die zweite Zahl ist der Beweis. `probelauf: true` schreibt nichts.
+
+- **Zugriff:** Erfordert die Berechtigung: `contract:update`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `bis` | string | ja | – |
+| `probelauf` | boolean | – | Standard `false` |
+
+### `GET /api/contracts/{id}/billing-basis`
+
+**Abrechnungsgrundlage einer Periode.** **Rechnet, schreibt nichts** — die Rechnung entsteht über den Rechnungsdienst, damit Nummernkreis und Belegregeln an einer Stelle bleiben. Geliefert wird die Herleitung mit jeder Zwischengrösse; jede Position trägt ihre **Vertragsversion**, weil eine Summe ohne diese Zuordnung bei einem geänderten Vertrag nicht mehr prüfbar ist. Gezählt werden nur abgeschlossene und geprüfte Einsätze, bei Stundenabrechnung nur freigegebene Zeiten.
+
+- **Zugriff:** Erfordert die Berechtigung: `contract:billing`.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+**Query-Parameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `von` | string | ja | date-time |
+| `bis` | string | ja | date-time |
+
+### `POST /api/contracts/{id}/versions/{versionId}/acceptance`
+
+**Vertragsfassung zur elektronischen Annahme schicken.** **Kein zweiter Signaturweg**: Es entsteht ein gewöhnlicher Vorgang des bestehenden Signaturkerns — unveränderlicher Snapshot, Hash A, versionierter Zustimmungstext, Protokoll, Ablauf. Unterzeichnet wird eine **Vertragsfassung**, nie „der Vertrag": Was angenommen wird, sind konkrete Konditionen, und die stehen in der Version. Der Link geht per E-Mail an die Kundschaft, nicht an die auslösende Person — sonst könnte der Betrieb den Vertrag selbst „annehmen". Mehrfaches Auslösen versendet den bestehenden Vorgang erneut (200 statt 201, alter Link verfällt), statt einen zweiten anzulegen; erzwungen durch einen Teilindex. Ab dem Versand ist die Fassung eingefroren. Keine Aussage über QES oder ZertES: Der Vorgang belegt den Hergang, keine geprüfte Identität.
+
+- **Zugriff:** Erfordert die Berechtigung: `contract:sign`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 201
+- **Mögliche Fehler:** 400, 401, 403, 404, 409, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+| `versionId` | string | ja | min. 1 Zeichen |
+
+### `DELETE /api/contracts/{id}/versions/{versionId}/acceptance`
+
+**Annahmevorgang zurückziehen.** Der Weg, den die Einfrierung offenlässt: Wer die Konditionen doch noch ändern will, zieht die Unterzeichnung zurück — sichtbar, protokolliert, mit entwertetem Link. Eine bereits angenommene Fassung lässt sich nicht zurückziehen (422); dafür gibt es die neue Version. Snapshot und Protokoll bleiben erhalten.
+
+- **Zugriff:** Erfordert die Berechtigung: `contract:sign`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+| `versionId` | string | ja | min. 1 Zeichen |
+
+### `GET /api/contracts/{id}/invoices`
+
+**Abrechnungsübersicht des Vertrags.** Welche Perioden fakturiert sind und welche offen — die Frage des Monatsabschlusses. Die Perioden entstehen aus dem Zyklus der geltenden Version, nicht aus den vorhandenen Rechnungen; eine vergessene Periode wäre sonst unsichtbar, weil zu ihr eben kein Beleg existiert. Stornierte Rechnungen zählen nicht als fakturiert.
+
+- **Zugriff:** Erfordert die Berechtigung: `contract:billing`.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+**Query-Parameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `perioden` | integer | – | ≥ 1, ≤ 36, Standard `6` |
+
+### `POST /api/contracts/{id}/invoices`
+
+**Rechnung einer Vertragsperiode erzeugen.** **Idempotent.** Ein zweiter Aufruf für dieselbe Periode legt nichts an, sondern gibt die vorhandene Rechnung mit `neu: false` zurück — und antwortet darum mit 200 statt 201. Die Zusicherung steht als Teilindex in der Datenbank (`contractId` + kanonischer Periodenbeginn, ohne stornierte Belege), nicht als Prüfung im Code: Zwischen Lesen und Schreiben liegt ein Moment, in den ein zweiter Klick und zwei gleichzeitige Monatsabschlüsse genau hineinpassen. Kein Zeitraum und kein Betrag werden entgegengenommen — beide ergeben sich aus der geltenden Vertragsversion. Abgewiesen (422): Vertrag ohne geltende Fassung, Vertrag der nie in Kraft war, Periode ohne Betrag.
+
+- **Zugriff:** Erfordert die Berechtigungen: `contract:billing`, `invoice:create`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 201
+- **Mögliche Fehler:** 400, 401, 403, 404, 409, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `stichtag` | string | – | – |
+| `sofortAusstellen` | boolean | – | Standard `false` |
+
+### `POST /api/contracts/{id}/amendments`
+
+**Vertragsänderung beantragen.** **Der Antrag ist nicht die Änderung.** Er durchläuft Prüfung und Freigabe und wird erst dann wirksam, indem er eine neue Version erzeugt. Die Version allein sagt nur, *dass* sich etwas geändert hat — warum, auf wessen Wunsch und mit wessen Zustimmung steht im Antrag. Ein zweiter offener Antrag wird abgewiesen (422).
+
+- **Zugriff:** Erfordert die Berechtigung: `contract:version`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 201
+- **Mögliche Fehler:** 400, 401, 403, 404, 409, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `type` | string | ja | `SCOPE` \| `PRICE` \| `FREQUENCY` \| `TERM` \| `SLA` \| `PAYMENT_TERMS` \| `INDEXATION` \| `OTHER` |
+| `title` | string | ja | min. 3 Zeichen, max. 160 Zeichen |
+| `description` | string | – | max. 4000 Zeichen |
+| `reason` | string | ja | min. 5 Zeichen, max. 2000 Zeichen |
+| `effectiveFrom` | string | ja | – |
+
+### `POST /api/contracts/{id}/amendments/{amendmentId}/decision`
+
+**Änderungsantrag freigeben oder ablehnen.** **Vier-Augen-Prinzip, zweimal abgesichert:** im Rechteschnitt (`contract:version` hat die Betriebsleitung, `contract:approve` nicht) und im Dienst — wer den Antrag gestellt hat, kann ihn nicht selbst freigeben (422). Der Rechteschnitt allein reichte nicht, weil die Administration beide Rechte hat.
+
+- **Zugriff:** Erfordert die Berechtigung: `contract:approve`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+| `amendmentId` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `entscheidung` | string | ja | `APPROVE` \| `REJECT` |
+| `reason` | string | – | max. 2000 Zeichen |
+
+### `POST /api/contracts/{id}/amendments/{amendmentId}/apply`
+
+**Änderungsantrag wirksam machen.** Erzeugt aus dem freigegebenen Antrag eine neue Vertragsversion **im Entwurf**; in Kraft tritt sie über `/activate`. Danach trägt der Antrag beide Versionen — die abgelöste und die neue —, damit „was genau hat sich geändert" beantwortbar bleibt. Der Rumpf trägt die vollständigen neuen Konditionen.
+
+- **Zugriff:** Erfordert die Berechtigung: `contract:version`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 201
+- **Mögliche Fehler:** 400, 401, 403, 404, 409, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+| `amendmentId` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `version` | object | ja | – |
+| `version.effectiveFrom` | string | ja | – |
+| `version.reason` | string | ja | min. 5 Zeichen, max. 2000 Zeichen |
+| `version.minimumTermMonths` | integer | – | ≥ 0, ≤ 240 |
+| `version.renewalType` | string | – | `NONE` \| `AUTOMATIC` \| `MANUAL`, Standard `"NONE"` |
+| `version.renewalPeriodMonths` | integer | – | ≥ 1, ≤ 120 |
+| `version.noticePeriodDays` | integer | – | ≥ 0, ≤ 730, Standard `90` |
+| `version.billingCycle` | string | – | `PER_VISIT` \| `MONTHLY` \| `QUARTERLY` \| `SEMIANNUAL` \| `ANNUAL`, Standard `"MONTHLY"` |
+| `version.paymentTermDays` | integer | – | ≥ 0, ≤ 180, Standard `30` |
+| `version.currency` | string | – | Standard `"CHF"` |
+| `version.pricingModel` | string | – | `FIXED_PERIOD` \| `FIXED_PER_VISIT` \| `HOURLY` \| `UNIT_BASED` \| `CUSTOM`, Standard `"FIXED_PERIOD"` |
+| `version.baseAmount` | number | – | ≥ 0, ≤ 9999999, Standard `0` |
+| `version.hourlyRate` | number | – | ≥ 0, ≤ 9999999 |
+| `version.unitPrice` | number | – | ≥ 0, ≤ 999999 |
+| `version.unitLabel` | string | – | max. 40 Zeichen |
+| `version.vatRate` | number | – | ≥ 0, ≤ 100, Standard `8.1` |
+| `version.indexReference` | string | – | max. 120 Zeichen |
+| `version.indexBaseValue` | number | – | ≥ 0, ≤ 999999 |
+| `version.nextReviewAt` | string | – | – |
+| `version.targetQualityScore` | integer | – | ≥ 0, ≤ 100 |
+| `version.inspectionIntervalDays` | integer | – | ≥ 1, ≤ 3650 |
+| `version.responseHours` | integer | – | ≥ 1, ≤ 8760 |
+| `version.slaNote` | string | – | max. 2000 Zeichen |
+| `version.terms` | string | – | max. 20000 Zeichen |
+| `version.internalNote` | string | – | max. 4000 Zeichen |
+| `services` | object[] | – | max. 100 Einträge |
+| `services[].id` | union | – | – |
+| `services[].serviceId` | union | – | – |
+| `services[].label` | string | ja | min. 2 Zeichen, max. 160 Zeichen |
+| `services[].description` | string | – | max. 2000 Zeichen |
+| `services[].buildingId` | object | – | – |
+| `services[].zone` | string | – | max. 120 Zeichen |
+| `services[].estimatedMinutes` | integer | – | ≥ 5, ≤ 1440, Standard `120` |
+| `services[].requiredCrewSize` | integer | – | ≥ 1, ≤ 50, Standard `1` |
+| `services[].requiredSkills` | string[] | – | max. 20 Einträge, Standard `[]` |
+| `services[].qualityRequirement` | string | – | max. 2000 Zeichen |
+| `services[].specialInstructions` | string | – | max. 2000 Zeichen |
+| `services[].materialsBy` | string | – | `PROVIDER` \| `CUSTOMER`, Standard `"PROVIDER"` |
+| `services[].quantity` | number | – | ≥ 0, ≤ 9999999 |
+| `services[].position` | integer | – | ≥ 0, ≤ 999, Standard `0` |
+
+### `POST /api/contracts/{id}/price-adjustments`
+
+**Preisanpassung vorschlagen.** **Keine Behauptung über Indexierung.** Ob und wie indexiert wird, steht im Vertrag; dieses Modul erfindet keine Regel und ruft keinen Index ab. Eine automatische Erhöhung findet nicht statt. `oldAmount` ist kein Feld der Anfrage — der bisherige Betrag steht in der geltenden Version, und ihn mitschicken zu lassen hiesse, dem Client zu erlauben, die Vergangenheit zu behaupten.
+
+- **Zugriff:** Erfordert die Berechtigung: `contract:version`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 201
+- **Mögliche Fehler:** 400, 401, 403, 404, 409, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `effectiveFrom` | string | ja | – |
+| `reviewDueAt` | string | – | – |
+| `newAmount` | number | ja | ≥ 0, ≤ 9999999 |
+| `percent` | number | – | ≥ -100, ≤ 1000 |
+| `indexReference` | string | – | max. 120 Zeichen |
+| `indexOldValue` | number | – | ≥ 0, ≤ 999999 |
+| `indexNewValue` | number | – | ≥ 0, ≤ 999999 |
+| `reason` | string | ja | min. 5 Zeichen, max. 2000 Zeichen |
+
+### `POST /api/contracts/{id}/price-adjustments/{adjustmentId}/decision`
+
+**Preisanpassung freigeben oder ablehnen.** Wer vorgeschlagen hat, kann nicht selbst zustimmen (422). Bei einer Preiserhöhung ist das keine Formsache: Sie geht an die Kundschaft hinaus.
+
+- **Zugriff:** Erfordert die Berechtigung: `contract:approve`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+| `adjustmentId` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `entscheidung` | string | ja | `APPROVE` \| `REJECT` |
+| `reason` | string | – | max. 2000 Zeichen |
+
+### `POST /api/contracts/{id}/price-adjustments/{adjustmentId}/apply`
+
+**Preisanpassung wirksam machen.** **Kein Rumpf**, und das ist der Punkt: Die neue Version übernimmt alle Konditionen der geltenden Fassung und ändert genau einen Wert. Ein Rumpf hier lüde ein, „bei der Gelegenheit" noch etwas zu verschieben — dann wäre es keine Preisanpassung mehr.
+
+- **Zugriff:** Erfordert die Berechtigung: `contract:version`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 201
+- **Mögliche Fehler:** 400, 401, 403, 404, 409, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+| `adjustmentId` | string | ja | min. 1 Zeichen |
+
+### `POST /api/contract-services/{id}/schedules`
+
+**Einsatzplan anlegen.** Mehrere Pläne je Leistung sind der Normalfall: „Büro Mo/Mi/Fr früh" und „Treppenhaus jeden zweiten Dienstag" sind zwei Serien derselben Position. Die Mandantenprüfung läuft über die ganze Kette Leistung → Version → Vertrag → Organisation.
+
+- **Zugriff:** Erfordert die Berechtigung: `contract:version`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 201
+- **Mögliche Fehler:** 400, 401, 403, 404, 409, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `frequency` | string | – | `WEEKLY` \| `BIWEEKLY` \| `MONTHLY` \| `QUARTERLY` \| `SEMIANNUAL` \| `ANNUAL`, Standard `"WEEKLY"` |
+| `interval` | integer | – | ≥ 1, ≤ 52, Standard `1` |
+| `weekdays` | integer[] | – | max. 7 Einträge, Standard `[]` |
+| `monthDay` | integer | – | ≥ 1, ≤ 31 |
+| `startMinute` | integer | – | ≥ 0, ≤ 1439, Standard `360` |
+| `endMinute` | integer | – | ≥ 0, ≤ 1439, Standard `600` |
+| `effectiveFrom` | string | ja | – |
+| `effectiveUntil` | string | – | – |
+| `holidayHandling` | string | – | `IGNORE` \| `SKIP` \| `MOVE_BEFORE` \| `MOVE_AFTER`, Standard `"SKIP"` |
+| `active` | boolean | – | Standard `true` |
+
+### `PATCH /api/contract-schedules/{id}`
+
+**Einsatzplan ändern.** Bereits erzeugte Einsätze bleiben unberührt — sie sind disponiert, vielleicht schon angekündigt. Die Änderung wirkt ab dem nächsten Planungslauf und, weil `generatedUntil` stehen bleibt, erst jenseits des bereits geplanten Zeitraums. Wer früher wirken will, verschiebt einzelne Termine über eine Ausnahme.
+
+- **Zugriff:** Erfordert die Berechtigung: `contract:version`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `frequency` | string | – | `WEEKLY` \| `BIWEEKLY` \| `MONTHLY` \| `QUARTERLY` \| `SEMIANNUAL` \| `ANNUAL`, Standard `"WEEKLY"` |
+| `interval` | integer | – | ≥ 1, ≤ 52, Standard `1` |
+| `weekdays` | integer[] | – | max. 7 Einträge, Standard `[]` |
+| `monthDay` | integer | – | ≥ 1, ≤ 31 |
+| `startMinute` | integer | – | ≥ 0, ≤ 1439, Standard `360` |
+| `endMinute` | integer | – | ≥ 0, ≤ 1439, Standard `600` |
+| `effectiveFrom` | string | ja | – |
+| `effectiveUntil` | string | – | – |
+| `holidayHandling` | string | – | `IGNORE` \| `SKIP` \| `MOVE_BEFORE` \| `MOVE_AFTER`, Standard `"SKIP"` |
+| `active` | boolean | – | Standard `true` |
+
+### `DELETE /api/contract-schedules/{id}`
+
+**Einsatzplan entfernen.** Hängen bereits Einsätze daran, wird der Plan **stillgelegt statt gelöscht** und zurückgegeben (200 statt 204). Sonst verlören die Einsätze ihre Herkunft, und „aus welchem Plan kam dieser Termin" wäre für immer unbeantwortbar.
+
+- **Zugriff:** Erfordert die Berechtigung: `contract:version`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+### `POST /api/contract-schedules/{id}/exceptions`
+
+**Einzelnen Termin aussetzen, verschieben oder ansetzen.** Eine Ausnahme ist keine Regeländerung: Wer wegen Betriebsferien einen Termin verschiebt, will nicht den Vertrag ändern — und eine Regeländerung wäre eine neue Vertragsversion. Deshalb `contract:update` und nicht `contract:version`. Eine Ausnahme je Serientag; ein zweiter Eintrag für denselben Tag ersetzt den ersten.
+
+- **Zugriff:** Erfordert die Berechtigung: `contract:update`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 201
+- **Mögliche Fehler:** 400, 401, 403, 404, 409, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `kind` | string | ja | `SKIP` \| `MOVE` \| `EXTRA` |
+| `originalDate` | string | ja | – |
+| `newDate` | string | – | – |
+| `reason` | string | – | max. 500 Zeichen |
+
+## Qualität
+
+### `GET /api/quality-inspections`
+
+**Begehungen auflisten.** **Die Kundschaft liest dieselbe Liste**, eingegrenzt in der `where`-Klausel: nur die eigenen Objekte und Verträge, und nur abgeschlossene — ein Entwurf ist eine Momentaufnahme, keine Feststellung. `internalNote` fehlt in der Auswahl; ein Feld, das nur die Anzeige ausblendet, stünde trotzdem auf der Leitung.
+
+- **Zugriff:** Erfordert eine der Berechtigungen: `quality:read`, `quality:read_own`.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 429, 500
+
+**Query-Parameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `status` | string | – | `DRAFT` \| `COMPLETED` \| `CANCELLED` |
+| `outcome` | string | – | `BESTANDEN` \| `KNAPP` \| `NICHT_BESTANDEN` \| `OHNE_ZIEL` |
+| `contractId` | string | – | – |
+| `propertyId` | string | – | – |
+| `von` | string | – | date-time |
+| `bis` | string | – | date-time |
+| `page` | integer | – | ≥ 1, Standard `1` |
+| `perPage` | integer | – | ≥ 1, ≤ 100, Standard `25` |
+
+### `POST /api/quality-inspections`
+
+**Begehung erfassen.** Sie entsteht als **Entwurf**. Die Punktzahl rechnet der Server aus den Positionen; ein mitgeschicktes Ergebnis gibt es im Schema nicht — dieselbe Regel wie beim Preis. Der **Massstab wird eingefroren**: festgehalten wird, welche Vertragsfassung am Tag der Begehung galt und welchen Zielwert sie zusagte. Eine Kontrolle, die nach einer Vertragsänderung anders ausfiele, wäre kein Beleg. Abgewiesen (422): eine Begehung ohne Vertrag **und** ohne Objekt, eine Nachkontrolle zu einem Entwurf, eine zweite Nachkontrolle zu derselben Begehung.
+
+- **Zugriff:** Erfordert die Berechtigung: `quality:inspect`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 201
+- **Mögliche Fehler:** 400, 401, 403, 409, 422, 429, 500
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `contractId` | union | – | – |
+| `propertyId` | union | – | – |
+| `jobId` | union | – | – |
+| `inspectedAt` | string | ja | date-time |
+| `inspectorId` | union | – | – |
+| `followUpOfId` | union | – | – |
+| `note` | string | – | max. 4000 Zeichen |
+| `internalNote` | string | – | max. 4000 Zeichen |
+| `items` | object[] | – | max. 200 Einträge, Standard `[]` |
+| `items[].label` | string | ja | min. 2 Zeichen, max. 160 Zeichen |
+| `items[].room` | string | – | max. 120 Zeichen |
+| `items[].points` | number | ja | ≥ 0, ≤ 1000 |
+| `items[].maxPoints` | number | ja | ≥ 0.5, ≤ 1000 |
+| `items[].weight` | number | – | ≥ 0, ≤ 100, Standard `1` |
+| `items[].note` | string | – | max. 2000 Zeichen |
+| `items[].position` | integer | – | ≥ 0, ≤ 999, Standard `0` |
+
+### `PATCH /api/quality-inspections/{id}`
+
+**Begehungsentwurf ändern.** **Nur Entwürfe** (422 sonst). Eine abgeschlossene Begehung ist ein Beleg; korrigiert wird über eine Nachkontrolle, nicht durch Überschreiben. Die Positionen werden als Ganzes ersetzt. Verschiebt jemand das Begehungsdatum, verschiebt sich auch der Massstab — sonst trüge die Kontrolle die Zusage eines Tages, an dem sie nicht stattfand.
+
+- **Zugriff:** Erfordert die Berechtigung: `quality:inspect`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `inspectedAt` | string | – | date-time |
+| `inspectorId` | union | – | – |
+| `note` | string | – | max. 4000 Zeichen |
+| `internalNote` | string | – | max. 4000 Zeichen |
+| `items` | object[] | – | max. 200 Einträge |
+| `items[].label` | string | ja | min. 2 Zeichen, max. 160 Zeichen |
+| `items[].room` | string | – | max. 120 Zeichen |
+| `items[].points` | number | ja | ≥ 0, ≤ 1000 |
+| `items[].maxPoints` | number | ja | ≥ 0.5, ≤ 1000 |
+| `items[].weight` | number | – | ≥ 0, ≤ 100, Standard `1` |
+| `items[].note` | string | – | max. 2000 Zeichen |
+| `items[].position` | integer | – | ≥ 0, ≤ 999, Standard `0` |
+
+### `DELETE /api/quality-inspections/{id}`
+
+**Begehungsentwurf verwerfen.** Nur Entwürfe. Eine abgeschlossene Begehung wird nicht gelöscht — sie ist ein Beleg, und dafür gibt es keine Ausnahme.
+
+- **Zugriff:** Erfordert die Berechtigung: `quality:inspect`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+### `POST /api/quality-inspections/{id}/complete`
+
+**Begehung abschliessen.** Ab hier ist sie ein **Beleg**: Nummer aus dem Nummernkreis, Abschlusszeitpunkt, danach weder änderbar noch löschbar. Beides entsteht in *einer* Transaktion mit dem Zustand; die Nummer erst hier, damit ein verworfener Entwurf keine Lücke hinterlässt. Abgewiesen (422): eine Begehung ohne Positionen, und eine, bei der **keine** Position beurteilbar war — die wäre ein Beleg über nichts. Nicht bestanden meldet ans Büro, bestanden nicht.
+
+- **Zugriff:** Erfordert die Berechtigung: `quality:complete`.
+- **Rate-Limit-Klasse:** `apiWrite`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 422, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `note` | string | – | max. 4000 Zeichen |
+
+### `GET /api/contracts/{id}/quality`
+
+**Qualitätszusage und ihr Stand.** Der Endpunkt, der die drei SLA-Felder der Vertragsfassung endlich **misst**, statt sie nur zu speichern: zugesagter Zielwert, vereinbartes Kontrollintervall, die letzte abgeschlossene Begehung und wann die nächste ansteht. Gerechnet ab der **letzten durchgeführten** Kontrolle, nicht ab dem Vertragsbeginn — wer früher kontrolliert, verschiebt die nächste Frist nach hinten, statt Termine aufzustauen. Ein Entwurf zählt nicht. Ohne vereinbartes Intervall gibt es keine Fälligkeit, ohne zugesagten Zielwert kein Urteil.
+
+- **Zugriff:** Erfordert die Berechtigung: `quality:read`.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 404, 429, 500
+
+**Pfadparameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `id` | string | ja | min. 1 Zeichen |

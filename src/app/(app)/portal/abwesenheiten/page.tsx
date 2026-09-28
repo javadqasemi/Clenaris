@@ -4,6 +4,7 @@ import { Palmtree } from 'lucide-react';
 import { prisma, toNumber } from '@/lib/db';
 import { requireEmployeeId } from '@/lib/auth/session';
 import { formatDate } from '@/lib/utils';
+import { zuercherJahr } from '@/lib/zuerich';
 import { getVacationBalance } from '@/server/services/employee.service';
 import { StatusBadge } from '@/components/ui/badge';
 import { KpiTile } from '@/components/app/kpi-tile';
@@ -34,7 +35,7 @@ const TYPE_LABELS: Record<string, string> = {
 export default async function AbsencesPage() {
   const { employeeId } = await requireEmployeeId();
 
-  const year = new Date().getFullYear();
+  const year = zuercherJahr();
 
   const [absences, balance] = await Promise.all([
     prisma.absence.findMany({

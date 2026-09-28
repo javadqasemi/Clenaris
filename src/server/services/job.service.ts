@@ -1,15 +1,18 @@
 import 'server-only';
 
-import type { Job, Prisma, ServiceKind } from '@prisma/client';
+import type { Job, Prisma, Service, ServiceKind } from '@prisma/client';
 
 import { prisma, toNumber, type Tx } from '@/lib/db';
 import { BusinessRuleError, ForbiddenError, NotFoundError } from '@/lib/errors';
-import { absoluteUrl, round2 } from '@/lib/utils';
+import { absoluteUrl, formatDate, formatDateTime, round2 } from '@/lib/utils';
 import { orderByFor, resolveSort, type SortOrder } from '@/lib/sort';
 import { haversineMeters } from '@/lib/maps/google';
+import { CRYPTO_CONTEXT, decryptNullable } from '@/lib/crypto';
 import { jobAssignedEmail } from '@/lib/email/templates';
 import { smsTemplates } from '@/lib/sms/client';
 import { audit } from '@/lib/audit';
+import { lesbareFarben } from '@/lib/farbkontrast';
+import { automationEreignisseAbarbeiten, automationEreignisVormerken } from './automation-engine.service';
 import {
   deriveJobCosts,
   effectiveHourlyRate,
@@ -23,14 +26,32 @@ import type {
   JobChecklistTemplateInput,
   JobCostingInput,
   JobMaterialsInput,
+  JobPhotoInput,
   JobTeamInput,
   UpdateJobInput,
 } from '@/lib/validation/operations';
 
+import { renderJobReportSnapshot } from '@/lib/pdf/render';
+
 import { nextNumber } from './numbering.service';
 import { notify } from './notification.service';
 import { invalidateAvailability } from './availability.service';
-import { activeStaffWhere } from './profile.service';
+import { assertAssignable } from './assignment.service';
+import { dateienBinden } from './file.service';
+import { zeiterfassungSperren } from './timetracking.service';
+import {
+  HANDOFF_TTL_MS,
+  assertRapportNichtEingefroren,
+  createHandoffInTx,
+  stempelSitzungNeu,
+} from './device-handoff.service';
+import { assertJobAbnahmefaehig, cancelActiveJobAcceptanceInTx } from './job-acceptance.service';
+import {
+  createJobAcceptanceRequest,
+  findActiveJobAcceptance,
+  issueJobAcceptanceSession,
+} from './signature.service';
+import type { AnfrageKontext } from './signature-events';
 
 /**
  * Einsatzsteuerung (Disposition, Zeiterfassung, Abschluss).
@@ -153,6 +174,25 @@ const CHECKLIST_TEMPLATES: Record<ServiceKind, { label: string; room?: string }[
  * Läuft innerhalb der Transaktion des Aufrufers.
  */
 export async function createJobsForBooking(tx: Tx, bookingId: string): Promise<Job[]> {
+  /**
+   * Zeilensperre auf der Buchung, bevor gezählt wird.
+   *
+   * Die Doppelklick-Falle: Zwei gleichzeitige Bestätigungen derselben Buchung
+   * lasen beide `count === 0` und legten beide einen Einsatz an. Die
+   * Nummernfolge rettete nichts — sie serialisiert erst *nach* der Zählung
+   * und vergibt der zweiten Transaktion brav eine eigene Nummer. Herausgekommen
+   * wären zwei Einsätze für einen Auftrag, zwei Teams und zwei Rapporte.
+   *
+   * `FOR UPDATE` sperrt die Buchungszeile bis zum Commit. Die zweite
+   * Transaktion wartet, sieht danach `count === 1` und gibt eine leere Liste
+   * zurück — dieselbe Antwort, die ein wiederholter Aufruf immer schon
+   * bekommen hat. Das ist billiger als eine Eindeutigkeitsbedingung auf
+   * `bookingId`, die es verböte, einer Buchung je einen zweiten Einsatz zu
+   * geben (Nachbesserung, geteilter Auftrag) — und genau das soll möglich
+   * bleiben.
+   */
+  await tx.$queryRaw`SELECT id FROM bookings WHERE id = ${bookingId} FOR UPDATE`;
+
   const booking = await tx.booking.findUniqueOrThrow({
     where: { id: bookingId },
     include: {
@@ -164,10 +204,31 @@ export async function createJobsForBooking(tx: Tx, bookingId: string): Promise<J
   const existing = await tx.job.count({ where: { bookingId } });
   if (existing > 0) return [];
 
-  const service = booking.items[0]?.service;
+  /**
+   * Mehrere Leistungen, ein Einsatz (Produktsprint 2026-09-26).
+   *
+   * Eine Buchung mit Büro- und Fensterreinigung wird vom selben Team am
+   * selben Termin nacheinander erledigt — so rechnet auch die
+   * Verfügbarkeit (Dauer = Summe, Team = das grösste). Zwei Einsätze wären
+   * zwei Zuteilungen für eine Anfahrt und würden den Termin in der
+   * Disposition doppelt belegen.
+   *
+   * Damit downstream keine Leistung verloren geht: Der Titel nennt alle, die
+   * Checkliste enthält die Punkte jeder Leistung (bei mehreren mit deren Namen
+   * vorangestellt), und die Beschreibung listet sie mit ihrer Dauer. `serviceId`
+   * am Einsatz bleibt die erste Leistung — das Feld ist einwertig, und
+   * Kalenderfarbe und Auswertung je Leistungsart hängen daran; die
+   * vollständige Liste steht an der Buchung, auf die der Einsatz verweist.
+   */
+  const leistungen = eindeutigeLeistungen(booking.items);
+  const service = leistungen[0]?.service;
+  const mehrere = leistungen.length > 1;
   const { number } = await nextNumber(tx, booking.organizationId, 'job');
 
-  const checklistTemplate = service ? CHECKLIST_TEMPLATES[service.kind] : [];
+  const checklistTemplate = leistungen.flatMap(({ service: s }) =>
+    CHECKLIST_TEMPLATES[s.kind].map((item) => ({ ...item, label: mehrere ? `${s.name}: ${item.label}` : item.label })),
+  );
+  const namen = leistungen.map((l) => l.service.name).join(' + ') || 'Reinigung';
 
   const job = await tx.job.create({
     data: {
@@ -178,7 +239,13 @@ export async function createJobsForBooking(tx: Tx, bookingId: string): Promise<J
       addressId: booking.addressId,
       propertyId: booking.propertyId,
       serviceId: service?.id ?? null,
-      title: `${service?.name ?? 'Reinigung'} · ${booking.customer.companyName ?? booking.customer.lastName}`,
+      // Alle Qualifikationen aller Leistungen — dasselbe Team erledigt sie
+      // nacheinander (siehe oben).
+      requiredSkills: [...new Set(leistungen.flatMap((l) => l.service.requiredSkills))],
+      title: `${namen} · ${booking.customer.companyName ?? booking.customer.lastName}`,
+      description: mehrere
+        ? `Leistungen, nacheinander: ${leistungen.map((l) => `${l.service.name} (ca. ${Math.round((l.dauer / 60) * 10) / 10} Std.)`).join(', ')}`
+        : null,
       status: 'UNASSIGNED',
       scheduledStart: booking.scheduledStart,
       scheduledEnd: booking.scheduledEnd,
@@ -201,6 +268,17 @@ export async function createJobsForBooking(tx: Tx, bookingId: string): Promise<J
   return [job];
 }
 
+/** Die Leistungen einer Buchung in Positionsreihenfolge, je Leistung einmal, mit ihrer Dauer. */
+function eindeutigeLeistungen<T extends { serviceId: string; position: number; durationMin: number; service: Service }>(items: T[]) {
+  const karte = new Map<string, { service: Service; dauer: number }>();
+  for (const item of [...items].sort((a, b) => a.position - b.position)) {
+    const eintrag = karte.get(item.serviceId);
+    if (eintrag) eintrag.dauer += item.durationMin;
+    else karte.set(item.serviceId, { service: item.service, dauer: item.durationMin });
+  }
+  return [...karte.values()];
+}
+
 export async function createJob(params: {
   organizationId: string;
   input: CreateJobInput;
@@ -208,9 +286,26 @@ export async function createJob(params: {
 }): Promise<Job> {
   const { organizationId, input } = params;
 
-  await assertActiveStaff(organizationId, input.employeeIds);
-
   const job = await prisma.$transaction(async (tx) => {
+    /**
+     * Die Eignungsprüfung steht innerhalb der Transaktion und vor dem
+     * Schreiben. Vorher stand hier nur `assertActiveStaff` — ein Einsatz liess
+     * sich also mit einem Team anlegen, dessen Mitglieder in den Ferien oder
+     * zur selben Zeit anderswo eingeteilt waren. Über den Kalender war das
+     * verboten, über das Formular nicht.
+     */
+    const requiredSkills = input.serviceId
+      ? ((await tx.service.findFirst({ where: { id: input.serviceId, organizationId }, select: { requiredSkills: true } }))?.requiredSkills ?? [])
+      : [];
+
+    await assertAssignable(tx, {
+      organizationId,
+      employeeIds: input.employeeIds,
+      scheduledStart: input.scheduledStart,
+      scheduledEnd: input.scheduledEnd,
+      requiredSkills,
+    });
+
     const { number } = await nextNumber(tx, organizationId, 'job');
 
     const created = await tx.job.create({
@@ -222,6 +317,7 @@ export async function createJob(params: {
         addressId: input.addressId ?? null,
         propertyId: input.propertyId ?? null,
         serviceId: input.serviceId ?? null,
+        requiredSkills,
         title: input.title,
         status: input.employeeIds.length > 0 ? 'SCHEDULED' : 'UNASSIGNED',
         scheduledStart: input.scheduledStart,
@@ -249,6 +345,11 @@ export async function createJob(params: {
       },
     });
 
+    // Parität (2026-09-27): Ein Einsatz, der gleich mit Team entsteht, ist
+    // ebenso zugeteilt wie einer, dem das Team später zugewiesen wird.
+    if (input.employeeIds.length > 0) {
+      await automationEreignisVormerken(tx, { organizationId, trigger: 'JOB_ASSIGNED', entityId: created.id });
+    }
     return created;
   });
 
@@ -256,6 +357,7 @@ export async function createJob(params: {
 
   if (input.employeeIds.length > 0) {
     await notifyAssignees(job.id, input.employeeIds);
+    await automationEreignisseAbarbeiten({ organizationId });
   }
 
   await audit.created({
@@ -269,18 +371,127 @@ export async function createJob(params: {
   return job;
 }
 
+/**
+ * Die Einsatzzeile sperren und **danach** lesen — der erste Schritt jeder
+ * Transaktion, die Team oder Termin eines Einsatzes ändert (F-06, 2026-09-27).
+ *
+ * Die Sperre je Person in `assertAssignable` schützt eine *Person* vor zwei
+ * gleichzeitigen Einteilungen. Sie schützt nicht den *Einsatz* vor zwei
+ * gleichzeitigen Änderungen, die je eine andere Hälfte der Frage betreffen:
+ * `updateJob` verschiebt den Termin und prüft dabei das **bisherige** Team zur
+ * neuen Zeit; `setJobTeam` setzt gleichzeitig ein neues Team und prüft es zur
+ * **bisherigen** Zeit. Beide lasen den Einsatz vor ihrer Transaktion, beide
+ * fanden „geeignet", beide schrieben — und das Ergebnis, neues Team zur neuen
+ * Zeit, hatte niemand geprüft. Die beiden Personensperren halfen nicht: Es
+ * waren verschiedene Personen, also sperrten sie einander nicht.
+ *
+ * `SELECT … FOR UPDATE` auf der Einsatzzeile reiht alle Änderungen an
+ * *demselben* Einsatz hintereinander. Die zweite wartet, bis die erste
+ * festgeschrieben ist, und liest dann Termin, Team und Status so, wie sie
+ * jetzt sind — deshalb wird hier nach der Sperre neu gelesen, und nicht der
+ * Stand vor der Transaktion weiterverwendet. Einsätze, die nichts
+ * miteinander zu tun haben, warten nicht aufeinander.
+ *
+ * **Sperrreihenfolge:** zuerst der Einsatz, dann die Personen
+ * (`zuteilung:<employeeId>` in `assertAssignable`). Das ist dieselbe Richtung
+ * wie in Gate 4D („Job → SignatureRequest → …"), und `decideAbsence` nimmt
+ * nur die Personensperre, nie eine Einsatzzeile — eine umgekehrte Reihenfolge,
+ * die eine Verklemmung ergäbe, gibt es damit nicht.
+ *
+ * Eine Versionsspalte mit optimistischer Prüfung wäre die andere Möglichkeit;
+ * sie verlangte eine Migration und liesse den Verlierer mit einem Fehler
+ * zurück, den er nur durch Wiederholen beheben kann. Die Sperre lässt ihn
+ * warten und dann gegen den wahren Stand entscheiden.
+ */
+async function einsatzSperren(tx: Tx, organizationId: string, jobId: string) {
+  await tx.$queryRaw`SELECT id FROM jobs WHERE id = ${jobId} AND "organizationId" = ${organizationId} FOR UPDATE`;
+  const job = await tx.job.findFirst({
+    where: { id: jobId, organizationId, deletedAt: null },
+    include: { assignments: true },
+  });
+  if (!job) throw new NotFoundError('Einsatz');
+  return job;
+}
+
+/**
+ * Status, in denen ein Einsatz kein neues Personal mehr bekommt.
+ *
+ * Abgeschlossen und kontrolliert: Am Team hängen Zeiterfassung,
+ * Lohnabrechnung und Rapport — ein nachträglich ersetztes Team behauptete,
+ * andere Personen hätten die Arbeit getan. Abgesagt: Wer einem abgesagten
+ * Einsatz zugeteilt wird, bekommt eine Benachrichtigung für Arbeit, die nicht
+ * stattfindet.
+ */
+const KEINE_ZUTEILUNG_MEHR: Job['status'][] = ['COMPLETED', 'VERIFIED', 'CANCELLED'];
+
+function zuteilungsstatusMeldung(status: Job['status']): string {
+  return status === 'CANCELLED'
+    ? 'Einem abgesagten Einsatz wird niemand mehr zugeteilt.'
+    : 'Das Team eines abgeschlossenen Einsatzes lässt sich nicht mehr ändern — daran hängt die Lohnabrechnung.';
+}
+
 export async function updateJob(params: {
   organizationId: string;
   jobId: string;
   input: UpdateJobInput;
   actorId: string;
 }): Promise<Job> {
-  const job = await prisma.job.findFirst({
-    where: { id: params.jobId, organizationId: params.organizationId, deletedAt: null },
-  });
-  if (!job) throw new NotFoundError('Einsatz');
+  /*
+    Prüfen und Schreiben in **einer** Transaktion (2026-09-27). Vorher lief
+    die Eignungsprüfung hier auf dem globalen Klienten und das Schreiben
+    danach getrennt — das weiteste Fenster aller fünf Aufrufer: Zwischen
+    „das Team ist frei" und dem Verschieben konnte ein zweiter Vorgang
+    dieselben Personen zur neuen Zeit einteilen. Die Sperre je Person in
+    `assertAssignable` wirkt nur innerhalb einer Transaktion.
 
-  const updated = await prisma.job.update({
+    Seit F-06 (2026-09-27) wird der Einsatz ausserdem **in** der Transaktion
+    gesperrt und gelesen (`einsatzSperren`): Das Team, das zur neuen Zeit
+    geprüft wird, ist das Team, das nach dem Festschreiben tatsächlich am
+    Einsatz steht — nicht das, das vor einer gleichzeitigen Teamänderung dort
+    stand.
+  */
+  const { job, updated } = await prisma.$transaction(async (tx) => {
+  const job = await einsatzSperren(tx, params.organizationId, params.jobId);
+
+  // Der Rapport ist eingefroren, solange die Kundschaft ihn liest (§ 12).
+  await assertRapportNichtEingefroren(job.id, tx);
+
+  /**
+   * Das Bearbeitungsformular kann den Termin verschieben — dann gilt
+   * dieselbe Frage wie im Kalender: Kann das eingeteilte Team zur neuen Zeit?
+   * Ohne diese Prüfung wäre das Formular der Umweg um die Regel, die der
+   * Kalender durchsetzt.
+   *
+   * Nur wenn sich eine der beiden Zeiten wirklich ändert; sonst kostet jede
+   * Notizänderung zwei überflüssige Abfragen.
+   */
+  const neuerStart = params.input.scheduledStart ?? job.scheduledStart;
+  const neuesEnde = params.input.scheduledEnd ?? job.scheduledEnd;
+  const terminVerschoben =
+    neuerStart.getTime() !== job.scheduledStart.getTime() ||
+    neuesEnde.getTime() !== job.scheduledEnd.getTime();
+
+  /*
+    Dieselbe Schwelle wie im Kalender (`moveJob`): Ein abgeschlossener Einsatz
+    hat stattgefunden, sein Termin ist Teil von Rapport und Zeiterfassung.
+    Über das Formular liess er sich bis F-06 trotzdem verschieben — wieder der
+    Umweg um die Regel, die der Kalender durchsetzt.
+  */
+  if (terminVerschoben && ['COMPLETED', 'VERIFIED'].includes(job.status)) {
+    throw new BusinessRuleError('Abgeschlossene Einsätze können nicht verschoben werden.');
+  }
+
+  if (terminVerschoben && job.assignments.length > 0) {
+    await assertAssignable(tx, {
+      organizationId: params.organizationId,
+      employeeIds: job.assignments.map((assignment) => assignment.employeeId),
+      scheduledStart: neuerStart,
+      scheduledEnd: neuesEnde,
+      ignoreJobId: job.id,
+    });
+  }
+
+  const geschrieben = await tx.job.update({
     where: { id: job.id },
     data: {
       ...(params.input.title !== undefined ? { title: params.input.title } : {}),
@@ -306,6 +517,8 @@ export async function updateJob(params: {
       ...(params.input.color !== undefined ? { color: params.input.color } : {}),
     },
   });
+  return { job, updated: geschrieben };
+  });
 
   await invalidateAvailability(params.organizationId, updated.scheduledStart);
 
@@ -330,17 +543,42 @@ export async function moveJob(params: {
   employeeId?: string;
   actorId: string;
 }): Promise<Job> {
-  const job = await prisma.job.findFirst({
-    where: { id: params.jobId, organizationId: params.organizationId, deletedAt: null },
-    include: { assignments: true },
-  });
-  if (!job) throw new NotFoundError('Einsatz');
+  const { job, updated } = await prisma.$transaction(async (tx) => {
+    // Einsatz sperren und in der Transaktion lesen (F-06, siehe
+    // `einsatzSperren`): Status und bisheriges Team gelten so, wie sie nach
+    // einer gleichzeitigen Änderung wirklich sind.
+    const job = await einsatzSperren(tx, params.organizationId, params.jobId);
 
-  if (['COMPLETED', 'VERIFIED'].includes(job.status)) {
-    throw new BusinessRuleError('Abgeschlossene Einsätze können nicht verschoben werden.');
-  }
+    if (['COMPLETED', 'VERIFIED'].includes(job.status)) {
+      throw new BusinessRuleError('Abgeschlossene Einsätze können nicht verschoben werden.');
+    }
 
-  const updated = await prisma.$transaction(async (tx) => {
+    /**
+     * Wer nach dem Verschieben vor der Tür steht, muss zur **neuen** Zeit
+     * können.
+     *
+     * Diese Prüfung fehlte hier vollständig — und das war die grösste Lücke
+     * der Disposition: Ein Einsatz liess sich per Ziehen auf einen Tag legen,
+     * an dem das eingeteilte Team in den Ferien war oder bereits woanders
+     * stand. Die Zuteilung blieb bestehen, niemand widersprach, und der
+     * Ausfall fiel am Einsatztag auf.
+     *
+     * Geprüft wird das Team, das der Einsatz *nachher* hat: entweder die neu
+     * gezogene Person allein (die Ressourcenspalte ersetzt das Team) oder das
+     * bisherige.
+     */
+    const teamNachher = params.employeeId
+      ? [params.employeeId]
+      : job.assignments.map((assignment) => assignment.employeeId);
+
+    await assertAssignable(tx, {
+      organizationId: params.organizationId,
+      employeeIds: teamNachher,
+      scheduledStart: params.scheduledStart,
+      scheduledEnd: params.scheduledEnd,
+      ignoreJobId: job.id,
+    });
+
     const result = await tx.job.update({
       where: { id: job.id },
       data: { scheduledStart: params.scheduledStart, scheduledEnd: params.scheduledEnd },
@@ -366,7 +604,7 @@ export async function moveJob(params: {
       });
     }
 
-    return result;
+    return { job, updated: result };
   });
 
   await Promise.all([
@@ -391,23 +629,12 @@ export async function moveJob(params: {
 // ---------------------------------------------------------------------------
 
 /**
- * Nur aktives Personal lässt sich einteilen — Personalakte aktiv *und*
- * Kontorolle ist Personal. Eine Person, deren Konto auf Kundschaft steht,
- * gehört nicht ins Team, auch wenn ihre Akte noch nicht stillgelegt ist; und
- * eine erfundene ID darf nicht erst als Fremdschlüsselfehler auffallen.
+ * Ob eine Person eingeteilt werden darf, beantwortet seit Phase 2
+ * ausschliesslich `assignment.service.ts` — aktives Personal, bewilligte
+ * Abwesenheiten, Überschneidungen und hinterlegte Arbeitszeit in einer Regel.
+ * Das frühere `assertActiveStaff` prüfte nur den ersten Punkt und stand
+ * ausserdem vor der Transaktion, also im Rennen mit dem eigenen Schreibvorgang.
  */
-async function assertActiveStaff(organizationId: string, employeeIds: string[]): Promise<void> {
-  if (employeeIds.length === 0) return;
-  const known = await prisma.employee.count({
-    where: { id: { in: employeeIds }, ...activeStaffWhere(organizationId) },
-  });
-  if (known !== new Set(employeeIds).size) {
-    throw new BusinessRuleError(
-      'Mindestens eine der gewählten Personen gehört nicht zum aktiven Personal.',
-    );
-  }
-}
-
 export async function assignJob(params: {
   organizationId: string;
   jobId: string;
@@ -416,40 +643,38 @@ export async function assignJob(params: {
   notify?: boolean;
   actorId: string;
 }): Promise<void> {
-  const job = await prisma.job.findFirst({
-    where: { id: params.jobId, organizationId: params.organizationId, deletedAt: null },
-  });
-  if (!job) throw new NotFoundError('Einsatz');
+  const job = await prisma.$transaction(async (tx) => {
+    /*
+      Einsatz zuerst sperren, dann lesen (F-06, siehe `einsatzSperren`):
+      Termin und Status, gegen die geprüft wird, sind die festgeschriebenen —
+      nicht die von vor einer gleichzeitigen Terminverschiebung.
+    */
+    const job = await einsatzSperren(tx, params.organizationId, params.jobId);
 
-  await assertActiveStaff(params.organizationId, params.employeeIds);
+    /*
+      Statusprüfung (F-06, 2026-09-27). `setJobTeam` wies abgeschlossene
+      Einsätze schon immer ab, `assignJob` — dieselbe Handlung aus dem
+      Kalender — nicht: Über `/assign` liess sich das Team eines
+      abgeschlossenen, kontrollierten oder abgesagten Einsatzes ersetzen.
+      `assertAssignable` fragt nach der Person, nicht nach dem Einsatz; die
+      Frage, ob der Einsatz überhaupt noch Personal bekommt, steht deshalb
+      hier.
+    */
+    if (KEINE_ZUTEILUNG_MEHR.includes(job.status)) {
+      throw new BusinessRuleError(zuteilungsstatusMeldung(job.status));
+    }
 
-  // Doppelverplanung erkennen: überlappende Einsätze derselben Person.
-  const conflicts = await prisma.jobAssignment.findMany({
-    where: {
-      employeeId: { in: params.employeeIds },
-      jobId: { not: job.id },
-      job: {
-        deletedAt: null,
-        status: { notIn: ['CANCELLED', 'COMPLETED', 'VERIFIED'] },
-        scheduledStart: { lt: job.scheduledEnd },
-        scheduledEnd: { gt: job.scheduledStart },
-      },
-    },
-    include: {
-      employee: { include: { user: { select: { firstName: true, lastName: true } } } },
-      job: { select: { number: true } },
-    },
-  });
+    // Eine Regel für alle fünf Stellen, die ein Team setzen — siehe
+    // `assignment.service.ts`. Innerhalb der Transaktion, damit zwischen
+    // Prüfen und Schreiben nichts dazwischenkommt.
+    await assertAssignable(tx, {
+      organizationId: params.organizationId,
+      employeeIds: params.employeeIds,
+      scheduledStart: job.scheduledStart,
+      scheduledEnd: job.scheduledEnd,
+      ignoreJobId: job.id,
+    });
 
-  if (conflicts.length > 0) {
-    throw new BusinessRuleError(
-      `Terminkonflikt: ${conflicts
-        .map((c) => `${c.employee.user.firstName} ${c.employee.user.lastName} ist bereits für ${c.job.number} eingeteilt`)
-        .join('; ')}.`,
-    );
-  }
-
-  await prisma.$transaction(async (tx) => {
     await tx.jobAssignment.deleteMany({ where: { jobId: job.id } });
     await tx.jobAssignment.createMany({
       data: params.employeeIds.map((employeeId, index) => ({
@@ -463,19 +688,39 @@ export async function assignJob(params: {
       where: { id: job.id },
       data: { status: job.status === 'UNASSIGNED' ? 'SCHEDULED' : job.status },
     });
+    await automationEreignisVormerken(tx, { organizationId: params.organizationId, trigger: 'JOB_ASSIGNED', entityId: job.id });
+    return job;
   });
 
   if (params.notify !== false) {
     await notifyAssignees(job.id, params.employeeIds);
   }
 
+  /**
+   * Die Kennungen der zugeteilten Personen gehören in den Eintrag, nicht nur
+   * ihre Anzahl.
+   *
+   * „an 3 Person(en) zugeteilt" beantwortet die Frage nicht, die im Ernstfall
+   * gestellt wird: *Wer* war an diesem Tag auf diesem Objekt? Diese Frage
+   * stellt sich bei einem Schadenfall, bei einem Schlüsselverlust und bei
+   * jeder arbeitsrechtlichen Auseinandersetzung — und die Zuteilung selbst
+   * wird beim nächsten Umdisponieren überschrieben (`deleteMany` oben). Ohne
+   * die Kennungen im Protokoll ist der frühere Stand danach nicht mehr
+   * rekonstruierbar.
+   *
+   * Kennungen und nicht Namen: Der Name steht in der Personalakte und ändert
+   * sich; die Kennung ist stabil und verrät für sich genommen nichts.
+   */
   await audit.updated({
     organizationId: params.organizationId,
     userId: params.actorId,
     entity: 'Job',
     entityId: job.id,
     summary: `Einsatz ${job.number} an ${params.employeeIds.length} Person(en) zugeteilt`,
+    changes: { employeeIds: params.employeeIds, role: params.role ?? 'MEMBER' },
   });
+
+  await automationEreignisseAbarbeiten({ organizationId: params.organizationId });
 }
 
 async function notifyAssignees(jobId: string, employeeIds: string[]) {
@@ -500,7 +745,9 @@ async function notifyAssignees(jobId: string, employeeIds: string[]) {
         userId: employee.user.id,
         channels: ['IN_APP', 'EMAIL', 'SMS'],
         title: 'Neuer Einsatz zugeteilt',
-        body: `${job.title} · ${job.scheduledStart.toLocaleString('de-CH')}`,
+        // Zürcher Zeit (2026-09-27) — ohne Zone stand die UTC-Uhrzeit in der
+        // Meldung, eine bis zwei Stunden zu früh.
+        body: `${job.title} · ${formatDateTime(job.scheduledStart)}`,
         link: `/portal/einsaetze/${job.id}`,
         emailContent: jobAssignedEmail({
           firstName: employee.user.firstName,
@@ -511,7 +758,7 @@ async function notifyAssignees(jobId: string, employeeIds: string[]) {
           portalUrl: absoluteUrl(`/portal/einsaetze/${job.id}`),
         }),
         smsBody: smsTemplates.jobAssigned({
-          date: job.scheduledStart.toLocaleDateString('de-CH'),
+          date: formatDate(job.scheduledStart),
           time: job.scheduledStart.toLocaleTimeString('de-CH', {
             hour: '2-digit',
             minute: '2-digit',
@@ -572,18 +819,12 @@ export async function clockIn(params: {
   const isAssigned = job.assignments.some((a) => a.employeeId === params.employeeId);
   if (!isAssigned) throw new ForbiddenError('Sie sind diesem Einsatz nicht zugeteilt.');
 
-  const open = await prisma.timeEntry.findFirst({
-    where: { employeeId: params.employeeId, endedAt: null },
-    include: { job: { select: { number: true, title: true } } },
-  });
-  if (open) {
-    // Mit Nummer statt ohne: „Es läuft bereits eine Zeiterfassung" schickt die
-    // Person suchen, „…auf E-2041" sagt ihr, wo sie ausstempeln muss.
-    throw new BusinessRuleError(
-      open.job
-        ? `Es läuft bereits eine Zeiterfassung auf ${open.job.number} (${open.job.title}). Bitte stempeln Sie dort zuerst aus.`
-        : 'Es läuft bereits eine Zeiterfassung. Bitte stempeln Sie zuerst aus.',
-    );
+  // Auf einen abgesagten oder abgeschlossenen Einsatz wird nicht mehr
+  // eingestempelt (2026-09-27). Vorher ging das: Die Zeit lief in die
+  // Lohnkosten eines Einsatzes, der nicht stattfand oder schon abgerechnet
+  // war. Dieselbe Grenze wie bei Zuteilung und Terminänderung.
+  if (['CANCELLED', 'COMPLETED', 'VERIFIED'].includes(job.status)) {
+    throw new BusinessRuleError('Dieser Einsatz ist abgesagt oder abgeschlossen — hier lässt sich keine Zeit mehr erfassen.');
   }
 
   const position = resolvePosition(params.input);
@@ -603,6 +844,42 @@ export async function clockIn(params: {
   });
 
   const entry = await prisma.$transaction(async (tx) => {
+    /*
+      Erst die Sperre der Zeiterfassung dieser Person, dann nachsehen, ob
+      schon etwas läuft — beides in der Transaktion, in der auch angelegt
+      wird (N-01, 2026-09-27).
+
+      Vorher stand die Prüfung vor der Transaktion und ohne Sperre. Sechs
+      gleichzeitige Stempelungen (Doppeltipp, schlechtes Netz mit
+      Wiederholung, zwei Geräte) lasen alle „nichts offen" und legten alle
+      eine laufende Erfassung an; beim Ausstempeln wurde nur die jüngste
+      geschlossen, die übrigen liefen weiter in die Lohnkosten. Die Sperre ist
+      dieselbe wie bei Nacherfassung und Korrektur (`zeiterfassungSperren` in
+      `timetracking.service.ts`), also warten auch diese Wege aufeinander.
+      Die zweite Stempelung wartet, bis die erste festgeschrieben ist, und
+      findet dann deren offenen Eintrag.
+
+      Dahinter steht seit Migration `20260927200100_eine_offene_zeiterfassung`
+      der Teilindex `time_entries_eine_laufende_je_person` (UNIQUE über
+      `employeeId` WHERE `endedAt IS NULL`): Er fängt auch Schreibwege ab, die
+      die Sperre vergessen.
+    */
+    await zeiterfassungSperren(tx, params.employeeId);
+
+    const open = await tx.timeEntry.findFirst({
+      where: { employeeId: params.employeeId, endedAt: null },
+      include: { job: { select: { number: true, title: true } } },
+    });
+    if (open) {
+      // Mit Nummer statt ohne: „Es läuft bereits eine Zeiterfassung" schickt die
+      // Person suchen, „…auf E-2041" sagt ihr, wo sie ausstempeln muss.
+      throw new BusinessRuleError(
+        open.job
+          ? `Es läuft bereits eine Zeiterfassung auf ${open.job.number} (${open.job.title}). Bitte stempeln Sie dort zuerst aus.`
+          : 'Es läuft bereits eine Zeiterfassung. Bitte stempeln Sie zuerst aus.',
+      );
+    }
+
     const created = await tx.timeEntry.create({
       data: {
         jobId: job.id,
@@ -733,6 +1010,10 @@ export async function completeJob(params: {
     throw new ForbiddenError('Sie sind diesem Einsatz nicht zugeteilt.');
   }
 
+  // Ein zweiter Abschluss während der Kundenabnahme würde genau den Rapport
+  // verändern, den die Kundschaft gerade vor sich hat (§ 12).
+  await assertRapportNichtEingefroren(job.id);
+
   const openRequired = job.checklist.filter((item) => item.required && !item.done);
   if (openRequired.length > 0) {
     throw new BusinessRuleError(
@@ -785,9 +1066,6 @@ export async function completeJob(params: {
         status: 'COMPLETED',
         actualEnd: new Date(),
         completionNote: params.input.completionNote ?? null,
-        signatureDataUrl: params.input.signatureDataUrl ?? null,
-        signatureName: params.input.signatureName ?? null,
-        signedAt: params.input.signatureDataUrl ? new Date() : null,
         materialCost: { increment: round2(materialCost) },
       },
     });
@@ -805,9 +1083,13 @@ export async function completeJob(params: {
           where: { id: job.bookingId },
           data: { status: 'COMPLETED', completedAt: new Date() },
         });
+        // Die Buchung ist mit diesem Einsatz abgeschlossen — das Ereignis
+        // entsteht in derselben Transaktion wie der Statuswechsel.
+        await automationEreignisVormerken(tx, { organizationId: params.organizationId, trigger: 'BOOKING_COMPLETED', entityId: job.bookingId });
       }
     }
 
+    await automationEreignisVormerken(tx, { organizationId: params.organizationId, trigger: 'JOB_COMPLETED', entityId: job.id });
     return result;
   });
 
@@ -819,7 +1101,268 @@ export async function completeJob(params: {
     summary: `Einsatz ${job.number} abgeschlossen`,
   });
 
+  /**
+   * JOB_COMPLETED und — wenn dieser Einsatz die Buchung abschloss —
+   * BOOKING_COMPLETED sind oben in der Transaktion vermerkt (Outbox,
+   * 2026-09-27). Vorher stand die zweite Meldung hier mit einer eigenen,
+   * nachträglichen Zählung: zwei gleichzeitige Abschlüsse der letzten beiden
+   * Einsätze konnten beide „noch einer offen" sehen, und die Buchung meldete
+   * ihren Abschluss nie.
+   */
+  await automationEreignisseAbarbeiten({ organizationId: params.organizationId });
+
   return updated;
+}
+
+// ---------------------------------------------------------------------------
+//  Vor-Ort-Abnahme (Gate 4D)
+// ---------------------------------------------------------------------------
+
+/**
+ * Ist diese Person berechtigt, die Kundenabnahme dieses Einsatzes zu starten?
+ *
+ * **Nicht nur die Berechtigung zählt.** `job:complete_assigned` sagt „darf
+ * zugeteilte Einsätze abschliessen" — welche das sind, sagt sie nicht. Wer
+ * das Gerät übergibt, muss diesem Einsatz auch tatsächlich zugeteilt sein;
+ * sonst könnte jede Reinigungskraft die Abnahme eines fremden Einsatzes
+ * eröffnen und dessen Rapport einfrieren.
+ *
+ * Die Disposition (`job:update`) darf ohne Zuteilung — das ist die
+ * bestehende Regel aus `completeJob` und wird hier nicht neu erfunden.
+ */
+function assertDarfAbnahmeStarten(
+  job: { assignments: { employeeId: string }[] },
+  params: { employeeId?: string },
+): void {
+  if (params.employeeId && !job.assignments.some((a) => a.employeeId === params.employeeId)) {
+    throw new ForbiddenError('Sie sind diesem Einsatz nicht zugeteilt.');
+  }
+}
+
+/**
+ * Die Kundenabnahme starten: Rapport einfrieren, Gerät übergeben.
+ *
+ * **Der Ablauf, und warum in dieser Reihenfolge.** Erst wird der Rapport
+ * serverseitig gerendert und abgelegt — die Bytes, die die Kundschaft gleich
+ * sieht, stehen fest, bevor irgendjemand etwas übergibt (Hash A). Dann
+ * entsteht der Vorgang, dann die Signatursitzung für das Gerät, und ganz
+ * zuletzt die Sperre. Andersherum gäbe es einen Moment, in dem das Gerät
+ * gesperrt ist, aber noch nichts zu unterschreiben da wäre.
+ *
+ * **Was der Browser nicht schickt.** Keine Positionen, keine Zeiten, kein
+ * PDF, kein HTML, keinen Hash, keinen Teilnehmernamen. Der Server lädt den
+ * Einsatz aus der Datenbank und rendert selbst; wer unterzeichnen soll,
+ * bestimmt die Kundschaft des Einsatzes. Der Name, den die Person vor Ort
+ * eintippt, kommt später und getrennt beim Abschluss an (`signedName`) — er
+ * ergänzt den Beweis, er bestimmt ihn nicht.
+ *
+ * Mehrfaches Tippen erzeugt einen Vorgang, nicht vier: Der Teilindex
+ * entscheidet, der Verlierer verwendet den Vorgang des Gewinners weiter.
+ */
+export async function startCustomerHandoff(params: {
+  organizationId: string;
+  jobId: string;
+  userId: string;
+  employeeId?: string;
+  sessionFamily: string;
+  ctx: AnfrageKontext;
+}): Promise<{
+  requestId: string;
+  publicId: string;
+  handoffId: string;
+  /** Die Signatursitzung für das Gerät — der Aufrufer setzt daraus das Cookie. */
+  sessionToken: string;
+}> {
+  const job = await prisma.job.findFirst({
+    where: { id: params.jobId, organizationId: params.organizationId },
+    include: {
+      assignments: { select: { employeeId: true } },
+      customer: { select: { id: true, firstName: true, lastName: true, companyName: true, email: true } },
+    },
+  });
+  if (!job || job.deletedAt) throw new NotFoundError('Einsatz');
+
+  assertDarfAbnahmeStarten(job, params);
+  assertJobAbnahmefaehig(job);
+
+  // Läuft bereits eine Abnahme, wird sie fortgesetzt statt verdoppelt.
+  const vorhanden = await findActiveJobAcceptance(job.id);
+  if (vorhanden && vorhanden.status === 'FINALIZING') {
+    throw new BusinessRuleError('Die Abnahme dieses Einsatzes wird gerade abgeschlossen.');
+  }
+
+  const kundenName =
+    job.customer.companyName ?? `${job.customer.firstName} ${job.customer.lastName}`.trim();
+  const kundenMail = job.customer.email;
+  if (!kundenName || !kundenMail) {
+    throw new BusinessRuleError(
+      'Für diese Kundschaft fehlt ein Name oder eine E-Mail-Adresse — die Abnahme lässt sich nicht zuordnen.',
+    );
+  }
+
+  const person = await prisma.user.findUniqueOrThrow({
+    where: { id: params.userId },
+    select: { firstName: true, lastName: true },
+  });
+  const presenterName = `${person.firstName} ${person.lastName}`.trim();
+  const expiresAt = new Date(Date.now() + HANDOFF_TTL_MS);
+
+  let requestId = vorhanden?.id ?? null;
+  let publicId = vorhanden?.publicId ?? null;
+  let participantId = vorhanden?.participants[0]?.id ?? null;
+
+  if (!requestId) {
+    const snapshot = await renderJobReportSnapshot(job.organizationId, job.id);
+    const angelegt = await createJobAcceptanceRequest({
+      job: { id: job.id, organizationId: job.organizationId, number: job.number, title: job.title },
+      participant: { name: kundenName, email: kundenMail, customerId: job.customer.id },
+      snapshot: { bytes: snapshot.buffer, filename: snapshot.filename },
+      expiresAt,
+      presenter: { userId: params.userId, name: presenterName, employeeId: params.employeeId ?? null },
+      ctx: params.ctx,
+    });
+    if (angelegt) {
+      requestId = angelegt.id;
+      publicId = angelegt.publicId;
+      participantId = angelegt.participantId;
+    } else {
+      // Jemand war schneller — dessen Vorgang gilt.
+      const gewinner = await findActiveJobAcceptance(job.id);
+      requestId = gewinner?.id ?? null;
+      publicId = gewinner?.publicId ?? null;
+      participantId = gewinner?.participants[0]?.id ?? null;
+    }
+  }
+
+  if (!requestId || !publicId || !participantId) {
+    throw new BusinessRuleError('Die Abnahme konnte nicht begonnen werden. Bitte erneut versuchen.');
+  }
+
+  const sitzung = await issueJobAcceptanceSession({
+    organizationId: job.organizationId,
+    requestId,
+    participantId,
+    expiresAt,
+    presenterUserId: params.userId,
+    ctx: params.ctx,
+  });
+
+  /**
+   * Die Sperre zuletzt — und in einer eigenen Transaktion, damit ein
+   * verlorenes Rennen um die Familie (zweiter Tab) nicht den bereits
+   * angelegten Vorgang zurückrollt.
+   */
+  let handoffId: string;
+  try {
+    handoffId = await prisma.$transaction((tx) =>
+      createHandoffInTx(tx, {
+        organizationId: job.organizationId,
+        userId: params.userId,
+        jobId: job.id,
+        signatureRequestId: requestId,
+        sessionFamily: params.sessionFamily,
+        expiresAt,
+      }),
+    );
+  } catch (error) {
+    if ((error as { code?: string }).code !== 'P2002') throw error;
+    const bestehend = await prisma.deviceHandoffSession.findFirstOrThrow({
+      where: { sessionFamily: params.sessionFamily, status: 'ACTIVE' },
+      select: { id: true },
+    });
+    handoffId = bestehend.id;
+  }
+
+  // Das Zugangstoken trägt die Sperre ab jetzt mit sich.
+  await stempelSitzungNeu(params.userId);
+
+  await audit.updated({
+    organizationId: job.organizationId,
+    userId: params.userId,
+    entity: 'Job',
+    entityId: job.id,
+    summary: `Kundenabnahme für Einsatz ${job.number} begonnen — Gerät übergeben (Vorgang ${requestId})`,
+    ip: params.ctx.ip,
+    userAgent: params.ctx.userAgent,
+  });
+
+  return { requestId, publicId, handoffId, sessionToken: sitzung.sessionToken };
+}
+
+/**
+ * Eine versehentlich begonnene Abnahme abbrechen — erst nach dem Entsperren.
+ *
+ * Der Kundschaft wird bewusst **keine** Schaltfläche angeboten, die den
+ * Mitarbeiterbereich wieder freigäbe; das wäre die Sperre mit einem Klick
+ * daneben. Abbrechen darf nur, wer das Gerät zurückbekommen und sein
+ * Passwort bestätigt hat.
+ */
+export async function cancelCustomerHandoff(params: {
+  organizationId: string;
+  jobId: string;
+  userId: string;
+  employeeId?: string;
+  ctx: AnfrageKontext;
+}): Promise<{ abgebrochen: number }> {
+  const job = await prisma.job.findFirst({
+    where: { id: params.jobId, organizationId: params.organizationId, deletedAt: null },
+    include: { assignments: { select: { employeeId: true } } },
+  });
+  if (!job) throw new NotFoundError('Einsatz');
+  assertDarfAbnahmeStarten(job, params);
+
+  const abgebrochen = await prisma.$transaction((tx) =>
+    cancelActiveJobAcceptanceInTx(tx, {
+      jobId: job.id,
+      reason: 'handoff_cancelled',
+      ctx: params.ctx,
+      cancelledById: params.userId,
+    }),
+  );
+
+  if (abgebrochen > 0) {
+    await audit.updated({
+      organizationId: job.organizationId,
+      userId: params.userId,
+      entity: 'Job',
+      entityId: job.id,
+      summary: `Kundenabnahme für Einsatz ${job.number} abgebrochen — Rapport wieder bearbeitbar`,
+      ip: params.ctx.ip,
+      userAgent: params.ctx.userAgent,
+    });
+  }
+
+  return { abgebrochen };
+}
+
+/** Der Abnahmezustand eines Einsatzes — für Seiten und Masken. */
+export async function getJobAcceptanceState(jobId: string) {
+  const [aktiv, fertig] = await Promise.all([
+    findActiveJobAcceptance(jobId),
+    prisma.signatureRequest.findFirst({
+      where: { jobId, ceremonyMode: 'IN_PERSON_HANDOFF', status: 'COMPLETED' },
+      orderBy: { completedAt: 'desc' },
+      include: { participants: { orderBy: { order: 'asc' } } },
+    }),
+  ]);
+  const signer = fertig?.participants[0] ?? null;
+  return {
+    active: aktiv ? { requestId: aktiv.id, publicId: aktiv.publicId, expiresAt: aktiv.expiresAt } : null,
+    completed: fertig
+      ? {
+          requestId: fertig.id,
+          signedName: signer?.signedName ?? signer?.nameSnapshot ?? null,
+          method: signer?.signatureMethod ?? null,
+          signedAt: signer?.signedAt ?? fertig.completedAt,
+          presentedByName: fertig.presentedByName,
+          hashes: {
+            original: fertig.originalDocumentHash,
+            signed: fertig.signedArtifactHash,
+            evidence: fertig.evidenceArtifactHash,
+          },
+        }
+      : null,
+  };
 }
 
 export async function toggleChecklistItem(params: {
@@ -837,6 +1380,8 @@ export async function toggleChecklistItem(params: {
   if (params.employeeId && !item.job.assignments.some((a) => a.employeeId === params.employeeId)) {
     throw new ForbiddenError('Sie sind diesem Einsatz nicht zugeteilt.');
   }
+
+  await assertRapportNichtEingefroren(item.job.id);
 
   /**
    * Ein abgeschlossener Einsatz ist rapportiert; seine Checkliste ist der
@@ -882,6 +1427,8 @@ export async function replaceChecklist(params: {
     include: { checklist: true },
   });
   if (!job) throw new NotFoundError('Einsatz');
+
+  await assertRapportNichtEingefroren(job.id);
 
   const keptIds = params.input.items
     .map((item) => item.id)
@@ -949,6 +1496,8 @@ export async function applyChecklistTemplate(params: {
   });
   if (!job) throw new NotFoundError('Einsatz');
 
+  await assertRapportNichtEingefroren(job.id);
+
   const template = CHECKLIST_TEMPLATES[params.input.kind];
 
   const created = await prisma.$transaction(async (tx) => {
@@ -998,57 +1547,43 @@ export async function setJobTeam(params: {
   input: JobTeamInput;
   actorId: string;
 }): Promise<void> {
-  const job = await prisma.job.findFirst({
-    where: { id: params.jobId, organizationId: params.organizationId, deletedAt: null },
-    include: { assignments: true },
-  });
-  if (!job) throw new NotFoundError('Einsatz');
-
-  if (['COMPLETED', 'VERIFIED'].includes(job.status)) {
-    throw new BusinessRuleError(
-      'Das Team eines abgeschlossenen Einsatzes lässt sich nicht mehr ändern — daran hängt die Lohnabrechnung.',
-    );
-  }
-
   const employeeIds = params.input.members.map((member) => member.employeeId);
 
-  if (employeeIds.length > 0) {
-    await assertActiveStaff(params.organizationId, employeeIds);
+  const { job, added } = await prisma.$transaction(async (tx) => {
+    // Einsatz sperren und in der Transaktion lesen (F-06, siehe
+    // `einsatzSperren`): Das Team wird zu dem Termin geprüft, der nach einer
+    // gleichzeitigen Verschiebung tatsächlich gilt.
+    const job = await einsatzSperren(tx, params.organizationId, params.jobId);
 
-    // Doppelverplanung erkennen — dieselbe Prüfung wie im Kalender.
-    const conflicts = await prisma.jobAssignment.findMany({
-      where: {
-        employeeId: { in: employeeIds },
-        jobId: { not: job.id },
-        job: {
-          deletedAt: null,
-          status: { notIn: ['CANCELLED', 'COMPLETED', 'VERIFIED'] },
-          scheduledStart: { lt: job.scheduledEnd },
-          scheduledEnd: { gt: job.scheduledStart },
-        },
-      },
-      include: {
-        employee: { include: { user: { select: { firstName: true, lastName: true } } } },
-        job: { select: { number: true } },
-      },
+    if (['COMPLETED', 'VERIFIED'].includes(job.status)) {
+      throw new BusinessRuleError(zuteilungsstatusMeldung(job.status));
+    }
+
+    // „Wer ist neu dazugekommen?" nach der Sperre: Vor ihr gelesen, meldete
+    // eine gleichzeitige Teamänderung dieselbe Person zweimal als neu.
+    const before = new Set(job.assignments.map((assignment) => assignment.employeeId));
+    const added = employeeIds.filter((id) => !before.has(id));
+
+    /*
+      Ein abgesagter Einsatz bekommt niemanden dazu (F-06, 2026-09-27) —
+      dieselbe Regel wie `assignJob`. Verkleinern oder leeren bleibt erlaubt:
+      Wer nach einer Absage das Team austrägt, räumt auf und macht die
+      Personen für andere Einsätze wieder sichtbar frei.
+    */
+    if (job.status === 'CANCELLED' && added.length > 0) {
+      throw new BusinessRuleError(zuteilungsstatusMeldung(job.status));
+    }
+
+    // Dieselbe Regel wie in `assignJob` — bis hierher stand hier eine
+    // wortgleiche zweite Kopie, die Abwesenheiten ebenso wenig kannte.
+    await assertAssignable(tx, {
+      organizationId: params.organizationId,
+      employeeIds,
+      scheduledStart: job.scheduledStart,
+      scheduledEnd: job.scheduledEnd,
+      ignoreJobId: job.id,
     });
 
-    if (conflicts.length > 0) {
-      throw new BusinessRuleError(
-        `Terminkonflikt: ${conflicts
-          .map(
-            (conflict) =>
-              `${conflict.employee.user.firstName} ${conflict.employee.user.lastName} ist bereits für ${conflict.job.number} eingeteilt`,
-          )
-          .join('; ')}.`,
-      );
-    }
-  }
-
-  const before = new Set(job.assignments.map((assignment) => assignment.employeeId));
-  const added = employeeIds.filter((id) => !before.has(id));
-
-  await prisma.$transaction(async (tx) => {
     await tx.jobAssignment.deleteMany({
       where: { jobId: job.id, employeeId: { notIn: employeeIds.length > 0 ? employeeIds : ['—'] } },
     });
@@ -1071,19 +1606,32 @@ export async function setJobTeam(params: {
     await tx.job.update({
       where: { id: job.id },
       data: {
+        // Ein abgesagter Einsatz bleibt abgesagt, auch wenn sein Team
+        // geleert wird — sonst stünde er danach als „unbesetzt" wieder in
+        // der Disposition, als wäre er nie abgesagt worden.
         status:
-          employeeIds.length === 0
-            ? 'UNASSIGNED'
-            : job.status === 'UNASSIGNED'
-              ? 'SCHEDULED'
-              : job.status,
+          job.status === 'CANCELLED'
+            ? 'CANCELLED'
+            : employeeIds.length === 0
+              ? 'UNASSIGNED'
+              : job.status === 'UNASSIGNED'
+                ? 'SCHEDULED'
+                : job.status,
       },
     });
+    // Gleichwertig zu `assignJob` (Parität, 2026-09-27): Wer über die
+    // Teamverwaltung neu dazukommt, ist ebenso zugeteilt. Bis dahin meldete
+    // nur `assignJob` den Auslöser.
+    if (added.length > 0) {
+      await automationEreignisVormerken(tx, { organizationId: params.organizationId, trigger: 'JOB_ASSIGNED', entityId: job.id });
+    }
+    return { job, added };
   });
 
   if (params.input.notify && added.length > 0) {
     await notifyAssignees(job.id, added);
   }
+  await automationEreignisseAbarbeiten({ organizationId: params.organizationId });
 
   await audit.updated({
     organizationId: params.organizationId,
@@ -1287,12 +1835,26 @@ export async function replaceJobMaterials(params: {
   });
   if (!job) throw new NotFoundError('Einsatz');
 
+  await assertRapportNichtEingefroren(job.id);
+
+  /**
+   * Zeilen aus dem Lager bleiben stehen (Wave 11). Sie hängen an einer
+   * Lagerbewegung; sie hier zu löschen hiesse, den Verbrauch aus der
+   * Nachkalkulation zu nehmen, während der Bestand weiter um diese Menge
+   * kleiner ist. Ersetzt werden nur die frei erfassten Zeilen; eine
+   * Lagerentnahme wird über eine Rückgabe im Lager berichtigt.
+   */
+  const lagerzeilen = await prisma.materialUsage.findMany({
+    where: { jobId: job.id, stockMovement: { isNot: null } },
+    select: { total: true },
+  });
   const materialCost = round2(
-    params.input.materials.reduce((sum, item) => sum + item.quantity * item.unitCost, 0),
+    params.input.materials.reduce((sum, item) => sum + item.quantity * item.unitCost, 0) +
+      lagerzeilen.reduce((sum, z) => sum + toNumber(z.total), 0),
   );
 
   await prisma.$transaction(async (tx) => {
-    await tx.materialUsage.deleteMany({ where: { jobId: job.id } });
+    await tx.materialUsage.deleteMany({ where: { jobId: job.id, stockMovement: { is: null } } });
     if (params.input.materials.length > 0) {
       await tx.materialUsage.createMany({
         data: params.input.materials.map((item) => ({
@@ -1323,6 +1885,99 @@ export async function replaceJobMaterials(params: {
   });
 
   return materialCost;
+}
+
+/**
+ * Ein hochgeladenes Bild als Foto an einen Einsatz binden (F-09b, 2026-09-27).
+ *
+ * Bis dahin stand das im Routenhandler: `findFirst` auf die Datei, dann ein
+ * bedingungsloses `update` und das `create` des Fotos — ohne Transaktion, am
+ * Dienst vorbei und an der einen Bindungsregel (`dateienBinden` in
+ * `file.service.ts`) vorbei. Geprüft wurden Organisation, Zweck, Prüfsumme und
+ * „noch keinem Einsatz zugeordnet"; **nicht** geprüft wurden:
+ *
+ *  • *wer* die Datei hochgeladen hat — eine Kennung ist keine Berechtigung:
+ *    Wer die Kennung eines fremden Einsatzbildes kannte, konnte es an einen
+ *    Einsatz hängen, den er selbst sieht, und es so lesbar machen;
+ *  • der Befund der Schadsoftwareprüfung — eine als schädlich erkannte Datei
+ *    wurde Teil des Rapports;
+ *  • „öffentlich" — und das Lesen und das Schreiben lagen auseinander, sodass
+ *    zwei gleichzeitige Aufrufe dieselbe Datei an zwei Einsätze binden konnten
+ *    (der zweite `update` überschrieb den ersten).
+ *
+ * Jetzt bindet `dateienBinden`: ein einziger bedingter Übergang in der
+ * Transaktion, in der auch das Foto entsteht. Scheitert die Bindung, entsteht
+ * kein Foto; entsteht das Foto nicht, bleibt die Datei ungebunden.
+ *
+ * `uploadedById` ist das **Benutzerkonto** (so schreibt es der
+ * Upload-Abschluss an die Datei), `fotoUrheberId` das Personalprofil, das am
+ * Foto steht wie bisher.
+ *
+ * Mitarbeitende: nur am eigenen, noch nicht abgeschlossenen Einsatz —
+ * dieselbe Grenze wie beim Ändern und Entfernen (`assertPhotoAccess`). Und für
+ * alle: nicht, solange die Kundschaft den Rapport zur Abnahme liest — ein Foto,
+ * das danach dazukommt, hätte sie nicht gesehen.
+ */
+export async function addJobPhoto(params: {
+  organizationId: string;
+  jobId: string;
+  /** Benutzerkonto der handelnden Person — muss die Datei hochgeladen haben. */
+  actorUserId: string;
+  /** Gesetzt, wenn eine Mitarbeiterin handelt: nur eigene, laufende Einsätze. */
+  employeeId?: string;
+  fotoUrheberId: string | null;
+  input: JobPhotoInput;
+}) {
+  return prisma.$transaction(async (tx) => {
+    const job = await tx.job.findFirst({
+      where: { id: params.jobId, organizationId: params.organizationId, deletedAt: null },
+      select: { id: true, status: true, assignments: { select: { employeeId: true } } },
+    });
+    if (!job) throw new NotFoundError('Einsatz');
+
+    if (params.employeeId !== undefined) {
+      if (!job.assignments.some((a) => a.employeeId === params.employeeId)) {
+        throw new ForbiddenError('Sie sind diesem Einsatz nicht zugeteilt.');
+      }
+      if (['COMPLETED', 'VERIFIED', 'CANCELLED'].includes(job.status)) {
+        throw new BusinessRuleError(
+          'Die Fotos eines abgeschlossenen Einsatzes gehören zum Rapport und bleiben unverändert.',
+        );
+      }
+    }
+
+    await assertRapportNichtEingefroren(job.id, tx);
+
+    await dateienBinden(tx, {
+      organizationId: params.organizationId,
+      fileIds: [params.input.fileId],
+      uploadedById: params.actorUserId,
+      scope: 'JOB',
+      ziel: 'jobId',
+      zielId: job.id,
+    });
+
+    // Die Adresse kommt aus der gebundenen Datei, nie aus dem Browser (siehe
+    // `jobPhotoSchema`).
+    const datei = await tx.fileAsset.findUniqueOrThrow({
+      where: { id: params.input.fileId },
+      select: { url: true },
+    });
+
+    return tx.jobPhoto.create({
+      data: {
+        jobId: job.id,
+        type: params.input.type,
+        url: datei.url,
+        thumbnailUrl: params.input.thumbnailUrl ?? null,
+        caption: params.input.caption ?? null,
+        room: params.input.room ?? null,
+        lat: params.input.lat ?? null,
+        lng: params.input.lng ?? null,
+        uploadedById: params.fotoUrheberId,
+      },
+    });
+  });
 }
 
 /**
@@ -1376,6 +2031,8 @@ export async function listJobs(filter: {
   status?: Job['status'];
   employeeId?: string;
   customerId?: string;
+  /** Alle Einsätze, die aus einem Vertrag entstanden sind (Wave 10). */
+  contractId?: string;
   from?: Date;
   to?: Date;
   q?: string;
@@ -1389,6 +2046,7 @@ export async function listJobs(filter: {
     deletedAt: null,
     ...(filter.status ? { status: filter.status } : {}),
     ...(filter.customerId ? { customerId: filter.customerId } : {}),
+    ...(filter.contractId ? { contractId: filter.contractId } : {}),
     ...(filter.employeeId ? { assignments: { some: { employeeId: filter.employeeId } } } : {}),
     ...(filter.from || filter.to
       ? {
@@ -1444,11 +2102,31 @@ export async function listJobs(filter: {
   return { items, total };
 }
 
+/**
+ * Ein Einsatz mit allem, was seine Detailseite braucht.
+ *
+ * **Der Alarmcode ist der Sonderfall.** Er liegt verschlüsselt in der Spalte
+ * (`src/lib/crypto.ts`) und wird hier entschlüsselt — aber nur, wenn der
+ * Aufrufer ihn ausdrücklich anfordert. Das ist Absicht: Vorher zog
+ * `property: true` die ganze Zeile samt Chiffrat in jede Antwort, auch dorthin,
+ * wo sie nie gebraucht wurde. Ein Chiffrat ist zwar unlesbar, aber es hat in
+ * einer Nutzlast nichts verloren, die es nicht braucht — und die
+ * Entschlüsselung gehört an eine Stelle, die sie begründen kann, nicht in jede
+ * Seite, die sie vergessen könnte.
+ *
+ * Wer ihn bekommt, entscheidet der Aufrufer über `includeAccessSecrets`; die
+ * Zuteilungsschranke steckt bereits in `employeeId`.
+ */
 export async function getJobDetail(params: {
   organizationId: string;
   jobId: string;
   /** Bei Mitarbeitendenzugriff: erzwingt die Zuteilungsprüfung. */
   employeeId?: string;
+  /**
+   * Alarmcode entschlüsselt mitliefern. Nur für die Personen setzen, die vor
+   * der Tür stehen, und für die Disposition, die ihn pflegt.
+   */
+  includeAccessSecrets?: boolean;
 }) {
   const job = await prisma.job.findFirst({
     where: {
@@ -1460,7 +2138,31 @@ export async function getJobDetail(params: {
     include: {
       customer: true,
       address: true,
-      property: true,
+      /**
+       * Feldweise statt `true`: Der Alarmcode kommt unten getrennt dazu,
+       * damit kein künftiges Feld dieser Tabelle unbemerkt in jede Antwort
+       * rutscht.
+       */
+      property: {
+        select: {
+          id: true,
+          label: true,
+          kind: true,
+          squareMeters: true,
+          rooms: true,
+          bathrooms: true,
+          windows: true,
+          floor: true,
+          hasBalcony: true,
+          hasGarden: true,
+          hasPets: true,
+          hasElevator: true,
+          parkingInfo: true,
+          keyLocation: true,
+          accessNote: true,
+          notes: true,
+        },
+      },
       service: true,
       // `netTotal` für die Herleitung der Nachkalkulation (`breakdownForJob`).
       booking: { select: { id: true, number: true, customerNote: true, netTotal: true } },
@@ -1488,7 +2190,27 @@ export async function getJobDetail(params: {
   });
 
   if (!job) throw new NotFoundError('Einsatz');
-  return job;
+
+  /**
+   * Der Alarmcode wird in einer zweiten, engen Abfrage geholt und sofort
+   * entschlüsselt. Getrennt, damit der Klartext nur entsteht, wenn er
+   * angefordert wurde — und nie im selben Objekt landet, das ohne Anforderung
+   * herausgeht.
+   *
+   * Er wird bewusst **nicht** protokolliert: Ein Prüfprotokoll, das
+   * Zugangsdaten mitschreibt, ist ein zweites Versteck für dieselben
+   * Geheimnisse. `src/lib/audit.ts` redigiert das Feld deshalb ohnehin.
+   */
+  let alarmCode: string | null = null;
+  if (params.includeAccessSecrets && job.propertyId) {
+    const row = await prisma.property.findUnique({
+      where: { id: job.propertyId },
+      select: { alarmCode: true },
+    });
+    alarmCode = decryptNullable(row?.alarmCode ?? null, CRYPTO_CONTEXT.alarmCode);
+  }
+
+  return { ...job, alarmCode };
 }
 
 /** Kalenderereignisse für FullCalendar. */
@@ -1532,13 +2254,19 @@ export async function getCalendarJobs(params: {
     CANCELLED: '#C92A2A',
   };
 
-  return jobs.map((job) => ({
+  return jobs.map((job) => {
+    // Fläche und Schrift als Paar (2026-09-27): Vorher weisse Schrift auf
+    // jeder Fläche — auf „Erledigt" 4.36 : 1, auf „Pausiert" 2.1 : 1. Warum
+    // gerechnet statt eine Palette korrigiert: `lesbareFarben`.
+    const farben = lesbareFarben(job.color ?? STATUS_COLORS[job.status], STATUS_COLORS[job.status]);
+    return {
     id: job.id,
     title: `${job.number} · ${job.customer.companyName ?? job.customer.lastName}`,
     start: job.scheduledStart.toISOString(),
     end: job.scheduledEnd.toISOString(),
-    backgroundColor: job.color ?? STATUS_COLORS[job.status],
-    borderColor: job.color ?? STATUS_COLORS[job.status],
+    backgroundColor: farben.hintergrund,
+    borderColor: farben.hintergrund,
+    textColor: farben.schrift,
     resourceIds: job.assignments.map((a) => a.employeeId),
     extendedProps: {
       number: job.number,
@@ -1551,7 +2279,8 @@ export async function getCalendarJobs(params: {
       crew: job.assignments.map((a) => `${a.employee.user.firstName} ${a.employee.user.lastName}`),
       crewSize: job.crewSize,
     },
-  }));
+    };
+  });
 }
 
 export { CHECKLIST_TEMPLATES };

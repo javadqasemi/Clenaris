@@ -1,7 +1,6 @@
-import { z } from 'zod';
-
 import { defineRoute, idParam } from '@/lib/api/handler';
 import { ok } from '@/lib/api/response';
+import { publishCtaSchema } from '@/lib/validation/cta';
 import { toggleCta } from '@/server/services/cta.service';
 import { getOrganizationId } from '@/server/services/organization.service';
 
@@ -18,7 +17,7 @@ export const runtime = 'nodejs';
 export const POST = defineRoute({
   permissions: ['cta:publish'],
   params: idParam,
-  body: z.object({ active: z.boolean() }),
+  body: publishCtaSchema,
   rateLimit: 'apiWrite',
   handler: async ({ params, body, session, ip }) => {
     const cta = await toggleCta({

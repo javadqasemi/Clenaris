@@ -1,4 +1,4 @@
-import type { Metadata } from 'next';
+﻿import type { Metadata } from 'next';
 import Link from 'next/link';
 import {
   ArrowRight,
@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 
 import { prisma, toNumber } from '@/lib/db';
+import { leistungsnamen } from '@/lib/booking/leistungen';
 import { requireCustomerId } from '@/lib/auth/session';
 import { formatCurrency, formatDateLong, formatRelative, timeRangeLabel } from '@/lib/utils';
 import { StatusBadge } from '@/components/ui/badge';
@@ -46,7 +47,7 @@ export default async function AccountHomePage() {
       orderBy: { scheduledStart: 'asc' },
       take: 3,
       include: {
-        items: { select: { name: true }, take: 1 },
+        items: { select: { name: true, serviceId: true, position: true } },
         address: { select: { street: true, streetNo: true, postalCode: true, city: true } },
         jobs: {
           select: {
@@ -175,7 +176,7 @@ export default async function AccountHomePage() {
                           <Clock className="size-3.5 shrink-0" aria-hidden />
                           {timeRangeLabel(booking.scheduledStart, booking.scheduledEnd)} Uhr
                         </p>
-                        <p className="font-medium">{booking.items[0]?.name ?? 'Reinigung'}</p>
+                        <p className="font-medium">{leistungsnamen(booking.items)}</p>
                         {booking.address ? (
                           <p className="flex items-center gap-2 text-sm text-muted-foreground">
                             <MapPin className="size-3.5 shrink-0" aria-hidden />
@@ -234,7 +235,7 @@ export default async function AccountHomePage() {
             {openQuotes.map((quote) => (
               <li key={quote.id}>
                 <Link
-                  href={`/offerte/${quote.publicToken}`}
+                  href={`/konto/offerten/${quote.id}`}
                   className="flex flex-wrap items-center gap-4 rounded-2xl border border-primary/25 bg-primary/[0.04] p-5 transition-colors hover:bg-primary/[0.08]"
                 >
                   <FileText className="size-5 shrink-0 text-primary" aria-hidden />

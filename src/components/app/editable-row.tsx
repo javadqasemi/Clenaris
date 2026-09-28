@@ -164,10 +164,11 @@ export function EditableRow({
   // erschienen beim Überfahren einer Zeile die Stifte *aller* Zeilen.
   return (
     <div className={cn('protocol-row group/row', editing && 'protocol-row--editing')}>
-      <div className="protocol-row-head">
-        <dt className="protocol-label">
+      {/* Kopfzeile = `<dt>`, ohne Zwischen-`<div>` — siehe `DetailRow`. */}
+      <dt className="protocol-row-head">
+        <span className="protocol-label">
           <label htmlFor={editing ? fieldId : undefined}>{label}</label>
-        </dt>
+        </span>
 
         {editing ? null : canEdit ? (
           <button
@@ -194,7 +195,7 @@ export function EditableRow({
             <span className="sr-only">{lockedReason}</span>
           </span>
         ) : null}
-      </div>
+      </dt>
 
       {editing ? (
         <dd className="space-y-2">

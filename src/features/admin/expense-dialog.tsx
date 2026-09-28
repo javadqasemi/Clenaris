@@ -8,6 +8,7 @@ import { Plus } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { formatCurrency, round2 } from '@/lib/utils';
+import { zuercherTagText } from '@/lib/zuerich';
 import { api, ApiError } from '@/lib/api/client';
 import { createExpenseSchema, type CreateExpenseInput } from '@/lib/validation/finance';
 import { Button } from '@/components/ui/button';
@@ -74,7 +75,8 @@ export function ExpenseDialog({ suppliers }: { suppliers: { id: string; name: st
       category: 'MATERIAL',
       description: '',
       reference: '',
-      expenseDate: new Date().toISOString().slice(0, 10) as unknown as Date,
+      // Zürcher Tag — am 1. um 00:30 stand der Beleg sonst im Vormonat (2026-09-27).
+      expenseDate: zuercherTagText() as unknown as Date,
       netAmount: 0,
       vatRate: 8.1,
       paid: false,

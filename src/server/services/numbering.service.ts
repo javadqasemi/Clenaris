@@ -1,6 +1,7 @@
 import 'server-only';
 
 import { prisma, type Tx } from '@/lib/db';
+import { zuercherJahr } from '@/lib/zuerich';
 
 /**
  * Lückenlose Belegnummern.
@@ -16,7 +17,20 @@ import { prisma, type Tx } from '@/lib/db';
  * Format: PREFIX-JAHR-LAUFNUMMER, z. B. RE-2026-00042
  */
 
-export type SequenceScope = 'invoice' | 'quote' | 'booking' | 'job' | 'credit_note' | 'customer' | 'lead' | 'employee';
+export type SequenceScope =
+  | 'invoice'
+  | 'quote'
+  | 'booking'
+  | 'job'
+  | 'credit_note'
+  | 'customer'
+  | 'lead'
+  | 'employee'
+  | 'contract'
+  | 'quality'
+  | 'complaint'
+  | 'equipment'
+  | 'site_visit';
 
 const PREFIX_FIELD: Record<SequenceScope, string> = {
   invoice: 'invoiceNumberPrefix',
@@ -27,12 +41,33 @@ const PREFIX_FIELD: Record<SequenceScope, string> = {
   customer: '',
   lead: '',
   employee: '',
+  contract: '',
+  quality: '',
+  complaint: '',
+  equipment: '',
+  site_visit: '',
 };
 
 const STATIC_PREFIX: Partial<Record<SequenceScope, string>> = {
   customer: 'K',
   lead: 'L',
   employee: 'MA',
+  /**
+   * Fester Präfix statt einer Spalte in `Organization` — wie bei Kundschaft,
+   * Anfragen und Personal. Die einstellbaren Präfixe gibt es für die Belege,
+   * die nach aussen gehen und auf denen ein Betrieb sein eigenes Schema
+   * gewohnt ist. Eine Vertragsnummer ist eine interne Kennung; eine weitere
+   * Einstellung dafür wäre eine Schraube, an der niemand dreht.
+   */
+  contract: 'VT',
+  /** Qualitätskontrolle — ebenfalls eine interne Kennung, ebenfalls fest. */
+  quality: 'QK',
+  /** Reklamation/Vorfall (Wave 11) — die Nummer, unter der die Kundschaft nachfragt. */
+  complaint: 'REK',
+  /** Inventarnummer eines Geräts (Wave 11). */
+  equipment: 'GR',
+  /** Besichtigung / Objektaufnahme (Wave 12). */
+  site_visit: 'BES',
 };
 
 export interface NextNumberResult {
@@ -52,7 +87,11 @@ export async function nextNumber(
   scope: SequenceScope,
   at: Date = new Date(),
 ): Promise<NextNumberResult> {
-  const year = at.getUTCFullYear();
+  // Das Zürcher Jahr, nicht das UTC-Jahr (2026-09-27). Mit `getUTCFullYear`
+  // bekam eine Rechnung vom 1. Januar zwischen 00:00 und 01:00 die Nummer —
+  // und den Nummernkreis — des alten Jahres; der neue Kreis begann erst eine
+  // Stunde nach Mitternacht.
+  const year = zuercherJahr(at);
 
   // `upsert` + `increment` ist auf PostgreSQL atomar: der UPDATE-Zweig sperrt
   // die Zeile bis zum Commit, konkurrierende Transaktionen warten.
@@ -100,7 +139,7 @@ async function resolvePrefix(
 export async function peekSequence(
   organizationId: string,
   scope: SequenceScope,
-  year = new Date().getUTCFullYear(),
+  year = zuercherJahr(),
 ): Promise<number> {
   const row = await prisma.numberSequence.findUnique({
     where: { organizationId_scope_year: { organizationId, scope, year } },

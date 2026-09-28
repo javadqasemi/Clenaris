@@ -140,7 +140,9 @@ export default async function BookingPage({
 
 function WizardSkeleton() {
   return (
-    <div className="grid gap-10 lg:grid-cols-[minmax(0,1fr)_22rem]">
+    // `form-measure` wie im Assistenten selbst — sonst springt das Layout in
+    // dem Moment, in dem das Skelett durch das Formular ersetzt wird.
+    <div className="form-measure grid gap-10 lg:grid-cols-[minmax(0,1fr)_22rem]">
       <div className="space-y-8">
         <Skeleton className="h-8 w-full max-w-lg" />
         <Skeleton className="h-10 w-3/4" />

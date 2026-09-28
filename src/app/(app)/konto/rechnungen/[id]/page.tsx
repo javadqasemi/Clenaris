@@ -11,6 +11,7 @@ import { Button } from '@/components/ui/button';
 import { Alert } from '@/components/ui/primitives';
 import { DetailRow, DetailSection, PageHeader, TableScroll } from '@/components/app/page-parts';
 import { PayInvoice } from '@/features/public/pay-invoice';
+import { PdfViewer } from '@/components/app/pdf-viewer';
 
 export const metadata: Metadata = {
   title: 'Rechnung',
@@ -187,6 +188,15 @@ export default async function AccountInvoiceDetailPage({
             </dl>
           </section>
 
+          <DetailSection title="Dokument" body="flush">
+            <div className="p-3">
+              <PdfViewer
+                source={`/api/invoices/${invoice.id}/pdf`}
+                fileName={`Rechnung-${invoice.number}.pdf`}
+              />
+            </div>
+          </DetailSection>
+
           {invoice.payments.length > 0 ? (
             <DetailSection title="Zahlungseingänge">
               <dl className="protocol-list">
@@ -218,7 +228,8 @@ export default async function AccountInvoiceDetailPage({
 
         <aside className="space-y-6">
           {balance > 0 && invoice.status !== 'CANCELLED' ? (
-            <PayInvoice token={invoice.publicToken} amount={balance} />
+            /* Angemeldeter Weg: Sitzung und Eigentümerschaft statt Capability. */
+            <PayInvoice endpoint={`/api/invoices/${invoice.id}/pay`} amount={balance} />
           ) : null}
 
           <DetailSection title="Rechnungsempfänger">

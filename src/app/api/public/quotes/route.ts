@@ -68,6 +68,7 @@ export const POST = definePublicRoute({
         organizationId,
         leadId: lead.id,
         input: body,
+        ip,
       });
       quoteNumber = quote.number;
 

@@ -19,6 +19,7 @@ export const GET = defineRoute({
       organizationId,
       status: query.status,
       customerId: query.customerId,
+      contractId: query.contractId,
       from: query.from,
       to: query.to,
       q: query.q,

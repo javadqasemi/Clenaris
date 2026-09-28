@@ -92,7 +92,11 @@ export default async function BlogPage() {
 
               {/* Weitere Beiträge */}
               {rest.length > 0 ? (
-                <ul className="grid gap-x-10 gap-y-12 md:grid-cols-2 lg:grid-cols-3">
+                /* Vier bzw. fünf Spalten auf sehr breiten Bildschirmen: Der
+                   Behälter wächst dort mit (siehe `globals.css`), und drei
+                   Spalten ergäben Beitragskarten von über 800 px Breite mit
+                   drei Zeilen Text darin. */
+                <ul className="grid gap-x-10 gap-y-12 md:grid-cols-2 lg:grid-cols-3 3xl:grid-cols-4 5xl:grid-cols-5">
                   {rest.map((post) => (
                     <li key={post.id}>
                       <article>

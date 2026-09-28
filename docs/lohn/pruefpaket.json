@@ -1,0 +1,904 @@
+{
+  "$beschreibung": "Maschinenlesbares Prüfpaket der Lohnrechnung für die externe fachliche Prüfung (E-6). Erzeugt aus dem Code von scripts/lohn-pruefpaket.ts — nicht von Hand bearbeiten. Jeder Beispielfall trägt das Ergebnis des Codes (ist) und einen von Hand gerechneten Sollwert (soll) mit Rechenweg; das Skript scheitert, wenn beide abweichen. Alle Sätze sind Vorbelegung und UNGEPRUEFT: Die Prüfung bestätigt oder korrigiert sie.",
+  "stand": "2026-09-27",
+  "erzeugtVon": "scripts/lohn-pruefpaket.ts",
+  "pruefen": "npx tsx scripts/lohn-pruefpaket.ts --pruefen",
+  "offeneFachfragen": "docs/PAYROLL.md §11",
+  "saetze": [
+    {
+      "code": "AHV_IV_EO",
+      "bezeichnung": "AHV/IV/EO",
+      "arbeitnehmerPct": 5.3,
+      "arbeitgeberPct": 5.3,
+      "basis": "Bruttolohn des Monats (AHV-pflichtiger Lohn)",
+      "zuPruefen": "Satz 2026 gegen die Vorgaben des Bundes (BSV) bestätigen.",
+      "gueltigAb": "2026-01-01",
+      "gueltigBis": "2026-12-31",
+      "quelle": "Vorbelegung Clenaris (Stand 2026) — ungeprüft, fachlich zu bestätigen",
+      "version": "SAETZE_2026",
+      "pruefstand": "UNGEPRUEFT",
+      "fundstelle": "src/lib/payroll/beitraege.ts:SAETZE_2026; Arbeitgeberanteile: src/server/services/payroll-rates.service.ts:vorbelegung"
+    },
+    {
+      "code": "ALV",
+      "bezeichnung": "ALV bis Grenze",
+      "arbeitnehmerPct": 1.1,
+      "arbeitgeberPct": 1.1,
+      "grenzeJahr": 148200,
+      "basis": "Bruttolohn bis zur Jahresgrenze ÷ 12 je Monat",
+      "zuPruefen": "Satz und Höchstbetrag 2026; Monatsaufteilung der Jahresgrenze (÷ 12) statt laufender Jahressumme.",
+      "gueltigAb": "2026-01-01",
+      "gueltigBis": "2026-12-31",
+      "quelle": "Vorbelegung Clenaris (Stand 2026) — ungeprüft, fachlich zu bestätigen",
+      "version": "SAETZE_2026",
+      "pruefstand": "UNGEPRUEFT",
+      "fundstelle": "src/lib/payroll/beitraege.ts:SAETZE_2026; Arbeitgeberanteile: src/server/services/payroll-rates.service.ts:vorbelegung"
+    },
+    {
+      "code": "ALV_SOLIDARITY",
+      "bezeichnung": "ALV über Grenze (Solidarität)",
+      "arbeitnehmerPct": 0,
+      "arbeitgeberPct": 0,
+      "grenzeJahr": 148200,
+      "basis": "Bruttolohn über der Jahresgrenze ÷ 12",
+      "zuPruefen": "Seit 2023 aufgehoben — 0 bestätigen.",
+      "gueltigAb": "2026-01-01",
+      "gueltigBis": "2026-12-31",
+      "quelle": "Vorbelegung Clenaris (Stand 2026) — ungeprüft, fachlich zu bestätigen",
+      "version": "SAETZE_2026",
+      "pruefstand": "UNGEPRUEFT",
+      "fundstelle": "src/lib/payroll/beitraege.ts:SAETZE_2026; Arbeitgeberanteile: src/server/services/payroll-rates.service.ts:vorbelegung"
+    },
+    {
+      "code": "UVG_NBU",
+      "bezeichnung": "UVG Nichtberufsunfall",
+      "arbeitnehmerPct": 1.6,
+      "arbeitgeberPct": 0,
+      "basis": "Bruttolohn des Monats (ohne Höchstbetrag in der Rechnung)",
+      "zuPruefen": "Betriebsabhängig: Satz aus dem Versicherungsvertrag. 1,6 % ist eine Annahme für das Reinigungsgewerbe. Der UVG-Höchstbetrag wird nicht angewendet.",
+      "gueltigAb": "2026-01-01",
+      "gueltigBis": "2026-12-31",
+      "quelle": "Vorbelegung Clenaris (Stand 2026) — ungeprüft, fachlich zu bestätigen",
+      "version": "SAETZE_2026",
+      "pruefstand": "UNGEPRUEFT",
+      "fundstelle": "src/lib/payroll/beitraege.ts:SAETZE_2026; Arbeitgeberanteile: src/server/services/payroll-rates.service.ts:vorbelegung"
+    },
+    {
+      "code": "UVG_BU",
+      "bezeichnung": "UVG Berufsunfall",
+      "arbeitnehmerPct": 0,
+      "arbeitgeberPct": 0,
+      "basis": "Bruttolohn des Monats",
+      "zuPruefen": "Betriebsabhängig, trägt der Betrieb. Vorbelegung 0 — nicht geraten.",
+      "gueltigAb": "2026-01-01",
+      "gueltigBis": "2026-12-31",
+      "quelle": "Vorbelegung Clenaris (Stand 2026) — ungeprüft, fachlich zu bestätigen",
+      "version": "SAETZE_2026",
+      "pruefstand": "UNGEPRUEFT",
+      "fundstelle": "src/lib/payroll/beitraege.ts:SAETZE_2026; Arbeitgeberanteile: src/server/services/payroll-rates.service.ts:vorbelegung"
+    },
+    {
+      "code": "KTG",
+      "bezeichnung": "Krankentaggeld",
+      "arbeitnehmerPct": 0,
+      "arbeitgeberPct": 0,
+      "basis": "Bruttolohn des Monats",
+      "zuPruefen": "Nur mit Versicherung; Satz und Aufteilung aus dem Vertrag (GAV Reinigung beachten).",
+      "gueltigAb": "2026-01-01",
+      "gueltigBis": "2026-12-31",
+      "quelle": "Vorbelegung Clenaris (Stand 2026) — ungeprüft, fachlich zu bestätigen",
+      "version": "SAETZE_2026",
+      "pruefstand": "UNGEPRUEFT",
+      "fundstelle": "src/lib/payroll/beitraege.ts:SAETZE_2026; Arbeitgeberanteile: src/server/services/payroll-rates.service.ts:vorbelegung"
+    },
+    {
+      "code": "FAK",
+      "bezeichnung": "Familienausgleichskasse",
+      "arbeitnehmerPct": 0,
+      "arbeitgeberPct": 0,
+      "basis": "Bruttolohn des Monats (AHV-Lohn)",
+      "zuPruefen": "Kantonal (Bern) und je Kasse. Vorbelegung 0 — nicht geraten.",
+      "gueltigAb": "2026-01-01",
+      "gueltigBis": "2026-12-31",
+      "quelle": "Vorbelegung Clenaris (Stand 2026) — ungeprüft, fachlich zu bestätigen",
+      "version": "SAETZE_2026",
+      "pruefstand": "UNGEPRUEFT",
+      "fundstelle": "src/lib/payroll/beitraege.ts:SAETZE_2026; Arbeitgeberanteile: src/server/services/payroll-rates.service.ts:vorbelegung"
+    },
+    {
+      "code": "VK",
+      "bezeichnung": "Verwaltungskosten Ausgleichskasse",
+      "arbeitnehmerPct": 0,
+      "arbeitgeberPct": 0,
+      "basis": "AHV/IV/EO-Beiträge beider Seiten — nicht der Lohn",
+      "zuPruefen": "Je Ausgleichskasse. Vorbelegung 0 — nicht geraten.",
+      "gueltigAb": "2026-01-01",
+      "gueltigBis": "2026-12-31",
+      "quelle": "Vorbelegung Clenaris (Stand 2026) — ungeprüft, fachlich zu bestätigen",
+      "version": "SAETZE_2026",
+      "pruefstand": "UNGEPRUEFT",
+      "fundstelle": "src/lib/payroll/beitraege.ts:SAETZE_2026; Arbeitgeberanteile: src/server/services/payroll-rates.service.ts:vorbelegung"
+    },
+    {
+      "code": "BVG",
+      "bezeichnung": "Berufliche Vorsorge (Altersgutschrift)",
+      "arbeitnehmerPct": 50,
+      "arbeitgeberPct": 50,
+      "anteilHinweis": "Prozent der Altersgutschrift, nicht des Lohns",
+      "eintrittsschwelle": 22680,
+      "koordinationsabzug": 26460,
+      "mindestKoordiniert": 3780,
+      "obergrenze": 90720,
+      "altersgutschriften": [
+        {
+          "abAlter": 25,
+          "satz": 7
+        },
+        {
+          "abAlter": 35,
+          "satz": 10
+        },
+        {
+          "abAlter": 45,
+          "satz": 15
+        },
+        {
+          "abAlter": 55,
+          "satz": 18
+        }
+      ],
+      "basis": "Koordinierter Jahreslohn aus der Jahreshochrechnung; Alter am 31.12. des Abrechnungsjahres",
+      "zuPruefen": "Grenzbeträge 2026, Altersbänder und Aufteilung gegen den Vorsorgeplan; nur Sparbeitrag, keine Risikobeiträge.",
+      "gueltigAb": "2026-01-01",
+      "gueltigBis": "2026-12-31",
+      "quelle": "Vorbelegung Clenaris (Stand 2026) — ungeprüft, fachlich zu bestätigen",
+      "version": "SAETZE_2026",
+      "pruefstand": "UNGEPRUEFT",
+      "fundstelle": "src/lib/payroll/beitraege.ts:SAETZE_2026; Arbeitgeberanteile: src/server/services/payroll-rates.service.ts:vorbelegung"
+    }
+  ],
+  "formeln": [
+    {
+      "id": "rundung",
+      "formel": "Jeder Beitrag = Satz % × Basis, dezimal gerechnet, einmal auf Rappen gerundet (kaufmännisch, 0.005 → 0.01).",
+      "fundstelle": "src/lib/money.ts:aufRappen; src/lib/payroll/beitraege.ts:prozent"
+    },
+    {
+      "id": "ahv",
+      "formel": "AHV/IV/EO = Brutto × Satz",
+      "fundstelle": "beitraege.ts:berechneBeitraege"
+    },
+    {
+      "id": "alv",
+      "formel": "ALV = min(Brutto, Grenze/12) × Satz + max(0, Brutto − Grenze/12) × Satz über Grenze",
+      "fundstelle": "beitraege.ts:berechneBeitraege"
+    },
+    {
+      "id": "uvg-ktg",
+      "formel": "UVG-NBU = Brutto × Satz; KTG = Brutto × Satz (ohne Höchstbetrag)",
+      "fundstelle": "beitraege.ts:berechneBeitraege"
+    },
+    {
+      "id": "bvg-koordiniert",
+      "formel": "Jahreslohn < Eintrittsschwelle → 0 (nicht versichert); sonst max(Mindestbetrag, min(Jahreslohn, Obergrenze) − Koordinationsabzug)",
+      "fundstelle": "beitraege.ts:koordinierterLohn"
+    },
+    {
+      "id": "bvg-satz",
+      "formel": "Altersgutschrift des höchsten Bandes mit abAlter ≤ Alter; Alter = Abrechnungsjahr − Geburtsjahr; ohne Geburtsdatum 0",
+      "fundstelle": "beitraege.ts:bvgSatzFuerAlter, alterImJahr"
+    },
+    {
+      "id": "bvg-abzug",
+      "formel": "BVG AN = koordinierter Lohn × Satz ÷ 12 × Anteil AN %; AG = derselbe Monatsbetrag × (100 − Anteil AN) %",
+      "fundstelle": "beitraege.ts:berechneBeitraege, berechneArbeitgeberbeitraege"
+    },
+    {
+      "id": "vk",
+      "formel": "VK = (AHV/IV/EO AN + AHV/IV/EO AG) × VK-Satz",
+      "fundstelle": "beitraege.ts:berechneArbeitgeberbeitraege"
+    },
+    {
+      "id": "anteilig",
+      "formel": "Monatslohn anteilig = Σ über angestellte Kalendertage (Monatslohn des Tages ÷ Tage im Monat)",
+      "fundstelle": "lohnbestandteile.ts:monatslohnAnteilig"
+    },
+    {
+      "id": "unbezahlt",
+      "formel": "Unbezahlter Urlaub = Monatslohn ÷ Werktage Mo–Fr des Monats × unbezahlte Werktage (Feiertage nicht abgezogen)",
+      "fundstelle": "lohnbestandteile.ts:ermittleLohnteil"
+    },
+    {
+      "id": "ueberstunden",
+      "formel": "Überstunden = Stunden × Ansatz × (100 + Zuschlag %) ÷ 100",
+      "fundstelle": "lohnbestandteile.ts:ueberstundenBetrag"
+    },
+    {
+      "id": "ferien",
+      "formel": "Ferienentschädigung % = Wochen ÷ (52 − Wochen) × 100, Wochen = Ferientage ÷ 5, auf 4 Stellen",
+      "fundstelle": "lohnbestandteile.ts:ferienanteilProzent"
+    },
+    {
+      "id": "dreizehnter",
+      "formel": "MONTHLY: Grundlohn ÷ 12 je Monat; PRO_RATA: (Grundlöhne des Jahres ÷ 12) − bereits ausbezahlt; ANNUAL: Monatslohn × Anstellungstage ÷ Jahrestage (voll bei ganzem Jahr)",
+      "fundstelle": "lohnbestandteile.ts:berechneDreizehnten"
+    },
+    {
+      "id": "quellensteuer",
+      "formel": "Quellensteuer = Bemessung (steuerbare Lohn- und Zahlungsbestandteile) × Tarifsatz; ohne Tarif keine Zahl, sondern Prüfung",
+      "fundstelle": "lohnbestandteile.ts:schliesseAbrechnungAb"
+    },
+    {
+      "id": "netto",
+      "formel": "Auszahlung = Brutto − Sozialabzüge − Quellensteuer − andere Abzüge + Spesen/Zahlungen",
+      "fundstelle": "lohnbestandteile.ts:schliesseAbrechnungAb"
+    }
+  ],
+  "beispielfaelle": [
+    {
+      "id": "B1",
+      "titel": "Vollzeit, Monatslohn 6000, Alter 40",
+      "eingabe": {
+        "bruttoMonat": 6000,
+        "bruttoJahr": 72000,
+        "alter": 40,
+        "saetze": "SAETZE_2026"
+      },
+      "rechenweg": "AHV 6000 × 5.3 % = 318.00; ALV 6000 × 1.1 % = 66.00; NBU 6000 × 1.6 % = 96.00; BVG: 72000 − 26460 = 45540 × 10 % = 4554 ÷ 12 = 379.50 × 50 % = 189.75; Summe 669.75",
+      "soll": {
+        "ahvIvEo": 318,
+        "alv": 66,
+        "uvgNbu": 96,
+        "ktg": 0,
+        "bvg": 189.75,
+        "summe": 669.75,
+        "bvgKoordinierterJahreslohn": 45540,
+        "bvgSatzGesamt": 10,
+        "bvgVersichert": true
+      },
+      "ist": {
+        "ahvIvEo": 318,
+        "alv": 66,
+        "uvgNbu": 96,
+        "ktg": 0,
+        "bvg": 189.75,
+        "summe": 669.75,
+        "bvgKoordinierterJahreslohn": 45540,
+        "bvgSatzGesamt": 10,
+        "bvgVersichert": true
+      }
+    },
+    {
+      "id": "B2",
+      "titel": "Teilzeit knapp über der Eintrittsschwelle: Mindestbetrag des koordinierten Lohns",
+      "eingabe": {
+        "bruttoMonat": 2000,
+        "bruttoJahr": 24000,
+        "alter": 30,
+        "saetze": "SAETZE_2026"
+      },
+      "rechenweg": "AHV 106.00; ALV 22.00; NBU 32.00; BVG: 24000 ≥ 22680, 24000 − 26460 < 0 → Mindestbetrag 3780 × 7 % = 264.60 ÷ 12 = 22.05 × 50 % = 11.025 → 11.03; Summe 171.03",
+      "soll": {
+        "ahvIvEo": 106,
+        "alv": 22,
+        "uvgNbu": 32,
+        "ktg": 0,
+        "bvg": 11.03,
+        "summe": 171.03,
+        "bvgKoordinierterJahreslohn": 3780,
+        "bvgSatzGesamt": 7,
+        "bvgVersichert": true
+      },
+      "ist": {
+        "ahvIvEo": 106,
+        "alv": 22,
+        "uvgNbu": 32,
+        "ktg": 0,
+        "bvg": 11.03,
+        "summe": 171.03,
+        "bvgKoordinierterJahreslohn": 3780,
+        "bvgSatzGesamt": 7,
+        "bvgVersichert": true
+      }
+    },
+    {
+      "id": "B3",
+      "titel": "Unter der Eintrittsschwelle: kein BVG",
+      "eingabe": {
+        "bruttoMonat": 1500,
+        "bruttoJahr": 18000,
+        "alter": 50,
+        "saetze": "SAETZE_2026"
+      },
+      "rechenweg": "AHV 79.50; ALV 16.50; NBU 24.00; BVG 0 (18000 < 22680); Summe 120.00",
+      "soll": {
+        "ahvIvEo": 79.5,
+        "alv": 16.5,
+        "uvgNbu": 24,
+        "ktg": 0,
+        "bvg": 0,
+        "summe": 120,
+        "bvgKoordinierterJahreslohn": 0,
+        "bvgSatzGesamt": 0,
+        "bvgVersichert": false
+      },
+      "ist": {
+        "ahvIvEo": 79.5,
+        "alv": 16.5,
+        "uvgNbu": 24,
+        "ktg": 0,
+        "bvg": 0,
+        "summe": 120,
+        "bvgKoordinierterJahreslohn": 0,
+        "bvgSatzGesamt": 0,
+        "bvgVersichert": false
+      }
+    },
+    {
+      "id": "B4",
+      "titel": "Hoher Lohn: ALV-Grenze und BVG-Obergrenze greifen, Alter 58",
+      "eingabe": {
+        "bruttoMonat": 15000,
+        "bruttoJahr": 180000,
+        "alter": 58,
+        "saetze": "SAETZE_2026"
+      },
+      "rechenweg": "AHV 795.00; ALV: Grenze 148200 ÷ 12 = 12350 × 1.1 % = 135.85, darüber 2650 × 0 % = 0; NBU 240.00; BVG: min(180000, 90720) − 26460 = 64260 × 18 % = 11566.80 ÷ 12 = 963.90 × 50 % = 481.95; Summe 1652.80",
+      "soll": {
+        "ahvIvEo": 795,
+        "alv": 135.85,
+        "uvgNbu": 240,
+        "ktg": 0,
+        "bvg": 481.95,
+        "summe": 1652.8,
+        "bvgKoordinierterJahreslohn": 64260,
+        "bvgSatzGesamt": 18,
+        "bvgVersichert": true
+      },
+      "ist": {
+        "ahvIvEo": 795,
+        "alv": 135.85,
+        "uvgNbu": 240,
+        "ktg": 0,
+        "bvg": 481.95,
+        "summe": 1652.8,
+        "bvgKoordinierterJahreslohn": 64260,
+        "bvgSatzGesamt": 18,
+        "bvgVersichert": true
+      }
+    },
+    {
+      "id": "B5",
+      "titel": "Rundung auf halbe Rappen: 57.505 wird 57.51",
+      "eingabe": {
+        "bruttoMonat": 1085,
+        "bruttoJahr": 13020,
+        "alter": 30,
+        "saetze": "SAETZE_2026"
+      },
+      "rechenweg": "AHV 1085 × 5.3 % = 57.505 → 57.51; ALV 1085 × 1.1 % = 11.935 → 11.94; NBU 1085 × 1.6 % = 17.36; BVG 0; Summe 86.81",
+      "soll": {
+        "ahvIvEo": 57.51,
+        "alv": 11.94,
+        "uvgNbu": 17.36,
+        "ktg": 0,
+        "bvg": 0,
+        "summe": 86.81,
+        "bvgKoordinierterJahreslohn": 0,
+        "bvgSatzGesamt": 0,
+        "bvgVersichert": false
+      },
+      "ist": {
+        "ahvIvEo": 57.51,
+        "alv": 11.94,
+        "uvgNbu": 17.36,
+        "ktg": 0,
+        "bvg": 0,
+        "summe": 86.81,
+        "bvgKoordinierterJahreslohn": 0,
+        "bvgSatzGesamt": 0,
+        "bvgVersichert": false
+      }
+    },
+    {
+      "id": "B6",
+      "titel": "Ohne Geburtsdatum: versichert, aber keine Altersgutschrift",
+      "eingabe": {
+        "bruttoMonat": 6000,
+        "bruttoJahr": 72000,
+        "alter": null,
+        "saetze": "SAETZE_2026"
+      },
+      "rechenweg": "AHV 318.00; ALV 66.00; NBU 96.00; BVG 0 (Alter unbekannt — Lücke in der Personalakte, kein geratener Satz); Summe 480.00",
+      "soll": {
+        "ahvIvEo": 318,
+        "alv": 66,
+        "uvgNbu": 96,
+        "ktg": 0,
+        "bvg": 0,
+        "summe": 480,
+        "bvgKoordinierterJahreslohn": 45540,
+        "bvgSatzGesamt": 0,
+        "bvgVersichert": true
+      },
+      "ist": {
+        "ahvIvEo": 318,
+        "alv": 66,
+        "uvgNbu": 96,
+        "ktg": 0,
+        "bvg": 0,
+        "summe": 480,
+        "bvgKoordinierterJahreslohn": 45540,
+        "bvgSatzGesamt": 0,
+        "bvgVersichert": true
+      }
+    },
+    {
+      "id": "AG1",
+      "titel": "Arbeitgeberbeiträge zu B1 mit der Vorbelegung",
+      "eingabe": {
+        "bruttoMonat": 6000,
+        "bruttoJahr": 72000,
+        "alter": 40,
+        "arbeitgeberSaetze": {
+          "ahvIvEo": 5.3,
+          "alv": 1.1,
+          "alvUeberGrenze": 0,
+          "uvgNbu": 0,
+          "uvgBu": 0,
+          "ktg": 0,
+          "fak": 0,
+          "vk": 0
+        }
+      },
+      "rechenweg": "AHV 318.00; ALV 66.00; UVG 0; KTG 0; FAK 0; VK 0; BVG 379.50 × 50 % = 189.75; Summe 573.75",
+      "soll": {
+        "ahvIvEo": 318,
+        "alv": 66,
+        "uvg": 0,
+        "ktg": 0,
+        "fak": 0,
+        "vk": 0,
+        "bvg": 189.75,
+        "summe": 573.75
+      },
+      "ist": {
+        "ahvIvEo": 318,
+        "alv": 66,
+        "uvg": 0,
+        "ktg": 0,
+        "fak": 0,
+        "vk": 0,
+        "bvg": 189.75,
+        "summe": 573.75
+      }
+    },
+    {
+      "id": "AG2",
+      "titel": "Arbeitgeberbeiträge zu B1 mit Beispielsätzen (keine Vorbelegung): VK auf die Beiträge, nicht auf den Lohn",
+      "eingabe": {
+        "bruttoMonat": 6000,
+        "bruttoJahr": 72000,
+        "alter": 40,
+        "arbeitgeberSaetze": {
+          "ahvIvEo": 5.3,
+          "alv": 1.1,
+          "alvUeberGrenze": 0,
+          "uvgNbu": 0,
+          "uvgBu": 0.5,
+          "ktg": 0,
+          "fak": 1.2,
+          "vk": 3
+        }
+      },
+      "rechenweg": "AHV 318.00; ALV 66.00; UVG 6000 × 0.5 % = 30.00; FAK 6000 × 1.2 % = 72.00; VK (318 + 318) × 3 % = 19.08; BVG 189.75; Summe 694.83",
+      "soll": {
+        "ahvIvEo": 318,
+        "alv": 66,
+        "uvg": 30,
+        "ktg": 0,
+        "fak": 72,
+        "vk": 19.08,
+        "bvg": 189.75,
+        "summe": 694.83
+      },
+      "ist": {
+        "ahvIvEo": 318,
+        "alv": 66,
+        "uvg": 30,
+        "ktg": 0,
+        "fak": 72,
+        "vk": 19.08,
+        "bvg": 189.75,
+        "summe": 694.83
+      }
+    },
+    {
+      "id": "L1",
+      "titel": "Ferienentschädigung für 4, 5 und 6 Wochen",
+      "eingabe": {
+        "ferientageJeJahr": [
+          20,
+          25,
+          30
+        ]
+      },
+      "rechenweg": "4 ÷ 48 = 8.3333 %; 5 ÷ 47 = 10.6383 %; 6 ÷ 46 = 13.0435 %",
+      "soll": {
+        "tage20": 8.3333,
+        "tage25": 10.6383,
+        "tage30": 13.0435
+      },
+      "ist": {
+        "tage20": 8.3333,
+        "tage25": 10.6383,
+        "tage30": 13.0435
+      }
+    },
+    {
+      "id": "L2",
+      "titel": "Monatslohn anteilig: Eintritt am 20. März, Lohnänderung am 16. April",
+      "eingabe": {
+        "eintritt": "März 2021, Tag 20–31, 6000",
+        "aenderung": "April 2021, 6000 bis 15., 6200 ab 16."
+      },
+      "rechenweg": "März: 12 Tage × 6000 ÷ 31 = 2322.58; April: 15 × 6000 ÷ 30 + 15 × 6200 ÷ 30 = 3000 + 3100 = 6100.00",
+      "soll": {
+        "eintritt": 2322.58,
+        "eintrittTage": 12,
+        "aenderung": 6100
+      },
+      "ist": {
+        "eintritt": 2322.58,
+        "eintrittTage": 12,
+        "aenderung": 6100
+      }
+    },
+    {
+      "id": "L3",
+      "titel": "Überstunden mit Zuschlag",
+      "eingabe": {
+        "stunden": 5,
+        "ansatz": 40,
+        "zuschlagPct": 25
+      },
+      "rechenweg": "5 × 40 × 125 % = 250.00",
+      "soll": {
+        "betrag": 250
+      },
+      "ist": {
+        "betrag": 250
+      }
+    },
+    {
+      "id": "L4",
+      "titel": "13. Monatslohn: pro rata, jährlich anteilig, monatlich",
+      "eingabe": {
+        "proRata": {
+          "art": "PRO_RATA",
+          "auszahlungsmonat": 12,
+          "grundlohnBisherImJahr": 66000,
+          "bereitsAusbezahlt": 0,
+          "monatslohnVoll": 6000,
+          "anstellungstageImJahr": 365,
+          "tageImJahr": 365,
+          "austrittImMonat": false
+        },
+        "jaehrlichAnteilig": {
+          "art": "ANNUAL",
+          "auszahlungsmonat": 12,
+          "grundlohnBisherImJahr": 0,
+          "bereitsAusbezahlt": 0,
+          "monatslohnVoll": 6000,
+          "anstellungstageImJahr": 183,
+          "tageImJahr": 365,
+          "austrittImMonat": false
+        },
+        "monatlich": {
+          "grundlohn": 6000
+        }
+      },
+      "rechenweg": "PRO_RATA: (66000 + 6000) ÷ 12 = 6000.00; ANNUAL: 6000 × 183 ÷ 365 = 3008.22; MONTHLY: 6000 ÷ 12 = 500.00",
+      "soll": {
+        "proRata": 6000,
+        "jaehrlichAnteilig": 3008.22,
+        "monatlich": 500
+      },
+      "ist": {
+        "proRata": 6000,
+        "jaehrlichAnteilig": 3008.22,
+        "monatlich": 500
+      }
+    },
+    {
+      "id": "A1",
+      "titel": "Ganze Abrechnung: Monatslohn 6000, Überstunden 250, Zulage 200, Spesen 80, Abzug 300, ohne Quellensteuer",
+      "eingabe": {
+        "jahr": 2026,
+        "monat": 5,
+        "grundlohn": {
+          "art": "MONTHLY",
+          "betrag": 6000,
+          "tage": 31,
+          "voll": true,
+          "monatslohnVoll": 6000
+        },
+        "unbezahlteTage": 0,
+        "werktageImMonat": 21,
+        "positionen": [
+          {
+            "id": "p1",
+            "type": "OVERTIME",
+            "label": "Überstunden",
+            "quantity": 5,
+            "rate": 40,
+            "surchargePct": 25,
+            "amount": 250
+          },
+          {
+            "id": "p2",
+            "type": "ALLOWANCE",
+            "label": "Zulage",
+            "quantity": null,
+            "rate": null,
+            "surchargePct": null,
+            "amount": 200
+          },
+          {
+            "id": "p3",
+            "type": "EXPENSE",
+            "label": "Spesen",
+            "quantity": null,
+            "rate": null,
+            "surchargePct": null,
+            "amount": 80
+          },
+          {
+            "id": "p4",
+            "type": "DEDUCTION",
+            "label": "Abzug",
+            "quantity": null,
+            "rate": null,
+            "surchargePct": null,
+            "amount": 300
+          }
+        ],
+        "ferienImLohn": false,
+        "ferientageJeJahr": 25,
+        "feiertagsanteilPct": null,
+        "dreizehnter": {
+          "art": "NONE",
+          "auszahlungsmonat": 12,
+          "grundlohnBisherImJahr": 66000,
+          "bereitsAusbezahlt": 0,
+          "monatslohnVoll": 6000,
+          "anstellungstageImJahr": 365,
+          "tageImJahr": 365,
+          "austrittImMonat": false
+        },
+        "saetze": "SAETZE_2026",
+        "arbeitgeber": "Vorbelegung",
+        "alter": 40,
+        "bruttoJahrHochrechnung": 72000,
+        "quellensteuer": {
+          "status": "KEINE"
+        }
+      },
+      "rechenweg": "Brutto 6000 + 250 + 200 = 6450; AHV 341.85, ALV 70.95, NBU 103.20, BVG 189.75 (Jahreshochrechnung 72000) = 705.75; Netto 6450 − 705.75 − 300 + 80 = 5524.25",
+      "soll": {
+        "brutto": 6450,
+        "sozialabzuege": 705.75,
+        "quellensteuer": 0,
+        "andereAbzuege": 300,
+        "spesenUndZahlungen": 80,
+        "netto": 5524.25,
+        "pruefungErforderlich": false
+      },
+      "ist": {
+        "brutto": 6450,
+        "sozialabzuege": 705.75,
+        "quellensteuer": 0,
+        "andereAbzuege": 300,
+        "spesenUndZahlungen": 80,
+        "netto": 5524.25,
+        "pruefungErforderlich": false
+      }
+    },
+    {
+      "id": "A2",
+      "titel": "Wie A1, mit Quellensteuer aus einem Beispieltarif von 10 % (kein echter Tarif)",
+      "eingabe": {
+        "jahr": 2026,
+        "monat": 5,
+        "grundlohn": {
+          "art": "MONTHLY",
+          "betrag": 6000,
+          "tage": 31,
+          "voll": true,
+          "monatslohnVoll": 6000
+        },
+        "unbezahlteTage": 0,
+        "werktageImMonat": 21,
+        "positionen": [
+          {
+            "id": "p1",
+            "type": "OVERTIME",
+            "label": "Überstunden",
+            "quantity": 5,
+            "rate": 40,
+            "surchargePct": 25,
+            "amount": 250
+          },
+          {
+            "id": "p2",
+            "type": "ALLOWANCE",
+            "label": "Zulage",
+            "quantity": null,
+            "rate": null,
+            "surchargePct": null,
+            "amount": 200
+          },
+          {
+            "id": "p3",
+            "type": "EXPENSE",
+            "label": "Spesen",
+            "quantity": null,
+            "rate": null,
+            "surchargePct": null,
+            "amount": 80
+          },
+          {
+            "id": "p4",
+            "type": "DEDUCTION",
+            "label": "Abzug",
+            "quantity": null,
+            "rate": null,
+            "surchargePct": null,
+            "amount": 300
+          }
+        ],
+        "ferienImLohn": false,
+        "ferientageJeJahr": 25,
+        "feiertagsanteilPct": null,
+        "dreizehnter": {
+          "art": "NONE",
+          "auszahlungsmonat": 12,
+          "grundlohnBisherImJahr": 66000,
+          "bereitsAusbezahlt": 0,
+          "monatslohnVoll": 6000,
+          "anstellungstageImJahr": 365,
+          "tageImJahr": 365,
+          "austrittImMonat": false
+        },
+        "saetze": "SAETZE_2026",
+        "arbeitgeber": "Vorbelegung",
+        "alter": 40,
+        "bruttoJahrHochrechnung": 72000,
+        "quellensteuer": {
+          "status": "SATZ",
+          "satzPct": 10,
+          "tarif": "A0N",
+          "kanton": "BE",
+          "quelle": "Beispielsatz des Prüfpakets",
+          "satzId": "beispiel"
+        }
+      },
+      "rechenweg": "Bemessung = steuerbare Bestandteile 6450 (Spesen nicht steuerbar); Quellensteuer 645.00; Netto 5524.25 − 645.00 = 4879.25",
+      "soll": {
+        "brutto": 6450,
+        "sozialabzuege": 705.75,
+        "quellensteuer": 645,
+        "andereAbzuege": 300,
+        "spesenUndZahlungen": 80,
+        "netto": 4879.25,
+        "pruefungErforderlich": false
+      },
+      "ist": {
+        "brutto": 6450,
+        "sozialabzuege": 705.75,
+        "quellensteuer": 645,
+        "andereAbzuege": 300,
+        "spesenUndZahlungen": 80,
+        "netto": 4879.25,
+        "pruefungErforderlich": false
+      }
+    },
+    {
+      "id": "A3",
+      "titel": "Wie A1, Quellensteuerpflicht ohne eingelesenen Tarif: keine erfundene Zahl, sondern eine Prüfung",
+      "eingabe": {
+        "jahr": 2026,
+        "monat": 5,
+        "grundlohn": {
+          "art": "MONTHLY",
+          "betrag": 6000,
+          "tage": 31,
+          "voll": true,
+          "monatslohnVoll": 6000
+        },
+        "unbezahlteTage": 0,
+        "werktageImMonat": 21,
+        "positionen": [
+          {
+            "id": "p1",
+            "type": "OVERTIME",
+            "label": "Überstunden",
+            "quantity": 5,
+            "rate": 40,
+            "surchargePct": 25,
+            "amount": 250
+          },
+          {
+            "id": "p2",
+            "type": "ALLOWANCE",
+            "label": "Zulage",
+            "quantity": null,
+            "rate": null,
+            "surchargePct": null,
+            "amount": 200
+          },
+          {
+            "id": "p3",
+            "type": "EXPENSE",
+            "label": "Spesen",
+            "quantity": null,
+            "rate": null,
+            "surchargePct": null,
+            "amount": 80
+          },
+          {
+            "id": "p4",
+            "type": "DEDUCTION",
+            "label": "Abzug",
+            "quantity": null,
+            "rate": null,
+            "surchargePct": null,
+            "amount": 300
+          }
+        ],
+        "ferienImLohn": false,
+        "ferientageJeJahr": 25,
+        "feiertagsanteilPct": null,
+        "dreizehnter": {
+          "art": "NONE",
+          "auszahlungsmonat": 12,
+          "grundlohnBisherImJahr": 66000,
+          "bereitsAusbezahlt": 0,
+          "monatslohnVoll": 6000,
+          "anstellungstageImJahr": 365,
+          "tageImJahr": 365,
+          "austrittImMonat": false
+        },
+        "saetze": "SAETZE_2026",
+        "arbeitgeber": "Vorbelegung",
+        "alter": 40,
+        "bruttoJahrHochrechnung": 72000,
+        "quellensteuer": {
+          "status": "KEIN_TARIF",
+          "tarif": "A0N",
+          "kanton": "BE",
+          "grund": "Kein Tarif für BE A0N im Jahr 2026 eingelesen."
+        }
+      },
+      "rechenweg": "Quellensteuer 0 und pruefungErforderlich = true; Netto wie A1",
+      "soll": {
+        "brutto": 6450,
+        "sozialabzuege": 705.75,
+        "quellensteuer": 0,
+        "andereAbzuege": 300,
+        "spesenUndZahlungen": 80,
+        "netto": 5524.25,
+        "pruefungErforderlich": true
+      },
+      "ist": {
+        "brutto": 6450,
+        "sozialabzuege": 705.75,
+        "quellensteuer": 0,
+        "andereAbzuege": 300,
+        "spesenUndZahlungen": 80,
+        "netto": 5524.25,
+        "pruefungErforderlich": true
+      }
+    }
+  ]
+}

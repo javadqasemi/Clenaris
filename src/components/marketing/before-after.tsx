@@ -103,7 +103,23 @@ export function BeforeAfter({
     <figure className={cn('space-y-3', className)}>
       <div
         ref={containerRef}
-        className="relative aspect-[4/3] w-full select-none overflow-hidden rounded-3xl border border-border bg-muted shadow-elevated sm:aspect-[16/10]"
+        /*
+          Das Seitenverhältnis gibt die Höhe vor — bis es das nicht mehr darf.
+
+          Auf der Galerieseite steht der Vergleich fast über die volle
+          Spaltenbreite. Bei 2500 px ergäbe 16:10 eine Bildhöhe von rund
+          1560 px; auf einem 49-Zöller mit 1440 px Höhe passte dann nicht
+          einmal *ein* Beispiel auf den Bildschirm, und man scrollte an einem
+          Foto entlang, ohne es je ganz zu sehen.
+
+          Die Deckelung greift erst ab `3xl` (2000 px) — darunter ändert sich
+          nichts. Sie wirkt über `max-height` und nicht über ein anderes
+          Seitenverhältnis: Beide Bilder liegen als `object-cover` darin, ein
+          flacherer Rahmen beschneidet sie also oben und unten, statt sie zu
+          verzerren. Das ist bei einer Küchenzeile oder einem Treppenhaus die
+          harmlosere Änderung — der Vergleich lebt von der Mitte des Bildes.
+        */
+        className="relative aspect-[4/3] w-full select-none overflow-hidden rounded-3xl border border-border bg-muted shadow-elevated sm:aspect-[16/10] 3xl:max-h-[78vh]"
         onMouseDown={(event) => {
           setDragging(true);
           updateFromClientX(event.clientX);

@@ -1,40 +1,21 @@
-import { z } from 'zod';
-
 import { defineRoute } from '@/lib/api/handler';
+import { supplierListQuery } from '@/lib/validation/queries';
 import { created, ok } from '@/lib/api/response';
-import { prisma } from '@/lib/db';
-import { audit } from '@/lib/audit';
 import { createSupplierSchema } from '@/lib/validation/finance';
 import { getOrganizationId } from '@/server/services/organization.service';
+import { createSupplier, listSuppliers } from '@/server/services/supplier.service';
 
 export const runtime = 'nodejs';
 
-const listQuery = z.object({
-  q: z.string().trim().max(120).optional(),
-  includeInactive: z
-    .enum(['0', '1'])
-    .default('0')
-    .transform((v) => v === '1'),
-});
 
 /** GET /api/suppliers — Lieferanten mit der Zahl ihrer Belege. */
 export const GET = defineRoute({
   permissions: ['supplier:read'],
-  query: listQuery,
+  query: supplierListQuery,
   rateLimit: 'apiRead',
   handler: async ({ query }) => {
     const organizationId = await getOrganizationId();
-    return ok(
-      await prisma.supplier.findMany({
-        where: {
-          organizationId,
-          ...(query.includeInactive ? {} : { active: true }),
-          ...(query.q ? { name: { contains: query.q, mode: 'insensitive' } } : {}),
-        },
-        orderBy: { name: 'asc' },
-        include: { _count: { select: { expenses: true } } },
-      }),
-    );
+    return ok(await listSuppliers(organizationId, query));
   },
 });
 
@@ -45,36 +26,7 @@ export const POST = defineRoute({
   rateLimit: 'apiWrite',
   handler: async ({ body, session, ip }) => {
     const organizationId = await getOrganizationId();
-
-    const empty = (v: string | undefined) => (v && v.trim() !== '' ? v.trim() : null);
-
-    const supplier = await prisma.supplier.create({
-      data: {
-        organizationId,
-        name: body.name,
-        contactName: empty(body.contactName),
-        email: empty(body.email),
-        phone: empty(body.phone),
-        street: empty(body.street),
-        postalCode: empty(body.postalCode),
-        city: empty(body.city),
-        country: body.country,
-        vatNumber: empty(body.vatNumber),
-        iban: empty(body.iban),
-        paymentTermDays: body.paymentTermDays,
-        notes: empty(body.notes),
-      },
-    });
-
-    await audit.created({
-      organizationId,
-      userId: session.id,
-      entity: 'Supplier',
-      entityId: supplier.id,
-      summary: `Lieferant „${supplier.name}" erfasst`,
-      ip,
-    });
-
+    const supplier = await createSupplier({ organizationId, actorId: session.id, ip, input: body });
     return created({ id: supplier.id, name: supplier.name });
   },
 });

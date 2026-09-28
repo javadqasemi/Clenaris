@@ -2,6 +2,7 @@ import { defineRoute } from '@/lib/api/handler';
 import { exportRangeQuery } from '@/lib/validation/queries';
 import { exportTimesheetsXlsx } from '@/server/services/export.service';
 import { getOrganizationId } from '@/server/services/organization.service';
+import { zuercherTag } from '@/lib/zuerich';
 
 export const runtime = 'nodejs';
 export const maxDuration = 60;
@@ -19,13 +20,16 @@ export const GET = defineRoute({
   handler: async ({ query, session }) => {
     const organizationId = await getOrganizationId();
 
-    const now = new Date();
-    const defaultFrom = new Date(now.getFullYear(), now.getMonth(), 1);
+    // Ohne Angabe: der laufende Zürcher Monat bis heute (2026-09-27). Vorher
+    // der Monat in der Zone des Servers — am 1. zwischen 00:00 und 02:00 der
+    // Vormonat.
+    const heute = zuercherTag();
+    const monatsbeginn = new Date(Date.UTC(heute.getUTCFullYear(), heute.getUTCMonth(), 1));
 
     const { buffer, filename } = await exportTimesheetsXlsx({
       organizationId,
-      from: query.from ?? defaultFrom,
-      to: query.to ?? now,
+      from: query.from ?? monatsbeginn,
+      to: query.to ?? heute,
       actorId: session.id,
     });
 

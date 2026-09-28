@@ -23,6 +23,8 @@
  *    und Ursache aus — aber nur hier, nie an die Kundschaft.
  */
 
+import { istSensiblerSchluessel } from './sensitive-fields';
+
 const LEVELS = { debug: 10, info: 20, warn: 30, error: 40, silent: 100 } as const;
 
 export type LogLevel = keyof typeof LEVELS;
@@ -43,9 +45,23 @@ const AHV = /\b756\.\d{4}\.\d{4}\.\d{2}\b/g;
 /** Lange zufällige Zeichenketten — Token, Schlüssel, Signaturen. */
 const TOKEN = /\b[A-Za-z0-9_-]{32,}\b/g;
 
-/** Schlüssel, deren Wert unabhängig vom Inhalt nie im Protokoll erscheint. */
-const SECRET_KEYS =
-  /^(password|passwort|token|secret|authorization|cookie|apiKey|api_key|signature|refreshToken|accessToken|iban|ahvNumber)$/i;
+/**
+ * Schlüssel, deren Wert unabhängig vom Inhalt nie im Protokoll erscheint.
+ *
+ * `signature` bleibt hier zusätzlich zur gemeinsamen Regel stehen: Im Logger
+ * ist es der Signaturkopf eines Webhooks, also ein Geheimnis. Im
+ * Prüfprotokoll wäre dasselbe Wort zu breit. `hourlyRate` ebenso: Der Logger
+ * kennt keine Entität und kann Lohn und Katalogpreis nicht unterscheiden; ein
+ * maskierter Katalogpreis in einer Fehlermeldung kostet nichts. Alles Übrige entscheidet
+ * `istSensiblerSchluessel` — dieselbe Regel wie im Prüfprotokoll, damit ein
+ * Lohnbetrag nicht über eine Fehlermeldung hinausgeht, die das Prüfprotokoll
+ * zurückhält.
+ */
+const SECRET_KEYS = /^(signature|hourlyRate)$/i;
+
+function geheimerSchluessel(key: string): boolean {
+  return SECRET_KEYS.test(key) || istSensiblerSchluessel(key);
+}
 
 export function redact(value: string): string {
   return value
@@ -77,7 +93,7 @@ function scrub(value: unknown, depth = 0): unknown {
   if (typeof value === 'object') {
     const out: Record<string, unknown> = {};
     for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
-      out[key] = SECRET_KEYS.test(key) ? '[maskiert]' : scrub(item, depth + 1);
+      out[key] = geheimerSchluessel(key) ? '[maskiert]' : scrub(item, depth + 1);
     }
     return out;
   }
@@ -91,11 +107,36 @@ interface LogFields {
   [key: string]: unknown;
 }
 
+/**
+ * Die Kennung der laufenden Anfrage — ohne dass sie jemand weiterreicht.
+ *
+ * **Warum der Import verzögert geschieht.** `observability/context` benutzt
+ * `node:async_hooks`; dieses Modul wird auch aus Umgebungen geladen, in denen
+ * es das nicht gibt. Ein Import an der Dateispitze machte den Logger dort
+ * unbrauchbar — und ein Logger, der wegen seiner Zusatzangaben nicht mehr
+ * schreibt, ist schlechter als einer ohne sie.
+ *
+ * Der Modulzwischenspeicher sorgt dafür, dass `require` nach dem ersten
+ * Aufruf nichts mehr kostet.
+ */
+function requestId(): string | undefined {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const mod = require('@/lib/observability/context') as {
+      aktuelleRequestId?: () => string | undefined;
+    };
+    return mod.aktuelleRequestId?.();
+  } catch {
+    return undefined;
+  }
+}
+
 function emit(level: Exclude<LogLevel, 'silent'>, scope: string, message: string, fields?: LogFields) {
   if (LEVELS[level] < threshold()) return;
 
   const safeMessage = redact(message);
   const safeFields = fields ? (scrub(fields) as LogFields) : undefined;
+  const rid = requestId();
 
   // In der Produktion eine JSON-Zeile je Ereignis; sonst lesbar.
   if (process.env.NODE_ENV === 'production') {
@@ -104,6 +145,7 @@ function emit(level: Exclude<LogLevel, 'silent'>, scope: string, message: string
       scope,
       message: safeMessage,
       time: new Date().toISOString(),
+      ...(rid ? { requestId: rid } : {}),
       ...safeFields,
     });
     // eslint-disable-next-line no-console -- die eine Stelle, die schreiben darf
@@ -111,7 +153,10 @@ function emit(level: Exclude<LogLevel, 'silent'>, scope: string, message: string
     return;
   }
 
-  const prefix = `[${scope}]`;
+  // In der Entwicklung nur die ersten acht Zeichen: Eine volle UUID vor jeder
+  // Zeile verschiebt die eigentliche Meldung aus dem Blick, und zum
+  // Auseinanderhalten zweier gleichzeitiger Anfragen reichen acht.
+  const prefix = rid ? `[${scope} ${rid.slice(0, 8)}]` : `[${scope}]`;
   // eslint-disable-next-line no-console -- die eine Stelle, die schreiben darf
   const write = level === 'error' ? console.error : level === 'warn' ? console.warn : console.log;
   if (safeFields && Object.keys(safeFields).length > 0) write(prefix, safeMessage, safeFields);

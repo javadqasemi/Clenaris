@@ -24,7 +24,14 @@ export default async function AssistantPage({ searchParams }: { searchParams: Pr
   return (
     <div className="space-y-6">
       <PageHeader title="Führungsassistent" description="Zusammenfassungen, Analysen, Risikovorschläge und Protokolle als Entwurf — jeder mit Begründung, Datenquelle und Vertrauensgrad." />
-      <Alert variant="info">Übermittelt werden aggregierte Kennzahlen, Titel von Zielen und Risiken sowie anonymisierte Bewertungstexte. Kundennamen, Löhne und Adressen verlassen die Anwendung nicht.</Alert>
+      {/*
+        Bis 2026-09-27 hiess es hier „anonymisierte Bewertungstexte" und
+        „Kundennamen verlassen die Anwendung nicht" — beides stimmte nicht,
+        die Texte gingen roh hinaus. Der Satz sagt jetzt, was geschieht.
+      */}
+      <Alert variant="info">
+        Übermittelt werden aggregierte Kennzahlen, Titel von Zielen und Risiken sowie — je nach Auswertung — Bewertungstexte, Kommentare oder Ihre Sitzungsnotizen. Namen, die Clenaris kennt, sowie E-Mail-Adressen, Telefonnummern, IBAN und AHV-Nummern werden vorher ersetzt; Löhne und Adressen gehen nie hinaus. Namen, die nirgends erfasst sind, erkennt kein Filter sicher: Die Übermittlung ist sparsam, nicht anonym.
+      </Alert>
       <AssistantPanel configured={hasIntegration('ai')} budgets={budgets} defaultKind={(params.art as never) ?? 'summarizePeriod'} />
     </div>
   );

@@ -8,18 +8,34 @@ import { NotFoundError } from '@/lib/errors';
 import { uploadBuffer } from '@/lib/storage';
 import {
   BookingConfirmationDocument,
+  ContractVersionDocument,
   CreditNoteDocument,
+  EvidenceDocument,
+  type EvidencePdfProps,
   InvoiceDocument,
   JobReportDocument,
   QuoteDocument,
+  type JobReportPdfProps,
   type PdfCompany,
   type PdfLineItem,
   type PdfRecipient,
   type QrSlipData,
 } from './documents';
+import {
+  PayslipDocument,
+  SalaryCertificateDocument,
+  type PayslipPdfProps,
+  type SalaryCertificatePdfProps,
+} from './payroll-documents';
 import { isQrIban, renderQrCode, splitStreet } from './swiss-qr';
+import {
+  ABRECHNUNGSZYKLUS,
+  PREISMODELL,
+  VERLAENGERUNG,
+  rhythmusText,
+} from '@/lib/contracts/bezeichnungen';
 import { FREQUENCY_LABEL } from '@/lib/pricing/engine';
-import { absoluteUrl } from '@/lib/utils';
+import { leistungsnamen } from '@/lib/booking/leistungen';
 import { STATUS_MAP } from '@/components/ui/badge';
 import { logger } from '@/lib/logger';
 
@@ -94,6 +110,57 @@ function dominantVatRate(items: { vatRate: number; net: number }[]): number {
     byRate.set(item.vatRate, (byRate.get(item.vatRate) ?? 0) + item.net);
   }
   return [...byRate.entries()].sort((a, b) => b[1] - a[1])[0][0];
+}
+
+// ---------------------------------------------------------------------------
+//  Signaturprotokoll
+// ---------------------------------------------------------------------------
+
+/**
+ * Das Signaturprotokoll als PDF — aus bereits eingefrorenen Daten.
+ *
+ * Bewusst ohne Datenbankzugriff: Der Aufrufer (`signature.service.ts`) hat
+ * den Vorgang geladen und entschieden, was hineingehört. Diese Funktion
+ * rendert nur. Ein zweiter Aufruf mit denselben Eingaben ergibt dasselbe
+ * Dokument bis auf `generatedAt` — deshalb wird die Prüfsumme über die
+ * *gespeicherten* Bytes gebildet, nicht über eine Neuerzeugung.
+ */
+export async function renderEvidencePdf(
+  organizationId: string,
+  props: Omit<EvidencePdfProps, 'company'>,
+): Promise<Buffer> {
+  const company = await loadCompany(organizationId);
+  return Buffer.from(
+    await renderToBuffer(React.createElement(EvidenceDocument, { ...props, company }) as never),
+  );
+}
+
+// ---------------------------------------------------------------------------
+//  Lohnabrechnung und Lohnausweis-Aufstellung
+// ---------------------------------------------------------------------------
+
+/**
+ * Wie beim Signaturprotokoll: ohne eigenen Datenbankzugriff auf die
+ * Abrechnung. Der Lohndienst übergibt die eingefrorenen Zeilen; hier wird nur
+ * gesetzt. Aufgerufen wird genau einmal, beim Veröffentlichen bzw.
+ * Abschliessen — ausgeliefert werden danach die gespeicherten Bytes.
+ */
+export async function renderPayslipPdf(
+  organizationId: string,
+  props: Omit<PayslipPdfProps, 'company'>,
+): Promise<Buffer> {
+  const company = await loadCompany(organizationId);
+  return Buffer.from(await renderToBuffer(React.createElement(PayslipDocument, { ...props, company }) as never));
+}
+
+export async function renderSalaryCertificatePdf(
+  organizationId: string,
+  props: Omit<SalaryCertificatePdfProps, 'company'>,
+): Promise<Buffer> {
+  const company = await loadCompany(organizationId);
+  return Buffer.from(
+    await renderToBuffer(React.createElement(SalaryCertificateDocument, { ...props, company }) as never),
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -219,11 +286,12 @@ export async function renderInvoicePdf(invoiceId: string): Promise<{
 //  Offerte
 // ---------------------------------------------------------------------------
 
-export async function renderQuotePdf(quoteId: string): Promise<{
-  buffer: Buffer;
-  filename: string;
-  url: string | null;
-}> {
+/**
+ * Die Offerte samt allem, was das Dokument braucht — eine Abfrage, zwei
+ * Renderer (unten): das gewöhnliche PDF mit Altbestands-Unterschrift und der
+ * Snapshot für die Unterzeichnung ohne sie.
+ */
+async function offerteLaden(quoteId: string) {
   const quote = await prisma.quote.findUnique({
     where: { id: quoteId },
     include: {
@@ -233,8 +301,171 @@ export async function renderQuotePdf(quoteId: string): Promise<{
     },
   });
   if (!quote) throw new NotFoundError('Offerte');
+  return quote;
+}
 
+/**
+ * Der Snapshot für die Annahme (Gate 4C): dieselbe Darstellung wie das
+ * gewöhnliche Offert-PDF — Anbieter, Kundschaft, Nummer, Datum, Gültigkeit,
+ * Positionen, Rabatt, MWST, Total, Texte, Bedingungen —, aber **ohne**
+ * Unterschriftsbild aus dem Altbestand und **ohne** Ablage an der Offerte.
+ * Die Bytes gehen an den Signaturkern, der sie als Original speichert und
+ * ihren SHA-256 (Hash A) einfriert. Was die Kundschaft unterzeichnet, ist
+ * genau diese Datei; danach wird sie nie neu gerendert.
+ */
+export async function renderQuoteSnapshot(quoteId: string): Promise<{ buffer: Buffer; filename: string }> {
+  const quote = await offerteLaden(quoteId);
   const company = await loadCompany(quote.organizationId);
+  const buffer = await renderToBuffer(
+    React.createElement(QuoteDocument, { ...offertDokumentProps(quote, company), signature: null }) as never,
+  );
+  return { buffer, filename: `Offerte-${quote.number}.pdf` };
+}
+
+/**
+ * Der Snapshot einer Vertragsfassung für die elektronische Annahme (Wave 10).
+ *
+ * Dieselbe Rolle wie `renderQuoteSnapshot`: Die Bytes gehen an den
+ * Signaturkern, der sie als Original ablegt und ihren SHA-256 (Hash A)
+ * einfriert. Was unterzeichnet wird, ist genau diese Datei — sie wird danach
+ * nie neu gerendert, auch dann nicht, wenn sich der Vertrag ändert.
+ *
+ * Geladen wird die **Fassung**, nicht der Vertrag: Titel, Konditionen,
+ * Leistungen und Rhythmen stammen aus `ContractVersion` und hängen an ihr.
+ * Ein Snapshot, der die Konditionen aus „der derzeit geltenden Fassung"
+ * zöge, wäre nach der ersten Änderung nicht mehr das, was unterschrieben
+ * wurde.
+ */
+export async function renderContractVersionSnapshot(
+  contractVersionId: string,
+): Promise<{ buffer: Buffer; filename: string }> {
+  const version = await prisma.contractVersion.findUnique({
+    where: { id: contractVersionId },
+    include: {
+      contract: {
+        include: {
+          customer: { include: { addresses: { where: { isBilling: true }, take: 1 } } },
+          property: {
+            select: {
+              label: true,
+              address: { select: { street: true, streetNo: true, postalCode: true, city: true } },
+            },
+          },
+        },
+      },
+      services: {
+        orderBy: { position: 'asc' },
+        include: { schedules: { where: { active: true }, orderBy: { effectiveFrom: 'asc' } } },
+      },
+    },
+  });
+  if (!version) throw new NotFoundError('Vertragsfassung');
+
+  const vertrag = version.contract;
+  const company = await loadCompany(vertrag.organizationId);
+  const billing = vertrag.customer.addresses[0];
+
+  const recipient: PdfRecipient = {
+    name: `${vertrag.customer.firstName} ${vertrag.customer.lastName}`,
+    company: vertrag.customer.companyName,
+    street: billing ? [billing.street, billing.streetNo].filter(Boolean).join(' ') : '—',
+    postalCode: billing?.postalCode ?? '',
+    city: billing?.city ?? '',
+    country: billing?.country ?? 'CH',
+    vatNumber: vertrag.customer.vatNumber,
+  };
+
+  /**
+   * Der Preis steht ausgeschrieben, nicht als Modellname. „UNIT_BASED" ist
+   * in einem Dokument, das jemand unterschreibt, keine Preisvereinbarung.
+   */
+  const preis = (() => {
+    const satz = toNumber(version.vatRate);
+    switch (version.pricingModel) {
+      case 'HOURLY':
+        return `${version.currency} ${toNumber(version.hourlyRate).toFixed(2)} je Stunde · zzgl. ${satz} % MWST`;
+      case 'UNIT_BASED':
+        return `${version.currency} ${toNumber(version.unitPrice).toFixed(4)} je ${version.unitLabel ?? 'Einheit'} · zzgl. ${satz} % MWST`;
+      case 'FIXED_PER_VISIT':
+        return `${version.currency} ${toNumber(version.baseAmount).toFixed(2)} je Einsatz · zzgl. ${satz} % MWST`;
+      default:
+        return `${version.currency} ${toNumber(version.baseAmount).toFixed(2)} je Abrechnungsperiode · zzgl. ${satz} % MWST`;
+    }
+  })();
+
+  const konditionen: { label: string; value: string }[] = [
+    { label: 'Preismodell', value: PREISMODELL[version.pricingModel] ?? version.pricingModel },
+    { label: 'Preis', value: preis },
+    { label: 'Abrechnung', value: ABRECHNUNGSZYKLUS[version.billingCycle] ?? version.billingCycle },
+    { label: 'Zahlungsziel', value: `${version.paymentTermDays} Tage` },
+    { label: 'Kündigungsfrist', value: `${version.noticePeriodDays} Tage` },
+    { label: 'Verlängerung', value: VERLAENGERUNG[version.renewalType] ?? version.renewalType },
+  ];
+  if (version.minimumTermMonths) {
+    konditionen.splice(5, 0, { label: 'Mindestlaufzeit', value: `${version.minimumTermMonths} Monate` });
+  }
+  if (version.renewalType === 'AUTOMATIC' && version.renewalPeriodMonths) {
+    konditionen.push({ label: 'Verlängert sich um', value: `${version.renewalPeriodMonths} Monate` });
+  }
+  if (version.indexReference) {
+    konditionen.push({ label: 'Indexierung', value: version.indexReference });
+  }
+  if (version.responseHours) {
+    konditionen.push({ label: 'Reaktionszeit bei Reklamation', value: `${version.responseHours} Stunden` });
+  }
+
+  const objektAdresse = vertrag.property?.address;
+  const objekt = vertrag.property
+    ? [
+        vertrag.property.label,
+        objektAdresse ? [objektAdresse.street, objektAdresse.streetNo].filter(Boolean).join(' ') : null,
+        objektAdresse ? `${objektAdresse.postalCode} ${objektAdresse.city}` : null,
+      ]
+        .filter(Boolean)
+        .join(', ')
+    : null;
+
+  const buffer = await renderToBuffer(
+    React.createElement(ContractVersionDocument, {
+      company,
+      recipient,
+      contractNumber: vertrag.number,
+      title: vertrag.title,
+      versionNumber: version.versionNumber,
+      reason: version.reason,
+      effectiveFrom: version.effectiveFrom,
+      endDate: vertrag.endDate,
+      objekt,
+      konditionen,
+      leistungen: version.services.map((leistung) => ({
+        label: leistung.zone ? `${leistung.label} (${leistung.zone})` : leistung.label,
+        menge:
+          leistung.quantity != null
+            ? `${toNumber(leistung.quantity)} ${version.unitLabel ?? ''}`.trim()
+            : `${leistung.estimatedMinutes} Min. · ${leistung.requiredCrewSize} Person(en)`,
+        rhythmus:
+          leistung.schedules.map((plan) =>
+            rhythmusText({
+              frequency: plan.frequency,
+              intervalWeeks: plan.interval,
+              weekdays: plan.weekdays,
+              dayOfMonth: plan.monthDay,
+              startMinute: plan.startMinute,
+              endMinute: plan.endMinute,
+            }),
+          ).join(' · ') || null,
+      })),
+      terms: version.terms,
+    }) as never,
+  );
+
+  const kennung = vertrag.number ?? vertrag.id.slice(-6).toUpperCase();
+  return { buffer, filename: `Vertrag-${kennung}-Fassung-${version.versionNumber}.pdf` };
+}
+
+type GeladeneOfferte = Awaited<ReturnType<typeof offerteLaden>>;
+
+function offertDokumentProps(quote: GeladeneOfferte, company: PdfCompany) {
 
   const billing = quote.customer?.addresses[0];
   const recipient: PdfRecipient = quote.customer
@@ -274,24 +505,44 @@ export async function renderQuotePdf(quoteId: string): Promise<{
       .map((i) => ({ vatRate: toNumber(i.vatRate), net: toNumber(i.lineTotal) })),
   );
 
+  return {
+    company,
+    recipient,
+    number: quote.number,
+    title: quote.title,
+    issueDate: quote.createdAt,
+    validUntil: quote.validUntil,
+    items,
+    subtotal: toNumber(quote.subtotal),
+    discountAmount: toNumber(quote.discountAmount),
+    netTotal: toNumber(quote.netTotal),
+    vatAmount: toNumber(quote.vatAmount),
+    vatRate,
+    grossTotal: toNumber(quote.grossTotal),
+    introText: quote.introText,
+    outroText: quote.outroText,
+    terms: quote.terms,
+  };
+}
+
+/**
+ * Das gewöhnliche Offert-PDF: für Versand, Download und Ansicht vor der
+ * Annahme. Trägt bei Annahmen aus der Zeit vor Gate 4C das Unterschriftsbild
+ * aus dem Altbestand (`LEGACY_SIGNATURE`); Annahmen über den Signaturkern
+ * werden hier **nicht** dargestellt — für sie gibt es das signierte Artefakt
+ * (Hash B), das die PDF-Routen an seiner Stelle ausliefern.
+ */
+export async function renderQuotePdf(quoteId: string): Promise<{
+  buffer: Buffer;
+  filename: string;
+  url: string | null;
+}> {
+  const quote = await offerteLaden(quoteId);
+  const company = await loadCompany(quote.organizationId);
+
   const buffer = await renderToBuffer(
     React.createElement(QuoteDocument, {
-      company,
-      recipient,
-      number: quote.number,
-      title: quote.title,
-      issueDate: quote.createdAt,
-      validUntil: quote.validUntil,
-      items,
-      subtotal: toNumber(quote.subtotal),
-      discountAmount: toNumber(quote.discountAmount),
-      netTotal: toNumber(quote.netTotal),
-      vatAmount: toNumber(quote.vatAmount),
-      vatRate,
-      grossTotal: toNumber(quote.grossTotal),
-      introText: quote.introText,
-      outroText: quote.outroText,
-      terms: quote.terms,
+      ...offertDokumentProps(quote, company),
       signature:
         quote.signatureDataUrl && quote.signatureName && quote.signedAt
           ? {
@@ -317,12 +568,72 @@ export async function renderQuotePdf(quoteId: string): Promise<{
 //  Einsatzbericht
 // ---------------------------------------------------------------------------
 
+/**
+ * Der Rapport-Snapshot für die Vor-Ort-Abnahme (Gate 4D).
+ *
+ * Dieselbe Darstellung wie der gewöhnliche Einsatzbericht — Nummer, Datum,
+ * Objekt, Kundschaft, Team, Arbeitszeit, Checkliste samt Bemerkungen,
+ * kundenrelevantes Material, Abschlusstext —, aber **ohne** das
+ * Unterschriftsbild aus dem Altbestand und **ohne** Ablage am Einsatz.
+ *
+ * Die Bytes gehen an den Signaturkern, der sie als Original speichert und
+ * ihren SHA-256 (Hash A) einfriert. Was die Kundschaft auf dem Gerät sieht
+ * und unterschreibt, ist genau diese Datei; danach wird sie nie neu
+ * gerendert. Dass hier nichts persistiert wird, ist Absicht: Der
+ * `persist()`-Aufruf des gewöhnlichen Berichts schriebe unter
+ * `jobs/<id>/…` und überschriebe bei einer zweiten Abnahme den Beleg der
+ * ersten.
+ *
+ * Was bewusst **nicht** hineingeht, weil der Rapport ein Kundendokument
+ * ist: interne Notiz, Lohn- und Materialkosten, Nachkalkulation, Bewertung.
+ * `JobReportDocument` führt sie ohnehin nicht — geprüft in Gate 4D.
+ */
+export async function renderJobReportSnapshot(
+  organizationId: string,
+  jobId: string,
+): Promise<{ buffer: Buffer; filename: string }> {
+  const { props, number } = await einsatzberichtProps(organizationId, jobId);
+  const buffer = await renderToBuffer(
+    React.createElement(JobReportDocument, { ...props, signature: null }) as never,
+  );
+  return { buffer, filename: `Rapport-${number}.pdf` };
+}
+
 export async function renderJobReportPdf(
+  organizationId: string,
   jobId: string,
   reportText?: string | null,
 ): Promise<{ buffer: Buffer; filename: string; url: string | null }> {
-  const job = await prisma.job.findUnique({
-    where: { id: jobId },
+  const { props, jobId: id, number } = await einsatzberichtProps(organizationId, jobId, reportText);
+  const buffer = await renderToBuffer(React.createElement(JobReportDocument, props) as never);
+
+  const filename = `Einsatzbericht-${number}.pdf`;
+  const url = await persist(organizationId, `jobs/${id}/${filename}`, buffer);
+
+  return { buffer, filename, url };
+}
+
+/** Eine Abfrage, zwei Renderer — der Bericht und sein unveränderlicher Schnappschuss. */
+async function einsatzberichtProps(
+  organizationId: string,
+  jobId: string,
+  reportText?: string | null,
+): Promise<{
+  props: JobReportPdfProps;
+  organizationId: string;
+  jobId: string;
+  number: string;
+}> {
+  /*
+    Die Organisation ist Pflicht und steht im `where` (2026-09-27). Vorher
+    suchte der Bericht nur nach der Kennung: `GET /api/jobs/:id/report`
+    renderte den Rapport eines Einsatzes jeder Organisation — mit Kundschaft,
+    Adresse und Team — und legte die Datei sogar unter deren Ablage ab. Ein
+    Pflichtparameter statt einer Prüfung im Endpunkt, damit kein künftiger
+    Aufrufer sie vergessen kann.
+  */
+  const job = await prisma.job.findFirst({
+    where: { id: jobId, organizationId, deletedAt: null },
     include: {
       customer: true,
       address: true,
@@ -344,8 +655,11 @@ export async function renderJobReportPdf(
       ? Math.round((job.actualEnd.getTime() - job.actualStart.getTime()) / 60_000)
       : job.estimatedMin);
 
-  const buffer = await renderToBuffer(
-    React.createElement(JobReportDocument, {
+  return {
+    organizationId: job.organizationId,
+    jobId: job.id,
+    number: job.number,
+    props: {
       company,
       recipient: {
         name: `${job.customer.firstName} ${job.customer.lastName}`,
@@ -381,13 +695,8 @@ export async function renderJobReportPdf(
         job.signatureDataUrl && job.signatureName && job.signedAt
           ? { dataUrl: job.signatureDataUrl, name: job.signatureName, signedAt: job.signedAt }
           : null,
-    }) as never,
-  );
-
-  const filename = `Einsatzbericht-${job.number}.pdf`;
-  const url = await persist(job.organizationId, `jobs/${job.id}/${filename}`, buffer);
-
-  return { buffer, filename, url };
+    },
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -477,6 +786,14 @@ export async function renderCreditNotePdf(creditNoteId: string): Promise<{
  */
 export async function renderBookingConfirmationPdf(
   bookingId: string,
+  /**
+   * Der Verwaltungslink, falls der Aufrufer einen hat — beim Anlegen der
+   * frisch ausgestellte, über den öffentlichen Download der vorgelegte. Das
+   * PDF stellt selbst keinen aus: Ein Link entsteht nur dort, wo er auch
+   * versendet wird. Wer das Dokument über die Sitzung lädt, verwaltet die
+   * Buchung im Konto und braucht keinen.
+   */
+  optionen: { manageUrl?: string } = {},
 ): Promise<{ buffer: Buffer; filename: string }> {
   const booking = await prisma.booking.findFirst({
     where: { id: bookingId, deletedAt: null },
@@ -527,7 +844,8 @@ export async function renderBookingConfirmationPdf(
       status: booking.status,
       statusLabel: STATUS_MAP[booking.status]?.label ?? booking.status,
       createdAt: booking.createdAt,
-      serviceName: booking.items[0]?.service?.name ?? booking.items[0]?.name ?? 'Reinigung',
+      // Alle Leistungen, nicht nur die erste (Produktsprint 2026-09-26).
+      serviceName: leistungsnamen(booking.items),
       frequencyLabel: FREQUENCY_LABEL[booking.frequency] ?? 'Einmalig',
       scheduledStart: booking.scheduledStart,
       scheduledEnd: booking.scheduledEnd,
@@ -547,7 +865,7 @@ export async function renderBookingConfirmationPdf(
       grossTotal: toNumber(booking.grossTotal),
       customerNote: booking.customerNote,
       accessNote: booking.accessNote,
-      manageUrl: absoluteUrl(`/buchung/${booking.confirmationToken}`),
+      manageUrl: optionen.manageUrl,
     }) as never,
   );
 

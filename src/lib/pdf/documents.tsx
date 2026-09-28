@@ -704,7 +704,7 @@ export function QuoteDocument(props: QuotePdfProps) {
                 <Image src={props.signature.dataUrl} style={styles.signatureImage} />
                 <View style={styles.signatureLine}>
                   <Text style={styles.signatureLabel}>
-                    {props.signature.name} · digital signiert am {formatDate(props.signature.signedAt)}
+                    {props.signature.name} · elektronisch unterzeichnet am {formatDate(props.signature.signedAt)}
                   </Text>
                 </View>
               </>
@@ -871,8 +871,12 @@ export interface BookingConfirmationPdfProps {
   grossTotal: number;
   customerNote?: string | null;
   accessNote?: string | null;
-  /** Öffentlicher Verwaltungslink — steht im Dokument, damit der Ausdruck allein genügt. */
-  manageUrl: string;
+  /**
+   * Öffentlicher Verwaltungslink — steht im Dokument, damit der Ausdruck allein
+   * genügt. Fehlt beim Download über die Sitzung: Links liegen nur als Hash vor
+   * und entstehen nur dort, wo sie versendet werden (`buchungslinkAusstellen`).
+   */
+  manageUrl?: string;
 }
 
 /**
@@ -997,7 +1001,9 @@ export function BookingConfirmationDocument(props: BookingConfirmationPdfProps) 
             Bezahlt wird erst nach dem Einsatz — per QR-Rechnung mit 30 Tagen Frist oder online.
             Bis 24 Stunden vor dem Termin verschieben oder stornieren Sie kostenlos.
           </Text>
-          <Text style={{ marginTop: 4 }}>Buchung verwalten: {props.manageUrl}</Text>
+          {props.manageUrl ? (
+            <Text style={{ marginTop: 4 }}>Buchung verwalten: {props.manageUrl}</Text>
+          ) : null}
         </View>
 
         <Footer company={company} label={`${title} ${props.number}`} />
@@ -1067,6 +1073,347 @@ export function CreditNoteDocument(props: CreditNotePdfProps) {
         </View>
 
         <Footer company={company} label={`Gutschrift ${props.number}`} />
+      </Page>
+    </Document>
+  );
+}
+
+// ---------------------------------------------------------------------------
+//  Vertragsfassung
+// ---------------------------------------------------------------------------
+
+export interface ContractVersionPdfProps {
+  company: PdfCompany;
+  recipient: PdfRecipient;
+  /** Leer, solange der Vertrag noch nicht in Kraft ist — die Nummer entsteht erst dann. */
+  contractNumber: string | null;
+  title: string;
+  versionNumber: number;
+  /** Warum es diese Fassung gibt. Steht im Dokument, nicht nur in der Akte. */
+  reason: string;
+  effectiveFrom: Date;
+  endDate?: Date | null;
+  objekt?: string | null;
+  konditionen: { label: string; value: string }[];
+  leistungen: { label: string; menge: string | null; rhythmus: string | null }[];
+  terms?: string | null;
+}
+
+/**
+ * Was bei einer Vertragsannahme unterzeichnet wird.
+ *
+ * **Eine Fassung, kein Vertrag.** Der Titel nennt ausdrücklich die
+ * Versionsnummer, und die Konditionen stehen ausgeschrieben im Dokument.
+ * Unterzeichnet wird damit ein bestimmter Stand, nicht ein Verweis auf einen
+ * Datensatz, der sich danach ändern könnte — genau das, was die Versionierung
+ * verhindern soll.
+ *
+ * **Keine Rechtsbehauptung.** Das Dokument sagt nicht, welche Beweiskraft die
+ * Unterschrift hat; es nennt den Hergang. Eine Aussage über QES oder ZertES
+ * steht hier so wenig wie anderswo im Produkt.
+ */
+export function ContractVersionDocument(props: ContractVersionPdfProps) {
+  const { company, recipient } = props;
+  const bezeichnung = props.contractNumber
+    ? `Vertrag ${props.contractNumber}`
+    : 'Vertrag (Nummer bei Inkraftsetzung)';
+
+  return (
+    <Document title={`${bezeichnung} — Fassung ${props.versionNumber}`} author={company.name} creator="Clenaris">
+      <Page size="A4" style={styles.page}>
+        <Header company={company} />
+
+        <View style={styles.addressRow}>
+          <RecipientBlock recipient={recipient} />
+          <MetaBlock
+            rows={[
+              { label: 'Vertrag', value: props.contractNumber ?? '—' },
+              { label: 'Fassung', value: String(props.versionNumber) },
+              { label: 'Gültig ab', value: formatDate(props.effectiveFrom) },
+              ...(props.endDate ? [{ label: 'Befristet bis', value: formatDate(props.endDate) }] : []),
+            ]}
+          />
+        </View>
+
+        <Text style={styles.title}>{bezeichnung}</Text>
+        <Text style={styles.subtitle}>
+          {props.title}
+          {props.objekt ? ` · ${props.objekt}` : ''}
+        </Text>
+
+        <Text style={styles.paragraph}>
+          Fassung {props.versionNumber} · {props.reason}
+        </Text>
+
+        <Text style={[styles.th, { marginTop: 14, marginBottom: 6 }]}>KONDITIONEN</Text>
+        {props.konditionen.map((row, i) => (
+          <View key={i} style={styles.tableRow} wrap={false}>
+            <Text style={[styles.td, { width: '45%' }]}>{row.label}</Text>
+            <Text style={[styles.td, { width: '55%' }]}>{row.value}</Text>
+          </View>
+        ))}
+
+        <Text style={[styles.th, { marginTop: 18, marginBottom: 6 }]}>VEREINBARTE LEISTUNGEN</Text>
+        {props.leistungen.map((leistung, i) => (
+          <View key={i} style={styles.tableRow} wrap={false}>
+            <View style={{ width: '60%' }}>
+              <Text style={styles.itemName}>{leistung.label}</Text>
+              {leistung.rhythmus ? <Text style={styles.itemDesc}>{leistung.rhythmus}</Text> : null}
+            </View>
+            <Text style={[styles.td, { width: '40%', textAlign: 'right' }]}>{leistung.menge ?? '—'}</Text>
+          </View>
+        ))}
+
+        {props.terms ? (
+          <View style={styles.note}>
+            <Text>{props.terms}</Text>
+          </View>
+        ) : null}
+
+        <View style={styles.signatureRow}>
+          <View style={styles.signatureBox}>
+            <Text style={styles.signatureLabel}>{company.name}</Text>
+            <View style={[styles.signatureLine, { marginTop: 42 }]}>
+              <Text style={styles.signatureLabel}>Ort, Datum, Unterschrift</Text>
+            </View>
+          </View>
+          <View style={styles.signatureBox}>
+            <Text style={styles.signatureLabel}>Auftraggeber/in</Text>
+            <View style={[styles.signatureLine, { marginTop: 42 }]}>
+              <Text style={styles.signatureLabel}>Ort, Datum, Unterschrift</Text>
+            </View>
+          </View>
+        </View>
+
+        <Footer company={company} label={`${bezeichnung} · Fassung ${props.versionNumber}`} />
+      </Page>
+    </Document>
+  );
+}
+
+// ---------------------------------------------------------------------------
+//  Signaturprotokoll
+// ---------------------------------------------------------------------------
+
+export interface EvidenceParticipant {
+  name: string;
+  email: string;
+  method: 'DRAWN' | 'TYPED' | null;
+  signedName: string | null;
+  signedAt: Date | null;
+  authenticationMethod: string | null;
+  consentText: string | null;
+  consentHash: string | null;
+  consentVersion: string | null;
+  consentLocale: string | null;
+  consentAcceptedAt: Date | null;
+  signatureArtifactHash: string | null;
+  ipAddress: string | null;
+  ipSource: string | null;
+  userAgent: string | null;
+  otp: { channel: string; sentTo: string; requestedAt: Date; verifiedAt: Date | null }[];
+}
+
+export interface EvidenceEvent {
+  at: Date;
+  type: string;
+  participant: string | null;
+  /** Kurze sachliche Ergänzung aus den Details, z. B. der Zugangsweg. */
+  note?: string | null;
+}
+
+/** Woher die handelnde Person kam — ohne Anspruch auf mehr Identitätssicherheit. */
+const ACTOR_SOURCE_TEXT: Record<string, string> = {
+  PUBLIC_LINK: 'über den zugestellten Link',
+  AUTHENTICATED_CUSTOMER: 'aus dem angemeldeten Kundenkonto (Sitzung, keine zusätzliche Identitätsprüfung)',
+};
+
+export function actorSourceText(source: string | null | undefined): string | null {
+  return source ? (ACTOR_SOURCE_TEXT[source] ?? source) : null;
+}
+
+export interface EvidencePdfProps {
+  company: PdfCompany;
+  requestId: string;
+  publicId: string;
+  title: string;
+  sourceType: string;
+  sourceReference: string;
+  artifactMode: 'EMBEDDED_VISUAL' | 'DETACHED_EVIDENCE';
+  assuranceLevel: string;
+  originalArtifactId: string;
+  originalHash: string;
+  signedArtifactId: string | null;
+  signedHash: string | null;
+  createdAt: Date;
+  completedAt: Date | null;
+  participants: EvidenceParticipant[];
+  events: EvidenceEvent[];
+  /** Zeitpunkt der Erzeugung dieses Protokolls — Serverzeit, kein Zeitstempeldienst. */
+  generatedAt: Date;
+}
+
+const ASSURANCE_TEXT: Record<string, string> = {
+  LINK_ONLY: 'Besitz des zugestellten Links',
+  LINK_PLUS_EMAIL_CODE: 'Besitz des Links und Bestätigungscode an dieselbe E-Mail-Adresse (derselbe Kanal)',
+  LINK_PLUS_SMS_CODE: 'Besitz des Links und Bestätigungscode an die hinterlegte Mobilnummer',
+};
+
+const EVENT_TEXT: Record<string, string> = {
+  REQUEST_CREATED: 'Vorgang angelegt',
+  LINK_ISSUED: 'Link ausgestellt',
+  LINK_EXCHANGED: 'Link geöffnet, Sitzung begonnen',
+  DOCUMENT_VIEWED: 'Dokument angesehen',
+  OTP_REQUESTED: 'Bestätigungscode angefordert',
+  OTP_VERIFIED: 'Bestätigungscode bestätigt',
+  OTP_FAILED: 'Bestätigungscode falsch',
+  CONSENT_ACCEPTED: 'Zustimmung erteilt',
+  SIGNATURE_SUBMITTED: 'Unterschrift übermittelt',
+  FINALIZATION_STARTED: 'Abschluss begonnen',
+  INTEGRITY_FAILED: 'Prüfsumme des Originals stimmte nicht — Abschluss abgebrochen',
+  SIGNED: 'Unterzeichnet',
+  DECLINED: 'Abgelehnt',
+  CANCELLED: 'Abgebrochen',
+  EXPIRED: 'Abgelaufen',
+  ARTIFACT_CREATED: 'Artefakt erzeugt',
+  REQUEST_COMPLETED: 'Vorgang abgeschlossen',
+  RESULT_LINK_ISSUED: 'Ergebnislink ausgestellt',
+  RESULT_VIEWED: 'Ergebnis angesehen',
+};
+
+function zuerich(d: Date): string {
+  return `${new Intl.DateTimeFormat('de-CH', {
+    dateStyle: 'medium',
+    timeStyle: 'medium',
+    timeZone: 'Europe/Zurich',
+  }).format(d)} (Europe/Zurich) · ${d.toISOString()} (UTC)`;
+}
+
+/**
+ * Das Signaturprotokoll.
+ *
+ * **Was es enthält:** Prüfsumme A des Originals, Prüfsumme B des signierten
+ * Artefakts (falls vorhanden), wer wann womit unterzeichnet hat, der exakte
+ * Wortlaut der Zustimmung samt Prüfsumme, die technischen Angaben mit ihrer
+ * Quelle, der Ablauf. **Was es nicht enthält:** seine eigene Prüfsumme C —
+ * ein Dokument kann seinen eigenen Hash nicht tragen. C wird über die
+ * gespeicherten Bytes dieses PDF gebildet und in der Datenbank gehalten.
+ *
+ * Es sagt „Code bestätigt", „Adresse laut Proxy", „Browser-Angabe" — nie
+ * „Identität verifiziert", nie „qualifizierter Zeitstempel".
+ */
+const ev = {
+  section: { marginBottom: 14 },
+  sectionTitle: { fontSize: 8, fontFamily: 'Helvetica-Bold', color: COLORS.ink, letterSpacing: 0.6, marginBottom: 4 },
+  body: { fontSize: 9.5, color: COLORS.ink },
+  meta: { fontSize: 8.5, color: COLORS.muted, lineHeight: 1.5 },
+} as const;
+
+export function EvidenceDocument(props: EvidencePdfProps) {
+  const { company } = props;
+  const mono = { fontFamily: 'Courier', fontSize: 7 } as const;
+  return (
+    <Document title={`Signaturprotokoll ${props.publicId}`} author={company.name}>
+      <Page size="A4" style={styles.page}>
+        <Header company={company} />
+        <Text style={styles.title}>Signaturprotokoll</Text>
+        <Text style={styles.subtitle}>Vorgang {props.publicId}</Text>
+
+        <View style={ev.section}>
+          <Text style={ev.sectionTitle}>Dokument</Text>
+          <Text style={ev.body}>{props.title}</Text>
+          <Text style={ev.meta}>
+            Quelle: {props.sourceType} · {props.sourceReference}
+          </Text>
+          <Text style={ev.meta}>
+            Modus: {props.artifactMode === 'EMBEDDED_VISUAL'
+              ? 'Signiertes Artefakt mit sichtbarer Unterschrift'
+              : 'Elektronisch bestätigtes Dokument mit separatem Signaturprotokoll — das Original bleibt bytegenau unverändert'}
+          </Text>
+          <Text style={ev.meta}>Prüfstufe: {ASSURANCE_TEXT[props.assuranceLevel] ?? props.assuranceLevel}</Text>
+        </View>
+
+        <View style={ev.section}>
+          <Text style={ev.sectionTitle}>Prüfsummen (SHA-256)</Text>
+          <Text style={ev.meta}>Original · {props.originalArtifactId}</Text>
+          <Text style={mono}>{props.originalHash}</Text>
+          {props.signedArtifactId ? (
+            <>
+              <Text style={[ev.meta, { marginTop: 4 }]}>Signiertes Artefakt · {props.signedArtifactId}</Text>
+              <Text style={mono}>{props.signedHash}</Text>
+            </>
+          ) : (
+            <Text style={[ev.meta, { marginTop: 4 }]}>Kein signiertes Artefakt (Modus ohne Einbettung).</Text>
+          )}
+          <Text style={[ev.meta, { marginTop: 4 }]}>
+            Die Prüfsumme dieses Protokolls wird über seine gespeicherten Bytes gebildet und in Clenaris
+            gehalten; sie steht nicht in diesem Dokument.
+          </Text>
+        </View>
+
+        {props.participants.map((p, i) => (
+          <View key={i} style={ev.section} wrap={false}>
+            <Text style={ev.sectionTitle}>Unterzeichnende Person {props.participants.length > 1 ? i + 1 : ''}</Text>
+            <Text style={ev.body}>{p.name}</Text>
+            <Text style={ev.meta}>Link zugestellt an: {p.email}</Text>
+            {p.signedAt ? (
+              <>
+                <Text style={ev.meta}>Unterzeichnet: {zuerich(p.signedAt)}</Text>
+                <Text style={ev.meta}>
+                  Methode: {p.method === 'DRAWN' ? 'gezeichnet' : 'getippt'} · eingegebener Name: {p.signedName}
+                </Text>
+                {p.signatureArtifactHash ? (
+                  <Text style={ev.meta}>Prüfsumme des Unterschriftsbilds: {p.signatureArtifactHash}</Text>
+                ) : null}
+                <Text style={ev.meta}>
+                  Geprüft: {ASSURANCE_TEXT[p.authenticationMethod ?? ''] ?? p.authenticationMethod}
+                </Text>
+              </>
+            ) : (
+              <Text style={ev.meta}>Nicht unterzeichnet.</Text>
+            )}
+            {p.otp.map((o, j) => (
+              <Text key={j} style={ev.meta}>
+                Code per {o.channel === 'SMS' ? 'SMS' : 'E-Mail'} an {o.sentTo}, angefordert {zuerich(o.requestedAt)}
+                {o.verifiedAt ? `, bestätigt ${zuerich(o.verifiedAt)}` : ', nicht bestätigt'}
+              </Text>
+            ))}
+            {p.consentText ? (
+              <>
+                <Text style={[ev.meta, { marginTop: 4 }]}>
+                  Zustimmung ({p.consentVersion}, {p.consentLocale}) erteilt {p.consentAcceptedAt ? zuerich(p.consentAcceptedAt) : ''}:
+                </Text>
+                <Text style={[ev.body, { fontStyle: 'italic' }]}>„{p.consentText}“</Text>
+                <Text style={mono}>{p.consentHash}</Text>
+              </>
+            ) : null}
+            <Text style={[ev.meta, { marginTop: 4 }]}>
+              Adresse: {p.ipAddress ?? 'nicht verfügbar'} (Quelle: {p.ipSource ?? 'UNAVAILABLE'}) — technisches Metadatum, kein Identitätsnachweis
+            </Text>
+            {p.userAgent ? <Text style={ev.meta}>Browser-Angabe (vom Gerät gemeldet): {p.userAgent}</Text> : null}
+          </View>
+        ))}
+
+        <View style={ev.section}>
+          <Text style={ev.sectionTitle}>Ablauf</Text>
+          {props.events.map((e, i) => (
+            <Text key={i} style={ev.meta}>
+              {zuerich(e.at)} — {EVENT_TEXT[e.type] ?? e.type}
+              {e.participant ? ` (${e.participant})` : ''}
+              {e.note ? ` — ${e.note}` : ''}
+            </Text>
+          ))}
+        </View>
+
+        <View style={styles.note}>
+          <Text>
+            Erstellt am {zuerich(props.generatedAt)} aus den in Clenaris gespeicherten Daten. Zeiten sind
+            Systemzeit des Servers, kein qualifizierter Zeitstempel. Dieses Protokoll dokumentiert einen
+            elektronischen Unterzeichnungsablauf; es ist keine qualifizierte elektronische Signatur.
+          </Text>
+        </View>
+
+        <Footer company={company} label={`Signaturprotokoll ${props.publicId}`} />
       </Page>
     </Document>
   );

@@ -23,7 +23,11 @@ export const GET = defineRoute({
     const booking = await getBookingDetail({
       organizationId: await getOrganizationId(),
       bookingId: params.id,
-      customerId: session.role === 'CUSTOMER' ? (session.profileId ?? undefined) : undefined,
+      // `?? '__keines__'` statt `?? undefined` (2026-09-27): Eine
+      // Kundensitzung ohne Profil hätte sonst gar keinen Filter bekommen und
+      // jede Buchung gelesen — geschlossen scheitern, nicht offen. Dieselbe
+      // Form wie die PDF-Route daneben.
+      customerId: session.role === 'CUSTOMER' ? (session.profileId ?? '__keines__') : undefined,
     });
 
     return ok(booking);

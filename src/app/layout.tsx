@@ -2,7 +2,7 @@ import type { Metadata, Viewport } from 'next';
 import { Archivo, Bricolage_Grotesque } from 'next/font/google';
 
 import { Providers } from '@/components/providers';
-import { clientEnv } from '@/lib/env';
+import { GOOGLE_SITE_VERIFICATION, SEITEN_URL } from '@/lib/seiten-url';
 
 import './globals.css';
 
@@ -29,7 +29,8 @@ const sans = Archivo({
 });
 
 export const metadata: Metadata = {
-  metadataBase: new URL(clientEnv.NEXT_PUBLIC_APP_URL),
+  // Kanonische Domain, bewusst zur Bauzeit — Begründung in `src/lib/seiten-url.ts`.
+  metadataBase: new URL(SEITEN_URL),
   title: {
     default: 'Clenaris — Reinigungsfirma in Bern',
     template: '%s | Clenaris',
@@ -52,7 +53,7 @@ export const metadata: Metadata = {
   openGraph: {
     type: 'website',
     locale: 'de_CH',
-    url: clientEnv.NEXT_PUBLIC_APP_URL,
+    url: SEITEN_URL,
     siteName: 'Clenaris',
     title: 'Clenaris — Reinigungsfirma in Bern',
     description:
@@ -68,8 +69,8 @@ export const metadata: Metadata = {
     follow: true,
     googleBot: { index: true, follow: true, 'max-image-preview': 'large', 'max-snippet': -1 },
   },
-  ...(clientEnv.NEXT_PUBLIC_GOOGLE_SITE_VERIFICATION
-    ? { verification: { google: clientEnv.NEXT_PUBLIC_GOOGLE_SITE_VERIFICATION } }
+  ...(GOOGLE_SITE_VERIFICATION
+    ? { verification: { google: GOOGLE_SITE_VERIFICATION } }
     : {}),
   alternates: {
     canonical: '/',
@@ -87,9 +88,25 @@ export const viewport: Viewport = {
   ],
 };
 
+/**
+ * `data-scroll-behavior="smooth"` ist keine Zierde, sondern eine Zusage an
+ * Next: `globals.css` setzt `scroll-behavior: smooth` auf `<html>`, und Next
+ * schaltet weiches Scrollen während eines Seitenwechsels heute noch
+ * stillschweigend ab — sonst gleitet der Browser bei jedem Wechsel sichtbar
+ * nach oben, statt oben zu beginnen. Ohne dieses Attribut warnt Next bei
+ * **jedem** Seitenaufruf in der Konsole, dass es das künftig nicht mehr tun
+ * wird. Eine Warnung, die in jedem Lauf steht und jedes Mal überlesen wird,
+ * nimmt allen anderen Meldungen die Aufmerksamkeit — und diese Reihe behandelt
+ * Konsolenmeldungen als Fehler.
+ */
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="de-CH" suppressHydrationWarning className={`${sans.variable} ${display.variable}`}>
+    <html
+      lang="de-CH"
+      suppressHydrationWarning
+      data-scroll-behavior="smooth"
+      className={`${sans.variable} ${display.variable}`}
+    >
       <body className="min-h-dvh bg-background font-sans">
         {/* Tastaturnavigation: erster Tabstopp springt zum Inhalt. */}
         <a

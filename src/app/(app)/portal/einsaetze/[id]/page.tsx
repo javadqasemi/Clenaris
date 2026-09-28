@@ -1,7 +1,7 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
-import { ArrowLeft, KeyRound, MapPin, Navigation, Phone, StickyNote } from 'lucide-react';
+import { ArrowLeft, KeyRound, MapPin, Navigation, Phone, ShieldAlert, StickyNote } from 'lucide-react';
 
 import { requireEmployeeId } from '@/lib/auth/session';
 import { NotFoundError } from '@/lib/errors';
@@ -34,10 +34,20 @@ export default async function PortalJobPage({ params }: { params: Promise<{ id: 
     organizationId,
     jobId: id,
     employeeId: session.role === 'EMPLOYEE' ? employeeId : undefined,
+    /**
+     * Der Rapport ist die Stelle, an der der Alarmcode gebraucht wird: Hier
+     * steht die Person vor der Tür. Für Mitarbeitende hat `getJobDetail` den
+     * Einsatz oben bereits auf die eigenen Zuteilungen eingegrenzt — die
+     * Entschlüsselung erbt damit dieselbe Schranke, ohne sie ein zweites Mal
+     * zu formulieren. Disponierende sehen ihn, weil sie ihn pflegen.
+     */
+    includeAccessSecrets: true,
   }).catch((error) => {
     if (error instanceof NotFoundError) notFound();
     throw error;
   });
+
+  const alarmCode = job.alarmCode;
 
   const address = job.address
     ? `${job.address.street} ${job.address.streetNo ?? ''}, ${job.address.postalCode} ${job.address.city}`.replace(
@@ -108,13 +118,21 @@ export default async function PortalJobPage({ params }: { params: Promise<{ id: 
       ) : null}
 
       {/* Zugangshinweise */}
-      {job.internalNote || job.property?.keyLocation || job.property?.parkingInfo ? (
+      {job.internalNote || job.property?.keyLocation || job.property?.parkingInfo || alarmCode ? (
         <Alert variant="info" title="Zugang und Hinweise">
           <ul className="space-y-1.5">
             {job.property?.keyLocation ? (
               <li className="flex items-start gap-2">
                 <KeyRound className="mt-0.5 size-3.5 shrink-0" aria-hidden />
                 {job.property.keyLocation}
+              </li>
+            ) : null}
+            {alarmCode ? (
+              <li className="flex items-start gap-2">
+                <ShieldAlert className="mt-0.5 size-3.5 shrink-0" aria-hidden />
+                <span>
+                  Alarmcode <span className="font-mono tabular-nums">{alarmCode}</span>
+                </span>
               </li>
             ) : null}
             {job.property?.parkingInfo ? (
@@ -190,6 +208,7 @@ export default async function PortalJobPage({ params }: { params: Promise<{ id: 
         jobId={job.id}
         status={job.status}
         canComplete={isAssigned}
+        customerAccepted={Boolean(job.customerAcceptedAt)}
         checklist={job.checklist.map((item) => ({
           id: item.id,
           label: item.label,

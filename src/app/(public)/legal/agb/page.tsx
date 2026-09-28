@@ -32,9 +32,10 @@ export default async function TermsPage() {
       <h2>2. Vertragsschluss</h2>
       <p>
         Der Vertrag kommt zustande, wenn wir Ihre Buchung bestätigen — per E-Mail oder durch
-        Freigabe im Kundenkonto. Bei Offerten gilt der Vertrag mit Ihrer Annahme als geschlossen;
-        die digitale Annahme mit Namenseingabe und Unterschrift ist einer handschriftlichen
-        gleichgestellt.
+        Freigabe im Kundenkonto. Bei Offerten gilt der Vertrag mit Ihrer Annahme als geschlossen.
+        Die Annahme kann elektronisch über den zugestellten Link oder im Kundenkonto erfolgen; wir
+        halten dazu den Zeitpunkt, den verwendeten Zugang und die angenommene Fassung der Offerte in
+        einem Protokoll fest.
       </p>
       <p>
         Der im Buchungsprozess berechnete Preis ist verbindlich, sofern Ihre Angaben zum Objekt

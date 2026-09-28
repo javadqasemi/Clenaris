@@ -2,7 +2,7 @@ import { definePublicRoute } from '@/lib/api/handler';
 import { ok } from '@/lib/api/response';
 import { prisma } from '@/lib/db';
 import { NotFoundError } from '@/lib/errors';
-import { calculatePrice } from '@/lib/pricing/engine';
+import { calculateBookingPrice } from '@/lib/pricing/engine';
 import { publicEstimateSchema } from '@/lib/validation/booking';
 import { getOrganizationId } from '@/server/services/organization.service';
 
@@ -50,20 +50,45 @@ export const POST = definePublicRoute({
       serviceId = service.id;
     }
 
-    const breakdown = await calculatePrice(
+    /**
+     * Mehrere Leistungen (Produktsprint 2026-09-26): `leistungen` ersetzt
+     * `serviceId`; dieselbe Engine rechnet beide Formen, mit einer Leistung
+     * Zeile für Zeile wie zuvor. Angaben auf oberster Ebene (Fläche, Zimmer,
+     * Bäder, Fenster) beschreiben das Objekt und gelten für jede Leistung,
+     * die keine eigene mitbringt — dieselbe Regel wie beim Buchen
+     * (`leistungenAusEingabe`), sonst zeigte die Schätzung einen anderen
+     * Preis als den, der gebucht wird.
+     */
+    const leistungen = body.leistungen?.length
+      ? body.leistungen.map((l) => ({
+          serviceId: l.serviceId,
+          squareMeters: l.squareMeters ?? body.squareMeters ?? null,
+          rooms: l.rooms ?? body.rooms ?? null,
+          bathrooms: l.bathrooms ?? body.bathrooms ?? null,
+          windows: l.windows ?? body.windows ?? null,
+          manualHours: l.manualHours ?? null,
+          extras: l.extras,
+        }))
+      : [
+          {
+            serviceId: serviceId!,
+            squareMeters: body.squareMeters,
+            rooms: body.rooms,
+            bathrooms: body.bathrooms,
+            windows: body.windows,
+            manualHours: body.manualHours,
+            extras: body.extras,
+          },
+        ];
+
+    const breakdown = await calculateBookingPrice(
       {
-        serviceId: serviceId!,
-        squareMeters: body.squareMeters,
-        rooms: body.rooms,
-        bathrooms: body.bathrooms,
-        windows: body.windows,
+        leistungen,
         propertyKind: body.propertyKind,
         frequency: body.frequency,
-        extras: body.extras,
         scheduledStart: body.scheduledStart,
         postalCode: body.postalCode,
         hasPets: body.hasPets,
-        manualHours: body.manualHours,
         couponCode: body.couponCode,
         customer,
         urgent: body.urgent,

@@ -7,6 +7,7 @@ import type { UserRole } from '@prisma/client';
 
 import { prisma } from '@/lib/db';
 import { serverEnv } from '@/lib/env';
+import { clientIpFromHeaders } from '@/lib/http/client-ip';
 import {
   ACCESS_COOKIE,
   REFRESH_COOKIE,
@@ -16,9 +17,11 @@ import {
   signAccessToken,
   signRefreshToken,
   verifyAccessToken,
+  verifyRefreshToken,
 } from './jwt';
 import { can, type Permission } from './rbac';
-import { ForbiddenError, UnauthorizedError } from '@/lib/errors';
+import { getOrganizationId } from '@/server/services/organization.service';
+import { DeviceHandoffLockedError, ForbiddenError, UnauthorizedError } from '@/lib/errors';
 
 export interface SessionUser {
   id: string;
@@ -34,6 +37,12 @@ export interface SessionUser {
   theme: string | null;
   /** Customer-ID bzw. Employee-ID der Person, falls vorhanden. */
   profileId: string | null;
+  /**
+   * Läuft auf diesem Gerät gerade eine Geräteübergabe (Gate 4D)? Dann steht
+   * hier deren Kennung, und die Sitzung ist für alles gesperrt, was nicht
+   * ausdrücklich während einer Übergabe erlaubt ist.
+   */
+  handoffId: string | null;
 }
 
 /**
@@ -62,11 +71,31 @@ export const getSession = reactCache(async (): Promise<SessionUser | null> => {
   const claims = await verifyAccessToken(token);
   if (!claims) return null;
 
-  if (await tokenWasRevoked(claims.sub, claims.iat)) return null;
+  const [konto, handoffId, installationsOrg] = await Promise.all([
+    kontoPruefen(claims.sub, claims.iat),
+    aktiveUebergabe(claims.lck),
+    getOrganizationId(),
+  ]);
+  if (!konto) return null;
+
+  /*
+    Mandantenbindung (2026-09-27). Diese Installation bedient genau eine
+    Organisation (`getOrganizationId()`), und jede Route liest ihre Daten
+    über diese. Eine Sitzung gilt deshalb nur, wenn das Konto **laut
+    Datenbank** zu eben dieser Organisation gehört — der Anspruch `org` im
+    Token allein genügt nicht, er könnte vor einem Wechsel ausgestellt sein.
+
+    Vorher fehlte der Vergleich ganz: Ein Konto einer anderen Organisation
+    meldete sich an, und jede Route löste danach die Organisation dieser
+    Installation auf. Ein Administrator von B verwaltete damit A. Jetzt hat
+    ein solches Konto hier schlicht keine Sitzung — geschlossen, nicht
+    umgeleitet.
+  */
+  if (konto.organizationId !== installationsOrg || claims.org !== konto.organizationId) return null;
 
   return {
     id: claims.sub,
-    organizationId: claims.org,
+    organizationId: konto.organizationId,
     email: claims.email,
     firstName: claims.name.split(' ')[0] ?? '',
     lastName: claims.name.split(' ').slice(1).join(' '),
@@ -76,8 +105,45 @@ export const getSession = reactCache(async (): Promise<SessionUser | null> => {
     locale: (claims.locale as string | undefined) ?? 'de',
     theme: (claims.thm as string | undefined) ?? null,
     profileId: claims.pid ?? null,
+    handoffId,
   };
 });
+
+/**
+ * Läuft für diesen Browser eine Geräteübergabe? — die verbindliche Antwort.
+ *
+ * **Warum das Token allein nicht genügt.** Der Anspruch `lck` wird beim
+ * Ausstellen eingeprägt, und das Zugangstoken lebt fünfzehn Minuten. Ein
+ * Token, das *vor* der Übergabe ausgestellt wurde, trägt ihn also nicht —
+ * und wer eine Kopie davon behalten hat, käme damit an der Sperre vorbei,
+ * genau so lange, wie das Gerät in fremder Hand ist. Für eine
+ * Kontosperrung nimmt dieses Projekt ein solches Fenster bewusst in Kauf
+ * (siehe `tokenWasRevoked`); hier nicht: Dort ist der Angreifer irgendwo im
+ * Netz, hier hält er das Gerät.
+ *
+ * Deshalb entscheidet die Datenbank. Die Abfrage läuft **parallel** zur
+ * ohnehin nötigen Widerrufsprüfung, trifft einen Teilindex und kostet damit
+ * keine zusätzliche Wartezeit, sondern nur eine zweite Zeile im selben
+ * Rundgang. Ein Zwischenspeicher kam aus demselben Grund nicht in Frage wie
+ * dort: PM2 läuft im Cluster, und eine Sperre, die der nächste Worker nicht
+ * sieht, ist keine.
+ *
+ * Trägt das Token die Sperre bereits, wird sie geglaubt — falsch liegen
+ * kann sie nur in die sichere Richtung, und der Weg zurück führt ohnehin
+ * über das Entsperren, das die Zeile anfasst.
+ */
+async function aktiveUebergabe(claim: string | undefined): Promise<string | null> {
+  if (claim) return claim;
+
+  const family = await currentSessionFamily();
+  if (!family) return null;
+
+  const offen = await prisma.deviceHandoffSession.findFirst({
+    where: { sessionFamily: family, status: 'ACTIVE' },
+    select: { id: true },
+  });
+  return offen?.id ?? null;
+}
 
 /**
  * Session inkl. frischer DB-Prüfung. Für sicherheitskritische Operationen
@@ -111,21 +177,59 @@ export async function getVerifiedSession(): Promise<SessionUser | null> {
  * Ein Token ohne Ausstellungszeitpunkt lässt sich nicht einordnen, und im
  * Zweifel schliesst diese Prüfung.
  */
-async function tokenWasRevoked(userId: string, issuedAt: number | undefined): Promise<boolean> {
+async function kontoPruefen(userId: string, issuedAt: number | undefined): Promise<{ organizationId: string } | null> {
   const user = await prisma.user.findUnique({
     where: { id: userId },
-    select: { sessionsRevokedAt: true },
+    select: { sessionsRevokedAt: true, organizationId: true },
   });
 
   // Konto gelöscht oder nie existent: das Token gehört zu niemandem mehr.
-  if (!user) return true;
-  if (!user.sessionsRevokedAt) return false;
-  if (issuedAt === undefined) return true;
+  if (!user) return null;
+  if (!user.sessionsRevokedAt) return { organizationId: user.organizationId };
+  if (issuedAt === undefined) return null;
 
-  return issuedAt < Math.floor(user.sessionsRevokedAt.getTime() / 1000);
+  return issuedAt < Math.floor(user.sessionsRevokedAt.getTime() / 1000) ? null : { organizationId: user.organizationId };
 }
 
+/**
+ * Die Rotationsfamilie des aktuellen Browsers — oder `null`.
+ *
+ * Sie benennt genau einen Browser und überlebt jede Token-Rotation; damit
+ * ist sie der richtige Anker für eine Gerätesperre. Der Refresh-Token liegt
+ * unter Pfad `/`, geht also bei jedem Aufruf mit; gelesen wird aus ihm nur
+ * die Familie, und die ist kein Geheimnis: Sie eröffnet keinen Zugriff, der
+ * Token selbst liegt allein als Hash in der Datenbank.
+ */
+export async function currentSessionFamily(): Promise<string | null> {
+  const store = await cookies();
+  const token = store.get(REFRESH_COOKIE)?.value;
+  if (!token) return null;
+  const claims = await verifyRefreshToken(token);
+  return claims?.fam ?? null;
+}
+
+/**
+ * Sitzung mit Sperrprüfung — der Weg für alles, was dem Personal gehört.
+ *
+ * Während eine Geräteübergabe läuft, hält jemand anderes dieses Gerät. Die
+ * Sitzung bleibt bestehen (kein Abmelden, siehe `device-handoff.service.ts`),
+ * aber sie trägt nichts mehr: Jede Seite und jeder Endpunkt, der hierher
+ * kommt, endet mit 423. Freigegeben wird sie erst, wenn die Person am Gerät
+ * ihr Passwort bestätigt.
+ */
 export async function requireSession(): Promise<SessionUser> {
+  const session = await getSession();
+  if (!session) throw new UnauthorizedError();
+  if (session.handoffId) throw new DeviceHandoffLockedError();
+  return session;
+}
+
+/**
+ * Sitzung **ohne** Sperrprüfung — ausschliesslich für die wenigen Stellen,
+ * die während einer Übergabe arbeiten müssen: die Entsperrmaske und der
+ * Endpunkt, der sie bedient. Sonst nirgends.
+ */
+export async function requireSessionDespiteHandoff(): Promise<SessionUser> {
   const session = await getSession();
   if (!session) throw new UnauthorizedError();
   return session;
@@ -226,6 +330,15 @@ export async function createSession({ userId, family }: CreateSessionInput) {
     },
   });
 
+  // Die einzige Stelle, die Zugangstoken ausstellt, stellt keines für ein
+  // Konto einer anderen Organisation aus (Mandantenbindung, siehe
+  // `getSession`). Anmeldung, zweiter Faktor, Einladung, Passwortwechsel und
+  // Erneuerung laufen alle hier durch — ein Weg, der die Prüfung in
+  // `login()` umginge, endet trotzdem hier.
+  if (user.organizationId !== (await getOrganizationId())) {
+    throw new UnauthorizedError('Dieses Konto gehört nicht zu dieser Installation.');
+  }
+
   // Das Profil folgt der Rolle, nicht der Reihenfolge „Kundschaft, sonst
   // Personal": Eine Person kann beides haben (privat gebucht *und*
   // angestellt). Mit der alten Regel war sie als Mitarbeitende mit einer
@@ -233,6 +346,30 @@ export async function createSession({ userId, family }: CreateSessionInput) {
   // gebucht, den es in der Personaltabelle nicht gibt.
   const profileId =
     user.role === 'CUSTOMER' ? (user.customer?.id ?? undefined) : (user.employee?.id ?? undefined);
+
+  const jti = randomToken(24);
+  const tokenFamily = family ?? randomToken(16);
+
+  /**
+   * Läuft für diesen Browser eine Geräteübergabe?
+   *
+   * Die Abfrage steht **hier**, an der einzigen Stelle, die Zugangstoken
+   * ausstellt — und deshalb greift sie auf allen Wegen: beim Start der
+   * Übergabe, bei jeder stillen Erneuerung und beim Entsperren. Wer das
+   * Zugangstoken im Kundenmodus löscht und erneuern lässt, bekommt die
+   * Sperre erneut eingeprägt, statt sie loszuwerden.
+   *
+   * Nur bei fortgeführter Familie: Eine frische Anmeldung beginnt eine neue
+   * Familie und damit einen neuen Browserkontext; sie erbt keine Sperre.
+   * Das ist gewollt und kein Schlupfloch — sie verlangt das Passwort, also
+   * genau das, was auch das Entsperren verlangt.
+   */
+  const sperre = family
+    ? await prisma.deviceHandoffSession.findFirst({
+        where: { sessionFamily: family, status: 'ACTIVE' },
+        select: { id: true },
+      })
+    : null;
 
   const accessToken = await signAccessToken({
     sub: user.id,
@@ -244,10 +381,9 @@ export async function createSession({ userId, family }: CreateSessionInput) {
     locale: user.locale.toLowerCase(),
     avatar: user.avatarUrl ?? undefined,
     thm: user.theme ?? undefined,
+    lck: sperre?.id,
   } as never);
 
-  const jti = randomToken(24);
-  const tokenFamily = family ?? randomToken(16);
   const refreshToken = await signRefreshToken({ userId: user.id, jti, family: tokenFamily });
 
   const hdrs = await headers();
@@ -314,11 +450,25 @@ export async function revokeAllSessions(userId: string) {
   ]);
 }
 
+/**
+ * Die Adresse der anfragenden Stelle — aus der **einen** Richtlinie.
+ *
+ * Hier stand bis Gate 4D.2 eine eigene Kette
+ * `cf-connecting-ip → x-real-ip → x-forwarded-for`, die jedem dieser Köpfe
+ * glaubte. Sie war ein Überbleibsel: In `lib/http/client-ip.ts` war dieselbe
+ * Kette längst durch `TRUSTED_PROXY_MODE` ersetzt worden, in dieser Datei
+ * nicht. Zwei Auswertungen bedeuten zwei Sicherheitsniveaus, und das
+ * schwächere gewinnt immer dort, wo niemand hinschaut.
+ *
+ * Betroffen waren `RefreshToken.ip` und `User.lastLoginIp` — also genau die
+ * Felder, in die man bei einem Vorfall zuerst schaut. Ein Angreifer konnte
+ * sie mit einer einzigen Kopfzeile beliebig füllen, ohne dass irgendeine
+ * Prüfung dazwischenlag. Das Signaturprotokoll war nie betroffen; es bezieht
+ * `ctx.ip` seit Gate 4B aus `getClientIp`.
+ *
+ * Diese Funktion bleibt als Name bestehen, damit die Aufrufstellen lesbar
+ * bleiben, hat aber keine eigene Logik mehr.
+ */
 export function clientIpFrom(hdrs: Headers): string | null {
-  return (
-    hdrs.get('cf-connecting-ip') ??
-    hdrs.get('x-real-ip') ??
-    hdrs.get('x-forwarded-for')?.split(',')[0]?.trim() ??
-    null
-  );
+  return clientIpFromHeaders(hdrs);
 }

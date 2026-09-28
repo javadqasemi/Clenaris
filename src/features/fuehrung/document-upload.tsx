@@ -6,6 +6,7 @@ import { Upload } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { api, ApiError } from '@/lib/api/client';
+import { uploadFile } from '@/lib/upload';
 import { MAX_UPLOAD_BYTES, describeUploadLimit } from '@/lib/validation/files';
 import { DOCUMENT_CATEGORY_LABELS, DOCUMENT_VISIBILITY_LABELS, optionsOf } from '@/lib/bi/labels';
 import { Button } from '@/components/ui/button';
@@ -26,30 +27,16 @@ import {
 /**
  * Datei in die Ablage bringen — als neue Akte oder als neue Fassung.
  *
- * Derselbe Weg wie bei Einsatzfotos: signierte Adresse holen, direkt zum
- * Speicher, dann registrieren. Die Datei läuft nie durch die Anwendung. Das
- * Profil `document` erlaubt PDF, Office und Bilder bis `MAX_UPLOAD_BYTES`.
+ * Derselbe Weg wie bei Einsatzfotos: Ticket holen, direkt zum Speicher,
+ * abschliessen. Die Datei läuft nie durch die Anwendung — geprüft wird sie
+ * trotzdem, denn der Abschluss liest sie serverseitig zurück. Das Profil
+ * `document` erlaubt PDF, Office und Bilder bis `MAX_UPLOAD_BYTES`.
+ *
+ * Gemeldet wird danach nur noch die Kennung des geprüften `FileAsset`.
+ * Früher schickte diese Maske Pfad, Adresse, Typ und Grösse, und der Dienst
+ * legte daraus eine Datei an — bei Personal- und Vertragsunterlagen die
+ * heikelste Stelle dafür im ganzen System.
  */
-
-interface Uploaded {
-  path: string;
-  url: string;
-  filename: string;
-  mimeType: string;
-  sizeBytes: number;
-}
-
-async function uploadFile(file: File): Promise<Uploaded> {
-  const target = await api.post<{ path: string; signedUrl: string; publicUrl: string }>('/api/files/upload-url', {
-    profile: 'document',
-    filename: file.name,
-    mimeType: file.type || 'application/octet-stream',
-    sizeBytes: file.size,
-  });
-  const response = await fetch(target.signedUrl, { method: 'PUT', headers: { 'Content-Type': file.type || 'application/octet-stream', 'x-upsert': 'true' }, body: file });
-  if (!response.ok) throw new Error('Der Upload wurde vom Speicher abgelehnt.');
-  return { path: target.path, url: target.publicUrl, filename: file.name, mimeType: file.type || 'application/octet-stream', sizeBytes: file.size };
-}
 
 export function DocumentUploadDialog({
   mode,
@@ -83,9 +70,11 @@ export function DocumentUploadDialog({
     }
     setBusy(true);
     try {
-      const uploaded = file ? await uploadFile(file) : undefined;
+      const uploaded = file
+        ? await uploadFile({ file, profile: 'document', filename: file.name })
+        : undefined;
       if (mode === 'version') {
-        await api.post(`/api/bi/documents/${documentId}/versions`, { file: uploaded, changeNote: form.changeNote || undefined });
+        await api.post(`/api/bi/documents/${documentId}/versions`, { fileId: uploaded?.id, changeNote: form.changeNote || undefined });
         toast.success('Neue Fassung hochgeladen.');
       } else {
         const created = await api.post<{ id: string }>('/api/bi/documents', {
@@ -99,7 +88,7 @@ export function DocumentUploadDialog({
           validFrom: form.validFrom || undefined,
           expiresOn: form.expiresOn || undefined,
           reminderDaysBefore: Number(form.reminderDaysBefore) || 30,
-          file: uploaded,
+          fileId: uploaded?.id,
           changeNote: form.changeNote || undefined,
         });
         toast.success('Dokument abgelegt.');

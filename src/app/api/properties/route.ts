@@ -1,20 +1,15 @@
-import { z } from 'zod';
-
 import { defineRoute } from '@/lib/api/handler';
+import { propertyListQuery } from '@/lib/validation/queries';
 import { created, ok } from '@/lib/api/response';
 import { prisma } from '@/lib/db';
 import { audit } from '@/lib/audit';
 import { ForbiddenError, NotFoundError } from '@/lib/errors';
-import { createPropertySchema } from '@/lib/validation/crm';
+import { CRYPTO_CONTEXT, encryptNullable } from '@/lib/crypto';
+import { createPropertyBodySchema } from '@/lib/validation/crm';
 import { getOrganizationId } from '@/server/services/organization.service';
 import { mayManagePropertyOf, propertyVisibilityWhere } from '@/server/services/property.service';
 
 export const runtime = 'nodejs';
-
-const listQuery = z.object({
-  customerId: z.string().min(1).optional(),
-  q: z.string().trim().max(120).optional(),
-});
 
 /**
  * GET /api/properties — Objekte und Liegenschaften.
@@ -34,18 +29,31 @@ const listQuery = z.object({
  */
 export const GET = defineRoute({
   permissions: ['property:read'],
-  query: listQuery,
+  query: propertyListQuery,
   rateLimit: 'apiRead',
   handler: async ({ query, session }) => {
     const organizationId = await getOrganizationId();
     return ok(
       await prisma.property.findMany({
+        /*
+          Sicht und Filter als Glieder eines `AND` (2026-09-27). Vorher wurden
+          beide in ein Objekt verbreitet, und `?customerId=` überschrieb das
+          `customerId` der Sichtregel: Eine Kundin listete mit der Kennung
+          einer anderen Kundschaft deren Objekte — samt Schlüsseldepot und
+          Zugangshinweis. Ein Filter darf die Sicht nur verengen, nie ersetzen.
+        */
         where: {
-          ...propertyVisibilityWhere(session, organizationId),
-          ...(query.customerId ? { customerId: query.customerId } : {}),
-          ...(query.q ? { label: { contains: query.q, mode: 'insensitive' } } : {}),
+          AND: [
+            propertyVisibilityWhere(session, organizationId),
+            ...(query.customerId ? [{ customerId: query.customerId }] : []),
+            ...(query.q ? [{ label: { contains: query.q, mode: 'insensitive' as const } }] : []),
+          ],
         },
         orderBy: { label: 'asc' },
+        // Obergrenze (Phase 23, 2026-09-27): Die Liste wächst mit dem
+        // Kundenstamm und füllt Auswahlfelder; wer mehr als 200 Objekte
+        // durchsehen will, sucht (`q`) oder grenzt nach Kundschaft ein.
+        take: 200,
         select: {
           id: true,
           label: true,
@@ -72,19 +80,6 @@ export const GET = defineRoute({
 });
 
 /**
- * Körper des Anlegens: das Objektschema plus die Kundschaft, zu der es gehört.
- *
- * `z.intersection` statt `.extend()`, weil `createPropertySchema` mit einem
- * `.refine()` endet (Adresse ist Pflicht) und damit kein einfaches
- * `ZodObject` mehr ist. Die Prüfung bleibt dadurch an genau einer Stelle —
- * die Adressregel gilt hier wie überall sonst.
- */
-const createPropertyBody = z.intersection(
-  createPropertySchema,
-  z.object({ customerId: z.string().min(1, 'Eine Kundschaft ist erforderlich.') }),
-);
-
-/**
  * POST /api/properties — Objekt erfassen.
  *
  * Die Kundschaft darf Objekte nur an die eigene Akte hängen. Die Kunden-ID
@@ -93,7 +88,7 @@ const createPropertyBody = z.intersection(
  */
 export const POST = defineRoute({
   permissions: ['property:create'],
-  body: createPropertyBody,
+  body: createPropertyBodySchema,
   rateLimit: 'apiWrite',
   handler: async ({ body, session, ip }) => {
     const organizationId = await getOrganizationId();
@@ -146,6 +141,15 @@ export const POST = defineRoute({
         hasElevator: body.hasElevator,
         parkingInfo: body.parkingInfo ?? null,
         keyLocation: body.keyLocation ?? null,
+        /**
+         * Der Alarmcode wird verschlüsselt abgelegt (`src/lib/crypto.ts`).
+         *
+         * Bis hierher war er im Schema deklariert, im Zod-Schema
+         * entgegengenommen — und dann verworfen: Die Eingabe verschwand
+         * kommentarlos. Ein Feld, das eine Antwort mit 201 quittiert und den
+         * Wert wegwirft, ist schlimmer als ein fehlendes Feld.
+         */
+        alarmCode: encryptNullable(body.alarmCode, CRYPTO_CONTEXT.alarmCode),
         accessNote: body.accessNote ?? null,
         notes: body.notes ?? null,
       },

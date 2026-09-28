@@ -1,5 +1,27 @@
 import { type ClassValue, clsx } from 'clsx';
-import { twMerge } from 'tailwind-merge';
+import { extendTailwindMerge } from 'tailwind-merge';
+
+import { laufzeitUrsprung } from '@/lib/laufzeit-konfiguration';
+import { kaufmaennischRunden } from '@/lib/runden';
+
+/**
+ * tailwind-merge kennt nur die Standard-Schriftgrössen. Die eigenen Stufen aus
+ * `tailwind.config.ts` (`text-meta`, `text-body`, …) hielt es deshalb für
+ * *Textfarben* — und warf beim Zusammenführen die echte Farbe weg:
+ * `bg-primary text-primary-foreground … text-meta` wurde zu `bg-primary …
+ * text-meta`, und jede kleine oder grosse Primärschaltfläche erbte die dunkle
+ * Schriftfarbe der Seite (Kontrast 2.9 : 1 auf Aare-Blaugrün). Aufgefallen ist
+ * das erst der axe-Prüfung (Wave 18), weil die Schrift auf dem Bildschirm
+ * noch lesbar *aussieht*. Die Liste muss mit `fontSize` in der Konfiguration
+ * übereinstimmen; eine neue Stufe ohne Eintrag hier bringt den Fehler zurück.
+ */
+const twMerge = extendTailwindMerge({
+  extend: {
+    classGroups: {
+      'font-size': [{ text: ['2xs', 'meta', 'body', 'display', 'headline', 'title'] }],
+    },
+  },
+});
 
 /** Tailwind-Klassen deterministisch zusammenführen (letzte Regel gewinnt). */
 export function cn(...inputs: ClassValue[]) {
@@ -161,9 +183,15 @@ export function roundToRappen(value: number): number {
   return Math.round(value * 20) / 20;
 }
 
-/** Kaufmännisch auf 2 Nachkommastellen runden — vermeidet Float-Artefakte. */
+/**
+ * Kaufmännisch auf 2 Nachkommastellen runden — auf den Dezimalwert.
+ *
+ * Bis 2026-09-27 `Math.round((value + Number.EPSILON) * 100) / 100`: Das
+ * rundete die Binärzahl, und 1.5 × 12.35 (= 18.525) wurde 18.52. Die Rechnung
+ * steht jetzt einmal in `lib/runden.ts`.
+ */
 export function round2(value: number): number {
-  return Math.round((value + Number.EPSILON) * 100) / 100;
+  return kaufmaennischRunden(value, 2);
 }
 
 export function clamp(value: number, min: number, max: number): number {
@@ -235,9 +263,14 @@ export function toQueryString(params: Record<string, unknown>): string {
   return qs ? `?${qs}` : '';
 }
 
+/**
+ * Absolute Adresse unter der Herkunft **dieser Instanz** — für Mails,
+ * Zahlungsrücksprünge, Signaturlinks, PDFs. Zur Laufzeit aus `APP_URL`
+ * (V2-1); vorher `process.env.NEXT_PUBLIC_APP_URL`, beim Bau eingesetzt.
+ * Nur auf dem Server aufzurufen.
+ */
 export function absoluteUrl(path: string): string {
-  const base = process.env.NEXT_PUBLIC_APP_URL ?? 'http://localhost:3000';
-  return `${base.replace(/\/$/, '')}/${path.replace(/^\//, '')}`;
+  return `${laufzeitUrsprung()}/${path.replace(/^\//, '')}`;
 }
 
 /** Datei-Grösse menschenlesbar. */

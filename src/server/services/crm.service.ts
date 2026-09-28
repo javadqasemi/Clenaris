@@ -2,16 +2,21 @@ import 'server-only';
 
 import type { Customer, Lead, Prisma } from '@prisma/client';
 
-import { prisma, toNumber } from '@/lib/db';
+import { prisma, toNumber, type Tx } from '@/lib/db';
 import { ConflictError, NotFoundError } from '@/lib/errors';
-import { absoluteUrl } from '@/lib/utils';
+import { absoluteUrl, formatDate } from '@/lib/utils';
+import { tagPlus, zuercherTag } from '@/lib/zuerich';
+import { zuercherZeitpunkt } from '@/lib/contracts/serie';
 import { orderByFor, resolveSort, type SortOrder } from '@/lib/sort';
 import { randomToken } from '@/lib/auth/jwt';
 import { audit } from '@/lib/audit';
+import { automationEreignisseAbarbeiten, automationEreignisVormerken } from './automation-engine.service';
 import { sendEmail } from '@/lib/email/client';
 import { contactAutoReplyEmail, newLeadInternalEmail } from '@/lib/email/templates';
 import { hasIntegration } from '@/lib/env';
 import { scoreLead } from '@/lib/ai/features';
+import { namenErsetzen } from '@/lib/ai/governance';
+import { statusZurStufe, stufeZumStatus, type LeadStatus } from '@/lib/crm/pipeline';
 import type {
   ContactFormInput,
   CreateCustomerInput,
@@ -21,6 +26,7 @@ import type {
   UpdateLeadInput,
 } from '@/lib/validation/crm';
 
+import { kundenakteSperren } from './kundenakte-sperre';
 import { nextNumber } from './numbering.service';
 import { notifyStaff } from './notification.service';
 import { inviteUser } from './auth.service';
@@ -96,17 +102,21 @@ function nameKey(value: string | null | undefined): string {
  * hängen würde ihn wieder aufreissen und die Trichterstatistik verfälschen.
  * Die Verbindung zur Person bleibt trotzdem bestehen — über `customerId`.
  */
-export async function findMatchingLead(params: {
-  organizationId: string;
-  email: string;
-  phone?: string | null;
-  firstName: string;
-  lastName: string;
-  company?: string | null;
-}): Promise<Lead | null> {
+export async function findMatchingLead(
+  params: {
+    organizationId: string;
+    email: string;
+    phone?: string | null;
+    firstName: string;
+    lastName: string;
+    company?: string | null;
+  },
+  /** In der Transaktion des Eingangs, damit die Suche hinter dessen Sperre liest. */
+  db: Tx | typeof prisma = prisma,
+): Promise<Lead | null> {
   const email = params.email.trim().toLowerCase();
 
-  const byEmail = await prisma.lead.findFirst({
+  const byEmail = await db.lead.findFirst({
     where: {
       organizationId: params.organizationId,
       deletedAt: null,
@@ -124,7 +134,7 @@ export async function findMatchingLead(params: {
    * kleine, überschaubare Menge, ein voller Tabellenscan wäre es nicht.
    */
   const since = new Date(Date.now() - 180 * 86_400_000);
-  const candidates = await prisma.lead.findMany({
+  const candidates = await db.lead.findMany({
     where: {
       organizationId: params.organizationId,
       deletedAt: null,
@@ -175,24 +185,44 @@ export async function createLeadFromContactForm(params: {
   const input = params.input;
   const subject = params.activitySubject ?? 'Anfrage über die Website';
 
-  const existing = await findMatchingLead({
-    organizationId: params.organizationId,
-    email: input.email,
-    phone: input.phone,
-    firstName: input.firstName,
-    lastName: input.lastName,
-    company: input.company,
+  const stage = await prisma.pipelineStage.findFirst({
+    where: { organizationId: params.organizationId, key: 'new' },
   });
 
-  if (existing) {
-    /**
-     * Bestehender Lead: Die Anfrage wird angehängt, nicht als neuer Vorgang
-     * gezählt. Ergänzt werden nur *fehlende* Angaben — eine zweite Anfrage
-     * ohne Telefonnummer darf die aus der ersten nicht löschen.
-     */
-    const lead = await prisma.lead.update({
-      where: { id: existing.id },
-      data: {
+  /*
+    Zuordnen und Anlegen hinter einer Sperre je Organisation, in einer
+    Transaktion (2026-09-27). Vorher lief die Suche nach einem passenden
+    Lead ausserhalb jeder Transaktion: Ein doppelt abgeschickter
+    Kontaktformular-Eintrag fand zweimal „keinen", und es entstanden zwei
+    Anfragen statt einer mit zwei Nachrichten — genau der Fall, den die
+    Zuordnungsregel verhindern soll. Die Sperre gilt für die ganze
+    Organisation und nicht je Adresse, weil die Zuordnung auch über Telefon
+    und Name läuft; der Eingang über die Website ist dafür selten genug.
+    E-Mails und Meldungen folgen nach dem Commit.
+  */
+  const eingang = await prisma.$transaction(async (tx) => {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`anfrage-eingang:${params.organizationId}`}))`;
+    const existing = await findMatchingLead(
+      {
+        organizationId: params.organizationId,
+        email: input.email,
+        phone: input.phone,
+        firstName: input.firstName,
+        lastName: input.lastName,
+        company: input.company,
+      },
+      tx,
+    );
+
+    if (existing) {
+      /**
+       * Bestehender Lead: Die Anfrage wird angehängt, nicht als neuer Vorgang
+       * gezählt. Ergänzt werden nur *fehlende* Angaben — eine zweite Anfrage
+       * ohne Telefonnummer darf die aus der ersten nicht löschen.
+       */
+      const ergaenzt = await tx.lead.update({
+        where: { id: existing.id },
+        data: {
         phone: existing.phone ?? input.phone ?? null,
         company: existing.company ?? input.company ?? null,
         postalCode: existing.postalCode ?? input.postalCode ?? null,
@@ -207,9 +237,54 @@ export async function createLeadFromContactForm(params: {
         },
       },
     });
+      return { lead: ergaenzt, isNew: false };
+    }
 
-    await attachRequestFiles(params.organizationId, input);
+    const { number } = await nextNumber(tx, params.organizationId, 'lead');
 
+    // Bestehende Kundschaft erkennen und verknüpfen.
+    const existingCustomer = await tx.customer.findFirst({
+      where: { organizationId: params.organizationId, email: input.email, deletedAt: null },
+      select: { id: true },
+    });
+
+    const angelegt = await tx.lead.create({
+      data: {
+        organizationId: params.organizationId,
+        number,
+        firstName: input.firstName,
+        lastName: input.lastName,
+        email: input.email,
+        phone: input.phone ?? null,
+        company: input.company ?? null,
+        postalCode: input.postalCode ?? null,
+        city: input.city ?? null,
+        street: 'street' in input ? (input.street ?? null) : null,
+        serviceKind: input.serviceKind ?? null,
+        message: input.message,
+        status: 'NEW',
+        source: 'WEBSITE',
+        stageId: stage?.id ?? null,
+        customerId: existingCustomer?.id ?? null,
+        utmSource: input.utmSource ?? null,
+        utmMedium: input.utmMedium ?? null,
+        utmCampaign: input.utmCampaign ?? null,
+        referrerUrl: input.referrerUrl ?? null,
+        landingPath: input.landingPath ?? null,
+        // Erste Nachfassaktion am nächsten Werktag.
+        nextFollowUpAt: nextBusinessDay(),
+        activities: {
+          create: { type: 'EMAIL', subject, body: input.message },
+        },
+      },
+    });
+    await automationEreignisVormerken(tx, { organizationId: params.organizationId, trigger: 'LEAD_CREATED', entityId: angelegt.id });
+    return { lead: angelegt, isNew: true };
+  });
+
+  const lead = eingang.lead;
+
+  if (!eingang.isNew) {
     await audit.updated({
       organizationId: params.organizationId,
       entity: 'Lead',
@@ -244,52 +319,6 @@ export async function createLeadFromContactForm(params: {
     return { ...lead, isNew: false };
   }
 
-  const stage = await prisma.pipelineStage.findFirst({
-    where: { organizationId: params.organizationId, key: 'new' },
-  });
-
-  const lead = await prisma.$transaction(async (tx) => {
-    const { number } = await nextNumber(tx, params.organizationId, 'lead');
-
-    // Bestehende Kundschaft erkennen und verknüpfen.
-    const existingCustomer = await tx.customer.findFirst({
-      where: { organizationId: params.organizationId, email: input.email, deletedAt: null },
-      select: { id: true },
-    });
-
-    return tx.lead.create({
-      data: {
-        organizationId: params.organizationId,
-        number,
-        firstName: input.firstName,
-        lastName: input.lastName,
-        email: input.email,
-        phone: input.phone ?? null,
-        company: input.company ?? null,
-        postalCode: input.postalCode ?? null,
-        city: input.city ?? null,
-        street: 'street' in input ? (input.street ?? null) : null,
-        serviceKind: input.serviceKind ?? null,
-        message: input.message,
-        status: 'NEW',
-        source: 'WEBSITE',
-        stageId: stage?.id ?? null,
-        customerId: existingCustomer?.id ?? null,
-        utmSource: input.utmSource ?? null,
-        utmMedium: input.utmMedium ?? null,
-        utmCampaign: input.utmCampaign ?? null,
-        referrerUrl: input.referrerUrl ?? null,
-        landingPath: input.landingPath ?? null,
-        // Erste Nachfassaktion am nächsten Werktag.
-        nextFollowUpAt: nextBusinessDay(),
-        activities: {
-          create: { type: 'EMAIL', subject, body: input.message },
-        },
-      },
-    });
-  });
-
-  await attachRequestFiles(params.organizationId, input);
   await sendContactAutoReply(input.email, input.firstName, lead.id);
 
   // Interne Benachrichtigung.
@@ -309,10 +338,20 @@ export async function createLeadFromContactForm(params: {
     }),
   });
 
-  // KI-Bewertung im Hintergrund — Fehler bleiben folgenlos.
+  /**
+   * KI-Bewertung im Hintergrund — Fehler bleiben folgenlos.
+   *
+   * Sie läuft ohne Zutun einer Person bei jeder Anfrage und schickt deren
+   * Text an den Auftragsverarbeiter; das Ergebnis ist ein Punktwert mit
+   * Begründung an der Anfrage, eine Empfehlung, keine Entscheidung. Namen der
+   * anfragenden Person und ihrer Firma werden vorher durch `[NAME]` ersetzt
+   * (2026-09-27) — für die Einschätzung der Anfrage spielen sie keine Rolle;
+   * E-Mail und Telefon nimmt der Ausgangsfilter des Clients. Im Inventar in
+   * `docs/KI_GOVERNANCE.md` stand diese Funktion bis dahin nicht.
+   */
   if (hasIntegration('ai')) {
     void scoreLeadInBackground(lead.id, {
-      message: input.message,
+      message: namenErsetzen(input.message, [input.firstName, input.lastName, input.company ?? '']).text,
       serviceKind: input.serviceKind ?? null,
       squareMeters: 'squareMeters' in input ? (input.squareMeters ?? null) : null,
       isBusiness: Boolean(input.company),
@@ -327,6 +366,9 @@ export async function createLeadFromContactForm(params: {
     summary: `Lead ${lead.number} über Website erfasst`,
     ip: params.ip,
   });
+
+  // Vermerkt in der Transaktion oben; hier nur noch abarbeiten (Outbox).
+  await automationEreignisseAbarbeiten({ organizationId: params.organizationId });
 
   return { ...lead, isNew: true };
 }
@@ -354,18 +396,6 @@ async function sendContactAutoReply(
   });
 }
 
-/** Mit der Anfrage hochgeladene Dateien der Organisation zuordnen. */
-async function attachRequestFiles(
-  organizationId: string,
-  input: ContactFormInput | QuoteRequestInput,
-): Promise<void> {
-  if (!('fileIds' in input) || input.fileIds.length === 0) return;
-  await prisma.fileAsset.updateMany({
-    where: { id: { in: input.fileIds }, organizationId },
-    data: { scope: 'OTHER' },
-  });
-}
-
 async function scoreLeadInBackground(
   leadId: string,
   input: Parameters<typeof scoreLead>[0],
@@ -390,15 +420,61 @@ async function scoreLeadInBackground(
   }
 }
 
+/**
+ * Verweise einer Anfrage gegen die Organisation prüfen und Stufe und Status
+ * in Einklang bringen (2026-09-27).
+ *
+ * Stufe, zuständige Person und Etiketten kamen ungeprüft aus der Anfrage —
+ * eine fremde Kennung wurde gespeichert. Und die Regel „die Stufe bestimmt
+ * den Status" setzte nur das Kanban im Browser durch (`lib/crm/pipeline.ts`).
+ * Jetzt gilt: Wer eine Stufe setzt, bekommt deren Status; wer nur einen
+ * Status setzt, bekommt die passende Stufe, sofern die Organisation eine hat.
+ * Fremde oder unbekannte Kennungen sind 404 — nicht von einer erfundenen zu
+ * unterscheiden.
+ */
+async function leadBezuegePruefen(params: {
+  organizationId: string;
+  stageId?: string | null;
+  status?: string | null;
+  ownerId?: string | null;
+  tagIds?: string[];
+}): Promise<{ stageId?: string | null; status?: LeadStatus }> {
+  const { organizationId } = params;
+  if (params.ownerId && !(await prisma.employee.count({ where: { id: params.ownerId, organizationId } }))) {
+    throw new NotFoundError('Zuständige Person');
+  }
+  if (params.tagIds?.length) {
+    const eindeutig = [...new Set(params.tagIds)];
+    if ((await prisma.tag.count({ where: { id: { in: eindeutig }, organizationId } })) !== eindeutig.length) throw new NotFoundError('Etikett');
+  }
+  if (params.stageId) {
+    const stufe = await prisma.pipelineStage.findFirst({ where: { id: params.stageId, organizationId }, select: { key: true } });
+    if (!stufe) throw new NotFoundError('Stufe');
+    return { stageId: params.stageId, status: statusZurStufe(stufe.key) };
+  }
+  if (params.status) {
+    const schluessel = stufeZumStatus(params.status);
+    const stufe = schluessel ? await prisma.pipelineStage.findFirst({ where: { organizationId, key: schluessel }, select: { id: true } }) : null;
+    return { status: params.status as LeadStatus, ...(stufe ? { stageId: stufe.id } : {}) };
+  }
+  return {};
+}
+
 export async function createLead(params: {
   organizationId: string;
   input: CreateLeadInput;
   actorId: string;
 }): Promise<Lead> {
+  const abgeglichen = await leadBezuegePruefen({
+    organizationId: params.organizationId,
+    stageId: params.input.stageId,
+    ownerId: params.input.ownerId,
+    tagIds: params.input.tagIds,
+  });
   const lead = await prisma.$transaction(async (tx) => {
     const { number } = await nextNumber(tx, params.organizationId, 'lead');
 
-    return tx.lead.create({
+    const angelegt = await tx.lead.create({
       data: {
         organizationId: params.organizationId,
         number,
@@ -415,6 +491,7 @@ export async function createLead(params: {
         estimatedValue: params.input.estimatedValue ?? null,
         source: params.input.source,
         stageId: params.input.stageId ?? null,
+        ...(abgeglichen.status ? { status: abgeglichen.status } : {}),
         ownerId: params.input.ownerId ?? null,
         nextFollowUpAt: params.input.nextFollowUpAt ?? null,
         tags: {
@@ -422,6 +499,8 @@ export async function createLead(params: {
         },
       },
     });
+    await automationEreignisVormerken(tx, { organizationId: params.organizationId, trigger: 'LEAD_CREATED', entityId: angelegt.id });
+    return angelegt;
   });
 
   await audit.created({
@@ -431,6 +510,8 @@ export async function createLead(params: {
     entityId: lead.id,
     summary: `Lead ${lead.number} manuell erfasst`,
   });
+
+  await automationEreignisseAbarbeiten({ organizationId: params.organizationId });
 
   return lead;
 }
@@ -446,7 +527,16 @@ export async function updateLead(params: {
   });
   if (!lead) throw new NotFoundError('Lead');
 
-  const { tagIds, ...rest } = params.input;
+  const { tagIds, ...eingabe } = params.input;
+  const abgeglichen = await leadBezuegePruefen({
+    organizationId: params.organizationId,
+    stageId: eingabe.stageId,
+    status: eingabe.status,
+    ownerId: eingabe.ownerId,
+    tagIds,
+  });
+  // Stufe und Status aus der Prüfung — der Server entscheidet, nicht die Maske.
+  const rest = { ...eingabe, ...abgeglichen };
 
   const updated = await prisma.lead.update({
     where: { id: lead.id },
@@ -490,28 +580,41 @@ export async function convertLeadToCustomer(params: {
   leadId: string;
   actorId: string;
 }): Promise<Customer> {
-  const lead = await prisma.lead.findFirst({
-    where: { id: params.leadId, organizationId: params.organizationId, deletedAt: null },
-  });
-  if (!lead) throw new NotFoundError('Lead');
+  /*
+    Alles in einer Transaktion, hinter zwei Sperren (2026-09-27): der Anfrage
+    selbst (`FOR UPDATE`) und der Adresse (`kundenakteSperren`). Vorher lasen
+    Anfrage und bestehende Akte ausserhalb jeder Transaktion; sechs
+    gleichzeitige Umwandlungen derselben Anfrage fanden alle „noch keine
+    Akte" und legten je eine an — und die Anfrage zeigte am Ende auf die, die
+    zuletzt schrieb. Die Zeilensperre macht die zweite Umwandlung zur
+    Wiederholung der ersten: Sie findet `customerId` gesetzt und gibt dieselbe
+    Akte zurück.
+  */
+  const ergebnis = await prisma.$transaction(async (tx) => {
+    const gesperrt = await tx.$queryRaw<{ id: string }[]>`
+      SELECT id FROM leads
+      WHERE id = ${params.leadId} AND "organizationId" = ${params.organizationId} AND "deletedAt" IS NULL
+      FOR UPDATE`;
+    if (gesperrt.length === 0) throw new NotFoundError('Lead');
+    const lead = await tx.lead.findUniqueOrThrow({ where: { id: params.leadId } });
 
-  if (lead.customerId) {
-    return prisma.customer.findUniqueOrThrow({ where: { id: lead.customerId } });
-  }
+    if (lead.customerId) {
+      return { lead, customer: await tx.customer.findUniqueOrThrow({ where: { id: lead.customerId } }), art: 'wiederholt' as const };
+    }
 
-  const existing = await prisma.customer.findFirst({
-    where: { organizationId: params.organizationId, email: lead.email, deletedAt: null },
-  });
-
-  if (existing) {
-    await prisma.lead.update({
-      where: { id: lead.id },
-      data: { customerId: existing.id, status: 'WON', convertedAt: new Date() },
+    await kundenakteSperren(tx, params.organizationId, lead.email);
+    const existing = await tx.customer.findFirst({
+      where: { organizationId: params.organizationId, email: lead.email, deletedAt: null },
     });
-    return existing;
-  }
 
-  const customer = await prisma.$transaction(async (tx) => {
+    if (existing) {
+      await tx.lead.update({
+        where: { id: lead.id },
+        data: { customerId: existing.id, status: 'WON', convertedAt: new Date() },
+      });
+      return { lead, customer: existing, art: 'verknuepft' as const };
+    }
+
     const { number } = await nextNumber(tx, params.organizationId, 'customer');
 
     const created = await tx.customer.create({
@@ -553,16 +656,35 @@ export async function convertLeadToCustomer(params: {
       data: { customerId: created.id },
     });
 
-    return created;
+    return { lead, customer: created, art: 'angelegt' as const };
   });
 
-  await audit.created({
-    organizationId: params.organizationId,
-    userId: params.actorId,
-    entity: 'Customer',
-    entityId: customer.id,
-    summary: `Lead ${lead.number} in Kunde ${customer.number} umgewandelt`,
-  });
+  const { lead, customer } = ergebnis;
+  /*
+    Protokolliert wird, was sich geändert hat — und nur das. Die neue Akte
+    als CREATE an der Kundschaft; die Verknüpfung mit einer bestehenden Akte
+    als UPDATE an der Anfrage (bis 2026-09-27 gar nicht protokolliert, obwohl
+    sie Status und Zuordnung der Anfrage ändert). Die Wiederholung einer
+    schon umgewandelten Anfrage hat nichts geändert und schreibt nichts.
+  */
+  if (ergebnis.art === 'angelegt') {
+    await audit.created({
+      organizationId: params.organizationId,
+      userId: params.actorId,
+      entity: 'Customer',
+      entityId: customer.id,
+      summary: `Lead ${lead.number} in Kunde ${customer.number} umgewandelt`,
+    });
+  } else if (ergebnis.art === 'verknuepft') {
+    await audit.updated({
+      organizationId: params.organizationId,
+      userId: params.actorId,
+      entity: 'Lead',
+      entityId: lead.id,
+      summary: `Lead ${lead.number} mit bestehendem Kunden ${customer.number} verknüpft`,
+      changes: { customerId: customer.id, status: 'WON' },
+    });
+  }
 
   return customer;
 }
@@ -677,14 +799,19 @@ export async function createCustomer(params: {
   input: CreateCustomerInput;
   actorId: string;
 }): Promise<Customer> {
-  const existing = await prisma.customer.findFirst({
-    where: { organizationId: params.organizationId, email: params.input.email, deletedAt: null },
-  });
-  if (existing) {
-    throw new ConflictError('Für diese E-Mail-Adresse existiert bereits ein Kundendatensatz.');
-  }
-
   const customer = await prisma.$transaction(async (tx) => {
+    // Suche und Anlage hinter derselben Sperre (`kundenakte-sperre.ts`) —
+    // vorher lag die Suche vor der Transaktion, und fünf gleichzeitige
+    // Anlagen ergaben fünf Akten.
+    await kundenakteSperren(tx, params.organizationId, params.input.email);
+    const existing = await tx.customer.findFirst({
+      where: { organizationId: params.organizationId, email: params.input.email, deletedAt: null },
+      select: { id: true },
+    });
+    if (existing) {
+      throw new ConflictError('Für diese E-Mail-Adresse existiert bereits ein Kundendatensatz.');
+    }
+
     const { number } = await nextNumber(tx, params.organizationId, 'customer');
 
     return tx.customer.create({
@@ -909,7 +1036,7 @@ export async function mergeCustomers(params: {
         deletedAt: new Date(),
         internalNotes: [
           source.internalNotes,
-          `Zusammengeführt mit ${target.number} am ${new Date().toLocaleDateString('de-CH')}.`,
+          `Zusammengeführt mit ${target.number} am ${formatDate(new Date())}.`,
         ]
           .filter(Boolean)
           .join('\n'),
@@ -1145,7 +1272,7 @@ export async function getCustomerDetail(params: {
         where: { deletedAt: null },
         orderBy: { scheduledStart: 'desc' },
         take: 10,
-        include: { items: { select: { name: true }, take: 1 } },
+        include: { items: { select: { name: true, serviceId: true, position: true } } },
       },
       invoices: {
         where: { deletedAt: null },
@@ -1186,12 +1313,16 @@ export async function getCustomerDetail(params: {
 // ---------------------------------------------------------------------------
 
 /** Nächster Werktag um 09:00 Uhr — Standard für die erste Nachfassaktion. */
+/**
+ * Der nächste Werktag um 09:00 Uhr in Zürich (2026-09-27).
+ *
+ * Vorher `setHours(9)` in der Zone des Servers — auf dem UTC-Server stand
+ * jedes Nachfassen auf 10:00 bzw. 11:00 Zürcher Zeit, und Tag wie Wochentag
+ * waren UTC-Tage. `zuercherZeitpunkt` liest den Versatz am Zieltag selbst ab,
+ * damit „09:00" auch an Umstellungstagen neun Uhr in Bern heisst.
+ */
 function nextBusinessDay(): Date {
-  const date = new Date();
-  date.setHours(9, 0, 0, 0);
-  date.setDate(date.getDate() + 1);
-  while (date.getDay() === 0 || date.getDay() === 6) {
-    date.setDate(date.getDate() + 1);
-  }
-  return date;
+  let tag = tagPlus(zuercherTag(), 1);
+  while (tag.getUTCDay() === 0 || tag.getUTCDay() === 6) tag = tagPlus(tag, 1);
+  return zuercherZeitpunkt(tag, 9 * 60);
 }

@@ -1,6 +1,6 @@
 import 'server-only';
 
-import { prisma } from '@/lib/db';
+import { prisma, type Tx } from '@/lib/db';
 import { audit, diff } from '@/lib/audit';
 import { can } from '@/lib/auth/rbac';
 import type { SessionUser } from '@/lib/auth/session';
@@ -95,8 +95,28 @@ async function requireCustomer(organizationId: string, customerId: string) {
   return customer;
 }
 
-const describe = (address: { street: string; streetNo: string | null; city: string }) =>
+/** Felder, die festlegen, *wo* die Adresse ist — siehe `updateAddress`. */
+const ORTSFELDER = ['street', 'streetNo', 'addition', 'postalCode', 'city', 'canton', 'country', 'lat', 'lng', 'placeId'] as const;
+
+const describe = (address:{ street: string; streetNo: string | null; city: string }) =>
   `${address.street} ${address.streetNo ?? ''}`.trim() + `, ${address.city}`;
+
+/**
+ * Sperre je Kundschaft über ihre Adressen (2026-09-27).
+ *
+ * Standard- und Rechnungsadresse werden umgesetzt, indem zuerst alle übrigen
+ * Adressen der Kundschaft den Merker verlieren und dann eine ihn bekommt.
+ * Gleichzeitige Umsetzungen sperrten dieselben Zeilen in verschiedener
+ * Reihenfolge und verklemmten sich — im Release-Lauf auf frischer Datenbank
+ * antworteten drei von vier mit 500. „Genau eine Standardadresse" hielt die
+ * Zeilensperre zwar, aber eine Verklemmung ist kein Ergebnis, das die
+ * Oberfläche erklären kann. Die Sperre reiht die Umsetzungen einer Kundschaft
+ * hintereinander; Adressen verschiedener Kundschaften warten nicht
+ * aufeinander.
+ */
+async function adressenSperren(tx: Tx, customerId: string): Promise<void> {
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`adressen:${customerId}`}))`;
+}
 
 export async function createAddress(params: {
   organizationId: string;
@@ -115,6 +135,7 @@ export async function createAddress(params: {
   const isBilling = existing === 0 ? true : params.input.isBilling;
 
   const address = await prisma.$transaction(async (tx) => {
+    await adressenSperren(tx, params.customerId);
     if (isDefault) {
       await tx.address.updateMany({
         where: { customerId: params.customerId },
@@ -167,7 +188,44 @@ export async function updateAddress(params: {
     );
   }
 
+  /**
+   * Der Ort einer Adresse mit Geschichte bleibt, wie er war (2026-09-27).
+   *
+   * Buchungen und Einsätze zeigen auf die Adresszeile, sie kopieren sie
+   * nicht. Bis hierher liess sich die Strasse einer Adresse ändern, an der
+   * abgeschlossene Einsätze hängen — und der Rapport vom letzten März zeigte
+   * danach die neue Wohnung, obwohl das Team in der alten gereinigt hatte.
+   * Dieselbe Überlegung, aus der das Löschen verweigert wird (siehe unten),
+   * nur leiser: Nichts verschwindet, es wird bloss falsch.
+   *
+   * Erwogen und verworfen: beim Ändern still eine Kopie anlegen und die
+   * offenen Aufträge umhängen. Das sähe bequem aus, hinterliesse aber zwei
+   * fast gleiche Adressen in der Liste der Kundschaft, ohne dass jemand sie
+   * angelegt hätte. Der Umzug ist ein eigener Vorgang — neue Adresse,
+   * Standard umsetzen —, und die Meldung sagt genau das.
+   *
+   * Solange nur offene Aufträge daran hängen, bleibt die Korrektur möglich:
+   * Ein Tippfehler in der Hausnummer soll das Team zur richtigen Tür führen,
+   * und die offenen Aufträge sollen ihm folgen.
+   */
+  const ortGeaendert = ORTSFELDER.some(
+    (feld) => params.input[feld] !== undefined && String(params.input[feld] ?? '') !== String(before[feld] ?? ''),
+  );
+  if (ortGeaendert) {
+    const [abgeschlosseneBuchungen, abgeschlosseneEinsaetze] = await Promise.all([
+      prisma.booking.count({ where: { addressId: params.addressId, status: { in: ['COMPLETED', 'NO_SHOW'] } } }),
+      prisma.job.count({ where: { addressId: params.addressId, status: { in: ['COMPLETED', 'VERIFIED'] } } }),
+    ]);
+    if (abgeschlosseneBuchungen + abgeschlosseneEinsaetze > 0) {
+      throw new BusinessRuleError(
+        'An dieser Adresse hängen abgeschlossene Aufträge; sie belegt, wo damals gearbeitet wurde, und ihr Ort bleibt deshalb unverändert. ' +
+          'Bei einem Umzug legen Sie eine neue Adresse an und machen sie zur Standardadresse. Bezeichnung, Zugangshinweis und Markierungen lassen sich weiterhin ändern.',
+      );
+    }
+  }
+
   const address = await prisma.$transaction(async (tx) => {
+    await adressenSperren(tx, params.customerId);
     if (params.input.isDefault === true) {
       await tx.address.updateMany({
         where: { customerId: params.customerId, id: { not: params.addressId } },

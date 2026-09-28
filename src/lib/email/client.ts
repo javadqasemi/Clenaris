@@ -1,9 +1,14 @@
 import 'server-only';
 
+import { randomBytes } from 'node:crypto';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+
 import { Resend } from 'resend';
 import { prisma } from '@/lib/db';
 import { hasIntegration, serverEnv } from '@/lib/env';
 import { logger } from '@/lib/logger';
+import { getOrganizationId } from '@/server/services/organization.service';
 
 const log = logger('email');
 
@@ -39,6 +44,21 @@ export interface SendEmailInput {
   entity?: string;
   entityId?: string;
   tags?: { name: string; value: string }[];
+  /** Für die Protokollzeile; ohne Angabe die Organisation dieser Installation. */
+  organizationId?: string;
+}
+
+/**
+ * Die Organisation der Protokollzeile (2026-09-27).
+ *
+ * Das Zustellprotokoll filtert danach; eine Zeile ohne Organisation erscheint
+ * in keinem. Die Installation ist einmandantig, deshalb genügt als Rückfall
+ * `getOrganizationId()` — und weil Versand nie scheitern darf (siehe oben),
+ * wird ein Fehler dort zu einer leeren Spalte, nicht zu einem verlorenen Mail.
+ */
+export async function protokollOrganisation(explizit?: string): Promise<string | null> {
+  if (explizit) return explizit;
+  return getOrganizationId().catch(() => null);
 }
 
 export interface SendEmailResult {
@@ -53,6 +73,7 @@ export async function sendEmail(input: SendEmailInput): Promise<SendEmailResult>
   const from = env.EMAIL_FROM;
 
   const logBase = {
+    organizationId: await protokollOrganisation(input.organizationId),
     to: recipients.join(', ').slice(0, 300),
     from,
     subject: input.subject.slice(0, 300),
@@ -73,6 +94,7 @@ export async function sendEmail(input: SendEmailInput): Promise<SendEmailResult>
     await prisma.emailLog
       .create({ data: { ...logBase, status: 'simulated' } })
       .catch(() => undefined);
+    testPostausgang(input, recipients);
     return { ok: true, id: 'simulated' };
   }
 
@@ -116,6 +138,46 @@ export async function sendEmail(input: SendEmailInput): Promise<SendEmailResult>
       .catch(() => undefined);
     log.error('Versand fehlgeschlagen', { error: message });
     return { ok: false, error: message };
+  }
+}
+
+/**
+ * Postausgang der Prüfreihe — nur auf dem Testserver, nur ohne Anbieter.
+ *
+ * **Warum.** Der Versand ist der einzige Ort, an dem ein roher Zugangstoken
+ * existiert; in der Datenbank liegt allein sein Hash. Eine Prüfung, die den
+ * *tatsächlich versendeten* Link fahren will (Gate 4C, § 49), kann ihn sich
+ * nirgends sonst holen. Deshalb schreibt der Testserver jede simulierte
+ * Nachricht als Datei nach `<CLENARIS_TEST_CACHE_DIR>/mail/`; der Testprozess
+ * liest sie dort (`tests/helpers/mail.ts`). Ein Anbieter ist nie beteiligt,
+ * und ohne die Variable — also im Betrieb — passiert hier nichts. Der
+ * Schutz ist derselbe wie beim dateibasierten Zähler: eine serverseitige
+ * Umgebungsvariable, kein Endpunkt, keine Kopfzeile.
+ */
+function testPostausgang(input: SendEmailInput, recipients: string[]): void {
+  const dir = process.env.CLENARIS_TEST_CACHE_DIR?.trim();
+  if (!dir) return;
+  try {
+    const ordner = join(dir, 'mail');
+    mkdirSync(ordner, { recursive: true });
+    const name = `${Date.now()}-${randomBytes(4).toString('hex')}.json`;
+    writeFileSync(
+      join(ordner, name),
+      JSON.stringify({
+        at: new Date().toISOString(),
+        to: recipients,
+        subject: input.subject,
+        html: input.html,
+        text: input.text ?? stripHtml(input.html),
+        templateKey: input.templateKey ?? null,
+        entity: input.entity ?? null,
+        entityId: input.entityId ?? null,
+        attachments: (input.attachments ?? []).map((a) => a.filename),
+      }),
+      'utf8',
+    );
+  } catch {
+    // Der Postausgang ist ein Prüfwerkzeug — sein Fehlen darf keinen Versand stören.
   }
 }
 

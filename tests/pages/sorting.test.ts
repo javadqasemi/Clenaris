@@ -1,8 +1,9 @@
-import { describe, it } from 'node:test';
+import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { get, requireServer } from '../helpers/client';
 import { loginAs } from '../helpers/accounts';
+import { eigeneOrganisationId, testDb, testDbSchliessen } from '../helpers/testdb';
 
 /**
  * Sortierung — ob sie *wirkt*, nicht ob die Seite noch lädt.
@@ -97,15 +98,69 @@ describe('Sortierung', { concurrency: 1 }, async () => {
       ['Kunden', '/admin/kunden', 'lifetimeValue'],
     ];
 
+    /**
+     * Genug Zeilen für eine zweite Seite — immer, nicht nur mit „vollem"
+     * Bestand.
+     *
+     * Bis 2026-09-26 übersprang sich der Fall, wenn die Testdatenbank weniger
+     * als 25 Rechnungen oder Kundschaften hatte, und das hing davon ab, welche
+     * Prüfreihen vorher gelaufen waren. Jetzt füllt der Fall selbst auf 26
+     * auf: Kundschaft ohne Umsatz, Rechnungsentwürfe mit Nummern ausserhalb
+     * des Belegschemas `-JJJJ-NNNNN` (Entwürfe und fremde Nummern prüft die
+     * Integritätsprüfung nicht als Belege). Gleiche Sortierwerte sind
+     * gewollt: Die Listen brechen Gleichstände über eine eindeutige Spalte
+     * (`orderByFor`), und genau das muss beim Blättern halten.
+     */
+    const MARKE = `PRUEF-SORT-${Date.now()}`;
+    const angelegteKunden: string[] = [];
+    const angelegteRechnungen: string[] = [];
+
+    before(async () => {
+      const db = testDb();
+      const org = await eigeneOrganisationId();
+      if (!db || !org) return;
+      const kunden = await db.customer.count({ where: { organizationId: org, deletedAt: null } });
+      for (let i = kunden; i < 26; i += 1) {
+        const k = await db.customer.create({
+          data: { organizationId: org, number: `${MARKE}-K${i}`, firstName: 'Sortier', lastName: `Prüfung ${i}`, email: `${MARKE.toLowerCase()}-${i}@example.ch` },
+        });
+        angelegteKunden.push(k.id);
+      }
+      const rechnungen = await db.invoice.count({ where: { organizationId: org, deletedAt: null } });
+      const kunde = await db.customer.findFirstOrThrow({ where: { organizationId: org, deletedAt: null }, select: { id: true } });
+      for (let i = rechnungen; i < 26; i += 1) {
+        const r = await db.invoice.create({
+          data: {
+            organizationId: org,
+            number: `${MARKE}-R${i}`,
+            customerId: kunde.id,
+            issueDate: new Date(),
+            dueDate: new Date(Date.now() + 30 * 86_400_000),
+            billToName: 'Sortierprüfung',
+            billToStreet: 'Prüfweg 1',
+            billToZip: '3000',
+            billToCity: 'Bern',
+          },
+        });
+        angelegteRechnungen.push(r.id);
+      }
+    });
+
+    after(async () => {
+      const db = testDb();
+      if (db) {
+        await db.invoice.deleteMany({ where: { id: { in: angelegteRechnungen } } });
+        await db.customer.deleteMany({ where: { id: { in: angelegteKunden } } });
+      }
+      await testDbSchliessen();
+    });
+
     for (const [name, path, field] of CASES) {
       it(name, async (t) => {
+        if (!testDb()) return t.skip('keine Testdatenbank für die Auffüllung');
         const first = await get(withSort(path, field, 'asc'), { jar });
         const link = /href="([^"]*seite=2[^"]*)"/.exec(first.text)?.[1];
-
-        if (!link) {
-          t.skip('nur eine Seite, nichts zu blättern');
-          return;
-        }
+        assert.ok(link, 'keine zweite Seite trotz 26 Zeilen — Blätterung fehlt');
 
         const decoded = link.replace(/&amp;/g, '&');
         assert.ok(decoded.includes(`sort=${field}`), `Blätter-Link ohne Sortierfeld: ${decoded}`);

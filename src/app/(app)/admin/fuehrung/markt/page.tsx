@@ -6,6 +6,7 @@ import { requirePermission } from '@/lib/auth/session';
 import { can } from '@/lib/auth/rbac';
 import { toNumber } from '@/lib/db';
 import { formatCurrency, formatDate } from '@/lib/utils';
+import { zuercherTagText } from '@/lib/zuerich';
 import { ANALYSIS_KIND_LABELS, INSIGHT_KIND_LABELS } from '@/lib/bi/labels';
 import { getOrganizationId } from '@/server/services/organization.service';
 import { listAnalysisBoards, listCompetitors, listMarketInsights } from '@/server/services/knowledge.service';
@@ -143,7 +144,7 @@ export default async function MarketPage() {
         <DetailSection
           title="Marktbeobachtungen"
           body="flush"
-          action={canManage ? <FormDialog title="Beobachtung erfassen" triggerLabel="Beobachtung" triggerVariant="outline" triggerSize="sm" endpoint="/api/bi/market-insights" successMessage="Beobachtung erfasst." fields={insightFields()} values={{ kind: 'INDUSTRY', observedOn: new Date().toISOString().slice(0, 10), reviewIntervalDays: 365 }} /> : null}
+          action={canManage ? <FormDialog title="Beobachtung erfassen" triggerLabel="Beobachtung" triggerVariant="outline" triggerSize="sm" endpoint="/api/bi/market-insights" successMessage="Beobachtung erfasst." fields={insightFields()} values={{ kind: 'INDUSTRY', observedOn: zuercherTagText(), reviewIntervalDays: 365 }} /> : null}
         >
           {insights.length === 0 ? (
             <EmptyState className="m-4" icon={<Compass aria-hidden />} title="Keine Beobachtungen" description="Neue Vorschriften, Lohnentwicklung, Nachfrage nach Umzugsreinigungen — was Sie hören, gehört hierher." />

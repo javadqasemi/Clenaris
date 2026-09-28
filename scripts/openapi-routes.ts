@@ -19,8 +19,21 @@ import * as nav from '@/lib/validation/navigation';
 import * as users from '@/lib/validation/users';
 import * as settings from '@/lib/validation/settings';
 import * as system from '@/lib/validation/system';
+import * as sig from '@/lib/validation/signatures';
+import * as security from '@/lib/validation/security';
+import * as payroll from '@/lib/validation/payroll';
 import * as q from '@/lib/validation/queries';
 import { BI_ROUTES } from './openapi-routes-bi';
+import { CONTRACT_ROUTES } from './openapi-routes-vertraege';
+import { QUALITY_ROUTES } from './openapi-routes-qualitaet';
+import { BETRIEB_ROUTES } from './openapi-routes-betrieb';
+import { FINANZ_ROUTES } from './openapi-routes-finanzen';
+import { VERKAUF_ROUTES } from './openapi-routes-verkauf';
+import { KOMMUNIKATION_ROUTES } from './openapi-routes-kommunikation';
+import { SUCHE_ROUTES } from './openapi-routes-suche';
+import { SCAN_ROUTES } from './openapi-routes-scan';
+import * as sicherheitsbericht from '../src/lib/validation/security-report';
+import { VERSIONEN_ROUTES } from './openapi-routes-versionen';
 
 /**
  * Registrierung aller REST-Endpunkte.
@@ -113,6 +126,7 @@ export const ROUTES: RouteDoc[] = [
       'Widerruft den Refresh-Token in der Datenbank und löscht beide Cookies. Ein blosses ' +
       'Löschen im Browser würde einen gestohlenen Token weiterleben lassen.',
     guard: { kind: 'public' },
+    rateLimit: 'apiWrite',
   },
   {
     method: 'post',
@@ -153,6 +167,7 @@ export const ROUTES: RouteDoc[] = [
       'würde jede Marketingseite dynamisch machen und jeden Besuch zu einer ' +
       'Datenbankabfrage. Die Antwort ist absichtlich mager und wird nicht zwischengespeichert.',
     guard: { kind: 'public' },
+    rateLimit: 'apiRead',
   },
   {
     method: 'post',
@@ -325,15 +340,45 @@ export const ROUTES: RouteDoc[] = [
   },
   {
     method: 'get',
+    path: '/api/public/runtime-config',
+    tag: 'Öffentlich',
+    summary: 'Öffentliche Laufzeitkonfiguration',
+    description:
+      'Was der Browser über diese Umgebung wissen darf — zur Laufzeit gelesen, nicht beim Bau eingesetzt ' +
+      '(V2-1): die Herkunft dieser Instanz (`appUrl`) und die Analyse-Kennungen in engem Format. Die ' +
+      'Felder stehen einzeln in `PublicRuntimeConfigSchema`; nie die Umgebung als Ganzes, nichts aus der ' +
+      'Anfrage. `Cache-Control: no-cache`. Eine ungültige Herkunft in der Umgebung ergibt 500 statt einer ' +
+      'erfundenen Antwort.',
+    guard: { kind: 'public' },
+    rateLimit: 'apiRead',
+  },
+  {
+    method: 'get',
     path: '/api/public/availability',
     tag: 'Öffentlich',
-    summary: 'Freie Zeitfenster eines Tages',
+    summary: 'Freie Zeitfenster eines Tages (eine Leistung)',
     description:
-      'Berücksichtigt Öffnungszeiten, Feiertage, bestehende Einsätze, Abwesenheiten und die ' +
-      'benötigte Teamgrösse. Ein Fenster erscheint nur, wenn genügend Personal frei ist.',
+      'Berücksichtigt Einsatzzeiten (sonst Öffnungszeiten), Feiertage, bestehende Einsätze und ' +
+      'unbestätigte Buchungen, Arbeitszeiten und Abwesenheiten sowie die benötigte Teamgrösse. ' +
+      'Ohne `durationMin` rechnet der Server die Dauer mit derselben Funktion wie den Preis. ' +
+      'Ein Fenster erscheint nur, wenn der ganze Einsatz ins Einsatzfenster passt.',
     guard: { kind: 'public' },
     rateLimit: 'apiRead',
     query: q.availabilityCheckQuery,
+  },
+  {
+    method: 'post',
+    path: '/api/public/availability',
+    tag: 'Öffentlich',
+    summary: 'Kalender für eine Auswahl aus einer oder mehreren Leistungen',
+    description:
+      'Nimmt die gewählten Leistungen samt Angaben, nicht eine Dauer: Dauer (Summe, nacheinander ' +
+      'vom selben Team), Teamgrösse und Puffer rechnet der Server. Liefert je Tag, ob er ein ' +
+      'buchbares Zeitfenster hat, und die Zeitfenster. Vorlauf und Horizont aus den Einstellungen ' +
+      '(`bookingMinNoticeHours`, `bookingLeadDays`).',
+    guard: { kind: 'public' },
+    rateLimit: 'apiRead',
+    body: booking.verfuegbarkeitAnfrageSchema,
   },
   {
     method: 'get',
@@ -385,6 +430,32 @@ export const ROUTES: RouteDoc[] = [
     rateLimit: 'newsletter',
     body: crm.newsletterSchema,
     status: 201,
+  },
+  {
+    method: 'post',
+    path: '/api/public/newsletter/bestaetigen',
+    tag: 'Öffentlich',
+    summary: 'Newsletter-Anmeldung bestätigen',
+    description:
+      'Double-Opt-in mit dem Token aus der E-Mail (im Körper). Erst der Klick bestätigt, nicht ' +
+      'der Seitenaufruf — Mailfilter rufen Links vorab auf. Unbekannter oder verbrauchter Token: 404.',
+    guard: { kind: 'public' },
+    rateLimit: 'publicTokenAction',
+    body: crm.newsletterTokenSchema,
+    status: 200,
+  },
+  {
+    method: 'post',
+    path: '/api/public/newsletter/abmelden',
+    tag: 'Öffentlich',
+    summary: 'Newsletter abbestellen',
+    description:
+      'Abmeldung mit dem Token aus der E-Mail (im Körper), ein Klick, ohne Anmeldung. ' +
+      'Unbekannter Token: 404; eine zweite Abmeldung ändert nichts.',
+    guard: { kind: 'public' },
+    rateLimit: 'publicTokenAction',
+    body: crm.newsletterTokenSchema,
+    status: 200,
   },
   {
     method: 'post',
@@ -445,11 +516,15 @@ export const ROUTES: RouteDoc[] = [
     tag: 'Öffentlich',
     summary: 'Offerte annehmen oder ablehnen',
     description:
-      'Bei Annahme werden Unterschrift, Name, IP und Zeitpunkt festgehalten — das ist der ' +
-      'Nachweis des Vertragsschlusses.',
+      '`REJECT` entscheidet sofort und endgültig. `ACCEPT` entscheidet nicht selbst (Gate 4C): Es legt ' +
+      'den Unterzeichnungsvorgang an — unveränderlicher Snapshot der Offerte, SHA-256 (Hash A) — und ' +
+      'antwortet mit `requiresSignature: true` und `signatureUrl` (`/signieren#t=…`, Token nur im Fragment). ' +
+      'Erst der Abschluss des Vorgangs (Zustimmung, gezeichnete oder getippte Unterschrift, Protokoll) ' +
+      'setzt die Offerte auf ACCEPTED. Ein bereits begonnener Vorgang wird fortgesetzt, nicht verdoppelt. ' +
+      'Gezählt je Link (`publicTokenAction`).',
     guard: { kind: 'public' },
-    extraErrors: [404],
-    rateLimit: 'apiWrite',
+    extraErrors: [404, 422],
+    rateLimit: 'publicTokenAction',
     params: q.publicTokenParams,
     body: operations.respondQuoteSchema,
   },
@@ -493,6 +568,251 @@ export const ROUTES: RouteDoc[] = [
     rateLimit: 'fileUpload',
     body: files.uploadUrlSchema,
     status: 201,
+  },
+  {
+    method: 'post',
+    path: '/api/files/finalize',
+    tag: 'Dateien',
+    summary: 'Upload abschliessen und prüfen',
+    description:
+      'Erst dieser Aufruf macht aus abgelegten Bytes eine Datei, mit der die Anwendung ' +
+      'arbeitet. Der Server liest das gespeicherte Objekt zurück, prüft die tatsächliche ' +
+      'Grösse, die Signatur der ersten Bytes und den angemeldeten Typ gegen das Upload-Profil ' +
+      'des Tickets, bildet den SHA-256 und legt danach das FileAsset an. Ohne diesen Schritt ' +
+      'trägt die Ablage keine Prüfsumme und lässt sich weder abrufen noch verknüpfen. ' +
+      'Wiederholbar: Ein zweiter Aufruf liefert dasselbe Asset, nicht ein zweites.',
+    guard: { kind: 'public' },
+    rateLimit: 'fileTransfer',
+    body: files.finalizeUploadSchema,
+    status: 201,
+  },
+
+  // -------------------------------------------------------------------------
+  //  Elektronische Unterzeichnung
+  //
+  //  Der rohe Zugangstoken erreicht den Server genau einmal: im Körper des
+  //  Tauschs. Alles danach läuft über ein Sitzungs-Cookie, das nur für
+  //  `/api/public/signatures` gilt und bei jedem Aufruf gegen die Datenbank
+  //  nachgeprüft wird (Vorgang offen, Token nicht widerrufen, Zweck passt).
+  // -------------------------------------------------------------------------
+  {
+    method: 'post',
+    path: '/api/public/signatures/exchange',
+    tag: 'Unterzeichnung',
+    summary: 'Zugangstoken gegen Sitzung tauschen',
+    description:
+      'Der einzige Aufruf, der den rohen Token trägt — im Körper, nie im Pfad oder in der ' +
+      'Abfrage, damit er in keinem Zugriffsprotokoll steht. Die Seite `/signieren` liest ihn aus ' +
+      'dem URL-Fragment, entfernt ihn aus der Adresse und ruft hierher. Antwort: die nicht geheime ' +
+      'Kennung des Vorgangs und der Bereich (`sign` oder `result`); die Sitzung liegt im Cookie ' +
+      '`clenaris_sig` (HttpOnly, 60 Minuten). Unbekannte, abgelaufene und widerrufene Tokens ' +
+      'antworten gleich (404).',
+    guard: { kind: 'public' },
+    rateLimit: 'signatureExchange',
+    body: sig.signatureExchangeSchema,
+    extraErrors: [404],
+  },
+  {
+    method: 'get',
+    path: '/api/public/signatures/{publicId}',
+    tag: 'Unterzeichnung',
+    summary: 'Stand des Vorgangs für die unterzeichnende Person',
+    description:
+      'Titel, Modus, Prüfstufe, Ablauf, Zustimmungstext (serverseitig, versioniert) und der eigene ' +
+      'Stand. E-Mail und Mobilnummer nur verschleiert. Ohne gültige Sitzung 404.',
+    guard: { kind: 'public' },
+    rateLimit: 'publicTokenRead',
+    params: sig.signaturePublicIdParams,
+    extraErrors: [404],
+  },
+  {
+    method: 'get',
+    path: '/api/public/signatures/{publicId}/document',
+    tag: 'Unterzeichnung',
+    summary: 'Das zu unterzeichnende Original',
+    description:
+      'Die Bytes der gebundenen Fassung für den Viewer, `inline`, nie zwischengespeichert. ' +
+      'Ereignis `DOCUMENT_VIEWED` einmal je Sitzung.',
+    guard: { kind: 'public' },
+    rateLimit: 'publicTokenRead',
+    params: sig.signaturePublicIdParams,
+    produces: 'application/pdf',
+    extraErrors: [404],
+  },
+  {
+    method: 'post',
+    path: '/api/public/signatures/{publicId}/otp/request',
+    tag: 'Unterzeichnung',
+    summary: 'Bestätigungscode anfordern',
+    description:
+      'Nur bei Prüfstufe mit Code (422 sonst). Sechs Ziffern aus dem CSPRNG, zehn Minuten gültig, ' +
+      'fünf Versuche, sechzig Sekunden Sperre bis zum nächsten Versand; ein neuer Code entwertet ' +
+      'alle offenen. Gespeichert wird nur ein Argon2id-Hash über ein HMAC des Codes. Das Limit ' +
+      'zählt je Vorgang, nicht je Adresse.',
+    guard: { kind: 'public' },
+    rateLimit: 'otpRequest',
+    params: sig.signaturePublicIdParams,
+    extraErrors: [404, 422],
+  },
+  {
+    method: 'post',
+    path: '/api/public/signatures/{publicId}/otp/verify',
+    tag: 'Unterzeichnung',
+    summary: 'Bestätigungscode prüfen',
+    description:
+      'Der Versuch wird gezählt, bevor der Code verglichen wird — ein abgebrochener Vergleich ' +
+      'schenkt keinen Versuch. Nach dem fünften Fehlversuch ist der Code verbraucht (422). ' +
+      'Einmalig: Ein bestätigter Code gilt nie ein zweites Mal.',
+    guard: { kind: 'public' },
+    rateLimit: 'otpVerify',
+    params: sig.signaturePublicIdParams,
+    body: sig.signatureOtpVerifySchema,
+    extraErrors: [404, 422],
+  },
+  {
+    method: 'post',
+    path: '/api/public/signatures/{publicId}/complete',
+    tag: 'Unterzeichnung',
+    summary: 'Verbindlich unterzeichnen',
+    description:
+      'Die eine Handlung. Der Server prüft Sitzung, Code (falls verlangt), Zustimmung, die ' +
+      'PNG-Bytes der gezeichneten Unterschrift und rechnet die Prüfsumme des Originals **aus den ' +
+      'gespeicherten Bytes** neu — stimmt sie nicht mehr, entsteht `INTEGRITY_FAILED` und die ' +
+      'Unterzeichnung wird verweigert (422). Text und Fassung der Zustimmung bestimmt der Server. ' +
+      'Haben alle unterzeichnet, beginnt der Abschluss (`FINALIZING`): signiertes Dokument (nur ' +
+      'EMBEDDED_VISUAL), Signaturprotokoll, `COMPLETED`, Ergebnislinks per E-Mail.',
+    guard: { kind: 'public' },
+    rateLimit: 'signatureFinalize',
+    params: sig.signaturePublicIdParams,
+    body: sig.signatureCompleteSchema,
+    extraErrors: [404, 422],
+  },
+  {
+    method: 'post',
+    path: '/api/public/signatures/{publicId}/decline',
+    tag: 'Unterzeichnung',
+    summary: 'Unterzeichnung ablehnen',
+    description: 'Beendet den Vorgang für alle (`DECLINED`), widerruft die Links und meldet es der Verwaltung.',
+    guard: { kind: 'public' },
+    rateLimit: 'signatureFinalize',
+    params: sig.signaturePublicIdParams,
+    body: sig.signatureDeclineSchema,
+    status: 204,
+    extraErrors: [404, 422],
+  },
+  {
+    method: 'get',
+    path: '/api/public/signatures/{publicId}/result',
+    tag: 'Unterzeichnung',
+    summary: 'Ergebnis nach Abschluss',
+    description:
+      'Mit der Ergebnis-Sitzung (eigener Zweck `SIGNATURE_RESULT_VIEW`, dreissig Tage): Titel, ' +
+      'Modus, die drei Prüfsummen und welche Dateien vorliegen. Ein Unterzeichnungslink öffnet ' +
+      'kein Ergebnis und umgekehrt.',
+    guard: { kind: 'public' },
+    rateLimit: 'publicTokenRead',
+    params: sig.signaturePublicIdParams,
+    extraErrors: [404],
+  },
+  {
+    method: 'get',
+    path: '/api/public/signatures/{publicId}/result/{artifact}',
+    tag: 'Unterzeichnung',
+    summary: 'Original, signiertes Dokument oder Signaturprotokoll',
+    description:
+      '`original` (A), `signed` (B, nur EMBEDDED_VISUAL) oder `evidence` (C). Nie zwischengespeichert, ' +
+      'kein Referrer. Das Protokoll als Anhang, die Dokumente `inline`.',
+    guard: { kind: 'public' },
+    rateLimit: 'publicTokenRead',
+    params: sig.signatureResultArtifactParams,
+    produces: 'application/pdf',
+    extraErrors: [404],
+  },
+  {
+    method: 'get',
+    path: '/api/handoff',
+    tag: 'Unterzeichnung',
+    summary: 'Läuft auf diesem Gerät eine Kundenabnahme?',
+    description:
+      'Einer von zwei Endpunkten, die während einer Geräteübergabe antworten (`allowDuringHandoff`) — ' +
+      'sonst gäbe es keinen Weg zurück in den Mitarbeiterbereich. Liefert Einsatznummer, Zeitpunkte ' +
+      'und den Zustand des Vorgangs, keine Rapport- oder Kundendaten.',
+    guard: { kind: 'session' },
+    rateLimit: 'apiRead',
+  },
+  {
+    method: 'post',
+    path: '/api/handoff/unlock',
+    tag: 'Unterzeichnung',
+    summary: 'Gerät nach der Kundenabnahme wieder übernehmen',
+    description:
+      'Bestätigung mit dem Passwort des bereits angemeldeten Kontos — keine Anmeldung: Die Sitzung ' +
+      'und ihre Rotationsfamilie bleiben dieselben, nur die Sperre fällt. Das Kontingent zählt je ' +
+      'Übergabe, damit falsches Tippen niemanden auf seinen übrigen Geräten aussperrt.',
+    guard: { kind: 'session' },
+    rateLimit: 'handoffUnlock',
+    body: sig.handoffUnlockSchema,
+  },
+  {
+    method: 'get',
+    path: '/api/signatures/{id}',
+    tag: 'Unterzeichnung',
+    summary: 'Vorgang für die Verwaltung',
+    description: 'Mit Teilnehmenden, dem vollständigen Ereignisprotokoll und den drei Artefakten. Sichtbarkeit des Dokuments gilt auch hier.',
+    guard: { kind: 'permissions', permissions: ['signature:read'], mode: 'all' },
+    rateLimit: 'apiRead',
+    params: q.idParam,
+  },
+  {
+    method: 'get',
+    path: '/api/signatures/{id}/integrity',
+    tag: 'Unterzeichnung',
+    summary: 'Prüfsummen nachrechnen',
+    description:
+      'A, B und C werden aus den tatsächlich gespeicherten Bytes neu gebildet und mit den ' +
+      'festgehaltenen Werten verglichen — die Antwort sagt je Datei `ok`, `abweichend` oder `fehlt`.',
+    guard: { kind: 'permissions', permissions: ['signature:read'], mode: 'all' },
+    rateLimit: 'apiRead',
+    params: q.idParam,
+  },
+  {
+    method: 'get',
+    path: '/api/signatures/{id}/artifacts/{artifact}',
+    tag: 'Unterzeichnung',
+    summary: 'Artefakt für die Verwaltung',
+    description:
+      '`original` (A), `signed` (B) oder `evidence` (C) mit Sitzung und `signature:read`; bei Vorgängen zu ' +
+      'Offerten zusätzlich `quote:read`. Der Abruf steht im Prüfprotokoll. Nie zwischengespeichert.',
+    guard: { kind: 'permissions', permissions: ['signature:read'], mode: 'all' },
+    rateLimit: 'fileDownload',
+    params: sig.signatureArtifactParams,
+    produces: 'application/pdf',
+    extraErrors: [404],
+  },
+  {
+    method: 'post',
+    path: '/api/signatures/{id}/send',
+    tag: 'Unterzeichnung',
+    summary: 'Links (erneut) versenden',
+    description:
+      'Stellt je Person einen frischen Zugangstoken aus und widerruft die alten. Der rohe Token ' +
+      'steht nur in der E-Mail, als Fragment der Adresse `/signieren#t=…`. Nicht bei beendeten Vorgängen (422).',
+    guard: { kind: 'permissions', permissions: ['signature:create'], mode: 'all' },
+    rateLimit: 'apiWrite',
+    params: q.idParam,
+    extraErrors: [422],
+  },
+  {
+    method: 'post',
+    path: '/api/signatures/{id}/cancel',
+    tag: 'Unterzeichnung',
+    summary: 'Vorgang abbrechen',
+    description: 'Widerruft alle Links und offenen Codes. Ein abgeschlossener Vorgang lässt sich nicht abbrechen (422) — seine Beweise bleiben.',
+    guard: { kind: 'permissions', permissions: ['signature:cancel'], mode: 'all' },
+    rateLimit: 'apiWrite',
+    params: q.idParam,
+    body: sig.signatureCancelSchema,
+    extraErrors: [422],
   },
 
   // -------------------------------------------------------------------------
@@ -871,10 +1191,58 @@ export const ROUTES: RouteDoc[] = [
     params: q.idParam,
     produces: 'application/pdf',
   },
+  {
+    method: 'post',
+    path: '/api/quotes/{id}/respond',
+    tag: 'Offerten',
+    summary: 'Offerte im Kundenkonto annehmen oder ablehnen',
+    description:
+      'Der angemeldete Weg neben dem öffentlichen Link. Wer eine Sitzung hat und die Offerte ' +
+      'besitzt, braucht keine Capability; die Eigentümerprüfung steht in der where-Klausel. ' +
+      '`REJECT` ist die direkte, atomare Ablehnung. `ACCEPT` startet denselben Unterzeichnungsvorgang ' +
+      'wie der öffentliche Weg, setzt direkt das teilnehmergebundene Signatur-Cookie und antwortet mit ' +
+      '`signatureUrl` (`/signieren/s/<publicId>`, kein Token). Ablehnung und Abschluss der Unterzeichnung ' +
+      'sind gegeneinander race-safe: genau eine terminale Entscheidung.',
+    guard: perm('all', 'quote:respond_own'),
+    rateLimit: 'apiWrite',
+    params: q.idParam,
+    body: operations.respondQuoteSchema,
+    extraErrors: [403, 422],
+  },
 
   // -------------------------------------------------------------------------
   //  Einsätze
   // -------------------------------------------------------------------------
+  {
+    method: 'get',
+    path: '/api/jobs',
+    tag: 'Einsätze',
+    summary: 'Einsätze auflisten',
+    description:
+      'Filter nach Status, Zeitraum, Kundschaft, zugeteilter Person und **Vertrag**, dazu ' +
+      'Sortierung und Blätterung. Wer nur `job:read_assigned` hat, bekommt ausschliesslich die eigenen ' +
+      'Einsätze — die Einschränkung steht in der where-Klausel, nicht in der Darstellung. ' +
+      'Objektangaben wie Schlüsseldepot und Alarmcode sind nicht Teil der Liste; sie gehören ' +
+      'auf den Rapport des einzelnen Einsatzes.',
+    guard: perm('any', 'job:read', 'job:read_assigned'),
+    rateLimit: 'apiRead',
+    query: q.jobListQuery,
+  },
+  {
+    method: 'post',
+    path: '/api/jobs',
+    tag: 'Einsätze',
+    summary: 'Einsatz anlegen',
+    description:
+      'Für Einsätze ohne vorangehende Buchung — Nachbesserung, Sonderauftrag, Hauswartung auf ' +
+      'Zuruf. Kundschaft, Adresse, Objekt, Leistung und Buchung werden gegen den Mandanten ' +
+      'und gegen die Kundschaft geprüft. Ein Team mitzugeben verlangt zusätzlich `job:assign`; ' +
+      'ob es zur geplanten Zeit kann, entscheidet dieselbe Regel wie beim Zuteilen.',
+    guard: perm('all', 'job:create'),
+    rateLimit: 'apiWrite',
+    body: operations.createJobSchema,
+    status: 201,
+  },
   {
     method: 'get',
     path: '/api/jobs/calendar',
@@ -937,12 +1305,40 @@ export const ROUTES: RouteDoc[] = [
     tag: 'Einsätze',
     summary: 'Einsatz abschliessen',
     description:
-      'Erfasst Abschlussbericht, Materialverbrauch und die Unterschrift der Kundschaft und ' +
-      'stoppt laufende Zeiterfassungen.',
+      'Erfasst Abschlussbericht und Materialverbrauch und stoppt laufende Zeiterfassungen. ' +
+      'Seit Gate 4D ohne Unterschrift — die Abnahme durch die Kundschaft ist ein eigener ' +
+      'Vorgang auf dem Signaturkern.',
     guard: perm('any', 'job:complete_assigned', 'job:update'),
     rateLimit: 'apiWrite',
     params: q.idParam,
     body: operations.completeJobSchema,
+  },
+  {
+    method: 'post',
+    path: '/api/jobs/{id}/handoff',
+    tag: 'Einsätze',
+    summary: 'Kundenabnahme beginnen und Gerät übergeben',
+    description:
+      'Rendert den Rapport serverseitig, legt ihn unveränderlich ab (Hash A), erzeugt den ' +
+      'Unterzeichnungsvorgang mit ceremonyMode IN_PERSON_HANDOFF und sperrt die ' +
+      'Mitarbeitersitzung dieses Browsers. Antwortet mit der nicht geheimen Adresse des ' +
+      'Kundenmodus; die Signatursitzung wird als Cookie gesetzt, nie als Token ausgegeben.',
+    guard: perm('any', 'job:complete_assigned', 'job:update'),
+    rateLimit: 'apiWrite',
+    params: q.idParam,
+  },
+  {
+    method: 'delete',
+    path: '/api/jobs/{id}/handoff',
+    tag: 'Einsätze',
+    summary: 'Begonnene Kundenabnahme abbrechen',
+    description:
+      'Bricht den offenen Abnahmevorgang ab und gibt den Rapport wieder zur Bearbeitung frei. ' +
+      'Erreichbar erst nach dem Entsperren des Geräts — während der Übergabe antwortet die ' +
+      'Route 423.',
+    guard: perm('any', 'job:complete_assigned', 'job:update'),
+    rateLimit: 'apiWrite',
+    params: q.idParam,
   },
   {
     method: 'post',
@@ -1184,6 +1580,22 @@ export const ROUTES: RouteDoc[] = [
     rateLimit: 'apiRead',
     params: q.idParam,
     produces: 'application/pdf',
+  },
+  {
+    method: 'post',
+    path: '/api/invoices/{id}/pay',
+    tag: 'Finanzen',
+    summary: 'Zahlung aus dem Kundenkonto starten',
+    description:
+      'Der angemeldete Weg neben dem öffentlichen Zahllink. Vorher verwendete der ' +
+      'Kundenbereich invoice.publicToken — eine angemeldete Person brauchte also eine ' +
+      'Capability, um ihre eigene Rechnung zu bezahlen. Der Betrag stammt ausschliesslich aus ' +
+      'der Datenbank; gebucht wird über den Webhook, nicht über die Rückkehr-URL.',
+    guard: perm('all', 'invoice:pay_own'),
+    rateLimit: 'apiWrite',
+    params: q.idParam,
+    body: finance.payInvoiceSchema,
+    extraErrors: [403, 422],
   },
   {
     method: 'get',
@@ -1992,6 +2404,7 @@ export const ROUTES: RouteDoc[] = [
       'Alle Aufrufe, auch abgeschaltete. `?papierkorb=1` zeigt zusätzlich die gelöschten.',
     guard: perm('all', 'cta:read'),
     rateLimit: 'apiRead',
+    query: q.ctaListQuery,
   },
   {
     method: 'post',
@@ -2039,6 +2452,7 @@ export const ROUTES: RouteDoc[] = [
       'bereits im Papierkorb liegt.',
     guard: perm('all', 'cta:delete'),
     rateLimit: 'apiWrite',
+    query: q.ctaDeleteQuery,
     params: q.idParam,
     status: 204,
     extraErrors: [422],
@@ -2053,6 +2467,7 @@ export const ROUTES: RouteDoc[] = [
       'Website erscheinen lässt. Wer Texte vorbereiten darf, muss nicht veröffentlichen dürfen.',
     guard: perm('all', 'cta:publish'),
     rateLimit: 'apiWrite',
+    body: cta.publishCtaSchema,
     params: q.idParam,
     extraErrors: [422],
   },
@@ -2091,6 +2506,7 @@ export const ROUTES: RouteDoc[] = [
     description: 'Alle hochgeladenen Dateien mit Blätterung, Filter nach Bereich und Dateityp.',
     guard: perm('all', 'media:read'),
     rateLimit: 'apiRead',
+    query: q.mediaListQuery,
   },
   {
     method: 'post',
@@ -2098,10 +2514,13 @@ export const ROUTES: RouteDoc[] = [
     tag: 'Website',
     summary: 'Hochgeladene Datei registrieren',
     description:
-      'Der Upload selbst läuft direkt zu Supabase (/api/files/upload-url). Dieser Endpunkt hält ' +
-      'nur fest, was dort gelandet ist — sonst gäbe es Dateien, die in keiner Liste erscheinen.',
+      'Wie /api/files/finalize, aber mit der Berechtigung media:upload. Der Körper enthält nur ' +
+      'die Kennung des serverseitig ausgestellten Upload-Tickets; Pfad, Adresse, Typ, Grösse, ' +
+      'Bereich und Sichtbarkeit bestimmt der Server. Vorher kamen all diese Werte aus dem ' +
+      'Client und wurden ungeprüft übernommen.',
     guard: perm('all', 'media:upload'),
     rateLimit: 'apiWrite',
+    body: files.finalizeUploadSchema,
     status: 201,
   },
   {
@@ -2112,6 +2531,7 @@ export const ROUTES: RouteDoc[] = [
     description: 'Ändert Anzeigename und Bereich. Die Adresse der Datei bleibt bestehen.',
     guard: perm('all', 'media:update'),
     rateLimit: 'apiWrite',
+    body: files.mediaUpdateSchema,
     params: q.idParam,
   },
   {
@@ -2125,6 +2545,7 @@ export const ROUTES: RouteDoc[] = [
       'darüber hinweg.',
     guard: perm('all', 'media:delete'),
     rateLimit: 'apiWrite',
+    query: q.mediaDeleteQuery,
     params: q.idParam,
     status: 204,
     extraErrors: [422],
@@ -2141,6 +2562,7 @@ export const ROUTES: RouteDoc[] = [
     description: 'Filter nach Rolle, Status und Suchbegriff. `?papierkorb=1` zeigt gelöschte mit.',
     guard: perm('all', 'user:read'),
     rateLimit: 'apiRead',
+    query: q.userListQuery,
   },
   {
     method: 'post',
@@ -2185,6 +2607,71 @@ export const ROUTES: RouteDoc[] = [
     params: q.idParam,
     body: users.assignRoleSchema,
     extraErrors: [422],
+  },
+  {
+    method: 'get',
+    path: '/api/metrics',
+    tag: 'System',
+    summary: 'Kennzahlen des laufenden Prozesses',
+    description:
+      'Je Route und Methode: Anfragen, Verteilung auf Statusklassen, Dauer als Mittelwert, ' +
+      'p50, p95 und Maximum. Die Reihen laufen über **Vorlagen** (`/api/jobs/:id`) — es gibt ' +
+      'keine Zeile je Datensatz und keine Angabe darüber, wer eine Anfrage gestellt hat. ' +
+      'Die Zahlen gelten je Prozess und überleben keinen Neustart; `prozessId` und ' +
+      '`prozessStartzeit` sagen, ob zwei Antworten vergleichbar sind. Nur die ' +
+      'Systemverantwortung: offen wäre der Endpunkt eine Echtzeitauskunft darüber, ob ein ' +
+      'Angriff auffällt.',
+    guard: perm('all', 'security:read'),
+    rateLimit: 'apiRead',
+  },
+  {
+    method: 'get',
+    path: '/api/security/events',
+    tag: 'System',
+    summary: 'Sicherheitsereignisse',
+    description:
+      'Der Strom aus Anmeldungen, Fehlversuchen, Sperren, Sitzungswiderrufen, Rollenwechseln, ' +
+      'Zugangslinks und Dateibefunden. Nur die Systemverantwortung — die Liste ist eine Aufsicht ' +
+      'über Personen. Enthält keine Geheimnisse: `context` ist beim Schreiben redigiert, rohe ' +
+      'Tokenwerte und Hashes kommen gar nicht erst hinein.',
+    guard: perm('all', 'security:read'),
+    rateLimit: 'apiRead',
+    query: security.securityEventQuerySchema,
+  },
+  {
+    method: 'post',
+    path: '/api/security/events/{id}/acknowledge',
+    tag: 'System',
+    summary: 'Sicherheitsereignis bestätigen',
+    description:
+      'Erklärt ein Ereignis als gesehen. Die Zeile bleibt unverändert stehen; Zeitpunkt, Person ' +
+      'und Notiz kommen hinzu — bestätigen heisst nicht löschen. Ein bereits bestätigtes ' +
+      'Ereignis antwortet mit 200 und `bestaetigt: false`.',
+    guard: perm('all', 'security:manage'),
+    rateLimit: 'apiWrite',
+    body: security.acknowledgeEventSchema,
+  },
+  {
+    method: 'post',
+    path: '/api/security/users/{id}/unlock',
+    tag: 'System',
+    summary: 'Kontosperre aufheben',
+    description:
+      'Setzt Fehlversuchszähler und Sperrfrist zurück — mehr nicht. Kein neues Passwort, keine ' +
+      'Sitzung: Wer entsperrt wird, meldet sich selbst an.',
+    guard: perm('all', 'security:manage'),
+    rateLimit: 'apiWrite',
+  },
+  {
+    method: 'post',
+    path: '/api/security/users/{id}/revoke-sessions',
+    tag: 'System',
+    summary: 'Alle Sitzungen eines Kontos beenden',
+    description:
+      'Widerruft alle Erneuerungstokens **und** setzt `sessionsRevokedAt`. Nur das Erste liesse ' +
+      'die bereits ausgestellten Zugangstokens ihre restlichen fünfzehn Minuten weiterlaufen.',
+    guard: perm('all', 'security:manage'),
+    rateLimit: 'apiWrite',
   },
   {
     method: 'get',
@@ -2439,6 +2926,7 @@ export const ROUTES: RouteDoc[] = [
       'Tage zu pflegen wären sieben Anfragen, von denen jede für sich fehlschlagen könnte.',
     guard: perm('all', 'company:update'),
     rateLimit: 'apiWrite',
+    body: settings.openingHoursSchema,
     extraErrors: [422],
   },
 
@@ -2505,6 +2993,7 @@ export const ROUTES: RouteDoc[] = [
     description: 'Mit der Zahl der darauf gebuchten Ausgaben.',
     guard: perm('all', 'supplier:read'),
     rateLimit: 'apiRead',
+    query: q.supplierListQuery,
   },
   {
     method: 'post',
@@ -2526,6 +3015,7 @@ export const ROUTES: RouteDoc[] = [
       'Teil-Update. Mit active=false wird der Lieferant stillgelegt, ohne Belege zu verlieren.',
     guard: perm('all', 'supplier:update'),
     rateLimit: 'apiWrite',
+    body: finance.updateSupplierSchema,
     params: q.idParam,
   },
   {
@@ -2552,6 +3042,7 @@ export const ROUTES: RouteDoc[] = [
       'bezahlt ist. Enthält Zahlungen mit und ohne Rechnungsbezug.',
     guard: perm('all', 'payment:read'),
     rateLimit: 'apiRead',
+    query: q.paymentListQuery,
   },
 
   // -------------------------------------------------------------------------
@@ -2577,6 +3068,466 @@ export const ROUTES: RouteDoc[] = [
     rateLimit: 'apiWrite',
     params: q.idParam,
     body: crm.updateCustomerSchema,
+  },
+  {
+    method: 'post',
+    path: '/api/payroll/run',
+    tag: 'Personal',
+    summary: 'Lohnlauf eines Monats',
+    description:
+      'Erzeugt die Abrechnungen. **Nur freigegebene Zeiten** fliessen in den Bruttolohn — offene ' +
+      'werden gezählt und gemeldet, aber nicht bezahlt. Ein **laufender** Monat wird abgewiesen ' +
+      '(422): Ein Lauf am 12. sähe aus wie eine Abrechnung und wäre um zwei Drittel zu tief. ' +
+      'Idempotent je Person und Monat — ein zweiter Lauf überschreibt die noch nicht ' +
+      'veröffentlichten und lässt die veröffentlichten unberührt. ' +
+      '`saetzeGeprueft: false` heisst, dass UVG-Satz und BVG-Plan noch Vorbelegungen sind.',
+    guard: perm('all', 'payslip:create'),
+    rateLimit: 'apiWrite',
+    body: payroll.payrollRunSchema,
+    extraErrors: [422],
+  },
+  {
+    method: 'post',
+    path: '/api/payroll/publish',
+    tag: 'Personal',
+    summary: 'Abrechnungen veröffentlichen',
+    description:
+      'Macht sie unter `/portal/lohn` sichtbar und **unveränderlich** — dieselbe Schwelle wie ' +
+      'beim Ausstellen einer Rechnung. **Es gibt kein Zurücknehmen:** Eine Abrechnung, die ' +
+      'wieder verschwindet, ist schlimmer als eine falsche, die korrigiert wird. Korrekturen ' +
+      'laufen über die Abrechnung des Folgemonats. Eigene Berechtigung, weil Erstellen ein ' +
+      'wiederholbarer Rechenlauf ist und Veröffentlichen endgültig. Erzeugt je Abrechnung das PDF ' +
+      '(einmal, mit Prüfsumme). Offene Prüfungen werden übersprungen und gemeldet; mit ungeprüften ' +
+      'Sätzen nur mit `trotzUngepruefterSaetze: true`, sonst 422.',
+    guard: perm('all', 'payslip:publish'),
+    rateLimit: 'apiWrite',
+    body: payroll.payrollPublishSchema,
+    extraErrors: [422],
+  },
+  {
+    method: 'get',
+    path: '/api/payroll/payslips',
+    tag: 'Personal',
+    summary: 'Abrechnungen einsehen',
+    description:
+      'Filterbar nach Jahr, Monat, Person und Veröffentlichungsstand, mit den Summen über alle ' +
+      'Treffer. Ohne diese Ansicht lässt sich ein Lohnlauf nicht prüfen, bevor er ' +
+      'veröffentlicht wird.',
+    guard: perm('all', 'payslip:read_all'),
+    rateLimit: 'apiRead',
+    query: payroll.payslipQuerySchema,
+  },
+  {
+    method: 'get',
+    path: '/api/payroll/payslips/{id}',
+    tag: 'Personal',
+    summary: 'Eine Abrechnung samt Herleitung',
+    description:
+      'Zwei Wege hinein: Mit `payslip:read_all` jede Abrechnung, mit `payslip:read_own` nur die ' +
+      'eigene **und nur, wenn sie veröffentlicht ist** — eine unveröffentlichte ist ein Entwurf, ' +
+      'und eine Zahl, die sich ändert, nachdem jemand sie gesehen hat, ist schlimmer als keine. ' +
+      'Beides steht in der Prisma-`where`-Klausel und nicht in einer Prüfung danach. ' +
+      '`breakdown` trägt die angewandten Sätze, den koordinierten Jahreslohn und den ' +
+      'BVG-Altersband-Satz als Momentaufnahme.',
+    guard: perm('any', 'payslip:read_own'),
+    rateLimit: 'apiRead',
+    params: q.idParam,
+  },
+  {
+    method: 'get',
+    path: '/api/payroll/payslips/{id}/pdf',
+    tag: 'Personal',
+    summary: 'Abrechnung als PDF',
+    description:
+      'Das beim Veröffentlichen erzeugte PDF — gespeicherte Bytes nach Prüfsummenvergleich, nichts ' +
+      'wird neu gerechnet. Mit `payslip:read_own` nur die eigene veröffentlichte Abrechnung ' +
+      '(Bedingung in der Abfrage). Jeder Abruf wird protokolliert.',
+    guard: perm('any', 'payslip:read_own', 'payslip:read_all'),
+    rateLimit: 'apiRead',
+    params: q.idParam,
+    produces: 'application/pdf',
+  },
+  {
+    method: 'post',
+    path: '/api/payroll/payslips/{id}/review',
+    tag: 'Personal',
+    summary: 'Prüfung einer Abrechnung freigeben',
+    description:
+      'Für Abrechnungen mit `reviewRequired` (etwa Quellensteuer ohne Tarif). Notiz ist Pflicht. ' +
+      'Eine veraltete Abrechnung (Grundlagen seit der Berechnung geändert) wird nicht freigegeben, ' +
+      'sondern neu gerechnet (422).',
+    guard: perm('all', 'payslip:publish'),
+    rateLimit: 'apiWrite',
+    params: q.idParam,
+    body: payroll.payslipReviewSchema,
+    extraErrors: [422],
+  },
+  {
+    method: 'get',
+    path: '/api/payroll/rates',
+    tag: 'Personal',
+    summary: 'Satzversionen der Sozialbeiträge',
+    description:
+      'Je Beitragsart Versionen mit Gültigkeit, Arbeitnehmer- und Arbeitgeberanteil, Schwellen, ' +
+      'Herkunft (`source`, `reference`) und Prüfstand. `benutzt: true` heisst: in eine ' +
+      'veröffentlichte Abrechnung eingeflossen und damit unveränderlich. Ersetzt ' +
+      '`/api/payroll/settings`.',
+    guard: perm('all', 'payslip:create'),
+    rateLimit: 'apiRead',
+    query: payroll.payrollRateQuerySchema,
+  },
+  {
+    method: 'post',
+    path: '/api/payroll/rates',
+    tag: 'Personal',
+    summary: 'Neue Satzversion',
+    description:
+      'Die Vorgängerin wird am Vortag geschlossen, aber nie so, dass ein veröffentlichter Monat ' +
+      'seine Version verlöre. `source` ist Pflicht; eine neue Version ist ungeprüft. BVG: ' +
+      'Arbeitnehmeranteil höchstens 50 % (Art. 66 BVG), Schwellen und Altersbänder in `parameters`.',
+    guard: perm('all', 'payslip:publish'),
+    rateLimit: 'apiWrite',
+    body: payroll.payrollRateCreateSchema,
+    extraErrors: [422],
+  },
+  {
+    method: 'patch',
+    path: '/api/payroll/rates/{id}',
+    tag: 'Personal',
+    summary: 'Satzversion ändern',
+    description:
+      'Nur solange keine veröffentlichte Abrechnung mit ihr gerechnet wurde (sonst 422; die ' +
+      'Datenbank verweigert es ebenfalls). Setzt den Prüfstand zurück und markiert berechnete, ' +
+      'unveröffentlichte Abrechnungen als veraltet.',
+    guard: perm('all', 'payslip:publish'),
+    rateLimit: 'apiWrite',
+    params: payroll.payrollIdParam,
+    body: payroll.payrollRateUpdateSchema,
+    extraErrors: [422],
+  },
+  {
+    method: 'post',
+    path: '/api/payroll/rates/{id}/verify',
+    tag: 'Personal',
+    summary: 'Satzversion als geprüft bestätigen',
+    description:
+      'Vermerk, wer bestätigt hat und worauf gestützt. Eine Aussage der bestätigenden Person — ' +
+      'das System prüft keinen Satz gegen eine amtliche Quelle.',
+    guard: perm('all', 'payslip:publish'),
+    rateLimit: 'apiWrite',
+    params: payroll.payrollIdParam,
+    body: payroll.payrollRateVerifySchema,
+  },
+  {
+    method: 'get',
+    path: '/api/payroll/profiles/{employeeId}',
+    tag: 'Personal',
+    summary: 'Lohnvereinbarungen einer Person',
+    description:
+      '13. Monatslohn (keiner, jährlich, anteilig, monatlich), Ferien- und Feiertagsentschädigung. ' +
+      'Ohne Eintrag: nichts vereinbart erfasst — keine Aussage über die Rechtslage.',
+    guard: perm('all', 'payslip:create'),
+    rateLimit: 'apiRead',
+    params: payroll.payrollEmployeeParam,
+  },
+  {
+    method: 'put',
+    path: '/api/payroll/profiles/{employeeId}',
+    tag: 'Personal',
+    summary: 'Lohnvereinbarungen setzen',
+    description: 'Ganzheitlich. Berechnete, unveröffentlichte Abrechnungen der Person werden als veraltet markiert.',
+    guard: perm('all', 'payslip:create'),
+    rateLimit: 'apiWrite',
+    params: payroll.payrollEmployeeParam,
+    body: payroll.payrollProfileSchema,
+  },
+  {
+    method: 'get',
+    path: '/api/payroll/items',
+    tag: 'Personal',
+    summary: 'Lohnpositionen',
+    description: 'Überstunden, Zulagen, Familienzulagen, Spesen, Korrekturen, Abzüge und Quellensteuer von Hand.',
+    guard: perm('all', 'payslip:create'),
+    rateLimit: 'apiRead',
+    query: payroll.payrollItemQuerySchema,
+  },
+  {
+    method: 'post',
+    path: '/api/payroll/items',
+    tag: 'Personal',
+    summary: 'Lohnposition erfassen',
+    description:
+      'Überstunden: Betrag rechnet der Server (Stunden × Ansatz × Zuschlag). Nur Korrekturen dürfen ' +
+      'negativ sein. Nicht in einen veröffentlichten Monat (422) — eine Korrektur gehört in einen ' +
+      'offenen Monat und verweist auf die korrigierte Abrechnung.',
+    guard: perm('all', 'payslip:create'),
+    rateLimit: 'apiWrite',
+    body: payroll.payrollItemCreateSchema,
+    extraErrors: [422],
+  },
+  {
+    method: 'patch',
+    path: '/api/payroll/items/{id}',
+    tag: 'Personal',
+    summary: 'Lohnposition ändern',
+    description: 'Nur solange sie in keine veröffentlichte Abrechnung eingeflossen ist.',
+    guard: perm('all', 'payslip:create'),
+    rateLimit: 'apiWrite',
+    params: payroll.payrollIdParam,
+    body: payroll.payrollItemUpdateSchema,
+    extraErrors: [422],
+  },
+  {
+    method: 'delete',
+    path: '/api/payroll/items/{id}',
+    tag: 'Personal',
+    summary: 'Lohnposition entfernen',
+    description: 'Ausblenden (`deletedAt`), nur solange nicht veröffentlicht.',
+    guard: perm('all', 'payslip:create'),
+    rateLimit: 'apiWrite',
+    params: payroll.payrollIdParam,
+    extraErrors: [422],
+  },
+  {
+    method: 'get',
+    path: '/api/payroll/withholding/profiles',
+    tag: 'Personal',
+    summary: 'Quellensteuerprofile',
+    description: 'Kanton, Tarifcode, Kirchensteuer, Kinder — mit Gültigkeit. Im Prüfprotokoll geschwärzt.',
+    guard: perm('all', 'payslip:create'),
+    rateLimit: 'apiRead',
+    query: payroll.withholdingProfileQuerySchema,
+  },
+  {
+    method: 'post',
+    path: '/api/payroll/withholding/profiles',
+    tag: 'Personal',
+    summary: 'Quellensteuerprofil erfassen',
+    description: 'Überschneidungen je Person verweigert die Datenbank (422).',
+    guard: perm('all', 'payslip:create'),
+    rateLimit: 'apiWrite',
+    body: payroll.withholdingProfileCreateSchema,
+    extraErrors: [422],
+  },
+  {
+    method: 'patch',
+    path: '/api/payroll/withholding/profiles/{id}',
+    tag: 'Personal',
+    summary: 'Quellensteuerprofil ändern',
+    description:
+      'Mit veröffentlichter Abrechnung im Zeitraum nur Ende und Notiz — ein Tarifwechsel ist ein ' +
+      'neues Profil ab dem Wechseltag.',
+    guard: perm('all', 'payslip:create'),
+    rateLimit: 'apiWrite',
+    params: payroll.payrollIdParam,
+    body: payroll.withholdingProfileUpdateSchema,
+    extraErrors: [422],
+  },
+  {
+    method: 'delete',
+    path: '/api/payroll/withholding/profiles/{id}',
+    tag: 'Personal',
+    summary: 'Quellensteuerprofil entfernen',
+    description: 'Nur ohne veröffentlichte Abrechnung im Zeitraum; sonst beenden statt löschen.',
+    guard: perm('all', 'payslip:create'),
+    rateLimit: 'apiWrite',
+    params: payroll.payrollIdParam,
+    extraErrors: [422],
+  },
+  {
+    method: 'get',
+    path: '/api/payroll/withholding/rates',
+    tag: 'Personal',
+    summary: 'Eingelesene Quellensteuertarife',
+    description: 'Tarifzeilen und Importstapel mit Quelle und Prüfstand.',
+    guard: perm('all', 'payslip:create'),
+    rateLimit: 'apiRead',
+    query: payroll.withholdingRateQuerySchema,
+  },
+  {
+    method: 'post',
+    path: '/api/payroll/withholding/rates',
+    tag: 'Personal',
+    summary: 'Quellensteuertarif einlesen',
+    description:
+      'Clenaris liefert keine Tarife mit. Zeilen aus der Datei der kantonalen Steuerverwaltung, ' +
+      '`source` Pflicht, eingelesen ungeprüft; bestehende Stufen werden nicht überschrieben (422).',
+    guard: perm('all', 'payslip:publish'),
+    rateLimit: 'apiWrite',
+    body: payroll.withholdingRateImportSchema,
+    extraErrors: [422],
+  },
+  {
+    method: 'post',
+    path: '/api/payroll/withholding/rates/verify',
+    tag: 'Personal',
+    summary: 'Tarifstapel als geprüft bestätigen',
+    description: 'Abgleich mit der Quelle, mit Vermerk.',
+    guard: perm('all', 'payslip:publish'),
+    rateLimit: 'apiWrite',
+    body: payroll.withholdingRateVerifySchema,
+  },
+  {
+    method: 'get',
+    path: '/api/payroll/certificates',
+    tag: 'Personal',
+    summary: 'Lohnausweis-Aufstellungen',
+    description:
+      'Verdichtung veröffentlichter Abrechnungen auf die Ziffern des Lohnausweises — **nicht** das ' +
+      'amtliche Formular 11. Mit `payslip:read_own` nur die eigenen abgeschlossenen.',
+    guard: perm('any', 'payslip:read_own', 'payslip:read_all'),
+    rateLimit: 'apiRead',
+    query: payroll.salaryCertificateQuerySchema,
+  },
+  {
+    method: 'post',
+    path: '/api/payroll/certificates',
+    tag: 'Personal',
+    summary: 'Lohnausweis-Aufstellung verdichten',
+    description: 'Erstellt oder erneuert den Entwurf eines Jahres. Ohne veröffentlichte Abrechnung 422.',
+    guard: perm('all', 'payslip:create'),
+    rateLimit: 'apiWrite',
+    body: payroll.salaryCertificateCreateSchema,
+    extraErrors: [422],
+  },
+  {
+    method: 'post',
+    path: '/api/payroll/certificates/{id}/finalize',
+    tag: 'Personal',
+    summary: 'Lohnausweis-Aufstellung abschliessen',
+    description: 'PDF erzeugen, ablegen, unveränderlich machen. Eine Korrektur danach ist eine neue Version.',
+    guard: perm('all', 'payslip:publish'),
+    rateLimit: 'apiWrite',
+    params: payroll.payrollIdParam,
+    extraErrors: [422],
+  },
+  {
+    method: 'get',
+    path: '/api/payroll/certificates/{id}/pdf',
+    tag: 'Personal',
+    summary: 'Lohnausweis-Aufstellung als PDF',
+    description: 'Gespeicherte Bytes mit Prüfsummenvergleich; für die eigene Person nur der eigene, abgeschlossene.',
+    guard: perm('any', 'payslip:read_own', 'payslip:read_all'),
+    rateLimit: 'apiRead',
+    params: payroll.payrollIdParam,
+    produces: 'application/pdf',
+  },
+  {
+    method: 'get',
+    path: '/api/time',
+    tag: 'Personal',
+    summary: 'Erfasste Zeiten',
+    description:
+      'Filterbar nach Person, Einsatz, Zeitraum, Freigabestand und „nur laufende". Die Summe ' +
+      'der Minuten kommt über **alle** Treffer, nicht über die angezeigte Seite — eine ' +
+      'Seitensumme sähe aus wie die Monatssumme und wäre keine. ' +
+      '`timetracking:read_all` gab es seit jeher und wurde bis Wave 8 von genau einem Endpunkt ' +
+      'geprüft (dem Buchhaltungsexport): Es gab keinen Weg, die Zeiten anzusehen, ohne sie zu ' +
+      'exportieren.',
+    guard: perm('all', 'timetracking:read_all'),
+    rateLimit: 'apiRead',
+    query: operations.timeEntryQuerySchema,
+  },
+  {
+    method: 'post',
+    path: '/api/time',
+    tag: 'Personal',
+    summary: 'Zeit von Hand erfassen',
+    description:
+      'Für vergessenes Stempeln, fehlenden Empfang oder einen Gerätewechsel. `minutes` kommt ' +
+      '**nicht** aus dem Körper — die Dauer rechnet der Server aus Beginn, Ende und Pause, ' +
+      'dieselbe Regel wie bei den Preisen. Der Eintrag wird als `manual` gekennzeichnet. ' +
+      'Überschneidungen mit einer anderen Erfassung derselben Person werden abgewiesen (422): ' +
+      'zwei gleichzeitige Zeiten ergäben doppelten Lohn für dieselbe Stunde.',
+    guard: perm('all', 'timetracking:approve'),
+    rateLimit: 'apiWrite',
+    body: operations.createTimeEntrySchema,
+    extraErrors: [422],
+  },
+  {
+    method: 'patch',
+    path: '/api/time/{id}',
+    tag: 'Personal',
+    summary: 'Zeit korrigieren',
+    description:
+      'Eine **freigegebene** Zeit lässt sich nicht ändern (422) — sie ist Grundlage einer ' +
+      'Abrechnung. Zuerst die Freigabe aufheben. Die Lohnkosten des Einsatzes werden um die ' +
+      'Differenz angepasst, damit die Nachkalkulation nicht auseinanderläuft.',
+    guard: perm('all', 'timetracking:approve'),
+    rateLimit: 'apiWrite',
+    params: q.idParam,
+    body: operations.updateTimeEntrySchema,
+    extraErrors: [422],
+  },
+  {
+    method: 'delete',
+    path: '/api/time/{id}',
+    tag: 'Personal',
+    summary: 'Zeit entfernen',
+    description:
+      'Nur solange sie nicht freigegeben ist. Der Fall dahinter ist der Doppeleintrag; ihn auf ' +
+      'null Minuten zu korrigieren wäre eine Zeile, die aussieht wie Arbeit ohne Dauer.',
+    guard: perm('all', 'timetracking:approve'),
+    rateLimit: 'apiWrite',
+    params: q.idParam,
+    extraErrors: [422],
+  },
+  {
+    method: 'post',
+    path: '/api/time/approve',
+    tag: 'Personal',
+    summary: 'Zeiten freigeben',
+    description:
+      'Mehrere auf einmal — das ist der Arbeitsablauf am Monatsende. Eine **laufende** ' +
+      'Erfassung wird übersprungen und nicht abgewiesen: Wer dreissig Zeilen markiert und eine ' +
+      'laufende dabei hat, soll die neunundzwanzig freigeben können. Die Antwort sagt beides.',
+    guard: perm('all', 'timetracking:approve'),
+    rateLimit: 'apiWrite',
+    body: operations.approveTimeEntriesSchema,
+  },
+  {
+    method: 'post',
+    path: '/api/time/{id}/reopen',
+    tag: 'Personal',
+    summary: 'Freigabe aufheben',
+    description:
+      'Bewusst **einzeln** und nicht als Stapel — anders als das Freigeben. Der häufige Weg ist ' +
+      'bequem, der seltene ist einzeln.',
+    guard: perm('all', 'timetracking:approve'),
+    rateLimit: 'apiWrite',
+    params: q.idParam,
+    extraErrors: [422],
+  },
+  {
+    method: 'put',
+    path: '/api/employees/{id}/skills',
+    tag: 'Personal',
+    summary: 'Qualifikationen setzen',
+    description:
+      'Ersetzt die Liste **als Ganzes** — deshalb `PUT` und nicht `PATCH`. Diese Zeilen haben ' +
+      'keinen Bezug nach aussen; ein Abgleich wäre nur eine zweite Stelle, an der etwas falsch ' +
+      'sein kann, und Ersetzen ist wettlauffrei. Doppelte Namen und mehr als 30 Einträge werden ' +
+      'abgewiesen.',
+    guard: perm('all', 'employee:update'),
+    rateLimit: 'apiWrite',
+    params: q.idParam,
+    body: operations.employeeSkillsSchema,
+  },
+  {
+    method: 'put',
+    path: '/api/employees/{id}/availability',
+    tag: 'Personal',
+    summary: 'Arbeitszeiten setzen',
+    description:
+      'Ersetzt die Zeitfenster als Ganzes. Überschneidungen am selben Tag werden abgewiesen — ' +
+      'der eindeutige Index deckt nur gleiche Startzeiten ab, und zwei sich überlappende ' +
+      'Fenster ergäben eine Verfügbarkeit, die sich nicht mehr lesen lässt. ' +
+      'Die Arbeitszeit bleibt eine **Planungshilfe**: Die Eignungsprüfung warnt bei einem ' +
+      'Einsatz ausserhalb und blockiert ihn nicht. Bereits geplante Einsätze bleiben unberührt.',
+    guard: perm('all', 'employee:update'),
+    rateLimit: 'apiWrite',
+    params: q.idParam,
+    body: operations.employeeAvailabilitySchema,
   },
   {
     method: 'get',
@@ -2677,6 +3628,7 @@ export const ROUTES: RouteDoc[] = [
       'versehentlich wieder anschreibt, ist genau der Fehler, den das Austragen verhindern soll.',
     guard: perm('all', 'newsletter:read'),
     rateLimit: 'apiRead',
+    query: opsAdmin.newsletterListQuery,
   },
   {
     method: 'delete',
@@ -2952,6 +3904,7 @@ export const ROUTES: RouteDoc[] = [
     description: 'Alle Beiträge, auch Entwürfe. Ohne Blätterung — ein Reinigungsbetrieb schreibt keine tausend Artikel.',
     guard: perm('all', 'blog:read'),
     rateLimit: 'apiRead',
+    query: q.blogListQuery,
   },
   {
     method: 'get',
@@ -3004,6 +3957,7 @@ export const ROUTES: RouteDoc[] = [
       'gehört auf den Einsatzrapport der zugewiesenen Person.',
     guard: perm('all', 'property:read'),
     rateLimit: 'apiRead',
+    query: q.propertyListQuery,
   },
   {
     method: 'post',
@@ -3015,6 +3969,7 @@ export const ROUTES: RouteDoc[] = [
       'Objekt an eine fremde Adresse hängen, und der Einsatzrapport führte das Team dorthin.',
     guard: perm('all', 'property:create'),
     rateLimit: 'apiWrite',
+    body: crm.createPropertyBodySchema,
     status: 201,
   },
   {
@@ -3027,6 +3982,25 @@ export const ROUTES: RouteDoc[] = [
       'kann mehrere Einsätze erzeugen, und ein Einsatz kann ohne Buchung bestehen.',
     guard: perm('all', 'booking:read'),
     rateLimit: 'apiRead',
+    query: q.bookingListQuery,
+  },
+  {
+    method: 'post',
+    path: '/api/bookings',
+    tag: 'Buchungen',
+    summary: 'Buchung im Büro erfassen',
+    description:
+      'Telefonisch, am Schalter oder aus einer E-Mail. Derselbe Dienst wie die öffentliche ' +
+      'Buchung — Preis, Dauer, Mannschaft und Mehrwertsteuer rechnet ausschliesslich der ' +
+      'Server. Unterschiede: die Kundschaft kommt als customerId statt über die Adresse, die ' +
+      'Herkunft ist wählbar (eine telefonische Buchung als „Website" zu verbuchen verfälscht ' +
+      'jede Auswertung), eine interne Notiz ist möglich, und die Kapazitätsprüfung lässt sich ' +
+      'ausdrücklich übergehen — protokolliert. Die Meldung „Neue Online-Buchung" ans Büro ' +
+      'entfällt, die Bestätigung an die Kundschaft nicht.',
+    guard: perm('all', 'booking:create'),
+    rateLimit: 'apiWrite',
+    body: booking.staffBookingSchema,
+    status: 201,
   },
   {
     method: 'get',
@@ -3038,6 +4012,7 @@ export const ROUTES: RouteDoc[] = [
       'in den Ferien war, ist eine Personalangabe und geht die Kolleginnen und Kollegen nichts an.',
     guard: perm('any', 'absence:read_all', 'absence:request'),
     rateLimit: 'apiRead',
+    query: q.absenceListQuery,
   },
   {
     method: 'patch',
@@ -3050,6 +4025,7 @@ export const ROUTES: RouteDoc[] = [
       'erhalten hat. Korrigiert wird über eine Gutschrift.',
     guard: perm('all', 'invoice:update'),
     rateLimit: 'apiWrite',
+    body: finance.updateInvoiceSchema,
     params: q.idParam,
     extraErrors: [422],
   },
@@ -3122,7 +4098,9 @@ export const ROUTES: RouteDoc[] = [
       'Nur von Hand erfasste Zahlungen. Was über Stripe oder Datatrans hereinkam, ist beim ' +
       'Zahlungsanbieter eine Tatsache; die Zeile zu entfernen hiesse, die eigene Buchhaltung ' +
       'gegen den Kontoauszug laufen zu lassen. Der offene Posten der Rechnung wird in derselben ' +
-      'Transaktion zurückgesetzt — sonst bliebe sie als bezahlt stehen, obwohl kein Geld da ist.',
+      'Transaktion zurückgesetzt — sonst bliebe sie als bezahlt stehen, obwohl kein Geld da ist. ' +
+      'Seit Wave 13 bleibt die Zeile als `CANCELLED` stehen (Storno statt Löschen); die Datenbank ' +
+      'verweigert das Löschen von Zahlungen. Eine bereits stornierte Zahlung: 422.',
     guard: perm('all', 'payment:delete'),
     rateLimit: 'apiWrite',
     params: q.idParam,
@@ -3150,6 +4128,7 @@ export const ROUTES: RouteDoc[] = [
       'erfasst und das alte stillgelegt.',
     guard: perm('all', 'property:update'),
     rateLimit: 'apiWrite',
+    body: crm.updatePropertySchema,
     params: q.idParam,
   },
   {
@@ -3188,8 +4167,9 @@ export const ROUTES: RouteDoc[] = [
     tag: 'System',
     summary: 'Stündliche Aufgaben',
     description:
-      'Terminerinnerungen 24 h und 2 h vorher, fällige Aufgabenerinnerungen. Authentifiziert ' +
-      'über `Authorization: Bearer $CRON_SECRET`.',
+      'Terminerinnerungen 24 h und 2 h vorher, zeitbezogene Auslöser der Automatisierung und ' +
+      'fällige Läufe. Authentifiziert über `Authorization: Bearer $CRON_SECRET`. Jeder Lauf ' +
+      'hinterlässt ein `CronRun`; **500**, sobald eine Teilaufgabe gescheitert ist.',
     guard: { kind: 'cron' },
   },
   {
@@ -3199,8 +4179,39 @@ export const ROUTES: RouteDoc[] = [
     summary: 'Tägliche Aufgaben',
     description:
       'Mahnläufe, ablaufende Offerten, Wiederholungsbuchungen, Bewertungsanfragen, ' +
-      'Geburtstagsgrüsse, Automatisierungen.',
+      'Geburtstagsgrüsse, Automatisierungen, Vertragsplanung, Nachläufe. Jeder Lauf hinterlässt ' +
+      'ein `CronRun`; **500**, sobald eine Teilaufgabe gescheitert ist.',
     guard: { kind: 'cron' },
+  },
+  {
+    method: 'get',
+    path: '/api/cron/status',
+    tag: 'System',
+    summary: 'Zustand der geplanten Läufe',
+    description:
+      'Für eine Überwachung von aussen: 200, wenn jeder Auftrag frisch ist, keiner hängt und keiner ' +
+      'wiederholt scheitert; sonst **503**. Bleiben stündlicher und nächtlicher Lauf beide aus, ' +
+      'meldet von innen niemand etwas — diese Adresse schon. Zeitpunkte und Zahlen, keine Inhalte. ' +
+      'Dazu `betrieb`: Erreichbarkeit des Schadsoftwareprüfers, Alter der letzten Sicherung und der letzten ' +
+      'bestandenen Wiederherstellungsprobe (ohne Einfluss auf den Statuscode). Bearer `CRON_SECRET` oder ' +
+      '`SECURITY_REPORT_TOKEN` — Letzteres öffnet nur diesen lesenden Endpunkt, keinen Lauf.',
+    guard: { kind: 'cron' },
+  },
+  {
+    method: 'post',
+    path: '/api/cron/security-report',
+    tag: 'System',
+    summary: 'Sicherheitsbericht entgegennehmen',
+    description:
+      'Bericht von security:check, externer Überwachung, ZAP-Grundprüfung oder Sicherung. Bearer ' +
+      '`SECURITY_REPORT_TOKEN` — ein eigenes Geheimnis, **nicht** `CRON_SECRET`. Höchstens 512 kB, alle ' +
+      'Felder begrenzt; ungültig 422, zu gross 400. Die Anwendung speichert und zeigt den Bericht in der ' +
+      'Sicherheitszentrale; sie führt nichts aus. Ein kritischer Bericht wird beim Wechsel in diesen ' +
+      'Zustand ein Sicherheitsereignis.',
+    guard: { kind: 'cron' },
+    body: sicherheitsbericht.securityReportSchema,
+    status: 201,
+    extraErrors: [400, 422],
   },
   {
     method: 'post',
@@ -3323,6 +4334,7 @@ export const ROUTES: RouteDoc[] = [
       'und nur im Rahmen der Maske (`Sec-Fetch-Dest: iframe`); ausserhalb liefert die Website ' +
       'den veröffentlichten Stand ohne Bearbeitungsmarken.',
     guard: perm('all', 'content:update'),
+    rateLimit: 'apiWrite',
     query: cms.previewQuery,
   },
 
@@ -3366,10 +4378,12 @@ export const ROUTES: RouteDoc[] = [
     summary: 'Datei an die Upload-Adresse schreiben',
     description:
       'Gegenstück zur signierten Adresse von Supabase, wenn kein externer Speicher ' +
-      'eingerichtet ist. Der Körper sind die rohen Bytes; die Adresse ist die Berechtigung — ' +
-      'sie entsteht in `/api/files/upload-url`, ist nicht erratbar, genau einmal und nur zwei ' +
-      'Stunden lang beschreibbar. Höchstens 256 MB — die allgemeine Grenze von 1 GB gilt ' +
-      'für den externen Speicher; die Datenbank-Rückfallebene trägt nicht mehr.',
+      'eingerichtet ist. Der Körper sind die rohen Bytes. Die Schreibberechtigung ist das ' +
+      'Upload-Ticket aus /api/files/upload-url: serverseitig für genau einen Pfad ' +
+      'ausgestellt, genau einmal und nur zwei Stunden lang beschreibbar. Die Bytes werden ' +
+      'schon hier gegen das Profil des Tickets geprüft; angenommen ist die Datei damit noch ' +
+      'nicht — das entscheidet /api/files/finalize. Höchstens 256 MB: Die allgemeine Grenze ' +
+      'von 1 GB gilt für den externen Speicher, die Datenbank-Rückfallebene trägt nicht mehr.',
     guard: { kind: 'public' },
     params: q.idParam,
     extraErrors: [400, 404],
@@ -3380,8 +4394,12 @@ export const ROUTES: RouteDoc[] = [
     tag: 'Dateien',
     summary: 'Datei ausliefern',
     description:
-      'Öffentlich lesbar wie ein öffentlicher Bucket: Profilbilder und Einsatzfotos erscheinen ' +
-      'in E-Mails und PDF-Berichten ohne Sitzung. Der Schutz ist die nicht erratbare Adresse.',
+      'Die Kennung allein öffnet nichts. Ausgeliefert wird nur, was ein FileAsset hat: ist es ' +
+      'öffentlich (Teambild, Galerie, Kopfbild), ohne Anmeldung und mit langem Zwischenspeicher; ' +
+      'sonst nur mit Sitzung, gleicher Organisation, passender Rolle und tatsächlicher Beziehung ' +
+      'zum Geschäftsobjekt, und ohne öffentliche Cachebarkeit. Alles andere ist 404 — auch eine ' +
+      'vorhandene Datei, die dieser Person nicht gehört. Extern geteilte Dokumente laufen nicht ' +
+      'über diesen Weg, sondern über ihre Fachroute mit PublicAccessToken.',
     guard: { kind: 'public' },
     params: q.idParam,
     produces: 'application/octet-stream',
@@ -3508,4 +4526,50 @@ export const ROUTES: RouteDoc[] = [
   //  Unternehmensführung — eigene Datei, weil es über neunzig Operationen sind
   // -------------------------------------------------------------------------
   ...BI_ROUTES,
+
+  // -------------------------------------------------------------------------
+  //  Verträge — eigene Datei aus demselben Grund
+  // -------------------------------------------------------------------------
+  ...CONTRACT_ROUTES,
+
+  // -------------------------------------------------------------------------
+  //  Qualitätskontrolle — dasselbe Muster, damit die drei Module
+  //  nebeneinander wachsen können, ohne sich in einer Datei zu drängen
+  // -------------------------------------------------------------------------
+  ...QUALITY_ROUTES,
+
+  // -------------------------------------------------------------------------
+  //  Betrieb (Wave 11): Reklamationen, Material, Geräte
+  // -------------------------------------------------------------------------
+  ...BETRIEB_ROUTES,
+
+  // -------------------------------------------------------------------------
+  //  Gutschriften (Wave 13)
+  // -------------------------------------------------------------------------
+  ...FINANZ_ROUTES,
+
+  // -------------------------------------------------------------------------
+  //  Besichtigung / Objektaufnahme (Wave 12)
+  // -------------------------------------------------------------------------
+  ...VERKAUF_ROUTES,
+
+  // -------------------------------------------------------------------------
+  //  Zustellstatus (Wave 14)
+  // -------------------------------------------------------------------------
+  ...KOMMUNIKATION_ROUTES,
+
+  // -------------------------------------------------------------------------
+  //  Globale Suche (Wave 17)
+  // -------------------------------------------------------------------------
+  ...SUCHE_ROUTES,
+
+  // -------------------------------------------------------------------------
+  //  Scanplattform (2026-09-26)
+  // -------------------------------------------------------------------------
+  ...SCAN_ROUTES,
+
+  // -------------------------------------------------------------------------
+  //  Versionsverwaltung (Produktsprint 2026-09-26)
+  // -------------------------------------------------------------------------
+  ...VERSIONEN_ROUTES,
 ];

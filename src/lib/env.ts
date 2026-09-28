@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+import { mapsBrowserSchluessel, supabaseAdresse } from '@/lib/laufzeit-konfiguration';
+
 /**
  * Zentrale, typsichere Konfiguration.
  *
@@ -8,9 +10,9 @@ import { z } from 'zod';
  * beim Erzeugen statischer Seiten — ein harter Import-Time-Throw würde den Build
  * auf Vercel brechen, obwohl zur Laufzeit alle Secrets vorhanden sind.
  *
- * Client-seitig sind nur `NEXT_PUBLIC_*`-Werte sichtbar; `serverEnv` darf
- * ausschliesslich in Server Components, Route Handlers und Server Actions
- * verwendet werden.
+ * `serverEnv` darf ausschliesslich in Server Components, Route Handlers und
+ * Server Actions verwendet werden. Was je Umgebung verschieden ist und die
+ * Browser sehen dürfen, steht in `laufzeit-konfiguration.ts`.
  */
 
 const serverSchema = z.object({
@@ -33,6 +35,26 @@ const serverSchema = z.object({
   SESSION_IDLE_TTL: z.coerce.number().int().positive().default(900),
   AUTH_COOKIE_DOMAIN: z.string().optional(),
 
+  /**
+   * Schlüssel für die Feldverschlüsselung (`src/lib/crypto.ts`): 32 Byte als
+   * 64 Hex-Zeichen. Fehlt er, leitet das Modul den Schlüssel aus `JWT_SECRET`
+   * ab — die Anwendung läuft also auch ohne, aber dann hängen die
+   * verschlüsselten Felder an einem Schlüssel, der einem anderen Zweck dient.
+   * Die Begründung steht im Kopf von `crypto.ts`.
+   */
+  ENCRYPTION_KEY: z
+    .string()
+    .regex(/^[0-9a-fA-F]{64}$/, 'ENCRYPTION_KEY muss 64 Hex-Zeichen (32 Byte) lang sein')
+    .optional(),
+
+  /**
+   * Welchem Proxy-Kopf die Client-Adresse entnommen wird (`lib/http/client-ip.ts`).
+   * `NONE`: keinem — die Adresse ist dann nicht verfügbar. Das ist die
+   * sichere Vorgabe; ein falsch gesetzter Modus liesse gefälschte Adressen
+   * ins Prüf- und Signaturprotokoll.
+   */
+  TRUSTED_PROXY_MODE: z.enum(['NONE', 'SINGLE_REVERSE_PROXY', 'CLOUDFLARE']).default('NONE'),
+
   SUPABASE_SERVICE_ROLE_KEY: z.string().optional(),
   SUPABASE_STORAGE_BUCKET: z.string().default('clenaris'),
 
@@ -45,6 +67,12 @@ const serverSchema = z.object({
     .transform((v) => v === 'true'),
 
   RESEND_API_KEY: z.string().optional(),
+  /**
+   * Signaturgeheimnis der Resend-Webhooks (`whsec_…`, Svix). Ohne es nimmt
+   * `/api/webhooks/resend` keine Zustellmeldungen an (503) — eine ungeprüfte
+   * Meldung könnte jede Zustellung als „zugestellt" markieren.
+   */
+  RESEND_WEBHOOK_SECRET: z.string().optional(),
   EMAIL_FROM: z.string().default('Clenaris <noreply@clenaris.ch>'),
   EMAIL_REPLY_TO: z.string().optional(),
   EMAIL_BCC_ARCHIVE: z.string().optional(),
@@ -61,28 +89,45 @@ const serverSchema = z.object({
   AI_MODEL_FAST: z.string().default('claude-haiku-4-5'),
 
   CRON_SECRET: z.string().optional(),
+  /**
+   * Token für den Berichtseingang der Sicherheitszentrale
+   * (`POST /api/cron/security-report`). Eigenes Geheimnis, nicht
+   * `CRON_SECRET` (siehe `defineCronRoute`). Ohne Wert nimmt der Eingang
+   * nichts an.
+   */
+  SECURITY_REPORT_TOKEN: z.string().optional(),
+
+  /**
+   * Schnittstelle des Release-Ausführers (`/api/cron/release-auftraege`,
+   * 2026-09-27). Zwei Geheimnisse, weil sie Verschiedenes beweisen: Das
+   * Token öffnet die Tür (Bearer, wie jeder Scheduler-Endpunkt), der
+   * Signaturschlüssel beweist, dass genau dieser Rumpf zu genau dieser Zeit
+   * vom Ausführer kommt — er reist nie mit, nur die HMAC darüber. Ohne beide
+   * und ohne `CLENARIS_UMGEBUNG` nimmt die Schnittstelle nichts an.
+   */
+  RELEASE_EXECUTOR_TOKEN: z.string().optional(),
+  RELEASE_EXECUTOR_SIGNING_KEY: z.string().optional(),
+  /**
+   * Name der Umgebung dieser Instanz. Ein Ausführer für die Vorschau kann
+   * damit keinen Auftrag der Produktion übernehmen — die Instanz vergleicht
+   * seine Angabe mit ihrer eigenen, nicht mit einem Feld im Auftrag.
+   */
+  CLENARIS_UMGEBUNG: z.enum(['production', 'staging', 'preview', 'test']).optional(),
+
+  /**
+   * Herkunft dieser Instanz (`https://clenaris.qasemi.ch`) — zur Laufzeit,
+   * für Links, Mails, Zahlungsrücksprünge und die Herkunftsprüfung. Geprüft
+   * und gelesen in `laufzeit-konfiguration.ts` (`ursprungAus`), dort mit
+   * Rückfall auf das ältere `NEXT_PUBLIC_APP_URL`.
+   */
+  APP_URL: z.string().optional(),
 
   COMPANY_NAME: z.string().default('Clenaris Reinigungen GmbH'),
   COMPANY_EMAIL: z.string().default('info@clenaris.ch'),
   COMPANY_PHONE: z.string().default('+41 31 000 00 00'),
 });
 
-const clientSchema = z.object({
-  NEXT_PUBLIC_APP_URL: z.string().url().default('http://localhost:3000'),
-  NEXT_PUBLIC_APP_NAME: z.string().default('Clenaris'),
-  NEXT_PUBLIC_DEFAULT_LOCALE: z.enum(['de', 'en', 'fr', 'it']).default('de'),
-  NEXT_PUBLIC_SUPABASE_URL: z.string().optional(),
-  NEXT_PUBLIC_SUPABASE_ANON_KEY: z.string().optional(),
-  NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY: z.string().optional(),
-  NEXT_PUBLIC_GOOGLE_MAPS_API_KEY: z.string().optional(),
-  NEXT_PUBLIC_GA_MEASUREMENT_ID: z.string().optional(),
-  NEXT_PUBLIC_GTM_ID: z.string().optional(),
-  NEXT_PUBLIC_FACEBOOK_PIXEL_ID: z.string().optional(),
-  NEXT_PUBLIC_GOOGLE_SITE_VERIFICATION: z.string().optional(),
-});
-
 export type ServerEnv = z.infer<typeof serverSchema>;
-export type ClientEnv = z.infer<typeof clientSchema>;
 
 let cachedServerEnv: ServerEnv | null = null;
 
@@ -101,23 +146,16 @@ export function serverEnv(): ServerEnv {
   return cachedServerEnv;
 }
 
-/**
- * Client-Konfiguration. Next.js ersetzt `process.env.NEXT_PUBLIC_*` zur Build-Zeit
- * statisch — deshalb müssen die Keys hier ausgeschrieben stehen.
+/*
+ * Hier stand bis 2026-09-26 `clientEnv`: jede `NEXT_PUBLIC_*`-Variable als
+ * `process.env.NEXT_PUBLIC_…` ausgeschrieben — und damit beim Bau fest
+ * eingesetzt, in Client- *und* Server-Bündeln. Ersetzt durch
+ * `laufzeit-konfiguration.ts` (zur Laufzeit, mit Freigabeliste für den
+ * Browser) und `seiten-url.ts` (bewusst Bauzeit, mit Begründung). Vier
+ * Variablen hatten keinen Verbraucher und sind entfallen:
+ * `NEXT_PUBLIC_APP_NAME`, `NEXT_PUBLIC_DEFAULT_LOCALE`,
+ * `NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`.
  */
-export const clientEnv: ClientEnv = clientSchema.parse({
-  NEXT_PUBLIC_APP_URL: process.env.NEXT_PUBLIC_APP_URL,
-  NEXT_PUBLIC_APP_NAME: process.env.NEXT_PUBLIC_APP_NAME,
-  NEXT_PUBLIC_DEFAULT_LOCALE: process.env.NEXT_PUBLIC_DEFAULT_LOCALE,
-  NEXT_PUBLIC_SUPABASE_URL: process.env.NEXT_PUBLIC_SUPABASE_URL,
-  NEXT_PUBLIC_SUPABASE_ANON_KEY: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
-  NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY: process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY,
-  NEXT_PUBLIC_GOOGLE_MAPS_API_KEY: process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY,
-  NEXT_PUBLIC_GA_MEASUREMENT_ID: process.env.NEXT_PUBLIC_GA_MEASUREMENT_ID,
-  NEXT_PUBLIC_GTM_ID: process.env.NEXT_PUBLIC_GTM_ID,
-  NEXT_PUBLIC_FACEBOOK_PIXEL_ID: process.env.NEXT_PUBLIC_FACEBOOK_PIXEL_ID,
-  NEXT_PUBLIC_GOOGLE_SITE_VERIFICATION: process.env.NEXT_PUBLIC_GOOGLE_SITE_VERIFICATION,
-});
 
 export const isProduction = process.env.NODE_ENV === 'production';
 export const isDevelopment = process.env.NODE_ENV === 'development';
@@ -134,13 +172,12 @@ export function hasIntegration(
     case 'twilio':
       return Boolean(process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN);
     case 'supabase':
-      return Boolean(
-        process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY,
-      );
+      // Zur Laufzeit gelesen (V2-1) — `process.env.NEXT_PUBLIC_…` würde beim Bau eingesetzt.
+      return Boolean(supabaseAdresse() && process.env.SUPABASE_SERVICE_ROLE_KEY);
     case 'redis':
       return Boolean(process.env.REDIS_URL);
     case 'maps':
-      return Boolean(process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY);
+      return Boolean(mapsBrowserSchluessel());
     case 'ai':
       return Boolean(process.env.ANTHROPIC_API_KEY);
     default:

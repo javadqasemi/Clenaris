@@ -10,6 +10,7 @@ import {
   timeRangeLabel,
 } from '@/lib/utils';
 import { navigationUrl } from '@/lib/maps/google';
+import { tagPlus, zuercherTag, zuercherTagesbeginn, zuercherTagesgrenzen } from '@/lib/zuerich';
 import { getEmployeeSchedule, getVacationBalance } from '@/server/services/employee.service';
 import { StatusBadge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -27,16 +28,17 @@ export const dynamic = 'force-dynamic';
 export default async function PortalHomePage() {
   const { session, employeeId } = await requireEmployeeId();
 
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const inSevenDays = new Date(today.getTime() + 7 * 86_400_000);
+  // Zürcher Tagesgrenzen (2026-09-27). `setHours(0, 0, 0, 0)` rechnete in der
+  // Zone des Servers: zwischen Mitternacht und 02:00 zeigte „Heute" die
+  // Einsätze von gestern.
+  const { von: today, bis: tomorrow } = zuercherTagesgrenzen();
+  const inSevenDays = zuercherTagesbeginn(tagPlus(zuercherTag(), 7));
 
   const [schedule, vacation] = await Promise.all([
     getEmployeeSchedule({ employeeId, from: today, to: inSevenDays }),
     getVacationBalance(employeeId),
   ]);
 
-  const tomorrow = new Date(today.getTime() + 86_400_000);
   const todayJobs = schedule.jobs.filter((job) => job.scheduledStart < tomorrow);
   const upcomingJobs = schedule.jobs.filter((job) => job.scheduledStart >= tomorrow);
 

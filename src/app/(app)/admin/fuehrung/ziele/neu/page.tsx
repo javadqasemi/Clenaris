@@ -3,6 +3,7 @@ import Link from 'next/link';
 import { ArrowLeft } from 'lucide-react';
 
 import { requirePermission } from '@/lib/auth/session';
+import { zuercherFelder } from '@/lib/zuerich';
 import { getOrganizationId } from '@/server/services/organization.service';
 import { listObjectiveOptions, listStaffOptions } from '@/server/services/fuehrung-options.service';
 import { Button } from '@/components/ui/button';
@@ -22,8 +23,9 @@ export default async function NewObjectivePage({ searchParams }: { searchParams:
   const params = await searchParams;
   const organizationId = await getOrganizationId();
   const [staff, parents] = await Promise.all([listStaffOptions(organizationId), listObjectiveOptions(organizationId)]);
-  const year = new Date().getFullYear();
-  const quarter = Math.floor(new Date().getMonth() / 3) + 1;
+  const heute = zuercherFelder(new Date());
+  const year = heute.jahr;
+  const quarter = Math.floor((heute.monat - 1) / 3) + 1;
 
   return (
     <div className="space-y-6">

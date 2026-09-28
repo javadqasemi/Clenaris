@@ -1,6 +1,21 @@
 import 'server-only';
 
 import { generateStructured, generateText, type Effort } from './client';
+import { kuerzel } from './governance';
+import {
+  bewertungsantwortNutzlast,
+  einsatzberichtNutzlast,
+  emailEntwurfNutzlast,
+  offertentwurfNutzlast,
+  SWISS_CONTEXT,
+  uebersetzungNutzlast,
+  zusammenfassungNutzlast,
+  type AiQuoteRequest,
+  type EinsatzberichtEingabe,
+  type EmailTone,
+} from './nutzlast';
+
+export type { AiQuoteRequest, EmailTone } from './nutzlast';
 
 /**
  * KI-Funktionen der Plattform.
@@ -12,34 +27,14 @@ import { generateStructured, generateText, type Effort } from './client';
  *    werden vor dem Versand von einer Person freigegeben — das steht so auch
  *    in den Prompts, damit das Modell keine Verbindlichkeit suggeriert.
  *  • Personenbezogene Daten werden auf das Nötige reduziert (Vorname, Objekt-
- *    kenndaten) — nie AHV-Nummern, IBAN oder Alarmcodes.
+ *    kenndaten) — nie AHV-Nummern, IBAN oder Alarmcodes. Jede Funktion mit
+ *    Freitext baut ihre Nutzlast in `nutzlast.ts`, wo die Prüfreihe sie ohne
+ *    Anbieter prüfen kann (F-15).
  */
-
-const SWISS_CONTEXT = `Du arbeitest für eine professionelle Reinigungsfirma im Kanton Bern, Schweiz.
-Regeln für alle Ausgaben:
-- Sprache: Schweizer Hochdeutsch. Niemals "ß" verwenden, immer "ss".
-- Anrede: höfliche Sie-Form. Grussformel "Freundliche Grüsse".
-- Währung: CHF mit zwei Nachkommastellen. Mehrwertsteuer: 8.1 % (Normalsatz).
-- Datumsformat: TT.MM.JJJJ. Uhrzeit im 24-Stunden-Format.
-- Ton: sachlich, freundlich, kompetent, ohne Superlative und ohne Emojis.
-- Keine verbindlichen Zusagen: Preise und Termine sind Vorschläge, die intern geprüft werden.`;
 
 // ---------------------------------------------------------------------------
 //  1) Offerten-Generator
 // ---------------------------------------------------------------------------
-
-export interface AiQuoteRequest {
-  serviceKind: string;
-  propertyKind: string;
-  squareMeters?: number | null;
-  rooms?: number | null;
-  windows?: number | null;
-  frequency: string;
-  customerMessage: string;
-  customerType: 'PRIVATE' | 'BUSINESS';
-  hourlyRate: number;
-  city?: string | null;
-}
 
 export interface AiQuoteDraft {
   title: string;
@@ -96,41 +91,12 @@ const QUOTE_SCHEMA = {
 } as const;
 
 export async function generateQuoteDraft(request: AiQuoteRequest): Promise<AiQuoteDraft> {
-  const details = [
-    `Leistungsart: ${request.serviceKind}`,
-    `Objektart: ${request.propertyKind}`,
-    request.squareMeters ? `Fläche: ${request.squareMeters} m²` : null,
-    request.rooms ? `Zimmer: ${request.rooms}` : null,
-    request.windows ? `Fenster: ${request.windows}` : null,
-    `Turnus: ${request.frequency}`,
-    `Kundentyp: ${request.customerType === 'BUSINESS' ? 'Geschäftskunde' : 'Privatkunde'}`,
-    request.city ? `Ort: ${request.city}` : null,
-    `Interner Stundenansatz: CHF ${request.hourlyRate.toFixed(2)}`,
-  ]
-    .filter(Boolean)
-    .join('\n');
-
+  // Erlaubte Felder und geschwärzter Anfragetext — der Bau steht in
+  // `nutzlast.ts`, damit die Prüfreihe genau diese Nutzlast prüfen kann (F-15).
+  const { system, prompt } = offertentwurfNutzlast(request);
   return generateStructured<AiQuoteDraft>({
-    system: `${SWISS_CONTEXT}
-
-Du erstellst Offertentwürfe für Reinigungsdienstleistungen. Kalkuliere realistisch nach branchenüblichen Leistungswerten:
-- Unterhaltsreinigung Wohnung: ca. 1.0–1.4 Minuten pro m²
-- Umzugsreinigung mit Abnahmegarantie: ca. 2.0–3.0 Minuten pro m²
-- Büroreinigung: ca. 0.8–1.2 Minuten pro m²
-- Fensterreinigung: 6–10 Minuten pro Fenster inkl. Rahmen
-- Baureinigung (Grobreinigung): ca. 2.5–4.0 Minuten pro m²
-
-Preise sind Nettopreise ohne MWST. Runde Stundenansätze auf ganze Franken.
-Halte die Positionen nachvollziehbar: eine Hauptposition, dazu Anfahrt und optionale Zusatzleistungen.
-Liste unter "assumptions" jede Annahme auf, die vor dem Versand geprüft werden muss.`,
-    prompt: `Erstelle einen Offertentwurf.
-
-${details}
-
-Kundenanfrage im Wortlaut:
-"""
-${request.customerMessage.slice(0, 3000)}
-"""`,
+    system,
+    prompt,
     schema: QUOTE_SCHEMA,
     toolName: 'offerte_erstellen',
     toolDescription: 'Erstellt einen strukturierten Offertentwurf mit Positionen und Annahmen.',
@@ -142,8 +108,6 @@ ${request.customerMessage.slice(0, 3000)}
 //  2) E-Mail-Assistent
 // ---------------------------------------------------------------------------
 
-export type EmailTone = 'freundlich' | 'sachlich' | 'entschuldigend' | 'bestimmt' | 'werblich';
-
 export async function writeEmail(params: {
   purpose: string;
   recipientName: string;
@@ -151,21 +115,16 @@ export async function writeEmail(params: {
   tone: EmailTone;
   senderName: string;
 }): Promise<{ subject: string; body: string }> {
-  return generateStructured<{ subject: string; body: string }>({
-    system: `${SWISS_CONTEXT}
-
-Du formulierst E-Mails im Namen der Reinigungsfirma. Halte dich kurz: maximal 200 Wörter.
-Struktur: Anrede, Kernaussage im ersten Absatz, Details, klarer nächster Schritt, Grussformel mit dem Namen der absendenden Person.
-Erfinde keine Zahlen, Termine oder Zusagen, die nicht im Kontext stehen.`,
-    prompt: `Zweck: ${params.purpose}
-Empfänger: ${params.recipientName}
-Tonalität: ${params.tone}
-Absender: ${params.senderName}
-
-Kontext:
-"""
-${params.context.slice(0, 4000)}
-"""`,
+  /**
+   * Namen als Platzhalter (Wave 15), seit F-15 auch als Vor- oder Nachname
+   * allein, und Zweck wie Kontext mit Schutzplatzhaltern und Rückweg: Codes,
+   * Lohnbeträge, Gesundheitssätze und vermutete Namen erreichen den Anbieter
+   * nicht, stehen aber im Entwurf, wenn er sie braucht (`nutzlast.ts`).
+   */
+  const nutzlast = emailEntwurfNutzlast(params);
+  const entwurf = await generateStructured<{ subject: string; body: string }>({
+    system: nutzlast.system,
+    prompt: nutzlast.prompt,
     schema: {
       type: 'object',
       additionalProperties: false,
@@ -181,6 +140,35 @@ ${params.context.slice(0, 4000)}
     effort: 'low',
     maxTokens: 2_000,
   });
+  return { subject: nutzlast.zurueck(entwurf.subject), body: nutzlast.zurueck(entwurf.body) };
+}
+
+/**
+ * Öffentliche Antwort auf eine Bewertung (F-15).
+ *
+ * Lief bis 2026-09-27 über `writeEmail` mit dem ganzen Bewertungstext als
+ * „Kontext" — nur durch den Formfilter. Eine Bewertung nennt aber oft die
+ * Mitarbeiterin beim Namen oder erzählt, warum der Termin ausfiel („meine
+ * Frau lag im Spital"). Jetzt eigene Nutzlast: Sterne als Zahl, Zweck und Ton
+ * aus dem Code, Text geschwärzt ohne Rückweg — die Antwort ist öffentlich.
+ */
+export async function writeReviewReply(params: {
+  rating: number;
+  title: string | null;
+  body: string;
+  authorName: string;
+  senderName: string;
+  bekannteNamen?: Iterable<string | null | undefined>;
+}): Promise<string> {
+  const nutzlast = bewertungsantwortNutzlast(params);
+  const antwort = await generateText({
+    system: nutzlast.system,
+    prompt: nutzlast.prompt,
+    tier: 'fast',
+    effort: 'low',
+    maxTokens: 1_500,
+  });
+  return nutzlast.zurueck(antwort);
 }
 
 // ---------------------------------------------------------------------------
@@ -223,92 +211,59 @@ export async function summarize(params: {
   focus?: string;
   maxSentences?: number;
 }): Promise<string> {
+  // Geschwärzt ohne Rückweg: Codes, Lohnbeträge und Gesundheitssätze braucht
+  // keine Zusammenfassung (F-15, `nutzlast.ts`).
+  const { system, prompt } = zusammenfassungNutzlast(params);
   return generateText({
-    system: `${SWISS_CONTEXT}
-
-Du fasst Geschäftsdokumente und Kundenkommunikation zusammen. Nenne nur, was im Text steht.
-Struktur: Kernaussage in einem Satz, danach Stichpunkte mit den wichtigsten Fakten und offenen Punkten.`,
-    prompt: `Fasse den folgenden Text in maximal ${params.maxSentences ?? 6} Sätzen zusammen.${
-      params.focus ? ` Fokus: ${params.focus}.` : ''
-    }
-
-"""
-${params.text.slice(0, 40_000)}
-"""`,
+    system,
+    prompt,
     tier: 'fast',
     effort: 'low',
     maxTokens: 1_500,
   });
 }
 
-export async function generateJobReport(params: {
-  jobNumber: string;
-  customerName: string;
-  serviceName: string;
-  date: string;
-  durationMinutes: number;
-  crew: string[];
-  checklist: { label: string; done: boolean; note?: string | null }[];
-  materials: { name: string; quantity: number; unit: string }[];
-  notes?: string | null;
-}): Promise<string> {
-  return generateText({
-    system: `${SWISS_CONTEXT}
-
-Du schreibst Einsatzberichte für Kundinnen und Kunden. Sachlich, vollständig, ohne Werbesprache.
-Struktur: Einleitungssatz, ausgeführte Arbeiten als Liste, verwendete Materialien, Bemerkungen, Abschlusssatz.
-Erwähne nicht erledigte Checklistenpunkte transparent mit Begründung, sofern eine vorliegt.`,
-    prompt: `Erstelle den Einsatzbericht.
-
-Auftrag: ${params.jobNumber}
-Kunde: ${params.customerName}
-Leistung: ${params.serviceName}
-Datum: ${params.date}
-Dauer: ${Math.round(params.durationMinutes / 60 * 10) / 10} Stunden
-Team: ${params.crew.join(', ')}
-
-Checkliste:
-${params.checklist.map((c) => `- [${c.done ? 'x' : ' '}] ${c.label}${c.note ? ` — ${c.note}` : ''}`).join('\n')}
-
-Material:
-${params.materials.length ? params.materials.map((m) => `- ${m.quantity} ${m.unit} ${m.name}`).join('\n') : '- keines'}
-
-Interne Notizen: ${params.notes ?? 'keine'}`,
+export async function generateJobReport(params: EinsatzberichtEingabe): Promise<string> {
+  /**
+   * Kunden- und Teamnamen als Platzhalter (Wave 15) — der Bericht braucht
+   * sie im Ergebnis, das Modell nicht zum Formulieren. Seit F-15 auch als
+   * Namensteil, und Checkliste wie Notizen geschwärzt ohne Rückweg: Die
+   * interne Notiz darf weder den Anbieter noch den Kundenbericht mit einem
+   * Alarmcode oder einem Gesundheitssatz erreichen (`nutzlast.ts`).
+   */
+  const nutzlast = einsatzberichtNutzlast(params);
+  const bericht = await generateText({
+    system: nutzlast.system,
+    prompt: nutzlast.prompt,
     effort: 'low',
     maxTokens: 2_000,
   });
+  return nutzlast.zurueck(bericht);
 }
 
 // ---------------------------------------------------------------------------
 //  5) Übersetzung
 // ---------------------------------------------------------------------------
 
-const LANGUAGE_NAMES: Record<string, string> = {
-  DE: 'Deutsch (Schweiz)',
-  EN: 'Englisch',
-  FR: 'Französisch (Schweiz)',
-  IT: 'Italienisch (Schweiz)',
-};
-
 export async function translate(params: {
   text: string;
   targetLocale: 'DE' | 'EN' | 'FR' | 'IT';
   preserveFormatting?: boolean;
 }): Promise<string> {
-  return generateText({
-    system: `Du bist Fachübersetzer für die Reinigungsbranche in der Schweiz.
-Übersetze präzise und idiomatisch. Behalte Fachbegriffe, Eigennamen, Zahlen, Beträge und Platzhalter der Form {{name}} unverändert bei.
-${params.preserveFormatting ? 'Behalte Zeilenumbrüche, Aufzählungszeichen und Markdown-Auszeichnungen exakt bei.' : ''}
-Gib ausschliesslich die Übersetzung zurück, ohne Vor- oder Nachbemerkung.`,
-    prompt: `Zielsprache: ${LANGUAGE_NAMES[params.targetLocale]}
-
-"""
-${params.text.slice(0, 20_000)}
-"""`,
+  /*
+    Schutzplatzhalter mit Rückweg (F-15, `nutzlast.ts`): Die Übersetzung soll
+    vollständig zurückkommen, der Alarmcode im Kundenbrief also wieder an
+    seiner Stelle stehen — aber ohne den Anbieter erreicht zu haben.
+  */
+  const nutzlast = uebersetzungNutzlast(params);
+  const uebersetzung = await generateText({
+    system: nutzlast.system,
+    prompt: nutzlast.prompt,
     tier: 'fast',
     effort: 'low',
     maxTokens: 8_000,
   });
+  return nutzlast.zurueck(uebersetzung);
 }
 
 // ---------------------------------------------------------------------------
@@ -341,7 +296,21 @@ export async function optimizeRoute(params: {
   /** Vorab per Distance-Matrix ermittelte Fahrzeiten in Minuten. */
   travelMatrix?: Record<string, Record<string, number>>;
 }): Promise<RoutePlan> {
-  return generateStructured<RoutePlan>({
+  /**
+   * Kürzel statt Datenbankkennungen (Wave 15) — dasselbe Verfahren wie bei
+   * der Personaldisposition. Die Adressen bleiben: Ohne sie gibt es keine
+   * Route. Ein Kürzel, das das Modell erfindet, wird verworfen.
+   */
+  const k = kuerzel(params.stops.map((s) => s.jobId), 'E');
+  const matrix = params.travelMatrix
+    ? Object.fromEntries(
+        Object.entries(params.travelMatrix).map(([von, ziele]) => [
+          params.stops.some((s) => s.jobId === von) ? k.hin(von) : von,
+          Object.fromEntries(Object.entries(ziele).map(([nach, min]) => [params.stops.some((s) => s.jobId === nach) ? k.hin(nach) : nach, min])),
+        ]),
+      )
+    : undefined;
+  const roh = await generateStructured<RoutePlan>({
     system: `${SWISS_CONTEXT}
 
 Du planst Tagesrouten für Reinigungsteams im Kanton Bern.
@@ -356,11 +325,11 @@ Einsätze:
 ${params.stops
   .map(
     (s) =>
-      `- ${s.jobNumber} (ID ${s.jobId}): ${s.address}, Fenster ${s.earliestStart}–${s.latestStart}, Dauer ${s.durationMinutes} Min., Priorität ${s.priority}`,
+      `- ${k.hin(s.jobId)}: ${s.address}, Fenster ${s.earliestStart}–${s.latestStart}, Dauer ${s.durationMinutes} Min., Priorität ${s.priority}`,
   )
   .join('\n')}
 
-${params.travelMatrix ? `Fahrzeitmatrix (Minuten):\n${JSON.stringify(params.travelMatrix)}` : 'Keine Fahrzeitmatrix verfügbar.'}`,
+${matrix ? `Fahrzeitmatrix (Minuten):\n${JSON.stringify(matrix)}` : 'Keine Fahrzeitmatrix verfügbar.'}`,
     schema: {
       type: 'object',
       additionalProperties: false,
@@ -385,9 +354,16 @@ ${params.travelMatrix ? `Fahrzeitmatrix (Minuten):\n${JSON.stringify(params.trav
       },
     },
     toolName: 'route_planen',
-    toolDescription: 'Erstellt eine optimierte Einsatzreihenfolge mit Startzeiten.',
+    toolDescription: 'Erstellt eine optimierte Einsatzreihenfolge mit Startzeiten. Einsätze sind durch Kürzel (E1, E2 …) bezeichnet; verwende nur diese.',
     effort: 'high',
   });
+  return {
+    ...roh,
+    order: roh.order.flatMap((o) => {
+      const jobId = k.zurueck(o.jobId);
+      return jobId ? [{ ...o, jobId }] : [];
+    }),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -421,12 +397,57 @@ export async function suggestStaffing(params: {
     driverLicense: boolean;
   }[];
 }): Promise<StaffingSuggestion> {
-  return generateStructured<StaffingSuggestion>({
+  /**
+   * Pseudonymisierung — der Grund, warum diese Funktion nicht einfach ihre
+   * Eingabe in den Prompt schreibt.
+   *
+   * Vorher standen im Prompt der **Klarname** jeder mitarbeitenden Person
+   * sowie ihre Datenbankkennung, dazu Qualifikationen, Verfügbarkeitsfenster
+   * und die bereits verplante Arbeitszeit. Das sind Personendaten eines
+   * Arbeitsverhältnisses, und sie gingen an einen Auftragsverarbeiter im
+   * Ausland — während die Dokumentation zusicherte, es würden keine
+   * personenbezogenen Daten gesendet. Beides zugleich konnte nicht stimmen.
+   *
+   * Der Ausweg ist nicht, die Funktion abzuschalten: Die Disposition braucht
+   * Qualifikation, Fenster und Auslastung, um überhaupt etwas vorschlagen zu
+   * können. Sie braucht aber **keinen Namen** — und sie braucht auch keine
+   * Datenbankkennung, denn die Antwort muss ohnehin wieder zugeordnet werden.
+   *
+   * Deshalb bekommt jede Person und jeder Einsatz für **diese eine Anfrage**
+   * ein Kürzel (`P1`, `A1`). Die Zuordnung bleibt im Prozess; beim Modell
+   * landen nur Kürzel und die fachlichen Merkmale. Das Kürzel ist ausserhalb
+   * dieser Anfrage bedeutungslos — es taugt weder zur Wiedererkennung über
+   * mehrere Anfragen hinweg noch zum Nachschlagen in unserer Datenbank.
+   *
+   * Was dadurch **nicht** verschwindet: Qualifikationen und Arbeitszeiten
+   * bleiben Merkmale realer Personen. Die Übermittlung wird damit
+   * datensparsam, nicht anonym. Wer sie ganz vermeiden will, schaltet die
+   * Funktion ab — ohne `ANTHROPIC_API_KEY` ist sie es ohnehin.
+   */
+  const personKuerzel = new Map<string, string>();
+  const personZurueck = new Map<string, string>();
+  params.employees.forEach((e, i) => {
+    const k = `P${i + 1}`;
+    personKuerzel.set(e.id, k);
+    personZurueck.set(k, e.id);
+  });
+
+  const einsatzKuerzel = new Map<string, string>();
+  const einsatzZurueck = new Map<string, string>();
+  params.jobs.forEach((j, i) => {
+    const k = `A${i + 1}`;
+    einsatzKuerzel.set(j.id, k);
+    einsatzZurueck.set(k, j.id);
+  });
+
+  const roh = await generateStructured<StaffingSuggestion>({
     system: `${SWISS_CONTEXT}
 
 Du planst die Personaleinsätze eines Reinigungsteams.
+Personen und Einsätze sind durch Kürzel bezeichnet (P1, P2 … bzw. A1, A2 …).
+Verwende in deiner Antwort ausschliesslich diese Kürzel.
 Regeln:
-- Niemand wird doppelt verplant; Einsätze desselben Teammitglieds dürfen sich nicht überschneiden.
+- Niemand wird doppelt verplant; Einsätze derselben Person dürfen sich nicht überschneiden.
 - Verfügbarkeitsfenster strikt einhalten.
 - Benötigte Qualifikationen müssen abgedeckt sein; mindestens eine Person pro Einsatz mit Führerausweis, wenn Material transportiert wird.
 - Arbeitszeit pro Person maximal 510 Minuten pro Tag (8.5 Stunden).
@@ -438,7 +459,7 @@ Einsätze:
 ${params.jobs
   .map(
     (j) =>
-      `- ${j.number} (ID ${j.id}): ${j.start}–${j.end}, ${j.crewSize} Person(en), Ort ${j.city}, Qualifikationen: ${j.requiredSkills.join(', ') || 'keine speziellen'}`,
+      `- ${einsatzKuerzel.get(j.id)}: ${j.start}–${j.end}, ${j.crewSize} Person(en), Ort ${j.city}, Qualifikationen: ${j.requiredSkills.join(', ') || 'keine speziellen'}`,
   )
   .join('\n')}
 
@@ -446,7 +467,7 @@ Verfügbares Personal:
 ${params.employees
   .map(
     (e) =>
-      `- ${e.name} (ID ${e.id}): verfügbar ${e.availableFrom}–${e.availableTo}, bereits verplant ${e.workloadMinutes} Min., Qualifikationen: ${e.skills.join(', ') || 'Grundreinigung'}, Führerausweis: ${e.driverLicense ? 'ja' : 'nein'}`,
+      `- ${personKuerzel.get(e.id)}: verfügbar ${e.availableFrom}–${e.availableTo}, bereits verplant ${e.workloadMinutes} Min., Qualifikationen: ${e.skills.join(', ') || 'Grundreinigung'}, Führerausweis: ${e.driverLicense ? 'ja' : 'nein'}`,
   )
   .join('\n')}`,
     schema: {
@@ -486,6 +507,32 @@ ${params.employees
     toolDescription: 'Schlägt eine Personalzuteilung für die Einsätze eines Tages vor.',
     effort: 'high',
   });
+
+  /**
+   * Rückübersetzung. Ein Kürzel, das wir nicht vergeben haben, wird
+   * **verworfen** statt durchgereicht: Das Modell kann sich eines ausdenken,
+   * und eine erfundene Kennung, die als Datensatzbezug weiterwandert, wäre
+   * schlimmer als ein fehlender Vorschlag. Ein Einsatz, dessen Kürzel nicht
+   * auflösbar ist, entfällt; eine Person, deren Kürzel nicht auflösbar ist,
+   * wird aus der Zuteilung entfernt.
+   */
+  const einsatz = (k: string) => einsatzZurueck.get(k.trim());
+
+  return {
+    assignments: roh.assignments.flatMap((a) => {
+      const jobId = einsatz(a.jobId);
+      if (!jobId) return [];
+      const employeeIds = a.employeeIds
+        .map((k) => personZurueck.get(k.trim()))
+        .filter((id): id is string => Boolean(id));
+      return employeeIds.length > 0 ? [{ jobId, employeeIds, reason: a.reason }] : [];
+    }),
+    unassigned: roh.unassigned.flatMap((u) => {
+      const jobId = einsatz(u.jobId);
+      return jobId ? [{ jobId, reason: u.reason }] : [];
+    }),
+    summary: roh.summary,
+  };
 }
 
 // ---------------------------------------------------------------------------

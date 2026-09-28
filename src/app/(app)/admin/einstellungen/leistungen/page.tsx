@@ -81,6 +81,7 @@ export default async function ServiceSettingsPage() {
       minutesPerSqm: toNumber(service.minutesPerSqm),
       defaultCrewSize: service.defaultCrewSize,
       bufferMinutes: service.bufferMinutes,
+      requiredSkills: service.requiredSkills,
       bulletPoints: service.bulletPoints,
       includes: service.includes,
       excludes: service.excludes,

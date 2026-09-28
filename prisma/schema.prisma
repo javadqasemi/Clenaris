@@ -369,6 +369,13 @@ enum AutomationRunStatus {
   SKIPPED
 }
 
+enum AutomationActionRunStatus {
+  RUNNING
+  SUCCEEDED
+  FAILED
+  SKIPPED
+}
+
 enum FileScope {
   BOOKING
   QUOTE
@@ -393,6 +400,13 @@ enum FileScope {
   ARTICLE
   MEETING
   REPORT
+  /// Artefakte eines Unterzeichnungsvorgangs: Original-Snapshot, signiertes
+  /// Dokument, Signaturprotokoll, Unterschriftsbild. Haengen ueber benannte
+  /// Relationen am Vorgang — nie per Cascade an Offerte, Einsatz oder Kundschaft.
+  SIGNATURE
+  /// Lohnabrechnungs- und Lohnausweis-PDF. Über die allgemeine Dateiroute nur
+  /// mit `payslip:read_all`; die eigene Abrechnung liefert der Lohndienst.
+  PAYROLL
 }
 
 enum AuditAction {
@@ -521,6 +535,21 @@ model Organization {
   pipelineStages    PipelineStage[]
   tags              Tag[]
   auditLogs         AuditLog[]
+  securityEvents    SecurityEvent[]
+  cronRuns          CronRun[]
+  payrollSettings   PayrollSetting[]
+  payrollRates          PayrollRate[]
+  payrollItems          PayrollItem[]
+  withholdingProfiles   WithholdingTaxProfile[]
+  withholdingTaxRates   WithholdingTaxRate[]
+  salaryCertificates    SalaryCertificate[]
+  complaints            Complaint[]
+  siteVisits            SiteVisit[]
+  materials             Material[]
+  stockMovements        StockMovement[]
+  equipment             Equipment[]
+  scanCodes             ScanCode[]
+  securityReports       SecurityReport[]
   numberSequences   NumberSequence[]
   files             FileAsset[]
   newsletter        NewsletterSubscriber[]
@@ -528,11 +557,19 @@ model Organization {
   contentBlocks     ContentBlock[]
   contentRevisions  ContentRevision[]
   storedFiles       StoredFile[]
+  publicTokens      PublicAccessToken[]
+  messageThreads    MessageThread[]
+  tasks             Task[]
+  emailLogs         EmailLog[]
+  smsLogs           SmsLog[]
+  signatureRequests SignatureRequest[]
+  deviceHandoffs    DeviceHandoffSession[]
   seoMeta           SeoMeta[]
   accountingExports AccountingExport[]
   callsToAction     CallToAction[]
   navigationItems   NavigationItem[]
   legalDocuments    LegalDocument[]
+  contracts         Contract[]
 
   // Unternehmensführung
   kpiDefinitions    KpiDefinition[]
@@ -553,6 +590,11 @@ model Organization {
   meetings          Meeting[]
   reportSchedules   ReportSchedule[]
   reportRuns        ReportRun[]
+  qualityInspections QualityInspection[]
+
+  // Versionsverwaltung (Produktsprint 2026-09-26)
+  releaseRequests  ReleaseRequest[]
+  releaseDeferrals ReleaseDeferral[]
 
   @@map("organizations")
 }
@@ -572,7 +614,8 @@ model NumberSequence {
   @@map("number_sequences")
 }
 
-/// Öffnungszeiten je Wochentag; Grundlage der buchbaren Zeitfenster.
+/// Öffnungszeiten je Wochentag und die Einsatzzeiten, falls sie davon abweichen.
+/// Grundlage der buchbaren Zeitfenster: `src/server/services/availability.service.ts`.
 model OpeningHours {
   id             String  @id @default(cuid())
   organizationId String
@@ -580,6 +623,16 @@ model OpeningHours {
   opensAt        String? // "08:00"
   closesAt       String? // "17:30"
   closed         Boolean @default(false)
+
+  /// Einsatzzeiten (Produktsprint 2026-09-26). Leer = wie die Öffnungszeiten.
+  /// Eine Firma, deren Büro 08–17 Uhr offen ist und die Büros abends von 18 bis
+  /// 22 Uhr reinigt, konnte das vorher nicht ausdrücken, ohne auf der Website
+  /// falsche Bürozeiten zu veröffentlichen — dieselbe Zeile speist Fusszeile,
+  /// Kontaktseite und die strukturierten Daten für Suchmaschinen.
+  serviceOpensAt  String?
+  serviceClosesAt String?
+  /// An diesem Tag keine Einsätze, auch wenn das Büro offen ist.
+  serviceClosed   Boolean @default(false)
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
@@ -646,6 +699,9 @@ model User {
 
   // Sicherheit
   twoFactorEnabled       Boolean   @default(false)
+  /// TOTP-Geheimnis, AES-256-GCM mit Praefix `enc:v1:` ueber `src/lib/crypto.ts`.
+  /// Nicht gehasht, weil die Anwendung es zum Nachrechnen des Codes im Klartext
+  /// zurueckbraucht — anders als ein Passwort.
   twoFactorSecret        String?
   /// Gehashte Wiederherstellungscodes. Sie sind der einzige Weg zurueck,
   /// wenn das Telefon verloren geht — im Klartext gespeichert waeren sie
@@ -684,6 +740,11 @@ model User {
   tokens        VerificationToken[]
   notifications Notification[]
   auditLogs     AuditLog[]
+  securityEvents           SecurityEvent[] @relation("SecurityEventSubject")
+  securityEventsAcknowledged SecurityEvent[] @relation("SecurityEventAcknowledger")
+  signatureRequestsCreated SignatureRequest[] @relation("SignatureRequestsCreated")
+  signatureRequestsPresented SignatureRequest[] @relation("SignatureRequestsPresented")
+  deviceHandoffs DeviceHandoffSession[] @relation("DeviceHandoffs")
   consents      Consent[]
   activities    Activity[]          @relation("ActivityAuthor")
   assignedTasks Task[]              @relation("TaskAssignee")
@@ -700,6 +761,10 @@ model User {
   ownedControls     ControlEntry[]       @relation("ControlOwner")
   authoredArticles  KnowledgeArticle[]   @relation("ArticleAuthor")
   meetingSeats      MeetingParticipant[]
+  qualityInspections QualityInspection[] @relation("QualityInspector")
+  complaintsAssigned Complaint[]         @relation("ComplaintAssignee")
+  complaintsReported Complaint[]         @relation("ComplaintReporter")
+  siteVisitsAssessed SiteVisit[]         @relation("SiteVisitAssessor")
 
   @@index([organizationId, role])
   @@index([organizationId, status])
@@ -717,6 +782,11 @@ model RefreshToken {
   ip        String?
   expiresAt DateTime  @db.Timestamptz(6)
   revokedAt DateTime? @db.Timestamptz(6)
+  /// Gesetzt, wenn der Token durch **Rotation** verbraucht wurde — nicht durch
+  /// Abmelden, Leerlauf oder Sperre (2026-09-27). Taucht er kurz danach noch
+  /// einmal auf, ist das ein verlorener Wettlauf zweier Tabs, keine
+  /// Wiederverwendung; siehe `session-refresh.service.ts`.
+  rotatedAt DateTime? @db.Timestamptz(6)
   createdAt DateTime  @default(now()) @db.Timestamptz(6)
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -743,6 +813,107 @@ model VerificationToken {
   @@index([email, purpose])
   @@index([expiresAt])
   @@map("verification_tokens")
+}
+
+/// Ein Schluessel fuer genau eine Sache, ohne Anmeldung.
+///
+/// Der Anlass: `Quote.publicToken` und `Invoice.publicToken` waren
+/// `@default(cuid())`. Die Route dazu behauptete, der Token sei „unerratbar
+/// (cuid)" — cuid v1 ist aber ausdruecklich kein kryptografisches Geheimnis:
+/// Es besteht aus Zeitstempel, Zaehler, Maschinenkennung und einem kurzen
+/// Zufallsblock. Nachgemessen teilten sich die Tokens der Testdatenbank einen
+/// festen Praefix, waehrend die per CSPRNG erzeugten Buchungstokens kein
+/// einziges Zeichen gemeinsam hatten. Dazu kamen: Klartext in der Datenbank,
+/// kein Ablauf, kein Widerruf.
+///
+/// Statt das an drei Stellen einzeln zu flicken, gibt es jetzt **eine**
+/// Infrastruktur. Wer kuenftig einen oeffentlichen Link braucht, nimmt sie —
+/// und muss ueber Entropie, Hashing und Ablauf nicht mehr nachdenken.
+///
+/// **Was hier absichtlich fehlt: ein `resourceType`.** Der Zweck bestimmt die
+/// Art der Ressource eindeutig (`QUOTE_RESPOND` gehoert zu einer Offerte, nie
+/// zu etwas anderem). Eine zweite Spalte, die dasselbe noch einmal sagt,
+/// muesste synchron gehalten werden — und genau solche Paare laufen
+/// auseinander. Die Zuordnung steht einmal in
+/// `access-token.service.ts` und wird dort erzwungen.
+model PublicAccessToken {
+  id             String @id @default(cuid())
+  organizationId String
+
+  /// SHA-256 des rohen Tokens, hexadezimal. Der rohe Wert existiert nur bei
+  /// der Erzeugung und im versendeten Link — nie in der Datenbank, nie im
+  /// Protokoll.
+  tokenHash String             @unique
+  purpose   PublicTokenPurpose
+  /// Die eine Ressource, die dieser Token freigibt. Nie eine andere.
+  resourceId String
+
+  createdById String?
+  createdAt   DateTime  @default(now()) @db.Timestamptz(6)
+  expiresAt   DateTime  @db.Timestamptz(6)
+  revokedAt   DateTime? @db.Timestamptz(6)
+  revokedById String?
+
+  lastUsedAt DateTime? @db.Timestamptz(6)
+  useCount   Int       @default(0)
+
+  /// `null` = beliebig oft verwendbar, solange nicht abgelaufen oder
+  /// widerrufen. Das ist der Normalfall: Eine Rechnung darf man zweimal
+  /// ansehen, und ein Signaturlink muss bis zum Abschluss wieder aufrufbar
+  /// sein.
+  ///
+  /// Eine Zahl steht nur dort, wo die Einmaligkeit im **Token** liegt — beim
+  /// Einmalkennwort. Bei einer Offertannahme liegt sie dagegen im
+  /// Geschaeftszustand: Der Statusuebergang findet einmal statt, und der
+  /// Link darf danach weiter die angenommene Offerte zeigen.
+  maxUses Int?
+
+  /// Zeitpunkt der abschliessenden Handlung, falls es eine gibt. Reine
+  /// Nachweisangabe — die Sperre selbst kommt aus `maxUses` oder aus dem
+  /// Geschaeftszustand.
+  actionCompletedAt DateTime? @db.Timestamptz(6)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([purpose, resourceId])
+  @@index([organizationId, purpose])
+  @@index([expiresAt])
+  @@map("public_access_tokens")
+}
+
+/// Wofuer ein oeffentlicher Token gilt — und nur dafuer.
+///
+/// Ansehen und Handeln sind getrennt, auch wenn beide zur selben Offerte
+/// gehoeren: Ein Link, der nur das Dokument zeigt, soll nicht zugleich die
+/// Annahme ausloesen koennen.
+///
+/// Die staerkere Stufe schliesst die schwaechere ein — `QUOTE_RESPOND` kann
+/// ansehen, `INVOICE_PAY` kann ansehen. Die Umkehrung gilt nie. Wo diese
+/// Implikation steht: `PURPOSE_IMPLIES` in `access-token.service.ts`, an
+/// genau einer Stelle und nicht je Route.
+enum PublicTokenPurpose {
+  QUOTE_VIEW
+  QUOTE_RESPOND
+  INVOICE_VIEW
+  /// Ansehen *und* eine Zahlung starten.
+  ///
+  /// Vorher gab es fuer Rechnungen nur eine Stufe, und die Zahlroute nahm
+  /// deshalb denselben Token wie die Ansicht. Damit konnte ein Link, der zum
+  /// blossen Ansehen weitergegeben wurde — etwa an die Buchhaltung der
+  /// Kundschaft —, eine Zahlung ausloesen.
+  INVOICE_PAY
+  BOOKING_MANAGE
+  DOCUMENT_VIEW
+  /// Link einer unterzeichnenden Person; Ressource ist der **Teilnehmer**,
+  /// nicht der Vorgang — jede Person hat ihren eigenen Schluessel.
+  SIGNATURE_ACCESS
+  /// Nicht verwendet. Ein sechsstelliger Code darf nicht als SHA-256 liegen;
+  /// Einmalcodes stehen in `SignatureOtpChallenge`. Der Wert bleibt, damit
+  /// keine Migration ihn entfernen muss.
+  SIGNATURE_OTP
+  /// Nach Abschluss: Ergebnis ansehen, signiertes Dokument und Protokoll
+  /// laden. Nichts davon veraendert den Vorgang.
+  SIGNATURE_RESULT_VIEW
 }
 
 /// Nachweis erteilter und widerrufener Einwilligungen mit Zeitpunkt und IP.
@@ -786,6 +957,218 @@ model AuditLog {
   @@map("audit_logs")
 }
 
+/// Wie schwer ein Sicherheitsereignis wiegt.
+///
+/// Die Stufe entscheidet **nicht**, ob etwas protokolliert wird — das steht
+/// an der Stelle fest, die das Ereignis auslöst. Sie entscheidet, was auf der
+/// Übersicht oben steht und was eine Bestätigung braucht.
+enum SecuritySeverity {
+  /// Normalbetrieb, nachvollziehbar: Anmeldung, Abmeldung, Gerät entsperrt.
+  INFO
+  /// Auffällig, aber erklärbar: fehlgeschlagene Anmeldung, abgelehnter
+  /// Zugriff, Zugangslink ausgestellt.
+  WARNING
+  /// Braucht eine Entscheidung: Konto gesperrt, Zweitfaktor abgeschaltet,
+  /// Datei in Quarantäne, wiederverwendeter Rotationstoken.
+  CRITICAL
+}
+
+/// Wovon das Ereignis handelt.
+///
+/// Bewusst grob. Eine feine Einteilung sieht in der Datenbank ordentlich aus
+/// und hilft niemandem beim Lesen — wer die Übersicht öffnet, sucht „stimmt
+/// etwas mit Anmeldungen nicht", nicht `LOGIN_FAILED_WRONG_PASSWORD_THIRD_TRY`.
+/// Was genau geschah, steht in `kind` und `summary`.
+enum SecurityCategory {
+  /// Anmeldung, Abmeldung, Sperre, Zweitfaktor.
+  AUTHENTICATION
+  /// Sitzungen, Rotation, Widerruf, Gerätesperre.
+  SESSION
+  /// Abgelehnte Zugriffe, Rollen- und Rechteänderungen.
+  ACCESS
+  /// Öffentliche Zugangslinks.
+  PUBLIC_LINK
+  /// Dateien: Fund, Quarantäne, abgewiesener Typ.
+  FILE
+  /// Betriebszustand der Sicherheitseinrichtungen selbst.
+  SYSTEM
+}
+
+/// Sicherheitsereignisse — der Strom, den das Sicherheitszentrum liest.
+///
+/// ---------------------------------------------------------------------------
+///  Warum das nicht in `AuditLog` gehört
+/// ---------------------------------------------------------------------------
+///
+/// Es wäre möglich. `AuditLog` hat `action`, `entity`, `summary`, `ip` und
+/// `userAgent` — technisch passt alles hinein. Und genau daran scheitert es:
+///
+///  1. **Mengenverhältnis.** Das Prüfprotokoll nimmt jeden ändernden
+///     Geschäftsvorgang auf; im Bestand sind das 223 Aufrufstellen. Eine
+///     Sicherheitsübersicht, die darin nach fehlgeschlagenen Anmeldungen
+///     filtert, findet sie — und übersieht sie im Alltag trotzdem, weil sie
+///     zwischen Rechnungsänderungen steht.
+///  2. **Das Prüfprotokoll beantwortet eine andere Frage.** Es sagt, *wer
+///     welchen Datensatz geändert hat*. Ein fehlgeschlagener Anmeldeversuch
+///     ändert keinen Datensatz, ein abgelehnter Zugriff erst recht nicht.
+///     Beides als „Änderung an `User`" zu führen, wäre eine Notlüge.
+///  3. **Sicherheitsereignisse brauchen einen Bearbeitungszustand.** Ein
+///     Prüfprotokolleintrag ist fertig, sobald er geschrieben ist — er wird
+///     gelesen, nicht bearbeitet. Ein gesperrtes Konto dagegen ist offen, bis
+///     jemand hingesehen hat. `acknowledgedAt` in `AuditLog` wäre eine Spalte,
+///     die für 99 % der Zeilen bedeutungslos ist.
+///
+/// Umgekehrt ersetzt dieser Strom das Prüfprotokoll nicht: Eine Rollenvergabe
+/// steht in beiden, und das ist richtig so. Im Prüfprotokoll als Änderung an
+/// einem Datensatz, hier als Ereignis, das jemand sehen soll.
+///
+/// ---------------------------------------------------------------------------
+///  Was hier nicht hineingehört
+/// ---------------------------------------------------------------------------
+///
+/// **Keine Geheimnisse, auch nicht gehasht.** Kein Passwort, kein roher
+/// Zugangstoken, kein Tokenhash, kein TOTP-Geheimnis, keine AHV-Nummer, kein
+/// Alarmcode. Ein Sicherheitsprotokoll ist genau die Datei, die jemand
+/// mitnimmt, wenn er schon drin ist; sie darf ihm nichts geben, was er noch
+/// nicht hat. `context` geht deshalb durch dieselbe Redigierung wie
+/// `AuditLog.changes`.
+model SecurityEvent {
+  id             String           @id @default(cuid())
+  organizationId String
+  /// Wen es betrifft. `null` bei Ereignissen ohne bekanntes Konto — eine
+  /// Anmeldung mit unbekannter E-Mail-Adresse etwa. Die Adresse selbst steht
+  /// dann **nicht** hier: Ein Protokoll, das jede getippte Adresse sammelt,
+  /// ist eine Adressliste.
+  userId         String?
+  category       SecurityCategory
+  severity       SecuritySeverity
+  /// Die genaue Art, als stabile Zeichenkette (`LOGIN_FAILED`,
+  /// `ACCOUNT_LOCKED`, `FILE_QUARANTINED`, …). Bewusst kein Aufzählungstyp:
+  /// Eine neue Art soll keine Migration brauchen, sonst entsteht sie nicht.
+  /// Die gültigen Werte stehen in `src/lib/security/events.ts`.
+  kind           String
+  /// Ein Satz auf Deutsch, lesbar ohne Codekenntnis.
+  summary        String
+  /// Zusatzangaben, redigiert. Niemals Geheimnisse.
+  context        Json?
+  ip             String?
+  userAgent      String?
+  occurredAt     DateTime         @default(now()) @db.Timestamptz(6)
+  /// Gesehen und eingeordnet. Nur `CRITICAL` verlangt das; alles andere darf
+  /// offen bleiben, ohne dass die Übersicht danach aussieht, als stünde etwas
+  /// an.
+  acknowledgedAt DateTime?        @db.Timestamptz(6)
+  acknowledgedById String?
+  /// Was die Person dazu festgehalten hat.
+  acknowledgedNote String?
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user           User?        @relation("SecurityEventSubject", fields: [userId], references: [id], onDelete: SetNull)
+  acknowledgedBy User?        @relation("SecurityEventAcknowledger", fields: [acknowledgedById], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, occurredAt])
+  @@index([organizationId, severity, acknowledgedAt])
+  @@index([organizationId, category, occurredAt])
+  @@index([userId, occurredAt])
+  @@map("security_events")
+}
+
+enum CronRunStatus {
+  RUNNING
+  /// Alle Teilaufgaben gelungen.
+  SUCCESS
+  /// Einige gelungen, einige gescheitert.
+  PARTIAL
+  /// Keine gelungen, oder der Lauf selbst brach ab.
+  FAILED
+}
+
+/// Ein Lauf eines geplanten Auftrags (`/api/cron/hourly`, `/api/cron/daily`).
+///
+/// Bis 2026-09-23 hinterliess ein Lauf nur eine Logzeile. Ob der Nachtlauf
+/// gestern überhaupt lief, wie lange er dauerte und seit wann eine Teilaufgabe
+/// scheitert, liess sich nicht beantworten — und die Antwort des Endpunkts war
+/// 200, auch wenn jede Teilaufgabe gescheitert war (RB-014). Die Zeile hier ist
+/// die Grundlage der Anzeige im Sicherheitszentrum, der Alarme und von
+/// `/api/cron/status`.
+///
+/// **Keine Geheimnisse, keine Personendaten** in `details` und `error`:
+/// Zusammenfassungen je Teilaufgabe, über `wertSchwaerzen` geschrieben.
+model CronRun {
+  id             String        @id @default(cuid())
+  organizationId String
+  /// Der Auftrag, stabil: `hourly`, `daily`.
+  job            String
+  status         CronRunStatus @default(RUNNING)
+  startedAt      DateTime      @default(now()) @db.Timestamptz(6)
+  finishedAt     DateTime?     @db.Timestamptz(6)
+  durationMs     Int?
+  /// Teilaufgaben, die gelungen sind.
+  processed      Int           @default(0)
+  /// Teilaufgaben, die gescheitert sind.
+  failed         Int           @default(0)
+  details        Json?
+  error          String?
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, job, startedAt])
+  @@map("cron_runs")
+}
+
+enum SecurityReportSource {
+  /// `npm run security:check -- --melden` (CI oder Freigabe).
+  SECURITY_CHECK
+  /// Externer Überwachungsrechner: Erreichbarkeit, TLS, Kopfzeilen, Dateien.
+  EXTERNAL_MONITOR
+  /// ZAP-Grundprüfung (passiv) vom Überwachungsrechner.
+  ZAP_BASELINE
+  /// Abhängigkeits- und Betriebssystemprüfung auf dem Server.
+  DEPENDENCY_CHECK
+  /// Sicherung und Wiederherstellungsprobe.
+  BACKUP
+  /// Integritätsprüfung des Rechners (AIDE, Wazuh, Falco — sofern eingerichtet).
+  HOST_INTEGRITY
+}
+
+enum SecurityReportStatus {
+  OK
+  WARNUNG
+  KRITISCH
+  NICHT_GEPRUEFT
+}
+
+/// Bericht einer Prüfung, die **ausserhalb** der Anwendung läuft
+/// (Sicherheitsautomation, 2026-09-26).
+///
+/// Die Anwendung startet keine Prüfung und liest keine Datei eines Skripts;
+/// sie nimmt Berichte über `POST /api/cron/security-report` entgegen (eigenes
+/// Token `SECURITY_REPORT_TOKEN`), speichert sie und zeigt sie in der
+/// Sicherheitszentrale. So hängt die Anzeige nicht am Dateisystem genau des
+/// Rechners, den sie überwachen soll — und keine Browserroute kann eine Shell
+/// erreichen.
+///
+/// Alle Inhalte sind begrenzt (`securityReportSchema`) und werden als Text
+/// gezeigt. Aufbewahrt werden je Quelle die letzten 100 Berichte.
+model SecurityReport {
+  id             String               @id @default(cuid())
+  organizationId String
+  source         SecurityReportSource
+  status         SecurityReportStatus
+  version        String?
+  summary        String
+  /// `{ pruefungen, befunde, kennzahlen }` — so, wie validiert empfangen.
+  details        Json
+  /// Zeitpunkt laut Absender.
+  reportedAt     DateTime             @db.Timestamptz(6)
+  receivedAt     DateTime             @default(now()) @db.Timestamptz(6)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, source, receivedAt])
+  @@map("security_reports")
+}
+
 // ===========================================================================
 //  CRM — LEADS, KUNDEN, OBJEKTE
 // ===========================================================================
@@ -808,7 +1191,11 @@ model PipelineStage {
   @@map("pipeline_stages")
 }
 
-/// Frei vergebbares Etikett für Kundschaft und Anfragen.
+/// Etikett für Kundschaft und Anfragen.
+///
+/// Stand 2026-09-27: angelegt nur über den Seed, in der Anfrage auswählbar
+/// (gegen die Organisation geprüft). Eine Pflegemaske fehlt — „frei
+/// vergebbar", wie es hier stand, war es nie.
 model Tag {
   id             String @id @default(cuid())
   organizationId String
@@ -872,6 +1259,7 @@ model Lead {
   tasks        Task[]
   quotes       Quote[]
   tags         LeadTag[]
+  siteVisits   SiteVisit[]
 
   @@unique([organizationId, number])
   @@index([organizationId, status])
@@ -961,12 +1349,16 @@ model Customer {
   tasks          Task[]
   reviews        Review[]
   files          FileAsset[]
+  signatureParticipations SignatureParticipant[]
   threads        MessageThread[]
   paymentMethods PaymentMethodRef[]
   leads          Lead[]
   tags           CustomerTag[]
   giftCards      GiftCard[]
   payments       Payment[]
+  contracts      Contract[]
+  complaints     Complaint[]
+  siteVisits     SiteVisit[]
 
   @@unique([organizationId, number])
   @@index([organizationId, email])
@@ -1047,6 +1439,15 @@ model Address {
 }
 
 /// Liegenschaft mit mehreren Objekten, etwa eine Überbauung.
+///
+/// **Kein Produktbestandteil — Stand 2026-09-27.** Es gibt keinen Anlegeweg
+/// (keine Route, keine Oberfläche, keinen Seed) und keine Organisation. Die
+/// Vertragsleistung weist deshalb eine `buildingId` ab
+/// (`contractServiceSchema`); die Lage einer Leistung steht in `zone`. Das
+/// Modell bleibt stehen, weil bestehende Zeilen darauf verweisen können und
+/// ein Löschen ohne Anlass Daten kostete. Wird es ein Produktbestandteil,
+/// braucht es zuerst `organizationId` und `customerId` und einen ganzen
+/// Lebenszyklus (Anlegen, Lesen, Ändern, Archivieren, Rechte, Prüfprotokoll).
 model Building {
   id           String  @id @default(cuid())
   name         String
@@ -1067,6 +1468,10 @@ model Building {
   updatedAt DateTime @updatedAt @db.Timestamptz(6)
 
   properties Property[]
+  /// Wave 10 hatte hier „kein totes Modell mehr" vermerkt, weil
+  /// Vertragsleistungen darauf verweisen können. Ohne Anlegeweg blieb es
+  /// trotzdem eines; siehe Kopf des Modells.
+  contractServices ContractService[]
 
   @@index([postalCode])
   @@map("buildings")
@@ -1092,7 +1497,10 @@ model Property {
   hasElevator  Boolean  @default(false)
   parkingInfo  String?
   keyLocation  String?
-  alarmCode    String? // verschlüsselt gespeichert (siehe lib/crypto)
+  /// AES-256-GCM, Präfix `enc:v1:` — geschrieben und gelesen über
+  /// `src/lib/crypto.ts`. Nie in einer Liste, nur auf dem Einsatzrapport der
+  /// zugeteilten Person.
+  alarmCode    String?
   accessNote   String?
   notes        String?
 
@@ -1103,16 +1511,25 @@ model Property {
   customer Customer    @relation(fields: [customerId], references: [id], onDelete: Cascade)
   address  Address?    @relation(fields: [addressId], references: [id], onDelete: SetNull)
   building Building?   @relation(fields: [buildingId], references: [id], onDelete: SetNull)
-  bookings Booking[]
-  jobs     Job[]
-  quotes   Quote[]
-  files    FileAsset[]
+  bookings  Booking[]
+  jobs      Job[]
+  quotes    Quote[]
+  files     FileAsset[]
+  contracts Contract[]
+  qualityInspections QualityInspection[]
+  complaints         Complaint[]
+  siteVisits         SiteVisit[]
 
   @@index([customerId])
   @@map("properties")
 }
 
 /// Hinterlegtes Zahlungsmittel — nur der Verweis beim Anbieter, nie die Kartendaten.
+///
+/// **Kein Produktbestandteil — Stand 2026-09-27.** Kein Weg hinterlegt ein
+/// Zahlungsmittel (Online-Zahlungen laufen je Rechnung über Stripe Checkout).
+/// Einzig das Zusammenführen von Kundschaft (`crm.service.ts`) hängt
+/// vorhandene Zeilen um, damit keine verwaist, falls je welche entstehen.
 model PaymentMethodRef {
   id         String        @id @default(cuid())
   customerId String
@@ -1151,6 +1568,7 @@ model Activity {
   bookingId  String?
   quoteId    String?
   invoiceId  String?
+  contractId String?
   authorId   String?
 
   durationMinutes Int?
@@ -1163,10 +1581,12 @@ model Activity {
   booking  Booking?  @relation(fields: [bookingId], references: [id], onDelete: Cascade)
   quote    Quote?    @relation(fields: [quoteId], references: [id], onDelete: Cascade)
   invoice  Invoice?  @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  contract Contract? @relation(fields: [contractId], references: [id], onDelete: Cascade)
   author   User?     @relation("ActivityAuthor", fields: [authorId], references: [id], onDelete: SetNull)
 
   @@index([customerId, occurredAt])
   @@index([leadId, occurredAt])
+  @@index([contractId, occurredAt])
   @@index([type])
   @@map("activities")
 }
@@ -1174,6 +1594,10 @@ model Activity {
 /// Aufgabe mit Fälligkeit, Zuständigkeit und Erinnerung.
 model Task {
   id           String       @id @default(cuid())
+  /// Seit 2026-09-27. Eine Aufgabe kann an niemandem und nichts hängen, also
+  /// liess sich die Organisation nicht über eine Beziehung erschliessen — und
+  /// Liste, Änderung und Löschen filterten gar nicht danach.
+  organizationId String
   title        String
   description  String?
   status       TaskStatus   @default(OPEN)
@@ -1206,7 +1630,9 @@ model Task {
   objective Objective?        @relation(fields: [objectiveId], references: [id], onDelete: SetNull)
   meeting   Meeting?          @relation(fields: [meetingId], references: [id], onDelete: SetNull)
   action    CorrectiveAction?
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
+  @@index([organizationId, status, dueAt])
   @@index([assigneeId, status])
   @@index([dueAt])
   @@index([objectiveId])
@@ -1215,7 +1641,13 @@ model Task {
 
 /// Nachrichtenverlauf mit der Kundschaft, gebunden an Kundschaft oder Einsatz.
 model MessageThread {
-  id            String   @id @default(cuid())
+  id             String   @id @default(cuid())
+  /// Seit 2026-09-27. Vorher hing die Zugehörigkeit nur an Kundschaft oder
+  /// Einsatz, und Liste wie Einzelansicht filterten gar nicht danach — das Büro
+  /// sah die Verläufe jeder Organisation. Eine eigene Spalte statt eines
+  /// Filters über die Beziehung: Ein Verlauf zu einem Einsatz hat keine
+  /// Kundschaft, und eine Regel, die zwei Wege kennen muss, vergisst einen.
+  organizationId String
   customerId    String?
   jobId         String?
   subject       String
@@ -1223,11 +1655,13 @@ model MessageThread {
   lastMessageAt DateTime @default(now()) @db.Timestamptz(6)
   createdAt     DateTime @default(now()) @db.Timestamptz(6)
 
-  customer Customer? @relation(fields: [customerId], references: [id], onDelete: Cascade)
-  job      Job?      @relation(fields: [jobId], references: [id], onDelete: Cascade)
-  messages Message[]
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  customer     Customer?    @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  job          Job?         @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  messages     Message[]
 
   /// Posteingang des Büros: alle offenen Verläufe, neueste zuerst.
+  @@index([organizationId, closed, lastMessageAt])
   @@index([closed, lastMessageAt])
   @@index([customerId, lastMessageAt])
   @@map("message_threads")
@@ -1336,6 +1770,10 @@ model Service {
   minutesPerSqm      Decimal @default(1.2) @db.Decimal(6, 3)
   defaultCrewSize    Int     @default(1)
   bufferMinutes      Int     @default(30)
+  /// Qualifikationen, die jede Ausführung dieser Leistung verlangt — dieselben
+  /// Namen wie `EmployeeSkill.name` (2026-09-27). Ein Einsatz übernimmt sie
+  /// bei seiner Entstehung (`Job.requiredSkills`), die Zuteilung prüft sie.
+  requiredSkills     String[] @default([])
 
   // SEO
   seoTitle       String?
@@ -1357,6 +1795,8 @@ model Service {
   bookings     BookingItem[]
   quoteItems   QuoteItem[]
   jobs         Job[]
+  contractServices ContractService[]
+  siteVisitAreas   SiteVisitArea[]
 
   @@unique([organizationId, slug])
   @@index([organizationId, active])
@@ -1514,7 +1954,9 @@ model Booking {
   // Kanäle & Herkunft
   source            LeadSource @default(WEBSITE)
   bookedByIp        String?
-  confirmationToken String?    @unique // Zugriff ohne Login (Magic Link)
+  // Der Verwaltungslink ohne Login ist ein `PublicAccessToken` (BOOKING_MANAGE):
+  // nur der Hash liegt in der Datenbank. Bis 2026-09-27 stand hier
+  // `confirmationToken` im Klartext — siehe Migration `…_buchungslink_hash`.
 
   confirmedAt     DateTime? @db.Timestamptz(6)
   cancelledAt     DateTime? @db.Timestamptz(6)
@@ -1568,6 +2010,11 @@ model BookingItem {
   lineTotal   Decimal @db.Decimal(12, 2)
   durationMin Int     @default(0)
   position    Int     @default(0)
+  /// Die Angaben, mit denen diese Leistung gebucht wurde (Fläche, Fenster,
+  /// Zusatzleistungen …) — je Leistung, seit eine Buchung mehrere haben kann.
+  /// Nur an der ersten Zeile einer Leistung; ältere Buchungen haben `null`
+  /// und tragen ihre Angaben weiterhin an der Buchung selbst.
+  details     Json?
 
   booking Booking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
   service Service @relation(fields: [serviceId], references: [id], onDelete: Restrict)
@@ -1636,7 +2083,12 @@ model Quote {
   rejectedAt   DateTime? @db.Timestamptz(6)
   rejectReason String?
 
-  // Elektronische Signatur
+  // LEGACY_SIGNATURE — Annahme ueber die Antwortmaske vor Gate 4. Bild als
+  // Data-URL in der Zeile, kein Snapshot, keine Pruefsumme, kein Protokoll;
+  // `signatureIp` stammt aus der Zeit vor der Proxy-Richtlinie und ist eine
+  // Behauptung des Absenders. Bleibt lesbar; neue Annahmen laufen ab Gate 4C
+  // ueber `SignatureRequest`. Kein Rueckfuellen: Beweise, die es nie gab,
+  // lassen sich nicht nachtraeglich erzeugen.
   signatureDataUrl String? // PNG DataURL der Unterschrift
   signatureName    String?
   signatureIp      String?
@@ -1654,12 +2106,16 @@ model Quote {
   customer     Customer?    @relation(fields: [customerId], references: [id], onDelete: SetNull)
   lead         Lead?        @relation(fields: [leadId], references: [id], onDelete: SetNull)
   property     Property?    @relation(fields: [propertyId], references: [id], onDelete: SetNull)
+  signatureRequests SignatureRequest[]
 
   items      QuoteItem[]
   booking    Booking?
   invoices   Invoice[]
   files      FileAsset[]
   activities Activity[]
+  contracts  Contract[]
+  /// Die Besichtigung, aus der die Offerte entstand (Wave 12).
+  siteVisit  SiteVisit?
 
   @@unique([organizationId, number])
   @@index([organizationId, status])
@@ -1709,6 +2165,44 @@ model Job {
   propertyId String?
   serviceId  String?
 
+  /// Woher dieser Einsatz stammt, wenn er aus einem Vertrag erzeugt wurde.
+  ///
+  /// Alle drei zusammen, nicht nur der Vertrag: Die Frage, die später gestellt
+  /// wird, lautet „unter **welcher Vertragsversion** wurde das ausgeführt" —
+  /// und die beantwortet der Vertrag allein nicht, sobald er einmal geändert
+  /// wurde. `serviceScheduleId` kommt dazu, weil eine Vertragsversion mehrere
+  /// Serien hat und die Nachkalkulation je Serie rechnet.
+  contractId        String?
+  contractVersionId String?
+  serviceScheduleId String?
+  /// Der Serientag, für den dieser Einsatz erzeugt wurde. Kalendertag, nicht
+  /// Zeitpunkt: Der Planer denkt in Tagen, und das Zeitfenster steht an der
+  /// Serie.
+  scheduleDate      DateTime? @db.Date
+  /// Die fachliche Serie (`ServiceSchedule.seriesKey`), unabhängig davon,
+  /// unter welcher Fassung der Einsatz entstand. Zusammen mit `contractId` und
+  /// `scheduleDate` die Identität eines geplanten Termins.
+  seriesKey         String?
+
+  /// Die gültige Rechnung, die diesen Einsatz verrechnet (2026-09-27).
+  ///
+  /// Die Verrechnung ist ein **Anspruch**, gesetzt in der Transaktion der
+  /// Rechnung mit einer bedingten Aktualisierung (`WHERE billedInvoiceId IS
+  /// NULL`): Zwei gleichzeitige Rechnungen für denselben Einsatz — der
+  /// Doppelklick auf „Rechnung erstellen" — treffen dieselbe Zeile, und nur
+  /// eine setzt sie. Vorher stand die Prüfung „schon verrechnet?" vor der
+  /// Transaktion, und fünf gleichzeitige Aufrufe ergaben drei Rechnungen.
+  /// Storno und gelöschter Entwurf geben den Anspruch frei; eine stornierte
+  /// Rechnung verrechnet nichts mehr.
+  billedInvoiceId String?
+  /// Qualifikationen, die dieser Einsatz verlangt — Momentaufnahme bei der
+  /// Entstehung aus Leistung oder Vertragsleistung (2026-09-27). Dieselben
+  /// Namen wie `EmployeeSkill.name`; die Zuteilung
+  /// (`assignment.service.ts`) weist Personen ohne gültige Qualifikation ab.
+  /// Eine Momentaufnahme, damit eine spätere Änderung am Katalog keinen
+  /// geplanten Einsatz rückwirkend unbesetzbar macht.
+  requiredSkills String[] @default([])
+
   title  String
   status JobStatus @default(UNASSIGNED)
 
@@ -1728,9 +2222,22 @@ model Job {
   // Abschluss
   completionNote   String?
   customerRating   Int?
+  // LEGACY_SIGNATURE — Abnahme auf dem Geraet der Reinigungskraft vor Ort.
+  // Seit Gate 4D schreibt kein neuer Ablauf mehr in diese drei Spalten; sie
+  // tragen den Altbestand und bleiben lesbar. Neue Abnahmen stehen im
+  // Signaturkern (`SignatureRequest` mit `ceremonyMode = IN_PERSON_HANDOFF`).
   signatureDataUrl String?
   signatureName    String?
   signedAt         DateTime? @db.Timestamptz(6)
+
+  /// Wann die Kundschaft den Rapport vor Ort elektronisch bestaetigt hat.
+  ///
+  /// Eigenes Feld statt eines neuen `JobStatus`: `VERIFIED` heisst in diesem
+  /// Produkt „vom Buero kontrolliert und abrechnungsreif" — eine interne
+  /// Freigabe. Die Kundenabnahme ist eine andere Tatsache und darf jene
+  /// Bedeutung nicht stillschweigend uebernehmen. Zusicherung aus Gate 4D:
+  /// gesetzt genau dann, wenn ein abgeschlossener Abnahmevorgang existiert.
+  customerAcceptedAt DateTime? @db.Timestamptz(6)
 
   // Kostenrechnung
   laborCost    Decimal @default(0) @db.Decimal(12, 2)
@@ -1750,6 +2257,11 @@ model Job {
   property     Property?    @relation(fields: [propertyId], references: [id], onDelete: SetNull)
   service      Service?     @relation(fields: [serviceId], references: [id], onDelete: SetNull)
 
+  contract        Contract?        @relation(fields: [contractId], references: [id], onDelete: SetNull)
+  contractVersion ContractVersion? @relation(fields: [contractVersionId], references: [id], onDelete: SetNull)
+  serviceSchedule ServiceSchedule? @relation(fields: [serviceScheduleId], references: [id], onDelete: SetNull)
+  billedInvoice   Invoice?         @relation("VerrechneteEinsaetze", fields: [billedInvoiceId], references: [id], onDelete: SetNull)
+
   assignments  JobAssignment[]
   checklist    JobChecklistItem[]
   photos       JobPhoto[]
@@ -1761,11 +2273,34 @@ model Job {
   files        FileAsset[]
   threads      MessageThread[]
   invoiceItems InvoiceItem[]
+  signatureRequests SignatureRequest[]
+  deviceHandoffs    DeviceHandoffSession[]
+  qualityInspections QualityInspection[]
+  complaints         Complaint[]
+  stockMovements     StockMovement[]
 
   @@unique([organizationId, number])
+  /**
+   * **Die Doppelsperre des Planers** steht als partieller eindeutiger Index
+   * `jobs_serientermin_einmal` in der Migration
+   * `20260923100000_vertragsintegritaet` — über `(contractId, seriesKey,
+   * scheduleDate)`, ohne abgesagte und gelöschte Einsätze. Prisma kann einen
+   * partiellen Index nicht ausdrücken; hier steht deshalb nur der gewöhnliche
+   * Suchindex.
+   *
+   * Bis 2026-09-23 lautete sie `@@unique([serviceScheduleId, scheduleDate])`.
+   * Das hatte zwei Fehler: Die Serienkennung wechselt mit jeder neuen Fassung
+   * (Doppeleinsatz nach einem Fassungswechsel), und ein **abgesagter**
+   * Einsatz hielt seinen Schlüssel fest — nach einer Pause liess sich der
+   * Termin nie wieder anlegen.
+   */
+  @@index([serviceScheduleId, scheduleDate])
+  @@index([contractId, seriesKey, scheduleDate])
   @@index([organizationId, status, scheduledStart])
+  @@index([billedInvoiceId])
   @@index([scheduledStart])
   @@index([customerId])
+  @@index([contractId])
   @@map("jobs")
 }
 
@@ -1891,6 +2426,8 @@ model MaterialUsage {
   createdAt DateTime @default(now()) @db.Timestamptz(6)
 
   job Job @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  /// Die Lagerbuchung dazu, wenn das Material aus dem Bestand kam (Wave 11).
+  stockMovement StockMovement?
 
   @@index([jobId])
   @@map("material_usages")
@@ -1919,7 +2456,8 @@ model Employee {
   vacationDaysPerYear Decimal  @default(20) @db.Decimal(4, 1)
 
   // Schweizer Personaldaten
-  ahvNumber        String? // 756.xxxx.xxxx.xx — verschlüsselt
+  /// 756.xxxx.xxxx.xx — AES-256-GCM, Präfix `enc:v1:`, über `src/lib/crypto.ts`.
+  ahvNumber        String?
   iban             String?
   nationality      String?
   permitType       String? // B, C, G, L, CH
@@ -1961,6 +2499,17 @@ model Employee {
   files         FileAsset[]
   documents     ManagedDocument[]
   salaryHistory SalaryRecord[]
+  payrollProfile      EmployeePayrollProfile?
+  payrollItems        PayrollItem[]
+  withholdingProfiles WithholdingTaxProfile[]
+  salaryCertificates  SalaryCertificate[]
+  equipment           Equipment[]         @relation("EquipmentAssignee")
+
+  /// Drei Rollen am Vertrag, die im Reinigungsgewerbe regelmässig
+  /// auseinanderfallen: Wer verkauft hat, wer verantwortet, wer operativ führt.
+  contractsResponsible Contract[] @relation("ContractResponsible")
+  contractsSales       Contract[] @relation("ContractSalesOwner")
+  contractsManaged     Contract[] @relation("ContractServiceManager")
 
   @@unique([organizationId, employeeNumber])
   @@index([organizationId, active])
@@ -2043,6 +2592,58 @@ model Absence {
 }
 
 /// Lohnabrechnung mit AHV/IV/EO, ALV, BVG und UVG. Erst sichtbar, wenn freigegeben.
+/// Beitragssätze eines Jahres — je Organisation.
+///
+/// **Warum sie nicht im Code stehen.** Die Versuchung ist, `AHV = 5.3` als
+/// Konstante zu schreiben. Das wäre für genau ein Jahr richtig und danach
+/// falsch — und zwar still: Eine Lohnabrechnung mit dem Satz des Vorjahres
+/// sieht aus wie eine Lohnabrechnung.
+///
+/// Drei Dinge ändern sich unabhängig voneinander: die gesetzlichen Sätze
+/// (jährlich, vom Bund), der UVG-Satz (je Branche und Schadenerfahrung, steht
+/// im Versicherungsvertrag) und der BVG-Plan (je Vorsorgeeinrichtung, oft über
+/// dem Gesetzesminimum).
+///
+/// **Je Jahr eine Zeile, und alte Zeilen bleiben stehen.** Eine nachträgliche
+/// Korrektur einer Abrechnung von 2025 muss mit den Sätzen von 2025 rechnen.
+/// Die Sätze zu überschreiben hiesse, die Vergangenheit umzuschreiben.
+model PayrollSetting {
+  id             String @id @default(cuid())
+  organizationId String
+  year           Int
+
+  /// AHV, IV und EO zusammen — Arbeitnehmeranteil, in Prozent.
+  ahvIvEo               Decimal @default(5.3) @db.Decimal(6, 3)
+  alv                   Decimal @default(1.1) @db.Decimal(6, 3)
+  alvGrenzeJahr         Decimal @default(148200) @db.Decimal(12, 2)
+  /// Solidaritätsbeitrag über der Grenze. Seit 2023 aufgehoben — das Feld
+  /// bleibt, weil ein aufgehobener Beitrag wiederkommen kann und weil eine
+  /// Abrechnung für ein älteres Jahr ihn braucht.
+  alvUeberGrenze        Decimal @default(0) @db.Decimal(6, 3)
+  /// Nichtberufsunfall — trägt die angestellte Person. Betriebsabhängig.
+  uvgNbu                Decimal @default(1.6) @db.Decimal(6, 3)
+  /// Krankentaggeld, sofern der Betrieb eine Versicherung hat.
+  ktg                   Decimal @default(0) @db.Decimal(6, 3)
+
+  bvgEintrittsschwelle  Decimal @default(22680) @db.Decimal(12, 2)
+  bvgKoordinationsabzug Decimal @default(26460) @db.Decimal(12, 2)
+  bvgMindestKoordiniert Decimal @default(3780) @db.Decimal(12, 2)
+  bvgObergrenze         Decimal @default(90720) @db.Decimal(12, 2)
+  /// Altersgutschriften als `[{ abAlter, satz }]` — der **gesamte** Satz.
+  bvgSaetze             Json    @default("[{\"abAlter\":25,\"satz\":7},{\"abAlter\":35,\"satz\":10},{\"abAlter\":45,\"satz\":15},{\"abAlter\":55,\"satz\":18}]")
+  /// Anteil der angestellten Person an der Altersgutschrift, in Prozent.
+  /// Gesetzlich trägt der Betrieb mindestens die Hälfte.
+  bvgAnteilArbeitnehmer Decimal @default(50) @db.Decimal(6, 3)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, year])
+  @@map("payroll_settings")
+}
+
 model Payslip {
   id              String  @id @default(cuid())
   employeeId      String
@@ -2058,13 +2659,400 @@ model Payslip {
   netPay          Decimal @default(0) @db.Decimal(12, 2)
   pdfUrl          String?
   published       Boolean @default(false)
+  /// Krankentaggeld — bis Wave 9 fehlte die Spalte, obwohl die Versicherung
+  /// in vielen Gesamtarbeitsverträgen dieses Gewerbes vorgeschrieben ist. Ohne
+  /// sie wäre der Abzug in `otherDeductions` verschwunden, und die Abrechnung
+  /// mit der Versicherung liesse sich nicht mehr herleiten.
+  ktg             Decimal @default(0) @db.Decimal(12, 2)
+
+  /// Wie der Bruttolohn zustande kam.
+  ///
+  /// `HOURLY` — aus **freigegebenen** Zeiterfassungen; `MONTHLY` — aus dem
+  /// Monatslohn mal Pensum. Die Angabe steht hier und nicht nur implizit im
+  /// Personalstamm, weil sich der Anstellungstyp später ändern kann und eine
+  /// alte Abrechnung dann nicht mehr erklärbar wäre.
+  basis           String  @default("HOURLY")
+
+  /// Die vollständige Herleitung, wie sie zum Zeitpunkt der Erstellung galt.
+  ///
+  /// Enthält die angewandten Sätze, den koordinierten Jahreslohn, den
+  /// BVG-Altersband-Satz und die Zahl der berücksichtigten Zeiterfassungen.
+  /// **Eine Momentaufnahme, kein Verweis** — dieselbe Überlegung wie bei der
+  /// Empfängeradresse einer Rechnung: Ändert sich der Satz im nächsten Jahr,
+  /// bleibt die alte Abrechnung nachvollziehbar.
+  breakdown       Json?
+
+  publishedAt     DateTime? @db.Timestamptz(6)
+  createdById     String?
+
+  /// Quellensteuerabzug des Monats (Wave 9, 2026-09-23).
+  withholdingTax  Decimal @default(0) @db.Decimal(12, 2)
+  /// Spesen und andere nicht beitragspflichtige Vergütungen — kommen zur
+  /// Auszahlung dazu, sind aber kein Lohn.
+  expenses        Decimal @default(0) @db.Decimal(12, 2)
+  /// Summe der Arbeitgeberbeiträge — nicht Teil der Auszahlung, aber der
+  /// Lohnkosten und der Abrechnung mit den Kassen.
+  employerContributions Decimal @default(0) @db.Decimal(12, 2)
+
+  /// Die Beitragsversionen (`PayrollRate.id`), mit denen gerechnet wurde. Eine
+  /// Version, auf die eine veröffentlichte Abrechnung zeigt, ist unveränderlich.
+  rateVersionIds  String[] @default([])
+  /// Wurde mit mindestens einem ungeprüften Satz gerechnet?
+  unverifiedRates Boolean  @default(true)
+
+  /// Die Abrechnung braucht eine menschliche Prüfung, bevor sie veröffentlicht
+  /// werden darf — heute: Quellensteuer ohne hinterlegten Tarif.
+  reviewRequired   Boolean   @default(false)
+  reviewReason     String?
+  reviewResolvedAt DateTime? @db.Timestamptz(6)
+  reviewResolvedById String?
+  reviewNote       String?
+
+  /// Das beim Veröffentlichen erzeugte PDF — eine Momentaufnahme, nie neu
+  /// gerechnet. `FileAsset.id` im Bereich `PAYROLL`.
+  pdfFileId       String?
+  pdfChecksum     String?
 
   createdAt DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+
+  employee Employee      @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  lines    PayslipLine[]
+  items    PayrollItem[] @relation("PayslipItems")
+
+  @@unique([employeeId, year, month])
+  @@index([year, month])
+  @@map("payslips")
+}
+
+// ---------------------------------------------------------------------------
+//  Lohnabrechnung — technischer Ausbau (Wave 9, 2026-09-23)
+// ---------------------------------------------------------------------------
+
+/// Welche Beitragsart eine Satzversion beschreibt.
+enum PayrollRateCode {
+  /// AHV/IV/EO — Arbeitnehmer- und Arbeitgeberanteil.
+  AHV_IV_EO
+  /// ALV bis zur Jahresgrenze (`thresholdMax`).
+  ALV
+  /// ALV über der Grenze (Solidaritätsbeitrag; seit 2023 aufgehoben, bleibt für ältere Jahre).
+  ALV_SOLIDARITY
+  /// Nichtberufsunfall (UVG-NBU) — in der Regel die angestellte Person.
+  UVG_NBU
+  /// Berufsunfall (UVG-BU) — der Betrieb.
+  UVG_BU
+  /// Krankentaggeld.
+  KTG
+  /// Familienausgleichskasse — der Betrieb, kantonal.
+  FAK
+  /// Verwaltungskosten der Ausgleichskasse — der Betrieb, in Prozent der AHV-Beiträge.
+  VK
+  /// Berufliche Vorsorge — Schwellen und Altersbänder in `parameters`.
+  BVG
+}
+
+/// Ist ein Satz fachlich bestätigt?
+enum PayrollVerification {
+  UNGEPRUEFT
+  GEPRUEFT
+}
+
+/// Eine Version eines Beitragssatzes mit Gültigkeitszeitraum.
+///
+/// **Warum Versionen statt einer Zeile je Jahr.** Der UVG- oder KTG-Satz kann
+/// mitten im Jahr wechseln (neuer Versicherungsvertrag), und eine Abrechnung
+/// für März muss nach dem Wechsel im Juli noch mit dem Märzsatz nachrechenbar
+/// sein. Gerechnet wird mit der Version, die am **letzten Tag** des
+/// Abrechnungsmonats gilt.
+///
+/// **Keine Überschneidung je Art** — Ausschlussbedingung in der Migration.
+/// **Unveränderlich, sobald benutzt:** Zeigt eine veröffentlichte Abrechnung
+/// auf die Version, lehnt der Dienst jede Änderung ab; eine neue Version mit
+/// späterem `validFrom` ist der Weg.
+///
+/// **Nie erfunden:** `source`/`reference` halten fest, woher ein Wert kommt;
+/// `verification` sagt, ob ihn jemand fachlich bestätigt hat.
+model PayrollRate {
+  id             String          @id @default(cuid())
+  organizationId String
+  code           PayrollRateCode
+  validFrom      DateTime        @db.Date
+  /// Letzter gültiger Tag, einschliesslich. `null` = offen.
+  validUntil     DateTime?       @db.Date
+  /// Anteil der angestellten Person, in Prozent (5.3 = 5,3 %).
+  employeePct    Decimal         @default(0) @db.Decimal(7, 4)
+  /// Anteil des Betriebs, in Prozent.
+  employerPct    Decimal         @default(0) @db.Decimal(7, 4)
+  /// Untergrenze des beitragspflichtigen Jahreslohns (z. B. ALV-Solidarität ab Grenze).
+  thresholdMin   Decimal?        @db.Decimal(12, 2)
+  /// Obergrenze des beitragspflichtigen Jahreslohns (z. B. ALV-Grenze).
+  thresholdMax   Decimal?        @db.Decimal(12, 2)
+  /// Weitere Grössen je Art — heute nur BVG: Eintrittsschwelle,
+  /// Koordinationsabzug, Mindest- und Obergrenze, Altersbänder.
+  parameters     Json?
+  /// Woher der Wert stammt — „Vorbelegung Clenaris (ungeprüft)",
+  /// „Kreisschreiben …", „UVG-Police Nr. …".
+  source         String
+  reference      String?
+  verification   PayrollVerification @default(UNGEPRUEFT)
+  verifiedAt     DateTime?       @db.Timestamptz(6)
+  verifiedById   String?
+  verificationNote String?
+
+  createdById String?
+  createdAt   DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt   DateTime @updatedAt @db.Timestamptz(6)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, code, validFrom])
+  @@map("payroll_rates")
+}
+
+/// Wie der 13. Monatslohn ausgerichtet wird — vertraglich, nicht gesetzlich.
+enum ThirteenthSalaryMode {
+  /// Kein 13. Monatslohn vereinbart.
+  NONE
+  /// Ein Monatslohn im Auszahlungsmonat; bei unterjähriger Anstellung anteilig.
+  ANNUAL
+  /// Ein Zwölftel der im Jahr bezahlten Grundlöhne, im Auszahlungsmonat oder beim Austritt.
+  PRO_RATA
+  /// Monatlich ein Zwölftel des Grundlohns.
+  MONTHLY
+}
+
+/// Lohnbezogene Vereinbarungen einer Person — nur über die Lohnschnittstelle
+/// erreichbar (`payslip:create`), nie über die Personalakte.
+model EmployeePayrollProfile {
+  id                    String               @id @default(cuid())
+  employeeId            String               @unique
+  thirteenthMode        ThirteenthSalaryMode @default(NONE)
+  /// Auszahlungsmonat bei `ANNUAL`/`PRO_RATA` (1–12).
+  thirteenthPayoutMonth Int                  @default(12)
+  /// Ferienentschädigung mit dem Stundenlohn ausrichten (unregelmässige
+  /// Pensen). Der Satz ergibt sich aus den Ferienwochen der Personalakte.
+  vacationPayInWage     Boolean              @default(false)
+  /// Feiertagsentschädigung in Prozent des Grundlohns — vertraglich/GAV.
+  holidayPayPct         Decimal?             @db.Decimal(6, 3)
+  note                  String?
+
+  updatedById String?
+  createdAt   DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt   DateTime @updatedAt @db.Timestamptz(6)
 
   employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
 
-  @@unique([employeeId, year, month])
-  @@map("payslips")
+  @@map("employee_payroll_profiles")
+}
+
+/// Von Hand erfasste Lohnpositionen eines Monats.
+enum PayrollItemType {
+  /// Überstunden: Stunden × Ansatz × (1 + Zuschlag).
+  OVERTIME
+  /// Zulage (beitragspflichtig) — Schicht, Nacht, Funktion.
+  ALLOWANCE
+  /// Kinder-/Ausbildungszulage (nicht AHV-pflichtig).
+  FAMILY_ALLOWANCE
+  /// Spesenvergütung (kein Lohn).
+  EXPENSE
+  /// Korrektur des beitragspflichtigen Lohns (±).
+  CORRECTION
+  /// Korrektur der Auszahlung ohne Beitragswirkung (±).
+  NET_CORRECTION
+  /// Anderer Abzug — Vorschuss, Mietzins, Lohnpfändung.
+  DEDUCTION
+  /// Quellensteuer von Hand — ersetzt die Tarifberechnung dieses Monats.
+  WITHHOLDING_TAX_MANUAL
+}
+
+model PayrollItem {
+  id             String          @id @default(cuid())
+  organizationId String
+  employeeId     String
+  year           Int
+  month          Int
+  type           PayrollItemType
+  label          String
+  quantity       Decimal?        @db.Decimal(10, 2)
+  rate           Decimal?        @db.Decimal(12, 2)
+  surchargePct   Decimal?        @db.Decimal(6, 2)
+  /// Betrag — bei Überstunden vom Server gerechnet, sonst erfasst. Vorzeichen
+  /// nur bei Korrekturen; Abzüge und Spesen sind positiv.
+  amount         Decimal         @db.Decimal(12, 2)
+  note           String?
+  /// Korrigiert eine frühere, veröffentlichte Abrechnung.
+  correctsPayslipId String?
+  /// In welche Abrechnung die Position eingeflossen ist.
+  payslipId      String?
+
+  createdById String?
+  createdAt   DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt   DateTime  @updatedAt @db.Timestamptz(6)
+  deletedAt   DateTime? @db.Timestamptz(6)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  employee     Employee     @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  payslip      Payslip?     @relation("PayslipItems", fields: [payslipId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, year, month])
+  @@index([employeeId, year, month])
+  @@map("payroll_items")
+}
+
+/// Art einer Abrechnungszeile.
+enum PayslipLineType {
+  BASE
+  UNPAID_LEAVE
+  OVERTIME
+  ALLOWANCE
+  FAMILY_ALLOWANCE
+  VACATION_PAY
+  HOLIDAY_PAY
+  THIRTEENTH
+  CORRECTION
+  EXPENSE
+  NET_CORRECTION
+  AHV_IV_EO
+  ALV
+  BVG
+  UVG_NBU
+  KTG
+  WITHHOLDING_TAX
+  DEDUCTION
+  /// Arbeitgeberbeitrag — informativ, nicht Teil der Auszahlung.
+  EMPLOYER
+}
+
+/// Wirkung einer Zeile.
+enum PayslipLineKind {
+  /// Beitragspflichtiger Lohnbestandteil.
+  EARNING
+  /// Auszahlung ohne Lohncharakter (Spesen, Netto-Korrektur, Familienzulage).
+  PAYMENT
+  /// Abzug von der Auszahlung.
+  DEDUCTION
+  /// Arbeitgeberbeitrag — informativ.
+  EMPLOYER
+}
+
+/// Eine Zeile der Abrechnung — Momentaufnahme, unveränderlich nach dem Veröffentlichen.
+model PayslipLine {
+  id          String          @id @default(cuid())
+  payslipId   String
+  position    Int
+  type        PayslipLineType
+  kind        PayslipLineKind
+  label       String
+  quantity    Decimal?        @db.Decimal(10, 2)
+  rate        Decimal?        @db.Decimal(12, 4)
+  amount      Decimal         @db.Decimal(12, 2)
+  /// Unterliegt die Zeile der Quellensteuer (steuerbarer Lohn)?
+  taxable     Boolean         @default(true)
+  /// Ziffer des Lohnausweises, in die die Zeile fällt — Zuordnung fachlich
+  /// zu bestätigen (`docs/PAYROLL.md` §11).
+  certificateField String?
+  sourceItemId String?
+
+  payslip Payslip @relation(fields: [payslipId], references: [id], onDelete: Cascade)
+
+  @@unique([payslipId, position])
+  @@map("payslip_lines")
+}
+
+/// Quellensteuerpflicht einer Person — mit Gültigkeitszeitraum.
+///
+/// Konfession, Kinderzahl und Tarif sind **besonders schützenswerte bzw.
+/// persönliche Daten**; sie stehen nur hier, sind nur über die
+/// Lohnschnittstelle erreichbar und im Prüfprotokoll geschwärzt.
+model WithholdingTaxProfile {
+  id             String    @id @default(cuid())
+  organizationId String
+  employeeId     String
+  validFrom      DateTime  @db.Date
+  validUntil     DateTime? @db.Date
+  /// Kanton der Quellensteuer, zweistellig (BE, ZH, …).
+  canton         String
+  /// Tarifcode, wie ihn die Steuerverwaltung vergibt (z. B. „A0N").
+  tariffCode     String
+  churchTax      Boolean   @default(false)
+  children       Int       @default(0)
+  note           String?
+
+  createdById String?
+  createdAt   DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt   DateTime @updatedAt @db.Timestamptz(6)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  employee     Employee     @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@index([employeeId, validFrom])
+  @@map("withholding_tax_profiles")
+}
+
+/// Eine Zeile eines Quellensteuertarifs — **nur aus einer Quelle eingelesen,
+/// nie erfunden**. Ohne passende Zeile rechnet der Lohnlauf keine
+/// Quellensteuer, sondern verlangt eine Prüfung.
+model WithholdingTaxRate {
+  id             String @id @default(cuid())
+  organizationId String
+  canton         String
+  year           Int
+  tariffCode     String
+  /// Monatliches steuerbares Einkommen von (einschliesslich) …
+  incomeFrom     Decimal @db.Decimal(12, 2)
+  /// … bis (ausschliesslich). `null` = offen nach oben.
+  incomeTo       Decimal? @db.Decimal(12, 2)
+  ratePct        Decimal  @db.Decimal(7, 4)
+  source         String
+  reference      String?
+  verification   PayrollVerification @default(UNGEPRUEFT)
+  importBatch    String?
+
+  createdById String?
+  createdAt   DateTime @default(now()) @db.Timestamptz(6)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, canton, year, tariffCode, incomeFrom])
+  @@index([organizationId, canton, year, tariffCode])
+  @@map("withholding_tax_rates")
+}
+
+enum SalaryCertificateStatus {
+  DRAFT
+  FINAL
+}
+
+/// Aufstellung für den Lohnausweis eines Jahres — aus veröffentlichten
+/// Abrechnungen verdichtet. **Nicht das amtliche Formular 11**; die Zuordnung
+/// zu den Ziffern ist fachlich zu bestätigen.
+model SalaryCertificate {
+  id             String                  @id @default(cuid())
+  organizationId String
+  employeeId     String
+  year           Int
+  version        Int                     @default(1)
+  status         SalaryCertificateStatus @default(DRAFT)
+  periodFrom     DateTime                @db.Date
+  periodTo       DateTime                @db.Date
+  /// Die Ziffern und ihre Beträge — Momentaufnahme.
+  fields         Json
+  /// Aus welchen Abrechnungen verdichtet wurde.
+  payslipIds     String[]
+  pdfFileId      String?
+  pdfChecksum    String?
+  finalizedAt    DateTime?               @db.Timestamptz(6)
+  finalizedById  String?
+
+  createdById String?
+  createdAt   DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt   DateTime @updatedAt @db.Timestamptz(6)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  employee     Employee     @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@unique([employeeId, year, version])
+  @@map("salary_certificates")
 }
 
 // ===========================================================================
@@ -2080,6 +3068,33 @@ model Invoice {
   customerId String
   bookingId  String?
   quoteId    String?
+
+  /**
+   * Herkunft aus einem Vertrag (Wave 10).
+   *
+   * Alle drei zusammen, und der dritte ist der wichtige:
+   * `contractPeriodStart` ist der **kanonische** Beginn der Abrechnungsperiode
+   * (Monatserster, Quartalsbeginn, …), berechnet aus dem Zyklus der
+   * Vertragsversion. Er ist zugleich der Schlüssel gegen Doppelabrechnung —
+   * ein frei gewählter Zeitraum wäre keiner, weil sich beliebig viele
+   * überlappende „Perioden" bilden liessen.
+   *
+   * `contractVersionId` hält fest, unter welchen Konditionen fakturiert
+   * wurde. Ohne ihn liesse sich eine Rechnung nach der ersten Preisanpassung
+   * nicht mehr nachrechnen.
+   */
+  contractId          String?
+  contractVersionId   String?
+  contractPeriodStart DateTime? @db.Date
+  /// Erster Tag **nach** der Periode (obere Grenze schliesst nicht ein).
+  ///
+  /// Seit 2026-09-23. Der Beginn allein war kein ausreichender Schlüssel:
+  /// Wechselte der Zyklus von monatlich auf quartalsweise, begannen „Januar"
+  /// und „1. Quartal" am selben Tag, „Februar" aber nicht — Februar und März
+  /// liessen sich zusätzlich zum Quartal abrechnen. Mit dem Ende prüft die
+  /// Ausschlussbedingung `invoices_vertragsperiode_ueberlappungsfrei`, dass
+  /// sich keine zwei gültigen Rechnungen eines Vertrags zeitlich überlappen.
+  contractPeriodEnd   DateTime? @db.Date
 
   status InvoiceStatus @default(DRAFT)
 
@@ -2138,8 +3153,12 @@ model Invoice {
   customer     Customer     @relation(fields: [customerId], references: [id], onDelete: Restrict)
   booking      Booking?     @relation(fields: [bookingId], references: [id], onDelete: SetNull)
   quote        Quote?       @relation(fields: [quoteId], references: [id], onDelete: SetNull)
+  contract        Contract?        @relation(fields: [contractId], references: [id], onDelete: SetNull)
+  contractVersion ContractVersion? @relation(fields: [contractVersionId], references: [id], onDelete: SetNull)
 
   items       InvoiceItem[]
+  /// Einsätze, deren Verrechnung diese Rechnung beansprucht (`Job.billedInvoiceId`).
+  billedJobs  Job[]         @relation("VerrechneteEinsaetze")
   payments    Payment[]
   creditNotes CreditNote[]
   reminders   PaymentReminder[]
@@ -2150,6 +3169,8 @@ model Invoice {
   @@index([organizationId, status, dueDate])
   @@index([customerId])
   @@index([issueDate])
+  @@index([contractId, contractPeriodStart])
+  @@index([organizationId, qrReference])
   @@map("invoices")
 }
 
@@ -2198,7 +3219,14 @@ model Payment {
 
   paidAt         DateTime? @db.Timestamptz(6)
   refundedAt     DateTime? @db.Timestamptz(6)
+  /// Der **kumulierte** erstattete Betrag, wie der Anbieter ihn meldet — ein
+  /// Stand, kein Zuwachs. Der Saldo zählt jede eingegangene Zahlung mit
+  /// `amount − refundedAmount` (`saldoNeuBilden`).
   refundedAmount Decimal   @default(0) @db.Decimal(12, 2)
+  /// Zeitpunkt (laut Anbieter, `event.created`) des Erstattungsstands, der in
+  /// `refundedAmount` steht. Ein älteres Ereignis, das später zugestellt
+  /// wird, dreht den Stand damit nicht zurück (2026-09-27).
+  refundSyncedAt DateTime? @db.Timestamptz(6)
   failureReason  String?
 
   createdAt DateTime @default(now()) @db.Timestamptz(6)
@@ -2214,6 +3242,29 @@ model Payment {
   @@index([createdAt])
   @@index([paidAt])
   @@map("payments")
+}
+
+/// Verarbeitete Webhook-Ereignisse eines Zahlungsanbieters (2026-09-27).
+///
+/// Stripe stellt jedes Ereignis **mindestens** einmal zu — bei einer
+/// langsamen oder fehlerhaften Antwort mehrfach, in beliebiger Reihenfolge.
+/// Die Zeile entsteht in derselben Transaktion wie die Wirkung des
+/// Ereignisses; die Eindeutigkeit von (Anbieter, Ereigniskennung) macht die
+/// zweite Zustellung zu einem Konflikt, den PostgreSQL entscheidet, statt zu
+/// einer zweiten Buchung. Scheitert die Wirkung, rollt die Zeile mit zurück,
+/// und die nächste Zustellung versucht es erneut.
+///
+/// Ohne Organisation: Die Signatur gehört dem Anbieterkonto der Installation,
+/// nicht einem Mandanten; der Bezug steht an der Zahlung.
+model ProviderWebhookEvent {
+  id         String   @id @default(cuid())
+  provider   String
+  eventId    String
+  type       String
+  receivedAt DateTime @default(now()) @db.Timestamptz(6)
+
+  @@unique([provider, eventId])
+  @@map("provider_webhook_events")
 }
 
 /// Mahnstufe mit Versandzeitpunkt und Gebühr.
@@ -2385,6 +3436,10 @@ model SmsTemplate {
 /// Protokoll jedes E-Mail-Versands inkl. Öffnungen und Zustellfehlern.
 model EmailLog {
   id          String    @id @default(cuid())
+  /// Seit 2026-09-27; leer bei Zeilen aus der Zeit davor, die sich keiner
+  /// Organisation sicher zuordnen liessen (siehe Migration
+  /// `…_kommunikation_mandant`). Das Zustellprotokoll zeigt nur eigene.
+  organizationId String?
   to          String
   from        String
   subject     String
@@ -2394,18 +3449,29 @@ model EmailLog {
   error       String?
   openedAt    DateTime? @db.Timestamptz(6)
   clickedAt   DateTime? @db.Timestamptz(6)
+  /// Zustellung laut Anbieter (Wave 14) — erst über den Webhook bekannt.
+  deliveredAt DateTime? @db.Timestamptz(6)
+  /// Zeitpunkt der letzten Statusänderung durch den Anbieter.
+  statusAt    DateTime? @db.Timestamptz(6)
   entity      String?
   entityId    String?
   createdAt   DateTime  @default(now()) @db.Timestamptz(6)
 
+  organization Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, createdAt])
   @@index([to])
   @@index([entity, entityId])
+  @@index([providerId])
+  @@index([createdAt])
   @@map("email_logs")
 }
 
 /// Protokoll jedes SMS-Versands inkl. Kosten.
 model SmsLog {
   id         String   @id @default(cuid())
+  /// Seit 2026-09-27 — wie `EmailLog.organizationId`.
+  organizationId String?
   to         String
   body       String
   providerId String?
@@ -2415,9 +3481,18 @@ model SmsLog {
   cost       Decimal? @db.Decimal(10, 4)
   entity     String?
   entityId   String?
+  /// Zustellung laut Anbieter (Wave 14).
+  deliveredAt DateTime? @db.Timestamptz(6)
+  statusAt    DateTime? @db.Timestamptz(6)
   createdAt  DateTime @default(now()) @db.Timestamptz(6)
 
+  organization Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, createdAt])
   @@index([to])
+  @@index([providerId])
+  @@index([entity, entityId])
+  @@index([createdAt])
   @@map("sms_logs")
 }
 
@@ -2472,14 +3547,82 @@ model AutomationRun {
   finishedAt   DateTime?           @db.Timestamptz(6)
   result       Json?
   error        String?
+  /// Wie oft dieser Lauf schon versucht wurde.
+  ///
+  /// Ohne diesen Zähler gäbe es nur zwei Möglichkeiten, und beide sind
+  /// falsch: Ein Fehlschlag wäre entweder endgültig — dann fällt jede
+  /// Erinnerung aus, während der Mailversand eine Minute lang klemmt — oder
+  /// er würde ewig wiederholt, und eine dauerhaft unerreichbare Gegenstelle
+  /// erzeugte eine Schleife, die mit jedem Vorgang länger wird.
+  ///
+  /// Mit ihm: dreimal mit wachsendem Abstand, danach bleibt `FAILED` stehen
+  /// und ist sichtbar. Das ist der Zustand, den jemand sehen *soll*.
+  attempts     Int                 @default(0)
 
   createdAt DateTime @default(now()) @db.Timestamptz(6)
 
   automation Automation @relation(fields: [automationId], references: [id], onDelete: Cascade)
+  aktionen   AutomationActionRun[]
 
   @@unique([automationId, entity, entityId])
   @@index([status, scheduledFor])
   @@map("automation_runs")
+}
+
+/// Der Stand **einer** Aktion innerhalb eines Laufs (2026-09-27).
+///
+/// Bis dahin kannte nur der Lauf als Ganzes einen Stand. Scheiterte die
+/// zweite von zwei Aktionen, wurde der Lauf wiederholt — und die erste lief
+/// erneut: Aufgaben doppelt, E-Mails an bereits Erreichte noch einmal. Jetzt
+/// setzt ein Wiederholungsversuch bei der ersten nicht erfolgreichen Aktion
+/// fort; erfolgreiche und übersprungene bleiben erledigt.
+///
+/// `RUNNING` bleibt stehen, wenn der Prozess mitten in der Aktion starb. Für
+/// eine Aktion mit Aussenwirkung ist dann ungewiss, ob sie gewirkt hat; sie
+/// wird nicht blind wiederholt, sondern der Lauf endet sichtbar
+/// (`automation-engine.service.ts`). `result` trägt den Fortschritt innerhalb
+/// der Aktion — beim Versand die bereits Erreichten.
+model AutomationActionRun {
+  id         String                    @id @default(cuid())
+  runId      String
+  /// Stelle der Aktion in der Regel — mit `runId` ihre Identität.
+  position   Int
+  type       String
+  status     AutomationActionRunStatus @default(RUNNING)
+  attempts   Int                       @default(0)
+  result     Json?
+  error      String?
+  startedAt  DateTime?                 @db.Timestamptz(6)
+  finishedAt DateTime?                 @db.Timestamptz(6)
+
+  run AutomationRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@unique([runId, position])
+  @@map("automation_action_runs")
+}
+
+/// Ein fachliches Ereignis für die Automatisierung, vermerkt **in der
+/// Transaktion des Geschäftsvorgangs** (Transactional Outbox, 2026-09-27).
+///
+/// Vorher meldeten die Dienste ihre Auslöser nach dem Festschreiben,
+/// bestmöglich: Starb der Prozess zwischen Commit und Meldung, war das
+/// Ereignis verloren, und keine Regel lief. Jetzt entsteht diese Zeile mit
+/// der Buchung, der Rechnung, dem Einsatz — oder gar nicht. Verarbeitet wird
+/// sie gleich danach im selben Aufruf und, falls das ausbleibt, vom
+/// stündlichen Lauf; die Eindeutigkeit der Läufe macht beides unschädlich.
+model AutomationEvent {
+  id             String    @id @default(cuid())
+  organizationId String
+  trigger        AutomationTrigger
+  entityId       String
+  /// Bezug für die Verzögerung der Regel — wie `bezugszeit` beim Melden.
+  bezugszeit     DateTime? @db.Timestamptz(6)
+  createdAt      DateTime  @default(now()) @db.Timestamptz(6)
+  processedAt    DateTime? @db.Timestamptz(6)
+  attempts       Int       @default(0)
+
+  @@index([processedAt, createdAt])
+  @@map("automation_events")
 }
 
 // ===========================================================================
@@ -2516,6 +3659,12 @@ model Coupon {
 }
 
 /// Geschenkkarte mit Restguthaben.
+///
+/// **Kein Produktbestandteil — Stand 2026-09-27.** Kein Weg legt eine Karte
+/// an, keiner löst eine ein, die Buchhaltung kennt sie nicht; die
+/// Marketingseite zeigte deshalb eine immer leere Kachel und wurde bereinigt.
+/// Die Tabelle bleibt (Migrationen nur hinzufügend). Wird es ein Produkt,
+/// braucht es zuerst Verkauf, Einlösung auf der Rechnung und Verbuchung.
 model GiftCard {
   id             String    @id @default(cuid())
   organizationId String
@@ -2653,6 +3802,64 @@ model ContentBlock {
   @@map("content_blocks")
 }
 
+/// Welcher Speicher die Bytes tatsächlich hält.
+///
+/// Die Zeile entsteht bei beiden Treibern, weil sie zwei Aufgaben hat: Sie ist
+/// die *Upload-Berechtigung* (ein serverseitig ausgestelltes Ticket mit Pfad,
+/// Profil und Ablauf) und danach der *Integritätsnachweis* (`checksum`). Bei
+/// `LOCAL` liegen die Bytes zusätzlich in `data`; bei `SUPABASE` bleibt `data`
+/// dauerhaft `null` und der Pfad zeigt in den Objektspeicher.
+///
+/// Vor dieser Unterscheidung stellte der externe Weg überhaupt kein Ticket
+/// aus: `createSignedUpload` schrieb keine Zeile. Damit liess sich beim
+/// Abschluss nicht mehr feststellen, ob der gemeldete Pfad je vom Server
+/// genehmigt worden war — der Client konnte einen beliebigen behaupten.
+enum StorageDriver {
+  LOCAL
+  SUPABASE
+}
+
+/// Woher die Bytes einer Datei stammen — und damit, welches Vertrauen sie
+/// von Haus aus verdienen.
+///
+/// Die Unterscheidung ist nötig, weil „alles scannen" und „alles vertrauen"
+/// beide falsch sind. Ein Rechnungs-PDF, das unser eigener Renderer aus
+/// unseren eigenen Daten erzeugt hat, ist etwas anderes als eine
+/// Bewerbungsunterlage aus dem Internet — und ein Altbestand aus der Zeit vor
+/// dieser Prüfung ist wieder etwas anderes als beides.
+enum FileProvenance {
+  /// Von aussen hochgeladen. Wird immer geprüft, bevor sie ausgeliefert wird.
+  USER_UPLOAD
+  /// Vom Server selbst erzeugt: Rechnungs- und Offert-PDF, Rapport,
+  /// Führungsbericht, Signaturartefakte. Die Bytes entstehen aus unseren
+  /// eigenen Daten und haben nie fremden Inhalt berührt.
+  SYSTEM_GENERATED
+  /// Aus einer kontrollierten Übernahme, deren Herkunft ausdrücklich
+  /// verantwortet wurde. Heute von keinem Codepfad vergeben — der Wert
+  /// existiert, damit eine spätere Datenübernahme sich nicht als
+  /// `USER_UPLOAD` tarnen muss.
+  TRUSTED_IMPORT
+  /// Vor Einführung der Prüfung angelegt. Nie geprüft und rückwirkend nicht
+  /// prüfbar, solange die Bytes nicht erneut gelesen werden.
+  LEGACY_UNSCANNED
+}
+
+/// Wo eine Datei im Prüfablauf steht.
+///
+/// **Genau ein Zustand ist auslieferbar: `CLEAN`.** Alles andere heisst
+/// „nicht ausliefern", und die Gründe sind verschieden genug, dass sie
+/// auseinandergehalten gehören: `PENDING` heisst noch nicht angefasst,
+/// `ERROR` heisst wir wissen nichts, `INFECTED` heisst wir wissen etwas
+/// Schlechtes.
+enum FileScanStatus {
+  PENDING
+  SCANNING
+  CLEAN
+  INFECTED
+  ERROR
+  QUARANTINED
+}
+
 /// Eingebauter Dateispeicher — die Rückfallebene, wenn kein externer
 /// Objektspeicher eingerichtet ist.
 ///
@@ -2685,8 +3892,38 @@ model StoredFile {
   /// Obergrenze aus dem Upload-Profil, beim Anlegen festgehalten.
   maxBytes  Int
 
-  /// `null`, solange der Upload noch aussteht.
+  /// `null` bei `driver = SUPABASE` (die Bytes liegen dort) und solange ein
+  /// lokaler Upload noch aussteht.
   data Bytes?
+
+  /// Wo die Bytes liegen. Bestimmt, ob `data` je gefüllt wird.
+  driver StorageDriver @default(LOCAL)
+
+  /// Welches Upload-Profil diese Anforderung genehmigt hat.
+  ///
+  /// Beim Abschluss wird gegen genau diese Erlaubnisliste geprüft — sonst
+  /// liesse sich ein für `avatar` ausgestelltes Ticket mit einem PDF
+  /// abschliessen. `null` bei Zeilen aus der Zeit vor Gate 2.
+  ///
+  /// **Das Profil ist eine Dateiregel, keine Berechtigung.** Dass eine Datei
+  /// als `jobPhoto` hochgeladen wurde, sagt nichts darüber, wer den Einsatz
+  /// sehen darf. Der Zugriff hängt am `FileAsset` und dessen Fachbeziehung.
+  profile String?
+
+  /// SHA-256 der tatsächlich gespeicherten Bytes, hexadezimal in Kleinschrift.
+  ///
+  /// **Dieses Feld ist zugleich der Abschlussvermerk.** Es wird ausschliesslich
+  /// geschrieben, nachdem der Server die Bytes gelesen, die Signatur geprüft
+  /// und den deklarierten Typ bestätigt hat. Damit gilt die Invariante:
+  ///
+  ///   `checksum = null` ⇒ die Datei ist **nicht** abgeschlossen und darf
+  ///   nirgends als gültiges Fachobjekt auftauchen.
+  ///
+  /// Ein zusätzliches `verifiedAt` wäre ein zweiter Zustand für dieselbe
+  /// Aussage — und damit die Möglichkeit, dass beide auseinanderlaufen.
+  /// Zeilen aus der Zeit vor Gate 2 tragen `null` und gelten als ungeprüft;
+  /// sie werden nicht stillschweigend für in Ordnung erklärt.
+  checksum String?
 
   uploadedById String?
   uploadedAt   DateTime? @db.Timestamptz(6)
@@ -2696,6 +3933,11 @@ model StoredFile {
   createdAt DateTime @default(now()) @db.Timestamptz(6)
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  /// Die fachliche Seite derselben Datei. `null`, solange der Upload nicht
+  /// abgeschlossen ist — und bei servererzeugten Dateien, die bewusst keine
+  /// fachliche Registrierung haben (siehe `FileAsset.storedFileId`).
+  asset FileAsset?
 
   @@index([organizationId, createdAt])
   /// Für das Aufräumen nie beschriebener Platzhalter.
@@ -2765,6 +4007,11 @@ model SeoMeta {
 }
 
 /// Kampagnenseite mit eigenem Inhalt und Nachverfolgung.
+///
+/// **Kein Produktbestandteil — Stand 2026-09-27.** Kein Code liest oder
+/// schreibt dieses Modell; die Website-Inhalte laufen über das CMS
+/// (`src/lib/cms/registry.ts`) und `SeoMeta`. Die Tabelle bleibt
+/// (Migrationen nur hinzufügend).
 model LandingPage {
   id             String     @id @default(cuid())
   organizationId String
@@ -2931,15 +4178,73 @@ model FileAsset {
   organizationId String
   scope          FileScope @default(OTHER)
 
+  /// Herkunft der Bytes. Entscheidet mit darüber, ob eine Datei ohne
+  /// Prüflauf ausgeliefert werden darf (siehe `FileProvenance`).
+  ///
+  /// Die Vorgabe ist `USER_UPLOAD` — die misstrauischste der vier. Wer eine
+  /// Datei serverseitig erzeugt, muss das ausdrücklich hinschreiben; wer es
+  /// vergisst, bekommt eine Datei, die erst nach einem Prüflauf erscheint.
+  /// Andersherum wäre der Vergessensfall eine ungeprüft ausgelieferte Datei.
+  provenance FileProvenance @default(USER_UPLOAD)
+
+  /// Stand der Schadsoftwareprüfung. Nur `CLEAN` wird ausgeliefert.
+  scanStatus     FileScanStatus @default(PENDING)
+  /// Welcher Prüfer, in welcher Fassung — damit ein späterer Befund
+  /// einordenbar ist. Ein `CLEAN` von vor zwei Jahren sagt etwas anderes als
+  /// eines von heute.
+  scanner        String?
+  scannerVersion String?
+  scanStartedAt  DateTime? @db.Timestamptz(6)
+  scannedAt      DateTime? @db.Timestamptz(6)
+  /// Name des Fundes, wie der Prüfer ihn meldet. Nie die Rohantwort.
+  detectionName  String?
+  /// Der tatsächlich erkannte Typ, falls er vom angemeldeten abwich.
+  detectedMimeType String?
+  quarantinedAt  DateTime? @db.Timestamptz(6)
+  /// Begrenzt die erneuten Versuche. `ERROR` wird nie von selbst `CLEAN`.
+  scanAttempts   Int     @default(0)
+  /// Maschinenlesbarer Grund des letzten Fehlversuchs — `TIMEOUT`,
+  /// `UNAVAILABLE`, `TOO_LARGE`, `NO_SCANNER`, `PROTOCOL`. Nie Prüfertext.
+  lastScanErrorCode String?
+
   bucket    String  @default("clenaris")
   path      String // Supabase Storage Pfad
   url       String
   filename  String
   mimeType  String
   sizeBytes Int
+  /// Beim Abschluss aus `StoredFile.checksum` übernommen.
+  ///
+  /// Die physische Ebene ist die Quelle; dies ist die Momentaufnahme für die
+  /// fachliche. Beide sind beim Anlegen identisch und werden danach nie
+  /// unabhängig voneinander geändert — weicht später eines ab, ist das der
+  /// Befund, nicht ein zu behebender Schönheitsfehler. `null` heisst
+  /// ungeprüft, nicht unversehrt.
   checksum  String?
   /// true = öffentlich lesbar, false = nur via Signed URL
+  ///
+  /// **Die einzige fachliche Quelle der Zugriffsentscheidung.** Bewusst nicht
+  /// zusätzlich am `StoredFile`: zwei Kopien derselben Aussage könnten
+  /// auseinanderlaufen, und dann wäre unklar, welche gilt. Gesetzt wird sie
+  /// ausschliesslich serverseitig aus dem Verwendungszweck — ein Client kann
+  /// sie nicht behaupten.
   isPublic  Boolean @default(false)
+
+  /// Die physische Datei hinter diesem Asset.
+  ///
+  /// **Warum explizit und nicht über die URL.** Die Berechtigung wird von der
+  /// Datei aus rückwärts aufgelöst: `StoredFile` → `FileAsset` → Fachobjekt →
+  /// Rolle. Ohne Fremdschlüssel bliebe nur, die gespeicherte URL nach einer
+  /// `cuid` zu durchsuchen und zu hoffen, das richtige Fachobjekt zu treffen —
+  /// eine Zeichenkettensuche als Autorisierungsgrundlage.
+  ///
+  /// `@unique` ist hier die Absicherung gegen doppelte Registrierung: Zwei
+  /// gleichzeitige Abschlüsse desselben Tickets ergeben dann nicht zwei
+  /// Assets, sondern einen Konflikt, den PostgreSQL entscheidet.
+  ///
+  /// `null` bei Assets aus der Zeit vor Gate 2 und bei Dateien im externen
+  /// Speicher ohne Ticket.
+  storedFileId String? @unique
 
   bookingId     String?
   quoteId       String?
@@ -2951,6 +4256,11 @@ model FileAsset {
   expenseId     String?
   messageId     String?
   applicationId String?
+  /// Vertragsdokumente — unterschriebener Vertrag, Leistungsverzeichnis,
+  /// Anhänge. Bewusst dieselbe Dateikette wie überall sonst: Byteprüfung,
+  /// Dateipolitik, Schadsoftwareprüfung, Auslieferungstor. Eine zweite
+  /// Uploadarchitektur neben dieser wäre eine zweite Sicherheitsstufe.
+  contractId    String?
   // Unternehmensführung
   objectiveId  String?
   investmentId String?
@@ -2963,6 +4273,10 @@ model FileAsset {
   createdAt    DateTime @default(now()) @db.Timestamptz(6)
 
   organization Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  /// `SetNull`, nicht `Cascade`: Wird die physische Zeile aufgeräumt, soll der
+  /// fachliche Datensatz mit seiner Historie bestehen bleiben und als „Datei
+  /// fehlt" sichtbar sein — nicht spurlos verschwinden.
+  storedFile   StoredFile?     @relation(fields: [storedFileId], references: [id], onDelete: SetNull)
   booking      Booking?        @relation(fields: [bookingId], references: [id], onDelete: Cascade)
   quote        Quote?          @relation(fields: [quoteId], references: [id], onDelete: Cascade)
   invoice      Invoice?        @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
@@ -2973,6 +4287,7 @@ model FileAsset {
   expense      Expense?        @relation(fields: [expenseId], references: [id], onDelete: Cascade)
   message      Message?        @relation(fields: [messageId], references: [id], onDelete: Cascade)
   application  JobApplication? @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  contract     Contract?       @relation(fields: [contractId], references: [id], onDelete: Cascade)
   objective    Objective?        @relation(fields: [objectiveId], references: [id], onDelete: Cascade)
   investment   Investment?       @relation(fields: [investmentId], references: [id], onDelete: Cascade)
   risk         RiskEntry?        @relation(fields: [riskId], references: [id], onDelete: Cascade)
@@ -2982,10 +4297,431 @@ model FileAsset {
   versions     DocumentVersion[]
   reportRuns   ReportRun[]
 
+  /// Rollen in Unterzeichnungsvorgaengen — benannt, damit eindeutig ist,
+  /// welches Asset was ist. Keine generische Relation daneben.
+  /// Mehrere Vorgaenge duerfen dasselbe Original binden — etwa ein
+  /// abgebrochener und sein Nachfolger auf derselben Fassung.
+  signatureOriginalOf SignatureRequest[]    @relation("SignatureOriginal")
+  signatureSignedOf   SignatureRequest?     @relation("SignatureSigned")
+  signatureEvidenceOf SignatureRequest?     @relation("SignatureEvidence")
+  signatureOf         SignatureParticipant? @relation("ParticipantSignature")
+
   @@index([organizationId, scope])
   @@index([bookingId])
   @@index([jobId])
+  /// Für das Sicherheitscockpit und den erneuten Prüflauf: „alles, was nicht
+  /// CLEAN ist" muss sich ohne vollen Tabellendurchlauf finden lassen.
+  @@index([organizationId, scanStatus])
+  /// Für den Wiederholungslauf: offene Fälle nach Alter.
+  @@index([scanStatus, scanAttempts])
   @@map("file_assets")
+}
+
+// ===========================================================================
+//  ELEKTRONISCHE UNTERZEICHNUNG
+// ===========================================================================
+//
+// Entwurf und Begruendung: `docs/SIGNATUR_GATE4A.md`. Die Kurzfassung:
+//
+// Eine Unterschrift bezieht sich auf **Bytes**, nie auf ein veraenderliches
+// Geschaeftsobjekt. Der Vorgang friert die Pruefsumme des Originals ein
+// (Hash A), prueft sie vor dem Abschluss erneut aus den tatsaechlich
+// gespeicherten Bytes, und erzeugt danach hoechstens ein signiertes Artefakt
+// (Hash B) und ein Signaturprotokoll (Hash C). Alle drei liegen in der
+// Gate-2-Ablage (`StoredFile`/`FileAsset`, scope SIGNATURE).
+//
+// INTERNAL_EVIDENCE ist keine qualifizierte Signatur und wird nirgends als
+// solche bezeichnet. Ein Anbieter fuer QUALIFIED_EXTERNAL ist nicht angebunden.
+
+enum SignatureProviderType {
+  INTERNAL_EVIDENCE
+  QUALIFIED_EXTERNAL
+}
+
+/// Wie das signierte Artefakt entsteht.
+///
+/// `EMBEDDED_VISUAL` nur fuer Dokumente, deren Ursprung Clenaris kontrolliert
+/// (eigene Snapshots): Das Original wird kopiert, ein Unterschriftsbild und
+/// eine Signaturseite kommen dazu, ein neues Artefakt entsteht. Das Original
+/// selbst bleibt unangetastet.
+///
+/// `DETACHED_EVIDENCE` fuer hochgeladene Dokumente: Das Original bleibt
+/// bytegenau, wie es ist. Der Vorgang bindet sich ueber Hash A daran; das
+/// Ergebnis ist das Signaturprotokoll, nicht ein umgeschriebenes PDF. Grund:
+/// Ein hochgeladenes PDF kann eine fremde kryptografische Signatur tragen,
+/// und die Anwendung kann deren Abwesenheit nicht beweisen — ein Overlay
+/// zerstoerte sie still.
+enum SignatureArtifactMode {
+  EMBEDDED_VISUAL
+  DETACHED_EVIDENCE
+}
+
+/// Was technisch geprueft wurde — keine rechtliche Wertung, kein „MFA".
+enum SignatureAssuranceLevel {
+  /// Besitz des zugestellten Links.
+  LINK_ONLY
+  /// Link und ein Code an dieselbe E-Mail-Adresse — derselbe Kanal zweimal.
+  LINK_PLUS_EMAIL_CODE
+  /// Link per E-Mail, Code an die hinterlegte Mobilnummer.
+  LINK_PLUS_SMS_CODE
+}
+
+/// Wie die Unterzeichnung zustande kam — der *Hergang*, nicht die Sicherheit.
+///
+/// Bewusst getrennt von `SignatureAssuranceLevel`: Dort steht, womit der
+/// Zugang nachgewiesen wurde (Link, Link plus Code). Hier steht, in welcher
+/// Situation unterschrieben wurde. Beides zusammen ergibt erst das Bild, und
+/// keines darf fuer das andere einstehen.
+///
+/// `IN_PERSON_HANDOFF` behauptet ausschliesslich: Das Geraet wurde von einer
+/// Person aus dem Betrieb fuer genau diesen Vorgang uebergeben. Es behauptet
+/// **nicht**, dass eine Identitaet geprueft, ein Ausweis gesehen oder eine
+/// Vollmacht nachgewiesen wurde. Wer daraus mehr liest, liest etwas hinein.
+enum SignatureCeremonyMode {
+  /// Aus der Ferne ueber einen zugestellten Link, ohne Anmeldung.
+  REMOTE_LINK
+  /// Aus dem angemeldeten Kundenbereich heraus.
+  AUTHENTICATED_CUSTOMER
+  /// Vor Ort auf dem uebergebenen Geraet des Betriebs.
+  IN_PERSON_HANDOFF
+}
+
+/// Zustand einer Geraeteuebergabe zur Vor-Ort-Abnahme.
+enum DeviceHandoffStatus {
+  /// Geraet ist beim Kunden, die Mitarbeitersitzung ist gesperrt.
+  ACTIVE
+  /// Mitarbeiter hat wieder uebernommen (Passwort bestaetigt).
+  RELEASED
+}
+
+enum SignatureRequestStatus {
+  DRAFT
+  PENDING
+  /// Technischer Zwischenzustand: Artefakte werden erzeugt. Ablage und
+  /// Datenbank haben keine gemeinsame Transaktion; dieser Zustand macht einen
+  /// abgebrochenen Abschluss erkennbar und wiederholbar, statt ihn faelschlich
+  /// als COMPLETED zu melden.
+  FINALIZING
+  COMPLETED
+  DECLINED
+  EXPIRED
+  CANCELLED
+}
+
+enum SignatureParticipantRole {
+  SIGNER
+  CC
+}
+
+enum SignatureParticipantStatus {
+  PENDING
+  VIEWED
+  VERIFIED
+  SIGNED
+  DECLINED
+}
+
+enum SignatureMethod {
+  DRAWN
+  TYPED
+}
+
+enum SignatureEventType {
+  REQUEST_CREATED
+  LINK_ISSUED
+  LINK_EXCHANGED
+  DOCUMENT_VIEWED
+  OTP_REQUESTED
+  OTP_VERIFIED
+  OTP_FAILED
+  CONSENT_ACCEPTED
+  SIGNATURE_SUBMITTED
+  FINALIZATION_STARTED
+  INTEGRITY_FAILED
+  SIGNED
+  DECLINED
+  CANCELLED
+  EXPIRED
+  ARTIFACT_CREATED
+  REQUEST_COMPLETED
+  RESULT_LINK_ISSUED
+  RESULT_VIEWED
+}
+
+enum SignatureOtpChannel {
+  EMAIL
+  SMS
+}
+
+/// Ein Unterzeichnungsvorgang.
+///
+/// Genau eine Quelle (`quoteId` | `jobId` | `documentVersionId`) — die
+/// Datenbank erzwingt es per CHECK. `Restrict` in alle Richtungen: Ein
+/// Vorgang mit Beweis haelt sein Geschaeftsobjekt und seine Artefakte fest;
+/// wer loeschen will, muss den Vorgang zuerst bewusst behandeln. Die
+/// generische Bereinigung (`purge.service`) klammert Signaturen aus.
+model SignatureRequest {
+  id             String @id @default(cuid())
+  organizationId String
+  /// Nicht geheime Adresse fuer den Ablauf ohne rohen Token (16 Zufallsbytes
+  /// hex). Ohne Sitzung zeigt sie nur „Link nicht mehr gueltig".
+  publicId       String @unique
+
+  status         SignatureRequestStatus  @default(DRAFT)
+  providerType   SignatureProviderType   @default(INTERNAL_EVIDENCE)
+  artifactMode   SignatureArtifactMode   @default(DETACHED_EVIDENCE)
+  assuranceLevel SignatureAssuranceLevel @default(LINK_ONLY)
+  /// Der Hergang der Unterzeichnung. Bis Gate 4D stand er nur in den
+  /// `details` einzelner Ereignisse; als Spalte laesst er sich abfragen und
+  /// im Beweis eindeutig ausweisen.
+  ceremonyMode   SignatureCeremonyMode   @default(REMOTE_LINK)
+
+  /// Wer die Vor-Ort-Abnahme begonnen und das Geraet uebergeben hat.
+  ///
+  /// Ausdruecklich **nicht** der Unterzeichner: Die Person aus dem Betrieb
+  /// stellt das Geraet bereit, unterschreibt aber nicht und bestaetigt auch
+  /// keine Identitaet. Der Name wird als Schnappschuss mitgefuehrt, weil ein
+  /// spaeterer Namenswechsel den Beweis nicht veraendern darf.
+  presentedById       String?
+  presentedByName     String?
+  presentedByEmployeeId String?
+  title          String
+  /// Vorgangskennung eines spaeteren externen Anbieters. Bei INTERNAL null.
+  providerReference String?
+
+  quoteId           String?
+  jobId             String?
+  documentVersionId String?
+  /// Die vierte Quelle des Signaturkerns (Wave 10).
+  ///
+  /// Unterzeichnet wird immer eine **Vertragsversion**, nie „der Vertrag":
+  /// Was der Kunde angenommen hat, sind konkrete Konditionen, und die stehen
+  /// in der Version. Eine Unterschrift am Vertragskopf wäre eine Zusage auf
+  /// etwas, das sich danach ändern kann — genau das, was die Versionierung
+  /// verhindern soll.
+  contractVersionId String?
+
+  /// Immutable ab PENDING.
+  originalArtifactId   String
+  originalDocumentHash String // Hash A — SHA-256 der Originalbytes
+  signedArtifactId     String? @unique
+  signedArtifactHash   String? // Hash B
+  evidenceArtifactId   String? @unique
+  evidenceArtifactHash String? // Hash C
+
+  /// Welche Fassung des Zustimmungstexts (und welche Sprache) gilt. Der Text
+  /// selbst liegt im Code; beim Abschluss wird er am Teilnehmer eingefroren.
+  consentVersion String
+  consentLocale  String @default("de-CH")
+
+  /// Sichtbare Unterschrift bei EMBEDDED_VISUAL, PDF-Punkte; null = nur
+  /// Signaturseite. Wird gegen die tatsaechliche Seite validiert.
+  placementPage   Int?
+  placementX      Decimal? @db.Decimal(8, 2)
+  placementY      Decimal? @db.Decimal(8, 2)
+  placementWidth  Decimal? @db.Decimal(8, 2)
+  placementHeight Decimal? @db.Decimal(8, 2)
+
+  createdById      String
+  createdAt        DateTime  @default(now()) @db.Timestamptz(6)
+  sentAt           DateTime? @db.Timestamptz(6)
+  expiresAt        DateTime  @db.Timestamptz(6)
+  /// Seit wann der Abschluss laeuft — erkennt einen haengengebliebenen
+  /// FINALIZING-Zustand nach einem Absturz.
+  finalizingSince  DateTime? @db.Timestamptz(6)
+  completedAt      DateTime? @db.Timestamptz(6)
+  declinedAt       DateTime? @db.Timestamptz(6)
+  expiredAt        DateTime? @db.Timestamptz(6)
+  cancelledAt      DateTime? @db.Timestamptz(6)
+  cancelledById    String?
+  /// Fachliche Entwertung nach Abschluss durch einen neuen Vorgang — der
+  /// Beweis bleibt, nur die Bedeutung nicht.
+  supersededById   String?
+
+  organization     Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  quote            Quote?           @relation(fields: [quoteId], references: [id], onDelete: Restrict)
+  job              Job?             @relation(fields: [jobId], references: [id], onDelete: Restrict)
+  documentVersion  DocumentVersion? @relation(fields: [documentVersionId], references: [id], onDelete: Restrict)
+  contractVersion  ContractVersion? @relation(fields: [contractVersionId], references: [id], onDelete: Restrict)
+  originalArtifact FileAsset        @relation("SignatureOriginal", fields: [originalArtifactId], references: [id], onDelete: Restrict)
+  signedArtifact   FileAsset?       @relation("SignatureSigned", fields: [signedArtifactId], references: [id], onDelete: Restrict)
+  evidenceArtifact FileAsset?       @relation("SignatureEvidence", fields: [evidenceArtifactId], references: [id], onDelete: Restrict)
+  createdBy        User             @relation("SignatureRequestsCreated", fields: [createdById], references: [id], onDelete: Restrict)
+  presentedBy      User?            @relation("SignatureRequestsPresented", fields: [presentedById], references: [id], onDelete: SetNull)
+  participants     SignatureParticipant[]
+  events           SignatureEvent[]
+  deviceHandoffs   DeviceHandoffSession[]
+
+  @@index([organizationId, status])
+  @@index([organizationId, createdAt])
+  @@index([expiresAt])
+  @@index([quoteId])
+  @@index([jobId])
+  @@index([documentVersionId])
+  @@index([contractVersionId])
+  @@index([originalArtifactId])
+  @@map("signature_requests")
+}
+
+/// Die Geraeteuebergabe: Solange sie laeuft, haelt der Kunde das Geraet der
+/// Mitarbeiterin bzw. des Mitarbeiters — und die Mitarbeitersitzung ist
+/// gesperrt.
+///
+/// **Warum eine Tabelle und kein Cookie.** Ein Cookie liegt im Browser, den
+/// der Kunde gerade in der Hand haelt; es waere genau dort widerlegbar, wo es
+/// gelten muss. Und ein prozesslokaler Zwischenspeicher taugt nicht, weil PM2
+/// im Cluster laeuft: Die Sperre entstuende auf Worker 1 und der naechste
+/// Aufruf traefe Worker 2. Die Sperre gehoert deshalb in die Datenbank, wie
+/// `User.sessionsRevokedAt` und aus demselben Grund.
+///
+/// **Warum an die Familie gebunden und nicht an den Benutzer.** Dieselbe
+/// Person ist oft auf dem Arbeitstelefon *und* am Buerorechner angemeldet.
+/// Eine Sperre je Benutzer wuerde beim Uebergeben des Telefons den Rechner
+/// mitsperren. `RefreshToken.family` bleibt ueber alle Rotationen hinweg
+/// dieselbe und benennt damit genau einen Browser.
+model DeviceHandoffSession {
+  id             String @id @default(cuid())
+  organizationId String
+  /// Die gesperrte Person — der Mitarbeiter, nicht der Unterzeichner.
+  userId         String
+  jobId          String
+  signatureRequestId String
+
+  /// `RefreshToken.family` des gesperrten Browsers. Kein Geheimnis: Die
+  /// Familie ist eine Zufallskennung ohne Zugriffswirkung; der Token selbst
+  /// liegt nur als Hash in `refresh_tokens`.
+  sessionFamily  String
+  status         DeviceHandoffStatus @default(ACTIVE)
+
+  startedAt   DateTime  @default(now()) @db.Timestamptz(6)
+  /// Wann die Unterzeichnung spaetestens endet. **Entsperrt nicht**: Ein
+  /// abgelaufener Vorgang gibt das Geraet nicht frei, sonst zeigte ein
+  /// liegengelassenes Telefon nach Fristablauf wieder den Mitarbeiterbereich.
+  expiresAt   DateTime  @db.Timestamptz(6)
+  releasedAt  DateTime? @db.Timestamptz(6)
+
+  organization     Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user             User             @relation("DeviceHandoffs", fields: [userId], references: [id], onDelete: Cascade)
+  job              Job              @relation(fields: [jobId], references: [id], onDelete: Restrict)
+  signatureRequest SignatureRequest @relation(fields: [signatureRequestId], references: [id], onDelete: Restrict)
+
+  @@index([organizationId, status])
+  @@index([userId])
+  @@index([jobId])
+  @@index([signatureRequestId])
+  /// Der eigentliche Schluessel: Nachschlagen je Browser, bei jedem Refresh.
+  @@index([sessionFamily, status])
+  @@map("device_handoff_sessions")
+}
+
+/// Wer unterzeichnet — mit eingefrorenen Kontaktdaten. Ein spaeterer
+/// Kundenwechsel aendert den Beweis nicht; `customerId` ist nur ein Bezug.
+model SignatureParticipant {
+  id        String @id @default(cuid())
+  requestId String
+  order     Int    @default(1)
+  role      SignatureParticipantRole   @default(SIGNER)
+  status    SignatureParticipantStatus @default(PENDING)
+
+  nameSnapshot  String
+  emailSnapshot String
+  phoneSnapshot String?
+  customerId    String?
+
+  viewedAt      DateTime? @db.Timestamptz(6)
+  verifiedAt    DateTime? @db.Timestamptz(6)
+  signedAt      DateTime? @db.Timestamptz(6)
+  declinedAt    DateTime? @db.Timestamptz(6)
+  declineReason String?
+
+  /// Immutable ab SIGNED. Was die Person angegeben hat — kein Identitaetsnachweis.
+  authenticationMethod SignatureAssuranceLevel?
+  signatureMethod      SignatureMethod?
+  signedName           String?
+  signatureArtifactId  String? @unique
+  signatureArtifactHash String?
+  consentTextSnapshot  String?
+  consentTextHash      String?
+  consentVersion       String?
+  consentLocale        String?
+  consentAcceptedAt    DateTime? @db.Timestamptz(6)
+  /// Technische Metadaten des Abschlusses — mit Quelle, siehe `client-ip.ts`.
+  ipAddress                String?
+  ipSource                 String?
+  clientReportedUserAgent  String?
+
+  request           SignatureRequest @relation(fields: [requestId], references: [id], onDelete: Restrict)
+  customer          Customer?        @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  signatureArtifact FileAsset?       @relation("ParticipantSignature", fields: [signatureArtifactId], references: [id], onDelete: Restrict)
+  events            SignatureEvent[]
+  otpChallenges     SignatureOtpChallenge[]
+
+  @@unique([requestId, order])
+  @@index([requestId, status])
+  @@map("signature_participants")
+}
+
+/// Fachliches Signaturprotokoll — **nur anhaengen**.
+///
+/// Kein Dienst aendert oder loescht Zeilen; es gibt keine Funktion dafuer.
+/// Zusaetzlich lehnt ein Trigger in der Datenbank UPDATE, DELETE und TRUNCATE
+/// ab (Migration `signatur_kern`). `Restrict` an beiden Relationen: Wer den
+/// Vorgang loeschen wollte, muesste zuerst das Protokoll loeschen — und das
+/// geht nicht. Das ist Absicht.
+///
+/// `AuditLog` bleibt das allgemeine Systemaudit (wer hat was geaendert);
+/// hier steht der Ablauf eines Vorgangs in seiner Reihenfolge.
+model SignatureEvent {
+  id            String @id @default(cuid())
+  requestId     String
+  participantId String?
+  type          SignatureEventType
+  at            DateTime @default(now()) @db.Timestamptz(6)
+  ipAddress     String?
+  ipSource      String?
+  clientReportedUserAgent String?
+  /// SHA-256 der Sitzungskennung — Zuordnung ohne Geheimnis.
+  sessionRef    String?
+  /// Sachliche Angaben ohne Geheimnisse (z. B. Hash, Kanal, Fehlgrund). Klein
+  /// und versioniert (`v`).
+  details       Json?
+
+  request     SignatureRequest      @relation(fields: [requestId], references: [id], onDelete: Restrict)
+  participant SignatureParticipant? @relation(fields: [participantId], references: [id], onDelete: Restrict)
+
+  @@index([requestId, at])
+  @@map("signature_events")
+}
+
+/// Ein zugestellter Bestaetigungscode.
+///
+/// Nicht `PublicAccessToken`: Sechs Ziffern sind eine Million
+/// Moeglichkeiten, und ein blosser SHA-256 waere aus einem Datenbankabzug in
+/// Sekunden durchprobiert. Gespeichert wird Argon2id ueber einen HMAC mit
+/// zweckgebundenem Schluessel (`signature-otp.ts`). Der Hash ist kein Teil des
+/// Beweises — nach Ablauf wird die Zeile bereinigt; im Protokoll bleibt die
+/// Tatsache (Kanal, Ziel, Zeit, Ergebnis), nie der Code.
+model SignatureOtpChallenge {
+  id            String @id @default(cuid())
+  participantId String
+  channel       SignatureOtpChannel
+  sentTo        String
+  codeHash      String
+  attempts      Int      @default(0)
+  maxAttempts   Int      @default(5)
+  expiresAt     DateTime @db.Timestamptz(6)
+  usedAt        DateTime? @db.Timestamptz(6)
+  invalidatedAt DateTime? @db.Timestamptz(6)
+  resendAfter   DateTime @db.Timestamptz(6)
+  /// SHA-256 der Sitzungskennung, aus der der Code angefordert wurde.
+  sessionRef    String?
+  createdAt     DateTime @default(now()) @db.Timestamptz(6)
+
+  participant SignatureParticipant @relation(fields: [participantId], references: [id], onDelete: Cascade)
+
+  @@index([participantId, createdAt])
+  @@index([expiresAt])
+  @@map("signature_otp_challenges")
 }
 
 // ---------------------------------------------------------------------------
@@ -3919,6 +5655,7 @@ model CorrectiveAction {
   control      ControlEntry? @relation(fields: [controlId], references: [id], onDelete: SetNull)
   review       Review?       @relation(fields: [reviewId], references: [id], onDelete: SetNull)
   task         Task?         @relation(fields: [taskId], references: [id], onDelete: SetNull)
+  complaint    Complaint?
 
   @@index([organizationId, completedAt])
   @@map("corrective_actions")
@@ -4022,6 +5759,9 @@ model DocumentVersion {
   document ManagedDocument  @relation("AllVersions", fields: [documentId], references: [id], onDelete: Cascade)
   current  ManagedDocument? @relation("CurrentVersion")
   file     FileAsset        @relation(fields: [fileAssetId], references: [id], onDelete: Cascade)
+  /// Unterzeichnungsvorgaenge auf genau dieser Fassung. `Restrict` von dort:
+  /// Eine Fassung mit Beweis laesst sich nicht loeschen.
+  signatureRequests SignatureRequest[]
 
   @@unique([documentId, version])
   @@map("document_versions")
@@ -4372,4 +6112,1259 @@ model ReportRun {
 
   @@index([organizationId, kind, periodStart])
   @@map("report_runs")
+}
+
+// ===========================================================================
+//  Verträge (Wave 10)
+// ===========================================================================
+//
+//  Ein Reinigungsvertrag ist in diesem Produkt **kein Dokument**, sondern der
+//  betriebliche Ursprung wiederkehrender Leistungen:
+//
+//      Offerte → angenommen → Vertrag → Vertragsversion → Leistung →
+//      Einsatzplan → Einsätze → Disposition → Zeit → Rapport → Rechnung
+//
+//  Zwei Entscheidungen tragen das ganze Modell:
+//
+//  1. **Der Vertragskopf trägt die Identität, die Version die Konditionen.**
+//     Ein laufender Vertrag darf nicht rückwirkend umgeschrieben werden. Preis,
+//     Leistungsumfang, Frequenz, Zahlungsbedingungen, Laufzeit und SLA stehen
+//     deshalb ausschliesslich in `ContractVersion`. Wer etwas davon ändert,
+//     erzeugt eine neue Version; die alte bleibt vollständig lesbar, und jeder
+//     Einsatz und jede Rechnungsposition zeigt weiterhin auf *die* Version,
+//     unter der sie entstanden ist.
+//
+//  2. **Leistungen und Einsatzpläne hängen an der Version, nicht am Vertrag.**
+//     Der bequemere Weg wäre, sie am Vertrag zu führen und mit
+//     `gültigAb`/`gültigBis` zu versehen. Dann müsste aber jede Auswertung die
+//     Gültigkeit selbst nachrechnen, und ein vergessener Zeitfilter erzeugt
+//     eine falsche Antwort, die aussieht wie eine richtige. Beim Anlegen einer
+//     Version werden Leistungen und Pläne kopiert; das kostet Zeilen und
+//     erspart eine Klasse stiller Fehler.
+//
+//  Was dieses Modell **nicht** tut: Es beurteilt keine Kündigung. Clenaris
+//  verwaltet Fristen, Daten und Nachweise; ob eine Kündigung wirksam ist, ist
+//  eine Rechtsfrage und keine Datenbankspalte.
+
+enum ContractStatus {
+  DRAFT
+  IN_REVIEW
+  OFFERED
+  ACTIVE
+  PAUSED
+  NOTICE_GIVEN
+  ENDED
+  CANCELLED
+}
+
+/// Wie es nach Ablauf der Mindestlaufzeit weitergeht.
+enum ContractRenewalType {
+  /// Endet zum Enddatum, ohne Zutun.
+  NONE
+  /// Verlängert sich automatisch um `renewalPeriodMonths`.
+  AUTOMATIC
+  /// Verlängert sich nur, wenn jemand es ausdrücklich tut.
+  MANUAL
+}
+
+enum ContractBillingCycle {
+  PER_VISIT
+  MONTHLY
+  QUARTERLY
+  SEMIANNUAL
+  ANNUAL
+}
+
+/// Wie sich der Vertragspreis bildet.
+///
+/// Die Werte sind bewusst nicht dieselben wie `PricingModel` der Leistungen:
+/// Dort geht es um die Berechnung eines einzelnen Auftrags aus Fläche und
+/// Stunden, hier um die Abrechnungsform eines Dauerschuldverhältnisses.
+enum ContractPricingModel {
+  /// Fester Betrag je Abrechnungsperiode.
+  FIXED_PERIOD
+  /// Fester Betrag je Einsatz.
+  FIXED_PER_VISIT
+  /// Nach geleisteten Stunden.
+  HOURLY
+  /// Nach Menge (m², Fenster, Stockwerke) × Einzelpreis.
+  UNIT_BASED
+  /// Abweichende Vereinbarung — der Betrag wird je Periode erfasst.
+  CUSTOM
+}
+
+enum ContractVersionStatus {
+  DRAFT
+  ACTIVE
+  SUPERSEDED
+  /// Ein Entwurf, der nie gelten wird. Seit 2026-09-23: Ohne ihn blieb ein
+  /// ungewollter Entwurf für immer stehen und blockierte jede weitere Fassung
+  /// (je Vertrag gibt es nur einen). Gelöscht wird er nicht — ein
+  /// zurückgezogener Signaturvorgang zeigt auf ihn und ist ein Beleg.
+  DISCARDED
+}
+
+enum ContractAmendmentType {
+  SCOPE
+  PRICE
+  FREQUENCY
+  TERM
+  SLA
+  PAYMENT_TERMS
+  INDEXATION
+  OTHER
+}
+
+enum ContractAmendmentStatus {
+  DRAFT
+  REVIEW
+  APPROVED
+  EFFECTIVE
+  REJECTED
+}
+
+enum ContractPriceAdjustmentStatus {
+  PLANNED
+  APPROVED
+  APPLIED
+  REJECTED
+}
+
+/// Was mit einem Serientermin geschieht, der auf einen Feiertag fällt.
+///
+/// **Keine Regel ist eingebaut.** Welche Tage Feiertage sind, steht in
+/// `Holiday` je Organisation und Kanton; wie damit umzugehen ist, entscheidet
+/// der Vertrag. Ein fest verdrahteter Feiertagskalender wäre für genau einen
+/// Kanton richtig und überall sonst still falsch.
+enum ScheduleHolidayHandling {
+  /// Feiertag wird nicht beachtet — der Termin bleibt stehen.
+  IGNORE
+  /// Termin entfällt ersatzlos.
+  SKIP
+  /// Termin wird auf den letzten Werktag davor vorgezogen.
+  MOVE_BEFORE
+  /// Termin wird auf den nächsten Werktag danach verschoben.
+  MOVE_AFTER
+}
+
+enum ScheduleExceptionKind {
+  /// Dieser eine Termin entfällt.
+  SKIP
+  /// Dieser eine Termin findet an einem anderen Tag statt.
+  MOVE
+  /// Ein zusätzlicher Termin ausserhalb der Serie.
+  EXTRA
+}
+
+/// Der Vertragskopf — Identität, Beteiligte, Lebenslauf.
+///
+/// Hier steht nichts, was sich kaufmännisch ändern kann; das gehört in die
+/// Version. Was hier steht, ändert sich entweder nie (Nummer, Kundschaft) oder
+/// ist ein Ereignis im Lebenslauf (Kündigung, Ende).
+model Contract {
+  id             String @id @default(cuid())
+  organizationId String
+  /// Aus dem Nummernkreis `contract`, vergeben beim **Aktivieren** — nicht
+  /// beim Anlegen. Ein Entwurf, der verworfen wird, soll keine Lücke
+  /// hinterlassen; dieselbe Regel wie bei der Rechnung.
+  number         String?
+
+  customerId String
+  propertyId String?
+  /// Die angenommene Offerte, aus der der Vertrag entstanden ist.
+  quoteId    String?
+
+  title       String
+  description String?
+  status      ContractStatus @default(DRAFT)
+
+  /// Beginn der Leistungserbringung. Kalendertag, keine Uhrzeit — ein Vertrag
+  /// beginnt an einem Tag, nicht um 08:00 in einer Zeitzone.
+  startDate DateTime  @db.Date
+  /// Vereinbartes Ende, sofern befristet. Bei unbefristeten Verträgen `null`,
+  /// bis eine Kündigung ein Ende setzt.
+  endDate   DateTime? @db.Date
+
+  /// Betreuung: wer verkauft hat, wer verantwortet, wer operativ führt.
+  /// Drei Rollen, weil sie im Reinigungsgewerbe regelmässig auseinanderfallen.
+  responsibleEmployeeId String?
+  salesOwnerId          String?
+  serviceManagerId      String?
+  /// Kostenstelle für die Nachkalkulation. Freitext, weil es in dieser
+  /// Betriebsgrösse keinen Kostenstellenstamm gibt — wäre ein Fremdschlüssel
+  /// ins Leere.
+  costCenter            String?
+
+  /// Kündigung: Tatsachen, keine Bewertung.
+  noticeGivenAt        DateTime? @db.Timestamptz(6)
+  /// Von wem die Kündigung ausging — `CUSTOMER` oder `PROVIDER`.
+  noticeGivenBy        String?
+  /// Der errechnete späteste Kündigungstermin; Grundlage der Erinnerung.
+  noticeDeadline       DateTime? @db.Date
+  terminationEffectiveAt DateTime? @db.Date
+  terminationReason      String?
+
+  /// Pause: der Vertrag besteht, es wird nur nicht geleistet (Bauarbeiten,
+  /// Leerstand, Saison). Der Planer erzeugt in dieser Zeit keine Einsätze.
+  pausedFrom DateTime? @db.Date
+  pausedUntil DateTime? @db.Date
+  pauseReason String?
+
+  internalNote String?
+
+  createdById String?
+  createdAt   DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt   DateTime  @updatedAt @db.Timestamptz(6)
+  /// Weiches Löschen gibt es nur für Entwürfe — der Dienst verweigert es für
+  /// jeden Vertrag, der je aktiv war. Ein abgelaufener Vertrag ist ein Beleg.
+  deletedAt   DateTime? @db.Timestamptz(6)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  customer     Customer     @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  property     Property?    @relation(fields: [propertyId], references: [id], onDelete: SetNull)
+  quote        Quote?       @relation(fields: [quoteId], references: [id], onDelete: SetNull)
+
+  responsibleEmployee Employee? @relation("ContractResponsible", fields: [responsibleEmployeeId], references: [id], onDelete: SetNull)
+  salesOwner          Employee? @relation("ContractSalesOwner", fields: [salesOwnerId], references: [id], onDelete: SetNull)
+  serviceManager      Employee? @relation("ContractServiceManager", fields: [serviceManagerId], references: [id], onDelete: SetNull)
+
+  versions         ContractVersion[]
+  amendments       ContractAmendment[]
+  priceAdjustments ContractPriceAdjustment[]
+  jobs             Job[]
+  invoices         Invoice[]
+  files            FileAsset[]
+  activities       Activity[]
+  qualityInspections QualityInspection[]
+  complaints         Complaint[]
+
+  @@unique([organizationId, number])
+  @@index([organizationId, status, startDate])
+  @@index([organizationId, deletedAt])
+  @@index([customerId])
+  /// Für den Erinnerungslauf: welche Verträge laufen aus, welche Frist naht.
+  @@index([organizationId, noticeDeadline])
+  @@index([organizationId, endDate])
+  @@map("contracts")
+}
+
+/// Eine Fassung der kaufmännischen Vereinbarung.
+///
+/// **Genau eine Version ist `ACTIVE`** — durchgesetzt über einen partiellen
+/// eindeutigen Index in der Migration, nicht über die Oberfläche. Ein Vertrag
+/// mit zwei gültigen Preisen ist kein Anzeigefehler, sondern eine falsche
+/// Rechnung.
+model ContractVersion {
+  id         String @id @default(cuid())
+  contractId String
+
+  versionNumber Int
+  status        ContractVersionStatus @default(DRAFT)
+
+  effectiveFrom  DateTime  @db.Date
+  /// Gesetzt, sobald eine Nachfolgerin gilt. Solange `null`, ist dies die
+  /// aktuelle Fassung.
+  effectiveUntil DateTime? @db.Date
+  /// Warum es diese Version gibt. Pflichtangabe im Dienst — eine Version ohne
+  /// Grund ist eine Änderung, die niemand mehr erklären kann.
+  reason         String
+
+  // --- Laufzeit und Verlängerung ---
+  minimumTermMonths   Int?
+  renewalType         ContractRenewalType @default(NONE)
+  renewalPeriodMonths Int?
+  /// Kündigungsfrist in Tagen zum Ende der Laufzeit.
+  noticePeriodDays    Int                 @default(90)
+
+  // --- Abrechnung ---
+  billingCycle    ContractBillingCycle @default(MONTHLY)
+  paymentTermDays Int                  @default(30)
+  currency        String               @default("CHF")
+
+  // --- Preis ---
+  pricingModel ContractPricingModel @default(FIXED_PERIOD)
+  /// Betrag je Periode bzw. je Einsatz, abhängig von `pricingModel`.
+  /// `Decimal(12,2)` wie überall — gerechnet wird in der Datenbank, gerundet
+  /// an der Anzeigekante.
+  baseAmount   Decimal              @default(0) @db.Decimal(12, 2)
+  hourlyRate   Decimal?             @db.Decimal(12, 2)
+  unitPrice    Decimal?             @db.Decimal(12, 4)
+  /// Bezeichnung der Einheit bei `UNIT_BASED` — „m²", „Fenster", „Stockwerk".
+  unitLabel    String?
+  vatRate      Decimal              @default(8.1) @db.Decimal(5, 2)
+
+  // --- Indexierung ---
+  /// Bezugsgrösse einer vereinbarten Anpassung, z. B. „LIK Dezember".
+  ///
+  /// **Keine Rechtsbehauptung.** Ob und wie indexiert wird, steht im Vertrag;
+  /// dieses Feld hält fest, worauf sich die Parteien geeinigt haben. Eine
+  /// automatische Erhöhung findet nur statt, wenn jemand sie freigibt.
+  indexReference String?
+  indexBaseValue Decimal? @db.Decimal(12, 4)
+  nextReviewAt   DateTime? @db.Date
+
+  // --- Qualität / SLA (Vorbereitung für Wave 11) ---
+  /// Zielwert der Qualitätsbewertung (0–100). Ohne eigene Prüfmaschine —
+  /// hier steht nur, was vereinbart wurde.
+  targetQualityScore    Int?
+  /// Wie oft eine Kontrolle vereinbart ist, in Tagen.
+  inspectionIntervalDays Int?
+  /// Zugesagte Reaktionszeit auf eine Reklamation, in Stunden.
+  responseHours         Int?
+  slaNote               String?
+
+  terms        String?
+  internalNote String?
+
+  /**
+   * Die elektronische Annahme dieser Fassung (Wave 10, § 12).
+   *
+   * Unterzeichnet wird immer eine **konkrete Fassung**, nie „der Vertrag".
+   * `acceptedRequestId` zeigt auf den abgeschlossenen Signaturvorgang und ist
+   * eindeutig: Ein Vorgang gehört zu genau einer Fassung und umgekehrt. Damit
+   * lässt sich der Beweis in beide Richtungen führen — vom Protokoll zur
+   * Fassung und von der Fassung zum Protokoll.
+   *
+   * Die Spalte ist zugleich die Sperre: Eine angenommene Fassung ist
+   * unveränderlich, und der Dienst prüft das in der `where`-Klausel, nicht in
+   * der Anzeige. Ohne sie müsste jede Änderung erst Signaturvorgänge
+   * durchsuchen — und ein vergessener Aufruf wäre eine stille Änderung an
+   * etwas, das jemand unterschrieben hat.
+   *
+   * **Keine Rechtsbehauptung.** `acceptedAt` sagt, dass ein Vorgang über den
+   * Signaturkern abgeschlossen wurde. Welche Beweiskraft das hat, sagt es
+   * nicht; QES und ZertES behauptet das Produkt nirgends.
+   */
+  acceptedAt        DateTime? @db.Timestamptz(6)
+  acceptedRequestId String?   @unique
+
+  createdById String?
+  createdAt   DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt   DateTime @updatedAt @db.Timestamptz(6)
+
+  contract Contract          @relation(fields: [contractId], references: [id], onDelete: Cascade)
+  services ContractService[]
+  jobs     Job[]
+  invoices Invoice[]
+  signatureRequests SignatureRequest[]
+  amendmentsFrom ContractAmendment[] @relation("AmendmentPreviousVersion")
+  amendmentsTo   ContractAmendment[] @relation("AmendmentNewVersion")
+  priceAdjustments ContractPriceAdjustment[] @relation("PriceAdjustmentBase")
+  priceAdjustmentResults ContractPriceAdjustment[] @relation("PriceAdjustmentResult")
+  qualityInspections QualityInspection[]
+
+  @@unique([contractId, versionNumber])
+  @@index([contractId, status])
+  @@map("contract_versions")
+}
+
+/// Eine vereinbarte Leistung innerhalb einer Vertragsversion.
+///
+/// Kein Freitext: `serviceId` zeigt auf den bestehenden Leistungskatalog.
+/// Eine Vertragsposition „Treppenhaus" als Zeichenkette wäre in der
+/// Auswertung wertlos und in der Preisfindung gefährlich.
+model ContractService {
+  id                String @id @default(cuid())
+  contractVersionId String
+  serviceId         String?
+
+  /// Bezeichnung auf dem Vertrag. Vorbelegt aus dem Katalog, änderbar — die
+  /// Kundschaft nennt „Unterhaltsreinigung" oft anders.
+  label       String
+  description String?
+
+  /// Wo genau. Das Objekt steht am Vertrag; hier geht es feiner.
+  buildingId String?
+  /// Etage, Zone, Trakt — Freitext, weil es dafür kein Stammdatum gibt.
+  zone       String?
+
+  /// Wie lange ein Einsatz dieser Leistung dauert und wie viele Personen er
+  /// braucht. Grundlage der Kapazitätsplanung, nicht des Preises.
+  estimatedMinutes Int @default(120)
+  requiredCrewSize Int @default(1)
+
+  /// Qualifikationen, die für diese Leistung nötig sind. Dieselben Namen wie
+  /// in `EmployeeSkill` — die Eignungsprüfung der Disposition kann sie später
+  /// auswerten, ohne ein zweites Vokabular zu lernen.
+  requiredSkills String[] @default([])
+
+  qualityRequirement  String?
+  specialInstructions String?
+  /// Wer Material und Verbrauchsgüter stellt — `PROVIDER` oder `CUSTOMER`.
+  materialsBy         String  @default("PROVIDER")
+
+  /// Menge bei mengenabhängigem Preis (m², Fenster, …).
+  quantity Decimal? @db.Decimal(12, 3)
+
+  position Int @default(0)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+
+  version   ContractVersion   @relation(fields: [contractVersionId], references: [id], onDelete: Cascade)
+  service   Service?          @relation(fields: [serviceId], references: [id], onDelete: SetNull)
+  building  Building?         @relation(fields: [buildingId], references: [id], onDelete: SetNull)
+  schedules ServiceSchedule[]
+
+  @@index([contractVersionId])
+  @@map("contract_services")
+}
+
+/// Der Einsatzplan einer Vertragsleistung — die Serie, aus der Einsätze
+/// entstehen.
+///
+/// Die Wiederholungsregel ist bewusst **nicht** `RecurrenceRule`: Jene gehört
+/// zu Serienbuchungen der Kundschaft und kennt weder Zeitfenster noch
+/// Feiertagsbehandlung noch Ausnahmen. Sie hier mitzubenutzen hiesse, beide
+/// Bedeutungen in ein Modell zu zwingen, und jede spätere Änderung träfe den
+/// jeweils anderen Ablauf mit.
+model ServiceSchedule {
+  id                String @id @default(cuid())
+  contractServiceId String
+
+  frequency Frequency @default(WEEKLY)
+  /// Alle n Perioden. Zusammen mit `frequency` deckt das „alle zwei Wochen"
+  /// und „alle drei Monate" ab, ohne eigene Aufzählungswerte dafür.
+  interval  Int       @default(1)
+  /// 0 = Sonntag … 6 = Samstag. Mehrere Tage je Woche sind der Normalfall im
+  /// Unterhalt („Mo, Mi, Fr").
+  weekdays  Int[]     @default([])
+  /// Tag im Monat bei MONTHLY/QUARTERLY; `null` heisst „selber Tag wie der
+  /// Beginn".
+  monthDay  Int?
+
+  /// Zeitfenster des Einsatzes, als Minuten seit Mitternacht in der
+  /// Ortszeit Europe/Zurich. Nicht als `DateTime`: Ein Zeitfenster ist keine
+  /// Zeitpunktangabe, und über die Sommerzeit hinweg bleibt „ab 06:00"
+  /// richtig, ein UTC-Zeitpunkt nicht.
+  startMinute Int @default(360)
+  endMinute   Int @default(600)
+
+  effectiveFrom  DateTime  @db.Date
+  effectiveUntil DateTime? @db.Date
+
+  holidayHandling ScheduleHolidayHandling @default(SKIP)
+
+  /// Bis wohin der Planer Einsätze erzeugt hat. Fortschrittsmarke, kein
+  /// Zustand — sie darf nur vorwärts wandern.
+  generatedUntil DateTime? @db.Date
+  active         Boolean   @default(true)
+
+  /// Die **fachliche Identität** der Serie über Fassungswechsel hinweg.
+  ///
+  /// Eine neue Vertragsversion kopiert ihre Einsatzpläne — mit neuen Kennungen,
+  /// denn eine Fassung zeigt nicht auf die Zeilen ihrer Vorgängerin. Hinge die
+  /// Doppelsperre der Einsätze an `id`, wäre „Büroreinigung, Montag 14.
+  /// September" unter Fassung 1 und unter Fassung 2 zweimal derselbe Termin mit
+  /// zwei verschiedenen Schlüsseln — genau der Doppeleinsatz, den das Audit vom
+  /// 2026-09-23 gefunden hat. Die Kopie übernimmt deshalb `seriesKey`; eine neu
+  /// angelegte Serie bekommt einen eigenen.
+  seriesKey String @default(cuid())
+
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+
+  contractService ContractService            @relation(fields: [contractServiceId], references: [id], onDelete: Cascade)
+  exceptions      ScheduleException[]
+  jobs            Job[]
+
+  @@index([contractServiceId, active])
+  @@index([seriesKey])
+  @@map("service_schedules")
+}
+
+/// Eine Abweichung von der Serie an einem bestimmten Tag.
+///
+/// Getrennt von der Serie, weil eine Ausnahme keine Regeländerung ist: Wer
+/// einen Termin verschiebt, will nicht den Vertrag ändern. Und weil eine
+/// Regeländerung eine neue Vertragsversion wäre — eine verlegte Reinigung
+/// nicht.
+model ScheduleException {
+  id                String @id @default(cuid())
+  serviceScheduleId String
+
+  kind         ScheduleExceptionKind
+  /// Der betroffene Serientag (bei EXTRA der zusätzliche Tag).
+  originalDate DateTime              @db.Date
+  /// Der Ersatztag bei MOVE.
+  newDate      DateTime?             @db.Date
+  reason       String?
+
+  createdById String?
+  createdAt   DateTime @default(now()) @db.Timestamptz(6)
+
+  schedule ServiceSchedule @relation(fields: [serviceScheduleId], references: [id], onDelete: Cascade)
+
+  /// Eine Ausnahme je Tag und Serie. Zwei Ausnahmen für denselben Tag sind
+  /// keine feinere Steuerung, sondern ein Widerspruch.
+  @@unique([serviceScheduleId, originalDate])
+  @@index([serviceScheduleId])
+  @@map("schedule_exceptions")
+}
+
+/// Eine nachvollziehbare Vertragsänderung.
+///
+/// Der Änderungsantrag ist **nicht** die Änderung: Er durchläuft
+/// Entwurf → Prüfung → Freigabe und wird erst dann wirksam, indem er eine
+/// neue Vertragsversion erzeugt. Beide Versionen bleiben am Antrag verlinkt,
+/// damit später beantwortbar ist, *warum* sich etwas geändert hat — die
+/// Version allein sagt nur, *dass*.
+model ContractAmendment {
+  id         String @id @default(cuid())
+  contractId String
+
+  type   ContractAmendmentType
+  status ContractAmendmentStatus @default(DRAFT)
+
+  title       String
+  description String?
+  reason      String
+
+  requestedAt   DateTime  @default(now()) @db.Timestamptz(6)
+  effectiveFrom DateTime  @db.Date
+  approvedAt    DateTime? @db.Timestamptz(6)
+  rejectedAt    DateTime? @db.Timestamptz(6)
+  rejectReason  String?
+  appliedAt     DateTime? @db.Timestamptz(6)
+
+  requestedById String?
+  approvedById  String?
+
+  previousVersionId String?
+  newVersionId      String?
+
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+
+  contract        Contract         @relation(fields: [contractId], references: [id], onDelete: Cascade)
+  previousVersion ContractVersion? @relation("AmendmentPreviousVersion", fields: [previousVersionId], references: [id], onDelete: SetNull)
+  newVersion      ContractVersion? @relation("AmendmentNewVersion", fields: [newVersionId], references: [id], onDelete: SetNull)
+
+  @@index([contractId, status])
+  @@map("contract_amendments")
+}
+
+/// Eine geplante oder vollzogene Preisanpassung.
+///
+/// Eigenes Modell und kein Sonderfall des Änderungsantrags, weil eine
+/// Preisüberprüfung einen Termin hat, an den erinnert werden muss, und weil
+/// die Frage „wann wurde zuletzt erhöht und um wie viel" ohne eigene Zeile nur
+/// durch Vergleich aller Versionen zu beantworten wäre.
+///
+/// **Automatisch passiert hier nichts.** Der Lauf schlägt vor; wirksam wird
+/// eine Anpassung erst durch eine Freigabe, und diese erzeugt eine neue
+/// Vertragsversion mit Protokolleintrag.
+model ContractPriceAdjustment {
+  id                String @id @default(cuid())
+  contractId        String
+  contractVersionId String?
+
+  status ContractPriceAdjustmentStatus @default(PLANNED)
+
+  /// Stichtag, zu dem der neue Preis gelten soll.
+  effectiveFrom DateTime @db.Date
+  /// Wann die Überprüfung fällig ist — Grundlage der Erinnerung.
+  reviewDueAt   DateTime? @db.Date
+
+  oldAmount Decimal  @db.Decimal(12, 2)
+  newAmount Decimal  @db.Decimal(12, 2)
+  /// Prozentsatz, falls über einen Satz gerechnet wurde. Nur zur Erklärung —
+  /// verbindlich ist der Betrag.
+  percent   Decimal? @db.Decimal(6, 3)
+
+  indexReference String?
+  indexOldValue  Decimal? @db.Decimal(12, 4)
+  indexNewValue  Decimal? @db.Decimal(12, 4)
+
+  reason String
+
+  proposedById String?
+  approvedById String?
+  approvedAt   DateTime? @db.Timestamptz(6)
+  appliedAt    DateTime? @db.Timestamptz(6)
+  rejectedAt   DateTime? @db.Timestamptz(6)
+  rejectReason String?
+
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+
+  /// Die Fassung, die durch das Anwenden **entstanden** ist.
+  ///
+  /// Getrennt von `contractVersionId`, der Ausgangsfassung. Bis 2026-09-23
+  /// überschrieb das Anwenden `contractVersionId` mit der neuen Fassung — danach
+  /// war nicht mehr beantwortbar, auf welchen Preis sich „+3 %" bezogen hatte.
+  resultVersionId String?
+
+  contract      Contract         @relation(fields: [contractId], references: [id], onDelete: Cascade)
+  version       ContractVersion? @relation("PriceAdjustmentBase", fields: [contractVersionId], references: [id], onDelete: SetNull)
+  resultVersion ContractVersion? @relation("PriceAdjustmentResult", fields: [resultVersionId], references: [id], onDelete: SetNull)
+
+  @@index([contractId, status])
+  @@index([contractId, reviewDueAt])
+  @@map("contract_price_adjustments")
+}
+
+/// Eine Qualitätskontrolle vor Ort (Wave 11).
+///
+/// ---------------------------------------------------------------------------
+///  Warum es das gibt
+/// ---------------------------------------------------------------------------
+///
+/// `ContractVersion` trägt seit Wave 10 `targetQualityScore`,
+/// `inspectionIntervalDays` und `responseHours`. Die drei Felder wurden
+/// gespeichert, angezeigt und gedruckt — und von **nichts** gemessen. Eine
+/// vereinbarte Zusage ohne Mechanismus ist genau das Muster, das die
+/// Merkmalsprüfung (`scripts/feature-integrity.ts`) finden soll; hier hat sie
+/// die eigene Wave gefunden.
+///
+/// ---------------------------------------------------------------------------
+///  Die Zusicherungen
+/// ---------------------------------------------------------------------------
+///
+/// **Die Punktzahl rechnet der Server.** `scoreAchieved`, `scorePercent` und
+/// `outcome` entstehen aus den Positionen (`src/lib/quality/bewertung.ts`),
+/// nie aus einer Angabe des Clients. Dieselbe Regel wie beim Preis.
+///
+/// **Der Massstab ist ein Schnappschuss.** `contractVersionId` und
+/// `targetScore` halten fest, welche Zusage zum Zeitpunkt der Begehung galt.
+/// Eine Kontrolle, die nach einer Vertragsänderung plötzlich anders ausfiele,
+/// wäre kein Beleg — dieselbe Überlegung wie bei Einsatz und Rechnung.
+///
+/// **Abgeschlossen ist unveränderlich.** Eine Begehung ist ein Beleg;
+/// korrigiert wird über eine **Nachkontrolle** (`followUpOfId`), nicht durch
+/// Überschreiben. Der Teilindex lässt je Kontrolle genau eine Nachkontrolle
+/// zu.
+model QualityInspection {
+  id             String @id @default(cuid())
+  organizationId String
+  /// Aus dem Nummernkreis `quality`, vergeben beim **Abschluss** — nicht beim
+  /// Anlegen. Eine verworfene Begehung soll keine Lücke hinterlassen;
+  /// dieselbe Regel wie bei Rechnung und Vertrag.
+  number         String?
+
+  /// Woran gemessen wird. Ohne Vertrag ist es eine Begehung ohne Zusage —
+  /// erlaubt, aber ohne Urteil (`OHNE_ZIEL`).
+  contractId        String?
+  /// Die Fassung, deren Zusage galt. Schnappschuss, keine Auflösung auf „die
+  /// derzeit geltende".
+  contractVersionId String?
+  propertyId        String?
+  /// Wenn die Begehung im Anschluss an einen Einsatz stattfand.
+  jobId             String?
+
+  status QualityInspectionStatus @default(DRAFT)
+
+  /// Wann begangen wurde — nicht wann der Datensatz entstand.
+  inspectedAt DateTime @db.Timestamptz(6)
+  /// Wer begangen hat. Eine Begehung ohne Person ist kein Beleg.
+  inspectorId String?
+
+  // --- Ergebnis, serverseitig gerechnet ---
+  scoreAchieved Decimal  @default(0) @db.Decimal(8, 2)
+  scorePossible Decimal  @default(0) @db.Decimal(8, 2)
+  /// `null`, wenn kein Kriterium beurteilbar war — nicht 0. „Nichts geprüft"
+  /// ist nicht dasselbe wie „null Punkte".
+  scorePercent  Decimal? @db.Decimal(5, 2)
+  /// Der zugesagte Zielwert zum Zeitpunkt der Begehung. `null` = keine Zusage.
+  targetScore   Int?
+  outcome       QualityOutcome @default(OHNE_ZIEL)
+
+  note         String?
+  internalNote String?
+
+  /// Diese Begehung ist die Nachkontrolle zu jener. Eindeutig: eine
+  /// Nachkontrolle je Kontrolle, sonst wäre „welche gilt" eine Frage der
+  /// Reihenfolge.
+  followUpOfId String? @unique
+
+  createdById String?
+  createdAt   DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt   DateTime  @updatedAt @db.Timestamptz(6)
+  completedAt DateTime? @db.Timestamptz(6)
+  deletedAt   DateTime? @db.Timestamptz(6)
+
+  organization Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  contract     Contract?        @relation(fields: [contractId], references: [id], onDelete: SetNull)
+  version      ContractVersion? @relation(fields: [contractVersionId], references: [id], onDelete: SetNull)
+  property     Property?        @relation(fields: [propertyId], references: [id], onDelete: SetNull)
+  job          Job?             @relation(fields: [jobId], references: [id], onDelete: SetNull)
+  inspector    User?            @relation("QualityInspector", fields: [inspectorId], references: [id], onDelete: SetNull)
+
+  followUpOf QualityInspection?  @relation("QualityFollowUp", fields: [followUpOfId], references: [id], onDelete: SetNull)
+  followUp   QualityInspection?  @relation("QualityFollowUp")
+
+  items QualityInspectionItem[]
+
+  @@index([organizationId, status, inspectedAt])
+  @@index([contractId, inspectedAt])
+  @@index([propertyId, inspectedAt])
+  @@map("quality_inspections")
+}
+
+/// Eine Einzelbewertung innerhalb einer Begehung.
+///
+/// `weight = 0` heisst **nicht beurteilbar** — der Keller war verschlossen —
+/// und klammert die Position aus der Rechnung aus, statt sie als null Punkte
+/// zu werten. Der Unterschied ist wesentlich: „nicht geprüft" ist keine
+/// schlechte Note.
+model QualityInspectionItem {
+  id           String @id @default(cuid())
+  inspectionId String
+
+  /// Was beurteilt wurde. Freitext, weil es dafür in dieser Betriebsgrösse
+  /// keinen Kriterienstamm gibt — ein Fremdschlüssel ginge ins Leere.
+  label String
+  /// Wo. Etage, Zone, Raum.
+  room  String?
+
+  points    Decimal @default(0) @db.Decimal(6, 2)
+  maxPoints Decimal @default(5) @db.Decimal(6, 2)
+  weight    Decimal @default(1) @db.Decimal(6, 2)
+
+  note String?
+
+  position Int @default(0)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+
+  inspection QualityInspection @relation(fields: [inspectionId], references: [id], onDelete: Cascade)
+
+  @@index([inspectionId, position])
+  @@map("quality_inspection_items")
+}
+
+enum QualityInspectionStatus {
+  DRAFT
+  COMPLETED
+  CANCELLED
+}
+
+enum QualityOutcome {
+  BESTANDEN
+  KNAPP
+  NICHT_BESTANDEN
+  /// Keine Zusage vereinbart — die Begehung misst, urteilt aber nicht.
+  OHNE_ZIEL
+}
+
+// ===========================================================================
+//  BETRIEB: REKLAMATIONEN, MATERIAL, GERÄTE (Wave 11, 2026-09-23)
+// ===========================================================================
+
+enum ComplaintKind {
+  /// Unzufriedenheit mit einer Leistung.
+  COMPLAINT
+  /// Betrieblicher Vorfall (Schlüssel verloren, Alarm ausgelöst, Zugang verweigert).
+  INCIDENT
+  /// Sachschaden beim Kunden.
+  DAMAGE
+}
+
+enum ComplaintSeverity {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum ComplaintStatus {
+  OPEN
+  ACKNOWLEDGED
+  IN_PROGRESS
+  RESOLVED
+  CLOSED
+  REJECTED
+}
+
+enum ComplaintChannel {
+  PHONE
+  EMAIL
+  PORTAL
+  ON_SITE
+  OTHER
+}
+
+/// Reklamation oder Vorfall mit Reaktionsfrist.
+///
+/// **Die Frist kommt aus dem Vertrag, nie aus einer Annahme.** Beim Erfassen
+/// wird die Vertragsfassung gesucht, die am Meldezeitpunkt galt; deren
+/// `responseHours` wird als Momentaufnahme übernommen, die Frist daraus
+/// gerechnet. Ohne Vertrag oder ohne Zusage steht keine Frist — „keine
+/// Zusage" ist eine andere Aussage als „24 Stunden".
+///
+/// **Reaktion ist die Bestätigung**, nicht die Erledigung: `acknowledgedAt`
+/// wird beim ersten Übergang aus `OPEN` gesetzt und danach nie verschoben —
+/// sonst liesse sich eine verpasste Frist nachträglich einhalten.
+model Complaint {
+  id             String @id @default(cuid())
+  organizationId String
+  number         String
+
+  kind     ComplaintKind     @default(COMPLAINT)
+  severity ComplaintSeverity @default(MEDIUM)
+  channel  ComplaintChannel  @default(PHONE)
+  status   ComplaintStatus   @default(OPEN)
+
+  title       String
+  description String
+
+  customerId        String
+  propertyId        String?
+  contractId        String?
+  contractVersionId String?
+  jobId             String?
+
+  reportedAt     DateTime  @db.Timestamptz(6)
+  /// Zusage zum Meldezeitpunkt (Stunden) — Momentaufnahme aus der Vertragsfassung.
+  responseHours  Int?
+  responseDueAt  DateTime? @db.Timestamptz(6)
+  acknowledgedAt DateTime? @db.Timestamptz(6)
+  resolvedAt     DateTime? @db.Timestamptz(6)
+  closedAt       DateTime? @db.Timestamptz(6)
+
+  /// Für die Kundschaft sichtbar.
+  resolution   String?
+  /// Nur intern.
+  internalNote String?
+
+  assigneeId         String?
+  reportedByUserId   String?
+  correctiveActionId String? @unique
+
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+
+  organization     Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  customer         Customer          @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  property         Property?         @relation(fields: [propertyId], references: [id], onDelete: SetNull)
+  contract         Contract?         @relation(fields: [contractId], references: [id], onDelete: SetNull)
+  job              Job?              @relation(fields: [jobId], references: [id], onDelete: SetNull)
+  assignee         User?             @relation("ComplaintAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
+  reportedBy       User?             @relation("ComplaintReporter", fields: [reportedByUserId], references: [id], onDelete: SetNull)
+  correctiveAction CorrectiveAction? @relation(fields: [correctiveActionId], references: [id], onDelete: SetNull)
+
+  @@unique([organizationId, number])
+  @@index([organizationId, status, responseDueAt])
+  @@index([customerId, reportedAt])
+  @@map("complaints")
+}
+
+/// Verbrauchsmaterial mit Bestand. Der Bestand ist die **Summe der
+/// Bewegungen**, keine gepflegte Zahl — eine Zahl, die man überschreiben
+/// kann, erklärt nicht, wohin das Material gegangen ist.
+model Material {
+  id             String  @id @default(cuid())
+  organizationId String
+  sku            String
+  /// Strichcode des Herstellers (EAN-13, EAN-8 oder GTIN-14; UPC-A wird mit
+  /// führender Null als EAN-13 gespeichert). Eindeutig je Organisation — ein
+  /// Scan muss auf genau einen Artikel führen. Kein eigener Code: Den trägt
+  /// `ScanCode`.
+  barcode        String?
+  name           String
+  unit           String  @default("Stk.")
+  unitCost       Decimal @default(0) @db.Decimal(12, 2)
+  /// Meldebestand — darunter erscheint das Material als „nachbestellen".
+  minStock       Decimal @default(0) @db.Decimal(12, 2)
+  active         Boolean @default(true)
+  note           String?
+
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+
+  organization Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  movements    StockMovement[]
+
+  @@unique([organizationId, sku])
+  @@unique([organizationId, barcode])
+  @@map("materials")
+}
+
+enum StockMovementKind {
+  /// Wareneingang (+).
+  RECEIPT
+  /// Entnahme für einen Einsatz (−).
+  ISSUE
+  /// Rückgabe aus einem Einsatz (+).
+  RETURN
+  /// Inventurkorrektur (±) — Begründung Pflicht.
+  ADJUSTMENT
+}
+
+/// Eine Lagerbewegung — **nur anfügen** (Trigger `stock_movements_nur_anfuegen`).
+/// Eine falsche Buchung wird durch eine Gegenbuchung berichtigt, nicht
+/// überschrieben.
+model StockMovement {
+  id             String            @id @default(cuid())
+  organizationId String
+  materialId     String
+  kind           StockMovementKind
+  /// Mit Vorzeichen: Eingang positiv, Entnahme negativ.
+  quantity       Decimal           @db.Decimal(12, 2)
+  unitCost       Decimal?          @db.Decimal(12, 2)
+  jobId          String?
+  materialUsageId String?          @unique
+  reference      String?
+  note           String?
+  createdById    String?
+  createdAt      DateTime          @default(now()) @db.Timestamptz(6)
+
+  organization  Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  material      Material       @relation(fields: [materialId], references: [id], onDelete: Restrict)
+  job           Job?           @relation(fields: [jobId], references: [id], onDelete: SetNull)
+  materialUsage MaterialUsage? @relation(fields: [materialUsageId], references: [id], onDelete: SetNull)
+
+  @@index([materialId, createdAt])
+  @@index([organizationId, createdAt])
+  @@map("stock_movements")
+}
+
+enum EquipmentStatus {
+  AVAILABLE
+  IN_USE
+  MAINTENANCE
+  RETIRED
+}
+
+/// Gerät (Maschine, Staubsauger, Hochdruckreiniger) mit Zuteilung und Wartung.
+model Equipment {
+  id              String          @id @default(cuid())
+  organizationId  String
+  inventoryNumber String
+  name            String
+  category        String?
+  serialNumber    String?
+  status          EquipmentStatus @default(AVAILABLE)
+  assignedEmployeeId String?
+  purchasedOn     DateTime?       @db.Date
+  purchaseCost    Decimal?        @db.Decimal(12, 2)
+  /// Wartungsintervall in Tagen — aus Herstellerangabe oder eigener Regel.
+  maintenanceIntervalDays Int?
+  nextMaintenanceOn       DateTime? @db.Date
+  retiredAt       DateTime?       @db.Timestamptz(6)
+  retiredReason   String?
+  note            String?
+
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+
+  organization     Organization           @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  assignedEmployee Employee?              @relation("EquipmentAssignee", fields: [assignedEmployeeId], references: [id], onDelete: SetNull)
+  maintenances     EquipmentMaintenance[]
+
+  @@unique([organizationId, inventoryNumber])
+  @@index([organizationId, status])
+  @@index([organizationId, nextMaintenanceOn])
+  @@map("equipment")
+}
+
+enum ScanEntity {
+  MATERIAL
+  EQUIPMENT
+  PROPERTY
+  JOB
+}
+
+/// Eigener Etikettcode (Scanplattform, 2026-09-26) — die einzige Kennung, die
+/// Clenaris selbst auf ein Etikett druckt.
+///
+/// **Warum eine eigene Tabelle statt der Datensatz-ID im QR-Code.** Ein
+/// Etikett klebt jahrelang an einem Gerät oder im Hauswartraum eines Objekts,
+/// und es geht verloren, wird fotografiert, abgerissen. Die ID eines
+/// Datensatzes lässt sich nicht zurückziehen; ein Code schon (`revokedAt`),
+/// und danach löst der alte Aufkleber nichts mehr auf. Zudem verrät ein Code
+/// nichts: 20 Zeichen Zufall, keine Nummer, kein Name, keine Adresse — wer
+/// ihn abliest, hält eine Zeichenfolge in der Hand, die ohne Anmeldung und
+/// Leserecht nirgendwohin führt.
+///
+/// Ein aktiver Code je Datensatz — erzwungen durch den Teilindex
+/// `scan_codes_ein_aktiver_je_datensatz` (Migration), nicht durch die Oberfläche.
+/// Der Code selbst ist global eindeutig, damit ein Treffer in einer fremden
+/// Organisation gar nicht erst denkbar ist; gesucht wird trotzdem immer mit
+/// `organizationId`.
+model ScanCode {
+  id             String     @id @default(cuid())
+  organizationId String
+  code           String     @unique
+  entityType     ScanEntity
+  entityId       String
+  createdById    String?
+  createdAt      DateTime   @default(now()) @db.Timestamptz(6)
+  revokedAt      DateTime?  @db.Timestamptz(6)
+  revokedById    String?
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, entityType, entityId])
+  @@map("scan_codes")
+}
+
+// ===========================================================================
+//  VERKAUF: BESICHTIGUNG / OBJEKTAUFNAHME (Wave 12, 2026-09-23)
+// ===========================================================================
+
+enum SiteVisitStatus {
+  PLANNED
+  DONE
+  CANCELLED
+}
+
+/// Besichtigung vor Ort — die Grundlage einer Offerte für ein Objekt, das man
+/// gesehen haben muss (Büro, Praxis, Treppenhaus).
+///
+/// **Gerechnet wird nur auf dem Server.** Die Flächen und Leistungen der
+/// Aufnahme gehen durch dieselbe Preisberechnung wie die Online-Buchung
+/// (`calculatePrice`); die Offerte übernimmt deren Ergebnis, nie einen Preis
+/// aus dem Formular. `calculation` ist die letzte Berechnung als
+/// Momentaufnahme — beim Erstellen der Offerte wird trotzdem neu gerechnet.
+model SiteVisit {
+  id             String          @id @default(cuid())
+  organizationId String
+  number         String
+  status         SiteVisitStatus @default(PLANNED)
+
+  leadId     String?
+  customerId String?
+  propertyId String?
+
+  scheduledAt DateTime  @db.Timestamptz(6)
+  performedAt DateTime? @db.Timestamptz(6)
+  assessorId  String?
+
+  propertyKind PropertyKind @default(OFFICE)
+  /// Adresse, falls es (noch) kein Objekt gibt — etwa bei einer Anfrage.
+  street     String?
+  postalCode String?
+  city       String?
+  hasPets    Boolean @default(false)
+
+  accessNotes String?
+  findings    String?
+
+  calculation  Json?
+  calculatedAt DateTime? @db.Timestamptz(6)
+  /// Die daraus erstellte Offerte — höchstens eine je Besichtigung.
+  quoteId      String?   @unique
+
+  cancelledReason String?
+  createdById     String?
+  createdAt       DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt       DateTime @updatedAt @db.Timestamptz(6)
+
+  organization Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  lead         Lead?           @relation(fields: [leadId], references: [id], onDelete: SetNull)
+  customer     Customer?       @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  property     Property?       @relation(fields: [propertyId], references: [id], onDelete: SetNull)
+  assessor     User?           @relation("SiteVisitAssessor", fields: [assessorId], references: [id], onDelete: SetNull)
+  quote        Quote?          @relation(fields: [quoteId], references: [id], onDelete: SetNull)
+  areas        SiteVisitArea[]
+
+  @@unique([organizationId, number])
+  @@index([organizationId, status, scheduledAt])
+  @@map("site_visits")
+}
+
+/// Eine aufgenommene Fläche mit der Leistung, die dort erbracht werden soll.
+model SiteVisitArea {
+  id          String    @id @default(cuid())
+  siteVisitId String
+  position    Int
+  label       String
+  serviceId   String
+  squareMeters Int?
+  rooms        Decimal?  @db.Decimal(4, 1)
+  bathrooms    Int?
+  windows      Int?
+  frequency    Frequency @default(ONCE)
+  /// `[{ extraId, quantity }]` — geprüft gegen die Zusatzleistungen der Leistung.
+  extras       Json      @default("[]")
+  manualHours  Decimal?  @db.Decimal(6, 2)
+  note         String?
+
+  siteVisit SiteVisit @relation(fields: [siteVisitId], references: [id], onDelete: Cascade)
+  service   Service   @relation(fields: [serviceId], references: [id], onDelete: Restrict)
+
+  @@unique([siteVisitId, position])
+  @@map("site_visit_areas")
+}
+
+/// Eine durchgeführte Wartung — Beleg, nicht änderbar (Trigger).
+model EquipmentMaintenance {
+  id          String   @id @default(cuid())
+  equipmentId String
+  performedOn DateTime @db.Date
+  kind        String   @default("Wartung")
+  note        String?
+  cost        Decimal? @db.Decimal(12, 2)
+  createdById String?
+  createdAt   DateTime @default(now()) @db.Timestamptz(6)
+
+  equipment Equipment @relation(fields: [equipmentId], references: [id], onDelete: Cascade)
+
+  @@index([equipmentId, performedOn])
+  @@map("equipment_maintenances")
+}
+
+// ===========================================================================
+//  VERSIONSVERWALTUNG (Produktsprint 2026-09-26)
+//
+//  Drei Tabellen, zwei Welten: `Release` ist die Beschreibung einer Version
+//  (was sie bringt), `ReleaseRequest` die Entscheidung des Betriebs darüber
+//  (freigegeben, terminiert, storniert). Ausgeführt wird hier nichts — die
+//  Ausführung ist Sache eines vertrauenswürdigen Deployment-Werkzeugs
+//  ausserhalb der Anwendung (Production V2), das offene Aufträge liest. Die
+//  Begründung steht in `src/server/services/release.service.ts`.
+// ===========================================================================
+
+/// Einordnung einer Version für den Betrieb.
+enum ReleaseKind {
+  PATCH
+  MINOR
+  MAJOR
+  SECURITY
+}
+
+/// Schwere einer Sicherheitskorrektur — nur bei Versionen, die eine enthalten.
+enum ReleaseSeverity {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+/// Ergebnis der Prüfstufe (CI) für das Release-Artefakt.
+enum ReleaseCiStatus {
+  PASSED
+  FAILED
+  PENDING
+}
+
+/// Zustand eines Aktualisierungsauftrags.
+///
+/// Bis 2026-09-27 nur APPROVED/SCHEDULED/CANCELLED — ohne Ausführer gab es
+/// keinen Weg in die übrigen, und ein Zustand ohne Weg ist eine Behauptung.
+/// Seither übernimmt ein vertrauenswürdiger Ausführer ausserhalb der
+/// Anwendung fällige Aufträge über `/api/cron/release-auftraege`
+/// (`release-ausfuehrung.service.ts`): SCHEDULED → DEPLOYING → SUCCEEDED,
+/// FAILED oder ROLLED_BACK. Die Anwendung setzt diese Zustände nur auf
+/// signierte Meldung des Ausführers, nie selbst.
+enum ReleaseRequestStatus {
+  APPROVED
+  SCHEDULED
+  CANCELLED
+  DEPLOYING
+  SUCCEEDED
+  FAILED
+  ROLLED_BACK
+}
+
+/// Eine Clenaris-Version mit ihrem Änderungsprotokoll — Metadaten, keine Ausführung.
+/// Produktweit, nicht je Mandant: Dieselbe Version ist für jeden Betrieb dieselbe.
+/// Unveränderlich nach dem Eintragen (`scripts/release-registrieren.ts` verweigert
+/// eine abweichende Neufassung derselben Versionsnummer).
+model Release {
+  id               String           @id @default(cuid())
+  /// Semantische Version ohne „v", etwa `1.1.0`.
+  version          String           @unique
+  releasedAt       DateTime         @db.Timestamptz(6)
+  kind             ReleaseKind
+  securitySeverity ReleaseSeverity?
+  summary          String
+  features         String[]         @default([])
+  fixes            String[]         @default([])
+  securityFixes    String[]         @default([])
+  uiChanges        String[]         @default([])
+  /// Namen der Datenbankmigrationen, die diese Version mitbringt.
+  migrations       String[]         @default([])
+  breakingChanges  String[]         @default([])
+  manualActions    String[]         @default([])
+  expectedDowntimeMinutes Int?
+  rollbackAvailable Boolean         @default(true)
+  ciStatus         ReleaseCiStatus  @default(PENDING)
+  compatibility    String?
+  commit           String?
+  artifactSha256   String?
+  artifactSizeBytes Int?
+  createdAt        DateTime         @default(now()) @db.Timestamptz(6)
+
+  requests  ReleaseRequest[]
+  deferrals ReleaseDeferral[]
+
+  @@index([releasedAt])
+  @@map("releases")
+}
+
+/// Die Entscheidung eines Betriebs über eine Version: freigegeben, terminiert, storniert.
+/// Höchstens ein offener Auftrag (APPROVED/SCHEDULED) je Organisation und Version —
+/// als partieller eindeutiger Index `release_requests_offen_einmal` in der Migration
+/// `20260926100000_versionsverwaltung`; Prisma kann ihn nicht ausdrücken.
+model ReleaseRequest {
+  id             String               @id @default(cuid())
+  organizationId String
+  releaseId      String
+  status         ReleaseRequestStatus
+  /// Stand beim Freigeben — die Frage „von welcher Version aus" beantwortet
+  /// später nicht der aktuelle Stand, sondern dieser.
+  fromVersion    String
+  toVersion      String
+  scheduledFor   DateTime?            @db.Timestamptz(6)
+
+  approvedById   String
+  approvedAt     DateTime             @db.Timestamptz(6)
+  scheduledById  String?
+  scheduledAt    DateTime?            @db.Timestamptz(6)
+  cancelledById  String?
+  cancelledAt    DateTime?            @db.Timestamptz(6)
+  cancelReason   String?
+
+  /// Ausführung (2026-09-27) — gesetzt nur über die signierte Schnittstelle
+  /// des Ausführers, nie über die Oberfläche.
+  ///
+  /// `executionKey` ist der Idempotenzschlüssel der Übernahme: Derselbe
+  /// Ausführer, der nach einem Abbruch mit demselben Schlüssel wiederkommt,
+  /// bekommt denselben Auftrag zurück; ein zweiter mit anderem Schlüssel
+  /// bekommt 409. Eindeutig, damit ein Schlüssel nie zwei Aufträge trägt.
+  executorId      String?
+  executionKey    String?   @unique
+  /// Zielumgebung, gegen die Umgebung der Instanz geprüft (`CLENARIS_UMGEBUNG`).
+  environment     String?
+  /// Die Prüfsumme, die der Ausführer am Artefakt gemessen hat — muss der
+  /// des Release entsprechen, sonst keine Übernahme.
+  verifiedSha256  String?
+  /// Nachweis der Prüfstufe für genau diesen Commit (Adresse des CI-Laufs).
+  ciEvidence      String?
+  claimedAt       DateTime? @db.Timestamptz(6)
+  finishedAt      DateTime? @db.Timestamptz(6)
+  resultMessage   String?
+  /// Bei ROLLED_BACK: die Version, auf die zurückgesprungen wurde (= `fromVersion`).
+  rollbackVersion String?
+
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  release      Release      @relation(fields: [releaseId], references: [id], onDelete: Restrict)
+
+  @@index([organizationId, status])
+  @@index([releaseId])
+  @@map("release_requests")
+}
+
+/// „Nicht jetzt" — eine Version bewusst zurückgestellt, bis zu einem Datum.
+/// Eigene Zeile statt eines Feldes am Auftrag: Zurückstellen ist keine
+/// Freigabe, und ein Auftrag ohne Freigabe wäre ein Widerspruch.
+model ReleaseDeferral {
+  id             String   @id @default(cuid())
+  organizationId String
+  releaseId      String
+  deferredById   String
+  deferredUntil  DateTime @db.Timestamptz(6)
+  createdAt      DateTime @default(now()) @db.Timestamptz(6)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  release      Release      @relation(fields: [releaseId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, releaseId, deferredUntil])
+  @@map("release_deferrals")
 }

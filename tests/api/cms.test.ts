@@ -1,9 +1,10 @@
-import { after, describe, it } from 'node:test';
+import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { call, get, requireServer } from '../helpers/client';
+import { call, data, get, requireServer } from '../helpers/client';
 import { loginAll, ROLE_ORDER, type AccountName } from '../helpers/accounts';
 import { pageTitle } from '../helpers/markup';
+import { eigeneOrganisationId, testDb, testDbGrund, testDbSchliessen } from '../helpers/testdb';
 
 /**
  * Die Redaktion: ändern → prüfen → veröffentlichen → zurücksetzen.
@@ -310,5 +311,161 @@ describe('Suchmaschinenangaben', { concurrency: 1 }, async () => {
     assert.ok(page.text.includes('Preise und Konditionen'), `Titel ist „${pageTitle(page.text)}"`);
     assert.ok(!page.text.includes(TITLE));
     assert.ok(!/name="robots"[^>]*content="[^"]*noindex/.test(page.text), 'noindex blieb stehen');
+  });
+});
+
+// ---------------------------------------------------------------------------
+
+/**
+ * Nebenläufigkeit und Idempotenz der Redaktion (Testmatrix „CMS", 2026-09-27).
+ *
+ * Die Redaktion arbeitet in der Vorschau: Ein Feld speichert beim Verlassen,
+ * ein zweites Fenster ist schnell offen, und „Veröffentlichen" ist ein Knopf,
+ * den man zweimal drückt, wenn die Antwort auf sich warten lässt. Was das
+ * Produkt dabei zusagt:
+ *
+ *  • **Gleichzeitige Entwürfe:** Der spätere gewinnt, keiner endet in einem
+ *    500, und Entwürfe legen keine Fassung an — die Historie entsteht beim
+ *    Veröffentlichen (`content.service.ts`, „Die Historie entsteht beim
+ *    Veröffentlichen").
+ *  • **Veröffentlichen ohne Änderung** legt keine zweite Fassung und keine
+ *    zweite Protokollzeile an. Die Historie beantwortet „was stand vorher auf
+ *    der Website?" — eine Fassung, die gleich der geltenden ist, beantwortet
+ *    nichts, und eine Zeile „veröffentlicht" für einen unveränderten Text
+ *    behauptet eine Freigabe, die es nicht gab.
+ *  • **Gleichzeitige Freigaben** desselben Entwurfs: genau eine Fassung und
+ *    eine Protokollzeile — je echter Änderung eine.
+ *
+ * Der Baustein ist `footer.tagline`: Er hat laut `CLAUDE.md` keine Seite, die
+ * ihn zeigt, und die übrigen Prüfungen dieser Datei fassen ihn nicht an. Die
+ * Zeile wird vorher und nachher entfernt (die Historie hängt per Kaskade
+ * daran); Protokollzeilen bleiben stehen, gezählt wird je Baustein-Kennung.
+ */
+const cmsDb = testDb();
+const ohneCmsDb = cmsDb ? false : `kein Zugang zur Testdatenbank: ${testDbGrund()}`;
+
+describe('Redaktion — gleichzeitige Entwürfe, gleichzeitige Freigaben, Freigabe ohne Änderung', { concurrency: 1, skip: ohneCmsDb }, () => {
+  const SCHLUESSEL = 'footer.tagline';
+  const LAUF = Date.now();
+  const s = { org: '' };
+  const db = cmsDb!;
+
+  const entwurf = (wert: string) => patchContent(jars.admin, [{ key: SCHLUESSEL, value: wert }]);
+  const freigeben = () =>
+    call<{ data: { published: number } }>('POST', '/api/content', { jar: jars.admin, body: { action: 'publish', keys: [SCHLUESSEL] } });
+  const baustein = () => db.contentBlock.findFirst({ where: { organizationId: s.org, key: SCHLUESSEL, locale: 'DE' } });
+  const fassungen = () =>
+    db.contentRevision.findMany({ where: { organizationId: s.org, key: SCHLUESSEL }, orderBy: { createdAt: 'asc' }, select: { value: true } });
+  const freigabeZeilen = async () => {
+    const b = await baustein();
+    if (!b) return 0;
+    return db.auditLog.count({ where: { entity: 'ContentBlock', entityId: b.id, action: 'UPDATE', summary: { contains: 'veröffentlicht' } } });
+  };
+
+  const aufraeumen = async () => {
+    // Erst über die Anwendung zurück auf den Auslieferungstext — das leert
+    // auch den Inhaltszwischenspeicher —, dann die Zeile samt Historie weg.
+    await patchContent(jars.admin, [{ key: SCHLUESSEL, value: '' }]);
+    await freigeben();
+    await call('POST', '/api/content', { jar: jars.admin, body: { action: 'discard', keys: [SCHLUESSEL] } });
+    await db.contentBlock.deleteMany({ where: { organizationId: s.org, key: SCHLUESSEL } });
+  };
+
+  before(async () => {
+    await requireServer();
+    jars ??= await loginAll();
+    s.org = (await eigeneOrganisationId()) ?? '';
+    assert.ok(s.org, 'die eigene Organisation fehlt — `npm run db:test:setup`?');
+    await aufraeumen();
+  });
+
+  after(async () => {
+    try {
+      await aufraeumen();
+    } finally {
+      await testDbSchliessen();
+    }
+  });
+
+  it('sechs gleichzeitige Entwürfe eines noch nie gespeicherten Bausteins: kein 500, eine Zeile, einer der Entwürfe gilt, keine Fassung', async () => {
+    assert.equal(await baustein(), null, 'Vorbedingung: der Baustein hat noch keine Zeile');
+    const werte = Array.from({ length: 6 }, (_, i) => `Gleichzeitig ${LAUF} Nr. ${i}`);
+    const antworten = await Promise.all(werte.map((w) => entwurf(w)));
+    assert.deepEqual(
+      antworten.map((a) => a.status),
+      werte.map(() => 200),
+      `gleichzeitiges Speichern: ${antworten.map((a) => `${a.status} ${a.text.slice(0, 120)}`).join(' | ')}`,
+    );
+
+    const zeilen = await db.contentBlock.findMany({ where: { organizationId: s.org, key: SCHLUESSEL, locale: 'DE' } });
+    assert.equal(zeilen.length, 1, 'mehr als eine Zeile für denselben Baustein');
+    assert.ok(werte.includes(zeilen[0]!.draftValue as string), `der Entwurf ist keiner der gesendeten: ${JSON.stringify(zeilen[0]!.draftValue)}`);
+    assert.equal(zeilen[0]!.publishedAt, null, 'Speichern hat veröffentlicht');
+    assert.equal((await fassungen()).length, 0, 'ein Entwurf hat eine Fassung angelegt');
+  });
+
+  it('gleichzeitige Entwürfe eines veröffentlichten Bausteins: keine Fassung geht verloren, keine entsteht zu viel', async () => {
+    const erste = await freigeben();
+    assert.equal(erste.status, 200, erste.text);
+    assert.equal(data(erste).published, 1);
+    const erstVeroeffentlicht = (await baustein())!.value;
+    assert.equal((await fassungen()).length, 0, 'die erste Freigabe hat nichts abzulösen');
+
+    const zweiterWortlaut = `Veröffentlicht ${LAUF}`;
+    assert.equal((await entwurf(zweiterWortlaut)).status, 200);
+    assert.equal(data(await freigeben()).published, 1);
+
+    const werte = Array.from({ length: 6 }, (_, i) => `Überarbeitung ${LAUF} Nr. ${i}`);
+    const antworten = await Promise.all(werte.map((w) => entwurf(w)));
+    assert.ok(antworten.every((a) => a.status === 200), antworten.map((a) => `${a.status} ${a.text.slice(0, 120)}`).join(' | '));
+    const zwischen = (await baustein())!;
+    assert.equal(zwischen.value, zweiterWortlaut, 'ein Entwurf hat den veröffentlichten Text ersetzt');
+    assert.ok(werte.includes(zwischen.draftValue as string), `Entwurf: ${JSON.stringify(zwischen.draftValue)}`);
+
+    const dritte = await freigeben();
+    assert.equal(data(dritte).published, 1);
+    const historie = (await fassungen()).map((f) => f.value);
+    assert.deepEqual(historie, [erstVeroeffentlicht, zweiterWortlaut], `Historie: ${JSON.stringify(historie)}`);
+  });
+
+  it('zweimal veröffentlichen ohne Änderung: keine zweite Fassung, keine zweite Protokollzeile', async () => {
+    const vorher = { fassungen: (await fassungen()).length, zeilen: await freigabeZeilen(), block: (await baustein())! };
+
+    // Ohne offenen Entwurf: nichts zu tun.
+    const leer = await freigeben();
+    assert.equal(leer.status, 200, leer.text);
+    assert.equal(data(leer).published, 0);
+
+    // Der Entwurf trägt den veröffentlichten Wortlaut — so speichert die
+    // Vorschau, wenn jemand in ein Feld klickt und es wieder verlässt.
+    assert.equal((await entwurf(vorher.block.value as string)).status, 200);
+    const unveraendert = await freigeben();
+    assert.equal(unveraendert.status, 200, unveraendert.text);
+    assert.equal(data(unveraendert).published, 0, 'ein unveränderter Text wurde als Veröffentlichung gezählt');
+
+    assert.equal((await fassungen()).length, vorher.fassungen, 'eine Freigabe ohne Änderung hat eine Fassung angelegt');
+    assert.equal(await freigabeZeilen(), vorher.zeilen, 'eine Freigabe ohne Änderung hat eine Protokollzeile „veröffentlicht" geschrieben');
+    const nachher = (await baustein())!;
+    assert.equal(nachher.draftValue, null, 'der Entwurf ohne Änderung bleibt als offener Entwurf stehen');
+    assert.equal(nachher.publishedAt?.getTime(), vorher.block.publishedAt?.getTime(), 'der Veröffentlichungszeitpunkt hat sich ohne Änderung verschoben');
+  });
+
+  it('fünf gleichzeitige Freigaben desselben Entwurfs: genau eine Fassung und eine Protokollzeile', async () => {
+    const vorher = { fassungen: (await fassungen()).length, zeilen: await freigabeZeilen(), wert: (await baustein())!.value };
+    const neu = `Gleichzeitig freigegeben ${LAUF}`;
+    assert.equal((await entwurf(neu)).status, 200);
+
+    const antworten = await Promise.all(Array.from({ length: 5 }, () => freigeben()));
+    assert.ok(antworten.every((a) => a.status === 200), antworten.map((a) => `${a.status} ${a.text.slice(0, 120)}`).join(' | '));
+    const summe = antworten.reduce((n, a) => n + (data(a)?.published ?? 0), 0);
+    assert.equal(summe, 1, `derselbe Entwurf wurde ${summe}-mal veröffentlicht`);
+
+    const historie = (await fassungen()).map((f) => f.value);
+    assert.equal(historie.length, vorher.fassungen + 1, `Fassungen: ${JSON.stringify(historie)}`);
+    assert.equal(historie.at(-1), vorher.wert, 'die neue Fassung ist nicht der abgelöste Text');
+    assert.equal(await freigabeZeilen(), vorher.zeilen + 1, 'mehr als eine Protokollzeile für eine Freigabe');
+    const block = (await baustein())!;
+    assert.equal(block.value, neu);
+    assert.equal(block.draftValue, null);
   });
 });

@@ -47,3 +47,130 @@ export const purgeSchema = z.object({
 });
 
 export type PurgeInput = z.infer<typeof purgeSchema>;
+
+// ---------------------------------------------------------------------------
+//  Versionsverwaltung (Produktsprint 2026-09-26)
+// ---------------------------------------------------------------------------
+
+const textListe = z.array(z.string().trim().min(1).max(500)).max(100).default([]);
+
+/**
+ * Beschreibung einer Version, wie sie das Release-Werkzeug einträgt
+ * (`scripts/release-registrieren.ts`). Kein Endpunkt nimmt sie an: Wer eine
+ * Version beschreiben darf, hat Zugriff auf den Server — über das Dashboard
+ * soll niemand eine „neue Version" erfinden können, die dann freigegeben
+ * wird.
+ */
+export const releaseManifestSchema = z
+  .object({
+    version: z
+      .string()
+      .trim()
+      .regex(/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/, 'Version als MAJOR.MINOR.PATCH, etwa 1.2.0.'),
+    releasedAt: z.string().datetime({ offset: true }),
+    kind: z.enum(['PATCH', 'MINOR', 'MAJOR', 'SECURITY']),
+    securitySeverity: z.enum(['LOW', 'MEDIUM', 'HIGH', 'CRITICAL']).nullable().default(null),
+    summary: z.string().trim().min(10).max(2000),
+    features: textListe,
+    fixes: textListe,
+    securityFixes: textListe,
+    uiChanges: textListe,
+    migrations: z.array(z.string().trim().regex(/^\d{14}_[a-z0-9_]+$/, 'Migrationsname wie im Ordner prisma/migrations.')).max(100).default([]),
+    breakingChanges: textListe,
+    manualActions: textListe,
+    expectedDowntimeMinutes: z.number().int().min(0).max(24 * 60).nullable().default(null),
+    rollbackAvailable: z.boolean().default(true),
+    ciStatus: z.enum(['PASSED', 'FAILED', 'PENDING']).default('PENDING'),
+    compatibility: z.string().trim().max(2000).nullable().default(null),
+    commit: z.string().trim().regex(/^[0-9a-f]{7,40}$/).nullable().default(null),
+    artifactSha256: z.string().trim().regex(/^[0-9a-f]{64}$/).nullable().default(null),
+    artifactSizeBytes: z.number().int().min(0).nullable().default(null),
+  })
+  .strict()
+  .refine((m) => m.kind !== 'SECURITY' || m.securitySeverity !== null, {
+    message: 'Eine Sicherheitsversion nennt ihre Schwere.',
+    path: ['securitySeverity'],
+  })
+  .refine((m) => m.kind !== 'SECURITY' || m.securityFixes.length > 0, {
+    message: 'Eine Sicherheitsversion nennt mindestens eine Sicherheitskorrektur.',
+    path: ['securityFixes'],
+  });
+
+export type ReleaseManifest = z.infer<typeof releaseManifestSchema>;
+
+/** Termin setzen oder verschieben. */
+export const releaseScheduleSchema = z
+  .object({
+    scheduledFor: z.string().datetime({ offset: true, message: 'Zeitpunkt als ISO-Datum mit Zeitzone.' }),
+  })
+  .strict();
+
+/** Termin stornieren — der Grund steht im Protokoll, nicht nur ein Zeitstempel. */
+export const releaseCancelSchema = z
+  .object({
+    grund: z.string().trim().max(500).optional(),
+  })
+  .strict();
+
+/** „Nicht jetzt" — zurückstellen um eine Anzahl Tage. */
+export const releaseDeferSchema = z
+  .object({
+    tage: z.number().int().min(1).max(90).default(7),
+  })
+  .strict();
+
+// ---------------------------------------------------------------------------
+//  Release-Ausführer (2026-09-27) — `/api/cron/release-auftraege`
+// ---------------------------------------------------------------------------
+
+const UMGEBUNGEN = ['production', 'staging', 'preview', 'test'] as const;
+
+/** Welche Umgebung fragt — die Instanz vergleicht mit ihrer eigenen. */
+export const releaseAuftraegeQuery = z
+  .object({
+    umgebung: z.enum(UMGEBUNGEN),
+  })
+  .strict();
+
+const ausfuehrungsSchluessel = z
+  .string()
+  .regex(/^[A-Za-z0-9._:-]{16,120}$/, 'Ausführungsschlüssel: 16–120 Zeichen aus Buchstaben, Ziffern, . _ : -');
+
+/**
+ * Einen fälligen Auftrag übernehmen.
+ *
+ * Der Ausführer meldet, was er **gemessen** hat: die Prüfsumme des
+ * heruntergeladenen Artefakts und die Adresse des CI-Laufs, aus dem es
+ * stammt. Die Anwendung vergleicht die Summe mit der des Release; eine
+ * Übernahme „auf Treu und Glauben" gibt es nicht.
+ */
+export const releaseUebernahmeSchema = z
+  .object({
+    auftragId: z.string().cuid(),
+    umgebung: z.enum(UMGEBUNGEN),
+    ausfuehrer: z.string().regex(/^[a-z0-9][a-z0-9._/-]{2,79}$/, 'Kennung des Ausführers: 3–80 Zeichen, klein.'),
+    ausfuehrungsSchluessel,
+    artefaktSha256: z.string().regex(/^[0-9a-f]{64}$/, 'SHA-256 als 64 Hexadezimalzeichen.'),
+    ciNachweis: z.string().url().max(300).refine((u) => u.startsWith('https://'), 'Nachweis als https-Adresse.'),
+  })
+  .strict();
+
+/**
+ * Ergebnis einer Ausführung melden.
+ *
+ * `laufendeVersion` ist, was der Gesundheitsendpunkt der Instanz nach dem
+ * Umschalten meldete. Für SUCCEEDED muss sie die Zielversion sein — ein
+ * „erfolgreich", nach dem die alte Version weiterläuft, ist keines.
+ */
+export const releaseErgebnisSchema = z
+  .object({
+    auftragId: z.string().cuid(),
+    ausfuehrungsSchluessel,
+    ergebnis: z.enum(['SUCCEEDED', 'FAILED', 'ROLLED_BACK']),
+    laufendeVersion: z.string().regex(/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/).optional(),
+    meldung: z.string().trim().max(2000).optional(),
+  })
+  .strict();
+
+export type ReleaseUebernahme = z.infer<typeof releaseUebernahmeSchema>;
+export type ReleaseErgebnis = z.infer<typeof releaseErgebnisSchema>;

@@ -3,6 +3,7 @@ import 'server-only';
 import { prisma } from '@/lib/db';
 import { audit, diff } from '@/lib/audit';
 import { BusinessRuleError, ConflictError, NotFoundError } from '@/lib/errors';
+import { zuercherTag } from '@/lib/zuerich';
 import type { CreateHolidayInput, UpdateHolidayInput } from '@/lib/validation/settings';
 
 /**
@@ -49,9 +50,13 @@ function formatDay(date: Date): string {
   }).format(date);
 }
 
+/**
+ * Der heutige Zürcher Tag als UTC-Mitternacht — die Form von `Holiday.date`.
+ * Bis 2026-09-27 der UTC-Tag: zwischen Mitternacht und 02:00 liess sich der
+ * Feiertag von gestern noch löschen, und die Ferienrechnung verschob sich.
+ */
 function startOfTodayUtc(): Date {
-  const now = new Date();
-  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+  return zuercherTag();
 }
 
 export async function listHolidays(organizationId: string, options: { from?: Date; take?: number } = {}) {

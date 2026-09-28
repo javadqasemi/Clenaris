@@ -1,11 +1,13 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
-import { Gift, Mail, Settings2, Ticket, TrendingUp } from 'lucide-react';
+import { Mail, Settings2, Ticket, TrendingUp } from 'lucide-react';
 
 import { prisma, toNumber } from '@/lib/db';
 import { requirePermission } from '@/lib/auth/session';
 import { can } from '@/lib/auth/rbac';
 import { formatCurrency, formatDate, formatNumber } from '@/lib/utils';
+import { periodOf } from '@/lib/bi/periods';
+import { zuercherJahr } from '@/lib/zuerich';
 import { getOrganizationId } from '@/server/services/organization.service';
 import { listNewsletterSubscribers } from '@/server/services/operations-admin.service';
 import { Badge } from '@/components/ui/badge';
@@ -53,18 +55,23 @@ export default async function MarketingPage() {
   const canManageCoupons = can(session.role, 'coupon:update');
 
   const organizationId = await getOrganizationId();
-  const yearStart = new Date(new Date().getFullYear(), 0, 1);
+  // Beginn des Zürcher Jahres für `createdAt` (Zeitpunkt), 2026-09-27.
+  const yearStart = periodOf('YEAR', new Date()).from;
 
-  const [coupons, giftCards, subscribers, confirmedSubscribers, leadsBySource, wonLeads, totalLeads, subscriberList] =
+  /*
+    Geschenkkarten stehen hier nicht mehr (Phase 31, 2026-09-27). Die Seite
+    zeigte eine Kachel „Geschenkkarten im Umlauf" und einen Reiter, aber kein
+    Weg in der Anwendung legt je eine Karte an, und keiner löst eine ein —
+    die Kachel stand immer auf CHF 0.00, der Reiter warb im leeren Zustand
+    für ein Merkmal, das es nicht gibt. Das Datenmodell der Karten bleibt im Schema
+    (Kommentar dort); wird es ein Produkt, braucht es Verkauf, Einlösung und
+    Buchhaltung zuerst.
+  */
+  const [coupons, subscribers, confirmedSubscribers, leadsBySource, wonLeads, totalLeads, subscriberList] =
     await Promise.all([
       prisma.coupon.findMany({
         where: { organizationId },
         orderBy: { createdAt: 'desc' },
-      }),
-      prisma.giftCard.findMany({
-        where: { organizationId, active: true },
-        orderBy: { createdAt: 'desc' },
-        take: 25,
       }),
       prisma.newsletterSubscriber.count({ where: { organizationId } }),
       prisma.newsletterSubscriber.count({
@@ -91,10 +98,10 @@ export default async function MarketingPage() {
     <div className="space-y-6">
       <PageHeader
         title="Marketing"
-        description="Gutscheine, Geschenkkarten, Newsletter und die Frage, woher Ihre Anfragen tatsächlich kommen."
+        description="Gutscheine, Newsletter und die Frage, woher Ihre Anfragen tatsächlich kommen."
       />
 
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
         <KpiTile
           label="Newsletter-Abonnenten"
           value={String(confirmedSubscribers)}
@@ -109,13 +116,6 @@ export default async function MarketingPage() {
           label="Aktive Gutscheincodes"
           value={String(coupons.filter((coupon) => coupon.status === 'ACTIVE').length)}
         />
-        <KpiTile
-          label="Geschenkkarten im Umlauf"
-          value={formatCurrency(
-            giftCards.reduce((sum, card) => sum + toNumber(card.balance), 0),
-          )}
-          hint={`${giftCards.length} Karten`}
-        />
       </div>
 
       <Tabs defaultValue="herkunft">
@@ -123,9 +123,6 @@ export default async function MarketingPage() {
           <TabsTriggerUnderline value="herkunft">Herkunft der Anfragen</TabsTriggerUnderline>
           <TabsTriggerUnderline value="gutscheine">
             Gutscheine ({coupons.length})
-          </TabsTriggerUnderline>
-          <TabsTriggerUnderline value="geschenkkarten">
-            Geschenkkarten ({giftCards.length})
           </TabsTriggerUnderline>
           <TabsTriggerUnderline value="newsletter">Newsletter</TabsTriggerUnderline>
         </TabsList>
@@ -139,7 +136,7 @@ export default async function MarketingPage() {
               description="Sobald Anfragen eingehen, sehen Sie hier, welcher Kanal tatsächlich Aufträge bringt."
             />
           ) : (
-            <ListCard title={`Anfragen ${new Date().getFullYear()}`}>
+            <ListCard title={`Anfragen ${zuercherJahr()}`}>
               <TableScroll>
                 <table className="data-table">
                   <caption className="sr-only">Leistung je Kanal</caption>
@@ -242,57 +239,6 @@ export default async function MarketingPage() {
                           >
                             {coupon.status === 'ACTIVE' ? 'Aktiv' : 'Inaktiv'}
                           </Badge>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </TableScroll>
-            </ListCard>
-          )}
-        </TabsContent>
-
-        {/* Geschenkkarten */}
-        <TabsContent value="geschenkkarten">
-          {giftCards.length === 0 ? (
-            <EmptyState
-              icon={<Gift aria-hidden />}
-              title="Keine Geschenkkarten"
-              description="Geschenkkarten sind im Reinigungsgewerbe ein beliebtes Präsent — besonders bei Umzügen und Geburten."
-            />
-          ) : (
-            <ListCard>
-              <TableScroll>
-                <table className="data-table">
-                  <caption className="sr-only">Geschenkkarten</caption>
-                  <thead>
-                    <tr>
-                      <th scope="col">Code</th>
-                      <th scope="col">Empfänger</th>
-                      <th scope="col" className="text-right">
-                        Ausgangswert
-                      </th>
-                      <th scope="col" className="text-right">
-                        Guthaben
-                      </th>
-                      <th scope="col">Gültig bis</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {giftCards.map((card) => (
-                      <tr key={card.id}>
-                        <td className="font-mono text-sm font-semibold">{card.code}</td>
-                        <td className="text-muted-foreground">
-                          {card.recipientName ?? card.recipientEmail ?? '—'}
-                        </td>
-                        <td className="num text-muted-foreground">
-                          {formatCurrency(toNumber(card.initialValue))}
-                        </td>
-                        <td className="num font-medium">
-                          {formatCurrency(toNumber(card.balance))}
-                        </td>
-                        <td className="text-muted-foreground">
-                          {card.validUntil ? formatDate(card.validUntil) : 'unbefristet'}
                         </td>
                       </tr>
                     ))}

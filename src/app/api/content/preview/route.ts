@@ -4,6 +4,8 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { can } from '@/lib/auth/rbac';
 import { safeReturnPath } from '@/lib/auth/safe-redirect';
+import { toErrorResponse } from '@/lib/api/response';
+import { enforceRateLimit, getClientIp } from '@/lib/rate-limit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -42,6 +44,14 @@ export const dynamic = 'force-dynamic';
  * darunter können Preise stehen, die noch nicht gelten sollen.
  */
 export async function GET(request: NextRequest) {
+  // Von Hand geschrieben (kein JSON, nur Cookie und Weiterleitung), deshalb
+  // auch das Kontingent von Hand — bis 2026-09-26 fehlte es (C9,
+  // `security:check`).
+  try {
+    await enforceRateLimit('apiWrite', getClientIp(request));
+  } catch (fehler) {
+    return toErrorResponse(fehler);
+  }
   const session = await getSession();
   if (!session || !can(session.role, 'content:update')) {
     return new NextResponse('Nicht berechtigt.', { status: 403 });

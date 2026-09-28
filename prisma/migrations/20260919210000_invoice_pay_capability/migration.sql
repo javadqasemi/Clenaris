@@ -1,0 +1,21 @@
+-- Eine Zahlberechtigung, die sich vom blossen Ansehen unterscheidet.
+--
+-- Fuer Rechnungen gab es nur `INVOICE_VIEW`. Die Zahlroute nahm deshalb
+-- denselben Token wie die Ansicht — ein Link, der zum Ansehen weitergegeben
+-- wurde, konnte eine Zahlung starten. Mit zwei Stufen gilt:
+--
+--   INVOICE_PAY  → ansehen, PDF, Zahlung starten
+--   INVOICE_VIEW → ansehen, PDF
+--
+-- und niemals umgekehrt. Die Implikation steht in `access-token.service.ts`.
+--
+-- Rein additiv: ein Aufzaehlungswert. Keine Spalte geaendert, keine geloescht,
+-- keine Zeile umgeschrieben, kein Standardwert beruehrt. Bestehende Tokens
+-- behalten ihren Zweck.
+--
+-- `ADD VALUE` haengt den Wert hinten an die Sortierreihenfolge des Typs.
+-- Unerheblich: Nach `purpose` wird nirgends sortiert, verglichen wird nur auf
+-- Gleichheit.
+
+-- AlterEnum
+ALTER TYPE "PublicTokenPurpose" ADD VALUE 'INVOICE_PAY';

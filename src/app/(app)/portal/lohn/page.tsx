@@ -4,6 +4,7 @@ import { Download, Wallet } from 'lucide-react';
 import { prisma, toNumber } from '@/lib/db';
 import { requireEmployeeId } from '@/lib/auth/session';
 import { formatCurrency, formatNumber } from '@/lib/utils';
+import { zuercherJahr } from '@/lib/zuerich';
 import { Button } from '@/components/ui/button';
 import { Alert } from '@/components/ui/primitives';
 import { EmptyState, ListCard, PageHeader, TableScroll } from '@/components/app/page-parts';
@@ -40,13 +41,22 @@ const MONTHS = [
 export default async function PayslipsPage() {
   const { employeeId } = await requireEmployeeId();
 
-  const payslips = await prisma.payslip.findMany({
-    where: { employeeId, published: true },
-    orderBy: [{ year: 'desc' }, { month: 'desc' }],
-    take: 36,
-  });
+  const [payslips, ausweise] = await Promise.all([
+    prisma.payslip.findMany({
+      where: { employeeId, published: true },
+      orderBy: [{ year: 'desc' }, { month: 'desc' }],
+      take: 36,
+    }),
+    // Nur abgeschlossene Aufstellungen — ein Entwurf kann sich noch ändern.
+    prisma.salaryCertificate.findMany({
+      where: { employeeId, status: 'FINAL' },
+      orderBy: [{ year: 'desc' }, { version: 'desc' }],
+      select: { id: true, year: true, version: true },
+      take: 10,
+    }),
+  ]);
 
-  const currentYear = new Date().getFullYear();
+  const currentYear = zuercherJahr();
   const yearTotal = payslips
     .filter((slip) => slip.year === currentYear)
     .reduce((sum, slip) => sum + toNumber(slip.grossPay), 0);
@@ -62,13 +72,14 @@ export default async function PayslipsPage() {
         <EmptyState
           icon={<Wallet aria-hidden />}
           title="Noch keine Abrechnungen"
-          description="Sobald die erste Lohnabrechnung freigegeben ist, findest du sie hier — inklusive PDF zum Herunterladen."
+          description="Sobald die erste Lohnabrechnung freigegeben ist, findest du sie hier."
         />
       ) : (
         <>
           <Alert variant="info">
-            Bruttolohn {currentYear}: <strong>{formatCurrency(yearTotal)}</strong>. Der
-            Lohnausweis für die Steuererklärung kommt jeweils im Januar per Post.
+            Bruttolohn {currentYear}: <strong>{formatCurrency(yearTotal)}</strong>. Den amtlichen
+            Lohnausweis für die Steuererklärung stellt der Betrieb aus; die Aufstellung unten ist
+            seine Grundlage.
           </Alert>
 
           <ListCard>
@@ -95,12 +106,18 @@ export default async function PayslipsPage() {
                 </thead>
                 <tbody>
                   {payslips.map((slip) => {
+                    // KTG und Quellensteuer gehören dazu, Spesen kommen
+                    // dazu. Fehlte eines davon, ergäbe Brutto minus Abzüge
+                    // nicht mehr die ausgewiesene Auszahlung.
                     const deductions =
                       toNumber(slip.ahvIv) +
                       toNumber(slip.alv) +
                       toNumber(slip.bvg) +
                       toNumber(slip.uvg) +
-                      toNumber(slip.otherDeductions);
+                      toNumber(slip.ktg) +
+                      toNumber(slip.withholdingTax) +
+                      toNumber(slip.otherDeductions) -
+                      toNumber(slip.expenses);
 
                     return (
                       <tr key={slip.id}>
@@ -116,9 +133,9 @@ export default async function PayslipsPage() {
                         </td>
                         <td className="num font-semibold">{formatCurrency(toNumber(slip.netPay))}</td>
                         <td>
-                          {slip.pdfUrl ? (
+                          {slip.pdfFileId ? (
                             <Button asChild variant="ghost" size="sm">
-                              <a href={slip.pdfUrl} download>
+                              <a href={`/api/payroll/payslips/${slip.id}/pdf`} download>
                                 <Download aria-hidden />
                                 Laden
                               </a>
@@ -136,9 +153,32 @@ export default async function PayslipsPage() {
           </ListCard>
 
           <p className="text-sm leading-relaxed text-muted-foreground">
-            Die Abzüge umfassen AHV/IV/EO, ALV, Nichtberufsunfall und die berufliche Vorsorge
-            (BVG). Fragen zur Abrechnung beantwortet die Betriebsleitung.
+            Die Abzüge umfassen AHV/IV/EO, ALV, Nichtberufsunfall, die berufliche Vorsorge
+            (BVG), falls versichert das Krankentaggeld (KTG), gegebenenfalls die Quellensteuer
+            und andere Abzüge; Spesen sind verrechnet. Das PDF zeigt jede Zeile. Fragen zur
+            Abrechnung beantwortet die Personalverwaltung.
           </p>
+
+          {ausweise.length > 0 ? (
+            <ListCard>
+              <ul className="divide-y divide-border">
+                {ausweise.map((a) => (
+                  <li key={a.id} className="flex items-center justify-between gap-3 px-4 py-3 text-sm">
+                    <span>
+                      Lohnausweis-Aufstellung {a.year}
+                      {a.version > 1 ? ` (Version ${a.version})` : ''}
+                    </span>
+                    <Button asChild variant="ghost" size="sm">
+                      <a href={`/api/payroll/certificates/${a.id}/pdf`} download>
+                        <Download aria-hidden />
+                        Laden
+                      </a>
+                    </Button>
+                  </li>
+                ))}
+              </ul>
+            </ListCard>
+          ) : null}
         </>
       )}
     </div>

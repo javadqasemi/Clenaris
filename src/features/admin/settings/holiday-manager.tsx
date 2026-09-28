@@ -3,6 +3,7 @@
 import { PenLine, Trash2 } from 'lucide-react';
 
 import { ActionButton } from '@/components/app/action-button';
+import { zuercherTagText } from '@/lib/zuerich';
 import { FormDialog, type FieldSpec } from '@/components/app/resource-form';
 import { EmptyState } from '@/components/app/page-parts';
 
@@ -82,7 +83,7 @@ export function HolidayList({ holidays, canEdit }: { holidays: HolidayRow[]; can
     );
   }
 
-  const today = new Date().toISOString().slice(0, 10);
+  const today = zuercherTagText();
 
   return (
     <dl className="protocol-list">

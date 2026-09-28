@@ -35,6 +35,21 @@ export interface AccessTokenClaims extends JWTPayload {
    * das Gerät, auf dem gerade umgestellt wurde, gehört nicht dazu.
    */
   thm?: string;
+  /**
+   * Kennung einer laufenden Geräteübergabe — die Sperre (Gate 4D).
+   *
+   * Steht sie im Token, hält gerade jemand anderes dieses Gerät und die
+   * Mitarbeitersitzung ist blockiert. Als Anspruch im Token statt als
+   * Abfrage je Aufruf: Die Prüfung kostet so nichts, und sie liegt an
+   * derselben Stelle wie Rolle und Organisation.
+   *
+   * Der Umweg, der damit **nicht** offensteht: Wer das Zugangstoken
+   * löscht, bekommt kein unbelastetes zurück — `createSession` schlägt die
+   * Übergabe bei jeder Erneuerung in der Datenbank nach und prägt sie
+   * erneut ein. Die Datenbank bleibt die Wahrheit, das Token nur ihr
+   * schneller Abdruck.
+   */
+  lck?: string;
   typ: 'access';
 }
 

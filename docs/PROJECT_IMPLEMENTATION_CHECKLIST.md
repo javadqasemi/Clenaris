@@ -1,5 +1,29 @@
 # Project Implementation Checklist — Clenaris
 
+> **Teilweise überholt.** Dieses Dokument hält den Stand vom 2026-09-14 fest —
+> und zwar den Stand *vor* den letzten vier Commits desselben Tages. Was sich
+> seither geändert hat, steht in
+> [`NEXT_DEVELOPMENT_AUDIT.md`](NEXT_DEVELOPMENT_AUDIT.md), Abschnitt 1; dort
+> stehen auch die Befunde, die diese Prüfung übersehen hat. Bei Widerspruch
+> gilt das neuere Dokument.
+>
+> Konkret überholt: „**Keine CI-Pipeline**" (es gibt sie, `.github/workflows/deploy.yml`),
+> „Hosting: Vercel" (zusätzlich eigener Server über PM2), `createInvoiceFromQuote`
+> „ungenutzt" (verdrahtet in `quote.service.ts:840`), sämtliche Zählungen, sowie
+> die Punkte, die Phase 1 des Audits erledigt hat: Next.js-Fassung (S1),
+> 2FA-Geheimnis (S2), zeitkonstanter Cron-Vergleich (S5), Rollenprüfung im
+> Kundenbereich.
+>
+> Durch **Phase 2** zusätzlich überholt: F4 („Kein authentifiziertes
+> `POST /api/bookings`") und F5 („`GET`/`POST /api/jobs` fehlen") sind erledigt;
+> die Aussage in Abschnitt 3.3, Einsätze entstünden „nur aus Buchungen", stimmt
+> nicht mehr. Die Zeile „Disposition ✅" in Abschnitt 2.3 war zu freundlich: Das
+> Ziehen im Kalender prüfte weder Abwesenheit noch Überschneidung. Endpunktzahl
+> jetzt 377.
+>
+> Als **Feature-für-Feature-Landkarte** ist es weiterhin gültig und
+> detaillierter als das Audit; es bleibt deshalb stehen.
+
 **Stand:** 2026-09-14 · **Grundlage:** vollständige Analyse des Quellcodes (kein Abgleich mit Roadmaps oder Absichtserklärungen). Jede Zeile nennt den Ort im Repository, an dem die Aussage geprüft werden kann.
 
 **Prüfumfang:** 133 Seiten (`page.tsx`), 240 Route-Dateien unter `src/app/api`, 46 Dienste, 26 Validierungsmodule, 111 Prisma-Modelle, 67 Enums, 12 Migrationen, 19 Testdateien, rund 106 000 Zeilen TypeScript/TSX unter `src/`.

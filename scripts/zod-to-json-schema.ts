@@ -113,6 +113,15 @@ export function zodToJsonSchema(input: ZodTypeAny): JsonSchema {
     case Kind.ZodNull:
       return described({ type: 'null' });
 
+    /**
+     * `z.never()` — ein Feld, das es nicht geben darf (2026-09-27, erstmals
+     * `contractServiceSchema.buildingId`). In JSON Schema ist das `not: {}`:
+     * kein Wert passt. Dokumentiert statt weggelassen, damit die Beschreibung
+     * sagt, *warum* das Feld abgewiesen wird.
+     */
+    case Kind.ZodNever:
+      return described({ not: {} });
+
     case Kind.ZodDefault:
       return { ...zodToJsonSchema(def.innerType), default: def.defaultValue() };
 
@@ -120,6 +129,16 @@ export function zodToJsonSchema(input: ZodTypeAny): JsonSchema {
       // `.refine()` / `.superRefine()` / `.transform()` — die Form bestimmt
       // das innere Schema; die Regel selbst steht in der Beschreibung.
       return described(zodToJsonSchema(def.schema));
+
+    /**
+     * `a.and(b)` — beide Teile müssen gelten (2026-09-27, erstmals
+     * `createPropertyBodySchema`: Liegenschaftsfelder *und* entweder eine
+     * Adress-ID oder eine neue Adresse). JSON Schema kennt dafür genau
+     * `allOf`; zusammenfalten hiesse, die Oder-Bedingung des zweiten Teils zu
+     * verlieren.
+     */
+    case Kind.ZodIntersection:
+      return described({ allOf: [zodToJsonSchema(def.left), zodToJsonSchema(def.right)] });
 
     case Kind.ZodUnion:
       return described({ anyOf: (def.options as ZodTypeAny[]).map(zodToJsonSchema) });

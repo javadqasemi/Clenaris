@@ -34,16 +34,23 @@ export const ASSET_FIELDS = {
 
 export type CmsAssetEntity = keyof typeof ASSET_FIELDS;
 
-/** Ist diese Anschrift überhaupt vorgesehen? */
+/**
+ * Ist diese Anschrift überhaupt vorgesehen?
+ *
+ * **Nur eigene Schlüssel** (`Object.hasOwn`, 2026-09-27). Vorher prüften
+ * `ASSET_FIELDS[entity]` und `field in …` auch die Prototypenkette:
+ * `constructor`, `toString` oder `__proto__` bestanden die Liste, erreichten
+ * Prisma und kamen als 500 zurück. Geschrieben wurde nichts — aber eine
+ * Freigabeliste, die Namen durchlässt, die nicht auf ihr stehen, ist keine.
+ */
 export function isAssetField(entity: string, field: string): boolean {
-  const table = ASSET_FIELDS[entity as CmsAssetEntity];
-  return Boolean(table && field in table.fields);
+  if (!Object.hasOwn(ASSET_FIELDS, entity)) return false;
+  return Object.hasOwn(ASSET_FIELDS[entity as CmsAssetEntity].fields, field);
 }
 
 /** Bezeichnung für die Maske, z. B. „Galerieeintrag — Bild ‚vorher'". */
 export function assetFieldLabel(entity: string, field: string): string | null {
+  if (!isAssetField(entity, field)) return null;
   const table = ASSET_FIELDS[entity as CmsAssetEntity];
-  if (!table) return null;
-  const name = (table.fields as Record<string, string>)[field];
-  return name ? `${table.label} — ${name}` : null;
+  return `${table.label} — ${(table.fields as Record<string, string>)[field]}`;
 }

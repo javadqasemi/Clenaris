@@ -201,8 +201,8 @@ export function QuoteActions({
             <DialogTitle>Offerte versenden</DialogTitle>
             <DialogDescription>
               Empfänger: {email || 'keine E-Mail-Adresse hinterlegt'}. Die Offerte wird als PDF
-              angehängt; zusätzlich erhält die Kundschaft einen Link zum Annehmen mit digitaler
-              Unterschrift.
+              angehängt; zusätzlich erhält die Kundschaft einen Link, über den sie die Offerte
+              elektronisch annehmen kann.
             </DialogDescription>
           </DialogHeader>
 

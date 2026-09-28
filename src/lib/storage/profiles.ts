@@ -1,11 +1,14 @@
 import 'server-only';
 
+import { sha256Hex } from '@/lib/crypto';
 import { ValidationError } from '@/lib/errors';
 import {
   MAX_UPLOAD_BYTES,
   describeUploadLimit,
   type UploadProfileName,
 } from '@/lib/validation/files';
+
+import { pruefeSignatur } from './signatures';
 
 /**
  * Was hochgeladen werden darf — unabhängig davon, *wohin*.
@@ -73,6 +76,14 @@ export function sanitizeFilename(filename: string): string {
   return cleaned || 'datei';
 }
 
+/**
+ * Vorprüfung beim Anfordern einer Upload-Adresse.
+ *
+ * Arbeitet ausschliesslich mit dem, was der Client *behauptet* — mehr liegt
+ * zu diesem Zeitpunkt nicht vor. Das ist Bequemlichkeit, keine Sicherheit:
+ * Sie erspart den Upload einer Datei, die ohnehin abgelehnt würde. Verbindlich
+ * ist allein `verifyBytes` nach dem Upload.
+ */
 export function validateUpload(profile: UploadProfile, mimeType: string, sizeBytes: number) {
   const config = UPLOAD_PROFILES[profile];
   if (!config.types.includes(mimeType as never)) {
@@ -90,10 +101,108 @@ export function validateUpload(profile: UploadProfile, mimeType: string, sizeByt
   return config;
 }
 
+export interface ByteBefund {
+  /** SHA-256 der geprüften Bytes, hexadezimal in Kleinschrift. */
+  checksum: string;
+  /** Die *tatsächliche* Grösse — nicht die angekündigte. */
+  sizeBytes: number;
+  /** Der bestätigte MIME-Typ; identisch mit dem angemeldeten. */
+  mimeType: string;
+}
+
+/**
+ * Die zentrale Byteprüfung. Jede angenommene Benutzerdatei geht hier durch.
+ *
+ * **Die Reihenfolge ist Absicht.** Erst leer, dann zu gross, dann Typ gegen
+ * Profil, dann Signatur — die billigen Prüfungen zuerst, und die Signatur
+ * zuletzt, weil ihre Fehlermeldung die aufschlussreichste ist und sonst von
+ * einer banaleren verdeckt würde.
+ *
+ * **Was hier als Tatsache gilt und was nicht.** `bytes.length` ist die
+ * Grösse; die Angabe des Clients wird nicht einmal übergeben. Die
+ * Dateiendung kommt nicht vor. Der angemeldete MIME-Typ wird geprüft, nicht
+ * geglaubt: Er muss im Profil stehen *und* zur Signatur passen.
+ *
+ * Es wird nie protokolliert, was in der Datei steht — nur, welches Format
+ * erkannt wurde.
+ */
+export function verifyBytes(
+  profile: UploadProfile,
+  mimeType: string,
+  bytes: Buffer,
+): ByteBefund {
+  const config = UPLOAD_PROFILES[profile];
+
+  if (bytes.byteLength === 0) {
+    throw new ValidationError('Die Datei ist leer.');
+  }
+
+  if (bytes.byteLength > config.maxBytes) {
+    throw new ValidationError(
+      `Die Datei ist zu gross (max. ${describeUploadLimit(config.maxBytes)}).`,
+    );
+  }
+
+  if (!config.types.includes(mimeType as never)) {
+    throw new ValidationError(
+      `Dieser Dateityp wird nicht unterstützt. Erlaubt sind: ${config.types
+        .map((t) => t.split('/')[1].toUpperCase())
+        .join(', ')}.`,
+    );
+  }
+
+  const befund = pruefeSignatur(mimeType, bytes);
+  if (!befund.passt) {
+    throw new ValidationError(
+      `Der Inhalt der Datei passt nicht zum angegebenen Typ. ${befund.grund ?? ''}`.trim(),
+    );
+  }
+
+  return {
+    checksum: sha256Hex(bytes),
+    sizeBytes: bytes.byteLength,
+    mimeType,
+  };
+}
+
 export interface SignedUploadTarget {
   path: string;
+  /**
+   * Die Kennung des Upload-Tickets — das Einzige, was der Client beim
+   * Abschluss zurückmelden muss.
+   *
+   * Pfad, Profil, Organisation und Obergrenze stehen serverseitig am Ticket.
+   * Damit gibt es nichts mehr, das der Client über seine Datei behaupten
+   * könnte: Er nennt eine Kennung, alles andere schlägt der Server nach.
+   */
+  ticketId: string;
   token: string;
   signedUrl: string;
-  publicUrl: string;
   expiresIn: number;
 }
+
+/**
+ * Warum hier **keine** `publicUrl` mehr steht.
+ *
+ * Bis Wave 2 gab das Ticket neben der Schreibadresse auch die öffentliche
+ * Leseadresse des Objekts zurück — bei Supabase
+ * `…/storage/v1/object/public/<bucket>/<pfad>`. Die Antwort von
+ * `POST /api/files/upload-url` geht an den Client, und `created(target)` gibt
+ * das Ticket unverändert weiter.
+ *
+ * Das war eine Abkürzung an sämtlichen Toren vorbei: Diese Adresse zeigt auf
+ * Bytes, die zu diesem Zeitpunkt noch gar nicht hochgeladen sind — und wenn
+ * sie es sind, sind sie weder byteweise geprüft (`verifyBytes`) noch gegen die
+ * Dateipolitik gehalten noch auf Schadsoftware untersucht, und `FileAsset`
+ * existiert noch nicht, also gibt es auch niemanden, der eine Berechtigung
+ * prüfen könnte. Wer die Adresse hat, liest an `authorizeStoredFile` vorbei.
+ *
+ * Ob das tatsächlich trägt, hängt daran, ob der Ablage-Bucket öffentlich ist —
+ * also an einer Betriebseinstellung ausserhalb dieses Codes. Genau deshalb
+ * fällt das Feld weg: Eine Sicherheitseigenschaft, die von einer Einstellung
+ * in einer fremden Oberfläche abhängt, ist keine.
+ *
+ * Genommen hat das Feld ohnehin nie jemand — `UploadZiel` in `lib/upload.ts`
+ * kennt nur `ticketId`, `signedUrl` und `path`. Ausgeliefert wird
+ * ausschliesslich über `/api/files/blob/[id]`, und dort steht das Tor.
+ */

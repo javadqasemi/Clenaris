@@ -1,7 +1,7 @@
 import type { MetadataRoute } from 'next';
 
 import { prisma } from '@/lib/db';
-import { clientEnv } from '@/lib/env';
+import { SEITEN_URL } from '@/lib/seiten-url';
 import { logger } from '@/lib/logger';
 
 const log = logger('sitemap');
@@ -19,7 +19,8 @@ const log = logger('sitemap');
 export const revalidate = 3600;
 
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
-  const base = clientEnv.NEXT_PUBLIC_APP_URL.replace(/\/$/, '');
+  // Kanonische Domain (Bauzeit, `src/lib/seiten-url.ts`).
+  const base = SEITEN_URL;
 
   const staticRoutes: MetadataRoute.Sitemap = [
     { url: base, changeFrequency: 'weekly', priority: 1 },

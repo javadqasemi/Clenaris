@@ -53,7 +53,9 @@ export default async function NewInvoicePage({
         organizationId,
         status: 'COMPLETED',
         deletedAt: null,
-        invoiceItems: { none: {} },
+        // Der Verrechnungsanspruch, nicht „hat irgendeine Position": Ein
+        // Einsatz einer stornierten Rechnung ist wieder verrechenbar.
+        billedInvoiceId: null,
       },
       orderBy: { scheduledStart: 'desc' },
       take: 40,

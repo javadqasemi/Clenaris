@@ -4,6 +4,8 @@ import { Clock } from 'lucide-react';
 
 import { requireEmployeeId } from '@/lib/auth/session';
 import { formatDate, formatDuration, formatTime, formatNumber } from '@/lib/utils';
+import { periodOf } from '@/lib/bi/periods';
+import { tagPlus, zuercherTag, zuercherTagesbeginn } from '@/lib/zuerich';
 import { getTimesheet } from '@/server/services/employee.service';
 import { Badge } from '@/components/ui/badge';
 import { KpiTile } from '@/components/app/kpi-tile';
@@ -150,37 +152,44 @@ export default async function TimesheetPage({
   );
 }
 
+/**
+ * Zeitraum der eigenen Auswertung — Zürcher Grenzen (2026-09-27).
+ *
+ * Vorher mit `new Date(y, m, d)` und `setHours` in der Zone des Servers: Tag,
+ * Woche, Monat, Quartal und Jahr begannen um 01:00/02:00 Zürcher Zeit, und
+ * die Stunden einer Schicht ab Mitternacht fielen in den Vorzeitraum. `to` ist
+ * ausschliessend.
+ */
 function resolvePeriod(range: string, now: Date): { from: Date; to: Date } {
   switch (range) {
     case 'today': {
-      const start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-      return { from: start, to: new Date(start.getTime() + 86_400_000) };
+      const p = periodOf('DAY', now);
+      return { from: p.from, to: p.to };
     }
     case 'week': {
-      const monday = new Date(now);
-      monday.setHours(0, 0, 0, 0);
-      monday.setDate(monday.getDate() - ((monday.getDay() + 6) % 7));
-      return { from: monday, to: new Date(monday.getTime() + 7 * 86_400_000) };
+      const p = periodOf('WEEK', now);
+      return { from: p.from, to: p.to };
     }
-    case 'quarter': {
-      const start = new Date(now.getFullYear(), Math.floor(now.getMonth() / 3) * 3, 1);
-      return { from: start, to: now };
-    }
+    case 'quarter':
+      return { from: periodOf('QUARTER', now).from, to: now };
     case 'year':
-      return { from: new Date(now.getFullYear(), 0, 1), to: now };
+      return { from: periodOf('YEAR', now).from, to: now };
     case 'month':
     default:
-      return { from: new Date(now.getFullYear(), now.getMonth(), 1), to: now };
+      return { from: periodOf('MONTH', now).from, to: now };
   }
 }
 
+/**
+ * Werktage der Zürcher Tage, die im Zeitraum beginnen (`to` ausschliessend).
+ * Die frühere Schleife lief mit `<=` bis zum ausschliessenden Ende und zählte
+ * für „Heute" zwei Soll-Tage.
+ */
 function countWorkdays(from: Date, to: Date): number {
   let count = 0;
-  const cursor = new Date(from);
-  while (cursor <= to) {
-    const day = cursor.getDay();
-    if (day !== 0 && day !== 6) count++;
-    cursor.setDate(cursor.getDate() + 1);
+  for (let tag = zuercherTag(from); zuercherTagesbeginn(tag) < to; tag = tagPlus(tag, 1)) {
+    const wochentag = tag.getUTCDay();
+    if (wochentag !== 0 && wochentag !== 6) count++;
   }
   return count;
 }

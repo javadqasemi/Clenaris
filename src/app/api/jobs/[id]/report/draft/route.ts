@@ -26,7 +26,9 @@ export const POST = defineRoute({
     const job = await prisma.job.findFirst({
       where: { id: params.id, organizationId, deletedAt: null },
       include: {
-        customer: { select: { firstName: true, lastName: true, companyName: true } },
+        customer: {
+          select: { firstName: true, lastName: true, companyName: true, contacts: { select: { firstName: true, lastName: true } } },
+        },
         service: { select: { name: true } },
         checklist: { orderBy: { position: 'asc' } },
         materials: true,
@@ -62,6 +64,14 @@ export const POST = defineRoute({
         unit: material.unit,
       })),
       notes: job.completionNote,
+      // Bei einer Firmenkundschaft ist `customerName` der Firmenname; die
+      // Person dahinter und die Kontakte stehen oft in Checkliste und Notiz
+      // („Frau Keller öffnet") und werden dort zu `[NAME]` (F-15).
+      bekannteNamen: [
+        job.customer.firstName,
+        job.customer.lastName,
+        ...job.customer.contacts.flatMap((c) => [c.firstName, c.lastName]),
+      ],
     });
 
     return ok({ text });

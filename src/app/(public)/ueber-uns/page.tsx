@@ -59,7 +59,16 @@ export default async function AboutPage() {
   ]);
 
   const [completedJobs, customers, employees, areas] = stats;
-  const foundedYear = team[0] ? team[0].hiredAt.getFullYear() : new Date().getFullYear();
+
+  /**
+   * Gründungsjahr aus der ersten Anstellung — und nur dann, wenn es eine gibt.
+   *
+   * Das Datenmodell kennt kein Gründungsdatum; die früheste Anstellung ist die
+   * nächstbeste echte Spur. Vorher fiel der Wert ohne Team auf das laufende
+   * Jahr zurück und behauptete damit eine Gründung, die niemand belegt hat.
+   * Lieber keine Zeile als eine erfundene: `null` lässt die Angabe weg.
+   */
+  const foundedYear = team[0]?.hiredAt.getFullYear() ?? null;
 
   return (
     <>
@@ -77,13 +86,22 @@ export default async function AboutPage() {
         </div>
       </section>
 
+      {/* Nur Kennzahlen mit Bestand. Einsätze und Kundschaft standen vorher als
+          `Math.max(…, 1)` da — ein Betrieb ohne einen einzigen Auftrag wies
+          damit je einen abgeschlossenen Einsatz und eine Kundin aus. Wer den
+          Bestand nachzählt, findet sie nicht; die Aufrundung war eine
+          Behauptung, kein Platzhalter. */}
       <div className="container py-12">
         <StatStrip
           stats={[
-            { value: String(Math.max(completedJobs, 1)), label: 'Abgeschlossene Einsätze' },
-            { value: String(Math.max(customers, 1)), label: 'Kundinnen und Kunden' },
-            { value: String(employees), label: 'Festangestellte' },
-            { value: String(areas), label: 'Postleitzahlen im Gebiet' },
+            ...(completedJobs > 0
+              ? [{ value: String(completedJobs), label: 'Abgeschlossene Einsätze' }]
+              : []),
+            ...(customers > 0
+              ? [{ value: String(customers), label: 'Kundinnen und Kunden' }]
+              : []),
+            ...(employees > 0 ? [{ value: String(employees), label: 'Festangestellte' }] : []),
+            ...(areas > 0 ? [{ value: String(areas), label: 'Postleitzahlen im Gebiet' }] : []),
           ]}
         />
       </div>
@@ -218,10 +236,12 @@ export default async function AboutPage() {
                 label: 'Sitz',
                 value: `${company.address.street}, ${company.address.postalCode} ${company.address.city}`,
               },
-              { label: 'Gegründet', value: String(foundedYear) },
+              ...(foundedYear ? [{ label: 'Gegründet', value: String(foundedYear) }] : []),
               { label: 'Rechtsform', value: 'Gesellschaft mit beschränkter Haftung (GmbH)' },
               ...(company.vatNumber ? [{ label: 'MWST-Nummer', value: company.vatNumber }] : []),
-              { label: 'Mitarbeitende', value: `${employees} festangestellt` },
+              ...(employees > 0
+                ? [{ label: 'Mitarbeitende', value: `${employees} festangestellt` }]
+                : []),
               { label: 'Einsatzgebiet', value: 'Kanton Bern und angrenzende Gemeinden' },
               {
                 label: 'Versicherung',

@@ -1,0 +1,136 @@
+# Production V2 — Release-Ausführer (VORLAGE, 2026-09-27)
+#
+# Diese Datei liegt bewusst NICHT unter .github/workflows: GitHub führt sie
+# nicht aus. Sie wird dorthin kopiert, wenn Production V2 freigegeben ist
+# (docs/PRODUCTION_V2.md, „Release-Ausführer"). Bis dahin ist sie die
+# vollständige, geprüfte Beschreibung des Wegs:
+#
+#   Update Center (freigegeben + terminiert)
+#     → dieser Lauf holt den fälligen Auftrag   (signiert, /api/cron/release-auftraege)
+#     → sucht den grünen CI-Lauf des Commits    (Nachweis)
+#     → lädt dessen Artefakt, misst die SHA-256 (= Release, sonst Abbruch)
+#     → übernimmt den Auftrag                   (idempotent, Schlüssel = Lauf-ID)
+#     → aktiviert per release-aktivieren.sh     (Summe, Manifest, Migration, Health, Rücksprung)
+#     → meldet das Ergebnis                     (SUCCEEDED / FAILED / ROLLED_BACK)
+#
+# Die Anwendung erhält dabei nichts: kein SSH-Schlüssel, kein GitHub-Token.
+# Sie gibt nur fällige Aufträge her und nimmt Ergebnisse an.
+
+name: Release-Ausführer
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+
+# Ein Lauf je Umgebung zur selben Zeit — zwei Ausführer hiessen zwei
+# Umschaltungen. Die Schnittstelle weist den zweiten ohnehin mit 409 ab.
+concurrency:
+  group: release-ausfuehrer-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  ausfuehren:
+    runs-on: ubuntu-latest
+    # Die GitHub-Umgebung „production" trägt die Geheimnisse und kann
+    # zusätzlich eine Bestätigung durch eine Person verlangen.
+    environment: production
+    timeout-minutes: 45
+    env:
+      CLENARIS_URL: ${{ vars.CLENARIS_URL }}
+      RELEASE_EXECUTOR_TOKEN: ${{ secrets.RELEASE_EXECUTOR_TOKEN }}
+      RELEASE_EXECUTOR_SIGNING_KEY: ${{ secrets.RELEASE_EXECUTOR_SIGNING_KEY }}
+      AUSFUEHRER: github-actions/production
+      SCHLUESSEL: gh-${{ github.run_id }}
+    steps:
+      # Auf Commits gepinnt wie in deploy.yml — eine Vorlage, die mit
+      # beweglichen Tags ausgerollt würde, holte beim nächsten Tag fremden Code.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci --ignore-scripts
+
+      - name: Fällige Aufträge lesen
+        id: liste
+        run: |
+          npx tsx scripts/release-ausfuehrer.ts liste --umgebung production > auftraege.json
+          commit="$(node -e 'const a=require("./auftraege.json").filter(x=>!x.hindernis)[0]; process.stdout.write(a?a.commit:"")')"
+          echo "commit=${commit}" >> "$GITHUB_OUTPUT"
+
+      - name: Grünen CI-Lauf des Commits finden
+        if: steps.liste.outputs.commit != ''
+        id: ci
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          lauf="$(gh run list --workflow deploy.yml --commit '${{ steps.liste.outputs.commit }}' --status success --json databaseId,url --limit 1)"
+          id="$(node -e 'const l=JSON.parse(process.argv[1]); process.stdout.write(l[0]?String(l[0].databaseId):"")' "$lauf")"
+          url="$(node -e 'const l=JSON.parse(process.argv[1]); process.stdout.write(l[0]?l[0].url:"")' "$lauf")"
+          [[ -n "$id" ]] || { echo "Kein grüner CI-Lauf für den Commit — keine Übernahme."; exit 1; }
+          echo "id=${id}" >> "$GITHUB_OUTPUT"
+          echo "url=${url}" >> "$GITHUB_OUTPUT"
+
+      - name: Artefakt des CI-Laufs laden
+        if: steps.liste.outputs.commit != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh run download '${{ steps.ci.outputs.id }}' --name 'release-${{ steps.liste.outputs.commit }}' --dir release
+
+      - name: Messen und übernehmen
+        if: steps.liste.outputs.commit != ''
+        id: auftrag
+        run: |
+          npx tsx scripts/release-ausfuehrer.ts abholen --umgebung production --artefakte release \
+            --ausfuehrer "$AUSFUEHRER" --schluessel "$SCHLUESSEL" --ci-nachweis '${{ steps.ci.outputs.url }}'
+
+      - name: Übertragen und aktivieren
+        if: steps.auftrag.outputs.auftrag != ''
+        id: aktivieren
+        env:
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          SERVER_USER: ${{ secrets.SERVER_USER }}
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
+        run: |
+          # Dieselbe SSH-Vorbereitung wie deploy.yml: gepinnter Wirtsschlüssel,
+          # StrictHostKeyChecking=yes, kein Rückfall auf root.
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519 && chmod 600 ~/.ssh/id_ed25519
+          archiv='${{ steps.auftrag.outputs.archiv }}'
+          scp -o StrictHostKeyChecking=yes "$archiv" "$archiv.sha256" "${SERVER_USER}@${SERVER_HOST}:releases-eingang/"
+          ssh -o StrictHostKeyChecking=yes "${SERVER_USER}@${SERVER_HOST}" \
+            "bash ~/clenaris/current/deploy/v2/release-aktivieren.sh ~/releases-eingang/$(basename "$archiv")"
+
+      - name: Laufende Version lesen
+        if: always() && steps.auftrag.outputs.auftrag != ''
+        id: gesund
+        # Über die signierte Schnittstelle — /api/health nennt nur den Commit.
+        # Schlägt das Lesen fehl, bleibt die Version leer, und „erfolgreich"
+        # wird von der Anwendung abgewiesen (422): lieber ein offener Auftrag
+        # als ein falsch gemeldeter.
+        run: npx tsx scripts/release-ausfuehrer.ts version --umgebung production || echo "version=" >> "$GITHUB_OUTPUT"
+
+      - name: Ergebnis melden
+        if: always() && steps.auftrag.outputs.auftrag != ''
+        run: |
+          # release-aktivieren.sh springt bei fehlgeschlagenem Health Check
+          # selbst zurück; läuft danach die Ausgangsversion, war es ein
+          # Rücksprung, sonst ein Fehlschlag.
+          if [[ '${{ steps.aktivieren.outcome }}' == 'success' ]]; then
+            ergebnis=SUCCEEDED
+          elif [[ '${{ steps.gesund.outputs.version }}' == '${{ steps.auftrag.outputs.ruecksprung_auf }}' ]]; then
+            ergebnis=ROLLED_BACK
+          else
+            ergebnis=FAILED
+          fi
+          npx tsx scripts/release-ausfuehrer.ts melden --auftrag '${{ steps.auftrag.outputs.auftrag }}' \
+            --schluessel "$SCHLUESSEL" --ergebnis "$ergebnis" \
+            --laufende-version '${{ steps.gesund.outputs.version }}' \
+            --meldung "Lauf ${{ github.run_id }}: Aktivierung ${{ steps.aktivieren.outcome }}"

@@ -21,6 +21,7 @@ import {
   Sheet,
   SheetBody,
   SheetContent,
+  SheetDescription,
   SheetFooter,
   SheetHeader,
   SheetTitle,
@@ -56,6 +57,8 @@ interface CalendarEvent {
   end: string;
   backgroundColor: string;
   borderColor: string;
+  /** Vom Dienst zur Fläche gerechnet (`lesbareFarben`) — nie hier festlegen. */
+  textColor: string;
   resourceIds: string[];
   extendedProps: {
     number: string;
@@ -233,7 +236,18 @@ export function DispatchCalendar({ employees }: { employees: CalendarEmployee[] 
             week: 'Woche',
             day: 'Tag',
             list: 'Liste',
+            prev: '‹ Zurück',
+            next: 'Weiter ›',
           }}
+          /*
+            Zugänglichkeit des Kalenders (axe, 2026-09-27): Die Pfeilsymbole
+            sind bei FullCalendar `<span role="img">` ohne Namen — Text statt
+            Symbol behebt es. Der „+ weitere"-Link ist ein `<a>` ohne `href`
+            mit `aria-expanded`; ohne Rolle ist das Attribut unzulässig, als
+            Schaltfläche (was er ist) korrekt.
+          */
+          buttonIcons={false}
+          moreLinkDidMount={({ el }) => el.setAttribute('role', 'button')}
           /**
            * Der ganze Tag, nicht nur die Bürozeit.
            *
@@ -277,7 +291,9 @@ export function DispatchCalendar({ employees }: { employees: CalendarEmployee[] 
                 <p className="truncate font-semibold">{arg.timeText}</p>
                 <p className="truncate">{props.customerName}</p>
                 {props.crew.length === 0 ? (
-                  <p className="truncate opacity-90">Nicht zugeteilt</p>
+                  // Ohne `opacity`: Die Farben sind auf 4.5 : 1 gerechnet, jede
+                  // Abschwächung fiele wieder darunter.
+                  <p className="truncate italic">Nicht zugeteilt</p>
                 ) : null}
               </div>
             );
@@ -294,6 +310,7 @@ export function DispatchCalendar({ employees }: { employees: CalendarEmployee[] 
                 <SheetTitle>
                   {selected.extendedProps.number} · {selected.extendedProps.customerName}
                 </SheetTitle>
+                <SheetDescription className="sr-only">Einsatz aus dem Kalender: Status, Termin, Team und Aktionen.</SheetDescription>
                 <div className="flex flex-wrap items-center gap-2 pt-1">
                   <StatusBadge status={selected.extendedProps.status} />
                   <span className="text-sm text-muted-foreground">

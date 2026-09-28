@@ -92,6 +92,26 @@ export const createCreditNoteSchema = z.object({
 });
 export type CreateCreditNoteInput = z.infer<typeof createCreditNoteSchema>;
 
+/**
+ * Gutschrift zu einer Rechnung — eine Zeile, Kundschaft aus der Rechnung.
+ * Der Regelfall im Büro („CHF 80 wegen verspätetem Einsatz"); die volle
+ * Schnittstelle mit mehreren Positionen ist `createCreditNoteSchema`.
+ * `unitPrice` ist netto; die MWST rechnet der Server.
+ */
+export const invoiceCreditNoteSchema = z.object({
+  reason: z.string().trim().min(3, 'Bitte geben Sie einen Grund an.').max(500),
+  name: z.string().trim().min(2).max(200),
+  quantity: z.number().min(0.01).max(10000).default(1),
+  unitPrice: moneySchema.refine((v) => v > 0, 'Der Betrag muss grösser als 0 sein.'),
+  vatRate: z.number().min(0).max(30).default(8.1),
+});
+export type InvoiceCreditNoteInput = z.infer<typeof invoiceCreditNoteSchema>;
+
+export const creditNoteQuerySchema = z.object({
+  customerId: cuidSchema.optional(),
+  invoiceId: cuidSchema.optional(),
+});
+
 export const createExpenseSchema = z.object({
   supplierId: cuidSchema.optional(),
   category: z.enum([
@@ -130,6 +150,16 @@ export const createSupplierSchema = z.object({
 });
 export type CreateSupplierInput = z.infer<typeof createSupplierSchema>;
 
+/**
+ * Ändern = Anlegen mit lauter freiwilligen Feldern, plus `active` (bis
+ * 2026-09-27 in der Route).
+ *
+ * `active` fehlt beim Anlegen bewusst: ein neu erfasster Lieferant ist aktiv,
+ * alles andere wäre eine Einstellung ohne Anwendungsfall. Beim Ändern ist es
+ * der Weg, einen Lieferanten stillzulegen, ohne seine Belege zu verlieren.
+ */
+export const updateSupplierSchema = createSupplierSchema.partial().extend({ active: z.boolean().optional() });
+
 /** Zahlung starten (Stripe Card / TWINT). */
 export const startPaymentSchema = z.object({
   invoiceId: cuidSchema,
@@ -148,6 +178,12 @@ export const accountingExportSchema = z.object({
     .default(['invoices', 'payments', 'expenses']),
 }).refine((d) => d.periodTo >= d.periodFrom, {
   message: 'Das Enddatum darf nicht vor dem Startdatum liegen.',
+  path: ['periodTo'],
+})
+// Wie `exportRangeQuery` (Phase 23): Ein Buchhaltungsexport über zehn Jahre
+// lud jeden Beleg in den Speicher. Ein Geschäftsjahr ist die Einheit.
+.refine((d) => d.periodTo.getTime() - d.periodFrom.getTime() <= 367 * 86_400_000, {
+  message: 'Ein Export umfasst höchstens ein Jahr. Bitte den Zeitraum aufteilen.',
   path: ['periodTo'],
 });
 export type AccountingExportInput = z.infer<typeof accountingExportSchema>;

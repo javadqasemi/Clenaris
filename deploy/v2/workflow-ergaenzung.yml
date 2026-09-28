@@ -1,0 +1,52 @@
+# Production V2 — Ergänzung für .github/workflows/deploy.yml (VORLAGE)
+#
+# Diese Datei liegt bewusst NICHT unter .github/workflows: GitHub führt sie
+# nicht aus, und die heutige Auslieferung bleibt unverändert. Sie zeigt die
+# Schritte, die beim Umstieg auf Production V2 in die bestehende Pipeline
+# kommen (docs/PRODUCTION_V2.md).
+#
+# ---------------------------------------------------------------------------
+# A. Am Ende des Auftrags `pruefung` — nach Build, Testreihe und Browser-Reihe,
+#    also genau gegen den Bau, der eben geprüft wurde:
+# ---------------------------------------------------------------------------
+
+      - name: Release-Artefakt packen
+        # Kein zweiter Build: gepackt wird `.next` und `node_modules` aus
+        # diesem Lauf. Das Skript verweigert einen unvollständigen Bau, einen
+        # Baum ohne React-Korrektur und jede `.env` im Archiv.
+        run: npx tsx scripts/release-artefakt.ts --ausgabe release
+
+      - name: Release-Artefakt ablegen
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-${{ github.sha }}
+          path: release/
+          retention-days: 30
+          if-no-files-found: error
+
+# ---------------------------------------------------------------------------
+# B. Im Auftrag `auslieferung` — anstelle von „Auslieferung ausführen"
+#    (heute: `bash scripts/deploy.sh` über SSH):
+# ---------------------------------------------------------------------------
+
+      - name: Release-Artefakt holen
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release-${{ github.sha }}
+          path: release
+
+      - name: Artefakt übertragen
+        # Dieselbe SSH-Vorbereitung wie heute (gepinnter Wirtsschlüssel,
+        # StrictHostKeyChecking=yes, kein Rückfall auf root). Übertragen
+        # werden Archiv und Prüfsumme — die Summe wird auf dem Server geprüft,
+        # nicht hier.
+        run: |
+          scp -o StrictHostKeyChecking=yes release/clenaris-*.tar.gz release/clenaris-*.tar.gz.sha256 \
+            "${SERVER_USER}@${SERVER_HOST}:releases-eingang/"
+
+      - name: Artefakt aktivieren
+        run: |
+          ssh -o StrictHostKeyChecking=yes "${SERVER_USER}@${SERVER_HOST}" \
+            "bash ~/clenaris/current/deploy/v2/release-aktivieren.sh ~/releases-eingang/clenaris-${GITHUB_SHA::12}.tar.gz"
+        # Erstinstallation: Das Skript liegt noch nicht unter current/ —
+        # einmalig von Hand aus dem entpackten Archiv aufrufen.

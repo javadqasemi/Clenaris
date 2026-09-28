@@ -81,7 +81,7 @@ export default async function AuthLayout({ children }: { children: React.ReactNo
             </span>
             {ratingAgg._count > 0 ? (
               <span className="tabular-nums">
-                {(ratingAgg._avg.rating ?? 5).toFixed(1)} / 5 aus {ratingAgg._count} Bewertungen
+                {(ratingAgg._avg.rating ?? 0).toFixed(1)} / 5 aus {ratingAgg._count} Bewertungen
               </span>
             ) : null}
           </div>
