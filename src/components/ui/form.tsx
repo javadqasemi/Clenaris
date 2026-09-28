@@ -114,11 +114,74 @@ const FormLabel = React.forwardRef<
 });
 FormLabel.displayName = 'FormLabel';
 
+/** Feldarten, deren Wert als Text im Formularzustand steht und übernommen werden darf. */
+const TEXTARTIGE_FELDER = new Set(['text', 'email', 'password', 'search', 'tel', 'url']);
+
+/**
+ * Was vor der Hydration im Feld stand, in den Formularzustand übernehmen.
+ *
+ * Gefunden am 2026-09-28 in WebKit, nachgestellt in Chromium mit verzögertem
+ * JavaScript: Die Anmeldeseite wird auf dem Server gerendert, die Felder sind
+ * über React Hook Form **gesteuert** (`value=""`). Tippt jemand — oder füllt
+ * ein Passwortmanager — das Feld, bevor React hydriert hat, steht der Text im
+ * DOM, aber nicht im Formularzustand. Das Wiedereinspielen solcher Eingaben,
+ * das React 19 vorsieht (`trackHydrated` → `queueChangeEvent`), griff in
+ * diesem Bau nicht: Beim nächsten Rendern nach der Hydration schrieb
+ * `updateInput` den leeren gesteuerten Wert zurück ins Feld. Sichtbar wurde
+ * das als leeres Feld und „E-Mail-Adresse ist erforderlich" — auf der Seite,
+ * auf der Passwortmanager am häufigsten beim Laden ausfüllen.
+ *
+ * **Gelesen wird beim ersten Rendern, übernommen nach dem Einhängen.** Ein
+ * Layout-Effekt, der das Element selbst liest, blieb im Versuch wirkungslos —
+ * das Leeren geschieht in der Mutationsphase eines Commits (`updateInput`),
+ * und die liegt vor den Layout-Effekten. Beim ersten Rendern der Hydration steht das
+ * Server-Element dagegen unverändert im DOM, unter derselben Kennung, die
+ * `useId` auf Server und Browser gleich vergibt. Das Lesen verändert nichts
+ * und fliesst nicht in die Ausgabe — es gibt deshalb keine
+ * Hydrationsabweichung. Beim Rendern ohne Hydration gibt es das Element noch
+ * nicht, auf dem Server kein `document`; in beiden Fällen geschieht nichts.
+ *
+ * Übernommen wird nur in ein **leeres** Feld des Formularzustands und nur bei
+ * Textfeldern — ein vorbelegter Wert oder ein Zahlenfeld (dessen Zustand eine
+ * Zahl ist) bleibt unberührt.
+ */
+function useVorHydrationEingabe(elementId: string, name: string) {
+  const { getValues, setValue } = useFormContext();
+  const [vorHydration] = React.useState<string | null>(() => {
+    if (typeof document === 'undefined') return null;
+    const feld = document.getElementById(elementId);
+    const textfeld =
+      feld instanceof HTMLTextAreaElement || (feld instanceof HTMLInputElement && TEXTARTIGE_FELDER.has(feld.type));
+    return textfeld ? (feld as HTMLInputElement | HTMLTextAreaElement).value || null : null;
+  });
+  React.useEffect(() => {
+    if (!vorHydration || !name) return;
+    /*
+      Nicht direkt im Effekt: `Controller` meldet sich für Wertänderungen erst
+      in seinem eigenen Effekt an, und der läuft *nach* den Effekten seiner
+      Nachfahren — dieser hier ist einer. Ein `setValue` jetzt erreichte die
+      Anzeige nicht (beobachtet im Layout-Effekt: der Wert war beim ersten
+      Rendern gelesen, das Feld blieb trotzdem leer). Nach dem Einhängen sind
+      alle Anmeldungen erfolgt.
+    */
+    const zeitgeber = window.setTimeout(() => {
+      const imZustand: unknown = getValues(name);
+      if (imZustand === '' || imZustand === undefined || imZustand === null) {
+        setValue(name, vorHydration, { shouldDirty: true });
+      }
+    }, 0);
+    return () => window.clearTimeout(zeitgeber);
+    // Nur beim Einhängen — danach führt React das Feld.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+}
+
 const FormControl = React.forwardRef<
   React.ElementRef<typeof Slot>,
   React.ComponentPropsWithoutRef<typeof Slot>
 >(({ ...props }, ref) => {
-  const { error, formItemId, formDescriptionId, formMessageId } = useFormField();
+  const { error, formItemId, formDescriptionId, formMessageId, name } = useFormField();
+  useVorHydrationEingabe(formItemId, name);
   return (
     <Slot
       ref={ref}
