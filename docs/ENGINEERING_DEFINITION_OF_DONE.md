@@ -19,6 +19,33 @@ und schreibt es in die Beschreibung des Commits oder Pull Requests.
 
 ---
 
+## Pflichtablauf für jede neue Funktion (seit 2026-09-28)
+
+Die Checklisten unten sagen, *was* geprüft wird. Dieser Ablauf sagt, in
+welcher **Reihenfolge** — und dass kein Schritt übersprungen wird, weil der
+nächste schon lockt:
+
+| # | Schritt | Nachweis |
+|---|---|---|
+| 1 | Bestehende Umsetzung gesucht | Skill `pendenzen`, Abschnitt 1 — Fundstellen im Commit |
+| 2 | Anforderungen | Welcher Geschäftsablauf, welche Rollen, was ist ausdrücklich nicht Teil |
+| 3 | Architektur | Checkliste A; eine Quelle der Wahrheit |
+| 4 | Sicherheit | Skill `security`, Checkliste D |
+| 5 | Oberfläche | Skill `ui-ux`, Checkliste E |
+| 6 | Umsetzung | Checklisten B und C |
+| 7 | Einheitsprüfungen | Reine Rechenkerne direkt (`*-rechenkern.test.ts`) |
+| 8 | API- und Dienstprüfungen | `tests/api/*` über HTTP |
+| 9 | Sicherheitsprüfungen | 401/403/404, Mandant, IDOR, Nebenläufigkeit, Idempotenz |
+| 10 | Browserprüfung | `tests/e2e`, bei engine-abhängigen Bausteinen `*.browser.spec.ts` (Chromium, Firefox, WebKit) |
+| 11 | Regressionsreihe | Die verwandten Prüfdateien und `npm test` |
+| 12 | Dokumentation | `npm run docs`, `tests/README.md`, fachliche Doku unter `docs/` |
+| 13 | Kleiner Commit | Skill `pendenzen`, Abschnitte 3 und 4 (Löschungen, Kennzahlen) |
+| 14 | Vollprüfung | `npm run verify:full` — oder benennen, was ausgelassen wurde und warum |
+| 15 | CI | Grüner Lauf auf dem Arbeitszweig, Auslieferung übersprungen |
+
+Kein „COMPLETE" ohne Nachweis je Schritt. Jeder Punkt, der unterwegs
+auftaucht, steht im Register `docs/PENDENZEN.md`.
+
 ## Checkliste A — Vor dem Programmieren
 
 | | Punkt | Wie in diesem Repository |
@@ -120,6 +147,7 @@ und schreibt es in die Beschreibung des Commits oder Pull Requests.
 | [ ] | Keine toten Links | Kein Link in einen Bereich, den die Rolle nicht betreten darf |
 | [ ] | Keine doppelte Navigation | |
 | [ ] | Kein horizontales Überlaufen | `tests/e2e/phase21-oberflaeche.spec.ts` (acht Fenstergrössen inkl. 200 % Zoom), `tests/pages/tables.test.ts` |
+| [ ] | Browserübergreifend | Engine-abhängige Bausteine (Bilder, Auswahlfelder, Scrollsperre, Datumsfelder, `position: sticky`) in `tests/e2e/*.browser.spec.ts` — läuft in Chromium, Firefox und WebKit |
 | [ ] | Barrierefreiheit geprüft | axe in der Browser-Prüfreihe: `phase21-oberflaeche.spec.ts` misst jeden Eintrag der Seitenleiste je Rolle — eine neue Seite in der Navigation wird damit automatisch gemessen; Stand der Bereiche in `docs/PREPRODUCTION_READINESS.md`, „UI/UX-Prüfmatrix" |
 
 ## Checkliste F — Prüfungen
