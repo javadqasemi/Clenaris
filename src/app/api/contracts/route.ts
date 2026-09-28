@@ -3,13 +3,7 @@ import { created, ok } from '@/lib/api/response';
 import { can } from '@/lib/auth/rbac';
 import { prisma, toNumber } from '@/lib/db';
 import { ForbiddenError } from '@/lib/errors';
-import {
-  contractCreateSchema,
-  contractQuerySchema,
-  contractServiceSchema,
-  contractVersionSchema,
-} from '@/lib/validation/contracts';
-import { z } from 'zod';
+import { contractCreateRequestSchema, contractQuerySchema } from '@/lib/validation/contracts';
 import { plusTage, zuercherHeute } from '@/lib/contracts/serie';
 import { contractVisibilityWhere, createContract } from '@/server/services/contract.service';
 import { getOrganizationId } from '@/server/services/organization.service';
@@ -125,11 +119,7 @@ export const GET = defineRoute({
  */
 export const POST = defineRoute({
   permissions: ['contract:create'],
-  body: z.object({
-    contract: contractCreateSchema,
-    version: contractVersionSchema,
-    services: z.array(contractServiceSchema).max(100).optional(),
-  }),
+  body: contractCreateRequestSchema,
   rateLimit: 'apiWrite',
   handler: async ({ body, session, ip }) => {
     if (!can(session.role, 'contract:create')) throw new ForbiddenError();

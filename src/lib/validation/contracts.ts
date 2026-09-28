@@ -242,6 +242,19 @@ export const contractServicesReplaceSchema = z.object({
   services: z.array(contractServiceSchema).max(100, 'Höchstens 100 Positionen je Version.'),
 });
 
+/** Rumpf von `POST /api/contracts`: Vertragskopf samt erster Version und optionalem Leistungsumfang. */
+export const contractCreateRequestSchema = z.object({
+  contract: contractCreateSchema,
+  version: contractVersionSchema,
+  services: z.array(contractServiceSchema).max(100).optional(),
+});
+
+/** Rumpf von `POST /api/contracts/{id}/versions`: eine neue Fassung, ohne `services` mit kopiertem Leistungsumfang. */
+export const contractVersionCreateSchema = z.object({
+  version: contractVersionSchema,
+  services: z.array(contractServiceSchema).max(100).optional(),
+});
+
 // ---------------------------------------------------------------------------
 //  Einsatzplan
 // ---------------------------------------------------------------------------
@@ -375,9 +388,18 @@ export const contractRenewSchema = z.object({
   reason: begruendung,
 });
 
+/** Rumpf von `POST /api/contracts/{id}/end`: die Begründung ist freiwillig. */
+export const contractEndSchema = z.object({ reason: z.string().trim().max(2000).optional() });
+
+/** Rumpf von `POST /api/contracts/{id}/cancel`: die Begründung ist freiwillig. */
+export const contractCancelSchema = z.object({ reason: z.string().trim().max(2000).optional() });
+
 // ---------------------------------------------------------------------------
 //  Änderungsanträge
 // ---------------------------------------------------------------------------
+
+/** Pfad `…/contracts/{id}/amendments/{amendmentId}`. */
+export const contractAmendmentParams = z.object({ id: z.string().min(1), amendmentId: z.string().min(1) });
 
 export const contractAmendmentCreateSchema = z.object({
   type: z.enum(['SCOPE', 'PRICE', 'FREQUENCY', 'TERM', 'SLA', 'PAYMENT_TERMS', 'INDEXATION', 'OTHER']),
@@ -408,6 +430,9 @@ export const contractAmendmentApplySchema = z.object({
 // ---------------------------------------------------------------------------
 //  Preisanpassung
 // ---------------------------------------------------------------------------
+
+/** Pfad `…/contracts/{id}/price-adjustments/{adjustmentId}`. */
+export const priceAdjustmentParams = z.object({ id: z.string().min(1), adjustmentId: z.string().min(1) });
 
 export const priceAdjustmentCreateSchema = z
   .object({
@@ -462,6 +487,12 @@ export const contractBillingOverviewQuerySchema = z.object({
   perioden: z.coerce.number().int().min(1).max(36).default(6),
 });
 
+/** Abfrage von `GET /api/contracts/{id}/billing-basis`: der abzurechnende Zeitraum. */
+export const contractBillingBasisQuerySchema = z.object({
+  von: z.coerce.date(),
+  bis: z.coerce.date(),
+});
+
 // ---------------------------------------------------------------------------
 //  Abfragen
 // ---------------------------------------------------------------------------
@@ -479,6 +510,9 @@ export const contractQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
   perPage: z.coerce.number().int().min(1).max(100).default(25),
 });
+
+/** Abfrage von `GET /api/contracts/deadlines`: wie viele Tage im Voraus gewarnt wird. */
+export const contractDeadlinesQuerySchema = z.object({ tage: z.coerce.number().int().min(1).max(365).default(45) });
 
 export type ContractCreateInput = z.infer<typeof contractCreateSchema>;
 export type ContractUpdateInput = z.infer<typeof contractUpdateSchema>;
