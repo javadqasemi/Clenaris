@@ -1,5 +1,15 @@
 import type { FieldSpec, FieldValues } from '@/components/app/resource-form';
-import { defektFields, maintenanceFields, materialFields } from '@/features/admin/betrieb-fields';
+import { assignFields, defektFields, maintenanceFields, materialFields } from '@/features/admin/betrieb-fields';
+import type { ScanAktionSchluessel } from '@/lib/scan/regeln';
+
+/*
+  Der Schlüsseltyp wohnt seit 2026-09-28 bei den reinen Regeln
+  (`src/lib/scan/regeln.ts`), die entscheiden, welche Aktion ein Treffer
+  anbietet. Hier bleibt er als Wiederausfuhr, damit Dienst, Scanner und
+  Masken weiterhin dieselbe Liste meinen — und `switch` unten beim Übersetzen
+  jede neue Aktion verlangt.
+*/
+export type { ScanAktionSchluessel };
 
 /**
  * Schnellaktionen nach einem Scan (Scanplattform, 2026-09-26): welcher
@@ -21,16 +31,6 @@ import { defektFields, maintenanceFields, materialFields } from '@/features/admi
  * diesen einen Klick — ein Scan, der von sich aus einen Status setzt, wäre
  * mit einem vertauschten Etikett eine Änderung am falschen Gerät.
  */
-
-export type ScanAktionSchluessel =
-  | 'material.eingang'
-  | 'material.entnahme'
-  | 'material.korrektur'
-  | 'geraet.wartung'
-  | 'geraet.defekt'
-  | 'geraet.verfuegbar'
-  | 'einsatz.einstempeln'
-  | 'rechnung.zahlung';
 
 export interface AktionsMaske {
   titel: string;
@@ -55,7 +55,13 @@ function heute(): string {
   return new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Zurich' }).format(new Date());
 }
 
-export function aktionsMaske(schluessel: ScanAktionSchluessel, id: string): AktionsMaske {
+/**
+ * `optionen` trägt nur „Zuteilen": die aktiven Personen, die der Server mit
+ * dem Treffer geschickt hat — derselbe Kreis, den `assignEquipment` annimmt.
+ * Sie kommen aus der Antwort, nicht aus einer zweiten Abfrage im Browser, und
+ * nur an Rollen, die das Gerät zuteilen dürfen.
+ */
+export function aktionsMaske(schluessel: ScanAktionSchluessel, id: string, optionen: { value: string; label: string }[] = []): AktionsMaske {
   const pfad = encodeURIComponent(id);
   switch (schluessel) {
     case 'material.eingang':
@@ -120,6 +126,34 @@ export function aktionsMaske(schluessel: ScanAktionSchluessel, id: string): Akti
         fields: [],
         submitLabel: 'Als verfügbar melden',
         successMessage: 'Gerät wieder verfügbar.',
+      };
+    case 'geraet.zuteilen':
+      return {
+        titel: 'Zuteilen',
+        endpoint: `/api/equipment/${pfad}/assign`,
+        fields: assignFields(optionen),
+        submitLabel: 'Zuteilen',
+        successMessage: 'Zugeteilt.',
+      };
+    case 'geraet.zuruecknehmen':
+      // Ohne Felder, aber mit Knopf: Die Rücknahme ändert Status und
+      // Zuteilung — wie „Wieder verfügbar" nie ohne ausdrücklichen Klick.
+      return {
+        titel: 'Zurücknehmen',
+        endpoint: `/api/equipment/${pfad}/assign`,
+        extra: { employeeId: null },
+        fields: [],
+        submitLabel: 'Ins Lager zurücknehmen',
+        successMessage: 'Zurückgenommen.',
+      };
+    case 'einsatz.ausstempeln':
+      return {
+        titel: 'Ausstempeln',
+        endpoint: '/api/time/clock-out',
+        extra: { jobId: id },
+        fields: [{ name: 'note', label: 'Notiz', type: 'textarea', rows: 2 }],
+        submitLabel: 'Ausstempeln',
+        successMessage: 'Ausgestempelt.',
       };
     case 'einsatz.einstempeln':
       return {

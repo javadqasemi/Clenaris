@@ -89,6 +89,11 @@ const SCAN_ART: Record<ScanTrefferArt, string> = {
   RECHNUNG: 'Rechnung',
   KUNDSCHAFT: 'Kundschaft',
   OBJEKT: 'Objekt',
+  // Verträge löst der Scanner nur über ihre Nummer auf, nie über ein Etikett;
+  // in die Suche gelangen hier nur Etikett-Treffer. Der Eintrag steht, weil
+  // der Typ jede Art verlangt — und damit eine spätere Etikettart „Vertrag"
+  // nicht still ohne Gruppennamen bliebe.
+  VERTRAG: 'Vertrag',
 };
 
 /** Ein Suchbereich: welche Art, ob die Rolle ihn sieht, und wie er lädt. */

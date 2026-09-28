@@ -1,6 +1,9 @@
-import { describe, it } from 'node:test';
+import { before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import Module from 'node:module';
+import { join } from 'node:path';
 
+import type * as SwissQrModul from '../../src/lib/pdf/swiss-qr';
 import {
   gs1PruefzifferGueltig,
   gtinNormalisieren,
@@ -110,6 +113,66 @@ describe('Schweizer QR-Rechnung', () => {
 
   it('die nackte QR-Referenz (27 Ziffern) wird als solche erkannt', () => {
     assert.deepEqual(scanEinordnen('210000000003139471430009017'), { art: 'QR_REFERENZ', referenz: '210000000003139471430009017' });
+  });
+});
+
+/*
+  Alte und neue Form der eigenen QR-Referenz (2026-09-28).
+
+  Seit diesem Tag trägt die Referenz das Jahr (`buildQrReference`), damit
+  `RE-2026-00001` und `RE-2027-00001` nicht dieselbe Referenz bekommen.
+  Bereits ausgestellte Rechnungen behalten die alte Form — nur laufende
+  Nummer, mit führenden Nullen. Beide sind auf Papier bei der Kundschaft und
+  kommen als Bankrückmeldung zurück; der Scanner muss beide als Referenz
+  erkennen. Die Einordnung darf deshalb keinen Aufbau voraussetzen, nur die
+  Prüfziffer. Diese Fälle würden scheitern, sobald jemand „beginnt mit dem
+  Jahr" oder „beginnt mit Nullen" als Erkennungsmerkmal einführte.
+
+  `swiss-qr.ts` importiert `server-only`; dieselbe Umleitung wie in
+  `ablage-vertrag.test.ts`, vor dem ersten Import.
+*/
+describe('Eigene QR-Referenz: alte und neue Form', () => {
+  let swissQr: typeof SwissQrModul;
+
+  before(async () => {
+    const mitAufloeser = Module as unknown as { _resolveFilename: (request: string, ...rest: unknown[]) => string };
+    const urspruenglich = mitAufloeser._resolveFilename;
+    mitAufloeser._resolveFilename = function (request: string, ...rest: unknown[]) {
+      if (request === 'server-only') return join(__dirname, '..', '..', 'scripts', 'server-only-stub.cjs');
+      return urspruenglich.call(this, request, ...rest);
+    };
+    swissQr = await import('../../src/lib/pdf/swiss-qr');
+  });
+
+  /** Die Form bis 2026-09-27: 26 Stellen laufende Nummer, links mit Nullen aufgefüllt, plus Prüfziffer. */
+  function alteForm(laufnummer: number): string {
+    const basis = String(laufnummer).padStart(26, '0');
+    return `${basis}${swissQr.mod10Recursive(basis)}`;
+  }
+
+  it('die neue Form (Jahr + laufende Nummer) ist eine gültige QR-Referenz und wird erkannt', () => {
+    const neu = swissQr.buildQrReference({ invoiceSequence: 42, year: 2026 });
+    assert.match(neu, /^2026\d{23}$/);
+    assert.equal(qrReferenzGueltig(neu), true);
+    assert.deepEqual(scanEinordnen(neu), { art: 'QR_REFERENZ', referenz: neu });
+    // Wie gedruckt, in Fünfergruppen — so tippt sie jemand ab.
+    assert.deepEqual(scanEinordnen(swissQr.formatQrReference(neu)), { art: 'QR_REFERENZ', referenz: neu });
+    assert.deepEqual(scanEinordnen(qrRechnung('QRR', neu, '')), { art: 'QR_RECHNUNG', referenz: neu, rechnungsnummer: null });
+  });
+
+  it('die alte Form (sechs und mehr führende Nullen) bleibt erkannt', () => {
+    const alt = alteForm(42);
+    assert.ok(alt.startsWith('000000'));
+    assert.equal(qrReferenzGueltig(alt), true);
+    assert.deepEqual(scanEinordnen(alt), { art: 'QR_REFERENZ', referenz: alt });
+    assert.deepEqual(scanEinordnen(qrRechnung('QRR', swissQr.formatQrReference(alt), '')), { art: 'QR_RECHNUNG', referenz: alt, rechnungsnummer: null });
+  });
+
+  it('dieselbe laufende Nummer in zwei Jahren und in alter Form: drei verschiedene Referenzen', () => {
+    const a = swissQr.buildQrReference({ invoiceSequence: 1, year: 2026 });
+    const b = swissQr.buildQrReference({ invoiceSequence: 1, year: 2027 });
+    const c = alteForm(1);
+    assert.equal(new Set([a, b, c]).size, 3);
   });
 });
 

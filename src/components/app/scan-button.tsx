@@ -2,7 +2,7 @@
 
 import * as React from 'react';
 import Link from 'next/link';
-import { AlertCircle, Camera, CameraOff, ImageUp, Loader2, PackagePlus, QrCode, ScanLine, Tag } from 'lucide-react';
+import { AlertCircle, Camera, CameraOff, Download, FileText, ImageUp, Loader2, PackagePlus, QrCode, ScanLine, Tag } from 'lucide-react';
 
 import { api, ApiError } from '@/lib/api/client';
 import { cn } from '@/lib/utils';
@@ -10,6 +10,7 @@ import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/overlays';
 import { ResourceForm } from '@/components/app/resource-form';
 import { aktionsMaske, neuerArtikelMaske, type AktionsMaske, type ScanAktionSchluessel } from '@/features/shared/scan-aktionen';
+import { verweisSicher, type ScanVerweis } from '@/lib/scan/regeln';
 
 /**
  * Scanner in der Kopfzeile (Scanplattform, 2026-09-26).
@@ -58,13 +59,15 @@ import { aktionsMaske, neuerArtikelMaske, type AktionsMaske, type ScanAktionSchl
  */
 
 interface Treffer {
-  art: 'MATERIAL' | 'GERAET' | 'EINSATZ' | 'RECHNUNG' | 'KUNDSCHAFT' | 'OBJEKT';
+  art: 'MATERIAL' | 'GERAET' | 'EINSATZ' | 'RECHNUNG' | 'KUNDSCHAFT' | 'OBJEKT' | 'VERTRAG';
   id: string;
   titel: string;
   untertitel: string | null;
   link: string | null;
   merkmale: { label: string; wert: string }[];
-  aktionen: { schluessel: ScanAktionSchluessel; label: string }[];
+  aktionen: { schluessel: ScanAktionSchluessel; label: string; optionen?: { value: string; label: string }[] }[];
+  /** Ziele zum Lesen (PDF, Rapport) — optional, damit eine ältere Serverantwort nicht bricht. */
+  verweise?: ScanVerweis[];
   etikett: string | null;
 }
 
@@ -88,6 +91,7 @@ const ART_LABEL: Record<Treffer['art'], string> = {
   RECHNUNG: 'Rechnung',
   KUNDSCHAFT: 'Kundschaft',
   OBJEKT: 'Objekt',
+  VERTRAG: 'Vertrag',
 };
 
 /** Formate, die der Detektor liefern soll — nur die, die `scanEinordnen` versteht oder als Nummer liest. */
@@ -389,7 +393,7 @@ function ScanInhalt() {
                       ))}
                     </dl>
                   ) : null}
-                  {t.aktionen.length || t.etikett ? (
+                  {t.aktionen.length || t.etikett || t.verweise?.length ? (
                     <div className="mt-3 flex flex-wrap gap-2">
                       {t.aktionen.map((a) => (
                         <Button
@@ -397,11 +401,34 @@ function ScanInhalt() {
                           type="button"
                           size="sm"
                           variant={maske?.trefferId === t.id && maske.maske.titel === aktionsMaske(a.schluessel, t.id).titel ? 'default' : 'outline'}
-                          onClick={() => setMaske({ trefferId: t.id, maske: aktionsMaske(a.schluessel, t.id) })}
+                          onClick={() => setMaske({ trefferId: t.id, maske: aktionsMaske(a.schluessel, t.id, a.optionen) })}
                         >
                           {a.label}
                         </Button>
                       ))}
+                      {/*
+                        Verweise lesen nur (2026-09-28). Eine Datei (PDF) als
+                        `<a download>` — wie „Bericht (PDF)" auf der
+                        Einsatzseite: Der Dialog bleibt offen, und der
+                        Endpunkt prüft beim Abruf das Leserecht selbst. Was
+                        nicht wie ein Pfad dieser Anwendung aussieht, wird gar
+                        nicht erst als Link gerendert (`verweisSicher`).
+                      */}
+                      {(t.verweise ?? []).filter((v) => verweisSicher(v.href)).map((v) =>
+                        v.art === 'datei' ? (
+                          <Button key={v.href} asChild size="sm" variant="ghost">
+                            <a href={v.href} download data-scan-verweis={v.label}>
+                              <Download aria-hidden /> {v.label}
+                            </a>
+                          </Button>
+                        ) : (
+                          <Button key={v.href} asChild size="sm" variant="ghost">
+                            <Link href={v.href} data-scan-verweis={v.label}>
+                              <FileText aria-hidden /> {v.label}
+                            </Link>
+                          </Button>
+                        ),
+                      )}
                       {t.etikett ? (
                         <Button asChild size="sm" variant="ghost">
                           <Link href={t.etikett}>

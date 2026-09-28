@@ -12,6 +12,7 @@ import {
   Phone,
   Receipt,
   ShoppingBag,
+  Tag,
 } from 'lucide-react';
 
 import { toNumber } from '@/lib/db';
@@ -480,6 +481,21 @@ export default async function AdminCustomerDetailPage({
                       <p className="text-sm leading-relaxed text-muted-foreground">
                         {property.accessNote}
                       </p>
+                    ) : null}
+                    {/*
+                      Etikett für den Hauswartraum oder das Schlüsselkästchen
+                      (2026-09-28): Die Etikettart PROPERTY bestand, war aber
+                      nirgends verlinkt. Das Etikett trägt nur den Zufallscode
+                      und die Bezeichnung — keine Adresse, keinen Kundennamen.
+                      Dasselbe Recht wie die Etikettseite (`property:update`).
+                    */}
+                    {canEditProperty ? (
+                      <Button asChild variant="ghost" size="sm" className="-ml-2">
+                        <Link href={`/admin/etikett/PROPERTY/${property.id}`}>
+                          <Tag aria-hidden />
+                          Etikett
+                        </Link>
+                      </Button>
                     ) : null}
                   </li>
                 ))}

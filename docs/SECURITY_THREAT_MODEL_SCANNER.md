@@ -1,6 +1,7 @@
 # Bedrohungsmodell der Scanplattform
 
-Stand 2026-09-26. Gilt für `src/lib/scan/kennung.ts`,
+Stand 2026-09-26, durchgesehen 2026-09-28 (neue Aktionen, Verweise, Art
+Vertrag — Zeilen 23–25). Gilt für `src/lib/scan/kennung.ts`, `src/lib/scan/regeln.ts`,
 `src/server/services/scan.service.ts`, `POST /api/scan/resolve`,
 `POST /api/scan/codes`, `DELETE /api/scan/codes/:id`, die Etikettseite und
 `src/components/app/scan-button.tsx`. Aufbau: `docs/SCANNER.md`.
@@ -39,7 +40,9 @@ Die Spalte **Prüfung** nennt den Fall, der die Massnahme belegt. Ein
 | 20 | QR-Rechnung mit fremder IBAN oder manipuliertem Betrag | Nur zum Finden der **eigenen** Rechnung über QR-Referenz (mit Prüfziffer) oder Nummer; es wird nie eine Zahlung ausgelöst oder ein Betrag übernommen — „Zahlung erfassen" verlangt die Eingabe des Betrags | `scan-kennung.test.ts`, `scan.test.ts` QR-Rechnung | Eine Person erfasst einen falschen Betrag — wie bei jeder manuellen Zahlung; korrigierbar per Storno |
 | 21 | Suche als zweiter Weg zu Daten | Etikettcodes in der Suche gehen durch denselben Auflöser mit denselben Prüfungen | `scan.test.ts` „Suche findet den Artikel über den Etikettcode" | — |
 | 22 | Lieferkette einer Scanbibliothek | Keine neue Abhängigkeit; `qrcode` war bereits vorhanden (QR-Rechnung) | `security:check` (npm audit, Lockfile) | Browser-API-Verfügbarkeit ändert sich — die Komponente fragt sie zur Laufzeit ab |
-
+| 23 | Verweis (PDF, Rapport) als zweiter Zugang oder als Sprung auf eine fremde Seite (seit 2026-09-28) | Verweise bildet nur `src/lib/scan/regeln.ts` aus der geladenen Datensatz-ID (kodiert), nie aus dem gescannten Text; nur für Rollen mit Leserecht; die Ziele sind bestehende GET-Endpunkte, die das Recht beim Abruf selbst prüfen; der Browser rendert nur eigene Pfade (`verweisSicher`) | `scan-regeln.test.ts` (Pfade, Rollen), `scan.test.ts` (PDF und Bericht für Mitarbeitende 403) | — |
+| 24 | Personenliste über „Zuteilen" an Rollen, die sie nicht sehen sollen (seit 2026-09-28) | Die Liste (Name, Personalnummer — nichts Sensibles) wird nur geladen und mitgeschickt, wenn ein Treffer „Zuteilen" anbietet, also nur mit `equipment:manage`; dieselbe Liste zeigt die Geräteliste dieser Rolle | `scan-regeln.test.ts` (kein Zuteilen ohne Recht), `scan.test.ts` (Mitarbeitende: leer) | — |
+| 25 | Vertrags- oder Rechnungsnummer als Existenzorakel (seit 2026-09-28: Vertrag, beide QR-Referenzformen) | Sicht in der Abfrage (`contract:read`/`invoice:read`, nur Büro, Organisation); ohne Recht dieselbe Antwort wie eine unbekannte Nummer | `scan.test.ts` „Vertrag über die Nummer", „alte und neue QR-Referenz" | wie 4 |
 ## Nicht abgedeckt
 
 * **Physische Sicherheit der Etiketten** (Aufkleber entfernen, austauschen)

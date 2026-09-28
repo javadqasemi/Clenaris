@@ -328,6 +328,121 @@ test.describe('Scanplattform — auf dem Telefon', () => {
 });
 
 /**
+ * Ausbau 2026-09-28: Kontextaktionen und Verweise.
+ *
+ * Geprüft wird der ganze Weg im Browser: Etikett scannen → Treffer mit den
+ * Knöpfen, die die Rolle hat → Maske → bestätigen → bestehender Endpunkt →
+ * Datenbank und Protokoll. Und der Gegenfall: Vor dem Klick ist nichts
+ * zugeteilt, und eine Datei (PDF) ist ein Link mit `download`, kein Sprung aus
+ * dem Dialog.
+ */
+test.describe('Scanplattform — Kontextaktionen', () => {
+  const GERAET = 'Prüfreihe Scangerät E2E';
+  const RECHNUNG = 'SCAN-RE-E2E';
+
+  async function aufraeumenAusbau(): Promise<void> {
+    if (!db) return;
+    const geraete = await db.equipment.findMany({ where: { name: GERAET }, select: { id: true } });
+    const ids = geraete.map((g) => g.id);
+    await schutzfreiAufraeumen(async (tx) => {
+      await tx.scanCode.deleteMany({ where: { entityId: { in: ids } } });
+      await tx.equipment.deleteMany({ where: { id: { in: ids } } });
+      await tx.invoice.deleteMany({ where: { number: { startsWith: RECHNUNG } } });
+    });
+  }
+
+  test.beforeEach(aufraeumenAusbau);
+  test.afterEach(aufraeumenAusbau);
+
+  test('Gerät per Etikett → „Zuteilen" → Person wählen → zugeteilt und protokolliert; vorher nichts', async ({ page }) => {
+    test.skip(!db, 'Keine Testdatenbank.');
+    const organizationId = (await eigeneOrganisationId())!;
+    const person = await db!.employee.findFirst({
+      where: { organizationId, active: true },
+      orderBy: { employeeNumber: 'asc' },
+      select: { id: true, user: { select: { firstName: true, lastName: true } } },
+    });
+    test.skip(!person, 'Kein aktives Personal im Demobestand.');
+    const geraet = await db!.equipment.create({ data: { organizationId, inventoryNumber: `E2E-SCAN-${Date.now()}`, name: GERAET } });
+    const code = zufallscode();
+    await db!.scanCode.create({ data: { organizationId, entityType: 'EQUIPMENT', entityId: geraet.id, code } });
+
+    const konsole = konsoleUeberwachen(page);
+    await kameraNachbilden(page, `CLX1:${code}`);
+    await imBrowserAnmelden(page, 'manager', /\/admin/);
+    const dialog = await scannerOeffnen(page);
+    await dialog.getByRole('button', { name: 'Kamera', exact: true }).click();
+
+    const treffer = dialog.locator('[data-scan-treffer="GERAET"]');
+    await expect(treffer).toContainText(GERAET);
+    await expect(treffer.getByRole('button', { name: 'Defekt melden' })).toBeVisible();
+    // Erkannt heisst nicht zugeteilt.
+    expect((await db!.equipment.findUniqueOrThrow({ where: { id: geraet.id } })).assignedEmployeeId).toBeNull();
+
+    await treffer.getByRole('button', { name: 'Zuteilen', exact: true }).click();
+    const maske = treffer.locator('[data-scan-maske="Zuteilen"]');
+    await maske.getByLabel(/^Person/).click();
+    await page.getByRole('option', { name: new RegExp(`^${person!.user.firstName} ${person!.user.lastName}`) }).click();
+    await maske.getByRole('button', { name: 'Zuteilen', exact: true }).click();
+
+    // Nach dem Senden wird neu aufgelöst: jetzt „Zurücknehmen" statt „Zuteilen".
+    await expect(treffer.getByRole('button', { name: 'Zurücknehmen' })).toBeVisible({ timeout: 25_000 });
+    const nachher = await db!.equipment.findUniqueOrThrow({ where: { id: geraet.id } });
+    expect(nachher.assignedEmployeeId).toBe(person!.id);
+    expect(nachher.status).toBe('IN_USE');
+    const eintrag = await db!.auditLog.findFirst({ where: { entity: 'Equipment', entityId: geraet.id } });
+    expect(eintrag?.action).toBe('UPDATE');
+    konsole.keineFehler();
+  });
+
+  test('Rechnung per QR-Referenz (alte Form) → Treffer mit PDF als Download-Link und „Zahlung erfassen"', async ({ page }) => {
+    test.skip(!db, 'Keine Testdatenbank.');
+    const organizationId = (await eigeneOrganisationId())!;
+    const kunde = await db!.customer.findFirst({ where: { organizationId, deletedAt: null }, select: { id: true } });
+    test.skip(!kunde, 'Keine Kundschaft im Demobestand.');
+    // Alte Form: laufende Nummer, mit Nullen auf 26 Stellen, plus Prüfziffer.
+    const koerper = `00000000000000${String(Date.now()).slice(-12)}`;
+    const tabelle = [0, 9, 4, 6, 8, 2, 7, 1, 3, 5];
+    let uebertrag = 0;
+    for (const z of koerper) uebertrag = tabelle[(uebertrag + Number(z)) % 10]!;
+    const referenz = `${koerper}${(10 - uebertrag) % 10}`;
+    const rechnung = await db!.invoice.create({
+      data: {
+        organizationId,
+        number: `${RECHNUNG}-${Date.now()}`,
+        customerId: kunde!.id,
+        status: 'SENT',
+        sentAt: new Date(),
+        issueDate: new Date(),
+        dueDate: new Date(Date.now() + 30 * 86_400_000),
+        billToName: 'Prüfreihe Scan',
+        billToStreet: 'Prüfweg 1',
+        billToZip: '3000',
+        billToCity: 'Bern',
+        qrReference: referenz,
+      },
+    });
+
+    await imBrowserAnmelden(page, 'admin', /\/admin/);
+    const vorher = page.url();
+    const dialog = await scannerOeffnen(page);
+    const feld = dialog.getByLabel('Code eingeben oder einfügen');
+    await feld.fill(referenz);
+    await feld.press('Enter');
+
+    const treffer = dialog.locator('[data-scan-treffer="RECHNUNG"]');
+    await expect(treffer).toContainText(rechnung.number);
+    const pdf = treffer.locator('[data-scan-verweis="PDF"]');
+    await expect(pdf).toHaveAttribute('href', `/api/invoices/${rechnung.id}/pdf`);
+    await expect(pdf).toHaveAttribute('download', '');
+    await expect(treffer.getByRole('button', { name: 'Zahlung erfassen' })).toBeVisible();
+    // Nichts verbucht, nichts geöffnet.
+    expect(await db!.payment.count({ where: { invoiceId: rechnung.id } })).toBe(0);
+    expect(page.url()).toBe(vorher);
+  });
+});
+
+/**
  * Der Scanner im Mitarbeiterportal (F-17). Im Portal löst er nur eigene
  * Einsätze und deren Objekte auf (`scan.service.ts`), mit Links ins Portal —
  * `tests/api/scan.test.ts` prüft das am Endpunkt; hier im Browser, über die
@@ -359,6 +474,9 @@ test.describe('Scanplattform — Mitarbeiterportal', () => {
     await expect(treffer).toHaveCount(1);
     await expect(treffer.getByRole('link', { name: 'Öffnen' })).toHaveAttribute('href', `/portal/einsaetze/${eigener!.id}`);
     await expect(treffer.getByRole('button', { name: 'Einstempeln' })).toBeVisible();
+    // Der Rapport des Portals (Checkliste, Fotos) — nie der PDF-Endpunkt des Büros.
+    await expect(treffer.locator('[data-scan-verweis="Rapport"]')).toHaveAttribute('href', `/portal/einsaetze/${eigener!.id}#rapport`);
+    expect(await dialog.locator('a[href^="/api/jobs"]').count(), 'ein Büroverweis im Portal').toBe(0);
     expect(await dialog.locator('a[href^="/admin"]').count(), 'ein Link in die Verwaltung im Portal').toBe(0);
     // Erkannt heisst nicht eingestempelt und nicht geöffnet.
     expect(page.url()).toBe(vorher);
