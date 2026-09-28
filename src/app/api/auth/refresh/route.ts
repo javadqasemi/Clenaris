@@ -4,7 +4,7 @@ import { definePublicRoute } from '@/lib/api/handler';
 import { ok } from '@/lib/api/response';
 import { safeReturnPath } from '@/lib/auth/safe-redirect';
 import { refreshRedirectQuery } from '@/lib/validation/auth';
-import { refreshSession } from '@/server/services/session-refresh.service';
+import { RotationsWettlaufError, refreshSession } from '@/server/services/session-refresh.service';
 
 export const runtime = 'nodejs';
 
@@ -18,7 +18,32 @@ export const POST = definePublicRoute({
   // Jeder Aufruf kostet eine Datenbankabfrage und eine Signatur; ohne Bremse
   // wäre der Endpunkt der billigste Weg, den Server zu beschäftigen.
   rateLimit: 'apiWrite',
-  handler: async () => ok(await refreshSession()),
+  handler: async () => {
+    try {
+      return ok(await refreshSession());
+    } catch (fehler) {
+      /*
+        Verlorener Wettlauf zweier Tabs (2026-09-28): 200 ohne neue Cookies
+        statt 401.
+
+        Mehrere Tabs erneuern unabhängig voneinander; liegen zwei Erneuerungen
+        wenige Sekunden auseinander, gewinnt eine die Rotation, und die andere
+        trifft einen eben verbrauchten Token (`RotationsWettlaufError`). Beide
+        Klienten werteten das schon als Erfolg — die Cookies des Gewinners
+        liegen im gemeinsamen Speicher —, aber der Browser schrieb den 401
+        jedes Mal als roten Fehler in die Konsole, im gewöhnlichen Betrieb mit
+        zwei offenen Tabs. Gefunden durch `tests/e2e/sitzung-tabs.spec.ts`.
+
+        Die Antwort sagt nur „nichts zu tun": keine Cookies (neu oder
+        gelöscht), keine Personendaten — wer innerhalb der Kulanzfrist eine
+        Kopie des verbrauchten Tokens vorlegt, erfährt nichts und bekommt
+        nichts. Wiederverwendung nach der Frist bleibt 401 samt Sperre der
+        Familie (`refreshSession`). Der Seitenweg (`GET`) bleibt unverändert.
+      */
+      if (fehler instanceof RotationsWettlaufError) return ok({ erneuert: false, grund: 'SESSION_ROTATED' });
+      throw fehler;
+    }
+  },
 });
 
 /**
