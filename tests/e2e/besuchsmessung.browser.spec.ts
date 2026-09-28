@@ -59,6 +59,24 @@ async function warteAufZeilen(seit: Date, ms: number): Promise<number> {
   return n;
 }
 
+/**
+ * Warten, bis die Seitenansicht eines bestimmten Pfads gespeichert ist —
+ * höchstens `ms`. Gibt alle Zeilen seit `seit` zurück.
+ *
+ * Gezielt auf den Pfad statt „bis irgendeine Zeile da ist": Die Erfassung
+ * sammelt 500 ms und sendet dann; je nach Tempo der Navigation reisen zwei
+ * Seitenansichten in einer Anfrage oder in zweien, und die zweite kommt
+ * 0,6–0,9 s nach der ersten an (Diagnoselauf 2026-09-28).
+ */
+async function warteAufSeitenansicht(seit: Date, pfad: string, ms: number) {
+  const ende = Date.now() + ms;
+  for (;;) {
+    const zeilen = (await testDb()?.trafficEvent.findMany({ where: { occurredAt: { gte: seit } } })) ?? [];
+    if (zeilen.some((z) => z.path === pfad) || Date.now() >= ende) return zeilen;
+    await new Promise((r) => setTimeout(r, 250));
+  }
+}
+
 async function perLinkZu(page: Page, pfad: string) {
   await page.locator(`footer a[href="${pfad}"]`).first().click();
   await page.waitForURL(new RegExp(`${pfad.replace('/', '\\/')}$`));
@@ -117,13 +135,32 @@ test.describe('Besuchsmessung und Einwilligung', () => {
     await statistik.click();
     await expect(statistik).toHaveAttribute('aria-checked', 'true');
     await page.getByRole('button', { name: 'Auswahl speichern' }).click();
+
+    /*
+      Die Seite, auf der die Einwilligung erteilt wurde, zählt ab diesem
+      Moment — ihre Ansicht muss ankommen, **während der Tab offen ist**.
+
+      Bis 2026-09-28 schloss der Fall den Tab Millisekunden nach dem
+      Linkwechsel. In Firefox ging dabei 1–3 von 20 Mal die Ansicht von
+      `/kontakt` verloren. Diagnoselauf mit protokolliertem `sendBeacon`: Der
+      Sammeltakt (500 ms) hatte sie gesendet (`sendBeacon` → `true`), 7 ms
+      bevor der Tab schloss — und Firefox verwarf die Anfrage mit dem Tab.
+      Ab rund 50 ms Abstand kam sie immer an, bei offenem Tab 20 von 20 Mal,
+      mit bestehendem Browserkontext ebenso verloren wie ohne. Das ist ein
+      Verhalten der Engine im Millisekundenfenster vor dem Schliessen, keine
+      Lücke der Erfassung; für die Messung heisst es schlimmstenfalls eine
+      Seitenansicht weniger (Pendenz W-05). Ein Mensch schliesst einen Tab
+      nicht sieben Millisekunden nach einem Zeitgeber.
+    */
+    const kontaktAngekommen = await warteAufSeitenansicht(seit, '/kontakt', 10_000);
+    expect(kontaktAngekommen.map((z) => z.path), 'die Ansicht der Einwilligungsseite fehlt').toContain('/kontakt');
+
     await perLinkZu(page, '/ueber-uns');
     konsole.keineFehler();
     await page.close({ runBeforeUnload: true });
     await context.close();
 
-    expect(await warteAufZeilen(seit, 10_000), 'nach der Einwilligung keine Zeile gespeichert').toBeGreaterThan(0);
-    const zeilen = await testDb()!.trafficEvent.findMany({ where: { occurredAt: { gte: seit } } });
+    const zeilen = await warteAufSeitenansicht(seit, '/kontakt', 10_000);
     const kontakt = zeilen.find((z) => z.path === '/kontakt');
     expect(kontakt, `keine Seitenansicht von /kontakt: ${zeilen.map((z) => z.path).join(', ')}`).toBeTruthy();
     expect(kontakt!.utmCampaign).toBe('mit-einwilligung');
