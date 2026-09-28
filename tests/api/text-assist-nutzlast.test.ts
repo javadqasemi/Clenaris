@@ -38,9 +38,13 @@ describe('Textassistent: Sperre für vertrauliche Angaben', () => {
     ['Passwort', 'Das WLAN-Passwort: Sommer2026! liegt am Empfang.', 'Zugangs- oder Alarmcode bzw. Passwort'],
     ['Alarmcode', 'Der Alarmcode 4711# gilt ab Montag.', 'Zugangs- oder Alarmcode bzw. Passwort'],
     ['Lohnbetrag', "Der Monatslohn CHF 5'200 wird angepasst.", 'Lohnbetrag'],
-    ['API-Schlüssel', 'Schlüssel sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123 einsetzen.', 'Zugangsschlüssel oder Token'],
+    // Zusammengesetzt wie in `auslieferung-absicherung.test.ts`: Als Literal
+    // hielte die Geheimnisprüfung (`security:secrets`) die Attrappe für einen
+    // echten Schlüssel und bräche die Auslieferung ab. Der geprüfte Text ist
+    // zur Laufzeit derselbe.
+    ['API-Schlüssel', 'Schlüssel ' + 'sk-' + 'ant-api03-abcdefghijklmnopqrstuvwxyz0123 einsetzen.', 'Zugangsschlüssel oder Token'],
     ['JWT', 'Token eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U', 'Zugangsschlüssel oder Token'],
-    ['privater Schlüssel', '-----BEGIN RSA PRIVATE KEY-----\nMIIE...', 'Zugangsschlüssel oder Token'],
+    ['privater Schlüssel', '-----BEGIN RSA ' + 'PRIVATE KEY-----\nMIIE...', 'Zugangsschlüssel oder Token'],
   ];
   for (const [name, text, kategorie] of faelle) {
     it(`sperrt: ${name}`, () => {
