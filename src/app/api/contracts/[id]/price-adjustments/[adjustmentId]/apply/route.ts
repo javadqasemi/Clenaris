@@ -1,13 +1,10 @@
-import { z } from 'zod';
-
 import { defineRoute } from '@/lib/api/handler';
 import { created } from '@/lib/api/response';
+import { priceAdjustmentParams } from '@/lib/validation/contracts';
 import { applyPriceAdjustment } from '@/server/services/contract-amendment.service';
 import { getOrganizationId } from '@/server/services/organization.service';
 
 export const runtime = 'nodejs';
-
-const adjustmentParams = z.object({ id: z.string().min(1), adjustmentId: z.string().min(1) });
 
 /**
  * POST /api/contracts/{id}/price-adjustments/{adjustmentId}/apply — die
@@ -23,7 +20,7 @@ const adjustmentParams = z.object({ id: z.string().min(1), adjustmentId: z.strin
  */
 export const POST = defineRoute({
   permissions: ['contract:version'],
-  params: adjustmentParams,
+  params: priceAdjustmentParams,
   rateLimit: 'apiWrite',
   handler: async ({ params, session, ip }) =>
     created(

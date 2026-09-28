@@ -24,8 +24,6 @@ const perm = (mode: 'all' | 'any', ...permissions: Permission[]): Guard => ({
 });
 
 const versionParams = z.object({ id: z.string().min(1), versionId: z.string().min(1) });
-const amendmentParams = z.object({ id: z.string().min(1), amendmentId: z.string().min(1) });
-const adjustmentParams = z.object({ id: z.string().min(1), adjustmentId: z.string().min(1) });
 
 export const CONTRACT_ROUTES: RouteDoc[] = [
   {
@@ -54,11 +52,7 @@ export const CONTRACT_ROUTES: RouteDoc[] = [
       'Mit `quoteId` nur aus einer **angenommenen** Offerte (sonst 422).',
     guard: perm('all', 'contract:create'),
     rateLimit: 'apiWrite',
-    body: z.object({
-      contract: vertrag.contractCreateSchema,
-      version: vertrag.contractVersionSchema,
-      services: z.array(vertrag.contractServiceSchema).max(100).optional(),
-    }),
+    body: vertrag.contractCreateRequestSchema,
     status: 201,
   },
   {
@@ -72,7 +66,7 @@ export const CONTRACT_ROUTES: RouteDoc[] = [
       'Verpflichtungen über Monate, die ein Mensch trifft.',
     guard: perm('all', 'contract:read'),
     rateLimit: 'apiRead',
-    query: z.object({ tage: z.coerce.number().int().min(1).max(365).default(45) }),
+    query: vertrag.contractDeadlinesQuerySchema,
   },
   {
     method: 'get',
@@ -193,7 +187,7 @@ export const CONTRACT_ROUTES: RouteDoc[] = [
     guard: perm('all', 'contract:terminate'),
     rateLimit: 'apiWrite',
     params: idParam,
-    body: z.object({ reason: z.string().trim().max(2000).optional() }),
+    body: vertrag.contractEndSchema,
   },
   {
     method: 'post',
@@ -207,7 +201,7 @@ export const CONTRACT_ROUTES: RouteDoc[] = [
     guard: perm('all', 'contract:delete_draft'),
     rateLimit: 'apiWrite',
     params: idParam,
-    body: z.object({ reason: z.string().trim().max(2000).optional() }),
+    body: vertrag.contractCancelSchema,
   },
   {
     method: 'post',
@@ -238,10 +232,7 @@ export const CONTRACT_ROUTES: RouteDoc[] = [
     guard: perm('all', 'contract:version'),
     rateLimit: 'apiWrite',
     params: idParam,
-    body: z.object({
-      version: vertrag.contractVersionSchema,
-      services: z.array(vertrag.contractServiceSchema).max(100).optional(),
-    }),
+    body: vertrag.contractVersionCreateSchema,
     status: 201,
   },
   {
@@ -339,7 +330,7 @@ export const CONTRACT_ROUTES: RouteDoc[] = [
     guard: perm('all', 'contract:billing'),
     rateLimit: 'apiRead',
     params: idParam,
-    query: z.object({ von: z.coerce.date(), bis: z.coerce.date() }),
+    query: vertrag.contractBillingBasisQuerySchema,
   },
   {
     method: 'post',
@@ -438,7 +429,7 @@ export const CONTRACT_ROUTES: RouteDoc[] = [
       'die Administration beide Rechte hat.',
     guard: perm('all', 'contract:approve'),
     rateLimit: 'apiWrite',
-    params: amendmentParams,
+    params: vertrag.contractAmendmentParams,
     body: vertrag.contractAmendmentDecisionSchema,
   },
   {
@@ -453,7 +444,7 @@ export const CONTRACT_ROUTES: RouteDoc[] = [
       'die vollständigen neuen Konditionen.',
     guard: perm('all', 'contract:version'),
     rateLimit: 'apiWrite',
-    params: amendmentParams,
+    params: vertrag.contractAmendmentParams,
     body: vertrag.contractAmendmentApplySchema,
     status: 201,
   },
@@ -484,7 +475,7 @@ export const CONTRACT_ROUTES: RouteDoc[] = [
       'das keine Formsache: Sie geht an die Kundschaft hinaus.',
     guard: perm('all', 'contract:approve'),
     rateLimit: 'apiWrite',
-    params: adjustmentParams,
+    params: vertrag.priceAdjustmentParams,
     body: vertrag.priceAdjustmentDecisionSchema,
   },
   {
@@ -498,7 +489,7 @@ export const CONTRACT_ROUTES: RouteDoc[] = [
       'Gelegenheit" noch etwas zu verschieben — dann wäre es keine Preisanpassung mehr.',
     guard: perm('all', 'contract:version'),
     rateLimit: 'apiWrite',
-    params: adjustmentParams,
+    params: vertrag.priceAdjustmentParams,
     status: 201,
   },
   {

@@ -121,6 +121,9 @@ export const LEGAL_LABELS: Record<(typeof LEGAL_SLUGS)[number], string> = {
   cookies: 'Cookie-Hinweis',
 };
 
+/** Pfad `/api/legal/{slug}`: nur einer der vier festen Kurznamen. */
+export const legalSlugParams = z.object({ slug: z.enum(LEGAL_SLUGS) });
+
 export const updateLegalSchema = z.object({
   title: z.string().trim().min(3, 'Ein Titel ist erforderlich.').max(140),
   body: z

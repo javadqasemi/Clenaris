@@ -1,7 +1,6 @@
-import { z } from 'zod';
-
 import { defineRoute } from '@/lib/api/handler';
 import { ok } from '@/lib/api/response';
+import { contractDeadlinesQuerySchema } from '@/lib/validation/contracts';
 import { contractDeadlines } from '@/server/services/contract-schedule.service';
 import { getOrganizationId } from '@/server/services/organization.service';
 
@@ -25,7 +24,7 @@ export const runtime = 'nodejs';
  */
 export const GET = defineRoute({
   permissions: ['contract:read'],
-  query: z.object({ tage: z.coerce.number().int().min(1).max(365).default(45) }),
+  query: contractDeadlinesQuerySchema,
   rateLimit: 'apiRead',
   handler: async ({ query }) => ok(await contractDeadlines(await getOrganizationId(), query.tage)),
 });

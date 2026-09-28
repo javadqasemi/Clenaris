@@ -1,8 +1,7 @@
-import { z } from 'zod';
-
 import { defineRoute } from '@/lib/api/handler';
 import { noContent, ok } from '@/lib/api/response';
 import { updateAddressSchema } from '@/lib/validation/crm';
+import { addressParams } from '@/lib/validation/queries';
 import {
   assertMayManageAddresses,
   deleteAddress,
@@ -11,11 +10,6 @@ import {
 import { getOrganizationId } from '@/server/services/organization.service';
 
 export const runtime = 'nodejs';
-
-const params = z.object({
-  id: z.string().min(1),
-  addressId: z.string().min(1),
-});
 
 /**
  * PATCH /api/customers/:id/addresses/:addressId — Adresse ändern.
@@ -28,7 +22,7 @@ const params = z.object({
 export const PATCH = defineRoute({
   permissions: ['customer:update', 'customer:update_own'],
   anyPermission: true,
-  params,
+  params: addressParams,
   body: updateAddressSchema,
   rateLimit: 'apiWrite',
   handler: async ({ params: route, body, session, ip }) => {
@@ -58,7 +52,7 @@ export const PATCH = defineRoute({
 export const DELETE = defineRoute({
   permissions: ['customer:update', 'customer:update_own'],
   anyPermission: true,
-  params,
+  params: addressParams,
   rateLimit: 'apiWrite',
   handler: async ({ params: route, session, ip }) => {
     assertMayManageAddresses(session, route.id);

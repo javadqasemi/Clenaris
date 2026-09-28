@@ -1,7 +1,6 @@
-import { z } from 'zod';
-
 import { defineRoute } from '@/lib/api/handler';
 import { ok } from '@/lib/api/response';
+import { contractBillingBasisQuerySchema } from '@/lib/validation/contracts';
 import { idParam } from '@/lib/validation/queries';
 import { contractBillingBasis } from '@/server/services/contract.service';
 import { getOrganizationId } from '@/server/services/organization.service';
@@ -31,10 +30,7 @@ export const runtime = 'nodejs';
 export const GET = defineRoute({
   permissions: ['contract:billing'],
   params: idParam,
-  query: z.object({
-    von: z.coerce.date(),
-    bis: z.coerce.date(),
-  }),
+  query: contractBillingBasisQuerySchema,
   rateLimit: 'apiRead',
   handler: async ({ params, query }) =>
     ok(

@@ -1,14 +1,10 @@
-import { z } from 'zod';
-
 import { defineRoute } from '@/lib/api/handler';
 import { created } from '@/lib/api/response';
-import { contractAmendmentApplySchema } from '@/lib/validation/contracts';
+import { contractAmendmentApplySchema, contractAmendmentParams } from '@/lib/validation/contracts';
 import { applyAmendment } from '@/server/services/contract-amendment.service';
 import { getOrganizationId } from '@/server/services/organization.service';
 
 export const runtime = 'nodejs';
-
-const amendmentParams = z.object({ id: z.string().min(1), amendmentId: z.string().min(1) });
 
 /**
  * POST /api/contracts/{id}/amendments/{amendmentId}/apply — den freigegebenen
@@ -29,7 +25,7 @@ const amendmentParams = z.object({ id: z.string().min(1), amendmentId: z.string(
  */
 export const POST = defineRoute({
   permissions: ['contract:version'],
-  params: amendmentParams,
+  params: contractAmendmentParams,
   body: contractAmendmentApplySchema,
   rateLimit: 'apiWrite',
   handler: async ({ params, body, session, ip }) =>

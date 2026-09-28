@@ -1,19 +1,15 @@
-import { z } from 'zod';
-
 import { defineRoute } from '@/lib/api/handler';
 import { ok } from '@/lib/api/response';
-import { LEGAL_SLUGS, updateLegalSchema } from '@/lib/validation/navigation';
+import { legalSlugParams, updateLegalSchema } from '@/lib/validation/navigation';
 import { getLegalDocument, upsertLegalDocument } from '@/server/services/navigation.service';
 import { getOrganizationId } from '@/server/services/organization.service';
 
 export const runtime = 'nodejs';
 
-const slugParam = z.object({ slug: z.enum(LEGAL_SLUGS) });
-
 /** GET /api/legal/:slug */
 export const GET = defineRoute({
   permissions: ['legal:read'],
-  params: slugParam,
+  params: legalSlugParams,
   rateLimit: 'apiRead',
   handler: async ({ params }) =>
     ok(await getLegalDocument(await getOrganizationId(), params.slug)),
@@ -37,7 +33,7 @@ export const GET = defineRoute({
  */
 export const PUT = defineRoute({
   permissions: ['legal:update'],
-  params: slugParam,
+  params: legalSlugParams,
   body: updateLegalSchema,
   rateLimit: 'apiWrite',
   handler: async ({ params, body, session, ip }) => {
