@@ -64,7 +64,28 @@ export class UnauthorizedError extends AppError {
   }
 }
 
+/**
+ * Kennung, an der die Fehlergrenze einer Seite einen fehlenden Zugriff
+ * erkennt (2026-09-28).
+ *
+ * Wirft eine Seite `requirePermission()`, landet der Fehler in `error.tsx` des
+ * Bereichs. Im Produktionsbau ersetzt Next Meldung und Name durch einen
+ * generischen Text — `instanceof`, `name` oder `code` kommen im Browser nicht
+ * an. Erhalten bleibt allein `digest`, und zwar unverändert, wenn der Fehler
+ * schon einen trägt (`create-error-handler.js`: „respect the original
+ * digest"). Die Grenze zeigte deshalb für jede fehlende Berechtigung „Der
+ * Fehler liegt bei uns" und bot „Erneut versuchen" an — beides falsch und
+ * ein Anlass für eine Supportanfrage, die niemand lösen kann.
+ *
+ * Kein Geheimnis und keine Kennung eines Vorfalls: Die Zeichenkette sagt nur
+ * „fehlende Berechtigung", genau wie die Seite, die sie anzeigt.
+ */
+export const FORBIDDEN_DIGEST = 'CLENARIS_FORBIDDEN';
+
 export class ForbiddenError extends AppError {
+  /** Siehe `FORBIDDEN_DIGEST` — übersteht die Serialisierung an die Fehlergrenze. */
+  readonly digest = FORBIDDEN_DIGEST;
+
   constructor(message = 'Für diese Aktion fehlen Ihnen die Berechtigungen.') {
     super('FORBIDDEN', message, 403);
   }

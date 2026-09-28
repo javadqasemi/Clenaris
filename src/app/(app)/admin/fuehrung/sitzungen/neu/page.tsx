@@ -2,7 +2,7 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 import { ArrowLeft } from 'lucide-react';
 
-import { requirePermission } from '@/lib/auth/session';
+import { requirePagePermission } from '@/lib/auth/session';
 import { getOrganizationId } from '@/server/services/organization.service';
 import { listObjectiveOptions, listStaffOptions } from '@/server/services/fuehrung-options.service';
 import { Button } from '@/components/ui/button';
@@ -17,7 +17,8 @@ export const metadata: Metadata = {
 export const dynamic = 'force-dynamic';
 
 export default async function NewMeetingPage() {
-  await requirePermission('meeting:create');
+  // Reine Eingabemaske: ohne Schreibrecht 404 statt Fehlergrenze (Audit 2026-09-28).
+  await requirePagePermission('meeting:create');
   const organizationId = await getOrganizationId();
   const [staff, objectives] = await Promise.all([listStaffOptions(organizationId), listObjectiveOptions(organizationId)]);
 

@@ -1,6 +1,7 @@
 import 'server-only';
 
 import { prisma, toNumber } from '@/lib/db';
+import { can, type ActorRole } from '@/lib/auth/rbac';
 import { formatKpiValue } from '@/lib/bi/labels';
 import { periodFromKey, today } from '@/lib/bi/periods';
 import { getTopCustomers } from './analytics.service';
@@ -60,7 +61,64 @@ async function loadMonthlySeries(organizationId: string, keys: string[]): Promis
   );
 }
 
-export async function getInsights(organizationId: string): Promise<Insight[]> {
+/**
+ * Welche Register eine Person hinter den Auffälligkeiten sehen darf.
+ *
+ * Das Cockpit (`cockpit:view`) ist eine Sammelansicht; die Register dahinter
+ * haben eigene Leserechte. Die Betriebsleitung sieht das Cockpit, aber
+ * bewusst weder Risikoregister noch Marktbeobachtungen noch Dokumentenablage
+ * (siehe `MANAGER_PERMISSIONS` in `rbac.ts`). Bis 2026-09-28 zählte die Regel
+ * „Fällige Prüfungen" trotzdem Risiken, Marktbeobachtungen und ablaufende
+ * Dokumente mit und verlinkte ins Risikoregister — das Cockpit war damit ein
+ * Seiteneingang in genau die Register, die der Rolle verschlossen sind.
+ *
+ * Die Einschränkung steht deshalb in der Abfrage und nicht in der Anzeige:
+ * Was die Person nicht sehen darf, wird gar nicht erst gezählt. Ein Feld, das
+ * erst die Seite ausblendet, stünde in der JSON-Antwort von
+ * `/api/bi/cockpit` trotzdem.
+ */
+export interface InsightScope {
+  risks: boolean;
+  market: boolean;
+  documents: boolean;
+  /**
+   * `cockpit:financials` — Liquidität, Kundenkonzentration, Marge (2026-09-28).
+   *
+   * Das Cockpit filterte diese Auffälligkeiten selbst (`cockpit.service.ts`),
+   * die eigene Route `GET /api/bi/cockpit/insights` aber nicht: Die
+   * Betriebsleitung bekam dort überfällige Beträge und mit `concentration`
+   * den Namen der grössten Kundschaft samt Umsatzanteil. Jetzt steht die Regel
+   * hier, einmal, und jeder Weg zu den Auffälligkeiten erbt sie.
+   */
+  financials: boolean;
+}
+
+/** Auffälligkeiten, die Finanzzahlen tragen — nur mit `cockpit:financials`. */
+export const FINANZ_AUFFAELLIGKEITEN: ReadonlySet<string> = new Set(['liquidity-overdue', 'concentration', 'trend-margin.gross']);
+
+/**
+ * Die volle Sicht — für Wege ohne Person dahinter, die ohnehin nur die
+ * Geschäftsleitung erreicht (Berichte mit `bireport:*`, Nachtlauf). Ein
+ * ausdrücklicher Name statt eines stillen Standardwerts, damit an jeder
+ * Aufrufstelle sichtbar ist, dass hier bewusst ungefiltert gelesen wird.
+ */
+export const FULL_INSIGHT_SCOPE: InsightScope = { risks: true, market: true, documents: true, financials: true };
+
+export function insightScopeFor(role: ActorRole): InsightScope {
+  return {
+    risks: can(role, 'risk:read'),
+    market: can(role, 'market:read'),
+    documents: can(role, 'document:read'),
+    financials: can(role, 'cockpit:financials'),
+  };
+}
+
+export async function getInsights(organizationId: string, scope: InsightScope): Promise<Insight[]> {
+  const alle = await alleInsights(organizationId, scope);
+  return scope.financials ? alle : alle.filter((i) => !FINANZ_AUFFAELLIGKEITEN.has(i.key));
+}
+
+async function alleInsights(organizationId: string, scope: InsightScope): Promise<Insight[]> {
   const insights: Insight[] = [];
   const series = await loadMonthlySeries(organizationId, [
     'revenue.net',
@@ -193,7 +251,7 @@ export async function getInsights(organizationId: string): Promise<Insight[]> {
   }
 
   // --- Fällige Prüfungen ----------------------------------------------------
-  const due = await countDueReviews(organizationId);
+  const due = await countDueReviews(organizationId, scope);
   if (due.total > 0) {
     insights.push({
       key: 'reviews-due',
@@ -226,18 +284,27 @@ export interface DueReviewCounts {
   total: number;
 }
 
-/** Fällige Prüfungen über alle Bereiche — für Navigation, Cockpit und Nachtlauf. */
-export async function countDueReviews(organizationId: string): Promise<DueReviewCounts> {
+/**
+ * Fällige Prüfungen über alle Bereiche — für Navigation, Cockpit und Nachtlauf.
+ *
+ * Mit `scope` fallen die Register weg, die die Person nicht lesen darf: sie
+ * werden nicht abgefragt und zählen 0. Die Navigation braucht das nicht (sie
+ * zeigt eine Zahl nur an einem Eintrag, den `filterNavigation` für die Rolle
+ * ohnehin entfernt); das Cockpit und seine Auffälligkeiten schon, weil sie
+ * die Zahlen zusammenfassen und verlinken.
+ */
+export async function countDueReviews(organizationId: string, scope: InsightScope = FULL_INSIGHT_SCOPE): Promise<DueReviewCounts> {
   const now = today();
   const soon = new Date(now.getTime() + 30 * 86_400_000);
+  const none = Promise.resolve(0);
   const [objectives, risks, controls, competitors, insights, boards, documents] = await Promise.all([
     prisma.objective.count({ where: { organizationId, deletedAt: null, status: { in: ['ACTIVE', 'AT_RISK'] }, nextReviewAt: { lt: now } } }),
-    prisma.riskEntry.count({ where: { organizationId, deletedAt: null, status: { not: 'CLOSED' }, nextReviewAt: { lt: now } } }),
+    scope.risks ? prisma.riskEntry.count({ where: { organizationId, deletedAt: null, status: { not: 'CLOSED' }, nextReviewAt: { lt: now } } }) : none,
     prisma.controlEntry.count({ where: { organizationId, deletedAt: null, status: { in: ['ACTIVE', 'DUE', 'NON_COMPLIANT'] }, nextReviewAt: { lt: now } } }),
-    prisma.competitor.count({ where: { organizationId, deletedAt: null, nextReviewAt: { lt: now } } }),
-    prisma.marketInsight.count({ where: { organizationId, deletedAt: null, nextReviewAt: { lt: now } } }),
-    prisma.analysisBoard.count({ where: { organizationId, supersededById: null, nextReviewAt: { lt: now } } }),
-    prisma.managedDocument.count({ where: { organizationId, deletedAt: null, expiresOn: { gte: now, lte: soon } } }),
+    scope.market ? prisma.competitor.count({ where: { organizationId, deletedAt: null, nextReviewAt: { lt: now } } }) : none,
+    scope.market ? prisma.marketInsight.count({ where: { organizationId, deletedAt: null, nextReviewAt: { lt: now } } }) : none,
+    scope.market ? prisma.analysisBoard.count({ where: { organizationId, supersededById: null, nextReviewAt: { lt: now } } }) : none,
+    scope.documents ? prisma.managedDocument.count({ where: { organizationId, deletedAt: null, expiresOn: { gte: now, lte: soon } } }) : none,
   ]);
   const market = competitors + insights + boards;
   return { objectives, risks, controls, market, documents, total: objectives + risks + controls + market };

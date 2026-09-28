@@ -176,7 +176,8 @@ describe('Bewertungsbitte: einmal je Buchung', () => {
     if (!kandidat) return;
     buchungId = kandidat.id;
     vorher = kandidat.completedAt;
-    await db.notification.deleteMany({ where: { link: `/konto/bewertungen/neu?buchung=${buchungId}` } });
+    // Alter (bis 2026-09-28, führte auf eine 404) und neuer Verweis.
+    await db.notification.deleteMany({ where: { link: { in: [`/konto/bewertungen/neu?buchung=${buchungId}`, `/konto/bewertungen?buchung=${buchungId}`] } } });
     await db.emailLog.deleteMany({ where: { entity: 'Booking', entityId: buchungId, templateKey: 'review_request' } });
     // Ins Fenster der Bewertungsbitte (24–72 h nach Abschluss) legen.
     await db.booking.update({ where: { id: buchungId }, data: { completedAt: new Date(Date.now() - 30 * 3_600_000) } });
@@ -195,8 +196,11 @@ describe('Bewertungsbitte: einmal je Buchung', () => {
       const lauf = await get('/api/cron/daily', { headers: { authorization: `Bearer ${secret}` } });
       assert.equal(lauf.status, 200, lauf.text.slice(0, 300));
     }
-    const bitten = await testDb()!.notification.count({ where: { link: `/konto/bewertungen/neu?buchung=${buchungId}` } });
+    const bitten = await testDb()!.notification.count({ where: { link: `/konto/bewertungen?buchung=${buchungId}` } });
     assert.ok(bitten <= 1, `höchstens eine Bitte, gezählt ${bitten}`);
+    // Audit 2026-09-28 (L-04): Der alte Verweis auf `/konto/bewertungen/neu` war eine 404.
+    const alte = await testDb()!.notification.count({ where: { link: `/konto/bewertungen/neu?buchung=${buchungId}` } });
+    assert.equal(alte, 0, 'Bewertungsbitte zeigt noch auf die nicht vorhandene Seite /konto/bewertungen/neu');
     const mails = await testDb()!.emailLog.findMany({ where: { entity: 'Booking', entityId: buchungId, templateKey: 'review_request' } });
     assert.ok(mails.length <= 1, `höchstens eine Mail, gezählt ${mails.length}`);
     assert.ok(bitten + mails.length >= 1, 'die Bitte ging hinaus (Konto oder E-Mail)');

@@ -61,13 +61,24 @@ export function JobActions({
   status,
   canEdit = false,
   canDelete = false,
+  canDraftReport = false,
 }: {
   jobId: string;
   status: string;
   canEdit?: boolean;
   canDelete?: boolean;
+  /**
+   * KI-Entwurf des Einsatzberichts anbieten — entscheidet die Seite
+   * (`ai:use`, `job:update`, Anbieter eingerichtet). Bis 2026-09-28 stand der
+   * Menüpunkt immer da und endete ohne Anbieter oder ohne Recht in einer
+   * Fehlermeldung.
+   */
+  canDraftReport?: boolean;
 }) {
   const router = useRouter();
+  // Absagen ist eine Statusänderung (`PATCH /api/jobs/:id`) — nur mit
+  // Schreibrecht und nur, solange der Einsatz nicht erledigt oder abgesagt ist.
+  const cancellable = canEdit && !['CANCELLED', 'COMPLETED', 'VERIFIED'].includes(status);
   const [pending, setPending] = React.useState<string | null>(null);
   const [dialog, setDialog] = React.useState<'cancel' | 'report' | 'delete' | null>(null);
   const [reason, setReason] = React.useState('');
@@ -156,6 +167,8 @@ export function JobActions({
           </Button>
         ) : null}
 
+        {/* Ein Menü ohne Eintrag ist ein Knopf ins Leere — dann gar keines. */}
+        {canDraftReport || cancellable || canDelete ? (
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button variant="outline" size="icon" aria-label="Weitere Aktionen">
@@ -163,16 +176,16 @@ export function JobActions({
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-60">
-            <DropdownMenuItem onSelect={() => void generateReport()}>
-              <Sparkles aria-hidden />
-              Einsatzbericht mit KI entwerfen
-            </DropdownMenuItem>
-
-            {!['CANCELLED', 'COMPLETED', 'VERIFIED'].includes(status) || canDelete ? (
-              <DropdownMenuSeparator />
+            {canDraftReport ? (
+              <DropdownMenuItem onSelect={() => void generateReport()}>
+                <Sparkles aria-hidden />
+                Einsatzbericht mit KI entwerfen
+              </DropdownMenuItem>
             ) : null}
 
-            {!['CANCELLED', 'COMPLETED', 'VERIFIED'].includes(status) ? (
+            {canDraftReport && (cancellable || canDelete) ? <DropdownMenuSeparator /> : null}
+
+            {cancellable ? (
               <DropdownMenuItem destructive onSelect={() => setDialog('cancel')}>
                 <Ban aria-hidden />
                 Einsatz absagen
@@ -187,6 +200,7 @@ export function JobActions({
             ) : null}
           </DropdownMenuContent>
         </DropdownMenu>
+        ) : null}
       </div>
 
       {/* Löschen */}

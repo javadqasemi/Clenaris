@@ -3,7 +3,7 @@ import 'server-only';
 import type { NotificationChannel, UserRole } from '@prisma/client';
 
 import { prisma } from '@/lib/db';
-import { can, type Permission } from '@/lib/auth/rbac';
+import { can, taskLinkFor, type Permission } from '@/lib/auth/rbac';
 import { sendEmail } from '@/lib/email/client';
 import { sendSms } from '@/lib/sms/client';
 import type { EmailContent } from '@/lib/email/templates';
@@ -179,6 +179,19 @@ export async function notify(input: NotifyInput): Promise<Zustellung> {
  *    Rolle dazukommt. Eine Meldung, deren Link ins Leere führt, ist schlimmer
  *    als keine: sie erzeugt eine Handlung, die mit einem 403 endet.
  */
+/**
+ * Der Verweis einer Aufgabenmeldung für genau diese Person (2026-09-28).
+ *
+ * Schlägt die Rolle nach und entscheidet über `taskLinkFor`: Büro → der Ort
+ * in der Verwaltung, Mitarbeitende → `/portal/aufgaben`. Eine Person ohne
+ * Konto (gelöscht) bekommt den Verwaltungslink — sie erhält die Meldung
+ * ohnehin nicht, `notify` findet kein Konto.
+ */
+export async function taskLinkForUser(userId: string, adminHref = '/admin/aufgaben'): Promise<string> {
+  const user = await prisma.user.findUnique({ where: { id: userId }, select: { role: true } });
+  return user ? taskLinkFor(user.role, adminHref) : adminHref;
+}
+
 export async function notifyStaff(params: {
   organizationId: string;
   title: string;

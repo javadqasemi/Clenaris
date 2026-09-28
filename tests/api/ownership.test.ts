@@ -1,8 +1,8 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { BASE_URL, get, patch, post, requireServer } from '../helpers/client';
-import { loginAll } from '../helpers/accounts';
+import { BASE_URL, del, get, patch, post, requireServer } from '../helpers/client';
+import { ACCOUNTS, loginAll } from '../helpers/accounts';
 
 /**
  * Eigentümerschaft und Rechtegrenzen, die der Rauchtest nicht sieht.
@@ -117,6 +117,57 @@ describe('Eigentümerschaft und Rechtegrenzen', { concurrency: 1 }, async () => 
         { jar: jars.admin },
       );
       assert.equal(response.status, 403);
+    });
+  });
+
+  /*
+   * Audit 2026-09-28 (L-05): `/portal/aufgaben` ist neu — die Liste der
+   * eigenen Aufgaben. Die Eigentümerschaft steht in der Prisma-Abfrage
+   * (`assigneeId` = Sitzung); geprüft wird am ausgelieferten HTML, dass eine
+   * fremde und eine niemandem zugewiesene Aufgabe nicht erscheinen, und am
+   * Endpunkt, dass die fremde sich nicht abhaken lässt.
+   */
+  describe('Aufgaben im Portal', () => {
+    it('Mitarbeitende sehen und ändern nur die eigenen Aufgaben', async () => {
+      const eigeneTitel = 'Portalaufgabe eigene Prüfung';
+      const fremdeTitel = 'Portalaufgabe fremde Prüfung';
+      const aufraeumen = async () => {
+        for (const titel of [eigeneTitel, fremdeTitel]) {
+          const alt = await get<{ data: { id: string; title: string }[] }>(`/api/tasks?q=${encodeURIComponent(titel)}`, { jar: jars.admin });
+          for (const t of (alt.payload.data ?? []).filter((x) => x.title === titel)) await del(`/api/tasks/${t.id}`, { jar: jars.admin });
+        }
+      };
+      await aufraeumen();
+
+      const employees = await get<{ data: { user: { id: string; email: string; role: string } }[] }>('/api/employees', { jar: jars.admin });
+      const ich = employees.payload.data.find((row) => row.user.email === ACCOUNTS.employee.email);
+      assert.ok(ich, 'Demokonto der Mitarbeitenden ohne Personalakte');
+      const andere = employees.payload.data.find((row) => row.user.role === 'EMPLOYEE' && row.user.id !== ich.user.id);
+
+      const eigene = await post<{ data: { id: string } }>('/api/tasks', { title: eigeneTitel, assigneeId: ich.user.id }, { jar: jars.admin });
+      assert.equal(eigene.status, 201);
+      // Fremd: einer anderen Person zugewiesen, sonst niemandem — beides darf nicht erscheinen.
+      const fremde = await post<{ data: { id: string } }>('/api/tasks', { title: fremdeTitel, ...(andere ? { assigneeId: andere.user.id } : {}) }, { jar: jars.admin });
+      assert.equal(fremde.status, 201);
+
+      try {
+        const seite = await get('/portal/aufgaben', { jar: jars.employee });
+        assert.equal(seite.status, 200);
+        assert.ok(seite.text.includes(eigeneTitel), 'eigene Aufgabe fehlt im Portal');
+        assert.ok(!seite.text.includes(fremdeTitel), 'fremde Aufgabe im Portal sichtbar');
+
+        const liste = await get<{ data: { title: string }[] }>('/api/tasks', { jar: jars.employee });
+        assert.ok(!liste.payload.data.some((t) => t.title === fremdeTitel), 'fremde Aufgabe über /api/tasks sichtbar');
+
+        assert.equal((await patch(`/api/tasks/${fremde.payload.data.id}`, { status: 'DONE' }, { jar: jars.employee })).status, 403);
+        assert.equal((await patch(`/api/tasks/${eigene.payload.data.id}`, { status: 'IN_PROGRESS' }, { jar: jars.employee })).status, 200);
+
+        // Die Kundschaft betritt das Portal nicht.
+        const kunde = await get('/portal/aufgaben', { jar: jars.customer, redirect: 'manual' });
+        assert.ok(kunde.status >= 300 && kunde.status < 400, `Kundschaft im Portal: HTTP ${kunde.status}`);
+      } finally {
+        await aufraeumen();
+      }
     });
   });
 

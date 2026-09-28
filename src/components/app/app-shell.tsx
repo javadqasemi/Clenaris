@@ -556,11 +556,15 @@ export function AppShell({
                   Betriebseinstellungen. Ein Menü, das „Mein Profil" heisst,
                   darf nur zum eigenen Konto führen; die Firmenkonfiguration
                   steht in der Seitenleiste unter „Betrieb", mit eigenem Recht.
+                  Seit 2026-09-28 heisst der Eintrag auch so: „Einstellungen"
+                  allein stand in der Verwaltung neben dem gleichnamigen
+                  Seitenleisteneintrag der Firmenkonfiguration und liess offen,
+                  welche von beiden gemeint ist.
                 */}
                 <DropdownMenuItem asChild>
                   <Link href={`${areaHref}/profil/einstellungen`}>
                     <Settings aria-hidden />
-                    Einstellungen
+                    Persönliche Einstellungen
                   </Link>
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />

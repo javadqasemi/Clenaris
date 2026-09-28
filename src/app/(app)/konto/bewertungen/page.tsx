@@ -47,8 +47,18 @@ function Stars({ rating }: { rating: number }) {
  * Liste der offenen Termine wird deshalb serverseitig gebildet und nicht im
  * Dialog nachgeladen.
  */
-export default async function AccountReviewsPage() {
+export default async function AccountReviewsPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ buchung?: string }>;
+}) {
   const { customerId } = await requireCustomerId();
+  // Vorauswahl aus der Bewertungsbitte (2026-09-28; vorher zeigte der Link auf
+  // `/konto/bewertungen/neu`, eine Seite, die es nie gab). Nur eine Hilfe für
+  // die Eingabe: Das Formular übernimmt die Kennung nur, wenn sie unter den
+  // bewertbaren Terminen *dieser* Kundschaft steht, und `POST /api/reviews`
+  // prüft die Buchung ohnehin gegen die Kundschaft.
+  const { buchung } = await searchParams;
 
   const [reviews, reviewable] = await Promise.all([
     prisma.review.findMany({
@@ -96,7 +106,7 @@ export default async function AccountReviewsPage() {
       <PageHeader
         title="Meine Bewertungen"
         description="Ihre Rückmeldungen zu abgeschlossenen Einsätzen — und unsere Antworten darauf."
-        actions={<ReviewForm bookings={bookings} />}
+        actions={<ReviewForm bookings={bookings} preselectedBookingId={bookings.some((b) => b.id === buchung) ? buchung : undefined} />}
       />
 
       {bookings.length === 0 && reviews.length === 0 ? (

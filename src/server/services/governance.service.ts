@@ -19,7 +19,7 @@ import type {
   UpdateRiskInput,
 } from '@/lib/validation/bi-governance';
 import { organisationsbezugPruefen } from './bezug.service';
-import { notify } from './notification.service';
+import { notify, taskLinkForUser } from './notification.service';
 
 /**
  * Risiko, Kontrollen und Massnahmen.
@@ -389,7 +389,10 @@ export async function createAction(session: SessionUser, organizationId: string,
     });
   });
   if (input.assigneeId && input.assigneeId !== session.id) {
-    await notify({ userId: input.assigneeId, channels: ['IN_APP'], title: 'Neue Massnahme', body: action.title, link: '/admin/fuehrung/massnahmen', entity: 'CorrectiveAction', entityId: action.id });
+    // Die Massnahme läuft als Aufgabe (`taskId`) — Mitarbeitende finden sie im
+    // Portal, das Büro in der Massnahmenliste.
+    const link = await taskLinkForUser(input.assigneeId, '/admin/fuehrung/massnahmen');
+    await notify({ userId: input.assigneeId, channels: ['IN_APP'], title: 'Neue Massnahme', body: action.title, link, entity: 'CorrectiveAction', entityId: action.id });
   }
   await audit.created({ organizationId, userId: session.id, entity: 'CorrectiveAction', entityId: action.id, summary: `Massnahme „${action.title}" eröffnet` });
   return action;

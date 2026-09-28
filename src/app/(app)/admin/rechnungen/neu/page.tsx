@@ -3,7 +3,7 @@ import Link from 'next/link';
 import { ArrowLeft } from 'lucide-react';
 
 import { prisma, toNumber } from '@/lib/db';
-import { requirePermission } from '@/lib/auth/session';
+import { requirePagePermission } from '@/lib/auth/session';
 import { formatDate } from '@/lib/utils';
 import { getOrganizationId } from '@/server/services/organization.service';
 import { Button } from '@/components/ui/button';
@@ -29,7 +29,8 @@ export default async function NewInvoicePage({
 }: {
   searchParams: Promise<{ kunde?: string }>;
 }) {
-  await requirePermission('invoice:create');
+  // Reine Eingabemaske: ohne Schreibrecht 404 statt Fehlergrenze (Audit 2026-09-28).
+  await requirePagePermission('invoice:create');
 
   const params = await searchParams;
   const organizationId = await getOrganizationId();

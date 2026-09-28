@@ -314,7 +314,8 @@ export default async function AccountHomePage() {
               </div>
             </div>
             <Button asChild>
-              <Link href={`/konto/bewertungen/neu?buchung=${lastJob.booking!.id}`}>
+              {/* Die Bewertungsliste mit vorgewähltem Termin — `/konto/bewertungen/neu` gab es nie (404, bis 2026-09-28). */}
+              <Link href={`/konto/bewertungen?buchung=${lastJob.booking!.id}`}>
                 Bewertung abgeben
               </Link>
             </Button>

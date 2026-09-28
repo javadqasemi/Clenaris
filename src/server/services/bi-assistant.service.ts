@@ -20,7 +20,7 @@ import {
 } from '@/lib/ai/features-bi';
 import { biDaten, biFreitext, type BiKennzahl, type BiTeil } from '@/lib/ai/nutzlast';
 import { computeHealth } from './health.service';
-import { getInsights } from './insight.service';
+import { getInsights, insightScopeFor } from './insight.service';
 import { getBudgetVariance } from './budget.service';
 
 /**
@@ -118,8 +118,10 @@ async function healthDigest(organizationId: string): Promise<BiTeil> {
   };
 }
 
-async function insightDigest(organizationId: string): Promise<BiTeil> {
-  const insights = await getInsights(organizationId);
+async function insightDigest(organizationId: string, session: SessionUser): Promise<BiTeil> {
+  // Dieselbe Sicht wie im Cockpit: Was die Rolle dort nicht sieht (Risiken,
+  // Markt, Dokumente), soll ihr der Assistent nicht als Zusammenfassung liefern.
+  const insights = await getInsights(organizationId, insightScopeFor(session.role));
   // Ohne `href` (enthält die Kundenkennung) und — ausser für geprüfte Regeln —
   // ohne Detailzeile; die Auswahl trifft `biDaten`.
   return { art: 'hinweise', liste: insights.map((i) => ({ schluessel: i.key, schwere: i.severity, titel: i.title, detail: i.detail })) };
@@ -212,7 +214,7 @@ export async function runAssistant(session: SessionUser, organizationId: string,
         ueberschrift('Kennzahlen:'),
         await kpiDigest(organizationId, input.from, input.to),
         ueberschrift('Auffälligkeiten (regelbasiert):'),
-        await insightDigest(organizationId),
+        await insightDigest(organizationId, session),
       ]);
       // Die Frage ist Freitext der Geschäftsleitung — derselbe Weg.
       const question = input.question ? biFreitext(input.question, namen, 1000).text : undefined;

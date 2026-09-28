@@ -1,6 +1,6 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
-import { Compass, ExternalLink, Plus } from 'lucide-react';
+import { Compass, ExternalLink, Plus, Star } from 'lucide-react';
 
 import { requirePermission } from '@/lib/auth/session';
 import { can } from '@/lib/auth/rbac';
@@ -114,7 +114,14 @@ export default async function MarketPage() {
                           {c.region ?? '—'}
                           {c.services.length ? ` · ${c.services.join(', ')}` : ''}
                           {c.priceFrom || c.priceTo ? ` · ${c.priceFrom ? formatCurrency(toNumber(c.priceFrom)) : '?'} – ${c.priceTo ? formatCurrency(toNumber(c.priceTo)) : '?'}${c.priceNote ? ` ${c.priceNote}` : ''}` : ''}
-                          {c.reviewScore ? ` · ${toNumber(c.reviewScore)} ★ (${c.reviewCount ?? 0})` : ''}
+                          {/* Symbol aus lucide statt „★" (2026-09-28): Zeichen als Symbol sind im Designsystem ausgeschlossen, und Screenreader lesen „schwarzer Stern". */}
+                          {c.reviewScore ? (
+                            <>
+                              {` · ${toNumber(c.reviewScore)} `}
+                              <Star className="inline size-3 fill-current align-[-0.125em]" role="img" aria-label="Sterne" />
+                              {` (${c.reviewCount ?? 0})`}
+                            </>
+                          ) : null}
                         </p>
                       </div>
                       <div className="flex items-center gap-1">

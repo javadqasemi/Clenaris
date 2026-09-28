@@ -103,6 +103,15 @@ export default async function StaffDetailPage({
   const canSeeLogins = can(session.role, 'user:read');
   const canResetTwoFactor = can(session.role, 'role:assign');
   const canUploadDocument = can(session.role, 'document:create');
+  /*
+   * Die Personaldokumente nur mit `document:read` (2026-09-28). Die
+   * Betriebsleitung öffnet die Personalakte, aber nicht die Ablage:
+   * `documentVisibilityWhere` liefert ihr keine Zeile, und der Abschnitt
+   * behauptete dann „Noch keine Dokumente abgelegt" — eine falsche Aussage
+   * über die Akte, nicht bloss eine leere Liste. Ohne Recht wird gar nicht
+   * erst abgefragt und nichts gezeigt.
+   */
+  const canReadDocuments = can(session.role, 'document:read');
 
   let employee;
   try {
@@ -118,22 +127,24 @@ export default async function StaffDetailPage({
 
   const [vacation, documents, logins, lohnprofil] = await Promise.all([
     getVacationBalance(employee.id),
-    prisma.managedDocument.findMany({
-      where: {
-        AND: [documentVisibilityWhere(session, organizationId), { subjectEmployeeId: employee.id }],
-      },
-      orderBy: { updatedAt: 'desc' },
-      select: {
-        id: true,
-        title: true,
-        category: true,
-        expiresOn: true,
-        updatedAt: true,
-        currentVersion: {
-          select: { file: { select: { filename: true, sizeBytes: true } } },
-        },
-      },
-    }),
+    canReadDocuments
+      ? prisma.managedDocument.findMany({
+          where: {
+            AND: [documentVisibilityWhere(session, organizationId), { subjectEmployeeId: employee.id }],
+          },
+          orderBy: { updatedAt: 'desc' },
+          select: {
+            id: true,
+            title: true,
+            category: true,
+            expiresOn: true,
+            updatedAt: true,
+            currentVersion: {
+              select: { file: { select: { filename: true, sizeBytes: true } } },
+            },
+          },
+        })
+      : Promise.resolve([]),
     canSeeLogins
       ? prisma.auditLog.findMany({
           where: { userId: employee.user.id, action: 'LOGIN' },
@@ -519,6 +530,7 @@ export default async function StaffDetailPage({
         </DetailSection>
       ) : null}
 
+      {canReadDocuments ? (
       <DetailSection
         title={`Dokumente (${documents.length})`}
         description="Verträge, Zeugnisse, Bewilligungen, Ausweise — abgelegt als Personaldokument, sichtbar für Geschäftsleitung und die Person selbst."
@@ -566,6 +578,7 @@ export default async function StaffDetailPage({
           </ul>
         )}
       </DetailSection>
+      ) : null}
 
       {/*
         Beide Abschnitte standen bis Wave 7 unter `length > 0` — sie

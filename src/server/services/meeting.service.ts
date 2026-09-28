@@ -8,7 +8,7 @@ import type { SessionUser } from '@/lib/auth/session';
 import { NotFoundError } from '@/lib/errors';
 import type { CreateMeetingInput, UpdateMeetingInput } from '@/lib/validation/bi-knowledge';
 import { organisationsbezugPruefen } from './bezug.service';
-import { notify } from './notification.service';
+import { notify, taskLinkForUser } from './notification.service';
 
 /**
  * Sitzungen.
@@ -125,7 +125,10 @@ export async function createMeeting(session: SessionUser, organizationId: string
   });
   for (const task of tasks) {
     if (task.assigneeId && task.assigneeId !== session.id) {
-      await notify({ userId: task.assigneeId, channels: ['IN_APP'], title: 'Pendenz aus Sitzung', body: `${task.title} — ${meeting.title}`, link: `/admin/fuehrung/sitzungen/${meeting.id}`, entity: 'Task', entityId: task.id });
+      // Büro → zur Sitzung; Mitarbeitende → ihre Aufgabenliste im Portal (die
+      // Sitzungsseite liegt in der Verwaltung, die sie nicht betreten dürfen).
+      const link = await taskLinkForUser(task.assigneeId, `/admin/fuehrung/sitzungen/${meeting.id}`);
+      await notify({ userId: task.assigneeId, channels: ['IN_APP'], title: 'Pendenz aus Sitzung', body: `${task.title} — ${meeting.title}`, link, entity: 'Task', entityId: task.id });
     }
   }
   await audit.created({ organizationId, userId: session.id, entity: 'Meeting', entityId: meeting.id, summary: `Sitzung „${meeting.title}" angelegt` });
@@ -164,7 +167,8 @@ export async function updateMeeting(session: SessionUser, organizationId: string
   });
   for (const task of tasks) {
     if (task.assigneeId && task.assigneeId !== session.id) {
-      await notify({ userId: task.assigneeId, channels: ['IN_APP'], title: 'Pendenz aus Sitzung', body: `${task.title} — ${meeting.title}`, link: `/admin/fuehrung/sitzungen/${meeting.id}`, entity: 'Task', entityId: task.id });
+      const link = await taskLinkForUser(task.assigneeId, `/admin/fuehrung/sitzungen/${meeting.id}`);
+      await notify({ userId: task.assigneeId, channels: ['IN_APP'], title: 'Pendenz aus Sitzung', body: `${task.title} — ${meeting.title}`, link, entity: 'Task', entityId: task.id });
     }
   }
   await audit.updated({ organizationId, userId: session.id, entity: 'Meeting', entityId: id, summary: `Sitzung „${meeting.title}" geändert` });

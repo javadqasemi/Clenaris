@@ -34,12 +34,19 @@ export function ReviewModeration({
   hasReply,
   rating,
   canDelete = false,
+  canDraft = false,
 }: {
   reviewId: string;
   status: string;
   featured: boolean;
   hasReply: boolean;
   rating: number;
+  /**
+   * KI-Antwortentwurf anbieten (`ai:use` + `review:moderate` wie
+   * `POST /api/reviews/:id/reply-draft`, Anbieter eingerichtet) — entscheidet
+   * die Seite. Vorher stand der Knopf immer da (2026-09-28).
+   */
+  canDraft?: boolean;
   /**
    * Löschen ist von Moderieren getrennt (`review:delete`): Ablehnen nimmt
    * eine Bewertung von der Website, Löschen tilgt sie — auch aus der
@@ -141,7 +148,7 @@ export function ReviewModeration({
           {hasReply ? 'Antwort bearbeiten' : 'Öffentlich antworten'}
         </Button>
 
-        {rating <= 3 && !hasReply ? (
+        {canDraft && rating <= 3 && !hasReply ? (
           <Button size="sm" variant="ghost" loading={pending === 'ai'} onClick={draftReply}>
             <Sparkles aria-hidden />
             Antwort entwerfen
