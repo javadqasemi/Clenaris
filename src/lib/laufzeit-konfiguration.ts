@@ -37,76 +37,23 @@ import { z } from 'zod';
  * Was bewusst zur Bauzeit bleibt, steht in `src/lib/seiten-url.ts` — mit
  * Begründung.
  *
- * Diese Datei ist ohne `server-only`: `absoluteUrl` in `utils.ts` benutzt sie,
- * und `utils.ts` wird auch in Client-Komponenten eingebunden (für `cn`). Im
- * Browser liefert `laufzeitUmgebung()` ein leeres Objekt — die Funktionen
- * hier sind dort nicht aufzurufen, und keine Client-Komponente tut es.
+ * Herkunft und Umgebung selbst stehen seit 2026-09-28 in
+ * `laufzeit-ursprung.ts` (ohne Zod — Begründung dort: sonst reiste Zod über
+ * `utils.ts` in jedes Client-Bündel) und werden hier unverändert
+ * weitergereicht.
  */
 
-export type Umgebung = Record<string, string | undefined>;
+import { laufzeitUmgebung, ursprungAus, type Umgebung } from './laufzeit-ursprung';
 
-/**
- * Die Laufzeitumgebung. Absichtlich über eine Variable und nicht als
- * `process.env.X`: Nur diese Form ersetzt der Bau.
- */
-export function laufzeitUmgebung(): Umgebung {
-  return (typeof process !== 'undefined' ? process.env : {}) as Umgebung;
-}
-
-const ENTWICKLUNG_URSPRUNG = 'http://localhost:3000';
-
-export class KonfigurationsFehler extends Error {
-  constructor(meldung: string) {
-    super(meldung);
-    this.name = 'KonfigurationsFehler';
-  }
-}
-
-/**
- * Die Herkunft, unter der **diese Instanz** erreichbar ist — `APP_URL`, sonst
- * das ältere `NEXT_PUBLIC_APP_URL` (zur Laufzeit gelesen, nicht eingesetzt).
- *
- * Nur Schema, Host und Port: Ein Pfad, eine Abfrage, Zugangsdaten oder ein
- * anderes Schema als http/https sind ein Konfigurationsfehler und werfen.
- * Fehlt der Wert in der Produktion, wirft die Funktion ebenfalls — ein
- * stilles `localhost` in Kundenmails ist schlimmer als ein lauter Fehler.
- */
-export function ursprungAus(env: Umgebung): string {
-  const roh = (env.APP_URL ?? env.NEXT_PUBLIC_APP_URL)?.trim();
-  if (!roh) {
-    if (env.NODE_ENV === 'production') {
-      throw new KonfigurationsFehler('APP_URL fehlt — die Anwendung weiss nicht, unter welcher Adresse sie erreichbar ist.');
-    }
-    return ENTWICKLUNG_URSPRUNG;
-  }
-  let url: URL;
-  try {
-    url = new URL(roh);
-  } catch {
-    throw new KonfigurationsFehler('APP_URL ist keine gültige Adresse.');
-  }
-  if (url.protocol !== 'https:' && url.protocol !== 'http:') throw new KonfigurationsFehler('APP_URL muss http oder https sein.');
-  if (url.username || url.password) throw new KonfigurationsFehler('APP_URL darf keine Zugangsdaten enthalten.');
-  if ((url.pathname && url.pathname !== '/') || url.search || url.hash) {
-    throw new KonfigurationsFehler('APP_URL ist nur Schema, Host und Port — ohne Pfad, Abfrage oder Anker.');
-  }
-  return url.origin;
-}
-
-/** Die Herkunft dieser Instanz, aus der Server-Umgebung, zur Laufzeit. */
-export function laufzeitUrsprung(): string {
-  return ursprungAus(laufzeitUmgebung());
-}
-
-/** Browser-Schlüssel für Google Maps (auf die Domain beschränkt) — serverseitig, zur Laufzeit. */
-export function mapsBrowserSchluessel(): string | undefined {
-  return laufzeitUmgebung().NEXT_PUBLIC_GOOGLE_MAPS_API_KEY?.trim() || undefined;
-}
-
-/** Adresse des Supabase-Projekts — serverseitig, zur Laufzeit. */
-export function supabaseAdresse(): string | undefined {
-  return laufzeitUmgebung().NEXT_PUBLIC_SUPABASE_URL?.trim() || undefined;
-}
+export {
+  KonfigurationsFehler,
+  laufzeitUmgebung,
+  laufzeitUrsprung,
+  mapsBrowserSchluessel,
+  supabaseAdresse,
+  ursprungAus,
+  type Umgebung,
+} from './laufzeit-ursprung';
 
 // ---------------------------------------------------------------------------
 //  Öffentliche Laufzeitkonfiguration für den Browser

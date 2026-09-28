@@ -246,6 +246,13 @@ jobs:
           NODE_ENV: production
         run: npm run build
 
+      # Seit 2026-09-28 — derselbe Schritt wie in `verify:full`: JavaScript je
+      # Route gegen `scripts/leistungsbudget.json`. Grössen sind auf jedem
+      # Läufer gleich; ein Paket, das versehentlich in den gemeinsamen Rahmen
+      # rutscht, hält den Lauf hier an und nicht erst im Feld.
+      - name: Leistungsbudget
+        run: npx tsx scripts/leistungsbudget.ts
+
       - name: Anwendung starten
         # **Über `scripts/test-server.ts`, nicht über ein nacktes
         # `next start`.** Das Skript legt die Umgebung der Prüfreihe an einer

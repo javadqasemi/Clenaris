@@ -37,6 +37,10 @@ const ZIELE: [AccountName, string][] = [
   ['admin', '/admin/suche?q=Reinigung'],
   ['admin', '/admin/fuehrung'],
   ['admin', '/admin/auswertungen'],
+  // Ergänzt 2026-09-28: die Bereiche, nach denen „die App lädt langsam"
+  // gefragt wurde und die bisher nicht gemessen waren.
+  ['admin', '/admin/vertraege'],
+  ['admin', '/admin/personal'],
   ['admin', '/api/customers'],
   ['admin', '/api/invoices'],
   ['admin', '/api/jobs?pageSize=50'],
@@ -48,6 +52,7 @@ const ZIELE: [AccountName, string][] = [
   ['customer', '/konto/rechnungen'],
   ['admin', '/'],
   ['admin', '/offerte'],
+  ['admin', '/buchen'],
 ];
 
 function arg(name: string, vorgabe: string): string {

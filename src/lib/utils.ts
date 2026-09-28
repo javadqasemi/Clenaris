@@ -1,7 +1,9 @@
 import { type ClassValue, clsx } from 'clsx';
 import { extendTailwindMerge } from 'tailwind-merge';
 
-import { laufzeitUrsprung } from '@/lib/laufzeit-konfiguration';
+// Aus `laufzeit-ursprung`, nicht aus `laufzeit-konfiguration`: Diese Datei
+// steht in fast jeder Client-Komponente, und jene zöge Zod in jedes Bündel.
+import { laufzeitUrsprung } from '@/lib/laufzeit-ursprung';
 import { kaufmaennischRunden } from '@/lib/runden';
 
 /**
