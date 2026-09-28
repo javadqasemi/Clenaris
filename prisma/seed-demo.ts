@@ -885,13 +885,34 @@ async function main() {
     { title: 'Fensterfront Bürogebäude', description: '38 Fenster inklusive Rahmen und Storen, streifenfrei im Osmose-Verfahren.', serviceKind: 'WINDOW_CLEANING' as const, beforeUrl: '/gallery/fenster-vorher.jpg', afterUrl: '/gallery/fenster-nachher.jpg', location: 'Bern Effingerstrasse' },
   ];
 
+  /**
+   * Die Demo-Einträge bleiben **unveröffentlicht** (seit 2026-09-28).
+   *
+   * Ihre Adressen (`/gallery/*.jpg`) zeigen auf Dateien, die es im Repository
+   * nie gab. Veröffentlicht standen auf Startseite, Galerie und Leistungsseiten
+   * deshalb acht kaputte Bilder — in jedem Browser, und in der Browserprüfung
+   * (`tests/e2e/bilder.browser.spec.ts`) zu Recht als Fehler. Fotos zu
+   * erfinden kommt nicht in Frage: Eine Galerie ist ein Beleg für echte
+   * Arbeit. Ohne veröffentlichten Eintrag zeigt die Startseite die gezeichnete
+   * Ersatzdarstellung, und die Einträge stehen in der Verwaltung bereit, bis
+   * jemand echte Fotos hochlädt und sie freigibt.
+   *
+   * Bestehende Datenbanken werden dabei repariert: Ein veröffentlichter Eintrag,
+   * dessen Bilder noch auf diese nie vorhandenen Dateien zeigen, wird
+   * zurückgezogen. Ein Eintrag mit hochgeladenen Bildern bleibt unberührt.
+   */
   for (const [index, item] of galleryItems.entries()) {
     const existing = await prisma.galleryItem.findFirst({
       where: { organizationId: org.id, title: item.title },
     });
-    if (existing) continue;
+    if (existing) {
+      if (existing.published && existing.beforeUrl === item.beforeUrl && existing.afterUrl === item.afterUrl) {
+        await prisma.galleryItem.update({ where: { id: existing.id }, data: { published: false } });
+      }
+      continue;
+    }
     await prisma.galleryItem.create({
-      data: { organizationId: org.id, position: index, published: true, ...item },
+      data: { organizationId: org.id, position: index, published: false, ...item },
     });
   }
 

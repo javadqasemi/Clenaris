@@ -192,6 +192,33 @@ export default defineConfig({
         deviceScaleFactor: 1,
       },
     },
+    /**
+     * **Firefox und WebKit — für die browserübergreifenden Fälle
+     * (`*.browser.spec.ts`).** Seit 2026-09-28.
+     *
+     * Anlass war ein Fehler, den Chromium nicht zeigen kann: Bilder der
+     * Website, die in Firefox erst nach mehrmaligem Neuladen erschienen. Eine
+     * Reihe, die nur eine Engine fährt, erklärt ein Produkt für gesund, das in
+     * einem Viertel der Browser der Kundschaft kaputt ist.
+     *
+     * Bewusst nicht die ganze Reihe in drei Engines: Die Gate-Fälle prüfen
+     * Signaturkern, Gerätesperre und PDF-Plugin — Aussagen über die Anwendung,
+     * nicht über die Engine, und die PDF-Fälle hängen ausdrücklich an Chromiums
+     * Plugin (siehe oben). Die öffentlichen Seiten und die Bausteine, die sich
+     * je Engine unterscheiden können (Bilder, Auswahlfelder, Scrollsperre),
+     * stehen in `*.browser.spec.ts` und laufen überall. Chromium fährt sie mit,
+     * weil sein Projekt jede Datei nimmt.
+     */
+    {
+      name: 'firefox',
+      testMatch: '**/*.browser.spec.ts',
+      use: { browserName: 'firefox', viewport: { width: 1366, height: 900 }, deviceScaleFactor: 1 },
+    },
+    {
+      name: 'webkit',
+      testMatch: '**/*.browser.spec.ts',
+      use: { browserName: 'webkit', viewport: { width: 1366, height: 900 }, deviceScaleFactor: 1 },
+    },
   ],
 
   webServer: {
