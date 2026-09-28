@@ -39,6 +39,12 @@ export const PERMISSIONS = [
   'dashboard:financials',
   'report:read',
   'report:export',
+  // Eigene Besuchsmessung der Website (2026-09-28). Ein eigenes Recht und
+  // nicht `report:read`: Die Finanzauswertung und die Besuchszahlen sind zwei
+  // verschiedene Einblicke, und wer der Agentur für Suchmaschinenwerbung
+  // später eine Rolle einrichtet, soll ihr die Besuche zeigen können, ohne
+  // Erfolgsrechnung und Mehrwertsteuer mitzugeben.
+  'traffic:read',
 
   // --- Website --------------------------------------------------------------
   'content:read',
@@ -363,6 +369,7 @@ export const PERMISSION_META: Record<Permission, PermissionMeta> = {
   'dashboard:financials': { label: 'Dashboard.Financials', group: 'Übersicht', description: 'Umsatz, Marge und Kosten auf der Übersicht sehen.' },
   'report:read': { label: 'Reports.View', group: 'Übersicht', description: 'Auswertungen und Statistiken öffnen.' },
   'report:export': { label: 'Reports.Export', group: 'Übersicht', description: 'Auswertungen als Excel- oder CSV-Datei herunterladen.' },
+  'traffic:read': { label: 'Traffic.View', group: 'Übersicht', description: 'Besuchszahlen der Website sehen: Seitenansichten, Sitzungen, Herkunft, Konversionen — ohne einzelne Besucher.' },
 
   'content:read': { label: 'Website.Content.View', group: 'Website', description: 'Redaktionelle Texte der Website einsehen.' },
   'content:update': { label: 'Website.Content.Edit', group: 'Website', description: 'Überschriften, Fliesstexte und Listen der Website ändern.' },

@@ -41,7 +41,13 @@ const PAGES: Record<'admin' | 'employee' | 'customer', string[]> = {
     '/admin/ausgaben?bereich=lieferanten',
     '/admin/papierkorb',
     '/admin/auswertungen',
+    '/admin/auswertungen/website',
+    '/admin/auswertungen/website?zeitraum=eigen&von=2026-01-01&bis=2026-03-31',
+    '/admin/auswertungen/website?zeitraum=unsinn',
     '/admin/personal',
+    // Ziel der Meldung „Neuer Abwesenheitsantrag" (2026-09-28; vorher
+    // `/admin/personal/abwesenheiten`, eine 404).
+    '/admin/personal?reiter=abwesenheiten',
     '/admin/personal/neu',
     '/admin/personal/bewerbungen',
     '/admin/lohn',

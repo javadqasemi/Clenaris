@@ -95,6 +95,18 @@ export const RATE_LIMITS = {
    * solange getippt wird) mit Abstand.
    */
   search: { limit: 120, windowSeconds: 60 },
+  /**
+   * Eigene Besuchsmessung (2026-09-28) — je IP.
+   *
+   * Grosszügig, weil hier kein Mensch tippt, sondern eine Seite navigiert:
+   * Wer die Website zügig durchklickt, erzeugt eine Meldung je Seite, und
+   * hinter einer Adresse kann ein ganzes Büro stehen. 120 pro Minute sind
+   * zwei Seiten je Sekunde, dauerhaft. Eng genug bleibt es trotzdem: Ohne
+   * Kontingent wäre der Endpunkt die billigste Art, die Tabelle mit erfundenen
+   * Besuchen zu füllen und die Auswertung wertlos zu machen. Die Adresse
+   * dient nur als Zählschlüssel und wird nie gespeichert.
+   */
+  traffic: { limit: 120, windowSeconds: 60 },
 
   /**
    * Links ohne Anmeldung — enger als `apiRead`/`apiWrite`.

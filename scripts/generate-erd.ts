@@ -376,6 +376,10 @@ const DOMAINS: Domain[] = [
       'JobApplication',
       'FileAsset',
       'StoredFile',
+      // Eigene Besuchsmessung (2026-09-28): gehört zu den Vertriebsinstrumenten,
+      // weil sie misst, welche Seite zu einer Anfrage führt — nicht zur
+      // Unternehmensführung, deren Verlauf in `KpiSnapshot` gespeichert wird.
+      'TrafficEvent',
     ],
   },
   {

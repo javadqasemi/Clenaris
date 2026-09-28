@@ -9,6 +9,7 @@ import { toast } from 'sonner';
 import { api, ApiError } from '@/lib/api/client';
 import { quoteRequestSchema, type QuoteRequestInput } from '@/lib/validation/crm';
 import { trackEvent } from '@/components/marketing/analytics';
+import { trafficEreignis } from '@/lib/traffic/erfassen';
 import { Button } from '@/components/ui/button';
 import { Input, Textarea } from '@/components/ui/input';
 import { Alert } from '@/components/ui/primitives';
@@ -91,6 +92,9 @@ export function QuoteRequestForm({
       */
       await api.post('/api/public/quotes', values);
       trackEvent('quote_requested', { service: values.serviceKind });
+      // Eigene Besuchsmessung — nach der Bestätigung des Servers, ohne
+      // Einwilligung ein stilles Nichts.
+      trafficEreignis('QUOTE_REQUEST');
       setSent(true);
     } catch (err) {
       const message =

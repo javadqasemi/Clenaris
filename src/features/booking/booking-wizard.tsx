@@ -10,6 +10,7 @@ import { api, ApiError } from '@/lib/api/client';
 import { Button } from '@/components/ui/button';
 import { Alert } from '@/components/ui/primitives';
 import { trackEvent } from '@/components/marketing/analytics';
+import { trafficEreignis } from '@/lib/traffic/erfassen';
 
 import { BOOKING_STEPS, useBookingStore, type Frequency, type PropertyKind } from './store';
 import { leistungenPayload } from './payload';
@@ -114,6 +115,24 @@ export function BookingWizard({
 
   React.useEffect(() => {
     window.scrollTo({ top: 0, behavior: 'smooth' });
+  }, [step]);
+
+  /**
+   * „Buchung begonnen" für die eigene Besuchsmessung — einmal je Aufruf des
+   * Assistenten, sobald der erste Schritt verlassen ist.
+   *
+   * Nicht beim Öffnen der Seite: Das zählte jede Besucherin, die nur den
+   * Preis ansehen wollte, als Beginn, und die Rate „begonnen → abgeschlossen"
+   * wäre bedeutungslos. Wer die Leistung gewählt hat und weitergeht, hat
+   * begonnen. Der Verweis verhindert eine zweite Meldung beim Zurück- und
+   * wieder Vorgehen. Ohne Einwilligung tut `trafficEreignis` nichts; in
+   * Konto und Portal verwirft der Server die Meldung ohnehin (App-Bereich).
+   */
+  const buchungBegonnen = React.useRef(false);
+  React.useEffect(() => {
+    if (buchungBegonnen.current || step === BOOKING_STEPS[0]?.key) return;
+    buchungBegonnen.current = true;
+    trafficEreignis('BOOKING_START');
   }, [step]);
 
   // Der Store weiss nichts von der Sitzung; er muss aber wissen, ob der
@@ -231,6 +250,9 @@ export function BookingWizard({
         currency: 'CHF',
         service: state.auswahl.map((l) => l.slug).join('+'),
       });
+      // Eigene Besuchsmessung: vor dem Seitenwechsel eingereiht, damit das
+      // Ereignis noch dem Pfad des Assistenten zugeordnet wird.
+      trafficEreignis('BOOKING_COMPLETE');
 
       reset();
       // Der Verwaltungs-Token steckt im letzten Pfadsegment des Bestätigungslinks.
