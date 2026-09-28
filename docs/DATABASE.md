@@ -4,7 +4,7 @@
 > Diagramme sind damit nie älter als das Schema. Prosa und Bereichseinteilung
 > stehen in `scripts/generate-erd.ts`.
 
-**151 Modelle, 119 Aufzählungstypen, 2911 Felder.**
+**152 Modelle, 122 Aufzählungstypen, 2928 Felder.**
 PostgreSQL 16+; alle Zeitstempel als `timestamptz` in UTC, Anzeige in Europe/Zurich.
 
 ## Vier Entscheidungen, die das ganze Schema prägen
@@ -45,7 +45,7 @@ flowchart LR
   personal["Personal und Zeit<br/><small>16 Modelle</small>"]
   finanzen["Finanzen<br/><small>9 Modelle</small>"]
   kommunikation["Kommunikation und Automatisierung<br/><small>12 Modelle</small>"]
-  marketing["Marketing und Inhalte<br/><small>13 Modelle</small>"]
+  marketing["Marketing und Inhalte<br/><small>14 Modelle</small>"]
   redaktion["Redaktion<br/><small>6 Modelle</small>"]
   fuehrung["Unternehmensführung<br/><small>26 Modelle</small>"]
   versionen["Versionsverwaltung<br/><small>3 Modelle</small>"]
@@ -128,7 +128,7 @@ erDiagram
 
 | Modell | Tabelle | Felder | Zweck |
 | --- | --- | --- | --- |
-| `Organization` | `organizations` | 133 | Mandant — Firmendaten, Bankverbindung, Erscheinungsbild. Wurzel fast aller Beziehungen. |
+| `Organization` | `organizations` | 134 | Mandant — Firmendaten, Bankverbindung, Erscheinungsbild. Wurzel fast aller Beziehungen. |
 | `NumberSequence` | `number_sequences` | 6 | Fortlaufende, lückenlose Belegnummern (Schweizer Buchhaltungsanforderung). |
 | `OpeningHours` | `opening_hours` | 10 | Öffnungszeiten je Wochentag und die Einsatzzeiten, falls sie davon abweichen. |
 | `Holiday` | `holidays` | 7 | Feiertage und Betriebsferien. Sperren Termine und zählen nicht als Abwesenheitstage. |
@@ -751,7 +751,7 @@ erDiagram
 
 | Modell | Tabelle | Felder | Zweck |
 | --- | --- | --- | --- |
-| `Booking` | `bookings` | 60 | Vereinbarung mit der Kundschaft: Termin, Objekt, Leistungen und Preis als Momentaufnahme. |
+| `Booking` | `bookings` | 61 | Vereinbarung mit der Kundschaft: Termin, Objekt, Leistungen und Preis als Momentaufnahme. |
 | `BookingItem` | `booking_items` | 15 | Leistungsposition einer Buchung, mit Preis zum Buchungszeitpunkt. |
 | `BookingExtra` | `booking_extras` | 10 | Gebuchte Zusatzleistung mit Menge und Preis. |
 | `Quote` | `quotes` | 50 | Offerte mit Positionen, Gültigkeit, Magic-Link-Token und elektronischer Signatur. |
@@ -1359,6 +1359,16 @@ Website-Inhalte und Vertriebsinstrumente. Bewertungen durchlaufen immer die Mode
 
 ```mermaid
 erDiagram
+  TrafficEvent {
+    String id PK
+    String organizationId
+    DateTime occurredAt
+    DateTime day
+    String path
+    TrafficEventName eventName
+    String sessionHash
+    Boolean landing
+  }
   Coupon {
     String id PK
     String organizationId
@@ -1508,6 +1518,7 @@ erDiagram
 | `JobApplication` | `job_applications` | 16 | Bewerbung mit Lebenslauf und Stand im Verfahren. |
 | `FileAsset` | `file_assets` | 67 | Datei in Supabase Storage mit fachlicher Zuordnung und Sichtbarkeit. |
 | `StoredFile` | `stored_files` | 16 | Eingebauter Dateispeicher — die Rückfallebene, wenn kein externer |
+| `TrafficEvent` | `traffic_events` | 15 | Ein Ereignis der eigenen, einwilligungspflichtigen Besuchsmessung. |
 
 ## Redaktion
 
@@ -1992,6 +2003,9 @@ exakte TypeScript-Typen.
 | `SecuritySeverity` | `INFO`, `WARNING`, `CRITICAL` |
 | `SecurityCategory` | `AUTHENTICATION`, `SESSION`, `ACCESS`, `PUBLIC_LINK`, `FILE`, `SYSTEM` |
 | `CronRunStatus` | `RUNNING`, `SUCCESS`, `PARTIAL`, `FAILED` |
+| `TrafficEventName` | `PAGE_VIEW`, `CONTACT_PHONE`, `CONTACT_EMAIL`, `CONTACT_FORM`, `BOOKING_START`, `BOOKING_COMPLETE`, `QUOTE_REQUEST`, `NEWSLETTER_SIGNUP` |
+| `TrafficDevice` | `MOBILE`, `TABLET`, `DESKTOP` |
+| `TrafficBrowser` | `CHROME`, `FIREFOX`, `SAFARI`, `EDGE`, `OTHER` |
 | `SecurityReportSource` | `SECURITY_CHECK`, `EXTERNAL_MONITOR`, `ZAP_BASELINE`, `DEPENDENCY_CHECK`, `BACKUP`, `HOST_INTEGRITY` |
 | `SecurityReportStatus` | `OK`, `WARNUNG`, `KRITISCH`, `NICHT_GEPRUEFT` |
 | `PayrollRateCode` | `AHV_IV_EO`, `ALV`, `ALV_SOLIDARITY`, `UVG_NBU`, `UVG_BU`, `KTG`, `FAK`, `VK`, `BVG` |

@@ -5,7 +5,7 @@ import { prisma, toNumber } from '@/lib/db';
 import { ForbiddenError } from '@/lib/errors';
 import { contractCreateRequestSchema, contractQuerySchema } from '@/lib/validation/contracts';
 import { plusTage, zuercherHeute } from '@/lib/contracts/serie';
-import { contractVisibilityWhere, createContract } from '@/server/services/contract.service';
+import { contractVisibilityWhere, createContract, listCustomerContracts } from '@/server/services/contract.service';
 import { getOrganizationId } from '@/server/services/organization.service';
 
 export const runtime = 'nodejs';
@@ -37,6 +37,27 @@ export const GET = defineRoute({
       // Ohne Kundenakte gibt es nichts zu sehen — und das ist kein Fehler,
       // sondern eine leere Liste.
       nurKundeId = kunde?.id ?? '__ohne_akte__';
+
+      /*
+        Kundensicht (L-21, 2026-09-28): nur zugegangene Zustände, nur
+        kundensichtbare Felder — dieselbe Abfrage wie `/konto/vertraege`.
+        Vorher lief die Kundschaft durch die Büroabfrage unten und sah
+        Entwürfe, Verträge in Prüfung und annullierte; `?status=DRAFT`
+        überschrieb dort sogar die Zustandsliste. Die Filter der Verwaltung
+        (Frist, Ende, Suche) gibt es hier nicht.
+      */
+      const { gesamt, zeilen } = await listCustomerContracts({
+        organizationId,
+        customerId: nurKundeId,
+        page: query.page,
+        perPage: query.perPage,
+      });
+      return ok({
+        gesamt,
+        page: query.page,
+        perPage: query.perPage,
+        contracts: zeilen.map(({ versions, ...zeile }) => ({ ...zeile, geltendeFassung: versions[0] ?? null })),
+      });
     }
 
     // Der Zürcher Tag (2026-09-27). `alsTag(new Date())` ist der UTC-Tag —

@@ -35,7 +35,9 @@ export const CONTRACT_ROUTES: RouteDoc[] = [
       'Filtert nach Zustand, Kundschaft, Suchbegriff sowie nach nahender Kündigungsfrist und ' +
       'nahendem Vertragsende. **Die Einschränkung steht in der `where`-Klausel:** Wer nur ' +
       '`contract:read_own` hat, sieht ausschliesslich die Verträge der eigenen Kundenakte — ' +
-      'verstecktes HTML wäre auf der Leitung trotzdem sichtbar.',
+      'verstecktes HTML wäre auf der Leitung trotzdem sichtbar. Sie erhält die **Kundensicht**: ' +
+      'nur zugegangene Zustände (angeboten, aktiv, pausiert, gekündigt, beendet), keine ' +
+      'internen Felder, ohne die Filter der Verwaltung.',
     guard: perm('any', 'contract:read', 'contract:read_own'),
     rateLimit: 'apiRead',
     query: vertrag.contractQuerySchema,
@@ -77,7 +79,11 @@ export const CONTRACT_ROUTES: RouteDoc[] = [
       'Der Vertrag mit allen Versionen, Leistungen, Einsatzplänen, Ausnahmen, ' +
       'Änderungsanträgen und Preisanpassungen — **eine** Abfrage statt sechs. Sechs Abrufe ' +
       'hintereinander wären sechs Momente, in denen sich der Zustand zwischen zwei Antworten ' +
-      'ändern kann. Jede Version meldet zusätzlich, wie viele Einsätze an ihr hängen.',
+      'ändern kann. Jede Version meldet zusätzlich, wie viele Einsätze an ihr hängen. ' +
+      'Mit nur `contract:read_own` kommt die **Kundensicht**: der eigene Vertrag in einem ' +
+      'zugegangenen Zustand, mit dem Inhalt des Vertragsdokuments — ohne interne Notizen, ' +
+      'Kostenstelle, Zuständige, Entwurfsfassungen, Änderungsanträge und Preisanpassungen; ' +
+      'ein Entwurf ist 404 wie ein fremder Vertrag.',
     guard: perm('any', 'contract:read', 'contract:read_own'),
     rateLimit: 'apiRead',
     params: idParam,

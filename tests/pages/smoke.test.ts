@@ -125,6 +125,9 @@ const PAGES: Record<'admin' | 'employee' | 'customer', string[]> = {
     // eine 404). Eine unbekannte Buchung wählt nichts vor, die Seite steht.
     '/konto/bewertungen?buchung=gibt-es-nicht',
     '/konto/reklamationen',
+    // Verträge und Qualitätskontrollen (L-18, 2026-09-28).
+    '/konto/vertraege',
+    '/konto/qualitaet',
     '/konto/profil',
     '/konto/profil/einstellungen',
   ],
@@ -274,6 +277,25 @@ describe('Rauchtest', { concurrency: 1 }, async () => {
       const response = await get(`/konto/offerten/${id}`, { jar: jars.customer });
       assert.ok(response.status >= 200 && response.status < 400, `HTTP ${response.status}`);
       assert.ok(response.text.includes('data-pdf-viewer-mount'), 'Dokumentansicht fehlt');
+    });
+
+    /**
+     * Die Vertragsseite der Kundschaft (L-18) — mit einem *eigenen* Vertrag,
+     * aus demselben Grund wie bei der Offerte. Die Schnittstelle liefert der
+     * Kundschaft auch interne Zustände, die Seite zeigt nur die zugegangenen;
+     * deshalb wird hier nach Zustand gewählt. Ohne eigenen Vertrag im
+     * Demobestand entfällt der Fall — die Eigentumsprüfung legt sich ihren
+     * Vertrag selbst an (`ownership.test.ts`).
+     */
+    it('/konto/vertraege/:id', async () => {
+      const eigene = await get<{ data: { contracts: { id: string; status: string }[] } }>('/api/contracts', {
+        jar: jars.customer,
+      });
+      const sichtbar = ['OFFERED', 'ACTIVE', 'PAUSED', 'NOTICE_GIVEN', 'ENDED'];
+      const id = eigene.payload?.data?.contracts?.find((c) => sichtbar.includes(c.status))?.id ?? null;
+      if (!id) return;
+      const response = await get(`/konto/vertraege/${id}`, { jar: jars.customer });
+      assert.equal(response.status, 200, `HTTP ${response.status}`);
     });
 
     /**

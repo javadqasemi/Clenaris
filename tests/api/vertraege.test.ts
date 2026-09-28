@@ -2,8 +2,9 @@ import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { data, del, get, patch, post, put, requireServer } from '../helpers/client';
-import { loginAll, type AccountName } from '../helpers/accounts';
+import { ACCOUNTS, loginAll, type AccountName } from '../helpers/accounts';
 import { zuercherHeute } from '../helpers/datum';
+import { testDb, testDbGrund } from '../helpers/testdb';
 
 /**
  * Wave 10 — Verträge.
@@ -1526,26 +1527,79 @@ describe('Verträge', () => {
       const id = await neuerEntwurf();
       await post(`/api/contracts/${id}/activate`, {}, { jar: jars.admin });
 
-      const liste = await get<{ data: { contracts: { customer: { id: string } }[] } }>('/api/contracts', {
+      const liste = await get<{ data: { contracts: { id: string; status: string }[] } }>('/api/contracts', {
         jar: jars.customer,
       });
       assert.equal(liste.status, 200, 'Der Kundenbereich darf die Liste öffnen');
 
       /**
-       * Geprüft an der **Antwort**, nicht am Statuscode: Eine Einschränkung,
-       * die nur die Anzeige betrifft, wäre auf der Leitung wirkungslos.
+       * Geprüft an der **Antwort** gegen den Bestand, nicht am Statuscode:
+       * Eine Einschränkung, die nur die Anzeige betrifft, wäre auf der Leitung
+       * wirkungslos. Seit 2026-09-28 (L-21) bekommt die Kundschaft die
+       * Kundensicht — ohne `customer`-Feld (es ist immer sie selbst), nur in
+       * zugegangenen Zuständen, ohne interne Felder.
        */
-      const fremde = data(liste).contracts.filter((v) => v.customer.id !== kundeId);
-      assert.deepEqual(
-        fremde.map((v) => v.customer.id),
-        [],
-        'Kein fremder Vertrag in der Antwort',
-      );
+      const db = testDb();
+      assert.ok(db, `kein Zugang zur Testdatenbank: ${testDbGrund()}`);
+      // Die eigene Akte des Demokontos — nicht `kundeId`: Das ist die erste
+      // Kundschaft mit Objekt und muss nicht das angemeldete Konto sein.
+      const eigeneAkte = await db.customer.findFirst({
+        where: { user: { email: ACCOUNTS.customer.email } },
+        select: { id: true },
+      });
+      assert.ok(eigeneAkte, 'Kundenakte des Demokontos fehlt');
+      const geliefert = data(liste).contracts;
+      const imBestand = await db.contract.findMany({ where: { id: { in: geliefert.map((v) => v.id) } }, select: { id: true, customerId: true } });
+      assert.equal(imBestand.length, geliefert.length, 'jede gelieferte Vertrags-ID muss im Bestand stehen');
+      assert.deepEqual(imBestand.filter((v) => v.customerId !== eigeneAkte.id).map((v) => v.id), [], 'Kein fremder Vertrag in der Antwort');
+      assert.deepEqual(geliefert.filter((v) => ['DRAFT', 'IN_REVIEW', 'CANCELLED'].includes(v.status)).map((v) => v.status), [], 'interne Zustände in der Kundenliste');
+      assert.ok(!/internalNote|costCenter|responsibleEmployee|salesOwner|serviceManager/.test(liste.text), 'interne Felder in der Kundenliste');
 
       // Und der eben angelegte Vertrag gehört einer anderen Akte als der des
       // Demokunden — er darf deshalb nicht einzeln abrufbar sein.
       const einzeln = await get(`/api/contracts/${id}`, { jar: jars.customer });
       assert.ok([403, 404].includes(einzeln.status), `erwartet 403/404, war ${einzeln.status}`);
+    });
+
+    /**
+     * L-21 (2026-09-28): Der **eigene** Vertrag kam über die API bis dahin als
+     * Büroakte — mit interner Notiz, Kostenstelle, Zuständigen — und auch als
+     * Entwurf, der der Kundschaft nie zugegangen war. Gegen den alten Stand
+     * scheitert diese Prüfung an beiden Stellen: Der Entwurf lieferte 200, die
+     * aktive Fassung enthielt `internalNote`.
+     */
+    it('eigener Vertrag: Entwurf unsichtbar, aktive Fassung ohne interne Felder (L-21)', async () => {
+      const db = testDb();
+      assert.ok(db, `kein Zugang zur Testdatenbank: ${testDbGrund()}`);
+      const eigenesObjekt = await db.property.findFirst({
+        where: { deletedAt: null, customer: { user: { email: ACCOUNTS.customer.email } } },
+        select: { id: true, customerId: true },
+      });
+      assert.ok(eigenesObjekt, 'das Demokonto hat kein Objekt');
+
+      const geheim = `Interne Notiz L-21 ${Date.now()}`;
+      const id = await neuerEntwurf({
+        contract: {
+          customerId: eigenesObjekt.customerId,
+          propertyId: eigenesObjekt.id,
+          costCenter: 'KST-L21',
+          internalNote: geheim,
+        },
+      });
+
+      const alsEntwurf = await get(`/api/contracts/${id}`, { jar: jars.customer });
+      assert.equal(alsEntwurf.status, 404, 'ein Entwurf ist der Kundschaft nicht zugegangen');
+      const listeEntwurf = await get<{ data: { contracts: { id: string }[] } }>('/api/contracts?perPage=100', { jar: jars.customer });
+      assert.ok(!data(listeEntwurf).contracts.some((v) => v.id === id), 'Entwurf in der Kundenliste');
+      assert.equal((await get(`/api/contracts?status=DRAFT`, { jar: jars.customer })).text.includes(id), false, '?status=DRAFT öffnet den Entwurf');
+
+      assert.equal((await post(`/api/contracts/${id}/activate`, {}, { jar: jars.admin })).status, 200);
+      const aktiv = await get<{ data: { id: string } }>(`/api/contracts/${id}`, { jar: jars.customer });
+      assert.equal(aktiv.status, 200, 'der eigene aktive Vertrag ist abrufbar');
+      assert.equal(data(aktiv).id, id);
+      assert.ok(!aktiv.text.includes(geheim), 'die interne Notiz steht in der Kundenantwort');
+      assert.ok(!aktiv.text.includes('KST-L21'), 'die Kostenstelle steht in der Kundenantwort');
+      assert.ok(!/internalNote|costCenter|responsibleEmployee|salesOwner|serviceManager|amendments|priceAdjustments/.test(aktiv.text));
     });
   });
 });
