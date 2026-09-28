@@ -166,6 +166,12 @@ const MANAGER_PERMISSIONS: Permission[] = [
   'dashboard:financials',
   'report:read',
   'report:export',
+  // Besuchszahlen: Die Betriebsleitung sieht Auswertungen und Kampagnen
+  // (`report:read`, `newsletter:read`) — und damit auch, ob die Kampagne
+  // Besuche und Anfragen gebracht hat. Die Messung enthält keine
+  // Personendaten; es gibt keinen Grund, sie strenger zu halten als die
+  // Finanzauswertung daneben.
+  'traffic:read',
 
   'lead:read', 'lead:create', 'lead:update', 'lead:delete',
   'customer:read', 'customer:create', 'customer:update',

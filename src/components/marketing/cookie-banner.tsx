@@ -18,7 +18,16 @@ import { needsDecision, setConsent } from '@/lib/consent';
 export function CookieBanner() {
   const [open, setOpen] = React.useState(false);
   const [showDetails, setShowDetails] = React.useState(false);
-  const [analytics, setAnalytics] = React.useState(true);
+  /*
+    „Statistik" ist in der Detailansicht **nicht** vorausgewählt (2026-09-28).
+    Bis dahin stand der Schalter an, und wer „Auswahl speichern" drückte, ohne
+    ihn zu berühren, hatte damit eingewilligt. Ein vorausgewähltes Kästchen ist
+    keine aktive Zustimmung — genau das, was der Kopf dieser Datei zusichert
+    („erst nach aktiver Zustimmung"). Gefunden durch
+    `tests/e2e/besuchsmessung.browser.spec.ts`: Ein Klick auf den Schalter
+    schaltete die Statistik *aus*.
+  */
+  const [analytics, setAnalytics] = React.useState(false);
   const [marketing, setMarketing] = React.useState(false);
 
   React.useEffect(() => {
@@ -77,7 +86,8 @@ export function CookieBanner() {
                   <div>
                     <p className="text-sm font-medium">Statistik</p>
                     <p className="text-xs text-muted-foreground">
-                      Anonymisierte Nutzungszahlen (Google Analytics, IP gekürzt).
+                      Nutzungszahlen: eigene Besuchszählung ohne IP-Adresse und, falls
+                      eingerichtet, Google Analytics (IP gekürzt).
                     </p>
                   </div>
                   <Switch

@@ -60,6 +60,7 @@
     "20260928091000_buchung_absendekennung": {
       "einstufung": "RUECKWAERTSVERTRAEGLICH",
       "begruendung": "Neue, freiwillige Spalte bookings.idempotencyKey mit eindeutigem Index auf (organizationId, idempotencyKey). Die vorherige Fassung kennt die Spalte nicht und schreibt NULL; NULL-Werte verletzen den eindeutigen Index nicht. Bestand bleibt gültig."
-    }
+    },
+    "20260928120000_traffic_analytics": { "einstufung": "RUECKWAERTSVERTRAEGLICH", "notiz": "Nur neue Aufzählungen und die neue Tabelle traffic_events samt Prüfbedingungen; die vorherige Fassung kennt sie nicht." }
   }
 }

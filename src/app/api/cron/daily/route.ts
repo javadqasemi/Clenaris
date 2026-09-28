@@ -16,6 +16,7 @@ import { runScanNachlauf } from '@/server/services/file.service';
 import { runDueAutomations } from '@/server/services/automation-engine.service';
 import { runContractScheduling } from '@/server/services/contract-schedule.service';
 import { mitUeberwachung } from '@/server/services/cron-monitor.service';
+import { purgeTrafficEvents } from '@/server/services/traffic.service';
 import { purgeExpiredUploads } from '@/lib/storage';
 import { logger } from '@/lib/logger';
 
@@ -108,6 +109,14 @@ export const GET = defineCronRoute({
        * trotzdem geplant.
        */
       { name: 'vertragsplanung', lauf: () => runContractScheduling(organizationId) },
+      /**
+       * Besuchsmessung: Ereignisse älter als 13 Monate löschen.
+       *
+       * Die Frist steht in der Datenschutzerklärung; ohne diesen Lauf wäre
+       * sie ein Versprechen, das niemand einlöst. Idempotent — ein zweiter
+       * Lauf am selben Tag findet nichts mehr.
+       */
+      { name: 'besuchsmessung', lauf: () => purgeTrafficEvents(organizationId) },
     ];
 
     const ergebnis = await mitUeberwachung({ organizationId, job: 'daily', aufgaben });

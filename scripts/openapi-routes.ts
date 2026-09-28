@@ -34,6 +34,7 @@ import { SUCHE_ROUTES } from './openapi-routes-suche';
 import { SCAN_ROUTES } from './openapi-routes-scan';
 import * as sicherheitsbericht from '../src/lib/validation/security-report';
 import { VERSIONEN_ROUTES } from './openapi-routes-versionen';
+import { TRAFFIC_ROUTES } from './openapi-routes-traffic';
 
 /**
  * Registrierung aller REST-Endpunkte.
@@ -4572,4 +4573,9 @@ export const ROUTES: RouteDoc[] = [
   //  Versionsverwaltung (Produktsprint 2026-09-26)
   // -------------------------------------------------------------------------
   ...VERSIONEN_ROUTES,
+
+  // -------------------------------------------------------------------------
+  //  Eigene Besuchsmessung (2026-09-28)
+  // -------------------------------------------------------------------------
+  ...TRAFFIC_ROUTES,
 ];

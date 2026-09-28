@@ -10,6 +10,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Form, FormControl, FormField, FormItem, FormMessage } from '@/components/ui/form';
 import { api, ApiError } from '@/lib/api/client';
+import { trafficEreignis } from '@/lib/traffic/erfassen';
 import { newsletterSchema, type NewsletterInput } from '@/lib/validation/crm';
 
 /**
@@ -31,6 +32,11 @@ export function NewsletterForm() {
   const onSubmit = async (values: NewsletterInput) => {
     try {
       await api.post('/api/public/newsletter', values);
+      // Gezählt wird die abgeschickte Anmeldung, nicht die bestätigte: Die
+      // Bestätigung geschieht Tage später im Postfach, und ihr eine
+      // Sitzungskennung mitzugeben hiesse, den Besuch mit der E-Mail-Adresse
+      // zu verknüpfen. Ohne Einwilligung ein stilles Nichts.
+      trafficEreignis('NEWSLETTER_SIGNUP');
       setSubscribed(true);
       form.reset();
     } catch (error) {

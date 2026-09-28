@@ -26,6 +26,7 @@ import {
   UtilizationChart,
 } from '@/components/charts/lazy';
 import { ExportPanel } from '@/features/admin/export-panel';
+import { AuswertungenReiter } from '@/features/admin/auswertungen-reiter';
 
 export const metadata: Metadata = {
   title: 'Auswertungen',
@@ -55,7 +56,7 @@ export default async function ReportsPage({
 }: {
   searchParams: Promise<{ zeitraum?: string }>;
 }) {
-  await requirePermission('report:read');
+  const session = await requirePermission('report:read');
 
   const params = await searchParams;
   const range = (params.zeitraum ?? 'year') as 'month' | 'quarter' | 'year';
@@ -99,7 +100,10 @@ export default async function ReportsPage({
             </Button>
           </>
         }
-      />
+      >
+        {/* Unternavigation zur Besuchsauswertung — nur mit beiden Rechten sichtbar. */}
+        <AuswertungenReiter rolle={session.role} aktiv="finanzen" />
+      </PageHeader>
 
       {/* Diagramme */}
       <div className="grid gap-6 xl:grid-cols-2">

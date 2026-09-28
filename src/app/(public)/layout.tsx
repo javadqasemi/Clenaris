@@ -11,6 +11,7 @@ import { SiteHeader } from '@/components/marketing/site-header';
 import { SiteFooter } from '@/components/marketing/site-footer';
 import { AnalyticsScripts } from '@/components/marketing/analytics';
 import { CookieBanner } from '@/components/marketing/cookie-banner';
+import { TrafficMessung } from '@/components/marketing/traffic-messung';
 import { ChatWidget } from '@/components/marketing/chat-widget';
 import { CmsPreviewBridge } from '@/components/cms/preview-bridge';
 import { isPreview } from '@/lib/cms/preview';
@@ -80,6 +81,12 @@ export default async function PublicLayout({ children }: { children: React.React
       <CookieBanner />
       <ChatWidget />
       <AnalyticsScripts />
+      {/*
+        Eigene Besuchsmessung, nur mit Einwilligung „Statistik". Nicht im
+        Vorschaumodus: Dort klickt die Redaktion durch die Seiten, und jeder
+        ihrer Klicks wäre ein erfundener Besuch.
+      */}
+      {preview ? null : <TrafficMessung />}
 
       {/*
         Nur im Vorschaumodus: macht die gepflegten Texte anklickbar und meldet
