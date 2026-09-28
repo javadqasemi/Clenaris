@@ -83,10 +83,19 @@ describe('Personal — anlegen, bearbeiten, Lohnhistorie, Konto', () => {
     assert.ok(!hidden.text.includes('Anlegen und einladen'));
   });
 
-  it('weist ein Datum als ISO-Zeitstempel ab und nimmt JJJJ-MM-TT an', async () => {
+  /**
+   * Seit 2026-09-28 nimmt `dateOnlySchema` genau **eine** Zeitstempelform an:
+   * UTC-Mitternacht, also die eigene Ausgabe des Schemas, wie sie jedes
+   * Formular über `zodResolver` sendet (Begründung in
+   * `lib/validation/common.ts`; ohne das liess sich u. a. keine Offerte
+   * speichern). Die Absicht dieses Falls bleibt: Ein Zeitstempel, dessen
+   * Kalendertag von der Zeitzone abhängt, wird nicht still zu einem Tag. Geprüft
+   * wird deshalb ein solcher — 23:30 in Zürich ist in UTC schon der Vortag.
+   */
+  it('weist einen mehrdeutigen ISO-Zeitstempel ab und nimmt JJJJ-MM-TT an', async () => {
     const iso = await post(
       '/api/employees',
-      { firstName: 'Prüf', lastName: 'Personal', email: EMAIL, hiredAt: '2026-09-14T00:00:00.000Z' },
+      { firstName: 'Prüf', lastName: 'Personal', email: EMAIL, hiredAt: '2026-09-14T23:30:00+02:00' },
       { jar: jars.admin },
     );
     assert.equal(iso.status, 422, iso.text);
