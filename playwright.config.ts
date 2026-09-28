@@ -102,6 +102,9 @@ const cacheDir =
 process.env.TEST_BASE_URL = baseURL;
 process.env.CLENARIS_TEST_CACHE_DIR = cacheDir;
 
+/** Was ausser Chromium auch Firefox und WebKit fahren (Begründung beim Projekt). */
+const MEHRERE_ENGINES = ['**/*.browser.spec.ts', '**/offerte-rabatt.spec.ts', '**/scan.spec.ts', '**/sitzung-tabs.spec.ts'];
+
 export default defineConfig({
   testDir: './tests/e2e',
   testMatch: '**/*.spec.ts',
@@ -208,10 +211,29 @@ export default defineConfig({
      * je Engine unterscheiden können (Bilder, Auswahlfelder, Scrollsperre),
      * stehen in `*.browser.spec.ts` und laufen überall. Chromium fährt sie mit,
      * weil sein Projekt jede Datei nimmt.
+     *
+     * Dazu drei Dateien mit ihrem alten Namen (`MEHRERE_ENGINES`): Der
+     * Rabattfehler der Offertenmaske war ein Scrollsperren-Fehler — genau die
+     * Art, die je Engine anders ausfällt —, der Scanner hat in Firefox und
+     * Safari keinen `BarcodeDetector` und lebt dort vom Eingabeweg, und die
+     * Sitzungsabstimmung zwischen Tabs hängt an `BroadcastChannel` und
+     * `storage`-Ereignissen. Umbenannt wurden sie nicht, weil Pendenzen,
+     * Bedrohungsmodell und Prüfmatrix sie unter diesem Namen als Beleg führen.
+     *
+     * **WebKit fährt nur, was ohne Anmeldung im Browser auskommt.** Die
+     * Anmeldecookies sind im Produktionsbau `Secure`, der Prüfserver spricht
+     * `http://127.0.0.1`. Chromium und Firefox behandeln die Loopback-Adresse
+     * als sicheren Ursprung und schicken das Cookie; Playwrights WebKit nicht
+     * — nach der Anmeldung leitet jede Seite zurück (gemessen 2026-09-28).
+     * `Secure` für die Prüfung abzuschalten hiesse, eine Schutzeinstellung
+     * für den Test aufzuweichen; der richtige Weg ist ein HTTPS-Prüfserver
+     * (offener Punkt W-02). Bis dahin prüft WebKit die öffentlichen Seiten und
+     * die Übernahme von Eingaben vor der Hydration bis zur angenommenen
+     * Anmeldung.
      */
     {
       name: 'firefox',
-      testMatch: '**/*.browser.spec.ts',
+      testMatch: MEHRERE_ENGINES,
       use: { browserName: 'firefox', viewport: { width: 1366, height: 900 }, deviceScaleFactor: 1 },
     },
     {

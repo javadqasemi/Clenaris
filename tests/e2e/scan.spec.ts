@@ -298,7 +298,16 @@ test.describe('Scanplattform — ohne Kamera', () => {
 const { defaultBrowserType: _browsertyp, ...telefon } = devices['Pixel 7'];
 
 test.describe('Scanplattform — auf dem Telefon', () => {
-  test.use(telefon);
+  /*
+    Firefox kennt `isMobile` nicht (Playwright bricht den Kontext sonst ab).
+    Dort bleiben Bildschirm, Pixeldichte, Kennung und Berührung; die
+    Viewport-Meta-Auswertung eines Mobilbrowsers prüfen Chromium und WebKit.
+  */
+  test.use({
+    ...telefon,
+    isMobile: async ({ browserName }, bereitstellen) =>
+      bereitstellen(browserName === 'firefox' ? false : telefon.isMobile),
+  });
 
   test('Pixel 7: Scanner öffnen, Kamera → Erkennung, der Dialog passt auf den Bildschirm', async ({ page }) => {
     const konsole = konsoleUeberwachen(page);

@@ -91,17 +91,38 @@ test.describe('Offerte: Gesamtrabatt bearbeiten', () => {
     // Kleines Fenster in Desktopbreite: Die Seitenleiste ist ab `lg` sichtbar,
     // und das Formular muss länger als das Fenster sein, damit gescrollt wird.
     await page.setViewportSize({ width: 1280, height: 720 });
-    await imBrowserAnmelden(page, 'admin', /\/admin/);
+    const maske = `/admin/offerten/${offerteId}/bearbeiten`;
+
+    /*
+      Navigiert wird wie von Hand — Anmeldung mit Rücksprung, danach über den
+      Knopf „Bearbeiten" —, nicht per `page.goto` im selben Tab (2026-09-28).
+      Grund ist ein Verhalten von Firefox, kein Fehler dieser Maske: Firefox
+      bricht beim Start einer neuen Seitennavigation die laufenden Anfragen
+      des alten Dokuments ab, *bevor* `pagehide` feuert. Next beendet seine
+      Vorabrufe der Seitenleiste erst auf `pagehide`
+      (`fetch-server-response.js`) und meldet den Abbruch darum als
+      `console.error("Failed to fetch RSC payload …")`. Sechs harte
+      Navigationen in schneller Folge trafen fast sicher auf laufende
+      Vorabrufe; keine Antwort war misslungen. Gefiltert wird die Meldung
+      nicht — sie bleibt ein Fehler, wo sie ohne Seitenwechsel auftritt.
+    */
+    await imBrowserAnmelden(page, 'admin', new RegExp(`${maske}$`), maske);
 
     const lesen = async () =>
       data(await get<{ data: OfferteDetail }>(`/api/quotes/${offerteId}`, { jar }));
 
+    let erste = true;
     for (const [art, wert, erwartet] of [
       ['Prozentual', '10', { discountType: 'PERCENT', betrag: 38.4 }],
       ['Fixbetrag', '50', { discountType: 'FIXED', betrag: 50 }],
       ['Kein Rabatt', null, { discountType: null, betrag: 0 }],
     ] as const) {
-      await page.goto(`/admin/offerten/${offerteId}/bearbeiten`);
+      if (!erste) {
+        // Von der Detailseite nach dem Speichern zurück in die Maske.
+        await page.getByRole('link', { name: 'Bearbeiten' }).click();
+        await page.waitForURL(new RegExp(`${maske}$`));
+      }
+      erste = false;
       await expect(page.getByRole('heading', { name: 'Gesamtrabatt' })).toBeVisible();
 
       await artWaehlen(page, art);
@@ -121,9 +142,14 @@ test.describe('Offerte: Gesamtrabatt bearbeiten', () => {
       expect(gespeichert.discountType, `Rabattart nach „${art}"`).toBe(erwartet.discountType);
       expect(Number(gespeichert.discountAmount), `Rabattbetrag nach „${art}"`).toBe(erwartet.betrag);
 
-      // Neu laden: Die Bearbeitungsmaske zeigt den gespeicherten Wert.
-      await page.goto(`/admin/offerten/${offerteId}/bearbeiten`);
-      await expect(page.getByRole('combobox', { name: 'Art' })).toContainText(art);
+      // Neu geladen: Die Maske zeigt den gespeicherten Wert — in einem frischen
+      // Tab als vollständiger Seitenaufruf, ohne Router-Zwischenspeicher.
+      const frisch = await page.context().newPage();
+      const frischeKonsole = konsoleUeberwachen(frisch);
+      await frisch.goto(maske);
+      await expect(frisch.getByRole('combobox', { name: 'Art' })).toContainText(art);
+      frischeKonsole.keineFehler();
+      await frisch.close();
     }
 
     konsole.keineFehler();
