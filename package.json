@@ -7,10 +7,10 @@
     "node": ">=22.0.0"
   },
   "scripts": {
-    "dev": "node scripts/react-hydrationskorrektur.mjs && tsx scripts/copy-pdfjs-assets.ts && next dev --turbo",
+    "dev": "node scripts/react-hydrationskorrektur.mjs && node scripts/next-cachezeit-korrektur.mjs && tsx scripts/copy-pdfjs-assets.ts && next dev --turbo",
     "pdfjs:assets": "tsx scripts/copy-pdfjs-assets.ts",
-    "dev:webpack": "node scripts/react-hydrationskorrektur.mjs && next dev",
-    "build": "prisma generate && node scripts/react-hydrationskorrektur.mjs && tsx scripts/copy-pdfjs-assets.ts && next build",
+    "dev:webpack": "node scripts/react-hydrationskorrektur.mjs && node scripts/next-cachezeit-korrektur.mjs && next dev",
+    "build": "prisma generate && node scripts/react-hydrationskorrektur.mjs && node scripts/next-cachezeit-korrektur.mjs && tsx scripts/copy-pdfjs-assets.ts && next build",
     "start": "npm run build && next start",
     "start:built": "next start",
     "lint": "eslint src scripts tests prisma --ext .ts,.tsx",
@@ -55,7 +55,7 @@
     "verify:e2e": "tsx scripts/verify.ts browser",
     "production:preflight": "tsx scripts/production-preflight.ts",
     "migration:vertraeglichkeit": "tsx scripts/migration-kompatibilitaet.ts",
-    "postinstall": "prisma generate && node scripts/react-hydrationskorrektur.mjs"
+    "postinstall": "prisma generate && node scripts/react-hydrationskorrektur.mjs && node scripts/next-cachezeit-korrektur.mjs"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"

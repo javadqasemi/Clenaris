@@ -146,6 +146,7 @@ function merkmalspruefung(): void {
 
 function statisch(): void {
   schritt('React-Hydrationskorrektur angewendet', 'node scripts/react-hydrationskorrektur.mjs --pruefen');
+  schritt('Next-Cachezeitkorrektur angewendet (RB-002)', 'node scripts/next-cachezeit-korrektur.mjs --pruefen');
   // Nur `critical` und nur Laufzeitabhängigkeiten; die übrigen Befunde sind
   // in docs/LIEFERKETTE.md einzeln bewertet und laufen in der
   // Sicherheitsprüfung gegen `security/akzeptierte-befunde.json`.
