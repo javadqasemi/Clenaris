@@ -19,13 +19,21 @@ export async function protokolliereKiNutzung(params: {
   userId: string;
   funktion: string;
   ip?: string | null;
+  /**
+   * Metadaten der Nutzung (2026-09-28, Textassistent): Aktion, Feldart,
+   * Längen, Modell, Dauer. **Nur Zahlen und Schlüssel aus dem Code** — der
+   * Typ lässt keine verschachtelten Werte zu, und der Aufrufer reicht nie
+   * Eingabe oder Ergebnis hinein. Wer hier einen Text übergibt, schreibt ihn
+   * in die eine Tabelle, die bewusst nicht bereinigt wird.
+   */
+  details?: Record<string, string | number | boolean>;
 }): Promise<void> {
   await audit.created({
     organizationId: params.organizationId,
     userId: params.userId,
     entity: 'KiNutzung',
     summary: `KI-Funktion „${params.funktion}" genutzt — Entwurf, keine Entscheidung`,
-    changes: { funktion: params.funktion },
+    changes: { ...params.details, funktion: params.funktion },
     ip: params.ip,
   });
 }

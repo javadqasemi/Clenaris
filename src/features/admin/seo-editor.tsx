@@ -13,6 +13,7 @@ import { Label } from '@/components/ui/form';
 import { Checkbox } from '@/components/ui/controls';
 import { Badge } from '@/components/ui/badge';
 import { DetailSection } from '@/components/app/page-parts';
+import { TextAssist } from '@/components/app/text-assist';
 
 /**
  * Pflege der Suchmaschinenangaben.
@@ -31,6 +32,12 @@ import { DetailSection } from '@/components/app/page-parts';
  *
  *  • **„Nicht indexieren" steht abgesetzt und rot markiert.** Es ist die
  *    einzige Schaltung hier, die eine Seite aus den Suchergebnissen wirft.
+ *
+ *  • **Der KI-Textassistent schlägt vor, er speichert nicht** (2026-09-28).
+ *    Titel und Beschreibung sind öffentliche Texte ohne Personendaten — die
+ *    Felder, für die ein Vorschlag am meisten hilft, weil die Längengrenze
+ *    knapp ist. Übernehmen füllt nur das Feld; die Vorschau oben zeigt den
+ *    Treffer sofort, und erst „Speichern" macht ihn wirksam.
  */
 export interface SeoPageState {
   path: string;
@@ -180,7 +187,10 @@ function SeoForm({ page, siteUrl }: { page: SeoPageState; siteUrl: string }) {
 
         <div className="space-y-2">
           <div className="flex items-baseline justify-between gap-3">
-            <Label htmlFor="seo-title">Seitentitel</Label>
+            <span className="flex items-center gap-1">
+              <Label htmlFor="seo-title">Seitentitel</Label>
+              <TextAssist kontext="seo-title" feldId="seo-title" feldLabel="Seitentitel" value={title} onChange={setTitle} className="-my-1.5" />
+            </span>
             <Meter current={(title.trim() || page.defaultTitle).length} limit={TITLE_LIMIT} />
           </div>
           <Input
@@ -197,7 +207,17 @@ function SeoForm({ page, siteUrl }: { page: SeoPageState; siteUrl: string }) {
 
         <div className="space-y-2">
           <div className="flex items-baseline justify-between gap-3">
-            <Label htmlFor="seo-description">Beschreibung</Label>
+            <span className="flex items-center gap-1">
+              <Label htmlFor="seo-description">Beschreibung</Label>
+              <TextAssist
+                kontext="seo-description"
+                feldId="seo-description"
+                feldLabel="Beschreibung"
+                value={description}
+                onChange={setDescription}
+                className="-my-1.5"
+              />
+            </span>
             <Meter
               current={(description.trim() || page.defaultDescription).length}
               limit={DESCRIPTION_LIMIT}
