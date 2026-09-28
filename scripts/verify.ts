@@ -307,6 +307,10 @@ async function voll(optionen: { frisch: boolean }): Promise<void> {
   schritt('Migrationen auf die Testdatenbank', 'npx prisma migrate deploy', { env: dbEnv });
   schritt('Demodaten (idempotent)', 'npm run db:seed:demo', { env: dbEnv });
   schritt('Build', 'npm run build', { env: { ...dbEnv, NODE_ENV: 'production' } });
+  // Seit 2026-09-28: JavaScript je Route gegen `scripts/leistungsbudget.json`.
+  // Grössen statt Millisekunden — auf jeder Maschine dieselbe Zahl, also ein
+  // Tor, das nicht zufällig rot wird (Begründung in `leistungsbudget.ts`).
+  schritt('Leistungsbudget (JavaScript je Route)', 'npx tsx scripts/leistungsbudget.ts');
   const port = process.env.VERIFY_PORT?.trim() || '3001';
   const cacheDir = mkdtempSync(join(tmpdir(), 'clenaris-verify-'));
   try {
