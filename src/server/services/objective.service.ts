@@ -18,6 +18,7 @@ import type {
   UpdateKeyResultInput,
   UpdateObjectiveInput,
 } from '@/lib/validation/bi-objectives';
+import { organisationsbezugPruefen } from './bezug.service';
 import { notify } from './notification.service';
 
 /**
@@ -106,10 +107,12 @@ function nextReview(intervalDays: number | null | undefined, from = today()): Da
 }
 
 export async function createObjective(session: SessionUser, organizationId: string, input: CreateObjectiveInput) {
-  if (input.parentId) {
-    const parent = await prisma.objective.findFirst({ where: { id: input.parentId, organizationId, deletedAt: null } });
-    if (!parent) throw new NotFoundError('Übergeordnetes Ziel');
-  }
+  // Übergeordnetes Ziel und verantwortliche Person gehören der eigenen
+  // Organisation (B-13, 2026-09-28). Vorher prüfte das Anlegen nur das Ziel,
+  // die Person ging unbesehen durch — und `notify()` unten benachrichtigte
+  // dann ein Konto einer anderen Organisation.
+  await organisationsbezugPruefen('objective', input.parentId, organizationId, 'Übergeordnetes Ziel');
+  await organisationsbezugPruefen('user', input.ownerId, organizationId, 'Verantwortliche Person');
   const objective = await prisma.objective.create({
     data: {
       organizationId,
@@ -152,6 +155,12 @@ export async function updateObjective(session: SessionUser, organizationId: stri
   const before = await prisma.objective.findFirst({ where: { id, organizationId, deletedAt: null } });
   if (!before) throw new NotFoundError('Ziel');
   if (input.parentId === id) throw new BusinessRuleError('Ein Ziel kann nicht sein eigenes übergeordnetes Ziel sein.');
+  // Dieselbe Prüfung wie beim Anlegen (B-13, 2026-09-28). Vorher fehlte sie
+  // hier ganz: Ein eigenes Ziel liess sich unter ein fremdes hängen, und
+  // `recomputeObjectiveProgress` schrieb danach den Fortschritt in das Ziel
+  // der anderen Organisation hinauf.
+  await organisationsbezugPruefen('objective', input.parentId, organizationId, 'Übergeordnetes Ziel');
+  await organisationsbezugPruefen('user', input.ownerId, organizationId, 'Verantwortliche Person');
 
   const objective = await prisma.objective.update({
     where: { id },
@@ -366,6 +375,11 @@ export async function updateKeyResult(session: SessionUser, organizationId: stri
     where: { id, objective: objectiveVisibilityWhere(session, organizationId) },
   });
   if (!keyResult) throw new NotFoundError('Schlüsselergebnis');
+  // Die Kennzahl gehört der eigenen Organisation (B-13, 2026-09-28). Das
+  // Anlegen prüfte das schon, die Änderung nicht — und der Nachtlauf
+  // (`syncAutomaticKeyResult`) kopierte dann die Snapshot-Werte der fremden
+  // Kennzahl in dieses Schlüsselergebnis: fremde Geschäftszahlen im Cockpit.
+  await organisationsbezugPruefen('kpiDefinition', input.kpiDefinitionId, organizationId, 'Kennzahl');
   const start = input.startValue ?? toNumber(keyResult.startValue);
   const target = input.targetValue ?? toNumber(keyResult.targetValue);
   const current = input.currentValue ?? toNumber(keyResult.currentValue);
@@ -470,6 +484,10 @@ export async function syncAllAutomaticKeyResults(organizationId: string): Promis
 
 export async function createObjectiveTask(session: SessionUser, organizationId: string, objectiveId: string, input: ObjectiveTaskInput) {
   const objective = await requireObjectiveForWrite(session, organizationId, objectiveId);
+  // Ohne diese Prüfung entstünde eine Aufgabe für ein fremdes Konto samt
+  // Benachrichtigung (B-13). Der Rückfall auf `objective.ownerId` braucht
+  // keine: Der Eintrag wurde beim Speichern des Ziels geprüft.
+  await organisationsbezugPruefen('user', input.assigneeId, organizationId, 'Zuständige Person');
   const task = await prisma.task.create({
     data: {
       organizationId,
