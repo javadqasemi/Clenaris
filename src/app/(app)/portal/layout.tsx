@@ -1,8 +1,7 @@
 import { redirect } from 'next/navigation';
 
 import { prisma } from '@/lib/db';
-import { serverEnv } from '@/lib/env';
-import { getSession } from '@/lib/auth/session';
+import { getSession, sessionIdleSecondsFor } from '@/lib/auth/session';
 import { can, guardForPath, homeRouteFor } from '@/lib/auth/rbac';
 import { zuercherTagesgrenzen } from '@/lib/zuerich';
 import { AppShell, type NavGroup } from '@/components/app/app-shell';
@@ -82,7 +81,7 @@ export default async function PortalLayout({ children }: { children: React.React
       // Im Portal löst der Scanner nur eigene Einsätze und deren Objekte auf
       // (`scan.service.ts`), mit Links ins Portal.
       scan={can(session.role, 'dashboard:view')}
-      sessionIdleSeconds={serverEnv().SESSION_IDLE_TTL}
+      sessionIdleSeconds={sessionIdleSecondsFor(session.persistent)}
       user={{
         id: session.id,
         name: session.name,

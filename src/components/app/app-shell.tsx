@@ -87,7 +87,7 @@ import { ScanButton } from '@/components/app/scan-button';
 import { NotificationPanel } from '@/components/app/notification-panel';
 import { NavigationProgress } from '@/components/app/navigation-progress';
 import { ThemeSync } from '@/features/account/appearance-form';
-import { SessionKeepalive } from '@/features/account/session-keepalive';
+import { SessionKeepalive, abmeldungVerbreiten } from '@/features/account/session-keepalive';
 
 /**
  * Applikations-Rahmen für Administration, Mitarbeitendenportal und
@@ -297,6 +297,9 @@ export function AppShell({
 
   const logout = async () => {
     await api.post('/api/auth/logout').catch(() => undefined);
+    // Die anderen Tabs dieser Sitzung zur Anmeldung schicken, statt sie mit
+    // toten Cookies weiterarbeiten zu lassen (2026-09-28).
+    abmeldungVerbreiten();
     router.replace('/');
     router.refresh();
   };

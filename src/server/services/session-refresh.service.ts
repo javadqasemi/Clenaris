@@ -4,11 +4,10 @@ import { cookies } from 'next/headers';
 
 import { prisma } from '@/lib/db';
 import { recordSecurityEvent } from '@/lib/security/record';
-import { serverEnv } from '@/lib/env';
 import { AppError, UnauthorizedError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
 import { ACCESS_COOKIE, REFRESH_COOKIE, hashToken, verifyRefreshToken } from '@/lib/auth/jwt';
-import { createSession } from '@/lib/auth/session';
+import { createSession, sessionIdleSecondsFor } from '@/lib/auth/session';
 
 const log = logger('auth/refresh');
 
@@ -127,8 +126,10 @@ export async function refreshSession(): Promise<{ id: string; role: string; emai
   // Leerlauf: der Token wurde bei der letzten Aktivität ausgestellt. Liegt
   // die länger zurück als das Fenster, ist die Sitzung eingeschlafen — und
   // ein eingeschlafener Token wird widerrufen, nicht nur abgewiesen, damit
-  // er auch später nicht mehr taugt.
-  const idleMs = serverEnv().SESSION_IDLE_TTL * 1000;
+  // er auch später nicht mehr taugt. Das Fenster hängt an „Angemeldet
+  // bleiben" (signierter Anspruch `rem`, seit 2026-09-28).
+  const dauerhaft = claims.rem === true;
+  const idleMs = sessionIdleSecondsFor(dauerhaft) * 1000;
   if (record.createdAt.getTime() + idleMs < Date.now()) {
     await prisma.refreshToken.update({ where: { id: record.id }, data: { revokedAt: new Date() } });
     forget();
@@ -154,7 +155,7 @@ export async function refreshSession(): Promise<{ id: string; role: string; emai
     data: { revokedAt: jetzt, rotatedAt: jetzt },
   });
   if (verbraucht.count === 0) throw new RotationsWettlaufError();
-  const session = await createSession({ userId: record.user.id, family: record.family });
+  const session = await createSession({ userId: record.user.id, family: record.family, persistent: dauerhaft });
   return { id: session.user.id, role: session.user.role, email: session.user.email };
 }
 

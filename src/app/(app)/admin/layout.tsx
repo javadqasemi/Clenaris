@@ -1,8 +1,7 @@
 import { redirect } from 'next/navigation';
 
 import { prisma } from '@/lib/db';
-import { serverEnv } from '@/lib/env';
-import { getSession } from '@/lib/auth/session';
+import { getSession, sessionIdleSecondsFor } from '@/lib/auth/session';
 import { can, guardForPath, homeRouteFor } from '@/lib/auth/rbac';
 import { AppShell } from '@/components/app/app-shell';
 import { filterNavigation, type GuardedNavGroup } from '@/lib/auth/navigation';
@@ -241,7 +240,7 @@ export default async function AdminLayout({ children }: { children: React.ReactN
       // welche Bereiche sie durchsucht, entscheidet der Dienst je Recht.
       search={can(session.role, 'dashboard:view')}
       scan={can(session.role, 'dashboard:view')}
-      sessionIdleSeconds={serverEnv().SESSION_IDLE_TTL}
+      sessionIdleSeconds={sessionIdleSecondsFor(session.persistent)}
       user={{
         id: session.id,
         name: session.name,

@@ -50,6 +50,16 @@ export interface AccessTokenClaims extends JWTPayload {
    * schneller Abdruck.
    */
   lck?: string;
+  /**
+   * „Angemeldet bleiben" wurde gewählt (seit 2026-09-28).
+   *
+   * Im Zugangstoken, damit der Rahmen der Anwendung ohne Abfrage weiss,
+   * welches Leerlauffenster gilt (`SESSION_IDLE_TTL` oder
+   * `SESSION_REMEMBER_IDLE_TTL`). Die Entscheidung selbst trägt der
+   * Erneuerungstoken (`RefreshTokenClaims.rem`) — signiert, also nicht
+   * nachträglich zu setzen.
+   */
+  rem?: true;
   typ: 'access';
 }
 
@@ -57,6 +67,13 @@ export interface RefreshTokenClaims extends JWTPayload {
   sub: string;
   jti: string;
   fam: string;
+  /**
+   * Dauerhafte Sitzung. Fehlt der Anspruch, ist die Sitzung an das
+   * Browserfenster gebunden: Cookies ohne `Max-Age`, kurzes Leerlauffenster.
+   * Er wandert bei jeder Rotation mit (`refreshSession`), sonst wäre
+   * „Angemeldet bleiben" nach der ersten Erneuerung vergessen.
+   */
+  rem?: true;
   typ: 'refresh';
 }
 
@@ -89,9 +106,10 @@ export async function signRefreshToken(params: {
   userId: string;
   jti: string;
   family: string;
+  persistent?: boolean;
 }): Promise<string> {
   const ttl = serverEnv().JWT_REFRESH_TTL;
-  return new SignJWT({ jti: params.jti, fam: params.family, typ: 'refresh' })
+  return new SignJWT({ jti: params.jti, fam: params.family, ...(params.persistent ? { rem: true } : {}), typ: 'refresh' })
     .setProtectedHeader({ alg: 'HS256', typ: 'JWT' })
     .setSubject(params.userId)
     .setIssuedAt()
@@ -148,14 +166,28 @@ export function randomToken(bytes = 32): string {
     .join('');
 }
 
-export function cookieOptions(maxAgeSeconds: number) {
+/**
+ * Cookie-Optionen der Sitzung.
+ *
+ * `null` ergibt ein **Sitzungscookie** — ohne `Max-Age` und ohne `Expires`.
+ * Der Browser verwirft es, wenn er beendet wird. Das ist seit 2026-09-28 die
+ * Vorgabe; nur wer „Angemeldet bleiben" wählt, bekommt eine Laufzeit.
+ *
+ * Was das **nicht** verspricht: dass ein geschlossener Browser immer
+ * abgemeldet ist. Browser mit Sitzungswiederherstellung („Tabs vom letzten Mal
+ * öffnen") stellen auch Sitzungscookies wieder her, und das Schliessen eines
+ * Fensters ist kein Ereignis, das eine Seite verlässlich bemerkt. Die Grenze,
+ * die immer gilt, ist deshalb das Leerlauffenster auf dem Server
+ * (`refreshSession`) — siehe `docs/SITZUNG.md`.
+ */
+export function cookieOptions(maxAgeSeconds: number | null) {
   const env = serverEnv();
   return {
     httpOnly: true,
     secure: process.env.NODE_ENV === 'production',
     sameSite: 'lax' as const,
     path: '/',
-    maxAge: maxAgeSeconds,
+    ...(maxAgeSeconds === null ? {} : { maxAge: maxAgeSeconds }),
     ...(env.AUTH_COOKIE_DOMAIN ? { domain: env.AUTH_COOKIE_DOMAIN } : {}),
   };
 }

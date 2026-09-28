@@ -369,7 +369,9 @@ export async function login(params: { input: LoginInput; ip: string }) {
    */
   if (user.twoFactorEnabled) {
     const { issueMfaChallenge } = await import('./two-factor.service');
-    await issueMfaChallenge(user.id);
+    // „Angemeldet bleiben" reist im Zwischenschein mit — sonst wäre die Wahl
+    // für jedes Konto mit zweitem Faktor verloren.
+    await issueMfaChallenge(user.id, params.input.rememberMe);
 
     await recordAudit({
       organizationId: user.organizationId,
@@ -384,7 +386,9 @@ export async function login(params: { input: LoginInput; ip: string }) {
     return { user: null, mustChangePassword: false, twoFactorRequired: true as const };
   }
 
-  const session = await createSession({ userId: user.id });
+  // Seit 2026-09-28 wirksam: vorher wurde `rememberMe` geprüft und verworfen,
+  // jede Sitzung bekam dreissig Tage Laufzeit (siehe `createSession`).
+  const session = await createSession({ userId: user.id, persistent: params.input.rememberMe });
 
   await recordAudit({
     organizationId: user.organizationId,

@@ -43,6 +43,22 @@ export interface SessionUser {
    * ausdrücklich während einer Übergabe erlaubt ist.
    */
   handoffId: string | null;
+  /** „Angemeldet bleiben" — bestimmt das Leerlauffenster (`sessionIdleSecondsFor`). */
+  persistent: boolean;
+}
+
+/**
+ * Das Leerlauffenster dieser Sitzung in Sekunden.
+ *
+ * Eine Stelle für Server und Rahmen der Anwendung: `refreshSession` weist
+ * danach ab, der Aktivitätswächter im Browser warnt und meldet danach ab.
+ * Liefen die beiden auseinander, stünde die Person entweder vor einer
+ * Warnung, obwohl der Server noch erneuert hätte, oder sie arbeitete weiter
+ * und fiele beim nächsten Klick aus der Sitzung.
+ */
+export function sessionIdleSecondsFor(persistent: boolean): number {
+  const env = serverEnv();
+  return persistent ? env.SESSION_REMEMBER_IDLE_TTL : env.SESSION_IDLE_TTL;
 }
 
 /**
@@ -106,6 +122,7 @@ export const getSession = reactCache(async (): Promise<SessionUser | null> => {
     theme: (claims.thm as string | undefined) ?? null,
     profileId: claims.pid ?? null,
     handoffId,
+    persistent: claims.rem === true,
   };
 });
 
@@ -302,6 +319,14 @@ interface CreateSessionInput {
   userId: string;
   /** Bestehende Rotationsfamilie beim Refresh weiterführen. */
   family?: string;
+  /**
+   * „Angemeldet bleiben". Fehlt der Wert bei einer fortgeführten Familie
+   * (Geräteübergabe, Entsperren), gilt, was der aktuelle Erneuerungstoken
+   * trägt — sonst verlöre eine dauerhafte Sitzung ihre Laufzeit, sobald
+   * jemand das Gerät übergibt. Eine neue Anmeldung ohne Angabe ist an das
+   * Browserfenster gebunden.
+   */
+  persistent?: boolean;
 }
 
 /**
@@ -309,9 +334,19 @@ interface CreateSessionInput {
  * Refresh-Token-Hash. Rotation: jeder Refresh erzeugt einen neuen Token in
  * derselben `family`; taucht ein bereits widerrufener Token wieder auf, wird
  * die ganze Familie invalidiert (Token-Reuse-Detection).
+ *
+ * **Sitzungscookies als Vorgabe (seit 2026-09-28).** Vorher bekam jede
+ * Anmeldung einen Erneuerungscookie mit dreissig Tagen Laufzeit — auch ohne
+ * „Angemeldet bleiben", obwohl die Maske das Kästchen zeigte: Der Wert wurde
+ * geprüft und dann nirgends verwendet. Jetzt tragen beide Cookies ohne diese
+ * Wahl weder `Max-Age` noch `Expires`; der Browser verwirft sie beim
+ * Beenden. Mit der Wahl bekommt der Erneuerungscookie `JWT_REFRESH_TTL`.
  */
-export async function createSession({ userId, family }: CreateSessionInput) {
+export async function createSession({ userId, family, persistent }: CreateSessionInput) {
   const env = serverEnv();
+  const dauerhaft =
+    persistent ??
+    (family ? (await verifyRefreshToken((await cookies()).get(REFRESH_COOKIE)?.value ?? ''))?.rem === true : false);
 
   const user = await prisma.user.findUniqueOrThrow({
     where: { id: userId },
@@ -382,9 +417,10 @@ export async function createSession({ userId, family }: CreateSessionInput) {
     avatar: user.avatarUrl ?? undefined,
     thm: user.theme ?? undefined,
     lck: sperre?.id,
+    ...(dauerhaft ? { rem: true } : {}),
   } as never);
 
-  const refreshToken = await signRefreshToken({ userId: user.id, jti, family: tokenFamily });
+  const refreshToken = await signRefreshToken({ userId: user.id, jti, family: tokenFamily, persistent: dauerhaft });
 
   const hdrs = await headers();
   await prisma.refreshToken.create({
@@ -399,8 +435,8 @@ export async function createSession({ userId, family }: CreateSessionInput) {
   });
 
   const store = await cookies();
-  store.set(ACCESS_COOKIE, accessToken, cookieOptions(env.JWT_ACCESS_TTL));
-  store.set(REFRESH_COOKIE, refreshToken, cookieOptions(env.JWT_REFRESH_TTL));
+  store.set(ACCESS_COOKIE, accessToken, cookieOptions(dauerhaft ? env.JWT_ACCESS_TTL : null));
+  store.set(REFRESH_COOKIE, refreshToken, cookieOptions(dauerhaft ? env.JWT_REFRESH_TTL : null));
 
   return { accessToken, refreshToken, user };
 }
