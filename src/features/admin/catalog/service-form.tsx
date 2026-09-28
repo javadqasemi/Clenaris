@@ -19,6 +19,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { Input, Textarea } from '@/components/ui/input';
 import { Alert } from '@/components/ui/primitives';
+import { FormTextAssist } from '@/components/app/text-assist';
 import { Checkbox, Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/controls';
 import {
   Sheet,
@@ -67,6 +68,12 @@ import {
  *    wieder: bei einer bestehenden Leistung ist er eine indexierte Adresse,
  *    und sie beim Umbenennen still zu ändern, wäre der teuerste denkbare
  *    Automatismus.
+ *
+ *  • **KI-Textassistent nur an den Auftrittstexten** (2026-09-28):
+ *    Kurzbeschreibung, Beschreibung und die beiden Suchmaschinenfelder. Nicht
+ *    an Name und Adresse (ein umformulierter Name ist eine neue Leistung) und
+ *    nicht an Qualifikationen oder Preisen. Übernehmen füllt nur das Feld;
+ *    wirksam wird es mit „Speichern".
  */
 export interface ServiceRow {
   id: string;
@@ -353,7 +360,16 @@ export function ServiceForm({
                   name="shortDesc"
                   render={({ field }) => (
                     <FormItem>
-                      <FormLabel required>Kurzbeschreibung</FormLabel>
+                      <div className="flex items-center justify-between gap-2">
+                        <FormLabel required>Kurzbeschreibung</FormLabel>
+                        <FormTextAssist
+                          kontext="service-description"
+                          feldLabel="Kurzbeschreibung"
+                          value={field.value ?? ''}
+                          onChange={field.onChange}
+                          className="-my-1.5"
+                        />
+                      </div>
                       <FormControl>
                         <Textarea rows={2} {...field} />
                       </FormControl>
@@ -370,7 +386,16 @@ export function ServiceForm({
                   name="description"
                   render={({ field }) => (
                     <FormItem>
-                      <FormLabel required>Beschreibung</FormLabel>
+                      <div className="flex items-center justify-between gap-2">
+                        <FormLabel required>Beschreibung</FormLabel>
+                        <FormTextAssist
+                          kontext="service-description"
+                          feldLabel="Beschreibung"
+                          value={field.value ?? ''}
+                          onChange={field.onChange}
+                          className="-my-1.5"
+                        />
+                      </div>
                       <FormControl>
                         <Textarea rows={6} {...field} />
                       </FormControl>
@@ -648,7 +673,16 @@ export function ServiceForm({
                     name="seoTitle"
                     render={({ field }) => (
                       <FormItem>
-                        <FormLabel>Seitentitel für Suchmaschinen</FormLabel>
+                        <div className="flex items-center justify-between gap-2">
+                          <FormLabel>Seitentitel für Suchmaschinen</FormLabel>
+                          <FormTextAssist
+                            kontext="seo-title"
+                            feldLabel="Seitentitel für Suchmaschinen"
+                            value={field.value ?? ''}
+                            onChange={field.onChange}
+                            className="-my-1.5"
+                          />
+                        </div>
                         <FormControl>
                           <Input {...field} value={field.value ?? ''} />
                         </FormControl>
@@ -665,7 +699,16 @@ export function ServiceForm({
                     name="seoDescription"
                     render={({ field }) => (
                       <FormItem>
-                        <FormLabel>Beschreibung für Suchmaschinen</FormLabel>
+                        <div className="flex items-center justify-between gap-2">
+                          <FormLabel>Beschreibung für Suchmaschinen</FormLabel>
+                          <FormTextAssist
+                            kontext="seo-description"
+                            feldLabel="Beschreibung für Suchmaschinen"
+                            value={field.value ?? ''}
+                            onChange={field.onChange}
+                            className="-my-1.5"
+                          />
+                        </div>
                         <FormControl>
                           <Textarea rows={2} {...field} value={field.value ?? ''} />
                         </FormControl>

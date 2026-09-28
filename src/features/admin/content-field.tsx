@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button';
 import { Input, Textarea } from '@/components/ui/input';
 import { Label } from '@/components/ui/form';
 import { ImageField } from '@/features/admin/image-field';
+import { TextAssist } from '@/components/app/text-assist';
 
 /**
  * Ein einzelner Textbaustein als Eingabefeld.
@@ -54,7 +55,28 @@ export function ContentField({
   return (
     <div className="space-y-2">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <Label htmlFor={id}>{definition.label}</Label>
+        <span className="flex items-center gap-1">
+          <Label htmlFor={id}>{definition.label}</Label>
+          {/*
+            KI-Textassistent nur an Textbausteinen (Zeile, Absatz, Fliesstext)
+            — nicht an Listen, deren Einträge einzeln stehen, und nicht an
+            Bildern und Adressen (`url`: ein umformulierter Link ist ein
+            kaputter Link). Übernehmen ändert nur den Entwurf im Dialog;
+            gespeichert wird mit „Als Entwurf speichern", veröffentlicht erst
+            danach.
+          */}
+          {(definition.kind === 'line' || definition.kind === 'text' || definition.kind === 'richtext') &&
+          typeof value === 'string' ? (
+            <TextAssist
+              kontext="cms-text"
+              feldId={id}
+              feldLabel={definition.label}
+              value={value}
+              onChange={onChange}
+              className="-my-1.5"
+            />
+          ) : null}
+        </span>
 
         {!isDefault ? (
           <Button type="button" variant="ghost" size="sm" onClick={() => onChange(defaultValue)}>

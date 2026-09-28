@@ -4,6 +4,8 @@ import { prisma } from '@/lib/db';
 import { getSession, sessionIdleSecondsFor } from '@/lib/auth/session';
 import { can, guardForPath, homeRouteFor } from '@/lib/auth/rbac';
 import { AppShell } from '@/components/app/app-shell';
+import { TextAssistProvider } from '@/components/app/text-assist';
+import { hasIntegration } from '@/lib/env';
 import { filterNavigation, type GuardedNavGroup } from '@/lib/auth/navigation';
 import { getOrganizationId } from '@/server/services/organization.service';
 import { countDueReviews } from '@/server/services/insight.service';
@@ -252,7 +254,15 @@ export default async function AdminLayout({ children }: { children: React.ReactN
         theme: session.theme,
       }}
     >
-      {children}
+      {/*
+        KI-Textassistent (2026-09-28): Ob die Rolle ihn nutzen darf und ob
+        ein Anbieter eingerichtet ist, entscheidet der Server hier einmal —
+        die Felder fragen nicht selbst nach (kein Probeaufruf je Feld, der
+        das Rate-Limit belastete). Der Endpunkt prüft beides noch einmal.
+      */}
+      <TextAssistProvider erlaubt={can(session.role, 'ai:use')} verfuegbar={hasIntegration('ai')}>
+        {children}
+      </TextAssistProvider>
     </AppShell>
   );
 }

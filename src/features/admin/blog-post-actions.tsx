@@ -46,9 +46,12 @@ export function BlogPostActions({
   canDelete: boolean;
 }) {
   const fields: FieldSpec[] = [
-    { name: 'title', label: 'Titel', required: true },
-    { name: 'excerpt', label: 'Anriss', type: 'textarea', rows: 2, required: true, hint: 'Erscheint in der Übersicht und in Suchmaschinen.' },
-    { name: 'content', label: 'Beitrag', type: 'textarea', rows: 16, required: true },
+    // KI-Textassistent an Titel, Anriss, Text und SEO-Feldern — öffentliche
+    // Redaktionstexte ohne Personendaten. Übernehmen ändert nur das Feld;
+    // gespeichert wird mit „Speichern".
+    { name: 'title', label: 'Titel', required: true, textAssist: 'blog' },
+    { name: 'excerpt', label: 'Anriss', type: 'textarea', rows: 2, required: true, hint: 'Erscheint in der Übersicht und in Suchmaschinen.', textAssist: 'blog' },
+    { name: 'content', label: 'Beitrag', type: 'textarea', rows: 16, required: true, textAssist: 'blog' },
     {
       name: 'categorySlug',
       label: 'Kategorie',
@@ -59,8 +62,8 @@ export function BlogPostActions({
       emptyAsString: true,
     },
     { name: 'keywords', label: 'Schlagwörter', type: 'tags', half: true },
-    { name: 'seoTitle', label: 'Seitentitel (SEO)', half: true, emptyAsString: true },
-    { name: 'seoDescription', label: 'Beschreibung (SEO)', half: true, emptyAsString: true },
+    { name: 'seoTitle', label: 'Seitentitel (SEO)', half: true, emptyAsString: true, textAssist: 'seo-title' },
+    { name: 'seoDescription', label: 'Beschreibung (SEO)', half: true, emptyAsString: true, textAssist: 'seo-description' },
   ];
 
   const published = status === 'PUBLISHED';

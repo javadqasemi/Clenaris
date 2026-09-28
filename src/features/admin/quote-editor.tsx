@@ -16,6 +16,7 @@ import { Button } from '@/components/ui/button';
 import { Input, Textarea } from '@/components/ui/input';
 import { Alert } from '@/components/ui/primitives';
 import { Checkbox } from '@/components/ui/controls';
+import { FormTextAssist } from '@/components/app/text-assist';
 import {
   Select,
   SelectContent,
@@ -53,6 +54,11 @@ import {
  *    Total. Das ist im Reinigungsgewerbe üblich („Fenster auf Wunsch").
  *  • Der KI-Entwurf füllt nur die Felder aus; gespeichert wird erst nach
  *    einer bewussten Prüfung durch eine Person.
+ *  • Der KI-Textassistent (2026-09-28) hängt nur an Einleitung und
+ *    Schlusstext — Fliesstext an die Kundschaft. Nicht an Positionen, Mengen
+ *    und Preisen: Die rechnet der Server, und ein „professioneller
+ *    formulierter" Betrag wäre ein anderer Betrag. Übernehmen füllt nur das
+ *    Feld; gespeichert wird mit der Offerte.
  */
 
 export interface QuoteEditorService {
@@ -401,7 +407,16 @@ export function QuoteEditor({
             name="introText"
             render={({ field }) => (
               <FormItem className="sm:col-span-2">
-                <FormLabel>Einleitung</FormLabel>
+                <div className="flex items-center justify-between gap-2">
+                  <FormLabel>Einleitung</FormLabel>
+                  <FormTextAssist
+                    kontext="quote-text"
+                    feldLabel="Einleitung"
+                    value={field.value ?? ''}
+                    onChange={field.onChange}
+                    className="-my-1.5"
+                  />
+                </div>
                 <FormControl>
                   <Textarea rows={3} {...field} value={field.value ?? ''} />
                 </FormControl>
@@ -671,7 +686,16 @@ export function QuoteEditor({
               name="outroText"
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>Schlusstext</FormLabel>
+                  <div className="flex items-center justify-between gap-2">
+                    <FormLabel>Schlusstext</FormLabel>
+                    <FormTextAssist
+                      kontext="quote-text"
+                      feldLabel="Schlusstext"
+                      value={field.value ?? ''}
+                      onChange={field.onChange}
+                      className="-my-1.5"
+                    />
+                  </div>
                   <FormControl>
                     <Textarea rows={3} {...field} value={field.value ?? ''} />
                   </FormControl>

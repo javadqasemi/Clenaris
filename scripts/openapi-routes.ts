@@ -1800,6 +1800,20 @@ export const ROUTES: RouteDoc[] = [
     rateLimit: 'aiGenerate',
     body: ai.dispatchSuggestSchema,
   },
+  {
+    method: 'post',
+    path: '/api/ai/text-assist',
+    tag: 'Künstliche Intelligenz',
+    summary: 'Text korrigieren oder Vorschläge erzeugen',
+    description:
+      'Textassistent für Website-, Blog-, SEO-, Leistungs- und Offerttexte. Der Kontext ist eine feste ' +
+      'Erlaubnisliste. Enthält der Text eine AHV-Nummer, IBAN, einen Zugangscode, ein Passwort, einen ' +
+      'Lohnbetrag oder ein Token, antwortet der Endpunkt mit 422 und sendet nichts. Ohne konfigurierten ' +
+      'Anbieter 503. Der Endpunkt schreibt nichts — der Vorschlag geht ins Formular.',
+    guard: perm('all', 'ai:use'),
+    rateLimit: 'aiGenerate',
+    body: ai.textAssistSchema,
+  },
 
   // -------------------------------------------------------------------------
   //  Redaktion
