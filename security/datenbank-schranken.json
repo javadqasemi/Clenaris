@@ -12,7 +12,8 @@
     "scan_codes_ein_aktiver_je_datensatz",
     "signature_requests_offene_abnahme_je_einsatz",
     "signature_requests_offene_annahme_je_offerte",
-    "signature_requests_offene_annahme_je_vertragsfassung"
+    "signature_requests_offene_annahme_je_vertragsfassung",
+    "time_entries_eine_laufende_je_person"
   ],
   "trigger": [
     "contract_services_unveraenderlich",

@@ -1,5 +1,9 @@
 import { hash, verify } from '@node-rs/argon2';
 
+import { BusinessRuleError } from '@/lib/errors';
+
+import { MELDUNG_OEFFENTLICHES_PASSWORT, passwortHierGesperrt } from './oeffentliche-zugangsdaten';
+
 /**
  * Passwort-Hashing mit Argon2id.
  *
@@ -14,7 +18,26 @@ const OPTIONS = {
   parallelism: 1,
 } as const;
 
+/**
+ * Hier und nicht in jedem Dienst einzeln wird das veröffentlichte Passwort
+ * abgewiesen (Notfallauftrag 2026-09-27, `oeffentliche-zugangsdaten.ts`).
+ *
+ * Jeder Weg, auf dem ein Konto ein Passwort bekommt — Registrierung,
+ * Zurücksetzen, Wechsel, Einladung —, endet in dieser Funktion. Eine Prüfung
+ * in den Diensten hätte vier Stellen, und der fünfte Weg, den jemand später
+ * baut, hätte keine. Die Prüfung im Zod-Schema wäre ebenso falsch: Sie
+ * entscheidet ohne Kenntnis der Umgebung, und die Prüfreihe setzt die
+ * Demopasswörter gegen ihre Wegwerf-Datenbank bewusst wieder.
+ *
+ * Wiederherstellungs- und Einmalcodes laufen ebenfalls hier durch; sie sind
+ * zufällig erzeugt und treffen die Liste nie.
+ */
 export async function hashPassword(plain: string): Promise<string> {
+  if (passwortHierGesperrt(plain)) {
+    throw new BusinessRuleError(MELDUNG_OEFFENTLICHES_PASSWORT, [
+      { field: 'password', message: MELDUNG_OEFFENTLICHES_PASSWORT, code: 'custom' },
+    ]);
+  }
   return hash(plain, OPTIONS);
 }
 

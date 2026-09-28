@@ -296,7 +296,19 @@ async function migrationen() {
     if (name && !bekannt.has(name)) befunde.push({ schwere: 'warnung', titel: `Neue handgeschriebene Schranke nicht in security/datenbank-schranken.json: ${name}` });
   }
 
-  let hinweis = `${schranken.teilindizes.length} Teilindizes, ${schranken.trigger.length} Trigger in den Migrationen gefunden.`;
+  /**
+   * Verträglichkeitstor (Notfallauftrag 2026-09-27): Jede Migration braucht
+   * eine durchgesehene Einstufung gegen die vorherige Programmfassung, und
+   * eine mildere Einstufung als die Heuristik eine Begründung. Blockierend —
+   * die Auslieferung aktiviert Migration und Programm nur dann ohne
+   * Wartungsfenster zusammen, wenn sie weiss, was die Migration der alten
+   * Fassung antut (`scripts/migration-kompatibilitaet.ts`).
+   */
+  const { reiheEinstufen, registerLesen, torPruefen } = await import('./migration-kompatibilitaet');
+  const tor = torPruefen(reiheEinstufen(verzeichnis), registerLesen());
+  for (const f of tor.fehler) befunde.push({ schwere: 'blockierend', titel: 'Migrations-Verträglichkeit', details: f });
+
+  let hinweis = `${schranken.teilindizes.length} Teilindizes, ${schranken.trigger.length} Trigger in den Migrationen gefunden; Verträglichkeit: ${tor.fehler.length === 0 ? 'jede Migration durchgesehen' : `${tor.fehler.length} Fehler`}.`;
   if (args.has('--datenbank')) {
     if (!process.env.DATABASE_URL) {
       hinweis += ' Datenbankabgleich: NICHT GEPRÜFT (keine DATABASE_URL).';

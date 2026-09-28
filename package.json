@@ -53,6 +53,8 @@
     "verify:release": "tsx scripts/verify.ts release",
     "verify:security": "npm run security:check",
     "verify:e2e": "tsx scripts/verify.ts browser",
+    "production:preflight": "tsx scripts/production-preflight.ts",
+    "migration:vertraeglichkeit": "tsx scripts/migration-kompatibilitaet.ts",
     "postinstall": "prisma generate && node scripts/react-hydrationskorrektur.mjs"
   },
   "prisma": {

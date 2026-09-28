@@ -29,6 +29,9 @@ import { hash } from '@node-rs/argon2';
 // Relativ, ohne Pfad-Alias: `beitraege.ts` ist ein reiner Rechenkern ohne
 // `server-only` und dafür gebaut, auch ausserhalb von Next geladen zu werden.
 import { SAETZE_2026 } from '../src/lib/payroll/beitraege';
+import { istOeffentlichesPasswort } from '../src/lib/auth/oeffentliche-zugangsdaten';
+
+import { oeffentlicheKontenErlaubt } from './seed-guard';
 
 const prisma = new PrismaClient();
 
@@ -40,7 +43,17 @@ const ARGON_OPTIONS = { memoryCost: 19_456, timeCost: 2, parallelism: 1 } as con
 // hier blieben sie als toter Code zurück.
 
 /**
- * Startpasswörter im Produktionsbetrieb erzwingen.
+ * Dürfen hier Konten mit veröffentlichten Passwörtern entstehen?
+ *
+ * Einmal beim Start entschieden (`prisma/seed-guard.ts`): nur ausserhalb
+ * eines produktiven Systems und nur gegen eine Wegwerf-Datenbank oder nach
+ * `ALLOW_DEMO_SEED=ja`. „Produktiv" liest dabei auch `.env` — der Seed läuft
+ * auf einem Server in einer Shell, die sie nicht geladen hat.
+ */
+const OEFFENTLICHE_KONTEN = oeffentlicheKontenErlaubt();
+
+/**
+ * Startpasswörter erzwingen, wo veröffentlichte Konten nicht erlaubt sind.
  *
  * Die Rückfallwerte weiter unten (`Admin#2026Clenaris`, `System#2026Clenaris`)
  * stehen in `.env.example` und damit in einem öffentlichen Repository. Für die
@@ -48,21 +61,33 @@ const ARGON_OPTIONS = { memoryCost: 19_456, timeCost: 2, parallelism: 1 } as con
  * kostet jeden Neueinstieg eine halbe Stunde. Auf einem erreichbaren System
  * wäre derselbe Rückfallwert ein bekanntgegebenes Administratorkonto.
  *
- * Deshalb: In der Produktion muss das Passwort gesetzt sein, sonst bricht der
- * Seed ab. Ein lauter Abbruch beim Einrichten ist unendlich viel billiger als
- * ein stilles Standardkonto im Betrieb.
+ * Bis zum Notfallauftrag 2026-09-27 hatte diese Schranke zwei Lücken, und
+ * beide zusammen führten zu einem anmeldbaren Verwaltungskonto in der
+ * Produktion:
+ *
+ *   • Sie fragte nur `process.env.NODE_ENV`. Auf dem Server stand der Wert in
+ *     `.env`, nicht im Prozess — die Schranke sah eine Entwicklung.
+ *   • Sie prüfte nur die **Länge**. Der Wert aus `.env.example` hat 18 Zeichen
+ *     und kam durch. Jetzt wird er gegen die Liste der veröffentlichten
+ *     Passwörter geprüft (`src/lib/auth/oeffentliche-zugangsdaten.ts`).
+ *
+ * Ein lauter Abbruch beim Einrichten ist unendlich viel billiger als ein
+ * stilles Standardkonto im Betrieb. Die Werte selbst stehen in keiner Meldung.
  */
 function pruefeStartpasswoerter(): void {
-  if (process.env.NODE_ENV !== 'production') return;
+  if (OEFFENTLICHE_KONTEN) return;
 
-  const fehlend = (['SEED_ADMIN_PASSWORD', 'SEED_SUPERADMIN_PASSWORD'] as const).filter(
-    (name) => !process.env[name] || process.env[name]!.length < 12,
-  );
+  const fehler = (['SEED_ADMIN_PASSWORD', 'SEED_SUPERADMIN_PASSWORD'] as const).flatMap((name) => {
+    const wert = process.env[name];
+    if (!wert || wert.length < 12) return [`${name} fehlt oder ist kürzer als 12 Zeichen`];
+    if (istOeffentlichesPasswort(wert)) return [`${name} ist ein öffentlich bekanntes Passwort aus dem Repository`];
+    return [];
+  });
 
-  if (fehlend.length > 0) {
+  if (fehler.length > 0) {
     throw new Error(
-      `Im Produktionsbetrieb müssen ${fehlend.join(' und ')} gesetzt sein (mindestens 12 Zeichen).\n` +
-        'Ohne sie legte der Seed Konten mit den Passwörtern aus .env.example an — die stehen im Repository.\n' +
+      `Seed abgebrochen — kein Wegwerf-System, also gelten eigene Startpasswörter:\n  • ${fehler.join('\n  • ')}\n` +
+        'Ohne sie entstünden Konten mit Passwörtern, die im Repository stehen.\n' +
         'Erzeugen: openssl rand -base64 24',
     );
   }
@@ -744,22 +769,34 @@ async function main() {
     process.env.SEED_ADMIN_PASSWORD ?? 'Admin#2026Clenaris',
     ARGON_OPTIONS,
   );
-  const demoPassword = await hash('Demo#2026Clenaris', ARGON_OPTIONS);
 
+  /**
+   * Reparieren nur auf einem Wegwerf-System (Notfallauftrag 2026-09-27).
+   *
+   * Der Update-Zweig setzt Passwort, Rolle und Status des Kontos zurück —
+   * gedacht für die Prüfreihe, die das Demokonto bei einem abgebrochenen Lauf
+   * gesperrt zurücklässt. Auf einem System, das weiterlebt, hiesse derselbe
+   * Zweig: Jeder erneute Seed überschreibt das Passwort, das die
+   * Administratorin inzwischen selbst gesetzt hat, und weckt ein bewusst
+   * stillgelegtes Konto wieder auf. Dort legt der Seed das Konto nur an,
+   * wenn es fehlt, und lässt ein bestehendes unberührt.
+   */
   const admin = await prisma.user.upsert({
     where: { email: process.env.SEED_ADMIN_EMAIL ?? 'admin@clenaris.ch' },
     // Auch Papierkorb, Sperre und Fehlversuche zurücksetzen — ein Klick in
     // der Benutzerverwaltung oder ein abgebrochener Prüflauf darf das
     // Demo-Konto nicht dauerhaft aus den Prüfungen nehmen.
-    update: {
-      passwordHash: adminPassword,
-      role: 'ADMIN',
-      status: 'ACTIVE',
-      deletedAt: null,
-      lockedUntil: null,
-      failedLoginCount: 0,
-      mustChangePassword: false,
-    },
+    update: OEFFENTLICHE_KONTEN
+      ? {
+          passwordHash: adminPassword,
+          role: 'ADMIN',
+          status: 'ACTIVE',
+          deletedAt: null,
+          lockedUntil: null,
+          failedLoginCount: 0,
+          mustChangePassword: false,
+        }
+      : {},
     create: {
       organizationId: org.id,
       email: process.env.SEED_ADMIN_EMAIL ?? 'admin@clenaris.ch',
@@ -782,14 +819,17 @@ async function main() {
    */
   await prisma.user.upsert({
     where: { email: process.env.SEED_SUPERADMIN_EMAIL ?? 'system@clenaris.ch' },
-    update: {
-      role: 'SUPER_ADMIN',
-      status: 'ACTIVE',
-      deletedAt: null,
-      lockedUntil: null,
-      failedLoginCount: 0,
-      mustChangePassword: false,
-    },
+    // Reparatur nur auf einem Wegwerf-System — Begründung beim Konto oben.
+    update: OEFFENTLICHE_KONTEN
+      ? {
+          role: 'SUPER_ADMIN',
+          status: 'ACTIVE',
+          deletedAt: null,
+          lockedUntil: null,
+          failedLoginCount: 0,
+          mustChangePassword: false,
+        }
+      : {},
     create: {
       organizationId: org.id,
       email: process.env.SEED_SUPERADMIN_EMAIL ?? 'system@clenaris.ch',
@@ -806,7 +846,24 @@ async function main() {
     },
   });
 
-  const teamMembers = [
+  /**
+   * Das Demo-Team entsteht nur auf einem Wegwerf-System (Notfallauftrag
+   * 2026-09-27).
+   *
+   * Bis dahin legte dieser Seed — der Seed *für ein echtes System* — die
+   * Betriebsleitung und fünf Mitarbeitende mit dem Passwort
+   * `Demo#2026Clenaris` an, das in `README.md` steht, und setzte es bei jedem
+   * Lauf wieder darauf zurück. Eine Betriebsleitung sieht Kundschaft,
+   * Disposition und Personal. Auf dem Produktionsserver war das ein
+   * anmeldbares Konto für jeden, der das Repository gelesen hat.
+   *
+   * Ein zufälliges Passwort statt keines Kontos wäre die kleinere Änderung
+   * gewesen und die falsche: Die sechs Personen sind erfunden. Ein Betrieb,
+   * der loslegt, erfasst sein echtes Team in der Personalverwaltung und lädt
+   * es dort ein — mit einem Passwort, das jede Person selbst setzt.
+   */
+  const demoPassword = OEFFENTLICHE_KONTEN ? await hash('Demo#2026Clenaris', ARGON_OPTIONS) : '';
+  const teamMembers = !OEFFENTLICHE_KONTEN ? [] : [
     { email: 'manager@clenaris.ch', firstName: 'Marco', lastName: 'Zbinden', role: 'MANAGER' as const, position: 'Betriebsleiter', hourlyRate: 48, color: '#5F3DC4', skills: ['Disposition', 'Qualitätskontrolle', 'Baureinigung'] },
     { email: 'anna.keller@clenaris.ch', firstName: 'Anna', lastName: 'Keller', role: 'EMPLOYEE' as const, position: 'Teamleiterin Reinigung', hourlyRate: 34, color: '#0B7285', skills: ['Umzugsreinigung', 'Fensterreinigung', 'Teamführung'] },
     { email: 'luis.moreira@clenaris.ch', firstName: 'Luis', lastName: 'Moreira', role: 'EMPLOYEE' as const, position: 'Reinigungsfachmann', hourlyRate: 31, color: '#E8590C', skills: ['Baureinigung', 'Hochdruckreiniger', 'Stapler'] },
@@ -1492,10 +1549,21 @@ async function main() {
   //  Abschluss
   // =========================================================================
   console.log('\n✅  Seed abgeschlossen.\n');
-  console.log('   Zugangsdaten:');
-  console.log(`   Admin      ${process.env.SEED_ADMIN_EMAIL ?? 'admin@clenaris.ch'} / ${process.env.SEED_ADMIN_PASSWORD ?? 'Admin#2026Clenaris'}`);
-  console.log('   Manager    manager@clenaris.ch / Demo#2026Clenaris');
-  console.log('   Mitarbeit. anna.keller@clenaris.ch / Demo#2026Clenaris\n');
+  /**
+   * Passwörter nur auf einem Wegwerf-System ausgeben (Notfallauftrag
+   * 2026-09-27). Hier stand das gesetzte `SEED_ADMIN_PASSWORD` im Klartext —
+   * auf einem Server also im Auslieferungsprotokoll unter `logs/deployment/`,
+   * dreissig Tage lang, für jeden lesbar, der das Protokoll lesen darf.
+   */
+  if (OEFFENTLICHE_KONTEN) {
+    console.log('   Zugangsdaten (nur Wegwerf-System):');
+    console.log(`   Admin      ${process.env.SEED_ADMIN_EMAIL ?? 'admin@clenaris.ch'} / ${process.env.SEED_ADMIN_PASSWORD ?? 'Admin#2026Clenaris'}`);
+    console.log('   Manager    manager@clenaris.ch / Demo#2026Clenaris');
+    console.log('   Mitarbeit. anna.keller@clenaris.ch / Demo#2026Clenaris\n');
+  } else {
+    console.log(`   Verwaltungskonto: ${process.env.SEED_ADMIN_EMAIL ?? 'admin@clenaris.ch'} (Passwort aus SEED_ADMIN_PASSWORD, nicht ausgegeben)`);
+    console.log('   Kein Demo-Team angelegt — das echte Team wird in der Personalverwaltung erfasst.\n');
+  }
   console.log('   Ohne Geschäftsdaten. Für Kundschaft, Buchungen und Rechnungen:');
   console.log('   npm run db:seed:demo\n');
 }

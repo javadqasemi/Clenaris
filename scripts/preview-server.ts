@@ -95,6 +95,14 @@ function main(): void {
         DIRECT_URL: previewUrl,
         TRUSTED_PROXY_MODE: 'NONE',
         CLENARIS_TEST_CACHE_DIR: cacheDir,
+        /**
+         * Die Vorschau meldet sich mit `Preview#2026…` an — Passwörter aus dem
+         * Repository, die ein Produktionsbau sonst abweist
+         * (`src/lib/auth/oeffentliche-zugangsdaten.ts`). Zugelassen werden sie
+         * nur mit dieser Angabe **und** gegen `clenaris_preview`; beides
+         * steht nur hier.
+         */
+        CLENARIS_UMGEBUNG: 'preview',
       },
     },
   );

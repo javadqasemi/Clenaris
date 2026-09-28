@@ -220,11 +220,20 @@ Sicherheitsverbesserung die Anwendung umwirft.
 
 > **Betrieblich wichtig:** Ohne gesetzten `ENCRYPTION_KEY` hängen die
 > verschlüsselten Felder an `JWT_SECRET`. Wer den wechselt, macht sie unlesbar.
-> Mit gesetztem `ENCRYPTION_KEY` ist die Frage entkoppelt — und erst dann ist
-> eine Rotation überhaupt durchführbar, weil sich der abgeleitete Schlüssel
-> nicht als Hexwert in `ENCRYPTION_KEY_PREVIOUS` eintragen lässt.
+> Mit gesetztem `ENCRYPTION_KEY` ist die Frage entkoppelt.
 >
-> **Für eine Produktion ist `ENCRYPTION_KEY` deshalb Pflicht, nicht Kür.**
+> **Für eine Produktion ist `ENCRYPTION_KEY` deshalb Pflicht, nicht Kür** —
+> seit 2026-09-27 prüft `npm run production:preflight` das.
+>
+> Korrektur (Notfallauftrag 2026-09-27): Hier stand, der abgeleitete Schlüssel
+> lasse sich nicht als Hexwert in `ENCRYPTION_KEY_PREVIOUS` eintragen. Er lässt
+> sich — mit denselben HKDF-Parametern abgeleitet.
+> `ALT_JWT_SECRET=… npx tsx scripts/schluessel-aus-jwt-ableiten.ts <datei>`
+> schreibt ihn in eine Datei (Modus 600, nie auf die Konsole); von dort geht
+> er in `ENCRYPTION_KEY_PREVIOUS`, und die Rotation unten läuft wie mit jedem
+> anderen alten Schlüssel. `tests/api/schluesselrotation.test.ts` beweist den
+> Weg: mit dem abgeleiteten Schlüssel verschlüsselt, `JWT_SECRET` gewechselt,
+> gelesen.
 
 ---
 

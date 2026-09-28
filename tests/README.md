@@ -86,8 +86,8 @@ die Zieldatenbank nicht als Testdatenbank erkennbar ist. Er lässt sich mit
    sollte, was ausgeliefert wird.
 
    **Prüfen Sie, welche Datenbank der Testserver bedient**, bevor Sie die
-   Reihe starten. Der billigste Nachweis: `admin@clenaris.ch` mit
-   `Admin#2026Clenaris` anmelden. Geht das auf 3001 und nicht auf 3000, sind
+   Reihe starten. Der billigste Nachweis: `admin@clenaris.ch` mit dem
+   Prüfpasswort aus `tests/helpers/accounts.ts` anmelden. Geht das auf 3001 und nicht auf 3000, sind
    die beiden getrennt.
 
 3. **Die Reihe dagegen fahren:**

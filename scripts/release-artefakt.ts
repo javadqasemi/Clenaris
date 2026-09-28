@@ -84,6 +84,11 @@ const INHALT = [
   // Das Aktivierungsskript reist mit: Das nächste Release wird mit dem
   // Skript des laufenden aktiviert, nicht mit einem Stand aus Git.
   'deploy',
+  // Die durchgesehene Einstufung der Migrationen (Notfallauftrag 2026-09-27):
+  // Die Produktionsvorprüfung entscheidet damit auf dem Server, ob offene
+  // Migrationen ohne Wartungsfenster zusammen mit dem Umschalten laufen
+  // dürfen. Ohne die Datei gälte jede offene Migration als BRECHEND.
+  'security',
 ];
 
 /** Nie im Artefakt, auch wenn ein Einschluss sie träfe. */
