@@ -14,6 +14,8 @@ import {
 import { AlertCircle } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
+// Deutsche Zod-Vorgaben auch für die Prüfung im Browser (`zodResolver`).
+import '@/lib/validation/fehlerkarte';
 
 /**
  * Formularbausteine für React Hook Form.

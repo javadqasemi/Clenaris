@@ -624,7 +624,12 @@ export function QuoteEditor({
                 render={({ field }) => (
                   <FormItem>
                     <FormLabel>Art</FormLabel>
-                    <Select value={field.value ?? 'none'} onValueChange={(value) => field.onChange(value === 'none' ? undefined : value)}>
+                    {/*
+                      „Kein Rabatt" ist `null`, nicht `undefined`: `undefined`
+                      fällt beim Serialisieren weg, und der Server hätte die
+                      alte Rabattart behalten (Schema `operations.ts`).
+                    */}
+                    <Select value={field.value ?? 'none'} onValueChange={(value) => field.onChange(value === 'none' ? null : value)}>
                       <FormControl>
                         <SelectTrigger>
                           <SelectValue />

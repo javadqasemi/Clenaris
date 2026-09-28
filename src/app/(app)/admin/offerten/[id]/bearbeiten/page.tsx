@@ -108,10 +108,22 @@ export default async function EditQuotePage({
           initial={{
             customerId: quote.customerId ?? undefined,
             title: quote.title,
-            validUntil: quote.validUntil,
+            /*
+             * Als `JJJJ-MM-TT`, nicht als `Date`. Das Formular prüft im
+             * Browser mit demselben Schema wie der Server, und
+             * `dateOnlySchema` nimmt nur die Zeichenkette an. Mit dem
+             * `Date`-Objekt scheiterte **jedes** Speichern einer unveränderten
+             * Gültigkeit an „Expected string, received date" — die Maske liess
+             * sich nur speichern, wenn man das Datum zuvor neu wählte
+             * (`tests/e2e/offerte-rabatt.spec.ts`). Die Spalte ist `@db.Date`,
+             * Prisma liefert sie als UTC-Mitternacht — der UTC-Tag ist also der
+             * gespeicherte Kalendertag, keine Zeitzonenfrage.
+             */
+            validUntil: quote.validUntil.toISOString().slice(0, 10) as unknown as Date,
             introText: quote.introText ?? '',
             outroText: quote.outroText ?? '',
-            discountType: quote.discountType ?? undefined,
+            // `null` bleibt `null` („kein Rabatt") — sonst fiele es beim Speichern weg.
+            discountType: quote.discountType,
             discountValue: toNumber(quote.discountValue),
             items: quote.items.map((item) => ({
               serviceId: item.serviceId ?? undefined,

@@ -24,6 +24,8 @@ import {
 } from '@/lib/observability/context';
 import { beobachteAnfrage } from '@/lib/observability/metrics';
 import { toErrorResponse } from './response';
+// Deutsche Zod-Vorgaben für jede Route — siehe die Begründung in der Datei.
+import '@/lib/validation/fehlerkarte';
 
 const beobachtung = logger('http');
 
