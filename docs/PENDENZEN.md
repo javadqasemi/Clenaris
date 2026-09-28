@@ -32,7 +32,7 @@ Durchgänge: Finanzen, Zugriff, Infrastruktur).
 | B-10 | Mandant | Lesen mandantengetrennt; `where`-Spread-Falle nicht mehr vorhanden | — | CLOSED (bereits behoben) | `mandanten.test.ts` | | |
 | B-11 | IDOR | Vertrag: `propertyId` ungeprüft, `quoteId` nicht gegen Kundschaft, verantwortliche Personen nicht gegen Organisation | P1 | CODE COMPLETE | `contract.service.ts` create/update; `vertraege.test.ts` „Bezüge des Vertrags"; Prüfbestand in 4 Dateien korrigiert (setzte fremde Objekte voraus) | | |
 | B-12 | IDOR | Kundschaft hängt Nachrichtenverlauf an fremden Einsatz (nur Organisation geprüft) | P1 | CODE COMPLETE | `message.service.ts`; `sicherheitsluecken.test.ts` „Nachrichtenverlauf zu einem fremden Einsatz" | | |
-| B-13 | Mandant | Schreibseitige Fremdschlüssel ohne Organisationsprüfung (Lieferant, Verantwortliche, Eltern-Ziel, Sitzung, Kennzahl am Schlüsselergebnis) | P2 | OPEN | objective/governance/investment/expense/document/meeting-Dienste | | |
+| B-13 | Mandant | Schreibseitige Fremdschlüssel ohne Organisationsprüfung (Lieferant, Verantwortliche, Eltern-Ziel, Sitzung, Kennzahl am Schlüsselergebnis) | P2 | VERIFIED | `bezug.service.ts`; `mandanten.test.ts` „Verweise der Führung und der Finanzen" — Produktionsbau 64/0 | 4b56a4b | |
 | B-14 | Dateien | Dateizugriff: Bindung, Scan-Tor, Prüfsumme | — | CLOSED (bereits behoben) | `datei-zugriff.test.ts`, `dateisicherheit.test.ts` | | |
 | B-15 | Sitzung | Refresh-Token einmalig, Familie bei Wiederverwendung gesperrt | — | CLOSED (bereits behoben) | `session-refresh.test.ts` | | |
 | B-16 | Dateien | Upload-Bytes einmalig; Signaturartefakte B/C bei Übernahme eines hängenden Abschlusses überschreibbar | P2 | OPEN | `signature.service.ts` Pfad ohne Versuchskennung | | |
@@ -54,3 +54,30 @@ Durchgänge: Finanzen, Zugriff, Infrastruktur).
 | C-03 | Formulare | Jedes Datumsfeld (`dateOnlySchema`) über `zodResolver` → 422; Offerte weder anlegen noch bearbeiten | P1 | CODE COMPLETE | `flows.test.ts`, Browserfall | c28328e | |
 | C-04 | Formulare | Englische Zod-Meldungen in der Oberfläche | P2 | CODE COMPLETE | `flows.test.ts` | c28328e | |
 | C-05 | Offerte | PATCH nur mit Rabatt rechnet die Summen nicht neu | P2 | CODE COMPLETE | `flows.test.ts` | c28328e | |
+
+## D — Bilder, Firefox und die anderen Engines
+
+| ID | Bereich | Befund | Prio | Status | Beleg / Prüfung | Commit | Extern |
+|---|---|---|---|---|---|---|---|
+| D-01 | Website | Gemeldet: Bilder (Vorher/Nachher) in Firefox erst nach mehrmaligem Neuladen. Lokal in Firefox **nicht** nachstellbar: hochgeladene Bilder in allen sechs Lagen (kalt, warm, Neuladen, Linkwechsel, langsam, mobil) dekodiert | P1 | EXTERNAL EVIDENCE REQUIRED | `tests/e2e/bilder.browser.spec.ts` Chromium/Firefox/WebKit 15/15 gegen den Produktionsbau | 4e81670 | Firefox gegen die Produktionsadresse (Cloudflare, https, echte Galerie) — Abnahme: Galerie und Startseite in Firefox mit leerem Cache öffnen, Netzwerkpanel: Status und Typ jeder `/api/files/blob/*`-Antwort; dazu `scripts/abnahme/bilder-browser.ts` |
+| D-02 | Website | WebKit: `upgrade-insecure-requests` stuft auf http-Auslieferung jede Unteranfrage auf https hoch (auch Loopback) — Seite ungestylt, Bilder leer | P1 | VERIFIED | Probe „SSL connect error" vor, 15/15 nach der Korrektur | 4e81670 | |
+| D-03 | Demodaten | Demogalerie veröffentlicht Adressen `/gallery/*.jpg`, die es nie gab — kaputte Bilder in jedem Browser | P2 | VERIFIED | Seed zieht solche Einträge zurück; Bildprüfung ohne kaputte Bilder | 4e81670 | Produktion: prüfen, ob dort Demo-Galerieeinträge veröffentlicht sind (Notfallauftrag 2026-09-27: Demodaten in Prod) |
+
+## K — Sitzung
+
+| ID | Bereich | Befund | Prio | Status | Beleg / Prüfung | Commit | Extern |
+|---|---|---|---|---|---|---|---|
+| K-01 | Anmeldung | „Angemeldet bleiben" war eine Scheinfunktion: geprüft, verworfen, jede Sitzung 30 Tage persistent; Kästchen vorausgewählt | P1 | CODE COMPLETE | `session-refresh.test.ts` „Sitzungscookies" | | |
+| K-02 | Sitzung | Ein Tab im Hintergrund meldete die ganze Sitzung ab, während im anderen gearbeitet wurde | P1 | CODE COMPLETE | `tests/e2e/sitzung-tabs.spec.ts` | | |
+| K-03 | Sitzung | Abmeldung erreichte die anderen Tabs nicht | P2 | CODE COMPLETE | `tests/e2e/sitzung-tabs.spec.ts` | | |
+| K-04 | Sitzung | Warnung vor Ablauf mit Weiterarbeiten/Abmelden | P2 | CODE COMPLETE | `tests/e2e/sitzung-tabs.spec.ts` | | |
+| K-05 | Doku | Grenzen (Schliessen nicht erkennbar, Sitzungswiederherstellung) | — | CODE COMPLETE | `docs/SITZUNG.md` | | |
+
+## N, O, P, Q — Arbeitsweise
+
+| ID | Bereich | Aufgabe | Prio | Status | Beleg | Commit | Extern |
+|---|---|---|---|---|---|---|---|
+| N-01 | Skill | `.claude/skills/security/SKILL.md` | P1 | CODE COMPLETE | Prüftabelle mit Clenaris-Wegen | | |
+| O-01 | Skill | `.claude/skills/ui-ux/SKILL.md` | P1 | CODE COMPLETE | Bausteine, Ebenen, Engines, Zustände | | |
+| P-01 | Skill | `.claude/skills/pendenzen/SKILL.md` | P1 | CODE COMPLETE | Vorher suchen, nichts still löschen, Löschdetektor, Register | | |
+| Q-01 | DoD | Pflichtablauf (15 Schritte), browserübergreifende Zeile, Verweis in `.claude/rules/engineering.md` | P1 | CODE COMPLETE | `docs/ENGINEERING_DEFINITION_OF_DONE.md` | | |
