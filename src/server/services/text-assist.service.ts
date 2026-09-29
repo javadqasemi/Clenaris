@@ -2,7 +2,7 @@ import 'server-only';
 
 import { randomBytes } from 'node:crypto';
 
-import { generateText, modelFor } from '@/lib/ai/client';
+import { generateText, kiTextVerfuegbar, modelFor } from '@/lib/ai/client';
 import {
   aktionLabel,
   antwortAuswerten,
@@ -11,7 +11,6 @@ import {
   sperrMeldung,
   textAssistNutzlast,
 } from '@/lib/ai/text-assist';
-import { hasIntegration } from '@/lib/env';
 import { AppError, BusinessRuleError, ConfigurationError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
 import type { TextAssistInput } from '@/lib/validation/ai';
@@ -69,7 +68,7 @@ export async function textAssistieren(
     throw new BusinessRuleError(sperrMeldung(gesperrt));
   }
 
-  if (!hasIntegration('ai')) {
+  if (!kiTextVerfuegbar()) {
     throw new ConfigurationError(
       'Anthropic',
       'Der KI-Textassistent ist nicht eingerichtet: Es ist kein KI-Anbieter konfiguriert (ANTHROPIC_API_KEY). Der Text bleibt unverändert.',
