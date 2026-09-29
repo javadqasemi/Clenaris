@@ -55,6 +55,7 @@ E-Mail an `nicole.wyss@example.ch` hinaus.
 | `angemeldet.webkit.spec.ts` | Nur WebKit, über die HTTPS-Vorschaltung (`scripts/test-https-vorschaltung.ts`, W-02): Anmeldung und Übersicht, Rabattauswahl in der Offertmaske, Suche und Scanner mit Handeingabe, Abmelden |
 | `abmelden.spec.ts` | Abmelden mit einer zurückgehaltenen Abfrage des Rahmens: kein Sprung zur Anmeldung „abgelaufen", keine Erneuerung, Ziel Startseite (2026-09-29) |
 | `ki-textassistent.spec.ts` | Textassistent mit dem Prüfanbieter (`src/lib/ai/pruefanbieter.ts`, keine echte KI): Original/Vorschlag, Verwerfen, Erneut generieren, Übernehmen, kein Autospeichern, Personal 403 |
+| `zustaende.spec.ts` | Fehler- und Leerzustände (RC-06): Nachrichtenliste und -verlauf mit Netzabbruch, Preisberechnung der Buchung mit Netzabbruch, Lohnjahr ohne Satzversion — jeweils mit Weg zurück zum Erfolg |
 | `besuchsauswertung.spec.ts` | Website-Besuche mit eigenem Bestand: Zeitraum, Leerzustand, keine IP und kein Token, kein Zugang für Personal |
 | `hydration-wiederholung.spec.ts` | RB-001 deterministisch: die **von Next mitgelieferte** React-Fassung spielt ein angehaltenes `<main>` während der Hydration wieder ab (Flight-artiger `lazy`-Knoten). Verlangt, dass das Wiederabspielen eintritt, und dass dabei keine Abweichung entsteht. Scheitert ohne `scripts/react-hydrationskorrektur.mjs` (`docs/HYDRATION.md` §16) |
 
