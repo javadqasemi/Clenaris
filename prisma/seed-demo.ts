@@ -23,12 +23,13 @@
  *   npm run db:seed:demo
  */
 
-import { PrismaClient, type Prisma } from '@prisma/client';
+import type { Prisma } from '@prisma/client';
 import { hash } from '@node-rs/argon2';
 
 // Derselbe Rechenkern wie in der Anwendung — der Seed erfindet kein Ergebnis.
 import { computeScenario, type ScenarioDriverKey } from '../src/lib/bi/math';
 import { assertDemoSeedErlaubt, databaseNameOf } from './seed-guard';
+import { erzeugePrismaClient } from '../src/lib/prisma-client';
 
 /**
  * Vor allem anderen: Zeigt `DATABASE_URL` auf eine Testdatenbank?
@@ -40,7 +41,7 @@ import { assertDemoSeedErlaubt, databaseNameOf } from './seed-guard';
  */
 assertDemoSeedErlaubt();
 
-const prisma = new PrismaClient();
+const prisma = erzeugePrismaClient();
 
 const ORG_SLUG = 'clenaris';
 const ARGON_OPTIONS = { memoryCost: 19_456, timeCost: 2, parallelism: 1 } as const;

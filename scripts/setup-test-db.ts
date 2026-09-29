@@ -50,9 +50,9 @@
 
 import { execFileSync } from 'node:child_process';
 
-import { PrismaClient } from '@prisma/client';
 
 import { databaseNameOf, istTestdatenbank } from '../prisma/seed-guard';
+import { erzeugePrismaClient } from '../src/lib/prisma-client';
 
 /**
  * Die Demokonten aus `prisma/seed.ts`.
@@ -91,7 +91,7 @@ async function datenbankAnlegen(testUrl: string, name: string, frisch: boolean):
   // diese Prüfung erst vor `CREATE`, das `DROP` mit `--frisch` lief ungeprüft
   // (gefunden von `npm run security:check`, Regel `sql-unsafe`).
   if (/["\\]/.test(name)) throw new Error(`Unzulässiger Datenbankname: ${name}`);
-  const client = new PrismaClient({ datasources: { db: { url: wartungsUrl(testUrl) } } });
+  const client = erzeugePrismaClient({ url: wartungsUrl(testUrl) });
   try {
     if (frisch) {
       // `WITH (FORCE)` trennt offene Verbindungen; ohne das scheitert das

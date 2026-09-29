@@ -43,7 +43,7 @@
       }
     },
     {
-      "files": ["src/lib/db.ts"],
+      "files": ["src/lib/db.ts", "src/lib/prisma-client.ts"],
       "rules": {
         "no-restricted-imports": "off"
       }

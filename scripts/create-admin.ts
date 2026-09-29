@@ -1,7 +1,8 @@
-import { PrismaClient, type UserRole } from '@prisma/client';
+import type { UserRole } from '@prisma/client';
 import { hash } from '@node-rs/argon2';
 
 import { istOeffentlichesPasswort } from '../src/lib/auth/oeffentliche-zugangsdaten';
+import { erzeugePrismaClient } from '../src/lib/prisma-client';
 
 /**
  * Legt ein Verwaltungskonto an oder setzt es zurück.
@@ -22,7 +23,7 @@ import { istOeffentlichesPasswort } from '../src/lib/auth/oeffentliche-zugangsda
 // Dieselben Argon2-Parameter wie im Seed und im Anmeldedienst.
 const ARGON_OPTIONS = { memoryCost: 19_456, timeCost: 2, parallelism: 1 } as const;
 
-const prisma = new PrismaClient();
+const prisma = erzeugePrismaClient();
 
 async function main() {
   const [email, password, roleArg = 'SUPER_ADMIN', firstName = 'Admin', lastName = 'Konto'] =

@@ -121,9 +121,12 @@ describe('Auslieferungs-Workflow — fail-closed', () => {
     assert.match(tor, /scripts\/release-artefakt\.ts/, 'das Artefakt entsteht im Qualitätstor, aus dem geprüften Bau');
   });
 
-  it('die Vorprüfung auf dem Server kennt DIRECT_URL, weil das Schema sie verlangt', () => {
-    const schema = readFileSync(join(wurzel, 'prisma', 'schema.prisma'), 'utf8');
-    assert.match(schema, /directUrl\s*=\s*env\("DIRECT_URL"\)/);
+  it('die Vorprüfung auf dem Server kennt DIRECT_URL, weil die Migrationen sie benutzen', () => {
+    // Seit Prisma 7 (2026-09-29) steht die Adresse der Kommandozeile nicht mehr
+    // im Schema (`directUrl`), sondern in `prisma.config.ts` — mit `DIRECT_URL`
+    // zuerst, damit `migrate` am Pooler vorbeigeht.
+    const konfiguration = readFileSync(join(wurzel, 'prisma.config.ts'), 'utf8');
+    assert.match(konfiguration, /url:\s*process\.env\.DIRECT_URL\s*\|\|/);
     const vorpruefung = readFileSync(join(wurzel, 'scripts', 'production-preflight.ts'), 'utf8');
     assert.match(vorpruefung, /'DIRECT_URL'/);
     const aktivieren = readFileSync(join(wurzel, 'deploy', 'v2', 'release-aktivieren.sh'), 'utf8');

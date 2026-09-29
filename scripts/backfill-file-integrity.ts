@@ -33,9 +33,9 @@
  */
 import { createHash } from 'node:crypto';
 
-import { PrismaClient } from '@prisma/client';
+import { erzeugePrismaClient } from '../src/lib/prisma-client';
 
-const prisma = new PrismaClient();
+const prisma = erzeugePrismaClient();
 const schreiben = process.argv.includes('--schreiben');
 
 /** `/api/files/blob/<id>` — die Adressform der Rückfallebene. */

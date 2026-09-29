@@ -35,8 +35,9 @@
  * sollte keine zeigen.
  */
 // eslint-disable-next-line no-restricted-imports
-import { PrismaClient } from '@prisma/client';
+import { type PrismaClient } from '@prisma/client';
 import { writeFileSync } from 'node:fs';
+import { erzeugePrismaClient } from '../src/lib/prisma-client';
 
 export interface Pruefung {
   schluessel: string;
@@ -222,7 +223,7 @@ export async function pruefen(prisma: Pick<PrismaClient, '$queryRawUnsafe'>): Pr
 
 async function main(): Promise<void> {
   const url = process.env.INTEGRITAET_DATABASE_URL?.trim();
-  const prisma = new PrismaClient(url ? { datasources: { db: { url } } } : undefined);
+  const prisma = erzeugePrismaClient(url ? { url } : {});
   let ergebnisse: Ergebnis[];
   try {
     ergebnisse = await pruefen(prisma);

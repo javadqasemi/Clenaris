@@ -20,10 +20,10 @@ generator client {
   previewFeatures = ["fullTextSearchPostgres"]
 }
 
+// Verbindung und Seed stehen seit Prisma 7 in `prisma.config.ts`; die
+// Laufzeit verbindet sich über den Treiberadapter (`src/lib/prisma-client.ts`).
 datasource db {
-  provider  = "postgresql"
-  url       = env("DATABASE_URL")
-  directUrl = env("DIRECT_URL")
+  provider = "postgresql"
 }
 
 // ===========================================================================

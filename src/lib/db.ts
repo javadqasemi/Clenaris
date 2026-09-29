@@ -1,4 +1,6 @@
-import { Prisma, PrismaClient } from '@prisma/client';
+import { Prisma, type PrismaClient } from '@prisma/client';
+
+import { erzeugePrismaClient } from './prisma-client';
 
 /**
  * Prisma-Singleton.
@@ -13,8 +15,9 @@ const globalForPrisma = globalThis as unknown as {
   prisma: PrismaClient | undefined;
 };
 
+// Seit Prisma 7 über den Treiberadapter (`prisma-client.ts`), Adresse aus `DATABASE_URL`.
 function createClient() {
-  return new PrismaClient({
+  return erzeugePrismaClient({
     log:
       process.env.NODE_ENV === 'development'
         ? [{ level: 'warn', emit: 'stdout' }, { level: 'error', emit: 'stdout' }]
@@ -32,20 +35,67 @@ if (process.env.NODE_ENV !== 'production') {
 export { Prisma };
 export type { PrismaClient };
 
-/** Transaktions-Client-Typ für Services, die innerhalb `$transaction` laufen. */
-export type Tx = Omit<
-  PrismaClient,
-  '$connect' | '$disconnect' | '$on' | '$transaction' | '$use' | '$extends'
->;
+/**
+ * Transaktions-Client-Typ für Services, die innerhalb `$transaction` laufen.
+ *
+ * Prismas eigener Typ statt einer eigenen Ausschlussliste (seit Prisma 7,
+ * 2026-09-29): Die Liste liess `$transaction` weg, Prisma 7 nimmt es in
+ * `TransactionClient` auf — beide Typen passten danach nicht mehr zueinander.
+ * Welche Methoden eine Transaktion hat, entscheidet Prisma.
+ */
+export type Tx = Prisma.TransactionClient;
 
-/** Prisma-Fehler in sprechende Meldungen übersetzen. */
+/**
+ * Die Einzelheiten eines Datenbankfehlers — in beiden Formen, die Prisma
+ * liefert (seit Prisma 7, 2026-09-29).
+ *
+ * Bis Prisma 6 standen die betroffenen Spalten in `meta.target` und der
+ * SQLSTATE einer rohen Abfrage in `meta.code`. Mit dem Treiberadapter liegen
+ * sie unter `meta.driverAdapterError.cause`: `constraint.fields` oder — wenn
+ * Postgres nur den Namen des Index meldet — `constraint.index`
+ * (etwa `materials_organizationId_barcode_key`), der SQLSTATE in
+ * `originalCode`. Gemessen gegen die Testdatenbank. Ohne diese Stelle hätte
+ * jede Prüfung auf `meta.target` still „nichts gefunden" gemeldet: der
+ * Lagerbestand „Artikelnummer vergeben" beim doppelten Strichcode, die
+ * Fehlerabbildung eine Verklemmung als 500 statt 409.
+ */
+interface AdapterUrsache {
+  originalCode?: string;
+  constraint?: { fields?: string[]; index?: string };
+}
+
+function adapterUrsache(error: Prisma.PrismaClientKnownRequestError): AdapterUrsache | undefined {
+  return (error.meta as { driverAdapterError?: { cause?: AdapterUrsache } } | undefined)?.driverAdapterError?.cause;
+}
+
+/** Spalten (oder der Indexname) einer verletzten Eindeutigkeit — leer, wenn unbekannt. */
+export function eindeutigkeitsFelder(error: unknown): string[] {
+  if (!(error instanceof Prisma.PrismaClientKnownRequestError)) return [];
+  const ziel = (error.meta as { target?: string[] | string } | undefined)?.target;
+  if (Array.isArray(ziel)) return ziel.map(String);
+  if (typeof ziel === 'string') return [ziel];
+  const constraint = adapterUrsache(error)?.constraint;
+  if (constraint?.fields?.length) return constraint.fields.map(String);
+  return constraint?.index ? [constraint.index] : [];
+}
+
+/** SQLSTATE des zugrunde liegenden Postgres-Fehlers (etwa `40P01`), falls gemeldet. */
+export function sqlZustand(error: unknown): string | undefined {
+  if (!(error instanceof Prisma.PrismaClientKnownRequestError)) return undefined;
+  const alt = (error.meta as { code?: unknown } | undefined)?.code;
+  if (typeof alt === 'string') return alt;
+  return adapterUrsache(error)?.originalCode;
+}
+
+/**
+ * Eindeutigkeit verletzt? Mit `target`: an dieser Spalte — ein Indexname, der
+ * die Spalte enthält, zählt mit (die Adapterform meldet oft nur den Index).
+ */
 export function isUniqueConstraintError(error: unknown, target?: string): boolean {
   if (!(error instanceof Prisma.PrismaClientKnownRequestError)) return false;
   if (error.code !== 'P2002') return false;
   if (!target) return true;
-  const meta = error.meta as { target?: string[] | string } | undefined;
-  const fields = Array.isArray(meta?.target) ? meta?.target : [meta?.target];
-  return fields.some((f) => f === target);
+  return eindeutigkeitsFelder(error).some((f) => f === target || f.includes(target));
 }
 
 export function isNotFoundError(error: unknown): boolean {

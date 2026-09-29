@@ -47,9 +47,9 @@
 import { writeFileSync } from 'node:fs';
 
 // eslint-disable-next-line no-restricted-imports
-import { PrismaClient } from '@prisma/client';
 
 import { OEFFENTLICHE_DEMO_ADRESSEN, OEFFENTLICHE_PASSWOERTER } from '../src/lib/auth/oeffentliche-zugangsdaten';
+import { erzeugePrismaClient } from '../src/lib/prisma-client';
 
 type Stufe = 'AUFFAELLIG' | 'PRUEFEN' | 'OK';
 
@@ -84,7 +84,7 @@ async function main(): Promise<void> {
   const roh = process.env.DATABASE_URL;
   if (!roh) throw new Error('DATABASE_URL fehlt.');
 
-  const prisma = new PrismaClient({ datasources: { db: { url: nurLesendeAdresse(roh) } } });
+  const prisma = erzeugePrismaClient({ url: nurLesendeAdresse(roh) });
   const abschnitte: Abschnitt[] = [];
   const neu = { gte: seit };
 

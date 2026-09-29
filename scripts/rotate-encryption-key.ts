@@ -82,7 +82,7 @@ moduleWithResolver._resolveFilename = function (request: string, ...rest: unknow
 /* eslint-disable no-console */
 
 async function main() {
-  const { PrismaClient } = await import('@prisma/client');
+  const { erzeugePrismaClient } = await import('../src/lib/prisma-client');
   const {
     CRYPTO_CONTEXT,
     decrypt,
@@ -93,7 +93,7 @@ async function main() {
     schluesselUebersicht,
   } = await import('../src/lib/crypto');
 
-  const prisma = new PrismaClient();
+  const prisma = erzeugePrismaClient();
   const argv = process.argv.slice(2);
   const nurStatus = argv.includes('--status');
 

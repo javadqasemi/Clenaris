@@ -3,7 +3,7 @@ import 'server-only';
 import { Prisma } from '@prisma/client';
 
 import { audit } from '@/lib/audit';
-import { isUniqueConstraintError, prisma, toNumber, type Tx } from '@/lib/db';
+import { eindeutigkeitsFelder, isUniqueConstraintError, prisma, toNumber, type Tx } from '@/lib/db';
 import { BusinessRuleError, ConflictError, NotFoundError } from '@/lib/errors';
 import { round2 } from '@/lib/utils';
 import type { MaterialCreateInput, MaterialUpdateInput, StockMovementCreateInput } from '@/lib/validation/betrieb';
@@ -132,9 +132,8 @@ export async function createMaterial(params: { organizationId: string; actorId: 
  * ändern.
  */
 function eindeutigkeitsMeldung(fehler: unknown, sku?: string): string {
-  const ziel = (fehler as { meta?: { target?: unknown } }).meta?.target;
-  const felder = Array.isArray(ziel) ? ziel.map(String) : [String(ziel ?? '')];
-  if (felder.some((f) => f.includes('barcode'))) return 'Dieser Strichcode gehört bereits zu einem anderen Artikel.';
+  // Beide Fehlerformen (Prisma 6 `meta.target`, Prisma 7 Adapter-Index) — `db.ts`.
+  if (eindeutigkeitsFelder(fehler).some((f) => f.includes('barcode'))) return 'Dieser Strichcode gehört bereits zu einem anderen Artikel.';
   return sku ? `Die Artikelnummer ${sku} ist bereits vergeben.` : 'Die Artikelnummer ist bereits vergeben.';
 }
 
