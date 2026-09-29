@@ -16,6 +16,7 @@ import { Button } from '@/components/ui/button';
 import { Input, Textarea } from '@/components/ui/input';
 import { Alert } from '@/components/ui/primitives';
 import { Checkbox } from '@/components/ui/controls';
+import { FormTextAssist } from '@/components/app/text-assist';
 import {
   Select,
   SelectContent,
@@ -53,6 +54,11 @@ import {
  *    Total. Das ist im Reinigungsgewerbe üblich („Fenster auf Wunsch").
  *  • Der KI-Entwurf füllt nur die Felder aus; gespeichert wird erst nach
  *    einer bewussten Prüfung durch eine Person.
+ *  • Der KI-Textassistent (2026-09-28) hängt nur an Einleitung und
+ *    Schlusstext — Fliesstext an die Kundschaft. Nicht an Positionen, Mengen
+ *    und Preisen: Die rechnet der Server, und ein „professioneller
+ *    formulierter" Betrag wäre ein anderer Betrag. Übernehmen füllt nur das
+ *    Feld; gespeichert wird mit der Offerte.
  */
 
 export interface QuoteEditorService {
@@ -77,12 +83,15 @@ export function QuoteEditor({
   defaultCustomerId,
   initial,
   quoteId,
+  canDraft = false,
 }: {
   services: QuoteEditorService[];
   customers: QuoteEditorCustomer[];
   defaultCustomerId?: string;
   initial?: Partial<CreateQuoteInput>;
   quoteId?: string;
+  /** KI-Entwurf anbieten — entscheidet die Seite auf dem Server. */
+  canDraft?: boolean;
 }) {
   const router = useRouter();
   const [error, setError] = React.useState<string | null>(null);
@@ -293,7 +302,13 @@ export function QuoteEditor({
       <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-8" noValidate>
         {error ? <Alert variant="destructive">{error}</Alert> : null}
 
-        {/* KI-Entwurf */}
+        {/*
+          KI-Entwurf — nur, wenn die Seite ihn freigibt (`ai:use` +
+          `quote:create` wie `POST /api/ai/quote-draft`, Anbieter eingerichtet).
+          Bis 2026-09-28 stand der Abschnitt immer da und endete ohne Anbieter
+          in einer Fehlermeldung, nachdem man die Anfrage eingefügt hatte.
+        */}
+        {canDraft ? (
         <section className="space-y-3 rounded-2xl border border-primary/25 bg-primary/[0.04] p-5">
           <div className="flex items-center gap-2">
             <Sparkles className="size-4 text-primary" aria-hidden />
@@ -315,6 +330,7 @@ export function QuoteEditor({
             Entwurf erstellen
           </Button>
         </section>
+        ) : null}
 
         {/* Kopfdaten */}
         <div className="grid gap-5 sm:grid-cols-2">
@@ -401,7 +417,16 @@ export function QuoteEditor({
             name="introText"
             render={({ field }) => (
               <FormItem className="sm:col-span-2">
-                <FormLabel>Einleitung</FormLabel>
+                <div className="flex items-center justify-between gap-2">
+                  <FormLabel>Einleitung</FormLabel>
+                  <FormTextAssist
+                    kontext="quote-text"
+                    feldLabel="Einleitung"
+                    value={field.value ?? ''}
+                    onChange={field.onChange}
+                    className="-my-1.5"
+                  />
+                </div>
                 <FormControl>
                   <Textarea rows={3} {...field} value={field.value ?? ''} />
                 </FormControl>
@@ -624,7 +649,12 @@ export function QuoteEditor({
                 render={({ field }) => (
                   <FormItem>
                     <FormLabel>Art</FormLabel>
-                    <Select value={field.value ?? 'none'} onValueChange={(value) => field.onChange(value === 'none' ? undefined : value)}>
+                    {/*
+                      „Kein Rabatt" ist `null`, nicht `undefined`: `undefined`
+                      fällt beim Serialisieren weg, und der Server hätte die
+                      alte Rabattart behalten (Schema `operations.ts`).
+                    */}
+                    <Select value={field.value ?? 'none'} onValueChange={(value) => field.onChange(value === 'none' ? null : value)}>
                       <FormControl>
                         <SelectTrigger>
                           <SelectValue />
@@ -666,7 +696,16 @@ export function QuoteEditor({
               name="outroText"
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>Schlusstext</FormLabel>
+                  <div className="flex items-center justify-between gap-2">
+                    <FormLabel>Schlusstext</FormLabel>
+                    <FormTextAssist
+                      kontext="quote-text"
+                      feldLabel="Schlusstext"
+                      value={field.value ?? ''}
+                      onChange={field.onChange}
+                      className="-my-1.5"
+                    />
+                  </div>
                   <FormControl>
                     <Textarea rows={3} {...field} value={field.value ?? ''} />
                   </FormControl>

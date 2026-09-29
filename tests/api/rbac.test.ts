@@ -581,6 +581,13 @@ describe('Seitenschutz und Navigation', { concurrency: 1 }, () => {
     ['/admin/benutzer', { super: 200, admin: 200, manager: 404, employee: 404, customer: 404 }],
     ['/admin/protokoll', { super: 200, admin: 404, manager: 404, employee: 404, customer: 404 }],
     ['/admin/medien', { super: 200, admin: 200, manager: 200, employee: 404, customer: 404 }],
+    // Audit 2026-09-28 (L-08): Der Kundenbereich nur für Kundschaft — vorher
+    // durfte das Personal hinein und sah auf jeder Seite eine Fehlerseite.
+    ['/konto', { super: 404, admin: 404, manager: 404, employee: 404, customer: 200 }],
+    // Audit 2026-09-28 (L-10): reine Eingabemaske mit `requirePagePermission`.
+    // Die Betriebsleitung hat kein `objective:create`; vorher warf die Seite
+    // (`requirePermission`) und zeigte die Fehlergrenze statt „nicht da".
+    ['/admin/fuehrung/ziele/neu', { super: 200, admin: 200, manager: 404, employee: 404, customer: 404 }],
   ];
 
   for (const [path, expectation] of PAGES) {
@@ -616,6 +623,20 @@ describe('Seitenschutz und Navigation', { concurrency: 1 }, () => {
       const html = (await get('/admin', { jar: jars.super })).text;
       assert.ok(html.includes('/admin/protokoll'));
       assert.ok(html.includes('/admin/rollen'));
+    });
+
+    // Audit 2026-09-28 (L-08): Die Portalnavigation war ungefiltert — die
+    // Betriebsleitung sah „Meine Ziele", ohne `objective:read_own` zu halten.
+    it('filtert die Portalnavigation nach Rechten', async () => {
+      const mitarbeitende = (await get('/portal', { jar: jars.employee })).text;
+      assert.ok(mitarbeitende.includes('href="/portal/ziele"'), 'Meine Ziele fehlt für Mitarbeitende');
+      assert.ok(mitarbeitende.includes('href="/portal/aufgaben"'), 'Meine Aufgaben fehlt für Mitarbeitende');
+      // Die Wissensseite verlangt nur `knowledge:read`, kein Personalprofil —
+      // sie rendert für die Betriebsleitung sicher mit Navigation.
+      const leitung = await get('/portal/wissen', { jar: jars.manager });
+      assert.equal(leitung.status, 200);
+      assert.ok(!leitung.text.includes('href="/portal/ziele"'), 'Meine Ziele für die Betriebsleitung sichtbar');
+      assert.ok(leitung.text.includes('href="/portal/wissen"'), 'Gegenprobe: Navigation fehlt ganz');
     });
   });
 });

@@ -65,6 +65,43 @@ export const VERSIONSSTATUS: Record<string, string> = {
   DISCARDED: 'Verworfen',
 };
 
+/**
+ * Der Vertragspreis in einem Satz — „CHF 480.00 je Abrechnungsperiode · zzgl.
+ * 8.1 % MWST".
+ *
+ * **Warum hier und nicht im PDF-Renderer.** Derselbe Satz steht im
+ * Vertrags-PDF, das unterschrieben wird, und seit L-18 (2026-09-28) auf der
+ * Vertragsseite im Kundenkonto. Zwei Formulierungen desselben Preises liefen
+ * genau dann auseinander, wenn jemand die eine mit der anderen vergleicht —
+ * und die Kundschaft vergleicht die Seite mit dem unterschriebenen Dokument.
+ *
+ * Nimmt bereits umgewandelte Zahlen entgegen (kein `Decimal`), damit das Modul
+ * frei von Prisma-Typen bleibt (siehe Kopfkommentar). Die Rundung auf zwei
+ * bzw. vier Stellen ist die des PDFs: Ein Mengenpreis wie 0.3500 je m² ist
+ * mit zwei Stellen eine andere Zahl.
+ */
+export function preisText(version: {
+  pricingModel: string;
+  currency: string;
+  baseAmount: number;
+  hourlyRate: number;
+  unitPrice: number;
+  unitLabel: string | null;
+  vatRate: number;
+}): string {
+  const mwst = `zzgl. ${version.vatRate} % MWST`;
+  switch (version.pricingModel) {
+    case 'HOURLY':
+      return `${version.currency} ${version.hourlyRate.toFixed(2)} je Stunde · ${mwst}`;
+    case 'UNIT_BASED':
+      return `${version.currency} ${version.unitPrice.toFixed(4)} je ${version.unitLabel ?? 'Einheit'} · ${mwst}`;
+    case 'FIXED_PER_VISIT':
+      return `${version.currency} ${version.baseAmount.toFixed(2)} je Einsatz · ${mwst}`;
+    default:
+      return `${version.currency} ${version.baseAmount.toFixed(2)} je Abrechnungsperiode · ${mwst}`;
+  }
+}
+
 /** Uhrzeit aus Minuten seit Mitternacht — „06:00". */
 export function uhrzeit(minuten: number): string {
   const h = Math.floor(minuten / 60);

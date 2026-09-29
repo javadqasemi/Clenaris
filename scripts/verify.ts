@@ -146,6 +146,7 @@ function merkmalspruefung(): void {
 
 function statisch(): void {
   schritt('React-Hydrationskorrektur angewendet', 'node scripts/react-hydrationskorrektur.mjs --pruefen');
+  schritt('Next-Cachezeitkorrektur angewendet (RB-002)', 'node scripts/next-cachezeit-korrektur.mjs --pruefen');
   // Nur `critical` und nur Laufzeitabhängigkeiten; die übrigen Befunde sind
   // in docs/LIEFERKETTE.md einzeln bewertet und laufen in der
   // Sicherheitsprüfung gegen `security/akzeptierte-befunde.json`.
@@ -307,6 +308,10 @@ async function voll(optionen: { frisch: boolean }): Promise<void> {
   schritt('Migrationen auf die Testdatenbank', 'npx prisma migrate deploy', { env: dbEnv });
   schritt('Demodaten (idempotent)', 'npm run db:seed:demo', { env: dbEnv });
   schritt('Build', 'npm run build', { env: { ...dbEnv, NODE_ENV: 'production' } });
+  // Seit 2026-09-28: JavaScript je Route gegen `scripts/leistungsbudget.json`.
+  // Grössen statt Millisekunden — auf jeder Maschine dieselbe Zahl, also ein
+  // Tor, das nicht zufällig rot wird (Begründung in `leistungsbudget.ts`).
+  schritt('Leistungsbudget (JavaScript je Route)', 'npx tsx scripts/leistungsbudget.ts');
   const port = process.env.VERIFY_PORT?.trim() || '3001';
   const cacheDir = mkdtempSync(join(tmpdir(), 'clenaris-verify-'));
   try {

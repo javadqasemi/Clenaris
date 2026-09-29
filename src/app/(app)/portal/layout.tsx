@@ -1,9 +1,9 @@
 import { redirect } from 'next/navigation';
 
 import { prisma } from '@/lib/db';
-import { serverEnv } from '@/lib/env';
-import { getSession } from '@/lib/auth/session';
+import { getSession, sessionIdleSecondsFor } from '@/lib/auth/session';
 import { can, guardForPath, homeRouteFor } from '@/lib/auth/rbac';
+import { filterNavigation, type GuardedNavGroup } from '@/lib/auth/navigation';
 import { zuercherTagesgrenzen } from '@/lib/zuerich';
 import { AppShell, type NavGroup } from '@/components/app/app-shell';
 
@@ -31,7 +31,7 @@ export default async function PortalLayout({ children }: { children: React.React
   const guard = guardForPath('/portal')!;
   if (!guard.roles.includes(session.role)) redirect(homeRouteFor(session.role));
 
-  const [todayJobs, openAbsences] = await Promise.all([
+  const [todayJobs, openAbsences, openTasks] = await Promise.all([
     session.profileId
       ? prisma.job.count({
           where: {
@@ -52,16 +52,35 @@ export default async function PortalLayout({ children }: { children: React.React
           where: { employeeId: session.profileId, status: 'REQUESTED' },
         })
       : Promise.resolve(0),
+    // Dieselbe Auswahl wie `/portal/aufgaben`: eigene, offene, eigene Organisation.
+    can(session.role, 'task:read')
+      ? prisma.task.count({
+          where: { organizationId: session.organizationId, assigneeId: session.id, status: { in: ['OPEN', 'IN_PROGRESS'] } },
+        })
+      : Promise.resolve(0),
   ]);
 
-  const navigation: NavGroup[] = [
+  /**
+   * Die Navigation des Portals — gefiltert wie die der Verwaltung.
+   *
+   * Bis 2026-09-28 stand hier eine ungefilterte Liste. Das Portal betreten
+   * aber auch Büro-Rollen (`ROUTE_GUARDS`), und nicht jede hält jedes Recht:
+   * Die Betriebsleitung hat kein `objective:read_own`, „Meine Ziele" führte
+   * sie auf eine Fehlerseite. Einträge, deren Seite ein Recht verlangt, nennen
+   * es deshalb hier — dieselbe Angabe wie `requirePermission()` der Seite, die
+   * vier Ebenen (Middleware, Rechteliste, Navigation, Seite) stimmen überein.
+   * Einträge ohne Angabe verlangen ein Personalprofil, kein Recht.
+   */
+  const allNavigation: GuardedNavGroup[] = [
     {
       items: [
         { href: '/portal', label: 'Heute', icon: 'home', exact: true, badge: todayJobs },
         { href: '/portal/einsaetze', label: 'Meine Einsätze', icon: 'tasks' },
+        // Eigene Aufgaben (2026-09-28): Ziel der Aufgabenmeldungen an Mitarbeitende.
+        { href: '/portal/aufgaben', label: 'Meine Aufgaben', icon: 'checklist', badge: openTasks, permission: 'task:read' },
         { href: '/portal/kalender', label: 'Kalender', icon: 'calendar' },
-        { href: '/portal/ziele', label: 'Meine Ziele', icon: 'target' },
-        { href: '/portal/wissen', label: 'Wissen', icon: 'book' },
+        { href: '/portal/ziele', label: 'Meine Ziele', icon: 'target', permission: 'objective:read_own' },
+        { href: '/portal/wissen', label: 'Wissen', icon: 'book', permission: 'knowledge:read' },
       ],
     },
     {
@@ -73,6 +92,7 @@ export default async function PortalLayout({ children }: { children: React.React
       ],
     },
   ];
+  const navigation: NavGroup[] = filterNavigation(allNavigation, session.role);
 
   return (
     <AppShell
@@ -82,7 +102,7 @@ export default async function PortalLayout({ children }: { children: React.React
       // Im Portal löst der Scanner nur eigene Einsätze und deren Objekte auf
       // (`scan.service.ts`), mit Links ins Portal.
       scan={can(session.role, 'dashboard:view')}
-      sessionIdleSeconds={serverEnv().SESSION_IDLE_TTL}
+      sessionIdleSeconds={sessionIdleSecondsFor(session.persistent)}
       user={{
         id: session.id,
         name: session.name,

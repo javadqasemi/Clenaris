@@ -1,7 +1,7 @@
 import { after, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { call, data, get, post, requireServer } from '../helpers/client';
+import { call, data, get, patch, post, requireServer } from '../helpers/client';
 import { loginAs } from '../helpers/accounts';
 import { resetRateLimits } from '../helpers/rate-limit';
 import { testDb, testDbGrund, testDbSchliessen } from '../helpers/testdb';
@@ -880,5 +880,95 @@ describe('Offerte: Anfrage, Kundschaft und Objekt passen zusammen', { concurrenc
     // Eine noch nicht umgewandelte Anfrage darf mit jeder Kundschaft zusammenstehen.
     const offen = await offerte({ customerId: kundeB, leadId: offeneAnfrage, propertyId: objektB!.id }, 'offene Anfrage Kundschaft B');
     assert.equal(offen.status, 201, offen.text);
+  });
+});
+
+/**
+ * Offerte speichern, wie die Maske es tut (2026-09-28).
+ *
+ * Drei Fehler, die zusammen „die Rabattänderung lässt sich teilweise nicht
+ * speichern" ergaben — der Browserfall dazu ist
+ * `tests/e2e/offerte-rabatt.spec.ts`, hier steht, was die Schnittstelle
+ * zusichert:
+ *
+ *  1. `zodResolver` übergibt die *umgewandelten* Werte; das Datumsfeld kam
+ *     darum als `"JJJJ-MM-TTT00:00:00.000Z"` an und wurde mit 422 abgewiesen
+ *     — Anlegen und Bearbeiten scheiterten im Browser. Gegen den alten Stand:
+ *     422 statt 201.
+ *  2. `discountType: null` („Kein Rabatt") blieb wirkungslos, die alte Art
+ *     wurde behalten. Gegen den alten Stand: `PERCENT` statt `null`.
+ *  3. Ein PATCH mit nur dem Rabatt rechnete nicht neu; die Summen passten
+ *     nicht mehr zum Rabatt. Gegen den alten Stand: Rabattbetrag 0.
+ */
+describe('Offerte speichern wie die Maske', { concurrency: 1 }, async () => {
+  await requireServer();
+  const admin = await loginAs('admin');
+  const kunden = data(await get<{ data: { id: string }[] }>('/api/customers', { jar: admin })) ?? [];
+  const MARKE = 'Prüfreihe Maskenspeichern';
+  const angelegt: string[] = [];
+
+  const basis = {
+    customerId: kunden[0]?.id,
+    title: MARKE,
+    // 6 × 64 = 384 — zehn Prozent sind 38.40.
+    items: [{ name: 'Unterhaltsreinigung', quantity: 6, unit: 'Std.', unitPrice: 64, discount: 0, vatRate: 8.1, optional: false }],
+    discountValue: 0,
+  };
+
+  const lesen = async (id: string) =>
+    data(await get<{ data: { discountType: string | null; discountValue: unknown; discountAmount: unknown; subtotal: unknown; grossTotal: unknown; validUntil: string } }>(`/api/quotes/${id}`, { jar: admin }));
+
+  after(async () => {
+    for (const id of angelegt) await call('DELETE', `/api/quotes/${id}`, { jar: admin });
+  });
+
+  it('das Datum als serialisierte UTC-Mitternacht wird angenommen und ergibt denselben Tag', async () => {
+    const tag = dateOnly(inDays(30));
+    const r = await post<{ data: { id: string } }>('/api/quotes', { ...basis, validUntil: `${tag}T00:00:00.000Z` }, { jar: admin });
+    assert.equal(r.status, 201, r.text);
+    angelegt.push(data(r).id);
+    assert.equal((await lesen(data(r).id)).validUntil.slice(0, 10), tag);
+  });
+
+  it('eine andere Uhrzeit bleibt abgewiesen — mit deutscher Meldung am Feld', async () => {
+    const r = await post('/api/quotes', { ...basis, validUntil: `${dateOnly(inDays(30))}T23:30:00+02:00` }, { jar: admin });
+    assert.equal(r.status, 422, r.text);
+    assert.match(r.text, /"field":"validUntil"/);
+    assert.match(r.text, /Bitte geben Sie ein gültiges Datum an/);
+  });
+
+  it('Zod-Vorgaben erscheinen auf Deutsch, nicht als „Expected …"', async () => {
+    const r = await post('/api/quotes', { ...basis, validUntil: dateOnly(inDays(30)), title: 42 }, { jar: admin });
+    assert.equal(r.status, 422, r.text);
+    assert.doesNotMatch(r.text, /Expected|Required|Invalid input/, 'englische Zod-Meldung in der Antwort');
+    assert.match(r.text, /"field":"title"/);
+  });
+
+  it('„Kein Rabatt" (null) entfernt einen gesetzten Rabatt; nur der Rabatt im PATCH rechnet die Summen neu', async () => {
+    const r = await post<{ data: { id: string } }>('/api/quotes', { ...basis, validUntil: dateOnly(inDays(30)) }, { jar: admin });
+    assert.equal(r.status, 201, r.text);
+    const id = data(r).id;
+    angelegt.push(id);
+
+    const prozent = await patch(`/api/quotes/${id}`, { discountType: 'PERCENT', discountValue: 10 }, { jar: admin });
+    assert.equal(prozent.status, 200, prozent.text);
+    const mitRabatt = await lesen(id);
+    assert.equal(mitRabatt.discountType, 'PERCENT');
+    assert.equal(Number(mitRabatt.discountAmount), 38.4, 'nur-Rabatt-PATCH hat die Summen nicht neu gerechnet');
+
+    const keiner = await patch(`/api/quotes/${id}`, { discountType: null }, { jar: admin });
+    assert.equal(keiner.status, 200, keiner.text);
+    const ohne = await lesen(id);
+    assert.equal(ohne.discountType, null, '„Kein Rabatt" wurde nicht gespeichert');
+    assert.equal(Number(ohne.discountAmount), 0);
+    assert.equal(Number(ohne.discountValue), 0, 'ein Rabattwert ohne Art blieb stehen');
+    assert.ok(Number(ohne.grossTotal) > Number(mitRabatt.grossTotal), 'das Total stieg nach dem Entfernen des Rabatts nicht');
+
+    // Fehlend heisst unverändert: ein PATCH nur mit Titel lässt die Rabattart stehen.
+    await patch(`/api/quotes/${id}`, { discountType: 'FIXED', discountValue: 50 }, { jar: admin });
+    await patch(`/api/quotes/${id}`, { title: `${MARKE} umbenannt` }, { jar: admin });
+    const unveraendert = await lesen(id);
+    assert.equal(unveraendert.discountType, 'FIXED');
+    assert.equal(Number(unveraendert.discountAmount), 50);
   });
 });

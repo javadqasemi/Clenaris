@@ -41,7 +41,16 @@ const quoteBaseSchema = z.object({
   outroText: z.string().trim().max(4000).optional(),
   terms: z.string().trim().max(8000).optional(),
   internalNote: z.string().trim().max(4000).optional(),
-  discountType: z.enum(['PERCENT', 'FIXED']).optional(),
+  /**
+   * `null` heisst „kein Rabatt", fehlend heisst „unverändert".
+   *
+   * Bis 2026-09-28 kannte das Schema nur „fehlend". Der Editor setzte für
+   * „Kein Rabatt" `undefined`, das `JSON.stringify` weglässt — beim Bearbeiten
+   * kam also gar keine Angabe an, und `updateQuote` behielt die alte Rabattart.
+   * Wer einen Rabatt entfernen wollte, speicherte ihn still wieder mit. Nur ein
+   * ausdrückliches `null` kann einen gesetzten Wert löschen.
+   */
+  discountType: z.enum(['PERCENT', 'FIXED']).nullable().optional(),
   discountValue: z.number().min(0).max(1_000_000).default(0),
   items: z.array(quoteItemSchema).min(1, 'Mindestens eine Position ist erforderlich.').max(100),
 });

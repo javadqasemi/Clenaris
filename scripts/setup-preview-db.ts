@@ -47,9 +47,9 @@
 
 import { execFileSync } from 'node:child_process';
 
-import { PrismaClient } from '@prisma/client';
 
 import { databaseNameOf } from '../prisma/seed-guard';
+import { erzeugePrismaClient } from '../src/lib/prisma-client';
 
 /** Der einzige zulässige Zielname. Auf das Zeichen genau. */
 export const PREVIEW_DB = 'clenaris_preview';
@@ -83,7 +83,7 @@ function wartungsUrl(url: string): string {
 }
 
 async function datenbankAnlegen(previewUrl: string, frisch: boolean): Promise<'angelegt' | 'vorhanden'> {
-  const client = new PrismaClient({ datasources: { db: { url: wartungsUrl(previewUrl) } } });
+  const client = erzeugePrismaClient({ url: wartungsUrl(previewUrl) });
   try {
     if (frisch) {
       console.log(`   … bestehende Vorschaudatenbank „${PREVIEW_DB}" wird verworfen (--frisch)`);

@@ -7,7 +7,8 @@ import { audit } from '@/lib/audit';
 import type { SessionUser } from '@/lib/auth/session';
 import { NotFoundError } from '@/lib/errors';
 import type { CreateMeetingInput, UpdateMeetingInput } from '@/lib/validation/bi-knowledge';
-import { notify } from './notification.service';
+import { organisationsbezugPruefen } from './bezug.service';
+import { notify, taskLinkForUser } from './notification.service';
 
 /**
  * Sitzungen.
@@ -60,6 +61,19 @@ async function validParticipants(organizationId: string, ids: string[]): Promise
   return users.map((u) => u.id);
 }
 
+/**
+ * Zuständige der Pendenzen gehören der eigenen Organisation (B-13,
+ * 2026-09-28). Anders als die Teilnehmenden (`validParticipants`) wird hier
+ * nicht still gefiltert: Eine Pendenz ohne die genannte Person wäre eine
+ * andere Pendenz als die beschlossene, und niemand merkte es. Vor der
+ * Transaktion, damit keine Sitzung halb entsteht.
+ */
+async function pendenzenZustaendigkeitPruefen(organizationId: string, items: CreateMeetingInput['actionItems'] | undefined) {
+  for (const item of items ?? []) {
+    await organisationsbezugPruefen('user', item.assigneeId, organizationId, 'Zuständige Person');
+  }
+}
+
 async function createActionItems(
   tx: Prisma.TransactionClient,
   session: SessionUser,
@@ -88,9 +102,8 @@ async function createActionItems(
 
 export async function createMeeting(session: SessionUser, organizationId: string, input: CreateMeetingInput) {
   const participantIds = await validParticipants(organizationId, input.participantIds);
-  if (input.objectiveId && !(await prisma.objective.findFirst({ where: { id: input.objectiveId, organizationId, deletedAt: null } }))) {
-    throw new NotFoundError('Ziel');
-  }
+  await organisationsbezugPruefen('objective', input.objectiveId, organizationId);
+  await pendenzenZustaendigkeitPruefen(organizationId, input.actionItems);
   const { meeting, tasks } = await prisma.$transaction(async (tx) => {
     const created = await tx.meeting.create({
       data: {
@@ -112,7 +125,10 @@ export async function createMeeting(session: SessionUser, organizationId: string
   });
   for (const task of tasks) {
     if (task.assigneeId && task.assigneeId !== session.id) {
-      await notify({ userId: task.assigneeId, channels: ['IN_APP'], title: 'Pendenz aus Sitzung', body: `${task.title} — ${meeting.title}`, link: `/admin/fuehrung/sitzungen/${meeting.id}`, entity: 'Task', entityId: task.id });
+      // Büro → zur Sitzung; Mitarbeitende → ihre Aufgabenliste im Portal (die
+      // Sitzungsseite liegt in der Verwaltung, die sie nicht betreten dürfen).
+      const link = await taskLinkForUser(task.assigneeId, `/admin/fuehrung/sitzungen/${meeting.id}`);
+      await notify({ userId: task.assigneeId, channels: ['IN_APP'], title: 'Pendenz aus Sitzung', body: `${task.title} — ${meeting.title}`, link, entity: 'Task', entityId: task.id });
     }
   }
   await audit.created({ organizationId, userId: session.id, entity: 'Meeting', entityId: meeting.id, summary: `Sitzung „${meeting.title}" angelegt` });
@@ -123,6 +139,11 @@ export async function updateMeeting(session: SessionUser, organizationId: string
   const before = await prisma.meeting.findFirst({ where: { id, organizationId, deletedAt: null } });
   if (!before) throw new NotFoundError('Sitzung');
   const participantIds = input.participantIds ? await validParticipants(organizationId, input.participantIds) : null;
+  // Das Anlegen prüfte das Ziel schon, die Änderung nicht (B-13, 2026-09-28):
+  // Eine eigene Sitzung liess sich einem fremden Ziel zuordnen und erschien
+  // dann in dessen Detailansicht — in der anderen Organisation.
+  await organisationsbezugPruefen('objective', input.objectiveId, organizationId);
+  await pendenzenZustaendigkeitPruefen(organizationId, input.actionItems);
   const { meeting, tasks } = await prisma.$transaction(async (tx) => {
     if (participantIds) {
       await tx.meetingParticipant.deleteMany({ where: { meetingId: id } });
@@ -146,7 +167,8 @@ export async function updateMeeting(session: SessionUser, organizationId: string
   });
   for (const task of tasks) {
     if (task.assigneeId && task.assigneeId !== session.id) {
-      await notify({ userId: task.assigneeId, channels: ['IN_APP'], title: 'Pendenz aus Sitzung', body: `${task.title} — ${meeting.title}`, link: `/admin/fuehrung/sitzungen/${meeting.id}`, entity: 'Task', entityId: task.id });
+      const link = await taskLinkForUser(task.assigneeId, `/admin/fuehrung/sitzungen/${meeting.id}`);
+      await notify({ userId: task.assigneeId, channels: ['IN_APP'], title: 'Pendenz aus Sitzung', body: `${task.title} — ${meeting.title}`, link, entity: 'Task', entityId: task.id });
     }
   }
   await audit.updated({ organizationId, userId: session.id, entity: 'Meeting', entityId: id, summary: `Sitzung „${meeting.title}" geändert` });

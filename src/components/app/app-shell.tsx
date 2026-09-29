@@ -87,7 +87,7 @@ import { ScanButton } from '@/components/app/scan-button';
 import { NotificationPanel } from '@/components/app/notification-panel';
 import { NavigationProgress } from '@/components/app/navigation-progress';
 import { ThemeSync } from '@/features/account/appearance-form';
-import { SessionKeepalive } from '@/features/account/session-keepalive';
+import { SessionKeepalive, abmeldungVerbreiten } from '@/features/account/session-keepalive';
 
 /**
  * Applikations-Rahmen für Administration, Mitarbeitendenportal und
@@ -297,6 +297,9 @@ export function AppShell({
 
   const logout = async () => {
     await api.post('/api/auth/logout').catch(() => undefined);
+    // Die anderen Tabs dieser Sitzung zur Anmeldung schicken, statt sie mit
+    // toten Cookies weiterarbeiten zu lassen (2026-09-28).
+    abmeldungVerbreiten();
     router.replace('/');
     router.refresh();
   };
@@ -553,11 +556,15 @@ export function AppShell({
                   Betriebseinstellungen. Ein Menü, das „Mein Profil" heisst,
                   darf nur zum eigenen Konto führen; die Firmenkonfiguration
                   steht in der Seitenleiste unter „Betrieb", mit eigenem Recht.
+                  Seit 2026-09-28 heisst der Eintrag auch so: „Einstellungen"
+                  allein stand in der Verwaltung neben dem gleichnamigen
+                  Seitenleisteneintrag der Firmenkonfiguration und liess offen,
+                  welche von beiden gemeint ist.
                 */}
                 <DropdownMenuItem asChild>
                   <Link href={`${areaHref}/profil/einstellungen`}>
                     <Settings aria-hidden />
-                    Einstellungen
+                    Persönliche Einstellungen
                   </Link>
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />

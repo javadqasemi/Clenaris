@@ -126,7 +126,9 @@ export default async function SicherheitPage({
         title="Sicherheit"
         description="Was an Anmeldungen, Sitzungen, Zugriffen und Dateien geschehen ist — und was davon noch eine Entscheidung braucht."
       >
+        {/* Ohne Suchfeld: `listSecurityEvents` wertet `q` nicht aus (2026-09-28). */}
         <FilterBar
+          search={false}
           filters={[
             {
               param: 'schwere',

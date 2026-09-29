@@ -16,6 +16,41 @@ import {
   type FassungZeitraum,
   type Serienregel,
 } from '../../src/lib/contracts/serie';
+import { abrechnungsbetrag, type AbrechnungsEingabe } from '../../src/lib/contracts/abrechnungsbetrag';
+
+/**
+ * Der Betrag einer Vertragsperiode (B-06, 2026-09-28). Jeder Fall hier ergab
+ * mit der früheren Gleitkommarechnung (`Math.round(x * 100) / 100`) einen
+ * Rappen zu wenig — die Erwartung ist die kaufmännische Rundung des exakten
+ * Werts, nicht das, was der alte Code lieferte.
+ */
+describe('Vertragsabrechnung — Betrag dezimal', () => {
+  const basis: AbrechnungsEingabe = {
+    pricingModel: 'FIXED_PERIOD', baseAmount: 0, hourlyRate: 0, unitPrice: 0, vatRate: 0,
+    einsaetze: 0, minuten: 0, menge: 0, anteil: 1,
+  };
+
+  it('90 Minuten zu CHF 12.35 sind 18.53 (binär 18.52499…)', () => {
+    assert.equal(abrechnungsbetrag({ ...basis, pricingModel: 'HOURLY', hourlyRate: 12.35, minuten: 90 }).netto, 18.53);
+  });
+
+  it('die halbe Pauschale von CHF 12.35 ist 6.18 (binär 6.17499…)', () => {
+    assert.equal(abrechnungsbetrag({ ...basis, baseAmount: 12.35, anteil: 0.5 }).netto, 6.18);
+  });
+
+  it('20 Minuten zu CHF 55.00 sind 18.33 — ein Drittel wird nicht zuerst gerundet', () => {
+    assert.equal(abrechnungsbetrag({ ...basis, pricingModel: 'HOURLY', hourlyRate: 55, minuten: 20 }).netto, 18.33);
+  });
+
+  it('MWST vom gerundeten Netto, Brutto als Summe: 1200 zu 8.1 % → 97.20 / 1297.20', () => {
+    assert.deepEqual(abrechnungsbetrag({ ...basis, baseAmount: 1200, vatRate: 8.1 }), { netto: 1200, mwst: 97.2, brutto: 1297.2 });
+  });
+
+  it('Einsatzpauschale und Mengenpreis', () => {
+    assert.equal(abrechnungsbetrag({ ...basis, pricingModel: 'FIXED_PER_VISIT', baseAmount: 0.1, einsaetze: 3 }).netto, 0.3);
+    assert.equal(abrechnungsbetrag({ ...basis, pricingModel: 'UNIT_BASED', unitPrice: 1.005, menge: 10, anteil: 1 }).netto, 10.05);
+  });
+});
 
 /**
  * Der Serien-Rechenkern der Verträge, mit festen Daten.

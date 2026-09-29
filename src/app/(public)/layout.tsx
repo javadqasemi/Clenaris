@@ -1,6 +1,7 @@
 import { prisma } from '@/lib/db';
-import { jsonLd } from '@/lib/json-ld';
 import { SEITEN_URL } from '@/lib/seiten-url';
+import { websiteGraph } from '@/lib/seo/structured-data';
+import { JsonLd } from '@/components/marketing/json-ld';
 import {
   getOrganizationId,
   getPublicCompanyInfo,
@@ -11,6 +12,7 @@ import { SiteHeader } from '@/components/marketing/site-header';
 import { SiteFooter } from '@/components/marketing/site-footer';
 import { AnalyticsScripts } from '@/components/marketing/analytics';
 import { CookieBanner } from '@/components/marketing/cookie-banner';
+import { TrafficMessung } from '@/components/marketing/traffic-messung';
 import { ChatWidget } from '@/components/marketing/chat-widget';
 import { CmsPreviewBridge } from '@/components/cms/preview-bridge';
 import { isPreview } from '@/lib/cms/preview';
@@ -80,6 +82,12 @@ export default async function PublicLayout({ children }: { children: React.React
       <CookieBanner />
       <ChatWidget />
       <AnalyticsScripts />
+      {/*
+        Eigene Besuchsmessung, nur mit Einwilligung „Statistik". Nicht im
+        Vorschaumodus: Dort klickt die Redaktion durch die Seiten, und jeder
+        ihrer Klicks wäre ein erfundener Besuch.
+      */}
+      {preview ? null : <TrafficMessung />}
 
       {/*
         Nur im Vorschaumodus: macht die gepflegten Texte anklickbar und meldet
@@ -88,64 +96,22 @@ export default async function PublicLayout({ children }: { children: React.React
       */}
       {preview ? <CmsPreviewBridge /> : null}
 
-      {/* Strukturierte Daten für lokale Suchergebnisse. */}
-      <script
-        type="application/ld+json"
-        // eslint-disable-next-line react/no-danger -- kontrollierter, serverseitig erzeugter JSON-LD-Block
-        dangerouslySetInnerHTML={{
-          __html: jsonLd({
-            '@context': 'https://schema.org',
-            '@type': 'HomeAndConstructionBusiness',
-            // Kanonische Domain (Bauzeit, `src/lib/seiten-url.ts`) — diese
-            // Seite ist statisch vorgerendert.
-            '@id': `${SEITEN_URL}#organisation`,
-            name: company.name,
-            legalName: company.legalName ?? undefined,
-            description:
-              'Reinigungsfirma im Kanton Bern für Unterhaltsreinigung, Umzugsreinigung mit Abgabegarantie, Büroreinigung, Fensterreinigung, Baureinigung und Hauswartung.',
-            url: SEITEN_URL,
-            telephone: company.phone ?? undefined,
-            email: company.email,
-            priceRange: 'CHF 62–95 / Std.',
-            address: {
-              '@type': 'PostalAddress',
-              streetAddress: company.address.street,
-              postalCode: company.address.postalCode,
-              addressLocality: company.address.city,
-              addressRegion: company.address.canton,
-              addressCountry: 'CH',
-            },
-            areaServed: areas.slice(0, 30).map((area) => ({
-              '@type': 'City',
-              name: area.city,
-              postalCode: area.postalCode,
-            })),
-            openingHoursSpecification: company.openingHours
-              .filter((hour) => !hour.closed && hour.opensAt && hour.closesAt)
-              .map((hour) => ({
-                '@type': 'OpeningHoursSpecification',
-                dayOfWeek: [
-                  'Sunday',
-                  'Monday',
-                  'Tuesday',
-                  'Wednesday',
-                  'Thursday',
-                  'Friday',
-                  'Saturday',
-                ][hour.weekday],
-                opens: hour.opensAt,
-                closes: hour.closesAt,
-              })),
-            hasOfferCatalog: {
-              '@type': 'OfferCatalog',
-              name: 'Reinigungsdienstleistungen',
-              itemListElement: services.map((service) => ({
-                '@type': 'Offer',
-                itemOffered: { '@type': 'Service', name: service.name, description: service.shortDesc },
-              })),
-            },
-          }),
-        }}
+      {/*
+        Strukturierte Daten für lokale Suchergebnisse: die Firma
+        (`HousekeepingService`, zugleich Organisation) und die Website als
+        ein Graph. Jede Angabe steht auch sichtbar in der Fusszeile; die
+        Begründung für Typ und Auswahl in `lib/seo/structured-data.ts`.
+        Vorher standen hier eine erfundene Preisspanne, eine feste
+        Beschreibung und Postleitzahlen an `City` (ein Feld, das es dort
+        nicht gibt).
+      */}
+      <JsonLd
+        daten={websiteGraph({
+          firma: company,
+          herkunft: SEITEN_URL,
+          orte: areas,
+          leistungen: services.map((service) => ({ name: service.name, slug: service.slug })),
+        })}
       />
     </>
   );

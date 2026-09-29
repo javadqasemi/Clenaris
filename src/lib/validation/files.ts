@@ -79,8 +79,22 @@ export const uploadUrlSchema = z.object({
   mimeType: z.string().min(3).max(120),
   /** Die Obergrenze über alle Profile; das Profil selbst kann strenger sein. */
   sizeBytes: z.number().int().min(1).max(MAX_UPLOAD_BYTES),
-  /** Fachliche Zuordnung, etwa die Job- oder Buchungs-ID. */
-  scopeId: z.string().max(60).optional(),
+  /**
+   * Fachliche Zuordnung, etwa die Job- oder Buchungs-ID.
+   *
+   * Nur Kennungszeichen (2026-09-28). Der Wert wird ein Segment des
+   * Speicherschlüssels (`storage/tickets.ts`), und vorher war jede Zeichenkette
+   * bis 60 Zeichen erlaubt — auch anonym, für Bewerbungsunterlagen und
+   * Buchungsfotos. `../../<x>/payslips` ergab einen Schlüssel ausserhalb des
+   * Organisations- und Profilpräfixes. Überschreiben liess sich damit nichts
+   * (das letzte Segment ist zufällig), aber jede Regel, die sich auf das
+   * Präfix verlässt — eine Bucket-Richtlinie, ein Auflisten zum Aufräumen —,
+   * wäre damit umgangen. Alle Aufrufer übergeben ohnehin eine cuid.
+   */
+  scopeId: z
+    .string()
+    .regex(/^[A-Za-z0-9_-]{1,60}$/, 'Die Zuordnung enthält unzulässige Zeichen.')
+    .optional(),
 });
 export type UploadUrlInput = z.infer<typeof uploadUrlSchema>;
 

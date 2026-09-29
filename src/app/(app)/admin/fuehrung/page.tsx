@@ -164,7 +164,7 @@ export default async function CockpitPage({ searchParams }: { searchParams: Prom
         </section>
       ))}
 
-      <div className="grid gap-6 lg:grid-cols-2">
+      <div className={cockpit.risks ? 'grid gap-6 lg:grid-cols-2' : 'grid gap-6'}>
         <DetailSection
           title={`Ziele ${cockpit.objectives.quarterLabel}`}
           description="Aktive Quartalsziele, die am wenigsten fortgeschrittenen zuerst."
@@ -200,6 +200,13 @@ export default async function CockpitPage({ searchParams }: { searchParams: Prom
           )}
         </DetailSection>
 
+        {/*
+          Die Risikomatrix nur mit `risk:read` (2026-09-28). Der Dienst lädt sie
+          für andere Rollen gar nicht (`risks: null`); die Seite lässt dann den
+          ganzen Abschnitt weg statt einer leeren Matrix, die „kein Risiko"
+          behaupten würde, und statt eines Links auf ein verschlossenes Register.
+        */}
+        {cockpit.risks ? (
         <DetailSection
           title="Risikomatrix"
           description={`${cockpit.risks.total} offene Risiken · ${cockpit.risks.bands.CRITICAL} kritisch, ${cockpit.risks.bands.HIGH} hoch`}
@@ -230,17 +237,23 @@ export default async function CockpitPage({ searchParams }: { searchParams: Prom
             </ul>
           </div>
         </DetailSection>
+        ) : null}
       </div>
 
       <div className="grid gap-6 lg:grid-cols-3">
         <DetailSection title="Fällige Prüfungen" body="list">
           <dl className="protocol-list">
-            {[
-              ['Ziele', cockpit.due.objectives, '/admin/fuehrung/ziele'],
-              ['Risiken', cockpit.due.risks, '/admin/fuehrung/risiken?faellig=1'],
-              ['Kontrollen', cockpit.due.controls, '/admin/fuehrung/qualitaet?faellig=1'],
-              ['Markt', cockpit.due.market, '/admin/fuehrung/markt'],
-            ].map(([label, count, href]) => (
+            {/* Nur Register, die die Rolle öffnen darf — eine Zeile „Risiken 0" mit Link ins verschlossene Register wäre falsch und ein toter Weg zugleich. */}
+            {(
+              [
+                ['Ziele', cockpit.due.objectives, '/admin/fuehrung/ziele', true],
+                ['Risiken', cockpit.due.risks, '/admin/fuehrung/risiken?faellig=1', cockpit.scope.risks],
+                ['Kontrollen', cockpit.due.controls, '/admin/fuehrung/qualitaet?faellig=1', true],
+                ['Markt', cockpit.due.market, '/admin/fuehrung/markt', cockpit.scope.market],
+              ] as const
+            )
+              .filter(([, , , visible]) => visible)
+              .map(([label, count, href]) => (
               <div key={String(label)} className="flex items-center justify-between py-2.5 text-sm">
                 <dt className="text-muted-foreground">{label}</dt>
                 <dd>
@@ -287,7 +300,7 @@ export default async function CockpitPage({ searchParams }: { searchParams: Prom
                 <span className="text-muted-foreground">{d.expiresOn ? formatDate(d.expiresOn) : ''}</span>
               </li>
             ))}
-            {cockpit.upcomingMeetings.length === 0 && cockpit.expiringDocuments.length === 0 ? <li className="py-2.5 text-muted-foreground">Keine Sitzungen, keine ablaufenden Dokumente.</li> : null}
+            {cockpit.upcomingMeetings.length === 0 && cockpit.expiringDocuments.length === 0 ? <li className="py-2.5 text-muted-foreground">{cockpit.scope.documents ? 'Keine Sitzungen, keine ablaufenden Dokumente.' : 'Keine anstehenden Sitzungen.'}</li> : null}
           </ul>
         </DetailSection>
       </div>

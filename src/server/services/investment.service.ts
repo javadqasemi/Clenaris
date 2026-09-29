@@ -9,6 +9,7 @@ import { BusinessRuleError, NotFoundError } from '@/lib/errors';
 import { depreciation, depreciationSchedule, paybackYears, roiPct, type DepreciationResult } from '@/lib/bi/math';
 import { today, wholeMonthsBetween } from '@/lib/bi/periods';
 import type { CreateInvestmentInput, UpdateInvestmentInput } from '@/lib/validation/bi-finance';
+import { organisationsbezugPruefen } from './bezug.service';
 
 /**
  * Investitionen — zugleich das Anlagenverzeichnis.
@@ -113,6 +114,11 @@ function assertMethodRules(input: { method: string; usefulLifeYears: number | nu
 
 export async function createInvestment(session: SessionUser, organizationId: string, input: CreateInvestmentInput) {
   assertMethodRules({ method: input.method, usefulLifeYears: input.usefulLifeYears, residualValue: input.residualValue, purchaseAmount: input.purchaseAmount });
+  // Lieferant und verantwortliche Person gehören der eigenen Organisation
+  // (B-13, 2026-09-28). Vorher hielt nur der Fremdschlüssel, und das
+  // Anlagenverzeichnis zeigte danach den Namen eines fremden Lieferanten.
+  await organisationsbezugPruefen('supplier', input.supplierId, organizationId);
+  await organisationsbezugPruefen('user', input.ownerId, organizationId, 'Verantwortliche Person');
   const investment = await prisma.investment.create({
     data: {
       organizationId,
@@ -149,6 +155,8 @@ export async function updateInvestment(session: SessionUser, organizationId: str
     residualValue: input.residualValue ?? toNumber(before.residualValue),
     purchaseAmount: input.purchaseAmount ?? toNumber(before.purchaseAmount),
   });
+  await organisationsbezugPruefen('supplier', input.supplierId, organizationId);
+  await organisationsbezugPruefen('user', input.ownerId, organizationId, 'Verantwortliche Person');
   const investment = await prisma.investment.update({
     where: { id },
     data: {

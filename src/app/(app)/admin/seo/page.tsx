@@ -8,6 +8,17 @@ import { getOrganizationId } from '@/server/services/organization.service';
 import { Alert } from '@/components/ui/primitives';
 import { PageHeader } from '@/components/app/page-parts';
 import { SeoEditor, type SeoPageState } from '@/features/admin/seo-editor';
+import { SeoStatusUebersicht } from '@/features/admin/seo-status';
+import {
+  beitragsSeo,
+  gepflegteSeo,
+  leistungsSeo,
+  seoStatus,
+  stellenSeo,
+  type SeoStatusZeile,
+} from '@/lib/seo/metadaten';
+import { RECHTSTEXTE } from '@/lib/seo/rechtstexte';
+import { strukturierteDatenTypen } from '@/lib/seo/structured-data';
 
 export const metadata: Metadata = {
   title: 'Suchmaschinen',
@@ -43,6 +54,111 @@ export default async function SeoPage() {
 
   const byPath = new Map(stored.map((row) => [row.path, row]));
 
+  /*
+   * SEO-Status (H3). Dieselben Quellen wie die Seiten selbst: `SeoMeta` über
+   * dem Registertext (`gepflegteSeo`, auch in `getPageSeo`), die Rechtstexte
+   * aus `lib/seo/rechtstexte.ts`, die Detailseiten aus ihrem Datensatz
+   * (`leistungsSeo`, `beitragsSeo`, `stellenSeo`, auch in deren
+   * `generateMetadata`). Nur veröffentlichte bzw. aktive Datensätze — die
+   * anderen antworten 404 und haben keinen Suchmaschinenauftritt.
+   */
+  const [services, posts, postings, faqCount, reviewCount] = await Promise.all([
+    prisma.service.findMany({
+      where: { organizationId, active: true },
+      orderBy: { position: 'asc' },
+      select: { slug: true, name: true, seoTitle: true, seoDescription: true, shortDesc: true, keywords: true },
+    }),
+    prisma.blogPost.findMany({
+      where: { organizationId, status: 'PUBLISHED', locale: 'DE' },
+      orderBy: { publishedAt: 'desc' },
+      select: {
+        slug: true,
+        title: true,
+        excerpt: true,
+        seoTitle: true,
+        seoDescription: true,
+        keywords: true,
+        publishedAt: true,
+      },
+    }),
+    prisma.jobPosting.findMany({
+      where: { organizationId, status: 'PUBLISHED' },
+      orderBy: { title: 'asc' },
+      select: { slug: true, title: true, location: true, description: true },
+    }),
+    prisma.faq.count({ where: { organizationId, active: true, locale: 'DE' } }),
+    prisma.review.count({ where: { organizationId, status: 'PUBLISHED' } }),
+  ]);
+
+  const mitInhalt: Record<string, boolean> = { '/faq': faqCount > 0, '/bewertungen': reviewCount > 0 };
+
+  const statusZeilen: SeoStatusZeile[] = [
+    ...SEO_PAGES.map((definition) => {
+      const row = byPath.get(definition.path);
+      const seo = gepflegteSeo(definition, row);
+      return seoStatus(
+        {
+          pfad: definition.path,
+          bezeichnung: definition.label,
+          quelle: row ? ('Redaktion' as const) : ('Standardtext' as const),
+          titel: seo.title,
+          beschreibung: seo.description,
+          schluesselwoerter: seo.keywords,
+          ogBildUrl: seo.ogImageUrl,
+          noIndex: seo.noIndex,
+          strukturierteDaten: strukturierteDatenTypen(definition.path, mitInhalt[definition.path] ?? true),
+        },
+        SEITEN_URL,
+      );
+    }),
+    ...RECHTSTEXTE.map((seite) =>
+      seoStatus(
+        {
+          ...seite,
+          quelle: 'Code' as const,
+          strukturierteDaten: strukturierteDatenTypen(seite.pfad),
+        },
+        SEITEN_URL,
+      ),
+    ),
+    ...services.map((service) => {
+      const seo = leistungsSeo(service);
+      return seoStatus(
+        {
+          ...seo,
+          bezeichnung: `Leistung: ${service.name}`,
+          quelle: 'Datensatz' as const,
+          strukturierteDaten: strukturierteDatenTypen(seo.pfad),
+        },
+        SEITEN_URL,
+      );
+    }),
+    ...posts.map((post) => {
+      const seo = beitragsSeo(post);
+      return seoStatus(
+        {
+          ...seo,
+          bezeichnung: `Ratgeber: ${post.title}`,
+          quelle: 'Datensatz' as const,
+          strukturierteDaten: strukturierteDatenTypen(seo.pfad),
+        },
+        SEITEN_URL,
+      );
+    }),
+    ...postings.map((posting) => {
+      const seo = stellenSeo(posting);
+      return seoStatus(
+        {
+          ...seo,
+          bezeichnung: `Stelle: ${posting.title}`,
+          quelle: 'Datensatz' as const,
+          strukturierteDaten: strukturierteDatenTypen(seo.pfad),
+        },
+        SEITEN_URL,
+      );
+    }),
+  ];
+
   const pages: SeoPageState[] = SEO_PAGES.map((definition) => {
     const row = byPath.get(definition.path);
     return {
@@ -77,6 +193,9 @@ export default async function SeoPage() {
 
       {/* Die Suchvorschau zeigt die kanonische Domain — dieselbe wie im HTML der Website. */}
       <SeoEditor pages={pages} siteUrl={SEITEN_URL} />
+
+      {/* Nach dem Editor: Zuerst wird gepflegt, dann nachgesehen, was daraus wird. */}
+      <SeoStatusUebersicht zeilen={statusZeilen} />
     </div>
   );
 }

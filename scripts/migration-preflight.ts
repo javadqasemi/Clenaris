@@ -47,7 +47,8 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 // eslint-disable-next-line no-restricted-imports
-import { PrismaClient } from '@prisma/client';
+import { type PrismaClient } from '@prisma/client';
+import { erzeugePrismaClient } from '../src/lib/prisma-client';
 
 export interface Eindeutigkeit {
   migration: string;
@@ -233,7 +234,7 @@ async function main(): Promise<void> {
   }
 
   const verzeichnis = join(process.cwd(), 'prisma', 'migrations');
-  const prisma = new PrismaClient({ datasources: { db: { url } } });
+  const prisma = erzeugePrismaClient({ url });
 
   console.log('');
   console.log('  ── Migrations-Vorprüfung (nur lesend) ───────────────────────');

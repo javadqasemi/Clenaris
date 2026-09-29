@@ -969,7 +969,27 @@
  *
  * Das ist ein Netz, keine Lösung. Wer hier einen abgeschnittenen Inhalt
  * bemerkt, hat ein zu breites Element gefunden und soll *dieses* reparieren.
+ *
+ * **Am `<body>`, nicht am `<html>` (seit 2026-09-28).** Bis dahin stand die
+ * Regel am `<html>`, und genau das liess Seitenleiste und Kopfzeile der
+ * Applikation verschwinden, sobald eine Auswahl, ein Dialog oder ein Menü
+ * geöffnet wurde. Der Mechanismus hat zwei Stufen:
+ *
+ *  1. Radix sperrt beim Öffnen das Scrollen mit `overflow: hidden` am
+ *     `<body>` (`react-remove-scroll`).
+ *  2. Der Browser reicht das `overflow` des `<body>` nur dann an das Fenster
+ *     weiter, wenn `<html>` selbst `visible` ist (CSS Overflow 3, „overflow
+ *     propagation"). Mit `overflow-x: clip` am `<html>` war es das nicht —
+ *     der `<body>` wurde zum eigenen Scrollbehälter, die klebenden Leisten
+ *     klebten an *ihm*, und wer hinuntergescrollt hatte (Gesamtrabatt am Ende
+ *     der Offerte), sah sie nicht mehr.
+ *
+ * Am `<body>` wird `clip` stattdessen an das Fenster weitergereicht (dort als
+ * `hidden` gelesen — dieselbe Wirkung wie vorher), der `<body>` selbst bleibt
+ * `visible`, und die Sperre des Scrollens landet ebenfalls am Fenster, wo sie
+ * hingehört. Nachgestellt in `tests/e2e/offerte-rabatt.spec.ts`; wer die Regel
+ * zurück an `<html>` schiebt, bringt dort den Fehlschlag zurück.
  */
-html {
+body {
   overflow-x: clip;
 }

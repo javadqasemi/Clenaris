@@ -18,6 +18,7 @@ import {
 } from '@/lib/storage';
 import { addDays, today } from '@/lib/bi/periods';
 import type { AddDocumentVersionInput, CreateDocumentInput, UpdateDocumentInput } from '@/lib/validation/bi-knowledge';
+import { organisationsbezugPruefen } from './bezug.service';
 import { notify } from './notification.service';
 
 /**
@@ -171,9 +172,11 @@ export async function createDocument(session: SessionUser, organizationId: strin
   if (visibility === 'EMPLOYEE_PRIVATE' && !input.subjectEmployeeId) {
     throw new BusinessRuleError('Ein Personaldokument braucht die betroffene Person — sonst weiss niemand, wer es sehen darf.');
   }
-  if (input.subjectEmployeeId && !(await prisma.employee.findFirst({ where: { id: input.subjectEmployeeId, organizationId } }))) {
-    throw new NotFoundError('Mitarbeitende Person');
-  }
+  // Personalakte und Lieferant gehören der eigenen Organisation. Die Person
+  // prüfte das Anlegen schon; der Lieferant kam mit B-13 (2026-09-28) dazu —
+  // vorher hielt nur der Fremdschlüssel.
+  await organisationsbezugPruefen('employee', input.subjectEmployeeId, organizationId);
+  await organisationsbezugPruefen('supplier', input.supplierId, organizationId);
 
   const document = await prisma.$transaction(async (tx) => {
     const doc = await tx.managedDocument.create({
@@ -213,6 +216,12 @@ export async function updateDocument(session: SessionUser, organizationId: strin
   if (visibility === 'EMPLOYEE_PRIVATE' && !subject) {
     throw new BusinessRuleError('Ein Personaldokument braucht die betroffene Person.');
   }
+  // Beim Ändern fehlten beide Prüfungen (B-13, 2026-09-28). Die Person wiegt
+  // schwerer als sie aussieht: `EMPLOYEE_PRIVATE` gibt die betroffene Person
+  // als Leserin frei — mit einer fremden Personalakte hätte die Sichtregel an
+  // einem Konto einer anderen Organisation gehangen.
+  await organisationsbezugPruefen('employee', input.subjectEmployeeId, organizationId);
+  await organisationsbezugPruefen('supplier', input.supplierId, organizationId);
   const document = await prisma.managedDocument.update({
     where: { id },
     data: {

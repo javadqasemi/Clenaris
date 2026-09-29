@@ -275,16 +275,19 @@ before(async () => {
     ).id;
   }
 
-  const kunden = data(await get<{ data: { id: string }[] }>('/api/customers?pageSize=1', { jar: jars.admin }));
-  stamm.kundeId = kunden[0]!.id;
+  // Zuerst ein Objekt, dann **seine** Kundschaft — wie `vertraege.test.ts`
+  // (2026-09-28). Die Liste liefert `customer.id`, kein `customerId`; der
+  // frühere Vergleich traf nie, und der Rückfall nahm das Objekt einer
+  // beliebigen Kundschaft — was `createContract` jetzt mit 404 abweist.
+  const objekte = data(
+    await get<{ data: { id: string; customer?: { id: string } | null }[] }>('/api/properties?pageSize=50', { jar: jars.admin }),
+  );
+  const objekt = objekte.find((o) => o.customer?.id);
+  assert.ok(objekt?.customer, 'kein Objekt mit Kundschaft im Bestand');
+  stamm.objektId = objekt.id;
+  stamm.kundeId = objekt.customer.id;
   const kunde = await db.customer.findUniqueOrThrow({ where: { id: stamm.kundeId }, select: { email: true } });
   stamm.kundeEmail = kunde.email ?? '';
-
-  // Ein Objekt **dieser** Kundschaft — wie `vertraege.test.ts`.
-  const objekte = data(
-    await get<{ data: { id: string; customerId: string }[] }>('/api/properties?pageSize=50', { jar: jars.admin }),
-  );
-  stamm.objektId = objekte.find((o) => o.customerId === stamm.kundeId)?.id ?? objekte[0]!.id;
 
   stamm.leistungId = data(await get<{ data: { id: string }[] }>('/api/services?pageSize=1', { jar: jars.admin }))[0]!.id;
   stamm.employeeId = data(await get<{ data: { id: string }[] }>('/api/employees', { jar: jars.admin }))[0]!.id;

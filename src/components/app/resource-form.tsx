@@ -11,6 +11,8 @@ import { Button, type ButtonProps } from '@/components/ui/button';
 import { Input, Textarea } from '@/components/ui/input';
 import { Label } from '@/components/ui/form';
 import { Alert } from '@/components/ui/primitives';
+import type { TextAssistKontext } from '@/lib/validation/ai';
+import { TextAssist } from '@/components/app/text-assist';
 import {
   Checkbox,
   Select,
@@ -85,6 +87,14 @@ export type FieldSpec = {
   max?: number;
   step?: number;
   rows?: number;
+  /**
+   * KI-Textassistent am Feld (nur `text` und `textarea`), mit der Feldart
+   * aus der Erlaubnisliste. **Opt-in, nie Vorgabe:** Ein Assistent an jedem
+   * Textfeld hätte ihn auch an Lohn-, Bank- und Notizfeldern angeboten, deren
+   * Inhalt das Haus nicht verlassen soll. Wer ihn setzt, entscheidet das für
+   * genau dieses Feld (`docs/KI_GOVERNANCE.md`, Textassistent).
+   */
+  textAssist?: TextAssistKontext;
 };
 
 export type FieldValues = Record<string, unknown>;
@@ -291,9 +301,25 @@ export function ResourceForm({
                 </label>
               ) : (
                 <>
-                  <Label htmlFor={fieldId} required={f.required}>
-                    {f.label}
-                  </Label>
+                  {f.textAssist && (f.type === undefined || f.type === 'text' || f.type === 'textarea') ? (
+                    <div className="flex items-center justify-between gap-2">
+                      <Label htmlFor={fieldId} required={f.required}>
+                        {f.label}
+                      </Label>
+                      <TextAssist
+                        kontext={f.textAssist}
+                        feldId={fieldId}
+                        feldLabel={f.label}
+                        value={String(value ?? '')}
+                        onChange={(neu) => set(f.name, neu)}
+                        className="-my-1.5"
+                      />
+                    </div>
+                  ) : (
+                    <Label htmlFor={fieldId} required={f.required}>
+                      {f.label}
+                    </Label>
+                  )}
                   {f.type === 'textarea' ? (
                     <Textarea
                       id={fieldId}

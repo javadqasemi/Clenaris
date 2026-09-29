@@ -303,8 +303,26 @@ export async function softDelete(
   if (model === 'invoice') {
     // Ein gelöschter Entwurf verrechnet nichts mehr: Löschen und Freigabe
     // der Einsätze gemeinsam (Verrechnungsanspruch, `invoice.service.ts`).
+    //
+    // Unter derselben Zeilensperre wie `issueInvoice` und nur, solange die
+    // Rechnung **noch** ein Entwurf ist (2026-09-28). Die Sperrprüfung oben
+    // (`block`) liest ohne Sperre; lief zwischen ihr und dem Schreiben ein
+    // „Ausstellen", wurde vorher eine eben nummerierte Rechnung weich
+    // gelöscht und verschwand aus jeder Liste — eine Lücke in der Folge nach
+    // Art. 957a OR, die niemand bemerkt. Jetzt wartet eine der beiden
+    // Transaktionen auf die andere, und das bedingte Schreiben trifft eine
+    // ausgestellte Rechnung nicht mehr.
     await prisma.$transaction(async (tx) => {
-      await tx.invoice.update({ where: { id }, data: { deletedAt: new Date() } });
+      await tx.$queryRaw`SELECT "id" FROM "invoices" WHERE "id" = ${id} FOR UPDATE`;
+      const geloescht = await tx.invoice.updateMany({
+        where: { id, status: 'DRAFT', deletedAt: null },
+        data: { deletedAt: new Date() },
+      });
+      if (geloescht.count === 0) {
+        throw new BusinessRuleError(
+          'Diese Rechnung wurde inzwischen ausgestellt. Nach Art. 957a OR muss die Nummerierung lückenlos bleiben — korrigieren Sie über eine Gutschrift oder eine Stornierung.',
+        );
+      }
       await einsaetzeFreigeben(tx, id);
     });
   } else {

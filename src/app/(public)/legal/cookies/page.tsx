@@ -1,15 +1,14 @@
 import type { Metadata } from 'next';
 
 import { LegalBody } from '@/components/marketing/legal-body';
+import { SEITEN_URL } from '@/lib/seiten-url';
+import { seitenMetadaten } from '@/lib/seo/metadaten';
+import { rechtstextSeo } from '@/lib/seo/rechtstexte';
 
 import { ConsentSettingsLink } from '@/features/public/consent-settings-link';
 
-export const metadata: Metadata = {
-  title: 'Cookie-Erklärung',
-  description:
-    'Welche Cookies wir setzen, wozu, und wie Sie Ihre Einwilligung jederzeit ändern können.',
-  alternates: { canonical: '/legal/cookies' },
-};
+// Titel und Beschreibung in `lib/seo/rechtstexte.ts` — dieselbe Quelle wie die SEO-Übersicht.
+export const metadata: Metadata = seitenMetadaten(rechtstextSeo('/legal/cookies'), SEITEN_URL);
 
 export const revalidate = 86400;
 
@@ -56,8 +55,18 @@ const COOKIES = [
   {
     category: 'Statistik',
     description:
-      'Nur mit Ihrer Einwilligung. Wir messen anonymisiert, welche Seiten genutzt werden, um die Website zu verbessern. Die IP-Adresse wird gekürzt.',
+      'Nur mit Ihrer Einwilligung. Wir messen, welche Seiten genutzt werden, um die Website zu verbessern. Unsere eigene Besuchszählung speichert weder IP-Adresse noch Browserkennung; falls Google Analytics eingerichtet ist, wird dort die IP-Adresse gekürzt.',
     items: [
+      // Eigene Besuchsmessung (2026-09-28). Streng genommen kein Cookie,
+      // sondern ein Eintrag im Sitzungsspeicher des Tabs — er steht trotzdem
+      // hier, weil die Seite erklärt, was im Browser abgelegt wird, und weil
+      // er unter dieselbe Einwilligung fällt.
+      {
+        name: 'clenaris-besuch',
+        purpose:
+          'Zufällige Kennung dieses Browser-Tabs für unsere eigene Besuchszählung. Wird nicht als Cookie gesendet; auf dem Server nur als täglich wechselnder Hashwert gespeichert.',
+        duration: 'Bis zum Schliessen des Browser-Tabs',
+      },
       { name: '_ga', purpose: 'Unterscheidet Besucherinnen und Besucher', duration: '13 Monate' },
       { name: '_ga_*', purpose: 'Hält den Sitzungsstatus (Google Analytics 4)', duration: '13 Monate' },
     ],

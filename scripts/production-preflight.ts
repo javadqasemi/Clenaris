@@ -326,8 +326,8 @@ function clamdPing(host: string, port: number): Promise<boolean> {
 
 export async function verbindungenPruefen(env: Umgebung, phase: 'start' | 'vor-migration', wartungsfenster: boolean): Promise<Pruefung[]> {
   const p: Pruefung[] = [];
-  const { PrismaClient } = await import('@prisma/client');
-  const prisma = new PrismaClient();
+  const { erzeugePrismaClient } = await import('../src/lib/prisma-client');
+  const prisma = erzeugePrismaClient();
   try {
     // --- Datenbank -----------------------------------------------------------
     let verbunden = false;

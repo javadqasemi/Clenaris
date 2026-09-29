@@ -33,6 +33,14 @@ const serverSchema = z.object({
    * `JWT_REFRESH_TTL` bleibt die absolute Obergrenze.
    */
   SESSION_IDLE_TTL: z.coerce.number().int().positive().default(900),
+  /**
+   * Das Leerlauffenster einer Sitzung mit „Angemeldet bleiben" (seit
+   * 2026-09-28). Vorgabe sieben Tage: Wer das Kästchen setzt, will am nächsten
+   * Arbeitstag nicht neu anmelden — aber ein Gerät, das eine Woche lang niemand
+   * anfasst, soll nicht angemeldet bleiben. Auch hier bleibt
+   * `JWT_REFRESH_TTL` die absolute Obergrenze.
+   */
+  SESSION_REMEMBER_IDLE_TTL: z.coerce.number().int().positive().default(604_800),
   AUTH_COOKIE_DOMAIN: z.string().optional(),
 
   /**

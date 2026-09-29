@@ -1,6 +1,7 @@
 import 'server-only';
 
 import { prisma, toNumber } from '@/lib/db';
+import { aufRappen, geld, summe } from '@/lib/money';
 
 import { activeStaffWhere } from './profile.service';
 import { cache, cacheKeys } from '@/lib/redis';
@@ -703,18 +704,19 @@ export async function getVatReport(params: {
     }),
   ]);
 
-  const outputVat = round2(
-    output.reduce((sum, row) => sum + toNumber(row._sum.vatAmount), 0),
-  );
-  const outputNet = round2(output.reduce((sum, row) => sum + toNumber(row._sum.netTotal), 0));
-  const inputVat = round2(toNumber(input._sum.vatAmount));
+  // Dezimal summiert (B-07, 2026-09-28): Das ist die Zahl, die in die
+  // MWST-Abrechnung übernommen wird — eine binäre Summe über die Sätze konnte
+  // am Rappen danebenliegen, bevor `round2` ihn „richtig" rundete.
+  const outputVat = summe(output.map((row) => row._sum.vatAmount)).toNumber();
+  const outputNet = summe(output.map((row) => row._sum.netTotal)).toNumber();
+  const inputVat = aufRappen(input._sum.vatAmount).toNumber();
 
   return {
     period: { from: params.from.toISOString(), to: params.to.toISOString() },
     turnoverNet: outputNet,
     outputVat,
     inputVat,
-    payable: round2(outputVat - inputVat),
+    payable: aufRappen(geld(outputVat).minus(geld(inputVat))).toNumber(),
     note:
       'Provisorische Auswertung nach vereinbarten Entgelten (Soll-Prinzip). Die definitive Abrechnung erstellt Ihre Treuhandstelle.',
   };

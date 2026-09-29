@@ -1,6 +1,6 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
-import { Download, UserPlus } from 'lucide-react';
+import { Download, Inbox, UserPlus } from 'lucide-react';
 
 import { prisma, toNumber } from '@/lib/db';
 import { requirePermission } from '@/lib/auth/session';
@@ -50,6 +50,19 @@ export default async function StaffPage({
   // Nach Berechtigung, nicht nach Rolle: `role === 'ADMIN'` nahm der
   // Systemverantwortung den Knopf, obwohl sie anlegen darf.
   const isAdmin = can(session.role, 'employee:create');
+  // Bewerbungen (2026-09-28): Die Seite bestand, war aber nur über eine
+  // Benachrichtigung erreichbar — ein Bereich, den man nur findet, wenn
+  // gerade jemand etwas eingereicht hat, wird nicht gepflegt.
+  const canReadApplications = can(session.role, 'application:read');
+  /*
+   * Der Reiter steht in der URL (`?reiter=abwesenheiten`), damit ein Link
+   * direkt auf die offenen Anträge führen kann. Die Benachrichtigung „Neuer
+   * Abwesenheitsantrag" zeigte bis 2026-09-28 auf `/admin/personal/abwesenheiten`
+   * — eine Seite, die es nie gab; der Pfad fiel auf `personal/[id]` und
+   * endete als 404. Eine eigene Seite dafür wäre eine zweite Liste derselben
+   * Anträge; der Reiter hier ist die eine.
+   */
+  const tab = filter.reiter === 'abwesenheiten' ? 'abwesenheiten' : 'team';
 
   const organizationId = await getOrganizationId();
   const now = new Date();
@@ -143,6 +156,14 @@ export default async function StaffPage({
         description="Anstellungen, Qualifikationen, Zeiterfassung und Abwesenheiten."
         actions={
           <>
+            {canReadApplications ? (
+              <Button asChild variant="outline">
+                <Link href="/admin/personal/bewerbungen">
+                  <Inbox aria-hidden />
+                  Bewerbungen
+                </Link>
+              </Button>
+            ) : null}
             <Button asChild variant="outline">
               <a href="/api/exports/zeiterfassung" download>
                 <Download aria-hidden />
@@ -214,7 +235,7 @@ export default async function StaffPage({
         />
       </div>
 
-      <Tabs defaultValue="team">
+      <Tabs defaultValue={tab}>
         <TabsList variant="underline">
           <TabsTriggerUnderline value="team">Team ({employees.length})</TabsTriggerUnderline>
           <TabsTriggerUnderline value="abwesenheiten">
@@ -256,7 +277,9 @@ export default async function StaffPage({
             <EmptyState
               title="Noch keine Mitarbeitenden erfasst"
               description="Erfassen Sie Ihr Team, damit Sie Einsätze zuteilen und Arbeitszeiten erfassen können."
-              action={{ href: '/admin/personal/neu', label: 'Person erfassen' }}
+              // Nur mit `employee:create` — die Betriebsleitung darf nicht
+              // anlegen; der Knopf führte sie auf eine 404 (Audit 2026-09-28).
+              action={isAdmin ? { href: '/admin/personal/neu', label: 'Person erfassen' } : undefined}
             />
           ) : filtered.length === 0 ? (
             <EmptyState

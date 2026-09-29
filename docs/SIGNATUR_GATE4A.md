@@ -73,8 +73,14 @@ zu optimistisch oder unentschieden:
   `SignatureParticipant.signatureArtifact`. `originalArtifactId` ist nicht
   eindeutig — mehrere Vorgänge dürfen dieselbe Fassung binden.
 - **Zustandsmaschine mit `FINALIZING`.** `PENDING → FINALIZING → COMPLETED`
-  über bedingtes `updateMany`; deterministische Artefaktpfade
-  (`<org>/signatures/<request>/{signed,evidence,signature-<participant>}`),
+  über bedingtes `updateMany`; Artefaktpfade unter
+  `<org>/signatures/<request>/` — Signaturbild `signature-<participant>`,
+  signiertes Artefakt und Protokoll seit 2026-09-28 mit einer Kennung je
+  Abschlussversuch (`signed-<versuch>`, `evidence-<versuch>`, B-16): Ein
+  hängender und ein übernehmender Abschluss überschrieben vorher dieselbe
+  Datei, nachdem der Hash des einen schon eingetragen war. Welches Artefakt
+  gilt, entscheidet allein das bedingte Eintragen; ein unterlegener Versuch
+  hinterlässt eine unverknüpfte private Datei, nie einen veränderten Beleg.
   Artefakte nur, wenn sie fehlen; `COMPLETED` nur mit Protokoll. Ein
   Fehlschlag lässt `FINALIZING` mit `finalizingSince` stehen; der Nachtlauf
   (`runSignatureNightly`, im täglichen Cron) übernimmt nach zehn Minuten,

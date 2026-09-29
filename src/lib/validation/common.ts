@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+import './fehlerkarte';
+
 /**
  * Gemeinsame Bausteine. Jede Fehlermeldung ist auf Deutsch formuliert und wird
  * unverändert im Formular angezeigt — dadurch bleiben Client- und Server-
@@ -126,10 +128,49 @@ export const isoDateSchema = z
   .or(z.string().regex(/^\d{4}-\d{2}-\d{2}$/))
   .transform((v) => new Date(v));
 
-export const dateOnlySchema = z
-  .string()
-  .regex(/^\d{4}-\d{2}-\d{2}$/, 'Bitte geben Sie ein gültiges Datum an (JJJJ-MM-TT).')
-  .transform((v) => new Date(`${v}T00:00:00.000Z`));
+/**
+ * Kalendertag `JJJJ-MM-TT`, als `Date` um UTC-Mitternacht weitergegeben.
+ *
+ * **Das Schema nimmt seine eigene Ausgabe wieder an** (seit 2026-09-28).
+ * Jedes Formular prüft im Browser mit demselben Schema wie der Server
+ * (`zodResolver`), und `@hookform/resolvers` übergibt `onSubmit` die bereits
+ * *umgewandelten* Werte. Aus „2026-10-28" wurde also ein `Date`, daraus beim
+ * Senden `"2026-10-28T00:00:00.000Z"` — und genau das wies derselbe Regex auf
+ * dem Server mit 422 ab. Betroffen war jedes Formular mit einem reinen
+ * Datumsfeld; bemerkt wurde es an der Offerte, die sich weder anlegen noch
+ * bearbeiten liess (`tests/e2e/offerte-rabatt.spec.ts`, `tests/api/quotes.test.ts`).
+ *
+ * Angenommen werden darum genau drei Formen, und alle drei bezeichnen
+ * denselben Tag:
+ *  • `JJJJ-MM-TT` — die Eingabe,
+ *  • `JJJJ-MM-TTT00:00:00(.000)Z` — die serialisierte eigene Ausgabe,
+ *  • ein `Date` um UTC-Mitternacht — die eigene Ausgabe vor dem Serialisieren.
+ *
+ * **Jede andere Uhrzeit bleibt abgewiesen.** `2026-10-28T23:30:00+02:00` ist in
+ * Zürich der 28., in UTC schon der 27.; welcher Tag gemeint war, lässt sich
+ * aus dem Wert nicht sicher ablesen, und raten wäre schlimmer als ablehnen.
+ * UTC-Mitternacht dagegen ist eindeutig die Form, die dieses Schema selbst
+ * erzeugt.
+ */
+const TAG_ALS_MITTERNACHT_UTC = /^(\d{4}-\d{2}-\d{2})T00:00:00(?:\.000)?Z$/;
+
+export const dateOnlySchema = z.preprocess(
+  (wert) => {
+    if (wert instanceof Date && !Number.isNaN(wert.getTime())) {
+      const iso = wert.toISOString();
+      return TAG_ALS_MITTERNACHT_UTC.test(iso) ? iso.slice(0, 10) : iso;
+    }
+    if (typeof wert === 'string') {
+      const treffer = TAG_ALS_MITTERNACHT_UTC.exec(wert);
+      if (treffer) return treffer[1];
+    }
+    return wert;
+  },
+  z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/, 'Bitte geben Sie ein gültiges Datum an (JJJJ-MM-TT).')
+    .transform((v) => new Date(`${v}T00:00:00.000Z`)),
+);
 
 /** "08:30" */
 export const timeSchema = z

@@ -24,7 +24,8 @@ interface Treffer {
   id: string;
   titel: string;
   link: string | null;
-  aktionen: { schluessel: string }[];
+  aktionen: { schluessel: string; optionen?: { value: string; label: string }[] }[];
+  verweise: { label: string; href: string; art: string }[];
   etikett: string | null;
 }
 interface Ergebnis {
@@ -78,7 +79,31 @@ async function aufraeumen() {
     await tx.material.deleteMany({ where: { id: { in: ids } } });
     await tx.equipment.deleteMany({ where: { name: { startsWith: 'Scangerät' } } });
     await tx.property.deleteMany({ where: { label: { startsWith: 'Scanobjekt' } } });
+    // Prüfbestand 2026-09-28: ausgestellte Rechnungen mit alter und neuer
+    // QR-Referenz (an den Unveränderlichkeitstriggern vorbei, nur hier) und
+    // Verträge mit Nummer, in der eigenen und der fremden Organisation.
+    await tx.invoice.deleteMany({ where: { number: { startsWith: 'SCAN-RE-' } } });
+    await tx.contract.deleteMany({ where: { number: { startsWith: 'SCAN-VT-' } } });
   });
+}
+
+/** Eine gültige QR-Referenz aus 26 Ziffern Körper (Modulo 10 rekursiv, wie `kennung.ts`). */
+function qrReferenz(koerper: string): string {
+  const tabelle = [0, 9, 4, 6, 8, 2, 7, 1, 3, 5];
+  let uebertrag = 0;
+  for (const z of koerper) uebertrag = tabelle[(uebertrag + Number(z)) % 10]!;
+  return `${koerper}${(10 - uebertrag) % 10}`;
+}
+
+function qrRechnungText(referenz: string): string {
+  return [
+    'SPC', '0200', '1', 'CH4431999123000889012',
+    'S', 'Clenaris', 'Weg', '1', '3011', 'Bern', 'CH',
+    '', '', '', '', '', '', '',
+    '100.00', 'CHF',
+    '', '', '', '', '', '', '',
+    'QRR', referenz, '', 'EPD',
+  ].join('\n');
 }
 
 before(async () => {
@@ -366,21 +391,90 @@ describe('Schnellaktionen je Rolle und die erneute Prüfung', () => {
     assert.equal(treffer.link, `/portal/einsaetze/${eigener.id}`);
     assert.deepEqual(treffer.aktionen.map((a) => a.schluessel), ['einsatz.einstempeln']);
     assert.equal(treffer.etikett, null);
-    assert.deepEqual(data(await aufloesen(fremder.number, jars.employee)).treffer, []);
+    // Rapport im Portal — kein PDF-Endpunkt, den die Rolle nicht abrufen darf.
+    assert.deepEqual(treffer.verweise, [{ label: 'Rapport', href: `/portal/einsaetze/${eigener.id}#rapport`, art: 'seite' }]);
+    // Ein fremder Einsatz ist für Mitarbeitende dieselbe leere Antwort wie
+    // eine Nummer, die es nicht gibt — kein Hinweis, dass es ihn gibt.
+    const fremd = data(await aufloesen(fremder.number, jars.employee));
+    const unbekannt = data(await aufloesen(`E-GIBTESNICHT-${RUN}`, jars.employee));
+    assert.deepEqual(fremd.treffer, []);
+    assert.equal(fremd.hinweis, unbekannt.hinweis);
     // Das Büro sieht beide, aber ohne „Einstempeln" — es ist nicht zugeteilt.
     const buero = data(await aufloesen(fremder.number, jars.manager));
     assert.equal(buero.treffer[0]?.link, `/admin/einsaetze/${fremder.id}`);
     assert.deepEqual(buero.treffer[0]?.aktionen, []);
+    assert.deepEqual(buero.treffer[0]?.verweise, [{ label: 'Rapport (PDF)', href: `/api/jobs/${fremder.id}/report`, art: 'datei' }]);
+    // Der Verweis ist kein Zugang: Der Endpunkt prüft beim Abruf selbst.
+    assert.equal((await get(`/api/jobs/${fremder.id}/report`, { jar: jars.employee })).status, 403);
+  });
+
+  it('Einsatz: läuft die eigene Zeit schon, bietet der Scan „Ausstempeln" statt „Einstempeln"', async (t) => {
+    const db = testDb();
+    const eigen = await eigeneOrganisationId();
+    if (!db || !eigen) return t.skip('keine Testdatenbank');
+    const anna = await db.employee.findFirst({ where: { user: { email: 'anna.keller@clenaris.ch' } }, select: { id: true } });
+    if (!anna) return t.skip('keine Mitarbeitende im Demobestand');
+    if (await db.timeEntry.count({ where: { employeeId: anna.id, endedAt: null } })) return t.skip('es läuft bereits eine Zeiterfassung');
+    const eigener = await db.job.findFirst({
+      where: { organizationId: eigen, deletedAt: null, assignments: { some: { employeeId: anna.id } }, status: { in: ['SCHEDULED', 'DISPATCHED'] } },
+      select: { id: true, number: true },
+    });
+    if (!eigener) return t.skip('Demobestand ohne passenden Einsatz');
+    // Direkt angelegt statt über `clock-in`: Einstempeln setzte den
+    // Demoeinsatz auf „in Arbeit", und andere Prüfdateien suchen geplante.
+    const eintrag = await db.timeEntry.create({ data: { employeeId: anna.id, jobId: eigener.id, startedAt: new Date() } });
+    try {
+      const r = data(await aufloesen(eigener.number, jars.employee));
+      const treffer = r.treffer.find((x) => x.id === eigener.id);
+      assert.deepEqual(treffer?.aktionen.map((a) => a.schluessel), ['einsatz.ausstempeln']);
+    } finally {
+      await schutzfreiAufraeumen((tx) => tx.timeEntry.deleteMany({ where: { id: eintrag.id } }));
+    }
   });
 
   it('Gerät: „Defekt melden" über den bestehenden Statusendpunkt, danach „Wieder verfügbar"', async () => {
     const code = data(await etikett('EQUIPMENT', geraetId, jars.manager)).inhalt;
     const r1 = data(await aufloesen(code, jars.manager));
-    assert.deepEqual(r1.treffer[0]!.aktionen.map((a) => a.schluessel), ['geraet.wartung', 'geraet.defekt']);
+    // Seit 2026-09-28 auch „Zuteilen" für ein freies, verfügbares Gerät.
+    assert.deepEqual(r1.treffer[0]!.aktionen.map((a) => a.schluessel), ['geraet.wartung', 'geraet.defekt', 'geraet.zuteilen']);
     const defekt = await post(`/api/equipment/${geraetId}/status`, { status: 'MAINTENANCE', reason: 'Kabel beschädigt' }, { jar: jars.manager });
     assert.equal(defekt.status, 200, defekt.text);
     const r2 = data(await aufloesen(code, jars.manager));
+    // In Wartung kein Zuteilen — `assignEquipment` wiese es mit 422 ab.
     assert.deepEqual(r2.treffer[0]!.aktionen.map((a) => a.schluessel), ['geraet.wartung', 'geraet.verfuegbar']);
+    const zurueck = await post(`/api/equipment/${geraetId}/status`, { status: 'AVAILABLE' }, { jar: jars.manager });
+    assert.equal(zurueck.status, 200, zurueck.text);
+  });
+
+  it('Gerät: „Zuteilen" bringt die aktiven Personen mit, geht über den bestehenden Endpunkt, danach „Zurücknehmen"', async (t) => {
+    const code = data(await etikett('EQUIPMENT', geraetId, jars.manager)).inhalt;
+    const vorher = data(await aufloesen(code, jars.manager)).treffer[0]!;
+    const zuteilen = vorher.aktionen.find((a) => a.schluessel === 'geraet.zuteilen');
+    assert.ok(zuteilen, JSON.stringify(vorher.aktionen));
+    const person = zuteilen.optionen?.[0];
+    if (!person) return t.skip('kein aktives Personal im Demobestand');
+    // Der Scan allein teilt nichts zu.
+    const db = testDb();
+    if (db) assert.equal((await db.equipment.findUniqueOrThrow({ where: { id: geraetId } })).assignedEmployeeId, null);
+
+    // Mitarbeitende: dasselbe Etikett ist für sie leer wie ein unbekanntes, und
+    // der Endpunkt weist die Zuteilung trotz bekannter ID ab.
+    const leer = data(await aufloesen(code, jars.employee));
+    assert.deepEqual(leer.treffer, []);
+    assert.equal(leer.hinweis, data(await aufloesen('CLX1:ZZZZZZZZZZZZZZZZZZZZ', jars.employee)).hinweis);
+    assert.equal((await post(`/api/equipment/${geraetId}/assign`, { employeeId: person.value }, { jar: jars.employee })).status, 403);
+
+    const zugeteilt = await post(`/api/equipment/${geraetId}/assign`, { employeeId: person.value }, { jar: jars.manager });
+    assert.equal(zugeteilt.status, 200, zugeteilt.text);
+    const nachher = data(await aufloesen(code, jars.manager)).treffer[0]!;
+    assert.deepEqual(nachher.aktionen.map((a) => a.schluessel), ['geraet.wartung', 'geraet.defekt', 'geraet.zuruecknehmen']);
+
+    const zurueck = await post(`/api/equipment/${geraetId}/assign`, { employeeId: null }, { jar: jars.manager });
+    assert.equal(zurueck.status, 200, zurueck.text);
+    if (db) {
+      const eintrag = await db.auditLog.findFirst({ where: { entity: 'Equipment', entityId: geraetId, summary: { contains: 'zugeteilt' } } });
+      assert.ok(eintrag, 'Die Zuteilung steht nicht im Protokoll');
+    }
   });
 
   it('die Schnellaktion prüft der Endpunkt erneut: Mitarbeitende können nicht buchen, auch mit bekannter ID', async () => {
@@ -401,6 +495,137 @@ describe('Schnellaktionen je Rolle und die erneute Prüfung', () => {
     const eintrag = await db.auditLog.findFirst({ where: { entity: 'StockMovement', entityId: data(buchung).id } });
     assert.ok(eintrag, 'Die Buchung steht nicht im Protokoll');
     assert.equal(eintrag.action, 'CREATE');
+  });
+});
+
+/*
+  Ausbau 2026-09-28: Rechnungen über beide Formen der QR-Referenz, Verträge
+  über ihre Nummer. Jede neue Auflösung einmal mit Recht (Treffer) und einmal
+  ohne (dieselbe Antwort wie ein unbekannter Code — kein Existenzorakel).
+*/
+describe('Rechnung: alte und neue QR-Referenz', () => {
+  const ENDE = String(RUN).slice(-12);
+  /** Bis 2026-09-27: nur die laufende Nummer, mit führenden Nullen. */
+  const ALT = qrReferenz(`00000000000000${ENDE}`);
+  /** Seit 2026-09-28: Jahr + laufende Nummer (`buildQrReference`). */
+  const NEU = qrReferenz(`2026${'0'.repeat(10)}${ENDE}`);
+  const rechnungen: { alt: string; neu: string } = { alt: '', neu: '' };
+
+  before(async () => {
+    const db = testDb();
+    const eigen = await eigeneOrganisationId();
+    if (!db || !eigen) return;
+    const kunde = await db.customer.findFirst({ where: { organizationId: eigen, deletedAt: null }, select: { id: true } });
+    if (!kunde) return;
+    const anlegen = (number: string, qrReference: string) =>
+      db.invoice.create({
+        data: {
+          organizationId: eigen,
+          number,
+          customerId: kunde.id,
+          status: 'SENT',
+          sentAt: new Date(),
+          issueDate: new Date(),
+          dueDate: new Date(Date.now() + 30 * 86_400_000),
+          billToName: 'Scanprüfung',
+          billToStreet: 'Prüfweg 1',
+          billToZip: '3000',
+          billToCity: 'Bern',
+          qrReference,
+        },
+        select: { id: true },
+      });
+    rechnungen.alt = (await anlegen(`SCAN-RE-A-${RUN}`, ALT)).id;
+    rechnungen.neu = (await anlegen(`SCAN-RE-N-${RUN}`, NEU)).id;
+  });
+
+  it('beide Formen sind gültige Referenzen und unterscheiden sich', () => {
+    assert.ok(ALT.startsWith('000000'));
+    assert.ok(NEU.startsWith('2026'));
+    assert.notEqual(ALT, NEU);
+  });
+
+  it('die nackte Referenz — alt wie neu — findet genau ihre Rechnung, mit PDF und „Zahlung erfassen"', async (t) => {
+    if (!rechnungen.alt) return t.skip('keine Testdatenbank');
+    for (const [referenz, id] of [[ALT, rechnungen.alt], [NEU, rechnungen.neu]] as const) {
+      const r = data(await aufloesen(referenz, jars.admin));
+      assert.equal(r.eingabe.art, 'QR_REFERENZ', referenz);
+      assert.deepEqual(r.treffer.map((x) => x.id), [id], referenz);
+      assert.deepEqual(r.treffer[0]!.aktionen.map((a) => a.schluessel), ['rechnung.zahlung']);
+      assert.deepEqual(r.treffer[0]!.verweise, [{ label: 'PDF', href: `/api/invoices/${id}/pdf`, art: 'datei' }]);
+    }
+  });
+
+  it('der Zahlteil einer QR-Rechnung — alt wie neu — findet dieselbe Rechnung', async (t) => {
+    if (!rechnungen.alt) return t.skip('keine Testdatenbank');
+    assert.deepEqual(data(await aufloesen(qrRechnungText(ALT), jars.admin)).treffer.map((x) => x.id), [rechnungen.alt]);
+    assert.deepEqual(data(await aufloesen(qrRechnungText(NEU), jars.admin)).treffer.map((x) => x.id), [rechnungen.neu]);
+  });
+
+  it('Mitarbeitende: dieselbe Antwort wie für eine Referenz, zu der es keine Rechnung gibt — und das PDF bleibt verschlossen', async (t) => {
+    if (!rechnungen.alt) return t.skip('keine Testdatenbank');
+    const unbekannt = data(await aufloesen(qrReferenz(`9999${'0'.repeat(10)}${ENDE}`), jars.employee));
+    for (const referenz of [ALT, NEU]) {
+      const r = data(await aufloesen(referenz, jars.employee));
+      assert.deepEqual(r.treffer, [], referenz);
+      assert.equal(r.hinweis, unbekannt.hinweis, referenz);
+    }
+    assert.equal((await get(`/api/invoices/${rechnungen.alt}/pdf`, { jar: jars.employee })).status, 403);
+  });
+});
+
+describe('Vertrag über die Nummer', () => {
+  const NUMMER = `SCAN-VT-${RUN}`;
+  let vertragId = '';
+
+  before(async () => {
+    const db = testDb();
+    const eigen = await eigeneOrganisationId();
+    if (!db || !eigen) return;
+    const kunde = await db.customer.findFirst({ where: { organizationId: eigen, deletedAt: null }, select: { id: true } });
+    if (!kunde) return;
+    vertragId = (
+      await db.contract.create({
+        data: { organizationId: eigen, number: NUMMER, customerId: kunde.id, title: 'Scanprüfung Unterhaltsreinigung', status: 'ACTIVE', startDate: new Date('2026-01-01') },
+        select: { id: true },
+      })
+    ).id;
+    // Dieselbe Nummer in der fremden Organisation: Sie darf nie erscheinen.
+    const fremd = await fremdeOrganisation();
+    if (fremd) {
+      const fremdeKundschaft = await db.customer.findFirst({ where: { organizationId: fremd }, select: { id: true } });
+      if (fremdeKundschaft) {
+        await db.contract.create({
+          data: { organizationId: fremd, number: `SCAN-VT-F-${RUN}`, customerId: fremdeKundschaft.id, title: 'Fremder Vertrag', status: 'ACTIVE', startDate: new Date('2026-01-01') },
+        });
+      }
+    }
+  });
+
+  it('Administration und Betriebsleitung finden den Vertrag, mit Link auf die Vertragsseite, ohne Schnellaktion', async (t) => {
+    if (!vertragId) return t.skip('keine Testdatenbank');
+    for (const jar of [jars.admin, jars.manager]) {
+      const r = data(await aufloesen(NUMMER, jar));
+      const treffer = r.treffer.find((x) => x.art === 'VERTRAG');
+      assert.ok(treffer, JSON.stringify(r));
+      assert.equal(treffer.id, vertragId);
+      assert.equal(treffer.link, `/admin/vertraege/${vertragId}`);
+      assert.deepEqual(treffer.aktionen, []);
+    }
+    // Genau — kein Teilwort.
+    assert.deepEqual(data(await aufloesen(NUMMER.slice(0, -1), jars.admin)).treffer.filter((x) => x.art === 'VERTRAG'), []);
+  });
+
+  it('Mitarbeitende: dieselbe Antwort wie eine unbekannte Nummer', async (t) => {
+    if (!vertragId) return t.skip('keine Testdatenbank');
+    const r = data(await aufloesen(NUMMER, jars.employee));
+    const unbekannt = data(await aufloesen(`SCAN-VT-GIBTESNICHT-${RUN}`, jars.employee));
+    assert.deepEqual(r.treffer, []);
+    assert.equal(r.hinweis, unbekannt.hinweis);
+  });
+
+  it('die Nummer eines Vertrags der fremden Organisation löst nichts auf', async () => {
+    assert.deepEqual(data(await aufloesen(`SCAN-VT-F-${RUN}`, jars.super)).treffer, []);
   });
 });
 

@@ -34,6 +34,7 @@ import { SUCHE_ROUTES } from './openapi-routes-suche';
 import { SCAN_ROUTES } from './openapi-routes-scan';
 import * as sicherheitsbericht from '../src/lib/validation/security-report';
 import { VERSIONEN_ROUTES } from './openapi-routes-versionen';
+import { TRAFFIC_ROUTES } from './openapi-routes-traffic';
 
 /**
  * Registrierung aller REST-Endpunkte.
@@ -391,6 +392,19 @@ export const ROUTES: RouteDoc[] = [
     guard: { kind: 'public' },
     rateLimit: 'apiRead',
     query: q.postalCodeQuery,
+  },
+  {
+    method: 'get',
+    path: '/api/public/kontakt/vcard',
+    tag: 'Öffentlich',
+    summary: 'Visitenkarte der Firma (.vcf)',
+    description:
+      'vCard 3.0 mit Firmenname, Telefon, E-Mail, Website und Postadresse — dieselbe Zeichenkette ' +
+      'wie im QR-Code auf `/kontakt`. Nur öffentliche Stammdaten (keine IBAN, keine MWST-Nummer, keine ' +
+      'Personen). `Content-Disposition: attachment`, `Cache-Control: public, max-age=3600`.',
+    guard: { kind: 'public' },
+    rateLimit: 'apiRead',
+    produces: 'text/vcard',
   },
   {
     method: 'post',
@@ -1798,6 +1812,20 @@ export const ROUTES: RouteDoc[] = [
     guard: perm('all', 'ai:use', 'job:dispatch'),
     rateLimit: 'aiGenerate',
     body: ai.dispatchSuggestSchema,
+  },
+  {
+    method: 'post',
+    path: '/api/ai/text-assist',
+    tag: 'Künstliche Intelligenz',
+    summary: 'Text korrigieren oder Vorschläge erzeugen',
+    description:
+      'Textassistent für Website-, Blog-, SEO-, Leistungs- und Offerttexte. Der Kontext ist eine feste ' +
+      'Erlaubnisliste. Enthält der Text eine AHV-Nummer, IBAN, einen Zugangscode, ein Passwort, einen ' +
+      'Lohnbetrag oder ein Token, antwortet der Endpunkt mit 422 und sendet nichts. Ohne konfigurierten ' +
+      'Anbieter 503. Der Endpunkt schreibt nichts — der Vorschlag geht ins Formular.',
+    guard: perm('all', 'ai:use'),
+    rateLimit: 'aiGenerate',
+    body: ai.textAssistSchema,
   },
 
   // -------------------------------------------------------------------------
@@ -4572,4 +4600,9 @@ export const ROUTES: RouteDoc[] = [
   //  Versionsverwaltung (Produktsprint 2026-09-26)
   // -------------------------------------------------------------------------
   ...VERSIONEN_ROUTES,
+
+  // -------------------------------------------------------------------------
+  //  Eigene Besuchsmessung (2026-09-28)
+  // -------------------------------------------------------------------------
+  ...TRAFFIC_ROUTES,
 ];

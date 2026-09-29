@@ -5,6 +5,7 @@ import { ExternalLink, Newspaper } from 'lucide-react';
 import { prisma } from '@/lib/db';
 import { requirePermission } from '@/lib/auth/session';
 import { can } from '@/lib/auth/rbac';
+import { hasIntegration } from '@/lib/env';
 import { formatDate } from '@/lib/utils';
 import { getOrganizationId } from '@/server/services/organization.service';
 import { Badge } from '@/components/ui/badge';
@@ -69,7 +70,9 @@ export default async function BlogAdminPage() {
       <PageHeader
         title="Blog"
         description="Ratgeberartikel bringen Besucherinnen und Besucher über die Suche — und beantworten Fragen, bevor sie im Telefon landen."
-        actions={canCreate ? <BlogDraftDialog /> : undefined}
+        // KI-Entwurf nur mit `ai:use` und eingerichtetem Anbieter
+        // (`POST /api/ai/blog-draft`); sonst schreibt man selbst (2026-09-28).
+        actions={canCreate ? <BlogDraftDialog aiAvailable={can(session.role, 'ai:use') && hasIntegration('ai')} /> : undefined}
       />
 
       <div className="grid gap-4 sm:grid-cols-3">

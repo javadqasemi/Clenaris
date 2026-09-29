@@ -1,6 +1,6 @@
 import type { Metadata } from 'next';
 
-import { requirePermission } from '@/lib/auth/session';
+import { requirePagePermission } from '@/lib/auth/session';
 import { prisma } from '@/lib/db';
 import { getOrganizationId } from '@/server/services/organization.service';
 import { PageHeader } from '@/components/app/page-parts';
@@ -14,7 +14,8 @@ export const metadata: Metadata = {
 export const dynamic = 'force-dynamic';
 
 export default async function NewContractPage() {
-  await requirePermission('contract:create');
+  // Reine Eingabemaske: ohne Schreibrecht 404 statt Fehlergrenze (Audit 2026-09-28).
+  await requirePagePermission('contract:create');
   const organizationId = await getOrganizationId();
 
   const [kunden, objekte, leistungen, personal, offerten] = await Promise.all([

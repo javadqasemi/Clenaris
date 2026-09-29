@@ -4,7 +4,7 @@ import { prisma, type Prisma } from '@/lib/db';
 import { NotFoundError } from '@/lib/errors';
 import { createTaskSchema } from '@/lib/validation/crm';
 import { getOrganizationId } from '@/server/services/organization.service';
-import { notify } from '@/server/services/notification.service';
+import { notify, taskLinkForUser } from '@/server/services/notification.service';
 
 export const runtime = 'nodejs';
 
@@ -95,7 +95,8 @@ export const POST = defineRoute({
         channels: ['IN_APP'],
         title: 'Neue Aufgabe',
         body: task.title,
-        link: '/admin/aufgaben',
+        // Nach Rolle der zugewiesenen Person — Mitarbeitende → Portal.
+        link: await taskLinkForUser(task.assigneeId),
         entity: 'Task',
         entityId: task.id,
       });

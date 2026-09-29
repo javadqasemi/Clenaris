@@ -36,10 +36,10 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, statSync } from 'node:fs';
 
 // eslint-disable-next-line no-restricted-imports
-import { PrismaClient } from '@prisma/client';
 
 import { verbindungAus, werkzeugPfad, type Verbindung } from './db-backup';
 import { melden } from './security/melden';
+import { erzeugePrismaClient } from '../src/lib/prisma-client';
 
 /** Nur dieses Muster darf angelegt und gelöscht werden. */
 const ZIELMUSTER = /^clenaris_restore_verify_\d{10,}$/;
@@ -100,7 +100,7 @@ const TABELLEN = [
 ];
 
 async function zaehlen(url: string): Promise<Record<string, number | string>> {
-  const prisma = new PrismaClient({ datasources: { db: { url } } });
+  const prisma = erzeugePrismaClient({ url });
   const ergebnis: Record<string, number | string> = {};
   try {
     for (const t of TABELLEN) {

@@ -57,7 +57,6 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { PrismaClient } from '@prisma/client';
 import { hash } from '@node-rs/argon2';
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 import { config } from 'dotenv';
@@ -65,6 +64,7 @@ import { config } from 'dotenv';
 import { databaseNameOf } from './seed-guard';
 import { PREVIEW_DB, previewUrlAus } from '../scripts/setup-preview-db';
 import { previewCacheDir } from '../scripts/preview-server';
+import { erzeugePrismaClient } from '../src/lib/prisma-client';
 
 // ---------------------------------------------------------------------------
 //  Schutzschalter — vor jeder Verbindung
@@ -105,7 +105,7 @@ if (!previewUrl || zielName !== PREVIEW_DB) {
 }
 
 // Die Adresse ausdrücklich setzen — nicht die aus `.env` übernehmen.
-const prisma = new PrismaClient({ datasources: { db: { url: previewUrl } } });
+const prisma = erzeugePrismaClient({ url: previewUrl });
 
 const BASIS = process.env.PREVIEW_BASE_URL?.trim() || 'http://127.0.0.1:3000';
 const ORG_SLUG = 'clenaris';

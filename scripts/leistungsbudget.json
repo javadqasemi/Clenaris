@@ -1,0 +1,24 @@
+{
+  "stand": "2026-09-28 — gemessen am Integrationsbau (Produktion, gzip), Budget = Messung + 10 %, auf 5 kB aufgerundet",
+  "erlaeuterung": "Budget = gemessener Stand beim Festlegen plus 10 % Spielraum, auf 5 kB aufgerundet. Erhöhen nur mit Begründung im Commit. HTML-Budgets gegen den Testserver (Demobestand), JS-Budgets aus dem Bau.",
+  "jsKb": {
+    "/": 280,
+    "/buchen": 300,
+    "/kontakt": 290,
+    "/admin": 295,
+    "/admin/kunden": 295,
+    "/admin/offerten": 295,
+    "/admin/offerten/[id]/bearbeiten": 305,
+    "/admin/vertraege": 295,
+    "/admin/einsaetze": 300,
+    "/admin/rechnungen": 295,
+    "/admin/personal": 295,
+    "/admin/lohn": 295,
+    "/admin/suche": 290,
+    "/admin/auswertungen": 295,
+    "/admin/fuehrung": 305,
+    "/portal": 290,
+    "/konto": 290
+  },
+  "htmlKb": {}
+}

@@ -136,6 +136,9 @@ function istPrivateIpv4([a, b, c]: [number, number, number, number]): boolean {
   if (a === 192 && b === 0) return true; // IETF-Protokollzuweisungen, TEST-NET-1
   if (a === 198 && (b === 18 || b === 19)) return true; // Benchmarking
   if (a === 198 && b === 51 && c === 100) return true; // TEST-NET-2
+  // 6to4-Relay-Anycast (192.88.99.0/24, RFC 7526 stillgelegt): leitet in ein
+  // Tunnelnetz weiter, dessen Ziel sich von hier nicht prüfen lässt (B-18).
+  if (a === 192 && b === 88 && c === 99) return true;
   if (a === 203 && b === 0 && c === 113) return true; // TEST-NET-3
   if (a >= 224) return true; // Multicast, reserviert, Broadcast
   return false;
@@ -179,6 +182,9 @@ function istPrivateIpv6(b: number[]): boolean {
   if (alleNull(0, 12)) return v4(12);
   // NAT64 64:ff9b::/96 — übersetzt auf das eingebettete IPv4.
   if (b[0] === 0x00 && b[1] === 0x64 && b[2] === 0xff && b[3] === 0x9b && alleNull(4, 12)) return v4(12);
+  // Lokales NAT64 64:ff9b:1::/48 (RFC 8215) — ein Übersetzer im eigenen Netz;
+  // wohin er übersetzt, ist von hier aus nicht zu sehen: abweisen (B-18).
+  if (b[0] === 0x00 && b[1] === 0x64 && b[2] === 0xff && b[3] === 0x9b && b[4] === 0x00 && b[5] === 0x01) return true;
   // 6to4 2002::/16 — trägt ein IPv4 in Byte 2–5.
   if (b[0] === 0x20 && b[1] === 0x02) return v4(2);
   // Teredo 2001:0::/32 — Tunnel, Ziel nicht prüfbar: abweisen.

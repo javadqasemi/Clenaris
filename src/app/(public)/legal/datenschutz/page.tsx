@@ -1,16 +1,15 @@
 import type { Metadata } from 'next';
 
 import { LegalBody } from '@/components/marketing/legal-body';
+import { SEITEN_URL } from '@/lib/seiten-url';
+import { seitenMetadaten } from '@/lib/seo/metadaten';
+import { rechtstextSeo } from '@/lib/seo/rechtstexte';
 
 import { getPublicCompanyInfo } from '@/server/services/organization.service';
 import { ConsentSettingsLink } from '@/features/public/consent-settings-link';
 
-export const metadata: Metadata = {
-  title: 'Datenschutzerklärung',
-  description:
-    'Wie wir Personendaten bearbeiten — nach dem revidierten Schweizer Datenschutzgesetz (DSG) und der DSGVO.',
-  alternates: { canonical: '/legal/datenschutz' },
-};
+// Titel und Beschreibung in `lib/seo/rechtstexte.ts` — dieselbe Quelle wie die SEO-Übersicht.
+export const metadata: Metadata = seitenMetadaten(rechtstextSeo('/legal/datenschutz'), SEITEN_URL);
 
 export const revalidate = 86400;
 
@@ -83,6 +82,22 @@ export default async function PrivacyPage() {
           Zusammenführung mit Ihrem Konto
         </li>
       </ul>
+      {/*
+        Eigene Besuchsmessung (2026-09-28). Beschreibt, was tatsächlich
+        gespeichert wird — keine Aussage über Rechtskonformität; die
+        fachliche Prüfung steht in `docs/TRAFFIC_ANALYTICS.md` als offen.
+      */}
+      <p>
+        Mit Ihrer Einwilligung zur Statistik zählen wir Besuche zusätzlich selbst, auf unserem
+        eigenen Server. Gespeichert werden je Ereignis: die aufgerufene Seite ohne Parameter,
+        gegebenenfalls die Kampagnenangaben aus dem Link (utm_source, utm_medium, utm_campaign),
+        bei der ersten Seite die Domain der verweisenden Website, Gerätetyp (Telefon, Tablet,
+        Computer), Browserfamilie, Datum und ein täglich wechselnder Hashwert Ihres Browser-Tabs.
+        Ihre IP-Adresse und die vollständige Browserkennung speichern wir dafür nicht; Besuche an
+        verschiedenen Tagen lassen sich nicht miteinander verknüpfen. Sendet Ihr Browser das Signal
+        „Global Privacy Control“ oder „Do Not Track“, zählen wir nicht. Die Daten werden nach 13
+        Monaten gelöscht und nicht an Dritte weitergegeben.
+      </p>
 
       <h2>3. Wie lange wir Daten aufbewahren</h2>
       <dl className="protocol-list border-t border-border">

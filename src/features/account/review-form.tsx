@@ -49,12 +49,28 @@ const RATING_LABELS = [
   'Sehr zufrieden',
 ];
 
-export function ReviewForm({ bookings }: { bookings: ReviewableBooking[] }) {
+export function ReviewForm({
+  bookings,
+  preselectedBookingId,
+}: {
+  bookings: ReviewableBooking[];
+  /**
+   * Termin aus dem Link der Bewertungsbitte (`?buchung=…`). Die Seite reicht
+   * ihn nur weiter, wenn er in `bookings` steht — also der Kundschaft gehört,
+   * abgeschlossen und noch nicht bewertet ist. Dann öffnet sich der Dialog
+   * gleich mit diesem Termin: Wer auf „Bewertung abgeben" geklickt hat, soll
+   * nicht erst den Knopf suchen und den Termin von Hand wählen.
+   */
+  preselectedBookingId?: string;
+}) {
   const router = useRouter();
-  const [open, setOpen] = React.useState(false);
+  const preselected = bookings.some((b) => b.id === preselectedBookingId) ? preselectedBookingId : undefined;
+  // Anfangszustand statt Effekt: Der Dialog rendert über ein Portal erst nach
+  // dem Einhängen, Server und erster Client-Durchlauf bleiben deshalb gleich.
+  const [open, setOpen] = React.useState(Boolean(preselected));
   const [pending, setPending] = React.useState(false);
   const [rating, setRating] = React.useState(5);
-  const [bookingId, setBookingId] = React.useState(bookings[0]?.id ?? '');
+  const [bookingId, setBookingId] = React.useState(preselected ?? bookings[0]?.id ?? '');
   const [title, setTitle] = React.useState('');
   const [body, setBody] = React.useState('');
 

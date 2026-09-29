@@ -14,6 +14,7 @@ import {
 } from '@/lib/contracts/serie';
 import type { SessionUser } from '@/lib/auth/session';
 import { prisma, toNumber, type Tx } from '@/lib/db';
+import { abrechnungsbetrag } from '@/lib/contracts/abrechnungsbetrag';
 import { BusinessRuleError, NotFoundError } from '@/lib/errors';
 import { renderContractVersionSnapshot } from '@/lib/pdf/render';
 import type {
@@ -172,6 +173,207 @@ export function contractVisibilityWhere(params: {
   };
 }
 
+// ---------------------------------------------------------------------------
+//  Kundensicht (L-18, 2026-09-28)
+// ---------------------------------------------------------------------------
+
+/**
+ * Welche Verträge die Kundschaft in `/konto/vertraege` sieht.
+ *
+ * `DRAFT` und `IN_REVIEW` sind interne Vorstufen: Die Firma rechnet, formuliert
+ * und prüft noch, und nichts davon ist der Kundschaft zugegangen. Ein Entwurf
+ * im Kundenkonto wäre eine Zusage, die niemand gegeben hat — dieselbe Regel wie
+ * bei Rechnungen (`status: { not: 'DRAFT' }`) und Kontrollen (nur `COMPLETED`).
+ *
+ * `CANCELLED` fehlt ebenfalls: Annulliert wird nur aus Entwurf, Prüfung oder
+ * Angebot (`ERLAUBTE_UEBERGAENGE`), also ein Vertrag, der nie in Kraft war.
+ * Ihn aufzuführen hiesse, der Kundschaft einen „Vertrag" zu zeigen, den es für
+ * sie nie gab.
+ *
+ * `OFFERED` steht drin, weil das Angebot der Kundschaft zugegangen ist — es
+ * wartet auf ihre Unterschrift, und „Wo ist mein Vertrag?" soll nicht auf einen
+ * Anruf hinauslaufen. Die Belegzustände (`ACTIVE`, `PAUSED`, `NOTICE_GIVEN`,
+ * `ENDED`) sind das, wofür die Seite da ist.
+ */
+export const KUNDENSICHTBARE_VERTRAGSZUSTAENDE: readonly ContractStatus[] = [
+  'OFFERED',
+  'ACTIVE',
+  'PAUSED',
+  'NOTICE_GIVEN',
+  'ENDED',
+];
+
+/**
+ * Die Konditionen, die die Kundschaft sieht: **nur Fassungen, die gegolten
+ * haben** (`ACTIVE`, `SUPERSEDED`), die jüngste zuerst — die geltende hat
+ * stets die höchste Nummer unter ihnen.
+ *
+ * Ein Entwurf der nächsten Fassung ist noch verhandelbar und trägt einen Preis,
+ * den niemand zugesagt hat; eine verworfene Fassung hat nie gegolten. Beides im
+ * Kundenkonto zu zeigen hiesse, eine interne Kalkulation als Vereinbarung
+ * auszugeben.
+ */
+const GELTENDE_FASSUNGEN = { status: { in: ['ACTIVE', 'SUPERSEDED'] as ('ACTIVE' | 'SUPERSEDED')[] } };
+
+/**
+ * Die Sichtregel der Kundschaft als `where` — Mandant, Eigentum, Zustand.
+ *
+ * Als `AND`-Glieder, nicht verbreitet: Ein späterer Filter, der dasselbe Feld
+ * setzt, überschriebe sonst still die Eigentumsregel (die Falle aus
+ * `where-spread-ueberschreibt-sicht`, 2026-09-27).
+ */
+function kundenvertragWhere(organizationId: string, customerId: string): Prisma.ContractWhereInput {
+  return {
+    AND: [
+      contractVisibilityWhere({ organizationId, nurKundeId: customerId }),
+      { status: { in: [...KUNDENSICHTBARE_VERTRAGSZUSTAENDE] } },
+    ],
+  };
+}
+
+/**
+ * Die eigenen Verträge der Kundschaft, seitenweise.
+ *
+ * **Die Auswahl der Felder ist die Schutzgrenze.** `internalNote`,
+ * `costCenter`, die drei Zuständigen, Kündigungsgrund und Pausengrund werden
+ * gar nicht erst geladen. Ein Feld, das erst die Anzeige weglässt, ist einen
+ * vergessenen Ausdruck von der Leitung entfernt — und eine Server Component
+ * reicht an eine Client-Komponente weiter, was man ihr gibt.
+ */
+export async function listCustomerContracts(params: {
+  organizationId: string;
+  customerId: string;
+  page: number;
+  perPage: number;
+}) {
+  const where = kundenvertragWhere(params.organizationId, params.customerId);
+  const [gesamt, zeilen] = await Promise.all([
+    prisma.contract.count({ where }),
+    prisma.contract.findMany({
+      where,
+      orderBy: [{ startDate: 'desc' }, { createdAt: 'desc' }],
+      skip: (params.page - 1) * params.perPage,
+      take: params.perPage,
+      select: {
+        id: true,
+        number: true,
+        title: true,
+        status: true,
+        startDate: true,
+        endDate: true,
+        property: { select: { label: true } },
+        versions: {
+          where: GELTENDE_FASSUNGEN,
+          orderBy: { versionNumber: 'desc' },
+          take: 1,
+          select: {
+            pricingModel: true,
+            currency: true,
+            baseAmount: true,
+            hourlyRate: true,
+            unitPrice: true,
+            unitLabel: true,
+            vatRate: true,
+            billingCycle: true,
+          },
+        },
+      },
+    }),
+  ]);
+  return { gesamt, zeilen };
+}
+
+/**
+ * Ein eigener Vertrag für die Detailseite — oder `null`.
+ *
+ * `null` für fremd, gelöscht, unbekannt **und** für einen internen Zustand:
+ * Die Seite antwortet in allen Fällen gleich (404). Ein 403 für einen fremden
+ * Vertrag verriete, dass es die Kennung gibt.
+ *
+ * Geladen wird, was im unterschriebenen Vertrags-PDF steht
+ * (`renderContractVersionSnapshot`) — nicht mehr. Das Dokument ist der
+ * Massstab dafür, was die Kundschaft ohnehin in der Hand hat.
+ */
+export async function getCustomerContract(params: {
+  organizationId: string;
+  customerId: string;
+  contractId: string;
+}) {
+  return prisma.contract.findFirst({
+    where: { AND: [{ id: params.contractId }, kundenvertragWhere(params.organizationId, params.customerId)] },
+    select: {
+      id: true,
+      number: true,
+      title: true,
+      /*
+        `description` fehlt bewusst: Das Vertrags-PDF druckt sie nicht, und
+        in der Verwaltung dient sie als Freitext für die Akte. Was nicht im
+        Dokument steht, ist nicht als Kundentext geschrieben worden.
+      */
+      status: true,
+      startDate: true,
+      endDate: true,
+      noticeGivenAt: true,
+      terminationEffectiveAt: true,
+      pausedFrom: true,
+      pausedUntil: true,
+      property: {
+        select: {
+          label: true,
+          address: { select: { street: true, streetNo: true, postalCode: true, city: true } },
+        },
+      },
+      versions: {
+        where: GELTENDE_FASSUNGEN,
+        orderBy: { versionNumber: 'desc' },
+        take: 1,
+        select: {
+          versionNumber: true,
+          effectiveFrom: true,
+          acceptedAt: true,
+          minimumTermMonths: true,
+          renewalType: true,
+          renewalPeriodMonths: true,
+          noticePeriodDays: true,
+          billingCycle: true,
+          paymentTermDays: true,
+          currency: true,
+          pricingModel: true,
+          baseAmount: true,
+          hourlyRate: true,
+          unitPrice: true,
+          unitLabel: true,
+          vatRate: true,
+          indexReference: true,
+          responseHours: true,
+          terms: true,
+          services: {
+            orderBy: { position: 'asc' },
+            select: {
+              id: true,
+              label: true,
+              zone: true,
+              schedules: {
+                where: { active: true },
+                orderBy: { effectiveFrom: 'asc' },
+                select: {
+                  id: true,
+                  frequency: true,
+                  interval: true,
+                  weekdays: true,
+                  monthDay: true,
+                  startMinute: true,
+                  endMinute: true,
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+  });
+}
+
 async function ladeVertrag(organizationId: string, contractId: string) {
   const vertrag = await prisma.contract.findFirst({
     where: { id: contractId, organizationId, deletedAt: null },
@@ -232,6 +434,46 @@ export function aktiveVersion<T extends { status: string; versionNumber: number 
 //  Anlegen und ändern
 // ---------------------------------------------------------------------------
 
+/**
+ * Objekt und Zuständige gehören zum Vertrag (2026-09-28).
+ *
+ * Bis dahin wurden `propertyId` und die drei Personenkennungen beim Anlegen
+ * und Ändern ungeprüft geschrieben. Ein Vertrag für Kundschaft A mit dem
+ * Objekt von B schickte das Team des Planers an Bs Adresse, und As
+ * Kundenkonto (`contract:read_own`) zeigte Bs Objekt. Die Personen liessen
+ * sich über die Organisationsgrenze setzen, der Fremdschlüssel allein hielt
+ * das nicht auf.
+ *
+ * Fremd heisst hier 404 wie nicht vorhanden — die Antwort verrät nicht, dass
+ * es das Objekt bei einer anderen Kundschaft gibt. Nur gesetzte Werte werden
+ * geprüft; `null` (Bezug entfernen) ist immer erlaubt.
+ */
+async function vertragsbezuegePruefen(
+  organizationId: string,
+  customerId: string,
+  bezug: {
+    propertyId?: string | null;
+    responsibleEmployeeId?: string | null;
+    salesOwnerId?: string | null;
+    serviceManagerId?: string | null;
+  },
+): Promise<void> {
+  if (bezug.propertyId) {
+    const objekt = await prisma.property.findFirst({
+      where: { id: bezug.propertyId, customerId, customer: { organizationId }, deletedAt: null },
+      select: { id: true },
+    });
+    if (!objekt) throw new NotFoundError('Objekt nicht gefunden.');
+  }
+  const personen = [bezug.responsibleEmployeeId, bezug.salesOwnerId, bezug.serviceManagerId].filter(
+    (id): id is string => Boolean(id),
+  );
+  if (personen.length > 0) {
+    const gefunden = await prisma.employee.count({ where: { id: { in: [...new Set(personen)] }, organizationId } });
+    if (gefunden !== new Set(personen).size) throw new NotFoundError('Person nicht gefunden.');
+  }
+}
+
 export async function createContract(params: {
   organizationId: string;
   actorId: string;
@@ -247,9 +489,14 @@ export async function createContract(params: {
   });
   if (!kunde) throw new NotFoundError('Kundschaft nicht gefunden.');
 
+  await vertragsbezuegePruefen(params.organizationId, kunde.id, params.input);
+
   if (params.input.quoteId) {
+    // Die Offerte derselben Kundschaft (2026-09-28) — vorher genügte die
+    // Organisation, und ein Vertrag für A liess sich auf Bs angenommene
+    // Offerte stützen.
     const offerte = await prisma.quote.findFirst({
-      where: { id: params.input.quoteId, organizationId: params.organizationId, deletedAt: null },
+      where: { id: params.input.quoteId, organizationId: params.organizationId, customerId: kunde.id, deletedAt: null },
       select: { id: true, status: true },
     });
     if (!offerte) throw new NotFoundError('Offerte nicht gefunden.');
@@ -338,6 +585,8 @@ export async function updateContract(params: {
       'Das Objekt eines Vertrags, der in Kraft ist oder war, lässt sich nicht ändern. Ein anderer Einsatzort ist eine Vertragsänderung.',
     );
   }
+
+  await vertragsbezuegePruefen(params.organizationId, vorher.customerId, params.input);
 
   const aktualisiert = await prisma.contract.update({
     where: { id: vorher.id },
@@ -1818,23 +2067,23 @@ export async function contractBillingBasis(params: {
   });
   const freigegebeneMinuten = stunden._sum.minutes ?? 0;
 
-  let netto = 0;
+  // Der Betrag selbst entsteht dezimal in `abrechnungsbetrag` (2026-09-28,
+  // Begründung dort); hier wird nur gesammelt, was er braucht, und die
+  // Herleitung in Worten gebildet.
   let herleitung = '';
+  let gesamtmenge: Prisma.Decimal | number | null = 0;
 
   switch (geltend.pricingModel) {
     case 'FIXED_PERIOD':
-      netto = toNumber(geltend.baseAmount) * anteil;
       herleitung =
         anteil < 1
           ? `Pauschale je Periode (${geltend.billingCycle}) ${toNumber(geltend.baseAmount).toFixed(2)} × ${(anteil * 100).toFixed(2)} % Zeitanteil (Kalendertage)`
           : `Pauschale je Periode (${geltend.billingCycle})`;
       break;
     case 'FIXED_PER_VISIT':
-      netto = toNumber(geltend.baseAmount) * einsaetze.length;
       herleitung = `${einsaetze.length} Einsätze × ${toNumber(geltend.baseAmount).toFixed(2)}`;
       break;
     case 'HOURLY':
-      netto = (freigegebeneMinuten / 60) * toNumber(geltend.hourlyRate ?? 0);
       herleitung = `${(freigegebeneMinuten / 60).toFixed(2)} freigegebene Stunden × ${toNumber(geltend.hourlyRate ?? 0).toFixed(2)}`;
       break;
     case 'UNIT_BASED': {
@@ -1842,22 +2091,30 @@ export async function contractBillingBasis(params: {
         where: { contractVersionId: geltend.id },
         _sum: { quantity: true },
       });
-      const gesamtmenge = toNumber(menge._sum.quantity);
-      netto = gesamtmenge * toNumber(geltend.unitPrice ?? 0) * anteil;
+      gesamtmenge = menge._sum.quantity;
       herleitung =
-        `${gesamtmenge} ${geltend.unitLabel ?? 'Einheiten'} × ${toNumber(geltend.unitPrice ?? 0).toFixed(4)}` +
+        `${toNumber(gesamtmenge)} ${geltend.unitLabel ?? 'Einheiten'} × ${toNumber(geltend.unitPrice ?? 0).toFixed(4)}` +
         (anteil < 1 ? ` × ${(anteil * 100).toFixed(2)} % Zeitanteil (Kalendertage)` : '');
       break;
     }
     default:
-      netto = toNumber(geltend.baseAmount) * anteil;
       herleitung =
         'Abweichende Vereinbarung — Betrag aus der Vertragsversion' +
         (anteil < 1 ? `, ${(anteil * 100).toFixed(2)} % Zeitanteil (Kalendertage)` : '');
   }
 
   const mwstSatz = toNumber(geltend.vatRate);
-  const mwst = Math.round(netto * mwstSatz) / 100;
+  const { netto, mwst, brutto } = abrechnungsbetrag({
+    pricingModel: geltend.pricingModel,
+    baseAmount: geltend.baseAmount,
+    hourlyRate: geltend.hourlyRate,
+    unitPrice: geltend.unitPrice,
+    vatRate: geltend.vatRate,
+    einsaetze: einsaetze.length,
+    minuten: freigegebeneMinuten,
+    menge: gesamtmenge,
+    anteil,
+  });
 
   return {
     contractId: vertrag.id,
@@ -1870,10 +2127,10 @@ export async function contractBillingBasis(params: {
     bis: params.bis,
     einsaetze: einsaetze.length,
     freigegebeneMinuten,
-    netto: Math.round(netto * 100) / 100,
+    netto,
     mwstSatz,
     mwst,
-    brutto: Math.round((netto + mwst) * 100) / 100,
+    brutto,
     herleitung,
     /**
      * Die Einsätze mit ihrer Vertragsversion — damit später beantwortbar

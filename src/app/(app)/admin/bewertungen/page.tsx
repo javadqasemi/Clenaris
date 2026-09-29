@@ -4,6 +4,7 @@ import { Star } from 'lucide-react';
 import { prisma } from '@/lib/db';
 import { requirePermission } from '@/lib/auth/session';
 import { can } from '@/lib/auth/rbac';
+import { hasIntegration } from '@/lib/env';
 import { formatDate } from '@/lib/utils';
 import { getOrganizationId } from '@/server/services/organization.service';
 import { Badge } from '@/components/ui/badge';
@@ -34,6 +35,8 @@ export default async function ReviewsAdminPage() {
   const session = await requirePermission('review:read');
   const canModerate = can(session.role, 'review:moderate');
   const canDelete = can(session.role, 'review:delete');
+  // KI-Antwortentwurf: Recht des Endpunkts und eingerichteter Anbieter (2026-09-28).
+  const canDraft = canModerate && can(session.role, 'ai:use') && hasIntegration('ai');
 
   const organizationId = await getOrganizationId();
 
@@ -109,6 +112,7 @@ export default async function ReviewsAdminPage() {
                     review={review}
                     canModerate={canModerate}
                     canDelete={canDelete}
+                    canDraft={canDraft}
                     serviceLabel={
                       review.serviceKind ? SERVICE_LABELS[review.serviceKind] : undefined
                     }
@@ -134,6 +138,7 @@ export default async function ReviewsAdminPage() {
                     review={review}
                     canModerate={canModerate}
                     canDelete={canDelete}
+                    canDraft={canDraft}
                     serviceLabel={
                       review.serviceKind ? SERVICE_LABELS[review.serviceKind] : undefined
                     }
@@ -157,11 +162,13 @@ function ReviewCardAdmin({
   serviceLabel,
   canModerate,
   canDelete,
+  canDraft,
 }: {
   review: ReviewRow;
   serviceLabel?: string;
   canModerate: boolean;
   canDelete: boolean;
+  canDraft: boolean;
 }) {
   return (
     <article className="space-y-4 rounded-2xl border border-border bg-card p-5 shadow-soft">
@@ -218,6 +225,7 @@ function ReviewCardAdmin({
           hasReply={Boolean(review.reply)}
           rating={review.rating}
           canDelete={canDelete}
+          canDraft={canDraft}
         />
       ) : null}
     </article>

@@ -35,7 +35,24 @@ const cspDirectives = [
    * eigenen Besucher nicht täuschen.
    */
   "frame-ancestors 'self'",
-  'upgrade-insecure-requests',
+  /*
+   * Kein `upgrade-insecure-requests` mehr (seit 2026-09-28).
+   *
+   * Die Anweisung schreibt jede Unteranfrage von `http:` auf `https:` um. Auf
+   * einem Server, der selbst über `http` ausliefert — Testserver, Vorschau im
+   * lokalen Netz —, tut WebKit das auch für `127.0.0.1` und `localhost`
+   * (Chromium und Firefox nehmen die Rückschleife aus). Gemessen mit
+   * Playwright: CSS, JavaScript und alle Bilder scheiterten mit „SSL connect
+   * error", die Seite blieb ungestylt und unhydriert, die Galeriebilder leer
+   * (`tests/e2e/bilder.browser.spec.ts`). Ein Bau entscheidet das nicht nach
+   * Umgebung — er ist für alle Umgebungen derselbe (V2-1).
+   *
+   * Verloren geht dabei nichts: HSTS (unten, zwei Jahre, `includeSubDomains`,
+   * `preload`) zwingt den eigenen Ursprung auf `https`, und jede andere Quelle
+   * dieser Richtlinie ist ein ausdrückliches `https://`-Ziel. Eine
+   * `http://`-Unteranfrage würde also nicht hochgestuft, sondern von der
+   * Richtlinie selbst abgewiesen — der Schutz vor gemischten Inhalten bleibt.
+   */
 ].join('; ');
 
 const nextConfig: NextConfig = {

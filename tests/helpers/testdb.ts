@@ -7,9 +7,10 @@
  * Entwicklungsdatenbank zu lesen.
  */
 // eslint-disable-next-line no-restricted-imports
-import { PrismaClient } from '@prisma/client';
+import { type PrismaClient } from '@prisma/client';
 
 import { databaseNameOf, istTestdatenbank } from '../../prisma/seed-guard';
+import { erzeugePrismaClient } from '../../src/lib/prisma-client';
 
 /**
  * Lesender Zugriff auf die Testdatenbank — nur wo HTTP nicht ausreicht.
@@ -86,8 +87,19 @@ export function testDb(): PrismaClient | null {
     return null;
   }
 
-  client = new PrismaClient({ datasources: { db: { url } } });
+  client = erzeugePrismaClient({ url });
   return client;
+}
+
+/**
+ * Die Adresse der Testdatenbank — mit derselben Namensprüfung wie `testDb()`,
+ * sonst `null`. Für Prüfungen, die bewusst **am Prisma-Client vorbei** messen
+ * (`datenbank-zeit.test.ts`): Was der Client falsch schreibt, liest er oft
+ * genauso falsch zurück.
+ */
+export function testDbAdresse(): string | null {
+  const url = testUrl();
+  return url && istTestdatenbank(databaseNameOf(url)) ? url : null;
 }
 
 export function testDbGrund(): string {

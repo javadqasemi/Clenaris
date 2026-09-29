@@ -1,13 +1,16 @@
 import type { Metadata } from 'next';
 
-import { jsonLd } from '@/lib/json-ld';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { ArrowRight, Check, X } from 'lucide-react';
 
 import { prisma, toNumber } from '@/lib/db';
 import { formatCurrency } from '@/lib/utils';
-import { getOrganizationId } from '@/server/services/organization.service';
+import { SEITEN_URL } from '@/lib/seiten-url';
+import { leistungsSeo, seitenMetadaten } from '@/lib/seo/metadaten';
+import { brotkrumen, leistungsKnoten, leistungsPreis } from '@/lib/seo/structured-data';
+import { JsonLd } from '@/components/marketing/json-ld';
+import { getOrganizationId, getServiceAreas } from '@/server/services/organization.service';
 import { getContent } from '@/server/services/content.service';
 import { createCms } from '@/lib/cms/editable';
 import { isPreview } from '@/lib/cms/preview';
@@ -31,8 +34,11 @@ export const revalidate = 3600;
 
 /** Alle Leistungsseiten zur Build-Zeit erzeugen — sie ändern sich selten. */
 export async function generateStaticParams() {
+  // Mit Organisation: Ohne sie wurden die Wege *jeder* Organisation der
+  // Datenbank vorgerendert — als 404, aber gebaut und im Zwischenspeicher.
+  const organizationId = await getOrganizationId();
   const services = await prisma.service.findMany({
-    where: { active: true },
+    where: { organizationId, active: true },
     select: { slug: true },
   });
   return services.map((service) => ({ slug: service.slug }));
@@ -48,21 +54,24 @@ export async function generateMetadata({
 
   const service = await prisma.service.findUnique({
     where: { organizationId_slug: { organizationId, slug } },
-    select: { name: true, seoTitle: true, seoDescription: true, shortDesc: true, keywords: true },
+    select: {
+      name: true,
+      slug: true,
+      active: true,
+      seoTitle: true,
+      seoDescription: true,
+      shortDesc: true,
+      keywords: true,
+    },
   });
 
-  if (!service) return { title: 'Leistung nicht gefunden' };
+  // Eine deaktivierte Leistung antwortet 404 (siehe unten) — dann auch kein
+  // Titel und keine kanonische Adresse, die sie als lebende Seite ausgäben.
+  if (!service || !service.active) return { title: 'Leistung nicht gefunden', robots: { index: false } };
 
-  return {
-    title: service.seoTitle ?? service.name,
-    description: service.seoDescription ?? service.shortDesc,
-    keywords: service.keywords,
-    alternates: { canonical: `/leistungen/${slug}` },
-    openGraph: {
-      title: service.seoTitle ?? service.name,
-      description: service.seoDescription ?? service.shortDesc,
-    },
-  };
+  // Der Pfad kommt aus dem Datensatz, nicht aus der Anfrage: `slug` ist hier
+  // derselbe Wert, aber nur der gespeicherte ist geprüft.
+  return seitenMetadaten(leistungsSeo(service), SEITEN_URL);
 }
 
 export default async function ServiceDetailPage({
@@ -86,7 +95,7 @@ export default async function ServiceDetailPage({
   const content = await getContent(organizationId);
   const cms = createCms(content, await isPreview());
 
-  const [reviews, gallery, faqs] = await Promise.all([
+  const [reviews, gallery, faqs, areas] = await Promise.all([
     prisma.review.findMany({
       where: { organizationId, status: 'PUBLISHED', serviceKind: service.kind },
       orderBy: { createdAt: 'desc' },
@@ -101,18 +110,32 @@ export default async function ServiceDetailPage({
       orderBy: { position: 'asc' },
       take: 6,
     }),
+    getServiceAreas(),
   ]);
 
-  const priceLabel =
-    service.pricingModel === 'PER_HOUR'
-      ? `${formatCurrency(toNumber(service.hourlyRate))} pro Stunde`
-      : service.pricingModel === 'PER_SQM'
-        ? `ab ${formatCurrency(toNumber(service.minPrice))} pauschal`
-        : service.pricingModel === 'PER_UNIT'
-          ? `${formatCurrency(toNumber(service.hourlyRate))} pro Einheit`
-          : service.pricingModel === 'FLAT'
-            ? `${formatCurrency(toNumber(service.basePrice))} pauschal`
-            : 'Individuelle Offerte';
+  /*
+   * Ein Preis, zwei Verbraucher: die sichtbare Beschriftung und das `Offer`
+   * im JSON-LD. Beide lesen `leistungsPreis()` — vorher wählte das JSON-LD
+   * seinen Betrag selbst (`hourlyRate || minPrice`) und meldete bei einer
+   * Pauschale einen anderen Preis, als die Seite zeigte. Ohne Betrag
+   * (Offertleistung, oder Ansatz 0) steht „Individuelle Offerte" da, und es
+   * gibt kein `Offer`.
+   */
+  const preis = leistungsPreis({
+    pricingModel: service.pricingModel,
+    hourlyRate: toNumber(service.hourlyRate),
+    minPrice: toNumber(service.minPrice),
+    basePrice: toNumber(service.basePrice),
+  });
+  const priceLabel = !preis
+    ? 'Individuelle Offerte'
+    : preis.art === 'STUNDE'
+      ? `${formatCurrency(preis.betrag)} pro Stunde`
+      : preis.art === 'AB_PAUSCHAL'
+        ? `ab ${formatCurrency(preis.betrag)} pauschal`
+        : preis.art === 'EINHEIT'
+          ? `${formatCurrency(preis.betrag)} pro Einheit`
+          : `${formatCurrency(preis.betrag)} pauschal`;
 
   // Verwaltete Handlungsaufrufe für das Abschlussband dieser Seite. Sie
   // ersetzen die eingebauten Schaltflächen, sobald welche gepflegt sind.
@@ -298,35 +321,29 @@ export default async function ServiceDetailPage({
         </div>
       </Section>
 
-      {/* Strukturierte Daten */}
-      <script
-        type="application/ld+json"
-        // eslint-disable-next-line react/no-danger -- serverseitig erzeugter JSON-LD-Block
-        dangerouslySetInnerHTML={{
-          __html: jsonLd({
-            '@context': 'https://schema.org',
-            '@type': 'Service',
-            name: service.name,
-            description: service.shortDesc,
-            provider: {
-              '@type': 'LocalBusiness',
-              name: 'Clenaris Reinigungen GmbH',
-              address: {
-                '@type': 'PostalAddress',
-                addressLocality: 'Bern',
-                addressRegion: 'BE',
-                addressCountry: 'CH',
-              },
-            },
-            areaServed: { '@type': 'State', name: 'Kanton Bern' },
-            offers: {
-              '@type': 'Offer',
-              priceCurrency: 'CHF',
-              price: toNumber(service.hourlyRate) || toNumber(service.minPrice),
-              availability: 'https://schema.org/InStock',
-            },
-          }),
-        }}
+      {/*
+        Strukturierte Daten: die Leistung mit Verweis auf die Firma aus dem
+        Layout (`provider` per `@id` statt fest eingetragenem Namen und Ort),
+        dem Einsatzgebiet und nur dem Preis, der oben sichtbar steht. Dazu die
+        Brotkrumen, die die Seite oben zeigt.
+      */}
+      <JsonLd
+        daten={leistungsKnoten({
+          leistung: { name: service.name, slug: service.slug, beschreibung: service.description },
+          preis,
+          herkunft: SEITEN_URL,
+          orte: areas,
+        })}
+      />
+      <JsonLd
+        daten={brotkrumen(
+          [
+            { name: 'Start', pfad: '/' },
+            { name: 'Leistungen', pfad: '/leistungen' },
+            { name: service.name, pfad: `/leistungen/${service.slug}` },
+          ],
+          SEITEN_URL,
+        )}
       />
     </>
   );

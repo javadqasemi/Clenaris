@@ -1,5 +1,7 @@
 import 'server-only';
 
+import { randomBytes } from 'node:crypto';
+
 import { Prisma, type Invoice, type PaymentMethod, type PaymentStatus } from '@prisma/client';
 
 import { prisma, toNumber } from '@/lib/db';
@@ -114,6 +116,32 @@ export async function createInvoice(params: {
   });
   if (!customer) throw new NotFoundError('Kunde');
 
+  /**
+   * Buchung und Offerte gehören **dieser Kundschaft** (2026-09-28).
+   *
+   * Vorher wurden `bookingId` und `quoteId` ungeprüft übernommen. Eine
+   * Rechnung an Kundschaft B mit der Buchung von A hing danach an As Buchung
+   * — und das Kundenkonto von A zeigte in der Buchungsansicht Nummer, Betrag
+   * und Saldo einer Rechnung an B. Über die Organisation hinaus hielt nur der
+   * Fremdschlüssel. Jetzt ist ein fremder Bezug ein 404 wie jeder andere
+   * nicht gefundene Datensatz: Ob es ihn bei einer anderen Kundschaft gibt,
+   * soll die Antwort nicht verraten.
+   */
+  if (params.input.bookingId) {
+    const buchung = await prisma.booking.findFirst({
+      where: { id: params.input.bookingId, organizationId: params.organizationId, customerId: customer.id, deletedAt: null },
+      select: { id: true },
+    });
+    if (!buchung) throw new NotFoundError('Buchung');
+  }
+  if (params.input.quoteId) {
+    const offerte = await prisma.quote.findFirst({
+      where: { id: params.input.quoteId, organizationId: params.organizationId, customerId: customer.id, deletedAt: null },
+      select: { id: true },
+    });
+    if (!offerte) throw new NotFoundError('Offerte');
+  }
+
   const totals = computeInvoiceTotals(params.input.items, params.input.discountAmount);
 
   // Kalendertage in Zürich (2026-09-27). `new Date()` landete in der
@@ -126,14 +154,17 @@ export async function createInvoice(params: {
 
   const invoice = await prisma.$transaction(async (tx) => {
     // Entwürfe erhalten eine Platzhalternummer, damit die Sequenz nicht
-    // durch verworfene Entwürfe Lücken bekommt.
-    let number = `ENTWURF-${Date.now().toString(36).toUpperCase()}`;
+    // durch verworfene Entwürfe Lücken bekommt. Mit Zufallsteil (2026-09-28):
+    // Nur aus der Millisekunde gebildet, kollidierten zwei gleichzeitig
+    // angelegte Entwürfe am eindeutigen Index (Organisation, Nummer) — ein 500
+    // statt eines zweiten Entwurfs.
+    let number = `ENTWURF-${Date.now().toString(36).toUpperCase()}-${randomBytes(3).toString('hex').toUpperCase()}`;
     let qrReference: string | null = null;
 
     if (params.input.issueImmediately) {
       const seq = await nextNumber(tx, params.organizationId, 'invoice', issueDate);
       number = seq.number;
-      qrReference = buildQrReference({ invoiceSequence: seq.sequence });
+      qrReference = buildQrReference({ invoiceSequence: seq.sequence, year: seq.year });
     }
 
     const angelegt = await tx.invoice.create({
@@ -534,8 +565,13 @@ export async function issueInvoice(params: {
       ISSUED und scheitert, bevor er eine Nummer zieht.
     */
     await tx.$queryRaw`SELECT "id" FROM "invoices" WHERE "id" = ${invoice.id} FOR UPDATE`;
-    const stand = await tx.invoice.findUniqueOrThrow({ where: { id: invoice.id }, select: { status: true, issueDate: true, dueDate: true } });
+    const stand = await tx.invoice.findUniqueOrThrow({ where: { id: invoice.id }, select: { status: true, issueDate: true, dueDate: true, deletedAt: true } });
     if (stand.status !== 'DRAFT') throw new BusinessRuleError('Diese Rechnung wurde bereits ausgestellt.');
+    // Auch „gelöscht?" unter der Sperre (2026-09-28): Lief das Löschen des
+    // Entwurfs zwischen der Abfrage oben und dieser Sperre, bekam ein bereits
+    // gelöschter Entwurf eine Nummer — eine ausgestellte Rechnung, die in
+    // keiner Liste erscheint, und damit eine Lücke nach Art. 957a OR.
+    if (stand.deletedAt) throw new NotFoundError('Rechnung');
 
     /**
      * Das Rechnungsdatum ist der Tag der Ausstellung (2026-09-27).
@@ -559,7 +595,7 @@ export async function issueInvoice(params: {
         status: 'ISSUED',
         issueDate: rechnungsdatum,
         dueDate: tagPlus(rechnungsdatum, Math.max(0, frist)),
-        qrReference: buildQrReference({ invoiceSequence: seq.sequence }),
+        qrReference: buildQrReference({ invoiceSequence: seq.sequence, year: seq.year }),
       },
     });
     await automationEreignisVormerken(tx, { organizationId: params.organizationId, trigger: 'INVOICE_ISSUED', entityId: invoice.id });
@@ -832,11 +868,22 @@ export async function saldoNeuBilden(tx: Prisma.TransactionClient, invoiceId: st
           : 'ISSUED'
         : rechnung.status;
 
+  /*
+    Bezahlt heisst: nichts mehr offen (2026-09-28, B-08). Ein Rest bis fünf
+    Rappen ist eine Rundungsdifferenz — typisch, wenn jemand CHF 108.12 auf
+    108.10 abrundet. Vorher bekam die Rechnung zwar den Status „bezahlt",
+    behielt aber den Saldo 0.02. Jede Stelle, die „offen" an `balance > 0`
+    erkennt — Kundenkonto, offene Posten, Kennzahlen, die Online-Zahlung —,
+    führte sie danach weiter als offen, und die Kundschaft konnte zwei Rappen
+    mit der Karte bezahlen. Die Differenz steht weiterhin nachvollziehbar in
+    `grossTotal − paidAmount`; die Integritätsprüfung
+    (`scripts/datenintegritaet.ts`) kennt genau diese Regel.
+  */
   return tx.invoice.update({
     where: { id: invoiceId },
     data: {
       paidAmount: bezahlt,
-      balance: max0(offen),
+      balance: voll ? 0 : max0(offen),
       status,
       paidAt: voll ? (rechnung.paidAt ?? new Date()) : null,
     },

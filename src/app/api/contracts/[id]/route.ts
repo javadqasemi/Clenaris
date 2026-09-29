@@ -8,6 +8,7 @@ import { contractUpdateSchema } from '@/lib/validation/contracts';
 import {
   contractVisibilityWhere,
   deleteContractDraft,
+  getCustomerContract,
   updateContract,
 } from '@/server/services/contract.service';
 import { getOrganizationId } from '@/server/services/organization.service';
@@ -37,6 +38,21 @@ export const GET = defineRoute({
         select: { id: true },
       });
       nurKundeId = kunde?.id ?? '__ohne_akte__';
+
+      /*
+        Die Kundschaft bekommt die **Kundensicht** (L-21, 2026-09-28), nicht
+        die Akte der Verwaltung. Bis hierher lief sie durch dieselbe Abfrage
+        wie das Büro: eigener Vertrag ja — aber mit `internalNote`,
+        `costCenter`, den drei Zuständigen, Entwürfen der nächsten Fassung samt
+        Kalkulation, Änderungsanträgen und Preisanpassungen, und auch als
+        Entwurf, der ihr nie zugegangen war. `getCustomerContract` lädt genau
+        das, was das unterschriebene Vertragsdokument zeigt, nur in
+        kundensichtbaren Zuständen; alles andere ist 404 wie ein fremder
+        Vertrag.
+      */
+      const eigener = await getCustomerContract({ organizationId, customerId: nurKundeId, contractId: params.id });
+      if (!eigener) throw new NotFoundError('Vertrag nicht gefunden.');
+      return ok(eigener);
     }
 
     const vertrag = await prisma.contract.findFirst({

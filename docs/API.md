@@ -5,7 +5,7 @@
 > Quelle, aus der sowohl diese Referenz als auch die Laufzeitvalidierung
 > stammen.
 
-Stand: 540 Endpunkte. Die maschinenlesbare Fassung liegt in
+Stand: 544 Endpunkte. Die maschinenlesbare Fassung liegt in
 [`openapi.yaml`](./openapi.yaml) bzw. [`openapi.json`](./openapi.json).
 
 ## Grundlagen
@@ -423,6 +423,15 @@ Familie.
 | --- | --- | --- | --- |
 | `postalCode` | string | ja | – |
 
+### `GET /api/public/kontakt/vcard`
+
+**Visitenkarte der Firma (.vcf).** vCard 3.0 mit Firmenname, Telefon, E-Mail, Website und Postadresse — dieselbe Zeichenkette wie im QR-Code auf `/kontakt`. Nur öffentliche Stammdaten (keine IBAN, keine MWST-Nummer, keine Personen). `Content-Disposition: attachment`, `Cache-Control: public, max-age=3600`.
+
+- **Zugriff:** Öffentlich — keine Anmeldung nötig.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200 (`text/vcard`)
+- **Mögliche Fehler:** 429, 500
+
 ### `POST /api/public/bookings`
 
 **Termin buchen.** Erstellt Buchung, Einsatz und — falls nötig — Kundendatensatz in einer Transaktion. Der Preis wird serverseitig neu berechnet; ein mitgeschickter Betrag wird ignoriert.
@@ -482,6 +491,7 @@ Familie.
 | `accessNote` | string | – | max. 500 Zeichen |
 | `couponCode` | string | – | max. 40 Zeichen |
 | `fileIds` | string[] | – | max. 10 Einträge, Standard `[]` |
+| `idempotencyKey` | string | – | – |
 | `recurrence` | object | – | – |
 | `recurrence.interval` | integer | – | ≥ 1, ≤ 12, Standard `1` |
 | `recurrence.weekdays` | integer[] | – | max. 7 Einträge, Standard `[]` |
@@ -734,6 +744,26 @@ Familie.
 | `frequency` | string | – | `ONCE` \| `WEEKLY` \| `BIWEEKLY` \| `MONTHLY` \| `QUARTERLY` \| `SEMIANNUAL` \| `ANNUAL` \| `CUSTOM`, Standard `"ONCE"` |
 | `preferredDate` | string | – | – |
 
+### `POST /api/public/traffic`
+
+**Besuchsereignisse melden.** Seitenansichten und Konversionen der öffentlichen Website, höchstens zwanzig je Anfrage. Der Browser sendet nur mit Einwilligung „Statistik". Der Server bereinigt: Pfad ohne Abfrage (nur `utm_source`/`utm_medium`/`utm_campaign` bleiben, in eigenen Spalten), Token-Segmente als `:token`, App-Bereiche (/admin, /portal, /konto, /api, /auth, /signieren) verworfen, Referrer nur als fremder Host, Gerät und Browser als Familie aus dem User-Agent (der selbst nicht gespeichert wird), Sitzung nur als tagesgebundener HMAC. `Sec-GPC: 1` oder `DNT: 1` verwirft alles. Die IP dient nur dem Kontingent. Antwort immer 204, auch wenn nichts gespeichert wurde.
+
+- **Zugriff:** Öffentlich — keine Anmeldung nötig.
+- **Rate-Limit-Klasse:** `traffic`
+- **Erfolg:** 204
+- **Mögliche Fehler:** 400, 422, 429, 500
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `sitzung` | string | ja | – |
+| `ereignisse` | object[] | ja | min. 1 Einträge, max. 20 Einträge |
+| `ereignisse[].name` | string | ja | `PAGE_VIEW` \| `CONTACT_PHONE` \| `CONTACT_EMAIL` \| `CONTACT_FORM` \| `BOOKING_START` \| `BOOKING_COMPLETE` \| `QUOTE_REQUEST` \| `NEWSLETTER_SIGNUP` |
+| `ereignisse[].pfad` | string | ja | min. 1 Zeichen, max. 300 Zeichen |
+| `ereignisse[].referrer` | string | – | max. 500 Zeichen |
+| `ereignisse[].einstieg` | boolean | – | – |
+
 ## Dateien
 
 ### `POST /api/files/upload-url`
@@ -753,7 +783,7 @@ Familie.
 | `filename` | string | ja | min. 1 Zeichen, max. 255 Zeichen |
 | `mimeType` | string | ja | min. 3 Zeichen, max. 120 Zeichen |
 | `sizeBytes` | integer | ja | ≥ 1, ≤ 1073741824 |
-| `scopeId` | string | – | max. 60 Zeichen |
+| `scopeId` | string | – | – |
 
 ### `POST /api/files/finalize`
 
@@ -2070,6 +2100,7 @@ Familie.
 | `accessNote` | string | – | max. 500 Zeichen |
 | `couponCode` | string | – | max. 40 Zeichen |
 | `fileIds` | string[] | – | max. 10 Einträge, Standard `[]` |
+| `idempotencyKey` | string | – | – |
 | `recurrence` | object | – | – |
 | `recurrence.interval` | integer | – | ≥ 1, ≤ 12, Standard `1` |
 | `recurrence.weekdays` | integer[] | – | max. 7 Einträge, Standard `[]` |
@@ -3331,6 +3362,23 @@ Familie.
 | Feld | Typ | Pflicht | Regeln |
 | --- | --- | --- | --- |
 | `date` | string | ja | – |
+
+### `POST /api/ai/text-assist`
+
+**Text korrigieren oder Vorschläge erzeugen.** Textassistent für Website-, Blog-, SEO-, Leistungs- und Offerttexte. Der Kontext ist eine feste Erlaubnisliste. Enthält der Text eine AHV-Nummer, IBAN, einen Zugangscode, ein Passwort, einen Lohnbetrag oder ein Token, antwortet der Endpunkt mit 422 und sendet nichts. Ohne konfigurierten Anbieter 503. Der Endpunkt schreibt nichts — der Vorschlag geht ins Formular.
+
+- **Zugriff:** Erfordert die Berechtigung: `ai:use`.
+- **Rate-Limit-Klasse:** `aiGenerate`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 422, 429, 500
+
+**Anfragekörper**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `aktion` | string | ja | `rechtschreibung` \| `grammatik` \| `professioneller` \| `freundlicher` \| `kuerzer` \| `ausfuehrlicher` \| `seo` \| `titel` \| `meta-description` |
+| `kontext` | string | – | `cms-text` \| `blog` \| `seo-title` \| `seo-description` \| `service-description` \| `email-draft` \| `quote-text`, Standard `"cms-text"` |
+| `text` | string | ja | min. 2 Zeichen, max. 6000 Zeichen |
 
 ## Personal
 
@@ -5106,7 +5154,7 @@ Familie.
 | `title` | string | – | max. 120 Zeichen |
 | `description` | string | – | max. 320 Zeichen |
 | `keywords` | string[] | – | max. 15 Einträge, Standard `[]` |
-| `ogImageUrl` | union | ja | – |
+| `ogImageUrl` | string | – | max. 500 Zeichen |
 | `noIndex` | boolean | – | Standard `false` |
 
 ### `POST /api/content`
@@ -6356,6 +6404,23 @@ Familie.
 | --- | --- | --- | --- |
 | `id` | string | ja | min. 1 Zeichen |
 
+### `GET /api/traffic`
+
+**Besuchsauswertung.** Seitenansichten, Sitzungen (je Tab und Zürcher Tag, keine Personen), Einstiegs- und meistbesuchte Seiten, Herkunft, UTM-Quelle/-Medium/-Kampagne, Geräte, Browser und Konversionen mit Rate je Sitzung für einen Zeitraum in Zürcher Tagen; dazu die Grundzahlen des gleich langen Zeitraums davor. Ranglisten höchstens zehn Zeilen, alles je Organisation.
+
+- **Zugriff:** Erfordert die Berechtigung: `traffic:read`.
+- **Rate-Limit-Klasse:** `apiRead`
+- **Erfolg:** 200
+- **Mögliche Fehler:** 400, 401, 403, 429, 500
+
+**Query-Parameter**
+
+| Feld | Typ | Pflicht | Regeln |
+| --- | --- | --- | --- |
+| `zeitraum` | string | – | `heute` \| `7tage` \| `30tage` \| `monat` \| `quartal` \| `jahr` \| `eigen`, Standard `"30tage"` |
+| `von` | string | – | – |
+| `bis` | string | – | – |
+
 ## System
 
 ### `GET /api/users`
@@ -6914,7 +6979,7 @@ Familie.
 
 ### `POST /api/scan/resolve`
 
-**Scan auflösen.** Einen gescannten oder eingefügten Text (Etikettcode, EAN/GTIN, QR-Rechnung, Nummer) einordnen und im Leserecht der Rolle auflösen. Liest nur: die Antwort nennt Treffer und die Schlüssel der Schnellaktionen, ausgeführt wird nichts. Unbekannt, fremde Organisation, gelöscht und ohne Recht ergeben dieselbe leere Antwort. Adressen werden weder aufgelöst noch als Link zurückgegeben. Kontingent je Person: 60 pro Minute.
+**Scan auflösen.** Einen gescannten oder eingefügten Text (Etikettcode, EAN/GTIN, QR-Rechnung in alter und neuer Referenzform, Material-, Inventar-, Einsatz-, Rechnungs-, Kunden- oder Vertragsnummer) einordnen und im Leserecht der Rolle auflösen. Liest nur: die Antwort nennt Treffer, die Schlüssel der Schnellaktionen und Verweise zum Lesen (PDF, Rapport), ausgeführt wird nichts — jede Aktion läuft über ihren bestehenden Endpunkt. Unbekannt, fremde Organisation, gelöscht und ohne Recht ergeben dieselbe leere Antwort. Adressen werden weder aufgelöst noch als Link zurückgegeben. Kontingent je Person: 60 pro Minute.
 
 - **Zugriff:** Erfordert die Berechtigung: `dashboard:view`.
 - **Rate-Limit-Klasse:** `scanResolve`
@@ -7962,7 +8027,7 @@ Familie.
 
 ### `GET /api/bi/cockpit`
 
-**Führungscockpit.** Gesundheitswert mit Herleitung, Kennzahlgruppen, Auffälligkeiten, Ziele, Risikomatrix, Fälliges. Finanzgruppen nur mit `cockpit:financials`.
+**Führungscockpit.** Gesundheitswert mit Herleitung, Kennzahlgruppen, Auffälligkeiten, Ziele, Risikomatrix, Fälliges. Finanzgruppen nur mit `cockpit:financials`; Risikomatrix (`risks`), fällige Risiken/Marktprüfungen und ablaufende Dokumente nur mit `risk:read`, `market:read` bzw. `document:read` — sonst `null`, 0 oder leer.
 
 - **Zugriff:** Erfordert die Berechtigung: `cockpit:view`.
 - **Rate-Limit-Klasse:** `apiRead`
@@ -7995,7 +8060,7 @@ Familie.
 
 ### `GET /api/bi/cockpit/insights`
 
-**Auffälligkeiten.** Regelbasierte Hinweise mit Verweis auf die Stelle, wo man etwas tun kann.
+**Auffälligkeiten.** Regelbasierte Hinweise mit Verweis auf die Stelle, wo man etwas tun kann. Fällige Prüfungen zählen nur Register, die die Rolle lesen darf.
 
 - **Zugriff:** Erfordert die Berechtigung: `cockpit:view`.
 - **Rate-Limit-Klasse:** `apiRead`
@@ -10013,7 +10078,7 @@ Familie.
 
 ### `GET /api/contracts`
 
-**Verträge auflisten.** Filtert nach Zustand, Kundschaft, Suchbegriff sowie nach nahender Kündigungsfrist und nahendem Vertragsende. **Die Einschränkung steht in der `where`-Klausel:** Wer nur `contract:read_own` hat, sieht ausschliesslich die Verträge der eigenen Kundenakte — verstecktes HTML wäre auf der Leitung trotzdem sichtbar.
+**Verträge auflisten.** Filtert nach Zustand, Kundschaft, Suchbegriff sowie nach nahender Kündigungsfrist und nahendem Vertragsende. **Die Einschränkung steht in der `where`-Klausel:** Wer nur `contract:read_own` hat, sieht ausschliesslich die Verträge der eigenen Kundenakte — verstecktes HTML wäre auf der Leitung trotzdem sichtbar. Sie erhält die **Kundensicht**: nur zugegangene Zustände (angeboten, aktiv, pausiert, gekündigt, beendet), keine internen Felder, ohne die Filter der Verwaltung.
 
 - **Zugriff:** Erfordert eine der Berechtigungen: `contract:read`, `contract:read_own`.
 - **Rate-Limit-Klasse:** `apiRead`
@@ -10116,7 +10181,7 @@ Familie.
 
 ### `GET /api/contracts/{id}`
 
-**Vertragsakte.** Der Vertrag mit allen Versionen, Leistungen, Einsatzplänen, Ausnahmen, Änderungsanträgen und Preisanpassungen — **eine** Abfrage statt sechs. Sechs Abrufe hintereinander wären sechs Momente, in denen sich der Zustand zwischen zwei Antworten ändern kann. Jede Version meldet zusätzlich, wie viele Einsätze an ihr hängen.
+**Vertragsakte.** Der Vertrag mit allen Versionen, Leistungen, Einsatzplänen, Ausnahmen, Änderungsanträgen und Preisanpassungen — **eine** Abfrage statt sechs. Sechs Abrufe hintereinander wären sechs Momente, in denen sich der Zustand zwischen zwei Antworten ändern kann. Jede Version meldet zusätzlich, wie viele Einsätze an ihr hängen. Mit nur `contract:read_own` kommt die **Kundensicht**: der eigene Vertrag in einem zugegangenen Zustand, mit dem Inhalt des Vertragsdokuments — ohne interne Notizen, Kostenstelle, Zuständige, Entwurfsfassungen, Änderungsanträge und Preisanpassungen; ein Entwurf ist 404 wie ein fremder Vertrag.
 
 - **Zugriff:** Erfordert eine der Berechtigungen: `contract:read`, `contract:read_own`.
 - **Rate-Limit-Klasse:** `apiRead`

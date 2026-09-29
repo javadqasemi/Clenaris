@@ -3,7 +3,7 @@ import { ZodError } from 'zod';
 import { Prisma } from '@prisma/client';
 
 import { type AppError, isAppError } from '@/lib/errors';
-import { serialize } from '@/lib/db';
+import { eindeutigkeitsFelder, serialize, sqlZustand } from '@/lib/db';
 import { logger } from '@/lib/logger';
 import { aktuelleRequestId } from '@/lib/observability/context';
 
@@ -119,7 +119,7 @@ export function toErrorResponse(error: unknown): NextResponse {
           selbst einen `ConflictError`; hier bleibt die allgemeine. Das Ziel
           steht im Protokoll, wo es zur Fehlersuche gebraucht wird.
         */
-        log.warn('Eindeutigkeit verletzt', { target: (error.meta as { target?: unknown })?.target });
+        log.warn('Eindeutigkeit verletzt', { target: eindeutigkeitsFelder(error) });
         return NextResponse.json(
           {
             error: {
@@ -134,7 +134,8 @@ export function toErrorResponse(error: unknown): NextResponse {
         // Rohe Abfrage (`$queryRaw`/`$executeRaw`): Verklemmung (40P01) und
         // Serialisierungsfehler (40001) sind derselbe Fall wie P2034 darunter;
         // jeder andere Fehler einer rohen Abfrage bleibt unbehandelt.
-        if (!['40P01', '40001'].includes(String((error.meta as { code?: unknown })?.code ?? ''))) break;
+        // SQLSTATE aus beiden Fehlerformen (Prisma 6 `meta.code`, Prisma 7 Adapter) — `db.ts`.
+        if (!['40P01', '40001'].includes(sqlZustand(error) ?? '')) break;
       // falls through
       case 'P2034':
         /*

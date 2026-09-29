@@ -3,6 +3,7 @@ import 'server-only';
 import ExcelJS from 'exceljs';
 
 import { prisma, toNumber } from '@/lib/db';
+import { summe } from '@/lib/money';
 import { round2 } from '@/lib/utils';
 import { csvZeile, formelsicher } from '@/lib/csv';
 import { tagPlus, zuercherFelder, zuercherTag, zuercherTagesbeginn } from '@/lib/zuerich';
@@ -140,14 +141,17 @@ export async function exportInvoicesXlsx(params: {
     sheet.getColumn(key).numFmt = 'dd.mm.yyyy';
   });
 
-  // Summenzeile.
+  // Summenzeile — dezimal (B-07, 2026-09-28). Die Gleitkommasumme über
+  // hunderte Rechnungen ergab Werte wie 12345.670000000002; das Zahlenformat
+  // der Zelle versteckte das, aber wer die Zelle weiterrechnete (Buchhaltung,
+  // Treuhand), rechnete mit dem ungerundeten Wert.
   const totalRow = sheet.addRow({
     customer: 'Total',
-    net: invoices.reduce((sum, i) => sum + toNumber(i.netTotal), 0),
-    vat: invoices.reduce((sum, i) => sum + toNumber(i.vatAmount), 0),
-    gross: invoices.reduce((sum, i) => sum + toNumber(i.grossTotal), 0),
-    paid: invoices.reduce((sum, i) => sum + toNumber(i.paidAmount), 0),
-    balance: invoices.reduce((sum, i) => sum + toNumber(i.balance), 0),
+    net: summe(invoices.map((i) => i.netTotal)).toNumber(),
+    vat: summe(invoices.map((i) => i.vatAmount)).toNumber(),
+    gross: summe(invoices.map((i) => i.grossTotal)).toNumber(),
+    paid: summe(invoices.map((i) => i.paidAmount)).toNumber(),
+    balance: summe(invoices.map((i) => i.balance)).toNumber(),
   });
   totalRow.font = { bold: true };
   totalRow.border = { top: { style: 'double' } };

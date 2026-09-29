@@ -20,10 +20,10 @@ generator client {
   previewFeatures = ["fullTextSearchPostgres"]
 }
 
+// Verbindung und Seed stehen seit Prisma 7 in `prisma.config.ts`; die
+// Laufzeit verbindet sich über den Treiberadapter (`src/lib/prisma-client.ts`).
 datasource db {
-  provider  = "postgresql"
-  url       = env("DATABASE_URL")
-  directUrl = env("DIRECT_URL")
+  provider = "postgresql"
 }
 
 // ===========================================================================
@@ -550,6 +550,7 @@ model Organization {
   equipment             Equipment[]
   scanCodes             ScanCode[]
   securityReports       SecurityReport[]
+  trafficEvents         TrafficEvent[]
   numberSequences   NumberSequence[]
   files             FileAsset[]
   newsletter        NewsletterSubscriber[]
@@ -1114,6 +1115,91 @@ model CronRun {
 
   @@index([organizationId, job, startedAt])
   @@map("cron_runs")
+}
+
+/// Was die eigene Besuchsmessung zählt (2026-09-28).
+///
+/// Ein fester Wertevorrat statt eines freien Textes: Der Endpunkt ist
+/// öffentlich, und ein freier Ereignisname wäre eine Tabelle, in die jede
+/// Besucherin beliebige Zeichenketten schreiben kann. Jeder Wert hier
+/// entspricht einer Stelle im Produkt, an der das Ereignis tatsächlich
+/// ausgelöst wird (`docs/TRAFFIC_ANALYTICS.md`, Abschnitt „Ereignisse").
+enum TrafficEventName {
+  /// Eine Seite der öffentlichen Website wurde angezeigt.
+  PAGE_VIEW
+  /// Ein `tel:`-Link wurde angeklickt.
+  CONTACT_PHONE
+  /// Ein `mailto:`-Link wurde angeklickt.
+  CONTACT_EMAIL
+  /// Das Kontaktformular wurde erfolgreich abgeschickt.
+  CONTACT_FORM
+  /// Der Buchungsassistent wurde über den ersten Schritt hinaus benutzt.
+  BOOKING_START
+  /// Eine Buchung wurde abgeschlossen.
+  BOOKING_COMPLETE
+  /// Eine Offertanfrage wurde abgeschickt.
+  QUOTE_REQUEST
+  /// Eine Newsletter-Anmeldung wurde abgeschickt (Double-Opt-in noch offen).
+  NEWSLETTER_SIGNUP
+}
+
+/// Gerätefamilie, serverseitig aus dem User-Agent abgeleitet — der
+/// User-Agent selbst wird nie gespeichert.
+enum TrafficDevice {
+  MOBILE
+  TABLET
+  DESKTOP
+}
+
+/// Browserfamilie, serverseitig aus dem User-Agent abgeleitet. Bewusst
+/// grob: Eine Version oder ein Betriebssystem wären zusammen mit Tag und
+/// Seite schon ein Stück Fingerabdruck.
+enum TrafficBrowser {
+  CHROME
+  FIREFOX
+  SAFARI
+  EDGE
+  OTHER
+}
+
+/// Ein Ereignis der eigenen, einwilligungspflichtigen Besuchsmessung.
+///
+/// **Keine Personendaten.** Keine IP-Adresse (sie dient nur dem Rate-Limit
+/// und wird nie geschrieben), kein User-Agent, keine Kennung, die über einen
+/// Tag hinaus trägt: `sessionHash` ist ein HMAC der zufälligen
+/// Tab-Sitzungskennung mit einem **je Zürcher Tag abgeleiteten** Schlüssel.
+/// Dieselbe Sitzung ergibt am nächsten Tag einen anderen Wert; Tage lassen
+/// sich darüber nicht verknüpfen. Die Begründung und die Grenzen stehen in
+/// `docs/TRAFFIC_ANALYTICS.md`.
+///
+/// `path` ist bereinigt (`lib/traffic/bereinigen.ts`): ohne Abfrage, mit
+/// maskierten Token-Segmenten, nie aus einem App-Bereich. Aufbewahrt wird
+/// 13 Monate; den Rest löscht der nächtliche Lauf (`purgeTrafficEvents`).
+model TrafficEvent {
+  id             String           @id @default(cuid())
+  organizationId String
+  occurredAt     DateTime         @default(now()) @db.Timestamptz(6)
+  /// Zürcher Kalendertag des Ereignisses — die Achse aller Auswertungen.
+  day            DateTime         @db.Date
+  path           String
+  eventName      TrafficEventName
+  /// HMAC-SHA256 (hex) der Tab-Sitzung mit dem Tagesschlüssel.
+  sessionHash    String
+  /// Erste Seitenansicht dieser Tab-Sitzung.
+  landing        Boolean          @default(false)
+  /// Nur der Host, und nur wenn er nicht die eigene Website ist.
+  referrerHost   String?
+  utmSource      String?
+  utmMedium      String?
+  utmCampaign    String?
+  device         TrafficDevice
+  browser        TrafficBrowser
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, day])
+  @@index([organizationId, eventName, day])
+  @@map("traffic_events")
 }
 
 enum SecurityReportSource {
@@ -1954,6 +2040,10 @@ model Booking {
   // Kanäle & Herkunft
   source            LeadSource @default(WEBSITE)
   bookedByIp        String?
+  /// Kennung des Absendens aus dem Buchungsassistenten — ein zweites Absenden
+  /// mit derselben Kennung bekommt diese Buchung zurück statt einer neuen
+  /// (B-23, 2026-09-28). Eindeutig je Organisation; `NULL` für Büro und Altbestand.
+  idempotencyKey    String?
   // Der Verwaltungslink ohne Login ist ein `PublicAccessToken` (BOOKING_MANAGE):
   // nur der Hash liegt in der Datenbank. Bis 2026-09-27 stand hier
   // `confirmationToken` im Klartext — siehe Migration `…_buchungslink_hash`.
@@ -1989,6 +2079,7 @@ model Booking {
   reviews    Review[]
 
   @@unique([organizationId, number])
+  @@unique([organizationId, idempotencyKey])
   @@index([organizationId, status, scheduledStart])
   @@index([customerId, scheduledStart])
   @@index([scheduledStart])

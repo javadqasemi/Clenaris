@@ -31,6 +31,16 @@ export default function robots(): MetadataRoute.Robots {
           '/rechnung/',
           '/buchung/',
           '/newsletter/',
+          // Ergänzt 2026-09-28 (SEO-Prüfung): Unterzeichnung und Vor-Ort-
+          // Abnahme (per Link erreichbar, tragen Personendaten und schon
+          // `X-Robots-Tag: noindex`), die Rückkehr vom Zahlungsanbieter und
+          // die Buchungsbestätigung — alle vier `noindex`, nichts davon ist
+          // eine Seite, die jemand über eine Suchmaschine finden soll.
+          '/signieren',
+          '/abnahme/',
+          '/geraet-uebernehmen',
+          '/zahlung/',
+          '/buchen/bestaetigt',
         ],
       },
       {

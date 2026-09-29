@@ -17,5 +17,12 @@ Für **jede** Umsetzung:
 8. Nie „fertig" ohne Nachweis melden.
 9. Unbelegte externe Nachweise getrennt melden: „EXTERNER NACHWEIS ERFORDERLICH", mit dem fehlenden Beleg.
 
+Dazu die drei Skills unter `.claude/skills/` (seit 2026-09-28) — laden, bevor
+die Arbeit beginnt:
+
+- `security` — bei jeder Route, jedem Dienst, jeder Abfrage, Datei, jedem Token, Geld, Personendaten.
+- `ui-ux` — bei jeder Änderung an Seiten, Formularen, Dialogen, Navigation, Website.
+- `pendenzen` — bei jeder Umsetzung, jedem Umbau, jeder Löschung und vor jedem Commit; Register `docs/PENDENZEN.md`.
+
 Nutzereigene, nicht eingecheckte Dateien (`CLAUDE.md`, `checklist.txt`,
 eigene Berichte unter `docs/`) werden weder geändert noch eingecheckt.

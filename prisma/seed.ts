@@ -23,7 +23,7 @@
  *   npm run db:seed:demo   zusätzlich die Demodaten
  */
 
-import { PrismaClient, type Prisma } from '@prisma/client';
+import type { Prisma } from '@prisma/client';
 import { hash } from '@node-rs/argon2';
 
 // Relativ, ohne Pfad-Alias: `beitraege.ts` ist ein reiner Rechenkern ohne
@@ -32,8 +32,9 @@ import { SAETZE_2026 } from '../src/lib/payroll/beitraege';
 import { istOeffentlichesPasswort } from '../src/lib/auth/oeffentliche-zugangsdaten';
 
 import { oeffentlicheKontenErlaubt } from './seed-guard';
+import { erzeugePrismaClient } from '../src/lib/prisma-client';
 
-const prisma = new PrismaClient();
+const prisma = erzeugePrismaClient();
 
 const ORG_SLUG = 'clenaris';
 const ARGON_OPTIONS = { memoryCost: 19_456, timeCost: 2, parallelism: 1 } as const;

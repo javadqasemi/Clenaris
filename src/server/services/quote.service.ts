@@ -99,7 +99,7 @@ interface ComputedTotals {
  */
 export function computeQuoteTotals(
   items: QuoteItemInput[],
-  discountType?: 'PERCENT' | 'FIXED',
+  discountType?: 'PERCENT' | 'FIXED' | null,
   discountValue = 0,
 ): ComputedTotals {
   // Zeilen **aller** Positionen — auch die optionalen tragen im PDF ihren Betrag.
@@ -572,16 +572,56 @@ export async function updateQuote(params: {
     ...(params.input.internalNote !== undefined ? { internalNote: params.input.internalNote } : {}),
   };
 
-  if (params.input.items) {
-    const totals = computeQuoteTotals(
-      params.input.items,
-      params.input.discountType ?? quote.discountType ?? undefined,
-      params.input.discountValue ?? toNumber(quote.discountValue),
-    );
+  /**
+   * Rabatt und Positionen ergeben zusammen die Summen — ändert sich eines,
+   * wird neu gerechnet.
+   *
+   * `null` bei der Rabattart ist „kein Rabatt" und muss den alten Wert
+   * ersetzen; nur `undefined` heisst „unverändert". Das frühere
+   * `input.discountType ?? quote.discountType` machte aus beidem dasselbe, und
+   * ein entfernter Rabatt blieb gespeichert (Browserfall
+   * `tests/e2e/offerte-rabatt.spec.ts`).
+   *
+   * Und neu gerechnet wird auch, wenn **nur** der Rabatt kommt: Vorher hing
+   * die Rechnung an `input.items`. Ein PATCH mit bloss `discountType` schrieb
+   * darum eine neue Rabattart neben die alten Summen — eine Offerte, deren
+   * Gesamtbetrag nicht zu ihrem eigenen Rabatt passt. Dann werden die
+   * gespeicherten Positionen zur Grundlage.
+   */
+  const rabattGeaendert =
+    params.input.discountType !== undefined || params.input.discountValue !== undefined;
+
+  if (params.input.items || rabattGeaendert) {
+    const art =
+      params.input.discountType !== undefined ? params.input.discountType : quote.discountType;
+    // Ohne Rabattart hat ein Rabattwert keine Bedeutung; stehen gelassen, lebte
+    // er beim nächsten Wechsel auf „Prozentual" unbemerkt wieder auf.
+    const wert = art === null ? 0 : (params.input.discountValue ?? toNumber(quote.discountValue));
+
+    const positionen: QuoteItemInput[] =
+      params.input.items ??
+      (
+        await prisma.quoteItem.findMany({
+          where: { quoteId: quote.id },
+          orderBy: { position: 'asc' },
+        })
+      ).map((item) => ({
+        serviceId: item.serviceId ?? undefined,
+        name: item.name,
+        description: item.description ?? undefined,
+        quantity: toNumber(item.quantity),
+        unit: item.unit,
+        unitPrice: toNumber(item.unitPrice),
+        discount: toNumber(item.discount),
+        vatRate: toNumber(item.vatRate),
+        optional: item.optional,
+      }));
+
+    const totals = computeQuoteTotals(positionen, art, wert);
 
     Object.assign(data, {
-      discountType: params.input.discountType ?? quote.discountType,
-      discountValue: params.input.discountValue ?? quote.discountValue,
+      discountType: art,
+      discountValue: wert,
       discountAmount: totals.discountAmount,
       subtotal: totals.subtotal,
       netTotal: totals.netTotal,
@@ -589,22 +629,27 @@ export async function updateQuote(params: {
       grossTotal: totals.grossTotal,
       // PDF ist nach einer Änderung nicht mehr aktuell.
       pdfUrl: null,
-      items: {
-        deleteMany: {},
-        create: totals.items.map((item) => ({
-          serviceId: item.serviceId ?? null,
-          name: item.name,
-          description: item.description ?? null,
-          quantity: item.quantity,
-          unit: item.unit,
-          unitPrice: item.unitPrice,
-          discount: item.discount ?? 0,
-          vatRate: item.vatRate,
-          lineTotal: item.lineTotal,
-          position: item.position,
-          optional: item.optional ?? false,
-        })),
-      },
+      // Die Positionen werden nur ersetzt, wenn neue kamen.
+      ...(params.input.items
+        ? {
+            items: {
+              deleteMany: {},
+              create: totals.items.map((item) => ({
+                serviceId: item.serviceId ?? null,
+                name: item.name,
+                description: item.description ?? null,
+                quantity: item.quantity,
+                unit: item.unit,
+                unitPrice: item.unitPrice,
+                discount: item.discount ?? 0,
+                vatRate: item.vatRate,
+                lineTotal: item.lineTotal,
+                position: item.position,
+                optional: item.optional ?? false,
+              })),
+            },
+          }
+        : {}),
     });
   }
 

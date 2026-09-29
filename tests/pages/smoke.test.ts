@@ -41,7 +41,13 @@ const PAGES: Record<'admin' | 'employee' | 'customer', string[]> = {
     '/admin/ausgaben?bereich=lieferanten',
     '/admin/papierkorb',
     '/admin/auswertungen',
+    '/admin/auswertungen/website',
+    '/admin/auswertungen/website?zeitraum=eigen&von=2026-01-01&bis=2026-03-31',
+    '/admin/auswertungen/website?zeitraum=unsinn',
     '/admin/personal',
+    // Ziel der Meldung „Neuer Abwesenheitsantrag" (2026-09-28; vorher
+    // `/admin/personal/abwesenheiten`, eine 404).
+    '/admin/personal?reiter=abwesenheiten',
     '/admin/personal/neu',
     '/admin/personal/bewerbungen',
     '/admin/lohn',
@@ -104,6 +110,8 @@ const PAGES: Record<'admin' | 'employee' | 'customer', string[]> = {
     '/portal/profil/einstellungen',
     '/portal/ziele',
     '/portal/wissen',
+    // Eigene Aufgaben (2026-09-28) — Ziel der Aufgabenmeldungen an Mitarbeitende.
+    '/portal/aufgaben',
   ],
   customer: [
     '/konto',
@@ -113,7 +121,13 @@ const PAGES: Record<'admin' | 'employee' | 'customer', string[]> = {
     '/konto/objekte',
     '/konto/nachrichten',
     '/konto/bewertungen',
+    // Ziel der Bewertungsbitte (2026-09-28; vorher `/konto/bewertungen/neu`,
+    // eine 404). Eine unbekannte Buchung wählt nichts vor, die Seite steht.
+    '/konto/bewertungen?buchung=gibt-es-nicht',
     '/konto/reklamationen',
+    // Verträge und Qualitätskontrollen (L-18, 2026-09-28).
+    '/konto/vertraege',
+    '/konto/qualitaet',
     '/konto/profil',
     '/konto/profil/einstellungen',
   ],
@@ -266,6 +280,25 @@ describe('Rauchtest', { concurrency: 1 }, async () => {
     });
 
     /**
+     * Die Vertragsseite der Kundschaft (L-18) — mit einem *eigenen* Vertrag,
+     * aus demselben Grund wie bei der Offerte. Die Schnittstelle liefert der
+     * Kundschaft auch interne Zustände, die Seite zeigt nur die zugegangenen;
+     * deshalb wird hier nach Zustand gewählt. Ohne eigenen Vertrag im
+     * Demobestand entfällt der Fall — die Eigentumsprüfung legt sich ihren
+     * Vertrag selbst an (`ownership.test.ts`).
+     */
+    it('/konto/vertraege/:id', async () => {
+      const eigene = await get<{ data: { contracts: { id: string; status: string }[] } }>('/api/contracts', {
+        jar: jars.customer,
+      });
+      const sichtbar = ['OFFERED', 'ACTIVE', 'PAUSED', 'NOTICE_GIVEN', 'ENDED'];
+      const id = eigene.payload?.data?.contracts?.find((c) => sichtbar.includes(c.status))?.id ?? null;
+      if (!id) return;
+      const response = await get(`/konto/vertraege/${id}`, { jar: jars.customer });
+      assert.equal(response.status, 200, `HTTP ${response.status}`);
+    });
+
+    /**
      * Die Abrechnungsliste liefert eine Hülle (`{ eintraege, summe… }`), und
      * der Demobestand hat nicht zwingend eine Abrechnung — ohne Beispiel wird
      * der Fall übersprungen, wie bei der Offertansicht der Kundschaft.
@@ -289,6 +322,58 @@ describe('Rauchtest', { concurrency: 1 }, async () => {
       const response = await get(`/admin/leads/${leadId}/bearbeiten`, { jar: jars.admin });
       assert.ok(response.status >= 200 && response.status < 400, `HTTP ${response.status}`);
       assert.ok(response.text.includes('Änderungen speichern'), 'Bearbeitungsmaske fehlt');
+    });
+
+    /*
+     * Audit Oberfläche 2026-09-28 — tote Links, leere Menüs und Abschnitte,
+     * die eine Rolle nicht lesen darf. Jede Prüfung scheitert gegen den
+     * alten Stand.
+     */
+    it('L-03: ?reiter=abwesenheiten öffnet den Reiter der offenen Anträge', async () => {
+      const response = await get('/admin/personal?reiter=abwesenheiten', { jar: jars.admin });
+      assert.equal(response.status, 200);
+      const reiter = response.text.match(/<button[^>]*id="[^"]*trigger-abwesenheiten"[^>]*>/)?.[0] ?? '';
+      assert.ok(reiter, 'Reiter „Abwesenheiten" fehlt');
+      assert.ok(reiter.includes('aria-selected="true"'), 'Reiter „Abwesenheiten" ist nicht gewählt');
+      // Und die Meldung zeigt nicht mehr auf die nie vorhandene Seite.
+      assert.notEqual((await get('/admin/personal/abwesenheiten', { jar: jars.admin })).status, 200);
+    });
+
+    it('L-17: Bewerbungen sind von der Personalliste aus erreichbar', async () => {
+      const response = await get('/admin/personal', { jar: jars.admin });
+      assert.ok(response.text.includes('href="/admin/personal/bewerbungen"'), 'kein Weg zu den Bewerbungen');
+    });
+
+    it('L-13: bezahlte Rechnung ohne leeres Menü „Weitere Aktionen"', async () => {
+      const paid = await get<{ data: { id: string }[] }>('/api/invoices?status=PAID&pageSize=1', { jar: jars.admin });
+      const id = paid.payload?.data?.[0]?.id;
+      if (!id) return;
+      const response = await get(`/admin/rechnungen/${id}`, { jar: jars.admin });
+      assert.equal(response.status, 200);
+      assert.ok(!response.text.includes('aria-label="Weitere Aktionen"'), 'leeres Aktionsmenü auf einer bezahlten Rechnung');
+    });
+
+    it('L-14: die Betriebsleitung sieht in der Personalakte keinen Dokumentabschnitt', async () => {
+      assert.ok(employeeId);
+      const leitung = await get(`/admin/personal/${employeeId}`, { jar: jars.manager });
+      assert.equal(leitung.status, 200);
+      assert.ok(!leitung.text.includes('Noch keine Dokumente abgelegt'), 'falsche Leeraussage für die Betriebsleitung');
+      assert.ok(!/Dokumente \(/.test(leitung.text.replace(/<!-- -->/g, '')), 'Dokumentabschnitt ohne document:read');
+      const verwaltung = await get(`/admin/personal/${employeeId}`, { jar: jars.admin });
+      assert.ok(/Dokumente \(/.test(verwaltung.text.replace(/<!-- -->/g, '')), 'Gegenprobe: Abschnitt fehlt der Administration');
+    });
+
+    it('L-16: „Termin buchen" in der Kundenakte ohne toten Parameter', async () => {
+      assert.ok(customerId);
+      const response = await get(`/admin/kunden/${customerId}`, { jar: jars.admin });
+      assert.equal(response.status, 200);
+      assert.ok(!response.text.includes('/buchen?kunde='), '/buchen wertet ?kunde= nicht aus');
+    });
+
+    it('L-04: die Bewertungsbitte im Kundenkonto zeigt auf die vorhandene Seite', async () => {
+      const response = await get('/konto', { jar: jars.customer });
+      assert.equal(response.status, 200);
+      assert.ok(!response.text.includes('/konto/bewertungen/neu'), 'Link auf die nicht vorhandene Seite /konto/bewertungen/neu');
     });
 
     // Die PDF-Erzeugung ist der Weg, der am ehesten stillschweigend bricht:

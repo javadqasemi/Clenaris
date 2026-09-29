@@ -246,6 +246,13 @@ jobs:
           NODE_ENV: production
         run: npm run build
 
+      # Seit 2026-09-28 — derselbe Schritt wie in `verify:full`: JavaScript je
+      # Route gegen `scripts/leistungsbudget.json`. Grössen sind auf jedem
+      # Läufer gleich; ein Paket, das versehentlich in den gemeinsamen Rahmen
+      # rutscht, hält den Lauf hier an und nicht erst im Feld.
+      - name: Leistungsbudget
+        run: npx tsx scripts/leistungsbudget.ts
+
       - name: Anwendung starten
         # **Über `scripts/test-server.ts`, nicht über ein nacktes
         # `next start`.** Das Skript legt die Umgebung der Prüfreihe an einer
@@ -290,8 +297,13 @@ jobs:
       # Lauf, der diese Ebene auslässt, prüft das Produkt nicht dort, wo die
       # Kundschaft es benutzt. Installiert wird vor den Prüfreihen, die sie
       # als letzten Schritt fahren.
+      #
+      # Seit 2026-09-28 alle drei Engines: `*.browser.spec.ts` läuft auch in
+      # Firefox und WebKit (`playwright.config.ts`). Anlass war ein
+      # Bildfehler, der in Chromium nicht auftrat — eine Reihe mit einer
+      # Engine hätte ihn nie gesehen.
       - name: Browser installieren
-        run: npx playwright install --with-deps chromium
+        run: npx playwright install --with-deps chromium firefox webkit
 
       - name: Prüfreihen (verify:tests)
         # **Derselbe Befehl wie örtlich** (2026-09-27): Sicherheitsreihen

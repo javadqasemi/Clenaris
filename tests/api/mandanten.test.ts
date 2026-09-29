@@ -4,7 +4,7 @@ import { createHash, randomBytes } from 'node:crypto';
 
 import { del, get, patch, post, requireServer } from '../helpers/client';
 import { ACCOUNTS, login, loginAll, type AccountName } from '../helpers/accounts';
-import { fremdeOrganisation, schutzfreiAufraeumen, testDb, testDbGrund, testDbSchliessen } from '../helpers/testdb';
+import { eigeneOrganisationId, fremdeOrganisation, schutzfreiAufraeumen, testDb, testDbGrund, testDbSchliessen } from '../helpers/testdb';
 
 /**
  * Wave 16 — Mandantentrennung, bewiesen an einer fremden Organisation.
@@ -121,6 +121,19 @@ async function aufraeumen() {
 
   // Führung, Automatisierung, Website: gewöhnliche Datensätze der fremden Organisation.
   await db.managedDocument.deleteMany({ where: { organizationId: org, tags: { has: MARKE } } });
+  /*
+    Verweisprüfungen der Führung (B-13): Ziele, Risiken und Kennzahlen beider
+    Organisationen, ohne Organisationsfilter — die eigenen Ziele und Risiken
+    legt die Prüfung selbst an. Massnahmen vor ihren Aufgaben und Risiken,
+    weil beide per Fremdschlüssel an ihnen hängen; die Aufgabe einer
+    Massnahme heisst „Massnahme: …" und fiele durch den Markenfilter unten.
+    Schlüsselergebnisse gehen mit dem Ziel (Cascade).
+  */
+  await db.correctiveAction.deleteMany({ where: { title: { startsWith: MARKE } } });
+  await db.task.deleteMany({ where: { title: { startsWith: `Massnahme: ${MARKE}` } } });
+  await db.riskEntry.deleteMany({ where: { title: { startsWith: MARKE } } });
+  await db.objective.deleteMany({ where: { title: { startsWith: MARKE } } });
+  await db.kpiDefinition.deleteMany({ where: { organizationId: org, key: { startsWith: 'mandant-pruef' } } });
   await db.automation.deleteMany({ where: { organizationId: org, name: { startsWith: MARKE } } });
   await db.contentRevision.deleteMany({ where: { organizationId: org, key: CMS_SCHLUESSEL } });
   await db.contentBlock.deleteMany({ where: { organizationId: org, key: CMS_SCHLUESSEL } });
@@ -140,6 +153,9 @@ async function aufraeumen() {
   await db.quote.deleteMany({ where: { organizationId: org, title: { startsWith: MARKE } } });
   await db.lead.deleteMany({ where: { organizationId: org, lastName: MARKE } });
   await db.expense.deleteMany({ where: { organizationId: org, description: { startsWith: MARKE } } });
+  // Ohne Organisationsfilter: Ein Defekt legte die Ausgabe mit fremdem
+  // Lieferanten in der *eigenen* Organisation ab.
+  await db.expense.deleteMany({ where: { description: { startsWith: `${MARKE} Querverweis` } } });
   await db.supplier.deleteMany({ where: { organizationId: org, name: { startsWith: MARKE } } });
   await db.property.deleteMany({ where: { label: { startsWith: MARKE } } });
   await db.customer.deleteMany({ where: { organizationId: org, lastName: MARKE } });
@@ -887,6 +903,90 @@ describe('Führungsdokumente einer fremden Organisation', () => {
     const mitPerson = await post('/api/bi/documents', { title: `${MARKE} Querverweis Person`, category: 'EMPLOYEE', subjectEmployeeId: fremd.employee }, { jar: jars.admin });
     assert.equal(mitPerson.status, 404, `fremde Person: ${mitPerson.text}`);
     assert.equal(await testDb()!.managedDocument.count({ where: { title: { startsWith: `${MARKE} Querverweis` } } }), 0, 'ein Dokument entstand trotzdem');
+  });
+});
+
+/**
+ * Verweise der Führung und der Finanzen auf fremde Datensätze (B-13,
+ * 2026-09-28).
+ *
+ * Diese Dienste schrieben Fremdschlüssel aus dem Anfragekörper unbesehen in
+ * die Datenbank; aufgehalten hat sie nur der Fremdschlüssel, und der fragt
+ * nicht, wem die Zeile gehört. Wo das Anlegen prüfte, fehlte die Prüfung beim
+ * Ändern. Jede Prüfung hier stellt deshalb neben dem Statuscode auch den
+ * Bestand fest — eine Route kann erst schreiben und dann scheitern.
+ *
+ * Die eigenen Ziele und Risiken entstehen direkt in der Datenbank: Geprüft
+ * wird der Verweis, nicht das Anlegen, und ein Umweg über die Schnittstelle
+ * brächte nur Ratenbegrenzung und Nebenwirkungen (Benachrichtigungen) ins Spiel.
+ */
+describe('Verweise der Führung und der Finanzen auf fremde Datensätze', () => {
+  const eigen: Record<string, string> = {};
+
+  before(async () => {
+    const db = testDb()!;
+    const eigeneOrg = (await eigeneOrganisationId())!;
+    eigen.ziel = (await db.objective.create({ data: { organizationId: eigeneOrg, title: `${MARKE} Ziel eigen` } })).id;
+    eigen.schluesselergebnis = (await db.keyResult.create({ data: { objectiveId: eigen.ziel, title: `${MARKE} Schlüsselergebnis`, targetValue: 100 } })).id;
+    eigen.risiko = (await db.riskEntry.create({ data: { organizationId: eigeneOrg, title: `${MARKE} Risiko eigen` } })).id;
+    fremd.ziel = (await db.objective.create({ data: { organizationId: org, title: `${MARKE} Ziel fremd` } })).id;
+    fremd.kennzahl = (await db.kpiDefinition.create({ data: { organizationId: org, key: `mandant-pruef.${RUN}`, label: `${MARKE} Kennzahl`, source: 'MANUAL' } })).id;
+  });
+
+  /**
+   * Gegen den alten Stand: 201 — die Ausgabe entstand mit dem fremden
+   * Lieferanten, und die Ausgabenliste zeigte dessen Namen.
+   */
+  it('Ausgabe mit fremdem Lieferanten wird nicht erfasst (404)', async () => {
+    const r = await post(
+      '/api/expenses',
+      { supplierId: fremd.supplier, description: `${MARKE} Querverweis Ausgabe`, expenseDate: tagIn(0), netAmount: 10 },
+      { jar: jars.admin },
+    );
+    assert.equal(r.status, 404, r.text);
+    assert.equal(await testDb()!.expense.count({ where: { description: `${MARKE} Querverweis Ausgabe` } }), 0, 'die Ausgabe entstand trotzdem');
+    assert.equal(await testDb()!.expense.count({ where: { supplierId: fremd.supplier, NOT: { organizationId: org } } }), 0, 'eine eigene Ausgabe verweist auf den fremden Lieferanten');
+  });
+
+  /**
+   * Gegen den alten Stand: 200 — das Schlüsselergebnis zeigte auf die fremde
+   * Kennzahl, und der Nachtlauf übernahm deren Snapshot-Werte.
+   */
+  it('Schlüsselergebnis: eine fremde Kennzahl wird nicht übernommen (404)', async () => {
+    const r = await patch(`/api/bi/key-results/${eigen.schluesselergebnis}`, { kpiDefinitionId: fremd.kennzahl, kpiPeriod: 'MONTH' }, { jar: jars.admin });
+    assert.equal(r.status, 404, r.text);
+    const nachher = await testDb()!.keyResult.findUniqueOrThrow({ where: { id: eigen.schluesselergebnis } });
+    assert.equal(nachher.kpiDefinitionId, null, 'die fremde Kennzahl wurde gespeichert');
+    assert.equal(nachher.kpiPeriod, null, 'die Änderung wurde teilweise übernommen');
+  });
+
+  /**
+   * Gegen den alten Stand: 200 — das eigene Ziel hing unter dem fremden, und
+   * die Fortschrittsrechnung schrieb in das Ziel der anderen Organisation.
+   */
+  it('Ziel: ein fremdes übergeordnetes Ziel und eine fremde Verantwortung werden nicht übernommen (404)', async () => {
+    const pfad = `/api/bi/objectives/${eigen.ziel}`;
+    const elternteil = await patch(pfad, { parentId: fremd.ziel }, { jar: jars.admin });
+    assert.equal(elternteil.status, 404, `übergeordnetes Ziel: ${elternteil.text}`);
+    const verantwortung = await patch(pfad, { ownerId: fremd.user }, { jar: jars.admin });
+    assert.equal(verantwortung.status, 404, `Verantwortung: ${verantwortung.text}`);
+    const nachher = await testDb()!.objective.findUniqueOrThrow({ where: { id: eigen.ziel } });
+    assert.equal(nachher.parentId, null, 'das fremde Ziel wurde übergeordnet');
+    assert.equal(nachher.ownerId, null, 'die fremde Person wurde verantwortlich');
+  });
+
+  /**
+   * Gegen den alten Stand: 201 — es entstanden eine Massnahme und eine
+   * Aufgabe für das fremde Konto, und das Konto wurde benachrichtigt.
+   */
+  it('Massnahme mit fremder Zuständigkeit wird nicht eröffnet (404) — keine Aufgabe, keine Benachrichtigung', async () => {
+    const db = testDb()!;
+    const titel = `${MARKE} Querverweis Massnahme`;
+    const r = await post('/api/bi/actions', { title: titel, riskId: eigen.risiko, assigneeId: fremd.user }, { jar: jars.admin });
+    assert.equal(r.status, 404, r.text);
+    assert.equal(await db.correctiveAction.count({ where: { title: titel } }), 0, 'die Massnahme entstand trotzdem');
+    assert.equal(await db.task.count({ where: { assigneeId: fremd.user } }), 0, 'für das fremde Konto entstand eine Aufgabe');
+    assert.equal(await db.notification.count({ where: { userId: fremd.user } }), 0, 'das fremde Konto wurde benachrichtigt');
   });
 });
 

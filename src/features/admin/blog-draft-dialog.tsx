@@ -2,7 +2,7 @@
 
 import * as React from 'react';
 import { useRouter } from 'next/navigation';
-import { Save, Sparkles } from 'lucide-react';
+import { PenLine, Save, Sparkles } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { api, ApiError } from '@/lib/api/client';
@@ -27,7 +27,16 @@ import {
  * ungelesener KI-Text auf der Firmenwebsite ist ein Reputationsrisiko — die
  * Freigabe bleibt bewusst ein zweiter, bewusster Schritt.
  */
-export function BlogDraftDialog() {
+/**
+ * Ohne KI (kein `ai:use` oder kein Anbieter, 2026-09-28) schreibt man den
+ * Artikel selbst: dieselben Felder, nur ohne Entwurfsschritt. Den Dialog
+ * einfach auszublenden hätte den einzigen Weg zum Anlegen eines Beitrags
+ * entfernt; ihn unverändert zu zeigen führte zu einer Fehlermeldung beim
+ * ersten Klick auf „Entwurf erstellen".
+ */
+const LEERER_ENTWURF = { title: '', excerpt: '', content: '', seoTitle: '', seoDescription: '' };
+
+export function BlogDraftDialog({ aiAvailable = false }: { aiAvailable?: boolean }) {
   const router = useRouter();
   const [open, setOpen] = React.useState(false);
   const [pending, setPending] = React.useState<string | null>(null);
@@ -41,7 +50,7 @@ export function BlogDraftDialog() {
     content: string;
     seoTitle: string;
     seoDescription: string;
-  } | null>(null);
+  } | null>(aiAvailable ? null : LEERER_ENTWURF);
 
   const generate = async () => {
     setPending('generate');
@@ -73,7 +82,7 @@ export function BlogDraftDialog() {
       await api.post('/api/blog', draft);
       toast.success('Entwurf gespeichert. Nach der Prüfung können Sie ihn veröffentlichen.');
       setOpen(false);
-      setDraft(null);
+      setDraft(aiAvailable ? null : LEERER_ENTWURF);
       setTopic('');
       setKeywords('');
       router.refresh();
@@ -91,23 +100,26 @@ export function BlogDraftDialog() {
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
         <Button>
-          <Sparkles aria-hidden />
-          Artikel entwerfen
+          {aiAvailable ? <Sparkles aria-hidden /> : <PenLine aria-hidden />}
+          {aiAvailable ? 'Artikel entwerfen' : 'Artikel verfassen'}
         </Button>
       </DialogTrigger>
 
       <DialogContent size="xl">
         <DialogHeader>
-          <DialogTitle>Blogartikel entwerfen</DialogTitle>
+          <DialogTitle>{aiAvailable ? 'Blogartikel entwerfen' : 'Blogartikel verfassen'}</DialogTitle>
           <DialogDescription>
-            Thema und Suchbegriffe angeben — wir erstellen einen Rohtext. Der Artikel wird als
-            Entwurf gespeichert; veröffentlichen Sie ihn erst nach dem Gegenlesen.
+            {aiAvailable
+              ? 'Thema und Suchbegriffe angeben — wir erstellen einen Rohtext. Der Artikel wird als Entwurf gespeichert; veröffentlichen Sie ihn erst nach dem Gegenlesen.'
+              : 'Der KI-Entwurf ist nicht eingerichtet oder für Ihre Rolle nicht freigegeben. Schreiben Sie den Artikel selbst; er wird als Entwurf gespeichert und erst nach dem Gegenlesen veröffentlicht.'}
           </DialogDescription>
         </DialogHeader>
 
         {error ? <Alert variant="destructive">{error}</Alert> : null}
 
         <div className="space-y-4">
+          {aiAvailable ? (
+          <>
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="space-y-2">
               <Label htmlFor="blog-topic" required>
@@ -141,6 +153,8 @@ export function BlogDraftDialog() {
             <Sparkles aria-hidden />
             Entwurf erstellen
           </Button>
+          </>
+          ) : null}
 
           {draft ? (
             <div className="space-y-4 border-t border-border pt-4">

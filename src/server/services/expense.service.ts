@@ -5,6 +5,7 @@ import { round2 } from '@/lib/utils';
 import { audit, diff } from '@/lib/audit';
 import { BusinessRuleError, NotFoundError } from '@/lib/errors';
 import type { CreateExpenseInput, UpdateExpenseInput } from '@/lib/validation/finance';
+import { organisationsbezugPruefen } from '@/server/services/bezug.service';
 import { dateienBinden } from '@/server/services/file.service';
 
 /**
@@ -61,6 +62,11 @@ export async function createExpense({ organizationId, actorId, input }: Omit<Act
   const vatAmount = round2(input.netAmount * (input.vatRate / 100));
   const grossAmount = round2(input.netAmount + vatAmount);
 
+  // Der Lieferant gehört der eigenen Organisation (B-13, 2026-09-28). Vorher
+  // hielt nur der Fremdschlüssel — und `listExpenses` zeigt `supplier.name`,
+  // also stand der Name eines fremden Lieferanten danach in der eigenen Liste.
+  await organisationsbezugPruefen('supplier', input.supplierId, organizationId);
+
   const expense = await prisma.$transaction(async (tx) => {
     const angelegt = await tx.expense.create({
       data: {
@@ -113,6 +119,9 @@ export async function updateExpense({
 }: Actor & { expenseId: string; input: UpdateExpenseInput }) {
   const before = await prisma.expense.findFirst({ where: { id: expenseId, organizationId } });
   if (!before) throw new NotFoundError('Ausgabe');
+  // `|| null` unten macht aus dem leeren Feld ein Entfernen; nur ein
+  // tatsächlich gesetzter Lieferant wird geprüft.
+  await organisationsbezugPruefen('supplier', input.supplierId || null, organizationId);
 
   const netAmount = input.netAmount ?? Number(before.netAmount);
   const vatRate = input.vatRate ?? Number(before.vatRate);

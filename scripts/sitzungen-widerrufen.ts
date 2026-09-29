@@ -59,9 +59,9 @@
  */
 
 // eslint-disable-next-line no-restricted-imports
-import { PrismaClient } from '@prisma/client';
+import { erzeugePrismaClient } from '../src/lib/prisma-client';
 
-const prisma = new PrismaClient();
+const prisma = erzeugePrismaClient();
 
 function argument(name: string): string | undefined {
   const i = process.argv.indexOf(name);

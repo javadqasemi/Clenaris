@@ -387,6 +387,70 @@ describe('Nebenläufigkeit — Rechnungsnummern', () => {
     const beleg = await db().invoice.findUniqueOrThrow({ where: { id: entwurf }, select: { number: true } });
     assert.equal(laufnummer(beleg.number), vorher + 1);
   });
+
+  /**
+   * Ausstellen gegen Löschen (2026-09-28, B-03). Das Löschen prüfte „noch
+   * Entwurf?" ohne Sperre und schrieb `deletedAt` danach ohne Bedingung; das
+   * Ausstellen prüfte `deletedAt` nicht unter seiner Sperre. Beides
+   * gleichzeitig ergab eine nummerierte, ausgestellte Rechnung im Papierkorb —
+   * in keiner Liste sichtbar, eine Lücke nach Art. 957a OR. Fünf Durchgänge,
+   * weil ein Wettlauf ohne Vorkehrung nicht in jedem auftritt; mit Vorkehrung
+   * muss jeder halten.
+   */
+  it('Ausstellen und Löschen desselben Entwurfs gleichzeitig — nie eine ausgestellte Rechnung im Papierkorb', async () => {
+    for (let durchgang = 0; durchgang < 5; durchgang++) {
+      const entwurf = await rechnung(false);
+      const [ausstellen, loeschen] = await Promise.all([
+        post(`/api/invoices/${entwurf}/issue`, undefined, { jar: jars.admin }),
+        del(`/api/invoices/${entwurf}`, { jar: jars.admin }),
+      ]);
+      const beleg = await db().invoice.findUniqueOrThrow({ where: { id: entwurf }, select: { status: true, deletedAt: true, number: true } });
+      assert.ok(
+        !(beleg.status !== 'DRAFT' && beleg.deletedAt),
+        `Durchgang ${durchgang}: ${beleg.number} ist ausgestellt und gelöscht (Ausstellen ${ausstellen.status}, Löschen ${loeschen.status})`,
+      );
+      // Genau eine der beiden Handlungen wirkt.
+      assert.equal([ausstellen.status, loeschen.status].filter((s) => s < 300).length, 1, `${ausstellen.text} / ${loeschen.text}`);
+    }
+  });
+
+  /**
+   * B-05: Die Platzhalternummer eines Entwurfs bestand nur aus der
+   * Millisekunde; zwei im selben Augenblick angelegte Entwürfe verletzten den
+   * eindeutigen Index und ergaben einen 500.
+   */
+  it('fünf Entwürfe gleichzeitig angelegt — fünf Entwürfe, kein 500', async () => {
+    const kunde = await belegKunde();
+    const antworten = await gleichzeitig(5, () =>
+      post<{ data: { id: string } }>(
+        '/api/invoices',
+        {
+          customerId: kunde,
+          notes: MARKE_BELEG,
+          items: [{ name: 'Unterhaltsreinigung', quantity: 1, unit: 'Std.', unitPrice: 50, vatRate: 8.1 }],
+          issueImmediately: false,
+        },
+        { jar: jars.admin },
+      ),
+    );
+    assert.deepEqual(codes(antworten), [201, 201, 201, 201, 201], texte(antworten));
+  });
+
+  /**
+   * B-04: Die QR-Referenz enthielt nur die laufende Nummer, und die beginnt
+   * jedes Jahr bei 1 — `RE-2026-00001` und `RE-2027-00001` hätten dieselbe
+   * Referenz getragen, und die Bank meldet Zahlungen genau damit. Jetzt steht
+   * das Jahr des Nummernkreises vorne, gefolgt von der Laufnummer.
+   */
+  it('die QR-Referenz einer ausgestellten Rechnung trägt Jahr und Laufnummer', async () => {
+    const id = await rechnung(true);
+    const beleg = await db().invoice.findUniqueOrThrow({ where: { id }, select: { number: true, qrReference: true } });
+    const [, jahr, lauf] = /-(\d{4})-(\d+)$/.exec(beleg.number) ?? [];
+    assert.ok(beleg.qrReference, 'keine QR-Referenz');
+    assert.equal(beleg.qrReference!.length, 27);
+    assert.equal(beleg.qrReference!.slice(0, 4), jahr, `Referenz ${beleg.qrReference} beginnt nicht mit dem Jahr ${jahr}`);
+    assert.equal(Number(beleg.qrReference!.slice(4, 26)), Number(lauf));
+  });
 });
 
 // ===========================================================================

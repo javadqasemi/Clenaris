@@ -19,6 +19,7 @@ import {
   type ContentDefinition,
 } from '@/lib/cms/registry';
 import { assetFieldLabel, isAssetField } from '@/lib/cms/assets';
+import { gepflegteSeo } from '@/lib/seo/metadaten';
 
 const log = logger('cms');
 
@@ -248,13 +249,8 @@ export const getPageSeo = reactCache(
 
       if (!row) return fallback;
 
-      return {
-        title: row.title?.trim() || fallback.title,
-        description: row.description?.trim() || fallback.description,
-        keywords: row.keywords ?? [],
-        ogImageUrl: row.ogImageUrl ?? null,
-        noIndex: row.noIndex,
-      };
+      // Dieselbe Mischregel wie die Übersicht „SEO-Status" in `/admin/seo`.
+      return gepflegteSeo(definition, row);
     } catch (error) {
       log.error('Suchmaschinenangaben konnten nicht geladen werden', { path, error });
       return fallback;
@@ -266,6 +262,10 @@ export async function invalidateSeo(organizationId: string, path: string): Promi
   await cache.del(cacheKeys.seo(organizationId, path, 'DE'));
   // Der Seitentitel steckt im erzeugten HTML — der Seitencache muss mit.
   revalidatePath(path);
+  // Die Sitemap lässt `noindex`-Seiten weg (2026-09-28) und ist selbst eine
+  // Stunde zwischengespeichert — ohne diesen Aufruf stünde eine eben
+  // ausgeblendete Seite bis zu einer Stunde weiter darin.
+  revalidatePath('/sitemap.xml');
 }
 
 /**

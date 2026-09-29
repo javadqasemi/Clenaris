@@ -36,9 +36,13 @@ export const test = basis.extend({
    *
    * Sie über ein Muster zu erlauben ginge nicht, ohne jeden anderen 404
    * mitzuerlauben: Die Meldung nennt die Adresse nicht. Also wird die Ursache
-   * behandelt statt die Meldung gefiltert. Dass das Favicon fehlt, bleibt ein
-   * benannter offener Punkt — diese Zeile versteckt ihn nicht, sie hält ihn
-   * nur aus der Fehlerprüfung heraus.
+   * behandelt statt die Meldung gefiltert.
+   *
+   * Seit 2026-09-28 hat die Anwendung ein Symbol (`src/app/icon.svg`, als
+   * `<link rel="icon">` ausgeliefert) — der offene Punkt ist damit erledigt.
+   * Die Antwort hier bleibt: Nicht jede Engine verzichtet bei gesetztem
+   * Symbol auf die Probe nach `/favicon.ico`, und eine `.ico`-Datei gibt es
+   * bewusst nicht.
    */
   context: async ({ context }, use, testInfo) => {
     await context.route('**/favicon.ico', (route) => route.fulfill({ status: 204, body: '' }));

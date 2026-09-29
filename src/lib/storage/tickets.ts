@@ -46,6 +46,12 @@ export function buildStoragePath(params: {
   scopeId?: string;
 }): string {
   const config = UPLOAD_PROFILES[params.profile];
+  // Das Schema (`uploadUrlSchema`) lässt nur Kennungszeichen durch; hier wird
+  // es trotzdem noch einmal verlangt, weil nicht jeder Aufrufer über die Route
+  // kommt. Ein Segment mit `/` oder `..` verliesse das Präfix der Organisation.
+  if (params.scopeId !== undefined && !/^[A-Za-z0-9_-]{1,60}$/.test(params.scopeId)) {
+    throw new Error('Ungültige Zuordnung für den Speicherpfad.');
+  }
   return [
     params.organizationId,
     config.folder,

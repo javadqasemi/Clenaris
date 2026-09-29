@@ -10,6 +10,7 @@ import { api, ApiError } from '@/lib/api/client';
 import { Button } from '@/components/ui/button';
 import { Alert } from '@/components/ui/primitives';
 import { trackEvent } from '@/components/marketing/analytics';
+import { trafficEreignis } from '@/lib/traffic/erfassen';
 
 import { BOOKING_STEPS, useBookingStore, type Frequency, type PropertyKind } from './store';
 import { leistungenPayload } from './payload';
@@ -116,6 +117,24 @@ export function BookingWizard({
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }, [step]);
 
+  /**
+   * „Buchung begonnen" für die eigene Besuchsmessung — einmal je Aufruf des
+   * Assistenten, sobald der erste Schritt verlassen ist.
+   *
+   * Nicht beim Öffnen der Seite: Das zählte jede Besucherin, die nur den
+   * Preis ansehen wollte, als Beginn, und die Rate „begonnen → abgeschlossen"
+   * wäre bedeutungslos. Wer die Leistung gewählt hat und weitergeht, hat
+   * begonnen. Der Verweis verhindert eine zweite Meldung beim Zurück- und
+   * wieder Vorgehen. Ohne Einwilligung tut `trafficEreignis` nichts; in
+   * Konto und Portal verwirft der Server die Meldung ohnehin (App-Bereich).
+   */
+  const buchungBegonnen = React.useRef(false);
+  React.useEffect(() => {
+    if (buchungBegonnen.current || step === BOOKING_STEPS[0]?.key) return;
+    buchungBegonnen.current = true;
+    trafficEreignis('BOOKING_START');
+  }, [step]);
+
   // Der Store weiss nichts von der Sitzung; er muss aber wissen, ob der
   // Kontaktschritt die vier Pflichtangaben verlangt — sonst liesse „Weiter"
   // eine Buchung durch, die der Server mit 422 zurückweist.
@@ -152,6 +171,28 @@ export function BookingWizard({
     }
   }, [scheduledStart, verfuegbarkeit.data, verfuegbarkeit.isFetching, patch]);
 
+  /**
+   * Eine Kennung je Buchungsvorgang, bei jedem Absenden dieselbe (B-23,
+   * 2026-09-28). Schickt der Browser nach einer Zeitüberschreitung erneut
+   * oder klickt jemand zweimal, antwortet der Server mit der bereits
+   * angelegten Buchung statt einer zweiten. `getRandomValues` statt
+   * `randomUUID`: Letzteres fehlt ausserhalb sicherer Ursprünge (Vorschau im
+   * lokalen Netz über http), Ersteres nicht. Fehlt beides, geht die Buchung
+   * ohne Kennung — wie bisher.
+   */
+  const absendeKennung = React.useRef<string | null>(null);
+  const kennungFuerAbsenden = () => {
+    if (absendeKennung.current) return absendeKennung.current;
+    try {
+      const bytes = new Uint8Array(16);
+      crypto.getRandomValues(bytes);
+      absendeKennung.current = Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+    } catch {
+      absendeKennung.current = null;
+    }
+    return absendeKennung.current ?? undefined;
+  };
+
   const submit = async () => {
     const state = useBookingStore.getState();
     setSubmitting(true);
@@ -161,6 +202,7 @@ export function BookingWizard({
       const result = await api.post<{ id: string; number: string; confirmationUrl: string }>(
         '/api/public/bookings',
         {
+          idempotencyKey: kennungFuerAbsenden(),
           // Alle Leistungen mit ihren Angaben und Zusätzen — dieselbe Form wie
           // für Preis und Kalender (`leistungenPayload`). Preis, Dauer und
           // Verfügbarkeit rechnet der Server beim Abschluss neu.
@@ -208,6 +250,9 @@ export function BookingWizard({
         currency: 'CHF',
         service: state.auswahl.map((l) => l.slug).join('+'),
       });
+      // Eigene Besuchsmessung: vor dem Seitenwechsel eingereiht, damit das
+      // Ereignis noch dem Pfad des Assistenten zugeordnet wird.
+      trafficEreignis('BOOKING_COMPLETE');
 
       reset();
       // Der Verwaltungs-Token steckt im letzten Pfadsegment des Bestätigungslinks.

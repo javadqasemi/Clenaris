@@ -1,15 +1,14 @@
 import type { Metadata } from 'next';
 
 import { LegalBody } from '@/components/marketing/legal-body';
+import { SEITEN_URL } from '@/lib/seiten-url';
+import { seitenMetadaten } from '@/lib/seo/metadaten';
+import { rechtstextSeo } from '@/lib/seo/rechtstexte';
 
 import { getPublicCompanyInfo } from '@/server/services/organization.service';
 
-export const metadata: Metadata = {
-  title: 'Impressum',
-  description: 'Angaben zur Clenaris Reinigungen GmbH gemäss Schweizer Recht.',
-  alternates: { canonical: '/legal/impressum' },
-  robots: { index: true, follow: true },
-};
+// Titel und Beschreibung in `lib/seo/rechtstexte.ts` — dieselbe Quelle wie die SEO-Übersicht.
+export const metadata: Metadata = seitenMetadaten(rechtstextSeo('/legal/impressum'), SEITEN_URL);
 
 export const revalidate = 86400;
 

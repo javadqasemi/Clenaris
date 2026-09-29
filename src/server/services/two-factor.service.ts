@@ -281,7 +281,7 @@ async function matchRecoveryCode(hashes: string[], input: string): Promise<numbe
  * Zugangstoken: Rolle und Rechte stehen nicht darin, und die Middleware
  * erkennt ihn nicht als Sitzung.
  */
-export async function issueMfaChallenge(userId: string): Promise<void> {
+export async function issueMfaChallenge(userId: string, persistent = false): Promise<void> {
   const token = await signAccessToken({
     sub: userId,
     org: 'mfa-pending',
@@ -289,6 +289,9 @@ export async function issueMfaChallenge(userId: string): Promise<void> {
     email: '',
     name: '',
     mfa: true,
+    // Die Wahl „Angemeldet bleiben" aus dem ersten Schritt — signiert, damit
+    // sie zwischen den Schritten niemand setzen kann.
+    ...(persistent ? { rem: true } : {}),
   } as never);
 
   const store = await cookies();
@@ -408,7 +411,7 @@ export async function completeMfaLogin(params: {
   const remaining = remainingAfterRecovery ?? user.twoFactorRecoveryCodes.length;
 
   store.delete(MFA_COOKIE);
-  await createSession({ userId: user.id });
+  await createSession({ userId: user.id, persistent: claims.rem === true });
 
   await prisma.user.update({
     where: { id: user.id },

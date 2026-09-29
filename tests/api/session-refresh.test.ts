@@ -28,6 +28,68 @@ function refreshOnly(jar: string): string {
     .join('; ');
 }
 
+/**
+ * Die Laufzeit der Sitzungscookies (2026-09-28).
+ *
+ * Bis dahin setzte jede Anmeldung einen Erneuerungscookie mit dreissig Tagen
+ * `Max-Age` — auch ohne „Angemeldet bleiben". Das Kästchen stand in der Maske,
+ * `rememberMe` wurde geprüft und danach verworfen: eine Scheinfunktion. Gegen
+ * den alten Stand scheitert der erste Fall (`Max-Age=2592000` ohne Wahl).
+ */
+function sitzungscookies(headers: Headers): Record<string, string> {
+  const alle = headers.getSetCookie();
+  const je = (name: string) => alle.find((c) => c.startsWith(`${name}=`)) ?? '';
+  return { at: je('clenaris_at'), rt: je('clenaris_rt') };
+}
+
+const laufzeit = (setCookie: string) => /max-age=(\d+)/i.exec(setCookie)?.[1];
+const ablauf = (setCookie: string) => /expires=/i.test(setCookie);
+
+describe('Sitzungscookies: an den Browser gebunden, ausser „Angemeldet bleiben"', { concurrency: 1 }, async () => {
+  await requireServer();
+
+  it('ohne Wahl: Zugangs- und Erneuerungscookie ohne Max-Age und ohne Expires — auch nach der Erneuerung', async () => {
+    resetRateLimits();
+    const anmeldung = await post('/api/auth/login', { email: ACCOUNTS.manager.email, password: ACCOUNTS.manager.password });
+    assert.equal(anmeldung.status, 200, anmeldung.text);
+    const { at, rt } = sitzungscookies(anmeldung.headers);
+    assert.ok(at && rt, 'Sitzungscookies fehlen');
+    for (const [name, c] of [['Zugang', at], ['Erneuerung', rt]] as const) {
+      assert.equal(laufzeit(c), undefined, `${name}: Max-Age gesetzt — ${c.replace(/=[^;]+/, '=…')}`);
+      assert.equal(ablauf(c), false, `${name}: Expires gesetzt`);
+      assert.match(c, /httponly/i, `${name}: nicht HttpOnly`);
+    }
+
+    const erneuert = await post('/api/auth/refresh', undefined, { jar: refreshOnly(anmeldung.cookies) });
+    assert.equal(erneuert.status, 200, erneuert.text);
+    const nachher = sitzungscookies(erneuert.headers);
+    assert.equal(laufzeit(nachher.rt), undefined, 'die Erneuerung machte aus der Browsersitzung eine dauerhafte');
+  });
+
+  it('mit „Angemeldet bleiben": Erneuerungscookie mit Laufzeit — und die Wahl überlebt die Rotation', async () => {
+    resetRateLimits();
+    const anmeldung = await post('/api/auth/login', { email: ACCOUNTS.manager.email, password: ACCOUNTS.manager.password, rememberMe: true });
+    assert.equal(anmeldung.status, 200, anmeldung.text);
+    const vorher = Number(laufzeit(sitzungscookies(anmeldung.headers).rt));
+    assert.ok(vorher >= 86_400, `Erneuerungscookie ohne mehrtägige Laufzeit: ${vorher}`);
+
+    const erneuert = await post('/api/auth/refresh', undefined, { jar: refreshOnly(anmeldung.cookies) });
+    assert.equal(erneuert.status, 200, erneuert.text);
+    assert.equal(Number(laufzeit(sitzungscookies(erneuert.headers).rt)), vorher, '„Angemeldet bleiben" ging bei der Erneuerung verloren');
+  });
+
+  it('die Abmeldung löscht beide Cookies und widerruft den Erneuerungstoken', async () => {
+    resetRateLimits();
+    const anmeldung = await post('/api/auth/login', { email: ACCOUNTS.manager.email, password: ACCOUNTS.manager.password, rememberMe: true });
+    const abmeldung = await post('/api/auth/logout', undefined, { jar: anmeldung.cookies });
+    assert.ok(abmeldung.status < 300, abmeldung.text);
+    const nachher = sitzungscookies(abmeldung.headers);
+    for (const c of [nachher.at, nachher.rt]) assert.ok(/max-age=0|expires=thu, 01 jan 1970/i.test(c), `Cookie nicht gelöscht: ${c.replace(/=[^;]+/, '=…')}`);
+    const wieder = await post('/api/auth/refresh', undefined, { jar: refreshOnly(anmeldung.cookies) });
+    assert.equal(wieder.status, 401, 'der Erneuerungstoken taugt nach der Abmeldung noch');
+  });
+});
+
 describe('Sitzungserneuerung', { concurrency: 1 }, async () => {
   await requireServer();
   const session = await login(ACCOUNTS.manager.email, ACCOUNTS.manager.password);
@@ -120,11 +182,16 @@ describe('Sitzungserneuerung', { concurrency: 1 }, async () => {
    * widerrufenen, hielt ihn für gestohlen und beendete die Sitzung der Person,
    * mit Sicherheitsmeldung, mitten in der Arbeit.
    *
-   * Die Invariante: genau **eine** Erneuerung gelingt, alle anderen scheitern
-   * ungefährlich (401, ohne Cookies zu löschen), und die Familie lebt weiter —
-   * mit genau einem gültigen Token.
+   * Die Invariante: genau **eine** Erneuerung rotiert (setzt neue Cookies),
+   * alle anderen enden ungefährlich — ohne Cookies zu setzen oder zu löschen
+   * —, und die Familie lebt weiter, mit genau einem gültigen Token.
+   *
+   * Seit 2026-09-28 antworten die Verlierer mit 200 `{ erneuert: false }`
+   * statt 401: Der 401 war im Browser bei zwei offenen Tabs ein roter
+   * Konsolenfehler im gewöhnlichen Betrieb (Begründung an der Route). Die
+   * Zusage hängt deshalb an den Cookies, nicht am Statuscode.
    */
-  it('fünfzig gleichzeitige Erneuerungen: genau eine gelingt, die Familie bleibt heil', async () => {
+  it('fünfzig gleichzeitige Erneuerungen: genau eine rotiert, die Familie bleibt heil', async () => {
     resetRateLimits();
     const frisch = await login(ACCOUNTS.manager.email, ACCOUNTS.manager.password);
     assert.equal(frisch.status, 200);
@@ -134,17 +201,21 @@ describe('Sitzungserneuerung', { concurrency: 1 }, async () => {
       Array.from({ length: 50 }, () => fetch(`${BASE_URL}/api/auth/refresh`, { method: 'POST', headers: { cookie: nurRefresh } })),
     );
     const status = antworten.map((a) => a.status);
-    assert.equal(status.filter((s) => s === 200).length, 1, `Erfolge: ${JSON.stringify(status)}`);
-    assert.ok(status.every((s) => s === 200 || s === 401), `nur 200 oder 401 erwartet: ${JSON.stringify(status)}`);
+    assert.ok(status.every((s) => s === 200), `nur 200 erwartet (Rotation oder verlorener Wettlauf): ${JSON.stringify(status)}`);
+    const setzt = (a: Response) => (a.headers.getSetCookie?.() ?? []).some((c) => c.startsWith('clenaris_rt='));
+    assert.equal(antworten.filter(setzt).length, 1, 'genau eine Antwort trägt einen neuen Erneuerungstoken');
 
-    // Keine abgewiesene Antwort löscht Cookies — sie käme im Browser womöglich
-    // nach der erfolgreichen an und nähme ihr die neue Sitzung wieder weg.
-    for (const a of antworten.filter((x) => x.status === 401)) {
-      const geloescht = (a.headers.getSetCookie?.() ?? []).some((c) => /clenaris_(at|rt)=;/.test(c) || /Max-Age=0/i.test(c));
-      assert.ok(!geloescht, 'eine verlorene Erneuerung löscht die Cookies');
+    // Keine verlorene Antwort setzt oder löscht Cookies — sie käme im Browser
+    // womöglich nach der erfolgreichen an und nähme ihr die neue Sitzung weg.
+    const verlierer = antworten.filter((a) => !setzt(a));
+    for (const a of verlierer) {
+      assert.deepEqual(a.headers.getSetCookie?.() ?? [], [], 'eine verlorene Erneuerung setzt Cookies');
+      const koerper = (await a.json()) as { data: { erneuert?: boolean; id?: string; email?: string } };
+      assert.equal(koerper.data.erneuert, false);
+      assert.equal(koerper.data.id ?? koerper.data.email, undefined, 'eine verlorene Erneuerung verrät Kontodaten');
     }
 
-    const gewinner = antworten.find((a) => a.status === 200)!;
+    const gewinner = antworten.find(setzt)!;
     const neueCookies = (gewinner.headers.getSetCookie?.() ?? []).map((c) => c.split(';')[0]).join('; ');
     const pruefung = await get<{ data: { authenticated: boolean } }>('/api/auth/session', { jar: neueCookies });
     assert.equal(pruefung.payload.data.authenticated, true, 'die neue Sitzung trägt — die Familie wurde nicht gesperrt');

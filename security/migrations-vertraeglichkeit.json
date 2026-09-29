@@ -3,6 +3,11 @@
   "erlaeuterung": "Durchgesehene Einstufung jeder Migration gegen die vorherige Programmfassung (scripts/migration-kompatibilitaet.ts). RUECKWAERTSVERTRAEGLICH: alte Fassung läuft weiter. RUECKFUELLUNG: Daten werden umgeschrieben, verträglich, Laufzeit zählt. PROGRAMMWECHSEL: alte Fassung scheitert an einzelnen Wegen — Migration und Umschalten unmittelbar zusammen. BRECHEND: alte Fassung scheitert grundsätzlich — Erweitern → Umschalten → Rückbau oder Wartungsfenster. Eine neue Migration ohne Eintrag hält das Tor an; eine mildere Einstufung als die Heuristik braucht eine Begründung.",
   "migrationen": {
     "20260904090000_init": { "einstufung": "RUECKWAERTSVERTRAEGLICH", "notiz": "Erstanlage." },
+    "20260929090000_vertragssperre_fehlercode": {
+      "einstufung": "RUECKWAERTSVERTRAEGLICH",
+      "begruendung": "Die drei Triggerfunktionen sind wörtlich die aus 20260923100000_vertragsintegritaet; geändert ist allein der Fehlercode (restrict_violation → P0001). Die Schreibregeln — was gesperrt ist und was erlaubt bleibt — sind dieselben, also schreibt die vorherige Programmfassung weiter genau das, was sie bisher durfte. Kein Code der Anwendung wertet SQLSTATE 23001 aus (durchgesehen 2026-09-29).",
+      "notiz": "Prisma 7 bildete 23001 auf „Fremdschlüssel verletzt“ ab und verwarf die Meldung der Sperre."
+    },
     "20260905100000_performance_indexes": { "einstufung": "RUECKWAERTSVERTRAEGLICH", "notiz": "Nur nicht eindeutige Indizes." },
     "20260905140000_cms_and_super_admin": { "einstufung": "RUECKWAERTSVERTRAEGLICH", "notiz": "Neue Tabellen, neuer Rollenwert SUPER_ADMIN (nach Rücksprung unbekannt)." },
     "20260906090000_calls_to_action": { "einstufung": "RUECKWAERTSVERTRAEGLICH" },
@@ -55,6 +60,12 @@
     "20260927190000_release_ausfuehrung_zustaende": { "einstufung": "RUECKWAERTSVERTRAEGLICH", "notiz": "Neue Werte ReleaseRequestStatus." },
     "20260927190100_release_ausfuehrung": { "einstufung": "PROGRAMMWECHSEL", "notiz": "Eindeutigkeiten auf release_requests." },
     "20260927200000_vertragsperiode_vollstaendig": { "einstufung": "PROGRAMMWECHSEL", "notiz": "Prüfregel: Periodenbeginn und -ende nur zusammen." },
-    "20260927200100_eine_offene_zeiterfassung": { "einstufung": "PROGRAMMWECHSEL", "notiz": "Teilindex: eine laufende Zeiterfassung je Person." }
+    "20260927200100_eine_offene_zeiterfassung": { "einstufung": "PROGRAMMWECHSEL", "notiz": "Teilindex: eine laufende Zeiterfassung je Person." },
+    "20260928090000_bezahlt_ohne_restsaldo": { "einstufung": "RUECKFUELLUNG", "notiz": "balance bezahlter Rechnungen mit Rundungsrest ≤ 0.05 auf 0; die alte Fassung liest und schreibt die Spalte unverändert weiter." },
+    "20260928091000_buchung_absendekennung": {
+      "einstufung": "RUECKWAERTSVERTRAEGLICH",
+      "begruendung": "Neue, freiwillige Spalte bookings.idempotencyKey mit eindeutigem Index auf (organizationId, idempotencyKey). Die vorherige Fassung kennt die Spalte nicht und schreibt NULL; NULL-Werte verletzen den eindeutigen Index nicht. Bestand bleibt gültig."
+    },
+    "20260928120000_traffic_analytics": { "einstufung": "RUECKWAERTSVERTRAEGLICH", "notiz": "Nur neue Aufzählungen und die neue Tabelle traffic_events samt Prüfbedingungen; die vorherige Fassung kennt sie nicht." }
   }
 }

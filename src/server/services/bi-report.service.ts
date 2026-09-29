@@ -28,7 +28,7 @@ import type { CreateReportScheduleInput, GenerateReportInput, UpdateReportSchedu
 import { geprueftLesen } from './document.service';
 import { mappeSchreiben } from './export.service';
 import { computeHealth, type HealthComponent } from './health.service';
-import { getInsights, type Insight } from './insight.service';
+import { FULL_INSIGHT_SCOPE, getInsights, type Insight } from './insight.service';
 
 const log = logger('bi-report');
 
@@ -152,7 +152,9 @@ export async function buildReportContent(organizationId: string, kind: ReportKin
           take: 5,
         })
       : Promise.resolve([]),
-    wantsHealth ? getInsights(organizationId) : Promise.resolve([] as Insight[]),
+    // Volle Sicht: Berichte erzeugt und liest nur, wer `bireport:*` hält —
+    // die Geschäftsleitung, die jedes Register ohnehin öffnen darf.
+    wantsHealth ? getInsights(organizationId, FULL_INSIGHT_SCOPE) : Promise.resolve([] as Insight[]),
   ]);
 
   const quarterLabel = periodKind === 'QUARTER' ? periodOf('QUARTER', zurichMidnight(from.getUTCFullYear(), from.getUTCMonth(), from.getUTCDate())).label : null;

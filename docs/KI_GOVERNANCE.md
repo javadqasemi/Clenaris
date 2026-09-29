@@ -88,6 +88,7 @@
 | Antwortentwurf Bewertung | `/api/reviews/[id]/reply-draft` | Sterne (Zahl 1–5), Titel und Text der Bewertung; Zweck und Ton aus dem Code | `bewertungsantwortNutzlast` (eigene Funktion `writeReviewReply` statt `writeEmail`): Verfasser/Absender als Platzhalter; Titel und Text geschwärzt **ohne** Rückweg — die Antwort ist öffentlich; Konten, Kundschaft und Kontakte der Bewertung sowie vermutete Namen → `[NAME]` + Ausgangsfilter | COMPLETE + VERIFIED (Nutzlast) |
 | Personaldisposition | (Dienst) | Qualifikationen, Fenster, Auslastung | Kürzel (bestehend) | COMPLETE |
 | Einsatzbericht | `/api/jobs/[id]/report/draft` | Auftragsnummer, Leistung, Datum, Dauer (geprüfte Formen), Checkliste, Material, Notizen | `einsatzberichtNutzlast`: Kunde/Team als Platzhalter mit Rückweg, auch als Namensteil; Checkliste und Notizen geschwärzt **ohne** Rückweg — der Bericht geht an die Kundschaft; Kundenperson und Kontakte → `[NAME]` + Ausgangsfilter | COMPLETE + VERIFIED (Nutzlast) |
+| Textassistent | `/api/ai/text-assist` | Der Text eines erlaubten Felds (bzw. der markierte Abschnitt), Aktion und Feldart als Schlüssel | Sperre vor dem Versand (AHV, IBAN, Zugangscode/Passwort, Lohnbetrag, Token → 422, nichts gesendet); übrige erkannte Angaben (Kontakt, Gesundheitssatz, vermutete Namen) als `{{GESCHUETZT_x}}` mit Rückweg + Ausgangsfilter; siehe Abschnitt 4 | COMPLETE + VERIFIED (Nutzlast, Sperre) |
 | Website-Chat | öffentlich | Besucherfragen samt Verlauf der Sitzung | Ausgangsfilter auf Frage und Verlauf; bei uns nicht gespeichert — beim Anbieter gilt dessen Aufbewahrung | COMPLETE |
 
 **Korrektur 2026-09-27.** Das Inventar nannte den Führungsassistenten „keine
@@ -140,3 +141,81 @@ Datenschutzerklärung behauptete „ohne Kundenstammdaten".
   Anbieter:** EXTERNAL VERIFICATION REQUIRED (rechtlich, nicht technisch).
 - **Qualität der Antworten** wird nicht automatisiert geprüft; jede Antwort
   ist ein Entwurf.
+
+## 4. KI-Textassistent (Textkorrektur und Textvorschläge, 2026-09-28)
+
+Ein Knopf neben ausgewählten Textfeldern der Verwaltung: Rechtschreibung
+und Grammatik korrigieren, professioneller oder freundlicher formulieren,
+kürzen, ausführlicher, SEO verbessern, Titel und Meta-Description
+vorschlagen. Endpunkt `POST /api/ai/text-assist`, Dienst
+`src/server/services/text-assist.service.ts`, reine Regeln in
+`src/lib/ai/text-assist.ts`, Oberfläche `src/components/app/text-assist.tsx`.
+
+**Kein zweiter KI-Stapel.** Derselbe Client (`generateText`, schnelles
+Modell, ohne Werkzeuge), derselbe Ausgangsfilter (`anfrageFiltern`),
+dieselben Schwärzungsregeln (`freitextSchwaerzen`, `mitSchutzplatzhaltern`,
+`namenVermuten`), dasselbe Recht (`ai:use`: Systemverantwortung,
+Administration, Betriebsleitung — nicht Mitarbeitende, nicht Kundschaft),
+dieselbe Rate-Limit-Klasse (`aiGenerate`) und dasselbe Nutzungsprotokoll
+(`KiNutzung`). Neu am Client ist nur eine Zeitgrenze je Anfrage (45 s, ohne
+stille Wiederholung).
+
+**Nur an ausgewählten Feldern.** Die Feldart ist eine Erlaubnisliste
+(`TEXT_ASSIST_KONTEXTE` in `src/lib/validation/ai.ts`): Website-Texte
+(`/admin/inhalte`, nur Zeile/Absatz/Fliesstext), Blogbeitrag (Titel, Anriss,
+Text, SEO-Felder), SEO-Titel und -Beschreibung (`/admin/seo`),
+Leistungsbeschreibungen im Katalog (Kurzbeschreibung, Beschreibung,
+SEO-Felder), Einleitung und Schlusstext der Offerte, und — noch ohne Feld —
+E-Mail-Entwürfe. **Nicht** an Personal-, Lohn-, Bank-, AHV-, Gesundheits-,
+Objekt- (Alarmcode) oder Notizfeldern: Der Assistent ist in `ResourceForm`
+ein Opt-in je Feld (`textAssist`), nie eine Vorgabe. Welche Aktion zu welcher
+Feldart passt, steht in `TEXT_ASSIST_AKTIONEN_JE_KONTEXT`; eine andere
+Kombination weist der Server mit 422 ab.
+
+**Sperren oder schützen.** Vor jedem Versand prüft `gesperrteInhalte` den
+Text. AHV-Nummer, IBAN, Zugangs-/Alarmcode, Passwort, Lohnbetrag und
+Zugangsschlüssel/Token (private Schlüssel, bekannte Tokenformen, JWT, Wert
+nach „API-Key"/„Token"/„Secret") **sperren** die Anfrage: 422 mit einer
+Meldung, die die Art nennt, nie den Wert — und nichts geht hinaus. Diese
+Prüfung läuft vor der Frage nach dem Anbieter, damit sie mit und ohne
+Schlüssel gleich antwortet. Was in Redaktionstexten legitim ist — Telefon
+und E-Mail der Firma, ein Name in einer Referenz, ein Satz, den die grobe
+Gesundheitsregel trifft („Für Allergiker geeignet") —, wird **geschützt**:
+als `{{GESCHUETZT_x}}` hinaus, im eigenen Prozess zurück. Ein geschützter
+Satz wird nicht umformuliert; die Oberfläche nennt die Anzahl.
+
+**Eingabe ist Daten.** Der Text steht zwischen Markierungen mit einer
+Kennung je Anfrage; eine Markierung im Text selbst wird entschärft; der
+Systemtext erklärt den Inhalt ausdrücklich zu Material, nicht zu
+Anweisungen, und verbietet Werkzeuge, erfundene Links und Kontaktdaten.
+Das ist eine Abwehr, keine Garantie.
+
+**Antwort prüfen.** `antwortAuswerten` nimmt nur Text innerhalb einer
+Längengrenze (dreimal die Eingabe, 600–12 000 Zeichen) bzw. ein JSON-Array
+aus ein bis drei Zeichenketten (Titel ≤ 90, Meta-Description ≤ 200
+Zeichen); Codezäune, HTML-Tags, Steuerzeichen und „ß" werden entfernt bzw.
+ersetzt. Alles andere wird verworfen (502, „Bitte erneut generieren") —
+nicht gekürzt.
+
+**Nichts wird gespeichert.** „Übernehmen" ersetzt nur den Text im Feld (bzw.
+den markierten Abschnitt); gespeichert wird mit dem Formular, über dessen
+Endpunkt, Recht und Protokoll. Ob der Knopf erscheint, entscheidet der
+Server im Rahmen der Verwaltung (`TextAssistProvider`: Rolle mit `ai:use`;
+ohne Anbieter gesperrt mit Begründung) — kein Probeaufruf je Feld.
+
+**Protokoll nur mit Metadaten.** Der `KiNutzung`-Eintrag trägt Funktion,
+Aktion, Feldart, Zeichenzahl von Eingabe und Ausgabe, Anzahl geschützter
+Stellen, Modell und Dauer — nie Eingabe oder Ergebnis. Eine gesperrte
+Anfrage ist keine Nutzung und erzeugt keinen Eintrag; das Log zählt nur die
+gesperrte Kategorie.
+
+**Ohne Anbieter** (kein `ANTHROPIC_API_KEY`): Der Knopf ist gesperrt und
+sagt warum; der Endpunkt antwortet 503 (`NOT_CONFIGURED`) mit klarer
+Meldung.
+
+Geprüft: `tests/api/text-assist-nutzlast.test.ts` (direkt) und
+`tests/api/text-assist.test.ts` (HTTP). **Offen:** Die Sperrregeln sind
+dieselbe Heuristik wie in Abschnitt 1 — ein Code ohne Schlüsselwort bleibt
+unerkannt, und ein Satz wie „Schlüsselübergabe ab 2026" kann fälschlich
+sperren (die Meldung erklärt dann, was zu tun ist). Die Qualität der
+Vorschläge prüft keine automatisierte Reihe.

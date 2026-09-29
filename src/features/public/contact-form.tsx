@@ -9,6 +9,7 @@ import { toast } from 'sonner';
 import { api, ApiError } from '@/lib/api/client';
 import { contactFormSchema, type ContactFormInput } from '@/lib/validation/crm';
 import { trackEvent } from '@/components/marketing/analytics';
+import { trafficEreignis } from '@/lib/traffic/erfassen';
 import { Button } from '@/components/ui/button';
 import { Input, Textarea } from '@/components/ui/input';
 import { Alert } from '@/components/ui/primitives';
@@ -84,6 +85,9 @@ export function ContactForm() {
     try {
       await api.post('/api/public/contact', values);
       trackEvent('quote_requested', { service: values.serviceKind ?? 'unbekannt' });
+      // Eigene Besuchsmessung: erst nach der Bestätigung des Servers — ein
+      // abgewiesenes Formular ist keine Anfrage. Ohne Einwilligung ein Nichts.
+      trafficEreignis('CONTACT_FORM');
       setSent(true);
     } catch (err) {
       const message =

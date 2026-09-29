@@ -1,8 +1,6 @@
-import { z } from 'zod';
-
 import { defineRoute } from '@/lib/api/handler';
 import { created } from '@/lib/api/response';
-import { contractServiceSchema, contractVersionSchema } from '@/lib/validation/contracts';
+import { contractVersionCreateSchema } from '@/lib/validation/contracts';
 import { idParam } from '@/lib/validation/queries';
 import { createContractVersion } from '@/server/services/contract.service';
 import { getOrganizationId } from '@/server/services/organization.service';
@@ -29,10 +27,7 @@ export const runtime = 'nodejs';
 export const POST = defineRoute({
   permissions: ['contract:version'],
   params: idParam,
-  body: z.object({
-    version: contractVersionSchema,
-    services: z.array(contractServiceSchema).max(100).optional(),
-  }),
+  body: contractVersionCreateSchema,
   rateLimit: 'apiWrite',
   handler: async ({ params, body, session, ip }) =>
     created(

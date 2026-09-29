@@ -313,8 +313,8 @@ async function migrationen() {
     if (!process.env.DATABASE_URL) {
       hinweis += ' Datenbankabgleich: NICHT GEPRÜFT (keine DATABASE_URL).';
     } else {
-      const { PrismaClient } = await import('@prisma/client');
-      const prisma = new PrismaClient();
+      const { erzeugePrismaClient } = await import('../src/lib/prisma-client');
+      const prisma = erzeugePrismaClient();
       try {
         const indizes = new Set((await prisma.$queryRaw<{ n: string }[]>`SELECT indexname AS n FROM pg_indexes WHERE schemaname = 'public'`).map((r) => r.n));
         const trigger = new Set((await prisma.$queryRaw<{ n: string }[]>`SELECT tgname AS n FROM pg_trigger WHERE NOT tgisinternal`).map((r) => r.n));

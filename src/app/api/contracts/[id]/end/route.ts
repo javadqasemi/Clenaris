@@ -1,7 +1,6 @@
-import { z } from 'zod';
-
 import { defineRoute } from '@/lib/api/handler';
 import { ok } from '@/lib/api/response';
+import { contractEndSchema } from '@/lib/validation/contracts';
 import { idParam } from '@/lib/validation/queries';
 import { endContract } from '@/server/services/contract.service';
 import { getOrganizationId } from '@/server/services/organization.service';
@@ -25,7 +24,7 @@ export const runtime = 'nodejs';
 export const POST = defineRoute({
   permissions: ['contract:terminate'],
   params: idParam,
-  body: z.object({ reason: z.string().trim().max(2000).optional() }),
+  body: contractEndSchema,
   rateLimit: 'apiWrite',
   handler: async ({ params, body, session, ip }) =>
     ok(

@@ -256,6 +256,21 @@ describe('Ein Saldo für alle Wege', () => {
     assert.deepEqual(await stand(zuerstGutschrift), await stand(zuerstZahlung));
     assert.deepEqual(await stand(zuerstGutschrift), { bezahlt: 97.29, offen: 0, status: 'PAID' });
   });
+
+  /**
+   * B-08 (2026-09-28): Zwei Rappen zu wenig sind eine Rundungsdifferenz —
+   * bezahlt, und **nichts** offen. Gegen den alten Stand: Status PAID, aber
+   * `offen` 0.02; das Kundenkonto zeigte die Rechnung als offen, und eine
+   * weitere Zahlung über 0.02 wurde angenommen.
+   */
+  it('zwei Rappen zu wenig: bezahlt ohne offenen Rest, keine weitere Zahlung', async () => {
+    const id = await rechnung();
+    const knapp = Math.round((BRUTTO - 0.02) * 100) / 100;
+    assert.equal((await post(`/api/invoices/${id}/payments`, { amount: knapp, method: 'BANK_TRANSFER' }, { jar: jars.admin })).status, 201);
+    assert.deepEqual(await stand(id), { bezahlt: knapp, offen: 0, status: 'PAID' });
+    const nachschuss = await post(`/api/invoices/${id}/payments`, { amount: 0.02, method: 'BANK_TRANSFER' }, { jar: jars.admin });
+    assert.equal(nachschuss.status, 422, `Zahlung auf eine bezahlte Rechnung: HTTP ${nachschuss.status}`);
+  });
 });
 
 /**

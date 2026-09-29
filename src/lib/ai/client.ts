@@ -53,6 +53,16 @@ export interface GenerateOptions {
   /** Frühere Turns für mehrstufige Dialoge (Chatbot). */
   history?: Anthropic.MessageParam[];
   temperatureHint?: never;
+  /**
+   * Obergrenze je Anfrage in Millisekunden (2026-09-28, Textassistent).
+   *
+   * Ohne Angabe gilt die Vorgabe des SDK (zehn Minuten, mit Wiederholungen)
+   * — richtig für einen Bericht, der Minuten brauchen darf. Eine Korrektur,
+   * auf die jemand im offenen Formular wartet, soll dagegen nach Sekunden
+   * klar scheitern statt endlos zu drehen; mit `timeoutMs` gibt es deshalb
+   * auch keine stille Wiederholung, die die Wartezeit verdoppelte.
+   */
+  timeoutMs?: number;
 }
 
 /**
@@ -100,17 +110,20 @@ function assertNoRefusal(message: Anthropic.Message): string {
  */
 export async function generateText(options: GenerateOptions): Promise<string> {
   const f = gefiltert(options.prompt, options.history);
-  const stream = anthropic().messages.stream({
-    model: modelFor(options.tier ?? 'smart'),
-    max_tokens: options.maxTokens ?? 8_000,
-    system: options.system,
-    thinking: { type: 'adaptive' },
-    output_config: { effort: options.effort ?? 'medium' },
-    messages: [
-      ...f.history,
-      { role: 'user', content: f.prompt },
-    ],
-  });
+  const stream = anthropic().messages.stream(
+    {
+      model: modelFor(options.tier ?? 'smart'),
+      max_tokens: options.maxTokens ?? 8_000,
+      system: options.system,
+      thinking: { type: 'adaptive' },
+      output_config: { effort: options.effort ?? 'medium' },
+      messages: [
+        ...f.history,
+        { role: 'user', content: f.prompt },
+      ],
+    },
+    options.timeoutMs ? { timeout: options.timeoutMs, maxRetries: 0 } : undefined,
+  );
 
   const message = await stream.finalMessage();
   return assertNoRefusal(message);

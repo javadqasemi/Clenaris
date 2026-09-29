@@ -4,7 +4,7 @@ import { notFound } from 'next/navigation';
 import { ArrowLeft } from 'lucide-react';
 
 import { prisma, toNumber } from '@/lib/db';
-import { requirePermission } from '@/lib/auth/session';
+import { requirePagePermission } from '@/lib/auth/session';
 import { fullName } from '@/lib/utils';
 import type { CreateLeadInput } from '@/lib/validation/crm';
 import { getOrganizationId } from '@/server/services/organization.service';
@@ -36,7 +36,8 @@ export default async function EditLeadPage({
 }: {
   params: Promise<{ id: string }>;
 }) {
-  await requirePermission('lead:update');
+  // Reine Bearbeitungsmaske: ohne Schreibrecht 404 statt Fehlergrenze (Audit 2026-09-28).
+  await requirePagePermission('lead:update');
 
   const { id } = await params;
   const organizationId = await getOrganizationId();

@@ -1066,4 +1066,81 @@ describe('IDOR — fremde Kennungen öffnen nichts', () => {
       await del(`/api/time/${eintragId}`, { jar: jars.admin }).catch(() => undefined);
     }
   });
+
+  /**
+   * B-01 (2026-09-28): `createInvoice` übernahm `bookingId` und `quoteId`
+   * ungeprüft. Eine Rechnung an Kundschaft B mit der Buchung von A hing an
+   * As Buchung, und As Kundenkonto zeigte sie samt Betrag und Saldo. Gegen den
+   * alten Stand: 201 und eine Rechnung mit fremdem Bezug im Bestand.
+   */
+  it('eine Rechnung nimmt keine Buchung und keine Offerte einer anderen Kundschaft an', async () => {
+    const eigene = await eigeneKundeId();
+    const fremdeBuchung = await db().booking.findFirst({
+      where: { organizationId: orgId, deletedAt: null, customerId: { not: eigene } },
+      select: { id: true },
+    });
+    const fremdeOfferte = await db().quote.findFirst({
+      where: { organizationId: orgId, deletedAt: null, customerId: { not: eigene } },
+      select: { id: true },
+    });
+    assert.ok(fremdeBuchung && fremdeOfferte, 'keine fremde Buchung oder Offerte im Bestand');
+
+    const rechnung = (bezug: Record<string, string>) =>
+      post('/api/invoices', {
+        customerId: eigene,
+        notes: `${MARKE} fremder Bezug`,
+        items: [{ name: 'Unterhaltsreinigung', quantity: 1, unit: 'Std.', unitPrice: 50, vatRate: 8.1 }],
+        issueImmediately: false,
+        ...bezug,
+      }, { jar: jars.admin });
+
+    try {
+      const mitBuchung = await rechnung({ bookingId: fremdeBuchung.id });
+      assert.equal(mitBuchung.status, 404, `fremde Buchung: HTTP ${mitBuchung.status} ${mitBuchung.text}`);
+      const mitOfferte = await rechnung({ quoteId: fremdeOfferte.id });
+      assert.equal(mitOfferte.status, 404, `fremde Offerte: HTTP ${mitOfferte.status} ${mitOfferte.text}`);
+      assert.equal(await db().invoice.count({ where: { notes: `${MARKE} fremder Bezug` } }), 0, 'eine Rechnung mit fremdem Bezug ist entstanden');
+
+      // Gegenprobe: die eigene Buchung wird angenommen — sonst bewiese das 404 nichts.
+      const eigeneBuchung = await db().booking.findFirst({ where: { organizationId: orgId, deletedAt: null, customerId: eigene }, select: { id: true } });
+      if (eigeneBuchung) {
+        const passend = await rechnung({ bookingId: eigeneBuchung.id });
+        assert.equal(passend.status, 201, passend.text);
+      }
+    } finally {
+      const ids = (await db().invoice.findMany({ where: { notes: `${MARKE} fremder Bezug` }, select: { id: true } })).map((r) => r.id);
+      if (ids.length) {
+        await schutzfreiAufraeumen(async (tx) => {
+          await tx.invoiceItem.deleteMany({ where: { invoiceId: { in: ids } } });
+          await tx.invoice.deleteMany({ where: { id: { in: ids } } });
+        });
+      }
+    }
+  });
+
+  /**
+   * B-12 (2026-09-28): Für die Kundschaft prüfte `openThread` an der
+   * Einsatz-ID nur die Organisation. Ein Kundenkonto hängte seinen Verlauf an
+   * den Einsatz einer anderen Kundschaft. Gegen den alten Stand: 201.
+   */
+  it('die Kundschaft eröffnet keinen Nachrichtenverlauf zu einem fremden Einsatz', async () => {
+    const eigene = await eigeneKundeId();
+    const fremderEinsatz = await db().job.findFirst({
+      where: { organizationId: orgId, deletedAt: null, customerId: { not: eigene } },
+      select: { id: true },
+    });
+    assert.ok(fremderEinsatz, 'kein fremder Einsatz im Bestand');
+    const betreff = `${MARKE} Verlauf an fremdem Einsatz`;
+    try {
+      const antwort = await post('/api/messages', { subject: betreff, body: 'Eingeschleust', jobId: fremderEinsatz.id }, { jar: jars.customer });
+      assert.equal(antwort.status, 404, `Verlauf an fremdem Einsatz: HTTP ${antwort.status} ${antwort.text}`);
+      assert.equal(await db().messageThread.count({ where: { subject: betreff } }), 0, 'der Verlauf ist am fremden Einsatz entstanden');
+    } finally {
+      const verlaeufe = await db().messageThread.findMany({ where: { subject: betreff }, select: { id: true } });
+      for (const v of verlaeufe) {
+        await db().message.deleteMany({ where: { threadId: v.id } });
+        await db().messageThread.delete({ where: { id: v.id } });
+      }
+    }
+  });
 });

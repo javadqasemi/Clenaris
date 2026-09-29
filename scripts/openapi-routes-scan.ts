@@ -19,9 +19,11 @@ export const SCAN_ROUTES: RouteDoc[] = [
     tag: 'System',
     summary: 'Scan auflösen',
     description:
-      'Einen gescannten oder eingefügten Text (Etikettcode, EAN/GTIN, QR-Rechnung, Nummer) einordnen und ' +
-      'im Leserecht der Rolle auflösen. Liest nur: die Antwort nennt Treffer und die Schlüssel der ' +
-      'Schnellaktionen, ausgeführt wird nichts. Unbekannt, fremde Organisation, gelöscht und ohne Recht ' +
+      'Einen gescannten oder eingefügten Text (Etikettcode, EAN/GTIN, QR-Rechnung in alter und neuer ' +
+      'Referenzform, Material-, Inventar-, Einsatz-, Rechnungs-, Kunden- oder Vertragsnummer) einordnen und ' +
+      'im Leserecht der Rolle auflösen. Liest nur: die Antwort nennt Treffer, die Schlüssel der ' +
+      'Schnellaktionen und Verweise zum Lesen (PDF, Rapport), ausgeführt wird nichts — jede Aktion läuft ' +
+      'über ihren bestehenden Endpunkt. Unbekannt, fremde Organisation, gelöscht und ohne Recht ' +
       'ergeben dieselbe leere Antwort. Adressen werden weder aufgelöst noch als Link zurückgegeben. ' +
       'Kontingent je Person: 60 pro Minute.',
     guard: perm('all', 'dashboard:view'),

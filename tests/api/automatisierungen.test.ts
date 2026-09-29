@@ -5,7 +5,11 @@ import { createHash } from 'node:crypto';
 import { bedingungenErfuellt, wertAn } from '../../src/lib/automation/conditions';
 import { fuelleVorlage, platzhalterIn } from '../../src/lib/automation/template';
 import { istPrivateAdresse, pruefendeVerbindungsaufloesung, pruefeZiel, sendeWebhook } from '../../src/lib/automation/webhook';
-import { pruefeAktionsKonfiguration } from '../../src/lib/validation/automation-config';
+import {
+  ERLAUBTE_STATUSAENDERUNGEN,
+  ausgangszustaendeFuer,
+  pruefeAktionsKonfiguration,
+} from '../../src/lib/validation/automation-config';
 import { get, post, patch, del, data, requireServer } from '../helpers/client';
 import { loginAll, type AccountName } from '../helpers/accounts';
 import { eigeneOrganisationId, testDb, testDbGrund, testDbSchliessen } from '../helpers/testdb';
@@ -174,6 +178,30 @@ describe('Vorlagen', () => {
 //  Aktionskonfiguration
 // ===========================================================================
 
+/**
+ * B-19 (2026-09-28): Eine Statusregel schrieb ohne Bedingung auf den
+ * Ausgangszustand — sie holte abgesagte Einsätze zurück und sagte
+ * abgeschlossene ab. Jetzt steht der zulässige Ausgangszustand im `where`.
+ */
+describe('Statusregeln: nur aus zulässigen Ausgangszuständen', () => {
+  it('jedes erlaubte Ziel hat Ausgangszustände; Abgeschlossenes, Abgesagtes und Begonnenes gehören nie dazu', () => {
+    for (const [ziel, stati] of Object.entries(ERLAUBTE_STATUSAENDERUNGEN)) {
+      for (const status of stati) {
+        const von = ausgangszustaendeFuer(ziel, status);
+        assert.ok(von.length > 0, `${ziel} → ${status} hat keinen Ausgangszustand`);
+        for (const tabu of ['COMPLETED', 'VERIFIED', 'CANCELLED', 'IN_PROGRESS', 'EN_ROUTE', 'WON']) {
+          assert.ok(!von.includes(tabu), `${ziel} → ${status} darf nicht aus ${tabu} wechseln`);
+        }
+      }
+    }
+  });
+
+  it('ein nicht zugelassener Wechsel hat keinen Ausgangszustand', () => {
+    assert.deepEqual(ausgangszustaendeFuer('job', 'COMPLETED'), []);
+    assert.deepEqual(ausgangszustaendeFuer('invoice', 'PAID'), []);
+  });
+});
+
 describe('Aktionskonfiguration', () => {
   it('nimmt eine vollständige Konfiguration an', () => {
     assert.equal(
@@ -279,6 +307,9 @@ describe('Ausgehende Aufrufe — die Adressprüfung', () => {
       '198.18.0.1', // Benchmarking
       '203.0.113.7', // Dokumentation
       '0:0:0:0:0:0:0:1', // ::1 ausgeschrieben
+      // Bis 2026-09-28 durchgelassen (B-18):
+      '64:ff9b:1::a9fe:a9fe', // lokales NAT64 (RFC 8215)
+      '192.88.99.1', // 6to4-Relay-Anycast
     ];
 
     for (const adresse of privat) {
@@ -757,7 +788,15 @@ describe('RB-012 — vom zeitbezogenen Auslöser bis zur ausgeführten Aktion', 
     }
 
     // Zeit vergehen lassen: die Läufe fällig machen; eine Aufgabe erledigen.
-    await db.automationRun.updateMany({ where: eigene, data: { scheduledFor: new Date(Date.now() - 60_000) } });
+    //
+    // Fällig **vor allen anderen** (2026-09-28): Der Takt arbeitet höchstens
+    // 200 fällige Läufe ab, die ältesten zuerst — die gerechte Reihenfolge des
+    // Produkts. In einer vollen Prüfreihe legen die Dateien davor aber
+    // hunderte Läufe an (Nebenläufigkeit, Automatisierungen), und mit „vor
+    // einer Minute fällig" stand dieser Lauf dahinter und blieb PENDING. Das
+    // war eine Störung durch den geteilten Bestand, keine Aussage über die
+    // Regel. Ein Fälligkeitsdatum weit in der Vergangenheit stellt ihn nach vorn.
+    await db.automationRun.updateMany({ where: eigene, data: { scheduledFor: new Date('2000-01-01T00:00:00Z') } });
     await db.task.update({ where: { id: erledigt }, data: { status: 'DONE', completedAt: new Date() } });
 
     const zweiter = await stuendlich();

@@ -2227,6 +2227,50 @@
         }
       }
     },
+    "/api/public/kontakt/vcard": {
+      "get": {
+        "tags": [
+          "Öffentlich"
+        ],
+        "summary": "Visitenkarte der Firma (.vcf)",
+        "description": "vCard 3.0 mit Firmenname, Telefon, E-Mail, Website und Postadresse — dieselbe Zeichenkette wie im QR-Code auf `/kontakt`. Nur öffentliche Stammdaten (keine IBAN, keine MWST-Nummer, keine Personen). `Content-Disposition: attachment`, `Cache-Control: public, max-age=3600`.\n\n**Zugriff:** Öffentlich — keine Anmeldung nötig.\n\n**Rate-Limit-Klasse:** `apiRead`",
+        "operationId": "getPublicKontaktVcard",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Datei",
+            "content": {
+              "text/vcard": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/public/bookings": {
       "post": {
         "tags": [
@@ -2524,6 +2568,10 @@
                     },
                     "maxItems": 10,
                     "default": []
+                  },
+                  "idempotencyKey": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9_-]{16,64}$"
                   },
                   "recurrence": {
                     "type": "object",
@@ -3863,7 +3911,7 @@
                   },
                   "scopeId": {
                     "type": "string",
-                    "maxLength": 60
+                    "pattern": "^[A-Za-z0-9_-]{1,60}$"
                   }
                 },
                 "required": [
@@ -17439,6 +17487,141 @@
         }
       }
     },
+    "/api/ai/text-assist": {
+      "post": {
+        "tags": [
+          "Künstliche Intelligenz"
+        ],
+        "summary": "Text korrigieren oder Vorschläge erzeugen",
+        "description": "Textassistent für Website-, Blog-, SEO-, Leistungs- und Offerttexte. Der Kontext ist eine feste Erlaubnisliste. Enthält der Text eine AHV-Nummer, IBAN, einen Zugangscode, ein Passwort, einen Lohnbetrag oder ein Token, antwortet der Endpunkt mit 422 und sendet nichts. Ohne konfigurierten Anbieter 503. Der Endpunkt schreibt nichts — der Vorschlag geht ins Formular.\n\n**Zugriff:** Erfordert die Berechtigung: `ai:use`.\n\n**Rate-Limit-Klasse:** `aiGenerate`",
+        "operationId": "postAiTextAssist",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "aktion": {
+                    "type": "string",
+                    "enum": [
+                      "rechtschreibung",
+                      "grammatik",
+                      "professioneller",
+                      "freundlicher",
+                      "kuerzer",
+                      "ausfuehrlicher",
+                      "seo",
+                      "titel",
+                      "meta-description"
+                    ]
+                  },
+                  "kontext": {
+                    "type": "string",
+                    "enum": [
+                      "cms-text",
+                      "blog",
+                      "seo-title",
+                      "seo-description",
+                      "service-description",
+                      "email-draft",
+                      "quote-text"
+                    ],
+                    "default": "cms-text"
+                  },
+                  "text": {
+                    "type": "string",
+                    "minLength": 2,
+                    "maxLength": 6000
+                  }
+                },
+                "required": [
+                  "aktion",
+                  "text"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Erfolg",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SuccessEnvelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHORIZED — keine oder abgelaufene Sitzung.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN — angemeldet, aber ohne die nötige Berechtigung.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "BUSINESS_RULE — fachlich nicht zulässig, etwa eine bereits ausgestellte Rechnung ändern.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/content": {
       "patch": {
         "tags": [
@@ -17783,16 +17966,8 @@
                     "default": []
                   },
                   "ogImageUrl": {
-                    "anyOf": [
-                      {
-                        "type": "string",
-                        "format": "uri",
-                        "maxLength": 500
-                      },
-                      {
-                        "const": ""
-                      }
-                    ]
+                    "type": "string",
+                    "maxLength": 500
                   },
                   "noIndex": {
                     "type": "boolean",
@@ -17800,8 +17975,7 @@
                   }
                 },
                 "required": [
-                  "path",
-                  "ogImageUrl"
+                  "path"
                 ]
               }
             }
@@ -40594,6 +40768,10 @@
                     "maxItems": 10,
                     "default": []
                   },
+                  "idempotencyKey": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9_-]{16,64}$"
+                  },
                   "recurrence": {
                     "type": "object",
                     "properties": {
@@ -45030,7 +45208,7 @@
           "Führung: Kennzahlen"
         ],
         "summary": "Führungscockpit",
-        "description": "Gesundheitswert mit Herleitung, Kennzahlgruppen, Auffälligkeiten, Ziele, Risikomatrix, Fälliges. Finanzgruppen nur mit `cockpit:financials`.\n\n**Zugriff:** Erfordert die Berechtigung: `cockpit:view`.\n\n**Rate-Limit-Klasse:** `apiRead`",
+        "description": "Gesundheitswert mit Herleitung, Kennzahlgruppen, Auffälligkeiten, Ziele, Risikomatrix, Fälliges. Finanzgruppen nur mit `cockpit:financials`; Risikomatrix (`risks`), fällige Risiken/Marktprüfungen und ablaufende Dokumente nur mit `risk:read`, `market:read` bzw. `document:read` — sonst `null`, 0 oder leer.\n\n**Zugriff:** Erfordert die Berechtigung: `cockpit:view`.\n\n**Rate-Limit-Klasse:** `apiRead`",
         "operationId": "getBiCockpit",
         "security": [
           {
@@ -45265,7 +45443,7 @@
           "Führung: Kennzahlen"
         ],
         "summary": "Auffälligkeiten",
-        "description": "Regelbasierte Hinweise mit Verweis auf die Stelle, wo man etwas tun kann.\n\n**Zugriff:** Erfordert die Berechtigung: `cockpit:view`.\n\n**Rate-Limit-Klasse:** `apiRead`",
+        "description": "Regelbasierte Hinweise mit Verweis auf die Stelle, wo man etwas tun kann. Fällige Prüfungen zählen nur Register, die die Rolle lesen darf.\n\n**Zugriff:** Erfordert die Berechtigung: `cockpit:view`.\n\n**Rate-Limit-Klasse:** `apiRead`",
         "operationId": "getBiCockpitInsights",
         "security": [
           {
@@ -58797,7 +58975,7 @@
           "Verträge"
         ],
         "summary": "Verträge auflisten",
-        "description": "Filtert nach Zustand, Kundschaft, Suchbegriff sowie nach nahender Kündigungsfrist und nahendem Vertragsende. **Die Einschränkung steht in der `where`-Klausel:** Wer nur `contract:read_own` hat, sieht ausschliesslich die Verträge der eigenen Kundenakte — verstecktes HTML wäre auf der Leitung trotzdem sichtbar.\n\n**Zugriff:** Erfordert eine der Berechtigungen: `contract:read`, `contract:read_own`.\n\n**Rate-Limit-Klasse:** `apiRead`",
+        "description": "Filtert nach Zustand, Kundschaft, Suchbegriff sowie nach nahender Kündigungsfrist und nahendem Vertragsende. **Die Einschränkung steht in der `where`-Klausel:** Wer nur `contract:read_own` hat, sieht ausschliesslich die Verträge der eigenen Kundenakte — verstecktes HTML wäre auf der Leitung trotzdem sichtbar. Sie erhält die **Kundensicht**: nur zugegangene Zustände (angeboten, aktiv, pausiert, gekündigt, beendet), keine internen Felder, ohne die Filter der Verwaltung.\n\n**Zugriff:** Erfordert eine der Berechtigungen: `contract:read`, `contract:read_own`.\n\n**Rate-Limit-Klasse:** `apiRead`",
         "operationId": "getContracts",
         "security": [
           {
@@ -59479,7 +59657,7 @@
           "Verträge"
         ],
         "summary": "Vertragsakte",
-        "description": "Der Vertrag mit allen Versionen, Leistungen, Einsatzplänen, Ausnahmen, Änderungsanträgen und Preisanpassungen — **eine** Abfrage statt sechs. Sechs Abrufe hintereinander wären sechs Momente, in denen sich der Zustand zwischen zwei Antworten ändern kann. Jede Version meldet zusätzlich, wie viele Einsätze an ihr hängen.\n\n**Zugriff:** Erfordert eine der Berechtigungen: `contract:read`, `contract:read_own`.\n\n**Rate-Limit-Klasse:** `apiRead`",
+        "description": "Der Vertrag mit allen Versionen, Leistungen, Einsatzplänen, Ausnahmen, Änderungsanträgen und Preisanpassungen — **eine** Abfrage statt sechs. Sechs Abrufe hintereinander wären sechs Momente, in denen sich der Zustand zwischen zwei Antworten ändern kann. Jede Version meldet zusätzlich, wie viele Einsätze an ihr hängen. Mit nur `contract:read_own` kommt die **Kundensicht**: der eigene Vertrag in einem zugegangenen Zustand, mit dem Inhalt des Vertragsdokuments — ohne interne Notizen, Kostenstelle, Zuständige, Entwurfsfassungen, Änderungsanträge und Preisanpassungen; ein Entwurf ist 404 wie ein fremder Vertrag.\n\n**Zugriff:** Erfordert eine der Berechtigungen: `contract:read`, `contract:read_own`.\n\n**Rate-Limit-Klasse:** `apiRead`",
         "operationId": "getContractsById",
         "security": [
           {
@@ -70427,7 +70605,7 @@
           "System"
         ],
         "summary": "Scan auflösen",
-        "description": "Einen gescannten oder eingefügten Text (Etikettcode, EAN/GTIN, QR-Rechnung, Nummer) einordnen und im Leserecht der Rolle auflösen. Liest nur: die Antwort nennt Treffer und die Schlüssel der Schnellaktionen, ausgeführt wird nichts. Unbekannt, fremde Organisation, gelöscht und ohne Recht ergeben dieselbe leere Antwort. Adressen werden weder aufgelöst noch als Link zurückgegeben. Kontingent je Person: 60 pro Minute.\n\n**Zugriff:** Erfordert die Berechtigung: `dashboard:view`.\n\n**Rate-Limit-Klasse:** `scanResolve`",
+        "description": "Einen gescannten oder eingefügten Text (Etikettcode, EAN/GTIN, QR-Rechnung in alter und neuer Referenzform, Material-, Inventar-, Einsatz-, Rechnungs-, Kunden- oder Vertragsnummer) einordnen und im Leserecht der Rolle auflösen. Liest nur: die Antwort nennt Treffer, die Schlüssel der Schnellaktionen und Verweise zum Lesen (PDF, Rapport), ausgeführt wird nichts — jede Aktion läuft über ihren bestehenden Endpunkt. Unbekannt, fremde Organisation, gelöscht und ohne Recht ergeben dieselbe leere Antwort. Adressen werden weder aufgelöst noch als Link zurückgegeben. Kontingent je Person: 60 pro Minute.\n\n**Zugriff:** Erfordert die Berechtigung: `dashboard:view`.\n\n**Rate-Limit-Klasse:** `scanResolve`",
         "operationId": "postScanResolve",
         "security": [
           {
@@ -71746,6 +71924,243 @@
           },
           "422": {
             "description": "BUSINESS_RULE — fachlich nicht zulässig, etwa eine bereits ausgestellte Rechnung ändern.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/public/traffic": {
+      "post": {
+        "tags": [
+          "Öffentlich"
+        ],
+        "summary": "Besuchsereignisse melden",
+        "description": "Seitenansichten und Konversionen der öffentlichen Website, höchstens zwanzig je Anfrage. Der Browser sendet nur mit Einwilligung „Statistik\". Der Server bereinigt: Pfad ohne Abfrage (nur `utm_source`/`utm_medium`/`utm_campaign` bleiben, in eigenen Spalten), Token-Segmente als `:token`, App-Bereiche (/admin, /portal, /konto, /api, /auth, /signieren) verworfen, Referrer nur als fremder Host, Gerät und Browser als Familie aus dem User-Agent (der selbst nicht gespeichert wird), Sitzung nur als tagesgebundener HMAC. `Sec-GPC: 1` oder `DNT: 1` verwirft alles. Die IP dient nur dem Kontingent. Antwort immer 204, auch wenn nichts gespeichert wurde.\n\n**Zugriff:** Öffentlich — keine Anmeldung nötig.\n\n**Rate-Limit-Klasse:** `traffic`",
+        "operationId": "postPublicTraffic",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "sitzung": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9_-]{16,64}$"
+                  },
+                  "ereignisse": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "name": {
+                          "type": "string",
+                          "enum": [
+                            "PAGE_VIEW",
+                            "CONTACT_PHONE",
+                            "CONTACT_EMAIL",
+                            "CONTACT_FORM",
+                            "BOOKING_START",
+                            "BOOKING_COMPLETE",
+                            "QUOTE_REQUEST",
+                            "NEWSLETTER_SIGNUP"
+                          ]
+                        },
+                        "pfad": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 300
+                        },
+                        "referrer": {
+                          "type": "string",
+                          "maxLength": 500
+                        },
+                        "einstieg": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "name",
+                        "pfad"
+                      ]
+                    },
+                    "minItems": 1,
+                    "maxItems": 20
+                  }
+                },
+                "required": [
+                  "sitzung",
+                  "ereignisse"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Erfolg",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SuccessEnvelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "BUSINESS_RULE — fachlich nicht zulässig, etwa eine bereits ausgestellte Rechnung ändern.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/traffic": {
+      "get": {
+        "tags": [
+          "Website"
+        ],
+        "summary": "Besuchsauswertung",
+        "description": "Seitenansichten, Sitzungen (je Tab und Zürcher Tag, keine Personen), Einstiegs- und meistbesuchte Seiten, Herkunft, UTM-Quelle/-Medium/-Kampagne, Geräte, Browser und Konversionen mit Rate je Sitzung für einen Zeitraum in Zürcher Tagen; dazu die Grundzahlen des gleich langen Zeitraums davor. Ranglisten höchstens zehn Zeilen, alles je Organisation.\n\n**Zugriff:** Erfordert die Berechtigung: `traffic:read`.\n\n**Rate-Limit-Klasse:** `apiRead`",
+        "operationId": "getTraffic",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "zeitraum",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "heute",
+                "7tage",
+                "30tage",
+                "monat",
+                "quartal",
+                "jahr",
+                "eigen"
+              ],
+              "default": "30tage"
+            }
+          },
+          {
+            "name": "von",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            }
+          },
+          {
+            "name": "bis",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Erfolg",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SuccessEnvelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_ERROR — die Eingabe ist ungültig. `error.details` nennt Feld und Grund.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHORIZED — keine oder abgelaufene Sitzung.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN — angemeldet, aber ohne die nötige Berechtigung.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "RATE_LIMITED — zu viele Anfragen. `Retry-After` nennt die Wartezeit in Sekunden.",
             "content": {
               "application/json": {
                 "schema": {

@@ -36,10 +36,11 @@
  * geschwärzt bleiben.
  */
 
-import { PrismaClient, type Prisma } from '@prisma/client';
+import type { Prisma } from '@prisma/client';
 import { config } from 'dotenv';
 
 import { freitextSchwaerzen, wertSchwaerzen } from '../src/lib/sensitive-fields';
+import { erzeugePrismaClient } from '../src/lib/prisma-client';
 
 config();
 
@@ -47,7 +48,7 @@ const anwenden = process.argv.includes('--anwenden');
 const SEITE = 500;
 
 async function main(): Promise<void> {
-  const prisma = new PrismaClient();
+  const prisma = erzeugePrismaClient();
   let geprueft = 0;
   let betroffen = 0;
   const jeEntitaet = new Map<string, number>();

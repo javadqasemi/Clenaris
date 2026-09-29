@@ -109,14 +109,17 @@ describe('Qualitätskontrolle', () => {
     await requireServer();
     jars = await loginAll();
 
-    const kunden = await get<{ data: { id: string }[] }>('/api/customers?pageSize=1', { jar: jars.admin });
-    assert.equal(kunden.status, 200);
-    kundeId = data(kunden)[0]!.id;
-
-    const objekte = await get<{ data: { id: string; customerId: string }[] }>('/api/properties?pageSize=50', {
+    // Objekt und seine Kundschaft (2026-09-28): Die Liste liefert
+    // `customer.id`; der frühere Vergleich auf `customerId` traf nie, und der
+    // Rückfall nahm das Objekt einer beliebigen Kundschaft.
+    const objekte = await get<{ data: { id: string; customer?: { id: string } | null }[] }>('/api/properties?pageSize=50', {
       jar: jars.admin,
     });
-    objektId = data(objekte).find((o) => o.customerId === kundeId)?.id ?? data(objekte)[0]!.id;
+    assert.equal(objekte.status, 200);
+    const objekt = data(objekte).find((o) => o.customer?.id);
+    assert.ok(objekt?.customer, 'kein Objekt mit Kundschaft im Bestand');
+    objektId = objekt.id;
+    kundeId = objekt.customer.id;
 
     const leistungen = await get<{ data: { id: string }[] }>('/api/services?pageSize=1', { jar: jars.admin });
     leistungId = data(leistungen)[0]!.id;

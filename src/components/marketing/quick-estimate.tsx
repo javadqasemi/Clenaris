@@ -59,33 +59,52 @@ export function QuickEstimate({ services }: { services: QuickEstimateService[] }
   const onRequestOnly = service?.pricingModel === 'ON_REQUEST';
 
   React.useEffect(() => {
+    // Ohne gültige Eingabe gibt es nichts zu rechnen — und eine laufende,
+    // eben abgebrochene Anfrage beendet ihr „wird berechnet" nicht mehr selbst.
     if (!serviceSlug || onRequestOnly) {
       setEstimate(null);
+      setLoading(false);
       return;
     }
 
     const sqm = Number(squareMeters);
     if (!Number.isFinite(sqm) || sqm < 5) {
       setEstimate(null);
+      setLoading(false);
       return;
     }
 
+    /*
+      Der Abbruch erreicht die Anfrage (2026-09-28). Vorher wurde der
+      Controller angelegt und beim nächsten Tastendruck abgebrochen, aber nie
+      an `api.post` übergeben: Kam die Antwort auf „60" nach der auf „500",
+      stand der Preis für 60 m² unter der Eingabe 500 m²
+      (`tests/e2e/preisrechner.browser.spec.ts`). Eine abgebrochene Anfrage
+      setzt jetzt keinen Zustand mehr — auch keine Fehlermeldung, denn sie ist
+      kein Fehler, sondern überholt; Laden und Ergebnis gehören der neueren.
+    */
     const controller = new AbortController();
     const timer = window.setTimeout(async () => {
       setLoading(true);
       setNote(null);
       try {
-        const result = await api.post<EstimateResponse>('/api/public/pricing/estimate', {
-          serviceSlug,
-          squareMeters: Math.round(sqm),
-          postalCode: isValidSwissPostalCode(postalCode) ? postalCode : undefined,
-          frequency: 'ONCE',
-          propertyKind: 'APARTMENT',
-          extras: [],
-        });
+        const result = await api.post<EstimateResponse>(
+          '/api/public/pricing/estimate',
+          {
+            serviceSlug,
+            squareMeters: Math.round(sqm),
+            postalCode: isValidSwissPostalCode(postalCode) ? postalCode : undefined,
+            frequency: 'ONCE',
+            propertyKind: 'APARTMENT',
+            extras: [],
+          },
+          { signal: controller.signal },
+        );
+        if (controller.signal.aborted) return;
         setEstimate(result);
         if (result.notes.length > 0) setNote(result.notes[0]);
       } catch (error) {
+        if (controller.signal.aborted) return;
         setEstimate(null);
         setNote(
           error instanceof ApiError
@@ -93,7 +112,7 @@ export function QuickEstimate({ services }: { services: QuickEstimateService[] }
             : 'Der Preis lässt sich gerade nicht berechnen. Bitte versuchen Sie es erneut.',
         );
       } finally {
-        setLoading(false);
+        if (!controller.signal.aborted) setLoading(false);
       }
     }, 450);
 
