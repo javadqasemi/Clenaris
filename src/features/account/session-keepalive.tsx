@@ -3,6 +3,7 @@
 import * as React from 'react';
 import { Clock } from 'lucide-react';
 
+import { abmeldungBeginnen, abmeldungLaeuftBereits } from '@/lib/api/client';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -128,6 +129,8 @@ export function SessionKeepalive({ idleSeconds }: { idleSeconds: number }) {
     let warnungOffen = false;
 
     const zurAnmeldung = (grund: 'inaktiv' | 'abgelaufen' | 'abgemeldet') => {
+      // Dieses Ziel gilt — keine laufende Abfrage soll mit „abgelaufen" dazwischenspringen.
+      abmeldungBeginnen();
       const here = `${window.location.pathname}${window.location.search}`;
       window.location.assign(`/auth/anmelden?weiter=${encodeURIComponent(here)}&grund=${grund}`);
     };
@@ -160,6 +163,9 @@ export function SessionKeepalive({ idleSeconds }: { idleSeconds: number }) {
     const signOut = async (grund: 'inaktiv' | 'abgemeldet') => {
       if (stopped) return;
       stopped = true;
+      // Schon vor dem Abmeldeaufruf: Sonst schickt eine laufende Abfrage mit
+      // ihrem 401 zur Anmeldung „abgelaufen", im Wettlauf mit dem Ziel hier.
+      abmeldungBeginnen();
       await fetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin' }).catch(() => undefined);
       kanal?.postMessage({ art: 'abgemeldet' } satisfies Nachricht);
       zurAnmeldung(grund);
@@ -228,6 +234,13 @@ export function SessionKeepalive({ idleSeconds }: { idleSeconds: number }) {
       if (event.data?.art === 'aktiv') aktivitaetMerken(event.data.zeit, false);
       if (event.data?.art === 'abgemeldet' && !stopped) {
         stopped = true;
+        // `abmeldungVerbreiten()` öffnet einen eigenen Kanal, und ein
+        // `BroadcastChannel` stellt auch an die anderen Kanäle **desselben**
+        // Tabs zu. Ohne diese Weiche schickte die eigene Nachricht den Tab, der
+        // gerade über das Kontomenü abmeldet, hart zur Anmeldung „abgemeldet" —
+        // im Wettlauf mit seinem Sprung auf die Startseite (2026-09-29,
+        // `tests/e2e/abmelden.spec.ts`). Dieser Tab hat sein Ziel schon.
+        if (abmeldungLaeuftBereits()) return;
         zurAnmeldung('abgemeldet');
       }
     };

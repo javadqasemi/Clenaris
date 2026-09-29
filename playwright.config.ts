@@ -165,6 +165,9 @@ export default defineConfig({
   projects: [
     {
       name: 'chromium',
+      // `*.webkit.spec.ts` gehört allein dem WebKit-Auftrag: Die Fälle laufen
+      // über die HTTPS-Vorschaltung und prüfen genau das (W-02).
+      testIgnore: '**/*.webkit.spec.ts',
       use: {
         browserName: 'chromium',
         /**
