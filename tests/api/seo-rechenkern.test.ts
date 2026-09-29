@@ -145,18 +145,31 @@ describe('Metadaten — seitenMetadaten()', () => {
     assert.equal(meta.description, 'x');
   });
 
-  it('wählt die grosse Twitter-Karte nur mit Bild', () => {
+  // SEO-06 (2026-09-29): Früher hiess „kein gepflegtes Bild" auch „kein
+  // og:image" und die kleine Karte. Seither gilt dann das Standardbild —
+  // die Erwartung „summary ohne Bild" wäre heute die leere Vorschau, die
+  // SEO-06 beseitigt. Geprüft wird deshalb: gepflegtes Bild geht vor,
+  // sonst das Standardbild mit Massen, und die kleine Karte nur, wenn gar
+  // kein Bild gebildet werden kann (keine gültige Herkunft).
+  it('nimmt das gepflegte Vorschaubild, sonst das Standardbild — die grosse Karte nur mit Bild', () => {
     const ohne = seitenMetadaten({ pfad: '/', titel: 'T', beschreibung: 'B' }, HERKUNFT);
-    assert.equal((ohne.twitter as { card?: string }).card, 'summary');
+    assert.equal((ohne.twitter as { card?: string }).card, 'summary_large_image');
+    assert.deepEqual((ohne.openGraph as { images?: unknown }).images, [
+      { url: 'https://www.clenaris.ch/og-standard.png', width: 1200, height: 630, alt: 'Clenaris' },
+    ]);
     const mit = seitenMetadaten({ pfad: '/', titel: 'T', beschreibung: 'B', ogBildUrl: '/bild.jpg' }, HERKUNFT);
     assert.equal((mit.twitter as { card?: string }).card, 'summary_large_image');
     assert.deepEqual((mit.openGraph as { images?: unknown }).images, [{ url: 'https://www.clenaris.ch/bild.jpg' }]);
+    const ohneHerkunft = seitenMetadaten({ pfad: '/', titel: 'T', beschreibung: 'B' }, '');
+    assert.equal((ohneHerkunft.twitter as { card?: string }).card, 'summary');
+    assert.equal((ohneHerkunft.openGraph as { images?: unknown }).images, undefined);
   });
 
-  it('verwirft ein Vorschaubild mit javascript:-Adresse', () => {
+  it('verwirft ein Vorschaubild mit javascript:-Adresse und fällt auf das Standardbild zurück', () => {
     const meta = seitenMetadaten({ pfad: '/', titel: 'T', beschreibung: 'B', ogBildUrl: 'javascript:alert(1)' }, HERKUNFT);
-    assert.equal((meta.openGraph as { images?: unknown }).images, undefined);
-    assert.equal((meta.twitter as { images?: unknown }).images, undefined);
+    const bilder = JSON.stringify([(meta.openGraph as { images?: unknown }).images, (meta.twitter as { images?: unknown }).images]);
+    assert.doesNotMatch(bilder, /javascript/);
+    assert.deepEqual((meta.twitter as { images?: unknown }).images, ['https://www.clenaris.ch/og-standard.png']);
   });
 
   it('setzt noindex mit follow', () => {
