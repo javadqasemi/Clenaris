@@ -388,56 +388,71 @@ export default async function PayrollPage({ searchParams }: { searchParams: Prom
             ) : null
           }
         >
-          <ListCard>
-            <TableScroll>
-              <table className="data-table">
-                <caption className="sr-only">Satzversionen {jahr}</caption>
-                <thead>
-                  <tr>
-                    <th scope="col">Art</th>
-                    <th scope="col">Gültig</th>
-                    <th scope="col" className="text-right">Arbeitnehmende</th>
-                    <th scope="col" className="text-right">Betrieb</th>
-                    <th scope="col">Quelle</th>
-                    <th scope="col">Prüfstand</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {saetze.map((s) => (
-                    <tr key={s.id}>
-                      <td className="font-medium">{ART_BESCHRIFTUNG[s.code]}</td>
-                      <td className="text-muted-foreground">
-                        {formatDate(s.validFrom)} – {s.validUntil ? formatDate(s.validUntil) : 'offen'}
-                      </td>
-                      <td className="num">{toNumber(s.employeePct).toLocaleString('de-CH', { maximumFractionDigits: 4 })} %</td>
-                      <td className="num">{toNumber(s.employerPct).toLocaleString('de-CH', { maximumFractionDigits: 4 })} %</td>
-                      <td className="max-w-xs text-xs text-muted-foreground">{s.source}</td>
-                      <td>
-                        {s.verification === 'GEPRUEFT' ? (
-                          <Badge size="sm" variant="success" title={s.verificationNote ?? undefined}>Geprüft</Badge>
-                        ) : darfVeroeffentlichen ? (
-                          <ActionButton
-                            endpoint={`/api/payroll/rates/${s.id}/verify`}
-                            label="Bestätigen"
-                            confirmTitle={`${ART_BESCHRIFTUNG[s.code]} bestätigen`}
-                            confirm="Sie bestätigen, dass dieser Satz mit der massgebenden Quelle übereinstimmt."
-                            withNote
-                            noteField="note"
-                            noteLabel="Worauf stützt sich die Bestätigung?"
-                            variant="outline"
-                            size="sm"
-                          />
-                        ) : (
-                          <Badge size="sm" variant="warning">Ungeprüft</Badge>
-                        )}
-                        {s.benutzt ? <Badge size="sm" variant="outline" className="ml-1">benutzt</Badge> : null}
-                      </td>
+          {/* Ein Jahr ohne Satzversion (frische Organisation, `?jahr=` rückwärts)
+              zeigte nur die Kopfzeile — wie eine Tabelle, deren Inhalt fehlt. */}
+          {saetze.length === 0 ? (
+            <EmptyState
+              className="m-4"
+              icon={<Wallet aria-hidden />}
+              title={`Keine Beitragssätze für ${jahr}`}
+              description={
+                darfVeroeffentlichen
+                  ? 'Mit „Satzversion" eine gültige Version anlegen.'
+                  : 'Gültige Versionen legt an, wer Lohnsätze veröffentlichen darf.'
+              }
+            />
+          ) : (
+            <ListCard>
+              <TableScroll>
+                <table className="data-table">
+                  <caption className="sr-only">Satzversionen {jahr}</caption>
+                  <thead>
+                    <tr>
+                      <th scope="col">Art</th>
+                      <th scope="col">Gültig</th>
+                      <th scope="col" className="text-right">Arbeitnehmende</th>
+                      <th scope="col" className="text-right">Betrieb</th>
+                      <th scope="col">Quelle</th>
+                      <th scope="col">Prüfstand</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </TableScroll>
-          </ListCard>
+                  </thead>
+                  <tbody>
+                    {saetze.map((s) => (
+                      <tr key={s.id}>
+                        <td className="font-medium">{ART_BESCHRIFTUNG[s.code]}</td>
+                        <td className="text-muted-foreground">
+                          {formatDate(s.validFrom)} – {s.validUntil ? formatDate(s.validUntil) : 'offen'}
+                        </td>
+                        <td className="num">{toNumber(s.employeePct).toLocaleString('de-CH', { maximumFractionDigits: 4 })} %</td>
+                        <td className="num">{toNumber(s.employerPct).toLocaleString('de-CH', { maximumFractionDigits: 4 })} %</td>
+                        <td className="max-w-xs text-xs text-muted-foreground">{s.source}</td>
+                        <td>
+                          {s.verification === 'GEPRUEFT' ? (
+                            <Badge size="sm" variant="success" title={s.verificationNote ?? undefined}>Geprüft</Badge>
+                          ) : darfVeroeffentlichen ? (
+                            <ActionButton
+                              endpoint={`/api/payroll/rates/${s.id}/verify`}
+                              label="Bestätigen"
+                              confirmTitle={`${ART_BESCHRIFTUNG[s.code]} bestätigen`}
+                              confirm="Sie bestätigen, dass dieser Satz mit der massgebenden Quelle übereinstimmt."
+                              withNote
+                              noteField="note"
+                              noteLabel="Worauf stützt sich die Bestätigung?"
+                              variant="outline"
+                              size="sm"
+                            />
+                          ) : (
+                            <Badge size="sm" variant="warning">Ungeprüft</Badge>
+                          )}
+                          {s.benutzt ? <Badge size="sm" variant="outline" className="ml-1">benutzt</Badge> : null}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </TableScroll>
+            </ListCard>
+          )}
         </DetailSection>
       ) : null}
 

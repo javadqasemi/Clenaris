@@ -11,7 +11,35 @@ import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/input';
 import { Label } from '@/components/ui/form';
 import { Badge } from '@/components/ui/badge';
-import { Skeleton } from '@/components/ui/primitives';
+import { Alert, Skeleton } from '@/components/ui/primitives';
+
+/**
+ * Ladefehler in der Nachrichtenakte — für Liste und Verlauf derselbe, nach
+ * dem Muster der Terminwahl (`booking/steps.tsx`): Meldung des Servers, sonst
+ * ein allgemeiner Satz, und ein Knopf, der den Abruf wiederholt.
+ */
+export function NachrichtenLadefehler({
+  titel,
+  fehler,
+  laedt,
+  erneut,
+}: {
+  titel: string;
+  fehler: unknown;
+  laedt: boolean;
+  erneut: () => void;
+}) {
+  return (
+    <Alert variant="destructive" title={titel}>
+      <span className="block">
+        {fehler instanceof ApiError ? fehler.message : 'Bitte prüfen Sie die Verbindung und versuchen Sie es erneut.'}
+      </span>
+      <Button type="button" variant="outline" size="sm" className="mt-3" onClick={erneut} loading={laedt}>
+        Erneut versuchen
+      </Button>
+    </Alert>
+  );
+}
 
 /**
  * Ein Nachrichtenverlauf.
@@ -78,6 +106,20 @@ export function ThreadPanel({
       toast.error(error instanceof ApiError ? error.message : 'Senden fehlgeschlagen.');
     },
   });
+
+  // Vorher stand hier `isLoading || !data` → Skelett. Scheiterte der Abruf
+  // (403, 404, Netz), gab es nie Daten, und das Skelett blieb für immer
+  // stehen — ein Ladezustand, der lügt. Der Fehler kommt deshalb zuerst.
+  if (thread.isError) {
+    return (
+      <NachrichtenLadefehler
+        titel="Der Verlauf konnte nicht geladen werden"
+        fehler={thread.error}
+        laedt={thread.isFetching}
+        erneut={() => void thread.refetch()}
+      />
+    );
+  }
 
   if (thread.isLoading || !thread.data) {
     return <Skeleton className="h-96 rounded-2xl" />;

@@ -8,7 +8,7 @@ import { api, queryKeys } from '@/lib/api/client';
 import { cn, formatRelative } from '@/lib/utils';
 import { Skeleton } from '@/components/ui/primitives';
 import { EmptyState } from '@/components/app/page-parts';
-import { ThreadPanel } from './thread-panel';
+import { NachrichtenLadefehler, ThreadPanel } from './thread-panel';
 
 /**
  * Zweispaltige Nachrichtenakte: links die Verläufe, rechts der gewählte.
@@ -72,6 +72,19 @@ export function ThreadList({
         <Skeleton className="h-64 rounded-2xl" />
         <Skeleton className="h-64 rounded-2xl" />
       </div>
+    );
+  }
+
+  // Ohne diese Weiche zeigte ein gescheiterter Abruf den Leerzustand —
+  // „Noch keine Nachrichten" für jemanden, der welche hat.
+  if (threads.isError) {
+    return (
+      <NachrichtenLadefehler
+        titel="Die Nachrichten konnten nicht geladen werden"
+        fehler={threads.error}
+        laedt={threads.isFetching}
+        erneut={() => void threads.refetch()}
+      />
     );
   }
 
