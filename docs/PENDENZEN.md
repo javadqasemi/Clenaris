@@ -13,6 +13,23 @@ Priorität: **P0** Datenverlust/Sicherheitsbruch jetzt · **P1** falsche Beträg
 Zugriff über Kunden- oder Mandantengrenze, Kernablauf unbenutzbar · **P2**
 Robustheit, Randfall, Verteidigung in der Tiefe · **P3** Pflege.
 
+## PR7 — Umstieg auf Prisma 7.10 (2026-09-29)
+
+Ausgelöst durch eine ungeprüfte Abhängigkeitsänderung im Arbeitsbaum
+(`prisma@^8.0.0-rc.17`, `@prisma/client@^7.10.0`): Der Bau scheiterte, weil die
+Vorabfassung 8 kein `generate` mehr kennt. Entscheid des Eigentümers: auf eine
+stabile Fassung umstellen statt zurück auf 6 — beide Pakete auf **7.10.0**.
+
+| ID | Bereich | Befund | Prio | Status | Beleg / Prüfung | Commit | Extern |
+|---|---|---|---|---|---|---|---|
+| PR7-01 | Datenbank | Prisma 7: Verbindung und Seed aus Schema bzw. `package.json#prisma` nach `prisma.config.ts`; Client nur noch mit Treiberadapter (`@prisma/adapter-pg`) — 17 eigene Konstruktoren durch eine Fabrik ersetzt (`src/lib/prisma-client.ts`) | P1 | CODE COMPLETE | HTTP-Vollreihe auf frisch aufgesetzter Testdatenbank 2453/2455, die zwei Rest-Fälle danach grün (PR7-04); Bau, `migrate deploy`, Seeds, `prisma validate`, Typen, Linter grün | | |
+| PR7-02 | Datenbank | **Zeitpunkte zwei Stunden zu früh gespeichert**: Der Adapter schreibt UTC-Ziffern ohne Versatz und liest jeden Versatz als `+00:00` — er verlangt eine UTC-Sitzung; der Server steht auf `Europe/Berlin`. In JavaScript unsichtbar, in der Datenbank falsch; sofort ausgestellte Rechnungen scheiterten am Positions-Trigger | P0 | CODE COMPLETE | Sitzung mit `TimeZone=UTC` in der Fabrik; `tests/api/datenbank-zeit.test.ts` misst am Client vorbei (vorher rot: 7200 s), zweiter Fall prüft die UTC-Sitzung auch dort, wo der Server UTC läuft | | Entwicklungsdatenbank: 10 Zeilen aus dem Rauchtest vor der Korrektur mit um 2 h zu frühem Zeitpunkt (3 `security_events`, 3 `audit_logs`, 4 `traffic_events`, 2026-09-29 03:00–03:45 UTC) — nicht berichtigt (Protokoll unveränderlich) |
+| PR7-03 | Fehlerabbildung | Prisma 7 meldet verletzte Eindeutigkeit und SQLSTATE nicht mehr in `meta.target`/`meta.code`, sondern unter `meta.driverAdapterError.cause` — der doppelte Strichcode hiess wieder „Artikelnummer vergeben", eine Verklemmung aus roher Abfrage wäre 500 statt 409 geworden | P1 | CODE COMPLETE | `eindeutigkeitsFelder`/`sqlZustand` in `src/lib/db.ts` lesen beide Formen; `scan.test.ts` „Strichcode und Nummern" (war rot) grün | | |
+| PR7-04 | Datenbank | Vertragssperren mit `restrict_violation` (23001): Adapter macht daraus „Fremdschlüssel verletzt" und verwirft die Meldung; über die API hätte es „noch mit anderen Objekten verknüpft" geheissen | P2 | CODE COMPLETE | Migration `20260929090000_vertragssperre_fehlercode` (Funktionen wörtlich, nur `P0001`); `vertraege-integritaet.test.ts` 55/55 mit Nachbarn | | |
+| PR7-05 | Umgebung | Prisma 7 lädt `.env` nicht mehr selbst; Skripte, Seeds und Prüfhelfer verliessen sich darauf (erste Vollreihe: 70× „kein Zugang zur Testdatenbank", 245 Fälle abgebrochen) | P1 | CODE COMPLETE | `dotenv/config` in `prisma.config.ts` und in der Client-Fabrik (überschreibt nichts Gesetztes) | | |
+| PR7-06 | Lieferkette | `prisma@7.10.0` zieht `mysql2@3.15.3` (hoch: Klartext-Anmeldung bei Herabstufung) | P2 | CODE COMPLETE | `overrides.mysql2 = ^3.22.0` → 3.24.4; `security:check` statisch BESTANDEN | | |
+| PR7-07 | Prüfung | Browserreihe (Chromium/Firefox/WebKit) und Stressreihe nach dem Umstieg **nicht** erneut gefahren; `verify:release` ebenso nicht | P1 | OPEN | Serverseitig belegt durch die HTTP-Vollreihe; der Treiberwechsel betrifft den Server, nicht den Browser — trotzdem ungeprüft | | |
+
 ## B — Nachprüfung früherer Befunde (gegen `241d8d5`)
 
 Nicht aus den Berichten übernommen, sondern am Code nachgelesen (drei
