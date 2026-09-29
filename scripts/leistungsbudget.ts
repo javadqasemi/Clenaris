@@ -3,6 +3,7 @@
  *
  *   npx tsx scripts/leistungsbudget.ts                  # JS je Route gegen das Budget
  *   npx tsx scripts/leistungsbudget.ts --html           # dazu HTML je Seite (TEST_BASE_URL)
+ *   npx tsx scripts/leistungsbudget.ts --nur-html       # nur HTML (Prüfweg, vor den Prüfreihen)
  *   npx tsx scripts/leistungsbudget.ts --messen         # nur messen, Tabelle ausgeben
  *
  * `scripts/leistungsmessung.ts` misst Antwortzeiten und sagt ausdrücklich, warum
@@ -110,14 +111,18 @@ async function htmlKb(pfad: string, konto: 'admin' | 'employee' | 'customer' | n
 
 async function main(): Promise<number> {
   const nurMessen = process.argv.includes('--messen');
-  const mitHtml = process.argv.includes('--html');
+  // `--nur-html` (2026-09-29): Der Prüfweg misst das HTML im Schritt mit
+  // laufendem Server, das JavaScript schon direkt nach dem Bau — zweimal
+  // dasselbe JS zu bewerten brächte nichts ausser einer zweiten Fehlerquelle.
+  const nurHtml = process.argv.includes('--nur-html');
+  const mitHtml = nurHtml || process.argv.includes('--html');
   const budget = JSON.parse(readFileSync(BUDGETDATEI, 'utf8')) as Budget;
-  const manifest = manifestLesen();
+  const manifest = nurHtml ? null : manifestLesen();
   const verstoesse: string[] = [];
 
-  console.log('First-Load-JavaScript je Route (gzip, kB)');
-  for (const [anzeige, seite] of Object.entries(ROUTEN)) {
-    const kb = jsKb(manifest, seite);
+  if (manifest) console.log('First-Load-JavaScript je Route (gzip, kB)');
+  for (const [anzeige, seite] of manifest ? Object.entries(ROUTEN) : []) {
+    const kb = jsKb(manifest!, seite);
     if (kb === null) {
       verstoesse.push(`${anzeige}: Seite fehlt im Bau (${seite}) — Route umbenannt? Budget nachführen.`);
       continue;

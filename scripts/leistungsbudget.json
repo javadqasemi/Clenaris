@@ -1,5 +1,5 @@
 {
-  "stand": "2026-09-28 — gemessen am Integrationsbau (Produktion, gzip), Budget = Messung + 10 %, auf 5 kB aufgerundet",
+  "stand": "2026-09-28 — gemessen am Integrationsbau (Produktion, gzip), Budget = Messung + 10 %, auf 5 kB aufgerundet. HTML seit 2026-09-29 (Release-Kandidat): gemessen gegen den Testserver mit gebrauchtem Testbestand (obere Seite des Demobestands), dieselbe Regel.",
   "erlaeuterung": "Budget = gemessener Stand beim Festlegen plus 10 % Spielraum, auf 5 kB aufgerundet. Erhöhen nur mit Begründung im Commit. HTML-Budgets gegen den Testserver (Demobestand), JS-Budgets aus dem Bau.",
   "jsKb": {
     "/": 280,
@@ -20,5 +20,21 @@
     "/portal": 290,
     "/konto": 290
   },
-  "htmlKb": {}
+  "htmlKb": {
+    "/": { "konto": null, "kb": 215 },
+    "/buchen": { "konto": null, "kb": 115 },
+    "/kontakt": { "konto": null, "kb": 145 },
+    "/admin": { "konto": "admin", "kb": 150 },
+    "/admin/kunden": { "konto": "admin", "kb": 135 },
+    "/admin/offerten": { "konto": "admin", "kb": 155 },
+    "/admin/vertraege": { "konto": "admin", "kb": 170 },
+    "/admin/buchungen": { "konto": "admin", "kb": 140 },
+    "/admin/einsaetze": { "konto": "admin", "kb": 185 },
+    "/admin/rechnungen": { "konto": "admin", "kb": 130 },
+    "/admin/personal": { "konto": "admin", "kb": 155 },
+    "/admin/lohn": { "konto": "admin", "kb": 150 },
+    "/portal": { "konto": "employee", "kb": 65 },
+    "/portal/einsaetze": { "konto": "employee", "kb": 140 },
+    "/konto": { "konto": "customer", "kb": 80 }
+  }
 }

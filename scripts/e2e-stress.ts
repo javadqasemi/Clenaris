@@ -55,6 +55,7 @@ interface Laufergebnis {
   bestanden: number;
   fehlgeschlagen: number;
   uebersprungen: number;
+  wackelig: number;
   dauerSekunden: number;
   hydrationsartefakte: number;
   exitcode: number;
@@ -173,7 +174,10 @@ function artefaktzahl(): number {
 function playwrightFahren(): { ausgabe: string; exitcode: number } {
   const ergebnis = spawnSync(
     'npx',
-    ['playwright', 'test', ...(datei ? [datei] : [])],
+    // `--retries=0` ausdrücklich, nicht nur aus der Konfiguration: Eine Reihe,
+    // die als Tor zählt, soll nicht davon abhängen, dass niemand dort einen
+    // Wiederholungswert einträgt.
+    ['playwright', 'test', '--retries=0', ...(datei ? [datei] : [])],
     {
       encoding: 'utf8',
       shell: ueberShell,
@@ -254,6 +258,7 @@ async function main(): Promise<void> {
       bestanden: zaehlen(ausgabe, 'passed'),
       fehlgeschlagen: zaehlen(ausgabe, 'failed'),
       uebersprungen: zaehlen(ausgabe, 'skipped'),
+      wackelig: zaehlen(ausgabe, 'flaky'),
       dauerSekunden: Math.round((Date.now() - start) / 1000),
       hydrationsartefakte: artefaktzahl() - vorher,
       exitcode,
@@ -272,7 +277,14 @@ async function main(): Promise<void> {
   writeFileSync(bericht, JSON.stringify({ port, datei, laeufe, ergebnisse }, null, 2), 'utf8');
   console.log(`\n  Bericht: ${bericht}`);
 
-  const rot = ergebnisse.filter((e) => e.exitcode !== 0);
+  // Rot ist auch ein Lauf mit Exitcode 0, in dem Fälle übersprungen wurden,
+  // wackelten oder Hydrationsartefakte entstanden (2026-09-29, M4): Playwright
+  // endet dann mit 0, und „5/5 grün" wäre eine Aussage über Fälle, die nie
+  // liefen. Ein Lauf ohne einen einzigen bestandenen Fall beweist ebenfalls
+  // nichts.
+  const rot = ergebnisse.filter(
+    (e) => e.exitcode !== 0 || e.uebersprungen > 0 || e.hydrationsartefakte > 0 || e.bestanden === 0 || e.wackelig > 0,
+  );
   if (rot.length > 0) {
     console.log(`\n❌  ${rot.length} von ${laeufe} Läufen rot (Läufe ${rot.map((e) => e.nummer).join(', ')}).`);
     process.exit(1);

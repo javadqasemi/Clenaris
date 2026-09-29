@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 
 import { join } from 'node:path';
 
+import { statusMitPflichtteil } from '../../scripts/security/pflichtabgleich';
 import { bilanzPruefen, browserBilanzPruefen, konfigurierteDateien, testbilanzLesen } from '../../scripts/security/testbilanz';
 
 /**
@@ -153,5 +154,21 @@ describe('Konfigurierte Prüfdateien', () => {
     const { vorhanden, fehlend } = konfigurierteDateien(wurzel, ['tests/api/pruefbilanz.test.ts', 'tests/api/gibt-es-nicht.test.ts']);
     assert.deepEqual(vorhanden, ['tests/api/pruefbilanz.test.ts']);
     assert.deepEqual(fehlend, ['tests/api/gibt-es-nicht.test.ts']);
+  });
+});
+
+// M2 (2026-09-29): `security:check -- --datenbank` ohne Adresse meldete
+// BESTANDEN, nur mit einem Hinweis im Text. Gegen den alten Stand scheitert
+// der zweite Fall.
+describe('Verlangter Datenbankabgleich', () => {
+  it('ohne Verlangen und ohne Befund: bestanden', () => {
+    assert.equal(statusMitPflichtteil([], { verlangt: false, gelaufen: false }), 'BESTANDEN');
+  });
+  it('verlangt, aber nicht gelaufen (keine Adresse): nicht geprüft — nie bestanden', () => {
+    assert.equal(statusMitPflichtteil([{ schwere: 'hinweis' }], { verlangt: true, gelaufen: false }), 'NICHT_GEPRUEFT');
+  });
+  it('verlangt und gelaufen: bestanden; ein blockierender Befund geht in jedem Fall vor', () => {
+    assert.equal(statusMitPflichtteil([], { verlangt: true, gelaufen: true }), 'BESTANDEN');
+    assert.equal(statusMitPflichtteil([{ schwere: 'blockierend' }], { verlangt: true, gelaufen: false }), 'BEFUND');
   });
 });
