@@ -91,6 +91,9 @@ const diagnose = process.env.E2E_DIAGNOSE === '1';
 
 const port = process.env.E2E_PORT?.trim() || (diagnose ? DIAGNOSE_PORT : '3001');
 const baseURL = `http://127.0.0.1:${port}`;
+/** HTTPS-Vorschaltung für WebKit (`scripts/test-https-vorschaltung.ts`, Begründung beim Projekt). */
+const httpsPort = process.env.E2E_HTTPS_PORT?.trim() || '3443';
+const httpsBaseURL = `https://127.0.0.1:${httpsPort}`;
 
 /** Derselbe Vorgabewert wie in `scripts/test-server.ts` und `tests/helpers/rate-limit.ts`. */
 const cacheDir =
@@ -226,10 +229,12 @@ export default defineConfig({
      * als sicheren Ursprung und schicken das Cookie; Playwrights WebKit nicht
      * — nach der Anmeldung leitet jede Seite zurück (gemessen 2026-09-28).
      * `Secure` für die Prüfung abzuschalten hiesse, eine Schutzeinstellung
-     * für den Test aufzuweichen; der richtige Weg ist ein HTTPS-Prüfserver
-     * (offener Punkt W-02). Bis dahin prüft WebKit die öffentlichen Seiten und
-     * die Übernahme von Eingaben vor der Hydration bis zur angenommenen
-     * Anmeldung.
+     * für den Test aufzuweichen. Seit 2026-09-29 spricht WebKit deshalb
+     * **HTTPS** über eine Vorschaltung vor demselben Prüfserver
+     * (`scripts/test-https-vorschaltung.ts`, selbstsigniert, nur hier mit
+     * `ignoreHTTPSErrors`) — wie Safari im Betrieb. Damit fährt WebKit neben
+     * den `*.browser.spec.ts` eine kleine angemeldete Rauchreihe
+     * (`*.webkit.spec.ts`), nicht die ganze Chromium-Reihe.
      */
     {
       name: 'firefox',
@@ -238,23 +243,41 @@ export default defineConfig({
     },
     {
       name: 'webkit',
-      testMatch: '**/*.browser.spec.ts',
-      use: { browserName: 'webkit', viewport: { width: 1366, height: 900 }, deviceScaleFactor: 1 },
+      testMatch: ['**/*.browser.spec.ts', '**/*.webkit.spec.ts'],
+      use: {
+        browserName: 'webkit',
+        viewport: { width: 1366, height: 900 },
+        deviceScaleFactor: 1,
+        baseURL: diagnose ? baseURL : httpsBaseURL,
+        ignoreHTTPSErrors: true,
+      },
     },
   ],
 
-  webServer: {
-    command: diagnose ? 'npm run diagnose:server' : 'npm run test:server',
-    url: `${baseURL}/api/auth/session`,
-    reuseExistingServer: true,
-    timeout: 180_000,
-    // Im Diagnosemodus ist die Serverausgabe Teil des Beweismaterials: Next
-    // schreibt die Hydrationsgegenüberstellung auch dorthin.
-    stdout: diagnose ? 'pipe' : 'ignore',
-    stderr: 'pipe',
-    env: {
-      PORT: port,
-      CLENARIS_TEST_CACHE_DIR: cacheDir,
+  webServer: [
+    {
+      command: diagnose ? 'npm run diagnose:server' : 'npm run test:server',
+      url: `${baseURL}/api/auth/session`,
+      reuseExistingServer: true,
+      timeout: 180_000,
+      // Im Diagnosemodus ist die Serverausgabe Teil des Beweismaterials: Next
+      // schreibt die Hydrationsgegenüberstellung auch dorthin.
+      stdout: diagnose ? 'pipe' : 'ignore',
+      stderr: 'pipe',
+      env: {
+        PORT: port,
+        CLENARIS_TEST_CACHE_DIR: cacheDir,
+      },
     },
-  },
+    {
+      command: 'npx tsx scripts/test-https-vorschaltung.ts',
+      url: `${httpsBaseURL}/api/health`,
+      ignoreHTTPSErrors: true,
+      reuseExistingServer: true,
+      timeout: 60_000,
+      stdout: 'ignore',
+      stderr: 'pipe',
+      env: { E2E_PORT: port, E2E_HTTPS_PORT: httpsPort },
+    },
+  ],
 });
