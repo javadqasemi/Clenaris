@@ -1,6 +1,7 @@
 import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
+import { Prisma } from '@prisma/client';
 import Stripe from 'stripe';
 
 import { BASE_URL, data, del, get, post, requireServer } from '../helpers/client';
@@ -495,6 +496,132 @@ describe('Gescheiterte Rückerstattungen folgen Stripes Stand', () => {
     assert.equal(await erstattet(intent, 3_000, { created: frueh + 30 }), 200);
     assert.deepEqual(await stand(id), { bezahlt: 98.1, offen: 10, status: 'PARTIALLY_PAID' });
     assert.equal(Number((await testDb()!.payment.findFirstOrThrow({ where: { invoiceId: id } })).refundedAmount), 10);
+  });
+});
+
+/**
+ * Monotonie der Rückerstattung (2026-09-29).
+ *
+ * `charge.refunded` trägt Stripes **kumulierten** Stand. Er wächst — ausser
+ * wenn eine Rückerstattung scheitert oder abgebrochen wird, und dafür gibt es
+ * den eigenen Weg über `refund.failed`/`refund.updated` (oben). Deshalb die
+ * Regel, die diese Fälle festhalten: **`charge.refunded` bewegt den Stand nur
+ * nach oben; gesenkt wird er ausschliesslich über den Ausfall.**
+ *
+ * Bis 2026-09-29 übernahm ein *neueres* `charge.refunded` auch einen
+ * kleineren Stand. Zusammen mit dem Ausfallereignis derselben Rückerstattung
+ * wurde dann zweimal gesenkt: 30 + 20 erstattet, 30 scheitert, ein
+ * `charge.refunded` meldet 20 (übernommen), dann `refund.failed` über 30
+ * (nochmals abgezogen) — der Stand fiel auf 0, und die gültige
+ * Rückerstattung über 20 verschwand aus Saldo und Kundenwert.
+ *
+ * Erwartungen in `Prisma.Decimal` gerechnet, nicht in Gleitkomma.
+ */
+describe('Monotonie der Rückerstattung', () => {
+  const D = (wert: string | number) => new Prisma.Decimal(wert);
+  const brutto = D(BRUTTO);
+  const sekunde = () => Math.floor(Date.now() / 1000) - 900;
+
+  it('gleiche Sekunde: kleinerer Stand übergangen, gleicher idempotent, grösserer genau einmal übernommen', async () => {
+    const id = await rechnung();
+    const intent = neueId('pi');
+    const wertVorher = await kundenwert();
+    assert.equal(await bezahlt(id, intent), 200);
+    const s = sekunde();
+
+    assert.equal(await erstattet(intent, 3_000, { created: s }), 200);
+    const nach30 = { bezahlt: brutto.minus(30).toNumber(), offen: 30, status: 'PARTIALLY_PAID' };
+    assert.deepEqual(await stand(id), nach30);
+
+    assert.equal(await erstattet(intent, 1_000, { created: s }), 200, 'kleinerer Stand, gleiche Sekunde');
+    assert.deepEqual(await stand(id), nach30, 'ein kleinerer Stand derselben Sekunde dreht zurück');
+
+    assert.equal(await erstattet(intent, 3_000, { created: s }), 200, 'gleicher Stand, neue Kennung');
+    assert.deepEqual(await stand(id), nach30, 'derselbe Stand ändert nichts');
+
+    const hoeher = neueId('evt');
+    assert.equal(await erstattet(intent, 5_000, { created: s, eventId: hoeher }), 200);
+    assert.equal(await erstattet(intent, 5_000, { created: s, eventId: hoeher }), 200, 'dieselbe Zustellung erneut');
+    assert.equal(await erstattet(intent, 5_000, { created: s }), 200, 'derselbe Stand mit neuer Kennung');
+    assert.deepEqual(await stand(id), { bezahlt: brutto.minus(50).toNumber(), offen: 50, status: 'PARTIALLY_PAID' });
+    assert.equal(D(await kundenwert()).minus(D(wertVorher)).toNumber(), brutto.minus(50).toNumber(), 'der Kundenwert sinkt genau einmal um 50');
+  });
+
+  /*
+    Älter und höher: Ein Stand, der älter ist als der gespeicherte, aber
+    höher, kann nur eine Rückerstattung mitzählen, die inzwischen
+    gescheitert ist (der Stand wächst sonst nur). Er gilt als veraltet — die
+    Entscheidung ist gewollt, nicht zufällig, und hier festgehalten.
+  */
+  it('älteres Ereignis mit höherem Stand wird übergangen — der neuere Stand gilt', async () => {
+    const id = await rechnung();
+    const intent = neueId('pi');
+    assert.equal(await bezahlt(id, intent), 200);
+    const s = sekunde();
+    assert.equal(await erstattet(intent, 1_000, { created: s + 60 }), 200);
+    assert.equal(await erstattet(intent, 3_000, { created: s }), 200, 'älter, aber höher');
+    assert.deepEqual(await stand(id), { bezahlt: brutto.minus(10).toNumber(), offen: 10, status: 'PARTIALLY_PAID' });
+  });
+
+  it('neueres Ereignis mit kleinerem Stand dreht nichts zurück — gesenkt wird nur über den Ausfall, und nur einmal', async () => {
+    const id = await rechnung();
+    const intent = neueId('pi');
+    const wertVorher = await kundenwert();
+    assert.equal(await bezahlt(id, intent), 200);
+    const s = sekunde();
+    const rueckerstattungA = neueId('re');
+
+    // A über 30, B über 20 — Stripe meldet kumuliert 30, dann 50.
+    assert.equal(await erstattet(intent, 3_000, { created: s }), 200);
+    assert.equal(await erstattet(intent, 5_000, { created: s + 30 }), 200);
+    assert.deepEqual(await stand(id), { bezahlt: brutto.minus(50).toNumber(), offen: 50, status: 'PARTIALLY_PAID' });
+
+    // A scheitert. Ein neueres `charge.refunded` meldet schon den gesenkten
+    // Stand 20 — bevor das Ausfallereignis da ist. Es darf nicht senken.
+    assert.equal(await erstattet(intent, 2_000, { created: s + 60 }), 200);
+    assert.deepEqual(
+      await stand(id),
+      { bezahlt: brutto.minus(50).toNumber(), offen: 50, status: 'PARTIALLY_PAID' },
+      'ein neueres charge.refunded mit kleinerem Stand hat zurückgedreht',
+    );
+
+    // Das Ausfallereignis senkt genau um A.
+    assert.equal(await rueckerstattungGeaendert(intent, rueckerstattungA, 3_000, { type: 'refund.failed', erstellt: s, created: s + 61 }), 200);
+    assert.deepEqual(await stand(id), { bezahlt: brutto.minus(20).toNumber(), offen: 20, status: 'PARTIALLY_PAID' }, 'die gültige Rückerstattung B ist verschwunden');
+    const zahlung = await testDb()!.payment.findFirstOrThrow({ where: { invoiceId: id } });
+    assert.equal(Number(zahlung.refundedAmount), 20);
+    assert.equal(D(await kundenwert()).minus(D(wertVorher)).toNumber(), brutto.minus(20).toNumber());
+  });
+
+  it('Zahlung, Rückerstattung, Gutschrift — fester Endstand, und derselbe nach erneuter Zustellung aller Ereignisse', async () => {
+    const id = await rechnung();
+    const intent = neueId('pi');
+    const wertVorher = await kundenwert();
+    const zahlungsEreignis = neueId('evt');
+    const erstattungsEreignis = neueId('evt');
+    const s = sekunde();
+
+    assert.equal(await bezahlt(id, intent, zahlungsEreignis), 200);
+    assert.equal(await erstattet(intent, 3_000, { created: s, eventId: erstattungsEreignis }), 200);
+    const gutschrift = await post(`/api/invoices/${id}/credit-note`, { reason: 'Kulanz Prüfreihe', name: 'Kulanz', unitPrice: 10, vatRate: 8.1 }, { jar: jars.admin });
+    assert.equal(gutschrift.status, 201, gutschrift.text);
+
+    // 108.10 − Gutschrift 10.81 (10 + 8.1 % MWST) − (108.10 − 30) = 19.19 offen.
+    const gutschriftBrutto = D(10).times(D('1.081'));
+    const bezahltErwartet = brutto.minus(30);
+    const offenErwartet = brutto.minus(gutschriftBrutto).minus(bezahltErwartet);
+    const endstand = { bezahlt: bezahltErwartet.toNumber(), offen: offenErwartet.toNumber(), status: 'PARTIALLY_PAID' };
+    assert.deepEqual(await stand(id), endstand);
+    const wertNachher = await kundenwert();
+
+    // Alles noch einmal: dieselben Ereignisse, dazu die Erstattung mit neuer Kennung.
+    assert.equal(await bezahlt(id, intent, zahlungsEreignis), 200);
+    assert.equal(await erstattet(intent, 3_000, { created: s, eventId: erstattungsEreignis }), 200);
+    assert.equal(await erstattet(intent, 3_000, { created: s }), 200);
+    assert.deepEqual(await stand(id), endstand, 'die erneute Zustellung hat den Stand bewegt');
+    assert.equal(await kundenwert(), wertNachher, 'die erneute Zustellung hat den Kundenwert bewegt');
+    assert.equal(await testDb()!.payment.count({ where: { invoiceId: id, providerPaymentId: { not: null } } }), 1);
+    assert.equal(D(wertNachher).minus(D(wertVorher)).toNumber(), bezahltErwartet.toNumber());
   });
 });
 
