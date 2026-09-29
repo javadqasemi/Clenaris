@@ -1,6 +1,7 @@
 # Leistung (Wave 19)
 
-Stand 2026-09-23. Status: **COMPLETE** für die Messung und den einen
+Stand 2026-09-23, Grössenbudgets ergänzt 2026-09-29 (Abschnitt „Grössenbudgets
+als Tor"). Status: **COMPLETE** für die Messung und den einen
 gefundenen Ausreisser; **EXTERNAL VERIFICATION REQUIRED** für jede Aussage
 über die Produktion (andere Maschine, anderes Netz, echter Datenbestand).
 
@@ -96,6 +97,26 @@ Die Indizes der gemessenen Abfragen sind vorhanden (`jobs(organizationId,
 status, scheduledStart)`, `job_assignments(employeeId)`,
 `invoices(organizationId, status, dueDate)`, `customers(organizationId,
 deletedAt)` u. a.); kein Endpunkt braucht serverseitig mehr als 20 ms.
+
+## Grössenbudgets als Tor (seit 2026-09-28 / 2026-09-29)
+
+Die Millisekunden oben bleiben eine Beobachtung. Als **Tor** dienen Grössen,
+weil sie auf jeder Maschine dieselbe Zahl ergeben: `scripts/leistungsbudget.ts`
+gegen `scripts/leistungsbudget.json`, Budget = Messung + 10 %, auf 5 kB
+aufgerundet, Erhöhung nur mit Begründung im Commit.
+
+- **JavaScript je Route** (gzip, aus dem Bau) — seit 2026-09-28 im Prüfweg
+  direkt nach dem Bau (`verify:full`, CI-Stufe „Leistungsbudget").
+- **HTML je Seite** (ungepackt, angemeldet, gegen den Testserver) — seit
+  2026-09-29 im Prüfweg vor den Prüfreihen (`--nur-html`), solange der Bestand
+  der Demobestand ist. Gemessen am Release-Kandidaten mit gebrauchtem
+  Testbestand: Startseite 192 kB, `/buchen` 102 kB, `/admin/vertraege` 153 kB,
+  `/admin/personal` 138 kB, `/admin/einsaetze` 167 kB, `/portal/einsaetze`
+  126 kB (vorher 1.4 MB, siehe oben).
+
+Beobachtung ohne Tor, am selben Tag und auf derselben Maschine (Median aus
+fünf Abrufen nach einer Aufwärmrunde, Client lokal): `/admin/vertraege` 88 ms,
+`/admin/personal` 90 ms, `/buchen` 69 ms.
 
 ## Nicht gemessen
 

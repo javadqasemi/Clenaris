@@ -1,13 +1,26 @@
 # Production V2 — unveränderliches Release-Artefakt (Wave 22)
 
+> **Stand 2026-09-29 (korrigiert).** Der Abschnitt darunter beschreibt den
+> Stand vom 2026-09-23 und ist in einem Punkt überholt: Seit dem
+> Notfallauftrag vom 2026-09-27 (`docs/NOTFALL_WIEDERHERSTELLUNG.md`) **ist**
+> der Artefaktweg der einzige Auslieferungsweg. `deploy.yml` packt nach
+> grünem Prüflauf das Artefakt aus genau diesem Bau (`scripts/release-artefakt.ts`,
+> Schritt „Release-Artefakt packen") und aktiviert es auf dem Server mit
+> `deploy/v2/release-aktivieren.sh`; der Server baut nichts. `scripts/deploy.sh`
+> verweigert die frühere Auslieferung mit Serverbau und bleibt nur für den
+> Rücksprung. Die Auslieferung selbst läuft nur, wenn `DEPLOY_ENABLED` gesetzt
+> ist — die Produktionsinfrastruktur V2 ist **nicht** abgenommen, und auf einem
+> echten Server ist die Aktivierung **nie** ausgeführt worden (externer
+> Nachweis ausstehend).
+
 Stand 2026-09-23. Status: **PARTIAL** — Packen örtlich bewiesen,
-Aktivierung als Entwurf, Pipeline als Vorlage. **Die heutige Auslieferung ist
-unverändert**: `.github/workflows/deploy.yml` (Auftrag `auslieferung`) und
+Aktivierung als Entwurf, Pipeline als Vorlage. Die Auslieferung war damals
+unverändert: `.github/workflows/deploy.yml` (Auftrag `auslieferung`) und
 `scripts/deploy.sh` wurden nicht angefasst, kein Server wurde berührt.
 
 ## 1. Das Problem, das V2 löst
 
-Heute prüft die Pipeline einen Bau — und ausgeliefert wird ein anderer:
+Bis 2026-09-27 prüfte die Pipeline einen Bau — und ausgeliefert wurde ein anderer:
 `deploy.sh` führt auf dem Server `git reset --hard`, `npm ci`, die
 React-Korrektur und `next build` **erneut** aus. Derselbe Commit, aber ein
 zweiter, ungeprüfter Baum. Zusätzlich (Befund dieser Wave):
@@ -33,8 +46,8 @@ npm ci
 | Baustein | Datei | Stand |
 |---|---|---|
 | Packen | `scripts/release-artefakt.ts` | **örtlich geprüft** (Probe, siehe 4) |
-| Aktivieren | `deploy/v2/release-aktivieren.sh` | Entwurf, **nie ausgeführt** (kein Bash hier, kein Server) |
-| Pipeline | `deploy/v2/workflow-ergaenzung.yml` | Vorlage, liegt ausserhalb von `.github/workflows` und läuft nicht |
+| Aktivieren | `deploy/v2/release-aktivieren.sh` | von `deploy.yml` aufgerufen, auf einem echten Server **nie ausgeführt** (externer Nachweis) |
+| Pipeline | `.github/workflows/deploy.yml` (Packen, Ablage, Auslieferung) | seit 2026-09-27 der einzige Weg; `deploy/v2/workflow-ergaenzung.yml` war die Vorlage dazu |
 | Korrektur in CI | `deploy.yml`, Stufe „React-Hydrationskorrektur ist angewendet" | seit Wave 20 in der Prüfstufe |
 
 ### Was das Artefakt enthält — und was nicht
