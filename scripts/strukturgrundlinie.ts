@@ -81,11 +81,17 @@ export function strukturLesen(wurzel: string): Struktur {
   }
 
   // Nur der Block des Katalogs — `PERMISSION_META` weiter unten nennt dieselben Namen noch einmal.
+  //
+  // Gross- **und** Kleinbuchstaben: Sechs Rechte heissen in camelCase
+  // (`jobPosting:*`, `serviceArea:*`). Der erste Entwurf las nur `[a-z_]` und
+  // zählte 240 statt 246 — genau diese sechs wären ohne Meldung verschwunden
+  // (gefunden 2026-09-29 beim Abgleich mit einer früheren Zählung).
+  // `strukturgrundlinie.test.ts` vergleicht die Lesung mit dem Laufzeitkatalog.
   const katalog = readFileSync(join(wurzel, 'src', 'lib', 'auth', 'permissions.ts'), 'utf8');
   const anfang = katalog.indexOf('export const PERMISSIONS = [');
   const ende = katalog.indexOf('] as const', anfang);
   if (anfang < 0 || ende < 0) throw new Error('Berechtigungskatalog `PERMISSIONS = [ … ] as const` nicht gefunden.');
-  const berechtigungen = [...katalog.slice(anfang, ende).matchAll(/'([a-z_]+:[a-z_]+)'/g)].map((m) => m[1]!);
+  const berechtigungen = [...katalog.slice(anfang, ende).matchAll(/'([A-Za-z0-9_]+:[A-Za-z0-9_]+)'/g)].map((m) => m[1]!);
 
   const migrationsordner = join(wurzel, 'prisma', 'migrations');
   const migrationen = readdirSync(migrationsordner).filter((n) => statSync(join(migrationsordner, n)).isDirectory());

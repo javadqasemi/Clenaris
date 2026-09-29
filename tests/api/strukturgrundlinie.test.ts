@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 
 import { join } from 'node:path';
 
+import { PERMISSIONS } from '../../src/lib/auth/permissions';
 import { navigationszieleLesen, strukturLesen, strukturVergleichen, type Struktur } from '../../scripts/strukturgrundlinie';
 
 /**
@@ -58,6 +59,16 @@ describe('Strukturelle Grundlinie', () => {
       seiten,
     );
     assert.deepEqual(befund.fehler, ['Navigationsziel ohne Seite: /admin/verschwunden (layout.tsx)']);
+  });
+
+  // 2026-09-29: Die Lesung sah nur `[a-z_]` und verlor die sechs camelCase-
+  // Rechte (`jobPosting:*`, `serviceArea:*`) — 240 statt 246. Gegen den
+  // Laufzeitkatalog verglichen, nicht gegen eine feste Zahl.
+  it('liest den Berechtigungskatalog vollständig — dieselbe Menge wie PERMISSIONS zur Laufzeit', () => {
+    const struktur = strukturLesen(join(__dirname, '..', '..'));
+    assert.deepEqual(struktur.berechtigungen, [...new Set(PERMISSIONS)].sort());
+    assert.ok(struktur.berechtigungen.includes('jobPosting:create'));
+    assert.ok(struktur.berechtigungen.includes('serviceArea:update'));
   });
 
   it('liest den echten Bestand: Katalog, Endpunkte, Migrationen und Navigation sind nicht leer', () => {
