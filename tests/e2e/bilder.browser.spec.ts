@@ -215,7 +215,16 @@ test.describe('Bilder der Website', () => {
         löste sofort auf, weil die Seite den Zustand schon einmal erreicht
         hatte, und in WebKit über HTTPS traf das Neuladen einen Vorabruf, der
         erst beim Durchscrollen der Bilder begonnen hatte.
+
+        Und erst, wenn das Cookie-Banner steht (2026-09-29, Stresslauf 4 von 5
+        auf dem Release-Kandidaten): Es öffnet 800 ms nach dem Laden
+        (`cookie-banner.tsx`) und ruft dabei seinen Link `/legal/cookies` vorab
+        ab. Die Ruhepause von 500 ms konnte davor liegen; das Neuladen traf dann
+        den Vorabruf, und WebKit meldete „Failed to fetch RSC payload for
+        …/legal/cookies … Load failed". Das Banner gehört zur Seite — wie in
+        `helpers/axe.ts` wird darauf gewartet, die Meldung bleibt ungefiltert.
       */
+      await page.locator('[role="dialog"][aria-labelledby="cookie-title"]').waitFor({ state: 'visible', timeout: 10_000 });
       await verkehr.ruhig();
       await page.reload();
       alleGeladen(await bilderPruefen(page), `${pfad} neu geladen`);
