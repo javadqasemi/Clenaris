@@ -4,7 +4,7 @@ import sharp from 'sharp';
 import { BASE_URL, data, patch, post } from '../helpers/client';
 import { testDb } from '../helpers/testdb';
 import { test, expect } from './helpers/basis';
-import { konsoleUeberwachen } from './helpers/browser';
+import { anfragenVerfolgen, konsoleUeberwachen } from './helpers/browser';
 import { frischAnmelden } from './helpers/bestand';
 
 /**
@@ -187,6 +187,7 @@ test.describe('Bilder der Website', () => {
     test(`${pfad}: leerer Zwischenspeicher, dann Neuladen — jedes Bild dekodiert und sichtbar`, async ({ page, context }) => {
       const konsole = konsoleUeberwachen(page);
       const fehlgeschlagen = bildantwortenBeobachten(context);
+      const verkehr = anfragenVerfolgen(page);
 
       await page.goto(pfad);
       const kalt = await bilderPruefen(page);
@@ -209,8 +210,13 @@ test.describe('Bilder der Website', () => {
         Zeitpunkt mit schnellem Server nicht zu treffen (Pendenz W-08). Die
         Meldung wird nicht gefiltert — geprüft werden hier Bilder, und ein
         Mensch lädt eine fertige Seite neu.
+
+        Seit 2026-09-29 über `anfragenVerfolgen` statt `networkidle`: Das
+        löste sofort auf, weil die Seite den Zustand schon einmal erreicht
+        hatte, und in WebKit über HTTPS traf das Neuladen einen Vorabruf, der
+        erst beim Durchscrollen der Bilder begonnen hatte.
       */
-      await page.waitForLoadState('networkidle');
+      await verkehr.ruhig();
       await page.reload();
       alleGeladen(await bilderPruefen(page), `${pfad} neu geladen`);
 
