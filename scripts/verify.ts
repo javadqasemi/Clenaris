@@ -37,12 +37,13 @@
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { appendFileSync, cpSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { basename, join, resolve } from 'node:path';
 
 import { config } from 'dotenv';
 
 import { databaseNameOf, istTestdatenbank } from '../prisma/seed-guard';
 
+import { abzugsbefundeSichern } from './security/befundsicherung';
 import { bilanzPruefen, browserBilanzPruefen, testbilanzLesen, type BrowserZahlen } from './security/testbilanz';
 
 config();
@@ -409,6 +410,13 @@ async function release(optionen: { stress: boolean }): Promise<void> {
   const ziel = mkdtempSync(join(tmpdir(), 'clenaris-release-'));
   const quelle = join(ziel, 'quelle');
   const aufraeumen = () => {
+    // Erst sichern, dann entfernen (RC-20): Mit dem Abzug verschwanden die
+    // Spur eines roten Laufs und das Protokoll, auf das die Ausgabe zeigt.
+    // `hydrationsbefunde/` ist nicht verfolgt — die Ablage stört weder den
+    // Arbeitsbaum noch den nächsten Release-Lauf.
+    const ablage = join(WURZEL, 'hydrationsbefunde', `release-${basename(ziel)}`);
+    const gesichert = abzugsbefundeSichern(quelle, ablage);
+    if (gesichert.length > 0) console.log(`\n   Beweise des Release-Laufs gesichert: ${ablage}`);
     spawnSync(`${git} worktree remove --force "${quelle}"`, { shell: true, cwd: WURZEL, stdio: 'ignore' });
     rmSync(ziel, { recursive: true, force: true });
   };

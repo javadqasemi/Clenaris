@@ -50,6 +50,8 @@ import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { existsSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
+import { laufspurenSichern } from './security/befundsicherung';
+
 interface Laufergebnis {
   nummer: number;
   bestanden: number;
@@ -248,9 +250,14 @@ async function main(): Promise<void> {
      */
     if (exitcode !== 0) {
       mkdirSync(artefakte, { recursive: true });
-      const protokoll = join(artefakte, `stress-lauf-${nummer}-${Date.now()}.log`);
+      const marke = `stress-lauf-${nummer}-${Date.now()}`;
+      const protokoll = join(artefakte, `${marke}.log`);
       writeFileSync(protokoll, ausgabe, 'utf8');
       console.log(`\n  Vollständige Ausgabe des roten Laufs: ${protokoll}`);
+      // Die Ausgabe allein reichte nicht (RC-20): Sie nennt die Spur nur mit
+      // ihrem Pfad in `test-results/`, und den leert der nächste Lauf.
+      const spuren = laufspurenSichern(join(process.cwd(), 'test-results'), join(artefakte, marke));
+      if (spuren) console.log(`  Spuren, Bildschirmfotos und Fehlerkontext des roten Laufs: ${spuren}`);
     }
 
     ergebnisse.push({
