@@ -491,12 +491,35 @@ async function voll(optionen: { frisch: boolean }): Promise<void> {
   // Tor, das nicht zufällig rot wird (Begründung in `leistungsbudget.ts`).
   schritt('Leistungsbudget (JavaScript je Route)', 'npx tsx scripts/leistungsbudget.ts');
   if (optionen.frisch) {
+    /*
+      `release-artefakt.ts` ruft git ohne Shell auf (`execFileSync`) und sucht
+      es nur unter `GIT_BIN` oder als blosses `git` im Pfad. Auf dem
+      Entwicklungsrechner dieses Projekts liegt git aber nicht im Pfad
+      (CLAUDE.md), und `.env` setzt kein `GIT_BIN`: Der Schritt scheiterte
+      dort beim ersten `git rev-parse HEAD` mit ENOENT, und mit ihm jeder
+      `verify:full --frisch`, `verify:release:core` und `verify:release`.
+      Gerade `verify:release` läuft örtlich und nicht in CI — ein Tor, das
+      auf der einzigen Maschine, auf der es läuft, nie grün werden kann, ist
+      keines.
+
+      Deshalb reicht der Prüfweg das git weiter, das er selbst schon findet
+      (`gitBefehl`, samt Rückfall auf GitHub Desktop), statt dass jedes
+      Skript eine eigene Suche mitbringt und die beiden auseinanderlaufen.
+      Ein von aussen gesetztes `GIT_BIN` geht vor. Die Anführungszeichen,
+      die `gitBefehl` für die Shell um einen Pfad mit Leerzeichen setzt,
+      müssen weg: `execFileSync` nimmt den Pfad wörtlich, und mit
+      Anführungszeichen wäre er wieder „nicht gefunden“.
+    */
+    const gitFuerProbe = process.env.GIT_BIN?.trim() || gitBefehl()?.replace(/^"(.*)"$/, '$1');
+    if (!gitFuerProbe) abbrechen('git nicht gefunden — das Probeartefakt braucht Commit und Zustand des Arbeitsbaums.');
     const probe = mkdtempSync(join(tmpdir(), 'clenaris-probeartefakt-'));
     // Über `exit` statt `finally`: Scheitert der Schritt, endet der Prozess in
     // `abbrechen` mit `process.exit`, und ein `finally` liefe nie.
     const probeEntfernen = () => rmSync(probe, { recursive: true, force: true });
     process.once('exit', probeEntfernen);
-    schritt('Probeartefakt ohne Demo-Kennzeichen (Stolperdraht)', `npx tsx scripts/release-artefakt.ts --ausgabe "${probe}" --ohne-module --unsauber`);
+    schritt('Probeartefakt ohne Demo-Kennzeichen (Stolperdraht)', `npx tsx scripts/release-artefakt.ts --ausgabe "${probe}" --ohne-module --unsauber`, {
+      env: { GIT_BIN: gitFuerProbe },
+    });
     probeEntfernen();
   }
   schritt('Demodaten (idempotent)', 'npm run db:seed:demo', { env: dbEnv });
