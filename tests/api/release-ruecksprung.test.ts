@@ -509,6 +509,14 @@ describe('Umschalten — reine Bausteine', () => {
     }
   });
 
+  /**
+   * `CLENARIS_TEST_CACHE_DIR` steht mit Absicht in der Eingabe: Die Variable
+   * schaltet einen Produktionsbau auf den Testprüfer für Dateien, auf
+   * Dateizähler für Rate-Limits und einen Dateipostausgang um
+   * (`src/lib/security/malware/index.ts`). Aus einer SSH-Sitzung darf sie nie
+   * in die Produktion gelangen — die Positivliste lässt sie deshalb gar nicht
+   * erst durch, statt sich auf eine Sperrliste zu verlassen.
+   */
   it('pm2Umgebung: nie APP_VERSION, GITHUB_*, CLENARIS_PRUEF_* — und nur, was pm2 braucht', () => {
     const umgebung = pm2Umgebung(
       {
@@ -517,6 +525,8 @@ describe('Umschalten — reine Bausteine', () => {
         APP_VERSION: 'b'.repeat(40),
         GITHUB_SHA: 'c'.repeat(40),
         CLENARIS_PRUEF_RELEASE_MANIFEST: '/tmp/fremd.json',
+        CLENARIS_TEST_CACHE_DIR: '/tmp/pruefreihe',
+        CLENARIS_UMGEBUNG: 'test',
         DATABASE_URL: 'postgresql://irgendwo/fremd',
         PM2_APP_NAME: 'clenaris',
       },
