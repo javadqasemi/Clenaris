@@ -1,7 +1,7 @@
 import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { request as httpRequest } from 'node:http';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -266,6 +266,16 @@ const GUTE_UMGEBUNG = {
  */
 const ARTEFAKT = pruefVerzeichnis();
 const OHNE_MANIFEST = pruefVerzeichnis({ manifest: null });
+/*
+  `.env.example` in beide Verzeichnisse: Der Fall „als Kindprozess" läuft mit
+  dem Release-Verzeichnis als Arbeitsverzeichnis, und `beispielwerte()` liest
+  `.env.example` von dort. Ohne die Kopie verglich der Kindprozess seit dem
+  Umzug aus `WURZEL` gegen eine leere Liste — der Abgleich mit den
+  Beispielwerten lief als Prozess nirgends mehr, und ein Fehler beim Lesen der
+  Datei fiele keinem Fall auf (die reinen Fälle reichen eine leere Liste
+  herein). Die Kopie stellt den Stand vor dem Umzug wieder her.
+*/
+for (const d of [ARTEFAKT, OHNE_MANIFEST]) copyFileSync(join(WURZEL, '.env.example'), join(d, '.env.example'));
 after(() => {
   for (const d of [ARTEFAKT, OHNE_MANIFEST]) rmSync(d, { recursive: true, force: true });
 });
@@ -428,6 +438,10 @@ describe('Produktionsvorprüfung (rein)', () => {
     // Die Vorprüfung liest `RELEASE.json` und `.next/BUILD_ID` von dort.
     // Der dritte Fall zeigt dasselbe wie oben als Prozess: Ohne Manifest
     // rettet auch ein gesetztes APP_VERSION den Start nicht mehr.
+    // Anders als auf dem Server liegt hier `.env.example` bei (siehe oben):
+    // Das Artefakt schliesst jede `.env*` aus, dort greift allein das
+    // Platzhaltermuster in `istBekannterWert` — es erkennt heute jeden
+    // Beispielwert der Datei, der Abgleich ist die zweite Sicherung.
     for (const [env, erwartet, cwd] of [
       [GUTE_UMGEBUNG, 3, ARTEFAKT],
       [{ ...GUTE_UMGEBUNG, ALLOW_DEMO_SEED: 'ja', TRUSTED_PROXY_MODE: 'CLOUDFLARE', JWT_SECRET: 'zu-kurz-marker' }, 1, ARTEFAKT],
