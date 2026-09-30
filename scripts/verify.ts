@@ -535,6 +535,14 @@ async function voll(optionen: { frisch: boolean }): Promise<void> {
 }
 
 /**
+ * Die Aufräumarbeit des Release-Abzugs, solange sie aussteht. Sie läuft
+ * **vor** der Schlussmeldung (in `main`), damit die Aussage des Laufs die
+ * letzte Zeile bleibt — und als Rückfall beim Prozessende, wenn ein Schritt
+ * mit `process.exit` abbricht.
+ */
+let abzugAufraeumen: (() => void) | null = null;
+
+/**
  * Release: derselbe volle Weg, aber aus einem sauberen Abzug des aktuellen
  * Commits und auf einer frischen Testdatenbank. Ein Bau, der nur im
  * Arbeitsbaum gelingt — wegen einer nicht eingecheckten Datei, eines
@@ -550,9 +558,8 @@ async function voll(optionen: { frisch: boolean }): Promise<void> {
  * genauso sauber — nur eingecheckte Dateien, keine örtlichen Reste, kein
  * gemeinsamer `node_modules` oder `.next` —, und git funktioniert darin.
  * Er wird am Ende wieder entfernt, auch nach einem Fehlschlag.
- */
-/**
- * Release in zwei Teilen (2026-09-29, M4):
+ *
+ * **In zwei Teilen** (2026-09-29, M4):
  *
  *   verify:release:core    Kern — sauberer Abzug, frische Datenbank, voller Prüfweg
  *   verify:release:stress  Stressreihe (5 Browserläufe, je frischer Server) auf einem vorhandenen Bau
@@ -566,15 +573,6 @@ async function voll(optionen: { frisch: boolean }): Promise<void> {
  * meldet „RELEASE BESTANDEN“ und schreibt den Nachweis
  * (`pruefweg-abschluss.ts`).
  */
-
-/**
- * Die Aufräumarbeit des Release-Abzugs, solange sie aussteht. Sie läuft
- * **vor** der Schlussmeldung (in `main`), damit die Aussage des Laufs die
- * letzte Zeile bleibt — und als Rückfall beim Prozessende, wenn ein Schritt
- * mit `process.exit` abbricht.
- */
-let abzugAufraeumen: (() => void) | null = null;
-
 async function release(modus: 'release' | 'release-kern'): Promise<void> {
   const git = gitBefehl();
   if (!git) abbrechen('git nicht gefunden — ohne Worktree kein sauberer Abzug.');
@@ -615,7 +613,7 @@ async function release(modus: 'release' | 'release-kern'): Promise<void> {
   // und wird dort mitgesichert, auch wenn die Reihe rot endet.
   const stressBericht = join(quelle, 'test-results', 'stress-bericht.json');
   stressreihe(quelle, stressBericht);
-  nachweisAblegen({ git, quelle, ablage, start, kernBilanz, stressBericht });
+  nachweisAblegen({ modus, git, quelle, ablage, start, kernBilanz, stressBericht });
 }
 
 function stressreihe(cwd: string, bericht?: string): void {
@@ -644,8 +642,25 @@ function jsonLesen<T>(pfad: string): T | null {
  * es nicht fünf grüne Stressläufe, fehlt einer Engine jeder bestandene
  * Fall —, bricht der Release-Weg ab, obwohl jeder Schritt einzeln grün war:
  * Ein „RELEASE BESTANDEN“ ohne Datei, die es trägt, gibt es nicht.
+ *
+ * Der Modus kommt vom Aufrufer durch und steht nicht fest auf `release`:
+ * Erst so greift die Sperre in `releaseNachweisSchreiben` („ein Teilweg
+ * hinterlässt nie eine Datei, die wie ein Nachweis aussieht“) auch an der
+ * einzigen Stelle, an der tatsächlich geschrieben wird. Heute erreicht
+ * `release-kern` diese Funktion nicht, weil `release()` vorher zurückkehrt;
+ * rückt jemand diese Rückkehr einmal nach hinten, schriebe ein fester Modus
+ * still einen Nachweis für einen Lauf ohne Stressreihe. Mit dem echten
+ * Modus endet derselbe Fehler laut („nicht geschrieben“).
  */
-function nachweisAblegen(a: { git: string; quelle: string; ablage: string; start: Date; kernBilanz: string; stressBericht: string }): void {
+function nachweisAblegen(a: {
+  modus: 'release' | 'release-kern';
+  git: string;
+  quelle: string;
+  ablage: string;
+  start: Date;
+  kernBilanz: string;
+  stressBericht: string;
+}): void {
   const beginn = Date.now();
   const commit = (spawnSync(`${a.git} rev-parse HEAD`, { shell: true, cwd: a.quelle, encoding: 'utf8' }).stdout ?? '').trim();
   const dist = process.env.NEXT_DIST_DIR?.trim() || '.next';
@@ -663,8 +678,8 @@ function nachweisAblegen(a: { git: string; quelle: string; ablage: string; start
     ergebnisse.push({ schritt: 'Release-Nachweis', ok: false, dauerMs: Date.now() - beginn, hinweis: 'nicht belegt' });
     abbrechen(`Release-Nachweis nicht belegt: ${ergebnis.gruende.join(' ')}`);
   }
-  const pfad = releaseNachweisSchreiben('release', join(a.quelle, 'test-results'), ergebnis.nachweis);
-  if (!pfad) abbrechen('Release-Nachweis nicht geschrieben.');
+  const pfad = releaseNachweisSchreiben(a.modus, join(a.quelle, 'test-results'), ergebnis.nachweis);
+  if (!pfad) abbrechen(`Release-Nachweis nicht geschrieben — Modus „${a.modus}“; einen Nachweis schreibt nur der Gesamtweg (verify:release).`);
   ergebnisse.push({
     schritt: 'Release-Nachweis',
     ok: true,
