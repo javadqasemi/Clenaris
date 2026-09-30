@@ -4,14 +4,31 @@
 #
 # Ein Push auf `main` durchläuft zwei Aufträge:
 #
-#   qualitaet      Linter, Typen, Dokumentation, Build, vollständige Testreihe,
-#                  danach das Release-Artefakt aus genau diesem Bau (mit SHA-256)
-#   auslieferung   Artefakt auf den Server, `deploy/v2/release-aktivieren.sh`,
-#                  Health Check — kein Bau, kein `npm ci`, kein `git pull` dort
-#                  (Notfallauftrag 2026-09-27, Phase 8)
+#   qualitaet      Linter, Typen, Dokumentation, Schema und Datenbankschranken,
+#                  Build, **dann sofort** das Release-Artefakt aus genau diesem
+#                  Bau (mit SHA-256) — und erst danach die vollständige
+#                  Testreihe gegen denselben Bau
+#   auslieferung   Artefakt auf den Server, `deploy/v2/release-aktivieren.sh`
+#                  **aus dem Artefakt selbst**, Identitätsprüfung von aussen —
+#                  kein Bau, kein `npm ci`, kein `git pull` dort
+#                  (Notfallauftrag 2026-09-27, Phase 8; Vertrag C3 seit 2026-09-30)
 #
 # Der zweite läuft nur, wenn der erste vollständig grün ist. Es gibt keinen
 # Weg, die Prüfung zu überspringen — das ist der Zweck der Trennung.
+#
+# Dazu ein dritter, nur von Hand ausgelöster Auftrag:
+#
+#   reproduzierbarkeit   denselben Commit zweimal bauen und die Bäume
+#                        vergleichen (`scripts/bau-vergleich.ts`)
+#
+# Neben `auslieferung` gibt es einen zweiten Weg in die Produktion: den
+# Release-Ausführer (`deploy/v2/release-ausfuehrer.yml`), der Termine aus dem
+# Release Center abarbeitet. Beide Wege bleiben (Entscheid der Betreiberin,
+# 2026-09-30) — und beide folgen **demselben** Vertrag: Aktivierungsskript aus
+# dem geprüften Archiv, erwartete Summe als Pflichtargument, Erfolg nur bei
+# bestätigter Identität (Commit, Build-ID, `belegt`), und eine gemeinsame
+# Nebenläufigkeitsgruppe, damit nie zwei Aktivierungen zugleich laufen.
+# `tests/api/release-ausfuehrer-vorlage.test.ts` hält beide Seiten fest.
 #
 # Warum die Testreihe hier so aufwendig ist: Die Prüfungen dieses Projekts
 # fahren die **laufende Anwendung über echtes HTTP** an (siehe `tests/README.md`).
@@ -20,6 +37,11 @@
 # gestarteten Produktionsbuild. Ein Workflow, der nur `npm test` aufruft,
 # scheitert sofort mit «Kein Server erreichbar» — und wer daraufhin die Tests
 # aus der Pipeline nimmt, hat die Pipeline abgeschafft, nicht repariert.
+#
+# Nirgends in dieser Datei steht ein Ausdruck in doppelten geschweiften
+# Klammern innerhalb eines `run:`-Blocks. GitHub setzt solche Ausdrücke
+# **vor** der Shell in den Skripttext ein: Enthält der Wert ein `"` oder
+# `$(…)`, ist er Code. Werte erreichen die Skripte deshalb nur über `env:`.
 
 name: Auslieferung
 
@@ -45,20 +67,23 @@ on:
   # Ohne Eingaben seit 2026-09-27. Hier standen `seed` (Konfigurations-Seed
   # auf dem Server) und `skip_rollback`. Beides gehörte zu `scripts/deploy.sh`,
   # das auf dem Server baute; die Aktivierung eines Artefakts seedet nicht und
-  # springt bei fehlgeschlagenem Health Check immer zurück. Die Ersteinrichtung
-  # eines Servers (erstes Verwaltungskonto) ist ein bewusster Handgriff
-  # (`scripts/create-admin.ts`), kein Häkchen in einem Formular.
+  # springt bei fehlgeschlagener Identitätsprüfung immer zurück. Die
+  # Ersteinrichtung eines Servers (erstes Verwaltungskonto) ist ein bewusster
+  # Handgriff (`scripts/create-admin.ts`), kein Häkchen in einem Formular.
   workflow_dispatch:
 
-# Zwei Auslieferungen gleichzeitig zögen sich auf dem Server den Arbeitsbaum
-# gegenseitig weg. Für `main` deshalb `cancel-in-progress: false`: Ein
-# *abgebrochener* Lauf liesse den Server in einem halben Zustand zurück — der
-# zweite wartet.
+# Zwei Läufe desselben Zweigs gleichzeitig prüften gegeneinander. Für `main`
+# deshalb `cancel-in-progress: false`: Ein *abgebrochener* Lauf liesse eine
+# Auslieferung in einem halben Zustand zurück — der zweite wartet.
 #
 # Für einen Pull Request gilt das Gegenteil. Dort berührt niemand einen
 # Server, und wer zweimal hintereinander pusht, will die Meinung zum neuen
 # Stand, nicht zum alten. Ein laufender Lauf auf einem überholten Stand kostet
 # nur Wartezeit.
+#
+# Der Auftrag `auslieferung` gehört **zusätzlich** zur Gruppe
+# `clenaris-auslieferung-production`, die er mit dem Release-Ausführer teilt
+# (siehe dort).
 concurrency:
   group: auslieferung-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -75,13 +100,43 @@ jobs:
   # =========================================================================
   #  1) Qualitätstor
   # =========================================================================
+  #
+  # Die Reihenfolge ist seit 2026-09-30 eine Aussage, keine Gewohnheit:
+  #
+  #   npm ci → statische Prüfungen → Stückliste
+  #     → Migrationen → Datenbankschranken
+  #     → Konfigurations-Seed → Build → Leistungsbudget
+  #     → Artefakt packen                    (vor jedem Serverstart)
+  #     → Demo-Seed → Testserver → Prüfreihen
+  #     → Artefakt ablegen                   (nur Push/Dispatch auf main)
+  #
+  # Drei Regeln stecken darin, und jede verhindert einen bestimmten Fehler:
+  #
+  #  • **Der Bau sieht nur Konfiguration, keine Demodaten.** Die öffentliche
+  #    Website wird beim Bau aus der Datenbank vorgerendert. Lag der Demo-Seed
+  #    vorher im Bestand, landeten Demokundschaft und Demotexte im Bündel —
+  #    und damit im Artefakt, das in die Produktion geht. `release-artefakt.ts`
+  #    verweigert ein solches Artefakt; hier entsteht es gar nicht erst.
+  #  • **Gepackt wird vor dem ersten Serverstart.** Der gestartete Prüfserver
+  #    schreibt in `.next` (neu gerenderte Seiten, jetzt mit Demodaten), und
+  #    ein danach gepacktes Artefakt enthielte, was die Prüfreihe dort
+  #    hinterlassen hat. Vorher gepackt ist es genau die Ausgabe des Baus.
+  #    Abgelegt wird es trotzdem erst nach grünen Prüfreihen: Ein Artefakt
+  #    aus einem roten Lauf gibt es nicht.
+  #  • **Kein Build-Zwischenspeicher.** Hier stand bis 2026-09-30
+  #    `actions/cache` für `.next/cache`, geschlüsselt über Sperrdatei und
+  #    `src/**/*.ts(x)` mit Rückfall auf ältere Stände. Das ausgelieferte
+  #    Bündel hing damit auch von einem früheren Lauf ab — Zustand, den kein
+  #    Commit beschreibt —, und der Schlüssel übersah Konfiguration, `public/`
+  #    und das Schema. Ein Artefakt muss aus dem Commit allein entstehen; die
+  #    paar Minuten Bauzeit sind der Preis dafür.
   qualitaet:
     name: Prüfung
     runs-on: ubuntu-latest
     # 45 statt 30 seit 2026-09-27: Das Release-Artefakt (mit `node_modules`)
-    # wird jetzt in diesem Auftrag gepackt und abgelegt. Die Läufe davor
-    # dauerten 22–26 Minuten; mit Packen und Hochladen wäre 30 knapp, und ein
-    # Abbruch an der Zeitgrenze sähe aus wie ein roter Test.
+    # wird in diesem Auftrag gepackt und abgelegt. Die Läufe davor dauerten
+    # 22–26 Minuten; mit Packen und Hochladen wäre 30 knapp, und ein Abbruch
+    # an der Zeitgrenze sähe aus wie ein roter Test.
     timeout-minutes: 45
 
     services:
@@ -124,9 +179,9 @@ jobs:
       # Bewusst `development` für den Auftrag, nicht `production`: Der Seed
       # verweigert in der Produktion den Dienst, solange kein eigenes
       # Startpasswort gesetzt ist (siehe `prisma/seed.ts`) — richtig auf einem
-      # echten System, hinderlich für Demodaten in einer Wegwerf-Datenbank.
-      # Der Build (Stufe „Build", eigene `env`) und der gestartete Server
-      # (`NODE_ENV=production npx next start`) setzen `production` ausdrücklich.
+      # echten System, hinderlich für eine Wegwerf-Datenbank. Der Build (Stufe
+      # „Build", eigene `env`) und der gestartete Server
+      # (`scripts/test-server.ts`) setzen `production` ausdrücklich.
       NODE_ENV: development
       NEXT_TELEMETRY_DISABLED: '1'
 
@@ -157,6 +212,8 @@ jobs:
         with:
           node-version-file: .nvmrc
           # Zwischenspeicher für `~/.npm`, geschlüsselt über package-lock.json.
+          # Anders als der frühere `.next/cache` ändert er nichts am Ergebnis:
+          # `npm ci` prüft jedes Paket gegen die Prüfsumme der Sperrdatei.
           cache: npm
 
       - name: Abhängigkeiten installieren
@@ -219,19 +276,24 @@ jobs:
       - name: Datenbankschema anwenden
         run: npx prisma migrate deploy
 
-      - name: Demodaten einspielen
-        # Die Prüfungen erwarten die fünf Demokonten und einen Datenbestand.
-        # `db:seed:demo` ist idempotent und enthält den Konfigurations-Seed.
-        run: npm run db:seed:demo
+      - name: Datenbankschranken prüfen
+        # Unmittelbar nach der Migration und vor jedem Schreiben: Trigger,
+        # Prüfregeln und Teilindizes, auf die sich Finanzbelege, Protokoll
+        # und Verträge verlassen, müssen im frisch migrierten Schema stehen.
+        # Fehlt eine, prüfte die ganze Testreihe danach ein Schema, das die
+        # Produktion nicht hat — und bestünde womöglich gerade deshalb.
+        #
+        # Liest `DATABASE_URL` aus der Umgebung dieses Auftrags. Jeder Ausgang
+        # ausser 0 hält den Lauf an, auch 2 („nicht geprüft", etwa ohne
+        # Verbindung): Eine Prüfung, die nicht lief, ist kein Bestehen.
+        run: npx tsx scripts/datenbank-schranken.ts
 
-      - name: Build-Zwischenspeicher wiederherstellen
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-        with:
-          path: .next/cache
-          key: next-${{ runner.os }}-${{ hashFiles('package-lock.json') }}-${{ hashFiles('src/**/*.ts', 'src/**/*.tsx') }}
-          restore-keys: |
-            next-${{ runner.os }}-${{ hashFiles('package-lock.json') }}-
-            next-${{ runner.os }}-
+      - name: Konfiguration einspielen
+        # **Nur** die Konfiguration (Firma, Leistungen, Preise, Gebiet, Team),
+        # keine Demodaten — der Bau im nächsten Schritt rendert die Website aus
+        # genau diesem Bestand vor (siehe Kopf des Auftrags). Die Demodaten
+        # folgen erst nach dem Packen, für die Prüfreihen.
+        run: npm run db:seed
 
       - name: Build
         # Ein einziger Build für Oberfläche und Schnittstelle: Die Anwendung ist
@@ -247,6 +309,8 @@ jobs:
         # geschehen im ersten Lauf dieses Zweigs (PR #3, Lauf 36270931878) und
         # örtlich genau so nachgestellt. Die frühere Annahme hier, der Bau setze
         # `production` selbst, war falsch.
+        #
+        # Ohne `.next/cache` aus einem früheren Lauf — siehe Kopf des Auftrags.
         env:
           NODE_ENV: production
         run: npm run build
@@ -258,18 +322,79 @@ jobs:
       - name: Leistungsbudget
         run: npx tsx scripts/leistungsbudget.ts
 
+      # -- Release-Artefakt ---------------------------------------------
+      #
+      # Notfallauftrag 2026-09-27, Phase 8: Die letzte Auslieferung auf den
+      # alten Server holte den Quelltext, installierte, migrierte und baute
+      # **dort** — mit 4,6 GB Heap, auf einer Maschine, die als nicht
+      # vertrauenswürdig galt. Ausgeliefert wurde damit ein Bau, den keine
+      # Prüfung je gesehen hatte, erzeugt von einem Rechner, dem niemand
+      # traute.
+      #
+      # Ab hier entsteht das, was ausgeliefert wird, **hier**: aus genau dem
+      # Bau, gegen den die Prüfreihen gleich laufen, als Archiv mit Manifest
+      # (`RELEASE.json`, Format 2), Beilage und SHA-256
+      # (`scripts/release-artefakt.ts`). Der Server prüft die Summe und
+      # schaltet um; er baut nichts.
+      #
+      # Gepackt wird in **jedem** Lauf, auch im Pull Request: Dort sagt das
+      # Manifest `auslieferbar: false` (kein Push auf main), das Archiv ist eine
+      # Probe — und das Packen selbst ist damit in jedem Pull Request geprüft,
+      # nicht erst beim ersten Push nach dem Zusammenführen.
+      - name: Release-Artefakt packen
+        run: npx tsx scripts/release-artefakt.ts --ausgabe release
+
+      - name: Prüfsumme in die Zusammenfassung
+        run: |
+          {
+            echo "## Release-Artefakt"
+            echo ""
+            echo '```'
+            cat release/*.sha256
+            node -e '
+              const fs = require("node:fs");
+              for (const name of fs.readdirSync("release").filter((n) => n.endsWith(".json"))) {
+                const b = JSON.parse(fs.readFileSync("release/" + name, "utf8"));
+                console.log(name + ": commit=" + b.commit + " buildId=" + b.buildId + " auslieferbar=" + b.auslieferbar);
+              }
+            '
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Demodaten einspielen
+        # Erst jetzt: Die Prüfungen erwarten die fünf Demokonten und einen
+        # Datenbestand, das Artefakt darf sie nie gesehen haben (siehe oben).
+        # `db:seed:demo` ist idempotent und enthält den Konfigurations-Seed.
+        run: npm run db:seed:demo
+
+      # -- Browser ------------------------------------------------------
+      #
+      # Gate 4D.1 hat die Browserebene als release-relevant eingeführt, und
+      # Gate 4D.2 hat gezeigt, warum sie es ist: Der PDF-Viewer war in jedem
+      # echten Chrome kaputt, während 812 HTTP-Prüfungen grün blieben. Ein
+      # Lauf, der diese Ebene auslässt, prüft das Produkt nicht dort, wo die
+      # Kundschaft es benutzt. Installiert wird vor den Prüfreihen, die sie
+      # als letzten Schritt fahren.
+      #
+      # Seit 2026-09-28 alle drei Engines: `*.browser.spec.ts` läuft auch in
+      # Firefox und WebKit (`playwright.config.ts`). Anlass war ein
+      # Bildfehler, der in Chromium nicht auftrat — eine Reihe mit einer
+      # Engine hätte ihn nie gesehen.
+      - name: Browser installieren
+        run: npx playwright install --with-deps chromium firefox webkit
+
       - name: Anwendung starten
         # **Über `scripts/test-server.ts`, nicht über ein nacktes
         # `next start`.** Das Skript legt die Umgebung der Prüfreihe an einer
         # Stelle fest: Testdatenbank (mit Namensschutz), `NODE_ENV=production`,
-        # `TRUSTED_PROXY_MODE=NONE`, Rate-Limit-Zähler als Dateien und die
-        # festen Prüfgeheimnisse für den Resend-Webhook und den
-        # Berichtseingang (`tests/helpers/webhooks.ts`). Bis 2026-09-26 stand
-        # hier eine Nachbildung von Hand, die nur einen Teil davon setzte — der
-        # erste CI-Lauf dieses Zweigs (Lauf 36271930469) scheiterte deshalb in
-        # zwölf Fällen, die örtlich grün waren (Zustellmeldungen,
-        # Berichtseingang). Zwei Kopien derselben Umgebung laufen auseinander;
-        # eine nicht.
+        # `TRUSTED_PROXY_MODE=NONE`, Rate-Limit-Zähler als Dateien, die festen
+        # Prüfgeheimnisse für den Resend-Webhook und den Berichtseingang
+        # (`tests/helpers/webhooks.ts`) und das Prüfmanifest der Identität.
+        # Bis 2026-09-26 stand hier eine Nachbildung von Hand, die nur einen
+        # Teil davon setzte — der erste CI-Lauf dieses Zweigs (Lauf
+        # 36271930469) scheiterte deshalb in zwölf Fällen, die örtlich grün
+        # waren (Zustellmeldungen, Berichtseingang). Zwei Kopien derselben
+        # Umgebung laufen auseinander; eine nicht.
         env:
           PORT: '3000'
           CLENARIS_TEST_CACHE_DIR: ${{ runner.temp }}/clenaris-tests/cache
@@ -293,22 +418,6 @@ jobs:
           echo "::error::Die Anwendung ist nicht hochgekommen."
           cat server.log
           exit 1
-
-      # -- Browser ------------------------------------------------------
-      #
-      # Gate 4D.1 hat die Browserebene als release-relevant eingeführt, und
-      # Gate 4D.2 hat gezeigt, warum sie es ist: Der PDF-Viewer war in jedem
-      # echten Chrome kaputt, während 812 HTTP-Prüfungen grün blieben. Ein
-      # Lauf, der diese Ebene auslässt, prüft das Produkt nicht dort, wo die
-      # Kundschaft es benutzt. Installiert wird vor den Prüfreihen, die sie
-      # als letzten Schritt fahren.
-      #
-      # Seit 2026-09-28 alle drei Engines: `*.browser.spec.ts` läuft auch in
-      # Firefox und WebKit (`playwright.config.ts`). Anlass war ein
-      # Bildfehler, der in Chromium nicht auftrat — eine Reihe mit einer
-      # Engine hätte ihn nie gesehen.
-      - name: Browser installieren
-        run: npx playwright install --with-deps chromium firefox webkit
 
       - name: Prüfreihen (verify:tests)
         # **Derselbe Befehl wie örtlich** (2026-09-27): Sicherheitsreihen
@@ -337,34 +446,14 @@ jobs:
         if: always()
         run: '[ -f server.pid ] && kill "$(cat server.pid)" || true'
 
-      # -- Release-Artefakt ---------------------------------------------
-      #
-      # Notfallauftrag 2026-09-27, Phase 8: Die letzte Auslieferung auf den
-      # alten Server holte den Quelltext, installierte, migrierte und baute
-      # **dort** — mit 4,6 GB Heap, auf einer Maschine, die als nicht
-      # vertrauenswürdig galt. Ausgeliefert wurde damit ein Bau, den keine
-      # Prüfung je gesehen hatte, erzeugt von einem Rechner, dem niemand
-      # traute.
-      #
-      # Ab hier entsteht das, was ausgeliefert wird, **hier**: aus genau dem
-      # Bau, gegen den die Prüfreihen eben liefen, als Archiv mit Manifest und
-      # SHA-256 (`scripts/release-artefakt.ts`). Der Server prüft die Summe und
-      # schaltet um; er baut nichts. Nur nach grünem Lauf — ein Artefakt aus
-      # einem roten Bau gibt es nicht.
-      - name: Release-Artefakt packen
-        run: npx tsx scripts/release-artefakt.ts --ausgabe release
-
-      - name: Prüfsumme in die Zusammenfassung
-        run: |
-          {
-            echo "## Release-Artefakt"
-            echo ""
-            echo '```'
-            cat release/*.sha256
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
-
       - name: Release-Artefakt ablegen
+        # Nur, was ausgeliefert werden darf: ein Push oder ein von Hand
+        # ausgelöster Lauf **auf main** — dieselbe Regel wie `auslieferbarNach`
+        # im Manifest. Ein Pull-Request-Lauf packt (siehe oben), legt aber
+        # nichts ab; eine Probe in der Ablage wäre ein Artefakt, das jemand
+        # für auslieferbar halten könnte. Ohne `always()`: nach einer roten
+        # Prüfreihe wird dieser Schritt übersprungen.
+        if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: release-${{ github.sha }}
@@ -387,17 +476,24 @@ jobs:
     name: Auslieferung
     needs: qualitaet
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 30
 
-    # Zwei Bedingungen, und beide müssen gelten. `needs: qualitaet` ist die
-    # dritte: Der Auftrag beginnt ohnehin nur, wenn das Qualitätstor grün ist.
+    # Drei Bedingungen, und alle müssen gelten. `needs: qualitaet` ist die
+    # vierte: Der Auftrag beginnt ohnehin nur, wenn das Qualitätstor grün ist.
     #
     # **Erstens: niemals aus einem Pull Request.** Ein Pull Request ist eine
     # Frage, keine Entscheidung. Er darf den vollen Prüflauf auslösen und
     # nichts sonst. Ohne diese Zeile genügte das Öffnen eines Pull Requests,
     # um einen Produktionsserver zu berühren.
     #
-    # **Zweitens: nur bei ausdrücklich eingeschalteter Auslieferung.**
+    # **Zweitens: nur von `main`.** Ein von Hand ausgelöster Lauf auf einem
+    # anderen Zweig ist kein Pull Request und käme an der ersten Bedingung
+    # vorbei. Sein Artefakt ist ohnehin nicht auslieferbar (das Manifest
+    # verlangt `refs/heads/main`), und es wird gar nicht erst abgelegt — die
+    # Bedingung hier sorgt dafür, dass der Auftrag nicht erst am fehlenden
+    # Artefakt scheitert, sondern gar nicht beginnt.
+    #
+    # **Drittens: nur bei ausdrücklich eingeschalteter Auslieferung.**
     # `DEPLOY_ENABLED` ist eine Repository-Variable, und sie ist fail-closed:
     # Ist sie nicht gesetzt, liefert GitHub den leeren String, der Vergleich
     # scheitert, der Auftrag wird übersprungen.
@@ -420,11 +516,31 @@ jobs:
     # `DEPLOY_ENABLED` = `true`.
     if: >-
       github.event_name != 'pull_request'
+      && github.ref == 'refs/heads/main'
       && vars.DEPLOY_ENABLED == 'true'
 
+    # Dieselbe Gruppe wie der Release-Ausführer (`deploy/v2/release-ausfuehrer.yml`):
+    # Gruppen gelten über Workflows hinweg, also wartet eine Auslieferung, bis
+    # ein laufender Ausführer fertig ist, und umgekehrt. Zwei Aktivierungen
+    # zugleich schalteten abwechselnd um; die Sperre auf dem Server
+    # (`.release.lock`, Ausgang 11) fängt das ab, aber erst, nachdem das
+    # Archiv übertragen ist.
+    #
+    # Eine Eigenheit von GitHub, die man kennen muss: Je Gruppe wartet höchstens
+    # **ein** Lauf. Kommt ein weiterer, wird der wartende abgebrochen. Sind
+    # beide Wege gleichzeitig eingeschaltet, kann ein geplanter Ausführerlauf
+    # also eine wartende Auslieferung verdrängen. Sie erscheint dann als
+    # „cancelled", und auf dem Server ist nichts geschehen — sichtbar, nicht
+    # still. Beide Wege zugleich eingeschaltet zu betreiben ist nicht der
+    # vorgesehene Zustand.
+    concurrency:
+      group: clenaris-auslieferung-production
+      cancel-in-progress: false
+
     # Dieser Auftrag checkt nichts aus und liest nichts aus dem Repository —
-    # er verbindet sich über SSH und ruft dort ein Skript auf. Er braucht
-    # deshalb kein einziges Recht am `GITHUB_TOKEN`.
+    # er lädt das Artefakt dieses Laufs, verbindet sich über SSH und ruft dort
+    # ein Skript auf. Er braucht deshalb kein einziges Recht am `GITHUB_TOKEN`
+    # (das Artefakt desselben Laufs kommt über das Laufzeit-Token der Aktion).
     permissions: {}
     # Bindet den Auftrag an die GitHub-Umgebung «production». Dort liegen die
     # Secrets, und dort lässt sich bei Bedarf eine Freigabe durch eine zweite
@@ -434,20 +550,20 @@ jobs:
     # dieser Workflow vom 14. bis zum 19. September 2026 kein einziges Mal
     # gelaufen ist.
     #
-    # Hier stand `url: ${{ secrets.API_URL }}`. Der `secrets`-Kontext ist in
-    # `jobs.<id>.environment.url` nicht verfügbar; erlaubt sind dort nur
-    # `github`, `needs`, `strategy`, `matrix`, `job`, `runner`, `env`, `vars`,
-    # `steps` und `inputs`. Eine unzulässige Kontextreferenz verwirft GitHub
-    # beim Parsen — der Lauf scheitert in derselben Sekunde, in der er
-    # entsteht, mit null Jobs, ohne Protokoll und ohne Annotation. Von aussen
-    # sah das aus wie ein fehlgeschlagener Test; tatsächlich hat der Workflow
-    # nie begonnen.
+    # Hier stand `url:` mit einem Ausdruck über `secrets.API_URL`. Der
+    # `secrets`-Kontext ist in `jobs.<id>.environment.url` nicht verfügbar;
+    # erlaubt sind dort nur `github`, `needs`, `strategy`, `matrix`, `job`,
+    # `runner`, `env`, `vars`, `steps` und `inputs`. Eine unzulässige
+    # Kontextreferenz verwirft GitHub beim Parsen — der Lauf scheitert in
+    # derselben Sekunde, in der er entsteht, mit null Jobs, ohne Protokoll und
+    # ohne Annotation. Von aussen sah das aus wie ein fehlgeschlagener Test;
+    # tatsächlich hat der Workflow nie begonnen.
     #
     # `url:` liefert nur den anklickbaren Verweis in der Oberfläche. Dafür
     # eine Repository-Variable einzuführen, wäre mehr Konfiguration als der
     # Nutzen wert; die Auslieferungsadresse steht ohnehin in der
     # Zusammenfassung am Ende des Laufs. In den Schritten unten bleibt
-    # `secrets.API_URL` unverändert — dort ist der Kontext zulässig.
+    # `secrets.API_URL` als Rückfall — dort ist der Kontext zulässig.
     environment:
       name: production
 
@@ -548,82 +664,181 @@ jobs:
           name: release-${{ github.sha }}
           path: release
 
+      - name: Beilage prüfen
+        # Bevor irgendetwas den Läufer verlässt: Ist das Archiv das dieses
+        # Laufs? Die Beilage (`clenaris-<sha12>.json`, Vertrag C1) muss genau
+        # diesen Commit und genau diesen Lauf nennen, aus `main` stammen,
+        # `auslieferbar` sein, und ihre `archivSha256` muss die hier gemessene
+        # Summe sein — ebenso die `.sha256` daneben. Die gemessene Summe geht
+        # danach als `--erwartet-sha256` an den Server: Dort wird sie gegen
+        # das übertragene Archiv geprüft, und nur die Prüfung am Ziel sagt
+        # etwas über das Ziel.
+        id: beilage
+        env:
+          ERWARTET_COMMIT: ${{ github.sha }}
+          ERWARTET_LAUF: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          archive=(release/clenaris-*.tar.gz)
+          if [ "${#archive[@]}" -ne 1 ]; then
+            echo "::error::Genau ein Archiv erwartet, gefunden: ${#archive[@]}."
+            exit 1
+          fi
+          archiv="${archive[0]}"
+          test -f "${archiv}.sha256" || { echo "::error::${archiv}.sha256 fehlt."; exit 1; }
+          ( cd release && sha256sum -c --status "$(basename "${archiv}").sha256" ) \
+            || { echo "::error::Das Archiv passt nicht zu seiner .sha256-Datei."; exit 1; }
+          GEMESSEN="$(sha256sum "${archiv}" | cut -d' ' -f1)"
+          ARCHIV="${archiv}"
+          export ARCHIV GEMESSEN
+          node - <<'JS'
+          const fs = require('node:fs');
+          const abbruch = (text) => {
+            console.log('::error::' + text);
+            process.exit(1);
+          };
+          const { ARCHIV: archiv, GEMESSEN: gemessen, ERWARTET_COMMIT: commit, ERWARTET_LAUF: lauf } = process.env;
+          if (!/^[0-9a-f]{40}$/.test(commit || '')) abbruch('github.sha ist keine Commit-Kennung.');
+          if (!/^[0-9a-f]{64}$/.test(gemessen || '')) abbruch('Die gemessene Summe ist keine SHA-256.');
+          const name = 'clenaris-' + commit.slice(0, 12);
+          if (archiv !== 'release/' + name + '.tar.gz') abbruch('Das Archiv heisst ' + archiv + ', erwartet ist release/' + name + '.tar.gz.');
+          let b;
+          try {
+            b = JSON.parse(fs.readFileSync('release/' + name + '.json', 'utf8'));
+          } catch {
+            abbruch('Beilage release/' + name + '.json fehlt oder ist kein JSON.');
+          }
+          const ci = b.ci && typeof b.ci === 'object' ? b.ci : null;
+          const regeln = [
+            [b.format === 2, 'format ist nicht 2'],
+            [b.anwendung === 'clenaris', 'anwendung ist nicht clenaris'],
+            [b.commit === commit, 'commit ist nicht github.sha'],
+            [ci !== null, 'ci fehlt (örtlich gepackt)'],
+            [ci !== null && ci.lauf === lauf, 'ci.lauf ist nicht dieser Lauf'],
+            [ci !== null && ci.ref === 'refs/heads/main', 'ci.ref ist nicht refs/heads/main'],
+            [b.auslieferbar === true, 'auslieferbar ist nicht true'],
+            [b.archivSha256 === gemessen, 'archivSha256 ist nicht die gemessene Summe'],
+            [typeof b.buildId === 'string' && /^[A-Za-z0-9._-]{1,200}$/.test(b.buildId), 'buildId fehlt oder hat unerwartete Zeichen'],
+          ];
+          const verletzt = regeln.filter(([gilt]) => !gilt).map(([, text]) => text);
+          if (verletzt.length > 0) abbruch('Beilage abgewiesen: ' + verletzt.join('; ') + '.');
+          const ausgabe = (schluessel, wert) => {
+            if (/[\r\n]/.test(wert)) abbruch('Ausgabe ' + schluessel + ' enthält einen Zeilenumbruch.');
+            fs.appendFileSync(process.env.GITHUB_OUTPUT, schluessel + '=' + wert + '\n');
+          };
+          ausgabe('archiv', archiv);
+          ausgabe('sha256', gemessen);
+          ausgabe('buildid', b.buildId);
+          console.log('Beilage in Ordnung: ' + name + ', Build ' + b.buildId + ', Version ' + b.version + '.');
+          JS
+
       - name: Artefakt übertragen und aktivieren
+        id: aktivieren
         env:
           HOST: ${{ secrets.SERVER_HOST }}
           PORT: ${{ secrets.SERVER_PORT }}
           USER_NAME: ${{ secrets.SERVER_USER }}
           APP_DIRECTORY: ${{ secrets.APP_DIRECTORY }}
+          ARCHIV: ${{ steps.beilage.outputs.archiv }}
+          SUMME: ${{ steps.beilage.outputs.sha256 }}
         run: |
           set -euo pipefail
           test -n "${APP_DIRECTORY:-}" || { echo "::error::Secret APP_DIRECTORY fehlt."; exit 1; }
-          archiv="$(ls release/clenaris-*.tar.gz | head -n1)"
-          test -f "${archiv}" && test -f "${archiv}.sha256" || { echo "::error::Artefakt oder Prüfsumme fehlt."; exit 1; }
-          # Die Summe wird hier **und** auf dem Server geprüft: hier, damit
-          # nichts Beschädigtes übertragen wird; dort, weil nur die Prüfung am
-          # Ziel etwas über das Ziel aussagt.
-          ( cd release && sha256sum -c "$(basename "${archiv}").sha256" )
+          # Ein absoluter Pfad aus schlichten Zeichen: Er wird Teil eines
+          # Befehls auf dem Server und eines scp-Ziels. Die Maskierung unten
+          # (`printf %q`) schützt den Befehl; das scp-Ziel liest je nach
+          # OpenSSH-Fassung eine entfernte Shell mit, und dort hilft nur, dass
+          # nichts zu maskieren ist.
+          [[ "${APP_DIRECTORY}" =~ ^/[A-Za-z0-9._/-]+$ ]] \
+            || { echo "::error::APP_DIRECTORY muss ein absoluter Pfad aus Buchstaben, Ziffern, . _ / - sein."; exit 1; }
+          [[ "${SUMME}" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::Keine geprüfte Summe aus der Beilage."; exit 1; }
+          port="${PORT:-22}"
+          eingang="${APP_DIRECTORY%/}/releases-eingang"
 
           # Das Aktivierungsskript kommt aus dem geprüften Artefakt selbst,
-          # nicht aus einem Arbeitsbaum auf dem Server: Dort gibt es keinen
-          # mehr, und ein Skript vom Server wäre genau der ungeprüfte Code,
-          # den das Artefakt abschaffen soll.
-          tar -xzOf "${archiv}" deploy/v2/release-aktivieren.sh > release/release-aktivieren.sh
+          # nicht aus einem Arbeitsbaum oder aus `current/` auf dem Server:
+          # Ein Skript vom Server wäre genau der ungeprüfte Code, den das
+          # Artefakt abschaffen soll — und bei der Erstinstallation gibt es
+          # dort noch keines.
+          mkdir -p aktivierung
+          tar -xzOf "${ARCHIV}" deploy/v2/release-aktivieren.sh > aktivierung/release-aktivieren.sh
+          test -s aktivierung/release-aktivieren.sh || { echo "::error::Das Archiv enthält deploy/v2/release-aktivieren.sh nicht."; exit 1; }
 
           # `StrictHostKeyChecking=yes` ausdrücklich an jeder Verbindung: Die
           # Vorgabe ist `ask`, und was `ask` unter `BatchMode` tut, hängt an
-          # der OpenSSH-Fassung des Läufers.
-          ssh -i ~/.ssh/id_deploy -p "${PORT:-22}" -o BatchMode=yes -o ConnectTimeout=20 \
-              -o StrictHostKeyChecking=yes \
-              "${USER_NAME}@${HOST}" "mkdir -p '${APP_DIRECTORY}/releases-eingang'"
-          scp -i ~/.ssh/id_deploy -P "${PORT:-22}" -o BatchMode=yes -o StrictHostKeyChecking=yes \
-              "${archiv}" "${archiv}.sha256" release/release-aktivieren.sh \
-              "${USER_NAME}@${HOST}:${APP_DIRECTORY}/releases-eingang/"
-          ssh -i ~/.ssh/id_deploy -p "${PORT:-22}" -o BatchMode=yes -o ConnectTimeout=20 -o ServerAliveInterval=30 \
-              -o StrictHostKeyChecking=yes \
-              "${USER_NAME}@${HOST}" \
-              "CLENARIS_BASIS='${APP_DIRECTORY}' bash '${APP_DIRECTORY}/releases-eingang/release-aktivieren.sh' '${APP_DIRECTORY}/releases-eingang/$(basename "${archiv}")'"
+          # der OpenSSH-Fassung des Läufers. Der Eingang entsteht vor der
+          # Übertragung — auf einem frischen Server gibt es ihn noch nicht.
+          ssh -i ~/.ssh/id_deploy -p "${port}" -o BatchMode=yes -o ConnectTimeout=20 -o StrictHostKeyChecking=yes \
+              "${USER_NAME}@${HOST}" "$(printf 'mkdir -p -- %q' "${eingang}")"
+          scp -i ~/.ssh/id_deploy -P "${port}" -o BatchMode=yes -o ConnectTimeout=20 -o StrictHostKeyChecking=yes \
+              "${ARCHIV}" "${ARCHIV}.sha256" aktivierung/release-aktivieren.sh \
+              "${USER_NAME}@${HOST}:${eingang}/"
 
-      - name: Health Check von aussen
+          # Der Ausgang des Skripts ist der Vertrag (C3), nicht nur „0 oder
+          # nicht 0": Er wird festgehalten und einzeln gedeutet, statt dass der
+          # erste Fehler den Schritt blind beendet.
+          befehl="$(printf 'CLENARIS_BASIS=%q bash %q %q --erwartet-sha256 %q' \
+            "${APP_DIRECTORY}" "${eingang}/release-aktivieren.sh" "${eingang}/$(basename "${ARCHIV}")" "${SUMME}")"
+          set +e
+          ssh -i ~/.ssh/id_deploy -p "${port}" -o BatchMode=yes -o ConnectTimeout=20 -o ServerAliveInterval=30 \
+              -o StrictHostKeyChecking=yes "${USER_NAME}@${HOST}" "${befehl}"
+          code=$?
+          set -e
+          echo "code=${code}" >> "$GITHUB_OUTPUT"
+          case "${code}" in
+            0)  echo "Aktiviert, Identität auf dem Server bestätigt." ;;
+            20) echo "::error::Die neue Fassung hat ihre Identität nicht bestätigt; der Server ist nachweislich auf die vorherige zurückgesprungen (20 ZURUECK). Nichts ausgeliefert."; exit 1 ;;
+            11) echo "::error::Eine andere Aktivierung oder ein Rücksprung lief gerade (11 GESPERRT). Nichts geändert — erneut auslösen, wenn sie fertig ist."; exit 1 ;;
+            10) echo "::error::Aktivierung vor dem Umschalten abgebrochen (10 NICHT_UMGESCHALTET). Der Grund steht im Protokoll oben."; exit 1 ;;
+            30) echo "::error::Zustand auf dem Server unklar (30 UNKLAR) — sofort von Hand prüfen: current, pm2 ls, /api/health."; exit 1 ;;
+            *)  echo "::error::Unerwarteter Ausgang ${code} (255 heisst: SSH-Verbindung gescheitert)."; exit 1 ;;
+          esac
+
+      - name: Identität von aussen prüfen
         env:
           # Siehe oben: `vars` ist der Zielzustand, das Secret der Übergang.
           API_URL: ${{ vars.API_URL || secrets.API_URL }}
           ERWARTET: ${{ github.sha }}
+          BUILD_ID: ${{ steps.beilage.outputs.buildid }}
         run: |
           set -euo pipefail
           if [ -z "${API_URL:-}" ]; then
-            echo "::warning::Secret API_URL fehlt — die Prüfung von aussen entfällt."
+            echo "::warning::API_URL fehlt — die Prüfung von aussen entfällt (auf dem Server ist die Identität bestätigt)."
             exit 0
           fi
 
           # Zwei Fragen, nicht eine. Erstens: antwortet die öffentliche Adresse
           # überhaupt? Das prüft die ganze Kette samt Reverse Proxy und TLS,
-          # die der Health Check auf dem Server selbst nie berührt. Zweitens:
-          # antwortet der *neue* Stand? Ein Reload, der still fehlschlägt,
-          # liefert eine gesunde alte Fassung aus — grün, und trotzdem ist
-          # nichts ausgeliefert worden.
+          # die die Prüfung auf dem Server selbst nie berührt. Zweitens:
+          # antwortet **genau dieser Bau**? Verglichen wird dieselbe Identität
+          # wie auf dem Server — Commit, Build-ID der Beilage, `belegt`. Der
+          # Commit allein genügte nicht: Ein zweiter Bau desselben Commits hat
+          # eine andere Build-ID und ist nie geprüft worden.
           for i in $(seq 1 10); do
             antwort="$(curl -fsS --max-time 15 "${API_URL%/}/api/health" || true)"
             if [ -n "$antwort" ]; then
               echo "$antwort" | jq .
-              version="$(echo "$antwort" | jq -r '.data.version // empty')"
               status="$(echo "$antwort" | jq -r '.data.status // empty')"
-              if [ "$status" = "ok" ] && [ "$version" = "$ERWARTET" ]; then
-                echo "Ausgelieferter Stand bestätigt: $version"
+              version="$(echo "$antwort" | jq -r '.data.version // empty')"
+              build="$(echo "$antwort" | jq -r '.data.buildId // empty')"
+              identitaet="$(echo "$antwort" | jq -r '.data.identitaet // empty')"
+              if [ "$status" = "ok" ] && [ "$version" = "$ERWARTET" ] && [ "$build" = "$BUILD_ID" ] && [ "$identitaet" = "belegt" ]; then
+                echo "Ausgelieferter Stand von aussen bestätigt: $version, Build $build."
                 exit 0
               fi
-              echo "Versuch $i: status=$status version=$version erwartet=$ERWARTET"
+              echo "Versuch $i: status=$status version=$version buildId=$build identitaet=$identitaet (erwartet $ERWARTET / $BUILD_ID / belegt)"
             else
               echo "Versuch $i: keine Antwort."
             fi
             sleep 6
           done
-          echo "::error::Der Health Check von aussen bestätigt den neuen Stand nicht."
+          echo "::error::Von aussen meldet sich nicht die erwartete Identität."
           exit 1
 
       - name: Zusammenfassung
         if: always()
-        # Die Werte kommen über `env` und nicht als `${{ … }}` in den Text des
+        # Die Werte kommen über `env` und nicht als Ausdruck in den Text des
         # Skripts (2026-09-26). Ein Ausdruck im `run:`-Block wird **vor** der
         # Shell eingesetzt: Enthielte er ein `"` oder `$(…)`, wäre er Code.
         # `github.actor` ist heute auf Buchstaben, Ziffern und Bindestrich
@@ -636,6 +851,8 @@ jobs:
           AUSLOESER: ${{ github.event_name }}
           VON: ${{ github.actor }}
           ZIEL: ${{ vars.API_URL }}
+          SUMME: ${{ steps.beilage.outputs.sha256 }}
+          AKTIVIERUNG: ${{ steps.aktivieren.outputs.code }}
         run: |
           {
             echo "## Auslieferung ${STATUS}"
@@ -643,6 +860,8 @@ jobs:
             echo "| Feld | Wert |"
             echo "|---|---|"
             echo "| Stand | \`${STAND}\` |"
+            echo "| SHA-256 | \`${SUMME}\` |"
+            echo "| Aktivierung (Ausgang) | ${AKTIVIERUNG} |"
             echo "| Auslöser | ${AUSLOESER} |"
             echo "| Von | ${VON} |"
             # Hier bewusst **nur** `vars`, ohne Rückfall auf das Secret.
@@ -660,3 +879,104 @@ jobs:
             # behauptet nichts.
             echo "| Ziel | ${ZIEL} |"
           } >> "$GITHUB_STEP_SUMMARY"
+
+  # =========================================================================
+  #  3) Reproduzierbarkeit — nur von Hand
+  # =========================================================================
+  #
+  # Derselbe Commit, zweimal gebaut, derselbe Baum? Erst dann heisst „das
+  # Artefakt entspricht dem Commit" mehr als „es wurde aus ihm gebaut": Wer
+  # das Artefakt anzweifelt, kann den Bau wiederholen und vergleichen. Der
+  # Vergleich (`scripts/bau-vergleich.ts`) kennt die Unterschiede, die ein
+  # Bau zwangsläufig hat, und scheitert an jedem anderen; der Bericht wird
+  # abgelegt.
+  #
+  # Nur bei `workflow_dispatch`: Zwei vollständige Bauten verdoppeln die
+  # Laufzeit, und die Frage ändert sich nicht mit jedem Push. Kein Secret,
+  # keine Auslieferung, nur Lesen am Repository.
+  reproduzierbarkeit:
+    name: Reproduzierbarkeit
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+
+    # Dieselbe Wegwerf-Datenbank wie im Qualitätstor: Der Bau rendert die
+    # Website aus ihr vor, also braucht er Schema und Konfiguration.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: clenaris
+          POSTGRES_PASSWORD: clenaris
+          POSTGRES_DB: clenaris_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U clenaris -d clenaris_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    env:
+      DATABASE_URL: postgresql://clenaris:clenaris@localhost:5432/clenaris_test
+      DIRECT_URL: postgresql://clenaris:clenaris@localhost:5432/clenaris_test
+      JWT_SECRET: ci-nur-fuer-den-testlauf-mindestens-32-zeichen
+      CRON_SECRET: ci-cron-secret
+      APP_URL: http://localhost:3000
+      NEXT_PUBLIC_SITE_URL: https://clenaris.qasemi.ch
+      NODE_ENV: development
+      NEXT_TELEMETRY_DISABLED: '1'
+
+    steps:
+      - name: Repository auschecken
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Node einrichten
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Abhängigkeiten installieren
+        run: npm ci --no-audit --no-fund
+
+      - name: Datenbankschema anwenden
+        run: npx prisma migrate deploy
+
+      - name: Konfiguration einspielen
+        # Wie im Qualitätstor: nur Konfiguration, damit beide Bauten denselben
+        # Bestand sehen, den auch der ausgelieferte Bau sah.
+        run: npm run db:seed
+
+      - name: Bau A
+        env:
+          NODE_ENV: production
+        run: npm run build
+
+      - name: Bau A beiseitelegen
+        run: mv .next bau-a
+
+      - name: Bau B (sauber)
+        # Ohne `.next` und ohne dessen Zwischenspeicher — sonst verglichen
+        # sich der zweite Bau mit Teilen des ersten.
+        env:
+          NODE_ENV: production
+        run: |
+          rm -rf .next
+          npm run build
+
+      - name: Bauten vergleichen
+        run: npx tsx scripts/bau-vergleich.ts bau-a .next --bericht bau-vergleich.json
+
+      - name: Vergleichsbericht sichern
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: bau-vergleich
+          path: bau-vergleich.json
+          if-no-files-found: warn
+          retention-days: 30
