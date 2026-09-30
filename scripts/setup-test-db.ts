@@ -197,7 +197,19 @@ async function main(): Promise<void> {
     lauf('npx', ['tsx', 'prisma/seed.ts'], testUrl);
     console.log('');
     console.log('  ✅  Testdatenbank bereit — nur Konfiguration.');
-    console.log('      Vor der Prüfreihe fehlen noch die Demodaten: npm run db:seed:demo');
+    console.log('');
+    // Der Hinweis nennt bewusst **nicht** `npm run db:seed:demo`: Das liest
+    // `DATABASE_URL` aus der `.env`, also die Entwicklungsdatenbank. Der
+    // Schutz in `prisma/seed-guard.ts` bricht dort ab — oder, folgt man
+    // dessen eigenem Hinweis auf `ALLOW_DEMO_SEED`, landen die Demodaten in
+    // der Entwicklungsdatenbank statt hier. Dieses Skript ohne `--ohne-demo`
+    // leitet dieselbe Testadresse ab, verwendet die bestehende Datenbank
+    // weiter und seedet idempotent nach — derselbe Weg, dieselbe Adresse.
+    console.log('  Vor der Prüfreihe fehlen noch die Demodaten. `verify.ts voll --frisch` spielt');
+    console.log('  sie selbst ein; von Hand ergänzt sie dieselbe Testdatenbank:');
+    console.log('');
+    console.log('      npm run db:test:setup    # ohne --ohne-demo; die Datenbank wird weiterverwendet');
+    if (process.env.TEST_DATABASE_URL) console.log('                               # mit derselben TEST_DATABASE_URL wie eben');
     console.log('');
     return;
   }
