@@ -5,6 +5,7 @@ import { Prisma, type Release, type ReleaseRequest, type ReleaseRequestStatus } 
 import { recordAuditInTx } from '@/lib/audit';
 import { prisma } from '@/lib/db';
 import { BusinessRuleError, ConflictError, NotFoundError } from '@/lib/errors';
+import { laufendeIdentitaet, type IdentitaetsZustand } from '@/lib/release/identitaet';
 import { aktuelleVersion, vergleicheVersionen } from '@/lib/version';
 import type { ReleaseManifest } from '@/lib/validation/system';
 
@@ -124,9 +125,30 @@ function zustandVon(release: Release, offen: ReleaseRequest | null, laufend: str
   return 'AVAILABLE';
 }
 
+/**
+ * Ob die laufende Version belegt ist (2026-09-30) — neben `laufend` in jeder
+ * Antwort dieses Dienstes.
+ *
+ * `laufend` ist seit der Identität der Instanz (`release/identitaet.ts`)
+ * entweder die Version des Artefakts, belegt durch `RELEASE.json` und
+ * `BUILD_ID`, oder — ohne Beleg — die in den Code eingebaute aus
+ * `package.json`. Für die Einordnung „neuer, installiert, älter" taugen
+ * beide. Für die Frage „läuft diese Fassung wirklich" taugt nur die belegte,
+ * und der Ausführer übernimmt ohne Beleg keinen Auftrag. Das Feld macht den
+ * Unterschied sichtbar, statt eine unbelegte Nummer wie eine belegte
+ * aussehen zu lassen.
+ */
+function laufenderStand(): { laufend: string; belegt: boolean; identitaet: IdentitaetsZustand } {
+  const i = laufendeIdentitaet();
+  return { laufend: i.version, belegt: i.belegt, identitaet: i.zustand };
+}
+
 /** Alle bekannten Versionen, neueste zuerst, mit ihrem Zustand für diesen Betrieb. */
-export async function listReleases(organizationId: string): Promise<{ laufend: string; releases: ReleaseUebersicht[] }> {
-  const laufend = aktuelleVersion();
+export async function listReleases(
+  organizationId: string,
+): Promise<{ laufend: string; belegt: boolean; identitaet: IdentitaetsZustand; releases: ReleaseUebersicht[] }> {
+  const stand = laufenderStand();
+  const laufend = stand.laufend;
   const jetzt = new Date();
   const [releases, offene, zurueckgestellt] = await Promise.all([
     prisma.release.findMany(),
@@ -151,7 +173,7 @@ export async function listReleases(organizationId: string): Promise<{ laufend: s
       };
     });
 
-  return { laufend, releases: uebersicht };
+  return { ...stand, releases: uebersicht };
 }
 
 /**
@@ -159,7 +181,7 @@ export async function listReleases(organizationId: string): Promise<{ laufend: s
  * laufende — oder `null`, wenn das System aktuell ist.
  */
 export async function neuesteVerfuegbare(organizationId: string) {
-  const { laufend, releases } = await listReleases(organizationId);
+  const { laufend, belegt, releases } = await listReleases(organizationId);
   const neuer = releases.filter((r) => r.zustand !== 'INSTALLED' && r.zustand !== 'OLDER');
   // „Offen" heisst: Es steht noch eine Entscheidung aus. Terminiert ist
   // entschieden, zurückgestellt auch — beides zählt nicht in die Zahl neben
@@ -167,11 +189,12 @@ export async function neuesteVerfuegbare(organizationId: string) {
   const anzahlOffen = neuer.filter(
     (r) => (r.zustand === 'AVAILABLE' && !r.zurueckgestelltBis) || r.zustand === 'APPROVED',
   ).length;
-  return { laufend, neueste: neuer[0] ?? null, anzahlNeuer: neuer.length, anzahlOffen };
+  return { laufend, belegt, neueste: neuer[0] ?? null, anzahlNeuer: neuer.length, anzahlOffen };
 }
 
 export async function getReleaseDetail(organizationId: string, releaseId: string) {
-  const laufend = aktuelleVersion();
+  const stand = laufenderStand();
+  const laufend = stand.laufend;
   const release = await prisma.release.findUnique({ where: { id: releaseId } });
   if (!release) throw new NotFoundError('Version');
 
@@ -199,7 +222,7 @@ export async function getReleaseDetail(organizationId: string, releaseId: string
   const namen = Object.fromEntries(personen.map((p) => [p.id, `${p.firstName} ${p.lastName}`]));
 
   return {
-    laufend,
+    ...stand,
     release,
     zustand: zustandVon(release, offen, laufend),
     offenerAuftrag: offen,

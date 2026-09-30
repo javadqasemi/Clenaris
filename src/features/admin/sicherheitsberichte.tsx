@@ -1,5 +1,6 @@
 import type { SecurityReportStatus } from '@prisma/client';
 
+import { IDENTITAETS_NAMEN, type Identitaet, type IdentitaetsZustand } from '@/lib/release/identitaet';
 import { formatDateTime } from '@/lib/utils';
 import { Badge } from '@/components/ui/badge';
 import { ListCard, TableScroll } from '@/components/app/page-parts';
@@ -50,6 +51,21 @@ const KENNZAHL: Record<string, { label: string; einheit?: string }> = {
   malwareSignaturenAlterStunden: { label: 'Malware-Signaturen alt', einheit: 'h' },
 };
 
+/**
+ * Farbe je Identitätszustand (2026-09-30). „Ohne RELEASE.json" ist eine
+ * Warnung und kein Alarm: In der Entwicklung und auf einem Prüfbau ohne
+ * Manifest ist es der Normalfall, in der Produktion verhindert es die
+ * Vorprüfung ohnehin. Widersprüchlich und ungültig dagegen heissen, dass
+ * jemand ein Manifest neben einen Bau gelegt hat, zu dem es nicht gehört —
+ * das ist in keiner Umgebung ein Normalfall.
+ */
+const IDENTITAET_FARBE: Record<IdentitaetsZustand, 'success' | 'warning' | 'destructive'> = {
+  belegt: 'success',
+  'ohne-manifest': 'warning',
+  widerspruechlich: 'destructive',
+  ungueltig: 'destructive',
+};
+
 function wert(schluessel: string, v: number | string | boolean): string {
   const k = KENNZAHL[schluessel];
   const text = typeof v === 'boolean' ? (v ? 'ja' : 'nein') : String(v);
@@ -66,12 +82,13 @@ function alter(von: Date, jetzt: Date): string {
 
 export function Sicherheitsberichte({
   zustaende,
-  version,
+  identitaet,
   scanner,
   jetzt,
 }: {
   zustaende: QuellenZustand[];
-  version: string | null;
+  /** Die Identität der Instanz (`release/identitaet.ts`) — bis 2026-09-30 stand hier `APP_VERSION`. */
+  identitaet: Pick<Identitaet, 'belegt' | 'zustand' | 'version' | 'commit' | 'buildId' | 'grund'>;
   scanner: { eingerichtet: boolean; art: string; erreichbar: boolean | null; version: string | null };
   jetzt: Date;
 }) {
@@ -90,8 +107,23 @@ export function Sicherheitsberichte({
         </p>
         <dl className="mt-3 grid gap-x-6 gap-y-1 text-sm sm:grid-cols-2">
           <div>
-            <dt className="inline text-muted-foreground">Laufende Version: </dt>
-            <dd className="inline font-mono text-xs">{version ?? 'nicht gesetzt (APP_VERSION)'}</dd>
+            <dt className="inline text-muted-foreground">Laufender Stand: </dt>
+            <dd className="inline" data-identitaet={identitaet.zustand}>
+              <Badge size="sm" variant={IDENTITAET_FARBE[identitaet.zustand]}>
+                {IDENTITAETS_NAMEN[identitaet.zustand]}
+              </Badge>{' '}
+              <span className="font-mono text-xs tabular-nums">
+                v{identitaet.version}
+                {identitaet.commit ? (
+                  <>
+                    {' · '}
+                    <span title={identitaet.commit}>{identitaet.commit.slice(0, 12)}</span>
+                  </>
+                ) : null}
+                {identitaet.buildId ? ` · Build ${identitaet.buildId}` : ''}
+              </span>
+              {identitaet.grund ? <span className="block text-2xs text-muted-foreground">{identitaet.grund}</span> : null}
+            </dd>
           </div>
           <div>
             <dt className="inline text-muted-foreground">Schadsoftwareprüfer: </dt>

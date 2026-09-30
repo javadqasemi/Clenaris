@@ -3,6 +3,7 @@ import type { SecurityCategory, SecuritySeverity } from '@prisma/client';
 
 import { requirePagePermission } from '@/lib/auth/session';
 import { ROLE_LABELS } from '@/lib/auth/rbac';
+import { laufendeIdentitaet } from '@/lib/release/identitaet';
 import { SECURITY_EVENTS } from '@/lib/security/events';
 import { formatDateTime, toQueryString } from '@/lib/utils';
 import { Badge } from '@/components/ui/badge';
@@ -290,8 +291,15 @@ export default async function SicherheitPage({
         Was Prüfungen ausserhalb der Anwendung gemeldet haben — security:check,
         der Überwachungsrechner, ZAP, die Sicherung (2026-09-26). Nur Anzeige:
         Diese Seite startet keine Prüfung und ruft kein Programm auf.
+
+        Der laufende Stand kommt seit 2026-09-30 aus der Identität der Instanz
+        (`RELEASE.json` und `BUILD_ID`), nicht mehr aus `APP_VERSION`: Eine
+        Variable, die jeder beim Start setzen kann, ist kein Beleg dafür,
+        welcher Code hier läuft. Die Systemverantwortung sieht auch den Grund,
+        wenn der Stand nicht belegt ist — der öffentliche Gesundheitsendpunkt
+        nennt ihn bewusst nicht.
       */}
-      <Sicherheitsberichte zustaende={berichte} version={process.env.APP_VERSION ?? null} scanner={ueberblick.scanner} jetzt={jetzt} />
+      <Sicherheitsberichte zustaende={berichte} identitaet={laufendeIdentitaet()} scanner={ueberblick.scanner} jetzt={jetzt} />
 
       {(ueberblick.dateienInQuarantaene > 0 || ueberblick.dateienOhneBefund > 0) && (
         <Alert variant={ueberblick.dateienInQuarantaene > 0 ? 'destructive' : 'warning'}>
