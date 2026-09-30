@@ -54,7 +54,10 @@
  * oder einem präparierten Dateinamen) schriebe sonst eine zweite Ausgabe
  * `archiv=…` in die Datei, und der Aktivierungsschritt holte ein anderes
  * Archiv; ein Anführungszeichen oder `$` in einem Pfad würde im Workflow, der
- * `${{ … }}` wörtlich in die Shell einsetzt, zu Code.
+ * `${{ … }}` wörtlich in die Shell einsetzt, zu Code. Geschrieben wird ganz
+ * oder gar nicht (`ausgeben`), und `abholen` prüft seine Zeilen schon vor der
+ * Übernahme (`artefaktMessen`) — ein Wert, der nicht weitergegeben werden
+ * darf, soll keinen Auftrag in DEPLOYING zurücklassen.
  */
 import { createHash } from 'node:crypto';
 import { appendFileSync, createReadStream, existsSync, readFileSync, statSync } from 'node:fs';
@@ -128,11 +131,27 @@ export function ausgabeZeile(name: string, wert: string): string {
   return `${name}=${wert}`;
 }
 
-function ausgabe(name: string, wert: string): void {
-  const zeile = ausgabeZeile(name, wert);
-  console.log(zeile);
+/**
+ * Schon geprüfte Zeilen ausgeben und an `GITHUB_OUTPUT` anhängen — in einem
+ * Schreibvorgang.
+ *
+ * **Warum erst alle prüfen, dann alle schreiben.** Bis 2026-09-30 schrieb
+ * jede Ausgabe für sich: `plan` hatte `modus=neu` und `auftrag=…` schon in
+ * der Datei, wenn die dritte Zeile (etwa ein Commit-Kürzel aus einem alten
+ * Release) an ihrer Form scheiterte. Der Schritt wurde rot, aber ein
+ * Folgeschritt mit `if: always()` oder ein `continue-on-error` hätte eine
+ * halbe Ausgabe gelesen — einen Auftrag ohne Commit. Ganz oder gar nicht ist
+ * die einzige Form, die ein Folgeschritt nicht missverstehen kann.
+ */
+function zeilenSchreiben(zeilen: readonly string[]): void {
+  for (const zeile of zeilen) console.log(zeile);
   const ziel = process.env.GITHUB_OUTPUT?.trim();
-  if (ziel) appendFileSync(ziel, `${zeile}\n`);
+  if (ziel && zeilen.length > 0) appendFileSync(ziel, zeilen.map((z) => `${z}\n`).join(''));
+}
+
+/** Mehrere Ausgaben: jede gegen ihre Form geprüft, erst dann alle geschrieben. */
+function ausgeben(...paare: readonly (readonly [string, string])[]): void {
+  zeilenSchreiben(paare.map(([name, wert]) => ausgabeZeile(name, wert)));
 }
 
 // ---------------------------------------------------------------------------
@@ -368,10 +387,38 @@ export interface Erwartung {
  *
  * Stimmt eines nicht, wird nicht übernommen: Der Auftrag bleibt terminiert
  * und sichtbar, statt als „in Ausführung" hängenzubleiben.
+ *
+ * **Die Ausgaben werden hier schon geprüft, nicht erst nach der Übernahme.**
+ * Archivpfad, Prüfsumme und Build-ID gehen über `GITHUB_OUTPUT` in den
+ * Aktivierungsschritt. Bis 2026-09-30 prüfte `abholen` sie erst nach dem
+ * POST auf `/uebernehmen`: Ein Arbeitsverzeichnis mit einer Klammer oder
+ * einem Umlaut im Pfad, oder eine Build-ID mit einem Zeichen, das der
+ * Vertrag zulässt, die Ausgabe aber nicht, liess den Auftrag übernommen
+ * (DEPLOYING) und das Werkzeug mit Ausgang 1 zurück. Ein neuer Lauf mit
+ * demselben Schlüssel scheiterte genauso, und erst der stündliche Lauf
+ * schloss den Auftrag nach zwei Stunden als FAILED — für ein Release, an dem
+ * nichts falsch war. Jetzt kommen die fertigen Zeilen (`ausgaben`) aus der
+ * Messung, und `abholen` schreibt sie erst, wenn die Übernahme gelungen ist.
  */
-export async function artefaktMessen(verzeichnis: string, e: Erwartung): Promise<{ archiv: string; summe: string; beilage: ArtefaktBeilage }> {
+export async function artefaktMessen(
+  verzeichnis: string,
+  e: Erwartung,
+): Promise<{ archiv: string; summe: string; beilage: ArtefaktBeilage; ausgaben: string[] }> {
   const name = `clenaris-${e.commit.slice(0, 12)}`;
+  /** Eine Ausgabe vorab prüfen — mit dem Hinweis, dass deshalb nichts übernommen wird. */
+  const vorab = (feld: string, wert: string): string => {
+    try {
+      return ausgabeZeile(feld, wert);
+    } catch (fehler) {
+      throw new AusfuehrerFehler(
+        `${name}: ${(fehler as Error).message} Nichts übernommen — der Auftrag bleibt terminiert; der Wert muss die Form haben, die der Aktivierungsschritt sicher liest.`,
+      );
+    }
+  };
   const archiv = join(verzeichnis, `${name}.tar.gz`);
+  // Vor dem Hashen: Ein Pfad, der nicht weitergegeben werden darf, muss
+  // nicht erst hunderte Megabyte lesen lassen, um abgewiesen zu werden.
+  const archivZeile = vorab('archiv', archiv);
   const summenDatei = `${archiv}.sha256`;
   const beilagePfad = join(verzeichnis, `${name}.json`);
   for (const datei of [archiv, summenDatei, beilagePfad]) {
@@ -410,7 +457,7 @@ export async function artefaktMessen(verzeichnis: string, e: Erwartung): Promise
   if (`${u[1]}/${u[2]}`.toLowerCase() !== b.ci.repository.toLowerCase()) {
     throw new AusfuehrerFehler(`${name}: Beilage stammt aus ${b.ci.repository}, der Lauf aus ${u[1]}/${u[2]}.`);
   }
-  return { archiv, summe, beilage: b };
+  return { archiv, summe, beilage: b, ausgaben: [archivZeile, vorab('sha256', summe), vorab('buildid', b.buildId)] };
 }
 
 // ---------------------------------------------------------------------------
@@ -506,7 +553,7 @@ async function melden(): Promise<void> {
   }
   if (r.status !== 200) throw new AusfuehrerFehler(`Meldung abgewiesen: HTTP ${r.status} ${fehlermeldung(r.text)}`);
   console.log(`Gemeldet: ${gemeldet}${r.daten?.wiederholt ? ' (war bereits gemeldet)' : ''}`);
-  ausgabe('ergebnis', gemeldet);
+  ausgeben(['ergebnis', gemeldet]);
 }
 
 // ---------------------------------------------------------------------------
@@ -519,10 +566,12 @@ async function main(): Promise<void> {
   if (befehl === 'plan') {
     const plan = planen(await lageLesen(umgebung()), schluessel());
     for (const h of plan.hinweise) console.log(h);
-    ausgabe('modus', plan.modus);
-    ausgabe('auftrag', plan.auftrag?.auftragId ?? '');
-    ausgabe('commit', plan.auftrag?.commit ?? '');
-    ausgabe('zielversion', plan.auftrag?.zielVersion ?? '');
+    ausgeben(
+      ['modus', plan.modus],
+      ['auftrag', plan.auftrag?.auftragId ?? ''],
+      ['commit', plan.auftrag?.commit ?? ''],
+      ['zielversion', plan.auftrag?.zielVersion ?? ''],
+    );
     return;
   }
 
@@ -535,8 +584,7 @@ async function main(): Promise<void> {
       throw new AusfuehrerFehler('Die Laufliste ist nicht lesbar oder kein JSON.');
     }
     const lauf = ciLaufWaehlen(laeufe, pflicht('commit'));
-    ausgabe('id', lauf.id);
-    ausgabe('url', lauf.url);
+    ausgeben(['id', lauf.id], ['url', lauf.url]);
     return;
   }
 
@@ -562,7 +610,9 @@ async function main(): Promise<void> {
       throw new AusfuehrerFehler(`Auftrag ${auftragId}: Commit oder Prüfsumme fehlt.`);
     }
 
-    const { archiv, summe, beilage } = await artefaktMessen(pflicht('verzeichnis'), {
+    // Die Messung liefert die Ausgabezeilen schon geprüft mit: Was hier
+    // scheitert, scheitert vor der Übernahme, und der Auftrag bleibt frei.
+    const { summe, beilage, ausgaben } = await artefaktMessen(pflicht('verzeichnis'), {
       commit: auftrag.commit,
       zielVersion: auftrag.zielVersion,
       artefaktSha256: auftrag.artefaktSha256,
@@ -586,9 +636,7 @@ async function main(): Promise<void> {
       throw new AusfuehrerFehler(`Auftrag ${auftragId} ist ${r.daten?.auftrag?.status ?? 'unbekannt'} — nichts zu aktivieren.`);
     }
     if (r.daten.wiederholt) console.log(`Übernahme bestätigt (bereits mit diesem Schlüssel übernommen).`);
-    ausgabe('archiv', archiv);
-    ausgabe('sha256', summe);
-    ausgabe('buildid', beilage.buildId);
+    zeilenSchreiben(ausgaben);
     return;
   }
 
@@ -606,10 +654,12 @@ async function main(): Promise<void> {
   if (befehl === 'identitaet') {
     const { laufend } = await lageLesen(umgebung());
     console.log(JSON.stringify(laufend, null, 2));
-    ausgabe('belegt', laufend.belegt ? 'ja' : 'nein');
-    ausgabe('version', laufend.version);
-    ausgabe('commit', laufend.commit ?? '');
-    ausgabe('buildid', laufend.buildId ?? '');
+    ausgeben(
+      ['belegt', laufend.belegt ? 'ja' : 'nein'],
+      ['version', laufend.version],
+      ['commit', laufend.commit ?? ''],
+      ['buildid', laufend.buildId ?? ''],
+    );
     return;
   }
 

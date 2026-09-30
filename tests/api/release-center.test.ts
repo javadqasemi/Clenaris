@@ -1,8 +1,10 @@
 import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -12,6 +14,7 @@ import { PAKET_VERSION, PRUEF_BUILD_ID, pruefBeilage, pruefManifest } from '../h
 import { eigeneOrganisationId, testDb, testDbGrund, testDbSchliessen } from '../helpers/testdb';
 import { PRUEF_AUSFUEHRER_SCHLUESSEL, PRUEF_AUSFUEHRER_TOKEN, PRUEF_IDENTITAET_COMMIT, PRUEF_SICHERHEITSBERICHT_TOKEN } from '../helpers/webhooks';
 import { SIGNATUR_KOPF, ZEIT_KOPF, signieren } from '../../src/lib/release/ausfuehrer-signatur';
+import type { ArtefaktBeilage } from '../../src/lib/release/manifest';
 import { releaseErgebnisSchema, releaseManifestSchema, releaseUebernahmeSchema } from '../../src/lib/validation/system';
 import {
   aktivierungDeuten,
@@ -1071,6 +1074,13 @@ describe('Release-Ausführer: Werkzeug und Verträge ohne Server (rein)', () => 
       const gemessen = await artefaktMessen(dir, e);
       assert.equal(gemessen.summe, summe);
       assert.equal(gemessen.beilage.buildId, PRUEF_BUILD_ID);
+      // Die Zeilen für GITHUB_OUTPUT kommen geprüft aus der Messung — `abholen`
+      // schreibt genau diese, nach der Übernahme.
+      assert.deepEqual(gemessen.ausgaben, [`archiv=${join(dir, `${name}.tar.gz`)}`, `sha256=${summe}`, `buildid=${PRUEF_BUILD_ID}`]);
+      // Eine Build-ID, die der Vertrag zulässt (1–200 beliebige Zeichen), die
+      // Ausgabe aber nicht: abgewiesen, schon bei der Messung.
+      schreiben(pruefBeilage(bytes, { commit, version: '9.9.9', ci, buildId: 'bau $(id)' }));
+      await assert.rejects(() => artefaktMessen(dir, e), /Ausgabe „buildid".*Nichts übernommen/, 'Build-ID');
 
       const abgewiesen: [string, Partial<typeof e>, RegExp][] = [
         ['anderer CI-Lauf', { ciLauf: '778', ciUrl: 'https://github.com/beispiel/clenaris/actions/runs/778' }, /CI-Lauf 777/],
@@ -1095,6 +1105,134 @@ describe('Release-Ausführer: Werkzeug und Verträge ohne Server (rein)', () => 
       await assert.rejects(() => artefaktMessen(dir, e), /anderen Datei/, 'Prüfsummendatei einer anderen Datei');
     } finally {
       rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  /**
+   * Die Reihenfolge in `abholen` als Prozess — gegen eine Attrappe der
+   * Schnittstelle auf 127.0.0.1, ohne Anwendungsserver.
+   *
+   * Gegen den Stand vor 2026-09-30 (Befund der Gegenprüfung) scheitert der
+   * Fall: Dort kam die Übernahme (POST) vor der Prüfung der Ausgaben. Die
+   * Attrappe zählte eine Übernahme, das Werkzeug endete danach mit Ausgang 1,
+   * und in einer echten Anwendung stünde der Auftrag in DEPLOYING, bis der
+   * stündliche Lauf ihn zwei Stunden später als FAILED schlösse.
+   *
+   * Der gelungene Lauf vorneweg ist die Gegenprobe: Er zeigt, dass die
+   * Attrappe eine Übernahme überhaupt sieht. Ohne ihn wäre „keine Übernahme"
+   * auch dann grün, wenn die Attrappe nie gefragt würde.
+   */
+  it('abholen prüft die Ausgaben vor der Übernahme: eine Klammer im Pfad oder fremde Zeichen in der Build-ID übernehmen nichts und schreiben nichts', async () => {
+    const commit = createHash('sha1').update('abholen-reihenfolge').digest('hex');
+    const name = `clenaris-${commit.slice(0, 12)}`;
+    const bytes = Buffer.from('Prüfarchiv, Reihenfolge');
+    const summe = createHash('sha256').update(bytes).digest('hex');
+    const ci = { lauf: '778', versuch: '1', ereignis: 'push', ref: 'refs/heads/main', repository: 'beispiel/clenaris' };
+    const AUFTRAG = 'creihenfolge01';
+    const uebernahmen: { commit?: string; zielVersion?: string }[] = [];
+
+    const attrappe = createServer((anfrage, antwort) => {
+      let rumpf = '';
+      anfrage.on('data', (d: Buffer) => (rumpf += d.toString()));
+      anfrage.on('end', () => {
+        antwort.setHeader('content-type', 'application/json');
+        if (anfrage.method === 'GET' && anfrage.url?.startsWith('/api/cron/release-auftraege?')) {
+          const lage: Lage = {
+            umgebung: 'test',
+            laufend: { version: '1.0.0', commit: 'c'.repeat(40), buildId: 'bau', belegt: true },
+            auftraege: [
+              { auftragId: AUFTRAG, status: 'SCHEDULED', zielVersion: '9.9.9', vonVersion: '1.0.0', commit, artefaktSha256: summe, ausfuehrungsSchluessel: null, hindernis: null },
+            ],
+            inAusfuehrung: [],
+          };
+          antwort.end(JSON.stringify({ data: lage }));
+          return;
+        }
+        if (anfrage.method === 'POST' && anfrage.url === '/api/cron/release-auftraege/uebernehmen') {
+          uebernahmen.push(JSON.parse(rumpf) as { commit?: string; zielVersion?: string });
+          antwort.end(JSON.stringify({ data: { wiederholt: false, auftrag: { status: 'DEPLOYING' } } }));
+          return;
+        }
+        antwort.statusCode = 404;
+        antwort.end('{}');
+      });
+    });
+    await new Promise<void>((ok) => attrappe.listen(0, '127.0.0.1', ok));
+    const port = (attrappe.address() as AddressInfo).port;
+
+    const verzeichnisse: string[] = [];
+    const artefakt = (praefix: string, beilage: Partial<ArtefaktBeilage> = {}) => {
+      const dir = mkdtempSync(join(tmpdir(), praefix));
+      verzeichnisse.push(dir);
+      writeFileSync(join(dir, `${name}.tar.gz`), bytes);
+      writeFileSync(join(dir, `${name}.tar.gz.sha256`), `${summe}  ${name}.tar.gz\n`);
+      writeFileSync(join(dir, `${name}.json`), JSON.stringify(pruefBeilage(bytes, { commit, version: '9.9.9', ci, ...beilage })));
+      return dir;
+    };
+    // Asynchron gestartet, nicht mit spawnSync: Die Attrappe läuft in diesem
+    // Prozess und könnte sonst nicht antworten.
+    const abholen = (dir: string) =>
+      new Promise<{ status: number | null; text: string; ausgabe: string }>((ok) => {
+        const ausgabeDatei = join(dir, 'github-output.txt');
+        const lauf = spawn(
+          process.execPath,
+          [
+            join('node_modules', 'tsx', 'dist', 'cli.mjs'),
+            'scripts/release-ausfuehrer.ts',
+            'abholen',
+            '--verzeichnis',
+            dir,
+            '--auftrag',
+            AUFTRAG,
+            '--ci-lauf',
+            '778',
+            '--ci-url',
+            'https://github.com/beispiel/clenaris/actions/runs/778',
+          ],
+          {
+            env: {
+              ...process.env,
+              CLENARIS_URL: `http://127.0.0.1:${port}`,
+              RELEASE_EXECUTOR_TOKEN: 'attrappe-token',
+              RELEASE_EXECUTOR_SIGNING_KEY: 'attrappe-signaturschluessel',
+              UMGEBUNG: 'test',
+              AUSFUEHRER: 'pruefreihe/rein',
+              SCHLUESSEL: 'pruefreihe-reihenfolge-0001',
+              GITHUB_OUTPUT: ausgabeDatei,
+            },
+            stdio: ['ignore', 'pipe', 'pipe'],
+          },
+        );
+        let text = '';
+        lauf.stdout.on('data', (d: Buffer) => (text += d.toString()));
+        lauf.stderr.on('data', (d: Buffer) => (text += d.toString()));
+        lauf.on('close', (status) => ok({ status, text, ausgabe: existsSync(ausgabeDatei) ? readFileSync(ausgabeDatei, 'utf8') : '' }));
+      });
+
+    try {
+      const gutesVerzeichnis = artefakt('clenaris-reihenfolge-');
+      const gut = await abholen(gutesVerzeichnis);
+      assert.equal(gut.status, 0, gut.text);
+      assert.equal(uebernahmen.length, 1, 'die Attrappe hat die Übernahme nicht gesehen — die Fälle unten bewiesen nichts');
+      assert.equal(uebernahmen[0]!.commit, commit);
+      assert.equal(uebernahmen[0]!.zielVersion, '9.9.9');
+      assert.equal(gut.ausgabe, [`archiv=${join(gutesVerzeichnis, `${name}.tar.gz`)}`, `sha256=${summe}`, `buildid=${PRUEF_BUILD_ID}`, ''].join('\n'));
+
+      const faelle: [string, string, RegExp][] = [
+        ['Klammer im Pfad', artefakt('clenaris-reihenfolge-(klammer)-'), /Ausgabe „archiv"/],
+        ['Build-ID mit Leerzeichen und $', artefakt('clenaris-reihenfolge-', { buildId: 'bau $(id)' }), /Ausgabe „buildid"/],
+      ];
+      for (const [fall, dir, grund] of faelle) {
+        const r = await abholen(dir);
+        assert.equal(r.status, 1, `${fall}: ${r.text}`);
+        assert.match(r.text, grund, fall);
+        assert.match(r.text, /Nichts übernommen/, fall);
+        assert.equal(r.ausgabe, '', `${fall}: GITHUB_OUTPUT wurde beschrieben`);
+      }
+      assert.equal(uebernahmen.length, 1, 'ein Wert, der nicht weitergegeben werden darf, hat trotzdem eine Übernahme ausgelöst');
+    } finally {
+      await new Promise<void>((ok) => attrappe.close(() => ok()));
+      for (const dir of verzeichnisse) rmSync(dir, { recursive: true, force: true });
     }
   });
 
