@@ -8,6 +8,11 @@
  *   npm run verify:release:core    release-kern    voll auf frischer Datenbank, aus sauberem Worktree des Commits
  *   npm run verify:release:stress  release-stress  Stressreihe gegen den vorhandenen Bau
  *
+ * Nur `verify:release` meldet „RELEASE BESTANDEN“ (Exitcode 0) und schreibt
+ * `test-results/release-nachweis.json`. Die beiden Teilwege enden mit
+ * „TEILPRÜFUNG BESTANDEN — KEIN RELEASE-NACHWEIS“ und Exitcode **3** — die
+ * Regel und ihre Begründung stehen in `scripts/security/pruefweg-abschluss.ts`.
+ *
  * ---------------------------------------------------------------------------
  *  Warum ein Skript
  * ---------------------------------------------------------------------------
@@ -35,20 +40,33 @@
  */
 
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
-import { appendFileSync, cpSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import { appendFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { basename, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 
 import { config } from 'dotenv';
 
 import { databaseNameOf, istTestdatenbank } from '../prisma/seed-guard';
 
 import { abzugsbefundeSichern } from './security/befundsicherung';
-import { bilanzPruefen, browserBilanzPruefen, testbilanzLesen, type BrowserZahlen } from './security/testbilanz';
+import {
+  abschluss,
+  browserBerichtLesen,
+  engineBilanzPruefen,
+  engineZeilen,
+  MODI,
+  RELEASE_NACHWEIS_DATEI,
+  releaseNachweisBauen,
+  releaseNachweisSchreiben,
+  STRESS_LAEUFE,
+  type BrowserBilanz,
+  type Laufbilanz,
+  type Modus,
+  type Stressbericht,
+} from './security/pruefweg-abschluss';
+import { bilanzPruefen, testbilanzLesen } from './security/testbilanz';
 
 config();
-
-type Modus = 'statisch' | 'pruefreihen' | 'browser' | 'voll' | 'release' | 'release-kern' | 'release-stress';
 
 const WURZEL = resolve(__dirname, '..');
 const WINDOWS = process.platform === 'win32';
@@ -93,14 +111,47 @@ function schritt(
 
 let server: ChildProcess | null = null;
 
+/** Der aktuelle Modus — für die abgelegte Laufbilanz. */
+let laufModus: Modus | null = null;
+
+/** Die Browserbilanz des letzten Browserlaufs, je Engine — für die Laufbilanz. */
+let letzteBrowserBilanz: BrowserBilanz | null = null;
+
 function zusammenfassung(): void {
   console.log('\n━━ Zusammenfassung');
   for (const e of ergebnisse) console.log(`   ${e.ok ? '✓' : '✗'} ${e.schritt.padEnd(44)} ${zeit(e.dauerMs).padStart(10)}${e.hinweis ? `  (${e.hinweis})` : ''}`);
 }
 
+/**
+ * Die Laufbilanz ablegen, wenn der Aufrufer danach fragt
+ * (`CLENARIS_PRUEFWEG_BILANZ`, ein Dateipfad) — bestanden **und** gescheitert.
+ *
+ * Wozu: Der Release-Weg startet den vollen Prüfweg als eigenen Prozess im
+ * Abzug und sah bis hierher nur dessen Exitcode. Für den Release-Nachweis
+ * braucht er aber, *was* bestanden hat — jeden Schritt, die Browserbilanz je
+ * Engine. Die Konsolenausgabe dafür wieder einzulesen wäre derselbe Fehler,
+ * den die Stressreihe mit ihrem regulären Ausdruck gemacht hat. Die Datei
+ * liegt ausserhalb von `test-results/`, weil Playwright dieses Verzeichnis zu
+ * Beginn jedes Stresslaufs leert.
+ */
+function bilanzAblegen(ok: boolean): void {
+  const ziel = process.env.CLENARIS_PRUEFWEG_BILANZ?.trim();
+  if (!ziel || !laufModus) return;
+  const bilanz: Laufbilanz = { modus: laufModus, ok, schritte: ergebnisse, browser: letzteBrowserBilanz };
+  try {
+    mkdirSync(dirname(ziel), { recursive: true });
+    writeFileSync(ziel, `${JSON.stringify(bilanz, null, 2)}\n`, 'utf8');
+  } catch (fehler) {
+    // Kein Abbruch im Abbruch: Fehlt die Bilanz, weist der Release-Weg den
+    // Nachweis ab („Keine Bilanz des Kerns“) — das ist die sichere Richtung.
+    console.error(`   Laufbilanz nicht geschrieben (${ziel}): ${(fehler as Error).message}`);
+  }
+}
+
 function abbrechen(grund: string): never {
   serverBeenden();
   zusammenfassung();
+  bilanzAblegen(false);
   console.error(`\n❌  ${grund}`);
   process.exit(1);
 }
@@ -346,26 +397,40 @@ async function pruefreihen(basis: string, cacheDir: string | undefined, port: st
  * Demodaten. Der JSON-Bericht (neben der gewohnten Liste) liefert die Zahlen;
  * übersprungen, wackelig (`flaky`) oder unerwartet ist ein Fehlschlag, und
  * ein fehlender Bericht ebenso — ohne Zahlen ist nichts bewiesen.
+ *
+ * Seit 2026-09-30 **je Engine** (`pruefweg-abschluss.ts`): Die Summe allein
+ * sagte nicht, ob Firefox und WebKit überhaupt gefahren sind. Jede der drei
+ * Engines braucht mindestens einen bestandenen Fall, und die Zahlen stehen
+ * nach dem Lauf je Engine in der Ausgabe und in der Laufbilanz.
+ *
+ * Der Bericht liegt in `test-results/` statt in einem Temp-Verzeichnis: Dort
+ * lädt CI ihn bei einem Fehlschlag zusammen mit den Spuren hoch, und im
+ * Release-Abzug sichert `befundsicherung.ts` ihn. Playwright leert das
+ * Verzeichnis zu **Beginn** eines Laufs und schreibt den Bericht an dessen
+ * Ende — er überlebt also genau bis zum nächsten Lauf. Vorher wird er
+ * gelöscht: Scheiterte Playwright, bevor es selbst aufräumt (kaputte
+ * Konfiguration), läse dieser Schritt sonst den Bericht des vorigen Laufs.
  */
 function browserreihe(env: Record<string, string>, port: string): void {
-  const bericht = join(mkdtempSync(join(tmpdir(), 'clenaris-e2e-')), 'bericht.json');
+  const bericht = join(WURZEL, 'test-results', 'playwright-bericht.json');
+  rmSync(bericht, { force: true });
   schritt('Browser-Prüfreihe (ohne Wiederholungen)', 'npx playwright test --retries=0 --reporter=list,json', {
     env: { ...env, E2E_PORT: port, PLAYWRIGHT_JSON_OUTPUT_NAME: bericht },
   });
   const start = Date.now();
-  const stats: BrowserZahlen | null = (() => {
-    try {
-      return (JSON.parse(readFileSync(bericht, 'utf8')) as { stats?: BrowserZahlen }).stats ?? null;
-    } catch {
-      return null;
-    }
-  })();
-  const gruende = browserBilanzPruefen(stats);
+  const bilanz = browserBerichtLesen(bericht);
+  letzteBrowserBilanz = bilanz;
+  const gruende = engineBilanzPruefen(bilanz, { jedeEngine: true });
+  if (bilanz) {
+    console.log('\n━━ Browser-Bilanz je Engine');
+    for (const zeile of engineZeilen(bilanz)) console.log(`   ${zeile}`);
+  }
+  const g = bilanz?.gesamt;
   ergebnisse.push({
-    schritt: 'Browser-Bilanz (0 übersprungen, 0 wackelig)',
+    schritt: 'Browser-Bilanz (je Engine, 0 übersprungen, 0 wackelig)',
     ok: gruende.length === 0,
     dauerMs: Date.now() - start,
-    hinweis: stats ? `${stats.expected ?? 0} bestanden, ${stats.skipped ?? 0} übersprungen, ${stats.flaky ?? 0} wackelig` : 'kein Bericht',
+    hinweis: g ? `${g.expected ?? 0} bestanden, ${g.skipped ?? 0} übersprungen, ${g.flaky ?? 0} wackelig; ${bilanz!.engines.join('/')}` : 'kein Bericht',
   });
   if (gruende.length) abbrechen(`Browser-Bilanz: ${gruende.join(' ')}`);
 }
@@ -463,9 +528,6 @@ async function voll(optionen: { frisch: boolean }): Promise<void> {
  * gemeinsamer `node_modules` oder `.next` —, und git funktioniert darin.
  * Er wird am Ende wieder entfernt, auch nach einem Fehlschlag.
  */
-/** Läufe der Stressreihe im Release-Weg; eine kleinere Zahl ist kein Release-Nachweis. */
-const STRESS_LAEUFE = 5;
-
 /**
  * Release in zwei Teilen (2026-09-29, M4):
  *
@@ -476,46 +538,126 @@ const STRESS_LAEUFE = 5;
  * Vorher endete `verify:release` nach dem Kern mit „Alle blockierenden
  * Schritte bestanden", und die Stressreihe war ein getrennter, vergessbarer
  * Aufruf. Ein wackelnder Browserfall zeigt sich aber gerade nicht im einen
- * Lauf des Kerns. Deshalb meldet der Kern allein ausdrücklich „RELEASE NICHT
- * BELEGT", und nur der Gesamtweg meldet „RELEASE BESTANDEN".
+ * Lauf des Kerns. Seit 2026-09-30 enden die beiden Teile mit Exitcode 3 und
+ * „TEILPRÜFUNG BESTANDEN — KEIN RELEASE-NACHWEIS“, und nur der Gesamtweg
+ * meldet „RELEASE BESTANDEN“ und schreibt den Nachweis
+ * (`pruefweg-abschluss.ts`).
  */
-async function release(optionen: { stress: boolean }): Promise<void> {
+
+/**
+ * Die Aufräumarbeit des Release-Abzugs, solange sie aussteht. Sie läuft
+ * **vor** der Schlussmeldung (in `main`), damit die Aussage des Laufs die
+ * letzte Zeile bleibt — und als Rückfall beim Prozessende, wenn ein Schritt
+ * mit `process.exit` abbricht.
+ */
+let abzugAufraeumen: (() => void) | null = null;
+
+async function release(modus: 'release' | 'release-kern'): Promise<void> {
   const git = gitBefehl();
   if (!git) abbrechen('git nicht gefunden — ohne Worktree kein sauberer Abzug.');
+  const start = new Date();
   const ziel = mkdtempSync(join(tmpdir(), 'clenaris-release-'));
   const quelle = join(ziel, 'quelle');
-  const aufraeumen = () => {
+  // `hydrationsbefunde/` ist nicht verfolgt — die Ablage stört weder den
+  // Arbeitsbaum noch den nächsten Release-Lauf.
+  const ablage = join(WURZEL, 'hydrationsbefunde', `release-${basename(ziel)}`);
+  abzugAufraeumen = () => {
+    abzugAufraeumen = null;
     // Erst sichern, dann entfernen (RC-20): Mit dem Abzug verschwanden die
     // Spur eines roten Laufs und das Protokoll, auf das die Ausgabe zeigt.
-    // `hydrationsbefunde/` ist nicht verfolgt — die Ablage stört weder den
-    // Arbeitsbaum noch den nächsten Release-Lauf.
-    const ablage = join(WURZEL, 'hydrationsbefunde', `release-${basename(ziel)}`);
+    // Seit 2026-09-30 liegt darunter auch der Release-Nachweis.
     const gesichert = abzugsbefundeSichern(quelle, ablage);
     if (gesichert.length > 0) console.log(`\n   Beweise des Release-Laufs gesichert: ${ablage}`);
     spawnSync(`${git} worktree remove --force "${quelle}"`, { shell: true, cwd: WURZEL, stdio: 'ignore' });
     rmSync(ziel, { recursive: true, force: true });
   };
-  process.once('exit', aufraeumen);
+  process.once('exit', () => abzugAufraeumen?.());
   schritt('Sauberer Abzug des aktuellen Commits (git worktree, losgelöst)', `${git} worktree add --detach "${quelle}" HEAD`);
   // Die `.env` gehört nicht ins Repository; die Testdatenbank wird ausdrücklich
   // übergeben, damit der Abzug dieselbe Datenbank ableitet wie der Arbeitsbaum.
   if (existsSync(join(WURZEL, '.env'))) cpSync(join(WURZEL, '.env'), join(quelle, '.env'));
   schritt('Abhängigkeiten aus der Sperrdatei (npm ci)', 'npm ci --no-audit --no-fund', { cwd: quelle });
-  schritt('Voller Prüfweg im Abzug, frische Testdatenbank', 'npx tsx scripts/verify.ts voll --frisch', { cwd: quelle, env: { TEST_DATABASE_URL: testdatenbank() } });
-  // Im selben Abzug und auf seinem Bau: Die Stressreihe prüft, was der Kern gebaut hat.
-  if (optionen.stress) stressreihe(quelle);
+  // Die Laufbilanz des Kerns liegt neben dem Abzug, nicht in seinem
+  // `test-results/`: Das leert Playwright zu Beginn jedes Stresslaufs.
+  const kernBilanz = join(ziel, 'kern-bilanz.json');
+  schritt('Voller Prüfweg im Abzug, frische Testdatenbank', 'npx tsx scripts/verify.ts voll --frisch', {
+    cwd: quelle,
+    env: { TEST_DATABASE_URL: testdatenbank(), CLENARIS_PRUEFWEG_BILANZ: kernBilanz },
+  });
+  if (modus === 'release-kern') return;
+
+  // Im selben Abzug und auf seinem Bau: Die Stressreihe prüft, was der Kern
+  // gebaut hat. Ihr Bericht liegt in `test-results/` des Abzugs — nach dem
+  // letzten Lauf geschrieben, also von keinem Playwright-Lauf mehr geleert —
+  // und wird dort mitgesichert, auch wenn die Reihe rot endet.
+  const stressBericht = join(quelle, 'test-results', 'stress-bericht.json');
+  stressreihe(quelle, stressBericht);
+  nachweisAblegen({ git, quelle, ablage, start, kernBilanz, stressBericht });
 }
 
-function stressreihe(cwd: string): void {
+function stressreihe(cwd: string, bericht?: string): void {
   const datenbank = testdatenbank();
-  schritt(`Stressreihe (${STRESS_LAEUFE} Browserläufe, je frischer Server, ohne Wiederholungen)`, `npx tsx scripts/e2e-stress.ts --laeufe ${STRESS_LAEUFE}`, {
-    cwd,
-    env: { TEST_DATABASE_URL: datenbank },
+  schritt(
+    `Stressreihe (${STRESS_LAEUFE} Browserläufe, je frischer Server, ohne Wiederholungen)`,
+    `npx tsx scripts/e2e-stress.ts --laeufe ${STRESS_LAEUFE}${bericht ? ` --bericht "${bericht}"` : ''}`,
+    { cwd, env: { TEST_DATABASE_URL: datenbank } },
+  );
+}
+
+function jsonLesen<T>(pfad: string): T | null {
+  try {
+    return JSON.parse(readFileSync(pfad, 'utf8')) as T;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Den Release-Nachweis bauen und in `test-results/` des Abzugs schreiben
+ * (2026-09-30). Von dort sichert ihn `abzugAufraeumen` mit den übrigen
+ * Beweisen nach `hydrationsbefunde/release-…/test-results/`.
+ *
+ * Kann der Nachweis nicht gebaut werden — fehlt die Bilanz des Kerns, sind
+ * es nicht fünf grüne Stressläufe, fehlt einer Engine jeder bestandene
+ * Fall —, bricht der Release-Weg ab, obwohl jeder Schritt einzeln grün war:
+ * Ein „RELEASE BESTANDEN“ ohne Datei, die es trägt, gibt es nicht.
+ */
+function nachweisAblegen(a: { git: string; quelle: string; ablage: string; start: Date; kernBilanz: string; stressBericht: string }): void {
+  const beginn = Date.now();
+  const commit = (spawnSync(`${a.git} rev-parse HEAD`, { shell: true, cwd: a.quelle, encoding: 'utf8' }).stdout ?? '').trim();
+  const dist = process.env.NEXT_DIST_DIR?.trim() || '.next';
+  const buildIdDatei = join(a.quelle, dist, 'BUILD_ID');
+  const buildId = existsSync(buildIdDatei) ? readFileSync(buildIdDatei, 'utf8').trim() : null;
+  const ergebnis = releaseNachweisBauen({
+    commit,
+    buildId,
+    start: a.start,
+    ende: new Date(),
+    kern: jsonLesen<Laufbilanz>(a.kernBilanz),
+    stress: jsonLesen<Stressbericht>(a.stressBericht),
+  });
+  if (!ergebnis.nachweis) {
+    ergebnisse.push({ schritt: 'Release-Nachweis', ok: false, dauerMs: Date.now() - beginn, hinweis: 'nicht belegt' });
+    abbrechen(`Release-Nachweis nicht belegt: ${ergebnis.gruende.join(' ')}`);
+  }
+  const pfad = releaseNachweisSchreiben('release', join(a.quelle, 'test-results'), ergebnis.nachweis);
+  if (!pfad) abbrechen('Release-Nachweis nicht geschrieben.');
+  ergebnisse.push({
+    schritt: 'Release-Nachweis',
+    ok: true,
+    dauerMs: Date.now() - beginn,
+    hinweis: `${commit.slice(0, 12)}, ${join(a.ablage, 'test-results', RELEASE_NACHWEIS_DATEI)}`,
   });
 }
 
 async function main(): Promise<void> {
-  const modus = process.argv[2] as Modus | undefined;
+  const eingabe = process.argv[2];
+  if (!eingabe || !(MODI as readonly string[]).includes(eingabe)) {
+    console.error(`Aufruf: tsx scripts/verify.ts ${MODI.join(' | ')}   (voll auch mit --frisch)`);
+    process.exit(2);
+  }
+  const modus = eingabe as Modus;
+  laufModus = modus;
   const frisch = process.argv.includes('--frisch');
   process.on('SIGINT', () => abbrechen('Abgebrochen.'));
 
@@ -542,24 +684,24 @@ async function main(): Promise<void> {
       await voll({ frisch });
       break;
     case 'release':
-      await release({ stress: true });
-      break;
     case 'release-kern':
-      await release({ stress: false });
+      await release(modus);
       break;
     case 'release-stress':
       // Gegen den Bau im Arbeitsbaum (`.next`); `e2e-stress.ts` bricht ohne ab.
       stressreihe(WURZEL);
       break;
-    default:
-      console.error('Aufruf: tsx scripts/verify.ts statisch | pruefreihen | browser | voll [--frisch] | release | release-kern | release-stress');
-      process.exit(2);
   }
+  // Erst die Beweise des Abzugs sichern (samt Nachweis), dann die
+  // Zusammenfassung und als letzte Zeile die Aussage des Laufs.
+  abzugAufraeumen?.();
   zusammenfassung();
-  if (modus === 'release') console.log(`\n✅  RELEASE BESTANDEN — Kern und Stressreihe ${STRESS_LAEUFE}/${STRESS_LAEUFE}.`);
-  else if (modus === 'release-kern') console.log('\n✅  Release-Kern bestanden.\n⚠  RELEASE NICHT BELEGT — die Stressreihe fehlt (`npm run verify:release:stress` oder `npm run verify:release`).');
-  else if (modus === 'release-stress') console.log(`\n✅  Stressreihe ${STRESS_LAEUFE}/${STRESS_LAEUFE} bestanden.\n⚠  RELEASE NICHT BELEGT ohne den Kern (\`npm run verify:release\`).`);
-  else console.log('\n✅  Alle blockierenden Schritte bestanden.');
+  bilanzAblegen(true);
+  const ende = abschluss(modus);
+  console.log(`\n${ende.text}`);
+  // `exitCode` statt `process.exit`: Der Prozess endet von selbst, und die
+  // Ausgabe darüber wird vorher vollständig geschrieben — auch in eine Pipe.
+  process.exitCode = ende.code;
 }
 
 void main();

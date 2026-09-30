@@ -5,6 +5,7 @@
  *   npm run e2e:stress                 # 5 Läufe
  *   npm run e2e:stress -- --laeufe 8
  *   npm run e2e:stress -- --laeufe 3 --datei tests/e2e/gate4d-sperre.spec.ts
+ *   npm run e2e:stress -- --bericht <datei.json>   # Bericht an festen Ort (verify:release)
  *
  * ---------------------------------------------------------------------------
  *  Wozu
@@ -47,21 +48,11 @@
  */
 
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
-import { existsSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
 
 import { laufspurenSichern } from './security/befundsicherung';
-
-interface Laufergebnis {
-  nummer: number;
-  bestanden: number;
-  fehlgeschlagen: number;
-  uebersprungen: number;
-  wackelig: number;
-  dauerSekunden: number;
-  hydrationsartefakte: number;
-  exitcode: number;
-}
+import { browserBerichtLesen, engineBilanzPruefen, engineZeilen, type Stressbericht, type Stresslauf } from './security/pruefweg-abschluss';
 
 const argv = process.argv.slice(2);
 
@@ -76,7 +67,22 @@ function wert(schalter: string): string | null {
 
 const laeufe = Number.parseInt(wert('--laeufe') ?? '5', 10);
 const datei = wert('--datei');
+/**
+ * Wohin der Bericht der Reihe geht. Vorgabe wie bisher `test-results/stress-<Zeit>.json`;
+ * `verify:release` gibt einen festen Pfad vor, weil es den Bericht danach in
+ * den Release-Nachweis übernimmt und nicht nach dem neuesten Zeitstempel
+ * raten soll.
+ */
+const berichtPfad = wert('--bericht');
 const port = process.env.E2E_PORT?.trim() || '3001';
+/**
+ * Der JSON-Bericht von Playwright je Lauf (2026-09-30). In `test-results/`,
+ * weil ein roter Lauf dieses Verzeichnis ohnehin wegsichert
+ * (`laufspurenSichern`) — die Zahlen reisen dann mit der Spur. Playwright
+ * leert das Verzeichnis zu Beginn des nächsten Laufs; bis dahin ist er
+ * gelesen.
+ */
+const playwrightBericht = join(process.cwd(), 'test-results', 'playwright-bericht.json');
 /**
  * Ausserhalb von `test-results/`, weil Playwright sein Ausgabeverzeichnis zu
  * Beginn jedes Laufs leert — sonst zählt dieses Skript im fünften Lauf die
@@ -89,8 +95,17 @@ if (!Number.isInteger(laeufe) || laeufe < 1) {
   process.exit(1);
 }
 
-if (!existsSync(join(process.cwd(), '.next', 'BUILD_ID'))) {
-  console.error('❌  Kein Produktionsbau in .next — zuerst `npm run build` (bei gestopptem Entwicklungsserver).');
+/*
+  Dasselbe Bauverzeichnis wie `next.config.ts` und `test-server.ts`
+  (`NEXT_DIST_DIR`, sonst `.next`). Bis 2026-09-30 stand hier fest `.next`:
+  Mit gesetztem `NEXT_DIST_DIR` — dem üblichen Weg, neben einem laufenden
+  Entwicklungsserver zu bauen — verweigerte die Reihe einen vorhandenen Bau
+  oder, schlimmer, liess sich von einem alten `.next` beruhigen, während der
+  Testserver aus dem anderen Verzeichnis startete.
+*/
+const bauverzeichnis = process.env.NEXT_DIST_DIR?.trim() || '.next';
+if (!existsSync(join(process.cwd(), bauverzeichnis, 'BUILD_ID'))) {
+  console.error(`❌  Kein Produktionsbau in ${bauverzeichnis} — zuerst \`npm run build\` (bei gestopptem Entwicklungsserver).`);
   process.exit(1);
 }
 
@@ -178,15 +193,16 @@ function playwrightFahren(): { ausgabe: string; exitcode: number } {
     'npx',
     // `--retries=0` ausdrücklich, nicht nur aus der Konfiguration: Eine Reihe,
     // die als Tor zählt, soll nicht davon abhängen, dass niemand dort einen
-    // Wiederholungswert einträgt.
-    ['playwright', 'test', '--retries=0', ...(datei ? [datei] : [])],
+    // Wiederholungswert einträgt. `list,json`: die gewohnte Liste für den
+    // Menschen, der JSON-Bericht für die Zählung.
+    ['playwright', 'test', '--retries=0', '--reporter=list,json', ...(datei ? [datei] : [])],
     {
       encoding: 'utf8',
       shell: ueberShell,
       maxBuffer: 64 * 1024 * 1024,
       // Playwright soll den Server **nicht** selbst starten: Dieses Skript
       // besitzt ihn und will ihn zwischen den Läufen kontrolliert wechseln.
-      env: { ...process.env, E2E_PORT: port, PLAYWRIGHT_HTML_OPEN: 'never' },
+      env: { ...process.env, E2E_PORT: port, PLAYWRIGHT_HTML_OPEN: 'never', PLAYWRIGHT_JSON_OUTPUT_NAME: playwrightBericht },
     },
   );
   const ausgabe = `${ergebnis.stdout ?? ''}${ergebnis.stderr ?? ''}`;
@@ -194,11 +210,19 @@ function playwrightFahren(): { ausgabe: string; exitcode: number } {
   return { ausgabe, exitcode: ergebnis.status ?? 1 };
 }
 
-/** Playwrights Listenausgabe endet mit Zeilen wie „19 passed (1.2m)". */
-function zaehlen(ausgabe: string, wort: string): number {
-  const treffer = ausgabe.match(new RegExp(`(\\d+)\\s+${wort}`));
-  return treffer ? Number.parseInt(treffer[1]!, 10) : 0;
-}
+/*
+  Gezählt wird aus dem JSON-Bericht, nicht mehr aus der Listenausgabe
+  (2026-09-30). Hier stand `ausgabe.match(/(\d+)\s+passed/)` — der **erste**
+  Treffer im ganzen Protokoll. Jede Zeile davor, die zufällig „3 passed“ oder
+  „2 skipped“ enthielt (eine Fehlermeldung, ein Konsolenausdruck der
+  Anwendung, ein Testtitel), wurde zur Bilanz des Laufs; und ein
+  übersprungener Fall, dessen Zeile Playwright anders formulierte, zählte als
+  null. Die Regel „0 übersprungen, 0 wackelig, mindestens ein bestandener
+  Fall“ war damit so gut wie die Formulierung der Ausgabe. Jetzt gilt
+  dieselbe Regel wie in `verify.ts` (`browserBilanzPruefen` aus
+  `testbilanz.ts`, über `engineBilanzPruefen` für die Summe und je Engine),
+  auf denselben Zahlen, die Playwright selbst zählt.
+*/
 
 // ---------------------------------------------------------------------------
 //  Hauptlauf
@@ -206,7 +230,7 @@ function zaehlen(ausgabe: string, wort: string): number {
 
 async function main(): Promise<void> {
   mkdirSync(artefakte, { recursive: true });
-  const ergebnisse: Laufergebnis[] = [];
+  const ergebnisse: Stresslauf[] = [];
 
   console.log('');
   console.log(`  Stressreihe: ${laeufe} vollständige Browserläufe, je gegen einen neu gestarteten Testserver.`);
@@ -228,6 +252,12 @@ async function main(): Promise<void> {
     const start = Date.now();
     let exitcode = 1;
     let ausgabe = '';
+    // Der Bericht des vorigen Laufs muss weg, bevor dieser beginnt: Startet
+    // der Server nicht, oder scheitert Playwright, bevor es `test-results/`
+    // selbst leert (kaputte Konfiguration, fehlender Browser), läse die
+    // Zählung sonst die Zahlen des vorigen, grünen Laufs — ein roter Lauf mit
+    // grünen Zahlen im Bericht.
+    rmSync(playwrightBericht, { force: true });
 
     try {
       kind = await serverStarten();
@@ -240,6 +270,19 @@ async function main(): Promise<void> {
       await serverBeenden(kind);
     }
 
+    // Rot ist auch ein Lauf mit Exitcode 0, in dem Fälle übersprungen wurden,
+    // wackelten oder Hydrationsartefakte entstanden (2026-09-29, M4):
+    // Playwright endet dann mit 0, und „5/5 grün" wäre eine Aussage über
+    // Fälle, die nie liefen. Ein Lauf ohne einen einzigen bestandenen Fall
+    // beweist ebenfalls nichts, ein Lauf ohne Bericht auch nicht — und seit
+    // 2026-09-30 über die ganze Reihe auch keine Engine ohne bestandenen Fall.
+    const bilanz = browserBerichtLesen(playwrightBericht);
+    const gruende = engineBilanzPruefen(bilanz, { jedeEngine: !datei });
+    if (exitcode !== 0) gruende.unshift(`Playwright endete mit Exitcode ${exitcode}.`);
+    const hydrationsartefakte = artefaktzahl() - vorher;
+    if (hydrationsartefakte > 0) gruende.push(`${hydrationsartefakte} Hydrationsartefakt(e).`);
+    const g = bilanz?.gesamt;
+
     /**
      * Die vollständige Ausgabe eines **roten** Laufs wird weggeschrieben.
      *
@@ -247,13 +290,19 @@ async function main(): Promise<void> {
      * fahren lässt (das ist der Normalfall bei zehn Läufen), hat am Ende die
      * Zusammenfassung und nicht den Fehlschlag. Genau so ist in Wave 9.1 der
      * erste eingefangene Restbefund verlorengegangen.
+     *
+     * Seit 2026-09-30 für **jeden** roten Lauf, nicht nur für einen mit
+     * Exitcode ungleich 0: Ein Lauf mit übersprungenem Fall ist ebenso rot,
+     * und gerade bei ihm will man später sehen, welcher es war. Mit der Spur
+     * wandert der JSON-Bericht des Laufs mit (er liegt in `test-results/`).
      */
-    if (exitcode !== 0) {
+    if (gruende.length > 0) {
       mkdirSync(artefakte, { recursive: true });
       const marke = `stress-lauf-${nummer}-${Date.now()}`;
       const protokoll = join(artefakte, `${marke}.log`);
-      writeFileSync(protokoll, ausgabe, 'utf8');
-      console.log(`\n  Vollständige Ausgabe des roten Laufs: ${protokoll}`);
+      writeFileSync(protokoll, `${ausgabe}\n\n── Gründe (e2e-stress) ──\n${gruende.join('\n')}\n`, 'utf8');
+      console.log(`\n  Lauf ${nummer} rot: ${gruende.join(' ')}`);
+      console.log(`  Vollständige Ausgabe des roten Laufs: ${protokoll}`);
       // Die Ausgabe allein reichte nicht (RC-20): Sie nennt die Spur nur mit
       // ihrem Pfad in `test-results/`, und den leert der nächste Lauf.
       const spuren = laufspurenSichern(join(process.cwd(), 'test-results'), join(artefakte, marke));
@@ -262,41 +311,42 @@ async function main(): Promise<void> {
 
     ergebnisse.push({
       nummer,
-      bestanden: zaehlen(ausgabe, 'passed'),
-      fehlgeschlagen: zaehlen(ausgabe, 'failed'),
-      uebersprungen: zaehlen(ausgabe, 'skipped'),
-      wackelig: zaehlen(ausgabe, 'flaky'),
+      bestanden: g?.expected ?? 0,
+      fehlgeschlagen: g?.unexpected ?? 0,
+      uebersprungen: g?.skipped ?? 0,
+      wackelig: g?.flaky ?? 0,
       dauerSekunden: Math.round((Date.now() - start) / 1000),
-      hydrationsartefakte: artefaktzahl() - vorher,
+      hydrationsartefakte,
       exitcode,
+      jeEngine: bilanz?.jeEngine ?? {},
+      gruende,
     });
   }
 
   console.log('\n══════════ Ergebnis der Stressreihe ══════════\n');
-  console.log('  Lauf  bestanden  fehlgeschlagen  übersprungen  Hydration  Dauer');
+  console.log('  Lauf  bestanden  fehlgeschlagen  übersprungen  wackelig  Hydration  Dauer');
   for (const e of ergebnisse) {
     console.log(
-      `  ${String(e.nummer).padStart(4)}  ${String(e.bestanden).padStart(9)}  ${String(e.fehlgeschlagen).padStart(14)}  ${String(e.uebersprungen).padStart(12)}  ${String(e.hydrationsartefakte).padStart(9)}  ${e.dauerSekunden}s`,
+      `  ${String(e.nummer).padStart(4)}  ${String(e.bestanden).padStart(9)}  ${String(e.fehlgeschlagen).padStart(14)}  ${String(e.uebersprungen).padStart(12)}  ${String(e.wackelig).padStart(8)}  ${String(e.hydrationsartefakte).padStart(9)}  ${e.dauerSekunden}s`,
     );
+    const engines = Object.keys(e.jeEngine);
+    if (engines.length > 0) {
+      for (const zeile of engineZeilen({ gesamt: {}, jeEngine: e.jeEngine, engines })) console.log(`        ${zeile}`);
+    }
   }
 
-  const bericht = join(process.cwd(), 'test-results', `stress-${new Date().toISOString().replace(/[:.]/g, '-')}.json`);
-  writeFileSync(bericht, JSON.stringify({ port, datei, laeufe, ergebnisse }, null, 2), 'utf8');
+  const bericht = berichtPfad ? resolve(berichtPfad) : join(process.cwd(), 'test-results', `stress-${new Date().toISOString().replace(/[:.]/g, '-')}.json`);
+  const inhalt: Stressbericht = { port, datei, laeufe, ergebnisse };
+  mkdirSync(dirname(bericht), { recursive: true });
+  writeFileSync(bericht, JSON.stringify(inhalt, null, 2), 'utf8');
   console.log(`\n  Bericht: ${bericht}`);
 
-  // Rot ist auch ein Lauf mit Exitcode 0, in dem Fälle übersprungen wurden,
-  // wackelten oder Hydrationsartefakte entstanden (2026-09-29, M4): Playwright
-  // endet dann mit 0, und „5/5 grün" wäre eine Aussage über Fälle, die nie
-  // liefen. Ein Lauf ohne einen einzigen bestandenen Fall beweist ebenfalls
-  // nichts.
-  const rot = ergebnisse.filter(
-    (e) => e.exitcode !== 0 || e.uebersprungen > 0 || e.hydrationsartefakte > 0 || e.bestanden === 0 || e.wackelig > 0,
-  );
+  const rot = ergebnisse.filter((e) => e.gruende.length > 0);
   if (rot.length > 0) {
     console.log(`\n❌  ${rot.length} von ${laeufe} Läufen rot (Läufe ${rot.map((e) => e.nummer).join(', ')}).`);
     process.exit(1);
   }
-  console.log(`\n✓  ${laeufe} von ${laeufe} Läufen grün, keine Hydrationsartefakte.`);
+  console.log(`\n✓  ${laeufe} von ${laeufe} Läufen grün, keine Hydrationsartefakte${datei ? '' : ', jede Engine mit bestandenen Fällen'}.`);
 }
 
 /**

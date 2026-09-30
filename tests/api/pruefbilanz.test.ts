@@ -7,6 +7,22 @@ import { join } from 'node:path';
 
 import { abzugsbefundeSichern, laufspurenSichern } from '../../scripts/security/befundsicherung';
 import { statusMitPflichtteil } from '../../scripts/security/pflichtabgleich';
+import {
+  abschluss,
+  browserBilanzAusBericht,
+  engineBilanzPruefen,
+  MODI,
+  RELEASE_NACHWEIS_DATEI,
+  releaseNachweisBauen,
+  releaseNachweisSchreiben,
+  STRESS_LAEUFE,
+  TEILPRUEFUNG_EXITCODE,
+  TEILPRUEFUNG_ZEILE,
+  type BrowserBilanz,
+  type Laufbilanz,
+  type NachweisEingabe,
+  type Stresslauf,
+} from '../../scripts/security/pruefweg-abschluss';
 import { bilanzPruefen, browserBilanzPruefen, konfigurierteDateien, testbilanzLesen } from '../../scripts/security/testbilanz';
 
 /**
@@ -225,6 +241,187 @@ describe('Beweise eines roten Laufs überleben das Aufräumen', () => {
       assert.ok(!existsSync(join(leer, 'ziel')) && !existsSync(join(leer, 'ablage')));
     } finally {
       rmSync(leer, { recursive: true, force: true });
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+//  Browserbilanz je Engine und Release-Semantik (2026-09-30)
+// ---------------------------------------------------------------------------
+
+/**
+ * Ein Playwright-JSON-Bericht in der Form, die der Berichter `json` schreibt
+ * (`playwright/types/testReporter.d.ts`, `JSONReport`): `config.projects`,
+ * verschachtelte `suites` mit `specs`, je Fall `projectName` und `status`,
+ * und die Summe in `stats`. Gekürzt auf die Felder, die gelesen werden.
+ */
+function playwrightBericht(faelle: { projekt: string; status: 'expected' | 'unexpected' | 'flaky' | 'skipped' }[], projekte = ['chromium', 'firefox', 'webkit']) {
+  const stats = { startTime: '2026-09-30T08:00:00.000Z', duration: 1000, expected: 0, unexpected: 0, flaky: 0, skipped: 0 };
+  for (const f of faelle) stats[f.status] += 1;
+  return {
+    config: { projects: projekte.map((name) => ({ id: name, name })) },
+    suites: [
+      {
+        title: 'beispiel.browser.spec.ts',
+        specs: [],
+        suites: [{ title: 'Gruppe', specs: faelle.map((f, i) => ({ title: `Fall ${i}`, ok: true, tests: [{ projectName: f.projekt, status: f.status }] })) }],
+      },
+    ],
+    errors: [],
+    stats,
+  };
+}
+
+const GRUENE_FAELLE = [
+  { projekt: 'chromium', status: 'expected' },
+  { projekt: 'chromium', status: 'expected' },
+  { projekt: 'chromium', status: 'expected' },
+  { projekt: 'firefox', status: 'expected' },
+  { projekt: 'firefox', status: 'expected' },
+  { projekt: 'webkit', status: 'expected' },
+] as const;
+
+const gruen = (): BrowserBilanz => browserBilanzAusBericht(playwrightBericht([...GRUENE_FAELLE]))!;
+
+function stresslauf(nummer: number, aenderung: Partial<Stresslauf> = {}): Stresslauf {
+  return {
+    nummer,
+    bestanden: 6,
+    fehlgeschlagen: 0,
+    uebersprungen: 0,
+    wackelig: 0,
+    dauerSekunden: 300,
+    hydrationsartefakte: 0,
+    exitcode: 0,
+    jeEngine: gruen().jeEngine,
+    gruende: [],
+    ...aenderung,
+  };
+}
+
+function vollstaendigeEingabe(): NachweisEingabe {
+  const kern: Laufbilanz = {
+    modus: 'voll',
+    ok: true,
+    schritte: [
+      { schritt: 'Datenbankschranken (live)', ok: true, dauerMs: 900 },
+      { schritt: 'Build', ok: true, dauerMs: 240_000 },
+    ],
+    browser: gruen(),
+  };
+  return {
+    commit: '9fd662b0c0ffee0c0ffee0c0ffee0c0ffee0c0ff',
+    buildId: 'pruefbau-1',
+    start: new Date('2026-09-30T08:00:00Z'),
+    ende: new Date('2026-09-30T09:10:00Z'),
+    kern,
+    stress: { port: '3001', datei: null, laeufe: STRESS_LAEUFE, ergebnisse: Array.from({ length: STRESS_LAEUFE }, (_, i) => stresslauf(i + 1)) },
+  };
+}
+
+describe('Browserbilanz je Engine', () => {
+  it('zählt je Engine aus dem JSON-Bericht von Playwright, auch in verschachtelten Gruppen', () => {
+    const b = gruen();
+    assert.deepEqual(b.engines, ['chromium', 'firefox', 'webkit']);
+    assert.deepEqual(b.jeEngine.chromium, { expected: 3, skipped: 0, unexpected: 0, flaky: 0 });
+    assert.deepEqual(b.jeEngine.firefox, { expected: 2, skipped: 0, unexpected: 0, flaky: 0 });
+    assert.deepEqual(b.jeEngine.webkit, { expected: 1, skipped: 0, unexpected: 0, flaky: 0 });
+    assert.deepEqual(engineBilanzPruefen(b, { jedeEngine: true }), []);
+  });
+
+  it('eine Engine ohne bestandenen Fall ist in der vollen Reihe ein Fehlschlag, in einer Einzeldatei nicht', () => {
+    // Die Summe ist grün — genau das sah die Browser-Bilanz bis hierher allein.
+    const nurChromium = browserBilanzAusBericht(playwrightBericht([{ projekt: 'chromium', status: 'expected' }]))!;
+    assert.deepEqual(browserBilanzPruefen(nurChromium.gesamt), [], 'die Summe allein ist grün');
+    const gruende = engineBilanzPruefen(nurChromium, { jedeEngine: true });
+    assert.ok(gruende.some((g) => g.startsWith('firefox:')), gruende.join(' | '));
+    assert.ok(gruende.some((g) => g.startsWith('webkit:')), gruende.join(' | '));
+    assert.deepEqual(engineBilanzPruefen(nurChromium, { jedeEngine: false }), []);
+  });
+
+  it('ein übersprungener Fall wird seiner Engine zugeschrieben, und ohne Bericht ist nichts bewiesen', () => {
+    const faelle = [...GRUENE_FAELLE, { projekt: 'webkit', status: 'skipped' } as const];
+    const gruende = engineBilanzPruefen(browserBilanzAusBericht(playwrightBericht(faelle)), { jedeEngine: true });
+    assert.ok(gruende.some((g) => g.startsWith('webkit:') && g.includes('übersprungen')), gruende.join(' | '));
+    assert.ok(engineBilanzPruefen(null, { jedeEngine: true }).some((g) => g.includes('Kein JSON-Bericht')));
+    assert.equal(browserBilanzAusBericht({ suites: [] }), null, 'ohne stats kein Bericht');
+  });
+
+  it('passt die Zählung je Engine nicht zur Summe, wird das gemeldet statt geglaubt', () => {
+    const bericht = playwrightBericht([...GRUENE_FAELLE]);
+    bericht.stats.expected += 4; // wie ein Berichtsformat, dessen Fälle nicht mehr gefunden werden
+    assert.ok(engineBilanzPruefen(browserBilanzAusBericht(bericht), { jedeEngine: true }).some((g) => g.includes('passt nicht zur Gesamtzahl')));
+  });
+});
+
+/**
+ * Release-Semantik (Vertrag C9). Gegen den alten Stand scheitern die ersten
+ * beiden Fälle: `verify:release:core` endete mit „✅ Release-Kern bestanden“
+ * und Exitcode 0, und einen Nachweis als Datei gab es in keinem Modus.
+ */
+describe('Release-Semantik des Prüfwegs', () => {
+  it('Teilläufe des Release-Wegs enden nie mit „RELEASE BESTANDEN" und nie mit 0', () => {
+    assert.equal(TEILPRUEFUNG_ZEILE, 'TEILPRÜFUNG BESTANDEN — KEIN RELEASE-NACHWEIS', 'der Wortlaut ist Vertrag — Aufrufer suchen danach');
+    assert.equal(TEILPRUEFUNG_EXITCODE, 3);
+    for (const modus of ['release-kern', 'release-stress'] as const) {
+      const ende = abschluss(modus);
+      assert.notEqual(ende.code, 0, `${modus} endet mit 0`);
+      assert.equal(ende.code, TEILPRUEFUNG_EXITCODE, `${modus}: Exitcode`);
+      assert.equal(ende.text.includes('RELEASE BESTANDEN'), false, `${modus} meldet „RELEASE BESTANDEN“`);
+      assert.equal(ende.text.includes('✅'), false, `${modus} trägt ein Häkchen`);
+      const zeilen = ende.text.trim().split('\n');
+      assert.equal(zeilen[zeilen.length - 1], TEILPRUEFUNG_ZEILE, `${modus}: letzte Zeile`);
+      assert.equal(ende.nachweis, false);
+    }
+    // Und umgekehrt: „RELEASE BESTANDEN“ sagt genau ein Modus, mit 0.
+    for (const modus of MODI) assert.equal(abschluss(modus).text.includes('RELEASE BESTANDEN'), modus === 'release', modus);
+    assert.equal(abschluss('release').code, 0);
+  });
+
+  it('nur der Gesamtweg schreibt den Release-Nachweis', () => {
+    const gebaut = releaseNachweisBauen(vollstaendigeEingabe());
+    assert.deepEqual(gebaut.gruende, []);
+    assert.ok(gebaut.nachweis);
+    const wurzel = mkdtempSync(join(tmpdir(), 'clenaris-nachweis-'));
+    try {
+      for (const modus of MODI) {
+        const verzeichnis = join(wurzel, modus, 'test-results');
+        const pfad = releaseNachweisSchreiben(modus, verzeichnis, gebaut.nachweis);
+        const datei = join(verzeichnis, RELEASE_NACHWEIS_DATEI);
+        assert.equal(abschluss(modus).nachweis, modus === 'release', `${modus}: Nachweispflicht`);
+        assert.equal(existsSync(datei), modus === 'release', `${modus}: Datei`);
+        assert.equal(pfad, modus === 'release' ? datei : null, `${modus}: Rückgabe`);
+      }
+      const geschrieben = JSON.parse(readFileSync(join(wurzel, 'release', 'test-results', RELEASE_NACHWEIS_DATEI), 'utf8'));
+      assert.equal(geschrieben.commit, '9fd662b0c0ffee0c0ffee0c0ffee0c0ffee0c0ff');
+      assert.equal(geschrieben.kern.ok, true);
+      assert.equal(geschrieben.stress.gruen, STRESS_LAEUFE);
+      assert.equal(geschrieben.stress.ergebnisse.length, STRESS_LAEUFE);
+      assert.deepEqual(Object.keys(geschrieben.kern.browser.jeEngine).sort(), ['chromium', 'firefox', 'webkit']);
+      assert.equal(geschrieben.stress.ergebnisse[0].jeEngine.webkit.expected, 1, 'jeder Stresslauf trägt seine Zahlen je Engine');
+    } finally {
+      rmSync(wurzel, { recursive: true, force: true });
+    }
+  });
+
+  it('der Release-Nachweis entsteht nur aus vollständigen, grünen Zahlen', () => {
+    const faelle: [string, (e: NachweisEingabe) => void, RegExp][] = [
+      ['ohne Kernbilanz', (e) => (e.kern = null), /Keine Bilanz des Kerns/],
+      ['Kern nicht bestanden', (e) => (e.kern!.ok = false), /Kern ist nicht bestanden/],
+      ['Kern ohne WebKit', (e) => (e.kern!.browser = browserBilanzAusBericht(playwrightBericht(GRUENE_FAELLE.filter((f) => f.projekt !== 'webkit'), ['chromium', 'firefox']))), /webkit ohne einen bestandenen Fall/],
+      ['vier statt fünf Stressläufe', (e) => e.stress!.ergebnisse.pop(), /4 von verlangten 5/],
+      ['ein Stresslauf mit übersprungenem Fall', (e) => (e.stress!.ergebnisse[2] = stresslauf(3, { uebersprungen: 1, gruende: ['1 übersprungen'] })), /Stressläufe rot: 3/],
+      ['ein Stresslauf mit Hydrationsartefakt', (e) => (e.stress!.ergebnisse[4] = stresslauf(5, { hydrationsartefakte: 1 })), /Stressläufe rot: 5/],
+      ['Stressreihe nur über eine Datei', (e) => (e.stress!.datei = 'tests/e2e/abmelden.spec.ts'), /nur über/],
+      ['kein Commit', (e) => (e.commit = 'HEAD'), /Kein gültiger Commit/],
+      ['ohne Stressbericht', (e) => (e.stress = null), /Kein Bericht der Stressreihe/],
+    ];
+    for (const [name, aendern, erwartet] of faelle) {
+      const eingabe = vollstaendigeEingabe();
+      aendern(eingabe);
+      const ergebnis = releaseNachweisBauen(eingabe);
+      assert.equal(ergebnis.nachweis, null, `${name}: trotzdem ein Nachweis`);
+      assert.ok(ergebnis.gruende.some((g) => erwartet.test(g)), `${name}: ${ergebnis.gruende.join(' | ')}`);
     }
   });
 });
