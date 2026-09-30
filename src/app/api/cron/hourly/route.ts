@@ -3,6 +3,7 @@ import { getOrganizationId } from '@/server/services/organization.service';
 import { sendBookingReminders, sendCrewReminders } from '@/server/services/automation.service';
 import { automationEreignisseAbarbeiten, emitZeitbezogeneAusloeser, runDueAutomations } from '@/server/services/automation-engine.service';
 import { mitUeberwachung } from '@/server/services/cron-monitor.service';
+import { verwaisteAusfuehrungenAbschliessen } from '@/server/services/release-ausfuehrung.service';
 
 export const runtime = 'nodejs';
 export const maxDuration = 120;
@@ -54,6 +55,23 @@ export const GET = defineCronRoute({
             ausgeloest: await emitZeitbezogeneAusloeser({ organizationId }),
             ausgefuehrt: await runDueAutomations({ organizationId, limit: 200 }),
           }),
+        },
+        {
+          /**
+           * Verwaiste Release-Ausführungen (2026-09-30): Ein Auftrag, zu dem
+           * der Ausführer nach zwei Stunden nichts gemeldet hat, wird anhand
+           * der Identität dieser Instanz abgeschlossen — erfolgreich, wenn
+           * sie das Ziel belegt, sonst fehlgeschlagen. Ohne diesen Schritt
+           * blieb er für immer „in Ausführung" und sperrte die Umgebung für
+           * jede weitere Übernahme (`release-ausfuehrung.service.ts`).
+           *
+           * Stündlich reicht: Die Frist ist zwei Stunden, und bis dahin
+           * wartet der Auftrag ohnehin auf die Rückmeldung. Der Endpunkt
+           * läuft auf der Instanz selbst (Crontab gegen `127.0.0.1`), also
+           * ist „diese Instanz" die, deren Stand belegt werden soll.
+           */
+          name: 'releaseAusfuehrungen',
+          lauf: () => verwaisteAusfuehrungenAbschliessen(organizationId),
         },
       ],
     });

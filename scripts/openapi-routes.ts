@@ -4199,8 +4199,10 @@ export const ROUTES: RouteDoc[] = [
     tag: 'System',
     summary: 'Stündliche Aufgaben',
     description:
-      'Terminerinnerungen 24 h und 2 h vorher, zeitbezogene Auslöser der Automatisierung und ' +
-      'fällige Läufe. Authentifiziert über `Authorization: Bearer $CRON_SECRET`. Jeder Lauf ' +
+      'Terminerinnerungen 24 h und 2 h vorher, zeitbezogene Auslöser der Automatisierung, ' +
+      'fällige Läufe und der Abschluss verwaister Release-Ausführungen (über zwei Stunden ohne ' +
+      'Rückmeldung: erfolgreich, wenn die Identität der Instanz das Ziel belegt, sonst ' +
+      'fehlgeschlagen). Authentifiziert über `Authorization: Bearer $CRON_SECRET`. Jeder Lauf ' +
       'hinterlässt ein `CronRun`; **500**, sobald eine Teilaufgabe gescheitert ist.',
     guard: { kind: 'cron' },
   },

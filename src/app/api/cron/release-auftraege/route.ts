@@ -16,8 +16,11 @@ export const dynamic = 'force-dynamic';
  * Nur für den Release-Ausführer: Bearer `RELEASE_EXECUTOR_TOKEN` **und**
  * Signatur (`x-clenaris-zeit`, `x-clenaris-signatur`). Liest nur; übernommen
  * wird über `…/uebernehmen`. Jeder Auftrag nennt sein `hindernis`, wenn er
- * fällig, aber nicht ausführbar ist (CI nicht bestanden, keine Prüfsumme) —
- * der Ausführer protokolliert es, statt still zu überspringen.
+ * fällig, aber nicht ausführbar ist (Stand der Instanz nicht belegt, CI nicht
+ * bestanden, keine Prüfsumme) — der Ausführer protokolliert es, statt still
+ * zu überspringen. Seit 2026-09-30 dazu `laufend` (belegte Identität der
+ * Instanz) und `inAusfuehrung` (Aufträge dieser Umgebung in DEPLOYING, mit
+ * Schlüssel) — damit ein abgebrochener Lauf seinen Auftrag fortsetzen kann.
  */
 export const GET = defineCronRoute({
   secretEnv: 'RELEASE_EXECUTOR_TOKEN',

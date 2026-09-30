@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+import { COMMIT_MUSTER, SEMVER_MUSTER } from '../release/manifest';
+
 /**
  * Datenbereinigung — endgültiges Löschen ganzer Datenbereiche.
  *
@@ -82,7 +84,15 @@ export const releaseManifestSchema = z
     rollbackAvailable: z.boolean().default(true),
     ciStatus: z.enum(['PASSED', 'FAILED', 'PENDING']).default('PENDING'),
     compatibility: z.string().trim().max(2000).nullable().default(null),
-    commit: z.string().trim().regex(/^[0-9a-f]{7,40}$/).nullable().default(null),
+    /**
+     * Genau 40 Hexzeichen (seit 2026-09-30) — vorher genügten 7. Ein Kürzel
+     * ist mehrdeutig, passt nicht zum Artefaktnamen und liesse sich nie mit
+     * dem Commit vergleichen, den die laufende Instanz aus `RELEASE.json`
+     * belegt; der Ausführer hätte „erfolgreich" nie bestätigen können.
+     * `release-registrieren.ts` nimmt den Wert ohnehin aus der Beilage des
+     * Artefakts; hier steht die Regel für jeden anderen Weg in die Tabelle.
+     */
+    commit: z.string().trim().regex(COMMIT_MUSTER, 'Commit als 40 Hexadezimalzeichen, kein Kürzel.').nullable().default(null),
     artifactSha256: z.string().trim().regex(/^[0-9a-f]{64}$/).nullable().default(null),
     artifactSizeBytes: z.number().int().min(0).nullable().default(null),
   })
@@ -140,9 +150,17 @@ const ausfuehrungsSchluessel = z
  * Einen fälligen Auftrag übernehmen.
  *
  * Der Ausführer meldet, was er **gemessen** hat: die Prüfsumme des
- * heruntergeladenen Artefakts und die Adresse des CI-Laufs, aus dem es
- * stammt. Die Anwendung vergleicht die Summe mit der des Release; eine
- * Übernahme „auf Treu und Glauben" gibt es nicht.
+ * heruntergeladenen Artefakts, Commit und Version aus dessen Beilage und die
+ * Adresse des CI-Laufs, aus dem es stammt. Die Anwendung vergleicht alle
+ * drei mit dem Release; eine Übernahme „auf Treu und Glauben" gibt es nicht.
+ *
+ * **Commit und Zielversion sind Pflicht** (seit 2026-09-30). Vorher verglich
+ * die Anwendung nur die Prüfsumme — die bewies, dass das Archiv das
+ * registrierte ist, aber nicht, dass der Ausführer es als *diese* Fassung
+ * gelesen hat. Ein Ausführer, der die Beilage gar nicht öffnete, konnte ein
+ * richtiges Archiv unter falscher Erwartung übernehmen und danach gegen den
+ * falschen Commit prüfen. Jetzt muss er sagen, was er gelesen hat, und die
+ * Anwendung weist jede Abweichung mit 422 ab.
  */
 export const releaseUebernahmeSchema = z
   .object({
@@ -151,26 +169,65 @@ export const releaseUebernahmeSchema = z
     ausfuehrer: z.string().regex(/^[a-z0-9][a-z0-9._/-]{2,79}$/, 'Kennung des Ausführers: 3–80 Zeichen, klein.'),
     ausfuehrungsSchluessel,
     artefaktSha256: z.string().regex(/^[0-9a-f]{64}$/, 'SHA-256 als 64 Hexadezimalzeichen.'),
+    commit: z.string().regex(COMMIT_MUSTER, 'Commit als 40 Hexadezimalzeichen, kein Kürzel.'),
+    zielVersion: z.string().regex(SEMVER_MUSTER, 'Zielversion als MAJOR.MINOR.PATCH, etwa 1.2.0.'),
     ciNachweis: z.string().url().max(300).refine((u) => u.startsWith('https://'), 'Nachweis als https-Adresse.'),
   })
   .strict();
 
 /**
+ * Was die Aktivierung auf dem Server berichtet hat — der Ausgangscode von
+ * `deploy/v2/release-aktivieren.sh`, in Worten (Vertrag C3):
+ *
+ *  | Wert                 | Code | Bedeutung |
+ *  |----------------------|------|-----------|
+ *  | `AKTIV`              | 0    | umgeschaltet, gesund, Identität bestätigt |
+ *  | `NICHT_UMGESCHALTET` | 10   | vor dem Umschalten gescheitert, nichts geändert |
+ *  | `GESPERRT`           | 11   | eine andere Aktivierung hält die Sperre |
+ *  | `ZURUECK`            | 20   | umgeschaltet, ungesund, alte Fassung wiederhergestellt |
+ *  | `UNKLAR`             | 30 oder kein Code | der Zustand ist nicht bekannt |
+ *  | `NICHT_VERBUNDEN`    | 255  | der Server war nicht erreichbar (SSH) |
+ *
+ * Der Wert steht im Prüfprotokoll. Er entscheidet **nicht** über das
+ * Ergebnis — das tut die Identität der antwortenden Instanz —, aber ohne ihn
+ * wüsste später niemand, ob ein FAILED „nichts geändert" oder „Zustand
+ * unbekannt" hiess.
+ */
+export const AKTIVIERUNGEN = ['AKTIV', 'ZURUECK', 'NICHT_UMGESCHALTET', 'GESPERRT', 'UNKLAR', 'NICHT_VERBUNDEN'] as const;
+export type Aktivierung = (typeof AKTIVIERUNGEN)[number];
+
+/**
  * Ergebnis einer Ausführung melden.
  *
- * `laufendeVersion` ist, was der Gesundheitsendpunkt der Instanz nach dem
- * Umschalten meldete. Für SUCCEEDED muss sie die Zielversion sein — ein
- * „erfolgreich", nach dem die alte Version weiterläuft, ist keines.
+ * **`laufendeVersion` gibt es nicht mehr** (seit 2026-09-30). Bis dahin
+ * meldete der Ausführer, welche Version die Instanz nach dem Umschalten
+ * genannt habe, und die Anwendung glaubte ihm. Jetzt prüft die Anwendung
+ * selbst: SUCCEEDED gilt nur, wenn die **antwortende Instanz** ihre Identität
+ * belegt und genau Commit und Version des Release nennt; ROLLED_BACK nur,
+ * wenn sie belegt die Ausgangsversion und einen anderen Commit nennt
+ * (`release-ausfuehrung.service.ts`). Ein Feld, das der Ausführer füllen
+ * kann, beweist nichts, was die Instanz nicht selbst belegen kann.
+ *
+ * Erfolg und Rücksprung müssen zur gemeldeten Aktivierung passen: Ein
+ * „erfolgreich" nach „ZURUECK" ist ein Fehler im Ausführer, kein Zustand.
  */
 export const releaseErgebnisSchema = z
   .object({
     auftragId: z.string().cuid(),
     ausfuehrungsSchluessel,
     ergebnis: z.enum(['SUCCEEDED', 'FAILED', 'ROLLED_BACK']),
-    laufendeVersion: z.string().regex(/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/).optional(),
+    aktivierung: z.enum(AKTIVIERUNGEN),
     meldung: z.string().trim().max(2000).optional(),
   })
-  .strict();
+  .strict()
+  .refine((e) => e.ergebnis !== 'SUCCEEDED' || e.aktivierung === 'AKTIV', {
+    message: '„Erfolgreich" verlangt die Aktivierung AKTIV.',
+    path: ['aktivierung'],
+  })
+  .refine((e) => e.ergebnis !== 'ROLLED_BACK' || e.aktivierung === 'ZURUECK', {
+    message: '„Zurückgesetzt" verlangt die Aktivierung ZURUECK.',
+    path: ['aktivierung'],
+  });
 
 export type ReleaseUebernahme = z.infer<typeof releaseUebernahmeSchema>;
 export type ReleaseErgebnis = z.infer<typeof releaseErgebnisSchema>;
