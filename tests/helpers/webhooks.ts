@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 /**
  * Webhook-Geheimnisse der Prüfreihe (Wave 14).
  *
@@ -33,3 +35,19 @@ export const PRUEF_STRIPE_GEHEIMNIS = `whsec_${Buffer.from('clenaris-pruefreihe-
  */
 export const PRUEF_AUSFUEHRER_TOKEN = `ausf_${Buffer.from('clenaris-pruefreihe-release-token').toString('hex')}`;
 export const PRUEF_AUSFUEHRER_SCHLUESSEL = `sig_${Buffer.from('clenaris-pruefreihe-release-signatur').toString('hex')}`;
+
+/**
+ * Identität des Testservers (2026-09-30, Production-V2-Härtung).
+ *
+ * Eine laufende Instanz belegt ihre Identität seither aus `RELEASE.json` und
+ * `BUILD_ID` in ihrem Verzeichnis — ein Prüfbau hat kein `RELEASE.json`,
+ * also schreibt `scripts/test-server.ts` ein Prüfmanifest mit diesem Commit
+ * und reicht es über `CLENARIS_PRUEF_RELEASE_MANIFEST` herein (nur in der
+ * Umgebung `test` wirksam; die Produktionsvorprüfung weist die Variable ab).
+ * Ein fester, erkennbar künstlicher Wert: Die Release-Prüfungen legen ein
+ * Release mit genau diesem Commit an und beweisen, dass „erfolgreich" nur
+ * gilt, wenn die antwortende Instanz ihn selbst belegt. Aus einem Hash
+ * abgeleitet statt als Literal, damit er nie mit einem echten Commit
+ * verwechselt wird und die Geheimnisprüfung kein Muster sieht.
+ */
+export const PRUEF_IDENTITAET_COMMIT = createHash('sha1').update('clenaris-pruefreihe-identitaet').digest('hex');

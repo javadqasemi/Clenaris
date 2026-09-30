@@ -219,12 +219,32 @@ export function umgebungPruefen(env: Umgebung, beispiele: Map<string, string> = 
     ['CLENARIS_TEST_CACHE_DIR', (v) => v !== '', 'kennzeichnet eine Prüfumgebung (Testscanner, Dateizähler)'],
     ['CLENARIS_LEGACY_FILES', (v) => v.toLowerCase() === 'allow', 'liefert ungeprüfte Altdateien aus'],
     ['LEGACY_PUBLIC_TOKENS', (v) => v !== '', 'lässt Alt-Links im Klartext zu'],
+    /*
+      Seit 2026-09-30 belegt eine Instanz ihre Identität aus `RELEASE.json`
+      und `BUILD_ID` in ihrem Verzeichnis. Diese Variable reicht der
+      Prüfreihe ein festes Manifest herein; sie wirkt zwar nur in der
+      Umgebung `test`, aber in einer Produktion hat sie nichts verloren —
+      gesetzt hiesse sie: Jemand versucht, der Instanz eine Identität
+      vorzugeben, die das Artefakt nicht trägt.
+    */
+    ['CLENARIS_PRUEF_RELEASE_MANIFEST', (v) => v !== '', 'lässt eine Prüfreihe die Identität der Instanz vorgeben'],
   ];
   for (const [name, aktiv, grund] of schalter) {
     const wert = env[name]?.trim() ?? '';
     if (aktiv(wert)) fehler(`schalter-${name.toLowerCase()}`, `${name} ist gesetzt und ${grund}.`);
   }
   if (!schalter.some(([name, aktiv]) => aktiv(env[name]?.trim() ?? ''))) ok('schalter', 'Keine Demo- oder Übergangsschalter gesetzt.');
+
+  /*
+    Die eigene Besuchsmessung ist ohne ausdrückliches „an" aus (2026-09-30).
+    Eingeschaltet ist sie kein Fehler — die Einwilligung bleibt die Schranke
+    im Browser —, aber sie darf erst laufen, wenn die Datenschutzerklärung
+    rechtlich geprüft ist (TA-02). Eine Warnung macht die bewusste
+    Entscheidung sichtbar, statt sie still vorauszusetzen.
+  */
+  if ((env.CLENARIS_BESUCHSMESSUNG?.trim() ?? '') === 'an') {
+    warnung('besuchsmessung', 'CLENARIS_BESUCHSMESSUNG=an — nur nach der rechtlichen Prüfung der Datenschutzerklärung (TA-02) einschalten.');
+  } else ok('besuchsmessung', 'Eigene Besuchsmessung aus (CLENARIS_BESUCHSMESSUNG nicht „an").');
 
   for (const name of ['SEED_ADMIN_PASSWORD', 'SEED_SUPERADMIN_PASSWORD'] as const) {
     const wert = env[name] ?? '';

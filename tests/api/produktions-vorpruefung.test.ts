@@ -322,6 +322,25 @@ describe('Produktionsvorprüfung (rein)', () => {
     assert.equal(p?.stand, 'WARNUNG');
   });
 
+  // 2026-09-30, Production-V2-Härtung: Die Prüfreihe reicht der Instanz ein
+  // festes Manifest herein — in einer Produktion hiesse das, jemand gibt ihr
+  // eine Identität vor, die das Artefakt nicht trägt.
+  it('CLENARIS_PRUEF_RELEASE_MANIFEST in der Produktion: Fehler', () => {
+    assert.ok(
+      fehlerIds(umgebungPruefen({ ...GUTE_UMGEBUNG, CLENARIS_PRUEF_RELEASE_MANIFEST: '/tmp/pruef-release.json' }, beispiele)).includes(
+        'schalter-clenaris_pruef_release_manifest',
+      ),
+    );
+  });
+
+  it('eigene Besuchsmessung: ohne „an" aus und bestanden, eingeschaltet eine Warnung (Rechtsprüfung TA-02)', () => {
+    const aus = umgebungPruefen(GUTE_UMGEBUNG, beispiele).find((x) => x.id === 'besuchsmessung');
+    assert.equal(aus?.stand, 'OK');
+    const an = umgebungPruefen({ ...GUTE_UMGEBUNG, CLENARIS_BESUCHSMESSUNG: 'an' }, beispiele).find((x) => x.id === 'besuchsmessung');
+    assert.equal(an?.stand, 'WARNUNG');
+    assert.match(an!.meldung, /TA-02/);
+  });
+
   it('--nur-umgebung ist nie ein Bestehen', () => {
     assert.equal(auswerten(umgebungPruefen(GUTE_UMGEBUNG, beispiele), true).code, 3);
     assert.equal(auswerten([{ id: 'x', stand: 'FEHLER', meldung: 'y' }], true).code, 1);

@@ -28,21 +28,24 @@
  *    zwischen den Dateien. Das Verzeichnis wird beim Start geleert.
  *
  * Es baut nicht. Fehlt `.next`, sagt es das und hört auf — ein stiller
- * Neubau hier hätte die Prisma-DLL des laufenden Entwicklungsservers
- * getroffen (siehe CLAUDE.md).
+ * Neubau hier schriebe in das Bauverzeichnis, aus dem womöglich gerade ein
+ * anderer Server läuft, und zerstörte ihn.
  */
 
 import { spawn } from 'node:child_process';
-import { existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { config } from 'dotenv';
 
 import { databaseNameOf, istTestdatenbank } from '../prisma/seed-guard';
+import { artefaktManifestSchema, MANIFEST_FORMAT } from '../src/lib/release/manifest';
 import {
   PRUEF_AUSFUEHRER_SCHLUESSEL,
   PRUEF_AUSFUEHRER_TOKEN,
+  PRUEF_IDENTITAET_COMMIT,
   PRUEF_RESEND_GEHEIMNIS,
   PRUEF_SICHERHEITSBERICHT_TOKEN,
   PRUEF_STRIPE_GEHEIMNIS,
@@ -57,6 +60,56 @@ function testUrlAus(entwicklungsUrl: string): string {
   if (name.endsWith('_test')) return entwicklungsUrl;
   url.pathname = `/${name}_test`;
   return url.toString();
+}
+
+/**
+ * Das Prüfmanifest schreiben (2026-09-30) und seinen Pfad liefern.
+ *
+ * Eine Instanz belegt ihre Identität aus `RELEASE.json` und `BUILD_ID` in
+ * ihrem Verzeichnis. Ein Prüfbau ist kein gepacktes Artefakt und hat kein
+ * `RELEASE.json` — ohne dieses Manifest liefe die Prüfreihe gegen eine
+ * Instanz, die sich nicht ausweisen kann, und jede Prüfung des
+ * Release-Vertrags („erfolgreich nur, wenn die Instanz das Ziel belegt")
+ * wäre nicht erreichbar.
+ *
+ * Die `BUILD_ID` ist die echte des Baus: Der Abgleich Manifest ↔ Bau läuft
+ * also auch in der Prüfreihe, nur Commit und Herkunft sind festgelegt. Das
+ * Manifest wird gegen denselben Vertrag geparst wie ein echtes, damit eine
+ * Formänderung hier auffällt und nicht erst auf dem Server. `auslieferbar`
+ * ist fest `false`: Ein Prüfmanifest beschreibt nie etwas Auslieferbares.
+ */
+function pruefManifestSchreiben(cacheDir: string, dist: string): string {
+  const wurzel = process.cwd();
+  const paket = JSON.parse(readFileSync(join(wurzel, 'package.json'), 'utf8')) as { version: string };
+  const next = JSON.parse(readFileSync(join(wurzel, 'node_modules', 'next', 'package.json'), 'utf8')) as { version: string };
+  const migrationen = readdirSync(join(wurzel, 'prisma', 'migrations'), { withFileTypes: true })
+    .filter((e) => e.isDirectory() && existsSync(join(wurzel, 'prisma', 'migrations', e.name, 'migration.sql')))
+    .map((e) => e.name)
+    .sort();
+  const manifest = artefaktManifestSchema.parse({
+    format: MANIFEST_FORMAT,
+    anwendung: 'clenaris',
+    version: paket.version,
+    commit: PRUEF_IDENTITAET_COMMIT,
+    unsauber: false,
+    buildId: readFileSync(join(wurzel, dist, 'BUILD_ID'), 'utf8').trim(),
+    distDir: dist,
+    quelleZeitUtc: '2026-01-01T00:00:00.000Z',
+    node: process.version,
+    npm: 'pruefreihe',
+    plattform: `${process.platform}-${process.arch}`,
+    next: next.version,
+    sperrdateiSha256: createHash('sha256').update(readFileSync(join(wurzel, 'package-lock.json'))).digest('hex'),
+    seitenUrl: null,
+    reactKorrektur: 'geprueft',
+    mitModulen: true,
+    migrationen,
+    ci: null,
+    auslieferbar: false,
+  });
+  const pfad = join(cacheDir, 'pruef-release.json');
+  writeFileSync(pfad, `${JSON.stringify(manifest, null, 2)}\n`);
+  return pfad;
 }
 
 function main(): void {
@@ -89,6 +142,7 @@ function main(): void {
   const cacheDir = process.env.CLENARIS_TEST_CACHE_DIR?.trim() || join(tmpdir(), 'clenaris-tests', 'cache');
   mkdirSync(cacheDir, { recursive: true });
   for (const datei of readdirSync(cacheDir)) rmSync(join(cacheDir, datei), { force: true, recursive: true });
+  const pruefManifest = pruefManifestSchreiben(cacheDir, dist);
 
   console.log('');
   console.log(`  Testdatenbank        : ${name}`);
@@ -131,6 +185,19 @@ function main(): void {
       RELEASE_EXECUTOR_TOKEN: PRUEF_AUSFUEHRER_TOKEN,
       RELEASE_EXECUTOR_SIGNING_KEY: PRUEF_AUSFUEHRER_SCHLUESSEL,
       CLENARIS_UMGEBUNG: 'test',
+      /**
+       * Identität der Instanz (2026-09-30): siehe `pruefManifestSchreiben`.
+       * Wirkt nur, weil `CLENARIS_UMGEBUNG` hier `test` ist.
+       */
+      CLENARIS_PRUEF_RELEASE_MANIFEST: pruefManifest,
+      /**
+       * Die eigene Besuchsmessung ist seit 2026-09-30 ohne ausdrückliches
+       * „an" aus — in der Produktion bis zur rechtlichen Prüfung der
+       * Datenschutzerklärung (TA-02). Die Prüfreihe misst, was die Messung
+       * tut, also schaltet sie sie ein; den ausgeschalteten Zustand prüft
+       * `laufzeit-konfiguration.test.ts` an einer eigenen Instanz.
+       */
+      CLENARIS_BESUCHSMESSUNG: 'an',
     },
   });
   const beenden = () => kind.kill();
