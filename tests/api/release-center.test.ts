@@ -56,6 +56,7 @@ const AUSF_ZWEI = `9.${RUN % 1_000_000}.4`;
 const AUSF_RUECK = `9.${RUN % 1_000_000}.5`;
 const AUSF_VERWAIST = `9.${RUN % 1_000_000}.6`;
 const AUSF_JUNG = `9.${RUN % 1_000_000}.7`;
+const AUSF_STAGING = `9.${RUN % 1_000_000}.8`;
 /** Eine gültig geformte Schweizer IBAN im Freitext — sie darf nicht ins Protokoll. */
 const IBAN_IM_GRUND = 'CH93 0076 2011 6238 5295 7';
 const db = testDb();
@@ -63,7 +64,9 @@ let jars: Record<AccountName, string>;
 let neuId = '';
 let altId = '';
 
-type Uebersicht = { data: { laufend: string; releases: { release: { id: string; version: string }; zustand: string }[] } };
+type Uebersicht = {
+  data: { laufend: string; belegt: boolean; identitaet: string; releases: { release: { id: string; version: string }; zustand: string }[] };
+};
 const zustandVon = async (id: string) =>
   data(await get<Uebersicht>('/api/system/releases', { jar: jars.super })).releases.find((r) => r.release.id === id)?.zustand;
 
@@ -81,7 +84,7 @@ async function aufraeumen() {
   const releases = await db.release.findMany({
     where: {
       OR: [
-        { version: { in: [NEU, ALT, AUSF, AUSF_ROT, AUSF_WERKZEUG, AUSF_ZWEI, AUSF_RUECK, AUSF_VERWAIST, AUSF_JUNG] } },
+        { version: { in: [NEU, ALT, AUSF, AUSF_ROT, AUSF_WERKZEUG, AUSF_ZWEI, AUSF_RUECK, AUSF_VERWAIST, AUSF_JUNG, AUSF_STAGING] } },
         { summary: { startsWith: 'Prüfversion' } },
       ],
     },
@@ -134,6 +137,32 @@ describe('Update Center', { concurrency: 1 }, () => {
     assert.equal((await get('/admin/updates', { jar: jars.super })).status, 200);
     const admin = await get('/admin/updates', { jar: jars.admin });
     assert.ok([307, 404].includes(admin.status), `Administration: HTTP ${admin.status}`);
+  });
+
+  /**
+   * Die Identität der Instanz in Übersicht und Sicherheitszentrale
+   * (2026-09-30). Bis dahin nannte die Sicherheitszentrale `APP_VERSION` —
+   * eine Variable, die jeder beim Start setzen kann —, und die Übersicht des
+   * Update Centers kannte nur eine Versionsnummer, die ebenso gut belegt wie
+   * bloss aus `package.json` eingebaut sein konnte; beide sahen gleich aus.
+   * Der Testserver belegt seinen Stand über das Prüfmanifest
+   * (`scripts/test-server.ts`), also müssen hier „belegt" und der
+   * Prüfcommit stehen. Gegen den alten Stand scheitert der Fall an den
+   * fehlenden Feldern `belegt`/`identitaet` und am fehlenden `data-identitaet`.
+   */
+  it('Übersicht und Sicherheitszentrale nennen die belegte Identität der Instanz, nicht APP_VERSION', async () => {
+    const uebersicht = data(await get<Uebersicht>('/api/system/releases', { jar: jars.super }));
+    assert.equal(uebersicht.belegt, true, 'der Testserver belegt seinen Stand nicht — läuft er mit scripts/test-server.ts?');
+    assert.equal(uebersicht.identitaet, 'belegt');
+    assert.equal(uebersicht.laufend, PAKET_VERSION);
+
+    const seite = await get('/admin/sicherheit', { jar: jars.super });
+    assert.equal(seite.status, 200);
+    // React trennt „v" und die Nummer mit `<!-- -->` — vor dem Suchen entfernen.
+    const html = seite.text.replace(/<!-- -->/g, '');
+    assert.ok(html.includes('data-identitaet="belegt"'), 'die Sicherheitszentrale zeigt den Stand der Identität nicht');
+    assert.ok(html.includes(PRUEF_IDENTITAET_COMMIT.slice(0, 12)), 'die Sicherheitszentrale nennt den belegten Commit nicht');
+    assert.ok(html.includes(`v${PAKET_VERSION}`), 'die Sicherheitszentrale nennt die belegte Version nicht');
   });
 
   it('die Administration kann nicht entscheiden', async (t) => {
@@ -353,6 +382,7 @@ describe('Release-Ausführer', { concurrency: 1 }, () => {
   const COMMIT_RUECK = createHash('sha1').update(`commit-rueck-${RUN}`).digest('hex');
   const COMMIT_VERWAIST = createHash('sha1').update(`commit-verwaist-${RUN}`).digest('hex');
   const COMMIT_JUNG = createHash('sha1').update(`commit-jung-${RUN}`).digest('hex');
+  const COMMIT_STAGING = createHash('sha1').update(`commit-staging-${RUN}`).digest('hex');
   const SCHLUESSEL_EINS = `lauf-${RUN}-eins`;
   const CI_NACHWEIS = `https://github.com/beispiel/clenaris/actions/runs/${RUN}`;
   const ERGEBNIS = '/api/cron/release-auftraege/ergebnis';
@@ -412,6 +442,8 @@ describe('Release-Ausführer', { concurrency: 1 }, () => {
     fromVersion?: string;
     schluessel?: string;
     claimedAt?: Date;
+    /** Umgebung einer Übernahme; Vorgabe `test`, die des Testservers. */
+    umgebung?: string;
   }) {
     const d = pflichtDb();
     const release = await d.release.create({
@@ -442,7 +474,7 @@ describe('Release-Ausführer', { concurrency: 1 }, () => {
           ? {
               executorId: 'pruefreihe/test',
               executionKey: o.schluessel,
-              environment: 'test',
+              environment: o.umgebung ?? 'test',
               verifiedSha256: SUMME,
               ciEvidence: CI_NACHWEIS,
               claimedAt: o.claimedAt ?? new Date(),
@@ -666,7 +698,7 @@ describe('Release-Ausführer', { concurrency: 1 }, () => {
     assert.ok(!alles.includes(PRUEF_AUSFUEHRER_TOKEN) && !alles.includes(PRUEF_AUSFUEHRER_SCHLUESSEL), 'Geheimnis im Protokoll');
   });
 
-  it('„erfolgreich" belegt die Instanz selbst: eigener Commit und eigene Version → 200; ein Rücksprung, während das Ziel läuft → 422', async () => {
+  it('„erfolgreich" belegt die Instanz selbst: eigener Commit und eigene Version → 200; ein Rücksprung, während das Ziel läuft → 422; ein Auftrag einer anderen Umgebung → 422', async () => {
     const d = pflichtDb();
     // Ein Release mit genau dem Stand, den der Testserver belegt. Eine echte
     // Version dieser Nummer darf es in der Testdatenbank nicht geben (die
@@ -685,6 +717,18 @@ describe('Release-Ausführer', { concurrency: 1 }, () => {
       const rueck = await ausfuehrer('POST', ERGEBNIS, m({ ergebnis: 'ROLLED_BACK', aktivierung: 'ZURUECK' }));
       assert.equal(rueck.status, 422, rueck.text);
       assert.match(rueck.text, /kein Rücksprung/);
+
+      // Dieselbe Identität, aber der Auftrag gilt einer anderen Umgebung: Eine
+      // Instanz der Umgebung test belegt nicht, was in staging läuft — auch
+      // wenn sie zufällig denselben Commit trägt. Ohne diese Grenze meldete
+      // eine Vorschau mit demselben Stand die Produktion als erfolgreich.
+      await d.releaseRequest.update({ where: { id: eigen.auftrag.id }, data: { environment: 'staging' } });
+      const fremdeUmgebung = await ausfuehrer('POST', ERGEBNIS, m({ ergebnis: 'SUCCEEDED', aktivierung: 'AKTIV' }));
+      assert.equal(fremdeUmgebung.status, 422, fremdeUmgebung.text);
+      // Aus dem geparsten Fehler: Im JSON-Text stünde das schliessende `"` als `\"`.
+      assert.match((JSON.parse(fremdeUmgebung.text) as { error: { message: string } }).error.message, /„staging", diese Instanz ist „test"/);
+      assert.equal((await d.releaseRequest.findUniqueOrThrow({ where: { id: eigen.auftrag.id } })).status, 'DEPLOYING');
+      await d.releaseRequest.update({ where: { id: eigen.auftrag.id }, data: { environment: 'test' } });
 
       const erfolg = await ausfuehrer('POST', ERGEBNIS, m({ ergebnis: 'SUCCEEDED', aktivierung: 'AKTIV', meldung: 'Aktivierung Code 0 (AKTIV)' }));
       assert.equal(erfolg.status, 200, erfolg.text);
@@ -724,12 +768,23 @@ describe('Release-Ausführer', { concurrency: 1 }, () => {
     }
   });
 
-  it('verwaiste Ausführung: der stündliche Lauf schliesst sie nach zwei Stunden anhand der Identität — belegt erfolgreich, sonst fehlgeschlagen', async () => {
+  it('verwaiste Ausführung: der stündliche Lauf schliesst sie nach zwei Stunden anhand der Identität — belegt erfolgreich, sonst fehlgeschlagen; eine andere Umgebung bleibt unberührt', async () => {
     const d = pflichtDb();
     const vorDreiStunden = new Date(Date.now() - 3 * 60 * 60_000);
     const belegt = await versionMitAuftrag({ version: PAKET_VERSION, commit: PRUEF_IDENTITAET_COMMIT, status: 'DEPLOYING', schluessel: `lauf-${RUN}-verwaist-a`, claimedAt: vorDreiStunden });
     const fremd = await versionMitAuftrag({ version: AUSF_VERWAIST, commit: COMMIT_VERWAIST, status: 'DEPLOYING', schluessel: `lauf-${RUN}-verwaist-b`, claimedAt: vorDreiStunden });
     const jung = await versionMitAuftrag({ version: AUSF_JUNG, commit: COMMIT_JUNG, status: 'DEPLOYING', schluessel: `lauf-${RUN}-jung`, claimedAt: new Date(Date.now() - 30 * 60_000) });
+    // Ebenso alt, aber in staging übernommen: Die Identität dieser Instanz
+    // (Umgebung test) sagt nichts darüber, was in staging läuft. Schlösse der
+    // Lauf ihn trotzdem, meldete eine Vorschau das Scheitern der Produktion.
+    const andereUmgebung = await versionMitAuftrag({
+      version: AUSF_STAGING,
+      commit: COMMIT_STAGING,
+      status: 'DEPLOYING',
+      schluessel: `lauf-${RUN}-staging`,
+      claimedAt: vorDreiStunden,
+      umgebung: 'staging',
+    });
     const stuendlich = () =>
       get<{ failures: string[]; summary: Record<string, unknown> }>('/api/cron/hourly', {
         headers: { authorization: `Bearer ${process.env.CRON_SECRET ?? 'dev-cron-secret'}` },
@@ -749,6 +804,10 @@ describe('Release-Ausführer', { concurrency: 1 }, () => {
       assert.match(b.resultMessage ?? '', /ohne Rückmeldung abgelaufen/i);
       assert.equal(b.rollbackVersion, null, 'ein Ablauf ist kein belegter Rücksprung');
       assert.equal((await zeile(jung.auftrag.id)).status, 'DEPLOYING', 'eine halbe Stunde ist keine verwaiste Ausführung');
+      const staging = await zeile(andereUmgebung.auftrag.id);
+      assert.equal(staging.status, 'DEPLOYING', 'der stündliche Lauf hat einen Auftrag einer anderen Umgebung abgeschlossen');
+      assert.equal(staging.finishedAt, null);
+      assert.equal(await letzterEintrag(staging.id), null, 'für den Auftrag einer anderen Umgebung steht ein Protokolleintrag');
 
       for (const id of [a.id, b.id]) {
         const e = await letzterEintrag(id);
@@ -764,7 +823,7 @@ describe('Release-Ausführer', { concurrency: 1 }, () => {
       assert.equal(aNachher.finishedAt?.toISOString(), a.finishedAt?.toISOString());
     } finally {
       // Der junge DEPLOYING sperrte sonst die Umgebung für das Werkzeug unten.
-      await entfernen(belegt, fremd, jung);
+      await entfernen(belegt, fremd, jung, andereUmgebung);
     }
   });
 
