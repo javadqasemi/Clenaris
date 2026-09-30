@@ -1,6 +1,6 @@
 {
   "$beschreibung": "Abdeckungsmatrix der kritischen Funktionen gegen die bestehenden Prüfungen (tests/api, tests/pages, tests/e2e). Jeder Beleg nennt Datei und den wörtlichen Titel eines it/describe/test-Aufrufs; scripts/testmatrix-pruefen.ts prüft, dass beides existiert. „abgedeckt“ heisst: Test und Zusicherung wurden gelesen. Ein „hinweis“ an einer abgedeckten Dimension nennt, was trotzdem offen ist. Lücken sind Absicht dieser Datei, nicht ihr Fehler.",
-  "stand": "2026-09-27",
+  "stand": "2026-09-30",
   "dimensionen": {
     "happyPath": "Der vorgesehene Ablauf gelingt über HTTP (oder im Browser) mit dem erwarteten Ergebnis.",
     "validierung": "Unzulässige Eingaben oder Zustände werden mit 4xx abgewiesen, ohne Nebenwirkung.",
@@ -66,7 +66,7 @@
         "nebenlaeufigkeit": {
           "status": "abgedeckt",
           "belege": [
-            { "datei": "tests/api/session-refresh.test.ts", "test": "fünfzig gleichzeitige Erneuerungen: genau eine gelingt, die Familie bleibt heil" },
+            { "datei": "tests/api/session-refresh.test.ts", "test": "fünfzig gleichzeitige Erneuerungen: genau eine rotiert, die Familie bleibt heil" },
             { "datei": "tests/api/rbac.test.ts", "test": "zwei gleichzeitige gegenseitige Herabstufungen lassen eine Systemverantwortung übrig" }
           ]
         },
@@ -1219,8 +1219,9 @@
         "unberechtigt": {
           "status": "abgedeckt",
           "belege": [
-            { "datei": "tests/api/rbac.test.ts", "test": "POST /api/leads — Anfrage erfassen" }
-          ]
+            { "datei": "tests/api/rbac.test.ts", "test": "${role}: ${allowed ? 'darf' : 'darf nicht'}" }
+          ],
+          "hinweis": "Tabelleneintrag „POST /api/leads — Anfrage erfassen“ (WITH_MANAGER) der Rechtematrix: Kundschaft und Mitarbeitende werden mit 401/403 abgewiesen, die Verwaltungsrollen kommen durch. Der Gruppentitel entsteht zur Laufzeit (describe(entry.name)) und ist deshalb kein zitierbarer Titel; belegt wird der Fall, der je Rolle läuft. Umwandeln und Löschen einer Anfrage stehen nicht in der Tabelle."
         },
         "fremderMandant": {
           "status": "abgedeckt",

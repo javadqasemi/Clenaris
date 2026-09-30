@@ -199,6 +199,17 @@ function statisch(): void {
   schritt('Prisma-Schema gültig', 'npx prisma validate');
   schritt('Keine Geheimnisse im Repository', 'npm run security:secrets');
   schritt('Sicherheitsprüfung (statisch)', 'npm run security:check:static');
+  /**
+   * Seit 2026-09-30. Die Prüfung der Abdeckungsmatrizen gibt es seit
+   * 2026-09-27 (5760e88), aber kein Tor rief sie — und so zeigten beide
+   * Matrizen seit der Umbenennung vom 2026-09-28 (a9810a6) auf einen Fall,
+   * den es nicht mehr gab („fünfzig gleichzeitige Erneuerungen: genau eine
+   * gelingt …“). Eine Matrix, die niemand nachschlägt, ist eine Behauptung.
+   * Ohne Datenbank und Server, also hier; CI erbt den Schritt über
+   * `verify:static`. Ein Beleg muss einem ausgeführten Testtitel gleich sein,
+   * eine Erwähnung im Kommentar zählt nicht (`scripts/security/testmatrix.ts`).
+   */
+  schritt('Testmatrix belegt', 'npx tsx scripts/testmatrix-pruefen.ts');
   // Das Prüfpaket für die Lohnfachprüfung ist aus dem Code erzeugt und muss
   // zu ihm passen (Sätze, Formeln, Musterfälle gegen Handrechnung) — sonst
   // prüft die Fachperson einen Stand, der nicht ausgeliefert wird (F-13).

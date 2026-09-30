@@ -1,6 +1,6 @@
 {
   "$beschreibung": "Sicherheitsklassen gegen die bestehenden Prüfungen (tests/api, tests/pages, tests/e2e). Gleiche Form wie security/testmatrix.json: status „abgedeckt“ mit wörtlichen Testtiteln als Belegen, „luecke“ oder „nicht_zutreffend“ mit Grund. Ein „hinweis“ an einer abgedeckten Klasse nennt die Stellen, an denen die Klasse trotzdem offen ist — er ist Teil des Befunds, nicht Beiwerk. Prüfbar mit scripts/testmatrix-pruefen.ts.",
-  "stand": "2026-09-27",
+  "stand": "2026-09-30",
   "klassen": [
     {
       "id": "idor",
@@ -168,7 +168,7 @@
       "status": "abgedeckt",
       "belege": [
         { "datei": "tests/api/session-refresh.test.ts", "test": "erneuert über GET, setzt neue Cookies und leitet an das Ziel zurück" },
-        { "datei": "tests/api/session-refresh.test.ts", "test": "fünfzig gleichzeitige Erneuerungen: genau eine gelingt, die Familie bleibt heil" },
+        { "datei": "tests/api/session-refresh.test.ts", "test": "fünfzig gleichzeitige Erneuerungen: genau eine rotiert, die Familie bleibt heil" },
         { "datei": "tests/api/two-factor.test.ts", "test": "verwirft ein Token, das älter ist als der Widerruf" },
         { "datei": "tests/api/mandanten.test.ts", "test": "wechselt ein Konto die Organisation, endet die laufende Sitzung sofort — Endpunkt, Seite und Erneuerung" },
         { "datei": "tests/api/sicherheitsluecken.test.ts", "test": "ein rotierter Token, nach der Kulanzfrist erneut vorgelegt, macht auch den neuesten ungültig" }
