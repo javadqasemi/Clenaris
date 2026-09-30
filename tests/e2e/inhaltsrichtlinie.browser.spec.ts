@@ -26,15 +26,50 @@ import { anfragenVerfolgen, konsoleUeberwachen } from './helpers/browser';
  *    tatsächlich keine Auswertung brauchen.
  *
  * ---------------------------------------------------------------------------
- *  Warum die Prüfung als Inline-Skript läuft und nicht über `page.evaluate`
+ *  Warum die Prüfung erst in einer eigenen Aufgabe der Ereignisschleife beginnt
  * ---------------------------------------------------------------------------
  *
- * `page.evaluate` wertet über das Steuerprotokoll des Browsers aus, und das
- * steht ausserhalb der Richtlinie — je nach Engine liefe `eval` dort durch,
- * und der Fall bewiese nichts. Deshalb setzt der Fall ein gewöhnliches
- * `<script>` in die Seite (`page.addScriptTag({ content })`), das die
- * Richtlinie genau so trifft wie jedes Skript der Anwendung; erlaubt ist es
- * über `'unsafe-inline'`, das Next für seine Inline-Nutzlast ohnehin braucht.
+ * Playwright wertet jeden Aufruf über das Steuerprotokoll des Browsers aus —
+ * `page.evaluate` ebenso wie `page.addScriptTag` —, und zwar mit
+ * `this.global.eval(ausdruck)` im Hauptbereich der Seite
+ * (`utilityScript.evaluate` in `playwright-core`). Auf einer Seite ohne
+ * `'unsafe-eval'` gelingt das nur, weil die Engine das Erzeugen von Code aus
+ * Text für die Dauer dieses einen Protokollaufrufs ausdrücklich erlaubt: der
+ * V8-Inspector ebenso wie `InjectedScriptBase` in JavaScriptCore („Temporarily
+ * enable allow evals for inspector"). Die ganze übrige Browserreihe lebt
+ * davon, und Playwrights eigenes `waitForFunction` rechnet damit — es merkt
+ * sich die ausgewertete Funktion, weil `eval` nur im ersten, synchronen
+ * Durchlauf gelingt. Für Firefox ist der Weg nicht nachgelesen; die
+ * Verschiebung unten wirkt dort genauso, falls es dieselbe Ausnahme kennt,
+ * und schadet nicht, falls nicht.
+ *
+ * Diese Ausnahme trifft auch das eingesetzte Skript. `addScriptTag({ content })`
+ * hängt das `<script>` *innerhalb* einer solchen Auswertung an
+ * (`document.head.appendChild` in `addScriptContent`), und ein eingefügtes
+ * klassisches Inline-Skript läuft synchron während `appendChild`. Alles, was
+ * es vor seinem ersten echten Warten tut, liegt also noch im Fenster der
+ * Ausnahme: `eval('1 + 1')` lieferte dort 2 und keinen Verstoss, und der Fall
+ * bewiese nichts. Die erste Fassung dieses Falls stand genau so da — die
+ * Auswertung vor dem ersten `await` — und wäre in Chromium und WebKit rot
+ * geworden, ohne dass die Richtlinie falsch gewesen wäre (aus dem Quelltext
+ * hergeleitet, nicht im Browser gemessen).
+ *
+ * Deshalb beginnt die Prüfung mit `await pause(0)`. Ein `setTimeout` ist eine
+ * neue Aufgabe der Ereignisschleife, und die beginnt erst, wenn der
+ * Protokollaufruf zurückgekehrt und die Ausnahme wieder aufgehoben ist.
+ * `queueMicrotask` oder ein blosses `await` auf eine erfüllte Zusage reichten
+ * nicht: Mikroaufgaben können noch abgearbeitet werden, bevor der
+ * Protokollaufruf endet. Ab dieser Aufgabe trifft die Richtlinie das Skript
+ * so wie jedes Skript der Anwendung. Die Zusicherungen auf `EvalError` und
+ * auf den einen Verstoss sind zugleich der Nachweis, dass die Verschiebung
+ * wirkt: Fiele sie weg, lieferte `eval` wieder 2, und der Fall würde rot.
+ *
+ * Das `<script>` bleibt trotzdem der richtige Träger und nicht ein
+ * `page.evaluate`, das seinerseits ein `setTimeout` stellt: Ob es überhaupt
+ * läuft, entscheidet `'unsafe-inline'` (das Next für seine Inline-Nutzlast
+ * ohnehin braucht). Die Prüfung von Inline-Skripten gilt auch für eine
+ * Einfügung über das Steuerprotokoll — genau deshalb fängt Playwright eine
+ * verweigerte Einfügung eigens als CSP-Fehler ab (`_raceWithCSPError`).
  * `page.evaluate` holt danach nur noch das Ergebnis ab — lesen, nicht
  * auswerten.
  *
@@ -117,9 +152,10 @@ function verstoesseMitschreiben(): void {
 }
 
 /**
- * Die eigentliche Prüfung — läuft **im Browser, als Inline-Skript** (siehe
- * Kopfkommentar). Sie wirft nie: Jeder Schritt hält sein Ergebnis fest, damit
- * ein Fehlschlag sagt, welcher Schritt es war.
+ * Die eigentliche Prüfung — läuft **im Browser, als Inline-Skript**, und
+ * beginnt erst in einer eigenen Aufgabe der Ereignisschleife (beides im
+ * Kopfkommentar begründet). Sie wirft nie: Jeder Schritt hält sein Ergebnis
+ * fest, damit ein Fehlschlag sagt, welcher Schritt es war.
  */
 function pruefungImBrowser(modul: number[]): void {
   const fenster = window as Fenster;
@@ -154,7 +190,21 @@ function pruefungImBrowser(modul: number[]): void {
     await pause(50);
   };
 
+  /*
+   * Die Zusage wird *synchron* abgelegt, noch während `appendChild`: Das
+   * `page.evaluate`, das sie abholt, folgt unmittelbar auf `addScriptTag` und
+   * fände sonst nichts vor.
+   */
   fenster.__inhaltsrichtlinie = (async (): Promise<Befund> => {
+    /*
+     * Zuerst aus dem Protokollaufruf heraus, in dem `addScriptTag` dieses
+     * Skript synchron ausführt — dort erlaubt die Engine `eval` für
+     * Playwright, und jede Prüfung davor wäre wertlos (Kopfkommentar).
+     * `setTimeout`, nicht `queueMicrotask`: Mikroaufgaben können noch
+     * innerhalb des Protokollaufrufs laufen.
+     */
+    await pause(0);
+
     const befund: Befund = {
       eval: { ausgefuehrt: false, wert: null, fehler: null },
       wasm: { antwort: null, fehler: null },
