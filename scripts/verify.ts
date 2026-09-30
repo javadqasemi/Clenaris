@@ -70,14 +70,25 @@ function zeit(ms: number): string {
  * Einen Schritt laufen lassen; scheitert er, bricht der Prüfweg ab. Die
  * Merkmalsprüfung hat eine eigene Funktion unten: Ihre Heuristiken melden nur,
  * ihr struktureller Teil blockiert.
+ *
+ * `exitcodes` erklärt einzelne Exitcodes in der Abbruchmeldung. Das ändert
+ * nichts an der Regel — **jeder** Code ausser 0 bricht ab —, sagt aber, was
+ * er heisst: Beim Datenbanktor ist 2 „nicht geprüft“, und wer nur
+ * „Exitcode 2“ liest, hält das leicht für einen Befund oder, schlimmer, für
+ * eine Nebensache.
  */
-function schritt(name: string, befehl: string, optionen: { env?: Record<string, string>; cwd?: string } = {}): void {
+function schritt(
+  name: string,
+  befehl: string,
+  optionen: { env?: Record<string, string>; cwd?: string; exitcodes?: Record<number, string> } = {},
+): void {
   console.log(`\n━━ ${name}\n   $ ${befehl}`);
   const start = Date.now();
   const lauf = spawnSync(befehl, { shell: true, stdio: 'inherit', cwd: optionen.cwd ?? WURZEL, env: { ...process.env, ...optionen.env } });
   const ok = lauf.status === 0;
-  ergebnisse.push({ schritt: name, ok, dauerMs: Date.now() - start });
-  if (!ok) abbrechen(`„${name}" ist gescheitert (Exitcode ${lauf.status ?? 'unbekannt'}).`);
+  const bedeutung = lauf.status !== null ? optionen.exitcodes?.[lauf.status] : undefined;
+  ergebnisse.push({ schritt: name, ok, dauerMs: Date.now() - start, hinweis: ok ? undefined : bedeutung });
+  if (!ok) abbrechen(`„${name}" ist gescheitert (Exitcode ${lauf.status ?? 'unbekannt'}${bedeutung ? `: ${bedeutung}` : ''}).`);
 }
 
 let server: ChildProcess | null = null;
@@ -359,18 +370,71 @@ function browserreihe(env: Record<string, string>, port: string): void {
   if (gruende.length) abbrechen(`Browser-Bilanz: ${gruende.join(' ')}`);
 }
 
+/**
+ * Der volle Weg: statisch, Testdatenbank, Bau, Server, Prüfreihen.
+ *
+ * Reihenfolge seit 2026-09-30 — und warum sie so ist:
+ *
+ *  1. **Migrationen, dann das Datenbanktor** („Datenbankschranken (live)“,
+ *     `scripts/datenbank-schranken.ts` gegen `security/datenbank-schranken.json`).
+ *     Die Schranken — etwa Trigger, die das Prüfprotokoll nur anfügen
+ *     lassen, Teilindizes, Prüfbedingungen — stehen in handgeschriebenem SQL
+ *     der Migrationen, das `prisma migrate dev` nicht kennt und still
+ *     verwerfen kann. Ob sie in der Datenbank auch *sind*, sagt keine
+ *     Migration über sich selbst; das Tor fragt die Datenbank. Exit 2 („nicht geprüft“: keine Adresse, keine
+ *     Verbindung) bricht genauso ab wie 1 („Befund“) — ein Tor, das bei
+ *     fehlender Verbindung grün wird, prüft nur, ob es eine Verbindung gab.
+ *  2. **Nur die Konfiguration** (`npm run db:seed`), dann Bau und
+ *     Leistungsbudget. Vorher lief der Demo-Seed vor dem Bau, und die
+ *     öffentlichen Seiten wurden mit erfundenen Bewertungen, Blogartikeln
+ *     und Stellen vorgerendert. Ein Bau, der Demodaten in sein HTML
+ *     geschrieben hat, ist kein Bau, der ausgeliefert werden darf — und der
+ *     Prüfweg soll den Bau prüfen, der ausgeliefert würde.
+ *  3. **Mit `--frisch` ein Probeartefakt** (`scripts/release-artefakt.ts
+ *     --ohne-module --unsauber`, in ein Temp-Verzeichnis). Dessen
+ *     Stolperdraht weist einen Bau mit Demo-Kennzeichen ab. Nur auf der
+ *     frischen Datenbank beweist er etwas: Auf einer wiederverwendeten
+ *     liegen Demodaten vom letzten Lauf, und der Draht schlüge an, ohne dass
+ *     der Code etwas falsch gemacht hätte. `--ohne-module`, weil nur der Bau
+ *     interessiert und `node_modules` Minuten kostet; `--unsauber`, weil
+ *     örtlich mit ungesicherten Änderungen gearbeitet wird (im
+ *     Release-Abzug ist der Baum ohnehin sauber). Das Probeartefakt ist nie
+ *     auslieferbar und wird danach verworfen.
+ *  4. **Dann die Demodaten** (`npm run db:seed:demo`, idempotent), weil die
+ *     Prüfreihen die fünf Demokonten und einen Bestand brauchen.
+ *
+ * Folge für die Prüfreihen: Seiten mit Zwischenspeicherung (ISR) zeigen bis
+ * zu ihrer Erneuerung den Stand des Baus, also ohne Demobestand. Das ist der
+ * Zustand, den auch die Produktion nach einer Auslieferung hat.
+ */
 async function voll(optionen: { frisch: boolean }): Promise<void> {
   statisch();
   const datenbank = testdatenbank();
   const dbEnv = { DATABASE_URL: datenbank, DIRECT_URL: datenbank };
-  if (optionen.frisch) schritt('Testdatenbank frisch aufsetzen', 'npm run db:test:setup -- --frisch', { env: { TEST_DATABASE_URL: datenbank } });
+  if (optionen.frisch) {
+    schritt('Testdatenbank frisch aufsetzen (nur Konfiguration)', 'npm run db:test:setup -- --frisch --ohne-demo', { env: { TEST_DATABASE_URL: datenbank } });
+  }
   schritt('Migrationen auf die Testdatenbank', 'npx prisma migrate deploy', { env: dbEnv });
-  schritt('Demodaten (idempotent)', 'npm run db:seed:demo', { env: dbEnv });
+  schritt('Datenbankschranken (live)', 'npx tsx scripts/datenbank-schranken.ts', {
+    env: dbEnv,
+    exitcodes: { 1: 'Befund — eine Schranke fehlt oder weicht ab', 2: 'nicht geprüft — keine Adresse oder keine Verbindung; das ist kein Bestehen' },
+  });
+  schritt('Konfiguration ohne Demodaten', 'npm run db:seed', { env: dbEnv });
   schritt('Build', 'npm run build', { env: { ...dbEnv, NODE_ENV: 'production' } });
   // Seit 2026-09-28: JavaScript je Route gegen `scripts/leistungsbudget.json`.
   // Grössen statt Millisekunden — auf jeder Maschine dieselbe Zahl, also ein
   // Tor, das nicht zufällig rot wird (Begründung in `leistungsbudget.ts`).
   schritt('Leistungsbudget (JavaScript je Route)', 'npx tsx scripts/leistungsbudget.ts');
+  if (optionen.frisch) {
+    const probe = mkdtempSync(join(tmpdir(), 'clenaris-probeartefakt-'));
+    // Über `exit` statt `finally`: Scheitert der Schritt, endet der Prozess in
+    // `abbrechen` mit `process.exit`, und ein `finally` liefe nie.
+    const probeEntfernen = () => rmSync(probe, { recursive: true, force: true });
+    process.once('exit', probeEntfernen);
+    schritt('Probeartefakt ohne Demo-Kennzeichen (Stolperdraht)', `npx tsx scripts/release-artefakt.ts --ausgabe "${probe}" --ohne-module --unsauber`);
+    probeEntfernen();
+  }
+  schritt('Demodaten (idempotent)', 'npm run db:seed:demo', { env: dbEnv });
   const port = process.env.VERIFY_PORT?.trim() || '3001';
   const cacheDir = mkdtempSync(join(tmpdir(), 'clenaris-verify-'));
   try {
