@@ -63,7 +63,7 @@ import { useQuery } from '@tanstack/react-query';
 import type { UserRole } from '@prisma/client';
 
 import { cn } from '@/lib/utils';
-import { api, queryKeys } from '@/lib/api/client';
+import { abmeldungBeginnen, api, queryKeys } from '@/lib/api/client';
 import { Logo, LogoMark } from '@/components/marketing/logo';
 import { ThemeToggle } from '@/components/theme-toggle';
 import { Button } from '@/components/ui/button';
@@ -296,6 +296,9 @@ export function AppShell({
   const unreadCount = eingehaengt ? (unread.data?.unread ?? 0) : 0;
 
   const logout = async () => {
+    // Vor dem Aufruf: Ab hier ist jedes 401 die erwartete Folge der Abmeldung,
+    // kein Anlass für „Sitzung abgelaufen" (`abmeldungBeginnen` in `lib/api/client.ts`).
+    abmeldungBeginnen();
     await api.post('/api/auth/logout').catch(() => undefined);
     // Die anderen Tabs dieser Sitzung zur Anmeldung schicken, statt sie mit
     // toten Cookies weiterarbeiten zu lassen (2026-09-28).

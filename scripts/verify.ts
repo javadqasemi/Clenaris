@@ -4,7 +4,9 @@
  *   npm run verify:static     statisch       ohne Datenbank und Server
  *   npm run verify:tests      pruefreihen    gegen einen laufenden Server (TEST_BASE_URL)
  *   npm run verify:full       voll           statisch + Testdatenbank + Build + Server + Prüfreihen
- *   npm run verify:release    release        voll auf frischer Datenbank, aus sauberem Worktree des Commits
+ *   npm run verify:release         release         Kern + Stressreihe 5/5 — der Release-Nachweis
+ *   npm run verify:release:core    release-kern    voll auf frischer Datenbank, aus sauberem Worktree des Commits
+ *   npm run verify:release:stress  release-stress  Stressreihe gegen den vorhandenen Bau
  *
  * ---------------------------------------------------------------------------
  *  Warum ein Skript
@@ -35,17 +37,18 @@
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { appendFileSync, cpSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { basename, join, resolve } from 'node:path';
 
 import { config } from 'dotenv';
 
 import { databaseNameOf, istTestdatenbank } from '../prisma/seed-guard';
 
+import { abzugsbefundeSichern } from './security/befundsicherung';
 import { bilanzPruefen, browserBilanzPruefen, testbilanzLesen, type BrowserZahlen } from './security/testbilanz';
 
 config();
 
-type Modus = 'statisch' | 'pruefreihen' | 'browser' | 'voll' | 'release';
+type Modus = 'statisch' | 'pruefreihen' | 'browser' | 'voll' | 'release' | 'release-kern' | 'release-stress';
 
 const WURZEL = resolve(__dirname, '..');
 const WINDOWS = process.platform === 'win32';
@@ -64,9 +67,9 @@ function zeit(ms: number): string {
 }
 
 /**
- * Einen Schritt laufen lassen; scheitert er, bricht der Prüfweg ab. Die eine
- * Ausnahme ist die Merkmalsprüfung (eigene Funktion unten), eine Heuristik mit
- * bekannten Fehlalarmen — Begründung in `deploy.yml`.
+ * Einen Schritt laufen lassen; scheitert er, bricht der Prüfweg ab. Die
+ * Merkmalsprüfung hat eine eigene Funktion unten: Ihre Heuristiken melden nur,
+ * ihr struktureller Teil blockiert.
  */
 function schritt(name: string, befehl: string, optionen: { env?: Record<string, string>; cwd?: string } = {}): void {
   console.log(`\n━━ ${name}\n   $ ${befehl}`);
@@ -141,7 +144,47 @@ function merkmalspruefung(): void {
   process.stdout.write(ausgabe);
   const zusammenfassungsDatei = process.env.GITHUB_STEP_SUMMARY;
   if (zusammenfassungsDatei) appendFileSync(zusammenfassungsDatei, `### Merkmalsprüfung\n\`\`\`\n${ausgabe}\n\`\`\`\n`);
-  ergebnisse.push({ schritt: 'Merkmalsprüfung', ok: lauf.status === 0, dauerMs: Date.now() - start, hinweis: lauf.status === 0 ? undefined : 'nicht blockierend' });
+  // Seit 2026-09-29 blockierend — aber nur, weil das Skript ohne `--streng`
+  // ausschliesslich bei einem strukturellen Rückschritt mit 1 endet
+  // (`strukturgrundlinie.ts`). Die Heuristiken bleiben Hinweise im Bericht.
+  const ok = lauf.status === 0;
+  ergebnisse.push({ schritt: 'Merkmalsprüfung (Struktur blockierend)', ok, dauerMs: Date.now() - start, hinweis: ok ? 'Heuristiken als Hinweis' : 'struktureller Rückschritt' });
+  if (!ok) abbrechen('Merkmalsprüfung: struktureller Rückschritt gegenüber security/struktur-grundlinie.json.');
+}
+
+/**
+ * Nutzereigene Berichte, die bewusst nie eingecheckt werden
+ * (`.claude/rules/engineering.md`: „Nutzereigene, nicht eingecheckte Dateien
+ * … werden weder geändert noch eingecheckt"). Nur genau diese Pfade — kein
+ * Muster, damit ein neuer Bericht nicht still mit durchrutscht.
+ */
+const NUTZEREIGENE_DOKUMENTE = new Set(['docs/LAST_ENTERPRISE_MISSION_REPORT.md', 'docs/LAST_ENTERPRISE_MISSION_MATRIX.md']);
+
+/**
+ * Unverfolgte Dokumentation (2026-09-29, M3).
+ *
+ * `git diff` sieht nur Dateien, die git schon kennt. Ein neues Dokument unter
+ * `docs/`, auf das Code, README oder ein anderes Dokument verweist, das aber
+ * nie hinzugefügt wurde, bestand den Schritt darüber — und fehlte im Commit,
+ * im Release-Abzug und in CI. Jetzt ist jede unverfolgte, nicht ignorierte
+ * Datei unter `docs/` (ausser den ausdrücklich nutzereigenen) ein
+ * Fehlschlag. In CI und im Release-Worktree ist die Liste immer leer; der
+ * Schritt wirkt örtlich, vor dem Commit — dort, wo die Datei vergessen wird.
+ */
+function unverfolgteDokumentation(git: string): void {
+  const start = Date.now();
+  const lauf = spawnSync(`${git} ls-files --others --exclude-standard -- docs/ README.md`, { shell: true, cwd: WURZEL, encoding: 'utf8' });
+  if (lauf.status !== 0) abbrechen('git ls-files ist gescheitert — unverfolgte Dokumentation lässt sich nicht prüfen.');
+  const liste = lauf.stdout.split(/\r?\n/).map((z) => z.trim()).filter(Boolean);
+  const offen = liste.filter((p) => !NUTZEREIGENE_DOKUMENTE.has(p));
+  const nutzereigen = liste.length - offen.length;
+  ergebnisse.push({
+    schritt: 'Keine unverfolgte Dokumentation',
+    ok: offen.length === 0,
+    dauerMs: Date.now() - start,
+    hinweis: offen.length ? offen.join(', ') : nutzereigen ? `${nutzereigen} nutzereigene ausgenommen` : undefined,
+  });
+  if (offen.length) abbrechen(`Unverfolgte Dokumentation — hinzufügen oder in .gitignore aufnehmen: ${offen.join(', ')}`);
 }
 
 function statisch(): void {
@@ -171,6 +214,7 @@ function statisch(): void {
   if (!git) abbrechen('git nicht gefunden — „Dokumentation aktuell" lässt sich nicht prüfen.');
   // README gehört dazu, seit ihre Umfangszahlen erzeugt werden (scripts/kennzahlen.ts, 2026-09-27).
   schritt('Dokumentation ist mitgeliefert (kein Unterschied in docs/ und README.md)', `${git} diff --exit-code --stat -- docs/ README.md`);
+  unverfolgteDokumentation(git);
   merkmalspruefung();
 }
 
@@ -252,6 +296,10 @@ function schrittMitBilanz(name: string, befehl: string, optionen: { env?: Record
 
 async function pruefreihen(basis: string, cacheDir: string | undefined, port: string): Promise<void> {
   const env = { TEST_BASE_URL: basis, ...(cacheDir ? { CLENARIS_TEST_CACHE_DIR: cacheDir } : {}) };
+  // HTML je Seite (2026-09-29): vor den Reihen, solange der Bestand der
+  // Demobestand ist — danach hängt die Grösse davon ab, was die Fälle
+  // angelegt haben. Bytes statt Millisekunden, also auf jeder Maschine gleich.
+  schritt('Leistungsbudget (HTML je Seite)', 'npx tsx scripts/leistungsbudget.ts --nur-html', { env });
   schritt('Sicherheitsreihen', 'npm run security:check:tests', { env });
   /*
     Der Bericht wird hier **nicht** erzwungen. `npm test -- --test-reporter=tap`
@@ -340,12 +388,35 @@ async function voll(optionen: { frisch: boolean }): Promise<void> {
  * gemeinsamer `node_modules` oder `.next` —, und git funktioniert darin.
  * Er wird am Ende wieder entfernt, auch nach einem Fehlschlag.
  */
-async function release(): Promise<void> {
+/** Läufe der Stressreihe im Release-Weg; eine kleinere Zahl ist kein Release-Nachweis. */
+const STRESS_LAEUFE = 5;
+
+/**
+ * Release in zwei Teilen (2026-09-29, M4):
+ *
+ *   verify:release:core    Kern — sauberer Abzug, frische Datenbank, voller Prüfweg
+ *   verify:release:stress  Stressreihe (5 Browserläufe, je frischer Server) auf einem vorhandenen Bau
+ *   verify:release         beides, im selben Abzug — nur das ist ein Release-Nachweis
+ *
+ * Vorher endete `verify:release` nach dem Kern mit „Alle blockierenden
+ * Schritte bestanden", und die Stressreihe war ein getrennter, vergessbarer
+ * Aufruf. Ein wackelnder Browserfall zeigt sich aber gerade nicht im einen
+ * Lauf des Kerns. Deshalb meldet der Kern allein ausdrücklich „RELEASE NICHT
+ * BELEGT", und nur der Gesamtweg meldet „RELEASE BESTANDEN".
+ */
+async function release(optionen: { stress: boolean }): Promise<void> {
   const git = gitBefehl();
   if (!git) abbrechen('git nicht gefunden — ohne Worktree kein sauberer Abzug.');
   const ziel = mkdtempSync(join(tmpdir(), 'clenaris-release-'));
   const quelle = join(ziel, 'quelle');
   const aufraeumen = () => {
+    // Erst sichern, dann entfernen (RC-20): Mit dem Abzug verschwanden die
+    // Spur eines roten Laufs und das Protokoll, auf das die Ausgabe zeigt.
+    // `hydrationsbefunde/` ist nicht verfolgt — die Ablage stört weder den
+    // Arbeitsbaum noch den nächsten Release-Lauf.
+    const ablage = join(WURZEL, 'hydrationsbefunde', `release-${basename(ziel)}`);
+    const gesichert = abzugsbefundeSichern(quelle, ablage);
+    if (gesichert.length > 0) console.log(`\n   Beweise des Release-Laufs gesichert: ${ablage}`);
     spawnSync(`${git} worktree remove --force "${quelle}"`, { shell: true, cwd: WURZEL, stdio: 'ignore' });
     rmSync(ziel, { recursive: true, force: true });
   };
@@ -356,6 +427,16 @@ async function release(): Promise<void> {
   if (existsSync(join(WURZEL, '.env'))) cpSync(join(WURZEL, '.env'), join(quelle, '.env'));
   schritt('Abhängigkeiten aus der Sperrdatei (npm ci)', 'npm ci --no-audit --no-fund', { cwd: quelle });
   schritt('Voller Prüfweg im Abzug, frische Testdatenbank', 'npx tsx scripts/verify.ts voll --frisch', { cwd: quelle, env: { TEST_DATABASE_URL: testdatenbank() } });
+  // Im selben Abzug und auf seinem Bau: Die Stressreihe prüft, was der Kern gebaut hat.
+  if (optionen.stress) stressreihe(quelle);
+}
+
+function stressreihe(cwd: string): void {
+  const datenbank = testdatenbank();
+  schritt(`Stressreihe (${STRESS_LAEUFE} Browserläufe, je frischer Server, ohne Wiederholungen)`, `npx tsx scripts/e2e-stress.ts --laeufe ${STRESS_LAEUFE}`, {
+    cwd,
+    env: { TEST_DATABASE_URL: datenbank },
+  });
 }
 
 async function main(): Promise<void> {
@@ -386,14 +467,24 @@ async function main(): Promise<void> {
       await voll({ frisch });
       break;
     case 'release':
-      await release();
+      await release({ stress: true });
+      break;
+    case 'release-kern':
+      await release({ stress: false });
+      break;
+    case 'release-stress':
+      // Gegen den Bau im Arbeitsbaum (`.next`); `e2e-stress.ts` bricht ohne ab.
+      stressreihe(WURZEL);
       break;
     default:
-      console.error('Aufruf: tsx scripts/verify.ts statisch | pruefreihen | browser | voll [--frisch] | release');
+      console.error('Aufruf: tsx scripts/verify.ts statisch | pruefreihen | browser | voll [--frisch] | release | release-kern | release-stress');
       process.exit(2);
   }
   zusammenfassung();
-  console.log('\n✅  Alle blockierenden Schritte bestanden.');
+  if (modus === 'release') console.log(`\n✅  RELEASE BESTANDEN — Kern und Stressreihe ${STRESS_LAEUFE}/${STRESS_LAEUFE}.`);
+  else if (modus === 'release-kern') console.log('\n✅  Release-Kern bestanden.\n⚠  RELEASE NICHT BELEGT — die Stressreihe fehlt (`npm run verify:release:stress` oder `npm run verify:release`).');
+  else if (modus === 'release-stress') console.log(`\n✅  Stressreihe ${STRESS_LAEUFE}/${STRESS_LAEUFE} bestanden.\n⚠  RELEASE NICHT BELEGT ohne den Kern (\`npm run verify:release\`).`);
+  else console.log('\n✅  Alle blockierenden Schritte bestanden.');
 }
 
 void main();

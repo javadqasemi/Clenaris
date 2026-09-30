@@ -15,8 +15,8 @@ Schweizer DSG und DSGVO.
 
 | | |
 | --- | --- |
-| **Stack** | Next.js 15 (App Router) · React 19 · TypeScript · Tailwind · Prisma 6 · PostgreSQL 16+ |
-| **Umfang** | <!-- kennzahlen:umfang -->171 Seiten · 379 Route-Dateien mit 544 Endpunkten · 152 Datenmodelle · 89 Dienste · 116 Prüfdateien<!-- /kennzahlen:umfang --> (gezählt von `scripts/kennzahlen.ts`) |
+| **Stack** | Next.js 15 (App Router) · React 19 · TypeScript · Tailwind · Prisma 7 (Treiberadapter `pg`) · PostgreSQL 16+ |
+| **Umfang** | <!-- kennzahlen:umfang -->171 Seiten · 379 Route-Dateien mit 544 Endpunkten · 152 Datenmodelle · 89 Dienste · 122 Prüfdateien<!-- /kennzahlen:umfang --> (gezählt von `scripts/kennzahlen.ts`) |
 | **Rollen** | SUPER_ADMIN · ADMIN · MANAGER · EMPLOYEE · CUSTOMER |
 | **Sprache** | Deutsch (Schema und Endpunkte für FR/IT/EN vorbereitet) |
 | **Betrieb** | Eigener Server: Internet → Cloudflare → Cloud Firewall → Nginx → Next.js auf `127.0.0.1:3000`, ausgeliefert über GitHub Actions → SSH → PM2 · Postgres & Objektspeicher · Redis empfohlen |
@@ -209,7 +209,7 @@ versendet.
 | Variable | Pflicht | Zweck |
 | --- | --- | --- |
 | `DATABASE_URL` | ja | PostgreSQL-Verbindung |
-| `DIRECT_URL` | – | Direktverbindung für Migrationen (bei Pooling) |
+| `DIRECT_URL` | – | Direktverbindung für die Prisma-Kommandozeile (`migrate`), bei Pooling Pflicht; sonst gilt `DATABASE_URL` (`prisma.config.ts`) |
 | `JWT_SECRET` | ja | mindestens 32 Zeichen |
 | `APP_URL` | ja | Adresse dieser Instanz für Links in E-Mails, PDFs, Zahlungen, Signaturen und die Herkunftsprüfung — zur Laufzeit gelesen (älterer Name `NEXT_PUBLIC_APP_URL` gilt als Rückfall) |
 | `NEXT_PUBLIC_SITE_URL` | beim Bau | kanonische Domain der Website (Canonical, Sitemap, robots.txt), für jede Umgebung dieselbe |

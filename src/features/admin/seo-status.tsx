@@ -93,7 +93,7 @@ export function SeoStatusUebersicht({ zeilen }: { zeilen: SeoStatusZeile[] }) {
                       </Badge>
                     )}
                   </td>
-                  <td className="text-sm">{zeile.ogBild ? 'vorhanden' : <span className="text-muted-foreground">fehlt</span>}</td>
+                  <td className="text-sm">{zeile.ogBild ? 'eigenes' : <span className="text-muted-foreground">Standardbild</span>}</td>
                   <td className="text-sm text-muted-foreground">{zeile.strukturierteDaten.join(', ')}</td>
                   <td>
                     <Badge variant={stufe.variant} size="sm" className="gap-1">

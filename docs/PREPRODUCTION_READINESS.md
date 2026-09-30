@@ -1,5 +1,11 @@
 # Pre-Production-Bereitschaft
 
+> **Historischer Stand.** Dieses Dokument hält die Pre-Production-Prüfung vom
+> 2026-09-26/27 fest (Commits, Zahlen, CI-Läufe jener Tage) und wird nicht
+> mehr fortgeschrieben. Seither: Prisma 7 statt 6.19.3, Artefakt-Auslieferung
+> als einziger Weg, Release-Kandidat vom 2026-09-29. Der geltende Stand steht
+> in `docs/RELEASEBEREITSCHAFT.md` und im Register `docs/PENDENZEN.md`.
+
 Stand 2026-09-26, fortgeschrieben 2026-09-27 (Nachträge C und D und
 „UI/UX-Prüfmatrix" am Ende). Diese Mission hat **keine** Produktfunktion hinzugefügt,
 nichts gepusht, nichts ausgeliefert, keinen Server, kein DNS, kein
@@ -270,6 +276,13 @@ Engine (EPERM). Folgen:
   Prisma-Update wäre es ein Fehler. **Regel:** vor `npm run build` im
   Arbeitsbaum jeden Server aus diesem Baum beenden (CLAUDE.md sagt das
   bereits).
+- **Überholt seit Prisma 7 (2026-09-29).** Mit dem Treiberadapter erzeugt
+  `prisma generate` keine Engine-Bibliothek mehr: Am 2026-09-29 war
+  `node_modules/.prisma/client/index.js` frisch erzeugt, die daneben liegende
+  `query_engine-windows.dll.node` trug noch den Stand vom 2026-09-03 (Rest aus
+  Prisma 6, nicht mehr geladen). Die EPERM-Sperre beim Bau tritt damit nicht
+  mehr auf; einen laufenden `next start` aus demselben Bauverzeichnis beendet
+  man trotzdem vor dem Bau, weil der Bau `.next` leert.
 - **Der Release-Bau hängt davon nicht ab** — bewiesen:
 
 | Schritt (sauberer Baum aus `git archive eba16bd`, eigenes Verzeichnis, ohne `.env`, ohne fremde `node_modules`) | Exit | Dauer |

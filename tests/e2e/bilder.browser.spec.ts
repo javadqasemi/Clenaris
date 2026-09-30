@@ -4,7 +4,7 @@ import sharp from 'sharp';
 import { BASE_URL, data, patch, post } from '../helpers/client';
 import { testDb } from '../helpers/testdb';
 import { test, expect } from './helpers/basis';
-import { konsoleUeberwachen } from './helpers/browser';
+import { anfragenVerfolgen, konsoleUeberwachen } from './helpers/browser';
 import { frischAnmelden } from './helpers/bestand';
 
 /**
@@ -187,6 +187,7 @@ test.describe('Bilder der Website', () => {
     test(`${pfad}: leerer Zwischenspeicher, dann Neuladen — jedes Bild dekodiert und sichtbar`, async ({ page, context }) => {
       const konsole = konsoleUeberwachen(page);
       const fehlgeschlagen = bildantwortenBeobachten(context);
+      const verkehr = anfragenVerfolgen(page);
 
       await page.goto(pfad);
       const kalt = await bilderPruefen(page);
@@ -209,8 +210,22 @@ test.describe('Bilder der Website', () => {
         Zeitpunkt mit schnellem Server nicht zu treffen (Pendenz W-08). Die
         Meldung wird nicht gefiltert — geprüft werden hier Bilder, und ein
         Mensch lädt eine fertige Seite neu.
+
+        Seit 2026-09-29 über `anfragenVerfolgen` statt `networkidle`: Das
+        löste sofort auf, weil die Seite den Zustand schon einmal erreicht
+        hatte, und in WebKit über HTTPS traf das Neuladen einen Vorabruf, der
+        erst beim Durchscrollen der Bilder begonnen hatte.
+
+        Und erst, wenn das Cookie-Banner steht (2026-09-29, Stresslauf 4 von 5
+        auf dem Release-Kandidaten): Es öffnet 800 ms nach dem Laden
+        (`cookie-banner.tsx`) und ruft dabei seinen Link `/legal/cookies` vorab
+        ab. Die Ruhepause von 500 ms konnte davor liegen; das Neuladen traf dann
+        den Vorabruf, und WebKit meldete „Failed to fetch RSC payload for
+        …/legal/cookies … Load failed". Das Banner gehört zur Seite — wie in
+        `helpers/axe.ts` wird darauf gewartet, die Meldung bleibt ungefiltert.
       */
-      await page.waitForLoadState('networkidle');
+      await page.locator('[role="dialog"][aria-labelledby="cookie-title"]').waitFor({ state: 'visible', timeout: 10_000 });
+      await verkehr.ruhig();
       await page.reload();
       alleGeladen(await bilderPruefen(page), `${pfad} neu geladen`);
 

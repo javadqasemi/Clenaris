@@ -85,8 +85,37 @@ function isAuthEndpoint(path: string): boolean {
   return path.startsWith('/api/auth/');
 }
 
+/**
+ * Läuft gerade eine gewollte Abmeldung? (2026-09-29)
+ *
+ * Gefunden im WebKit-Lauf des Release-Kandidaten („Frame load interrupted"):
+ * Nach „Abmelden" liefen im Rahmen noch Abfragen (Glocke, Neuabruf beim
+ * Fokus). Sie bekamen 401, versuchten eine Erneuerung, die nach der Abmeldung
+ * scheitern muss, und schickten per `goToLogin()` hart zur Anmeldung mit
+ * „Sitzung abgelaufen" — im Wettlauf mit dem Sprung auf die Startseite.
+ * Je nach Reihenfolge landete man auf der Website oder auf einer Anmeldemaske,
+ * die eine abgelaufene Sitzung behauptet, die man selbst beendet hat.
+ *
+ * Solange die Abmeldung läuft, ist ein 401 deshalb keine abgelaufene Sitzung,
+ * sondern die erwartete Antwort: keine Erneuerung, kein Sprung; der Aufruf
+ * scheitert still, und die Abmeldung bestimmt das Ziel. Die Marke wird nie
+ * zurückgesetzt — nach der Abmeldung verlässt die Seite den angemeldeten
+ * Bereich.
+ */
+let abmeldungLaeuft = false;
+
+export function abmeldungBeginnen(): void {
+  abmeldungLaeuft = true;
+}
+
+/** Hat **dieser** Tab die Abmeldung begonnen? (Für die Sitzungsabstimmung zwischen Tabs.) */
+export function abmeldungLaeuftBereits(): boolean {
+  return abmeldungLaeuft;
+}
+
 /** Zur Anmeldung, mit dem aktuellen Ort als Rücksprungziel. */
 function goToLogin(): void {
+  if (abmeldungLaeuft) return;
   const here = `${window.location.pathname}${window.location.search}`;
   window.location.assign(`/auth/anmelden?weiter=${encodeURIComponent(here)}&grund=abgelaufen`);
 }
@@ -113,7 +142,7 @@ async function request<T>(path: string, options: RequestOptions = {}, retried = 
     credentials: 'same-origin',
   });
 
-  if (response.status === 401 && !retried && !isAuthEndpoint(path)) {
+  if (response.status === 401 && !retried && !isAuthEndpoint(path) && !abmeldungLaeuft) {
     if (await tryRefresh()) return request<T>(path, options, true);
     goToLogin();
   }
@@ -173,7 +202,7 @@ async function requestWithMeta<T, M = unknown>(
     credentials: 'same-origin',
   });
 
-  if (response.status === 401 && !retried && !isAuthEndpoint(path)) {
+  if (response.status === 401 && !retried && !isAuthEndpoint(path) && !abmeldungLaeuft) {
     if (await tryRefresh()) return requestWithMeta<T, M>(path, options, true);
     goToLogin();
   }

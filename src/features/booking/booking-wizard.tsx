@@ -81,6 +81,15 @@ export function BookingWizard({
   const [error, setError] = React.useState<string | null>(null);
 
   const price = useLivePrice();
+  // Auch ein Netzfehler ist ein Fehler. Er kommt als `TypeError` aus `fetch`,
+  // nicht als `ApiError`, und fiel vorher auf `null` — die Zusammenfassung
+  // zeigte dann den neutralen Platzhalter, als fehlte nur eine Angabe, und
+  // `use-price.ts` wiederholt nicht (`retry: false`).
+  const preisFehler = price.isError
+    ? price.error instanceof ApiError
+      ? price.error.message
+      : 'Der Preis konnte nicht berechnet werden. Bitte prüfen Sie die Verbindung.'
+    : null;
   const stepIndex = BOOKING_STEPS.findIndex((s) => s.key === step);
   const current = BOOKING_STEPS[stepIndex];
 
@@ -382,7 +391,7 @@ export function BookingWizard({
         <PriceSummary
           loading={price.isFetching}
           data={price.data}
-          error={price.error instanceof ApiError ? price.error.message : null}
+          error={preisFehler}
         />
       </aside>
 
@@ -394,6 +403,11 @@ export function BookingWizard({
             <p className="font-display text-xl font-bold tabular-nums">
               {price.data ? formatCurrency(price.data.grossTotal) : '—'}
             </p>
+            {preisFehler && !price.data ? (
+              <p className="text-xs text-destructive" role="alert">
+                {preisFehler}
+              </p>
+            ) : null}
           </div>
           {price.isFetching ? (
             <Loader2 className="size-4 animate-spin text-muted-foreground" aria-hidden />

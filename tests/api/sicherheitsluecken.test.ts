@@ -12,7 +12,7 @@ import Stripe from 'stripe';
 import { pruefeZiel, sendeWebhook } from '../../src/lib/automation/webhook';
 import { BASE_URL, data, del, get, patch, post, requireServer, sleep } from '../helpers/client';
 import { ACCOUNTS, login, loginAll, type AccountName } from '../helpers/accounts';
-import { eigeneOrganisationId, schutzfreiAufraeumen, testDb, testDbGrund, testDbSchliessen } from '../helpers/testdb';
+import { eigeneOrganisationId, fremdeOrganisation, schutzfreiAufraeumen, testDb, testDbGrund, testDbSchliessen } from '../helpers/testdb';
 import { PRUEF_STRIPE_GEHEIMNIS } from '../helpers/webhooks';
 
 /**
@@ -1073,48 +1073,97 @@ describe('IDOR — fremde Kennungen öffnen nichts', () => {
    * As Buchung, und As Kundenkonto zeigte sie samt Betrag und Saldo. Gegen den
    * alten Stand: 201 und eine Rechnung mit fremdem Bezug im Bestand.
    */
-  it('eine Rechnung nimmt keine Buchung und keine Offerte einer anderen Kundschaft an', async () => {
-    const eigene = await eigeneKundeId();
-    const fremdeBuchung = await db().booking.findFirst({
-      where: { organizationId: orgId, deletedAt: null, customerId: { not: eigene } },
-      select: { id: true },
-    });
-    const fremdeOfferte = await db().quote.findFirst({
-      where: { organizationId: orgId, deletedAt: null, customerId: { not: eigene } },
-      select: { id: true },
-    });
-    assert.ok(fremdeBuchung && fremdeOfferte, 'keine fremde Buchung oder Offerte im Bestand');
+  /*
+    Seit 2026-09-29 mit eigenen Fixturen statt Demobestand: Der alte Fall
+    suchte „irgendeine fremde Buchung" und prüfte die Gegenprobe nur, wenn der
+    Bestand zufällig eine eigene Buchung hatte (`if (eigeneBuchung)`) — ohne
+    sie lief er still grün. Jetzt legt der Fall alles selbst an: Kundschaft A
+    und B der eigenen Organisation, Kundschaft C einer fremden, je mit einer
+    Buchung und einer Offerte. Sechs Fälle, keiner bedingt.
+  */
+  it('eine Rechnung nimmt keine Buchung und keine Offerte einer anderen Kundschaft oder Organisation an', async () => {
+    const fremdeOrg = await fremdeOrganisation();
+    assert.ok(fremdeOrg, 'keine fremde Prüforganisation');
+    const lauf = `${Date.now()}`;
+    const notiz = `${MARKE} Rechnungsbezug ${lauf}`;
+    const kunde = (organizationId: string, name: string) =>
+      db().customer.create({
+        data: { organizationId, number: `K-PRUEF-${name}-${lauf}`, firstName: 'Prüf', lastName: `Bezug ${name}`, email: `bezug-${name.toLowerCase()}-${lauf}@example.ch` },
+        select: { id: true },
+      });
+    const buchung = (organizationId: string, customerId: string, name: string) =>
+      db().booking.create({
+        data: {
+          organizationId,
+          customerId,
+          number: `B-PRUEF-${name}-${lauf}`,
+          scheduledStart: new Date(Date.now() + 7 * 86_400_000),
+          scheduledEnd: new Date(Date.now() + 7 * 86_400_000 + 7_200_000),
+          durationMin: 120,
+        },
+        select: { id: true },
+      });
+    const offerte = (organizationId: string, customerId: string, name: string) =>
+      db().quote.create({
+        data: { organizationId, customerId, number: `O-PRUEF-${name}-${lauf}`, title: `Prüfofferte ${name}`, validUntil: new Date(Date.now() + 30 * 86_400_000) },
+        select: { id: true },
+      });
 
-    const rechnung = (bezug: Record<string, string>) =>
-      post('/api/invoices', {
-        customerId: eigene,
-        notes: `${MARKE} fremder Bezug`,
+    const kundeA = await kunde(orgId, 'A');
+    const kundeB = await kunde(orgId, 'B');
+    const kundeC = await kunde(fremdeOrg, 'C');
+    const [buchungA, buchungB, buchungC] = await Promise.all([
+      buchung(orgId, kundeA.id, 'A'),
+      buchung(orgId, kundeB.id, 'B'),
+      buchung(fremdeOrg, kundeC.id, 'C'),
+    ]);
+    const [offerteA, offerteB, offerteC] = await Promise.all([
+      offerte(orgId, kundeA.id, 'A'),
+      offerte(orgId, kundeB.id, 'B'),
+      offerte(fremdeOrg, kundeC.id, 'C'),
+    ]);
+
+    const rechnungFuerA = (bezug: Record<string, string>) =>
+      post<{ data: { id: string } }>('/api/invoices', {
+        customerId: kundeA.id,
+        notes: notiz,
         items: [{ name: 'Unterhaltsreinigung', quantity: 1, unit: 'Std.', unitPrice: 50, vatRate: 8.1 }],
         issueImmediately: false,
         ...bezug,
       }, { jar: jars.admin });
 
     try {
-      const mitBuchung = await rechnung({ bookingId: fremdeBuchung.id });
-      assert.equal(mitBuchung.status, 404, `fremde Buchung: HTTP ${mitBuchung.status} ${mitBuchung.text}`);
-      const mitOfferte = await rechnung({ quoteId: fremdeOfferte.id });
-      assert.equal(mitOfferte.status, 404, `fremde Offerte: HTTP ${mitOfferte.status} ${mitOfferte.text}`);
-      assert.equal(await db().invoice.count({ where: { notes: `${MARKE} fremder Bezug` } }), 0, 'eine Rechnung mit fremdem Bezug ist entstanden');
+      for (const [fall, bezug] of [
+        ['Buchung einer fremden Organisation', { bookingId: buchungC.id }],
+        ['Offerte einer fremden Organisation', { quoteId: offerteC.id }],
+        ['Buchung einer anderen Kundschaft', { bookingId: buchungB.id }],
+        ['Offerte einer anderen Kundschaft', { quoteId: offerteB.id }],
+      ] as const) {
+        const antwort = await rechnungFuerA(bezug);
+        assert.equal(antwort.status, 404, `${fall}: HTTP ${antwort.status} ${antwort.text}`);
+      }
+      assert.equal(await db().invoice.count({ where: { notes: notiz } }), 0, 'eine Rechnung mit fremdem Bezug ist entstanden');
 
-      // Gegenprobe: die eigene Buchung wird angenommen — sonst bewiese das 404 nichts.
-      const eigeneBuchung = await db().booking.findFirst({ where: { organizationId: orgId, deletedAt: null, customerId: eigene }, select: { id: true } });
-      if (eigeneBuchung) {
-        const passend = await rechnung({ bookingId: eigeneBuchung.id });
-        assert.equal(passend.status, 201, passend.text);
-      }
+      // Gegenproben: der passende Bezug wird angenommen und genau so gespeichert.
+      // Gespeichert geprüft, nicht an der Antwort: Sie trägt die Bezüge nicht.
+      const mitBuchung = await rechnungFuerA({ bookingId: buchungA.id });
+      assert.equal(mitBuchung.status, 201, `eigene Buchung: ${mitBuchung.text}`);
+      const gespeichertB = await db().invoice.findUniqueOrThrow({ where: { id: data(mitBuchung).id }, select: { bookingId: true, customerId: true } });
+      assert.deepEqual(gespeichertB, { bookingId: buchungA.id, customerId: kundeA.id });
+      const mitOfferte = await rechnungFuerA({ quoteId: offerteA.id });
+      assert.equal(mitOfferte.status, 201, `eigene Offerte: ${mitOfferte.text}`);
+      const gespeichertO = await db().invoice.findUniqueOrThrow({ where: { id: data(mitOfferte).id }, select: { quoteId: true, customerId: true } });
+      assert.deepEqual(gespeichertO, { quoteId: offerteA.id, customerId: kundeA.id });
+      assert.equal(await db().invoice.count({ where: { notes: notiz } }), 2);
     } finally {
-      const ids = (await db().invoice.findMany({ where: { notes: `${MARKE} fremder Bezug` }, select: { id: true } })).map((r) => r.id);
-      if (ids.length) {
-        await schutzfreiAufraeumen(async (tx) => {
-          await tx.invoiceItem.deleteMany({ where: { invoiceId: { in: ids } } });
-          await tx.invoice.deleteMany({ where: { id: { in: ids } } });
-        });
-      }
+      const rechnungen = (await db().invoice.findMany({ where: { notes: notiz }, select: { id: true } })).map((r) => r.id);
+      await schutzfreiAufraeumen(async (tx) => {
+        await tx.invoiceItem.deleteMany({ where: { invoiceId: { in: rechnungen } } });
+        await tx.invoice.deleteMany({ where: { id: { in: rechnungen } } });
+        await tx.booking.deleteMany({ where: { id: { in: [buchungA.id, buchungB.id, buchungC.id] } } });
+        await tx.quote.deleteMany({ where: { id: { in: [offerteA.id, offerteB.id, offerteC.id] } } });
+        await tx.customer.deleteMany({ where: { id: { in: [kundeA.id, kundeB.id, kundeC.id] } } });
+      });
     }
   });
 

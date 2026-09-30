@@ -51,6 +51,8 @@
     "verify:tests": "tsx scripts/verify.ts pruefreihen",
     "verify:full": "tsx scripts/verify.ts voll",
     "verify:release": "tsx scripts/verify.ts release",
+    "verify:release:core": "tsx scripts/verify.ts release-kern",
+    "verify:release:stress": "tsx scripts/verify.ts release-stress",
     "verify:security": "npm run security:check",
     "verify:e2e": "tsx scripts/verify.ts browser",
     "production:preflight": "tsx scripts/production-preflight.ts",

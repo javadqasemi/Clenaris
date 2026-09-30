@@ -58,6 +58,14 @@ export const SEITENNAME = 'Clenaris';
 export const OG_LOCALE = 'de_CH';
 
 /**
+ * Vorschaubild für Seiten ohne eigenes. Erzeugt von
+ * `scripts/vorschaubild-erzeugen.ts` aus der freigegebenen Bildmarke; die
+ * Masse stehen mit im Tag, damit die Plattformen die Karte ohne Abruf des
+ * Bildes aufbauen können.
+ */
+export const STANDARD_VORSCHAUBILD = { pfad: '/og-standard.png', breite: 1200, hoehe: 630 } as const;
+
+/**
  * Richtwerte, an denen die Übersicht misst. Google kürzt Titel nach etwa
  * 580 Pixeln (rund 60 Zeichen) und Beschreibungen nach etwa 155–160 Zeichen.
  * Es sind Hinweise, keine Grenzen — die Redaktion entscheidet.
@@ -240,7 +248,18 @@ export function seitenMetadaten(seo: SeitenSeo, herkunft: string): Metadata {
   const titel = klartext(seo.titel);
   const beschreibung = klartext(seo.beschreibung);
   const kanonisch = absoluteSeitenUrl(seo.pfad, herkunft);
-  const bild = sichereBildUrl(seo.ogBildUrl, herkunft);
+  // Ein im CMS gepflegtes Vorschaubild geht vor. Fehlt es (oder fällt es
+  // durch die Prüfung), gilt das Standardbild aus `public/og-standard.png`
+  // (SEO-06, 2026-09-29): Ohne `og:image` zeigten Messenger und soziale
+  // Netzwerke eine leere Karte. Bewusst hier und nicht als Next-Dateikonvention
+  // `opengraph-image` — jene überschriebe auch die gepflegten Bilder.
+  const eigenesBild = sichereBildUrl(seo.ogBildUrl, herkunft);
+  const bild = eigenesBild ?? sichereBildUrl(STANDARD_VORSCHAUBILD.pfad, herkunft);
+  const bildAngabe = bild
+    ? eigenesBild
+      ? { url: bild }
+      : { url: bild, width: STANDARD_VORSCHAUBILD.breite, height: STANDARD_VORSCHAUBILD.hoehe, alt: SEITENNAME }
+    : null;
   const schluesselwoerter = (seo.schluesselwoerter ?? []).map(klartext).filter(Boolean);
   const ogTyp = seo.ogTyp ?? 'website';
 
@@ -256,13 +275,14 @@ export function seitenMetadaten(seo: SeitenSeo, herkunft: string): Metadata {
       ...(kanonisch ? { url: kanonisch } : {}),
       ...(titel ? { title: titel } : {}),
       ...(beschreibung ? { description: beschreibung } : {}),
-      ...(bild ? { images: [{ url: bild }] } : {}),
+      ...(bildAngabe ? { images: [bildAngabe] } : {}),
       ...(ogTyp === 'article' && seo.veroeffentlicht
         ? { publishedTime: seo.veroeffentlicht.toISOString() }
         : {}),
     },
     twitter: {
       // Die grosse Karte nur mit Bild — ohne Bild zeigte sie eine leere Fläche.
+      // Seit dem Standardbild fehlt eines nur noch ohne gültige Herkunft.
       card: bild ? 'summary_large_image' : 'summary',
       ...(titel ? { title: titel } : {}),
       ...(beschreibung ? { description: beschreibung } : {}),
@@ -384,8 +404,11 @@ export function seoStatus(eingabe: SeoStatusEingabe, herkunft: string): SeoStatu
   const beschreibung = typeof meta.description === 'string' ? meta.description : '';
   const kanonischRoh = meta.alternates?.canonical;
   const kanonisch = typeof kanonischRoh === 'string' ? kanonischRoh : null;
-  const bilder = meta.openGraph?.images;
-  const ogBild = Array.isArray(bilder) ? bilder.length > 0 : Boolean(bilder);
+  // `ogBild` heisst „eigenes, gültiges Bild gepflegt" — nicht „og:image im
+  // HTML". Seit dem Standardbild (SEO-06) steht dort fast immer eines; die
+  // Übersicht soll der Redaktion aber weiter zeigen, welche Seiten nur die
+  // allgemeine Karte tragen und welche ein verworfenes Bild haben.
+  const ogBild = sichereBildUrl(eingabe.ogBildUrl, herkunft) !== null;
   const indexierbar = !eingabe.noIndex;
 
   const befunde: SeoStatusZeile['befunde'] = [];
@@ -409,7 +432,7 @@ export function seoStatus(eingabe: SeoStatusEingabe, herkunft: string): SeoStatu
   if (!indexierbar) befunde.push({ stufe: 'hinweis', text: 'Aus dem Index genommen (noindex)' });
   if (eingabe.ogBildUrl?.trim() && !ogBild)
     befunde.push({ stufe: 'warnung', text: 'Vorschaubild verworfen — keine https-Adresse und kein Pfad dieser Website' });
-  if (!ogBild) befunde.push({ stufe: 'hinweis', text: 'Kein Vorschaubild für soziale Medien' });
+  if (!ogBild) befunde.push({ stufe: 'hinweis', text: 'Kein eigenes Vorschaubild — es gilt das Standardbild' });
 
   const stufe: SeoStufe = befunde.some((b) => b.stufe === 'warnung')
     ? 'warnung'

@@ -48,6 +48,7 @@ import { befundEinordnen, veralteteBewertungen, type Bewertung } from './securit
 import { geheimnisseImBestand } from './security/geheimnisse';
 import { melden, type Meldung } from './security/melden';
 import { musterPruefen, type Unterdrueckung } from './security/muster';
+import { statusMitPflichtteil } from './security/pflichtabgleich';
 import { bilanzPruefen, konfigurierteDateien, testbilanzLesen } from './security/testbilanz';
 
 type Status = 'BESTANDEN' | 'BEFUND' | 'NICHT_GEPRUEFT' | 'FEHLER';
@@ -309,9 +310,11 @@ async function migrationen() {
   for (const f of tor.fehler) befunde.push({ schwere: 'blockierend', titel: 'Migrations-Verträglichkeit', details: f });
 
   let hinweis = `${schranken.teilindizes.length} Teilindizes, ${schranken.trigger.length} Trigger in den Migrationen gefunden; Verträglichkeit: ${tor.fehler.length === 0 ? 'jede Migration durchgesehen' : `${tor.fehler.length} Fehler`}.`;
-  if (args.has('--datenbank')) {
-    if (!process.env.DATABASE_URL) {
-      hinweis += ' Datenbankabgleich: NICHT GEPRÜFT (keine DATABASE_URL).';
+  // Verlangt, aber ohne Adresse: NICHT_GEPRUEFT statt BESTANDEN (M2, `security/pflichtabgleich.ts`).
+  const abgleich = { verlangt: args.has('--datenbank'), gelaufen: false };
+  if (abgleich.verlangt) {
+    if (!process.env.DATABASE_URL?.trim()) {
+      hinweis += ' Datenbankabgleich: NICHT GEPRÜFT (keine DATABASE_URL) — `--datenbank` verlangt ihn.';
     } else {
       const { erzeugePrismaClient } = await import('../src/lib/prisma-client');
       const prisma = erzeugePrismaClient();
@@ -321,12 +324,13 @@ async function migrationen() {
         for (const n of schranken.teilindizes) if (!indizes.has(n)) befunde.push({ schwere: 'blockierend', titel: `Teilindex fehlt in der Datenbank: ${n}` });
         for (const n of schranken.trigger) if (!trigger.has(n)) befunde.push({ schwere: 'blockierend', titel: `Trigger fehlt in der Datenbank: ${n}` });
         hinweis += ' Datenbankabgleich durchgeführt.';
+        abgleich.gelaufen = true;
       } finally {
         await prisma.$disconnect();
       }
     }
   }
-  return { status: statusAus(befunde), befunde, hinweis };
+  return { status: statusMitPflichtteil(befunde, abgleich), befunde, hinweis };
 }
 
 // ---------------------------------------------------------------------------

@@ -6,6 +6,7 @@ import { IntegrationError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
 
 import { anfrageFiltern } from './governance';
+import { pruefanbieterAktiv, pruefantwort } from './pruefanbieter';
 
 const log = logger('ai');
 
@@ -33,6 +34,17 @@ export function anthropic(): Anthropic {
   }
   client ??= new Anthropic({ apiKey: serverEnv().ANTHROPIC_API_KEY });
   return client;
+}
+
+/**
+ * Ist ein KI-Anbieter für den Textassistenten da? Der echte (Schlüssel
+ * gesetzt) oder — nur in einer Prüfumgebung und nur auf Wunsch der
+ * Prüfreihe — der Prüfanbieter (`pruefanbieter.ts`). Nicht in `env.ts`:
+ * Das läuft auch in der Edge-Middleware, und der Prüfanbieter liest eine
+ * Datei.
+ */
+export function kiTextVerfuegbar(): boolean {
+  return hasIntegration('ai') || pruefanbieterAktiv();
 }
 
 export type AiTier = 'smart' | 'fast';
@@ -110,6 +122,9 @@ function assertNoRefusal(message: Anthropic.Message): string {
  */
 export async function generateText(options: GenerateOptions): Promise<string> {
   const f = gefiltert(options.prompt, options.history);
+  // Erst nach dem Ausgangsfilter: Der Prüfanbieter sieht genau, was ein
+  // echter Anbieter gesehen hätte.
+  if (pruefanbieterAktiv()) return pruefantwort(f.prompt);
   const stream = anthropic().messages.stream(
     {
       model: modelFor(options.tier ?? 'smart'),

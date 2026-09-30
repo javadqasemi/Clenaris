@@ -982,24 +982,29 @@ export async function erstattungsstandUebernehmen(
   // Anbieterfehler und wird auf den Zahlbetrag begrenzt.
   const kumuliert = aufRappen(Prisma.Decimal.min(max0(roh), betrag));
   /*
-    Gleiche Sekunde, kleinerer Stand: veraltet (2026-09-27). `event.created`
-    hat nur Sekundenauflösung; zwei Teilerstattungen in derselben Sekunde
-    lassen sich am Zeitpunkt nicht ordnen, und der strikte Vergleich oben
-    liess das ältere, später zugestellte Ereignis den Stand zurückdrehen. Der
-    kumulierte Stand wächst innerhalb einer Sekunde nur — der grössere ist
-    der neuere.
+    `charge.refunded` senkt den Stand **nie** (2026-09-29) — gesenkt wird
+    ausschliesslich über den Ausfall oben.
 
-    **Nicht für den Ausfall:** Er senkt den Stand ausdrücklich. Scheitert
-    eine Rückerstattung in derselben Sekunde, in der ihr `charge.refunded`
-    übernommen wurde, wäre der kleinere Stand sonst als „veraltet" verworfen
-    — und der Ausfall ginge verloren, weil sein Vermerk trotzdem stünde.
+    Bis 2026-09-27 galt nur „älter ist veraltet"; dann kam „gleiche Sekunde,
+    kleinerer Stand ist veraltet" dazu (`event.created` hat nur
+    Sekundenauflösung). Ein *neueres* `charge.refunded` mit kleinerem Stand
+    wurde aber weiter übernommen — und das gibt es nur, wenn eine
+    Rückerstattung gescheitert ist. Deren Ausfallereignis senkte danach ein
+    zweites Mal: 30 + 20 erstattet, 30 scheitert, `charge.refunded` meldet 20
+    (übernommen), `refund.failed` über 30 (abgezogen) — Stand 0, die gültige
+    Rückerstattung über 20 war aus Saldo und Kundenwert verschwunden
+    (`zahlungsbuch.test.ts`, „Monotonie der Rückerstattung").
+
+    Jetzt hat jede Senkung genau eine Quelle, das Ausfallereignis mit seinem
+    Betrag. Stripe stellt es zu, sobald die Rückerstattung scheitert
+    (abonniert: `refund.failed`, `refund.updated`, `charge.refund.updated`);
+    bis dahin bleibt der höhere erstattete Betrag stehen. Das ist die
+    vorsichtige Seite: Die Rechnung erscheint kurz offener, als sie ist —
+    statt dass eine gültige Rückerstattung zweimal abgezogen wird.
+
+    **Nicht für den Ausfall:** Er senkt den Stand ausdrücklich.
   */
-  if (
-    !('ausfall' in params) &&
-    zahlung.refundSyncedAt &&
-    zahlung.refundSyncedAt.getTime() === params.stand.getTime() &&
-    kumuliert.lessThan(geld(zahlung.refundedAmount))
-  ) {
+  if (!('ausfall' in params) && kumuliert.lessThan(geld(zahlung.refundedAmount))) {
     return 'veraltet';
   }
   const zuwachs = kumuliert.minus(geld(zahlung.refundedAmount));

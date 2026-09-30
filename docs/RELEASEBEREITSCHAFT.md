@@ -6,7 +6,9 @@ Stand 2026-09-23. Ausgangspunkt `0d51466` (Next 15.5.26, `npm test`
 §8 an `fb0202e`/`0023556`: Release-Lauf auf `0023556` grün, 2038/2038,
 Browser 57/57, Stressreihe 5/5, CI 36332513820 grün). Die
 Tabellen §1 und §3 tragen den heutigen Status; die Schlussprüfungen §4,
-§6.4 und §7 bleiben als datierte Messungen stehen.
+§6.4 und §7 bleiben als datierte Messungen stehen. **Jüngster Stand: §9
+(Release-Kandidat 2026-09-29, Prisma 7).** Die Freigabe in §8 bezieht sich
+auf den Stand vor Prisma 7 und ist für den heutigen Code keine Aussage mehr.
 
 **Kein Push, keine Auslieferung, kein Zugriff auf einen Produktionsserver**
 in dieser Mission. Jede Aussage über die Produktion ist deshalb
@@ -269,3 +271,32 @@ Einzelheiten je Befund: `docs/FINAL_REMEDIATION_MATRIX.md` und
 | External Verification Ready | **Ja** — E-1 … E-8 mit genauem fehlendem Beleg in `docs/FINAL_REMEDIATION_REPORT.md` §8; neu: Supabase-Bucket (E-8) und die am Stripe-Endpunkt abonnierten Rückerstattungsereignisse (E-5) |
 | Production V2 Ready | **Nein** — V2-2…V2-6 extern |
 | Freigabe | **nicht getroffen** — setzt RELEASE-ERGEBNIS fb0202e und STRESS-ERGEBNIS voraus |
+
+## 9. Release-Kandidat 2026-09-29 (Prisma 7, Feature Freeze)
+
+Zweig `release/2026-09-29-rc` ab `main` `7daaf71`. Befunde, Korrekturen und
+Belege je Punkt stehen im Register `docs/PENDENZEN.md`, Abschnitt **RC**
+(RC-01 … RC-18); die Laufzahlen des abschliessenden `verify:release` und der
+CI-Lauf stehen im Pull Request und im Abschlussbericht — hier nicht, weil
+jeder Nachtrag hier den geprüften Stand wieder verändern würde.
+
+**Im Feature Freeze gefundene und behobene Produktfehler:**
+
+| Nr. | Fehler | Folge ohne Behebung |
+|---|---|---|
+| RC-01 | Neueres `charge.refunded` mit kleinerem Stand senkte den erstatteten Betrag; das folgende `refund.failed` zog dieselbe Teilerstattung ein zweites Mal ab | offener Posten und Kundenwert um eine Rückerstattung falsch |
+| RC-06 | Nachrichtenliste zeigte bei Ladefehler den Leerzustand; Verlauf blieb im Skelett; Netzfehler der Preisberechnung unsichtbar; Beitragssätze ohne Leerzustand | falsche Auskunft („keine Nachrichten"), endloses Laden, stiller Preisfehler |
+| RC-15 | Abmelden landete je nach Wettlauf auf „Sitzung abgelaufen" oder „abgemeldet" statt auf der Startseite | irreführende Meldung nach gewollter Abmeldung |
+
+**Neue Tore im Prüfweg:** strukturelle Grundlinie (Endpunkte 544,
+Berechtigungen 246, Migrationen 55, Navigationsziele — Wegfall blockiert),
+`--datenbank` ohne Adresse = NICHT GEPRÜFT, unverfolgte Dokumentation,
+HTML-Budget je Seite, `verify:release` nur mit Stressreihe 5/5,
+angemeldetes WebKit über HTTPS, axe über 26 Seiten.
+
+| Frage | Antwort |
+|---|---|
+| App Code Ready | am Release-Kandidaten zu entscheiden — Beleg im Abschlussbericht |
+| Production V2 Ready | **Nein** — V2-2…V2-6 extern, Aktivierung nie auf einem echten Server ausgeführt |
+| Firefox-Bildbefund (D-01) | Code: Regression abgedeckt · Produktion: Abnahme erforderlich |
+| Freigabe | durch die Inhaberschaft nach dem Abschlussbericht |

@@ -352,6 +352,34 @@ describe('Suchmaschinenangaben', { concurrency: 1 }, async () => {
     assert.ok(!page.text.includes(TITLE));
     assert.ok(!/name="robots"[^>]*content="[^"]*noindex/.test(page.text), 'noindex blieb stehen');
   });
+
+  // SEO-06 (2026-09-29): Ohne gepflegtes Vorschaubild trug die Seite kein
+  // og:image — geteilte Links zeigten eine leere Karte. Geprüft wird am
+  // ausgelieferten HTML, dass das Standardbild samt Massen dasteht, dass es
+  // tatsächlich als PNG ausgeliefert wird (ein Tag auf eine 404 wäre dieselbe
+  // leere Karte), und dass das Manifest verlinkt und gültig ist.
+  it('setzt ohne gepflegtes Bild das Standard-Vorschaubild und verlinkt ein gültiges Manifest', async () => {
+    const page = await get('/preise');
+    const bild = /property="og:image" content="(https?:\/\/[^"]+\/og-standard\.png)"/.exec(page.text);
+    assert.ok(bild, 'kein Standard-Vorschaubild im HTML');
+    assert.match(page.text, /property="og:image:width" content="1200"/);
+    assert.match(page.text, /property="og:image:height" content="630"/);
+    assert.match(page.text, /name="twitter:card" content="summary_large_image"/);
+
+    const png = await get('/og-standard.png');
+    assert.equal(png.status, 200);
+    assert.match(png.headers.get('content-type') ?? '', /^image\/png/);
+
+    assert.match(page.text, /<link rel="manifest" href="\/manifest\.webmanifest"/);
+    const manifest = await get('/manifest.webmanifest');
+    assert.equal(manifest.status, 200);
+    const inhalt = JSON.parse(manifest.text) as { short_name?: string; start_url?: string; icons?: { src: string }[] };
+    assert.equal(inhalt.short_name, 'Clenaris');
+    assert.equal(inhalt.start_url, '/');
+    for (const symbol of inhalt.icons ?? []) {
+      assert.equal((await get(symbol.src)).status, 200, `Manifest-Symbol ${symbol.src} fehlt`);
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------

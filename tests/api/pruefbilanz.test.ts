@@ -1,8 +1,12 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { abzugsbefundeSichern, laufspurenSichern } from '../../scripts/security/befundsicherung';
+import { statusMitPflichtteil } from '../../scripts/security/pflichtabgleich';
 import { bilanzPruefen, browserBilanzPruefen, konfigurierteDateien, testbilanzLesen } from '../../scripts/security/testbilanz';
 
 /**
@@ -153,5 +157,74 @@ describe('Konfigurierte Prüfdateien', () => {
     const { vorhanden, fehlend } = konfigurierteDateien(wurzel, ['tests/api/pruefbilanz.test.ts', 'tests/api/gibt-es-nicht.test.ts']);
     assert.deepEqual(vorhanden, ['tests/api/pruefbilanz.test.ts']);
     assert.deepEqual(fehlend, ['tests/api/gibt-es-nicht.test.ts']);
+  });
+});
+
+// M2 (2026-09-29): `security:check -- --datenbank` ohne Adresse meldete
+// BESTANDEN, nur mit einem Hinweis im Text. Gegen den alten Stand scheitert
+// der zweite Fall.
+describe('Verlangter Datenbankabgleich', () => {
+  it('ohne Verlangen und ohne Befund: bestanden', () => {
+    assert.equal(statusMitPflichtteil([], { verlangt: false, gelaufen: false }), 'BESTANDEN');
+  });
+  it('verlangt, aber nicht gelaufen (keine Adresse): nicht geprüft — nie bestanden', () => {
+    assert.equal(statusMitPflichtteil([{ schwere: 'hinweis' }], { verlangt: true, gelaufen: false }), 'NICHT_GEPRUEFT');
+  });
+  it('verlangt und gelaufen: bestanden; ein blockierender Befund geht in jedem Fall vor', () => {
+    assert.equal(statusMitPflichtteil([], { verlangt: true, gelaufen: true }), 'BESTANDEN');
+    assert.equal(statusMitPflichtteil([{ schwere: 'blockierend' }], { verlangt: true, gelaufen: false }), 'BEFUND');
+  });
+});
+
+// RC-20 (2026-09-30): Ein roter Stresslauf verlor seine Spur zweimal — der
+// nächste Playwright-Lauf leerte `test-results/`, und `verify:release`
+// entfernte danach den ganzen Abzug. Die Fälle spielen genau diese Abfolge
+// nach: sichern, dann die Quelle löschen, dann nachsehen, was übrig ist.
+// Gegen den alten Stand scheitern sie, weil es nichts gab, das sicherte.
+describe('Beweise eines roten Laufs überleben das Aufräumen', () => {
+  const abzugAnlegen = () => {
+    const abzug = mkdtempSync(join(tmpdir(), 'clenaris-befund-'));
+    mkdirSync(join(abzug, 'test-results', 'abmelden-chromium'), { recursive: true });
+    writeFileSync(join(abzug, 'test-results', 'abmelden-chromium', 'trace.zip'), 'SPUR');
+    mkdirSync(join(abzug, 'hydrationsbefunde'), { recursive: true });
+    writeFileSync(join(abzug, 'hydrationsbefunde', 'stress-lauf-4.log'), 'AUSGABE');
+    return abzug;
+  };
+
+  it('die Spur eines roten Laufs ist nach dem Leeren von test-results noch da', () => {
+    const abzug = abzugAnlegen();
+    const ziel = join(abzug, 'hydrationsbefunde', 'stress-lauf-4');
+    try {
+      assert.equal(laufspurenSichern(join(abzug, 'test-results'), ziel), ziel);
+      rmSync(join(abzug, 'test-results'), { recursive: true, force: true }); // wie Playwright zu Beginn des nächsten Laufs
+      assert.equal(readFileSync(join(ziel, 'abmelden-chromium', 'trace.zip'), 'utf8'), 'SPUR');
+    } finally {
+      rmSync(abzug, { recursive: true, force: true });
+    }
+  });
+
+  it('die Beweise des Abzugs sind nach dem Entfernen des Abzugs noch da', () => {
+    const abzug = abzugAnlegen();
+    const ablage = mkdtempSync(join(tmpdir(), 'clenaris-ablage-'));
+    try {
+      assert.equal(abzugsbefundeSichern(abzug, ablage).length, 2);
+      rmSync(abzug, { recursive: true, force: true }); // wie `verify:release` am Ende
+      assert.equal(readFileSync(join(ablage, 'test-results', 'abmelden-chromium', 'trace.zip'), 'utf8'), 'SPUR');
+      assert.equal(readFileSync(join(ablage, 'hydrationsbefunde', 'stress-lauf-4.log'), 'utf8'), 'AUSGABE');
+    } finally {
+      rmSync(abzug, { recursive: true, force: true });
+      rmSync(ablage, { recursive: true, force: true });
+    }
+  });
+
+  it('ohne Beweise entsteht keine leere Ablage', () => {
+    const leer = mkdtempSync(join(tmpdir(), 'clenaris-leer-'));
+    try {
+      assert.equal(laufspurenSichern(join(leer, 'test-results'), join(leer, 'ziel')), null);
+      assert.deepEqual(abzugsbefundeSichern(leer, join(leer, 'ablage')), []);
+      assert.ok(!existsSync(join(leer, 'ziel')) && !existsSync(join(leer, 'ablage')));
+    } finally {
+      rmSync(leer, { recursive: true, force: true });
+    }
   });
 });

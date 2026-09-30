@@ -162,6 +162,45 @@ export function netzUeberwachen(context: BrowserContext): Netzwache {
   };
 }
 
+/**
+ * Offene Anfragen einer Seite zählen und auf Ruhe warten (2026-09-29).
+ *
+ * `page.waitForLoadState('networkidle')` genügt dafür nicht: Es löst sofort
+ * auf, wenn die Seite den Zustand **je** erreicht hat. Vorabrufe, die erst
+ * danach beginnen — Next lädt Links vor, sobald sie ins Bild scrollen —,
+ * laufen dann noch, wenn der Fall neu lädt, und jede Engine meldet ihren
+ * Abbruch anders (Firefox W-03, WebKit W-08: „Failed to fetch RSC payload …
+ * Load failed"). Die Meldung wird nicht gefiltert; der Fall wartet, bis
+ * wirklich nichts mehr unterwegs ist, wie ein Mensch eine fertige Seite neu
+ * lädt.
+ *
+ * Vor der Handlung anlegen, die Anfragen auslöst — was schon läuft, wenn
+ * die Wache entsteht, sieht sie nicht.
+ */
+export function anfragenVerfolgen(page: Page): { ruhig(ruheMs?: number, hoechstensMs?: number): Promise<void> } {
+  const offen = new Set<Request>();
+  page.on('request', (anfrage) => offen.add(anfrage));
+  const fertig = (anfrage: Request) => offen.delete(anfrage);
+  page.on('requestfinished', fertig);
+  page.on('requestfailed', fertig);
+  return {
+    async ruhig(ruheMs = 500, hoechstensMs = 15_000) {
+      const ende = Date.now() + hoechstensMs;
+      let ruhigSeit = offen.size === 0 ? Date.now() : Number.POSITIVE_INFINITY;
+      while (Date.now() < ende) {
+        if (offen.size === 0) {
+          if (ruhigSeit === Number.POSITIVE_INFINITY) ruhigSeit = Date.now();
+          if (Date.now() - ruhigSeit >= ruheMs) return;
+        } else {
+          ruhigSeit = Number.POSITIVE_INFINITY;
+        }
+        await page.waitForTimeout(50);
+      }
+      throw new Error(`Die Seite wurde in ${hoechstensMs} ms nicht ruhig: ${[...offen].map((a) => a.url()).join(', ')}`);
+    },
+  };
+}
+
 // ---------------------------------------------------------------------------
 //  Anmeldung über die Maske
 // ---------------------------------------------------------------------------

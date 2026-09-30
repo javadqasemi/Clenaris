@@ -1,6 +1,8 @@
 import { readFileSync, writeFileSync, mkdirSync, readdirSync, statSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
 
+import { strukturLesen, strukturPruefen } from './strukturgrundlinie';
+
 /**
  * Prüfung auf **halbe Merkmale**.
  *
@@ -34,8 +36,11 @@ import { join, relative, sep } from 'node:path';
  * geschrieben wird), und sie wird Fälle übersehen (ein Schreibpfad hinter
  * einer dynamisch gebauten Modellkennung).
  *
- * Deshalb **blockiert sie nichts**. Der Rückgabewert ist 0, auch wenn sie
- * etwas findet; die CI zeigt die Zusammenfassung an, mehr nicht. Eine
+ * Deshalb **blockiert sie nichts** — mit einer Ausnahme seit 2026-09-29: der
+ * strukturellen Grundlinie am Ende (`strukturgrundlinie.ts`), die keine
+ * Heuristik ist, sondern Tatsachen vergleicht (verschwundener Endpunkt,
+ * entfallene Berechtigung oder Migration, Navigationsziel ohne Seite); sie
+ * endet mit 1. Sonst ist der Rückgabewert 0, auch wenn sie etwas findet; die CI zeigt die Zusammenfassung an, mehr nicht. Eine
  * Heuristik, die einen Bau anhält, wird innerhalb einer Woche mit
  * Ausnahmelisten stillgelegt — dann hat man den Aufwand und die Meldung
  * verloren. `--streng` gibt es für den Fall, dass jemand sie bewusst als Tor
@@ -48,7 +53,10 @@ const ROOT = process.cwd();
 const SCHEMA = join(ROOT, 'prisma', 'schema.prisma');
 const BERICHT = join(ROOT, 'artifacts', 'feature-integrity-report.json');
 
+const GRUNDLINIE = join(ROOT, 'security', 'struktur-grundlinie.json');
+
 const streng = process.argv.includes('--streng');
+const grundlinieSchreiben = process.argv.includes('--grundlinie-schreiben');
 
 // ---------------------------------------------------------------------------
 //  Quellen einlesen
@@ -471,6 +479,31 @@ function main(): void {
   }
 
   console.log(`  Bericht: ${relative(ROOT, BERICHT).split(sep).join('/')}`);
+
+  // --- Strukturelle Grundlinie (blockierend, 2026-09-29) ---------------------
+  // Anders als alles darüber keine Heuristik: ein verschwundener Endpunkt,
+  // eine entfallene Berechtigung oder Migration, ein Navigationsziel ohne
+  // Seite. Begründung in `strukturgrundlinie.ts`.
+  if (grundlinieSchreiben) {
+    writeFileSync(GRUNDLINIE, `${JSON.stringify(strukturLesen(ROOT), null, 2)}\n`, 'utf8');
+    console.log(`\n  Grundlinie geschrieben: ${relative(ROOT, GRUNDLINIE).split(sep).join('/')}`);
+    return;
+  }
+  const struktur = strukturPruefen(ROOT, GRUNDLINIE);
+  console.log(
+    `\n  Struktur: ${struktur.aktuell.endpunkte.length} Endpunkte, ${struktur.aktuell.berechtigungen.length} Berechtigungen, ${struktur.aktuell.migrationen.length} Migrationen`,
+  );
+  if (struktur.neu.length > 0) {
+    console.log(`  Neu gegenüber der Grundlinie (nicht blockierend — mit --grundlinie-schreiben nachziehen): ${struktur.neu.length}`);
+    for (const n of struktur.neu.slice(0, 15)) console.log(`    · ${n}`);
+  }
+  if (struktur.fehler.length > 0) {
+    console.error('\n  STRUKTURELLER RÜCKSCHRITT — blockierend:');
+    for (const f of struktur.fehler) console.error(`    ✗ ${f}`);
+    console.error('  Absichtlich entfernt? Dann `npx tsx scripts/feature-integrity.ts --grundlinie-schreiben` im selben Commit.');
+    process.exit(1);
+  }
+  console.log('  Struktur gegenüber der Grundlinie: kein Rückschritt.');
 
   if (streng && (halbe.length > 0 || verwaisteEndpunkte.length > 0 || belegFehlt.length > 0)) {
     console.error('\n  --streng: Befunde vorhanden.');
