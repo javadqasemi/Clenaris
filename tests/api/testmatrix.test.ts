@@ -5,7 +5,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { DIMENSIONEN, matrizenPruefen, titelAusQuelltext } from '../../scripts/security/testmatrix';
+import { DIMENSIONEN, literaleAusQuelltext, matrizenPruefen, titelAusQuelltext } from '../../scripts/security/testmatrix';
 
 /**
  * Die Belegkette der Abdeckungsmatrizen (2026-09-30).
@@ -21,17 +21,28 @@ import { DIMENSIONEN, matrizenPruefen, titelAusQuelltext } from '../../scripts/s
  * Matrizen gescheitert — zwei Belege zeigten auf den umbenannten Fall
  * „fünfzig gleichzeitige Erneuerungen: genau eine gelingt …“, einer auf einen
  * Tabelleneintrag der Rechtematrix, der kein Titel ist.
+ *
+ * Der vierte Fall scheitert gegen den ersten Stand der strengen Regel: Dort
+ * zählte an einem Beleg nur der Titel, und die Vorlage eines
+ * tabellengetriebenen Falls (`${role}: …`) belegte jede Zeile der Tabelle —
+ * auch eine, die es nicht mehr gab. Ein Zusatzfeld `eintrag` wurde still
+ * übergangen.
  */
 
-/** Eine Wurzel mit genau den beiden Matrizen und einer Testdatei. */
-function wurzelMit(quelltext: string, belegTitel: string): string {
+/**
+ * Eine Wurzel mit genau den beiden Matrizen und einer Testdatei. `eintrag`
+ * wird nur gesetzt, wenn er übergeben ist — auch als leere Zeichenkette,
+ * denn gerade die soll als Formfehler auffallen.
+ */
+function wurzelMit(quelltext: string, belegTitel: string, eintrag?: string): string {
   const wurzel = mkdtempSync(join(tmpdir(), 'clenaris-matrix-'));
   mkdirSync(join(wurzel, 'security'), { recursive: true });
   mkdirSync(join(wurzel, 'tests', 'api'), { recursive: true });
   writeFileSync(join(wurzel, 'tests', 'api', 'beispiel.test.ts'), quelltext);
   const nichtZutreffend = { status: 'nicht_zutreffend', grund: 'nur für diese Prüfung' };
   const dimensionen = Object.fromEntries(DIMENSIONEN.map((d) => [d, nichtZutreffend]));
-  dimensionen.happyPath = { status: 'abgedeckt', belege: [{ datei: 'tests/api/beispiel.test.ts', test: belegTitel }] } as never;
+  const beleg = { datei: 'tests/api/beispiel.test.ts', test: belegTitel, ...(eintrag !== undefined ? { eintrag } : {}) };
+  dimensionen.happyPath = { status: 'abgedeckt', belege: [beleg] } as never;
   writeFileSync(join(wurzel, 'security', 'testmatrix.json'), JSON.stringify({ funktionen: [{ id: 'beispiel', name: 'Beispiel', dimensionen }] }));
   writeFileSync(join(wurzel, 'security', 'sicherheitsmatrix.json'), JSON.stringify({ klassen: [] }));
   return wurzel;
@@ -105,6 +116,49 @@ describe('Belege der Abdeckungsmatrizen', () => {
       'Titel auf der nächsten Zeile',
       'Schritt ${1 + 1}',
     ]);
+  });
+
+  it('ein Tabelleneintrag als Zusatzbeleg zählt nur als Zeichenkette im Code', () => {
+    // Aufgebaut wie die Rechtematrix: Der Gruppentitel entsteht zur Laufzeit,
+    // zitierbar ist nur die Vorlage des Falls, und die gilt für jede Zeile.
+    const quelltext = [
+      "import { describe, it } from 'node:test';",
+      "const MATRIX = [{ name: 'POST /api/leads — Anfrage erfassen' }];",
+      "// Früher stand hier auch 'DELETE /api/leads — Anfrage löschen'.",
+      'for (const entry of MATRIX) {',
+      '  describe(entry.name, () => {',
+      "    for (const role of ROLLEN) it(`${role}: ${erlaubt ? 'darf' : 'darf nicht'}`, () => {});",
+      '  });',
+      '}',
+    ].join('\n');
+    const vorlage = "${role}: ${erlaubt ? 'darf' : 'darf nicht'}";
+
+    const literale = literaleAusQuelltext(quelltext);
+    assert.ok(literale.includes('POST /api/leads — Anfrage erfassen'), 'die Tabellenzeile ist ein Literal im Code');
+    assert.ok(!literale.includes('DELETE /api/leads — Anfrage löschen'), 'ein Literal im Kommentar ist keines');
+
+    const faelle = {
+      vorhanden: wurzelMit(quelltext, vorlage, 'POST /api/leads — Anfrage erfassen'),
+      nurKommentar: wurzelMit(quelltext, vorlage, 'DELETE /api/leads — Anfrage löschen'),
+      bruchstueck: wurzelMit(quelltext, vorlage, 'POST /api/leads'),
+      leer: wurzelMit(quelltext, vorlage, ''),
+    };
+    try {
+      assert.deepEqual(matrizenPruefen(faelle.vorhanden).fehler, []);
+
+      const kommentar = matrizenPruefen(faelle.nurKommentar).fehler;
+      assert.equal(kommentar.length, 1, kommentar.join(' | '));
+      assert.match(kommentar[0]!, /Eintrag nicht gefunden/);
+      assert.match(kommentar[0]!, /nicht als Zeichenkette im Code/, 'die Meldung sagt, dass die Zeile nur erwähnt ist');
+
+      assert.equal(matrizenPruefen(faelle.bruchstueck).fehler.length, 1, 'ein Teil einer Tabellenzeile ist kein Beleg');
+
+      const leer = matrizenPruefen(faelle.leer).fehler;
+      assert.equal(leer.length, 1, leer.join(' | '));
+      assert.match(leer[0]!, /„eintrag“ ist leer/, 'ein leerer Zusatzbeleg wäre immer gefunden — er ist ein Formfehler');
+    } finally {
+      for (const wurzel of Object.values(faelle)) rmSync(wurzel, { recursive: true, force: true });
+    }
   });
 
   it('beide Matrizen sind vollständig belegt', () => {

@@ -57,6 +57,28 @@ import { join, normalize, relative, sep } from 'node:path';
  * nicht auf seine Laufzeitausprägung — dieselbe Regel wie vorher, nur jetzt
  * streng.
  *
+ * ---------------------------------------------------------------------------
+ *  Tabellengetriebene Fälle: der Zusatzbeleg `eintrag`
+ * ---------------------------------------------------------------------------
+ *
+ * Die Rechtematrix (`tests/api/rbac.test.ts`) läuft über eine Tabelle: Je
+ * Eintrag eine Gruppe `describe(entry.name)`, darin je Rolle der Fall
+ * `${role}: ${allowed ? 'darf' : 'darf nicht'}`. Der Gruppentitel entsteht
+ * erst zur Laufzeit und ist kein zitierbares Literal; zitierbar ist nur die
+ * Vorlage des Falls — und die ist für **jede** Zeile der Tabelle dieselbe.
+ * Ein Beleg, der nur sie nennt, bliebe grün, wenn die Zeile, um die es geht,
+ * aus der Tabelle verschwände. Das alte `includes()` hätte das bemerkt, weil
+ * der Beleg damals den Tabellennamen zitierte; die strenge Titelregel allein
+ * hätte die Kette an dieser Stelle also schwächer gemacht als vorher.
+ *
+ * Deshalb darf ein Beleg zusätzlich `eintrag` tragen: eine Zeichenkette, die
+ * als **Zeichenkettenliteral im Code** der Datei stehen muss — aus derselben
+ * Zerlegung wie die Titel, also nicht in einem Kommentar, und gleich, nicht
+ * enthalten. Damit hängt die Abdeckungsaussage wieder an der Tabellenzeile.
+ * Was auch das nicht beweist: dass das Literal in genau der Tabelle steht,
+ * über die der zitierte Fall läuft. Das bleibt, wie alles Inhaltliche hier,
+ * eine Leseaufgabe; verhindert wird das stille Reissen der Kette.
+ *
  * Ohne Abhängigkeiten und ohne Pfad-Aliasse, damit `tests/api/testmatrix.test.ts`
  * das Modul direkt laden kann.
  */
@@ -246,7 +268,24 @@ function zerlegen(q: string): Zeichen[] {
  * umgebenden `describe`.
  */
 export function titelAusQuelltext(text: string): string[] {
-  const zeichen = zerlegen(text);
+  return titelAusZeichen(zerlegen(text));
+}
+
+/**
+ * Alle Zeichenkettenliterale und Vorlagen eines Quelltexts, roh — ohne
+ * Kommentare und ohne die Literale innerhalb eines `${…}`. Gegen diese Liste
+ * prüft `matrizenPruefen` den Zusatzbeleg `eintrag`; warum es ihn gibt, steht
+ * oben im Abschnitt „Tabellengetriebene Fälle“.
+ */
+export function literaleAusQuelltext(text: string): string[] {
+  return literaleAusZeichen(zerlegen(text));
+}
+
+function literaleAusZeichen(zeichen: Zeichen[]): string[] {
+  return zeichen.flatMap((z) => (z.art === 'text' ? [z.roh] : []));
+}
+
+function titelAusZeichen(zeichen: Zeichen[]): string[] {
   const titel: string[] = [];
   for (let k = 0; k < zeichen.length; k++) {
     const z = zeichen[k]!;
@@ -302,6 +341,11 @@ type Status = (typeof STATUS)[number];
 interface Beleg {
   datei: string;
   test: string;
+  /**
+   * Wahlweise: ein Zeichenkettenliteral, das im Code der Datei stehen muss —
+   * die Tabellenzeile eines tabellengetriebenen Falls (siehe Kopf).
+   */
+  eintrag?: string;
 }
 
 interface Bewertung {
@@ -309,6 +353,13 @@ interface Bewertung {
   belege?: Beleg[];
   grund?: string;
   hinweis?: string;
+}
+
+/** Eine gelesene Testdatei: Rohtext, ausgeführte Titel, Zeichenkettenliterale im Code. */
+interface Quelltext {
+  inhalt: string;
+  titel: Set<string>;
+  literale: Set<string>;
 }
 
 export interface Zaehler {
@@ -380,7 +431,7 @@ function aehnlichsterTitel(gesucht: string, titel: Iterable<string>): string | n
  * hier wird nur verhindert, dass die Belegkette unbemerkt reisst.
  */
 export function matrizenPruefen(wurzel: string): Belegpruefung {
-  const quelltexte = new Map<string, { inhalt: string; titel: Set<string> } | null>();
+  const quelltexte = new Map<string, Quelltext | null>();
   const alleFehler: string[] = [];
 
   /**
@@ -388,12 +439,19 @@ export function matrizenPruefen(wurzel: string): Belegpruefung {
    * unterhalb des Projekts bleiben — ein `../` in der Matrix wäre kein Beleg,
    * sondern ein Verweis ins Ungewisse.
    */
-  function quelle(datei: string): { inhalt: string; titel: Set<string> } | null {
+  function quelle(datei: string): Quelltext | null {
     const pfad = normalize(join(wurzel, datei));
     if (relative(wurzel, pfad).startsWith('..')) return null;
     if (!quelltexte.has(pfad)) {
       const inhalt = existsSync(pfad) ? readFileSync(pfad, 'utf8') : null;
-      quelltexte.set(pfad, inhalt === null ? null : { inhalt, titel: new Set(titelAusQuelltext(inhalt)) });
+      if (inhalt === null) {
+        quelltexte.set(pfad, null);
+      } else {
+        // Einmal zerlegen, zweimal lesen: Titel und Literale kommen aus
+        // derselben Zerlegung, damit beide dieselben Kommentare überspringen.
+        const zeichen = zerlegen(inhalt);
+        quelltexte.set(pfad, { inhalt, titel: new Set(titelAusZeichen(zeichen)), literale: new Set(literaleAusZeichen(zeichen)) });
+      }
     }
     return quelltexte.get(pfad) ?? null;
   }
@@ -420,10 +478,22 @@ export function matrizenPruefen(wurzel: string): Belegpruefung {
           bericht.fehler.push(`${ort}: Beleg ohne „datei“ oder „test“`);
           continue;
         }
+        if (beleg.eintrag !== undefined && (typeof beleg.eintrag !== 'string' || beleg.eintrag.trim().length === 0)) {
+          // Ein leerer Zusatzbeleg wäre immer „gefunden“ (jede Datei hat
+          // irgendein leeres Literal) — also ein Formfehler, kein Beleg.
+          bericht.fehler.push(`${ort}: „eintrag“ ist leer oder keine Zeichenkette`);
+          continue;
+        }
         const q = quelle(beleg.datei);
         if (q === null) {
           bericht.fehler.push(`${ort}: Datei fehlt — ${beleg.datei}`);
-        } else if (!q.titel.has(beleg.test)) {
+          continue;
+        }
+        if (beleg.eintrag !== undefined && !q.literale.has(beleg.eintrag)) {
+          const nurErwaehnt = q.inhalt.includes(beleg.eintrag) ? ' (steht in der Datei, aber nicht als Zeichenkette im Code — etwa in einem Kommentar)' : '';
+          bericht.fehler.push(`${ort}: Eintrag nicht gefunden in ${beleg.datei} — „${beleg.eintrag}“${nurErwaehnt}`);
+        }
+        if (!q.titel.has(beleg.test)) {
           const nurErwaehnt = q.inhalt.includes(beleg.test)
             ? ' (steht in der Datei, aber nicht als Titel eines it/test/describe-Aufrufs — etwa in einem Kommentar)'
             : '';
