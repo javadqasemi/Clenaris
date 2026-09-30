@@ -27,9 +27,24 @@
  *    zuständig — deshalb braucht es weder Sticky Sessions noch einen geteilten
  *    Sitzungsspeicher.
  *
- * Aufruf (siehe `scripts/deploy.sh`):
- *   pm2 start ecosystem.config.js --env production   # erstmalig
- *   pm2 reload ecosystem.config.js --env production  # jede weitere Auslieferung
+ *  • **Das Arbeitsverzeichnis ist das Release, nicht `current`.** `cwd` ist
+ *    `__dirname`, und Node löst beim Laden dieser Datei Verweise auf — auch
+ *    wenn pm2 sie über `current/ecosystem.config.js` liest, läuft der
+ *    Arbeiter in `releases/<commit>`. Daran erkennt das Umschaltwerkzeug, ob
+ *    pm2 wirklich die neue Fassung geladen hat (`pm_cwd`, siehe `pm2Lage` in
+ *    `scripts/release/umschaltung.ts`), und `pm2 save` hält genau dieses
+ *    Verzeichnis für einen Neustart des Servers fest.
+ *
+ *  • **Keine Versionsangabe aus der Umgebung.** Bis 2026-09-29 setzte die
+ *    Aktivierung `APP_VERSION` beim Neuladen, und `/api/health` meldete sie
+ *    als Stand — eine Behauptung des Aufrufers. Die Instanz belegt ihre
+ *    Identität heute selbst aus `RELEASE.json` und `.next/BUILD_ID`.
+ *
+ * Aufruf nur über das Umschaltwerkzeug (`scripts/release-umschalten.ts`, aus
+ * `deploy/v2/release-aktivieren.sh` und `deploy/v2/release-ruecksprung.sh`):
+ *   pm2 start <release>/ecosystem.config.js --env production                 # kein Prozess vorhanden
+ *   pm2 startOrReload <release>/ecosystem.config.js --env production --update-env
+ *   pm2 save                                                                  # nach bestätigter Identität
  */
 
 const path = require('node:path');
