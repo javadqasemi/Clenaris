@@ -176,11 +176,21 @@ export function inhaltsrichtlinie({ entwicklung }: InhaltsrichtlinieOptionen): s
      * `'self'`: Die Redaktionsmaske zeigt die echte Website in einem Rahmen
      * (`src/features/admin/content-workspace.tsx`).
      *
+     * `blob:`: Der PDF-Viewer druckt, indem er die bereits geladenen Bytes als
+     * Objekt-URL in einen versteckten Rahmen legt
+     * (`src/components/app/pdf-viewer-inner.tsx`, `drucken`). `'self'` deckt
+     * eine `blob:`-Adresse nicht zuverlässig ab — Chromium vergleicht dafür
+     * das Schema, und `blob` ist nicht `https` —; der Rahmen würde also
+     * verweigert, und der Druck fiele still aus (der Fehler wird dort bewusst
+     * geschluckt, damit der Weg über „Herunterladen" bleibt). Eine
+     * `blob:`-Adresse kann nur Skript dieser Seite erzeugen; die Freigabe
+     * öffnet keinem fremden Ursprung einen Rahmen.
+     *
      * Entfallen: `js.stripe.com` und `hooks.stripe.com` (Rahmen von Stripe
      * Elements und 3-D Secure — Checkout ist eine Weiterleitung, kein Rahmen)
      * sowie `www.google.com` (keine eingebettete Karte, kein reCAPTCHA).
      */
-    "frame-src 'self'",
+    "frame-src 'self' blob:",
 
     "object-src 'none'",
     "base-uri 'self'",

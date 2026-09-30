@@ -151,6 +151,10 @@ describe('Inhaltsrichtlinie — der Baustein', () => {
         assert.ok(!quellen.includes(quelle), `${quelle} steht wieder in ${name}`);
       }
     }
+
+    // Der Druckrahmen des PDF-Viewers ist eine Objekt-URL; `'self'` deckt sie
+    // nicht zuverlässig ab (Chromium vergleicht das Schema).
+    assert.deepEqual(zerlegen(PRODUKTION).get('frame-src'), ["'self'", 'blob:']);
   });
 
   it('nur der Entwicklungsserver behält unsafe-eval', async () => {
