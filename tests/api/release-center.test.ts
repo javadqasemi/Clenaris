@@ -333,6 +333,15 @@ describe('Update Center', { concurrency: 1 }, () => {
  * scheitern sie: Die Übernahme verlangte weder Commit noch Zielversion,
  * „erfolgreich" glaubte der gemeldeten `laufendeVersion`, `inAusfuehrung`
  * gab es nicht, und ein Auftrag ohne Rückmeldung blieb für immer DEPLOYING.
+ *
+ * **Warum vier Titel mit ihrer alten Fassung beginnen.** `security/testmatrix.json`
+ * zitiert die Titel von vor 2026-09-30 als Belege, und
+ * `scripts/testmatrix-pruefen.ts` sucht sie wörtlich in dieser Datei. Die
+ * Härtung erweiterte diese Fälle, nahm ihnen aber keine Zusicherung weg —
+ * also steht die alte Fassung unverändert vorn und das Neue hinter dem
+ * Gedankenstrich. Ein ganz neuer Titel hätte die Belegkette still zerrissen:
+ * Die Matrix sagte weiter „abgedeckt", und der Beleg wäre nicht mehr
+ * auffindbar.
  */
 describe('Release-Ausführer', { concurrency: 1 }, () => {
   const SUMME = createHash('sha256').update(`artefakt-${RUN}`).digest('hex');
@@ -495,7 +504,7 @@ describe('Release-Ausführer', { concurrency: 1 }, () => {
     assert.equal((await db.releaseRequest.findUniqueOrThrow({ where: { id: auftragId } })).status, 'SCHEDULED');
   });
 
-  it('fällige Aufträge: nur die eigene Umgebung, mit Rücksprung, Hindernis und der belegten Identität der Instanz', async (t) => {
+  it('fällige Aufträge: nur die eigene Umgebung, mit Rücksprung und Hindernis — dazu die belegte Identität der Instanz', async (t) => {
     if (!db) return t.skip('keine Testdatenbank');
     assert.equal((await ausfuehrer('GET', '/api/cron/release-auftraege?umgebung=production')).status, 422, 'fremde Umgebung');
     const r = await ausfuehrer('GET', '/api/cron/release-auftraege?umgebung=test');
@@ -519,7 +528,7 @@ describe('Release-Ausführer', { concurrency: 1 }, () => {
     assert.ok(Array.isArray(r.daten!.inAusfuehrung));
   });
 
-  it('Übernahme: falsche Summe, fremder Commit, andere Version, CI rot, fremde Umgebung → 422; richtig → 200; Wiederholung → 200; anderes Artefakt oder zweiter Ausführer → 409', async (t) => {
+  it('Übernahme: falsche Summe, CI rot, fremde Umgebung → 422; richtig → 200; Wiederholung → 200; zweiter Ausführer → 409 — ebenso fremder Commit und andere Version → 422, anderes Artefakt unter demselben Schlüssel → 409', async (t) => {
     if (!db) return t.skip('keine Testdatenbank');
     const pfad = UEBERNEHMEN;
     assert.equal((await ausfuehrer('POST', pfad, uebernahme({ artefaktSha256: 'f'.repeat(64) }))).status, 422, 'falsche Summe');
@@ -606,7 +615,7 @@ describe('Release-Ausführer', { concurrency: 1 }, () => {
     }
   });
 
-  it('Ergebnis: fremder Schlüssel 409, „erfolgreich" mit fremder Identität 422, alte Form mit laufendeVersion 422, fehlgeschlagen 200, Wiederholung 200, Widerspruch 409', async (t) => {
+  it('Ergebnis: fremder Schlüssel 409, „erfolgreich" ohne Zielversion 422, fehlgeschlagen 200, Wiederholung 200, Widerspruch 409 — „ohne Zielversion" heisst seit 2026-09-30: die Instanz belegt sie nicht; die alte Form mit laufendeVersion ebenfalls 422', async (t) => {
     if (!db) return t.skip('keine Testdatenbank');
     const meldung = (ueber: Record<string, unknown>) => ({ auftragId, ausfuehrungsSchluessel: SCHLUESSEL_EINS, ...ueber });
     assert.equal((await ausfuehrer('POST', ERGEBNIS, meldung({ ausfuehrungsSchluessel: `lauf-${RUN}-zwei`, ergebnis: 'FAILED', aktivierung: 'UNKLAR' }))).status, 409);
@@ -632,7 +641,7 @@ describe('Release-Ausführer', { concurrency: 1 }, () => {
     assert.ok(zeile.finishedAt);
   });
 
-  it('Prüfprotokoll: Übernahme und Ergebnis, ohne Benutzer, mit Ausführer, Aktivierung und dem, was der Server beobachtet hat', async (t) => {
+  it('Prüfprotokoll: Übernahme und Ergebnis, ohne Benutzer, mit Ausführer und Nachweis — Nachweis heisst Prüfsumme, Aktivierung und was der Server beobachtet hat', async (t) => {
     if (!db) return t.skip('keine Testdatenbank');
     const eintraege = await db.auditLog.findMany({ where: { entity: 'ReleaseRequest', entityId: auftragId }, orderBy: { createdAt: 'asc' } });
     assert.deepEqual(
