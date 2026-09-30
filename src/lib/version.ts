@@ -1,32 +1,32 @@
-import paket from '../../package.json';
+import { laufendeIdentitaet } from './release/identitaet';
+import { SEMVER_MUSTER } from './release/manifest';
 
 /**
  * Die laufende Clenaris-Version und der Vergleich zweier Versionen.
  *
- * **Quelle ist `package.json`.** Sie wird beim Bau in das Bündel übernommen,
- * steht also im selben Artefakt wie der Code, dessen Version sie nennt. Eine
- * Umgebungsvariable als einzige Quelle hätte den Nachteil, dass ein
- * vergessener Eintrag nach einem Update weiterhin die alte Version meldet —
- * und das Update Center dann eine längst installierte Version als „verfügbar"
- * anböte. `APP_VERSION` (vom Deployment gesetzt) ist ein Commit-Hash und
- * keine Versionsnummer; sie beantwortet eine andere Frage und bleibt, wo sie
- * ist (`/api/health`).
+ * **Quelle ist die Identität der Instanz** (`release/identitaet.ts`, seit
+ * 2026-09-30): Ist der Stand durch `RELEASE.json` und `BUILD_ID` belegt, ist
+ * es die Version des Artefakts; sonst die beim Bau in das Bündel übernommene
+ * aus `package.json`. Beide stehen im selben Artefakt wie der Code, dessen
+ * Version sie nennen — eine Umgebungsvariable als Quelle hätte den Nachteil,
+ * dass ein vergessener Eintrag nach einem Update weiterhin die alte Version
+ * meldet und das Update Center eine längst installierte Version als
+ * „verfügbar" anböte.
  *
- * `CLENARIS_VERSION` darf den Wert überschreiben — für eine Prüfumgebung, die
- * „eine ältere Installation" darstellen soll. Nur eine gültige semantische
- * Version wird angenommen; alles andere fällt still auf `package.json` zurück,
- * statt die Anzeige mit einem Tippfehler zu füllen.
+ * **`CLENARIS_VERSION` gibt es nicht mehr.** Bis 2026-09-30 durfte sie den
+ * Wert überschreiben, damit eine Prüfumgebung „eine ältere Installation"
+ * darstellen konnte. Damit konnte aber auch jede Instanz eine Version
+ * behaupten, die sie nicht ist — und genau auf diese Antwort baut der
+ * Release-Ausführer, wenn er „erfolgreich" meldet. Die Prüfreihe stellt
+ * ihren Stand seither über ein Prüfmanifest dar, das nur in der Umgebung
+ * `test` wirkt und zum echten Bau passen muss (`scripts/test-server.ts`).
  */
-const SEMVER = /^(\d+)\.(\d+)\.(\d+)(?:-[0-9A-Za-z.-]+)?$/;
-
 export function aktuelleVersion(): string {
-  const ueberschrieben = process.env.CLENARIS_VERSION?.trim().replace(/^v/, '');
-  if (ueberschrieben && SEMVER.test(ueberschrieben)) return ueberschrieben;
-  return paket.version;
+  return laufendeIdentitaet().version;
 }
 
 export function istGueltigeVersion(version: string): boolean {
-  return SEMVER.test(version);
+  return SEMVER_MUSTER.test(version);
 }
 
 /**
@@ -38,8 +38,8 @@ export function istGueltigeVersion(version: string): boolean {
  * SemVer-Bibliothek für drei Zahlen und einen Zusatz.
  */
 export function vergleicheVersionen(a: string, b: string): number {
-  const ta = SEMVER.exec(a);
-  const tb = SEMVER.exec(b);
+  const ta = SEMVER_MUSTER.exec(a);
+  const tb = SEMVER_MUSTER.exec(b);
   if (!ta || !tb) return a.localeCompare(b);
   for (let i = 1; i <= 3; i += 1) {
     const d = Number(ta[i]) - Number(tb[i]);
