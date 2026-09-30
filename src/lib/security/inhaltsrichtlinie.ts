@@ -186,6 +186,15 @@ export function inhaltsrichtlinie({ entwicklung }: InhaltsrichtlinieOptionen): s
      * `blob:`-Adresse kann nur Skript dieser Seite erzeugen; die Freigabe
      * öffnet keinem fremden Ursprung einen Rahmen.
      *
+     * Offen und nicht belegt: Das `blob:`-Dokument im Rahmen erbt diese
+     * Richtlinie samt `object-src 'none'`. Ob der PDF-Darsteller eines
+     * Browsers darin trotzdem erscheinen darf, prüft kein Fall — der
+     * Browserfall (`tests/e2e/inhaltsrichtlinie.browser.spec.ts`) lädt nur ein
+     * HTML-Dokument über `blob:` und belegt damit `frame-src`, nicht den
+     * Druck. `object-src` deshalb vorsorglich zu öffnen hiesse, Plugins für
+     * die ganze Anwendung zuzulassen, ohne zu wissen, ob es nötig ist; die
+     * Messung in einem Browser mit echtem PDF-Darsteller muss zuerst kommen.
+     *
      * Entfallen: `js.stripe.com` und `hooks.stripe.com` (Rahmen von Stripe
      * Elements und 3-D Secure — Checkout ist eine Weiterleitung, kein Rahmen)
      * sowie `www.google.com` (keine eingebettete Karte, kein reCAPTCHA).

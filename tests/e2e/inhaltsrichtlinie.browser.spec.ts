@@ -16,10 +16,23 @@ import { anfragenVerfolgen, konsoleUeberwachen } from './helpers/browser';
  *    Engines kannten sie nicht und hätten WebAssembly zusammen mit `eval`
  *    abgewiesen; dann fiele PDF.js still auf seine langsamen Ersatzdekoder
  *    zurück.
- *  • **Der Druckrahmen lädt.** Der PDF-Viewer druckt über einen Rahmen mit
+ *  • **Ein `blob:`-Rahmen lädt.** Der PDF-Viewer druckt über einen Rahmen mit
  *    einer `blob:`-Adresse, die `'self'` nicht zuverlässig abdeckt
- *    (`frame-src 'self' blob:`). Geprüft wird das Laden des Rahmens, nicht
- *    der Druckdialog.
+ *    (`frame-src 'self' blob:`). Belegt ist damit **nur** `frame-src` für
+ *    `blob:` — die Voraussetzung des Druckwegs, nicht der Druckweg selbst.
+ *    Der Rahmen hier trägt ein kleines HTML-Dokument; der echte Druckrahmen
+ *    trägt ein PDF (`application/pdf`, `pdf-viewer-inner.tsx`, `drucken`).
+ *    Ein `blob:`-Dokument erbt die Richtlinie der Seite samt
+ *    `object-src 'none'`, und ob der PDF-Darsteller des Browsers darin
+ *    erscheinen darf, ist je Engine verschieden und hier nicht geprüft.
+ *    Ein PDF-Rahmen in diesem Fall wäre kein ehrlicher Ersatz: Ein Verstoss
+ *    im Rahmen fiele in *dessen* Dokument an, nicht in die Liste dieser
+ *    Seite, und ob die drei Prüfbrowser überhaupt einen PDF-Darsteller
+ *    mitbringen, ist nicht gemessen — wo keiner ist, hiesse „kein Verstoss"
+ *    nur „nichts dargestellt", und der Fall wäre grün, ohne etwas zu
+ *    belegen. Dieser Nachweis braucht einen Browser mit echtem
+ *    PDF-Darsteller und den Druckdialog und bleibt offen (EXTERNER NACHWEIS
+ *    ERFORDERLICH).
  *  • **Die Seite selbst kommt ohne einen einzigen Verstoss aus** — gezählt
  *    über `securitypolicyviolation` ab dem ersten Byte, nicht über die
  *    Konsole. Das ist der Nachweis, dass die ausgelieferten Bündel
@@ -231,7 +244,9 @@ function pruefungImBrowser(modul: number[]): void {
     }
     await schrittAbschliessen(vorher);
 
-    // Der Druckweg des PDF-Viewers: ein Rahmen mit einer Objekt-URL.
+    // Die Voraussetzung des Druckwegs: ein Rahmen mit einer Objekt-URL
+    // (`frame-src blob:`). Bewusst HTML und kein PDF — was das belegt und was
+    // nicht, steht im Kopfkommentar.
     fenster.__cspSchritt = 'rahmen';
     vorher = fenster.__cspVerstoesse?.length ?? 0;
     const adresse = URL.createObjectURL(
@@ -300,7 +315,7 @@ test('eval wird verweigert, WebAssembly kompiliert', async ({ page, browserName 
     antwort: 42,
     fehler: null,
   });
-  expect(befund!.rahmen.inhalt, `${browserName}: der blob:-Rahmen (Druckweg) wurde verweigert`).toBe('Druckrahmen');
+  expect(befund!.rahmen.inhalt, `${browserName}: der blob:-Rahmen wurde verweigert (frame-src blob:)`).toBe('Druckrahmen');
 
   /**
    * — Genau ein Verstoss, im Auswertungsschritt, gegen `script-src`, Quelle
