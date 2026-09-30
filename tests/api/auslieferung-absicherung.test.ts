@@ -131,9 +131,12 @@ describe('Auslieferungs-Workflow — fail-closed', () => {
     assert.match(vorpruefung, /'DIRECT_URL'/);
     const aktivieren = readFileSync(join(wurzel, 'deploy', 'v2', 'release-aktivieren.sh'), 'utf8');
     assert.match(aktivieren, /production-preflight\.ts --phase vor-migration/, 'vor der Migration');
+    // Seit 2026-09-30 ruft das Skript Prisma aus dem Release selbst (`npx`
+    // lüde Fehlendes aus dem Netz) und schaltet über das Werkzeug aus dem
+    // neuen Release um; die Reihenfolge ist dieselbe geblieben.
     const vor = aktivieren.indexOf('production-preflight.ts --phase vor-migration');
-    const migration = aktivieren.indexOf('npx prisma migrate deploy');
-    const umschalten = aktivieren.indexOf('umschalten "${ZIEL}"');
+    const migration = aktivieren.indexOf('"${PRISMA[@]}" migrate deploy');
+    const umschalten = aktivieren.indexOf('scripts/release-umschalten.ts" umschalten');
     assert.ok(vor > 0 && vor < migration && migration < umschalten, 'Vorprüfung → Migration → Umschalten');
   });
 
