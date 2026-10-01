@@ -6,6 +6,7 @@ import { usePathname } from 'next/navigation';
 import { hasConsent, onConsentChange } from '@/lib/consent';
 import {
   trafficEreignis,
+  trafficFreigabe,
   trafficJetztSenden,
   trafficSeitenansicht,
   trafficSitzungVergessen,
@@ -36,22 +37,48 @@ import {
  * Components ohne eigenen Klickweg. Ein einziger Zuhörer in der
  * Einfangphase erfasst sie alle, auch künftige, ohne dass jemand beim
  * nächsten Link daran denken muss.
+ *
+ * **Zwei Schranken, in dieser Reihenfolge** (seit 2026-09-30): zuerst die
+ * Einwilligung „Statistik", dann die Freigabe der Instanz
+ * (`CLENARIS_BESUCHSMESSUNG`, über die Laufzeitkonfiguration). Ohne
+ * Einwilligung wird nicht einmal nach der Freigabe gefragt — keine Anfrage
+ * ohne Einwilligung. Mit Einwilligung, aber ausgeschalteter Messung bleibt
+ * die Komponente vollständig still: keine Zuhörer, keine Sitzungskennung,
+ * keine Meldung. Erwogen wurde, die Freigabe allein dem Erfassungshelfer zu
+ * überlassen (er prüft sie ohnehin, für die Formulare); dann hingen hier bei
+ * ausgeschalteter Messung trotzdem Klick- und Sichtbarkeitszuhörer, die bei
+ * jedem Klick einen Weg ins Leere gingen.
  */
 export function TrafficMessung() {
   const pfad = usePathname();
-  const [aktiv, setAktiv] = React.useState(false);
+  const [einwilligung, setEinwilligung] = React.useState(false);
+  const [freigegeben, setFreigegeben] = React.useState(false);
+  const aktiv = einwilligung && freigegeben;
 
   React.useEffect(() => {
     try {
-      setAktiv(hasConsent().analytics);
+      setEinwilligung(hasConsent().analytics);
       return onConsentChange((zustand) => {
-        setAktiv(zustand.analytics);
+        setEinwilligung(zustand.analytics);
         if (!zustand.analytics) trafficSitzungVergessen();
       });
     } catch {
       return undefined;
     }
   }, []);
+
+  React.useEffect(() => {
+    if (!einwilligung || freigegeben) return;
+    // Die Antwort kann eintreffen, nachdem die Komponente schon weg ist (oder
+    // die Einwilligung widerrufen wurde) — dann wird sie verworfen.
+    let gueltig = true;
+    void trafficFreigabe().then((an) => {
+      if (gueltig) setFreigegeben(an);
+    });
+    return () => {
+      gueltig = false;
+    };
+  }, [einwilligung, freigegeben]);
 
   React.useEffect(() => {
     if (!aktiv) return;

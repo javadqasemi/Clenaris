@@ -4,7 +4,7 @@ import Script from 'next/script';
 import * as React from 'react';
 
 import { hasConsent, onConsentChange, type ConsentState } from '@/lib/consent';
-import { PublicRuntimeConfigSchema, type PublicRuntimeConfig } from '@/lib/laufzeit-konfiguration';
+import { oeffentlicheKonfigurationHolen, type PublicRuntimeConfig } from '@/lib/laufzeit-konfiguration';
 
 type Kennungen = PublicRuntimeConfig['analytics'];
 
@@ -25,6 +25,11 @@ type Kennungen = PublicRuntimeConfig['analytics'];
  * `/api/public/runtime-config` und prüft sie **auch hier** gegen das Schema:
  * Sie werden in Skriptzeilen eingesetzt, und was nicht dem engen Format
  * entspricht, wird nicht eingesetzt. Ohne Einwilligung keine Anfrage.
+ *
+ * Seit 2026-09-30 teilt sie diese eine Anfrage mit der eigenen
+ * Besuchsmessung (`oeffentlicheKonfigurationHolen`): Beide fragen nach
+ * derselben Einwilligung dasselbe, und zwei eigene `fetch` hätten zwei
+ * Antworten erlaubt, die einander widersprechen.
  */
 export function AnalyticsScripts() {
   const [consent, setConsent] = React.useState<ConsentState | null>(null);
@@ -38,18 +43,16 @@ export function AnalyticsScripts() {
   const benoetigt = Boolean(consent?.analytics || consent?.marketing);
   React.useEffect(() => {
     if (!benoetigt || kennungen) return;
-    const abbruch = new AbortController();
-    fetch('/api/public/runtime-config', { signal: abbruch.signal, credentials: 'omit' })
-      .then((r) => (r.ok ? r.json() : null))
-      .then((antwort: { data?: unknown } | null) => {
-        const geprueft = PublicRuntimeConfigSchema.safeParse(antwort?.data);
-        // Ungültig oder nicht erreichbar: keine Skripte — geschlossen, nicht offen.
-        setKennungen(geprueft.success ? geprueft.data.analytics : {});
-      })
-      .catch(() => {
-        if (!abbruch.signal.aborted) setKennungen({});
-      });
-    return () => abbruch.abort();
+    // Die geteilte Anfrage lässt sich nicht abbrechen — eine Antwort, die nach
+    // dem Abbau eintrifft, wird stattdessen verworfen.
+    let gueltig = true;
+    void oeffentlicheKonfigurationHolen().then((konfiguration) => {
+      // Ungültig oder nicht erreichbar: keine Skripte — geschlossen, nicht offen.
+      if (gueltig) setKennungen(konfiguration?.analytics ?? {});
+    });
+    return () => {
+      gueltig = false;
+    };
   }, [benoetigt, kennungen]);
 
   if (!consent || !benoetigt || !kennungen) return null;

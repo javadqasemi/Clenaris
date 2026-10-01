@@ -1,6 +1,10 @@
 import { z } from 'zod';
 
-import { mapsBrowserSchluessel, supabaseAdresse } from '@/lib/laufzeit-konfiguration';
+import {
+  besuchsmessungEingeschaltet,
+  mapsBrowserSchluessel,
+  supabaseAdresse,
+} from '@/lib/laufzeit-konfiguration';
 
 /**
  * Zentrale, typsichere Konfiguration.
@@ -130,6 +134,26 @@ const serverSchema = z.object({
     (wert) => (typeof wert === 'string' && wert.trim() === '' ? undefined : wert),
     z.enum(['production', 'staging', 'preview', 'test']).optional(),
   ),
+
+  /**
+   * Eigene Besuchsmessung der Website (2026-09-30) — hier schon als
+   * Wahrheitswert. Nur `an` schaltet sie ein; fehlt die Variable, ist sie
+   * leer oder steht dort irgendetwas anderes (`true`, `1`, `AN`), ist sie aus.
+   * Die Regel steht einmal, in `besuchsmessungEingeschaltet`
+   * (`laufzeit-konfiguration.ts`); dieselbe Funktion entscheidet über das Feld
+   * `besuchsmessung` der Browser-Konfiguration, damit Server und Browser nie
+   * verschieden urteilen.
+   *
+   * Bewusst kein `z.enum(['an', 'aus'])`: Ein Tippfehler darf die Anwendung
+   * nicht anhalten (`serverEnv()` würfe, und mit ihm jede Route, die es
+   * braucht — die Anmeldung eingeschlossen, vgl. `CLENARIS_UMGEBUNG` oben).
+   * Er soll nur das Messen verhindern; die Produktionsvorprüfung meldet einen
+   * eingeschalteten Schalter ohnehin als Warnung.
+   */
+  CLENARIS_BESUCHSMESSUNG: z
+    .string()
+    .optional()
+    .transform((wert) => besuchsmessungEingeschaltet(wert)),
 
   /**
    * Herkunft dieser Instanz (`https://clenaris.qasemi.ch`) — zur Laufzeit,

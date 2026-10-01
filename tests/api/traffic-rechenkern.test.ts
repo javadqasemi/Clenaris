@@ -14,6 +14,15 @@ import {
 import { sitzungsHash } from '../../src/lib/traffic/sitzung';
 import { aufbewahrungsgrenze, trafficZeitraumAufloesen } from '../../src/lib/traffic/zeitraum';
 import { TRAFFIC_BROWSER, TRAFFIC_EREIGNISSE, TRAFFIC_GERAETE } from '../../src/lib/traffic/ereignisse';
+import {
+  trafficEreignis,
+  trafficFreigabe,
+  trafficJetztSenden,
+  trafficSeitenansicht,
+} from '../../src/lib/traffic/erfassen';
+import { CONSENT_VERSION } from '../../src/lib/consent';
+import { besuchsmessungEingeschaltet, oeffentlicheKonfigurationAus } from '../../src/lib/laufzeit-konfiguration';
+import { umgebungPruefen } from '../../scripts/production-preflight';
 
 /**
  * Rechenkern der eigenen Besuchsmessung (2026-09-28) — direkt importiert,
@@ -297,5 +306,152 @@ describe('Besuchsmessung — Wertevorrat passt zum Schema', () => {
     assert.deepEqual(aufzaehlung('TrafficEventName'), [...TRAFFIC_EREIGNISSE]);
     assert.deepEqual(aufzaehlung('TrafficDevice'), [...TRAFFIC_GERAETE]);
     assert.deepEqual(aufzaehlung('TrafficBrowser'), [...TRAFFIC_BROWSER]);
+  });
+});
+
+/**
+ * Der Schalter der Instanz (`CLENARIS_BESUCHSMESSUNG`, 2026-09-30).
+ *
+ * Die Messung darf in der Produktion erst laufen, wenn die
+ * Datenschutzerklärung rechtlich geprüft ist (TA-02). Belegt wird hier die
+ * Regel selbst — nur „an" schaltet ein — an allen drei Stellen, die sie
+ * lesen: die Funktion, die Browser-Konfiguration und die
+ * Produktionsvorprüfung. Dass der Server ausgeschaltet nichts speichert,
+ * prüft `laufzeit-konfiguration.test.ts` an einer eigenen Instanz.
+ */
+describe('Besuchsmessung — Schalter der Instanz', () => {
+  // Was nach „ja" aussieht, aber nicht „an" ist, muss aus bleiben: Ein
+  // versehentlich eingeschalteter Schalter wäre die stille Entscheidung, die
+  // er verhindern soll.
+  const AUS = [undefined, '', '   ', 'aus', 'AN', 'An', 'true', '1', 'on', 'ja', 'yes', 'an!', 'ann', 'a n'];
+  const EIN = ['an', ' an ', 'an\n'];
+
+  it('Besuchsmessung ist ohne ausdrückliches „an" aus', () => {
+    for (const wert of AUS) assert.equal(besuchsmessungEingeschaltet(wert), false, `${JSON.stringify(wert)} schaltet ein`);
+    for (const wert of EIN) assert.equal(besuchsmessungEingeschaltet(wert), true, `${JSON.stringify(wert)} schaltet nicht ein`);
+
+    // Die Browser-Konfiguration urteilt mit derselben Regel — und das Feld
+    // fehlt nie, auch nicht ohne Variable: Ein fehlendes Feld liesse den
+    // Browser raten.
+    const basis = { APP_URL: 'https://a.clenaris.example' };
+    assert.equal(oeffentlicheKonfigurationAus(basis).besuchsmessung, false, 'ohne Variable eingeschaltet');
+    for (const wert of [...AUS, ...EIN]) {
+      assert.equal(
+        oeffentlicheKonfigurationAus({ ...basis, CLENARIS_BESUCHSMESSUNG: wert }).besuchsmessung,
+        besuchsmessungEingeschaltet(wert),
+        `Browser-Konfiguration für ${JSON.stringify(wert)}`,
+      );
+    }
+  });
+
+  it('die Produktionsvorprüfung warnt genau dann, wenn die Anwendung misst', () => {
+    // Die Vorprüfung vergleicht selbst (sie muss ohne die Anwendung laufen);
+    // hier wird festgehalten, dass beide Stellen dieselben Fälle gleich sehen.
+    for (const wert of [...AUS, ...EIN]) {
+      const pruefung = umgebungPruefen({ CLENARIS_BESUCHSMESSUNG: wert }, new Map()).find((p) => p.id === 'besuchsmessung');
+      assert.ok(pruefung, 'keine Prüfung „besuchsmessung"');
+      assert.equal(pruefung.stand, besuchsmessungEingeschaltet(wert) ? 'WARNUNG' : 'OK', `Vorprüfung für ${JSON.stringify(wert)}`);
+    }
+  });
+});
+
+/**
+ * Der Erfassungshelfer im Browser bei ausgeschalteter Instanz (2026-09-30) —
+ * ohne Browser, mit nachgebildetem `window`, `fetch` und Speicher.
+ *
+ * Die Browser-Reihe (`besuchsmessung.browser.spec.ts`) läuft gegen den
+ * Prüfserver, und der misst (`CLENARIS_BESUCHSMESSUNG=an`). Den
+ * ausgeschalteten Fall sähe sie nie. Hier wird deshalb der Helfer selbst
+ * gefahren: Ohne Einwilligung darf er gar nichts anfragen, mit Einwilligung
+ * genau einmal die Laufzeitkonfiguration — und wenn die „aus" sagt, weder
+ * melden noch eine Sitzungskennung anlegen. Gegen den Stand vor dem Schalter
+ * scheitert der Fall: Dort hätte die Einwilligung allein gereicht.
+ *
+ * Nur der ausgeschaltete Fall: Der Helfer merkt sich die Freigabe bis zum
+ * Neuladen der Seite, und ein Prüfprozess lädt nicht neu. Den
+ * eingeschalteten Weg belegt die Browser-Reihe.
+ */
+describe('Besuchsmessung — der Browser bleibt bei ausgeschalteter Instanz still', () => {
+  class Speicher {
+    readonly daten = new Map<string, string>();
+    getItem(schluessel: string) {
+      return this.daten.get(schluessel) ?? null;
+    }
+    setItem(schluessel: string, wert: string) {
+      this.daten.set(schluessel, String(wert));
+    }
+    removeItem(schluessel: string) {
+      this.daten.delete(schluessel);
+    }
+  }
+
+  const ruhe = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+  it('ohne Einwilligung keine Anfrage; mit Einwilligung, aber ausgeschaltet: keine Meldung, keine Sitzungskennung', async () => {
+    const lokal = new Speicher();
+    const sitzung = new Speicher();
+    const anfragen: Array<{ url: string; methode: string; credentials?: string }> = [];
+    const global = globalThis as unknown as Record<string, unknown>;
+    const fetchVorher = global.fetch;
+    const fensterVorher = global.window;
+
+    global.window = {
+      localStorage: lokal,
+      sessionStorage: sitzung,
+      location: { pathname: '/kontakt', search: '?utm_source=pruefung' },
+      dispatchEvent: () => true,
+      addEventListener: () => undefined,
+      removeEventListener: () => undefined,
+    };
+    global.fetch = async (eingabe: unknown, optionen: { method?: string; credentials?: string } = {}) => {
+      const url = String(eingabe);
+      anfragen.push({ url, methode: optionen.method ?? 'GET', credentials: optionen.credentials });
+      if (url === '/api/public/runtime-config') {
+        return new Response(
+          JSON.stringify({ data: { appUrl: 'https://a.clenaris.example', analytics: {}, besuchsmessung: false } }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }
+      return new Response(null, { status: 204 });
+    };
+
+    try {
+      // 1. Ohne Einwilligung: nichts — keine Frage nach der Freigabe, keine Meldung.
+      trafficSeitenansicht();
+      trafficEreignis('CONTACT_FORM');
+      trafficJetztSenden();
+      await ruhe(700);
+      // Über eine Abbildung verglichen: `deepEqual(anfragen, [])` engte den
+      // Typ der Liste für den Rest des Falls auf „leer" ein.
+      assert.deepEqual(anfragen.map((a) => `${a.methode} ${a.url}`), [], 'ohne Einwilligung wurde angefragt');
+      assert.equal(sitzung.getItem('clenaris-besuch'), null, 'Sitzungskennung ohne Einwilligung');
+
+      // 2. Einwilligung „Statistik" — aber die Instanz misst nicht.
+      lokal.setItem(
+        'clenaris-consent',
+        JSON.stringify({ necessary: true, analytics: true, marketing: false, decidedAt: new Date().toISOString(), version: CONSENT_VERSION }),
+      );
+      // Ein Formular meldet, bevor die Freigabe bekannt ist (der wartende Weg) …
+      trafficEreignis('CONTACT_FORM');
+      assert.equal(await trafficFreigabe(), false);
+      // … und danach der gewöhnliche Weg mit bekannter Freigabe.
+      trafficSeitenansicht();
+      trafficEreignis('CONTACT_PHONE');
+      trafficJetztSenden();
+      // Über die Sammelzeit (500 ms) hinaus: Auch verzögert darf nichts gehen.
+      await ruhe(700);
+
+      assert.deepEqual(
+        anfragen.map((a) => `${a.methode} ${a.url}`),
+        ['GET /api/public/runtime-config'],
+        'genau eine Frage nach der Freigabe — und keine Meldung',
+      );
+      assert.equal(anfragen[0]!.credentials, 'omit', 'die Laufzeitkonfiguration braucht keine Cookies');
+      assert.equal(sitzung.getItem('clenaris-besuch'), null, 'Sitzungskennung trotz ausgeschalteter Messung');
+    } finally {
+      global.fetch = fetchVorher;
+      if (fensterVorher === undefined) delete global.window;
+      else global.window = fensterVorher;
+    }
   });
 });

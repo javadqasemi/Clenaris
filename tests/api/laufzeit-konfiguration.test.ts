@@ -38,7 +38,9 @@ import { testDb, testDbSchliessen } from '../helpers/testdb';
  *     ohne Neubau. Stünde irgendwo noch ein beim Bau eingesetzter Wert,
  *     antworteten beide gleich. Geprüft wird an drei Stellen, die vorher
  *     festsassen: Browser-Konfiguration, Herkunftsprüfung und ein
- *     tatsächlich versendeter Link (`absoluteUrl` im Postausgang).
+ *     tatsächlich versendeter Link (`absoluteUrl` im Postausgang). Seit
+ *     2026-09-30 dazu der Schalter der Besuchsmessung: A misst, B nicht, und
+ *     B speichert nichts.
  *
  * Ebene 3 überspringt sich örtlich, wenn kein Bau oder keine Testdatenbank
  * da ist — im CI (`CI` gesetzt) scheitert sie stattdessen: Dort ist sie der
@@ -101,19 +103,27 @@ describe('Laufzeitkonfiguration: Freigabeliste und Geheimnisse (rein)', () => {
 
   it('liefert genau die freigegebenen Felder — nichts aus der übrigen Umgebung', () => {
     const konfiguration = oeffentlicheKonfigurationAus(basis);
-    assert.deepEqual(Object.keys(konfiguration).sort(), ['analytics', 'appUrl']);
+    assert.deepEqual(Object.keys(konfiguration).sort(), ['analytics', 'appUrl', 'besuchsmessung']);
     assert.deepEqual(Object.keys(konfiguration.analytics).sort(), ['facebookPixelId', 'gaMeasurementId', 'gtmId']);
+    // `besuchsmessung` (2026-09-30): ohne `CLENARIS_BESUCHSMESSUNG=an` aus.
     assert.deepEqual(konfiguration, {
       appUrl: 'https://a.clenaris.example',
       analytics: { gaMeasurementId: 'G-ABC1234', gtmId: 'GTM-XYZ123', facebookPixelId: '1234567890' },
+      besuchsmessung: false,
     });
+    assert.equal(oeffentlicheKonfigurationAus({ ...basis, CLENARIS_BESUCHSMESSUNG: 'an' }).besuchsmessung, true);
     ohneMarker(JSON.stringify(konfiguration), 'Die Browser-Konfiguration');
   });
 
   it('das Schema lehnt jedes weitere Feld ab — auch eines, das jemand später dazuschreibt', () => {
-    const erweitert = { appUrl: 'https://a.clenaris.example', analytics: {}, jwtSecret: MARKER.JWT_SECRET };
+    // Die Grundform ist gültig: Sonst scheiterten die beiden Fälle unten an
+    // einem fehlenden Pflichtfeld (`besuchsmessung`) statt am zusätzlichen —
+    // und bewiesen nichts mehr über die Freigabeliste.
+    const gueltig = { appUrl: 'https://a.clenaris.example', analytics: {}, besuchsmessung: false };
+    assert.equal(PublicRuntimeConfigSchema.safeParse(gueltig).success, true);
+    const erweitert = { ...gueltig, jwtSecret: MARKER.JWT_SECRET };
     assert.equal(PublicRuntimeConfigSchema.safeParse(erweitert).success, false);
-    const verschachtelt = { appUrl: 'https://a.clenaris.example', analytics: { databaseUrl: MARKER.DATABASE_URL } };
+    const verschachtelt = { ...gueltig, analytics: { databaseUrl: MARKER.DATABASE_URL } };
     assert.equal(PublicRuntimeConfigSchema.safeParse(verschachtelt).success, false);
   });
 
@@ -384,10 +394,26 @@ describe('Dasselbe Artefakt unter zwei Laufzeitumgebungen (ohne Neubau)', () => 
     buildIdVorher = readFileSync(join(WURZEL, DIST, 'BUILD_ID'), 'utf8').trim();
     buildIdZeitVorher = statSync(join(WURZEL, DIST, 'BUILD_ID')).mtimeMs;
     await aufraeumen();
-    // Nacheinander: Zwei gleichzeitig startende Instanzen kämpfen um
-    // denselben Bau-Zwischenspeicher nicht, aber um Speicher im CI-Läufer.
-    a = await starten('A', A.appUrl, A.ga, A.gtm, datenbank!);
-    b = await starten('B', B.appUrl, B.ga, B.gtm, datenbank!);
+    /*
+      Besuchsmessung (2026-09-30): A misst, B nicht — derselbe Bau, nur die
+      Umgebung verschieden. Gesetzt über `process.env`, das `starten` beim
+      Erzeugen des Prozesses übernimmt; ausdrücklich `aus` statt leer, damit
+      auch der Wert „irgendetwas ausser an" geprüft ist und `next start`
+      nicht aus der `.env` nachliest. Danach wieder der alte Stand: Die
+      übrigen Dateien des Laufs sollen davon nichts merken.
+    */
+    const besuchsmessungVorher = process.env.CLENARIS_BESUCHSMESSUNG;
+    try {
+      process.env.CLENARIS_BESUCHSMESSUNG = 'an';
+      // Nacheinander: Zwei gleichzeitig startende Instanzen kämpfen um
+      // denselben Bau-Zwischenspeicher nicht, aber um Speicher im CI-Läufer.
+      a = await starten('A', A.appUrl, A.ga, A.gtm, datenbank!);
+      process.env.CLENARIS_BESUCHSMESSUNG = 'aus';
+      b = await starten('B', B.appUrl, B.ga, B.gtm, datenbank!);
+    } finally {
+      if (besuchsmessungVorher === undefined) delete process.env.CLENARIS_BESUCHSMESSUNG;
+      else process.env.CLENARIS_BESUCHSMESSUNG = besuchsmessungVorher;
+    }
   });
 
   after(async () => {
@@ -423,8 +449,65 @@ describe('Dasselbe Artefakt unter zwei Laufzeitumgebungen (ohne Neubau)', () => 
       });
       assert.equal(status, 200);
       const rumpf = JSON.parse(text) as { data: unknown };
-      assert.deepEqual(rumpf.data, { appUrl: erwartet.appUrl, analytics: { gaMeasurementId: erwartet.ga, gtmId: erwartet.gtm } });
+      // `besuchsmessung`: A startet mit `an`, B mit `aus` (siehe `before`).
+      assert.deepEqual(rumpf.data, {
+        appUrl: erwartet.appUrl,
+        analytics: { gaMeasurementId: erwartet.ga, gtmId: erwartet.gtm },
+        besuchsmessung: instanz.name === 'A',
+      });
       ohneMarker(text, `Instanz ${instanz.name}`, [datenbank!]);
+    }
+  });
+
+  /**
+   * Der Schalter der Besuchsmessung wirkt zur Laufzeit, und ausgeschaltet
+   * speichert der Server nichts (2026-09-30).
+   *
+   * Dieselbe Meldung geht an beide Instanzen. A misst — das ist die
+   * Gegenprobe: Ohne sie bestünde der Fall auch dann, wenn die Meldung aus
+   * einem ganz anderen Grund verworfen würde (Automatenfilter, Pfad,
+   * Schema). B antwortet ebenfalls 204, aber in der Datenbank steht nur die
+   * Zeile von A.
+   *
+   * Ohne Ausweichen: Fehlt der Bau, scheitert dieser Fall mit dem Grund,
+   * statt still übersprungen zu werden — ein übersprungener Nachweis ist
+   * keiner.
+   */
+  it('Instanz mit ausgeschalteter Besuchsmessung speichert nichts', async () => {
+    assert.ok(a && b, `Die beiden Instanzen laufen nicht: ${voraussetzung ?? 'unbekannter Grund'}.`);
+    const db = testDb();
+    assert.ok(db, 'Keine Testdatenbank für die Gegenprobe.');
+
+    // Nur Buchstaben und kurz: Ziffernfolgen und lange Segmente maskiert die
+    // Bereinigung als Token, und dann stimmte der Pfad nicht mehr.
+    const marke = `laufzeitmessung${Array.from({ length: 6 }, () => String.fromCharCode(97 + Math.floor(Math.random() * 26))).join('')}`;
+    const wegraeumen = () => db.trafficEvent.deleteMany({ where: { path: { contains: marke } } });
+    await wegraeumen();
+    try {
+      for (const instanz of [a, b]) {
+        const antwort = await anfrage(instanz.port, '/api/public/traffic', {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            // Ein gewöhnlicher Browser — Automaten verwirft die Bereinigung.
+            'user-agent':
+              'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36',
+          },
+          body: JSON.stringify({
+            sitzung: 'Laufzeit_Pruefsitzung',
+            ereignisse: [{ name: 'PAGE_VIEW', pfad: `/${marke}/${instanz.name.toLowerCase()}` }],
+          }),
+        });
+        assert.equal(antwort.status, 204, `Instanz ${instanz.name}: ${antwort.status} ${antwort.text}`);
+      }
+      const zeilen = await db.trafficEvent.findMany({ where: { path: { contains: marke } } });
+      assert.deepEqual(
+        zeilen.map((z) => z.path),
+        [`/${marke}/a`],
+        'A (an) muss speichern, B (aus) darf nichts speichern',
+      );
+    } finally {
+      await wegraeumen();
     }
   });
 
