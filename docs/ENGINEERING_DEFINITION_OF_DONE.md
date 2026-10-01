@@ -188,7 +188,7 @@ auftaucht, steht im Register `docs/PENDENZEN.md`.
 | [ ] | Last | `npm run e2e:stress` |
 | [ ] | Hydration | `node scripts/react-hydrationskorrektur.mjs --pruefen` und die Browser-Prüfreihe |
 | [ ] | CI grün | Lauf auf dem Arbeitszweig |
-| [ ] | Keine Auslieferung versehentlich ausgelöst | `DEPLOY_ENABLED` nicht gesetzt; Auslieferungsauftrag im Lauf „übersprungen" |
+| [ ] | Keine Auslieferung versehentlich ausgelöst | `DEPLOY_ENABLED` und `RELEASE_EXECUTOR_ENABLED` nicht gesetzt; Auslieferungsauftrag im Lauf „übersprungen", der Release-Ausführer liegt nur als Vorlage unter `deploy/v2/` |
 
 ## Checkliste H — Produktionsauslieferung (seit dem Notfallauftrag 2026-09-27)
 
@@ -202,8 +202,8 @@ vor dem Bau, liess Demozugänge offen und lief ohne Scanner — und galt als
 | [ ] | CI sauber | grüner Lauf des Commits, Auftrag „Prüfung" |
 | [ ] | Geheimnisprüfung bestanden | `npm run security:secrets` im Lauf |
 | [ ] | Sicherheitsprüfung bestanden | `security:check` 7/7 (mit Prüfreihen), nicht nur statisch |
-| [ ] | Unveränderliches Artefakt | `release-<sha>` aus genau diesem Lauf, kein Bau am Server |
-| [ ] | Prüfsumme | SHA-256 aus der Laufzusammenfassung = Summe am Server |
+| [ ] | Unveränderliches Artefakt | `release-<sha>` aus genau diesem Lauf (Push oder Handstart auf `main`), gebaut ohne Demodaten und ohne Zwischenspeicher, gepackt vor dem ersten Serverstart; kein Bau am Server |
+| [ ] | Prüfsumme | SHA-256 aus der Laufzusammenfassung = `--erwartet-sha256` der Aktivierung = Summe am Server (die Aktivierung verweigert sonst mit Ausgang 10) |
 | [ ] | Produktionsvorprüfung | `npm run production:preflight` Ausgang 0 (vor und nach der Migration) |
 | [ ] | Keine Demozugänge | Vorprüfung „konten-oeffentliche-passwoerter" OK |
 | [ ] | Sicherung vollständig | `db-backup.ts` unmittelbar vor der Migration, gelesen |
@@ -213,8 +213,9 @@ vor dem Bau, liess Demozugänge offen und lief ohne Scanner — und galt als
 | [ ] | Überwachung gesund | externe Überwachung meldet, `SECURITY_REPORT_TOKEN` gesetzt |
 | [ ] | Ursprung geschützt | direkter Zugriff auf die IP von aussen geprüft: geschlossen |
 | [ ] | Keine öffentlichen internen Ports | 3000, 5432, 5433, 6379, 4444 von aussen gefiltert |
-| [ ] | Rauchtest | Health meldet genau diesen Commit; Anmeldung, eine Leseseite |
-| [ ] | Rücksprung | vorheriges Release unter `releases/`, Schema-Folgen der Migrationen bekannt |
+| [ ] | Aktivierung | `release-aktivieren.sh` endet mit `ERGEBNIS {"code":0,"zustand":"AKTIV",…}`; Zeile in `aktivierungen.jsonl` |
+| [ ] | Rauchtest | `/api/health` meldet genau diesen Commit als `version`, die Build-ID der Beilage und `identitaet=belegt`; Anmeldung, eine Leseseite |
+| [ ] | Rücksprung | vorheriges Release unter `releases/` **und sein Archiv unter `archiv/`** samt `.sha256`; die erwartete Summe dafür liegt ausserhalb des Servers (CI-Zusammenfassung oder Release Center) bereit; Weg: `deploy/v2/release-ruecksprung.sh --auf <commit> --erwartet-sha256 <summe>`; Einstufung der Migrationen bekannt (`--schema-bewusst` nur bewusst) |
 
 ---
 
@@ -222,14 +223,22 @@ vor dem Bau, liess Demozugänge offen und lief ohne Scanner — und galt als
 
 | Befehl | Was er tut |
 |---|---|
-| `npm run verify:static` | Alles ohne Datenbank und Server: Hydrationskorrektur, `npm audit` (kritisch blockiert), Linter, Typen, Prisma-Schema, Geheimnisse (`security:secrets`, ohne Bash), statische Sicherheitsprüfung, Lohn-Prüfpaket passt zum Code (`lohn-pruefpaket.ts --pruefen`, seit 2026-09-27), Dokumentation aktuell (kein Unterschied in `docs/` und `README.md`), Merkmalsprüfung (beratend) |
-| `npm run verify:full` | `verify:static`, dann Migrationen auf die Testdatenbank, Build, Testserver, Sicherheitsreihen, vollständige Testreihe (0 übersprungen, `node:test`-Bilanz), Browser-Prüfreihe mit Bilanz (seit 2026-09-27: übersprungen, wackelig, unerwartet oder kein JSON-Bericht ist ein Fehlschlag) — und der Server wird am Ende sicher beendet |
+| `npm run verify:static` | Alles ohne Datenbank und Server: Hydrationskorrektur (RB-001) und Cachezeitkorrektur (RB-002), `npm audit` (kritisch blockiert), Linter, Typen, Prisma-Schema, Geheimnisse (`security:secrets`, ohne Bash), statische Sicherheitsprüfung, **Testmatrix belegt** (`testmatrix-pruefen.ts`, seit 2026-09-30: jeder Beleg ein ausgeführter Testtitel), Lohn-Prüfpaket passt zum Code (`lohn-pruefpaket.ts --pruefen`, seit 2026-09-27), Dokumentation aktuell (kein Unterschied in `docs/` und `README.md`), Merkmalsprüfung (beratend) |
+| `npm run verify:full` | `verify:static`, dann in der Reihenfolge der CI (seit 2026-09-30): mit `--frisch` Testdatenbank nur mit Konfiguration (`db:test:setup -- --frisch --ohne-demo`) → Migrationen → **Datenbankschranken (live)** (`datenbank-schranken.ts`; Exit 1 = Befund, 2 = nicht geprüft, beides Abbruch) → Konfigurations-Seed → Build → Leistungsbudget → mit `--frisch` Probeartefakt mit Demo-Stolperdraht → Demodaten → Testserver, Sicherheitsreihen, vollständige Testreihe (0 übersprungen, `node:test`-Bilanz), Browser-Prüfreihe mit Bilanz **je Engine** (übersprungen, wackelig, unerwartet, kein JSON-Bericht oder eine Engine ohne bestandenen Fall ist ein Fehlschlag) — und der Server wird am Ende sicher beendet |
 | `npm run verify:security` | `security:check` im Umfang `voll` (braucht den laufenden Testserver) |
 | `npm run verify:e2e` | Browser-Prüfreihe ohne Wiederholungen **mit Bilanz** (`verify.ts browser`, gegen einen laufenden Server über `TEST_BASE_URL`): übersprungen, wackelig, gescheitert oder kein JSON-Bericht ist ein Fehlschlag — dieselbe Regel wie im vollen Weg (`browserBilanzPruefen`, geprüft in `pruefbilanz.test.ts`) |
-| `npm run verify:release` | `verify:full` auf einer **frischen** Testdatenbank und aus einem sauberen, losgelösten `git worktree` des aktuellen Commits (nicht `git archive`: ohne `.git` scheitern Geheimnissuche und Doku-Vergleich) |
+| `npm run verify:release` | `verify:full --frisch` aus einem sauberen, losgelösten `git worktree` des aktuellen Commits (nicht `git archive`: ohne `.git` scheitern Geheimnissuche und Doku-Vergleich), danach die **Stressreihe 5/5** (`e2e-stress.ts`, je frischer Server, ohne Wiederholungen, gezählt aus dem JSON-Bericht je Engine). Nur dieser Gesamtweg meldet „RELEASE BESTANDEN — Kern und Stressreihe 5/5." mit Exit 0 und schreibt `test-results/release-nachweis.json` (gesichert unter `hydrationsbefunde/release-…/`) — und nur aus vollständigen Zahlen |
+| `npm run verify:release:core`, `verify:release:stress` | die beiden Hälften einzeln. Seit 2026-09-30 enden sie **mit Exit 3** und der letzten eigenen Zeile „TEILPRÜFUNG BESTANDEN — KEIN RELEASE-NACHWEIS": weder Erfolg noch Absturz, und nie ein Release-Nachweis. (`npm` hängt bei Exit 3 eigene Fehlerzeilen an — massgeblich ist die Zeile des Skripts.) |
 
-CI ruft dieselben Befehle auf (`.github/workflows/deploy.yml`); es gibt keinen
-zweiten, versteckten Prüfweg.
+**CI und örtlicher Weg sind nicht dasselbe.** Die CI (`.github/workflows/deploy.yml`,
+Auftrag „Prüfung") ruft `verify:static` und `verify:tests` auf und hat die
+Schritte des vollen Wegs (Migration, Datenbanktor, Konfigurations-Seed, Bau,
+Budget, Packen, Demodaten, Testserver) als eigene Stufen — in derselben
+Reihenfolge, damit örtlich und in der CI derselbe Bau geprüft wird. Die
+Stressreihe und damit der **Release-Nachweis gibt es nur örtlich** über
+`verify:release`; die CI kennt weder `verify:release:core` noch `:stress`.
+Ein grüner CI-Lauf ersetzt `verify:release` also nicht, und ein
+`verify:release` ersetzt nicht die CI auf genau dieser SHA.
 
 ## Fehlerregel
 
