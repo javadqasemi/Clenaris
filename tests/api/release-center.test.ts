@@ -58,6 +58,8 @@ const AUSF_RUECK = `9.${RUN % 1_000_000}.5`;
 const AUSF_VERWAIST = `9.${RUN % 1_000_000}.6`;
 const AUSF_JUNG = `9.${RUN % 1_000_000}.7`;
 const AUSF_STAGING = `9.${RUN % 1_000_000}.8`;
+/** Vier Versionen, die gleichzeitig übernommen werden sollen (Sperre je Umgebung). */
+const AUSF_GLEICHZEITIG = [9, 10, 11, 12].map((patch) => `9.${RUN % 1_000_000}.${patch}`);
 /** Eine gültig geformte Schweizer IBAN im Freitext — sie darf nicht ins Protokoll. */
 const IBAN_IM_GRUND = 'CH93 0076 2011 6238 5295 7';
 const db = testDb();
@@ -105,7 +107,7 @@ async function aufraeumen() {
   const releases = await db.release.findMany({
     where: {
       OR: [
-        { version: { in: [NEU, ALT, AUSF, AUSF_ROT, AUSF_WERKZEUG, AUSF_ZWEI, AUSF_RUECK, AUSF_VERWAIST, AUSF_JUNG, AUSF_STAGING] } },
+        { version: { in: [NEU, ALT, AUSF, AUSF_ROT, AUSF_WERKZEUG, AUSF_ZWEI, AUSF_RUECK, AUSF_VERWAIST, AUSF_JUNG, AUSF_STAGING, ...AUSF_GLEICHZEITIG] } },
         { summary: { startsWith: 'Prüfversion' } },
       ],
     },
@@ -845,6 +847,80 @@ describe('Release-Ausführer', { concurrency: 1 }, () => {
     } finally {
       // Der junge DEPLOYING sperrte sonst die Umgebung für das Werkzeug unten.
       await entfernen(belegt, fremd, jung, andereUmgebung);
+    }
+  });
+
+  /**
+   * Die Sperre je Umgebung (`umgebungSperren`, Gegenprüfung 2026-09-30).
+   *
+   * Der Fall „Fortsetzen" oben übernimmt den zweiten Auftrag erst, als der
+   * erste schon DEPLOYING ist — dessen 409 liefert die Abfrage nach einer
+   * anderen Ausführung allein, mit oder ohne Sperre. Was die Sperre leistet,
+   * zeigt nur der gleichzeitige Fall: Vier Ausführer übernehmen vier
+   * **verschiedene** fällige Aufträge im selben Augenblick. Die Zeilensperre
+   * gilt je Auftrag, der Teilindex `release_requests_offen_einmal` je
+   * Version — keine von beiden hält verschiedene Aufträge auseinander. Ohne
+   * die Sperre sieht unter READ COMMITTED jede Transaktion „keine andere
+   * Ausführung" (die anderen haben noch nicht festgeschrieben), und mehrere
+   * Aufträge stehen danach zugleich in DEPLOYING: zwei Umschaltungen ohne
+   * definierten Rücksprung.
+   *
+   * Vier Anfragen statt zwei, weil ein Wettlauf ohne Vorkehrung nicht bei
+   * jedem Durchgang auftritt (wie in `nebenlaeufigkeit.test.ts`); mit der
+   * Sperre muss jeder Durchgang halten. Geprüft wird der Bestand, nicht nur
+   * die Codes: genau eine Zeile in DEPLOYING, die übrigen unverändert
+   * terminiert, genau ein Protokolleintrag — eine abgewiesene Übernahme darf
+   * nichts geschrieben haben. Die Ausführer-Routen haben kein Rate-Limit, die
+   * Salve zerfällt also nicht in Einzelaufrufe.
+   */
+  it('gleichzeitige Übernahmen verschiedener Aufträge in einer Umgebung: genau eine gilt, die übrigen 409 — die Sperre je Umgebung', async () => {
+    const d = pflichtDb();
+    // Vorbedingung: Nichts belegt die Umgebung schon — sonst wären alle vier
+    // 409, und der Fall bewiese nichts über die Sperre.
+    assert.equal(
+      await d.releaseRequest.count({ where: { organizationId: org, status: 'DEPLOYING', environment: 'test' } }),
+      0,
+      'die Umgebung test ist schon belegt — ein früherer Fall hat einen DEPLOYING liegen lassen',
+    );
+    const eintraege: Awaited<ReturnType<typeof versionMitAuftrag>>[] = [];
+    try {
+      for (const [i, version] of AUSF_GLEICHZEITIG.entries()) {
+        eintraege.push(await versionMitAuftrag({ version, commit: createHash('sha1').update(`commit-gleichzeitig-${i}-${RUN}`).digest('hex'), status: 'SCHEDULED' }));
+      }
+      const antworten = await Promise.all(
+        eintraege.map((e, i) =>
+          ausfuehrer(
+            'POST',
+            UEBERNEHMEN,
+            uebernahme({
+              auftragId: e.auftrag.id,
+              ausfuehrungsSchluessel: `lauf-${RUN}-gleichzeitig-${i}`,
+              ausfuehrer: `pruefreihe/gleichzeitig-${i}`,
+              commit: e.release.commit,
+              zielVersion: e.release.version,
+            }),
+          ),
+        ),
+      );
+      assert.deepEqual(
+        antworten.map((a) => a.status).sort((a, b) => a - b),
+        [200, 409, 409, 409],
+        antworten.map((a) => `${a.status} ${a.text.slice(0, 200)}`).join('\n'),
+      );
+      for (const a of antworten.filter((x) => x.status === 409)) assert.match(a.text, /gerade Version/);
+
+      const ids = eintraege.map((e) => e.auftrag.id);
+      const zeilen = await d.releaseRequest.findMany({ where: { id: { in: ids } }, select: { status: true } });
+      assert.equal(zeilen.filter((z) => z.status === 'DEPLOYING').length, 1, 'mehr als eine Ausführung zugleich in der Umgebung');
+      assert.equal(zeilen.filter((z) => z.status === 'SCHEDULED').length, 3, 'ein abgewiesener Auftrag hat seinen Zustand verloren');
+      assert.equal(
+        await d.auditLog.count({ where: { entity: 'ReleaseRequest', entityId: { in: ids } } }),
+        1,
+        'genau eine Übernahme gehört ins Protokoll',
+      );
+    } finally {
+      // Der übernommene DEPLOYING sperrte sonst die Umgebung für das Werkzeug unten.
+      await entfernen(...eintraege);
     }
   });
 
