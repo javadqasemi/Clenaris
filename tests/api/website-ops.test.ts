@@ -197,7 +197,9 @@ describe('Website- und Betriebsbereiche', { concurrency: 1 }, async () => {
       };
 
       it('räumt Reste eines abgebrochenen Laufs weg und wählt eine Leistung', async () => {
-        const liste = await get<{ data: Array<{ id: string; title: string }> }>('/api/gallery', { jar: jars.admin });
+        const liste = await get<{
+          data: Array<{ id: string; title: string; published: boolean; serviceKind: string | null }>;
+        }>('/api/gallery', { jar: jars.admin });
         assert.equal(liste.status, 200);
         for (const rest of liste.payload.data.filter((e) => e.title.startsWith(MARKE))) {
           await del(`/api/gallery/${rest.id}`, { jar: jars.admin });
@@ -208,8 +210,22 @@ describe('Website- und Betriebsbereiche', { concurrency: 1 }, async () => {
           { jar: jars.admin },
         );
         assert.equal(leistungen.status, 200);
-        leistung = leistungen.payload.data.find((l) => l.active && l.kind in ART_BESCHRIFTUNG);
-        assert.ok(leistung, 'keine aktive Leistung im Katalog');
+        /*
+          Eine Leistung, deren Art noch keinen veröffentlichten Eintrag hat.
+          Die Leistungsseite zeigt den ersten veröffentlichten Eintrag ihrer
+          Art nach `position`, und der Prüfeintrag steht auf 0 (tiefer lässt
+          das Schema nicht zu). Hätte die Art schon einen Eintrag auf 0, wäre
+          die Reihenfolge der beiden in Postgres nicht festgelegt — der Fall
+          scheiterte zufällig, mit einer Meldung, die nach fehlender
+          Erneuerung klingt. Die Demodaten veröffentlichen keine Einträge;
+          ist trotzdem jede Art belegt, scheitert die Vorbereitung hier mit
+          diesem Grund, statt später irrezuführen.
+        */
+        const belegt = new Set(
+          liste.payload.data.filter((e) => e.published && !e.title.startsWith(MARKE)).map((e) => e.serviceKind),
+        );
+        leistung = leistungen.payload.data.find((l) => l.active && l.kind in ART_BESCHRIFTUNG && !belegt.has(l.kind));
+        assert.ok(leistung, 'keine aktive Leistung, deren Art noch ohne veröffentlichten Galerieeintrag ist');
 
         // Die Leistungsseite einmal aufrufen, bevor es den Eintrag gibt: Ab
         // jetzt liegt sie im Zwischenspeicher, und nur eine Erneuerung bringt
@@ -253,6 +269,10 @@ describe('Website- und Betriebsbereiche', { concurrency: 1 }, async () => {
         // Angelegt: Die Leistungsseite zeigt den Eintrag — mit Alternativtext
         // aus Titel, dem Namen dieser Leistung und dem Ort.
         const nachAnlegen = (await get(pfad)).text;
+        // Gegen die erste Fassung der Erneuerung (2026-09-30) scheitert genau
+        // diese Erwartung: `revalidatePath('/leistungen/[slug]', 'page')` ohne
+        // die Routengruppe `(public)` traf kein Merkmal der Seite (siehe
+        // `revalidateGallery` und den reinen Fall in `seo-rechenkern.test.ts`).
         assert.equal(
           altVon(nachAnlegen, 'https://example.com/pruefvergleich-vorher.jpg'),
           `Vorher: ${titel}, ${leistung.name}, ${ort}`,
