@@ -5,9 +5,8 @@ import type { Release, ReleaseRequest, ReleaseRequestStatus } from '@prisma/clie
 import { recordAuditInTx } from '@/lib/audit';
 import { prisma, type Tx } from '@/lib/db';
 import { BusinessRuleError, ConfigurationError, ConflictError, NotFoundError } from '@/lib/errors';
-import { IDENTITAETS_NAMEN, identitaetsAngaben, laufendeIdentitaet, type Identitaet } from '@/lib/release/identitaet';
-import { COMMIT_MUSTER } from '@/lib/release/manifest';
-import { vergleicheVersionen } from '@/lib/version';
+import { ausgangNichtBelegt, hindernis, zielNichtBelegt } from '@/lib/release/ausfuehrungsregeln';
+import { identitaetsAngaben, laufendeIdentitaet, type Identitaet } from '@/lib/release/identitaet';
 import type { ReleaseErgebnis, ReleaseUebernahme } from '@/lib/validation/system';
 
 /**
@@ -99,56 +98,16 @@ function umgebungPruefen(verlangt: string) {
   }
 }
 
-/** Warum ein fälliger Auftrag (noch) nicht ausführbar ist — oder `null`. */
-function hindernis(release: Release, identitaet: Identitaet): string | null {
-  // Zuerst die Identität: Ohne belegten Ausgangsstand ist schon der
-  // Versionsvergleich darunter nur eine Behauptung, und ein Rücksprung auf
-  // „die vorherige Fassung" hätte kein belegtes Ziel.
-  if (!identitaet.belegt) {
-    return `Die laufende Instanz kann ihren Stand nicht belegen (${IDENTITAETS_NAMEN[identitaet.zustand]}) — ohne belegten Ausgangsstand wird nichts ausgerollt.`;
-  }
-  if (vergleicheVersionen(release.version, identitaet.version) <= 0) {
-    return `Version ${release.version} ist nicht neuer als die laufende ${identitaet.version}.`;
-  }
-  if (release.ciStatus !== 'PASSED') return `Die Prüfstufe für ${release.version} ist nicht bestanden (${release.ciStatus}).`;
-  if (!release.commit || !COMMIT_MUSTER.test(release.commit)) {
-    return `Für ${release.version} ist kein vollständiger Commit (40 Hexadezimalzeichen) eingetragen.`;
-  }
-  if (!release.artifactSha256) return `Für ${release.version} ist keine Artefakt-Prüfsumme eingetragen.`;
-  return null;
-}
-
-/**
- * Belegt die Instanz das Ziel des Auftrags? `null` heisst ja, sonst der Grund.
- * Dieselbe Regel für die Meldung „erfolgreich" und für den stündlichen
- * Abschluss verwaister Aufträge — zwei Fassungen liefen auseinander.
- */
-function zielNichtBelegt(auftrag: ReleaseRequest, release: Release, identitaet: Identitaet): string | null {
-  if (!identitaet.belegt) {
-    return `Die antwortende Instanz kann ihren Stand nicht belegen (${IDENTITAETS_NAMEN[identitaet.zustand]}).`;
-  }
-  if (identitaet.commit !== release.commit) {
-    return `Die antwortende Instanz belegt Commit ${identitaet.commit?.slice(0, 12)}, das Release ${auftrag.toVersion} ist ${release.commit?.slice(0, 12) ?? '—'}.`;
-  }
-  if (identitaet.version !== release.version) {
-    return `Die antwortende Instanz belegt Version ${identitaet.version}, nicht ${release.version}.`;
-  }
-  return null;
-}
-
-/** Belegt die Instanz den Ausgangsstand des Auftrags (Rücksprung)? `null` heisst ja. */
-function ausgangNichtBelegt(auftrag: ReleaseRequest, release: Release, identitaet: Identitaet): string | null {
-  if (!identitaet.belegt) {
-    return `Die antwortende Instanz kann ihren Stand nicht belegen (${IDENTITAETS_NAMEN[identitaet.zustand]}).`;
-  }
-  if (identitaet.commit === release.commit) {
-    return `Die antwortende Instanz läuft noch mit dem Ziel ${auftrag.toVersion} (${release.commit?.slice(0, 12)}) — das ist kein Rücksprung.`;
-  }
-  if (identitaet.version !== auftrag.fromVersion) {
-    return `Die antwortende Instanz belegt Version ${identitaet.version}, nicht die Ausgangsversion ${auftrag.fromVersion}.`;
-  }
-  return null;
-}
+/*
+  Die drei Regeln „darf ausgerollt werden" (`hindernis`), „belegt die
+  Instanz das Ziel" (`zielNichtBelegt`) und „belegt sie den Ausgangsstand"
+  (`ausgangNichtBelegt`) stehen seit 2026-10-01 rein in
+  `lib/release/ausfuehrungsregeln.ts`. Hier standen sie privat und waren nur
+  über HTTP gegen einen Prüfserver prüfbar, der seinen Stand immer belegt —
+  der Zweig „nicht belegt" lief in keiner Prüfung. Dieser Dienst bleibt der
+  einzige Ort, der sie anwendet: in der Liste, unter der Sperre der
+  Übernahme, bei der Meldung und im stündlichen Abschluss.
+*/
 
 /**
  * Was der Ausführer über einen Auftrag wissen muss — und nicht mehr.
