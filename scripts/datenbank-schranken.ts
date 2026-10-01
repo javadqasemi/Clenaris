@@ -5,9 +5,10 @@
  *   DATABASE_URL=… npx tsx scripts/datenbank-schranken.ts
  *
  *   Exit 0   BESTANDEN      jede gelistete Schranke vorhanden und wirksam
- *   Exit 1   BEFUND         mindestens eine fehlt, ist abgeschaltet, ungültig
- *                           oder nicht validiert — oder das Register passt
- *                           nicht zu den Migrationen
+ *   Exit 1   BEFUND         mindestens eine fehlt, ist abgeschaltet, ungültig,
+ *                           nicht validiert oder umgebaut (Trigger anders
+ *                           gebunden, Funktionsrumpf geändert) — oder das
+ *                           Register passt nicht zu den Migrationen
  *   Exit 2   NICHT GEPRÜFT  keine DATABASE_URL, keine Verbindung, kein
  *                           Register — **kein** Bestehen
  *

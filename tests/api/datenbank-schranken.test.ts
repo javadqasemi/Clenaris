@@ -1,18 +1,26 @@
 import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import type { Prisma } from '@prisma/client';
 
 import {
+  ausloeserAusTyp,
+  funktionenAusMigrationen,
   livePruefen,
   migrationenLesen,
   registerLesen,
+  rumpfPruefsumme,
   schemaAusAdresse,
   schrankenAusMigrationen,
   SCHRANKENARTEN,
   statischPruefen,
+  triggerAusMigrationen,
+  type Befundart,
+  type Schrankenart,
   type Schrankenbefund,
   type Schrankenregister,
 } from '../../scripts/security/datenbank-schranken';
@@ -32,7 +40,10 @@ import { testDb, testDbAdresse, testDbGrund, testDbSchliessen } from '../helpers
  * und 3 Ausschlussbedingungen standen in keiner Liste; ein abgeschalteter
  * Trigger galt als „vorhanden" (die alte Prüfung fragte nur `tgname`); und
  * ein Name, der nur in einem Kommentar einer Migration stand, bestand die
- * statische Prüfung.
+ * statische Prüfung. Seit 2026-10-01 dazu: Ein Trigger, dessen Funktion
+ * durch ein `RETURN COALESCE(NEW, OLD)` ersetzt, der als `BEFORE INSERT`
+ * neu angelegt, auf eine andere Tabelle gehängt oder mit `WHEN (false)`
+ * versehen wurde, bestand die Live-Prüfung — sie verglich nur den Namen.
  *
  * Kein HTTP-Server nötig. Was an der Datenbank verändert wird (Trigger
  * abschalten, Index löschen, Bedingung ohne Validierung), geschieht in einer
@@ -71,7 +82,7 @@ async function zurueckgerollt<T>(arbeit: (tx: Tx) => Promise<T>): Promise<T> {
 }
 
 const blockierende = (befunde: Schrankenbefund[]) => befunde.filter((b) => b.schwere === 'blockierend');
-const mit = (art: keyof Schrankenregister, ...namen: string[]): Schrankenregister => ({ ...register, [art]: [...register[art], ...namen] });
+const mit = (art: Schrankenart, ...namen: string[]): Schrankenregister => ({ ...register, [art]: [...register[art], ...namen] });
 const schema = () => schemaAusAdresse(testDbAdresse() ?? undefined);
 
 before(() => {
@@ -124,6 +135,103 @@ describe('Datenbankschranken — Register gegen Migrationen', () => {
     );
   });
 
+  it('jede Triggerbindung und jeder Funktionsrumpf im Register entspricht den Migrationen', () => {
+    const definitionen = triggerAusMigrationen(migrationen);
+    for (const name of register.trigger) {
+      const ist = definitionen.get(name);
+      assert.ok(ist, `${name}: in den Migrationen nicht lesbar`);
+      const { eingeschraenkt, ...bindung } = ist;
+      assert.deepEqual(bindung, register.triggerbindungen[name], `${name}: Bindung weicht ab`);
+      assert.equal(eingeschraenkt, false, `${name}: mit WHEN-Bedingung oder Spaltenliste`);
+    }
+    // Jede Funktion, die eine Migration anlegt — auch die Hilfsfunktionen,
+    // auf denen eine Schranke ruht, ohne selbst an einem Trigger zu hängen.
+    assert.deepEqual(Object.fromEntries(funktionenAusMigrationen(migrationen)), register.funktionen);
+    assert.ok('bereinigung_freigegeben' in register.funktionen && 'vertragsfassung_ist_gesperrt' in register.funktionen, 'die Hilfsfunktionen fehlen im Register');
+  });
+
+  it('eine geänderte Schutzfunktion oder ein umgebauter Trigger in einer neuen Migration ist blockierend', () => {
+    const befundeZu = (sql: string, reg: Schrankenregister = register) => blockierende(statischPruefen(`${migrationen}\n${sql}\n`, reg));
+    const arten = (befunde: Schrankenbefund[]) => befunde.map((b) => [b.art, b.name]);
+
+    // Der billigste Weg, den Protokollschutz auszuhebeln: dieselbe Funktion, wirkungslos.
+    const neutral = '\nBEGIN\n  RETURN COALESCE(NEW, OLD);\nEND;\n';
+    const ersetzt = befundeZu(`CREATE OR REPLACE FUNCTION audit_logs_nur_anfuegen() RETURNS trigger AS $$${neutral}$$ LANGUAGE plpgsql;`);
+    assert.deepEqual(arten(ersetzt), [['funktionen', 'audit_logs_nur_anfuegen']]);
+    // Die Meldung nennt die neue Prüfsumme — wer die Änderung durchgesehen hat, trägt sie ein.
+    assert.ok(ersetzt[0]!.titel.includes(rumpfPruefsumme(neutral)), ersetzt[0]!.titel);
+
+    // Eine Hilfsfunktion, die eine Schranke öffnet, ohne einen Trigger anzufassen.
+    assert.deepEqual(arten(befundeZu('CREATE OR REPLACE FUNCTION bereinigung_freigegeben() RETURNS boolean AS $$ SELECT true $$ LANGUAGE sql STABLE;')), [
+      ['funktionen', 'bereinigung_freigegeben'],
+    ]);
+
+    // Derselbe Name, anderer Auslöser, andere Tabelle, nur noch bedingt.
+    const neuAngelegt = (definition: string) => `DROP TRIGGER audit_logs_nur_anfuegen ON "audit_logs";\nCREATE TRIGGER audit_logs_nur_anfuegen ${definition};`;
+    const anderesEreignis = befundeZu(neuAngelegt('BEFORE INSERT ON "audit_logs" FOR EACH ROW EXECUTE FUNCTION audit_logs_nur_anfuegen()'));
+    assert.deepEqual(arten(anderesEreignis), [['trigger', 'audit_logs_nur_anfuegen']]);
+    assert.match(anderesEreignis[0]!.titel, /Auslöser „BEFORE INSERT FOR EACH ROW" statt „BEFORE UPDATE OR DELETE FOR EACH ROW"/);
+    const andereTabelle = befundeZu(neuAngelegt('BEFORE UPDATE OR DELETE ON "stock_movements" FOR EACH ROW EXECUTE FUNCTION audit_logs_nur_anfuegen()'));
+    assert.match(andereTabelle[0]?.titel ?? '', /Tabelle stock_movements statt audit_logs/);
+    const bedingt = befundeZu(neuAngelegt('BEFORE UPDATE OR DELETE ON "audit_logs" FOR EACH ROW WHEN (false) EXECUTE FUNCTION audit_logs_nur_anfuegen()'));
+    assert.match(bedingt[0]?.titel ?? '', /WHEN-Bedingung/);
+    // Die Reihenfolge der Ereignisse ist Schreibweise, keine Änderung.
+    assert.deepEqual(befundeZu(neuAngelegt('BEFORE DELETE OR UPDATE ON "audit_logs" FOR EACH ROW EXECUTE FUNCTION audit_logs_nur_anfuegen()')), []);
+
+    // Umgekehrt: ein falscher Registereintrag gegen unveränderte Migrationen.
+    const falsch: Schrankenregister = {
+      ...register,
+      triggerbindungen: { ...register.triggerbindungen, audit_logs_kein_leeren: { ...register.triggerbindungen.audit_logs_kein_leeren!, funktion: 'stock_movements_nur_anfuegen' } },
+    };
+    assert.match(blockierende(statischPruefen(migrationen, falsch))[0]?.titel ?? '', /Funktion audit_logs_nur_anfuegen statt stock_movements_nur_anfuegen/);
+
+    // Ein Kommentar ausserhalb eines Rumpfs definiert nichts.
+    assert.deepEqual(befundeZu('-- CREATE OR REPLACE FUNCTION audit_logs_nur_anfuegen() RETURNS trigger AS $$ BEGIN RETURN NEW; END; $$ LANGUAGE plpgsql;'), []);
+  });
+
+  it('ein Register mit Trigger ohne Bindung oder Bindung ohne Funktionsrumpf ist ein Formfehler', () => {
+    /*
+      Ein Formfehler und kein Befund, weil die Bindungsprüfung einen Trigger
+      ohne Eintrag sonst schlicht überginge — „nichts vermerkt, nichts
+      abweichend". Das Tor meldet einen Formfehler als NICHT GEPRÜFT (Exit 2).
+    */
+    const roh = JSON.parse(readFileSync(join(WURZEL, 'security', 'datenbank-schranken.json'), 'utf8')) as {
+      triggerbindungen: Record<string, Record<string, string>>;
+      funktionen: Record<string, string>;
+    };
+    const ordner = mkdtempSync(join(tmpdir(), 'clenaris-schranken-'));
+    try {
+      const lesen = (aendern: (r: typeof roh) => void) => {
+        const kopie = structuredClone(roh);
+        aendern(kopie);
+        const datei = join(ordner, 'register.json');
+        writeFileSync(datei, JSON.stringify(kopie));
+        return () => registerLesen(datei);
+      };
+      assert.doesNotThrow(lesen(() => undefined));
+      assert.throws(lesen((r) => delete r.triggerbindungen.audit_logs_nur_anfuegen), /audit_logs_nur_anfuegen" steht ohne Bindung/);
+      assert.throws(lesen((r) => (r.triggerbindungen.gibt_es_nicht = { ...r.triggerbindungen.audit_logs_nur_anfuegen! })), /gehört zu keinem Trigger/);
+      assert.throws(lesen((r) => delete r.funktionen.audit_logs_nur_anfuegen), /ruft „audit_logs_nur_anfuegen", die unter „funktionen" fehlt/);
+      assert.throws(lesen((r) => (r.triggerbindungen.audit_logs_nur_anfuegen!.ausloeser = 'BEFORE UPDATE')), /braucht tabelle, funktion und ausloeser/);
+      assert.throws(lesen((r) => (r.funktionen.audit_logs_nur_anfuegen = 'abc')), /SHA-256/);
+      assert.throws(
+        lesen((r) => delete (r as Partial<typeof roh>).funktionen),
+        /„funktionen" muss ein Objekt/,
+      );
+    } finally {
+      rmSync(ordner, { recursive: true, force: true });
+    }
+  });
+
+  it('der Auslöser aus pg_trigger.tgtype liest sich wie im Register', () => {
+    assert.equal(ausloeserAusTyp(27), 'BEFORE UPDATE OR DELETE FOR EACH ROW');
+    assert.equal(ausloeserAusTyp(31), 'BEFORE INSERT OR UPDATE OR DELETE FOR EACH ROW');
+    assert.equal(ausloeserAusTyp(19), 'BEFORE UPDATE FOR EACH ROW');
+    assert.equal(ausloeserAusTyp(34), 'BEFORE TRUNCATE FOR EACH STATEMENT');
+    assert.equal(ausloeserAusTyp(1 | 4), 'AFTER INSERT FOR EACH ROW');
+    assert.equal(ausloeserAusTyp(64 | 1 | 4), 'INSTEAD OF INSERT FOR EACH ROW');
+  });
+
   it('eine gelistete, aber fehlende Schranke ist auch in der Datenbank blockierend', async () => {
     for (const art of SCHRANKENARTEN) {
       const befunde = blockierende(await livePruefen(db!, mit(art, 'gibt_es_nicht'), schema()));
@@ -164,6 +272,95 @@ describe('Datenbankschranken — in der Datenbank', { concurrency: 1 }, () => {
     }
     const erweiterungen = await db!.$queryRaw<{ name: string }[]>`SELECT extname AS name FROM pg_extension`;
     for (const name of register.erweiterungen) assert.ok(erweiterungen.some((e) => e.name === name), `Erweiterung ${name} fehlt`);
+
+    // Bindung und Rumpf: Das Register stammt aus dem Text der Migrationen
+    // (in Node gehasht), die Datenbank hasht `prosrc` selbst — stimmen beide
+    // überein, lesen statische und Live-Prüfung wirklich denselben Rumpf.
+    const bindungen = await db!.$queryRaw<{ name: string; tabelle: string; funktion: string }[]>`
+      SELECT t.tgname AS name, c.relname AS tabelle, p.proname AS funktion
+      FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid JOIN pg_proc p ON p.oid = t.tgfoid WHERE NOT t.tgisinternal`;
+    for (const name of register.trigger) {
+      const z = bindungen.find((b) => b.name === name);
+      assert.equal(z?.tabelle, register.triggerbindungen[name]!.tabelle, `${name}: Tabelle`);
+      assert.equal(z?.funktion, register.triggerbindungen[name]!.funktion, `${name}: Funktion`);
+    }
+    const ruempfe = await db!.$queryRaw<{ name: string; pruefsumme: string }[]>`
+      SELECT p.proname AS name, encode(sha256(convert_to(replace(p.prosrc, chr(13), ''), 'UTF8')), 'hex') AS pruefsumme
+      FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = ${schema()}`;
+    for (const [name, pruefsumme] of Object.entries(register.funktionen)) {
+      assert.equal(ruempfe.find((r) => r.name === name)?.pruefsumme, pruefsumme, `Funktion ${name}: Rumpf in der Datenbank weicht vom Register ab`);
+    }
+  });
+
+  it('eine umgebaute Schutzfunktion, ein umgehängter oder eingeschränkter Trigger wird erkannt', async () => {
+    /*
+      Jeder Fall in einer eigenen, zurückgerollten Transaktion: Ein Trigger,
+      der hier umgebaut wird, darf den nächsten Fall nicht beeinflussen —
+      und erst recht nicht umgebaut zurückbleiben.
+    */
+    const fall = async (anweisungen: string[], erwartet: [Befundart, string], muster: RegExp) => {
+      await zurueckgerollt(async (tx) => {
+        for (const anweisung of anweisungen) await tx.$executeRawUnsafe(anweisung);
+        const befunde = blockierende(await livePruefen(tx, register, schema()));
+        assert.deepEqual(befunde.map((b) => [b.art, b.name]), [erwartet], JSON.stringify(befunde));
+        assert.match(befunde[0]!.titel, muster);
+      });
+    };
+    const neuAngelegt = (definition: string) => ['DROP TRIGGER audit_logs_nur_anfuegen ON audit_logs', `CREATE TRIGGER audit_logs_nur_anfuegen ${definition}`];
+
+    // Trigger da, eingeschaltet, richtig gebunden — die Funktion wirkungslos.
+    await fall(
+      ['CREATE OR REPLACE FUNCTION audit_logs_nur_anfuegen() RETURNS trigger AS $$ BEGIN RETURN COALESCE(NEW, OLD); END; $$ LANGUAGE plpgsql'],
+      ['funktionen', 'audit_logs_nur_anfuegen'],
+      /ist geändert/,
+    );
+    // Die Hilfsfunktion, die alle Rechnungen freigäbe.
+    await fall(
+      ['CREATE OR REPLACE FUNCTION bereinigung_freigegeben() RETURNS boolean AS $$ SELECT true $$ LANGUAGE sql STABLE'],
+      ['funktionen', 'bereinigung_freigegeben'],
+      /ist geändert/,
+    );
+    // Rumpf unverändert, aber der Schwärzungsschalter fest an der Funktion.
+    await fall([`ALTER FUNCTION audit_logs_nur_anfuegen() SET clenaris.audit_schwaerzung = 'on'`], ['funktionen', 'audit_logs_nur_anfuegen'], /eigene Einstellungen/);
+    // Derselbe Name, aber nur noch beim Anlegen.
+    await fall(
+      neuAngelegt('BEFORE INSERT ON audit_logs FOR EACH ROW EXECUTE FUNCTION audit_logs_nur_anfuegen()'),
+      ['trigger', 'audit_logs_nur_anfuegen'],
+      /Auslöser „BEFORE INSERT FOR EACH ROW"/,
+    );
+    // Auf eine andere Tabelle gehängt.
+    await fall(
+      [
+        'DROP TRIGGER audit_logs_kein_leeren ON audit_logs',
+        'CREATE TRIGGER audit_logs_kein_leeren BEFORE TRUNCATE ON stock_movements FOR EACH STATEMENT EXECUTE FUNCTION audit_logs_nur_anfuegen()',
+      ],
+      ['trigger', 'audit_logs_kein_leeren'],
+      /Tabelle stock_movements statt audit_logs/,
+    );
+    // Feuert nie oder nur bei einer Spalte, die niemand ändert.
+    await fall(
+      neuAngelegt('BEFORE UPDATE OR DELETE ON audit_logs FOR EACH ROW WHEN (false) EXECUTE FUNCTION audit_logs_nur_anfuegen()'),
+      ['trigger', 'audit_logs_nur_anfuegen'],
+      /WHEN-Bedingung/,
+    );
+    await fall(
+      neuAngelegt('BEFORE UPDATE OF "userAgent" OR DELETE ON audit_logs FOR EACH ROW EXECUTE FUNCTION audit_logs_nur_anfuegen()'),
+      ['trigger', 'audit_logs_nur_anfuegen'],
+      /Spaltenliste/,
+    );
+    // Eine gleichnamige, wirkungslose Funktion in einem anderen Schema.
+    await fall(
+      [
+        'CREATE SCHEMA pruef_schranken_fremd',
+        'CREATE FUNCTION pruef_schranken_fremd.audit_logs_nur_anfuegen() RETURNS trigger AS $$ BEGIN RETURN COALESCE(NEW, OLD); END; $$ LANGUAGE plpgsql',
+        ...neuAngelegt('BEFORE UPDATE OR DELETE ON audit_logs FOR EACH ROW EXECUTE FUNCTION pruef_schranken_fremd.audit_logs_nur_anfuegen()'),
+      ],
+      ['trigger', 'audit_logs_nur_anfuegen'],
+      /Schema pruef_schranken_fremd statt/,
+    );
+
+    // Nach allen Fällen: nichts zurückgeblieben.
+    assert.deepEqual(blockierende(await livePruefen(db!, register, schema())), []);
   });
 
   it('ein abgeschalteter Trigger wird erkannt', async () => {

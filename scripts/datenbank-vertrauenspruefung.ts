@@ -328,9 +328,12 @@ async function main(): Promise<void> {
      * fehlt oder abgeschaltet wurde: Wer die Datenbankrolle der Anwendung oder
      * den Host hatte, kann mit `ALTER TABLE audit_logs DISABLE TRIGGER …` das
      * Prüfprotokoll wieder änderbar machen, eine Spur löschen und den Trigger
-     * stehen lassen — dem Namen nach vorhanden, in der Wirkung weg. Dieselbe
-     * Prüfung wie das Datenbanktor (`scripts/datenbank-schranken.ts`), nur
-     * lesend über die Kataloge.
+     * stehen lassen — dem Namen nach vorhanden, in der Wirkung weg. Leiser
+     * noch: die Triggerfunktion durch ein `RETURN COALESCE(NEW, OLD)`
+     * ersetzen; Trigger und Schalter bleiben unberührt, nur der Rumpf ist
+     * ein anderer. Dieselbe Prüfung wie das Datenbanktor
+     * (`scripts/datenbank-schranken.ts`) — Bindung der Trigger, Prüfsumme
+     * jedes Funktionsrumpfs —, nur lesend über die Kataloge.
      */
     const schrankenBefunde = (await livePruefen(prisma, schranken, schemaAusAdresse(roh))).filter((b) => b.schwere === 'blockierend');
     abschnitte.push({
@@ -338,7 +341,7 @@ async function main(): Promise<void> {
       stufe: schrankenBefunde.length > 0 ? 'AUFFAELLIG' : 'OK',
       zusammenfassung:
         schrankenBefunde.length > 0
-          ? `${schrankenBefunde.length} Schranke(n) aus security/datenbank-schranken.json fehlen, sind abgeschaltet, ungültig oder nicht validiert — vor einer Übernahme klären, wann und von wem.`
+          ? `${schrankenBefunde.length} Schranke(n) aus security/datenbank-schranken.json fehlen, sind abgeschaltet, ungültig, nicht validiert oder umgebaut (Trigger anders gebunden, Funktionsrumpf geändert) — vor einer Übernahme klären, wann und von wem.`
           : `Jede Schranke aus security/datenbank-schranken.json ist vorhanden und wirksam (${registerZusammenfassung(schranken)}).`,
       zeilen: schrankenBefunde.map((b) => ({ art: b.art, name: b.name, befund: b.titel })),
     });

@@ -45,6 +45,10 @@
  *     wartet auf ihren Eintrag. Nicht blockierend, weil sie ja existiert —
  *     aber ohne Eintrag prüft sie die Live-Prüfung nicht, und sie fehlte
  *     danach unbemerkt.
+ *   • Bindung eines Triggers (Tabelle, Auslöser, Funktion) oder Prüfsumme
+ *     eines Funktionsrumpfs anders als im Register → **blockierend**: Die
+ *     Live-Prüfung misst gegen das Register, also muss es den Endstand der
+ *     Migrationen genau wiedergeben (Begründung weiter unten).
  *
  * **`livePruefen(db)`** fragt die Kataloge der Datenbank, nie nur Namen:
  *
@@ -52,7 +56,11 @@
  *     (`indpred`), gültig **und** bereit (`indisvalid`, `indisready`).
  *   • Trigger über `pg_trigger`: vorhanden, kein interner, und eingeschaltet
  *     (`tgenabled` `O` oder `A`). `D` ist abgeschaltet; `R` feuert nur im
- *     Replikationsmodus — also im Betrieb nie.
+ *     Replikationsmodus — also im Betrieb nie. Dazu die **Bindung**: Tabelle,
+ *     Auslöser (`tgtype`: Zeitpunkt, Ereignisse, Ebene), Funktion samt Schema,
+ *     und weder `WHEN`-Bedingung noch Spaltenliste.
+ *   • Funktionen über `pg_proc`: jede, die eine Migration anlegt, mit der
+ *     Prüfsumme ihres Rumpfs und ohne eigene Einstellungen (`proconfig`).
  *   • Bedingungen über `pg_constraint`: richtige Art (`c` bzw. `x`) und
  *     validiert (`convalidated`); bei Ausschlussbedingungen zusätzlich ein
  *     gültiger Index dahinter.
@@ -60,10 +68,48 @@
  *     Ausschlussbedingungen; fehlt sie in einer wiederhergestellten
  *     Datenbank, fehlen die Bedingungen mit.
  *
- * Nicht gelistete Trigger, Bedingungen und eindeutige Teilindizes in der
- * Datenbank sind eine **Warnung**: Die Vertrauensprüfung
+ * Nicht gelistete Trigger, Funktionen, Bedingungen und eindeutige
+ * Teilindizes in der Datenbank sind eine **Warnung**: Die Vertrauensprüfung
  * (`datenbank-vertrauenspruefung.ts`) bewertet fremde Objekte schärfer; hier
  * geht es darum, dass die gelisteten Regeln gelten.
+ *
+ * ---------------------------------------------------------------------------
+ *  Warum Bindung und Funktionsrumpf (2026-10-01)
+ * ---------------------------------------------------------------------------
+ *
+ * Bis hierher suchte die Live-Prüfung Trigger nur nach Namen und sah dann
+ * auf `tgisinternal` und `tgenabled`. Der billigste Weg, den Schutz des
+ * Prüfprotokolls auszuhebeln, liess das Tor grün: ein
+ * `CREATE OR REPLACE FUNCTION audit_logs_nur_anfuegen() … RETURN COALESCE(NEW, OLD)`
+ * — Trigger da, eingeschaltet, wirkungslos. Ebenso ein Trigger, der unter
+ * demselben Namen als `BEFORE INSERT` neu angelegt, auf eine andere Tabelle
+ * gehängt, mit `WHEN (false)` versehen oder auf eine gleichnamige Funktion in
+ * einem anderen Schema umgebogen wird. Und weil mehrere Schutzfunktionen
+ * Hilfsfunktionen rufen (`bereinigung_freigegeben()`,
+ * `vertragsfassung_ist_gesperrt()`), genügt es nicht, nur die direkt
+ * gebundene Funktion zu prüfen: Ein `SELECT true` in der Hilfsfunktion
+ * öffnete alle Rechnungen, ohne einen Trigger anzufassen. Deshalb trägt das
+ * Register **jede** Funktion, die eine Migration anlegt, mit SHA-256 ihres
+ * Rumpfs.
+ *
+ * Die Prüfsumme entsteht auf beiden Seiten aus demselben Text: statisch aus
+ * dem Rumpf zwischen den Dollar-Anführungszeichen der letzten Definition in
+ * den Migrationen, live aus `pg_proc.prosrc` — beides ohne Wagenrücklauf,
+ * damit ein Checkout mit CRLF nicht als Änderung zählt. SHA-256 statt MD5,
+ * weil `md5()` auf einem Server im FIPS-Modus verweigert wird und das Tor
+ * dort sonst „nicht geprüft" meldete. Ändert eine neue Migration eine
+ * Schutzfunktion, meldet die statische Prüfung die neue Prüfsumme als
+ * blockierend; nachgeführt wird sie erst nach der Durchsicht — genau die
+ * Stelle, an der jemand hinsehen soll.
+ *
+ * Was weiterhin nur nach Name, Art und Gültigkeit geprüft wird: die
+ * **Definition** von Prüf- und Ausschlussbedingungen und die Bedingung eines
+ * Teilindex. Ein `DROP CONSTRAINT x; ADD CONSTRAINT x CHECK (true)` bliebe
+ * hier unbemerkt. `pg_get_constraintdef()` und `pg_get_expr()` geben einen
+ * vom Server normalisierten Ausdruck zurück, dessen Schreibweise zwischen
+ * Postgres-Fassungen wechseln kann; eine Prüfsumme darüber schlüge beim
+ * nächsten Serverwechsel ohne jede Änderung an. Das bleibt eine offene
+ * Pendenz, keine stillschweigende Annahme.
  *
  * ---------------------------------------------------------------------------
  *  Abhängigkeiten
@@ -78,6 +124,7 @@
  * Trigger abschaltet und danach zurückrollt.
  */
 
+import { createHash } from 'node:crypto';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -85,19 +132,45 @@ import type { Prisma } from '@prisma/client';
 
 export const SCHRANKENARTEN = ['teilindizes', 'trigger', 'pruefbedingungen', 'ausschlussbedingungen', 'erweiterungen'] as const;
 export type Schrankenart = (typeof SCHRANKENARTEN)[number];
-export type Schrankenregister = Record<Schrankenart, string[]>;
 
-export const BEZEICHNUNG: Record<Schrankenart, string> = {
+/**
+ * Wie ein Trigger gebunden ist — was ihn zu **dieser** Schranke macht, statt
+ * bloss zu einem Objekt mit ihrem Namen.
+ */
+export interface Triggerbindung {
+  /** Die Tabelle, auf der er sitzt. */
+  tabelle: string;
+  /** Zeitpunkt, Ereignisse und Ebene in fester Schreibweise, etwa „BEFORE UPDATE OR DELETE FOR EACH ROW". */
+  ausloeser: string;
+  /** Die Triggerfunktion; ihr Rumpf steht unter `funktionen`. */
+  funktion: string;
+}
+
+/**
+ * Das Register: je Art eine Liste von Namen (`teilindizes` und `trigger`
+ * lesen auch andere Werkzeuge als blosse Namen), dazu je Trigger seine
+ * Bindung und je Funktion die SHA-256-Prüfsumme ihres Rumpfs.
+ */
+export type Schrankenregister = Record<Schrankenart, string[]> & {
+  triggerbindungen: Record<string, Triggerbindung>;
+  funktionen: Record<string, string>;
+};
+
+/** Die Arten, unter denen ein Befund erscheint — die fünf Listen und die Funktionen. */
+export type Befundart = Schrankenart | 'funktionen';
+
+export const BEZEICHNUNG: Record<Befundart, string> = {
   teilindizes: 'Teilindex',
   trigger: 'Trigger',
   pruefbedingungen: 'Prüfbedingung (CHECK)',
   ausschlussbedingungen: 'Ausschlussbedingung (EXCLUDE)',
   erweiterungen: 'Erweiterung',
+  funktionen: 'Funktion',
 };
 
 export interface Schrankenbefund {
   schwere: 'blockierend' | 'warnung';
-  art: Schrankenart;
+  art: Befundart;
   name: string;
   titel: string;
 }
@@ -105,16 +178,31 @@ export interface Schrankenbefund {
 /** Der Pfad des Registers, wie er in Meldungen steht (relativ zur Wurzel, mit `/`). */
 export const REGISTER_DATEI = 'security/datenbank-schranken.json';
 
+/** Die feste Schreibweise eines Auslösers — dieselbe, die `ausloeserText` bildet. */
+const AUSLOESER_MUSTER = /^(BEFORE|AFTER|INSTEAD OF) (INSERT|UPDATE|DELETE|TRUNCATE)( OR (INSERT|UPDATE|DELETE|TRUNCATE))* FOR EACH (ROW|STATEMENT)$/;
+
+function istObjekt(wert: unknown): wert is Record<string, unknown> {
+  return typeof wert === 'object' && wert !== null && !Array.isArray(wert);
+}
+
+/** Eigene Eigenschaft, nicht geerbte — ein Trigger namens `constructor` soll nicht „gelistet" sein. */
+function hat(objekt: object, schluessel: string): boolean {
+  return Object.prototype.hasOwnProperty.call(objekt, schluessel);
+}
+
 /**
  * Das Register lesen und seine Form prüfen.
  *
  * Eine fehlende oder falsch geschriebene Liste ist ein Fehler, keine leere
  * Liste: `"trigger": null` oder ein Tippfehler im Schlüssel liesse sonst
- * jede Prüfung mit „nichts gelistet, nichts fehlt" bestehen.
+ * jede Prüfung mit „nichts gelistet, nichts fehlt" bestehen. Dasselbe gilt
+ * für die Bindungen: Ein gelisteter Trigger ohne Bindung würde von der
+ * Bindungsprüfung schlicht übergangen — also ist er ein Formfehler, ebenso
+ * eine Bindung ohne Trigger und eine gebundene Funktion ohne Prüfsumme.
  */
 export function registerLesen(datei = join(process.cwd(), 'security', 'datenbank-schranken.json')): Schrankenregister {
   const roh = JSON.parse(readFileSync(datei, 'utf8')) as Record<string, unknown>;
-  const register = {} as Schrankenregister;
+  const register = { triggerbindungen: {}, funktionen: {} } as unknown as Schrankenregister;
   for (const art of SCHRANKENARTEN) {
     const liste = roh[art];
     if (!Array.isArray(liste) || liste.some((n) => typeof n !== 'string' || !/^[A-Za-z0-9_-]+$/.test(n))) {
@@ -123,6 +211,40 @@ export function registerLesen(datei = join(process.cwd(), 'security', 'datenbank
     const doppelt = liste.filter((n, i) => liste.indexOf(n) !== i);
     if (doppelt.length > 0) throw new Error(`${REGISTER_DATEI}: „${art}" nennt doppelt: ${doppelt.join(', ')}.`);
     register[art] = [...(liste as string[])];
+  }
+
+  const funktionen = roh.funktionen;
+  if (!istObjekt(funktionen)) throw new Error(`${REGISTER_DATEI}: „funktionen" muss ein Objekt Name → SHA-256 des Rumpfs sein.`);
+  for (const [name, pruefsumme] of Object.entries(funktionen)) {
+    if (!/^\w+$/.test(name) || typeof pruefsumme !== 'string' || !/^[0-9a-f]{64}$/.test(pruefsumme)) {
+      throw new Error(`${REGISTER_DATEI}: Funktion „${name}" braucht eine SHA-256-Prüfsumme (64 Hexadezimalzeichen, klein).`);
+    }
+    register.funktionen[name] = pruefsumme;
+  }
+
+  const bindungen = roh.triggerbindungen;
+  if (!istObjekt(bindungen)) throw new Error(`${REGISTER_DATEI}: „triggerbindungen" muss ein Objekt Triggername → Bindung sein.`);
+  const gelistet = new Set(register.trigger);
+  for (const name of register.trigger) {
+    if (!hat(bindungen, name)) throw new Error(`${REGISTER_DATEI}: Trigger „${name}" steht ohne Bindung in „triggerbindungen".`);
+  }
+  for (const [name, bindung] of Object.entries(bindungen)) {
+    if (!gelistet.has(name)) throw new Error(`${REGISTER_DATEI}: Bindung „${name}" gehört zu keinem Trigger aus der Liste „trigger".`);
+    if (
+      !istObjekt(bindung) ||
+      typeof bindung.tabelle !== 'string' ||
+      !/^\w+$/.test(bindung.tabelle) ||
+      typeof bindung.funktion !== 'string' ||
+      !/^\w+$/.test(bindung.funktion) ||
+      typeof bindung.ausloeser !== 'string' ||
+      !AUSLOESER_MUSTER.test(bindung.ausloeser)
+    ) {
+      throw new Error(`${REGISTER_DATEI}: Bindung „${name}" braucht tabelle, funktion und ausloeser (etwa „BEFORE UPDATE OR DELETE FOR EACH ROW").`);
+    }
+    if (!hat(register.funktionen, bindung.funktion)) {
+      throw new Error(`${REGISTER_DATEI}: Trigger „${name}" ruft „${bindung.funktion}", die unter „funktionen" fehlt — ihr Rumpf bliebe ungeprüft.`);
+    }
+    register.triggerbindungen[name] = { tabelle: bindung.tabelle, ausloeser: bindung.ausloeser, funktion: bindung.funktion };
   }
   return register;
 }
@@ -186,7 +308,7 @@ const MUSTER: { re: RegExp; art: Ereignis['art']; anlegen: boolean }[] = [
  * sortiert, damit ein Vergleich mit dem Register nicht an der Reihenfolge
  * hängt.
  */
-export function schrankenAusMigrationen(sql: string): Schrankenregister {
+export function schrankenAusMigrationen(sql: string): Record<Schrankenart, string[]> {
   const rein = ohneKommentare(sql);
   const ereignisse: Ereignis[] = [];
   for (const { re, art, anlegen } of MUSTER) {
@@ -212,7 +334,166 @@ export function schrankenAusMigrationen(sql: string): Schrankenregister {
       stand[e.art].delete(e.name);
     }
   }
-  return Object.fromEntries(SCHRANKENARTEN.map((art) => [art, [...stand[art]].sort()])) as Schrankenregister;
+  return Object.fromEntries(SCHRANKENARTEN.map((art) => [art, [...stand[art]].sort()])) as Record<Schrankenart, string[]>;
+}
+
+// ---------------------------------------------------------------------------
+//  Bindung der Trigger und Rümpfe der Funktionen
+// ---------------------------------------------------------------------------
+
+const EREIGNISREIHE = ['INSERT', 'UPDATE', 'DELETE', 'TRUNCATE'] as const;
+
+/** Ein Auslöser in fester Schreibweise — Reihenfolge der Ereignisse wie `EREIGNISREIHE`, nicht wie geschrieben. */
+function ausloeserText(zeitpunkt: string, ereignisse: Iterable<string>, ebene: 'ROW' | 'STATEMENT'): string {
+  const menge = new Set(ereignisse);
+  return `${zeitpunkt} ${EREIGNISREIHE.filter((e) => menge.has(e)).join(' OR ')} FOR EACH ${ebene}`;
+}
+
+/**
+ * `pg_trigger.tgtype` in derselben Schreibweise wie das Register. Die Bits
+ * stehen in `src/include/catalog/pg_trigger.h` von Postgres: 1 je Zeile,
+ * 2 BEFORE, 4 INSERT, 8 DELETE, 16 UPDATE, 32 TRUNCATE, 64 INSTEAD OF —
+ * seit Postgres 9 unverändert.
+ */
+export function ausloeserAusTyp(typ: number): string {
+  const zeitpunkt = typ & 64 ? 'INSTEAD OF' : typ & 2 ? 'BEFORE' : 'AFTER';
+  const bits: [number, string][] = [
+    [4, 'INSERT'],
+    [16, 'UPDATE'],
+    [8, 'DELETE'],
+    [32, 'TRUNCATE'],
+  ];
+  return ausloeserText(
+    zeitpunkt,
+    bits.filter(([bit]) => typ & bit).map(([, ereignis]) => ereignis),
+    typ & 1 ? 'ROW' : 'STATEMENT',
+  );
+}
+
+/** Ein Trigger, wie ihn die letzte `CREATE TRIGGER`-Anweisung der Migrationen anlegt. */
+export interface Triggerdefinition extends Triggerbindung {
+  /** Mit `WHEN (…)` oder `UPDATE OF spalte` — feuert nur noch teilweise; das Register bildet das nicht ab. */
+  eingeschraenkt: boolean;
+}
+
+/*
+  Jeder Trigger dieses Repositorys steht in genau dieser Form da:
+  `CREATE TRIGGER name BEFORE … ON "tabelle" FOR EACH ROW EXECUTE FUNCTION f();`
+  `[^;]` hält jede Gruppe in derselben Anweisung. Eine Form, die das Muster
+  nicht liest (etwa ein `CONSTRAINT TRIGGER`), fehlt in der Abbildung und
+  meldet sich als „nicht lesbar" — blockierend, nicht still übergangen.
+*/
+const TRIGGER_DEFINITION =
+  /\bCREATE\s+(?:OR\s+REPLACE\s+)?TRIGGER\s+"?(\w+)"?\s+(BEFORE|AFTER|INSTEAD\s+OF)\s+([^;]+?)\s+ON\s+(?:"?\w+"?\.)?"?(\w+)"?([^;]*?)\bEXECUTE\s+(?:FUNCTION|PROCEDURE)\s+(?:"?\w+"?\.)?"?(\w+)"?\s*\(/gi;
+const TRIGGER_ENTFERNEN = /\bDROP\s+TRIGGER\s+(?:IF\s+EXISTS\s+)?"?(\w+)"?/gi;
+
+/** Die Definition jedes Triggers im Endstand der Migrationen, nach Namen. */
+export function triggerAusMigrationen(sql: string): Map<string, Triggerdefinition> {
+  const rein = ohneKommentare(sql);
+  const schritte: { stelle: number; name: string; definition: Triggerdefinition | null }[] = [];
+  for (const m of rein.matchAll(TRIGGER_DEFINITION)) {
+    const [, name, zeitpunkt, ereignistext, tabelle, rest, funktion] = m as unknown as string[];
+    const ereignisse = ereignistext!.split(/\s+OR\s+/i).map((e) => e.trim().split(/\s+/)[0]!.toUpperCase());
+    schritte.push({
+      stelle: m.index ?? 0,
+      name: name!,
+      definition: {
+        tabelle: tabelle!,
+        ausloeser: ausloeserText(zeitpunkt!.toUpperCase().replace(/\s+/g, ' '), ereignisse, /\bFOR\s+EACH\s+ROW\b/i.test(rest!) ? 'ROW' : 'STATEMENT'),
+        funktion: funktion!,
+        eingeschraenkt: /\bWHEN\b/i.test(rest!) || /\bUPDATE\s+OF\b/i.test(ereignistext!),
+      },
+    });
+  }
+  for (const m of rein.matchAll(TRIGGER_ENTFERNEN)) schritte.push({ stelle: m.index ?? 0, name: m[1]!, definition: null });
+  schritte.sort((a, b) => a.stelle - b.stelle);
+
+  const stand = new Map<string, Triggerdefinition>();
+  for (const s of schritte) {
+    if (s.definition) stand.set(s.name, s.definition);
+    else stand.delete(s.name);
+  }
+  return stand;
+}
+
+/**
+ * Kommentare entfernen, Anführungen **wörtlich** lassen. `ohneKommentare`
+ * genügt für Namen, aber nicht für Funktionsrümpfe: Es entfernte auch die
+ * `--`-Zeilen **innerhalb** eines Rumpfs, und die gehören zu `prosrc` — die
+ * Prüfsumme stimmte dann nie mit der Datenbank überein. Hier wird deshalb
+ * gelesen wie Postgres liest: Was in `'…'`, `"…"` oder `$marke$…$marke$`
+ * steht, bleibt unangetastet, und nur ausserhalb davon zählt `--` oder `/*`
+ * als Kommentar.
+ */
+function ohneKommentareRuempfeWoertlich(sql: string): string {
+  const teile: string[] = [];
+  let i = 0;
+  while (i < sql.length) {
+    const zeichen = sql[i]!;
+    if (zeichen === '-' && sql[i + 1] === '-') {
+      const ende = sql.indexOf('\n', i);
+      i = ende === -1 ? sql.length : ende;
+      continue;
+    }
+    if (zeichen === '/' && sql[i + 1] === '*') {
+      const ende = sql.indexOf('*/', i + 2);
+      i = ende === -1 ? sql.length : ende + 2;
+      teile.push(' ');
+      continue;
+    }
+    const marke =
+      zeichen === "'" || zeichen === '"' ? zeichen : zeichen === '$' ? (/^\$(?:[A-Za-z_]\w*)?\$/.exec(sql.slice(i, i + 66))?.[0] ?? null) : null;
+    if (marke) {
+      // Ein verdoppeltes `''` in einer Zeichenkette endet hier und beginnt
+      // gleich wieder — kopiert wird beides wörtlich, das Ergebnis ist dasselbe.
+      const ende = sql.indexOf(marke, i + marke.length);
+      const bis = ende === -1 ? sql.length : ende + marke.length;
+      teile.push(sql.slice(i, bis));
+      i = bis;
+      continue;
+    }
+    teile.push(zeichen);
+    i++;
+  }
+  return teile.join('');
+}
+
+const FUNKTION_DEFINITION =
+  /\bCREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+(?:"?\w+"?\.)?"?(\w+)"?\s*\([^)]*\)[^$;]*?\bAS\s+(\$(?:[A-Za-z_]\w*)?\$)([\s\S]*?)\2/gi;
+const FUNKTION_ENTFERNEN = /\bDROP\s+FUNCTION\s+(?:IF\s+EXISTS\s+)?(?:"?\w+"?\.)?"?(\w+)"?/gi;
+
+/**
+ * SHA-256 eines Funktionsrumpfs, ohne Wagenrücklauf — derselbe Wert, den
+ * `livePruefen` aus `pg_proc.prosrc` bildet
+ * (`encode(sha256(convert_to(replace(prosrc, chr(13), ''), 'UTF8')), 'hex')`).
+ */
+export function rumpfPruefsumme(rumpf: string): string {
+  return createHash('sha256').update(rumpf.replace(/\r/g, ''), 'utf8').digest('hex');
+}
+
+/** Jede Funktion im Endstand der Migrationen mit der Prüfsumme ihrer letzten Definition. */
+export function funktionenAusMigrationen(sql: string): Map<string, string> {
+  const rein = ohneKommentareRuempfeWoertlich(sql);
+  const schritte: { stelle: number; name: string; pruefsumme: string | null }[] = [];
+  for (const m of rein.matchAll(FUNKTION_DEFINITION)) schritte.push({ stelle: m.index ?? 0, name: m[1]!, pruefsumme: rumpfPruefsumme(m[3]!) });
+  for (const m of rein.matchAll(FUNKTION_ENTFERNEN)) schritte.push({ stelle: m.index ?? 0, name: m[1]!, pruefsumme: null });
+  schritte.sort((a, b) => a.stelle - b.stelle);
+
+  const stand = new Map<string, string>();
+  for (const s of schritte) {
+    if (s.pruefsumme) stand.set(s.name, s.pruefsumme);
+    else stand.delete(s.name);
+  }
+  return stand;
+}
+
+/** Was an einer Bindung abweicht, in Worten — leer, wenn nichts. */
+function bindungsabweichungen(soll: Triggerbindung, ist: Triggerbindung): string[] {
+  const abweichungen: string[] = [];
+  if (ist.tabelle !== soll.tabelle) abweichungen.push(`Tabelle ${ist.tabelle} statt ${soll.tabelle}`);
+  if (ist.ausloeser !== soll.ausloeser) abweichungen.push(`Auslöser „${ist.ausloeser}" statt „${soll.ausloeser}"`);
+  if (ist.funktion !== soll.funktion) abweichungen.push(`Funktion ${ist.funktion} statt ${soll.funktion}`);
+  return abweichungen;
 }
 
 /** Register gegen den Endstand der Migrationen — die Regeln im Kopf dieser Datei. */
@@ -241,6 +522,63 @@ export function statischPruefen(sql: string, register: Schrankenregister = regis
           titel: `${BEZEICHNUNG[art]} „${name}" entsteht in den Migrationen, steht aber nicht in ${REGISTER_DATEI}.`,
         });
       }
+    }
+  }
+
+  // --- Trigger: Bindung wie im Register -------------------------------------
+  // Nur für Trigger, die es im Endstand gibt — ein fehlender ist oben schon
+  // blockierend gemeldet, und ein zweiter Befund zum selben Fehlen verwirrte.
+  const vorhandeneTrigger = new Set(endstand.trigger);
+  const definitionen = triggerAusMigrationen(sql);
+  for (const name of register.trigger) {
+    if (!vorhandeneTrigger.has(name)) continue;
+    const soll = hat(register.triggerbindungen, name) ? register.triggerbindungen[name] : undefined;
+    const ist = definitionen.get(name);
+    if (!soll) {
+      befunde.push({ schwere: 'blockierend', art: 'trigger', name, titel: `Trigger „${name}" steht ohne Bindung (Tabelle, Auslöser, Funktion) in ${REGISTER_DATEI}.` });
+      continue;
+    }
+    if (!ist) {
+      befunde.push({
+        schwere: 'blockierend',
+        art: 'trigger',
+        name,
+        titel: `Trigger „${name}": Seine Anweisung in den Migrationen ist nicht lesbar (erwartet CREATE TRIGGER … ON … EXECUTE FUNCTION …()) — die Bindung bleibt sonst ungeprüft.`,
+      });
+      continue;
+    }
+    const abweichungen = bindungsabweichungen(soll, ist);
+    if (ist.eingeschraenkt) abweichungen.push('WHEN-Bedingung oder Spaltenliste (UPDATE OF), die das Register nicht abbildet');
+    if (abweichungen.length > 0) {
+      befunde.push({ schwere: 'blockierend', art: 'trigger', name, titel: `Trigger „${name}" in den Migrationen weicht vom Register ab: ${abweichungen.join('; ')}.` });
+    }
+  }
+
+  // --- Funktionen: Rumpf wie im Register ------------------------------------
+  const funktionen = funktionenAusMigrationen(sql);
+  for (const [name, soll] of Object.entries(register.funktionen)) {
+    const ist = funktionen.get(name);
+    if (ist === undefined) {
+      befunde.push({
+        schwere: 'blockierend',
+        art: 'funktionen',
+        name,
+        titel: `Funktion „${name}" steht im Register, entsteht aber in keiner Migration (oder wird später wieder entfernt).`,
+      });
+    } else if (ist !== soll) {
+      befunde.push({
+        schwere: 'blockierend',
+        art: 'funktionen',
+        name,
+        titel:
+          `Funktion „${name}": Ihr Rumpf in den Migrationen (sha256 ${ist}) weicht vom Register ab (${soll}). ` +
+          `Eine Migration ändert eine Funktion, auf der eine Schranke ruht — die Änderung durchsehen und erst dann die Prüfsumme in ${REGISTER_DATEI} nachführen.`,
+      });
+    }
+  }
+  for (const name of funktionen.keys()) {
+    if (!hat(register.funktionen, name)) {
+      befunde.push({ schwere: 'warnung', art: 'funktionen', name, titel: `Funktion „${name}" entsteht in den Migrationen, steht aber nicht in ${REGISTER_DATEI}.` });
     }
   }
   return befunde;
@@ -281,6 +619,17 @@ interface TriggerZeile {
   tabelle: string;
   intern: boolean;
   zustand: string;
+  typ: number;
+  eingeschraenkt: boolean;
+  funktion: string;
+  funktionSchema: string;
+}
+
+interface FunktionZeile {
+  name: string;
+  signatur: string;
+  pruefsumme: string | null;
+  konfiguriert: boolean;
 }
 
 interface BedingungZeile {
@@ -302,12 +651,28 @@ export async function livePruefen(db: Katalogleser, register: Schrankenregister,
     JOIN pg_class ic ON ic.oid = ix.indexrelid
     JOIN pg_namespace n ON n.oid = ic.relnamespace
     WHERE n.nspname = ${schema}`;
+  // `tgattr` ist ein int2vector; erst als Feld lässt sich zählen, ob der
+  // Trigger auf eine Spaltenliste (`UPDATE OF …`) beschränkt ist.
   const trigger = await db.$queryRaw<TriggerZeile[]>`
-    SELECT t.tgname AS name, c.relname AS tabelle, t.tgisinternal AS intern, t.tgenabled::text AS zustand
+    SELECT t.tgname AS name, c.relname AS tabelle, t.tgisinternal AS intern, t.tgenabled::text AS zustand,
+           t.tgtype::int AS typ, (t.tgqual IS NOT NULL OR cardinality(t.tgattr::int2[]) > 0) AS eingeschraenkt,
+           p.proname AS funktion, fn.nspname AS "funktionSchema"
     FROM pg_trigger t
     JOIN pg_class c ON c.oid = t.tgrelid
     JOIN pg_namespace n ON n.oid = c.relnamespace
+    JOIN pg_proc p ON p.oid = t.tgfoid
+    JOIN pg_namespace fn ON fn.oid = p.pronamespace
     WHERE n.nspname = ${schema}`;
+  // Funktionen von Erweiterungen (btree_gist legt Dutzende an) gehören nicht
+  // zum Schema dieser Anwendung und blieben sonst als „nicht gelistet" stehen.
+  const funktionen = await db.$queryRaw<FunktionZeile[]>`
+    SELECT p.proname AS name, p.oid::regprocedure::text AS signatur,
+           encode(sha256(convert_to(replace(p.prosrc, chr(13), ''), 'UTF8')), 'hex') AS pruefsumme,
+           (p.proconfig IS NOT NULL) AS konfiguriert
+    FROM pg_proc p
+    JOIN pg_namespace n ON n.oid = p.pronamespace
+    WHERE n.nspname = ${schema}
+      AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.classid = 'pg_proc'::regclass AND d.objid = p.oid AND d.deptype = 'e')`;
   const bedingungen = await db.$queryRaw<BedingungZeile[]>`
     SELECT con.conname AS name, c.relname AS tabelle, con.contype::text AS art, con.convalidated AS validiert,
            ix.indisvalid AS "indexGueltig"
@@ -321,8 +686,8 @@ export async function livePruefen(db: Katalogleser, register: Schrankenregister,
   );
 
   const befunde: Schrankenbefund[] = [];
-  const blockierend = (art: Schrankenart, name: string, titel: string) => befunde.push({ schwere: 'blockierend', art, name, titel });
-  const warnung = (art: Schrankenart, name: string, titel: string) => befunde.push({ schwere: 'warnung', art, name, titel });
+  const blockierend = (art: Befundart, name: string, titel: string) => befunde.push({ schwere: 'blockierend', art, name, titel });
+  const warnung = (art: Befundart, name: string, titel: string) => befunde.push({ schwere: 'warnung', art, name, titel });
 
   // --- Teilindizes ----------------------------------------------------------
   const indexNach = new Map(indizes.map((i) => [i.name, i]));
@@ -352,8 +717,11 @@ export async function livePruefen(db: Katalogleser, register: Schrankenregister,
       continue;
     }
     for (const t of treffer) {
-      if (t.intern) blockierend('trigger', name, `Trigger ${name} auf ${t.tabelle} ist ein interner Trigger — nicht die handgeschriebene Schranke.`);
-      else if (!AKTIV.has(t.zustand)) {
+      if (t.intern) {
+        blockierend('trigger', name, `Trigger ${name} auf ${t.tabelle} ist ein interner Trigger — nicht die handgeschriebene Schranke.`);
+        continue;
+      }
+      if (!AKTIV.has(t.zustand)) {
         blockierend(
           'trigger',
           name,
@@ -362,11 +730,51 @@ export async function livePruefen(db: Katalogleser, register: Schrankenregister,
             : `Trigger ${name} auf ${t.tabelle} feuert nur im Replikationsmodus (tgenabled=${t.zustand}) — im Betrieb also nie.`,
         );
       }
+      // Die Bindung unabhängig vom Zustand: Ein abgeschalteter **und**
+      // umgehängter Trigger hat zwei Befunde, und beide gehören behoben.
+      const soll = hat(register.triggerbindungen, name) ? register.triggerbindungen[name] : undefined;
+      if (!soll) {
+        blockierend('trigger', name, `Trigger ${name} steht ohne Bindung (Tabelle, Auslöser, Funktion) im Register — seine Wirkung bleibt ungeprüft.`);
+        continue;
+      }
+      const abweichungen = bindungsabweichungen(soll, { tabelle: t.tabelle, ausloeser: ausloeserAusTyp(t.typ), funktion: t.funktion });
+      if (t.funktionSchema !== schema) abweichungen.push(`Funktion aus dem Schema ${t.funktionSchema} statt ${schema}`);
+      if (t.eingeschraenkt) abweichungen.push('WHEN-Bedingung oder Spaltenliste (UPDATE OF), die ihn nur noch teilweise feuern lässt');
+      if (abweichungen.length > 0) {
+        blockierend('trigger', name, `Trigger ${name} ist umgebaut: ${abweichungen.join('; ')} — die Regel gilt nicht mehr so, wie die Migration sie anlegt.`);
+      }
     }
   }
   const gelisteteTrigger = new Set(register.trigger);
   for (const t of trigger) {
     if (!t.intern && !gelisteteTrigger.has(t.name)) warnung('trigger', t.name, `Trigger ${t.name} auf ${t.tabelle} steht nicht im Register.`);
+  }
+
+  // --- Funktionen -----------------------------------------------------------
+  // Gleichnamige Überladungen werden einzeln geprüft: Eine zusätzliche
+  // Fassung mit anderem Rumpf ist ebenso unerwartet wie eine geänderte.
+  for (const [name, soll] of Object.entries(register.funktionen)) {
+    const zeilen = funktionen.filter((f) => f.name === name);
+    if (zeilen.length === 0) blockierend('funktionen', name, `Funktion fehlt in der Datenbank: ${name}`);
+    for (const f of zeilen) {
+      if (f.pruefsumme !== soll) {
+        blockierend(
+          'funktionen',
+          name,
+          `Funktion ${f.signatur} ist geändert — ihr Rumpf weicht vom Register ab (etwa CREATE OR REPLACE FUNCTION nach der Migration); die Schranke, die auf ihr ruht, gilt nicht mehr so, wie die Migration sie anlegt.`,
+        );
+      }
+      if (f.konfiguriert) {
+        blockierend(
+          'funktionen',
+          name,
+          `Funktion ${f.signatur} trägt eigene Einstellungen (ALTER FUNCTION … SET) — ein Schalter wie clenaris.audit_schwaerzung gälte darin bei jedem Aufruf.`,
+        );
+      }
+    }
+  }
+  for (const f of funktionen) {
+    if (!hat(register.funktionen, f.name)) warnung('funktionen', f.name, `Funktion ${f.signatur} steht nicht im Register.`);
   }
 
   // --- Prüf- und Ausschlussbedingungen --------------------------------------
@@ -401,14 +809,16 @@ export async function livePruefen(db: Katalogleser, register: Schrankenregister,
   return befunde;
 }
 
-/** Eine Zeile je Art für die Ausgabe: „13 Teilindizes · 20 Trigger · …". */
+/** Eine Zeile je Art für die Ausgabe: „13 Teilindizes · 20 Trigger · … · 19 Funktionen". */
 export function registerZusammenfassung(register: Schrankenregister): string {
-  const woerter: Record<Schrankenart, [string, string]> = {
+  const woerter: Record<Befundart, [string, string]> = {
     teilindizes: ['Teilindex', 'Teilindizes'],
     trigger: ['Trigger', 'Trigger'],
     pruefbedingungen: ['Prüfbedingung', 'Prüfbedingungen'],
     ausschlussbedingungen: ['Ausschlussbedingung', 'Ausschlussbedingungen'],
     erweiterungen: ['Erweiterung', 'Erweiterungen'],
+    funktionen: ['Funktion', 'Funktionen'],
   };
-  return SCHRANKENARTEN.map((art) => `${register[art].length} ${woerter[art][register[art].length === 1 ? 0 : 1]}`).join(' · ');
+  const anzahl = (art: Befundart) => (art === 'funktionen' ? Object.keys(register.funktionen).length : register[art].length);
+  return [...SCHRANKENARTEN, 'funktionen' as const].map((art) => `${anzahl(art)} ${woerter[art][anzahl(art) === 1 ? 0 : 1]}`).join(' · ');
 }
