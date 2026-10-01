@@ -1,4 +1,7 @@
 import type { NextConfig } from 'next';
+import { PHASE_DEVELOPMENT_SERVER } from 'next/constants';
+
+import { inhaltsrichtlinie } from './src/lib/security/inhaltsrichtlinie';
 
 /**
  * Architekturentscheid:
@@ -7,55 +10,11 @@ import type { NextConfig } from 'next';
  *   in der Node.js-Runtime der Route Handler, niemals in der Edge-Runtime.
  * - Security-Header werden zentral hier gesetzt, damit sie für statische Assets,
  *   Server Components und Route Handler gleichermassen gelten (Defense in Depth
- *   zusätzlich zu Cloudflare).
+ *   zusätzlich zu Cloudflare). Die Inhaltsrichtlinie selbst entsteht in
+ *   `src/lib/security/inhaltsrichtlinie.ts` — dort steht zu jeder Quelle, wer
+ *   sie braucht, und dort wird sie ohne Server geprüft.
  */
-const cspDirectives = [
-  "default-src 'self'",
-  // Google Maps + Stripe + Analytics benötigen externe Skripte.
-  "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://maps.googleapis.com https://js.stripe.com https://www.googletagmanager.com https://connect.facebook.net",
-  "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
-  "font-src 'self' https://fonts.gstatic.com data:",
-  "img-src 'self' data: blob: https://*.supabase.co https://maps.gstatic.com https://maps.googleapis.com https://*.googleapis.com https://www.google-analytics.com",
-  "connect-src 'self' https://*.supabase.co https://api.stripe.com https://maps.googleapis.com https://www.google-analytics.com wss://*.supabase.co",
-  "frame-src 'self' https://js.stripe.com https://hooks.stripe.com https://www.google.com",
-  "object-src 'none'",
-  "base-uri 'self'",
-  "form-action 'self'",
-  /**
-   * `'self'` statt `'none'`.
-   *
-   * Die Redaktionsmaske zeigt die echte Website in einem Rahmen, damit eine
-   * Änderung dort geprüft werden kann, wo sie erscheint. Mit `'none'` wäre das
-   * unmöglich — und eine nachgebaute Vorschau wäre schlechter als keine, weil
-   * sie bei jeder Layoutänderung still falsch würde.
-   *
-   * Der Schutz bleibt vollständig: Gegen Clickjacking hilft, dass *fremde*
-   * Seiten diese Anwendung nicht einbetten dürfen, und genau das sagt
-   * `'self'` weiterhin. Eine Seite, die sich selbst einbettet, kann ihre
-   * eigenen Besucher nicht täuschen.
-   */
-  "frame-ancestors 'self'",
-  /*
-   * Kein `upgrade-insecure-requests` mehr (seit 2026-09-28).
-   *
-   * Die Anweisung schreibt jede Unteranfrage von `http:` auf `https:` um. Auf
-   * einem Server, der selbst über `http` ausliefert — Testserver, Vorschau im
-   * lokalen Netz —, tut WebKit das auch für `127.0.0.1` und `localhost`
-   * (Chromium und Firefox nehmen die Rückschleife aus). Gemessen mit
-   * Playwright: CSS, JavaScript und alle Bilder scheiterten mit „SSL connect
-   * error", die Seite blieb ungestylt und unhydriert, die Galeriebilder leer
-   * (`tests/e2e/bilder.browser.spec.ts`). Ein Bau entscheidet das nicht nach
-   * Umgebung — er ist für alle Umgebungen derselbe (V2-1).
-   *
-   * Verloren geht dabei nichts: HSTS (unten, zwei Jahre, `includeSubDomains`,
-   * `preload`) zwingt den eigenen Ursprung auf `https`, und jede andere Quelle
-   * dieser Richtlinie ist ein ausdrückliches `https://`-Ziel. Eine
-   * `http://`-Unteranfrage würde also nicht hochgestuft, sondern von der
-   * Richtlinie selbst abgewiesen — der Schutz vor gemischten Inhalten bleibt.
-   */
-].join('; ');
-
-const nextConfig: NextConfig = {
+const nextConfig = (entwicklung: boolean): NextConfig => ({
   reactStrictMode: true,
   poweredByHeader: false,
   compress: true,
@@ -110,7 +69,7 @@ const nextConfig: NextConfig = {
       {
         source: '/:path*',
         headers: [
-          { key: 'Content-Security-Policy', value: cspDirectives },
+          { key: 'Content-Security-Policy', value: inhaltsrichtlinie({ entwicklung }) },
           { key: 'X-Content-Type-Options', value: 'nosniff' },
           // Muss zu `frame-ancestors` passen — ältere Browser kennen nur
           // diesen Kopf, und zwei widersprüchliche Angaben führen je nach
@@ -190,6 +149,39 @@ const nextConfig: NextConfig = {
       { source: '/agb', destination: '/legal/agb', permanent: true },
     ];
   },
-};
+});
 
-export default nextConfig;
+/**
+ * Die Konfiguration ist eine **Funktion der Phase**, nicht ein fester Wert —
+ * und zwar allein wegen `'unsafe-eval'`.
+ *
+ * Der Entwicklungsserver braucht es (React bildet dort die Aufrufstapel der
+ * Serverkomponenten über ausgewertete Zeichenketten nach), der Produktionsbau
+ * nicht, und dort ist es verboten (SECURITY_STANDARD C6). Die Frage ist nur,
+ * *woran* man den Entwicklungsserver erkennt. Next übergibt dafür die Phase:
+ * `phase-development-server` gibt es ausschliesslich unter `next dev`.
+ *
+ * **Warum keine Umgebungsvariable** (etwa `NODE_ENV` oder ein eigener
+ * Schalter). Die Kopfzeilen werden beim Bau festgeschrieben: `next build`
+ * ruft `headers()` in der Phase `phase-production-build` auf und legt das
+ * Ergebnis in `routes-manifest.json` ab; `next start` liest sie von dort und
+ * ruft `headers()` nicht noch einmal auf. Eine Variable, die beim Bau
+ * zufällig gesetzt war — in einer CI-Stufe, einer lokalen Shell, einem
+ * Probebau —, läge damit unsichtbar im Artefakt, und zwei Artefakte aus
+ * demselben Commit trügen verschiedene Richtlinien. Das ist genau, was V2-1
+ * ausschliesst: ein Artefakt für jede Umgebung, dessen Inhalt nicht davon
+ * abhängt, wo es gebaut wurde. Die Phase dagegen setzt Next selbst nach dem
+ * Befehl; es gibt keinen Weg, `next build` den Entwicklungsserver behaupten
+ * zu lassen. Ein Artefakt kann `'unsafe-eval'` also gar nicht tragen.
+ *
+ * Der Entwicklungsserver ist kein Artefakt: Er übersetzt bei jeder Anfrage aus
+ * dem Quelltext und wird nie ausgeliefert. Dass er eine weitere Richtlinie
+ * bekommt, verletzt V2-1 deshalb nicht.
+ *
+ * Der Diagnoseserver (`scripts/diagnose-server.ts`) startet `next dev` und
+ * bekommt die Freigabe damit von selbst; sein `NODE_ENV=development` spielt
+ * für die Richtlinie keine Rolle.
+ */
+export default function konfiguration(phase: string): NextConfig {
+  return nextConfig(phase === PHASE_DEVELOPMENT_SERVER);
+}
