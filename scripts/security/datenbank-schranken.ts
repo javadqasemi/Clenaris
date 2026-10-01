@@ -130,6 +130,8 @@ import { join } from 'node:path';
 
 import type { Prisma } from '@prisma/client';
 
+import { statusMitPflichtteil, type Pruefstatus } from './pflichtabgleich';
+
 export const SCHRANKENARTEN = ['teilindizes', 'trigger', 'pruefbedingungen', 'ausschlussbedingungen', 'erweiterungen'] as const;
 export type Schrankenart = (typeof SCHRANKENARTEN)[number];
 
@@ -807,6 +809,126 @@ export async function livePruefen(db: Katalogleser, register: Schrankenregister,
   }
 
   return befunde;
+}
+
+// ---------------------------------------------------------------------------
+//  Erweiterungen in der Vertrauensprüfung
+// ---------------------------------------------------------------------------
+
+/**
+ * Was jede Datenbank dieser Anwendung mitbringen darf, ohne dass eine
+ * Schranke daran hängt: `plpgsql` hat jeder Server, die übrigen sind
+ * verbreitete Standarderweiterungen, die ein Betreiber anlegen darf.
+ */
+export const GRUNDERWEITERUNGEN = ['plpgsql', 'pgcrypto', 'uuid-ossp', 'citext', 'pg_trgm'] as const;
+
+/**
+ * Die Erweiterungen, die weder zur Grundliste noch zum Register gehören —
+ * in `datenbank-vertrauenspruefung.ts` AUFFÄLLIG, weil eine Erweiterung wie
+ * `dblink` oder `postgres_fdw` Daten aus der Datenbank hinausträgt.
+ *
+ * Bis 2026-09-30 stand dort eine fest verdrahtete Liste ohne `btree_gist`,
+ * obwohl zwei Migrationen sie für die Ausschlussbedingungen anlegen: Jede
+ * ordnungsgemäss migrierte Kopie galt als auffällig. Ein Befund, der bei
+ * jeder Prüfung anschlägt, lehrt, Befunde zu übergehen; und eine zweite,
+ * von Hand gepflegte Liste liefe dem Register wieder davon. Deshalb die
+ * Grundliste hier, ergänzt um das, was das Register als Träger einer
+ * Schranke nennt.
+ */
+export function fremdeErweiterungen(namen: readonly string[], register: Pick<Schrankenregister, 'erweiterungen'>): string[] {
+  const erlaubt = new Set<string>([...GRUNDERWEITERUNGEN, ...register.erweiterungen]);
+  return namen.filter((name) => !erlaubt.has(name));
+}
+
+// ---------------------------------------------------------------------------
+//  Datenbankabgleich in `security:check --datenbank`
+// ---------------------------------------------------------------------------
+
+/** Eine Verbindungsadresse in einer Meldung unkenntlich machen — sie trägt das Passwort. */
+export function ohneZugangsdaten(text: string): string {
+  return text.replace(/(\w+:\/\/)[^@\s/]+@/g, '$1***@');
+}
+
+export interface Datenbankabgleich {
+  /** Lief die Live-Prüfung bis zum Ende? Nur dann gelten ihre Befunde als Aussage. */
+  gelaufen: boolean;
+  befunde: Schrankenbefund[];
+  /** Ein Satz für den Hinweis der Prüfung, ohne Zugangsdaten. */
+  hinweis: string;
+}
+
+/** Wie lange die Live-Prüfung dauern darf, bevor der Abgleich „nicht geprüft" meldet. */
+const ABGLEICH_FRIST_MS = 15_000;
+
+/**
+ * Der Datenbankabgleich, den `security:check --datenbank` verlangt — ohne
+ * eigenen Prisma-Client, damit dieses Modul `.env` nie lädt (siehe Kopf):
+ * `verbinden` erzeugt ihn erst, wenn eine Adresse da ist.
+ *
+ * Jeder Weg, auf dem die Live-Prüfung nicht zu Ende läuft — keine Adresse,
+ * keine Verbindung, ein Katalog, der sich nicht lesen lässt, keine Antwort
+ * innerhalb der Frist —, endet mit `gelaufen: false`. Bis 2026-09-30 wurde
+ * ein Verbindungsfehler in `security-check.ts` zu FEHLER der ganzen Prüfung
+ * „Migrationen" und verschluckte deren übrige Befunde; eine fehlende Adresse
+ * ist aber dieselbe Lage wie eine gescheiterte Verbindung: verlangt und
+ * nicht gelaufen, also NICHT GEPRÜFT (`abgleichStatus`).
+ */
+export async function datenbankAbgleichen(
+  adresse: string | undefined,
+  register: Schrankenregister,
+  verbinden: (adresse: string) => Promise<Katalogleser & { $disconnect(): Promise<void> }>,
+): Promise<Datenbankabgleich> {
+  if (!adresse) {
+    return { gelaufen: false, befunde: [], hinweis: 'Datenbankabgleich: NICHT GEPRÜFT (keine DATABASE_URL) — `--datenbank` verlangt ihn.' };
+  }
+  let db: (Katalogleser & { $disconnect(): Promise<void> }) | undefined;
+  let frist: ReturnType<typeof setTimeout> | undefined;
+  try {
+    db = await verbinden(adresse);
+    // `pg` wartet ohne eigene Frist beliebig lange auf eine Verbindung — ein
+    // Host, der Pakete verschluckt, hielte den ganzen Lauf an.
+    const zeit = new Promise<never>((_, ablehnen) => {
+      frist = setTimeout(() => ablehnen(new Error(`keine Antwort innerhalb von ${ABGLEICH_FRIST_MS / 1000} s`)), ABGLEICH_FRIST_MS);
+    });
+    const befunde = await Promise.race([livePruefen(db, register, schemaAusAdresse(adresse)), zeit]);
+    return { gelaufen: true, befunde, hinweis: 'Datenbankabgleich durchgeführt.' };
+  } catch (fehler) {
+    const grund = ohneZugangsdaten((fehler instanceof Error ? fehler.message : String(fehler)).trim().split('\n').pop() ?? '');
+    return { gelaufen: false, befunde: [], hinweis: `Datenbankabgleich: NICHT GEPRÜFT (${grund.slice(0, 200)}).` };
+  } finally {
+    clearTimeout(frist);
+    await db?.$disconnect().catch(() => undefined);
+  }
+}
+
+/**
+ * Status der Prüfung „Migrationen" in `security:check`, wenn ein
+ * Datenbankabgleich verlangt sein kann (2026-09-30).
+ *
+ * `statusMitPflichtteil` (`pflichtabgleich.ts`) stuft jede Prüfung mit einem
+ * nicht-hinweisenden Befund als BEFUND ein — auch dann, wenn der verlangte
+ * Abgleich gar nicht lief. Mit einer einzigen Warnung (etwa einer neuen,
+ * noch nicht eingetragenen Schranke) endete `--datenbank` ohne Adresse
+ * deshalb mit Exitcode 0: BEFUND mit Warnung blockiert nicht,
+ * NICHT GEPRÜFT schon. Wer den Abgleich verlangt, bekommt ihn oder ein
+ * Scheitern.
+ *
+ * Die Reihenfolge:
+ *   1. Blockierendes geht vor (BEFUND) — der Lauf scheitert ohnehin, und
+ *      der Befund bleibt obenauf, statt hinter „nicht geprüft" zu
+ *      verschwinden.
+ *   2. Verlangt und nicht gelaufen: NICHT GEPRÜFT, auch mit Warnungen.
+ *   3. Sonst die Regel aus `pflichtabgleich.ts`.
+ *
+ * Eine reine Funktion, damit die Prüfreihe die Regel ohne Datenbank und
+ * ohne den ganzen Lauf (der `npm audit` über das Netz ruft) festhalten kann.
+ */
+export function abgleichStatus(
+  befunde: { schwere: 'blockierend' | 'warnung' | 'hinweis' }[],
+  abgleich: { verlangt: boolean; gelaufen: boolean },
+): Pruefstatus {
+  if (abgleich.verlangt && !abgleich.gelaufen && !befunde.some((b) => b.schwere === 'blockierend')) return 'NICHT_GEPRUEFT';
+  return statusMitPflichtteil(befunde, abgleich);
 }
 
 /** Eine Zeile je Art für die Ausgabe: „13 Teilindizes · 20 Trigger · … · 19 Funktionen". */

@@ -52,6 +52,7 @@ import { join } from 'node:path';
 import {
   livePruefen,
   migrationenLesen,
+  ohneZugangsdaten,
   REGISTER_DATEI,
   registerLesen,
   registerZusammenfassung,
@@ -69,11 +70,6 @@ const VERBINDUNG_MS = 15_000;
 
 type Ergebnis = 'BESTANDEN' | 'BEFUND' | 'NICHT_GEPRUEFT';
 const EXIT: Record<Ergebnis, number> = { BESTANDEN: 0, BEFUND: 1, NICHT_GEPRUEFT: 2 };
-
-/** Eine Verbindungsadresse in einer Fehlermeldung unkenntlich machen. */
-function ohneZugangsdaten(text: string): string {
-  return text.replace(/(\w+:\/\/)[^@\s/]+@/g, '$1***@');
-}
 
 function ende(ergebnis: Ergebnis, grund: string): never {
   const zeichen = ergebnis === 'BESTANDEN' ? '✓' : ergebnis === 'BEFUND' ? '✗' : '○';

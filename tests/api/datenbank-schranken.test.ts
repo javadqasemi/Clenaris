@@ -7,8 +7,12 @@ import { join } from 'node:path';
 
 import type { Prisma } from '@prisma/client';
 
+import { erzeugePrismaClient } from '../../src/lib/prisma-client';
 import {
+  abgleichStatus,
   ausloeserAusTyp,
+  datenbankAbgleichen,
+  fremdeErweiterungen,
   funktionenAusMigrationen,
   livePruefen,
   migrationenLesen,
@@ -20,6 +24,7 @@ import {
   statischPruefen,
   triggerAusMigrationen,
   type Befundart,
+  type Katalogleser,
   type Schrankenart,
   type Schrankenbefund,
   type Schrankenregister,
@@ -391,6 +396,121 @@ describe('Datenbankschranken — in der Datenbank', { concurrency: 1 }, () => {
       assert.match(befunde.find((b) => b.name === 'stock_movements_vorzeichen')!.titel, /nicht validiert/);
       assert.match(befunde.find((b) => b.name === 'time_entries_eine_laufende_je_person')!.titel, /fehlt/);
     });
+  });
+});
+
+describe('Datenbankschranken — verlangter Abgleich in security:check', () => {
+  /*
+    `security:check --datenbank` verlangt den Abgleich gegen eine laufende
+    Datenbank. Drei Wege liessen ihn bis 2026-09-30 still bestehen: eine
+    einzige Warnung neben dem fehlenden Abgleich (BEFUND mit Warnung endete
+    mit Exitcode 0), `--umfang tests` (die Prüfung „Migrationen" lief gar
+    nicht, der Schalter wurde übergangen) und eine gescheiterte Verbindung
+    (FEHLER der ganzen Prüfung statt NICHT GEPRÜFT). Die Regeln stehen seit
+    2026-10-01 in `abgleichStatus` und `datenbankAbgleichen`; der ganze Lauf
+    ruft `npm audit` über das Netz und wird deshalb hier nur im Umfang
+    `tests` gestartet, wo er ohne Netz und ohne Server endet.
+  */
+  it('eine Warnung überdeckt den fehlenden Abgleich nicht, ein blockierender Befund geht vor', () => {
+    const fehlt = { verlangt: true, gelaufen: false };
+    // Gegen den alten Stand scheitert diese Zeile: `statusMitPflichtteil` gab BEFUND, also Exitcode 0.
+    assert.equal(abgleichStatus([{ schwere: 'warnung' }], fehlt), 'NICHT_GEPRUEFT');
+    assert.equal(abgleichStatus([{ schwere: 'hinweis' }], fehlt), 'NICHT_GEPRUEFT');
+    assert.equal(abgleichStatus([], fehlt), 'NICHT_GEPRUEFT');
+    assert.equal(abgleichStatus([{ schwere: 'warnung' }, { schwere: 'blockierend' }], fehlt), 'BEFUND');
+
+    const gelaufen = { verlangt: true, gelaufen: true };
+    assert.equal(abgleichStatus([{ schwere: 'warnung' }], gelaufen), 'BEFUND');
+    assert.equal(abgleichStatus([{ schwere: 'hinweis' }], gelaufen), 'BESTANDEN');
+    assert.equal(abgleichStatus([], { verlangt: false, gelaufen: false }), 'BESTANDEN');
+    assert.equal(abgleichStatus([{ schwere: 'warnung' }], { verlangt: false, gelaufen: false }), 'BEFUND');
+  });
+
+  it('ohne Adresse, ohne Verbindung oder ohne lesbaren Katalog: nicht gelaufen, ohne Zugangsdaten in der Meldung', async () => {
+    let verbunden = 0;
+    const ohne = await datenbankAbgleichen(undefined, register, async () => {
+      verbunden++;
+      throw new Error('darf nicht gerufen werden');
+    });
+    assert.equal(ohne.gelaufen, false);
+    assert.match(ohne.hinweis, /NICHT GEPRÜFT \(keine DATABASE_URL\)/);
+    assert.equal(verbunden, 0, 'ohne Adresse wurde trotzdem verbunden');
+
+    // Ein Katalog, der mit einer Meldung samt Adresse scheitert — so meldet `pg` einen Abbruch.
+    let getrennt = false;
+    const scheiternd: Katalogleser & { $disconnect(): Promise<void> } = {
+      $queryRaw: (() => Promise.reject(new Error('Verbindung abgebrochen: postgresql://pruef:geheim@db.example:5432/x'))) as unknown as Katalogleser['$queryRaw'],
+      $disconnect: async () => {
+        getrennt = true;
+      },
+    };
+    const abgebrochen = await datenbankAbgleichen('postgresql://pruef:geheim@db.example:5432/x', register, async () => scheiternd);
+    assert.equal(abgebrochen.gelaufen, false);
+    assert.match(abgebrochen.hinweis, /NICHT GEPRÜFT \(Verbindung abgebrochen/);
+    assert.doesNotMatch(abgebrochen.hinweis, /geheim/, 'das Passwort steht im Hinweis');
+    assert.ok(getrennt, 'die Verbindung wurde nicht getrennt');
+
+    // Eine echte, unerreichbare Adresse.
+    const unerreichbar = await datenbankAbgleichen('postgresql://pruef:geheim@127.0.0.1:1/unerreichbar_test?schema=public', register, async (adresse) =>
+      erzeugePrismaClient({ url: adresse }),
+    );
+    assert.equal(unerreichbar.gelaufen, false);
+    assert.match(unerreichbar.hinweis, /NICHT GEPRÜFT/);
+    assert.doesNotMatch(unerreichbar.hinweis, /geheim/);
+  });
+
+  it('gegen die Testdatenbank: gelaufen, ohne blockierenden Befund', async () => {
+    const adresse = testDbAdresse();
+    assert.ok(adresse, 'keine Adresse der Testdatenbank');
+    const ergebnis = await datenbankAbgleichen(adresse, register, async (url) => erzeugePrismaClient({ url }));
+    assert.equal(ergebnis.gelaufen, true, ergebnis.hinweis);
+    assert.deepEqual(blockierende(ergebnis.befunde), []);
+    assert.equal(abgleichStatus(ergebnis.befunde, { verlangt: true, gelaufen: ergebnis.gelaufen }), 'BESTANDEN');
+  });
+
+  it('security-check.ts entscheidet über diese Regeln und nicht daneben', () => {
+    const quelle = readFileSync(join(WURZEL, 'scripts', 'security-check.ts'), 'utf8');
+    assert.match(quelle, /status: abgleichStatus\(befunde, abgleich\)/, 'die Prüfung „Migrationen" entscheidet nicht über abgleichStatus');
+    assert.match(quelle, /await datenbankAbgleichen\(DATENBANK_ADRESSE,/, 'der Datenbankabgleich läuft nicht über datenbankAbgleichen');
+    assert.doesNotMatch(quelle, /livePruefen\(/, 'security-check.ts ruft die Live-Prüfung an datenbankAbgleichen vorbei');
+  });
+
+  it('--umfang tests --datenbank endet mit NICHT GEPRÜFT und Exitcode 1', () => {
+    /*
+      Ein eigener Prozess, wie der Befehl betrieben wird. Ohne TEST_BASE_URL
+      endet die Prüfreihe sofort als „nicht geprüft", ohne DATABASE_URL gibt
+      es nichts, was der Lauf versehentlich doch abgleichen könnte. Der Lauf
+      schreibt seinen Bericht nach `security-reports/` (in `.gitignore`).
+      Massgebend ist die eigene Zeile für `--datenbank`: Gegen den alten
+      Stand fehlte sie, und der Schalter verschwand ohne Spur.
+    */
+    const env: NodeJS.ProcessEnv = { ...process.env };
+    for (const name of ['TEST_BASE_URL', 'DATABASE_URL', 'TEST_DATABASE_URL']) delete env[name];
+    const tsx = join(WURZEL, 'node_modules', 'tsx', 'dist', 'cli.mjs');
+    const lauf = spawnSync(process.execPath, [tsx, join(WURZEL, 'scripts', 'security-check.ts'), '--umfang', 'tests', '--datenbank'], {
+      cwd: WURZEL,
+      encoding: 'utf8',
+      env,
+      timeout: 120_000,
+    });
+    assert.equal(lauf.status, 1, lauf.stdout + lauf.stderr);
+    assert.match(lauf.stdout, /Datenbankschranken \(--datenbank\)\s+NICHT GEPRÜFT/, lauf.stdout);
+    assert.match(lauf.stdout, /Gesamt: NICHT_GEPRUEFT/);
+  });
+});
+
+describe('Datenbankschranken — Erweiterungen in der Vertrauensprüfung', () => {
+  it('btree_gist aus dem Register ist keine fremde Erweiterung, dblink schon', () => {
+    assert.deepEqual(fremdeErweiterungen(['plpgsql', 'btree_gist'], register), []);
+    assert.deepEqual(fremdeErweiterungen(['plpgsql', 'btree_gist', 'dblink', 'postgres_fdw'], register), ['dblink', 'postgres_fdw']);
+    // Die alte, fest verdrahtete Liste — ohne die Erweiterungen des Registers — meldete btree_gist.
+    assert.deepEqual(fremdeErweiterungen(['btree_gist'], { erweiterungen: [] }), ['btree_gist']);
+  });
+
+  it('eine frisch migrierte Testdatenbank hat keine fremde Erweiterung', async () => {
+    const vorhanden = await db!.$queryRaw<{ name: string }[]>`SELECT extname AS name FROM pg_extension`;
+    assert.ok(vorhanden.some((e) => e.name === 'btree_gist'), 'btree_gist fehlt — die Prüfung bewiese nichts');
+    assert.deepEqual(fremdeErweiterungen(vorhanden.map((e) => e.name), register), []);
   });
 });
 

@@ -50,7 +50,7 @@ import { writeFileSync } from 'node:fs';
 
 import { OEFFENTLICHE_DEMO_ADRESSEN, OEFFENTLICHE_PASSWOERTER } from '../src/lib/auth/oeffentliche-zugangsdaten';
 import { erzeugePrismaClient } from '../src/lib/prisma-client';
-import { livePruefen, registerLesen, registerZusammenfassung, schemaAusAdresse } from './security/datenbank-schranken';
+import { fremdeErweiterungen, livePruefen, registerLesen, registerZusammenfassung, schemaAusAdresse } from './security/datenbank-schranken';
 
 type Stufe = 'AUFFAELLIG' | 'PRUEFEN' | 'OK';
 
@@ -304,19 +304,20 @@ async function main(): Promise<void> {
       als Träger einer Schranke nennt (seit 2026-09-30). Bis dahin fehlte
       `btree_gist` in der Grundliste, obwohl zwei Migrationen sie anlegen —
       jede ordnungsgemäss migrierte Kopie wurde deshalb als AUFFÄLLIG
-      gemeldet. Ein Befund, der bei jeder Prüfung anschlägt, lehrt, Befunde
-      zu übergehen; eine zweite, von Hand gepflegte Liste hier liefe dem
-      Register wieder davon.
+      gemeldet. Die Regel steht in `fremdeErweiterungen`
+      (`scripts/security/datenbank-schranken.ts`), wo die Prüfreihe sie
+      gegen eine frisch migrierte Datenbank hält; dieses Skript selbst
+      läuft nur gegen Wiederherstellungskopien und hat keine eigene Prüfung.
     */
-    const erlaubteErweiterungen = new Set(['plpgsql', 'pgcrypto', 'uuid-ossp', 'citext', 'pg_trgm', ...schranken.erweiterungen]);
-    const fremdeErweiterungen = erweiterungen.filter((e) => !erlaubteErweiterungen.has(e.extname));
+    const erweiterungNamen = new Set(fremdeErweiterungen(erweiterungen.map((e) => e.extname), schranken));
+    const fremdeErweiterungenListe = erweiterungen.filter((e) => erweiterungNamen.has(e.extname));
     abschnitte.push({
       titel: 'Datenbankebene: Rollen, Erweiterungen, Trigger',
-      stufe: fremdeTrigger.length > 0 || fremdeErweiterungen.length > 0 || ereignisTrigger.length > 0 ? 'AUFFAELLIG' : 'PRUEFEN',
-      zusammenfassung: `${rollen.length} Rolle(n) (jede einer bekannten Verwendung zuordnen), ${fremdeErweiterungen.length} unerwartete Erweiterung(en), ${fremdeTrigger.length} Trigger ausserhalb security/datenbank-schranken.json, ${ereignisTrigger.length} Ereignistrigger.`,
+      stufe: fremdeTrigger.length > 0 || fremdeErweiterungenListe.length > 0 || ereignisTrigger.length > 0 ? 'AUFFAELLIG' : 'PRUEFEN',
+      zusammenfassung: `${rollen.length} Rolle(n) (jede einer bekannten Verwendung zuordnen), ${fremdeErweiterungenListe.length} unerwartete Erweiterung(en), ${fremdeTrigger.length} Trigger ausserhalb security/datenbank-schranken.json, ${ereignisTrigger.length} Ereignistrigger.`,
       zeilen: [
         ...rollen.map((r) => ({ art: 'Rolle', ...r })),
-        ...fremdeErweiterungen.map((e) => ({ art: 'Erweiterung', ...e })),
+        ...fremdeErweiterungenListe.map((e) => ({ art: 'Erweiterung', ...e })),
         ...fremdeTrigger.map((t) => ({ art: 'Trigger', ...t })),
         ...ereignisTrigger.map((e) => ({ art: 'Ereignistrigger', ...e })),
       ],

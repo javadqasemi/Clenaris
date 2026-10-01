@@ -46,16 +46,15 @@ import { join } from 'node:path';
 
 import { befundEinordnen, veralteteBewertungen, type Bewertung } from './security/bewertung';
 import {
-  livePruefen,
+  abgleichStatus,
+  datenbankAbgleichen,
   registerLesen as schrankenregisterLesen,
   registerZusammenfassung,
-  schemaAusAdresse,
   statischPruefen,
 } from './security/datenbank-schranken';
 import { geheimnisseImBestand } from './security/geheimnisse';
 import { melden, type Meldung } from './security/melden';
 import { musterPruefen, type Unterdrueckung } from './security/muster';
-import { statusMitPflichtteil } from './security/pflichtabgleich';
 import { bilanzPruefen, konfigurierteDateien, testbilanzLesen } from './security/testbilanz';
 
 type Status = 'BESTANDEN' | 'BEFUND' | 'NICHT_GEPRUEFT' | 'FEHLER';
@@ -331,47 +330,32 @@ async function migrationen() {
   for (const f of tor.fehler) befunde.push({ schwere: 'blockierend', titel: 'Migrations-Verträglichkeit', details: f });
 
   let hinweis = `Datenbankschranken im Register: ${registerZusammenfassung(schranken)}; Verträglichkeit: ${tor.fehler.length === 0 ? 'jede Migration durchgesehen' : `${tor.fehler.length} Fehler`}.`;
-  // Verlangt, aber ohne Adresse oder ohne Verbindung: NICHT_GEPRUEFT statt
-  // BESTANDEN (M2, `security/pflichtabgleich.ts`). Eine Verbindung, die
-  // scheitert, ist dieselbe Lage wie eine fehlende Adresse — nicht ein
-  // Werkzeugfehler, der den ganzen Lauf als FEHLER markiert und die übrigen
-  // Befunde dieser Prüfung verschluckt.
+  /*
+    Verlangt, aber ohne Adresse, ohne Verbindung oder ohne Antwort:
+    NICHT_GEPRUEFT statt BESTANDEN (M2) — und eine Warnung überdeckt das
+    nicht. Beide Regeln stehen seit 2026-10-01 als reine Funktionen in
+    `scripts/security/datenbank-schranken.ts` (`datenbankAbgleichen`,
+    `abgleichStatus`), wo `tests/api/datenbank-schranken.test.ts` sie ohne
+    den ganzen Lauf festhält. Vorher standen sie nur hier und waren allein
+    von Hand geprüft — genau die Art Torregel, die unbemerkt zurückkommt:
+    So hatte eine einzige Warnung den fehlenden Abgleich zu Exitcode 0
+    gemacht.
+
+    Der Prisma-Client wird erst geladen, wenn eine Adresse da ist; das
+    Modul `src/lib/prisma-client.ts` lädt `.env`, und `DATENBANK_ADRESSE`
+    ist darum schon vorher gelesen.
+  */
   const abgleich = { verlangt: args.has('--datenbank'), gelaufen: false };
   if (abgleich.verlangt) {
-    if (!DATENBANK_ADRESSE) {
-      hinweis += ' Datenbankabgleich: NICHT GEPRÜFT (keine DATABASE_URL) — `--datenbank` verlangt ihn.';
-    } else {
+    const ergebnis = await datenbankAbgleichen(DATENBANK_ADRESSE, schranken, async (adresse) => {
       const { erzeugePrismaClient } = await import('../src/lib/prisma-client');
-      const prisma = erzeugePrismaClient({ url: DATENBANK_ADRESSE });
-      try {
-        // Kataloge statt Namen: gültig und bereit, eingeschaltet, validiert
-        // (Regeln und Begründung in `scripts/security/datenbank-schranken.ts`).
-        const live = await livePruefen(prisma, schranken, schemaAusAdresse(DATENBANK_ADRESSE));
-        for (const b of live) befunde.push({ schwere: b.schwere, titel: `Datenbank: ${b.titel}` });
-        hinweis += ' Datenbankabgleich durchgeführt.';
-        abgleich.gelaufen = true;
-      } catch (fehler) {
-        const grund = (fehler instanceof Error ? fehler.message : String(fehler)).split('\n').pop()!.replace(/(\w+:\/\/)[^@\s/]+@/g, '$1***@');
-        hinweis += ` Datenbankabgleich: NICHT GEPRÜFT (${grund.slice(0, 200)}).`;
-      } finally {
-        await prisma.$disconnect().catch(() => undefined);
-      }
-    }
+      return erzeugePrismaClient({ url: adresse });
+    });
+    for (const b of ergebnis.befunde) befunde.push({ schwere: b.schwere, titel: `Datenbank: ${b.titel}` });
+    hinweis += ` ${ergebnis.hinweis}`;
+    abgleich.gelaufen = ergebnis.gelaufen;
   }
-  /*
-    Eine Warnung darf den fehlenden Pflichtteil nicht überdecken (2026-09-30).
-    `statusMitPflichtteil` stuft jede Prüfung mit einem nicht-hinweisenden
-    Befund als BEFUND ein — auch, wenn der verlangte Datenbankabgleich gar
-    nicht lief. Mit einer einzigen Warnung (etwa einer neuen, noch nicht
-    eingetragenen Schranke) endete `--datenbank` ohne Adresse deshalb mit
-    Exitcode 0: BEFUND mit Warnung blockiert nicht, NICHT GEPRÜFT schon. Wer
-    den Abgleich verlangt, bekommt ihn oder ein Scheitern. Blockierendes geht
-    weiterhin vor — BEFUND scheitert ohnehin, und sein Befund bleibt so
-    obenauf statt hinter „nicht geprüft" zu verschwinden.
-  */
-  const status = statusMitPflichtteil(befunde, abgleich);
-  const pflichtteilFehlt = abgleich.verlangt && !abgleich.gelaufen && !befunde.some((b) => b.schwere === 'blockierend');
-  return { status: pflichtteilFehlt ? ('NICHT_GEPRUEFT' as const) : status, befunde, hinweis };
+  return { status: abgleichStatus(befunde, abgleich), befunde, hinweis };
 }
 
 // ---------------------------------------------------------------------------
@@ -541,6 +525,8 @@ async function main() {
     Datenbankabgleich, bekam keinen und endete trotzdem mit Erfolg. Verlangt
     und nicht gelaufen ist NICHT GEPRÜFT (dieselbe Regel wie
     `security/pflichtabgleich.ts`), also ein Fehlschlag mit Exitcode 1.
+    `tests/api/datenbank-schranken.test.ts` ruft diesen Lauf als eigenen
+    Prozess und hält die Zeile fest.
   */
   if (args.has('--datenbank') && !MIT_STATISCH) {
     pruefungen.push({
