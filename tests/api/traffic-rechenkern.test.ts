@@ -22,6 +22,7 @@ import {
 } from '../../src/lib/traffic/erfassen';
 import { CONSENT_VERSION } from '../../src/lib/consent';
 import { besuchsmessungEingeschaltet, oeffentlicheKonfigurationAus } from '../../src/lib/laufzeit-konfiguration';
+import { GA_COOKIE_MONATE, GA_COOKIE_SEKUNDEN } from '../../src/lib/traffic/google-analytics';
 import { umgebungPruefen } from '../../scripts/production-preflight';
 
 /**
@@ -352,6 +353,30 @@ describe('Besuchsmessung — Schalter der Instanz', () => {
       assert.ok(pruefung, 'keine Prüfung „besuchsmessung"');
       assert.equal(pruefung.stand, besuchsmessungEingeschaltet(wert) ? 'WARNUNG' : 'OK', `Vorprüfung für ${JSON.stringify(wert)}`);
     }
+  });
+});
+
+/**
+ * Google Analytics hält sich an die Frist der Cookie-Erklärung (2026-09-30).
+ *
+ * Die Erklärung nannte für `_ga` 13 Monate, das Skript liess Googles Vorgabe
+ * von zwei Jahren stehen. Belegt wird die Zahl selbst und dass das Skript sie
+ * einsetzt — als Quelltextprüfung, weil das Skript erst nach Einwilligung und
+ * nur mit einer gültigen Mess-ID im Browser entsteht, die die Prüfreihe nicht
+ * hat. Dass die Erklärung dieselbe Konstante anzeigt, prüft
+ * `tests/pages/public-site.test.ts` am ausgelieferten HTML.
+ */
+describe('Google Analytics — Laufzeit des Cookies', () => {
+  it('Google-Analytics-Cookie lebt 13 Monate wie erklärt — nicht Googles zwei Jahre', () => {
+    assert.equal(GA_COOKIE_MONATE, 13);
+    // 13 mittlere Monate (365,25 / 12 Tage), auf ganze Tage abgerundet: 395 Tage.
+    assert.equal(GA_COOKIE_SEKUNDEN, 395 * 86_400);
+    assert.equal(GA_COOKIE_SEKUNDEN, 34_128_000);
+    assert.ok(GA_COOKIE_SEKUNDEN < 63_072_000, 'muss kürzer sein als Googles Vorgabe von zwei Jahren');
+
+    const skript = readFileSync(join(__dirname, '..', '..', 'src', 'components', 'marketing', 'analytics.tsx'), 'utf8');
+    const konfiguration = /gtag\('config',[\s\S]*?\}\);/.exec(skript)?.[0] ?? '';
+    assert.match(konfiguration, /cookie_expires:\s*\$\{GA_COOKIE_SEKUNDEN\}/, 'gtag-config setzt cookie_expires nicht aus der Konstante');
   });
 });
 

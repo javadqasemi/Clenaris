@@ -4,6 +4,7 @@ import { LegalBody } from '@/components/marketing/legal-body';
 import { SEITEN_URL } from '@/lib/seiten-url';
 import { seitenMetadaten } from '@/lib/seo/metadaten';
 import { rechtstextSeo } from '@/lib/seo/rechtstexte';
+import { TRAFFIC_GRENZEN } from '@/lib/traffic/ereignisse';
 
 import { getPublicCompanyInfo } from '@/server/services/organization.service';
 import { ConsentSettingsLink } from '@/features/public/consent-settings-link';
@@ -12,6 +13,18 @@ import { ConsentSettingsLink } from '@/features/public/consent-settings-link';
 export const metadata: Metadata = seitenMetadaten(rechtstextSeo('/legal/datenschutz'), SEITEN_URL);
 
 export const revalidate = 86400;
+
+/**
+ * Wie lange die eigene Besuchsmessung ihre Ereignisse behält — aus der
+ * Konstante, nach der der Nachtlauf tatsächlich löscht
+ * (`TRAFFIC_GRENZEN.aufbewahrungMonate`, `purgeTrafficEvents`).
+ *
+ * Bis 2026-09-30 stand hier zweimal eine Zahl von Hand: im Fliesstext
+ * „13 Monate", in der Tabelle „14 Monate". Die Erklärung widersprach sich
+ * selbst, und eine der beiden Angaben war gegenüber den Besuchenden falsch.
+ * Abgeleitet kann die Zahl nur noch gemeinsam mit der Löschung wandern.
+ */
+const ANALYSE_MONATE = TRAFFIC_GRENZEN.aufbewahrungMonate;
 
 export default async function PrivacyPage() {
   const company = await getPublicCompanyInfo();
@@ -95,8 +108,8 @@ export default async function PrivacyPage() {
         Computer), Browserfamilie, Datum und ein täglich wechselnder Hashwert Ihres Browser-Tabs.
         Ihre IP-Adresse und die vollständige Browserkennung speichern wir dafür nicht; Besuche an
         verschiedenen Tagen lassen sich nicht miteinander verknüpfen. Sendet Ihr Browser das Signal
-        „Global Privacy Control“ oder „Do Not Track“, zählen wir nicht. Die Daten werden nach 13
-        Monaten gelöscht und nicht an Dritte weitergegeben.
+        „Global Privacy Control“ oder „Do Not Track“, zählen wir nicht.{' '}
+        {`Die Daten werden nach ${ANALYSE_MONATE} Monaten gelöscht und nicht an Dritte weitergegeben.`}
       </p>
 
       <h2>3. Wie lange wir Daten aufbewahren</h2>
@@ -111,7 +124,7 @@ export default async function PrivacyPage() {
           { label: 'Anfragen ohne Auftrag', value: '24 Monate' },
           { label: 'Bewerbungsunterlagen', value: '6 Monate nach Abschluss des Verfahrens' },
           { label: 'Server-Protokolle', value: '90 Tage' },
-          { label: 'Analysedaten', value: '14 Monate' },
+          { label: 'Analysedaten', value: `${ANALYSE_MONATE} Monate` },
         ].map((row) => (
           <div key={row.label} className="protocol-row">
             <dt className="protocol-label">{row.label}</dt>

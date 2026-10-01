@@ -5,6 +5,7 @@ import * as React from 'react';
 
 import { hasConsent, onConsentChange, type ConsentState } from '@/lib/consent';
 import { oeffentlicheKonfigurationHolen, type PublicRuntimeConfig } from '@/lib/laufzeit-konfiguration';
+import { GA_COOKIE_SEKUNDEN } from '@/lib/traffic/google-analytics';
 
 type Kennungen = PublicRuntimeConfig['analytics'];
 
@@ -65,6 +66,15 @@ export function AnalyticsScripts() {
             src={`https://www.googletagmanager.com/gtag/js?id=${kennungen.gaMeasurementId}`}
             strategy="afterInteractive"
           />
+          {/*
+            `cookie_expires` (2026-09-30): Die Cookie-Erklärung nennt für
+            `_ga`/`_ga_*` 13 Monate, die Vorgabe von Google sind zwei Jahre.
+            Die Zahl und ihre Herleitung stehen in
+            `lib/traffic/google-analytics.ts` — dieselbe, die die Erklärung
+            anzeigt. Eingesetzt wird eine Konstante, nichts aus der Umgebung.
+            Ein Container über `gtmId` setzt seine Cookies nach seiner eigenen
+            Konfiguration; die liegt bei der Betreiberin, nicht hier.
+          */}
           <Script id="ga-init" strategy="afterInteractive">
             {`
               window.dataLayer = window.dataLayer || [];
@@ -72,6 +82,7 @@ export function AnalyticsScripts() {
               gtag('js', new Date());
               gtag('config', '${kennungen.gaMeasurementId}', {
                 anonymize_ip: true,
+                cookie_expires: ${GA_COOKIE_SEKUNDEN},
                 cookie_flags: 'SameSite=Lax;Secure'
               });
             `}
