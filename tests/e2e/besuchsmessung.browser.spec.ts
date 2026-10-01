@@ -227,13 +227,19 @@ test.describe('Besuchsmessung und Einwilligung', () => {
     await perLinkZu(page, '/legal/datenschutz');
     const zuruecksetzen = page.getByRole('button', { name: 'Einstellungen zurücksetzen', exact: true });
     await expect(zuruecksetzen).toBeVisible();
-    // Das Neuladen erkennen: Eine Markierung am alten `window` überlebt es nicht.
+    // Das Neuladen abwarten — der nächste `load` ist das Neuladen, denn die
+    // Wege bis hier waren App-Navigationen ohne eigenes `load`. Eine
+    // Markierung am alten `window` belegt danach, dass es wirklich neu ist.
     await page.evaluate(() => {
       (window as unknown as { vorDemWiderruf?: boolean }).vorDemWiderruf = true;
     });
+    const neuGeladen = page.waitForEvent('load');
     await zuruecksetzen.click();
-    await page.waitForFunction(() => !(window as unknown as { vorDemWiderruf?: boolean }).vorDemWiderruf);
-    await page.waitForLoadState('load');
+    await neuGeladen;
+    expect(
+      await page.evaluate(() => (window as unknown as { vorDemWiderruf?: boolean }).vorDemWiderruf ?? false),
+      'die Seite wurde nicht neu geladen',
+    ).toBe(false);
 
     // Das Banner fragt neu, und im Browser ist nichts von der Einwilligung übrig.
     await expect(page.getByRole('button', { name: 'Alle akzeptieren', exact: true })).toBeVisible();
