@@ -1,6 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
+import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -422,6 +423,43 @@ describe('Release-Semantik des Prüfwegs', () => {
       const ergebnis = releaseNachweisBauen(eingabe);
       assert.equal(ergebnis.nachweis, null, `${name}: trotzdem ein Nachweis`);
       assert.ok(ergebnis.gruende.some((g) => erwartet.test(g)), `${name}: ${ergebnis.gruende.join(' | ')}`);
+    }
+  });
+});
+
+/**
+ * `db:test:setup --ohne-demo` (2026-10-01, Befund der Gegenprüfung). Ohne
+ * `--frisch` wurde eine bestehende Testdatenbank samt Demodaten früherer
+ * Läufe weiterverwendet, und das Skript meldete trotzdem „nur
+ * Konfiguration“. Jetzt bricht es ab, bevor es irgendetwas anfasst.
+ *
+ * Als Prozess, weil das Skript beim Laden selbst läuft. Beide Adressen
+ * zeigen auf einen Port, an dem nichts lauscht, und das Arbeitsverzeichnis
+ * ist leer (keine `.env`): Fehlte die Sperre, scheiterte der Aufruf an der
+ * Verbindung — mit einer anderen Meldung, also rot, und ohne dass eine echte
+ * Datenbank berührt würde. Darum prüft der Fall die Meldung und nicht nur den
+ * Exitcode; ohne `--frisch` verwirft das Skript ohnehin nichts.
+ */
+describe('Testdatenbank für den Release-Kern', () => {
+  it('--ohne-demo ohne --frisch bricht vor jedem Datenbankzugriff ab', () => {
+    const wurzel = join(__dirname, '..', '..');
+    const leer = mkdtempSync(join(tmpdir(), 'clenaris-testdb-'));
+    const nirgends = 'postgresql://pruefung:pruefung@127.0.0.1:9/clenaris_gibt_es_nicht_test';
+    try {
+      const lauf = spawnSync(process.execPath, [join(wurzel, 'node_modules', 'tsx', 'dist', 'cli.mjs'), join(wurzel, 'scripts', 'setup-test-db.ts'), '--ohne-demo'], {
+        cwd: leer,
+        encoding: 'utf8',
+        timeout: 60_000,
+        env: { ...process.env, DATABASE_URL: nirgends.replace('_test', ''), TEST_DATABASE_URL: nirgends },
+      });
+      const ausgabe = `${lauf.stdout}${lauf.stderr}`;
+      assert.equal(lauf.status, 1, ausgabe);
+      assert.match(lauf.stderr, /--ohne-demo nur zusammen mit --frisch/);
+      // Abgebrochen vor dem ersten Schritt: nicht einmal die Zieladresse ist
+      // ausgegeben, geschweige denn eine Migration oder ein Seed gestartet.
+      assert.doesNotMatch(ausgabe, /Testdatenbank \(Ziel\)|Migrationen|Konfiguration \(ohne Demodaten/);
+    } finally {
+      rmSync(leer, { recursive: true, force: true });
     }
   });
 });
