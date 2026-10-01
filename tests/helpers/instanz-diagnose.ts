@@ -132,6 +132,11 @@ const NACHFRAGE_FRIST_MS = 10_000;
 const ERHEBUNG_FRIST_MS = 25_000;
 const PROZESS_FRIST_MS = 20_000;
 const DATENBANK_FRIST_MS = 5_000;
+/**
+ * Wie lange nach `exit` auf `close` gewartet wird, bevor das Ende eines
+ * Prozesses ohne Port gemeldet wird — Begründung in `anmelden`.
+ */
+const ENDE_GNADE_MS = 2_000;
 
 /** So viele Zeilen Serverausgabe je Instanz bleiben im Speicher. */
 const AUSGABE_ZEILEN = 400;
@@ -168,6 +173,9 @@ export function lokalerPortAus(zeile: string): number | null {
   return port >= 1 && port <= 65_535 ? port : null;
 }
 
+/** Die Zeile, mit der Next jedes Scheitern beim Binden einleitet — ohne den Grund selbst. */
+const ALLGEMEINER_STARTFEHLER = /Failed to start server/;
+
 /**
  * Ein Startfehler in der Ausgabe, auf Deutsch benannt — oder `null`.
  *
@@ -175,12 +183,15 @@ export function lokalerPortAus(zeile: string): number | null {
  * weil `next start` bei jedem Fehler beim Binden mit „Failed to start server"
  * und Exitcode 1 endet und der Fall dann sagen soll, **was** passiert ist,
  * statt nach 90 Sekunden „kam nicht hoch" zu melden.
+ *
+ * Next schreibt die allgemeine Zeile **vor** dem eigentlichen Grund; wie
+ * `anmelden` deshalb mit ihr umgeht, steht dort (`ALLGEMEINER_STARTFEHLER`).
  */
 export function startfehlerAus(zeile: string): string | null {
   const text = zeile.replace(ANSI, '').trim();
   if (/EADDRINUSE/.test(text)) return `Der Port ist belegt (EADDRINUSE) — ein anderer Prozess hält ihn: ${text}`;
   if (/EACCES/.test(text)) return `Der Port darf nicht gebunden werden (EACCES): ${text}`;
-  if (/Failed to start server/.test(text)) return `Next meldet „Failed to start server": ${text}`;
+  if (ALLGEMEINER_STARTFEHLER.test(text)) return `Next meldet „Failed to start server": ${text}`;
   return null;
 }
 
@@ -711,6 +722,19 @@ export function instanzDiagnose(kennung: string): InstanzDiagnose {
       Pipe, läuft ihr Puffer voll, und ein Kindprozess, der dann schreibt,
       bleibt stehen — genau die Art Hängen, die hier untersucht wird.
     */
+    /*
+      Startfehler werden gesammelt, statt beim ersten abzulehnen. Next
+      schreibt beim Scheitern des Bindens **zuerst** die allgemeine Zeile
+      „Failed to start server" und **danach** den eigentlichen Fehler
+      (`next/dist/server/lib/start-server.js` 15.5.26: `_log.error(…)`, dann
+      `console.error(err)`, dann `process.exit(1)`). Lehnte schon die erste
+      Zeile ab, nannte der Fall den Grund nie — „EADDRINUSE" kam eine Zeile
+      zu spät, und die Meldung sagte nur, *dass* der Start scheiterte. Ein
+      bestimmter Grund (belegt, nicht erlaubt) lehnt deshalb sofort ab; die
+      allgemeine Zeile allein wartet auf das Ende des Prozesses und steht
+      dann im Grund mit.
+    */
+    const startfehler: string[] = [];
     for (const kanal of ['stdout', 'stderr'] as const) {
       const strom = prozess[kanal];
       if (!strom) continue;
@@ -731,8 +755,10 @@ export function instanzDiagnose(kennung: string): InstanzDiagnose {
           portAufloesen(port);
           return;
         }
-        const startfehler = startfehlerAus(text);
-        if (startfehler) portAblehnen(new Error(startfehler));
+        const fehler = startfehlerAus(text);
+        if (!fehler) return;
+        startfehler.push(fehler);
+        if (!ALLGEMEINER_STARTFEHLER.test(text)) portAblehnen(new Error(fehler));
       });
       strom.on('data', (block: Buffer) => sammler.aufnehmen(decoder.write(block)));
       strom.on('end', () => {
@@ -741,11 +767,42 @@ export function instanzDiagnose(kennung: string): InstanzDiagnose {
       });
     }
 
+    /*
+      Das Ende eines Prozesses, der seinen Port nie nannte, wird erst bei
+      `close` gemeldet, nicht schon bei `exit`. Node sagt ausdrücklich, dass
+      beim `exit`-Ereignis die Ausgabeströme des Kindes noch offen sein
+      können: Die letzten Zeilen — oft genau die Fehlermeldung — wären dann
+      noch nicht gelesen, und ein Wettlauf entschiede, ob der Fall
+      „EADDRINUSE" oder nur „Prozess endete" meldet. `close` kommt erst,
+      wenn beide Ströme zu sind und `zeilenSammler` die letzte Zeile
+      abgegeben hat.
+
+      Hielte ein Enkelprozess die Ströme offen, käme `close` nie, und der
+      Start scheiterte erst nach 90 Sekunden mit „keine Local-Zeile" — eine
+      falsche Aussage über einen Prozess, der längst beendet ist. Dafür die
+      Gnadenfrist nach `exit`. `next start` 15.5 startet keinen Enkel (der
+      Server läuft im selben Prozess); die Frist ist Versicherung, kein
+      Ausgleich für Langsamkeit, und ein Ablehnen nach erfülltem Port ist
+      wirkungslos.
+    */
+    const endeMelden = () => {
+      const code = eintrag.beendet?.code ?? prozess.exitCode;
+      const signal = eintrag.beendet?.signal ?? prozess.signalCode;
+      const ende = `Code ${code ?? '–'}, Signal ${signal ?? '–'}`;
+      portAblehnen(
+        new Error(
+          startfehler.length > 0
+            ? `${startfehler.join(' / ')} (Prozess endete: ${ende})`
+            : `Der Prozess endete (${ende}), bevor er seinen Port nannte.`,
+        ),
+      );
+    };
     prozess.once('exit', (code, signal) => {
       eintrag.beendet = { code, signal, nachMs: Date.now() - eintrag.gestartet };
       ereignis(name, 'ende', { code, signal });
-      portAblehnen(new Error(`Der Prozess endete (Code ${code ?? '–'}, Signal ${signal ?? '–'}), bevor er seinen Port nannte.`));
+      setTimeout(endeMelden, ENDE_GNADE_MS).unref();
     });
+    prozess.once('close', endeMelden);
     return eintrag;
   };
 
