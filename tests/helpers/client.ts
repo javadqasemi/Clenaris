@@ -11,7 +11,21 @@
  * Voraussetzung ist deshalb ein laufender Server. `tests/README.md` sagt, wie.
  */
 
-export const BASE_URL = process.env.TEST_BASE_URL ?? 'http://localhost:3000';
+/**
+ * Ohne `TEST_BASE_URL` der Prüfserver (`npm run test:server`, Port 3001) —
+ * nicht mehr Port 3000 (2026-10-01).
+ *
+ * Auf 3000 läuft der Entwicklungsserver gegen die **Entwicklungsdatenbank**.
+ * Wer eine einzelne Prüfdatei ohne die Variable startete, schickte die
+ * schreibenden HTTP-Aufrufe dorthin, während `testDb()` (Aufräumen,
+ * Gegenproben) gegen die Testdatenbank lief: Testkundschaft und Rechnungen
+ * landeten im Entwicklungsbestand, und die Prüfung sah von ihnen nichts.
+ * Gefunden bei den W-11-Wiederholungen der Production-V2-Härtung, als ein
+ * isolierter Lauf die Laufzeitkonfiguration des Entwicklungsservers prüfte.
+ * Der Prüfweg (`verify.ts`) und die CI setzen die Variable ohnehin; die
+ * Vorgabe muss nur dann stimmen, wenn jemand von Hand eine Datei fährt.
+ */
+export const BASE_URL = process.env.TEST_BASE_URL ?? 'http://127.0.0.1:3001';
 
 export interface ApiResponse<T = unknown> {
   status: number;
