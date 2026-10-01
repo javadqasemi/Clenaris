@@ -4,7 +4,7 @@
  *
  *   npm run security:check                     # Standardlauf
  *   npm run security:check -- --streng         # „nicht geprüft" zählt als Fehler (CI)
- *   npm run security:check -- --datenbank      # Schranken auch in DATABASE_URL suchen
+ *   npm run security:check -- --datenbank      # Schranken auch in DATABASE_URL prüfen (nur mit statischem Umfang)
  *   npm run security:check -- --mit-tests      # Sicherheitsreihen gegen TEST_BASE_URL
  *   npm run security:check -- --melden         # Bericht an SECURITY_REPORT_URL senden
  *
@@ -45,6 +45,13 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSy
 import { join } from 'node:path';
 
 import { befundEinordnen, veralteteBewertungen, type Bewertung } from './security/bewertung';
+import {
+  livePruefen,
+  registerLesen as schrankenregisterLesen,
+  registerZusammenfassung,
+  schemaAusAdresse,
+  statischPruefen,
+} from './security/datenbank-schranken';
 import { geheimnisseImBestand } from './security/geheimnisse';
 import { melden, type Meldung } from './security/melden';
 import { musterPruefen, type Unterdrueckung } from './security/muster';
@@ -74,6 +81,16 @@ interface Pruefung {
 const WURZEL = join(__dirname, '..');
 const argv = process.argv.slice(2);
 const args = new Set(argv);
+
+/**
+ * Die Datenbank für `--datenbank` — aus der Umgebung des Aufrufs, gelesen
+ * **bevor** irgendein Modul `.env` laden kann (`src/lib/prisma-client.ts`
+ * bindet `dotenv/config` ein, und die Schnittstellenprüfung lädt Module aus
+ * `src/`). Sonst hinge es an der Reihenfolge der Prüfungen, ob ein Aufruf
+ * ohne Variable „nicht geprüft" meldet oder still die Entwicklungsdatenbank
+ * aus `.env` abgleicht.
+ */
+const DATENBANK_ADRESSE = process.env.DATABASE_URL?.trim() || undefined;
 
 /**
  * Welche Prüfungen dieser Aufruf verspricht (2026-09-27).
@@ -287,14 +304,18 @@ async function migrationen() {
     alles += `\n${sql}`;
   }
 
-  const schranken = json<{ teilindizes: string[]; trigger: string[] }>('security/datenbank-schranken.json');
-  for (const name of [...schranken.teilindizes, ...schranken.trigger]) {
-    if (!new RegExp(`\\b${name}\\b`).test(alles)) befunde.push({ schwere: 'blockierend', titel: `Handgeschriebene Schranke fehlt in den Migrationen: ${name}` });
-  }
-  const bekannt = new Set([...schranken.teilindizes, ...schranken.trigger]);
-  for (const m of alles.matchAll(/CREATE\s+UNIQUE\s+INDEX\s+"?(\w+)"?[^;]*?WHERE|CREATE\s+(?:OR\s+REPLACE\s+)?TRIGGER\s+"?(\w+)"?/gis)) {
-    const name = m[1] ?? m[2];
-    if (name && !bekannt.has(name)) befunde.push({ schwere: 'warnung', titel: `Neue handgeschriebene Schranke nicht in security/datenbank-schranken.json: ${name}` });
+  /*
+    Handgeschriebene Schranken (seit 2026-09-30 über
+    `scripts/security/datenbank-schranken.ts`). Vorher genügte es, dass der
+    **Name** irgendwo im Migrationstext stand — auch in einem Kommentar —, und
+    Prüf- und Ausschlussbedingungen waren gar nicht gelistet. Jetzt zählt der
+    Endstand nach allen Migrationen (angelegt minus wieder entfernt), für alle
+    fünf Arten; dieselben Regeln prüft `scripts/datenbank-schranken.ts` gegen
+    die Datenbank.
+  */
+  const schranken = schrankenregisterLesen(join(WURZEL, 'security', 'datenbank-schranken.json'));
+  for (const b of statischPruefen(alles, schranken)) {
+    befunde.push({ schwere: b.schwere, titel: `Datenbankschranke: ${b.titel}`, ort: 'security/datenbank-schranken.json' });
   }
 
   /**
@@ -309,28 +330,48 @@ async function migrationen() {
   const tor = torPruefen(reiheEinstufen(verzeichnis), registerLesen());
   for (const f of tor.fehler) befunde.push({ schwere: 'blockierend', titel: 'Migrations-Verträglichkeit', details: f });
 
-  let hinweis = `${schranken.teilindizes.length} Teilindizes, ${schranken.trigger.length} Trigger in den Migrationen gefunden; Verträglichkeit: ${tor.fehler.length === 0 ? 'jede Migration durchgesehen' : `${tor.fehler.length} Fehler`}.`;
-  // Verlangt, aber ohne Adresse: NICHT_GEPRUEFT statt BESTANDEN (M2, `security/pflichtabgleich.ts`).
+  let hinweis = `Datenbankschranken im Register: ${registerZusammenfassung(schranken)}; Verträglichkeit: ${tor.fehler.length === 0 ? 'jede Migration durchgesehen' : `${tor.fehler.length} Fehler`}.`;
+  // Verlangt, aber ohne Adresse oder ohne Verbindung: NICHT_GEPRUEFT statt
+  // BESTANDEN (M2, `security/pflichtabgleich.ts`). Eine Verbindung, die
+  // scheitert, ist dieselbe Lage wie eine fehlende Adresse — nicht ein
+  // Werkzeugfehler, der den ganzen Lauf als FEHLER markiert und die übrigen
+  // Befunde dieser Prüfung verschluckt.
   const abgleich = { verlangt: args.has('--datenbank'), gelaufen: false };
   if (abgleich.verlangt) {
-    if (!process.env.DATABASE_URL?.trim()) {
+    if (!DATENBANK_ADRESSE) {
       hinweis += ' Datenbankabgleich: NICHT GEPRÜFT (keine DATABASE_URL) — `--datenbank` verlangt ihn.';
     } else {
       const { erzeugePrismaClient } = await import('../src/lib/prisma-client');
-      const prisma = erzeugePrismaClient();
+      const prisma = erzeugePrismaClient({ url: DATENBANK_ADRESSE });
       try {
-        const indizes = new Set((await prisma.$queryRaw<{ n: string }[]>`SELECT indexname AS n FROM pg_indexes WHERE schemaname = 'public'`).map((r) => r.n));
-        const trigger = new Set((await prisma.$queryRaw<{ n: string }[]>`SELECT tgname AS n FROM pg_trigger WHERE NOT tgisinternal`).map((r) => r.n));
-        for (const n of schranken.teilindizes) if (!indizes.has(n)) befunde.push({ schwere: 'blockierend', titel: `Teilindex fehlt in der Datenbank: ${n}` });
-        for (const n of schranken.trigger) if (!trigger.has(n)) befunde.push({ schwere: 'blockierend', titel: `Trigger fehlt in der Datenbank: ${n}` });
+        // Kataloge statt Namen: gültig und bereit, eingeschaltet, validiert
+        // (Regeln und Begründung in `scripts/security/datenbank-schranken.ts`).
+        const live = await livePruefen(prisma, schranken, schemaAusAdresse(DATENBANK_ADRESSE));
+        for (const b of live) befunde.push({ schwere: b.schwere, titel: `Datenbank: ${b.titel}` });
         hinweis += ' Datenbankabgleich durchgeführt.';
         abgleich.gelaufen = true;
+      } catch (fehler) {
+        const grund = (fehler instanceof Error ? fehler.message : String(fehler)).split('\n').pop()!.replace(/(\w+:\/\/)[^@\s/]+@/g, '$1***@');
+        hinweis += ` Datenbankabgleich: NICHT GEPRÜFT (${grund.slice(0, 200)}).`;
       } finally {
-        await prisma.$disconnect();
+        await prisma.$disconnect().catch(() => undefined);
       }
     }
   }
-  return { status: statusMitPflichtteil(befunde, abgleich), befunde, hinweis };
+  /*
+    Eine Warnung darf den fehlenden Pflichtteil nicht überdecken (2026-09-30).
+    `statusMitPflichtteil` stuft jede Prüfung mit einem nicht-hinweisenden
+    Befund als BEFUND ein — auch, wenn der verlangte Datenbankabgleich gar
+    nicht lief. Mit einer einzigen Warnung (etwa einer neuen, noch nicht
+    eingetragenen Schranke) endete `--datenbank` ohne Adresse deshalb mit
+    Exitcode 0: BEFUND mit Warnung blockiert nicht, NICHT GEPRÜFT schon. Wer
+    den Abgleich verlangt, bekommt ihn oder ein Scheitern. Blockierendes geht
+    weiterhin vor — BEFUND scheitert ohnehin, und sein Befund bleibt so
+    obenauf statt hinter „nicht geprüft" zu verschwinden.
+  */
+  const status = statusMitPflichtteil(befunde, abgleich);
+  const pflichtteilFehlt = abgleich.verlangt && !abgleich.gelaufen && !befunde.some((b) => b.schwere === 'blockierend');
+  return { status: pflichtteilFehlt ? ('NICHT_GEPRUEFT' as const) : status, befunde, hinweis };
 }
 
 // ---------------------------------------------------------------------------
@@ -493,6 +534,26 @@ async function main() {
     );
   }
   if (MIT_TESTS) pruefungen.push(await pruefung('pruefreihe', 'Sicherheitsreihen der Prüfreihe', pruefreihe));
+  /*
+    `--datenbank` hängt an der Prüfung „Migrationen", und die gehört zum
+    statischen Umfang. Mit `--umfang tests` lief sie bis 2026-09-30 gar nicht
+    — und der Schalter wurde still übergangen: Der Aufruf verlangte den
+    Datenbankabgleich, bekam keinen und endete trotzdem mit Erfolg. Verlangt
+    und nicht gelaufen ist NICHT GEPRÜFT (dieselbe Regel wie
+    `security/pflichtabgleich.ts`), also ein Fehlschlag mit Exitcode 1.
+  */
+  if (args.has('--datenbank') && !MIT_STATISCH) {
+    pruefungen.push({
+      id: 'datenbankschranken',
+      titel: 'Datenbankschranken (--datenbank)',
+      status: 'NICHT_GEPRUEFT',
+      befunde: [],
+      hinweis:
+        '`--datenbank` gehört zur Prüfung „Migrationen" im statischen Umfang und läuft mit `--umfang tests` nicht. ' +
+        'Mit `--umfang statisch` oder `voll` aufrufen — oder das Datenbanktor allein: `npx tsx scripts/datenbank-schranken.ts`.',
+      dauerMs: 0,
+    });
+  }
 
   for (const p of pruefungen) {
     const blockierend = p.befunde.filter((b) => b.schwere === 'blockierend').length;
