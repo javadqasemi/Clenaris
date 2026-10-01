@@ -7,10 +7,14 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
 import {
+  GESCHWAERZT,
   PLATZHALTER,
+  auszug,
   baeumeVergleichen,
+  ersterJsonUnterschied,
   inhaltNormalisieren,
   pfadNormalisieren,
+  schwaerzen,
   verzeichnisQuelle,
 } from '../../scripts/release/bau-vergleich-regeln';
 
@@ -240,7 +244,15 @@ describe('Bauvergleich', () => {
   });
 
   it('jeder andere Unterschied wird gemeldet', () => {
-    const a = bau({ 'server/app/bewertungen.html': '<h1>Bewertungen</h1><footer>Stand: 30.09.2026 15:29</footer>' });
+    // Ein je Bau gewürfelter Schlüssel an einer Stelle, die keine Regel kennt —
+    // so sähe es aus, wenn eine neue Next-Fassung einen weiteren ablegte.
+    const neuerOrt = (schluessel: string) => JSON.stringify({ version: 1, verbindung: { schluessel } }, null, 2);
+    const neuerSchluesselA = zufall(32);
+    const neuerSchluesselB = zufall(32);
+    const a = bau({
+      'server/app/bewertungen.html': '<h1>Bewertungen</h1><footer>Stand: 30.09.2026 15:29</footer>',
+      'server/neuer-ort.json': neuerOrt(neuerSchluesselA),
+    });
     // Zweites Argument: Die Schlüssel der Middleware werden normalisiert, ein anderer Pfadbereich nicht.
     const b = bau({
       // Das Baudatum im HTML — der Fall, für den der Vergleich gebaut ist.
@@ -264,6 +276,7 @@ describe('Bauvergleich', () => {
       'required-server-files.json': JSON.stringify({ version: 1, appDir: '/tmp/anderswo', config: { distDir: '.next' } }),
       // Ein Byte anders, beide ungültiges UTF-8: als UTF-8 gelesen wären beide „�" und gleich.
       'media/logo.png': Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0xfe, 0x00]),
+      'server/neuer-ort.json': neuerOrt(neuerSchluesselB),
     }, { matcher: '/konto/:path*' });
 
     const befund = baeumeVergleichen(verzeichnisQuelle(a.verzeichnis), verzeichnisQuelle(b.verzeichnis));
@@ -275,6 +288,7 @@ describe('Bauvergleich', () => {
       'server/app/bewertungen.html': 'inhalt',
       'server/app/neu.html': 'nur-in-b',
       'server/middleware-manifest.json': 'inhalt',
+      'server/neuer-ort.json': 'inhalt',
       'server/server-reference-manifest.json': 'inhalt',
       'static/chunks/main-app-5e1f6c2a.js': 'nur-in-a',
       'static/chunks/main-app-9b0c77d1.js': 'nur-in-b',
@@ -284,6 +298,19 @@ describe('Bauvergleich', () => {
     const datum = befund.unerwartet.find((u) => u.pfad === 'server/app/bewertungen.html');
     assert.match(datum?.auszugA ?? '', /15:29/);
     assert.match(datum?.auszugB ?? '', /15:31/);
+    assert.equal(datum?.jsonPfad, undefined, 'HTML hat keinen JSON-Pfad');
+
+    // Bei Manifesten sagt der JSON-Pfad, welcher Wert abweicht — auch wenn der Auszug ihn schwärzen muss.
+    const jsonPfade = Object.fromEntries(befund.unerwartet.filter((u) => u.jsonPfad).map((u) => [u.pfad, u.jsonPfad]));
+    assert.deepEqual(jsonPfade, {
+      'prerender-manifest.json': 'routes["/"].initialRevalidateSeconds',
+      'required-server-files.json': 'appDir',
+      'server/middleware-manifest.json': 'middleware["/"].matchers[0].originalSource',
+      'server/neuer-ort.json': 'verbindung.schluessel',
+      'server/server-reference-manifest.json': 'node["7f3a"]',
+    });
+    const neu = befund.unerwartet.find((u) => u.pfad === 'server/neuer-ort.json');
+    assert.match(neu?.auszugA ?? '', /"verbindung": \{\s+"schluessel": "\[…\]/, 'die Namen bleiben lesbar, der Wert ist geschwärzt');
 
     // Eine Zeichenkette, die wie eine Build-ID aussieht, aber keine ist, wird nicht weggeräumt.
     const fremd = neueBuildId();
@@ -297,9 +324,57 @@ describe('Bauvergleich', () => {
     assert.equal(lauf.status, 1, `${lauf.stdout}\n${lauf.stderr}`);
     assert.match(lauf.stdout, /ERGEBNIS: unerwartete Unterschiede/);
     assert.match(lauf.stdout, /server\/app\/bewertungen\.html — Inhalt ab Byte/);
-    const inhalt = JSON.parse(readFileSync(bericht, 'utf8')) as { ergebnis: string; unerwartet: { pfad: string }[] };
+    assert.match(lauf.stdout, /server\/middleware-manifest\.json — Inhalt ab Byte \d+, JSON-Pfad middleware\["\/"\]\.matchers\[0\]\.originalSource/);
+    const text = readFileSync(bericht, 'utf8');
+    const inhalt = JSON.parse(text) as { ergebnis: string; unerwartet: { pfad: string }[] };
     assert.equal(inhalt.ergebnis, 'unerwartete-unterschiede');
-    assert.equal(inhalt.unerwartet.length, 9);
+    assert.equal(inhalt.unerwartet.length, 10);
+    // Auch ein Schlüssel an unbekanntem Ort steht weder im Bericht noch in der Ausgabe.
+    assert.deepEqual(
+      [neuerSchluesselA, neuerSchluesselB, ...alleSchluessel(a, b)].filter((s) => text.includes(s) || lauf.stdout.includes(s)),
+      [],
+    );
+  });
+
+  /**
+   * Bis 2026-10-01 schwärzte der Auszug jede Folge ab 24 Zeichen. Am echten
+   * Vergleich zweier Bauten stand der Befund in der Middleware deshalb als
+   * `"[…]": "[…]"` da — weder Schlüsselname noch Stelle erkennbar.
+   */
+  it('der Auszug schwärzt Schlüssel und lässt Namen und Pfade lesbar', () => {
+    const aktion = randomBytes(32).toString('base64');
+    const vorschau = zufall(32);
+    const text = [
+      `"NEXT_SERVER_ACTIONS_ENCRYPTION_KEY": "${aktion}",`,
+      `"__NEXT_PREVIEW_MODE_SIGNING_KEY": "${vorschau}",`,
+      '"lowPriorityFiles": ["static/chunks/webpack-0b5d8249fb15f6f9.js"],',
+      '"previewModeEncryptionKey": 1',
+    ].join(' ');
+    const geschwaerzt = schwaerzen(text);
+    for (const lesbar of ['NEXT_SERVER_ACTIONS_ENCRYPTION_KEY', '__NEXT_PREVIEW_MODE_SIGNING_KEY', 'static/chunks/webpack-0b5d8249fb15f6f9.js', 'previewModeEncryptionKey']) {
+      assert.ok(geschwaerzt.includes(lesbar), `${lesbar} bleibt lesbar`);
+    }
+    assert.ok(!geschwaerzt.includes(aktion) && !geschwaerzt.includes(vorschau), 'beide Schlüssel sind geschwärzt');
+    assert.equal(geschwaerzt.split(GESCHWAERZT).length - 1, 2);
+    // Base64 mit Auffüllung gilt auch ohne Ziffer als Schlüssel.
+    assert.equal(schwaerzen('AbCdEfGhIjKlMnOpQrStUvWxYz+/AbCdEfGhIjKlMnO='), GESCHWAERZT);
+
+    // Ein Rand, der einen Schlüssel anschneidet, lässt keinen Rest stehen —
+    // auch nicht die 30 Zeichen, die für die Hex-Regel zu kurz wären.
+    const angeschnitten = `${'x'.repeat(100)} wert=${vorschau} ${'y'.repeat(100)}`;
+    // Der linke Rand (40 Zeichen vor der Stelle) fällt 34 Zeichen tief in den Schlüssel.
+    const ausschnitt = auszug(angeschnitten, angeschnitten.indexOf(vorschau) + 34 + 40);
+    for (let i = 0; i + 12 <= vorschau.length; i++) {
+      assert.ok(!ausschnitt.includes(vorschau.slice(i, i + 12)), `kein Stück des Schlüssels ab Zeichen ${i}`);
+    }
+    assert.ok(ausschnitt.includes(`wert=${GESCHWAERZT}`), ausschnitt);
+
+    // Der JSON-Pfad: Bezeichner mit Punkt, alles andere in Klammern; fehlende Schlüssel und Längen zählen.
+    assert.equal(ersterJsonUnterschied({ a: { 'b/c': [1, 2] } }, { a: { 'b/c': [1, 3] } }), 'a["b/c"][1]');
+    assert.equal(ersterJsonUnterschied({ a: 1 }, { a: 1, neu: true }), 'neu');
+    assert.equal(ersterJsonUnterschied([1], [1, 2]), '[1]');
+    assert.equal(ersterJsonUnterschied(1, 2), '(Wurzel)');
+    assert.equal(ersterJsonUnterschied({ a: 1, b: 2 }, { b: 2, a: 1 }), null, 'nur die Reihenfolge');
   });
 
   it('ein Aufruf, der nichts vergleichen kann, scheitert', () => {

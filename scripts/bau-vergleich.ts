@@ -24,7 +24,9 @@
  *
  * Der Bericht (`--bericht`) enthält alle erwarteten und unerwarteten
  * Unterschiede mit Pfad und, bei Inhalten, einen kurzen, geschwärzten Auszug
- * um die erste abweichende Stelle.
+ * um die erste abweichende Stelle — bei JSON-Dateien dazu den Pfad des ersten
+ * abweichenden Werts, damit ein Befund in einem Manifest auch dann zuzuordnen
+ * ist, wenn der Wert selbst geschwärzt werden muss.
  */
 import { existsSync, mkdirSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
@@ -83,7 +85,12 @@ function main(): number {
   for (const [art, anzahl] of [...jeRegel].sort()) console.log(`  ${String(anzahl).padStart(6)} × ${ERWARTETE_ABWEICHUNGEN[art]}`);
   console.log(`Unerwartet   : ${befund.unerwartet.length} Dateien`);
   for (const u of befund.unerwartet.slice(0, HOECHSTENS)) {
-    const art = u.art === 'nur-in-a' ? 'nur in A' : u.art === 'nur-in-b' ? 'nur in B' : `Inhalt ab Byte ${u.stelle}`;
+    const art =
+      u.art === 'nur-in-a'
+        ? 'nur in A'
+        : u.art === 'nur-in-b'
+          ? 'nur in B'
+          : `Inhalt ab Byte ${u.stelle}${u.jsonPfad ? `, JSON-Pfad ${u.jsonPfad}` : ''}`;
     console.log(`  ${u.pfad} — ${art}`);
     if (u.art === 'inhalt') {
       console.log(`      A: ${u.auszugA}`);

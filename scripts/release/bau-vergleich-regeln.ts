@@ -263,6 +263,11 @@ export interface Unerwartet {
   art: UnerwarteteArt;
   /** Bei `inhalt`: Stelle des ersten Unterschieds und je ein kurzer Auszug. */
   stelle?: number;
+  /**
+   * Bei `inhalt` in einer JSON-Datei: der Pfad des ersten abweichenden Werts
+   * (`middleware["/"].matchers[0].originalSource`) — geschwärzt wie der Auszug.
+   */
+  jsonPfad?: string;
   auszugA?: string;
   auszugB?: string;
 }
@@ -277,23 +282,133 @@ export interface Vergleichsbefund {
   unerwartet: Unerwartet[];
 }
 
+export const GESCHWAERZT = '[…]';
+
+/** Zeichen, aus denen Hex-, Base64- und Base64url-Werte bestehen. */
+const WERTZEICHEN = /[A-Za-z0-9+/=_-]/;
+
+/**
+ * Sieht eine lange Folge aus Wertzeichen wie ein Zufallswert aus?
+ *
+ * Gross- **und** Kleinbuchstaben **und** eine Ziffer — so sieht Base64 aus,
+ * und so sieht kaum ein Name aus: `NEXT_SERVER_ACTIONS_ENCRYPTION_KEY` hat
+ * keine Kleinbuchstaben, `static/chunks/webpack-0b5d8249fb15f6f9` keine
+ * Grossbuchstaben, `previewModeEncryptionKey` keine Ziffer. Dazu Base64 mit
+ * Auffüllung (`=` am Ende) auch ohne Ziffer: Der Aktionsschlüssel ist Base64
+ * aus 32 Bytes, 44 Zeichen mit einem `=` — die Wahrscheinlichkeit, dass darin
+ * keine Ziffer vorkommt, ist klein (rund 1 zu 1500), aber nicht null.
+ * Hex-Werte (Vorschauschlüssel, Kennungen) fängt `schwaerzen` vorher als
+ * eigene Regel.
+ */
+export function siehtZufaelligAus(folge: string): boolean {
+  const gemischt = /[A-Z]/.test(folge) && /[a-z]/.test(folge);
+  return gemischt && (/\d/.test(folge) || folge.endsWith('='));
+}
+
+/**
+ * Was wie ein Schlüssel aussieht, durch `[…]` ersetzen — und nur das.
+ *
+ *  • jede Hex-Folge ab 32 Zeichen, auch mitten in einem längeren Wort (die
+ *    Vorschauschlüssel sind 32 bzw. 64 Hex-Zeichen);
+ *  • jede Folge aus Wertzeichen ab 24 Zeichen, die `siehtZufaelligAus`.
+ *
+ * Bis 2026-10-01 fiel jede Folge ab 24 Zeichen darunter. Das traf auch
+ * Schlüsselnamen und Pfade, und gerade der wahrscheinlichste Befund — ein
+ * neuer Schlüssel unter einem bekannten Namen — stand als
+ * `"[…]": "[…]"` im Bericht: unlesbar, ohne Werkzeug nicht zuzuordnen.
+ */
+export function schwaerzen(text: string): string {
+  return text
+    .replace(/[0-9a-fA-F]{32,}/g, GESCHWAERZT)
+    .replace(/[A-Za-z0-9+/=_-]{24,}/g, (folge) => (siehtZufaelligAus(folge) ? GESCHWAERZT : folge));
+}
+
 /**
  * Ein Auszug um die erste abweichende Stelle — damit ein Befund wie ein
  * eingebettetes Datum ohne Werkzeug zu erkennen ist.
  *
- * Lange Folgen aus Hex- oder Base64-Zeichen werden geschwärzt: Der Auszug
- * landet im CI-Protokoll und im Bericht, und sollte Next einmal einen neuen
- * zufälligen Schlüssel an einer Stelle ablegen, die diese Liste nicht kennt,
- * stünde er sonst dort — ausgerechnet der Schlüssel des Baus, der vielleicht
- * ausgeliefert wird. Der Vorschauschlüssel etwa öffnet den Entwurfsmodus der
- * Website (`/admin/inhalte`).
+ * Geschwärzt (`schwaerzen`): Der Auszug landet im CI-Protokoll und im
+ * Bericht, und sollte Next einmal einen neuen zufälligen Schlüssel an einer
+ * Stelle ablegen, die diese Liste nicht kennt, stünde er sonst dort —
+ * ausgerechnet der Schlüssel des Baus, der vielleicht ausgeliefert wird. Der
+ * Vorschauschlüssel etwa öffnet den Entwurfsmodus der Website
+ * (`/admin/inhalte`).
+ *
+ * Der Ausschnitt wird an den Rändern bis zum Ende eines angeschnittenen Werts
+ * erweitert, **bevor** geschwärzt wird. Sonst schnitte der Rand einen
+ * Schlüssel so an, dass vom Rest weniger als die Mindestlänge übrig bleibt —
+ * und 30 von 64 Hex-Zeichen eines Schlüssels stünden ungeschwärzt im
+ * Protokoll. Die Erweiterung ist begrenzt, damit ein eingebetteter Datenblock
+ * den Auszug nicht auf Megabytes aufbläht; der angeschnittene Rest ist dann
+ * selbst lang genug für die Regel.
  */
 export function auszug(text: string, stelle: number, rand = 40): string {
-  const roh = text.slice(Math.max(0, stelle - rand), stelle + rand);
-  return Buffer.from(roh, 'latin1')
-    .toString('utf8')
-    .replace(/[\u0000-\u001f\u007f]/g, ' ')
-    .replace(/[A-Za-z0-9+/=_-]{24,}/g, '[…]');
+  let von = Math.max(0, stelle - rand);
+  let bis = Math.min(text.length, stelle + rand);
+  for (let n = 0; von > 0 && n < 512 && WERTZEICHEN.test(text[von - 1]!); n++) von--;
+  for (let n = 0; bis < text.length && n < 512 && WERTZEICHEN.test(text[bis]!); n++) bis++;
+  return schwaerzen(
+    Buffer.from(text.slice(von, bis), 'latin1')
+      .toString('utf8')
+      .replace(/[\u0000-\u001f\u007f]/g, ' '),
+  );
+}
+
+/** Ein JSON-Schlüssel als Teil eines Pfads: `.name` für Bezeichner, sonst `["/"]`. */
+function pfadteil(schluessel: string): string {
+  return /^[A-Za-z_$][\w$]*$/.test(schluessel) ? `.${schluessel}` : `[${JSON.stringify(schluessel)}]`;
+}
+
+/**
+ * Der Pfad des ersten abweichenden Werts zweier JSON-Werte, oder `null`, wenn
+ * sie gleich sind (dann unterschied sich nur die Schreibweise, etwa die
+ * Reihenfolge der Schlüssel). Schlüssel in der Reihenfolge von `a`, danach die
+ * nur in `b` vorhandenen; ein Schlüssel, der auf einer Seite fehlt, ist selbst
+ * die Abweichung.
+ */
+export function ersterJsonUnterschied(a: unknown, b: unknown): string | null {
+  const gehe = (x: unknown, y: unknown, pfad: string): string | null => {
+    if (Object.is(x, y)) return null;
+    if (Array.isArray(x) && Array.isArray(y)) {
+      for (let i = 0; i < Math.max(x.length, y.length); i++) {
+        if (i >= x.length || i >= y.length) return `${pfad}[${i}]`;
+        const tiefer = gehe(x[i], y[i], `${pfad}[${i}]`);
+        if (tiefer !== null) return tiefer;
+      }
+      return null;
+    }
+    const objekt = (w: unknown): w is Record<string, unknown> => !!w && typeof w === 'object' && !Array.isArray(w);
+    if (objekt(x) && objekt(y)) {
+      for (const schluessel of new Set([...Object.keys(x), ...Object.keys(y)])) {
+        const teil = `${pfad}${pfadteil(schluessel)}`;
+        if (!(schluessel in x) || !(schluessel in y)) return teil;
+        const tiefer = gehe(x[schluessel], y[schluessel], teil);
+        if (tiefer !== null) return tiefer;
+      }
+      return null;
+    }
+    return pfad;
+  };
+  const gefunden = gehe(a, b, '');
+  if (gefunden === null) return null;
+  return gefunden.replace(/^\./, '') || '(Wurzel)';
+}
+
+/**
+ * Den JSON-Pfad der ersten Abweichung zweier normalisierter Dateiinhalte —
+ * nur, wenn beide als JSON lesbar sind. Der Byte-Versatz allein sagt bei
+ * einem Manifest wenig („Byte 1100"); der Pfad sagt, welcher Wert es ist,
+ * auch wenn der Auszug ihn schwärzen muss.
+ */
+export function jsonUnterschiedsPfad(textA: string, textB: string): string | null {
+  try {
+    const a = JSON.parse(Buffer.from(textA, 'latin1').toString('utf8')) as unknown;
+    const b = JSON.parse(Buffer.from(textB, 'latin1').toString('utf8')) as unknown;
+    const pfad = ersterJsonUnterschied(a, b);
+    return pfad === null ? null : schwaerzen(pfad);
+  } catch {
+    return null;
+  }
 }
 
 function ersteAbweichung(a: string, b: string): number {
@@ -350,7 +465,15 @@ export function baeumeVergleichen(a: Baumquelle, b: Baumquelle): Vergleichsbefun
       continue;
     }
     const stelle = ersteAbweichung(normA.text, normB.text);
-    befund.unerwartet.push({ pfad, art: 'inhalt', stelle, auszugA: auszug(normA.text, stelle), auszugB: auszug(normB.text, stelle) });
+    const jsonPfad = pfad.endsWith('.json') ? jsonUnterschiedsPfad(normA.text, normB.text) : null;
+    befund.unerwartet.push({
+      pfad,
+      art: 'inhalt',
+      stelle,
+      ...(jsonPfad !== null ? { jsonPfad } : {}),
+      auszugA: auszug(normA.text, stelle),
+      auszugB: auszug(normB.text, stelle),
+    });
   }
   return befund;
 }
