@@ -1,7 +1,7 @@
 import { after, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { call, del, get, post, put, requireServer, sleep } from '../helpers/client';
+import { call, del, get, patch, post, put, requireServer, sleep } from '../helpers/client';
 import { loginAll, type AccountName } from '../helpers/accounts';
 import { eigeneOrganisationId, testDb, testDbGrund, testDbSchliessen } from '../helpers/testdb';
 
@@ -143,6 +143,158 @@ describe('Website- und Betriebsbereiche', { concurrency: 1 }, async () => {
       );
       assert.equal(response.status, 201);
       cleanup.push(`/api/gallery/${response.payload.data.id}`);
+    });
+
+    /*
+      Ein veröffentlichter Eintrag auf der Website (2026-09-30): sein
+      Alternativtext und die Seiten, die ihn zeigen.
+
+      Bis dahin hiessen die Bilder im `alt` nur „Vorher"/„Nachher", und eine
+      Änderung an der Galerie erneuerte `/galerie` und die Startseite, nicht
+      aber die Leistungsseiten — die zeigen den ersten veröffentlichten
+      Eintrag ihrer Art und blieben bis zu einer Stunde beim alten Stand,
+      auch nach dem Zurückziehen eines Fotos. Beide Fälle wären gegen diesen
+      Stand rot.
+
+      Nicht hervorgehoben (`featured: false`), damit die Startseite unberührt
+      bleibt; Bilder nur über https (das Schema lehnt http ab). Was ein
+      abgebrochener Lauf hinterlassen hat, wird vorher an der Titelmarke
+      erkannt und gelöscht.
+    */
+    describe('veröffentlichter Eintrag auf der Website', () => {
+      const MARKE = 'Prüfvergleich';
+      const titel = `${MARKE} ${Array.from({ length: 6 }, () => String.fromCharCode(97 + Math.floor(Math.random() * 26))).join('')}`;
+      const ort = 'Bern Prüfquartier';
+      // Die Beschriftungen der Galerie für die Art eines Eintrags — so steht
+      // es neben dem Bild und im Alternativtext (`galerie/page.tsx`).
+      const ART_BESCHRIFTUNG: Record<string, string> = {
+        RESIDENTIAL_CLEANING: 'Unterhaltsreinigung',
+        MOVE_OUT_CLEANING: 'Umzugsreinigung',
+        OFFICE_CLEANING: 'Büroreinigung',
+        WINDOW_CLEANING: 'Fensterreinigung',
+        CONSTRUCTION_CLEANING: 'Baureinigung',
+        BUILDING_MAINTENANCE: 'Hauswartung',
+        SPECIAL: 'Spezialauftrag',
+      };
+      let leistung: { slug: string; name: string; kind: string } | undefined;
+      let eintragId = '';
+
+      /**
+       * Der Alternativtext des `<img>` mit dieser Bildadresse, mit
+       * aufgelösten Entitäten — ein Leistungsname wie „Hauswartung &
+       * Liegenschaftsbetreuung" steht im Attribut als `&amp;`.
+       */
+      const altVon = (html: string, src: string) => {
+        const tag = [...html.matchAll(/<img\b[^>]*>/g)].map((t) => t[0]).find((t) => t.includes(`src="${src}"`));
+        const roh = tag ? /\balt="([^"]*)"/.exec(tag)?.[1] : undefined;
+        if (roh === undefined) return null;
+        return roh
+          .replace(/&lt;/g, '<')
+          .replace(/&gt;/g, '>')
+          .replace(/&quot;/g, '"')
+          .replace(/&#x27;/g, "'")
+          .replace(/&amp;/g, '&');
+      };
+
+      it('räumt Reste eines abgebrochenen Laufs weg und wählt eine Leistung', async () => {
+        const liste = await get<{
+          data: Array<{ id: string; title: string; published: boolean; serviceKind: string | null }>;
+        }>('/api/gallery', { jar: jars.admin });
+        assert.equal(liste.status, 200);
+        for (const rest of liste.payload.data.filter((e) => e.title.startsWith(MARKE))) {
+          await del(`/api/gallery/${rest.id}`, { jar: jars.admin });
+        }
+
+        const leistungen = await get<{ data: Array<{ slug: string; name: string; kind: string; active: boolean }> }>(
+          '/api/services',
+          { jar: jars.admin },
+        );
+        assert.equal(leistungen.status, 200);
+        /*
+          Eine Leistung, deren Art noch keinen veröffentlichten Eintrag hat.
+          Die Leistungsseite zeigt den ersten veröffentlichten Eintrag ihrer
+          Art nach `position`, und der Prüfeintrag steht auf 0 (tiefer lässt
+          das Schema nicht zu). Hätte die Art schon einen Eintrag auf 0, wäre
+          die Reihenfolge der beiden in Postgres nicht festgelegt — der Fall
+          scheiterte zufällig, mit einer Meldung, die nach fehlender
+          Erneuerung klingt. Die Demodaten veröffentlichen keine Einträge;
+          ist trotzdem jede Art belegt, scheitert die Vorbereitung hier mit
+          diesem Grund, statt später irrezuführen.
+        */
+        const belegt = new Set(
+          liste.payload.data.filter((e) => e.published && !e.title.startsWith(MARKE)).map((e) => e.serviceKind),
+        );
+        leistung = leistungen.payload.data.find((l) => l.active && l.kind in ART_BESCHRIFTUNG && !belegt.has(l.kind));
+        assert.ok(leistung, 'keine aktive Leistung, deren Art noch ohne veröffentlichten Galerieeintrag ist');
+
+        // Die Leistungsseite einmal aufrufen, bevor es den Eintrag gibt: Ab
+        // jetzt liegt sie im Zwischenspeicher, und nur eine Erneuerung bringt
+        // den Eintrag darauf.
+        const vorher = await get(`/leistungen/${leistung.slug}`);
+        assert.equal(vorher.status, 200);
+        assert.ok(!vorher.text.includes(titel));
+      });
+
+      it('veröffentlichter Galerieeintrag: /galerie nennt ihn im alt beider Bilder', async () => {
+        assert.ok(leistung, 'Vorbereitung fehlgeschlagen');
+        const angelegt = await post<{ data: { id: string } }>(
+          '/api/gallery',
+          {
+            title: titel,
+            serviceKind: leistung.kind,
+            location: ort,
+            beforeUrl: 'https://example.com/pruefvergleich-vorher.jpg',
+            afterUrl: 'https://example.com/pruefvergleich-nachher.jpg',
+            featured: false,
+            position: 0,
+            published: true,
+          },
+          { jar: jars.admin },
+        );
+        assert.equal(angelegt.status, 201, angelegt.text);
+        eintragId = angelegt.payload.data.id;
+        cleanup.push(`/api/gallery/${eintragId}`);
+
+        await sleep(600);
+        const html = (await get('/galerie')).text;
+        const beschreibung = `${titel}, ${ART_BESCHRIFTUNG[leistung.kind]}, ${ort}`;
+        assert.equal(altVon(html, 'https://example.com/pruefvergleich-vorher.jpg'), `Vorher: ${beschreibung}`);
+        assert.equal(altVon(html, 'https://example.com/pruefvergleich-nachher.jpg'), `Nachher: ${beschreibung}`);
+      });
+
+      it('eine Galerieänderung erneuert auch die Leistungsseiten', async () => {
+        assert.ok(leistung && eintragId, 'Vorbereitung fehlgeschlagen');
+        const pfad = `/leistungen/${leistung.slug}`;
+
+        // Angelegt: Die Leistungsseite zeigt den Eintrag — mit Alternativtext
+        // aus Titel, dem Namen dieser Leistung und dem Ort.
+        const nachAnlegen = (await get(pfad)).text;
+        // Gegen die erste Fassung der Erneuerung (2026-09-30) scheitert genau
+        // diese Erwartung: `revalidatePath('/leistungen/[slug]', 'page')` ohne
+        // die Routengruppe `(public)` traf kein Merkmal der Seite (siehe
+        // `revalidateGallery` und den reinen Fall in `seo-rechenkern.test.ts`).
+        assert.equal(
+          altVon(nachAnlegen, 'https://example.com/pruefvergleich-vorher.jpg'),
+          `Vorher: ${titel}, ${leistung.name}, ${ort}`,
+          'die Leistungsseite zeigt den neuen Eintrag nicht — wird sie erneuert?',
+        );
+
+        // Geändert: der neue Titel, nicht mehr der alte.
+        const neuerTitel = `${titel} geaendert`;
+        const geaendert = await patch(`/api/gallery/${eintragId}`, { title: neuerTitel }, { jar: jars.admin });
+        assert.equal(geaendert.status, 200, geaendert.text);
+        await sleep(600);
+        const nachAendern = (await get(pfad)).text;
+        assert.ok(nachAendern.includes(neuerTitel), 'die Änderung erreicht die Leistungsseite nicht');
+
+        // Zurückgezogen: Das Foto verschwindet sofort, nicht erst nach einer Stunde.
+        const zurueck = await patch(`/api/gallery/${eintragId}`, { published: false }, { jar: jars.admin });
+        assert.equal(zurueck.status, 200, zurueck.text);
+        await sleep(600);
+        const nachZurueckziehen = (await get(pfad)).text;
+        assert.ok(!nachZurueckziehen.includes(titel), 'ein zurückgezogener Eintrag steht noch auf der Leistungsseite');
+        assert.equal(altVon(nachZurueckziehen, 'https://example.com/pruefvergleich-vorher.jpg'), null);
+      });
     });
   });
 

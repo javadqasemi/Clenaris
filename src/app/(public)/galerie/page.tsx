@@ -7,6 +7,7 @@ import { getContent } from '@/server/services/content.service';
 import { createCms } from '@/lib/cms/editable';
 import { isPreview } from '@/lib/cms/preview';
 import { BeforeAfter } from '@/components/marketing/before-after';
+import { vergleichsbildBeschreibung } from '@/lib/seo/vergleichsbild';
 import { Badge } from '@/components/ui/badge';
 import { CallToAction, Section } from '@/components/marketing/sections';
 import { EmptyState } from '@/components/app/page-parts';
@@ -77,6 +78,12 @@ export default async function GalleryPage() {
                     beforeSrc={item.beforeUrl}
                     afterSrc={item.afterUrl}
                     caption="Regler verschieben"
+                    // Alternativtext aus genau den Angaben, die daneben stehen (2026-09-30).
+                    beschreibung={vergleichsbildBeschreibung({
+                      titel: item.title,
+                      leistung: item.serviceKind ? SERVICE_LABELS[item.serviceKind] : null,
+                      ort: item.location,
+                    })}
                     beforeAttrs={cms.asset('galleryItem', item.id, 'beforeUrl')}
                     afterAttrs={cms.asset('galleryItem', item.id, 'afterUrl')}
                   />

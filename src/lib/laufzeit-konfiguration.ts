@@ -68,6 +68,29 @@ const GA = /^G-[A-Z0-9]{4,20}$/;
 const GTM = /^GTM-[A-Z0-9]{4,12}$/;
 const PIXEL = /^[0-9]{6,20}$/;
 
+/**
+ * Ist die eigene Besuchsmessung eingeschaltet (`CLENARIS_BESUCHSMESSUNG`,
+ * 2026-09-30)? **Nur der Wert „an"** schaltet sie ein — nach dem Entfernen
+ * der Leerzeichen am Rand, sonst buchstabengenau.
+ *
+ * Warum so eng und nicht „alles, was nach ja aussieht" (`true`, `1`, `on`,
+ * `AN`): Die Messung darf in der Produktion erst laufen, wenn die
+ * Datenschutzerklärung rechtlich geprüft ist (TA-02). Ein Schalter, der sich
+ * aus Versehen einschalten lässt — ein `1` aus einer Vorlage, ein `true` aus
+ * Gewohnheit —, wäre genau die stille Entscheidung, die er verhindern soll.
+ * Ein einziges deutsches Wort ist eine bewusste Handlung; alles andere, auch
+ * das Fehlen, heisst aus.
+ *
+ * Eine Regel für alle Leser: `serverEnv()` (Route), diese Datei (Browser)
+ * und `scripts/production-preflight.ts` (Warnung) urteilen gleich. Die
+ * Vorprüfung vergleicht dieselbe Zeichenkette selbst, weil sie ohne die
+ * Anwendung laufen muss — `traffic-rechenkern.test.ts` hält beide Stellen an
+ * denselben Fällen fest, damit sie nicht auseinanderlaufen.
+ */
+export function besuchsmessungEingeschaltet(wert: string | undefined): boolean {
+  return wert?.trim() === 'an';
+}
+
 export const PublicRuntimeConfigSchema = z
   .object({
     appUrl: z.string().url(),
@@ -78,6 +101,15 @@ export const PublicRuntimeConfigSchema = z
         facebookPixelId: z.string().regex(PIXEL).optional(),
       })
       .strict(),
+    /**
+     * Darf der Browser die eigene Besuchsmessung überhaupt melden
+     * (2026-09-30)? Pflichtfeld, nicht optional: Fehlte es, müsste der
+     * Browser raten, und ein Raten, das „an" ergäbe, wäre eine Messung ohne
+     * Entscheidung der Betreiberin. Der Wert sagt nur, *ob* gemessen werden
+     * darf — die Einwilligung „Statistik" bleibt im Browser die zweite,
+     * unabhängige Schranke.
+     */
+    besuchsmessung: z.boolean(),
   })
   .strict();
 
@@ -101,10 +133,53 @@ export function oeffentlicheKonfigurationAus(env: Umgebung): PublicRuntimeConfig
       gtmId: nurWennGueltig(env.NEXT_PUBLIC_GTM_ID, GTM),
       facebookPixelId: nurWennGueltig(env.NEXT_PUBLIC_FACEBOOK_PIXEL_ID, PIXEL),
     },
+    besuchsmessung: besuchsmessungEingeschaltet(env.CLENARIS_BESUCHSMESSUNG),
   });
 }
 
 /** Die Browser-Konfiguration dieser Instanz. */
 export function oeffentlicheKonfiguration(): PublicRuntimeConfig {
   return oeffentlicheKonfigurationAus(laufzeitUmgebung());
+}
+
+// ---------------------------------------------------------------------------
+//  Im Browser: die Konfiguration einmal je Seite holen
+// ---------------------------------------------------------------------------
+
+/** Die eine Anfrage dieser Seite — `null`, solange niemand gefragt hat. */
+let imBrowserGeholt: Promise<PublicRuntimeConfig | null> | null = null;
+
+/**
+ * Die Browser-Konfiguration vom Server holen — **einmal je geladener Seite**,
+ * geteilt von allen, die sie brauchen (2026-09-30).
+ *
+ * Zwei Verbraucher fragen danach: die Analyse-Skripte (`analytics.tsx`,
+ * Kennungen) und die eigene Besuchsmessung (`lib/traffic/erfassen.ts`,
+ * Schalter). Jeder mit eigenem `fetch` hiesse zwei gleiche Anfragen nach
+ * derselben Einwilligung — und zwei Antworten, die sich im ungünstigen Fall
+ * widersprächen (eine vor, eine nach einem Neustart mit anderer Umgebung).
+ * Eine geteilte Anfrage gibt beiden dieselbe Wahrheit.
+ *
+ * Geprüft wird die Antwort **auch hier** gegen das Schema: Die Kennungen
+ * werden in Skriptzeilen eingesetzt. Ungültig, nicht erreichbar oder ein
+ * Fehler: `null` — geschlossen, nicht offen. Die Funktion wirft nie, und ein
+ * Fehlschlag wird für diese Seite nicht wiederholt: Wer neu lädt, fragt neu.
+ *
+ * Auf dem Server gibt es nichts zu holen (`null`, ohne Zwischenspeicher) —
+ * sonst hinge eine einmal geholte Antwort an einem Modul, das alle Anfragen
+ * des Prozesses teilen. Aufgerufen wird sie ohnehin nur aus Effekten im
+ * Browser, und nur nach einer Einwilligung: Ohne Einwilligung keine Anfrage.
+ */
+export function oeffentlicheKonfigurationHolen(): Promise<PublicRuntimeConfig | null> {
+  if (typeof window === 'undefined') return Promise.resolve(null);
+  if (!imBrowserGeholt) {
+    imBrowserGeholt = fetch('/api/public/runtime-config', { credentials: 'omit' })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((antwort: { data?: unknown } | null) => {
+        const geprueft = PublicRuntimeConfigSchema.safeParse(antwort?.data);
+        return geprueft.success ? geprueft.data : null;
+      })
+      .catch(() => null);
+  }
+  return imBrowserGeholt;
 }

@@ -4,6 +4,7 @@ import { LegalBody } from '@/components/marketing/legal-body';
 import { SEITEN_URL } from '@/lib/seiten-url';
 import { seitenMetadaten } from '@/lib/seo/metadaten';
 import { rechtstextSeo } from '@/lib/seo/rechtstexte';
+import { GA_COOKIE_MONATE } from '@/lib/traffic/google-analytics';
 
 import { ConsentSettingsLink } from '@/features/public/consent-settings-link';
 
@@ -67,8 +68,11 @@ const COOKIES = [
           'Zufällige Kennung dieses Browser-Tabs für unsere eigene Besuchszählung. Wird nicht als Cookie gesendet; auf dem Server nur als täglich wechselnder Hashwert gespeichert.',
         duration: 'Bis zum Schliessen des Browser-Tabs',
       },
-      { name: '_ga', purpose: 'Unterscheidet Besucherinnen und Besucher', duration: '13 Monate' },
-      { name: '_ga_*', purpose: 'Hält den Sitzungsstatus (Google Analytics 4)', duration: '13 Monate' },
+      // Die Laufzeit kommt aus derselben Konstante, mit der das Skript
+      // `cookie_expires` setzt (2026-09-30) — vorher stand hier „13 Monate",
+      // während das Skript Googles Vorgabe von zwei Jahren liess.
+      { name: '_ga', purpose: 'Unterscheidet Besucherinnen und Besucher', duration: `${GA_COOKIE_MONATE} Monate` },
+      { name: '_ga_*', purpose: 'Hält den Sitzungsstatus (Google Analytics 4)', duration: `${GA_COOKIE_MONATE} Monate` },
     ],
   },
   {

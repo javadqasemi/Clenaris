@@ -264,6 +264,37 @@ function revalidateGallery(): void {
   revalidatePath('/galerie');
   // Der hervorgehobene Eintrag steht im Kopfbereich der Startseite.
   revalidatePath('/');
+  /*
+    Jede Leistungsseite zeigt den ersten veröffentlichten Eintrag ihrer Art
+    (`/leistungen/[slug]`, Vergleich im Kopf, seit 2026-09-30 auch im
+    Alternativtext). Bis dahin wurde sie hier nicht erneuert: Ein neuer,
+    geänderter oder zurückgezogener Eintrag erschien dort erst nach Ablauf
+    der Revalidierung (eine Stunde) — ein zurückgezogenes Foto blieb also
+    eine Stunde lang öffentlich.
+
+    Über die Segmentangabe statt über die einzelnen Slugs: Welche Seite
+    betroffen ist, hängt an der Art des Eintrags *vor und nach* der Änderung
+    und an jeder Leistung dieser Art; eine Slug-Liste müsste dafür die
+    Leistungen abfragen und wäre bei einer Art ohne Leistung oder einem
+    geänderten Slug still unvollständig. Die Segmentangabe trifft alle
+    vorerzeugten Leistungsseiten; neu gebaut wird erst beim nächsten Aufruf,
+    und es sind eine Handvoll Seiten.
+
+    **Mit der Routengruppe `(public)`.** Next leitet die stillen Merkmale
+    einer zwischengespeicherten Seite aus ihrem App-Pfad *samt Gruppe* ab
+    (`_N_T_/(public)/leistungen/[slug]/page`, nachzulesen im `.meta` eines
+    Baus); `revalidatePath` dagegen hängt `/page` an den übergebenen Pfad
+    und ergänzt keine Gruppe. Die erste Fassung vom 2026-09-30 schrieb
+    `'/leistungen/[slug]'` — das ergab ein Merkmal, das keine Seite trägt,
+    der Aufruf blieb wirkungslos, und ein zurückgezogenes Foto stand weiter
+    eine Stunde auf der Leistungsseite. `catalog.service.ts` trägt dieselbe
+    Form; dort fällt es nicht auf, weil `revalidatePath('/', 'layout')`
+    davor ohnehin jede Seite erneuert. Hier gibt es diesen Schirm bewusst
+    nicht — eine Galerieänderung soll nicht die ganze Website neu erzeugen
+    lassen —, deshalb muss der Pfad stimmen, und `seo-rechenkern.test.ts`
+    prüft jede solche Angabe gegen die Dateien unter `src/app`.
+  */
+  revalidatePath('/(public)/leistungen/[slug]', 'page');
 }
 
 // ---------------------------------------------------------------------------
@@ -425,7 +456,14 @@ export async function deleteJobPosting({
 
 function revalidateCareers(): void {
   revalidatePath('/karriere');
-  revalidatePath('/karriere/[slug]', 'page');
+  /*
+    Die Detailseiten mit Routengruppe (seit 2026-09-30) — derselbe Grund wie
+    in `revalidateGallery`: Ohne `(public)` trifft die Angabe kein Merkmal,
+    und ein zurückgezogenes oder geändertes Inserat blieb bis zum Ablauf der
+    Revalidierung (eine halbe Stunde) unter `/karriere/<slug>` stehen — eine
+    Stelle, die es nicht mehr gibt, aber weiter öffentlich ausgeschrieben.
+  */
+  revalidatePath('/(public)/karriere/[slug]', 'page');
 }
 
 // ---------------------------------------------------------------------------

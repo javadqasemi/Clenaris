@@ -5,6 +5,8 @@ import { get, requireServer } from '../helpers/client';
 import { internalLinks, pageTitle } from '../helpers/markup';
 import { FIRMEN_TYP, TYPEN_JEDE_SEITE, typenIn } from '../../src/lib/seo/structured-data';
 import { qrSvg } from '../../src/lib/kontakt/qr';
+import { TRAFFIC_GRENZEN } from '../../src/lib/traffic/ereignisse';
+import { GA_COOKIE_MONATE } from '../../src/lib/traffic/google-analytics';
 
 /**
  * Die öffentliche Website.
@@ -288,5 +290,50 @@ describe('Kontaktseite — Visitenkarte als QR-Code und Datei', { concurrency: 1
     assert.equal(response.status, 200);
     assert.equal(response.text.includes('<script>'), false);
     assert.equal(response.text.includes('boese.example'), false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+
+/**
+ * Fristen in den Rechtstexten (2026-09-30) — am ausgelieferten HTML, gegen
+ * die Konstanten, nach denen tatsächlich gelöscht bzw. gesetzt wird.
+ *
+ * Die Datenschutzerklärung nannte für Analysedaten zugleich 13 (Fliesstext)
+ * und 14 Monate (Tabelle); gelöscht wird nach `TRAFFIC_GRENZEN.
+ * aufbewahrungMonate`. Die Cookie-Erklärung nannte für `_ga` 13 Monate, das
+ * Skript setzte zwei Jahre. Beide Seiten leiten die Zahl jetzt ab; diese
+ * Fälle halten fest, dass das auch im HTML ankommt.
+ *
+ * Geprüft wird die eingebaute Fassung. Die Prüfreihe erfasst keinen eigenen
+ * Text für Datenschutz oder Cookies (`website-ops.test.ts` schreibt nur die
+ * AGB) — eine redaktionelle Fassung ersetzte die eingebaute vollständig.
+ */
+describe('Rechtstexte — Fristen aus den Konstanten', { concurrency: 1 }, async () => {
+  await requireServer();
+
+  /** Der Wert einer Protokollzeile `<dt>Bezeichnung</dt><dd>Wert</dd>`. */
+  const protokollwert = (html: string, bezeichnung: string) =>
+    new RegExp(`<dt[^>]*>${bezeichnung}</dt>\\s*<dd[^>]*>([^<]*)</dd>`).exec(html)?.[1] ?? null;
+
+  it('Datenschutzerklärung: Analysedaten 13 Monate — gleich der Löschfrist', async () => {
+    const antwort = await get('/legal/datenschutz');
+    assert.equal(antwort.status, 200);
+    const html = ohneKommentare(antwort.text);
+    const monate = TRAFFIC_GRENZEN.aufbewahrungMonate;
+    assert.equal(protokollwert(html, 'Analysedaten'), `${monate} Monate`, 'Tabelle „Wie lange wir Daten aufbewahren"');
+    assert.ok(html.includes(`Die Daten werden nach ${monate} Monaten gelöscht`), 'Fliesstext zur eigenen Besuchsmessung');
+    assert.ok(!html.includes('14 Monate'), 'die alte, falsche Frist steht noch auf der Seite');
+  });
+
+  it('Cookie-Erklärung: _ga und _ga_* mit der Laufzeit, die das Skript setzt', async () => {
+    const antwort = await get('/legal/cookies');
+    assert.equal(antwort.status, 200);
+    const html = ohneKommentare(antwort.text);
+    for (const name of ['_ga', '_ga_*']) {
+      const zeile = new RegExp(`<td[^>]*>${name.replace('*', '\\*')}</td>\\s*<td[^>]*>[^<]*</td>\\s*<td[^>]*>([^<]*)</td>`).exec(html);
+      assert.ok(zeile, `keine Zeile für ${name}`);
+      assert.equal(zeile[1], `${GA_COOKIE_MONATE} Monate`, name);
+    }
   });
 });

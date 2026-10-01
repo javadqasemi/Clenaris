@@ -1,6 +1,7 @@
 'use client';
 
 import { hasConsent } from '@/lib/consent';
+import { oeffentlicheKonfigurationHolen } from '@/lib/laufzeit-konfiguration';
 
 import { TRAFFIC_GRENZEN, type TrafficEreignisName } from './ereignisse';
 
@@ -8,7 +9,7 @@ import { TRAFFIC_GRENZEN, type TrafficEreignisName } from './ereignisse';
  * Erfassung der eigenen Besuchsmessung im Browser (2026-09-28).
  *
  * ---------------------------------------------------------------------------
- *  Die drei Regeln dieser Datei
+ *  Die vier Regeln dieser Datei
  * ---------------------------------------------------------------------------
  *
  *  1. **Ohne Einwilligung geschieht nichts.** Jede Funktion prüft
@@ -25,6 +26,16 @@ import { TRAFFIC_GRENZEN, type TrafficEreignisName } from './ereignisse';
  *     Bildschirmgrösse, keine Sprache, keine Zeitzone: Das wären die Zutaten
  *     eines Fingerabdrucks. Der Server bereinigt trotzdem noch einmal, denn
  *     was hier steht, ist Sparsamkeit, keine Zusicherung.
+ *  4. **Ohne Freigabe der Instanz geschieht ebenfalls nichts** (seit
+ *     2026-09-30). Die Betreiberin schaltet die Messung mit
+ *     `CLENARIS_BESUCHSMESSUNG=an` ein; die Browser-Konfiguration meldet das
+ *     als `besuchsmessung`. Erst nach der Einwilligung wird sie einmal je
+ *     Seite geholt (`trafficFreigabe`), und solange sie nicht ausdrücklich
+ *     `true` sagt, entsteht weder eine Sitzungskennung noch eine Meldung.
+ *     Der Server speichert ausgeschaltet zwar ohnehin nichts — aber eine
+ *     Kennung im Speicher des Tabs und Meldungen ins Leere wären Messung ohne
+ *     Zweck, und die Einwilligung allein ist nicht die Entscheidung der
+ *     Betreiberin.
  *
  * `Sec-GPC`/`DNT` wertet der Server aus; der Browser prüft
  * `navigator.globalPrivacyControl` und `doNotTrack` zusätzlich und schickt
@@ -53,13 +64,73 @@ let zeitgeber: ReturnType<typeof setTimeout> | null = null;
 let fluechtigeSitzung: string | null = null;
 /** Ist die nächste Seitenansicht der Einstieg dieser Sitzung? */
 let einstiegOffen = false;
+/**
+ * Hat die Instanz die Messung freigegeben? `null`: noch nicht gefragt oder
+ * die Antwort steht aus. Einmal bekannt, gilt sie bis zum Neuladen — sie ist
+ * eine Eigenschaft des Servers, nicht der Einwilligung, und ändert sich nicht,
+ * während die Seite offen ist.
+ */
+let freigegeben: boolean | null = null;
+let freigabeAnfrage: Promise<boolean> | null = null;
 
+/** Einwilligung und Ablehnungssignale des Browsers — ohne die Freigabe. */
 function erlaubt(): boolean {
   if (typeof window === 'undefined') return false;
   if (!hasConsent().analytics) return false;
   const nav = navigator as Navigator & { globalPrivacyControl?: boolean };
   if (nav.globalPrivacyControl === true || nav.doNotTrack === '1') return false;
   return true;
+}
+
+/**
+ * Die Freigabe der Instanz — einmal je Seite gefragt, nie vor der
+ * Einwilligung (die Aufrufer prüfen `erlaubt()` bzw. die Einwilligung
+ * zuerst). Wirft nie; jeder Fehler heisst „nicht freigegeben".
+ *
+ * Exportiert für `TrafficMessung`: Die Komponente hängt ihre Zuhörer erst an,
+ * wenn die Freigabe feststeht, statt bei ausgeschalteter Messung auf jeden
+ * Klick zu horchen.
+ */
+export function trafficFreigabe(): Promise<boolean> {
+  if (freigegeben !== null) return Promise.resolve(freigegeben);
+  if (!freigabeAnfrage) {
+    freigabeAnfrage = oeffentlicheKonfigurationHolen()
+      .then((konfiguration) => konfiguration?.besuchsmessung === true)
+      .catch(() => false)
+      .then((an) => {
+        freigegeben = an;
+        return an;
+      });
+  }
+  return freigabeAnfrage;
+}
+
+/**
+ * `aktion` ausführen, sobald feststeht, dass gemessen werden darf.
+ *
+ * Ist die Freigabe schon bekannt, läuft `aktion` **sofort und synchron** —
+ * das ist der Normalfall, denn `TrafficMessung` fragt beim Erteilen der
+ * Einwilligung. Synchron muss es bleiben: Beim Klick auf einen `tel:`-Link
+ * folgt dem Einreihen unmittelbar `trafficJetztSenden()`, und eine erst im
+ * nächsten Mikrotask eingereihte Meldung käme zu spät, um mitzureisen.
+ *
+ * Steht die Antwort noch aus (ein Formular, das vor ihr abgeschickt wird),
+ * wartet die Aktion darauf und prüft danach die Einwilligung **erneut** —
+ * in der Zwischenzeit kann sie widerrufen worden sein.
+ */
+function wennFreigegeben(aktion: () => void): void {
+  if (freigegeben === true) {
+    aktion();
+    return;
+  }
+  if (freigegeben === false) return;
+  void trafficFreigabe().then((an) => {
+    try {
+      if (an && erlaubt()) aktion();
+    } catch {
+      /* Nie nach aussen. */
+    }
+  });
 }
 
 function zufallsKennung(): string | null {
@@ -176,16 +247,22 @@ export function trafficJetztSenden(): void {
 export function trafficSeitenansicht(): void {
   try {
     if (!erlaubt()) return;
-    // Zuerst die Sitzung holen: Sie setzt `einstiegOffen`, wenn sie neu ist.
-    if (!sitzung()) return;
-    const einstieg = einstiegOffen;
-    einstiegOffen = false;
-    einreihen({
-      name: 'PAGE_VIEW',
-      pfad: aktuellerPfad(),
-      ...(einstieg
-        ? { einstieg: true, referrer: document.referrer ? document.referrer.slice(0, TRAFFIC_GRENZEN.referrer) : undefined }
-        : {}),
+    // Der Pfad wird **jetzt** gelesen, nicht erst nach der Freigabe: Bis
+    // deren Antwort da ist, kann die App-Navigation schon weiter sein, und
+    // gemeldet würde die falsche Seite.
+    const pfad = aktuellerPfad();
+    wennFreigegeben(() => {
+      // Zuerst die Sitzung holen: Sie setzt `einstiegOffen`, wenn sie neu ist.
+      if (!sitzung()) return;
+      const einstieg = einstiegOffen;
+      einstiegOffen = false;
+      einreihen({
+        name: 'PAGE_VIEW',
+        pfad,
+        ...(einstieg
+          ? { einstieg: true, referrer: document.referrer ? document.referrer.slice(0, TRAFFIC_GRENZEN.referrer) : undefined }
+          : {}),
+      });
     });
   } catch {
     /* Nie nach aussen. */
@@ -193,7 +270,8 @@ export function trafficSeitenansicht(): void {
 }
 
 /**
- * Ein Konversionsereignis melden — ohne Einwilligung ein stilles Nichts.
+ * Ein Konversionsereignis melden — ohne Einwilligung oder ohne Freigabe der
+ * Instanz ein stilles Nichts.
  *
  * Der Aufrufer muss nichts prüfen und auf nichts warten; die Funktion kehrt
  * sofort zurück und wirft nie.
@@ -201,8 +279,11 @@ export function trafficSeitenansicht(): void {
 export function trafficEreignis(name: Exclude<TrafficEreignisName, 'PAGE_VIEW'>): void {
   try {
     if (!erlaubt()) return;
-    if (!sitzung()) return;
-    einreihen({ name, pfad: aktuellerPfad() });
+    const pfad = aktuellerPfad();
+    wennFreigegeben(() => {
+      if (!sitzung()) return;
+      einreihen({ name, pfad });
+    });
   } catch {
     /* Nie nach aussen. */
   }
