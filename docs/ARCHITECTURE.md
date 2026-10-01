@@ -9,7 +9,7 @@ steht im [README](../README.md); wie das Datenmodell aussieht, in
 ## Der Rahmen
 
 ```
-┌─────────────────────────── Vercel (Region fra1) ───────────────────────────┐
+┌──── Eigener Server (Production V2): Nginx → Next.js unter PM2, Loopback ───┐
 │                                                                            │
 │  Middleware (Edge)          Route Handler (Node)      Server Components    │
 │  ├ Rollen-Wegweiser         ├ defineRoute-Fabrik      ├ direkte Prisma-    │
@@ -29,6 +29,15 @@ steht im [README](../README.md); wie das Datenmodell aussieht, in
 Alles, was einen Zustand ändert, geht durch einen Dienst in
 `src/server/services/`. Route Handler übersetzen HTTP in Aufrufe, Server
 Components lesen direkt — schreiben aber nie.
+
+Der Rahmen hiess hier lange „Vercel, Region fra1" — ein früherer Betriebsweg
+(`docs/DEPLOYMENT.md`, „HISTORICAL — Vercel"); heute ist es ein eigener
+Server hinter Cloudflare und Nginx. Die Middleware läuft weiterhin in der Edge-Runtime
+von Next — das ist eine Eigenschaft von Next, nicht des Anbieters, und der
+Grund, warum sie weder Prisma noch Node-Module benutzt (Entscheid 4).
+Ausgeliefert wird nie ein Bau vom Server, sondern das in der CI gebaute und
+geprüfte Artefakt (`docs/PRODUCTION_V2.md`): Ein zweiter Bau desselben
+Commits wäre ein zweiter, ungeprüfter Baum.
 
 ---
 
@@ -62,8 +71,9 @@ export const POST = defineRoute({
 });
 ```
 
-Bei 96 Endpunkten ist das der Unterschied zwischen „jeder Endpunkt ist
-geschützt" und „die meisten sind es wahrscheinlich". Ein Endpunkt kann nicht
+Bei über fünfhundert Endpunkten (die genaue Zahl schreibt
+`scripts/kennzahlen.ts` in die README) ist das der Unterschied zwischen
+„jeder Endpunkt ist geschützt" und „die meisten sind es wahrscheinlich". Ein Endpunkt kann nicht
 versehentlich ungeschützt bleiben, weil es keinen Weg gibt, einen zu schreiben,
 ohne den Schutz zu deklarieren.
 
@@ -185,6 +195,11 @@ ist ein reines JavaScript-Paket, kaltstartfähig und in derselben Sprache
 geschrieben wie der Rest. Der Preis: kein volles CSS. Für Offerten, Rechnungen
 und Einsatzberichte reicht das Flexbox-Modell.
 
+Entschieden wurde das, als die Plattform noch serverlos laufen sollte. Auf
+dem eigenen Server gilt es weiter: Ein Chromium je PDF-Anfrage wäre ein
+zweiter Prozess mit eigenem Speicherhunger neben jedem PM2-Arbeiter, und er
+müsste im Release-Artefakt mitreisen.
+
 ### 10. Dateien laufen am Server vorbei — geprüft werden sie trotzdem
 
 Der Server stellt ein Upload-Ticket aus, der Browser lädt direkt zu Supabase
@@ -267,7 +282,14 @@ CJK-Zeichensätze und Standardschriften liegen unter `/pdfjs/<Version>/`,
 kopiert aus dem installierten Paket (`scripts/copy-pdfjs-assets.ts`, vor
 `dev` und `build`). Kein CDN: Die Version muss exakt passen, die CSP bleibt
 bei `'self'`, und kein Dritter erfährt, welche Dokumente hier angesehen
-werden. `react-pdf` pinnt `pdfjs-dist` fest, deshalb gibt es keine zweite
+werden. Eine Quelle braucht PDF.js trotzdem: `'wasm-unsafe-eval'` in
+`script-src` — seine JPEG-2000-, JBIG2- und Farbprofil-Decoder sind
+WebAssembly, und der Worker bekommt die Richtlinie seiner eigenen Antwort.
+`'unsafe-eval'` dagegen gibt es im Produktionsbau nicht mehr; die Richtlinie
+entsteht in `src/lib/security/inhaltsrichtlinie.ts`, die Next-Phase
+entscheidet, und nur der Entwicklungsserver bekommt `'unsafe-eval'`
+(`docs/SECURITY_STANDARD.md` C6). Der Druck läuft über einen Rahmen mit
+`blob:`-Adresse, deshalb `frame-src 'self' blob:`. `react-pdf` pinnt `pdfjs-dist` fest, deshalb gibt es keine zweite
 Versionsangabe, die auseinanderlaufen könnte.
 
 **Was ein hochgeladenes PDF hier nicht kann.** `enableScripting: false` —
@@ -430,6 +452,23 @@ mit Vorher-Nachher-Vergleich der geänderten Felder. Das verlangt das Schweizer
 DSG bei Personendaten, und es ist das Erste, wonach man greift, wenn eine
 Kundin fragt, warum ihr Termin verschoben wurde.
 
+**Fortschreibend wie die Finanzbelege — und in der Datenbank erzwungen**
+(seit 2026-09-30, Migration `20260930120000_protokoll_nur_anfuegen`, wie
+schon `signature_events` und `stock_movements`). Ein Protokoll, das die
+Anwendung ändern kann, beweist nur, was die Anwendung gerade behauptet.
+UPDATE, DELETE und TRUNCATE auf `audit_logs` enden mit P0001. Drei
+Ausnahmen, je eng gefasst: die Kaskade, wenn eine ganze Organisation
+gelöscht wird; `ON DELETE SET NULL` von `userId`, wenn ein Konto gelöscht
+wird (nur diese Spalte); und die Schwärzung von `changes`/`summary` unter dem
+transaktionslokalen Schalter `clenaris.audit_schwaerzung`, den nur
+`scripts/security/audit-schwaerzung.ts` setzt. P0001 wird bewusst nicht auf
+einen HTTP-Status abgebildet: Ein feuernder Schutztrigger ist ein Fehler im
+Code, kein Zustand, den eine Anfrage legitim erreicht. Die Grenze: Die
+Datenbankrolle der Anwendung besitzt heute die Tabellen und könnte den
+Trigger abschalten — das erkennt das Datenbanktor
+(`scripts/datenbank-schranken.ts`), verhindern kann es erst eine getrennte
+Eigentümerrolle (Betriebsentscheid, `docs/PENDENZEN.md` P2H-42).
+
 ### Unternehmensführung
 
 Das Führungsmodul (`/admin/fuehrung`, Dienste `kpi`, `health`, `insight`,
@@ -456,8 +495,9 @@ Das Führungsmodul (`/admin/fuehrung`, Dienste `kpi`, `health`, `insight`,
 
 Die reinen Rechenkerne (Gesundheitswert, Abschreibung, Budgetabweichung,
 Szenario, Perioden in Europe/Zurich) liegen in `src/lib/bi/` ohne
-Datenbankzugriff und sind die eine Stelle, an der die Prüfungen Code direkt
-importieren.
+Datenbankzugriff und werden direkt geprüft (`tests/api/bi-rechenkerne.test.ts`).
+Sie waren die erste Stelle, an der Prüfungen Code importieren; inzwischen
+gibt es weitere reine Prüfungen (siehe „Was fehlt").
 
 ---
 
@@ -493,12 +533,19 @@ dort, wo sie eine Handlung beantwortet — keine Einblendanimation pro Abschnitt
 
 Ehrlich benannt, statt stillschweigend übergangen:
 
-- **Unit-Tests.** Es gibt bewusst keine — geprüft wird die laufende Anwendung
-  über echtes HTTP (`tests/`, Prüfungen zu Rechtematrix, Abläufen,
-  Eigentümerschaft, Redaktion und ausgelieferten Seiten; siehe
-  `tests/README.md`). Was dabei ungeprüft bleibt, sind die reinen Rechenkerne:
-  Preis-Engine, QR-Referenz-Prüfziffer und Token-Rotation verdienen gezielte
-  Tests mit festen Erwartungswerten.
+- **Unit-Tests der Dienste.** Es gibt bewusst keine — geprüft wird die
+  laufende Anwendung über echtes HTTP (`tests/`, Prüfungen zu Rechtematrix,
+  Abläufen, Eigentümerschaft, Redaktion und ausgelieferten Seiten; siehe
+  `tests/README.md`). Die reinen Rechenkerne, die hier früher als ungeprüft
+  standen, haben inzwischen eigene Prüfungen mit festen Erwartungswerten
+  ohne Server: Geldrechnung der Preis-Engine (`geldrechnung.test.ts`),
+  QR-Referenz (`scan-kennung.test.ts`), die `*-rechenkern.test.ts`-Dateien
+  (Verträge, Verfügbarkeit, Qualität, SEO, Besuchsmessung, Visitenkarte,
+  Signatur) und die Werkzeuge des Release-Wegs (Artefakt, Identität,
+  Rücksprung, Bauvergleich). Die Token-Rotation bleibt über HTTP geprüft
+  (`session-refresh.test.ts`, `sitzung-leerlauf.test.ts`) — sie ist an
+  Datenbank und Cookies gebunden, und ein Nachbau ohne beides prüfte die
+  Attrappe.
 - **Mehrsprachigkeit.** Datenmodell und Endpunkte kennen DE/FR/IT/EN, die
   Oberfläche ist ausschliesslich deutsch. Die Texte liegen noch inline, nicht
   in Wörterbüchern.
