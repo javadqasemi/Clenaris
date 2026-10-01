@@ -84,6 +84,8 @@ function zeit(ms: number): string {
   return ms < 60_000 ? `${Math.round(ms / 1000)} s` : `${Math.floor(ms / 60_000)} min ${Math.round((ms % 60_000) / 1000)} s`;
 }
 
+type Schrittoptionen = { env?: Record<string, string>; cwd?: string; exitcodes?: Record<number, string> };
+
 /**
  * Einen Schritt laufen lassen; scheitert er, bricht der Prüfweg ab. Die
  * Merkmalsprüfung hat eine eigene Funktion unten: Ihre Heuristiken melden nur,
@@ -95,18 +97,27 @@ function zeit(ms: number): string {
  * „Exitcode 2“ liest, hält das leicht für einen Befund oder, schlimmer, für
  * eine Nebensache.
  */
-function schritt(
-  name: string,
-  befehl: string,
-  optionen: { env?: Record<string, string>; cwd?: string; exitcodes?: Record<number, string> } = {},
-): void {
+function schritt(name: string, befehl: string, optionen: Schrittoptionen = {}): void {
+  const fehler = schrittLaufen(name, befehl, optionen);
+  if (fehler) abbrechen(fehler);
+}
+
+/**
+ * Wie `schritt`, aber ohne Abbruch: liefert die Abbruchmeldung (oder `null`)
+ * und überlässt dem Aufrufer, wann er abbricht. Nur für einen Schritt, nach
+ * dessen Scheitern noch etwas gelesen werden muss, bevor der Prozess endet —
+ * die Browserreihe, deren Bilanz je Engine gerade beim roten Lauf zählt.
+ * Das Ergebnis steht schon in `ergebnisse`; der Aufrufer **muss** bei einer
+ * Meldung abbrechen.
+ */
+function schrittLaufen(name: string, befehl: string, optionen: Schrittoptionen = {}): string | null {
   console.log(`\n━━ ${name}\n   $ ${befehl}`);
   const start = Date.now();
   const lauf = spawnSync(befehl, { shell: true, stdio: 'inherit', cwd: optionen.cwd ?? WURZEL, env: { ...process.env, ...optionen.env } });
   const ok = lauf.status === 0;
   const bedeutung = lauf.status !== null ? optionen.exitcodes?.[lauf.status] : undefined;
   ergebnisse.push({ schritt: name, ok, dauerMs: Date.now() - start, hinweis: ok ? undefined : bedeutung });
-  if (!ok) abbrechen(`„${name}" ist gescheitert (Exitcode ${lauf.status ?? 'unbekannt'}${bedeutung ? `: ${bedeutung}` : ''}).`);
+  return ok ? null : `„${name}" ist gescheitert (Exitcode ${lauf.status ?? 'unbekannt'}${bedeutung ? `: ${bedeutung}` : ''}).`;
 }
 
 let server: ChildProcess | null = null;
@@ -410,11 +421,19 @@ async function pruefreihen(basis: string, cacheDir: string | undefined, port: st
  * Ende — er überlebt also genau bis zum nächsten Lauf. Vorher wird er
  * gelöscht: Scheiterte Playwright, bevor es selbst aufräumt (kaputte
  * Konfiguration), läse dieser Schritt sonst den Bericht des vorigen Laufs.
+ *
+ * **Auch ein roter Lauf wird erst gezählt, dann abgebrochen** (2026-10-01).
+ * Vorher lief Playwright über `schritt`, das bei einem Exitcode ausser 0
+ * sofort abbricht — die Zahlen je Engine standen also nur nach einem
+ * *grünen* Lauf in der Ausgabe und in der Laufbilanz, und ein roter Kern
+ * hinterliess `browser: null`. Gerade dann will man aber wissen, welche
+ * Engine gescheitert ist. Die Abbruchregel selbst ist unverändert: Ein
+ * Exitcode ausser 0 bricht ab, auch wenn die Bilanz grün aussähe.
  */
 function browserreihe(env: Record<string, string>, port: string): void {
   const bericht = join(WURZEL, 'test-results', 'playwright-bericht.json');
   rmSync(bericht, { force: true });
-  schritt('Browser-Prüfreihe (ohne Wiederholungen)', 'npx playwright test --retries=0 --reporter=list,json', {
+  const playwrightFehler = schrittLaufen('Browser-Prüfreihe (ohne Wiederholungen)', 'npx playwright test --retries=0 --reporter=list,json', {
     env: { ...env, E2E_PORT: port, PLAYWRIGHT_JSON_OUTPUT_NAME: bericht },
   });
   const start = Date.now();
@@ -432,7 +451,10 @@ function browserreihe(env: Record<string, string>, port: string): void {
     dauerMs: Date.now() - start,
     hinweis: g ? `${g.expected ?? 0} bestanden, ${g.skipped ?? 0} übersprungen, ${g.flaky ?? 0} wackelig; ${bilanz!.engines.join('/')}` : 'kein Bericht',
   });
-  if (gruende.length) abbrechen(`Browser-Bilanz: ${gruende.join(' ')}`);
+  // Beide Meldungen, wenn beide zutreffen: Der Exitcode sagt, dass Playwright
+  // gescheitert ist, die Bilanz sagt, wo.
+  const meldungen = [playwrightFehler, gruende.length ? `Browser-Bilanz: ${gruende.join(' ')}` : null].filter((m): m is string => m !== null);
+  if (meldungen.length) abbrechen(meldungen.join(' '));
 }
 
 /**
