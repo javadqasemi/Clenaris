@@ -325,9 +325,17 @@ function anfrage(port: number, pfad: string, optionen: AnfrageOptionen = {}): Pr
   return w11.anfrage(port, pfad, optionen);
 }
 
-function beenden(instanz: Instanz | undefined): Promise<void> {
-  if (!instanz || instanz.prozess.exitCode !== null) return Promise.resolve();
-  return new Promise((ok) => {
+/**
+ * Eine Instanz beenden — erst, wenn offene Beinahe-Abzüge fertig sind
+ * (W-11). Deren Proben gehen an genau diese Instanz; beendete der Abbau sie
+ * vorher, stünde im Abzug „Probe gescheitert", und er behauptete ein Hängen,
+ * das nur der Abbau verursacht hat. Das Warten ist durch die Fristen des
+ * Wächters begrenzt und dauert ohne Beinahe-Fall keinen Augenblick.
+ */
+async function beenden(instanz: Instanz | undefined): Promise<void> {
+  await w11.abzuegeAbwarten();
+  if (!instanz || instanz.prozess.exitCode !== null) return;
+  await new Promise<void>((ok) => {
     instanz.prozess.once('exit', () => ok());
     instanz.prozess.kill();
     setTimeout(ok, 5_000);

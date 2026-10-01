@@ -59,7 +59,8 @@ import { redigieren } from '../e2e/helpers/diagnose';
  *     (`/api/health`) — und die Lage wird erhoben, **während** es hängt.
  *     Antworten die Proben sofort, betrifft das Hängen diese eine Anfrage;
  *     hängen sie mit, steht der Prozess; hängt nur die Probe mit Datenbank,
- *     liegt es dort.
+ *     liegt es dort. Jedes Auslösen steht ausserdem als Zeile
+ *     `W-11-Wächter: …` in der Ausgabe der Prüfreihe (siehe „Warum laut").
  *  4. **Abzug** nach `test-results/w11-<Zeitpunkt>.json`, sobald eine
  *     Anfrage scheitert oder eine Instanz nicht hochkommt: Lage während und
  *     nach dem Hängen (`pg_stat_activity` gruppiert nach Datenbank, Zustand,
@@ -69,7 +70,8 @@ import { redigieren } from '../e2e/helpers/diagnose';
  *     Wächter auslöste und **trotzdem** ankam, hinterlässt
  *     `w11-langsam-<Zeitpunkt>.json`: dasselbe Phänomen unterhalb der
  *     Zeitgrenze, und bei einem Fehler, der sich selten zeigt, ist der
- *     Beinahe-Fall die häufigere Spur.
+ *     Beinahe-Fall die häufigere Spur. Sobald er geschrieben ist, folgt eine
+ *     zweite `W-11-Wächter`-Zeile mit seinem Pfad.
  *
  * `test-results/` und nicht `hydrationsbefunde/`: Der Prüfweg sichert
  * `test-results/` eines roten Laufs, bevor er aufräumt (RC-20,
@@ -78,15 +80,43 @@ import { redigieren } from '../e2e/helpers/diagnose';
  * färbte eine fremde Bilanz. Eine rote HTTP-Reihe bricht den Prüfweg ab,
  * bevor Playwright `test-results/` leeren könnte.
  *
+ * **Warum laut.** Für den Beinahe-Fall gilt das nicht: Er lässt die Reihe
+ * grün. In `verify:full`, `verify:tests` (CI) und `verify:release` folgt auf
+ * `npm test` die Browserreihe, und Playwright leert `test-results/` zu
+ * Beginn; das CI lädt `test-results/` ohnehin nur bei einem Fehlschlag
+ * hoch. Der Abzug eines grünen Laufs ist danach weg. Ohne eigene
+ * Ausgabezeile hinterliesse ein solcher Lauf keine Spur, und „zwei volle
+ * Läufe ohne Beinahe-Fall" liesse sich nicht belegen, nur behaupten. Deshalb
+ * schreibt der Wächter bei jedem Auslösen eine Zeile `<Kennung>-Wächter: …`
+ * auf die Fehlerausgabe der Testdatei — `node --test` reicht sie im
+ * TAP-Bericht als Kommentarzeile weiter, und sie überlebt im Protokoll des
+ * Laufs, auch wenn die Datei nicht überlebt. Direkt über `process.stderr`
+ * und nicht über `console.warn`: Die Regel `no-console` gilt auch für
+ * Prüfdateien, und eine Ausnahme dafür bräuchte es nicht, weil das Ergebnis
+ * dasselbe ist. Ein Wort wie „pass" oder „fail" am Zeilenanfang kommt in der
+ * Zeile nicht vor; die Testbilanz (`scripts/security/testbilanz.ts`) liest
+ * nur verankerte Zeilen und bleibt unberührt.
+ *
  * ---------------------------------------------------------------------------
  *  Was hier ausdrücklich **nicht** geschieht
  * ---------------------------------------------------------------------------
  *
  * Keine Wiederholung, keine längere Zeitgrenze, kein Filter. Die Anfrage
  * scheitert nach denselben 30 Sekunden wie vorher, und der Fall scheitert
- * mit ihr. Die Proben ändern das Ergebnis nicht — sie laufen neben der
- * hängenden Anfrage, nicht an ihrer Stelle. Ein Prüfwerkzeug, das einen
- * seltenen Fehler „verschwinden" lässt, hätte ihn nur unsichtbar gemacht.
+ * mit ihr. Die Proben ersetzen und wiederholen die Anfrage nicht — sie
+ * laufen neben ihr, über eigene Verbindungen. Wirkungslos sind sie trotzdem
+ * nicht: Es sind zwei weitere Anfragen an genau die Instanz, die gerade
+ * hängt, und `/api/health` holt sich dabei eine Datenbankverbindung. Dass
+ * eine Anfrage, die ohne Proben die Zeitgrenze gerissen hätte, mit ihnen
+ * knapp ankommt (oder umgekehrt), lässt sich nicht ausschliessen. Darum
+ * zählt ein Beinahe-Fall als Befund und nicht als „grün", und darum ist er
+ * laut. Ein Prüfwerkzeug, das einen seltenen Fehler „verschwinden" lässt,
+ * hätte ihn nur unsichtbar gemacht.
+ *
+ * Die Fristen lassen sich über `Einstellungen` nur **verkürzen**: für die
+ * Selbstprüfung dieses Werkzeugs, die ein Scheitern in Sekunden statt in 30
+ * Sekunden herbeiführt. Eine längere Frist als die Messlatte von W-11 weist
+ * `instanzDiagnose` ab.
  *
  * ---------------------------------------------------------------------------
  *  Warum die Datenbank im Abzug steht
@@ -567,20 +597,72 @@ export interface InstanzDiagnose {
   ): Promise<number>;
   /** Eine beobachtete Anfrage an die Instanz auf `port` (siehe Kopf dieser Datei). */
   anfrage(port: number, pfad: string, optionen?: AnfrageOptionen): Promise<Antwort>;
+  /**
+   * Auf Beinahe-Abzüge warten, die noch entstehen, und die Pfade aller
+   * bisher geschriebenen Abzüge liefern.
+   *
+   * Vor dem Beenden einer Instanz aufrufen. Der Abzug eines Beinahe-Falls
+   * entsteht erst, wenn die Proben des Wächters zurück sind; beendete die
+   * Testdatei die Instanz vorher, stünde im Abzug „Probe gescheitert", wo
+   * nur der Abbau zugeschlagen hat — ein falscher Befund. Das Warten ist
+   * durch die Fristen des Wächters begrenzt (`ERHEBUNG_FRIST_MS`), hängt
+   * also nie selbst.
+   */
+  abzuegeAbwarten(): Promise<string[]>;
+}
+
+/**
+ * Stellschrauben für die **Selbstprüfung** dieses Werkzeugs (Gruppe
+ * „Stellvertreterprozess" in `tests/api/laufzeit-konfiguration.test.ts`).
+ *
+ * Die Selbstprüfung führt den Fehlschlag einer Anfrage absichtlich herbei;
+ * mit der echten Zeitgrenze kostete jeder solche Fall 30 Sekunden in jedem
+ * Lauf der Reihe, und deshalb war der Fehlerweg bis hierher nur von Hand
+ * geprüft. Die W-11-Gruppe übergibt nichts und läuft mit den Werten oben.
+ *
+ * Verkürzen ist erlaubt, Verlängern nicht: Ein Werkzeug, mit dem sich die
+ * Messlatte still anheben liesse, wäre genau das, was der Kopf dieser Datei
+ * ausschliesst. `instanzDiagnose` weist eine längere Frist ab, statt sie
+ * stillschweigend zu kappen — wer es versucht, soll es merken.
+ */
+export interface Einstellungen {
+  /** Zeitgrenze einer Anfrage; höchstens `ANFRAGE_FRIST_MS`. */
+  anfrageFristMs?: number;
+  /** Ab wann der Wächter auslöst; höchstens `WAECHTER_MS`. */
+  waechterMs?: number;
+  /** Ablage der Abzüge — die Selbstprüfung schreibt in ein Wegwerfverzeichnis statt nach `test-results/`. */
+  ablage?: string;
+  /** Wohin die Wächterzeilen gehen; vorgegeben die Fehlerausgabe (siehe „Warum laut"). */
+  melden?: (zeile: string) => void;
 }
 
 /**
  * Eine Diagnose je Testdatei. `kennung` ist der Registerpunkt (`W-11`); aus
- * ihm entstehen Dateinamen (`test-results/w11-…json`) und der
- * `application_name` der Diagnoseverbindung.
+ * ihm entstehen Dateinamen (`test-results/w11-…json`), der
+ * `application_name` der Diagnoseverbindung und der Anfang der
+ * Wächterzeilen (`W-11-Wächter: …`).
  */
-export function instanzDiagnose(kennung: string): InstanzDiagnose {
+export function instanzDiagnose(kennung: string, einstellungen: Einstellungen = {}): InstanzDiagnose {
+  const anfrageFristMs = einstellungen.anfrageFristMs ?? ANFRAGE_FRIST_MS;
+  const waechterMs = einstellungen.waechterMs ?? WAECHTER_MS;
+  if (!(anfrageFristMs > 0 && anfrageFristMs <= ANFRAGE_FRIST_MS) || !(waechterMs > 0 && waechterMs <= WAECHTER_MS)) {
+    throw new Error(
+      `instanzDiagnose(${kennung}): Fristen dürfen nur verkürzt werden — Anfrage höchstens ${ANFRAGE_FRIST_MS} ms, ` +
+        `Wächter höchstens ${WAECHTER_MS} ms (übergeben: ${anfrageFristMs} ms und ${waechterMs} ms).`,
+    );
+  }
+  const ablage = einstellungen.ablage ?? ABLAGE;
+  const melden = einstellungen.melden ?? ((zeile: string) => void process.stderr.write(`${zeile}\n`));
   const kurz = kennung.toLowerCase().replace(/[^a-z0-9]/g, '');
   const beginn = Date.now();
   const instanzen = new Map<string, Eintrag>();
   const zeitleiste: Array<Record<string, unknown>> = [];
   let datenbank: string | null = null;
   let abzugNummer = 0;
+  /** Pfade aller geschriebenen Abzüge, in ihrer Reihenfolge. */
+  const abzuege: string[] = [];
+  /** Beinahe-Abzüge, deren Proben und Lage noch eingesammelt werden. */
+  const ausstehendeAbzuege = new Set<Promise<void>>();
 
   /**
    * Ein Eintrag der Zeitleiste. `nachMs` zählt ab dem Anlegen der Diagnose
@@ -661,9 +743,9 @@ export function instanzDiagnose(kennung: string): InstanzDiagnose {
       : '(Instanz unbekannt)';
 
   const abzugSchreiben = (art: 'fehlschlag' | 'langsam', inhalt: Record<string, unknown>): string => {
-    mkdirSync(ABLAGE, { recursive: true });
+    mkdirSync(ablage, { recursive: true });
     const stempel = new Date().toISOString().replace(/[:.]/g, '-');
-    let datei = join(ABLAGE, `${kurz}-${art === 'langsam' ? 'langsam-' : ''}${stempel}.json`);
+    let datei = join(ablage, `${kurz}-${art === 'langsam' ? 'langsam-' : ''}${stempel}.json`);
     while (existsSync(datei)) datei = datei.replace(/(-\d+)?\.json$/, `-${++abzugNummer}.json`);
     const abzug = {
       kennung,
@@ -674,7 +756,7 @@ export function instanzDiagnose(kennung: string): InstanzDiagnose {
           'verbinden = keine Verbindung zustande gekommen; senden = verbunden, Anfrage nicht ganz geschrieben; ' +
           'antwort-abwarten = verbunden und gesendet, keine Kopfzeilen; rumpf-lesen = Antwort begonnen, nicht beendet.',
         proben:
-          'Zwei neue Verbindungen, sobald eine Anfrage 5 s ohne Kopfzeilen war: runtime-config (ohne Datenbank) und health (mit). ' +
+          `Zwei neue Verbindungen, sobald eine Anfrage ${waechterMs} ms ohne Kopfzeilen war: runtime-config (ohne Datenbank) und health (mit). ` +
           'Antworten beide schnell, hängt nur die eine Verbindung; hängen beide, steht der Prozess; hängt nur health, liegt es an der Datenbank.',
         lagen:
           'Erhebung beim Wächter (während des Hängens) und beim Fehlschlag; die Differenz von Rechenzeit und Seitenfehlern zeigt, ' +
@@ -687,6 +769,7 @@ export function instanzDiagnose(kennung: string): InstanzDiagnose {
       zeitleiste,
     };
     writeFileSync(datei, JSON.stringify(abzug, null, 2), 'utf8');
+    abzuege.push(datei);
     return datei;
   };
 
@@ -809,6 +892,12 @@ export function instanzDiagnose(kennung: string): InstanzDiagnose {
   const waechterAusloesen = (port: number, m: Messung): Waechter => {
     const nachMs = Date.now() - Date.parse(m.beginn);
     ereignis(m.instanz, 'waechter', { pfad: m.pfad, seitAnfrageMs: nachMs, phase: phaseAus(m) });
+    // Sofort und unabhängig vom Ausgang: Die Zeile ist die eine Spur, die
+    // einen grünen Lauf überlebt (siehe „Warum laut" im Kopf).
+    melden(
+      `${kennung}-Wächter: ${m.instanz} ${m.methode} ${geschwaerzt(m.pfad)} nach ${nachMs} ms ohne Kopfzeilen ` +
+        `(Phase ${phaseAus(m)}) — Proben und Lage werden erhoben, Abzug folgt.`,
+    );
     const proben = Promise.all(
       PROBEN.map(async (pfad) => {
         const probe = messungAnlegen(m.instanz, port, 'GET', pfad);
@@ -898,7 +987,7 @@ export function instanzDiagnose(kennung: string): InstanzDiagnose {
           versuche += 1;
           letzte = messungAnlegen(name, port, 'GET', bereitPfad);
           try {
-            const antwort = await rohAnfrage(port, bereitPfad, {}, letzte, Math.min(ANFRAGE_FRIST_MS, Math.max(1_000, bis - Date.now())));
+            const antwort = await rohAnfrage(port, bereitPfad, {}, letzte, Math.min(anfrageFristMs, Math.max(1_000, bis - Date.now())));
             if (antwort.status === 200) {
               eintrag.bereitNachMs = Date.now() - eintrag.gestartet;
               eintrag.letzteAntwort = Date.now();
@@ -932,10 +1021,10 @@ export function instanzDiagnose(kennung: string): InstanzDiagnose {
       const beobachtet: { waechter: Waechter | null } = { waechter: null };
       const uhr = setTimeout(() => {
         if (m.kopfMs === undefined) beobachtet.waechter = waechterAusloesen(port, m);
-      }, WAECHTER_MS);
+      }, waechterMs);
 
       try {
-        const antwort = await rohAnfrage(port, pfad, optionen, m, ANFRAGE_FRIST_MS);
+        const antwort = await rohAnfrage(port, pfad, optionen, m, anfrageFristMs);
         clearTimeout(uhr);
         ereignis(name, 'anfrage', { ...m, ruhigVorherMs });
         if (eintrag) eintrag.letzteAntwort = Date.now();
@@ -943,18 +1032,27 @@ export function instanzDiagnose(kennung: string): InstanzDiagnose {
         if (waechter) {
           // Angekommen, aber erst nach dem Wächter: festhalten, nicht warten.
           // Der Fall läuft weiter wie ohne Diagnose; der Abzug entsteht, sobald
-          // Proben und Lage vorliegen (beide mit eigener Frist).
-          void waechterEinsammeln(waechter)
-            .then(({ proben, lage }) =>
-              abzugSchreiben('langsam', {
+          // Proben und Lage vorliegen (beide mit eigener Frist), und
+          // `abzuegeAbwarten` kann auf ihn warten. Auch ein Scheitern beim
+          // Schreiben wird gemeldet — vorher verschwand es in einem leeren
+          // `catch`, und ein fehlender Abzug sah aus wie ein ruhiger Lauf.
+          const pfadText = geschwaerzt(pfad);
+          const abzug = waechterEinsammeln(waechter)
+            .then(({ proben, lage }) => {
+              const datei = abzugSchreiben('langsam', {
                 anlass: `${name}: ${m.methode} ${pfad} brauchte ${m.dauerMs} ms`,
                 messung: m,
                 ruhigVorherMs,
                 waechter: { nachMs: waechter.nachMs, proben },
                 lagen: [lage],
-              }),
-            )
-            .catch(() => undefined);
+              });
+              melden(`${kennung}-Wächter: ${name} ${m.methode} ${pfadText} kam nach ${m.dauerMs} ms doch an — Abzug: ${datei}`);
+            })
+            .catch((fehler: Error) =>
+              melden(`${kennung}-Wächter: Abzug zu ${name} ${m.methode} ${pfadText} gescheitert: ${geschwaerzt(fehler.message)}`),
+            );
+          ausstehendeAbzuege.add(abzug);
+          void abzug.finally(() => ausstehendeAbzuege.delete(abzug));
         }
         return antwort;
       } catch (fehler) {
@@ -962,6 +1060,13 @@ export function instanzDiagnose(kennung: string): InstanzDiagnose {
         ereignis(name, 'anfrage', { ...m, ruhigVorherMs });
         throw await fehlschlagBelegen(eintrag, m, beobachtet.waechter, ruhigVorherMs, fehler as Error);
       }
+    },
+
+    async abzuegeAbwarten() {
+      // Jeder offene Abzug lehnt nie ab (oben gefangen) und ist durch die
+      // Fristen des Wächters begrenzt — dieses Warten also auch.
+      await Promise.all([...ausstehendeAbzuege]);
+      return [...abzuege];
     },
   };
 }
