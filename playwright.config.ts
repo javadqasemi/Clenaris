@@ -106,7 +106,13 @@ process.env.TEST_BASE_URL = baseURL;
 process.env.CLENARIS_TEST_CACHE_DIR = cacheDir;
 
 /** Was ausser Chromium auch Firefox und WebKit fahren (Begründung beim Projekt). */
-const MEHRERE_ENGINES = ['**/*.browser.spec.ts', '**/offerte-rabatt.spec.ts', '**/scan.spec.ts', '**/sitzung-tabs.spec.ts'];
+const MEHRERE_ENGINES = [
+  '**/*.browser.spec.ts',
+  '**/offerte-rabatt.spec.ts',
+  '**/scan.spec.ts',
+  '**/sitzung-tabs.spec.ts',
+  '**/sitzung-leerlauf.spec.ts',
+];
 
 export default defineConfig({
   testDir: './tests/e2e',
@@ -225,6 +231,11 @@ export default defineConfig({
      * Sitzungsabstimmung zwischen Tabs hängt an `BroadcastChannel` und
      * `storage`-Ereignissen. Umbenannt wurden sie nicht, weil Pendenzen,
      * Bedrohungsmodell und Prüfmatrix sie unter diesem Namen als Beleg führen.
+     * Seit 2026-10-01 kommt `sitzung-leerlauf.spec.ts` dazu, aus demselben
+     * Grund wie die Tababstimmung (gemeinsamer Zeitstempel, Abmeldung über
+     * `BroadcastChannel`) — und bewusst nicht als `*.browser.spec.ts`: Jeder
+     * ihrer Fälle ist angemeldet, und angemeldet fährt WebKit nur die
+     * Rauchreihe (siehe unten).
      *
      * **WebKit fährt nur, was ohne Anmeldung im Browser auskommt.** Die
      * Anmeldecookies sind im Produktionsbau `Secure`, der Prüfserver spricht
