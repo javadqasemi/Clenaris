@@ -1,7 +1,7 @@
 import { after, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { call, del, get, post, put, requireServer, sleep } from '../helpers/client';
+import { call, del, get, patch, post, put, requireServer, sleep } from '../helpers/client';
 import { loginAll, type AccountName } from '../helpers/accounts';
 import { eigeneOrganisationId, testDb, testDbGrund, testDbSchliessen } from '../helpers/testdb';
 
@@ -244,6 +244,36 @@ describe('Website- und Betriebsbereiche', { concurrency: 1 }, async () => {
         const beschreibung = `${titel}, ${ART_BESCHRIFTUNG[leistung.kind]}, ${ort}`;
         assert.equal(altVon(html, 'https://example.com/pruefvergleich-vorher.jpg'), `Vorher: ${beschreibung}`);
         assert.equal(altVon(html, 'https://example.com/pruefvergleich-nachher.jpg'), `Nachher: ${beschreibung}`);
+      });
+
+      it('eine Galerieänderung erneuert auch die Leistungsseiten', async () => {
+        assert.ok(leistung && eintragId, 'Vorbereitung fehlgeschlagen');
+        const pfad = `/leistungen/${leistung.slug}`;
+
+        // Angelegt: Die Leistungsseite zeigt den Eintrag — mit Alternativtext
+        // aus Titel, dem Namen dieser Leistung und dem Ort.
+        const nachAnlegen = (await get(pfad)).text;
+        assert.equal(
+          altVon(nachAnlegen, 'https://example.com/pruefvergleich-vorher.jpg'),
+          `Vorher: ${titel}, ${leistung.name}, ${ort}`,
+          'die Leistungsseite zeigt den neuen Eintrag nicht — wird sie erneuert?',
+        );
+
+        // Geändert: der neue Titel, nicht mehr der alte.
+        const neuerTitel = `${titel} geaendert`;
+        const geaendert = await patch(`/api/gallery/${eintragId}`, { title: neuerTitel }, { jar: jars.admin });
+        assert.equal(geaendert.status, 200, geaendert.text);
+        await sleep(600);
+        const nachAendern = (await get(pfad)).text;
+        assert.ok(nachAendern.includes(neuerTitel), 'die Änderung erreicht die Leistungsseite nicht');
+
+        // Zurückgezogen: Das Foto verschwindet sofort, nicht erst nach einer Stunde.
+        const zurueck = await patch(`/api/gallery/${eintragId}`, { published: false }, { jar: jars.admin });
+        assert.equal(zurueck.status, 200, zurueck.text);
+        await sleep(600);
+        const nachZurueckziehen = (await get(pfad)).text;
+        assert.ok(!nachZurueckziehen.includes(titel), 'ein zurückgezogener Eintrag steht noch auf der Leistungsseite');
+        assert.equal(altVon(nachZurueckziehen, 'https://example.com/pruefvergleich-vorher.jpg'), null);
       });
     });
   });

@@ -264,6 +264,23 @@ function revalidateGallery(): void {
   revalidatePath('/galerie');
   // Der hervorgehobene Eintrag steht im Kopfbereich der Startseite.
   revalidatePath('/');
+  /*
+    Jede Leistungsseite zeigt den ersten veröffentlichten Eintrag ihrer Art
+    (`/leistungen/[slug]`, Vergleich im Kopf, seit 2026-09-30 auch im
+    Alternativtext). Bis dahin wurde sie hier nicht erneuert: Ein neuer,
+    geänderter oder zurückgezogener Eintrag erschien dort erst nach Ablauf
+    der Revalidierung (eine Stunde) — ein zurückgezogenes Foto blieb also
+    eine Stunde lang öffentlich.
+
+    Über die Segmentangabe statt über die einzelnen Slugs, wie in
+    `catalog.service.ts`: Welche Seite betroffen ist, hängt an der Art des
+    Eintrags *vor und nach* der Änderung und an jeder Leistung dieser Art;
+    eine Slug-Liste müsste dafür die Leistungen abfragen und wäre bei einer
+    Art ohne Leistung oder einem geänderten Slug still unvollständig. Die
+    Segmentangabe trifft alle vorerzeugten Leistungsseiten; neu gebaut wird
+    erst beim nächsten Aufruf, und es sind eine Handvoll Seiten.
+  */
+  revalidatePath('/leistungen/[slug]', 'page');
 }
 
 // ---------------------------------------------------------------------------
