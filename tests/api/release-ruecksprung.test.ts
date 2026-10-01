@@ -313,6 +313,48 @@ describe('Rücksprung von Hand (scripts/release-ruecksprung.ts)', () => {
     unveraendert();
   });
 
+  /**
+   * Befund 2026-10-01: `node_modules` im Archiv enthält native Teile, gebaut
+   * gegen die Node-Fassung der CI. Die Aktivierung verweigert eine andere
+   * Hauptversion; der Rücksprung prüfte das nicht und schaltete auf einen
+   * Baum um, der erst nach dem Neuladen von pm2 scheiterte.
+   */
+  it('verweigert ein Archiv, das mit einer anderen Node-Hauptversion gebaut wurde — vor jedem Entpacken', async () => {
+    welt.node = '24.1.0';
+    const e = await ruecksprung(auftrag(), welt);
+    assert.equal(e.code, 10);
+    assert.match(e.meldung, /Node-Hauptversion weicht vom Bau ab \(Bau: v22\.11\.0, hier: 24\.1\.0\)/);
+    assert.deepEqual(welt.entpackt, [], 'nichts entpackt');
+    unveraendert();
+    // Neben- und Fehlerbehebungsversion zählen nicht: Die nativen Teile hängen an der Hauptversion.
+    welt.node = '22.20.3';
+    assert.equal((await ruecksprung(auftrag(), welt)).code, 0);
+  });
+
+  /**
+   * Befund 2026-10-01: Gemessen wurde `archiv/clenaris-….tar.gz`, gelesen und
+   * entpackt dieselbe Datei erneut. Wer sie dazwischen tauscht, liesse
+   * entpacken, was nie gemessen wurde — und die Identitätsprüfung danach
+   * bestätigte den getauschten Bau, weil sie dessen eigene Dateien liest.
+   */
+  it('misst, liest und entpackt dieselbe private Kopie — ein Tausch des Archivs nach dem Messen wirkt nicht', async () => {
+    const BOESE = 'getauschte-bytes';
+    welt.inhalt.set(BOESE, manifest(ALT, 'getauschter-bau', [M1, M2]));
+    welt.nachMessen = () => writeFileSync(archiv, BOESE);
+
+    const e = await ruecksprung(auftrag(), welt);
+    assert.equal(e.code, 0, e.meldung);
+    const [kopie] = welt.gemessen;
+    assert.ok(kopie && kopie !== archiv, 'gemessen wird nicht das aufbewahrte Archiv selbst');
+    assert.match(kopie, /[\\/]archiv[\\/]\.ruecksprung\.pruef\.tar\.gz$/);
+    assert.deepEqual(welt.manifestGelesen, [kopie], 'RELEASE.json aus der gemessenen Kopie');
+    assert.deepEqual(welt.entpackt, [kopie], 'entpackt aus der gemessenen Kopie');
+    const ziel = join(basis, 'releases', ALT);
+    assert.equal(readFileSync(join(ziel, '.next', 'BUILD_ID'), 'utf8').trim(), BAU_ALT, 'entpackt ist, was gemessen wurde');
+    assert.equal(welt.laufend, ziel);
+    assert.deepEqual(liegengebliebeneKopien(), [], 'die Kopie ist nach dem Rücksprung wieder weg');
+  });
+
   it('Ziel bereits aktiv → nichts zu tun', async () => {
     releaseSchreiben(join(basis, 'releases', ALT), manifest(ALT, BAU_ALT, [M1, M2]));
     welt.verweis = join(basis, 'releases', ALT);

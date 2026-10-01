@@ -31,8 +31,11 @@
  *    genau den verlangten Commit nennt. Ein Verzeichnis unter `releases/`
  *    wird nie ungeprüft wiederverwendet: Es liegt seit Tagen auf einem
  *    Server, auf dem jeder mit dem Dienstbenutzer schreiben kann.
- *  • **Frisch entpackt.** Aus dem geprüften Archiv, in ein neues Verzeichnis,
- *    dann an die Stelle des alten. Was dort lag, wird ersetzt.
+ *  • **Frisch entpackt, aus einer eigenen Kopie.** Gemessen, gelesen und
+ *    entpackt wird dieselbe private Kopie des Archivs (seit 2026-10-01), in
+ *    ein neues Verzeichnis, dann an die Stelle des alten. Was dort lag, wird
+ *    ersetzt. Gebaut mit einer anderen Node-Hauptversion als der des
+ *    Servers, wird gar nicht erst entpackt.
  *  • **Das Schema geht nie mit zurück.** Migrationen laufen nur vorwärts;
  *    eine Rückwärtsmigration ist eine Entscheidung, keine Automatik. Also
  *    wird gefragt, welche Migrationen des laufenden Release das Ziel **nicht**
@@ -54,8 +57,21 @@
  */
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { createReadStream, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync } from 'node:fs';
+import {
+  createReadStream,
+  createWriteStream,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  symlinkSync,
+} from 'node:fs';
 import { basename, join, resolve } from 'node:path';
+import { pipeline } from 'node:stream/promises';
 
 import { COMMIT_MUSTER, MIGRATION_MUSTER, SHA256_MUSTER, artefaktManifestSchema } from '../src/lib/release/manifest';
 import { registerLesen, type Einstufung, type Register } from './migration-kompatibilitaet';
@@ -75,6 +91,8 @@ import {
 /** Was der Rücksprung über die Umschaltung hinaus braucht — in der Prüfreihe Attrappen. */
 export interface RuecksprungDienste extends Befehle {
   sha256(datei: string): Promise<string>;
+  /** `process.versions.node` des Servers — in der Prüfreihe fest, damit der Fall nicht von der Node-Fassung des Prüfrechners abhängt. */
+  nodeVersion(): string;
   /** Der Text von `RELEASE.json` aus dem Archiv, ohne zu entpacken — `null`, wenn es fehlt. */
   manifestAusArchiv(archiv: string): string | null;
   /** Das Archiv vollständig nach `ziel` entpacken. `false` bei einem Fehler. */
@@ -172,58 +190,95 @@ export async function ruecksprungAusfuehren(a: RuecksprungAuftrag, d: Ruecksprun
   if (!existsSync(archiv) || !existsSync(`${archiv}.sha256`)) {
     return verweigert(`Kein aufbewahrtes Archiv für ${a.auf} (${archiv} samt .sha256) — ohne geprüftes Archiv kein Rücksprung.`, von, a.auf);
   }
-  const gemessen = await d.sha256(archiv);
-  const notiert = readFileSync(`${archiv}.sha256`, 'utf8').trim().split(/\s+/)[0]?.toLowerCase() ?? '';
-  if (gemessen !== erwartet) {
-    return verweigert(`SHA-256 des aufbewahrten Archivs (${gemessen}) ist nicht die erwartete (${erwartet}).`, von, a.auf);
-  }
-  if (gemessen !== notiert) {
-    return verweigert(`SHA-256 des aufbewahrten Archivs stimmt nicht mit seiner .sha256-Datei überein (${notiert || 'leer'}).`, von, a.auf);
-  }
 
-  const manifestText = d.manifestAusArchiv(archiv);
-  let manifestRoh: unknown = null;
-  try {
-    manifestRoh = manifestText === null ? null : JSON.parse(manifestText);
-  } catch {
-    /* unten als ungültig gemeldet */
-  }
-  const manifest = artefaktManifestSchema.safeParse(manifestRoh);
-  if (!manifest.success) return verweigert('RELEASE.json im Archiv fehlt oder entspricht nicht Format 2.', von, a.auf);
-  if (manifest.data.commit !== a.auf) {
-    return verweigert(`RELEASE.json im Archiv nennt ${manifest.data.commit}, verlangt ist ${a.auf}.`, von, a.auf);
-  }
-  if (!auslieferbarBelegt(manifest.data)) return verweigert('Das Archiv ist nicht auslieferbar (Probe).', von, a.auf);
-
-  // --- Schema ---------------------------------------------------------------
-  const verbleibend = verbleibendeMigrationen(aktuell, manifest.data.migrationen);
-  const bedenklich = verbleibend.filter((m) => m.einstufung !== 'RUECKWAERTSVERTRAEGLICH');
-  if (verbleibend.length > 0) {
-    d.protokoll(`Schema bleibt  : ${verbleibend.length} Migration(en) des laufenden Release kennt ${a.auf.slice(0, 12)} nicht — sie bleiben angewandt.`);
-    for (const m of verbleibend) d.protokoll(`                 ${m.einstufung.padEnd(24)} ${m.migration}`);
-  }
-  if (bedenklich.length > 0 && !a.schemaBewusst) {
-    return verweigert(
-      `${bedenklich.length} verbleibende Migration(en) sind nicht rückwärtsverträglich (${bedenklich.map((m) => `${m.migration}: ${m.einstufung}`).join('; ')}). ` +
-        'Die ältere Fassung liefe gegen ein Schema, das sie nicht kennt. Nur mit --schema-bewusst, wenn die Folgen bekannt sind.',
-      von,
-      a.auf,
-      verbleibend,
-    );
-  }
-  if (bedenklich.length > 0) d.protokoll('WARNUNG: --schema-bewusst — Rücksprung trotz nicht rückwärtsverträglicher Migrationen.');
-
-  if (!existsSync(join(a.basis, 'shared', '.env'))) return verweigert(`${join(a.basis, 'shared', '.env')} fehlt.`, von, a.auf, verbleibend);
-
-  // --- Frisch entpacken -----------------------------------------------------
+  /*
+    Gemessen, gelesen und entpackt wird eine **eigene Kopie**, nie das
+    aufbewahrte Archiv selbst — dieselbe Regel wie in `release-aktivieren.sh`
+    (Schritt 2). Bis 2026-10-01 öffnete dieses Werkzeug `archiv/clenaris-….tar.gz`
+    dreimal: zum Messen, für `RELEASE.json` und zum Entpacken. Wer zwischen
+    dem ersten und dem dritten Öffnen die Datei tauscht — und das kann jeder,
+    der als Dienstbenutzer schreibt, siehe Kopf —, liesse entpacken, was nie
+    gemessen wurde. Die Identitätsprüfung danach fände das nicht: Sie
+    vergleicht `RELEASE.json` und `BUILD_ID`, und beides lässt sich aus dem
+    echten Archiv abschreiben. Die Kopie entsteht mit 0600 neben dem Archiv
+    (dasselbe Dateisystem, also kein Platzproblem auf einem anderen) und geht
+    in jedem Ausgang wieder weg.
+  */
   const kennung = String(a.kennung ?? process.pid);
+  const kopie = join(a.basis, 'archiv', `.ruecksprung.${kennung}.tar.gz`);
   const neu = `${ziel}.tmp.${kennung}`;
   const alt = `${ziel}.alt.${kennung}`;
   let identitaet: Identitaet | null = null;
+  let verbleibend: VerbleibendeMigration[] = [];
   try {
+    await privateKopie(archiv, kopie);
+    const gemessen = await d.sha256(kopie);
+    const notiert = readFileSync(`${archiv}.sha256`, 'utf8').trim().split(/\s+/)[0]?.toLowerCase() ?? '';
+    if (gemessen !== erwartet) {
+      return verweigert(`SHA-256 des aufbewahrten Archivs (${gemessen}) ist nicht die erwartete (${erwartet}).`, von, a.auf);
+    }
+    if (gemessen !== notiert) {
+      return verweigert(`SHA-256 des aufbewahrten Archivs stimmt nicht mit seiner .sha256-Datei überein (${notiert || 'leer'}).`, von, a.auf);
+    }
+
+    const manifestText = d.manifestAusArchiv(kopie);
+    let manifestRoh: unknown = null;
+    try {
+      manifestRoh = manifestText === null ? null : JSON.parse(manifestText);
+    } catch {
+      /* unten als ungültig gemeldet */
+    }
+    const manifest = artefaktManifestSchema.safeParse(manifestRoh);
+    if (!manifest.success) return verweigert('RELEASE.json im Archiv fehlt oder entspricht nicht Format 2.', von, a.auf);
+    if (manifest.data.commit !== a.auf) {
+      return verweigert(`RELEASE.json im Archiv nennt ${manifest.data.commit}, verlangt ist ${a.auf}.`, von, a.auf);
+    }
+    if (!auslieferbarBelegt(manifest.data)) return verweigert('Das Archiv ist nicht auslieferbar (Probe).', von, a.auf);
+
+    /*
+      Die Node-Hauptversion muss die des Baus sein — dieselbe Prüfung wie in
+      `release-aktivieren.sh`. `node_modules` im Archiv enthält native Teile
+      (die Prisma-Engine), gebaut gegen die Node-Fassung der CI. Ein
+      Rücksprung auf ein Archiv, das vor einem Node-Wechsel auf dem Server
+      gebaut wurde, schaltete sonst auf einen Baum um, der gar nicht startet —
+      und das fiele erst auf, nachdem pm2 die laufende Fassung schon
+      angehalten hat (20 im besten Fall, 30 im schlechtesten). Hier fällt es
+      auf, bevor irgendetwas angefasst ist.
+    */
+    const bauNode = manifest.data.node.replace(/^v/, '').split('.')[0];
+    const hierNode = d.nodeVersion().replace(/^v/, '').split('.')[0];
+    if (bauNode !== hierNode) {
+      return verweigert(
+        `Node-Hauptversion weicht vom Bau ab (Bau: ${manifest.data.node}, hier: ${d.nodeVersion()}) — die nativen Teile in node_modules passen nicht.`,
+        von,
+        a.auf,
+      );
+    }
+
+    // --- Schema -------------------------------------------------------------
+    verbleibend = verbleibendeMigrationen(aktuell, manifest.data.migrationen);
+    const bedenklich = verbleibend.filter((m) => m.einstufung !== 'RUECKWAERTSVERTRAEGLICH');
+    if (verbleibend.length > 0) {
+      d.protokoll(`Schema bleibt  : ${verbleibend.length} Migration(en) des laufenden Release kennt ${a.auf.slice(0, 12)} nicht — sie bleiben angewandt.`);
+      for (const m of verbleibend) d.protokoll(`                 ${m.einstufung.padEnd(24)} ${m.migration}`);
+    }
+    if (bedenklich.length > 0 && !a.schemaBewusst) {
+      return verweigert(
+        `${bedenklich.length} verbleibende Migration(en) sind nicht rückwärtsverträglich (${bedenklich.map((m) => `${m.migration}: ${m.einstufung}`).join('; ')}). ` +
+          'Die ältere Fassung liefe gegen ein Schema, das sie nicht kennt. Nur mit --schema-bewusst, wenn die Folgen bekannt sind.',
+        von,
+        a.auf,
+        verbleibend,
+      );
+    }
+    if (bedenklich.length > 0) d.protokoll('WARNUNG: --schema-bewusst — Rücksprung trotz nicht rückwärtsverträglicher Migrationen.');
+
+    if (!existsSync(join(a.basis, 'shared', '.env'))) return verweigert(`${join(a.basis, 'shared', '.env')} fehlt.`, von, a.auf, verbleibend);
+
+    // --- Frisch entpacken ---------------------------------------------------
     rmSync(neu, { recursive: true, force: true });
     mkdirSync(neu, { recursive: true });
-    if (!d.entpacken(archiv, neu)) return verweigert(`Entpacken von ${archiv} gescheitert.`, von, a.auf, verbleibend);
+    if (!d.entpacken(kopie, neu)) return verweigert(`Entpacken von ${archiv} gescheitert.`, von, a.auf, verbleibend);
     const lesung = releaseIdentitaetLesen(neu);
     if (!lesung.ok) return verweigert(lesung.grund, von, a.auf, verbleibend);
     if (lesung.identitaet.commit !== a.auf || lesung.identitaet.buildId !== manifest.data.buildId) {
@@ -253,6 +308,7 @@ export async function ruecksprungAusfuehren(a: RuecksprungAuftrag, d: Ruecksprun
   } catch (fehler) {
     return verweigert(`Vorbereiten gescheitert: ${fehler instanceof Error ? fehler.message : String(fehler)}`, von, a.auf, verbleibend);
   } finally {
+    rmSync(kopie, { force: true });
     rmSync(neu, { recursive: true, force: true });
   }
 
@@ -264,6 +320,18 @@ export async function ruecksprungAusfuehren(a: RuecksprungAuftrag, d: Ruecksprun
     d,
   );
   return { code: umschaltung.code, zustand: umschaltung.zustand, meldung: umschaltung.meldung, von, nach: a.auf, verbleibend };
+}
+
+/**
+ * Das aufbewahrte Archiv in eine eigene Datei kopieren — gestreamt, weil ein
+ * Archiv samt `node_modules` einige hundert Megabyte hat und ein Server mit
+ * wenig Speicher es nicht am Stück lesen soll. `wx` scheitert, statt eine
+ * fremde Datei gleichen Namens zu überschreiben; eine liegen gebliebene
+ * eigene Kopie (gleiche Kennung, abgebrochener Lauf) wird vorher entfernt.
+ */
+async function privateKopie(quelle: string, ziel: string): Promise<void> {
+  rmSync(ziel, { force: true });
+  await pipeline(createReadStream(quelle), createWriteStream(ziel, { flags: 'wx', mode: 0o600 }));
 }
 
 /**
@@ -314,6 +382,7 @@ async function main(): Promise<number> {
   const dienste: RuecksprungDienste = {
     ...echteBefehle(appName, port),
     sha256: sha256Datei,
+    nodeVersion: () => process.versions.node,
     manifestAusArchiv(archiv) {
       const r = spawnSync('tar', ['-xzOf', archiv, 'RELEASE.json'], { encoding: 'utf8', maxBuffer: 10 * 1024 * 1024 });
       return r.status === 0 ? r.stdout : null;
