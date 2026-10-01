@@ -16,6 +16,8 @@
     "time_entries_eine_laufende_je_person"
   ],
   "trigger": [
+    "audit_logs_kein_leeren",
+    "audit_logs_nur_anfuegen",
     "contract_services_unveraenderlich",
     "contract_versions_unveraenderlich",
     "equipment_maintenances_unveraenderlich",
