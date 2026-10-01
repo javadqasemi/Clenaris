@@ -536,16 +536,22 @@ Ehrlich benannt, statt stillschweigend übergangen:
 - **Unit-Tests der Dienste.** Es gibt bewusst keine — geprüft wird die
   laufende Anwendung über echtes HTTP (`tests/`, Prüfungen zu Rechtematrix,
   Abläufen, Eigentümerschaft, Redaktion und ausgelieferten Seiten; siehe
-  `tests/README.md`). Die reinen Rechenkerne, die hier früher als ungeprüft
-  standen, haben inzwischen eigene Prüfungen mit festen Erwartungswerten
-  ohne Server: Geldrechnung der Preis-Engine (`geldrechnung.test.ts`),
-  QR-Referenz (`scan-kennung.test.ts`), die `*-rechenkern.test.ts`-Dateien
-  (Verträge, Verfügbarkeit, Qualität, SEO, Besuchsmessung, Visitenkarte,
-  Signatur) und die Werkzeuge des Release-Wegs (Artefakt, Identität,
-  Rücksprung, Bauvergleich). Die Token-Rotation bleibt über HTTP geprüft
-  (`session-refresh.test.ts`, `sitzung-leerlauf.test.ts`) — sie ist an
-  Datenbank und Cookies gebunden, und ein Nachbau ohne beides prüfte die
-  Attrappe.
+  `tests/README.md`). Von den reinen Rechenkernen, die hier früher als
+  ungeprüft standen, haben inzwischen eigene Prüfungen mit festen
+  Erwartungswerten ohne Server: die Geldrechnung, die die Preis-Engine
+  benutzt (`geldrechnung.test.ts`: Produkte und Prozente dezimal), die
+  QR-Referenz-Prüfziffer (`scan-kennung.test.ts`), die
+  `*-rechenkern(e).test.ts`-Dateien (Führung, Verträge, Verfügbarkeit,
+  Qualität, SEO, Besuchsmessung, Visitenkarte, Signatur) und die Werkzeuge
+  des Release-Wegs (Artefakt, Identität, Rücksprung, Bauvergleich). **Die
+  Regeln der Preis-Engine selbst** (`src/lib/pricing/engine.ts`: Zuschläge,
+  Häufigkeits- und Kundenrabatte, Gutschein) haben weiterhin keinen reinen
+  Test mit festen Erwartungswerten — sie sind nur über HTTP geprüft
+  (`/api/public/pricing/estimate`, etwa `catalog.test.ts`,
+  `buchung-integritaet.test.ts`). Die Token-Rotation bleibt über HTTP geprüft
+  (`session-refresh.test.ts`; seit 2026-10-01 dazu `sitzung-leerlauf.test.ts`,
+  geschrieben, Lauf steht aus) — sie ist an Datenbank und Cookies gebunden,
+  und ein Nachbau ohne beides prüfte die Attrappe.
 - **Mehrsprachigkeit.** Datenmodell und Endpunkte kennen DE/FR/IT/EN, die
   Oberfläche ist ausschliesslich deutsch. Die Texte liegen noch inline, nicht
   in Wörterbüchern.
