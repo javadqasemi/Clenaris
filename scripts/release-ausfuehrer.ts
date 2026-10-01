@@ -105,12 +105,33 @@ const AUFTRAG_MUSTER = /^c[a-z0-9]{8,49}$/;
 const CI_URL_MUSTER = /^https:\/\/github\.com\/([A-Za-z0-9._-]{1,100})\/([A-Za-z0-9._-]{1,100})\/actions\/runs\/(\d{1,20})$/;
 const LAUF_MUSTER = /^\d{1,20}$/;
 /**
- * Ein Pfad, der wörtlich in eine Shell-Zeile eingesetzt werden darf: keine
- * Anführungszeichen, kein `$`, kein Backtick, keine Steuer- oder
- * Trennzeichen. Laufwerksbuchstabe und Rückstrich bleiben erlaubt, damit die
- * Prüfreihe unter Windows läuft.
+ * Ein Archivpfad, der als **ein** Wort in eine Shell-Zeile passt und dort
+ * keinen Befehl bilden kann: keine Anführungszeichen, kein `$`, kein
+ * Backtick, keine Klammer, keine Umleitung, keine Steuerzeichen, **kein
+ * Leerzeichen** (Worttrenner); dazu weder ein führendes `-` (das `scp` oder
+ * `tar` als Option läsen) noch ein führendes `~` (Tilde-Ersetzung).
+ *
+ * Bis 2026-10-01 stand hier, der Pfad dürfe „wörtlich in eine Shell-Zeile
+ * eingesetzt werden" — und das Muster liess ein Leerzeichen zu. Ohne
+ * Anführungszeichen eingesetzt, zerfiel ein solcher Pfad in zwei Wörter;
+ * sicher war er nur, weil die Vorlage `"$ARCHIV"` zufällig in
+ * Anführungszeichen setzte (Gegenprüfung 2026-09-30). Ein Leerzeichen braucht
+ * der Pfad nie: Veränderlich ist an ihm nur `--verzeichnis`, und das setzt
+ * der Workflow selbst (`release`); der Rest ist `clenaris-<sha12>.tar.gz`.
+ *
+ * Rückstrich, Doppelpunkt und Tilde **in der Mitte** bleiben erlaubt, damit
+ * die Prüfreihe unter Windows läuft (`C:\…`, 8.3-Kurznamen wie `JAVADQ~1` im
+ * TEMP-Pfad). Ohne Anführungszeichen können sie einen Pfad verfälschen — ein
+ * Rückstrich maskiert in bash das nächste Zeichen, ein Doppelpunkt vor dem
+ * ersten Schrägstrich lässt `scp` einen entfernten Rechner lesen —, aber
+ * keinen Befehl einschleusen. Ein eigenes Muster je Plattform wurde
+ * verworfen: Die reine Prüfreihe liefe dann unter Windows und Linux gegen
+ * verschiedene Regeln, und ein Fall, der nur auf einer Plattform gilt, ist
+ * ein bedingter Fall. Das Muster ist deshalb die zweite Linie, nicht die
+ * erste: Verbraucher reichen den Wert über `env:` weiter und setzen ihn in
+ * doppelte Anführungszeichen, wie die Vorlage `deploy/v2/release-ausfuehrer.yml`.
  */
-const PFAD_MUSTER = /^[A-Za-z0-9 ._/\\:~+@-]{1,1000}$/;
+const PFAD_MUSTER = /^(?![-~])[A-Za-z0-9._/\\:~+@-]{1,1000}$/;
 
 const leerOder = (pruefen: (v: string) => boolean) => (v: string) => v === '' || pruefen(v);
 

