@@ -274,8 +274,14 @@ gemeldet haben: `security:check` (CI, Freigabe), der externe
 Überwachungsrechner (Erreichbarkeit, TLS, Kopfzeilen, offen erreichbare
 Dateien), die passive ZAP-Grundprüfung, Abhängigkeits- und
 Betriebssystemprüfung, Sicherung und Wiederherstellungsprobe,
-Rechnerintegrität — dazu die laufende Version (`APP_VERSION`) und den
-Zustand des Schadsoftwareprüfers.
+Rechnerintegrität — dazu den laufenden Stand und den Zustand des
+Schadsoftwareprüfers. Der **laufende Stand** kommt seit 2026-09-30 aus der
+Identität der Instanz (`src/lib/release/identitaet.ts`: Zustand `belegt`,
+`ohne RELEASE.json`, `widersprüchlich` oder `Manifest ungültig`, Version,
+Commit, Build-ID und — nur hier, nicht im unangemeldeten `/api/health` — der
+Grund einer fehlenden Belegung). Bis dahin stand hier `APP_VERSION`, eine
+Umgebungsvariable, die die Aktivierung selbst setzte und die damit nichts
+bewies.
 
 **Die Seite startet nichts.** Es gibt keinen Knopf „Prüfung starten", keine
 Shell, kein `npm`, kein SSH, keinen Neustart. Die Prüfungen melden über

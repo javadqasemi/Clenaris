@@ -107,7 +107,7 @@ npx tsx scripts/sitzungen-widerrufen.ts --ausfuehren --bestaetigen <datenbanknam
 | Kundenlinks (`public_access_tokens`) | nur mit `--oeffentliche-links` | Betriebsentscheidung — trifft die Kundschaft |
 | Zwischenschein 2FA (`clenaris_mfa`, 5 min) | über den neuen `JWT_SECRET` | kryptografisch entwertet |
 | Zweiter Faktor | **Liste** der im Verdachtszeitraum bestätigten Konten; Rücksetzen je Konto im Sicherheitszentrum nach Rücksprache | ein eingeschleustes TOTP-Geheimnis überlebt jeden Sitzungswiderruf |
-| Gemerkte Geräte | gibt es nicht (`rememberMe` wird am Server nicht ausgewertet) | — |
+| Gemerkte Geräte | gibt es nicht. „Angemeldet bleiben" (`rememberMe`, seit 2026-09-28 am Server ausgewertet, K-01) verlängert nur das Leerlauffenster des Erneuerungstokens (`SESSION_REMEMBER_IDLE_TTL`, Vorgabe 7 Tage) | der Widerruf der Refresh-Token oben beendet auch diese Sitzungen |
 
 Reihenfolge am Umschalttag: neuer `JWT_SECRET` in `shared/.env` → Widerruf
 ausführen → Zweitfaktor-Liste klären → Passwörter aller Verwaltungskonten
@@ -258,17 +258,24 @@ Durchsicht durch eine Person. Das Skript entscheidet nichts.
 ## 8. Auslieferung: Artefakt statt Bau am Server
 
 ```
-CI (vertrauenswürdig)                                   V2-Server
-npm ci → Hydrationskorrektur → prisma generate →
-Prüfungen, Sicherheit, Geheimnisse → Build →
-Testreihe + Browser gegen genau diesen Bau →
-release-artefakt.ts (Archiv + Manifest + SHA-256) ──►  Summe prüfen → entpacken
+CI (vertrauenswürdig)                                   V2-Server (Vertrag C3, seit 2026-09-30)
+npm ci → verify:static → Stückliste →
+Migrationen → Datenbankschranken →
+Konfigurations-Seed → Build ohne Zwischenspeicher →
+release-artefakt.ts (Archiv + RELEASE.json Format 2
+  + SHA-256 + Beilage), vor jedem Serverstart →
+Demo-Seed → Testreihe + Browser gegen genau diesen Bau
+  ── Archiv, .sha256, Aktivierungsskript aus dem Archiv ──►
+                                                        Sperre (.release.lock)
+                                                        Summe = --erwartet-sha256 = .sha256
+                                                        Manifest → frisch entpacken → BUILD_ID
                                                         production:preflight --phase vor-migration
                                                         migration-preflight → geprüfte Sicherung
                                                         prisma migrate deploy
                                                         production:preflight (keine offene Migration)
-                                                        Verweis umschalten → start:built → Health
-                                                        (sonst Rücksprung)
+                                                        umschalten → Identität prüfen
+                                                        (Commit, Build-ID, belegt — dreimal in Folge)
+                                                        sonst zurück und die vorherige prüfen (20)
 ```
 
 Der Server führt **nie** `git pull`, `npm install`/`npm ci`, `npm run build`
@@ -277,9 +284,25 @@ keine Anforderung an den Produktionsserver mehr: Gebaut wird im CI-Läufer
 (`ubuntu-latest`, 16 GB). Die Anwendungsgeheimnisse reisen nicht durch die
 Pipeline; der Auftrag kennt nur, was er zum Verbinden braucht.
 
-Offen (V2-3): `release-aktivieren.sh` ist auf keinem Server gelaufen — auf dem
-V2-Probeserver durchspielen (Erstinstallation, zweites Release, kaputtes
-Release, falsche Summe, fehlendes `APP_URL`, `auslieferbar=false`).
+Gebaut wird gegen eine Datenbank nur mit Konfiguration und gepackt, bevor ein
+Server läuft: Ein Bau gegen die Demodatenbank oder ein Bau, in den der
+Prüfserver Seiten zurückgeschrieben hat, trüge Demodaten in die Produktion —
+genau den Befund P0 aus Abschnitt 1, nur über einen anderen Weg. Das
+Packskript verweigert beides (`docs/PENDENZEN.md` P2H-06).
+
+**Rücksprung von Hand** (seit 2026-09-30): `deploy/v2/release-ruecksprung.sh
+--auf <commit> --erwartet-sha256 <summe> [--schema-bewusst]` — nur aus dem
+aufbewahrten, erneut gemessenen Archiv unter `archiv/`, mit Einstufung der
+zurückbleibenden Migrationen; nie bauen, nie `git`, nie zurückmigrieren
+(`docs/DEPLOYMENT.md` §16). `scripts/deploy.sh` ist auch kein Rücksprungweg.
+
+Offen (V2-3): `release-aktivieren.sh` und `release-ruecksprung.sh` sind auf
+keinem Server gelaufen — auf dem V2-Probeserver durchspielen (Erstinstallation,
+zweites Release, kaputtes Release mit Ausgang 20, falsche Summe, fehlendes
+`APP_URL`, `auslieferbar=false`, besetzte Sperre, Rücksprung). Für eine
+Erstinstallation auf einer **leeren** Datenbank ist die Reihenfolge noch
+offen (`docs/PENDENZEN.md` P2H-76); der Weg dieses Plans ist die Übernahme
+(Abschnitt 17).
 
 ## 9. Reihenfolge von Schema und Programm
 
@@ -297,10 +320,13 @@ Wartungsfenster (`CLENARIS_WARTUNGSFENSTER=ja` bei der Aktivierung).
 `npm run migration:vertraeglichkeit` (auch Teil von `security:check`,
 blockierend) stuft jede Migration heuristisch ein und hält sie gegen die
 durchgesehene Einstufung in `security/migrations-vertraeglichkeit.json`.
-Stand der 51 Migrationen: 27 rückwärtsverträglich, 6 Rückfüllung,
-17 Programmwechsel, 1 brechend (`20260927170000_buchungslink_hash` entfernt
-`bookings.confirmationToken`, das die alte Fassung bei jeder Buchungsabfrage
-liest). Eine neue Migration ohne Eintrag hält das Tor an.
+Stand der 56 Migrationen (Register vom 2026-09-30): 31 rückwärtsverträglich,
+7 Rückfüllung, 17 Programmwechsel, 1 brechend
+(`20260927170000_buchungslink_hash` entfernt `bookings.confirmationToken`,
+das die alte Fassung bei jeder Buchungsabfrage liest). Eine neue Migration
+ohne Eintrag hält das Tor an. Die Einstufung entscheidet seit 2026-09-30 auch
+über den Rücksprung von Hand: Bleibt eine nicht rückwärtsverträgliche
+Migration im Schema zurück, verweigert er ohne `--schema-bewusst`.
 
 ## 11. Schadsoftwareprüfung
 
@@ -326,6 +352,14 @@ einen Wert vom alten Host übernehmen.
 Bleibt abgeschaltet (keine Zugangsdaten → 401/503). Für V2 neue
 `RELEASE_EXECUTOR_*` und ausschliesslich der Artefaktweg; nie Zugangsdaten
 wiederverwenden, die auf dem alten Server lagen.
+
+Seit 2026-09-30 folgen beide Wege in die Produktion — der Auftrag
+`auslieferung` (`DEPLOY_ENABLED`) und der Release-Ausführer
+(`RELEASE_EXECUTOR_ENABLED`, Vorlage `deploy/v2/release-ausfuehrer.yml`) —
+demselben Aktivierungsvertrag, und „erfolgreich" bzw. „zurückgesetzt" hält das
+Release Center nur fest, wenn die laufende Instanz es aus `RELEASE.json` und
+`BUILD_ID` belegt (`docs/PRODUCTION_V2.md` §6, §7). Beide bleiben bis zur
+V2-Abnahme ausgeschaltet; zugleich eingeschaltet ist nicht vorgesehen.
 
 ## 14. Öffentliches Repository
 

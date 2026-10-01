@@ -60,7 +60,15 @@ Altersbänder), **Herkunft** (`source`, `reference`) und **Prüfstand**
 (`verification`, `verifiedAt`, `verifiedById`, `verificationNote`).
 
 - **Keine Überschneidung je Art** — Ausschlussbedingung
-  `payroll_rates_ueberlappungsfrei` (btree_gist, `daterange … '[]'`).
+  `payroll_rates_ueberlappungsfrei` (btree_gist, `daterange … '[]'`). Seit
+  2026-09-30 steht sie mit `withholding_tax_profiles_ueberlappungsfrei`, den
+  Prüfbedingungen des Lohns (`payroll_rates_prozent`, `payroll_rates_zeitraum`,
+  `payroll_items_monat`, `employee_payroll_profiles_monat`,
+  `withholding_tax_*`) und den Lohn-Triggern samt Funktionsrumpf im Register
+  `security/datenbank-schranken.json`; das Datenbanktor
+  (`scripts/datenbank-schranken.ts`) meldet eine fehlende, nicht validierte
+  oder abgeschaltete Schranke — `migrate dev` kann sie damit nicht mehr
+  unbemerkt verwerfen.
 - **Gerechnet wird mit der Version am letzten Tag des Monats.** Die
   Abrechnung speichert die Kennungen (`rateVersionIds`) und eine
   Momentaufnahme (`breakdown.satzversionen`).
@@ -314,4 +322,5 @@ Satzes.
 | `src/app/(app)/admin/lohn/**`, `src/app/(app)/portal/lohn` | Oberflächen |
 | `prisma/migrations/20260923130000_lohn_ausbau` | Modelle, Ausschlussbedingungen, Teilindex, Trigger, Übernahme der Jahreszeilen |
 | `tests/api/lohnbestandteile.test.ts` | 24 Prüfungen der reinen Rechnung |
-| `tests/api/lohnabrechnung.test.ts` | Beitragsrechnung und Ablauf über HTTP (50 Prüfungen) |
+| `tests/api/lohnabrechnung.test.ts` | Beitragsrechnung und Ablauf über HTTP (55 Prüfungen, Stand 2026-10-01) |
+| `security/datenbank-schranken.json`, `scripts/datenbank-schranken.ts` | Register und Tor der handgeschriebenen Lohn-Schranken (Ausschluss-, Prüfbedingungen, Trigger, Funktionsrümpfe) — `tests/api/datenbank-schranken.test.ts` |

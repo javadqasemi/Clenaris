@@ -10,6 +10,17 @@ frühere Berichte. Testtitel sind wörtlich aus den Testdateien übernommen und
 per Suche bestätigt. Keine Zeile beruht auf einem Testlauf dieser Prüfung;
 die Laufergebnisse des Tages stehen im Bericht, Abschnitt „Nachweise".
 
+> **Nachtrag 2026-10-01.** Zwei hier zitierte Titel heissen heute anders:
+> F-07 `session-refresh` „fünfzig gleichzeitige Erneuerungen: genau eine
+> rotiert, die Familie bleibt heil" (umbenannt in `a9810a6`), Q-05
+> `release-center` „Übernahme: falsche Summe, CI rot, fremde Umgebung → 422;
+> richtig → 200; Wiederholung → 200; zweiter Ausführer → 409 — ebenso fremder
+> Commit und andere Version → 422, anderes Artefakt unter demselben Schlüssel
+> → 409" (erweitert in der Production-V2-Härtung). Massgeblich für heutige
+> Belege sind `security/testmatrix.json` und `security/sicherheitsmatrix.json`;
+> `scripts/testmatrix-pruefen.ts` verlangt dort seit 2026-09-30 ausgeführte,
+> wörtlich gleiche Titel.
+
 **Zweite Nachprüfung.** Seit `5760e88` sind sechs Commits hinzugekommen:
 `71b2a2c` (Buchung: F-03, N-04), `66a5de5` (Finanzen: F-04, N-05, N-03,
 F-14, Prüfsumme F-13), `10c6c89` (Disposition: F-06, N-01 mit Teilindex,

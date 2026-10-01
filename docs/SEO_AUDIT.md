@@ -66,7 +66,7 @@ Legende: T = Titel, D = Beschreibung, C = Canonical, R = Robots, OG = OpenGraph,
 |---|---|
 | Genau eine `h1` | Alle öffentlichen Seiten haben genau eine `h1` (Rechtstexte: entweder die eingebaute oder die aus der Datenbank; `Markdown` stuft `#` zu `h2` herab). `/buchen`: die `h1` sitzt im Assistenten und wird serverseitig gerendert (`force-dynamic`). Neu geprüft für jede Seite in `public-site.test.ts`. |
 | Landmarken | `header`, `nav aria-label="Hauptnavigation"` / „Mobile Navigation", `main id="inhalt"` mit Sprunglink im Wurzellayout, `footer`, Brotkrumen als `nav aria-label="Brotkrumen"`. In Ordnung. |
-| Bilder | Einzige Bilder sind die Vorher-/Nachher-Vergleiche (`BeforeAfter`), `alt` = „Vorher"/„Nachher". **Offen (Empfehlung):** `alt` um den Galerietitel ergänzen („Vorher: Wohnungsabgabe Köniz"); Galerie-Datensätze haben den Titel. |
+| Bilder | Einzige Bilder sind die Vorher-/Nachher-Vergleiche (`BeforeAfter`). Am 2026-09-28: `alt` = „Vorher"/„Nachher", Empfehlung: um den Galerietitel ergänzen. **Seit 2026-10-01 umgesetzt (SEO-06):** `alt` = „Vorher: <Beschreibung>" / „Nachher: <Beschreibung>", die Beschreibung aus Titel, Leistung und Ort des Datensatzes (`src/lib/seo/vergleichsbild.ts`) — nur vorhandene Teile, nichts doppelt (wortweise verglichen), höchstens 120 Zeichen, Klartext; ohne Angaben bleibt es bei „Vorher"/„Nachher". Auf Startseite und Galerie ist die Leistung die Art-Beschriftung, auf der Leistungsseite deren Name. Beschriftungen und `aria-valuetext` des Reglers unverändert. Prüfung: `seo-rechenkern.test.ts` Block „Vergleichsbilder — Alternativtext"; über HTTP `website-ops.test.ts` (Lauf steht aus) |
 | Interne Links | Jede Übersichtsseite ist von der Startseite verlinkt (bestehende Prüfung). |
 
 ## 5. 404, Umleitungen, doppelte Inhalte
@@ -132,12 +132,13 @@ Beschreibung 70–160), Canonical, index/noindex, Vorschaubild, Typen der
 strukturierten Daten, Befunde. Berechnet von `seoStatus()` aus **demselben**
 `seitenMetadaten()` wie die Seiten; nichts wird automatisch geändert.
 
-## 9. Offen / Empfehlungen
+## 9. Offen / Empfehlungen (nachgeführt 2026-10-01)
 
 | Punkt | Warum offen |
 |---|---|
-| Kein Standard-Vorschaubild (`og:image`) für Seiten ohne gepflegtes Bild | Braucht ein gestaltetes Bild (oder `opengraph-image.tsx` mit `next/og`) — Gestaltungsentscheid, kein technischer Fehler. Twitter-Karte fällt bis dahin korrekt auf `summary` zurück. |
-| `alt` der Vorher-/Nachher-Bilder generisch | Siehe 4.; kleine Änderung an `galerie/page.tsx`. |
-| Kein Favicon/App-Icon und kein Web-Manifest in `src/app` | Gestaltungsentscheid. |
+| ~~Kein Standard-Vorschaubild (`og:image`) für Seiten ohne gepflegtes Bild~~ | **Erledigt 2026-09-29** (SEO-06, `88a6950`): Standard-Vorschaubild aus der freigegebenen Bildmarke (`public/og-standard.png`, 1200 × 630); ein gepflegtes CMS-Bild geht vor. Geprüft in `seo-rechenkern.test.ts` und `cms.test.ts` (og:image mit Massen, PNG ausgeliefert). |
+| ~~`alt` der Vorher-/Nachher-Bilder generisch~~ | **Erledigt 2026-10-01** (SEO-06, `dd13549`) — siehe 4. |
+| ~~Kein Favicon/App-Icon und kein Web-Manifest in `src/app`~~ | **Erledigt:** Favicon `src/app/icon.svg` (`64e8edb`), Web-App-Manifest `src/app/manifest.ts` → `/manifest.webmanifest` (`88a6950`, geprüft in `cms.test.ts`). |
+| Galerieänderung erneuerte die Leistungsseiten nicht | **Erledigt 2026-10-01** (`82f3922`): `revalidatePath` braucht unter einer Routengruppe den Pfad mit Gruppe (`/(public)/leistungen/[slug]`, ebenso `/(public)/karriere/[slug]`); ohne Gruppe war der Aufruf wirkungslos. `seo-rechenkern.test.ts` gleicht seither jede Angabe gegen `src/app` ab. Offen: derselbe wirkungslose Aufruf in `catalog.service.ts` (harmlos, `docs/PENDENZEN.md` P2H-66) und der CMS-Bildaustausch, der die Detailseiten nicht erneuert (P2H-67). |
 | `robots.txt` sperrt `noindex`-Seiten zusätzlich | Bewusst beibehaltene Linie des Repos (Personendaten); Nebenwirkung: Google sieht das `noindex` einer gesperrten Seite nicht und kann eine extern verlinkte Adresse ohne Inhalt listen. |
 | Rich-Result-Test mit echtem Google-Werkzeug | **EXTERNER NACHWEIS ERFORDERLICH:** Lauf von search.google.com/test/rich-results und validator.schema.org gegen die Produktionsdomain. |

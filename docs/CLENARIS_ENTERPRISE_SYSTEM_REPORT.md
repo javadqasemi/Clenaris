@@ -2303,7 +2303,7 @@ Eigene Datenbank (`clenaris_test`), eigener Server (Port 3001), `TRUSTED_PROXY_M
 | Logging | **eigener strukturierter Logger** (`src/lib/logger.ts`), Namensraum je Bereich, `LOG_LEVEL` |
 | Ausgabe | stdout → PM2 → `logs/pm2/out.log`, `error.log` |
 | Rotation | `pm2-logrotate`, in `docs/DEPLOYMENT.md` beschrieben, **nicht im Code erzwungen** |
-| **Health-Endpunkt** | `GET /api/health` — `status`, `datenbank`, **`migrationen`** (Anzahl angewandter), `version` (`APP_VERSION` = ausgelieferter Commit), `umgebung`, `laufzeitSekunden`, `dauerMs`. **503** bei toter Datenbank, `Cache-Control: no-store` |
+| **Health-Endpunkt** | `GET /api/health` — `status`, `datenbank`, **`migrationen`** (Anzahl angewandter), `version` (damals `APP_VERSION` = ausgelieferter Commit; seit 2026-09-30 der Commit aus `RELEASE.json`, nur wenn die Identität belegt ist, sonst `null`), seit 2026-09-30 dazu `buildId`, `release`, `identitaet`; `umgebung`, `laufzeitSekunden`, `dauerMs`. **503** bei toter Datenbank, `Cache-Control: no-store` |
 | Auslieferungsprotokolle | `logs/deployment/<zeitstempel>.log`, 30 Tage |
 | **Prüfprotokoll** | `AuditLog`, 223 Aufrufstellen |
 | **Sentry** | **nicht vorhanden** |

@@ -1,8 +1,9 @@
 # Browser-Prüfungen (Gate 4D.1)
 
-Diese Reihe fährt die Anwendung in einem echten Chromium. Sie **ergänzt** die
-HTTP-Prüfungen unter `tests/api` und `tests/pages` und ersetzt keine einzige
-davon.
+Diese Reihe fährt die Anwendung in echten Browsern — Chromium für alle Fälle,
+Firefox und WebKit für die Fälle, die von der Engine abhängen (Abschnitt
+„Engines"). Sie **ergänzt** die HTTP-Prüfungen unter `tests/api` und
+`tests/pages` und ersetzt keine einzige davon.
 
 ## Wozu eine zweite Ebene
 
@@ -20,7 +21,7 @@ sind sicherheitsrelevant:
 ## Ausführen
 
 ```powershell
-npm run e2e:install        # einmal: Chromium herunterladen
+npm run e2e:install        # einmal: Chromium, Firefox und WebKit herunterladen
 npm run build              # bei gestopptem Server
 npm run e2e                # startet den Testserver selbst, falls keiner läuft
 npm run e2e -- gate4d      # nur eine Gruppe
@@ -57,12 +58,34 @@ E-Mail an `nicole.wyss@example.ch` hinaus.
 | `ki-textassistent.spec.ts` | Textassistent mit dem Prüfanbieter (`src/lib/ai/pruefanbieter.ts`, keine echte KI): Original/Vorschlag, Verwerfen, Erneut generieren, Übernehmen, kein Autospeichern, Personal 403 |
 | `zustaende.spec.ts` | Fehler- und Leerzustände (RC-06): Nachrichtenliste und -verlauf mit Netzabbruch, Preisberechnung der Buchung mit Netzabbruch, Lohnjahr ohne Satzversion — jeweils mit Weg zurück zum Erfolg |
 | `besuchsauswertung.spec.ts` | Website-Besuche mit eigenem Bestand: Zeitraum, Leerzustand, keine IP und kein Token, kein Zugang für Personal |
+| `besuchsmessung.browser.spec.ts` | Drei Engines: ohne Einwilligung und mit „Nur notwendige" keine einzige Zeile (auch beim `tel:`-Klick), mit Einwilligung „Statistik" gespeichert — Pfad ohne Abfrage, Kampagne getrennt, kein Token —, ein Werbeblocker sperrt den Endpunkt ohne Seitenfehler; seit 2026-10-01 der **Widerruf** über „Einstellungen zurücksetzen": danach keine Zeile mehr, das Banner fragt neu (TA-03; geschrieben, erster Lauf im `verify:release` des Härtungskandidaten). Misst nur, weil der Prüfserver `CLENARIS_BESUCHSMESSUNG=an` setzt (der Diagnoseserver ebenfalls) |
+| `bilder.browser.spec.ts`, `vor-hydration.browser.spec.ts`, `preisrechner.browser.spec.ts` | Drei Engines: jedes Websitebild dekodiert und sichtbar (kalt, warm, Linkwechsel, langsames Netz, Telefon); vor der Hydration Eingetipptes geht nicht verloren; eine späte Antwort überschreibt den aktuellen Preis nicht (`tests/README.md`, Browserabschnitt) |
+| `offerte-rabatt.spec.ts`, `sitzung-tabs.spec.ts`, `produktsprint-2026-09-26.spec.ts` | Rabattauswahl ohne verschwindende Navigation; zwei Tabs als eine Sitzung; die sechs Abläufe des Produktsprints (`tests/README.md`, Browserabschnitt) |
+| `inhaltsrichtlinie.browser.spec.ts` | Drei Engines (2026-09-30; geschrieben, nur in `node:vm` nachgestellt — erster Lauf im `verify:release` des Härtungskandidaten): unter der Produktionsrichtlinie ohne `'unsafe-eval'` wird `eval` verweigert, WebAssembly kompiliert (PDF.js braucht `'wasm-unsafe-eval'`), ein `blob:`-Rahmen lädt (Druckrahmen des PDF-Viewers), die Seite lädt ohne Verstoss. Gestartet wird die Prüfung erst auf ein Signal nach `addScriptTag` — sonst fiele `eval` noch in die Ausnahme, mit der jede Engine die Richtlinie für einen Protokollaufruf aussetzt (kein Verstoss, der Fall bewiese nichts), und in Firefox bräche `addScriptTag` am erwarteten Verstoss ab (beides aus dem Quelltext hergeleitet, Kopfkommentar der Datei). Mit `E2E_DIAGNOSE=1` (Diagnoseserver unter `next dev`, mit `'unsafe-eval'`) gilt die umgekehrte Erwartung. **Beweist nicht** den Druckdialog selbst (P2H-34) |
+| `sitzung-leerlauf.spec.ts` | Chromium und Firefox (2026-10-01; geschrieben, erster Lauf im `verify:release` des Härtungskandidaten), mit der Playwright-Uhr: ohne Eingabe Warnung zwei Minuten vorher, dann Abmeldung `grund=inaktiv`; eine Eingabe vor der Warnung schiebt den Ablauf; „Angemeldet bleiben" ohne Warnung nach zwanzig Minuten, mit Warnung kurz vor sieben Tagen (`fastForward`); eine vom Server wegen Leerlaufs beendete Sitzung (Token in der Testdatenbank zurückdatiert) führt zur Anmeldung `grund=abgelaufen`; die automatische Abmeldung in einem Tab nimmt den anderen mit (angehaltene Uhr, `grund=abgemeldet`). Kopflose Engines melden das Zurückkehren eines Tabs nicht verlässlich — der Zwei-Tab-Fall löst `visibilitychange` deshalb selbst aus, der Weg danach ist der des Produkts |
 | `hydration-wiederholung.spec.ts` | RB-001 deterministisch: die **von Next mitgelieferte** React-Fassung spielt ein angehaltenes `<main>` während der Hydration wieder ab (Flight-artiger `lazy`-Knoten). Verlangt, dass das Wiederabspielen eintritt, und dass dabei keine Abweichung entsteht. Scheitert ohne `scripts/react-hydrationskorrektur.mjs` (`docs/HYDRATION.md` §16) |
 
 Die Helfer liegen in `helpers/`: Prüfbestand über die Schnittstelle
 (`bestand.ts`), Konsolen- und Netzwächter, Anmeldung, Tokenhygiene und die
-beiden Zeichenwege (`browser.ts`), kontrollierte PDF-Prüfobjekte
-(`pdf-fixtures.ts`).
+beiden Zeichenwege (`browser.ts`; `imBrowserAnmelden(page, konto, ziel, optionen)`
+nimmt seit 2026-10-01 statt des Rücksprungziels auch `{ weiter, angemeldetBleiben }`
+und kreuzt dann „Angemeldet bleiben" an), kontrollierte PDF-Prüfobjekte
+(`pdf-fixtures.ts`), axe-Messung (`axe.ts`), der gemeinsame Rahmen jedes Falls
+(`basis.ts`) und die Hydrationswache samt Lebenslauf (`diagnose.ts`).
+
+**Lebenslauf je Arbeiter (RC-21, seit 2026-10-01).** Der Rahmen schreibt immer
+`test-results/rc21-<pid>.jsonl`: `browser.beobachtet`, `fall.beginn`,
+`fall.ende` (Status, Fehler, Dauer, offene Seiten, Browser verbunden, Speicher,
+offene und abgewartete Körperlesungen, Urteil der Hydrationswache),
+`fixture.abgebaut`, `page.close`, `page.crash`, `context.close`,
+`browser.disconnected`, `arbeiter.ende` — jede Zeile mit Zeit, Prozess und
+freiem Speicher, Token in Adressen geschwärzt. Er lässt keinen Fall scheitern.
+Vor dem Abbau wartet der Rahmen höchstens 2 s auf offene Körperlesungen der
+Hydrationswache (`diagnose.ausstehendeAbwarten`). Playwright leert
+`test-results/` zu Beginn jedes Laufs; rote Läufe sichern `e2e-stress.ts`
+(`hydrationsbefunde/stress-lauf-<n>-<ts>/`) und `verify:release`
+(`hydrationsbefunde/release-…/test-results/`), grüne nicht (P2H-58). Geprüft
+mit Attrappen in `tests/api/pruefwerkzeug-lebenslauf.test.ts`.
 
 ## Grundsätze
 
@@ -123,22 +146,42 @@ schlimmer als keine.
   CDP), aus denen Chromium Pointer-Events ableitet. Druck, Radius, Vorhersage
   und das Zusammenfassen mehrerer Bewegungen eines echten Geräts sind damit
   nicht geprüft.
-- **Andere Browser.** Die Gate-Fälle (Signatur, Gerätesperre, PDF) laufen nur
-  in Chromium. Seit 2026-09-28 fährt Firefox die `*.browser.spec.ts` sowie
-  Rabattauswahl, Scanner und Sitzungstabs, WebKit nur die `*.browser.spec.ts`
-  — angemeldet kann WebKit über `http://127.0.0.1` nicht arbeiten, weil es die
-  `Secure`-Cookies dort nicht mitschickt (`docs/PENDENZEN.md`, W-02).
+- **Andere Browser — nur teilweise.** Die Gate-Fälle (Signatur, Gerätesperre,
+  PDF) laufen nur in Chromium. Seit 2026-09-28 fährt Firefox die
+  `*.browser.spec.ts` sowie Rabattauswahl, Scanner und Sitzungstabs, seit
+  2026-10-01 auch den Leerlauf (`MEHRERE_ENGINES` in `playwright.config.ts`);
+  WebKit fährt die `*.browser.spec.ts` und — über die HTTPS-Vorschaltung —
+  `angemeldet.webkit.spec.ts`. Über `http://127.0.0.1` schickt WebKit die
+  `Secure`-Cookies nicht mit (`docs/PENDENZEN.md`, W-02), deshalb laufen die
+  übrigen angemeldeten Fälle dort nicht.
+
+## Engines und Bilanz
+
+| Projekt | Fährt |
+|---|---|
+| `chromium` | alle Dateien ausser `*.webkit.spec.ts` |
+| `firefox` | `*.browser.spec.ts`, `offerte-rabatt`, `scan`, `sitzung-tabs`, `sitzung-leerlauf` |
+| `webkit` | `*.browser.spec.ts`, `*.webkit.spec.ts` (über `scripts/test-https-vorschaltung.ts`) |
+
+Seit 2026-09-30 zählt der Prüfweg die Browserreihe **je Engine** aus dem
+JSON-Bericht (`test-results/playwright-bericht.json`): übersprungen, wackelig,
+unerwartet oder kein Bericht ist ein Fehlschlag, und in der vollen Reihe
+braucht jede der drei Engines mindestens einen bestandenen Fall. Die
+Stressreihe (`npm run e2e:stress`) zählt ebenso aus dem Bericht, je Lauf und
+je Engine, und sichert jeden roten Lauf.
 - **PDF-JavaScript in jeder Form.** Geprüft ist ein Prüfobjekt mit
   `/OpenAction` und benanntem `/JavaScript`-Baum. Dass PDF.js nichts davon
   ausführt, ist an zwei unabhängigen Stellen gemessen (kein Dialog, keine
   Anfrage nach der Skript-Sandbox). Eine erschöpfende Untersuchung aller
   PDF-Aktionstypen ist das nicht.
 
-## Offener Punkt: CI
+## CI (erledigt)
 
-`npm run e2e` ist ein lokaler Befehl. Die Auslieferungs-Pipeline
-(`.github/workflows/`) wurde bewusst **nicht** verändert: Ein Browserlauf in CI
-braucht `playwright install --with-deps chromium` in einem Runner-Image, eine
-Datenbank als Dienst und eine Entscheidung darüber, ob ein Fehlschlag die
-Auslieferung blockiert. Das gehört in einen eigenen Schritt und nicht in einen
-Nebensatz dieses Gates.
+Hier stand bis Gate 4D.1, `npm run e2e` sei ein lokaler Befehl und die
+Pipeline bewusst unverändert. Das ist überholt: Der Auftrag „Prüfung" in
+`.github/workflows/deploy.yml` installiert die drei Engines (Schritt „Browser
+installieren"), startet den Testserver gegen eine Datenbank als Dienst und
+fährt die Browserreihe in `verify:tests` mit derselben Bilanz je Engine; ein
+Fehlschlag blockiert die Auslieferung (`needs: qualitaet`). Bei einem
+Fehlschlag wird der Bericht als Artefakt `playwright-bericht` abgelegt. Die
+Stressreihe läuft nur örtlich über `verify:release`.

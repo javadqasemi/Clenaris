@@ -6,9 +6,11 @@ Stand 2026-09-23. Ausgangspunkt `0d51466` (Next 15.5.26, `npm test`
 §8 an `fb0202e`/`0023556`: Release-Lauf auf `0023556` grün, 2038/2038,
 Browser 57/57, Stressreihe 5/5, CI 36332513820 grün). Die
 Tabellen §1 und §3 tragen den heutigen Status; die Schlussprüfungen §4,
-§6.4 und §7 bleiben als datierte Messungen stehen. **Jüngster Stand: §9
-(Release-Kandidat 2026-09-29, Prisma 7).** Die Freigabe in §8 bezieht sich
-auf den Stand vor Prisma 7 und ist für den heutigen Code keine Aussage mehr.
+§6.4 und §7 bleiben als datierte Messungen stehen. **Jüngster Stand: §10
+(Production-V2-Härtung, Feature Freeze, 2026-09-30/10-01)** auf dem
+Release-Kandidaten aus §9 (2026-09-29, Prisma 7). Die Freigabe in §8 bezieht
+sich auf den Stand vor Prisma 7 und ist für den heutigen Code keine Aussage
+mehr.
 
 **Kein Push, keine Auslieferung, kein Zugriff auf einen Produktionsserver**
 in dieser Mission. Jede Aussage über die Produktion ist deshalb
@@ -35,7 +37,7 @@ Prüfung belegt die Fachregel.
 | 19 | Leistung | **COMPLETE** (Messung) · Produktion **EXTERNAL** | `docs/LEISTUNG.md`; `scripts/leistungsmessung.ts` | Last, grössere Bestände, Browser-Kennzahlen |
 | 20 | Lieferkette | **PARTIAL** | `docs/LIEFERKETTE.md` | ~~Geheimnissuche nur in CI lauffähig~~ (seit 2026-09-27 `npm run security:secrets`, örtlich und im CI); ~~SBOM~~ (`npm run security:sbom`, CycloneDX, Stufe im CI); offen: `postcss` in Next erst mit Next 16 |
 | 21 | Sicherung / Wiederherstellung | Mechanismus **COMPLETE + VERIFIED** (örtlich) · Betrieb **EXTERNAL** | `docs/BACKUP_DR.md`; `db-restore-verify.ts` | B-DR-1…3 |
-| 22 | Production V2 | **PARTIAL** | `docs/PRODUCTION_V2.md`; `scripts/release-artefakt.ts`, `deploy/v2/`; `laufzeit-konfiguration.test.ts` | ~~V2-1~~ (geschlossen 2026-09-26); V2-2…V2-6 extern |
+| 22 | Production V2 | **PARTIAL** | `docs/PRODUCTION_V2.md`; `scripts/release-artefakt.ts`, `deploy/v2/`; `laufzeit-konfiguration.test.ts`; seit 2026-09-30 gehärtet (§10) | ~~V2-1~~ (geschlossen 2026-09-26); V2-2…V2-6 extern; Serverläufe der Aktivierung und des Rücksprungs (§10) |
 | 23 | Testabschluss, Merkmalsprüfung | **COMPLETE + VERIFIED** | `docs/TESTABSCHLUSS.md`; 0 übersprungen | ~~offene Masken (Zeitfreigabe aufheben, QST-Tarife, QST-Profil ändern)~~ — alle drei haben inzwischen eine Maske (Einsatzdetail, Lohnseite); Endpunkte über HTTP geprüft, die Masken nur über den Rauchtest der Seiten, ohne Browserfall |
 | 24 | Datenintegrität | **COMPLETE + VERIFIED** | `docs/DATENINTEGRITAET.md`; `datenintegritaet.test.ts` | Lauf gegen Produktion: EXTERNAL |
 | 25 | Doku, Releasebereitschaft | **COMPLETE** | dieses Dokument | — |
@@ -61,7 +63,15 @@ Prüfung belegt die Fachregel.
 | ~~V2-1~~ | ~~`NEXT_PUBLIC_*` wird beim Bau eingesetzt; ein Artefakt gehört zu einer Adresse~~ — **geschlossen 2026-09-26** (Laufzeitkonfiguration, `docs/PRODUCTION_V2.md` §5) | — |
 
 **Kein interner Blocker offen** — weder für den heutigen Auslieferungsweg
-noch für Production V2.
+noch für Production V2. *(Stand 2026-09-23. Überholt: Die Härtung vom
+2026-09-30 fand im Weg zu Production V2 interne Defekte, die diese Aussage
+nicht kannte — eine Ausführer-Vorlage, die beim ersten Lauf gescheitert wäre,
+eine Versionsprüfung gegen die eigene Umgebungsvariable, keinen geprüften
+Rücksprung von Hand, ein Artefakt ohne `prisma.config.ts` und mit Demodaten
+aus dem Prüfbau. Behoben in §10, jeweils mit einer reinen Prüfung, die
+gelaufen ist; HTTP- und Browserfälle der Härtung laufen erst im
+`verify:release` des Härtungskandidaten. Was intern und extern offen bleibt,
+steht in §10.2 und §10.3.)*
 
 ### Extern (ausserhalb des Codes)
 
@@ -244,7 +254,7 @@ Einzelheiten je Befund: `docs/FINAL_REMEDIATION_MATRIX.md` und
 | HTTP-Reihe auf dem Bau von `8bcc88c` … `fb0202e` | **2033** Fälle, alle bestanden, 0 übersprungen — nach Korrektur von 7 Fehlern im Testcode (die betroffenen Dateien erneut: 102 / 102) |
 | `verify:release` an `fb0202e` | RELEASE-ERGEBNIS fb0202e: FAIL (2032/2033 - Standardadresse gleichzeitig, Verklemmung -> 500; behoben in 0023556). verify:release auf 0023556: PASS - saubere Worktree-Kopie, frische Datenbank, 2038/2038 Tests, 0 übersprungen, Browser 57/57 ohne Wiederholungen, 0 übersprungen, 0 wackelig; CI-Lauf 36332513820 grün, Auslieferung übersprungen |
 | Stressreihe (5×) | STRESS-ERGEBNIS: 5 von 5 grün auf 0023556 — je 57/57 Browserfälle, 0 gescheitert, 0 übersprungen, 0 Hydrationsartefakte, ohne Wiederholungen, jeder Lauf gegen einen frisch gestarteten Testserver (Bericht test-results/stress-2026-09-27T17-10-28-542Z.json) |
-| Abdeckungsmatrizen | Testmatrix **205 abgedeckt / 0 Lücken / 2 nicht zutreffend**; Sicherheitsmatrix 15 / 15; `scripts/testmatrix-pruefen.ts` besteht |
+| Abdeckungsmatrizen | Testmatrix **205 abgedeckt / 0 Lücken / 2 nicht zutreffend**; Sicherheitsmatrix 15 / 15; `scripts/testmatrix-pruefen.ts` besteht (an diesem Stand; ab `a9810a6`, 2026-09-28, zitierten zwei Belege einen umbenannten Titel, und am Basisstand der Härtung `9fd662b` waren drei Belege kaputt — ohne dass es auffiel, weil die Prüfung in keinem Tor lief. Seit P2H-45 ist sie Schritt von `verify:static`) |
 | Umfang (README-Marker, `scripts/kennzahlen.ts`) | 166 Seiten, 375 Route-Dateien mit **540 Endpunkten**, 151 Datenmodelle, 85 Dienste, 99 Prüfdateien, 51 Migrationen |
 
 ### 8.2 Behobene Befunde seit `34b3484` (je mit Regressionsprüfung)
@@ -274,9 +284,11 @@ Einzelheiten je Befund: `docs/FINAL_REMEDIATION_MATRIX.md` und
 
 ## 9. Release-Kandidat 2026-09-29 (Prisma 7, Feature Freeze)
 
-Zweig `release/2026-09-29-rc` ab `main` `7daaf71`. Befunde, Korrekturen und
+Zweig `release/2026-09-29-rc` ab `main` `7daaf71`, abschliessend `e9cae98`,
+zusammengeführt als `main` `67a25f2` (Pull Request #9). Befunde, Korrekturen und
 Belege je Punkt stehen im Register `docs/PENDENZEN.md`, Abschnitt **RC**
-(RC-01 … RC-18); die Laufzahlen des abschliessenden `verify:release` und der
+(RC-01 … RC-21; offen: RC-14 (nutzereigene Datei, Sache der Inhaberschaft) und
+RC-21); die Laufzahlen des abschliessenden `verify:release` und der
 CI-Lauf stehen im Pull Request und im Abschlussbericht — hier nicht, weil
 jeder Nachtrag hier den geprüften Stand wieder verändern würde.
 
@@ -299,4 +311,80 @@ angemeldetes WebKit über HTTPS, axe über 26 Seiten.
 | App Code Ready | am Release-Kandidaten zu entscheiden — Beleg im Abschlussbericht |
 | Production V2 Ready | **Nein** — V2-2…V2-6 extern, Aktivierung nie auf einem echten Server ausgeführt |
 | Firefox-Bildbefund (D-01) | Code: Regression abgedeckt · Produktion: Abnahme erforderlich |
+| Freigabe | durch die Inhaberschaft nach dem Abschlussbericht |
+
+## 10. Production-V2-Härtung (Feature Freeze)
+
+> **Feature Freeze ab dem Release-Kandidaten dieser Härtung — nur noch
+> Production-V2-Vorfälle/P0/P1; jede Änderung verlangt neuen
+> `verify:release`, neue CI und eine neue RC-SHA.**
+
+Zweig `haertung/production-v2` ab `main` `67a25f2` (Baum gleich `e9cae98`,
+§9). Grundlage war ein Audit des Wegs **vom geprüften Bau bis zur laufenden
+Instanz**: Der Code des Release-Kandidaten war geprüft, der Weg in die
+Produktion nur beschrieben. Neun Härtungsströme auf einem gemeinsamen
+Vertragscommit (`9fd662b`); Befund, Korrektur, Prüfung und Commit je Punkt
+im Register `docs/PENDENZEN.md`, Abschnitt **P2H** (P2H-01 … P2H-76). Wie in
+§9 stehen die Laufzahlen des abschliessenden `verify:release` und der CI hier
+nicht, sondern im Pull Request und im Abschlussbericht.
+
+### 10.1 Was gehärtet ist
+
+| Bereich | Stand | Register |
+|---|---|---|
+| Artefakt | Vertrag `RELEASE.json` Format 2 (`src/lib/release/manifest.ts`) für alle vier Leser; auslieferbar nur aus der CI auf `main` (Push oder Handstart), vollständig, sauber, aus `.next`; verankerte Ausschlüsse, Vollständigkeitsabgleich, `prisma.config.ts` im Archiv; Demo-Stolperdraht und Verweigerung jedes Baus, auf dem ein Server lief; GNU tar normalisiert, Bauvergleich | P2H-01 … P2H-08 |
+| Identität | Die Instanz belegt Commit, Build-ID und Version aus `RELEASE.json` und `<distDir>/BUILD_ID`; `/api/health` meldet `version` (nur belegt), `buildId`, `release`, `identitaet`. `APP_VERSION` und `CLENARIS_VERSION` zählen nicht mehr | P2H-09, P2H-10 |
+| Release Center | Das Ergebnis entscheidet der Server: SUCCEEDED nur bei belegter Ziel-Identität, ROLLED_BACK nur belegt; Übernahme mit Commit und Zielversion; eine Ausführung je Umgebung; verwaiste Aufträge schliesst der Stundenlauf | P2H-11 … P2H-13 |
+| Aktivierung | Vertrag C3 (`deploy/v2/release-aktivieren.sh`): Sperre, erwartete Summe als Pflicht, frisch entpackt, Identitätsprüfung für neue und vorherige Fassung, Ausgänge 0/10/11/20/30, `aktivierungen.jsonl`, Archive in `archiv/` | P2H-16 |
+| Rücksprung | Von Hand aus dem aufbewahrten, erneut gemessenen Archiv (`deploy/v2/release-ruecksprung.sh`), mit Schema-Einstufung; nie bauen, nie `npm`, nie `git`, nie zurückmigrieren | P2H-17 |
+| Wege in die Produktion | Beide bleiben (Entscheid der Betreiberin): Auftrag `auslieferung` (`DEPLOY_ENABLED`) und Release-Ausführer (`RELEASE_EXECUTOR_ENABLED`) — derselbe Vertrag, dieselbe Nebenläufigkeitsgruppe; die Vorlage des Ausführers ist berichtigt, `workflow-ergaenzung.yml` gelöscht. **Der direkte Weg umgeht die Freigabe im Release Center** | P2H-14, P2H-15, P2H-19 |
+| CI | Migration → Datenbanktor → Konfigurations-Seed → Bau ohne Zwischenspeicher → Packen vor jedem Serverstart → Demo-Seed → Prüfreihen → Ablage nur auf `main`; Auftrag `reproduzierbarkeit` von Hand | P2H-18 |
+| Inhaltsrichtlinie | kein `'unsafe-eval'` im Produktionsbau (die Next-Phase entscheidet), `'wasm-unsafe-eval'` für PDF.js, ungenutzte Fremdquellen entfernt | P2H-26, P2H-27 |
+| Prüfprotokoll | `audit_logs` in der Datenbank nur fortschreibbar (Trigger), Schwärzung nur über einen transaktionslokalen Schalter | P2H-35, P2H-36 |
+| Datenbanktor | Register aller handgeschriebenen Schranken (Teilindizes, Trigger samt Bindung, CHECK, EXCLUDE, Erweiterung, Funktionsrümpfe) gegen Migrationen und Kataloge; Exit 0/1/2; in CI und vollem Prüfweg | P2H-37 … P2H-40 |
+| Prüfweg | Testmatrix nur mit ausgeführten Titeln, Teilwege des Release-Wegs enden mit Exit 3 „TEILPRÜFUNG BESTANDEN — KEIN RELEASE-NACHWEIS", nur `verify:release` schreibt den Release-Nachweis; Bilanz je Engine | P2H-45 … P2H-47 |
+| Sitzung | Leerlauf über HTTP und im Browser als Prüfung geschrieben (Lauf steht aus) | P2H-50, P2H-51 |
+| Diagnose | W-11 und RC-21 hinterlassen bei jedem Auftreten einen Abzug bzw. Lebenslauf — Ursachen weiter unbelegt | P2H-55, P2H-56 |
+| Besuchsmessung | Schalter `CLENARIS_BESUCHSMESSUNG` (Vorgabe aus), 13 Monate überall, GA-Cookie 13 Monate (rein geprüft); Widerruf als Browserfall geschrieben (Lauf steht aus) | P2H-59, P2H-60, TA-03 |
+| Website, KI | Alternativtext der Vergleichsbilder (rein geprüft), Galerie und Stellen erneuern ihre Detailseiten (reine Regressionsprüfung aus `82f3922`, HTTP-Fall steht aus), KI-Kontingent als HTTP-Prüfung geschrieben (Lauf steht aus) | P2H-61 … P2H-63 |
+
+### 10.2 Intern offen (im Code lösbar, nicht im Freeze)
+
+Keiner dieser Punkte ist ein P0/P1 im Sinn des Freeze; jeder steht mit
+Begründung im Register:
+
+- **P2H-64** Widerrufsknopf verschwindet, sobald Datenschutz- und
+  Cookie-Erklärung in `/admin` gepflegt sind — dringlich mit dem ersten
+  gepflegten Rechtstext.
+- **P2H-25** Das Datenbanktor läuft auf dem Server nach der Migration nicht.
+- **P2H-57** Datenbankpool ohne Verbindungs- und Abfragefrist (Produktentscheid).
+- **P2H-43** Ein leerer Offline-Bericht von `npm audit` gilt als bestanden.
+- **P2H-28/29/30** `'unsafe-inline'`, kein Meldeziel der Richtlinie, GA4-
+  und Meta-Endpunkte nicht erlaubt.
+- **P2H-48** ISR-Seiten ohne Demobestand im Prüflauf — im Volllauf beobachten.
+- **P2H-52 … 54** drei Sitzungsbeobachtungen (nur durch Lesen belegt).
+- **P2H-66 … 70**, **P2H-22 … 24**, **P2H-41**, **P2H-44**, **P2H-49**,
+  **P2H-58**, **P2H-71**, **P2H-75** Pflege und dokumentierte Grenzen.
+
+### 10.3 Extern offen
+
+| Nr. | Fehlender Beleg |
+|---|---|
+| P2H-20 / V2-3 | Aktivierung, Rücksprung und Ausführer auf einem Linux-Probeserver (Symlink, pm2-Verzeichniswechsel, `flock`, Ausgänge, Aufbewahrung) und `/api/health` mit `identitaet=belegt` auf Production V2 |
+| P2H-76 / V2-3 | Erstinstallation auf einer leeren Datenbank: Die Vorprüfung vor der Migration verlangt Schema und ein Konto der Systemverantwortung, `scripts/create-admin.ts` braucht Schema und Organisation, der Konfigurations-Seed auf einem produktiven System Startpasswörter, die auf V2 nicht gesetzt werden — Reihenfolge Vorprüfung/Schema/Seed/`create-admin` auf dem Probeserver festlegen. Der geplante Weg (Übernahme der geprüften Datenbank, `NOTFALL_WIEDERHERSTELLUNG.md` §17) ist nicht betroffen |
+| P2H-21 | erster Lauf des Auftrags `reproduzierbarkeit` mit abgelegtem `bau-vergleich.json` |
+| P2H-34 | Drucken aus dem PDF-Viewer über den `blob:`-Rahmen in einem Browser mit PDF-Renderer |
+| P2H-42 | getrennte Eigentümerrolle für Migrationen, `log_statement = 'ddl'`, aufbewahrte Sicherungen |
+| P2H-65 | Datenaufbewahrung der GA4-Property passend zur Erklärung (13 Monate) |
+| TA-02 | Rechtsprüfung der Datenschutzerklärung vor `CLENARIS_BESUCHSMESSUNG=an` |
+| V2-2, V2-4 … V2-6 | Node 22 auf dem Server, Verzeichnisaufbau, Grösse und Aufbewahrung der CI-Ablage, Sicherungs-Blocker B-DR-1 … 3 (`PRODUCTION_V2.md` §3) |
+| §3 | RB-009, RB-013, RB-014, E-2/E-4, E-9 unverändert |
+
+### 10.4 Urteil
+
+| Frage | Antwort |
+|---|---|
+| App Code Ready | am Härtungskandidaten zu entscheiden — nach grünem `verify:release` (Kern und Stress 5/5) und grüner CI auf genau dieser SHA; bis dahin sind die P2H-Zeilen CODE COMPLETE, nicht VERIFIED |
+| Production V2 Ready | **Nein** — der Weg ist im Code vollständig und geprüft, aber nie auf einem echten Server gelaufen (P2H-20) und V2-2 … V2-6 sind extern offen |
+| Freeze | jede weitere Änderung nur für Production-V2-Vorfälle, P0 oder P1 — und sie macht den Kandidaten ungültig: neuer `verify:release`, neue CI, neue RC-SHA |
 | Freigabe | durch die Inhaberschaft nach dem Abschlussbericht |

@@ -19,12 +19,13 @@ Schweizer DSG und DSGVO.
 | **Umfang** | <!-- kennzahlen:umfang -->171 Seiten · 379 Route-Dateien mit 544 Endpunkten · 152 Datenmodelle · 89 Dienste · 135 Prüfdateien<!-- /kennzahlen:umfang --> (gezählt von `scripts/kennzahlen.ts`) |
 | **Rollen** | SUPER_ADMIN · ADMIN · MANAGER · EMPLOYEE · CUSTOMER |
 | **Sprache** | Deutsch (Schema und Endpunkte für FR/IT/EN vorbereitet) |
-| **Betrieb** | Eigener Server: Internet → Cloudflare → Cloud Firewall → Nginx → Next.js auf `127.0.0.1:3000`, ausgeliefert über GitHub Actions → SSH → PM2 · Postgres & Objektspeicher · Redis empfohlen |
-| **Prüfung** | 20 Testdateien gegen die laufende Anwendung über HTTP; die CI führt sie bei jedem Pull Request gegen `main` und bei jedem Push auf `main` aus — ausgeliefert wird nur aus `main`, nie aus einem Pull Request |
+| **Betrieb** | Eigener Server: Internet → Cloudflare → Cloud Firewall → Nginx → Next.js auf `127.0.0.1:3000`. Ausgeliefert wird ein in der CI gebautes und geprüftes Artefakt mit SHA-256, über SSH übertragen und mit `deploy/v2/release-aktivieren.sh` unter PM2 eingeschaltet — der Server baut nichts · Postgres & Objektspeicher · Redis empfohlen |
+| **Prüfung** | HTTP-Prüfungen gegen die laufende Anwendung, Browserprüfungen in Chromium, Firefox und WebKit, dazu reine Prüfungen der Rechenkerne und Werkzeuge ohne Server (Zahl der Prüfdateien unter „Umfang"); die CI führt sie bei jedem Pull Request gegen `main` und bei jedem Push auf `main` aus — ausgeliefert wird nur aus `main`, nie aus einem Pull Request |
 
 ## Loslegen
 
-Voraussetzungen: **Node.js ≥ 20.11** und ein erreichbarer **PostgreSQL 16+**.
+Voraussetzungen: **Node.js ≥ 22** (`.nvmrc`; geprüft wird nur mit 22) und ein
+erreichbarer **PostgreSQL 16+**.
 
 ```bash
 npm install
@@ -131,16 +132,18 @@ Fahrwege verkürzt (vorschlagen, nicht ausführen).
 **Mitarbeitendenportal** fürs Telefon: Tagesübersicht, Ein- und Ausstempeln
 mit Standort, Checkliste, Zugangshinweise samt verschlüsseltem Alarmcode,
 Vorher-Nachher-Fotos, Materialverbrauch, Unterschrift der Kundschaft,
-Ferienanträge, Lohnabrechnungen (Anzeige — das Erzeugen fehlt noch, siehe
-Audit).
+Ferienanträge, veröffentlichte Lohnabrechnungen als PDF. Erzeugt werden sie in
+der Verwaltung (`/admin/lohn`: Lohnlauf, Prüfung, Veröffentlichung,
+Lohnausweis) — fachlich durch eine Lohnfachperson noch nicht abgenommen, siehe
+[`docs/PAYROLL.md`](docs/PAYROLL.md).
 
 **Kundenkonto** mit Terminen, Offerten, Rechnungen samt Online-Zahlung per
 TWINT oder Karte, Objekten, Nachrichten und Bewertungen.
 
 **Fakturierung** mit QR-Einzahlungsschein, Mahnläufen, Teilzahlungen,
-Ausgaben, Lieferanten und Buchhaltungsexport. *Gutschriften sind als Dienst
-vorhanden, aber noch ohne Endpunkt und ohne Schaltfläche — siehe
-[`docs/NEXT_DEVELOPMENT_AUDIT.md`](docs/NEXT_DEVELOPMENT_AUDIT.md), Abschnitt 6.*
+Ausgaben, Lieferanten und Buchhaltungsexport. Korrekturen laufen über
+Gutschriften: auf der Rechnung erstellt (`POST /api/invoices/:id/credit-note`),
+als PDF abrufbar — eine ausgestellte Rechnung wird nie geändert.
 
 **Auswertungen** zu Umsatz, Kosten, Deckungsbeitrag, Auslastung und
 Cashflow-Prognose, als Excel und PDF exportierbar.
@@ -193,7 +196,7 @@ src/
     marketing/ app/ charts/
   features/                fachliche Oberflächen je Bereich
   lib/                     Auth, Preis-Engine, PDF, Zahlungen, KI, Validierung, Verschlüsselung
-  server/services/         Geschäftslogik (47 Dienste)
+  server/services/         Geschäftslogik (Zahl der Dienste unter „Umfang")
 tests/                     HTTP-Prüfungen gegen die laufende Anwendung
 ```
 
@@ -209,7 +212,7 @@ versendet.
 | Variable | Pflicht | Zweck |
 | --- | --- | --- |
 | `DATABASE_URL` | ja | PostgreSQL-Verbindung |
-| `DIRECT_URL` | – | Direktverbindung für die Prisma-Kommandozeile (`migrate`), bei Pooling Pflicht; sonst gilt `DATABASE_URL` (`prisma.config.ts`) |
+| `DIRECT_URL` | ja¹ | Direktverbindung für die Prisma-Kommandozeile (`migrate`), hinter einem Pooler am Pooler vorbei; örtlich gilt ohne sie `DATABASE_URL` (`prisma.config.ts`) |
 | `JWT_SECRET` | ja | mindestens 32 Zeichen |
 | `APP_URL` | ja | Adresse dieser Instanz für Links in E-Mails, PDFs, Zahlungen, Signaturen und die Herkunftsprüfung — zur Laufzeit gelesen (älterer Name `NEXT_PUBLIC_APP_URL` gilt als Rückfall) |
 | `NEXT_PUBLIC_SITE_URL` | beim Bau | kanonische Domain der Website (Canonical, Sitemap, robots.txt), für jede Umgebung dieselbe |
@@ -222,8 +225,13 @@ versendet.
 | `NEXT_PUBLIC_GOOGLE_MAPS_API_KEY` | – | Navigation und Geokodierung |
 | `CRON_SECRET` | ja¹ | schützt die Scheduler-Endpunkte |
 | `ENCRYPTION_KEY` | ja¹ | verschlüsselt TOTP-Geheimnis, AHV-Nummer und Alarmcode (64 Hex-Zeichen) |
+| `CLENARIS_UMGEBUNG` | ja¹ | `production` oder `staging` — eine Produktion sagt ausdrücklich, dass sie eine ist |
+| `TRUSTED_PROXY_MODE` | ja¹ | welchem Kopf die Anwendung die Client-Adresse glaubt (`NONE`, `SINGLE_REVERSE_PROXY`, `CLOUDFLARE`); örtlich ohne Wert `NONE` |
+| `CLAMAV_HOST` | ja¹ | Adresse von `clamd`; ohne Scanner wird keine hochgeladene Datei ausgeliefert |
 
-¹ In der Produktion zwingend. Ohne `CRON_SECRET` weisen die Scheduler-Endpunkte
+¹ In der Produktion zwingend: Die Produktionsvorprüfung jeder Aktivierung
+(`scripts/production-preflight.ts`) hält ohne den Wert vor der Migration an;
+die vollständige Liste steht in `docs/DEPLOYMENT.md` §3. Ohne `CRON_SECRET` weisen die Scheduler-Endpunkte
 jede Anfrage ab. Ohne `ENCRYPTION_KEY` läuft die Anwendung zwar, leitet den
 Schlüssel aber aus `JWT_SECRET` ab — ein Wechsel von `JWT_SECRET` machte die
 verschlüsselten Felder dann unlesbar.

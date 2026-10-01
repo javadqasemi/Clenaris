@@ -3,8 +3,14 @@
 > **Historischer Stand.** Dieses Dokument hält die Pre-Production-Prüfung vom
 > 2026-09-26/27 fest (Commits, Zahlen, CI-Läufe jener Tage) und wird nicht
 > mehr fortgeschrieben. Seither: Prisma 7 statt 6.19.3, Artefakt-Auslieferung
-> als einziger Weg, Release-Kandidat vom 2026-09-29. Der geltende Stand steht
-> in `docs/RELEASEBEREITSCHAFT.md` und im Register `docs/PENDENZEN.md`.
+> als einziger Weg, Release-Kandidat vom 2026-09-29 und die
+> Production-V2-Härtung vom 2026-09-30/10-01 (Aktivierung nach Vertrag C3,
+> Rücksprung von Hand, Identität der Instanz statt `APP_VERSION`, Prüfprotokoll
+> nur fortschreibbar, Datenbanktor, Inhaltsrichtlinie ohne `'unsafe-eval'`).
+> Der geltende Stand steht in `docs/RELEASEBEREITSCHAFT.md` §10, im Register
+> `docs/PENDENZEN.md` (Abschnitt P2H), in `docs/PRODUCTION_V2.md` und
+> `docs/DEPLOYMENT.md`. Zahlen und Wege unten sind die jener Tage — wo der
+> heutige Code etwas anderes sagt, ist es angemerkt.
 
 Stand 2026-09-26, fortgeschrieben 2026-09-27 (Nachträge C und D und
 „UI/UX-Prüfmatrix" am Ende). Diese Mission hat **keine** Produktfunktion hinzugefügt,
@@ -342,7 +348,7 @@ sind gewollt: Die Listen brechen sie über eine eindeutige Spalte
 | Bewertungsablauf | Vorwarnung 30 Tage, Ablauf, Höchstfrist 183 Tage | **LOCAL VERIFIED** (`sicherheitsbewertung.test.ts`) |
 | Quelltext-/Musterprüfung | 16 Regeln inkl. Rate-Limit je Route | **LOCAL VERIFIED** (43 Treffer, alle begründet) |
 | Gefährliche Muster (SQL-Unsafe, Prozess, eval, TLS aus, Token im Speicher) | Teil der Musterprüfung | **LOCAL VERIFIED** |
-| Migrationen/Schema/Schranken | `prisma validate`, BOM, 12 Teilindizes + 18 Trigger gegen Grundlinie; mit `--datenbank` in der DB | **LOCAL VERIFIED** (auch gegen die frisch aufgebaute Datenbank) |
+| Migrationen/Schema/Schranken | `prisma validate`, BOM, 12 Teilindizes + 18 Trigger gegen Grundlinie; mit `--datenbank` in der DB | **LOCAL VERIFIED** (auch gegen die frisch aufgebaute Datenbank). *Heute (`security/datenbank-schranken.json`): 13 Teilindizes, 20 Trigger samt Bindung — neu `audit_logs_nur_anfuegen` und `audit_logs_kein_leeren` —, 22 Prüf- und 3 Ausschlussbedingungen, 1 Erweiterung, 19 Funktionsrümpfe; geprüft gegen die Kataloge durch `scripts/datenbank-schranken.ts`* |
 | Öffentliche Endpunkte | Registry gegen `security/oeffentliche-endpunkte.json` | **LOCAL VERIFIED** |
 | Repository-Integrität | verbotene Dateien, Lockfile, `.gitignore` | **LOCAL VERIFIED** |
 | Erzeugte Dokumentation | `npm run docs` + Vergleich | **LOCAL VERIFIED** (bytegleich); im CI als eigene Stufe |
@@ -460,7 +466,9 @@ Commit. Die Aktivierung (`deploy/v2/release-aktivieren.sh`) führt **kein**
 **patcht nichts** (Korrektur nur `--pruefen`); Migrationen nur ausdrücklich
 und nach Sicherung. Blocker: ~~V2-1~~ (geschlossen, Nachtrag B), V2-2…V2-5
 (extern). Der heutige Weg (`scripts/deploy.sh`) baut auf dem Server — genau
-das, was V2 ablöst.
+das, was V2 ablöst. *Seit 2026-09-27 abgelöst: `deploy.sh` bricht ab; seit
+2026-09-30 prüft die Aktivierung statt „Health mit Commit" die Identität
+(Commit, Build-ID, `belegt`) — `docs/PRODUCTION_V2.md` §2 und §7.*
 
 ## 14. Migrationssicherheit
 
@@ -477,7 +485,8 @@ successfully applied", Konfigurations- und Demo-Seed ohne Eingriff.
 `prisma migrate diff` Datenbank ↔ Schema: **genau** die zwei bekannten,
 dokumentierten Zeilen (`updatedAt DROP DEFAULT` für `payroll_settings`,
 `payslips`, Begründung in `20260922080000_vertraege`), sonst nichts.
-`security:check --datenbank`: alle 12 Teilindizes und 18 Trigger vorhanden.
+`security:check --datenbank`: alle 12 Teilindizes und 18 Trigger vorhanden
+(Stand 2026-09-27; heute 13 und 20, siehe Sicherheitstabelle oben).
 Danach die vollständige Prüfreihe gegen diese Datenbank:
 **1567 / 1567, 0 übersprungen**, Browser 42/42, Stressreihe 5/5 — die
 Schlussprüfung dieser Mission lief vollständig auf ihr. Die Datenbank bleibt
