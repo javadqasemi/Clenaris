@@ -438,6 +438,71 @@ export function umgebungsdateienImArchiv(gelistet: readonly string[]): string[] 
 }
 
 // ===========================================================================
+//  Von Git ignoriert, aber im Inhalt
+// ===========================================================================
+
+/**
+ * Orte im Inhalt, die Git ignoriert und die trotzdem ins Artefakt gehören —
+ * abschliessend, jeder mit Grund. Ein neuer Eintrag braucht dieselbe
+ * Begründung: erzeugt beim Bau, von der laufenden Anwendung gebraucht, ohne
+ * Geheimnis.
+ *
+ * Bewusst **nicht** hier: `public/sitemap*.xml` und `public/robots.txt`, die
+ * `.gitignore` ebenfalls als „erzeugt" führt. Beide liefert heute die
+ * Anwendung selbst (`src/app/sitemap.ts`, `src/app/robots.ts`); nichts im Bau
+ * schreibt sie noch nach `public/`. Eine solche Datei wäre ein Überbleibsel
+ * eines älteren Werkzeugs und stünde der Route im Weg — sie soll auffallen,
+ * nicht still mitreisen.
+ */
+export const IGNORIERT_ERLAUBT: Readonly<Record<string, string>> = {
+  'public/pdfjs':
+    'PDF.js-Laufzeitdateien, beim Bau aus node_modules/pdfjs-dist kopiert (scripts/copy-pdfjs-assets.ts); ohne sie zeigt die Anwendung keine PDF-Vorschau.',
+};
+
+/**
+ * Die Argumente für `git`, die alle ignorierten, unverfolgten Dateien im
+ * Inhalt auflisten — ohne Bau und Module: Die ignoriert Git als Ganzes, und
+ * sie gehören trotzdem hinein (sie sind das Erzeugnis, nicht die Quelle).
+ * `-z`, damit kein Name in Anführungszeichen gesetzt oder an einem
+ * Zeilenumbruch zerteilt wird.
+ */
+export function ignoriertAbfrage(inhalt: readonly string[] = INHALT): string[] {
+  return ['ls-files', '-z', '--others', '--ignored', '--exclude-standard', '--', ...inhalt];
+}
+
+/**
+ * Welche gesammelten Einträge Git ignoriert — ausser den Orten in
+ * `IGNORIERT_ERLAUBT`.
+ *
+ * **Warum das nötig ist.** Die Sauberkeitsprüfung (`unsauberePfade`) sieht nur,
+ * was `git status` zeigt, und ignorierte Dateien zeigt es nie. Eine
+ * `deploy/v2/server.pem` oder eine `security/schluessel.pem` — `.gitignore`
+ * führt `*.pem` ausdrücklich als Geheimnisklasse — reiste also still ins
+ * Archiv, mit einem Manifest, das „sauber" sagt. Die Gegenprobe am Archiv
+ * (`umgebungsdateienImArchiv`) fängt nur `.env*`. Bis 2026-10-01 stand hier
+ * die Annahme, ignoriert seien nur `.next` und `node_modules`; auf einem
+ * frischen CI-Rechner stimmt das, bei einer örtlichen Probe nicht.
+ *
+ * Verglichen wird mit den **gesammelten** Einträgen, nicht mit der rohen
+ * Liste von Git: Was die verankerten Ausschlüsse ohnehin draussen lassen
+ * (`src/.env.local`), wird nicht gepackt und ist hier kein Befund.
+ *
+ * `--unsauber` hebt diese Regel nicht auf. Eine Probe landet seltener auf
+ * einem Server, aber genauso in einer CI-Ablage oder einem geteilten Ordner —
+ * und ein Schlüssel darin ist dort ebenso verraten.
+ */
+export function ignoriertImArchiv(lsFilesZ: string, eintraege: readonly string[]): string[] {
+  const ignoriert = new Set(
+    lsFilesZ
+      .split('\0')
+      .filter((zeile) => zeile.length > 0)
+      .map((zeile) => zeile.replace(/\/+$/, '')),
+  );
+  const erlaubt = (pfad: string) => Object.keys(IGNORIERT_ERLAUBT).some((ort) => pfad === ort || pfad.startsWith(`${ort}/`));
+  return eintraege.filter((e) => ignoriert.has(e) && !erlaubt(e));
+}
+
+// ===========================================================================
 //  Herkunft: Commit, Sauberkeit, CI
 // ===========================================================================
 
@@ -476,8 +541,10 @@ export function commitBestimmen(githubSha: string | undefined, kopf: string): st
  *    `docs/`, Entwürfe) landet nicht im Archiv und zählt deshalb nicht.
  *
  * Von Git ignorierte Dateien erscheinen hier nie — `.next` und `node_modules`
- * sind Erzeugnisse und gehören trotzdem hinein. Eine ignorierte Umgebungsdatei
- * tief in `src/` fängt die Gegenprobe am Archiv (`umgebungsdateienImArchiv`).
+ * sind Erzeugnisse und gehören trotzdem hinein. Ignoriertes im übrigen Inhalt
+ * (eine `*.pem` unter `deploy/`) prüft `ignoriertImArchiv` eigens; eine
+ * ignorierte Umgebungsdatei tief in `src/` fängt zusätzlich die Gegenprobe am
+ * Archiv (`umgebungsdateienImArchiv`).
  *
  * `-z` statt Zeilen: keine Anführungszeichen um ungewöhnliche Namen, und bei
  * Umbenennungen (`R`, `C`) folgt der alte Pfad als eigener, NUL-getrennter

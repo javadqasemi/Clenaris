@@ -60,6 +60,9 @@
  *  • einen Commit mit ungesicherten Änderungen — geänderte verfolgte Dateien
  *    überall, **unverfolgte Dateien in den Einträgen des Artefakts** —, ausser
  *    mit `--unsauber` (für eine örtliche Probe; das Manifest vermerkt es);
+ *  • **von Git ignorierte Dateien** im Inhalt (eine `*.pem` unter `deploy/`),
+ *    die `git status` nie zeigt — ausser den erzeugten Orten in
+ *    `IGNORIERT_ERLAUBT` (`public/pdfjs/`); auch mit `--unsauber`;
  *  • einen `GITHUB_SHA`, der nicht dem ausgecheckten Commit entspricht, und
  *    eine CI-Herkunft, die nur halb gesetzt ist;
  *  • ein Ausgabeverzeichnis innerhalb eines Eintrags des Artefakts.
@@ -113,6 +116,8 @@ import {
   demodatenMeldung,
   demodatenSuchen,
   eintraegeSammeln,
+  ignoriertAbfrage,
+  ignoriertImArchiv,
   manifestBauen,
   migrationenAuflisten,
   packliste,
@@ -366,6 +371,21 @@ async function main(): Promise<void> {
     if (r.status !== 0) throw new Error(`${name} nicht angewendet:\n${r.stdout}${r.stderr}`);
   }
 
+  // --- Inhalt: gesammelt, nichts von Git Ignoriertes -----------------------
+  // Erst nach dem Bau: `public/pdfjs/` entsteht beim Bau und ist erlaubt
+  // ignoriert; vorher fehlte es, und das Artefakt wäre unvollständig.
+  const aufnahme = eintraegeSammeln(WURZEL, oberste, distDir);
+  const ignoriert = ignoriertImArchiv(gitRoh(...ignoriertAbfrage()), aufnahme.eintraege);
+  if (ignoriert.length > 0) {
+    throw new Error(
+      [
+        `Von Git ignorierte Dateien lägen im Artefakt (${ignoriert.length}) — sie stehen in keinem Commit, und .gitignore führt darunter Geheimnisklassen (*.pem, .env*):`,
+        auszug(ignoriert),
+        'Entfernen. Ist eine Datei beim Bau erzeugt und zur Laufzeit nötig, gehört ihr Ort mit Grund in IGNORIERT_ERLAUBT (scripts/release/artefakt-regeln.ts).',
+      ].join('\n'),
+    );
+  }
+
   // --- Manifest ------------------------------------------------------------
   const paket = JSON.parse(readFileSync(join(WURZEL, 'package.json'), 'utf8')) as { version: string };
   const nextVersion = (JSON.parse(readFileSync(join(WURZEL, 'node_modules', 'next', 'package.json'), 'utf8')) as { version: string }).version;
@@ -398,7 +418,6 @@ async function main(): Promise<void> {
   });
 
   // --- Packen --------------------------------------------------------------
-  const aufnahme = eintraegeSammeln(WURZEL, oberste, distDir);
   mkdirSync(ausgabe, { recursive: true });
   const name = artefaktName(commit, mitModulen);
   const archiv = join(ausgabe, `${name}.tar.gz`);

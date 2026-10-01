@@ -9,6 +9,7 @@ import { dirname, join } from 'node:path';
 import { DEMO_BLOGBEITRAEGE, DEMO_KENNZEICHEN, DEMO_KUNDSCHAFT } from '../../prisma/demo-kennzeichen';
 import { archivPacken, bauPruefen } from '../../scripts/release-artefakt';
 import {
+  IGNORIERT_ERLAUBT,
   INHALT,
   MANIFEST_DATEI,
   ausschlussGrund,
@@ -18,6 +19,8 @@ import {
   demodatenMeldung,
   demodatenSuchen,
   eintraegeSammeln,
+  ignoriertAbfrage,
+  ignoriertImArchiv,
   manifestBauen,
   migrationenAuflisten,
   quelleZeit,
@@ -338,6 +341,53 @@ describe('Release-Artefakt: Inhalt, Ausschlüsse, Vollständigkeit', () => {
     ]);
     // Ein fehlender oberster Eintrag wird nicht still übergangen.
     assert.throws(() => eintraegeSammeln(d, ['src', 'ecosystem.config.js'], '.next'), /ecosystem\.config\.js fehlt/);
+  });
+
+  /**
+   * `git status` zeigt ignorierte Dateien nie. Bis 2026-10-01 reiste deshalb
+   * eine `*.pem` unter `deploy/` oder `security/` still ins Archiv — mit einem
+   * Manifest, das „sauber" sagt. `.gitignore` führt `*.pem` ausdrücklich als
+   * Geheimnisklasse.
+   */
+  it('von Git Ignoriertes im Inhalt wird verweigert — ausser den erzeugten PDF.js-Dateien', () => {
+    const d = neuesVerzeichnis();
+    baum(d, {
+      'deploy/v2/release-aktivieren.sh': '#!/bin/sh',
+      'deploy/v2/server.pem': '-----BEGIN PRIVATE KEY-----',
+      'security/schluessel.pem': '-----BEGIN PRIVATE KEY-----',
+      'public/pdfjs/5.4.149/pdf.worker.min.mjs': 'export {};',
+      'public/pdfjsx/fremd.js': 'export {};',
+      'src/.env.local': 'GEHEIM=1',
+      'src/app/.DS_Store': 'x',
+      'src/app/page.tsx': 'export default 1;',
+    });
+    const aufnahme = eintraegeSammeln(d, ['deploy', 'public', 'security', 'src'], '.next');
+    // So meldet `git ls-files -z --others --ignored --exclude-standard` sie — nur Dateien, NUL-getrennt.
+    const gitMeldet = [
+      'deploy/v2/server.pem',
+      'public/pdfjs/5.4.149/pdf.worker.min.mjs',
+      'public/pdfjsx/fremd.js',
+      'security/schluessel.pem',
+      'src/.env.local',
+      'src/app/.DS_Store',
+      '',
+    ].join('\0');
+    assert.deepEqual(ignoriertImArchiv(gitMeldet, aufnahme.eintraege), [
+      'deploy/v2/server.pem',
+      'public/pdfjsx/fremd.js', // nur `public/pdfjs` selbst ist erlaubt, kein Ordner, der so beginnt
+      'security/schluessel.pem',
+      'src/app/.DS_Store',
+    ]);
+    // `src/.env.local` lassen die verankerten Ausschlüsse ohnehin draussen — kein Befund hier.
+    assert.ok(!aufnahme.eintraege.includes('src/.env.local'));
+    assert.deepEqual(ignoriertImArchiv('', aufnahme.eintraege), [], 'nichts ignoriert, nichts zu melden');
+    assert.deepEqual(Object.keys(IGNORIERT_ERLAUBT), ['public/pdfjs'], 'die Ausnahmen sind abschliessend');
+
+    // Die Abfrage an Git: unverfolgt und ignoriert, NUL-getrennt, über den ganzen Inhalt ohne Bau und Module.
+    const abfrage = ignoriertAbfrage();
+    assert.deepEqual(abfrage.slice(0, 6), ['ls-files', '-z', '--others', '--ignored', '--exclude-standard', '--']);
+    assert.deepEqual(abfrage.slice(6), [...INHALT]);
+    assert.ok(!abfrage.includes('.next') && !abfrage.includes('node_modules'));
   });
 
   it('Vollständigkeit: fehlt im Archiv eine Datei ausser den Ausschlüssen, scheitert das Packen', async () => {
