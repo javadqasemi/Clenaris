@@ -12,10 +12,11 @@ import { anfragenVerfolgen, konsoleUeberwachen } from './helpers/browser';
  *    mehr zu Skript werden. Das ist der eigentliche Gewinn — und er ist nur
  *    einer, wenn jede Engine ihn einlöst.
  *  • **WebAssembly übersetzt trotzdem.** `'wasm-unsafe-eval'` ist die
- *    schmale Ausnahme für PDF.js (JPEG 2000, JBIG2, Farbprofile). Ältere
- *    Engines kannten sie nicht und hätten WebAssembly zusammen mit `eval`
- *    abgewiesen; dann fiele PDF.js still auf seine langsamen Ersatzdekoder
- *    zurück.
+ *    schmale Ausnahme für PDF.js (JPEG 2000, JBIG2, Farbprofile und die
+ *    PostScript-Funktionen eines Dokuments, die PDF.js zur Laufzeit selbst in
+ *    WebAssembly übersetzt). Ältere Engines kannten sie nicht und hätten
+ *    WebAssembly zusammen mit `eval` abgewiesen; dann fiele PDF.js still auf
+ *    seine langsameren Ersatzwege in JavaScript zurück.
  *  • **Ein `blob:`-Rahmen lädt.** Der PDF-Viewer druckt über einen Rahmen mit
  *    einer `blob:`-Adresse, die `'self'` nicht zuverlässig abdeckt
  *    (`frame-src 'self' blob:`). Belegt ist damit **nur** `frame-src` für
@@ -39,64 +40,105 @@ import { anfragenVerfolgen, konsoleUeberwachen } from './helpers/browser';
  *    tatsächlich keine Auswertung brauchen.
  *
  * ---------------------------------------------------------------------------
- *  Warum die Prüfung erst in einer eigenen Aufgabe der Ereignisschleife beginnt
+ *  Warum die Prüfung erst auf ein Startsignal beginnt
  * ---------------------------------------------------------------------------
  *
- * Playwright wertet jeden Aufruf über das Steuerprotokoll des Browsers aus —
- * `page.evaluate` ebenso wie `page.addScriptTag` —, und zwar mit
- * `this.global.eval(ausdruck)` im Hauptbereich der Seite
- * (`utilityScript.evaluate` in `playwright-core`). Auf einer Seite ohne
- * `'unsafe-eval'` gelingt das nur, weil die Engine das Erzeugen von Code aus
- * Text für die Dauer dieses einen Protokollaufrufs ausdrücklich erlaubt: der
- * V8-Inspector ebenso wie `InjectedScriptBase` in JavaScriptCore („Temporarily
- * enable allow evals for inspector"). Die ganze übrige Browserreihe lebt
- * davon, und Playwrights eigenes `waitForFunction` rechnet damit — es merkt
- * sich die ausgewertete Funktion, weil `eval` nur im ersten, synchronen
- * Durchlauf gelingt. Für Firefox ist der Weg nicht nachgelesen; die
- * Verschiebung unten wirkt dort genauso, falls es dieselbe Ausnahme kennt,
- * und schadet nicht, falls nicht.
+ * Die Prüfung wird mit `page.addScriptTag` eingesetzt, aber sie *beginnt*
+ * dabei nicht. Das Skript legt nur die Zusage ab und wartet auf eine
+ * Nachricht (`postMessage`), die der Fall erst schickt, wenn `addScriptTag`
+ * zurückgekehrt ist. Dafür gibt es zwei Gründe, und jeder allein hätte den
+ * Fall unbrauchbar gemacht.
  *
- * Diese Ausnahme trifft auch das eingesetzte Skript. `addScriptTag({ content })`
+ * **1. Die Auswertungsausnahme des Steuerprotokolls.** Playwright wertet
+ * jeden Aufruf über das Steuerprotokoll des Browsers im Hauptbereich der
+ * Seite aus — `page.evaluate` ebenso wie `page.addScriptTag`. Auf einer Seite
+ * ohne `'unsafe-eval'` gelingt das nur, weil jede Engine die Richtlinie für
+ * die Dauer dieses einen Protokollaufrufs ausdrücklich aussetzt: der
+ * V8-Inspector, `InjectedScriptBase` in JavaScriptCore („Temporarily enable
+ * allow evals for inspector") und Juggler in Firefox, der jeden
+ * Funktionsaufruf mit `bypassCSP: true` über `executeInGlobalWithBindings`
+ * ausführt (`content/Runtime.js` im `omni.ja` von firefox-1543: „so
+ * bypassCSP scopes the call"). Die ganze übrige Browserreihe lebt davon, und
+ * Playwrights eigenes `waitForFunction` rechnet damit — es merkt sich die
+ * ausgewertete Funktion, weil `eval` nur im ersten, synchronen Durchlauf
+ * gelingt.
+ *
+ * Diese Ausnahme träfe auch das eingesetzte Skript. `addScriptTag({ content })`
  * hängt das `<script>` *innerhalb* einer solchen Auswertung an
  * (`document.head.appendChild` in `addScriptContent`), und ein eingefügtes
- * klassisches Inline-Skript läuft synchron während `appendChild`. Alles, was
- * es vor seinem ersten echten Warten tut, liegt also noch im Fenster der
- * Ausnahme: `eval('1 + 1')` lieferte dort 2 und keinen Verstoss, und der Fall
- * bewiese nichts. Die erste Fassung dieses Falls stand genau so da — die
- * Auswertung vor dem ersten `await` — und wäre in Chromium und WebKit rot
- * geworden, ohne dass die Richtlinie falsch gewesen wäre (aus dem Quelltext
- * hergeleitet, nicht im Browser gemessen).
+ * klassisches Inline-Skript läuft synchron während `appendChild`. Was es dort
+ * sofort täte, läge noch im Fenster der Ausnahme: `eval('1 + 1')` lieferte 2
+ * und keinen Verstoss, und der Fall bewiese nichts. Die erste Fassung dieses
+ * Falls stand genau so da — die Auswertung vor dem ersten `await`.
  *
- * Deshalb beginnt die Prüfung mit `await pause(0)`. Ein `setTimeout` ist eine
- * neue Aufgabe der Ereignisschleife, und die beginnt erst, wenn der
- * Protokollaufruf zurückgekehrt und die Ausnahme wieder aufgehoben ist.
- * `queueMicrotask` oder ein blosses `await` auf eine erfüllte Zusage reichten
- * nicht: Mikroaufgaben können noch abgearbeitet werden, bevor der
- * Protokollaufruf endet. Ab dieser Aufgabe trifft die Richtlinie das Skript
- * so wie jedes Skript der Anwendung. Die Zusicherungen auf `EvalError` und
- * auf den einen Verstoss sind zugleich der Nachweis, dass die Verschiebung
- * wirkt: Fiele sie weg, lieferte `eval` wieder 2, und der Fall würde rot.
+ * **2. Playwrights CSP-Wettlauf in `addScriptTag`.** `addScriptTag` läuft in
+ * `_raceWithCSPError` (`playwright-core`, `lib/coreBundle.js`): Erscheint,
+ * solange der Aufruf läuft, auf der Seite eine Konsolenmeldung vom Typ
+ * `error`, deren Text „Content-Security-Policy" oder „Content Security
+ * Policy" enthält, wirft `addScriptTag` mit genau diesem Text — so erkennt
+ * Playwright ein verweigertes Inline-Skript. Für Firefox
+ * (`cspErrorsAsynchronousForInlineScripts`) wartet es nach dem Einfügen sogar
+ * eigens einen zweiten Protokollaufruf ab (`context.evaluate(() => true)`),
+ * weil Firefox CSP-Meldungen erst nachträglich schreibt. Die zweite Fassung
+ * dieses Falls begann mit `await pause(0)`: Das hob Grund 1 auf, nicht aber
+ * Grund 2. Ein Zeitgeber über null Millisekunden läuft im Inhaltsprozess
+ * lange vor der Antwort auf jenen zweiten Aufruf; die verweigerte Auswertung
+ * hätte ihre Meldung („Content-Security-Policy: The page’s settings blocked
+ * a JavaScript eval …") mitten in den Wettlauf geschrieben, und
+ * `addScriptTag` wäre in Firefox an genau der Meldung gescheitert, die der
+ * Fall erwartet. Die Meldungen von Chromium und WebKit enthalten ebenfalls
+ * „Content Security Policy"; dort hielt nur die Reihenfolge der
+ * Protokollnachrichten den Fall grün — die Antwort auf das Einfügen verliess
+ * den Inhaltsprozess vor der Meldung. Ein Zufall der Reihenfolge ist kein
+ * Entwurf. (Beides aus dem Quelltext hergeleitet, nicht im Browser gemessen.)
+ *
+ * **Das Startsignal löst beides.** Es wird erst geschickt, nachdem
+ * `addScriptTag` zurückgekehrt ist — der Wettlauf ist dann entschieden und
+ * sein Zuhörer entfernt. Und `postMessage` liefert das `message`-Ereignis nie
+ * sofort, sondern stellt es als eigene Aufgabe in die Ereignisschleife; die
+ * beginnt erst, wenn der Protokollaufruf, der die Nachricht abschickt,
+ * zurückgekehrt und seine Ausnahme aufgehoben ist. Ein `dispatchEvent` oder
+ * `queueMicrotask` an derselben Stelle reichte nicht: Beide liefen noch
+ * innerhalb dieses Protokollaufrufs. Ab dem `message`-Ereignis trifft die
+ * Richtlinie das Skript so wie jedes Skript der Anwendung. Die Zusicherungen
+ * auf `EvalError` und auf den einen Verstoss sind zugleich der Nachweis, dass
+ * die Verschiebung wirkt: Fiele sie weg, lieferte `eval` wieder 2, und der
+ * Fall würde rot.
  *
  * Das `<script>` bleibt trotzdem der richtige Träger und nicht ein
- * `page.evaluate`, das seinerseits ein `setTimeout` stellt: Ob es überhaupt
+ * `page.evaluate`, das seinerseits einen Zeitgeber stellt: Ob es überhaupt
  * läuft, entscheidet `'unsafe-inline'` (das Next für seine Inline-Nutzlast
  * ohnehin braucht). Die Prüfung von Inline-Skripten gilt auch für eine
- * Einfügung über das Steuerprotokoll — genau deshalb fängt Playwright eine
- * verweigerte Einfügung eigens als CSP-Fehler ab (`_raceWithCSPError`).
- * `page.evaluate` holt danach nur noch das Ergebnis ab — lesen, nicht
- * auswerten.
+ * Einfügung über das Steuerprotokoll — genau dafür gibt es den Wettlauf aus
+ * Grund 2. `page.evaluate` schickt danach nur das Startsignal und holt das
+ * Ergebnis ab; was die Richtlinie betrifft, wertet es nicht aus.
  *
- * Verstösse werden aus demselben Grund im Browser gezählt
- * (`securitypolicyviolation`) und nicht allein an der Konsole: Firefox reicht
- * CSP-Meldungen nicht zuverlässig als Konsolenfehler an Playwright weiter.
- * Die Konsole wird trotzdem geprüft — dort ist genau die eine erwartete
- * Meldung erlaubt, und nur sie.
+ * ---------------------------------------------------------------------------
+ *  Verstösse und Konsole
+ * ---------------------------------------------------------------------------
+ *
+ * Verstösse werden im Browser gezählt (`securitypolicyviolation`), weil das
+ * Ereignis Anweisung und Quelle in fester Form nennt und hier den Schritt
+ * trägt, in dem es eintraf. Die Konsolenzeile ist je Engine anders formuliert
+ * und sagt nicht, welcher Schritt sie auslöste.
+ *
+ * Die Konsole wird trotzdem genau geprüft, nicht nur nach oben begrenzt. Alle
+ * drei Engines schreiben die verweigerte Auswertung als Fehlermeldung, und
+ * Playwright reicht sie als `console`-Ereignis vom Typ `error` weiter:
+ * Chromium über `Log.entryAdded`, WebKit über `Console.messageAdded` (Quelle
+ * `security`, Stufe `error`), Firefox über den Konsolendienst, dessen
+ * Kategorie `CSP` Juggler nicht ausfiltert (`_registerConsoleServiceListener`)
+ * — davon lebt der Wettlauf aus Grund 2. Erwartet wird deshalb **genau eine**
+ * solche Meldung: Eine fehlende wäre ebenso ein Befund wie eine zusätzliche.
+ * Scheitert eine Engine an dieser Zusicherung, gehört die Ausnahme dort
+ * namentlich und mit Messung hin — nicht eine pauschale Lockerung für alle
+ * drei.
  *
  * **Diagnosemodus** (`E2E_DIAGNOSE=1`, `next dev` auf Port 3002): Der
  * Entwicklungsserver trägt `'unsafe-eval'` absichtlich (Begründung in
  * `next.config.ts`). Dort wird deshalb das Gegenteil erwartet — `eval`
- * läuft, kein Verstoss —, statt den Fall zu überspringen: Er prüft auch dann,
- * dass die Richtlinie der Phase entspricht.
+ * läuft, kein Verstoss, keine Meldung —, statt den Fall zu überspringen: Er
+ * prüft auch dann, dass die Richtlinie der Phase entspricht.
  */
 
 /**
@@ -116,14 +158,44 @@ const WASM_MODUL = [
 const ENTWICKLUNGSSERVER = process.env.E2E_DIAGNOSE === '1';
 
 /**
- * Die eine Konsolenmeldung, die die verweigerte Auswertung auslösen darf —
- * je Engine anders formuliert. Bewusst so eng, dass eine Meldung über
- * **WebAssembly** nicht darunter fällt: Chromium nennt auch dort
- * `'unsafe-eval'` („Refused to compile or instantiate WebAssembly module
- * because …"), und genau diese Meldung wäre der Befund.
+ * Die Nachricht, auf die das eingesetzte Skript wartet, bevor es prüft
+ * (Kopfkommentar). Ein eigener Name statt eines leeren Signals, damit keine
+ * andere Nachricht der Seite die Prüfung auslöst.
  */
-const EVAL_VERWEIGERT =
-  /Refused to evaluate a string as JavaScript|Refused to execute a script because 'unsafe-eval'|blocked a JavaScript eval|resource at eval\b/;
+const STARTSIGNAL = 'clenaris:inhaltsrichtlinie:pruefen';
+
+/**
+ * Die eine Konsolenmeldung, die die verweigerte Auswertung auslösen darf —
+ * je Engine anders formuliert. Die Wortlaute stammen aus den Browsern, die
+ * Playwright 1.63 festlegt (`browsers.json`: chromium-1243, firefox-1543,
+ * webkit-2359), gelesen aus den installierten Dateien (`chrome.dll`,
+ * `csp.properties` im `omni.ja`, `WebCore.dll`):
+ *
+ *  • Chromium: „Evaluating a string as JavaScript violates the following
+ *    Content Security Policy directive because 'unsafe-eval' …". Die ältere
+ *    Fassung „Refused to evaluate a string as JavaScript" führt diese Version
+ *    nicht mehr — die erste Fassung dieses Musters kannte nur sie, verfehlte
+ *    die Meldung in Chromium, und `keineFehler()` wäre an ihr gescheitert.
+ *  • WebKit: „Refused to execute a script because 'unsafe-eval' …" (Konsole)
+ *    und „Refused to evaluate a string as JavaScript because 'unsafe-eval' …"
+ *    (Text des `EvalError`).
+ *  • Firefox: „Content-Security-Policy: The page’s settings blocked a
+ *    JavaScript eval …" (`CSPEvalScriptViolation`).
+ *
+ * Bewusst so eng, dass eine Meldung über **WebAssembly** nicht darunter
+ * fällt: „Compiling or instantiating a WebAssembly module violates …"
+ * (Chromium), „Refused to create a WebAssembly object …" (WebKit) und
+ * „blocked WebAssembly" (Firefox) passen auf keine der Alternativen — und
+ * genau diese Meldungen wären der Befund.
+ */
+const EVAL_VERWEIGERT = new RegExp(
+  [
+    'Evaluating a string as JavaScript violates the following Content Security Policy directive',
+    "Refused to execute a script because 'unsafe-eval'",
+    "Refused to evaluate a string as JavaScript because 'unsafe-eval'",
+    'blocked a JavaScript eval',
+  ].join('|'),
+);
 
 /** Der Schritt, in dem ein Verstoss eintraf — `laden` ist alles vor der Prüfung. */
 type Schritt = 'laden' | 'eval' | 'wasm' | 'rahmen' | 'ende';
@@ -166,11 +238,14 @@ function verstoesseMitschreiben(): void {
 
 /**
  * Die eigentliche Prüfung — läuft **im Browser, als Inline-Skript**, und
- * beginnt erst in einer eigenen Aufgabe der Ereignisschleife (beides im
- * Kopfkommentar begründet). Sie wirft nie: Jeder Schritt hält sein Ergebnis
- * fest, damit ein Fehlschlag sagt, welcher Schritt es war.
+ * beginnt erst auf das Startsignal (beides im Kopfkommentar begründet). Sie
+ * wirft nie: Jeder Schritt hält sein Ergebnis fest, damit ein Fehlschlag sagt,
+ * welcher Schritt es war. Abgelehnt wird die Zusage nur, wenn das
+ * Startsignal ausbleibt — dann gibt es keinen Schritt, dem man den
+ * Fehlschlag zuschreiben könnte, und eine klare Meldung ist besser als ein
+ * Fall, der stumm bis zur Zeitgrenze hängt.
  */
-function pruefungImBrowser(modul: number[]): void {
+function pruefungImBrowser(modul: number[], startsignal: string): void {
   const fenster = window as Fenster;
   const pause = (ms: number) => new Promise<void>((weiter) => setTimeout(weiter, ms));
 
@@ -203,21 +278,13 @@ function pruefungImBrowser(modul: number[]): void {
     await pause(50);
   };
 
-  /*
-   * Die Zusage wird *synchron* abgelegt, noch während `appendChild`: Das
-   * `page.evaluate`, das sie abholt, folgt unmittelbar auf `addScriptTag` und
-   * fände sonst nichts vor.
+  /**
+   * Die Schritte selbst. Aufgerufen wird das erst im `message`-Ereignis des
+   * Startsignals; die Auswertung ist dort das Erste, was geschieht, und läuft
+   * damit in einer eigenen Aufgabe der Ereignisschleife — ausserhalb jedes
+   * Protokollaufrufs und nach dem CSP-Wettlauf von `addScriptTag`.
    */
-  fenster.__inhaltsrichtlinie = (async (): Promise<Befund> => {
-    /*
-     * Zuerst aus dem Protokollaufruf heraus, in dem `addScriptTag` dieses
-     * Skript synchron ausführt — dort erlaubt die Engine `eval` für
-     * Playwright, und jede Prüfung davor wäre wertlos (Kopfkommentar).
-     * `setTimeout`, nicht `queueMicrotask`: Mikroaufgaben können noch
-     * innerhalb des Protokollaufrufs laufen.
-     */
-    await pause(0);
-
+  const pruefen = async (): Promise<Befund> => {
     const befund: Befund = {
       eval: { ausgefuehrt: false, wert: null, fehler: null },
       wasm: { antwort: null, fehler: null },
@@ -275,7 +342,36 @@ function pruefungImBrowser(modul: number[]): void {
 
     fenster.__cspSchritt = 'ende';
     return befund;
-  })();
+  };
+
+  /*
+   * Die Zusage wird *synchron* abgelegt, noch während `appendChild`: Das
+   * `page.evaluate`, das sie abholt, folgt kurz auf `addScriptTag` und fände
+   * sonst nichts vor.
+   *
+   * Das Startsignal wird allein an seinem Inhalt erkannt. Der eigene Name
+   * verhindert, dass eine andere Nachricht der Seite die Prüfung zu früh
+   * auslöst — womöglich doch noch innerhalb des Wettlaufs. Absender und
+   * Ursprung zusätzlich zu vergleichen brächte hier keine Sicherheit (auf der
+   * Prüfseite schickt niemand Fremdes), wohl aber ein Risiko: In Firefox
+   * schickt Juggler die Nachricht aus einer Auswertung über die
+   * Debugger-Schnittstelle, und ob `source` dort genau dieses Fenster ist,
+   * ist nicht gemessen. Ein Vergleich, der dort fehlschlüge, liesse die
+   * Prüfung nie beginnen.
+   */
+  fenster.__inhaltsrichtlinie = new Promise<Befund>((fertig, abbrechen) => {
+    const ausgeblieben = setTimeout(() => {
+      window.removeEventListener('message', starten);
+      abbrechen(new Error('Das Startsignal der Inhaltsrichtlinien-Prüfung traf nie ein.'));
+    }, 10_000);
+    function starten(ereignis: MessageEvent) {
+      if (ereignis.data !== startsignal) return;
+      window.removeEventListener('message', starten);
+      clearTimeout(ausgeblieben);
+      fertig(pruefen());
+    }
+    window.addEventListener('message', starten);
+  });
 }
 
 test('eval wird verweigert, WebAssembly kompiliert', async ({ page, browserName }) => {
@@ -297,8 +393,16 @@ test('eval wird verweigert, WebAssembly kompiliert', async ({ page, browserName 
   // — Die Seite selbst: geladen, hydriert, ruhig — und kein einziger Verstoss.
   expect(await verstoesse(), `${browserName}: die Seite verletzt die Richtlinie schon beim Laden`).toEqual([]);
 
-  // — Die Prüfung als gewöhnliches Inline-Skript einsetzen.
-  await page.addScriptTag({ content: `(${pruefungImBrowser.toString()})(${JSON.stringify(WASM_MODUL)});` });
+  // — Die Prüfung als gewöhnliches Inline-Skript einsetzen. Sie prüft dabei
+  //   noch nichts, sondern wartet auf das Startsignal.
+  await page.addScriptTag({
+    content: `(${pruefungImBrowser.toString()})(${JSON.stringify(WASM_MODUL)}, ${JSON.stringify(STARTSIGNAL)});`,
+  });
+
+  // — Erst jetzt beginnen lassen: Der CSP-Wettlauf von `addScriptTag` ist
+  //   entschieden, und das `message`-Ereignis ist eine eigene Aufgabe nach
+  //   diesem Protokollaufruf (Kopfkommentar).
+  await page.evaluate((signal) => window.postMessage(signal, location.origin), STARTSIGNAL);
   const befund = await page.evaluate(() => (window as Fenster).__inhaltsrichtlinie ?? null);
   expect(befund, `${browserName}: das Inline-Skript lief nicht — fehlt 'unsafe-inline'?`).not.toBeNull();
 
@@ -329,11 +433,13 @@ test('eval wird verweigert, WebAssembly kompiliert', async ({ page, browserName 
     erwartet,
   );
 
-  // — Konsole: höchstens die eine Meldung zur Auswertung (Firefox meldet sie
-  //   Playwright nicht als Fehler), sonst nichts.
+  // — Konsole: genau die eine Meldung zur verweigerten Auswertung (im
+  //   Diagnosemodus keine), sonst nichts. Warum genau und nicht „höchstens",
+  //   steht im Kopfkommentar.
   const evalMeldungen = konsole.erwartet(EVAL_VERWEIGERT);
-  expect(evalMeldungen, `${browserName}: die Auswertungsmeldung erschien mehr als einmal`).toBeLessThanOrEqual(
-    erwartet.length,
-  );
+  expect(
+    evalMeldungen,
+    `${browserName}: die Konsolenmeldung zur verweigerten Auswertung fehlt oder erschien mehrfach`,
+  ).toBe(erwartet.length);
   konsole.keineFehler();
 });
