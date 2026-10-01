@@ -3,7 +3,7 @@
 import * as React from 'react';
 import { Clock } from 'lucide-react';
 
-import { abmeldungBeginnen, abmeldungLaeuftBereits } from '@/lib/api/client';
+import { abmeldungBeenden, abmeldungBeginnen, abmeldungLaeuftBereits } from '@/lib/api/client';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -116,6 +116,20 @@ export function SessionKeepalive({ idleSeconds }: { idleSeconds: number }) {
   /** Restzeit bis zur Abmeldung, solange die Warnung steht — sonst `null`. */
   const [restzeit, setRestzeit] = React.useState<number | null>(null);
   const aktionen = React.useRef<{ weiter: () => void; abmelden: () => void }>({ weiter: () => {}, abmelden: () => {} });
+
+  /*
+    Der Wächter hängt sich ein, sobald ein angemeldeter Bereich gerendert
+    wird — das ist der Beginn einer Sitzung in diesem Tab. Eine Abmeldemarke
+    aus einer früheren Sitzung desselben Tabs (Abmelden über das Profilmenü,
+    dann clientseitig neu angemeldet) gilt hier nicht mehr; ohne das Zurück-
+    setzen sperrte `lib/api/client.ts` jede geschützte Abfrage der neuen
+    Sitzung (2026-10-01). Ein eigener Effekt ohne Abhängigkeiten: Der
+    Zeitgeber-Effekt unten läuft bei jedem neuen `idleSeconds` erneut, das
+    Zurücksetzen gehört nur zum Einhängen.
+  */
+  React.useEffect(() => {
+    abmeldungBeenden();
+  }, []);
 
   React.useEffect(() => {
     const idleMs = Math.max(60_000, idleSeconds * 1000);

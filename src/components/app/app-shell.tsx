@@ -59,7 +59,7 @@ import {
   Wallet,
   Wrench,
 } from 'lucide-react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { UserRole } from '@prisma/client';
 
 import { cn } from '@/lib/utils';
@@ -244,6 +244,7 @@ export function AppShell({
 }) {
   const pathname = usePathname();
   const router = useRouter();
+  const queryClient = useQueryClient();
   const [mobileOpen, setMobileOpen] = React.useState(false);
 
   React.useEffect(() => setMobileOpen(false), [pathname]);
@@ -299,6 +300,21 @@ export function AppShell({
     // Vor dem Aufruf: Ab hier ist jedes 401 die erwartete Folge der Abmeldung,
     // kein Anlass für „Sitzung abgelaufen" (`abmeldungBeginnen` in `lib/api/client.ts`).
     abmeldungBeginnen();
+    /*
+      Die Daten der beendeten Sitzung verlassen den Speicher (2026-10-01).
+      Der Abfragezwischenspeicher hängt an der Wurzel (`components/providers.tsx`)
+      und überlebt die clientseitige Navigation auf die Startseite. Bis hierher
+      blieben Kundenlisten, Kalender und Glocke der abgemeldeten Person im Tab
+      — und wer sich danach am selben Gerät anmeldete, bekam für Abfragen mit
+      gleichem Schlüssel zuerst die Daten der vorigen Sitzung zu sehen, bis
+      die eigene Antwort sie ersetzte. Gefunden mit dem Fall „nach Abmelden und
+      neuer Anmeldung im selben Tab" (`tests/e2e/abmelden.spec.ts`): Die Glocke
+      der neuen Sitzung fragte gar nicht erst, weil der alte Wert noch frisch
+      war. Abfragen, die nach dem Leeren neu anlaufen, sperrt
+      `lib/api/client.ts` während der Abmeldung, ohne das Netz zu berühren.
+    */
+    await queryClient.cancelQueries();
+    queryClient.clear();
     await api.post('/api/auth/logout').catch(() => undefined);
     // Die anderen Tabs dieser Sitzung zur Anmeldung schicken, statt sie mit
     // toten Cookies weiterarbeiten zu lassen (2026-09-28).

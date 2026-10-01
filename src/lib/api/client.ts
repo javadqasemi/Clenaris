@@ -98,14 +98,54 @@ function isAuthEndpoint(path: string): boolean {
  *
  * Solange die Abmeldung läuft, ist ein 401 deshalb keine abgelaufene Sitzung,
  * sondern die erwartete Antwort: keine Erneuerung, kein Sprung; der Aufruf
- * scheitert still, und die Abmeldung bestimmt das Ziel. Die Marke wird nie
- * zurückgesetzt — nach der Abmeldung verlässt die Seite den angemeldeten
- * Bereich.
+ * scheitert still, und die Abmeldung bestimmt das Ziel.
+ *
+ * **Seit 2026-10-01 geht während der Abmeldung auch keine neue geschützte
+ * Abfrage mehr hinaus.** Die Stressreihe der Production-V2-Härtung fing im
+ * Fall „Ohne Eingabe … Abmeldung wegen Inaktivität" eine Glockenabfrage, die
+ * 15 ms *nach* dem Abmelde-POST begann und mit 401 zurückkam — der Browser
+ * schreibt das als Fehler in die Konsole. Die Marke verhinderte bis dahin nur
+ * den falschen Sprung, nicht den Aufruf selbst; der war aber in jedem Fall
+ * sinnlos, denn die Sitzung, die er brauchte, wird gerade beendet. Jetzt
+ * scheitert ein solcher Aufruf, ohne das Netz zu berühren, mit einem 401 der
+ * eigenen Art — React Query wiederholt keine 4xx. Ausgenommen sind
+ * `/api/auth/` (die Abmeldung selbst, die Sitzungsabfrage der Website) und
+ * `/api/public/`: Nach einer Abmeldung über das Profilmenü landet die
+ * Startseite in **demselben** Tab (clientseitige Navigation), und ihre
+ * öffentlichen Abfragen (Preisrechner, Verfügbarkeit) müssen weiterlaufen.
+ *
+ * **Und die Marke wird zurückgesetzt, sobald eine neue Sitzung beginnt**
+ * (`abmeldungBeenden`, aufgerufen beim Einhängen von `SessionKeepalive`).
+ * Vorher hiess es hier „nie zurückgesetzt — die Seite verlässt den
+ * angemeldeten Bereich". Das stimmt für die Abmeldung wegen Inaktivität (sie
+ * lädt hart neu), aber nicht für die über das Profilmenü: Die Anmeldemaske
+ * leitet nach der Anmeldung ebenfalls clientseitig weiter, das Modul bleibt
+ * geladen, und die alte Marke hätte in der neuen Sitzung jede stille
+ * Erneuerung unterdrückt und die Abmeldung aus anderen Tabs überhört. Mit der
+ * Sperre oben wäre aus diesem verborgenen Fehler ein sichtbarer geworden —
+ * jede geschützte Abfrage der neuen Sitzung wäre gescheitert.
  */
 let abmeldungLaeuft = false;
 
 export function abmeldungBeginnen(): void {
   abmeldungLaeuft = true;
+}
+
+/** Eine neue angemeldete Sitzung in diesem Tab: Eine frühere Abmeldung gilt nicht mehr. */
+export function abmeldungBeenden(): void {
+  abmeldungLaeuft = false;
+}
+
+/**
+ * Darf dieser Aufruf während einer laufenden Abmeldung noch hinaus? Nur die
+ * Anmeldestrecke und die öffentlichen Endpunkte (Begründung oben).
+ */
+function waehrendAbmeldungGesperrt(path: string): boolean {
+  return abmeldungLaeuft && !isAuthEndpoint(path) && !path.startsWith('/api/public/');
+}
+
+function abmeldungsFehler(): ApiError {
+  return new ApiError(401, 'ABMELDUNG_LAEUFT', 'Die Sitzung wird gerade beendet.');
 }
 
 /** Hat **dieser** Tab die Abmeldung begonnen? (Für die Sitzungsabstimmung zwischen Tabs.) */
@@ -121,6 +161,7 @@ function goToLogin(): void {
 }
 
 async function request<T>(path: string, options: RequestOptions = {}, retried = false): Promise<T> {
+  if (waehrendAbmeldungGesperrt(path)) throw abmeldungsFehler();
   const { body, params, headers, ...rest } = options;
 
   const url = new URL(path, window.location.origin);
@@ -181,6 +222,7 @@ async function requestWithMeta<T, M = unknown>(
   options: RequestOptions = {},
   retried = false,
 ): Promise<{ data: T; meta: M }> {
+  if (waehrendAbmeldungGesperrt(path)) throw abmeldungsFehler();
   const { body, params, headers, ...rest } = options;
 
   const url = new URL(path, window.location.origin);
