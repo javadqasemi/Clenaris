@@ -15,18 +15,20 @@ Dokument ausgeführt:
 
 | | |
 |---|---|
-| Quelle der Wahrheit | **GitHub `main`** im Repository `javadqasemi/Clenaris`. Der Server zieht ausschliesslich von dort |
-| Repository | **privat.** Der Server braucht deshalb einen eigenen, nur lesenden Deploy-Key (13.3) |
-| Auslieferung | **GitHub Actions**, Qualitätstor und Auslieferung getrennt (Teil II) |
+| Quelle der Wahrheit | **GitHub `main`** im Repository `javadqasemi/Clenaris`. Der Server zieht **nichts** aus Git — er bekommt das in der CI aus `main` gebaute und geprüfte Artefakt (Teil II) |
+| Repository | Sichtbarkeit ist ein Entscheid der Inhaberschaft (`docs/GITHUB_GOVERNANCE.md` §3). Bis 2026-09-27 stand hier „privat, mit Deploy-Key für den Server"; seit dem Artefaktweg braucht der Server keinen Zugang zum Repository |
+| Auslieferung | **GitHub Actions**, Qualitätstor und Auslieferung getrennt; zwei Wege (direkter Auftrag `auslieferung` und Release-Ausführer) nach **einem** Aktivierungsvertrag (C3) — Teil II, Abschnitte 12, 15, 16 |
 | Wirtsschlüssel | **gepinnt, Pflicht.** Kein `ssh-keyscan`-Rückfall, kein Vertrauen beim ersten Kontakt (13.4) |
 | `SERVER_USER` | **Pflicht.** Kein Rückfall auf `root` (14) |
-| `DIRECT_URL` | **Empfohlen bei Pooling.** Seit Prisma 7 steht die Adresse nicht mehr in `schema.prisma`, sondern in `prisma.config.ts`: Die Kommandozeile (`migrate deploy`) nimmt `DIRECT_URL`, sonst `DATABASE_URL`. Hinter einem Pooler im Transaktionsmodus (PgBouncer, Supabase :6543) muss sie gesetzt sein und am Pooler vorbeiführen — `migrate` verträgt dessen Sperrverhalten nicht. Die Laufzeit liest nur `DATABASE_URL` (14) |
+| `DIRECT_URL` | **Pflicht in der Produktion** — die Produktionsvorprüfung jeder Aktivierung bricht ohne sie ab. Seit Prisma 7 steht die Adresse nicht mehr in `schema.prisma`, sondern in `prisma.config.ts`: Die Kommandozeile (`migrate deploy`) nimmt `DIRECT_URL`, sonst `DATABASE_URL`. Hinter einem Pooler im Transaktionsmodus (PgBouncer, Supabase :6543) muss sie am Pooler vorbeiführen — `migrate` verträgt dessen Sperrverhalten nicht. Die Laufzeit liest nur `DATABASE_URL` (3) |
 | HTTP-Eingang | **nur über Cloudflare.** Der Ursprung nimmt auf 80/443 nur Cloudflare-Netze an (13.5.2) |
 | Secrets | **keine Übernahme aus dem Altbestand.** Neu erzeugen oder beim Anbieter rotieren (14) |
 
-Die Anwendung selbst ist an keinen Anbieter gebunden: sie braucht Node ≥ 20.11,
-ein PostgreSQL ≥ 16 und einen S3-kompatiblen Speicher — ohne den fällt sie auf
-einen lokalen Postgres-Blob-Treiber zurück.
+Die Anwendung selbst ist an keinen Anbieter gebunden: sie braucht Node 22
+(`.nvmrc`, `engines` ≥ 22 — dieselbe Hauptversion wie die CI, weil
+`node_modules` im Artefakt mitreist), ein PostgreSQL ≥ 16 und einen
+S3-kompatiblen Speicher — ohne den fällt sie auf einen lokalen
+Postgres-Blob-Treiber zurück.
 
 > **HISTORICAL — Vercel.**
 > Die Abschnitte 4 (`vercel --prod`), 7 (Vercel Cron) und 8 (DNS auf Vercel)
@@ -118,10 +120,10 @@ Häkchen.
 | A3 | Pull Requests durchlaufen das Qualitätstor | **belegt** | Auslöser `pull_request` gegen `main`, kein `pull_request_target` |
 | A4 | Ein Pull Request liefert nie aus | **belegt** | `github.event_name != 'pull_request'` am Auslieferungsauftrag, dazu `needs: qualitaet` |
 | A5 | Auslieferung nur nach ausdrücklichem Einschalten | **belegt** | `vars.DEPLOY_ENABLED == 'true'`, fail-closed — verhindert, dass der erste grüne Lauf an ein Altziel liefert |
-| A6 | Default-Branch ist `main` | **offen** | siehe Betreiberliste unten |
-| A7 | `main` gegen Force-Push und Löschen geschützt, CI als Pflichtprüfung | **offen** | dito |
-| A8 | Repository privat | **offen** | dito |
-| A9 | Umgebung `production` nimmt nur `main` an | **offen** | dito |
+| A6 | Default-Branch ist `main` | **bestätigt** (seit 2026-09-27) | Umstellung durch die Inhaberschaft, `docs/GITHUB_GOVERNANCE.md` §1 — nach der API-Lesung vom 2026-09-27 nicht erneut gelesen |
+| A7 | `main` gegen Force-Push und Löschen geschützt, CI als Pflichtprüfung | **belegt** (2026-09-27) | Regelsatz „main schützen" (ID 24071027), über die API gelesen, `docs/GITHUB_GOVERNANCE.md` §2 |
+| A8 | Repository privat | **offen** — Entscheid der Inhaberschaft (E-9) | Seit dem Artefaktweg hängt der Server nicht mehr daran (kein Deploy-Key); auf GitHub Free verlöre ein privates Repository den Regelsatz (`GITHUB_GOVERNANCE.md` §3) |
+| A9 | Umgebung `production` nimmt nur `main` an | **belegt** (2026-09-27) | Zweigregel der Umgebung, über die API gelesen, `docs/GITHUB_GOVERNANCE.md` §1; dazu `github.ref == 'refs/heads/main'` am Auftrag seit 2026-09-30 |
 | A10 | Actions-Rechte nach Least Privilege | **teilweise belegt** | im Workflow: Vorgabe `contents: read`, Auslieferungsauftrag `permissions: {}`. Die Repository-Einstellung selbst ist Betreibersache |
 
 **B — Der neue Server, vor der ersten Auslieferung.** Jeder Punkt gilt für die
@@ -135,7 +137,7 @@ noch zu bauende Maschine; keiner ist heute belegbar.
 | B4 | `delete_protection` und `rebuild_protection` eingeschaltet | offen |
 | B5 | Infrastruktursicherung (Cloud-Backup/Snapshot) eingeschaltet | offen |
 | B6 | Wirtsschlüssel über die **Anbieterkonsole** gelesen und als `SERVER_SSH_KNOWN_HOSTS` gepinnt | offen |
-| B7 | Eigener, nur lesender Deploy-Key für das private Repository | offen |
+| B7 | ~~Eigener, nur lesender Deploy-Key für das private Repository~~ | **entfällt** — der Server holt seit dem Artefaktweg nichts aus Git |
 | B8 | `pg_dump`/`pg_restore` vorhanden, Hauptversion ≥ Server | offen — das Sicherungsskript prüft es beim Lauf und bricht sonst ab |
 | B9 | Sicherungsverzeichnis ausserhalb des Anwendungsverzeichnisses, beschreibbar | offen — ebenso fail-closed |
 | B10 | Produktions-Secrets vollständig und **neu** (14) | offen |
@@ -160,8 +162,8 @@ Gegenteil einer Regelmenge.
 **Was nur der Betreiber abhaken kann (A6–A9).** GitHub gibt weder
 Secret-Werte noch Einstellungen ohne Authentifizierung heraus; von einem
 Arbeitsplatz ohne Token sind diese vier Punkte grundsätzlich nicht messbar.
-Sie stehen deshalb als *offen*, nicht als *erledigt* — auch dann, wenn die
-Arbeit getan ist.
+Sie standen deshalb als *offen*, bis eine Lesung über die API vorlag (A7, A9
+am 2026-09-27) oder die Inhaberschaft die Umstellung bestätigt hat (A6).
 
 ### Zwei Sicherungsebenen, die nicht dasselbe sind
 
@@ -189,8 +191,10 @@ Hier stand bis zuletzt ein offener P1: Die Auslieferung sicherte Build und
 `.env` — also genau das, was sich aus Git und den Secrets wiederherstellen
 lässt — und **nicht** die Daten. Der Punkt ist geschlossen.
 
-**Was jetzt passiert.** Meldet `prisma migrate status` offene Migrationen,
-läuft vor `migrate deploy` zwingend:
+**Was jetzt passiert.** Die Aktivierung (`deploy/v2/release-aktivieren.sh`,
+Abschnitt 15) ruft beides aus dem frisch entpackten Release auf, mit
+`APP_DIRECTORY` = Basisverzeichnis. Meldet `prisma migrate status` offene
+Migrationen, läuft vor `migrate deploy` zwingend:
 
 1. **`scripts/migration-preflight.ts`** — liest die offenen Migrationen, sammelt
    jede darin verlangte Eindeutigkeit ein und prüft **nur lesend**, ob die
@@ -206,7 +210,7 @@ offene Migration wird nichts gesichert — es ändert sich ja nichts.
 
 | | |
 |---|---|
-| **Ablageort** | `CLENARIS_BACKUP_DIR`, Vorgabe `<über der Anwendung>/backups/clenaris-db`. Bewusst **ausserhalb** des Anwendungsverzeichnisses: Dort räumen `git reset --hard` und die Aufbewahrung der Build-Sicherungen. Wer `/var/backups/clenaris/database` will, gibt dem Dienstbenutzer Schreibrecht und setzt die Variable. |
+| **Ablageort** | `CLENARIS_BACKUP_DIR`, Vorgabe `<über APP_DIRECTORY>/backups/clenaris-db` — bei der Aktivierung also neben dem Basisverzeichnis, etwa `/home/clenaris/backups/clenaris-db`. Bewusst **ausserhalb**: Im Basisverzeichnis ersetzt und löscht die Aktivierung Releases und Archive (Aufbewahrung), und eine Sicherung, die beim nächsten Aufräumen mit verschwindet, ist keine. Wer `/var/backups/clenaris/database` will, gibt dem Dienstbenutzer Schreibrecht und setzt die Variable. |
 | **Format** | PostgreSQL Custom Archive (`--format=custom`, Kompression 6) — wahlfrei wiederherstellbar, einzelne Tabellen möglich |
 | **Name** | `clenaris_<UTC-Zeitstempel>_<Commit>.dump`, etwa `clenaris_2026-09-20T21-19-18-860Z_4eb385f2b032.dump` |
 | **Rechte** | Verzeichnis `700`, Datei `600`. Kein Nginx-Zugriff, kein Abruf über die Anwendung, **kein** Upload als CI-Artefakt |
@@ -241,8 +245,10 @@ Muster entsprechen — `clenaris`, `clenaris_preview`, `clenaris_test` und jede
 Produktionsadresse können es nicht erfüllen.
 
 ```bash
-# Sicherung von Hand, etwa vor einem Eingriff:
-APP_DIRECTORY=/home/clenaris/app npx tsx scripts/db-backup.ts --grund manuell
+# Sicherung von Hand, etwa vor einem Eingriff — aus dem laufenden Release,
+# ohne npx (auf dem Server wird nichts nachgeladen):
+cd /home/clenaris/clenaris/current
+APP_DIRECTORY=/home/clenaris/clenaris node node_modules/tsx/dist/cli.mjs scripts/db-backup.ts --grund manuell
 
 # Den Rückweg proben (nicht gegen Production):
 npx tsx scripts/db-restore-verify.ts --datei <pfad.dump>
@@ -264,12 +270,14 @@ Erst prüfen, dann umschalten. Eine Migration wird **nicht** automatisch
 rückwärts ausgeführt — das bleibt eine fachliche Entscheidung.
 
 **Wenn etwas schiefgeht.** Scheitert die Sicherung oder die Vorprüfung, wird
-nicht migriert und nicht ausgeliefert; der laufende Stand bleibt unberührt.
-Scheitert die Migration selbst, bricht die Auslieferung ab, bevor gebaut oder
-neu geladen wird — die Anwendung läuft weiter auf dem alten Build, und die
-Sicherung von eben liegt bereit. Scheitert der Health Check, springt die
-Auslieferung auf den vorherigen Commit und den gesicherten Build zurück; das
-Schema bleibt, wie die Migration es hinterlassen hat.
+nicht migriert und nicht umgeschaltet; der laufende Stand bleibt unberührt
+(Ausgang 10). Scheitert die Migration selbst, bricht die Aktivierung vor dem
+Umschalten ab — die Anwendung läuft weiter aus dem bisherigen Release, und die
+Sicherung von eben liegt bereit; das Protokoll meldet, dass das Schema
+womöglich teilweise migriert ist. Bestätigt die neue Fassung nach dem
+Umschalten ihre Identität nicht, schaltet die Aktivierung auf das vorherige
+Release zurück und prüft es (Ausgang 20); das Schema bleibt, wie die
+Migration es hinterlassen hat. Gebaut wird in keinem dieser Fälle.
 
 > **`npm run db:seed:demo` gehört nie auf ein System, das in Betrieb geht.**
 > Er legt erfundene Kundschaft, erfundene Bewertungen und **Rechnungen** an.
@@ -297,18 +305,31 @@ Erlaubte Dateitypen und Grössen stehen in `src/lib/storage/supabase.ts` unter
 
 ## 3. Umgebungsvariablen
 
-Im eigenen Betrieb stehen sie in der `.env` des Servers (13.3); die von
-GitHub verwalteten führt die Auslieferung dort ein (14). Pflicht in
-Produktion:
+Im eigenen Betrieb stehen sie ausschliesslich in `shared/.env` auf dem Server
+(13.3); die Pipeline überträgt seit 2026-09-27 keine einzige davon (14). Die
+Produktionsvorprüfung jeder Aktivierung (`scripts/production-preflight.ts`)
+prüft genau diese Datei. Pflicht in Produktion — fehlt einer, hält die
+Aktivierung vor der Migration an:
 
 ```
-DATABASE_URL
-DIRECT_URL
-JWT_SECRET                 openssl rand -base64 48
-APP_URL                    https://<produktionsadresse>   (Laufzeit)
-CRON_SECRET                openssl rand -hex 32
-ENCRYPTION_KEY             openssl rand -hex 32   (genau 64 Hex-Zeichen)
+NODE_ENV                   production   (auch in shared/.env: die Vorprüfung läuft vor PM2 und liest die Datei)
+CLENARIS_UMGEBUNG          production   (oder staging)
+DATABASE_URL               keine Test-, Vorschau- oder Demodatenbank, kein Standardpasswort
+DIRECT_URL                 dito; hinter einem Pooler am Pooler vorbei
+JWT_SECRET                 openssl rand -base64 48   (mindestens 32 Zeichen)
+APP_URL                    https://<produktionsadresse>   (Laufzeit; keine IP, kein localhost)
+CRON_SECRET                openssl rand -hex 32   (mindestens 32 Zeichen)
+ENCRYPTION_KEY             openssl rand -hex 32   (genau 64 Hex-Zeichen, verschieden von JWT_SECRET)
+TRUSTED_PROXY_MODE         NONE | SINGLE_REVERSE_PROXY | CLOUDFLARE   (13.5.1)
+CLAMAV_HOST                Adresse von clamd — ohne Scanner endet jeder Upload in ERROR
 ```
+
+Die Vorprüfung weist ausserdem jeden Wert ab, der aus `.env.example`, der CI
+oder der Prüfreihe bekannt ist, und jeden gesetzten Demo- oder Prüfschalter
+(`ALLOW_DEMO_SEED`, `CLENARIS_TEST_CACHE_DIR`, `CLENARIS_LEGACY_FILES=allow`,
+`LEGACY_PUBLIC_TOKENS`, `CLENARIS_PRUEF_RELEASE_MANIFEST`). Bei
+`TRUSTED_PROXY_MODE=CLOUDFLARE` verlangt sie zusätzlich
+`CLENARIS_URSPRUNG_NUR_CLOUDFLARE=bestaetigt`.
 
 Beim **Bau** zusätzlich `NEXT_PUBLIC_SITE_URL` — die kanonische Domain der
 Website, für jede Umgebung dieselbe (`https://clenaris.qasemi.ch`). Sie ist
@@ -362,20 +383,26 @@ Daten gefahren zu haben, wäre schlimmer als sein Fehlen.
 Empfohlen:
 
 ```
-REDIS_URL                          Rate-Limits über Instanzgrenzen hinweg
+REDIS_URL                          Rate-Limits über Instanzgrenzen hinweg (ohne: Warnung der Vorprüfung)
 NEXT_PUBLIC_SUPABASE_URL
-NEXT_PUBLIC_SUPABASE_ANON_KEY
 SUPABASE_SERVICE_ROLE_KEY
 STRIPE_SECRET_KEY
 STRIPE_WEBHOOK_SECRET
-NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY
 RESEND_API_KEY
 EMAIL_FROM
 ANTHROPIC_API_KEY
 NEXT_PUBLIC_GOOGLE_MAPS_API_KEY
 GOOGLE_MAPS_SERVER_KEY
-TRUSTED_PROXY_MODE                 NONE | SINGLE_REVERSE_PROXY | CLOUDFLARE — siehe 13.5.1
+SECURITY_REPORT_TOKEN              Eingang der Sicherheitsberichte (ohne: geschlossen, Warnung)
+RELEASE_EXECUTOR_TOKEN             nur mit dem Release-Ausführer, beide zusammen
+RELEASE_EXECUTOR_SIGNING_KEY       und verschieden
+CLENARIS_BESUCHSMESSUNG            nur „an" schaltet die eigene Besuchsmessung ein; Vorgabe aus,
+                                   erst nach der Rechtsprüfung (TA-02) — die Vorprüfung warnt bei „an"
 ```
+
+`NEXT_PUBLIC_SUPABASE_ANON_KEY` und `NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY` liest
+der Code seit V2-1 nicht mehr (`docs/PRODUCTION_V2.md` §5); sie gehören nicht
+in eine neue `shared/.env`.
 
 Firmenangaben (`COMPANY_*`) sind nur der Ausgangszustand für den Seed — im
 laufenden Betrieb gilt der Datensatz `Organization`.
@@ -604,8 +631,10 @@ auf der sicheren Seite lassen. Ohne gesetzte Variable ist er aus.
 
 # Teil II — Automatische Auslieferung auf einen eigenen Server
 
-Ab hier geht es um den Weg ohne Vercel: Ein Push auf `main` baut, prüft und
-liefert aus, ohne dass jemand eingreift.
+Ab hier geht es um den Weg ohne Vercel: Ein Push auf `main` baut und prüft,
+packt das Artefakt aus genau diesem Bau und liefert es — sobald
+`DEPLOY_ENABLED` gesetzt ist — aus, ohne dass jemand eingreift. Der Server
+baut nie.
 
 ## 12. Architektur der Pipeline
 
@@ -616,26 +645,44 @@ Entwicklung
 GitHub Actions  ── .github/workflows/deploy.yml
     │
     ├─ Auftrag 1: Prüfung          läuft bei PR · Push auf main · Handstart
-    │     Linter · TypeScript · Geheimnis-Suche · Dokumentation
-    │     PostgreSQL 16 starten · Migrationen · Demodaten
-    │     Build · Anwendung starten · vollständige Testreihe · Browser
+    │     npm ci · verify:static (Linter, Typen, Geheimnisse, Doku, Testmatrix …) · Stückliste
+    │     PostgreSQL 16 · Migrationen · Datenbankschranken
+    │     Konfigurations-Seed · Build ohne Zwischenspeicher · Leistungsbudget
+    │     Release-Artefakt packen       (vor jedem Serverstart; im Pull Request nur Probe)
+    │     Demodaten · Testserver · verify:tests (HTTP und Browser)
+    │     Ablage release-<sha>          (nur Push oder Handstart auf main)
     │
-    └─ Auftrag 2: Auslieferung     NUR bei Push auf main oder Handstart,
-          │                        NIE aus einem Pull Request,
-          │                        und nur bei DEPLOY_ENABLED = true
-          │                        (needs: Auftrag 1 grün)
-          Secrets über SSH ablegen
-          scripts/deploy.sh auf dem Server
-             ├─ Sicherung von Build und .env
-             ├─ git fetch · git reset --hard origin/main
-             ├─ npm ci
-             ├─ prisma generate · Vorprüfung · DB-Sicherung · migrate deploy
-             ├─ npm run build
-             ├─ pm2 reload  (ohne Ausfallzeit)
-             ├─ Health Check lokal  ──┐ schlägt fehl → Rücksprung
-             └─ Aufräumen             │
-          Health Check von aussen  ───┘  prüft zusätzlich den Commit
+    ├─ Auftrag 2: Auslieferung     NUR Push oder Handstart auf main,
+    │     │                        NIE aus einem Pull Request,
+    │     │                        nur bei DEPLOY_ENABLED = true
+    │     │                        (needs: Auftrag 1 grün)
+    │     Artefakt dieses Laufs holen · Beilage prüfen (Commit, Lauf, main, auslieferbar, Summe)
+    │     läuft dieser Commit schon als anderer Bau? → nichts übertragen, Hinweis, grün
+    │     Archiv + .sha256 + release-aktivieren.sh AUS DEM ARCHIV → releases-eingang/
+    │     release-aktivieren.sh <archiv> --erwartet-sha256 <summe>     (Vertrag C3, Abschnitt 15)
+    │         Sperre · Summe · Manifest · frisch entpacken · Vorprüfung
+    │         · Sicherung + migrate deploy · Umschalten mit Identitätsprüfung
+    │         · bei Misserfolg zurück auf die vorherige Fassung (Ausgang 20)
+    │     Identität von aussen prüfen (version = Commit, buildId der Beilage, belegt)
+    │
+    └─ Auftrag 3: Reproduzierbarkeit   nur Handstart: zweimal bauen, scripts/bau-vergleich.ts
 ```
+
+**Zwei Wege in die Produktion.** Neben dem Auftrag `auslieferung` gibt es den
+Release-Ausführer (`deploy/v2/release-ausfuehrer.yml`, eine Vorlage, die erst
+nach `.github/workflows` kopiert wird): Er arbeitet freigegebene und
+terminierte Aufträge aus dem Update Center ab, holt das Artefakt eines grünen
+Push-Laufs auf `main` und ruft **dasselbe** Aktivierungsskript mit derselben
+erwarteten Summe auf (`docs/PRODUCTION_V2.md` §6). Beide bleiben (Entscheid
+der Betreiberin, 2026-09-30); eingeschaltet wird jeder mit seiner eigenen
+Variablen — `DEPLOY_ENABLED` bzw. `RELEASE_EXECUTOR_ENABLED`. **Der direkte
+Weg umgeht die Freigabe im Release Center:** Jeder grüne Push auf `main` wird
+ausgeliefert, sobald `DEPLOY_ENABLED` steht. Beide Aufträge teilen die
+Nebenläufigkeitsgruppe `clenaris-auslieferung-production`, damit nie zwei
+Aktivierungen zugleich laufen; GitHub hält je Gruppe aber höchstens einen
+wartenden Lauf und bricht einen älteren wartenden ab (`cancelled`, auf dem
+Server ist dann nichts geschehen). Beide Wege gleichzeitig einzuschalten ist
+deshalb nicht der vorgesehene Zustand.
 
 **Drei Auslöser, zwei davon dürfen liefern.** Ein Pull Request löst das volle
 Qualitätstor aus und nichts sonst — er ist eine Frage, keine Entscheidung.
@@ -661,97 +708,118 @@ ein vollständiges Schema, Demodaten und einen gestarteten Produktionsbuild. Ein
 Workflow, der bloss `npm test` aufriefe, scheiterte sofort mit „Kein Server
 erreichbar".
 
+**Warum gebaut wird, bevor Demodaten da sind, und gepackt, bevor ein Server
+läuft.** Die öffentliche Website wird beim Bau aus der Datenbank vorgerendert,
+und der gestartete Prüfserver schreibt neu gerenderte Seiten in `.next`
+zurück. Ein Bau gegen die Demodatenbank oder ein nach den Prüfreihen gepacktes
+Artefakt trüge erfundene Kundschaft und Bewertungen in die Produktion — das
+Packskript verweigert beides. Abgelegt wird das Artefakt trotzdem erst nach
+grünen Prüfreihen.
+
 **Beteiligte Dateien.**
 
 | Datei | Aufgabe |
 | --- | --- |
-| `.github/workflows/deploy.yml` | Prüfung und Auslieferung. Auslöser: `pull_request` gegen `main`, `push` auf `main`, `workflow_dispatch` |
-| `scripts/deploy.sh` | Auslieferung auf dem Server; idempotent, mit Rücksprung |
+| `.github/workflows/deploy.yml` | Prüfung, Packen, Ablage, Auslieferung, Reproduzierbarkeit. Auslöser: `pull_request` gegen `main`, `push` auf `main`, `workflow_dispatch` |
+| `scripts/release-artefakt.ts` | Packt das Artefakt aus dem geprüften Bau (Archiv, `.sha256`, Beilage; `RELEASE.json` Format 2) |
+| `deploy/v2/release-aktivieren.sh` | Aktiviert ein Artefakt auf dem Server (Vertrag C3); kommt mit dem Archiv |
+| `deploy/v2/release-ruecksprung.sh` | Rücksprung von Hand aus dem aufbewahrten Archiv (Abschnitt 16) |
+| `scripts/release-umschalten.ts` | Umschalten mit Identitätsprüfung — aufgerufen von Aktivierung und Rücksprung, nie von Hand |
+| `deploy/v2/release-ausfuehrer.yml` | Vorlage des zweiten Wegs (Release-Ausführer), nicht unter `.github/workflows` |
+| `scripts/deploy.sh` | **abgelöst** — bricht ab und nennt die beiden Skripte oben |
 | `scripts/ci-secret-scan.sh` | Sucht Zugangsdaten im verfolgten Bestand |
-| `ecosystem.config.js` | PM2: Cluster-Modus, zwei Instanzen, Reload ohne Ausfallzeit |
-| `src/app/api/health/route.ts` | `GET /api/health` — Betriebsbereitschaft samt Datenbank |
-| `.nvmrc` | Node-Hauptversion für CI und Server |
+| `ecosystem.config.js` | PM2: Cluster-Modus, Arbeitsverzeichnis ist das Release, Bindung an `127.0.0.1` |
+| `src/app/api/health/route.ts` | `GET /api/health` — Betriebsbereitschaft samt Datenbank und Identität der Instanz |
+| `.nvmrc` | Node-Hauptversion für CI und Server (22) |
 
 ## 13. Server einrichten (einmalig)
 
 Voraussetzungen: Debian oder Ubuntu, erreichbares PostgreSQL ≥ 16, eine Domain
 mit Zertifikat.
 
-**13.1 Dienstbenutzer.** Die Auslieferung läuft nie als `root`; `deploy.sh`
-bricht ab, wenn sie es täte. Ein eigener Benutzer begrenzt den Schaden eines
-kompromittierten Schlüssels auf das Anwendungsverzeichnis.
+**13.1 Dienstbenutzer.** Die Auslieferung läuft nie als `root`: `SERVER_USER`
+ist Pflicht, und der Workflow bricht ohne ihn vor der ersten Verbindung ab,
+statt auf `root` zurückzufallen. Ein eigener Benutzer begrenzt den Schaden
+eines kompromittierten Schlüssels auf das Anwendungsverzeichnis.
 
 ```bash
 sudo adduser --disabled-password --gecos "" clenaris
 sudo -iu clenaris
 ```
 
-**13.2 Node und PM2.**
+**13.2 Node, PM2 und Werkzeuge.** Node in **derselben Hauptversion wie die
+CI** (`.nvmrc`, heute 22): `node_modules` reist im Artefakt mit und enthält
+native Teile (Prisma); Aktivierung und Rücksprung verweigern eine abweichende
+Hauptversion. Dazu `flock` (util-linux), `sha256sum`, `tar` und `readlink`,
+die die Aktivierung voraussetzt.
 
 ```bash
-curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
-sudo apt-get install -y nodejs git curl
+curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
+sudo apt-get install -y nodejs curl util-linux coreutils tar
 sudo npm install -g pm2
 ```
 
-**13.3 Repository und Umgebung.**
+**13.3 Verzeichnisaufbau und Umgebung.**
 
-Das Repository ist **privat**. Ein anonymes `git clone` über HTTPS scheitert
-deshalb — der Server braucht einen eigenen Zugang, und zwar einen, der nur
-lesen darf und nur für diesen Server gilt:
+Der Server holt **nichts** aus Git: kein `git clone`, kein Deploy-Key, kein
+`npm ci`, kein Bau. Er bekommt das geprüfte Artefakt über SSH in einen Eingang
+und aktiviert es (Abschnitt 15). Die Sichtbarkeit des Repositorys ist damit
+für den Server ohne Belang (Entscheid der Inhaberschaft,
+`docs/GITHUB_GOVERNANCE.md` §3). Einmalig anzulegen ist nur die Basis — sie ist
+das Secret `APP_DIRECTORY` und wird auf dem Server zu `CLENARIS_BASIS`:
 
-```bash
-# Auf dem Server, als Dienstbenutzer: Schlüsselpaar nur für das Holen des Codes.
-ssh-keygen -t ed25519 -C "clenaris-deploy-key-v2" -f ~/.ssh/id_repo -N ""
-cat ~/.ssh/id_repo.pub
+```
+/home/clenaris/clenaris/              = APP_DIRECTORY = CLENARIS_BASIS
+  shared/.env                         Geheimnisse und Konfiguration, Modus 600, nie im Artefakt
+  shared/logs/                        Protokolle über Releases hinweg (legt die Aktivierung an)
+  releases/<commit>/                  ein entpacktes Artefakt je Commit (legt die Aktivierung an)
+  current -> releases/<commit>        aktive Fassung
+  archiv/clenaris-<sha12>.tar.gz      aktivierte Archive samt .sha256, für den Rücksprung
+  releases-eingang/                   Übergabe aus der Pipeline, nach dem Entpacken geleert
+  aktivierungen.jsonl                 eine Zeile je Aktivierung und Rücksprung
+  .release.lock                       gemeinsame Sperre
+/home/clenaris/backups/clenaris-db/   Datenbanksicherungen (Vorgabe neben der Basis)
 ```
 
-Den öffentlichen Teil in GitHub unter *Settings → Deploy keys → Add deploy
-key* eintragen, **ohne** „Allow write access". Ein Deploy-Key gilt für genau
-ein Repository; ein persönliches Zugriffstoken gälte für alle und wäre auf
-einem Server der falsche Schlüssel.
-
 ```bash
-cat >> ~/.ssh/config <<'EOF'
-Host github-clenaris
-  HostName github.com
-  User git
-  IdentityFile ~/.ssh/id_repo
-  IdentitiesOnly yes
-EOF
-chmod 600 ~/.ssh/config
-
-cd ~ && git clone github-clenaris:javadqasemi/Clenaris.git app && cd app
-cp .env.example .env && chmod 600 .env
+mkdir -p ~/clenaris/shared && install -m 600 /dev/null ~/clenaris/shared/.env
 ```
 
-`IdentitiesOnly yes` ist kein Zierrat: Ohne die Zeile bietet `ssh` der
-Gegenstelle der Reihe nach jeden Schlüssel an, den der Agent kennt — und
-GitHub nimmt den ersten, der passt. Welches Repository der Server dann
-erreicht, hängt davon ab, welcher Schlüssel zuerst dran war.
+`shared/.env` jetzt vollständig ausfüllen — **alle** Werte aus Abschnitt 3.
+Seit dem Notfallauftrag vom 2026-09-27 reisen **keine** Anwendungsgeheimnisse
+mehr durch die Pipeline; die Datei auf dem Server ist die einzige Quelle, und
+die Produktionsvorprüfung jeder Aktivierung prüft genau die Werte, die die
+Anwendung lesen wird. Was hier fehlt, hält die erste Aktivierung an.
 
-`deploy.sh` ruft später `git fetch origin main` auf und benutzt genau diesen
-Weg; ein Wechsel der Adresse gehört deshalb in `git remote set-url`, nicht in
-den Workflow.
-
-`.env` jetzt vollständig ausfüllen — **alle** Werte aus Abschnitt 3, nicht nur
-die aus den GitHub Secrets. Die Pipeline führt später nur die von GitHub
-verwalteten Schlüssel ein und lässt den Rest unangetastet; was hier fehlt,
-fehlt dauerhaft.
+Die erste Aktivierung startet PM2 aus dem Release (ohne vorherige Fassung
+wird gestartet statt neu geladen) und sichert die Prozessliste mit `pm2 save`
+erst nach bestätigter Identität. Danach einmalig:
 
 ```bash
-npm ci
-npm run db:deploy
-SEED_ADMIN_PASSWORD="$(openssl rand -base64 24)" \
-SEED_SUPERADMIN_PASSWORD="$(openssl rand -base64 24)" npm run db:seed
-npm run build
-pm2 start ecosystem.config.js --env production
-pm2 save
 pm2 startup        # den ausgegebenen Befehl als root ausführen
 ```
 
-Ohne `pm2 startup` und `pm2 save` steht die Anwendung nach einem Neustart des
-Servers still — und niemand merkt es, bis die erste Anfrage kommt.
+Ohne `pm2 startup` steht die Anwendung nach einem Neustart des Servers still —
+und niemand merkt es, bis die erste Anfrage kommt.
+
+> **Erstinstallation auf einer leeren Datenbank — nicht geklärt.** Die
+> Produktionsvorprüfung, die jede Aktivierung vor der Migration ausführt
+> (`--phase vor-migration`), liest den Migrationsstand und die Konten und
+> verlangt eine abgeschlossene Ersteinrichtung (ein Konto der
+> Systemverantwortung, `scripts/create-admin.ts`). Gegen eine Datenbank ohne
+> Schema ist das nicht bestehbar, und `create-admin.ts` braucht das Schema.
+> Der geplante Weg für V2 ist die geprüfte Übernahme der bestehenden Datenbank
+> (`docs/NOTFALL_WIEDERHERSTELLUNG.md` §17) — dort sind Schema und Konten da.
+> Für eine wirklich leere Datenbank ist die Reihenfolge auf dem Probeserver
+> festzulegen (V2-3, `docs/PENDENZEN.md` P2H-76); bis dahin nichts von Hand
+> „vorziehen", was die Aktivierung sonst mit Sicherung und Vorprüfung täte.
+
+Das erste Konto der Systemverantwortung entsteht über `scripts/create-admin.ts`
+aus dem aktiven Release, nie über Startpasswörter in der Umgebung
+(`docs/NOTFALL_WIEDERHERSTELLUNG.md` §3 und §16). Ein Seed der
+Betriebskonfiguration (`prisma/seed.ts`) läuft nie automatisch; ob und wann er
+auf einer neuen Produktionsdatenbank läuft, ist ein bewusster Handgriff — der
+Demo-Seed nie.
 
 **13.4 Zugangsschlüssel und Wirtsschlüssel.** Auf dem Arbeitsplatz erzeugen, den
 öffentlichen Teil auf den Server legen, den privaten als GitHub Secret:
@@ -1019,8 +1087,13 @@ gilt: **setzen, nicht anhängen.** `$proxy_add_x_forwarded_for` hängt den
 serverseitigen Wert an einen vom Client gelieferten an, und die Anwendung liest
 den ersten Eintrag — also den des Angreifers.
 
-**Schritt 4 — Modus umstellen.** Repository-Variable
-`TRUSTED_PROXY_MODE=CLOUDFLARE` setzen (14.2) und ausliefern.
+**Schritt 4 — Modus umstellen.** In `shared/.env` auf dem Server
+`TRUSTED_PROXY_MODE=CLOUDFLARE` **und** `CLENARIS_URSPRUNG_NUR_CLOUDFLARE=bestaetigt`
+setzen und neu laden (oder mit der nächsten Aktivierung). Die
+Produktionsvorprüfung weist `CLOUDFLARE` ohne diese Bestätigung ab. Bis
+2026-09-27 war `TRUSTED_PROXY_MODE` eine Repository-Variable, die die
+Auslieferung in die `.env` übertrug; seit dem Notfallauftrag überträgt die
+Pipeline keine Anwendungskonfiguration mehr (Abschnitt 14).
 
 **Schritt 5 — nachmessen, nicht annehmen.** Der direkte Zugriff muss danach
 ins Leere laufen:
@@ -1070,15 +1143,15 @@ Internet → 443 → Reverse Proxy → 127.0.0.1:3000 (Next.js)
 Seit Gate 4C bindet `ecosystem.config.js` Next.js nur an Loopback
 (`args: 'start -H 127.0.0.1'`) — örtlich geprüft: Der Port antwortet auf
 `127.0.0.1`, auf der Netzadresse der Maschine wird die Verbindung verworfen.
-Nginx (`proxy_pass http://127.0.0.1:3000`) und der Health-Check in
-`scripts/deploy.sh` (`http://127.0.0.1:<port>/api/health`) sprechen ohnehin
-Loopback an; für sie ändert sich nichts. Das ersetzt keine Host-Firewall,
+Nginx (`proxy_pass http://127.0.0.1:3000`) und die Identitätsprüfung der
+Aktivierung (`http://127.0.0.1:<port>/api/health`, `scripts/release/umschaltung.ts`)
+sprechen ohnehin Loopback an; für sie ändert sich nichts. Das ersetzt keine Host-Firewall,
 macht aber den offenen Port zur Ausnahme, die jemand bewusst herstellen
 müsste. Was auf dem Server *heute* läuft, ist damit nicht bewiesen — siehe
 11.1: Vor dem Produktivgang von aussen prüfen, dass `:3000` nicht
 erreichbar ist, und erst danach den Proxy-Modus setzen.
 
-**13.5.2 Der Unterzeichnungsbereich.** `/signieren` und `/api/public/signatures`
+**13.5.3 Der Unterzeichnungsbereich.** `/signieren` und `/api/public/signatures`
 brauchen keinen eigenen Proxy-Block. Zwei Dinge dürfen dort aber nicht
 passieren: Der Proxy darf `Referrer-Policy` und `Cache-Control` der Anwendung
 nicht überschreiben (der Bereich setzt `no-referrer` und `no-store`), und ein
@@ -1091,9 +1164,13 @@ Zugriffsprotokoll.
 auf Vercel. Im eigenen Betrieb übernimmt das die Crontab des Dienstbenutzers:
 
 ```cron
-5  * * * * curl -fsS -m 300 -H "Authorization: Bearer $CRON_SECRET" https://<domain>/api/cron/hourly >> ~/app/logs/cron.log 2>&1
-0  5 * * * curl -fsS -m 600 -H "Authorization: Bearer $CRON_SECRET" https://<domain>/api/cron/daily  >> ~/app/logs/cron.log 2>&1
+5  * * * * curl -fsS -m 300 -H "Authorization: Bearer $CRON_SECRET" https://<domain>/api/cron/hourly >> ~/clenaris/shared/logs/cron.log 2>&1
+0  5 * * * curl -fsS -m 600 -H "Authorization: Bearer $CRON_SECRET" https://<domain>/api/cron/daily  >> ~/clenaris/shared/logs/cron.log 2>&1
 ```
+
+Der Stundenlauf schliesst seit 2026-09-30 auch verwaiste Aufträge des
+Release-Ausführers ab (über zwei Stunden in DEPLOYING, entschieden nach der
+Identität der Instanz).
 
 Ohne diesen Schritt bleiben Terminerinnerungen, Mahnläufe, Serienbuchungen und
 der nächtliche Führungslauf aus — ohne jede Fehlermeldung.
@@ -1103,25 +1180,37 @@ der nächtliche Führungslauf aus — ohne jede Fehlermeldung.
 *Settings → Secrets and variables → Actions*, oder in der Umgebung
 `production`. Im Repository steht kein einziger Zugangswert.
 
+**Seit dem Notfallauftrag vom 2026-09-27 kennt die Pipeline nur noch, was sie
+zum Verbinden braucht.** Die Anwendungsgeheimnisse (`DATABASE_URL`,
+`DIRECT_URL`, `JWT_SECRET`, `CRON_SECRET`, `ENCRYPTION_KEY`) und die
+Konfiguration (`TRUSTED_PROXY_MODE`, `APP_URL` …) stehen ausschliesslich in
+`shared/.env` auf dem Server (13.3); der Workflow liest sie nicht und
+überträgt nichts in die `.env`. Jeder Ort, der ein Geheimnis kennt, ist ein
+Ort, an dem es rotiert werden muss, wenn etwas passiert. Die Zeilen unten, die
+solche Werte noch nennen, sind deshalb als **nicht mehr gelesen** markiert —
+diese Secrets gehören gelöscht (`docs/NOTFALL_WIEDERHERSTELLUNG.md` §3).
+
 | Secret | Pflicht | Bedeutung |
 | --- | --- | --- |
 | `SERVER_HOST` | ja | Adresse des Servers. **Quelle der Wahrheit** — die Adresse steht nirgends im Repository, und das ist Absicht: Sie darf sich ändern lassen, ohne dass jemand Code anfasst. Genau deshalb kann aber auch niemand ausser Ihnen prüfen, wohin sie zeigt. Für V2 gilt: **erst die Adresse des neuen Servers eintragen, dann `DEPLOY_ENABLED` setzen** (14.2), nie umgekehrt. Eine Adresse aus dem Altbestand wird nicht weiterverwendet — auch dann nicht, wenn sie „ja noch funktioniert" |
 | `SERVER_USER` | ja | Dienstbenutzer, etwa `clenaris`. Anders als `SERVER_HOST` und `SERVER_SSH_KEY` **ungeprüft**: Fehlt er, verbindet der Lauf als `@host` und scheitert erst beim Aushandeln, mit einer Meldung, die aufs Netz zeigt statt auf die Konfiguration |
 | `SERVER_SSH_KEY` | ja | Privater Schlüssel, vollständig samt Kopf- und Fusszeile |
-| `APP_DIRECTORY` | ja | Absoluter Pfad, etwa `/home/clenaris/app` |
-| `DATABASE_URL` | ja | Verbindung der Anwendung |
-| `JWT_SECRET` | ja | Mindestens 32 Zeichen. **Im laufenden Betrieb nie ändern** — ein neuer Wert meldet alle Sitzungen ab, und ohne eigenen `ENCRYPTION_KEY` hängt die Feldverschlüsselung daran (siehe dort). Für Production V2 gilt das Gegenteil: Der Wert wird **neu erzeugt**, weil ein Signaturschlüssel aus einer Umgebung, die als kompromittiert gilt, kein Signaturschlüssel mehr ist |
+| `APP_DIRECTORY` | ja | Basisverzeichnis auf dem Server, etwa `/home/clenaris/clenaris` — wird dort zu `CLENARIS_BASIS` (13.3). Ein absoluter Pfad nur aus Buchstaben, Ziffern, `.`, `_`, `/`, `-`; sonst bricht der Auftrag ab, weil der Wert Teil eines Befehls und eines `scp`-Ziels wird |
+| ~~`DATABASE_URL`~~ | **nicht mehr gelesen** | gehört in `shared/.env`; Secret löschen |
+| ~~`JWT_SECRET`~~ | **nicht mehr gelesen** | gehört in `shared/.env`; Secret löschen. Für den Wert selbst gilt weiter: **im laufenden Betrieb nie ändern** — ein neuer Wert meldet alle Sitzungen ab, und ohne eigenen `ENCRYPTION_KEY` hängt die Feldverschlüsselung daran. Für Production V2 wird er **neu erzeugt**, weil ein Signaturschlüssel aus einer Umgebung, die als kompromittiert gilt, kein Signaturschlüssel mehr ist |
 | `SERVER_PORT` | nein | SSH-Port, Vorgabe 22 |
 | `SERVER_SSH_KNOWN_HOSTS` | **ja** | Gepinnter Wirtsschlüssel. Fehlt er, **bricht die Auslieferung ab** — es gibt keinen Rückfall (13.4), und die Gestalt des Werts steht in 13.4a. Der Schlüssel des V2-Servers wird über die **Anbieterkonsole** gelesen, nicht über `ssh-keyscan`: Letzteres sagt nur, was der Gegenüber gerade anbietet, nicht ob es der richtige Gegenüber ist. Ein Eintrag aus dem Altbestand pinnt eine Maschine, die nicht mehr beliefert wird — im schlimmsten Fall eine, die inzwischen jemand anderem gehört |
-| `DIRECT_URL` | **bei Pooling ja** | Direktverbindung für die Prisma-Kommandozeile (`migrate deploy`). **Stand seit Prisma 7 (2026-09-29):** `schema.prisma` deklariert keine Adresse mehr; `prisma.config.ts` nimmt `DIRECT_URL`, sonst `DATABASE_URL`. Der frühere Abbruch mit P1012 bei fehlender Variable (nachgemessen 2026-09-21 unter Prisma 6) gibt es damit nicht mehr — `prisma generate` und der Bau brauchen keine Adresse. Pflicht bleibt sie, wo `DATABASE_URL` auf einen Pooler im Transaktionsmodus zeigt, denn `migrate` verträgt dessen Sperrverhalten nicht. Der Workflow überträgt die Variable nur, wenn das Secret nicht leer ist |
+| ~~`DIRECT_URL`~~ | **nicht mehr gelesen** | gehört in `shared/.env` — dort **Pflicht** (die Produktionsvorprüfung verlangt sie). **Stand seit Prisma 7 (2026-09-29):** `schema.prisma` deklariert keine Adresse mehr; `prisma.config.ts` nimmt `DIRECT_URL`, sonst `DATABASE_URL`, und `prisma generate` und der Bau brauchen keine Adresse. Hinter einem Pooler im Transaktionsmodus muss sie am Pooler vorbeiführen, denn `migrate` verträgt dessen Sperrverhalten nicht |
 | `API_URL` | **abgelöst** | Wandert nach *Variables* (14.2): Die öffentliche Adresse ist Konfiguration, kein Geheimnis. Der Workflow liest `vars.API_URL` und fällt für den Übergang auf das Secret zurück; sobald die Variable steht, wird das Secret gelöscht |
-| `ENCRYPTION_KEY` | empfohlen | Schlüssel der Feldverschlüsselung (64 Hex). Ohne ihn leitet die Anwendung ihn aus `JWT_SECRET` ab — siehe Abschnitt 3 |
-| `CRON_SECRET` | empfohlen | Für die planmässigen Aufgaben |
+| ~~`ENCRYPTION_KEY`~~ | **nicht mehr gelesen** | gehört in `shared/.env` — dort Pflicht (64 Hex, verschieden von `JWT_SECRET`) |
+| ~~`CRON_SECRET`~~ | **nicht mehr gelesen** | gehört in `shared/.env` — dort Pflicht (mindestens 32 Zeichen) |
+| `RELEASE_EXECUTOR_TOKEN`, `RELEASE_EXECUTOR_SIGNING_KEY` | nur für den Release-Ausführer | in der Umgebung `production`, je mindestens 32 Zeichen und verschieden; dieselben Werte in `shared/.env` der Instanz. Ohne sie bleibt die Ausführerschnittstelle zu (401/503) |
 
-**Bestehende Werte nicht ohne Not neu erzeugen.** Für vier Secrets ist ein
-frischer Wert keine Hygienemassnahme, sondern ein Eingriff mit Folgen:
+**Bestehende Werte nicht ohne Not neu erzeugen.** Für vier Werte in
+`shared/.env` ist ein frischer Wert keine Hygienemassnahme, sondern ein
+Eingriff mit Folgen:
 
-| Secret | Was ein neuer Wert anrichtet |
+| Wert | Was ein neuer Wert anrichtet |
 |---|---|
 | `DATABASE_URL` | zeigt auf eine andere Datenbank oder scheitert. Nur ändern, wenn sich Zugangsdaten oder Ziel tatsächlich geändert haben |
 | `JWT_SECRET` | alle bestehenden Sitzungen sind sofort ungültig — und alle Verschlüsselungswerte, falls kein eigener `ENCRYPTION_KEY` gesetzt ist |
@@ -1138,9 +1227,10 @@ stehen.
   `JWT_SECRET`. Ein zusätzliches `NEXTAUTH_SECRET` wäre eine Variable, die
   nichts tut, und genau solche Variablen verwirren später bei der Fehlersuche.
 - `API_URL` — die Anwendung kennt keine getrennte Schnittstellenadresse, weil
-  Oberfläche und Schnittstelle unter derselben Adresse laufen. Das Secret
-  existiert trotzdem und wird auf `APP_URL` abgebildet (und für den Übergang
-  zusätzlich auf das ältere `NEXT_PUBLIC_APP_URL`).
+  Oberfläche und Schnittstelle unter derselben Adresse laufen. Bis 2026-09-27
+  wurde der Wert auf dem Server auf `APP_URL` abgebildet; heute dient er nur
+  noch der Pipeline: für die Frage, ob der Commit schon als anderer Bau läuft,
+  und für die Identitätsprüfung von aussen. `APP_URL` steht in `shared/.env`.
 
 **14.2 Repository-Variablen — Konfiguration, keine Geheimnisse.**
 
@@ -1152,24 +1242,25 @@ dass man im Protokoll sieht, was gesetzt war.
 
 | Variable | Pflicht | Bedeutung |
 | --- | --- | --- |
-| `DEPLOY_ENABLED` | **Schalter** | `true` schaltet den Auslieferungsauftrag ein. Jeder andere Wert und jede nicht gesetzte Variable lassen ihn **übersprungen** — fail-closed. Das Qualitätstor läuft davon unberührt bei jedem Push, jedem Pull Request und jedem Handstart. **Erst setzen, wenn der V2-Server steht und `SERVER_HOST`, `SERVER_SSH_KEY` und `SERVER_SSH_KNOWN_HOSTS` auf ihn zeigen.** Ohne diesen Schalter wäre der erste grüne Lauf zugleich eine Auslieferung an das Ziel, das die bestehenden Secrets gerade nennen — und niemand hätte sie ausgelöst |
-| `API_URL` | empfohlen | Öffentliche Adresse der Anwendung, etwa `https://<domain>`. Wird auf dem Server zu `APP_URL` (und `NEXT_PUBLIC_APP_URL` als Rückfall) und trägt den Health Check von aussen. Steht sie nicht, fällt der Workflow für den Übergang auf das gleichnamige Secret zurück; fehlt beides, entfällt die Prüfung von aussen mit einer Warnung |
-| `TRUSTED_PROXY_MODE` | nein, aber empfohlen | `NONE` \| `SINGLE_REVERSE_PROXY` \| `CLOUDFLARE` — welcher Kopfzeile die Anwendung die Client-Adresse glaubt (13.5.1). **Ist sie nicht gesetzt, überträgt die Auslieferung nichts und die `.env` des Servers behält ihren bisherigen Wert.** Das ist Absicht: Eine Auslieferung soll die Vertrauensannahme nicht heimlich umstellen. Ein *unbekannter* Wert bricht die Auslieferung dagegen ab, statt stillschweigend auf `NONE` zu fallen |
+| `DEPLOY_ENABLED` | **Schalter** (direkter Weg) | `true` schaltet den Auslieferungsauftrag ein. Jeder andere Wert und jede nicht gesetzte Variable lassen ihn **übersprungen** — fail-closed. Das Qualitätstor läuft davon unberührt bei jedem Push, jedem Pull Request und jedem Handstart. **Erst setzen, wenn der V2-Server steht und `SERVER_HOST`, `SERVER_SSH_KEY` und `SERVER_SSH_KNOWN_HOSTS` auf ihn zeigen.** Ohne diesen Schalter wäre der erste grüne Lauf zugleich eine Auslieferung an das Ziel, das die bestehenden Secrets gerade nennen — und niemand hätte sie ausgelöst |
+| `RELEASE_EXECUTOR_ENABLED` | **Schalter** (nur Release-Ausführer) | `true` schaltet den Release-Ausführer ein, sobald seine Vorlage unter `.github/workflows` liegt; sonst fail-closed übersprungen. Dieselbe Regel wie bei `DEPLOY_ENABLED`: erst setzen, wenn der V2-Server steht. Beide Schalter zugleich ist nicht der vorgesehene Zustand (Abschnitt 12) |
+| `CLENARIS_URL` | nur Release-Ausführer | Herkunft der Instanz, deren Ausführerschnittstelle der Ausführer anspricht |
+| `API_URL` | empfohlen | Öffentliche Adresse der Anwendung, etwa `https://<domain>`. Trägt die Frage „läuft dieser Commit schon als anderer Bau?" und die Identitätsprüfung von aussen (`version`, `buildId`, `identitaet`). Steht sie nicht, fällt der Workflow für den Übergang auf das gleichnamige Secret zurück; fehlt beides, entfällt die Prüfung von aussen mit einer Warnung — bindend ist die Identitätsprüfung auf dem Server |
+| ~~`TRUSTED_PROXY_MODE`~~ | **nicht mehr gelesen** | gehört in `shared/.env` und ist dort **Pflicht**: Die Produktionsvorprüfung bricht ab, wenn der Wert fehlt oder unbekannt ist, und weist `CLOUDFLARE` ohne `CLENARIS_URSPRUNG_NUR_CLOUDFLARE=bestaetigt` ab. Bis 2026-09-27 übertrug die Auslieferung die Variable in die `.env` |
 
 **Warum die Prüfung auf den unbekannten Wert wichtiger ist als die Variable
 selbst.** `src/lib/http/client-ip.ts` fällt bei jedem nicht erkannten Wert auf
 `NONE` zurück. Im Anfragepfad ist das genau richtig — lieber keine Adresse als
-eine erfundene. Als Auslieferungsverhalten wäre es eine Falle: Aus `CLOUDFARE`
+eine erfundene. Als Betriebszustand wäre es eine Falle: Aus `CLOUDFARE`
 würde lautlos „kein Proxy bekannt", alle Aufrufer teilten sich ab sofort einen
-Rate-Limit-Schlüssel, und niemand erführe davon. Der Workflow lässt deshalb nur
-die drei Namen durch.
+Rate-Limit-Schlüssel, und niemand erführe davon. Die Produktionsvorprüfung
+lässt deshalb nur die drei Namen durch.
 
-**Nur diese Werte verwaltet GitHub.** Stripe, Resend, Twilio, Supabase, Maps
-und die Firmenangaben bleiben in der `.env` auf dem Server. `deploy.sh` führt
-die Werte ein, statt die Datei zu ersetzen — ein Ersetzen löschte alles übrige,
-und die Anwendung liefe danach ohne E-Mail-Versand und ohne Zahlungen weiter,
-ohne dass irgendetwas fehlschlüge. Ein stiller Teilausfall ist schlimmer als
-ein lauter Abbruch.
+**GitHub verwaltet nur die Verbindung.** Alle Anwendungswerte — Datenbank,
+Schlüssel, Stripe, Resend, Twilio, Supabase, Maps, Firmenangaben, Proxy-Modus,
+Besuchsmessung — stehen in `shared/.env` auf dem Server, und die Pipeline
+fasst diese Datei nicht an. Bis 2026-09-27 führte `deploy.sh` einzelne Werte
+aus den Secrets ein; das ist mit dem Artefaktweg entfallen.
 
 ## 15. Ablauf einer Auslieferung
 
@@ -1194,46 +1285,102 @@ prüft den *zusammengeführten* Stand, wie GitHub ihn erzeugt; der Lauf auf
 `main` prüft, was tatsächlich dort gelandet ist. Zwischen beiden kann ein
 zweiter Pull Request liegen.
 
-**Von Hand auslösen.** *Actions → Auslieferung → Run workflow*. Zwei Schalter:
-`seed` führt zusätzlich den Konfigurations-Seed aus (Firma, Leistungen, Preise
-— niemals Demodaten), `skip_rollback` lässt einen Fehlschlag zur Analyse
-stehen.
+**Von Hand auslösen.** *Actions → Auslieferung → Run workflow* auf `main` —
+ohne Eingaben (die früheren Schalter `seed` und `skip_rollback` gehörten zu
+`scripts/deploy.sh` und sind seit 2026-09-27 entfallen; eine Aktivierung
+seedet nie und springt bei nicht bestätigter Identität immer zurück). Ein
+Handstart baut denselben Commit ein zweites Mal, mit neuer Build-ID; läuft
+der Commit schon, wird nichts übertragen und der Auftrag endet grün mit einem
+Hinweis (Frage über `API_URL`; ohne sie meldet die Aktivierung den Fall mit
+Ausgang 10). Nur ein Handstart löst auch den Auftrag `reproduzierbarkeit` aus.
 
-**Direkt auf dem Server**, wenn GitHub einmal nicht erreichbar ist:
+**Direkt auf dem Server ausliefern gibt es nicht mehr.** `scripts/deploy.sh`
+bricht ab. Wer ohne GitHub aktivieren muss, braucht ein in der CI gebautes
+Artefakt samt Summe aus der Zusammenfassung des Laufs und ruft die
+Aktivierung von Hand auf:
 
 ```bash
-ssh clenaris@<server>
-cd ~/app && bash scripts/deploy.sh
+CLENARIS_BASIS=/home/clenaris/clenaris \
+  bash <eingang>/release-aktivieren.sh <eingang>/clenaris-<sha12>.tar.gz --erwartet-sha256 <64 Hex>
 ```
 
-Ohne `.env.incoming` bleibt die `.env` unberührt — deshalb ist dieser Aufruf
-gefahrlos.
+Das Skript kommt aus dem Archiv selbst (`tar -xzOf <archiv>
+deploy/v2/release-aktivieren.sh`), nie aus `current/`.
 
-**Ohne Ausfallzeit.** `pm2 reload` startet die neuen Arbeiter und beendet die
-alten erst, wenn die neuen auf dem Port hören. Angemeldete Benutzer bleiben
-angemeldet, weil die Sitzung in einem signierten Token im Cookie steckt und
-nicht im Arbeitsspeicher des Prozesses — solange `JWT_SECRET` gleich bleibt,
-ist jeder Arbeiter für jede Sitzung zuständig.
+**Die Aktivierung (Vertrag C3)** prüft, entpackt und schaltet in dieser
+Reihenfolge: Sperre `${BASIS}/.release.lock` → Summe (erwartet = gemessen =
+`.sha256`, an einer privaten Kopie) → Manifest (Format 2, auslieferbar, Node-
+Hauptversion) → frisch entpacken, `BUILD_ID` = Manifest → Korrekturen RB-001
+und RB-002 → Produktionsvorprüfung vor der Migration → bei offenen Migrationen
+Vorprüfung der Eindeutigkeiten, geprüfte Sicherung, `migrate deploy` →
+Vorprüfung ohne offene Migration → Umschalten mit Identitätsprüfung (drei
+bestätigende Antworten in Folge: `version` = Commit, `buildId` = Manifest,
+`identitaet` = `belegt`) → Archiv nach `archiv/` → Aufbewahrung. Einzelheiten
+und Begründungen: `docs/PRODUCTION_V2.md` §2.
 
-**Migrationen** laufen nur, wenn `prisma migrate status` welche findet.
+| Ausgang | Zustand | Was zu tun ist |
+| --- | --- | --- |
+| 0 | `AKTIV` | nichts — die neue Fassung läuft und belegt ihre Identität |
+| 10 | `NICHT_UMGESCHALTET` | Grund im Protokoll; `current` ist unverändert. **Migrationen können angewandt sein** — das Protokoll sagt es (`migration` in `aktivierungen.jsonl`) |
+| 11 | `GESPERRT` | eine andere Aktivierung oder ein Rücksprung läuft; abwarten, erneut auslösen. Die Sperre gibt `flock` mit dem Prozess frei — keine Datei löschen |
+| 20 | `ZURUECK` | die neue Fassung hat ihre Identität nicht bestätigt; die vorherige läuft **nachweislich** wieder. Nichts ausgeliefert; Ursache in `pm2 logs` und `/api/health` der neuen Fassung suchen |
+| 30 | `UNKLAR` | sofort von Hand prüfen: `readlink -f current`, `pm2 ls`, `/api/health`; notfalls Rücksprung (Abschnitt 16) |
 
-**Protokolle** liegen unter `logs/deployment/<zeitstempel>.log` (30 Tage) und
-`logs/pm2/`. Beide sind in `.gitignore`.
+Die letzte Zeile der Ausgabe ist immer `ERGEBNIS {"code":…,"zustand":"…","commit":"…"}`;
+der Workflow deutet den Ausgang einzeln und meldet ihn mit Klartext.
+
+**Ohne Ausfallzeit, soweit PM2 mitspielt.** PM2 lädt die Anwendung aus dem
+neuen Release-Verzeichnis neu; übernimmt eine PM2-Fassung das neue
+Arbeitsverzeichnis beim Neuladen nicht, wird die Anwendung aus dem Release neu
+gestartet — eine kurze Unterbrechung statt einer stillen alten Fassung (auf
+einem echten Server noch nicht beobachtet, `docs/PENDENZEN.md` P2H-20).
+Angemeldete Benutzer bleiben angemeldet, weil die Sitzung in einem signierten
+Token im Cookie steckt und nicht im Arbeitsspeicher des Prozesses — solange
+`JWT_SECRET` gleich bleibt, ist jeder Arbeiter für jede Sitzung zuständig.
+
+**Migrationen** laufen nur, wenn `prisma migrate status` welche findet — und
+nur nach der Vorprüfung und einer geprüften Sicherung (Abschnitt 1).
+
+**Protokolle:** der Lauf in GitHub Actions (mit Prüfsumme und Kurzfassung der
+Beilage in der Zusammenfassung), `${BASIS}/aktivierungen.jsonl` (eine Zeile je
+Aktivierung und Rücksprung: Zeit, Art, von, nach, Code, Zustand, Migration)
+und `shared/logs/` für PM2.
 
 ## 16. Rücksprung
 
-Er löst automatisch aus, wenn `npm ci`, der Build, die Migration, der Reload
-oder der Health Check fehlschlagen:
+Bis 2026-09-27 sprang `scripts/deploy.sh` per `git reset --hard`, `npm ci` und
+Neubau zurück — auf dem Server, ungeprüft. Heute gibt es zwei Rücksprünge,
+und keiner baut etwas:
 
-1. `git reset --hard` auf den vorherigen Commit
-2. `npm ci` (die Abhängigkeiten können sich geändert haben)
-3. gesicherten Build aus `.deploy/backups/<zeitstempel>/.next` zurückspielen
-4. gesicherte `.env` zurückspielen
-5. `pm2 reload`
-6. Health Check erneut — bestätigt, dass der alte Stand wieder antwortet
+**Automatisch, während einer Aktivierung.** Bestätigt die neue Fassung ihre
+Identität nicht (drei Antworten in Folge mit Commit, Build-ID und `belegt`),
+schaltet die Aktivierung `current` auf die vorherige Fassung zurück und prüft
+**diese** genauso. Gelingt das: Ausgang 20 (`ZURUECK`); sonst 30 (`UNKLAR`).
+Ein Rücksprung, der nur behauptet wird, ist keiner.
 
-Drei Sicherungen werden aufbewahrt. Wer weiter zurück muss, nimmt Git und baut
-neu.
+**Von Hand, später** — wenn sich ein Fehler erst nach Stunden zeigt:
+
+```bash
+CLENARIS_BASIS=/home/clenaris/clenaris \
+  bash ~/clenaris/current/deploy/v2/release-ruecksprung.sh \
+    --auf <Commit, 40 Hex> --erwartet-sha256 <64 Hex> [--port 3000] [--schema-bewusst]
+```
+
+1. Die Hülle hält dieselbe Sperre wie die Aktivierung (besetzt → 11) und
+   startet `scripts/release-ruecksprung.ts` aus dem **laufenden** Release.
+2. Zurück geht es nur auf ein Archiv unter `${BASIS}/archiv/`: Seine Summe
+   muss der erwarteten **und** der `.sha256` daneben entsprechen, sein
+   `RELEASE.json` genau `--auf` nennen, seine Node-Hauptversion der des
+   Servers. Die erwartete Summe kommt aus der Zusammenfassung des CI-Laufs
+   oder aus dem Release Center (`Release.artifactSha256`) — nicht vom Server,
+   denn eine Summe neben dem Archiv kann tauschen, wer das Archiv tauschen kann.
+3. Entpackt wird frisch aus einer privaten Kopie; umgeschaltet und geprüft
+   wird wie bei der Aktivierung. Ausgänge 0/10/11/20/30, `ERGEBNIS`-Zeile,
+   Eintrag in `aktivierungen.jsonl`. Ist das Ziel schon aktiv: 10, nichts zu tun.
+
+Aufbewahrt werden die letzten `CLENARIS_RELEASES_KEEP` Releases (Vorgabe 5,
+mindestens 2, nie das aktive und nie das vorherige) und ihre Archive; weiter
+zurück geht es nur mit einem neu gelieferten Artefakt.
 
 > **Der Rücksprung stellt die Anwendung wieder her, nicht das Datenbankschema.**
 >
@@ -1241,7 +1388,11 @@ neu.
 > gefährlicher als der Fehler, den sie beheben soll — sie verwürfe Daten, die
 > die neue Fassung bereits geschrieben hat. Wurden in einem fehlgeschlagenen
 > Lauf Migrationen angewandt, bleiben sie bestehen, und das Protokoll sagt es
-> ausdrücklich.
+> ausdrücklich. Der Rücksprung von Hand fragt deshalb, welche Migrationen des
+> laufenden Release das Ziel **nicht** kennt, und liest ihre Einstufung aus
+> `security/migrations-vertraeglichkeit.json` des laufenden Release: Alles
+> ausser RUECKWAERTSVERTRAEGLICH (auch eine fehlende Einstufung) hält an —
+> ausser mit `--schema-bewusst`, und das steht dann im Protokoll.
 >
 > Daraus folgt die Regel für **jede** Migration: Sie muss zur *vorherigen*
 > Programmfassung passen. Spalte hinzufügen statt umbenennen; `NOT NULL` erst
@@ -1255,15 +1406,10 @@ neu.
 > `prisma migrate diff` → SQL-Datei → `prisma db execute` →
 > `prisma migrate resolve --applied`.
 
-Von Hand auf einen bestimmten Stand:
-
-```bash
-ssh clenaris@<server> && cd ~/app
-git reset --hard <commit>
-npm ci && npm run build
-pm2 reload ecosystem.config.js --env production
-curl -fsS http://127.0.0.1:3000/api/health
-```
+Was **nie** zum Rücksprung gehört: `git`, `npm ci`, `npm run build`, ein von
+Hand umgehängter `current`-Verweis ohne Prüfung oder `prisma migrate reset`.
+Ein Rücksprung, der etwas erzeugt, statt ein Geprüftes wiederherzustellen,
+ist der Weg, den der Notfallauftrag abgeschafft hat.
 
 ## 17. Wiederherstellung
 
@@ -1272,9 +1418,9 @@ curl -fsS http://127.0.0.1:3000/api/health
 | Anwendung antwortet nicht | `pm2 status`, `pm2 logs clenaris --lines 100`, dann `pm2 reload clenaris` |
 | Nach einem Serverneustart ist nichts gestartet | `pm2 resurrect`; fehlt der Dienst dauerhaft, `pm2 startup` nachholen |
 | Datenbank nicht erreichbar | `/api/health` meldet 503. Postgres und `DATABASE_URL` prüfen; die Anwendung fängt sich von selbst, sobald die Datenbank antwortet |
-| `.env` verloren | Aus `.deploy/backups/<zeitstempel>/.env` zurückspielen, sonst aus Abschnitt 3 neu aufbauen |
-| Arbeitsbaum zerschossen | `git reset --hard origin/main && rm -rf node_modules .next && bash scripts/deploy.sh` |
-| Server vollständig verloren | Abschnitt 13 neu durchlaufen, Datenbank aus dem Auszug (Abschnitt 9) einspielen, dann den Workflow von Hand auslösen |
+| `shared/.env` verloren | Aus Abschnitt 3 neu aufbauen — die Pipeline führt seit 2026-09-27 keine Kopie mehr; die Werte stehen bei den Anbietern bzw. im Passwortverwalter der Betreiberin. `ENCRYPTION_KEY` vorher sichern (Abschnitt 3) |
+| Release-Verzeichnis zerschossen | erneut aktivieren: denselben Lauf von Hand auslösen bzw. das aufbewahrte Archiv mit `release-ruecksprung.sh --auf <commit>` (Abschnitt 16) — nie auf dem Server bauen |
+| Server vollständig verloren | Abschnitt 13 neu durchlaufen, Datenbank aus der Sicherung einspielen (`docs/BACKUP_DR.md`), dann den Workflow von Hand auslösen |
 
 Die Anwendung hält **keinen** Zustand ausser Datenbank und Dateiablage. Ein
 neuer Server ist deshalb ein Nachmittag Arbeit und kein Datenverlust —
@@ -1291,30 +1437,38 @@ geprüft.
 | Geheimnis-Suche schlägt an | Zugangsdaten im Bestand | Beim Anbieter widerrufen, dann aus der Historie entfernen. Das Entfernen allein genügt nicht |
 | `Permission denied (publickey)` | Schlüssel oder Benutzer falsch | `SERVER_SSH_KEY` vollständig (mit Kopf- und Fusszeile), öffentlicher Teil in `~/.ssh/authorized_keys` |
 | `Host key verification failed` | Wirtsschlüssel geändert | `SERVER_SSH_KNOWN_HOSTS` neu erzeugen — und prüfen, *warum* er sich geändert hat |
-| `Eine andere Auslieferung läuft bereits` | Sperre steht | Läuft keine: `rm ~/app/.deploy/deploy.lock` |
-| Health Check von aussen meldet den alten Commit | Reload hat still nicht gegriffen | `pm2 logs`, dann `pm2 reload`; Proxy-Zwischenspeicher prüfen |
-| `EACCES` beim Schreiben | Verzeichnis gehört `root` | `sudo chown -R clenaris:clenaris ~/app` |
-| Build bricht mit Speichermangel ab | Zu wenig RAM | Auslagerungsdatei anlegen oder `NODE_OPTIONS=--max-old-space-size=2048` |
+| Aktivierung endet mit 11 (`GESPERRT`) | Eine Aktivierung oder ein Rücksprung hält `${BASIS}/.release.lock` | abwarten; `flock` gibt die Sperre mit dem Prozess frei — die Datei nicht löschen. Hält sie dauerhaft, hat ein Kindprozess den Deskriptor geerbt (`fuser`/`lsof` auf die Datei) |
+| Aktivierung endet mit 10: „SHA-256 … ist nicht die erwartete" | Archiv unterwegs verändert oder falsche Summe übergeben | nicht umgehen — das Archiv ist nicht das geprüfte; neu übertragen bzw. Summe aus der CI-Zusammenfassung nehmen |
+| Aktivierung endet mit 10: „Node-Hauptversion weicht vom Bau ab" | Server und CI haben verschiedene Node-Hauptversionen | Node auf dem Server an `.nvmrc` angleichen (V2-2) |
+| Aktivierung endet mit 10: „Derselbe Commit … läuft bereits, aber als anderer Bau" | Handstart hat den laufenden Commit neu gebaut | nichts — der laufende Bau bleibt; ohne `API_URL` erkennt der Workflow den Fall nicht vorab |
+| Identität von aussen meldet den alten Commit oder `identitaet` ≠ `belegt` | PM2 hat nicht aus dem neuen Release geladen, oder ein Proxy-Zwischenspeicher | `pm2 describe clenaris` (Arbeitsverzeichnis), `pm2 logs`; die Aktivierung hätte das mit 20 oder 30 gemeldet — Protokoll prüfen |
+| `EACCES` beim Schreiben | Verzeichnis gehört `root` | `sudo chown -R clenaris:clenaris ~/clenaris` |
+| Build bricht mit Speichermangel ab | nur in der CI — der Server baut nicht | Läuferlast prüfen; auf dem Server gibt es keinen Bau |
 
 ## 19. Wartung und Versionsverwaltung
 
-**Welcher Stand läuft?** `deploy.sh` schreibt den ausgelieferten Commit als
-`APP_VERSION` in die `.env`, und `/api/health` meldet ihn:
+**Welcher Stand läuft?** Die Instanz belegt ihn selbst — aus `RELEASE.json`
+und `.next/BUILD_ID` in ihrem Release-Verzeichnis (`src/lib/release/identitaet.ts`),
+nicht aus einer Umgebungsvariable. Bis 2026-09-27 schrieb `deploy.sh` den
+Commit als `APP_VERSION` in die `.env`, bis 2026-09-30 setzte ihn die
+Aktivierung über PM2 — geprüft wurde in beiden Fällen genau der Wert, den der
+Weg selbst gesetzt hatte. `APP_VERSION` wird nirgends mehr gelesen.
 
 ```bash
-curl -fsS https://<domain>/api/health | jq .data.version
+curl -fsS https://<domain>/api/health | jq '.data | {version, buildId, release, identitaet}'
 ```
 
-Der Workflow prüft nach jeder Auslieferung, dass dieser Wert dem gerade
-gebauten Commit entspricht. Genau das fängt den unangenehmsten Fehler: ein
-Reload, der still nicht greift und weiter die alte, gesunde Fassung ausliefert
-— grün, und trotzdem ist nichts angekommen.
+`version` ist der Commit — nur wenn `identitaet` `belegt` ist, sonst `null`;
+`buildId` steht in jedem Zustand da. Aktivierung und Workflow prüfen nach jeder
+Auslieferung Commit, Build-ID und `belegt`. Genau das fängt den
+unangenehmsten Fehler: ein Neuladen, das still nicht greift und weiter die
+alte, gesunde Fassung ausliefert — grün, und trotzdem ist nichts angekommen.
 
 **Regelmässig.**
 
 | Rhythmus | Aufgabe |
 | --- | --- |
-| wöchentlich | `pm2 status` und `logs/deployment/` durchsehen |
+| wöchentlich | `pm2 status`, `aktivierungen.jsonl` und `shared/logs/` durchsehen |
 | monatlich | Datenbankauszug an einen zweiten Ort (Abschnitt 9) |
 | monatlich | `npm audit`, Abhängigkeiten aktualisieren, über die Pipeline ausliefern |
 | vierteljährlich | Wiederherstellung üben |
@@ -1328,11 +1482,13 @@ pm2 set pm2-logrotate:max_size 10M
 pm2 set pm2-logrotate:retain 14
 ```
 
-Die Auslieferungsprotokolle räumt `deploy.sh` selbst nach 30 Tagen auf, die
-gesicherten Builds nach drei Läufen.
+Releases und ihre Archive räumt die Aktivierung selbst auf
+(`CLENARIS_RELEASES_KEEP`, Vorgabe 5, nie das aktive und nie das vorherige);
+`aktivierungen.jsonl` wächst um eine Zeile je Lauf und wird nicht gekürzt.
 
-**Versionen.** `main` ist immer der ausgelieferte Stand; jeder Commit darauf
-geht in Produktion. Wer einen benannten Stand braucht — für eine
+**Versionen.** Mit dem direkten Weg (`DEPLOY_ENABLED`) geht jeder grüne Commit
+auf `main` in Produktion; mit dem Release-Ausführer nur, was im Update Center
+freigegeben und terminiert ist. Wer einen benannten Stand braucht — für eine
 Übergabe, einen Prüfbericht, eine Rechnungsperiode —, setzt eine Marke:
 
 ```bash
