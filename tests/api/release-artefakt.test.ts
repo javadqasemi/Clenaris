@@ -382,6 +382,24 @@ describe('Release-Artefakt: Inhalt, Ausschlüsse, Vollständigkeit', () => {
     assert.deepEqual(JSON.parse(imArchiv.stdout), manifest);
     assert.ok(!existsSync(join(d, MANIFEST_DATEI)), 'das Manifest wird nie in die Wurzel geschrieben');
 
+    // Der Abgleich läuft im Packen selbst, nicht nur als Funktion daneben: tar
+    // packt einen doppelt genannten Eintrag klaglos zweimal (GNU tar wie
+    // bsdtar), Ausgang 0 — erst der Vergleich der Archivliste mit dem Baum
+    // bemerkt es. Ohne den Aufruf in archivPacken entstünde hier ein Archiv,
+    // in dem beim Entpacken der letzte Eintrag gewinnt.
+    const doppelt = join(ausgabe, 'doppelt.tar.gz');
+    await assert.rejects(
+      archivPacken({ wurzel: d, archiv: doppelt, eintraege: [...aufnahme.eintraege, 'src/app/page.tsx'], manifest, quelleEpoche: 1_759_238_943 }),
+      (fehler: unknown) => {
+        assert.ok(fehler instanceof Error);
+        assert.match(fehler.message, /entspricht nicht dem abgelaufenen Baum/);
+        assert.match(fehler.message, /doppelt \(1\):\n {2}src\/app\/page\.tsx/);
+        assert.doesNotMatch(fehler.message, /Packen fehlgeschlagen/, 'tar selbst hat nichts bemängelt');
+        return true;
+      },
+    );
+    assert.ok(!existsSync(doppelt), 'das abgewiesene Archiv wird entfernt');
+
     // Verschwindet eine gesammelte Datei vor dem Packen, scheitert das Packen — und es bleibt kein halbes Archiv liegen.
     rmSync(join(d, 'src', 'app', 'page.tsx'));
     const kaputt = join(ausgabe, 'kaputt.tar.gz');
