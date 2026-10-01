@@ -5,7 +5,7 @@ import { del, get, nextSecond, patch, post, requireServer, sleep } from '../help
 import { ACCOUNTS, login, loginAs } from '../helpers/accounts';
 import { resetRateLimits } from '../helpers/rate-limit';
 import { totp } from '../helpers/totp';
-import { eigeneOrganisationId, testDb, testDbGrund, testDbSchliessen } from '../helpers/testdb';
+import { eigeneOrganisationId, schutzfreiAufraeumen, testDb, testDbGrund, testDbSchliessen } from '../helpers/testdb';
 
 /**
  * Zwei-Faktor-Anmeldung, von aussen über HTTP.
@@ -433,7 +433,10 @@ async function ersatzcodeAufraeumen(): Promise<void> {
   const ids = konten.map((konto) => konto.id);
   if (ids.length === 0) return;
   await db.securityEvent.deleteMany({ where: { userId: { in: ids } } });
-  await db.auditLog.deleteMany({ where: { OR: [{ userId: { in: ids } }, { entityId: { in: ids } }] } });
+  // Das Prüfprotokoll lässt sich nur fortschreiben (seit 2026-09-30): die
+  // Zeilen über `schutzfreiAufraeumen`, das Konto danach ausserhalb davon,
+  // damit `ON DELETE SET NULL` greift.
+  await schutzfreiAufraeumen((tx) => tx.auditLog.deleteMany({ where: { OR: [{ userId: { in: ids } }, { entityId: { in: ids } }] } }));
   await db.refreshToken.deleteMany({ where: { userId: { in: ids } } });
   await db.user.deleteMany({ where: { id: { in: ids } } });
 }

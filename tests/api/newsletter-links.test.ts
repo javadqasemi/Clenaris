@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 
 import { get, post, requireServer } from '../helpers/client';
 import { resetRateLimits } from '../helpers/rate-limit';
-import { eigeneOrganisationId, fremdeOrganisation, testDb, testDbGrund, testDbSchliessen } from '../helpers/testdb';
+import { eigeneOrganisationId, fremdeOrganisation, schutzfreiAufraeumen, testDb, testDbGrund, testDbSchliessen } from '../helpers/testdb';
 
 /**
  * Newsletter-Links: Erst der Klick schreibt, nicht der Seitenaufruf
@@ -31,7 +31,9 @@ async function aufraeumen() {
   if (!db) return;
   const eintraege = await db.newsletterSubscriber.findMany({ where: { email: { startsWith: MARKE } }, select: { id: true } });
   const ids = eintraege.map((e) => e.id);
-  if (ids.length) await db.auditLog.deleteMany({ where: { entity: 'NewsletterSubscriber', entityId: { in: ids } } });
+  // Das Prüfprotokoll lässt sich nur fortschreiben (seit 2026-09-30) — den
+  // eigenen Prüfbestand entfernt nur `schutzfreiAufraeumen`.
+  if (ids.length) await schutzfreiAufraeumen((tx) => tx.auditLog.deleteMany({ where: { entity: 'NewsletterSubscriber', entityId: { in: ids } } }));
   await db.newsletterSubscriber.deleteMany({ where: { email: { startsWith: MARKE } } });
 }
 

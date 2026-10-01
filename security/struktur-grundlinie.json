@@ -848,6 +848,7 @@
     "20260928090000_bezahlt_ohne_restsaldo",
     "20260928091000_buchung_absendekennung",
     "20260928120000_traffic_analytics",
-    "20260929090000_vertragssperre_fehlercode"
+    "20260929090000_vertragssperre_fehlercode",
+    "20260930120000_protokoll_nur_anfuegen"
   ]
 }

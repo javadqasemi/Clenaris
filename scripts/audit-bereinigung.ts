@@ -31,6 +31,14 @@
  *  • **In der Produktion nur nach Freigabe** durch die Verantwortlichen für
  *    Datenschutz; `--anwenden` ohne diese Freigabe ist ein Verstoss gegen die
  *    Betriebsanleitung (`docs/KEY_MANAGEMENT.md` §3.5), nicht gegen das Skript.
+ *  • **Über den Schwärzungsschalter der Datenbank** (seit 2026-09-30).
+ *    `audit_logs` lässt sich nur noch fortschreiben
+ *    (`20260930120000_protokoll_nur_anfuegen`); jede Zeile geht deshalb über
+ *    `zeileSchwaerzen` (`scripts/security/audit-schwaerzung.ts`), das den
+ *    transaktionslokalen Schalter `clenaris.audit_schwaerzung` setzt. Die
+ *    Datenbank selbst hält dann die Regel oben fest: Nur `changes` und
+ *    `summary` dürfen sich ändern — ein Fehler in diesem Skript, der mehr
+ *    anfasste, scheiterte an P0001 statt still den Beleg umzuschreiben.
  *
  * Idempotent: Ein zweiter Lauf findet nichts mehr, weil geschwärzte Werte
  * geschwärzt bleiben.
@@ -41,6 +49,7 @@ import { config } from 'dotenv';
 
 import { freitextSchwaerzen, wertSchwaerzen } from '../src/lib/sensitive-fields';
 import { erzeugePrismaClient } from '../src/lib/prisma-client';
+import { zeileSchwaerzen } from './security/audit-schwaerzung';
 
 config();
 
@@ -77,12 +86,14 @@ async function main(): Promise<void> {
         betroffen += 1;
         jeEntitaet.set(zeile.entity, (jeEntitaet.get(zeile.entity) ?? 0) + 1);
         if (anwenden) {
-          await prisma.auditLog.update({
-            where: { id: zeile.id },
-            data: {
-              changes: (neueAenderungen ?? undefined) as Prisma.InputJsonValue | undefined,
-              summary: neueZusammenfassung,
-            },
+          // Nie direkt `auditLog.update`: Seit `20260930120000_protokoll_nur_anfuegen`
+          // weist die Datenbank jede Änderung am Protokoll mit P0001 ab — ausser
+          // mit dem Schalter, den nur `zeileSchwaerzen` setzt, und auch dann
+          // nur für `changes` und `summary`. Ein direktes Update hier scheiterte
+          // schon an der ersten Zeile; genau so soll es sein.
+          await zeileSchwaerzen(prisma, zeile.id, {
+            changes: (neueAenderungen ?? undefined) as Prisma.InputJsonValue | undefined,
+            summary: neueZusammenfassung,
           });
         }
       }

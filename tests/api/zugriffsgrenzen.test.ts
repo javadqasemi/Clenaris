@@ -6,7 +6,7 @@ import { call, data, del, get, patch, post, requireServer, sleep, type ApiRespon
 import { ACCOUNTS, login, loginAll, type AccountName } from '../helpers/accounts';
 import { resetRateLimits } from '../helpers/rate-limit';
 import { cookieValue, totp } from '../helpers/totp';
-import { eigeneOrganisationId, testDb, testDbGrund, testDbSchliessen } from '../helpers/testdb';
+import { eigeneOrganisationId, schutzfreiAufraeumen, testDb, testDbGrund, testDbSchliessen } from '../helpers/testdb';
 
 /**
  * Zugriffsgrenzen, die bisher nur behauptet und nicht geprüft waren.
@@ -85,7 +85,10 @@ async function aufraeumen(): Promise<void> {
     // blieben sie als herrenlose Einträge über ein Konto stehen, das es nie
     // gab — und die Sicherheitsübersicht zählte sie mit.
     await db.securityEvent.deleteMany({ where: { userId: { in: ids } } });
-    await db.auditLog.deleteMany({ where: { OR: [{ userId: { in: ids } }, { entityId: { in: ids } }] } });
+    // Das Prüfprotokoll lässt sich nur fortschreiben (seit 2026-09-30): die
+    // Zeilen über `schutzfreiAufraeumen`, die Konten danach ausserhalb davon —
+    // dort greift `ON DELETE SET NULL` für jede Zeile, die dazwischen entstand.
+    await schutzfreiAufraeumen((tx) => tx.auditLog.deleteMany({ where: { OR: [{ userId: { in: ids } }, { entityId: { in: ids } }] } }));
     await db.user.deleteMany({ where: { id: { in: ids } } });
   }
 }

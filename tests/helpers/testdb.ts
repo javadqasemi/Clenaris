@@ -120,6 +120,18 @@ export async function testDbSchliessen(): Promise<void> {
  * solche Abrechnung erzeugt, soll den Bestand trotzdem nicht Lauf für Lauf
  * wachsen lassen.
  *
+ * **Prüfprotokoll (seit 2026-09-30).** `audit_logs` lässt sich nur noch
+ * fortschreiben (Migration `20260930120000_protokoll_nur_anfuegen`). Eine
+ * Prüfung, die die Protokollzeilen ihrer Wegwerfkonten oder -einträge
+ * entfernt, tut das deshalb hier — `tx.auditLog.deleteMany(…)` in dieser
+ * Transaktion, nie direkt. **Das Löschen der Konten selbst gehört nicht
+ * hinein:** Unter `replica` feuern auch die Fremdschlüsselaktionen nicht, und
+ * `ON DELETE SET NULL` auf `audit_logs.userId` bliebe aus. Übrig blieben
+ * Protokollzeilen, die auf ein Konto zeigen, das es nicht mehr gibt — ein
+ * verwaister Verweis, den weder die Datenbank noch ein späterer Lauf je
+ * bemerkte. Also: Protokollzeilen hier, Konten danach über den normalen Weg,
+ * wo der Trigger genau die eine Änderung zulässt, die die Kaskade macht.
+ *
  * `SET LOCAL session_replication_role = 'replica'` schaltet Trigger für genau
  * diese eine Transaktion ab und verlangt eine privilegierte Datenbankrolle —
  * die Testdatenbank läuft lokal und in der CI unter einer solchen. Die
