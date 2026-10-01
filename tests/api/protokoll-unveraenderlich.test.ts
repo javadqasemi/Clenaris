@@ -292,6 +292,28 @@ describe('Prüfprotokoll — nur fortschreiben (in zurückgerollten Transaktione
       assert.equal(nachher.summary, 'Lohn geändert');
       assert.deepEqual(ohne(nachher, 'changes', 'summary'), ohne(eintrag, 'changes', 'summary'), 'die Schwärzung hat mehr als changes/summary geändert');
 
+      /*
+        Der Schalter gilt für die eine Schwärzung, nicht für den Rest der
+        Transaktion (2026-10-01). Bis dahin blieb er an, und ein Aufrufer in
+        einer grösseren Transaktion konnte danach jede weitere Zeile in
+        `changes` und `summary` umschreiben — gegen den alten Stand scheitert
+        genau diese Zusicherung.
+      */
+      const [{ schalterDanach }] = await tx.$queryRaw<{ schalterDanach: string | null }[]>`
+        SELECT current_setting('clenaris.audit_schwaerzung', true) AS "schalterDanach"`;
+      assert.notEqual(schalterDanach, 'on', 'der Schalter ist nach der Schwärzung noch an');
+      const zweiter = await eintragAnlegen(tx, { entityId: `${MARKE}-zweiter` });
+      await verweigert(tx, () => tx.auditLog.update({ where: { id: zweiter.id }, data: { summary: 'nachträglich umgeschrieben' } }), 'nach der Schwärzung, in derselben Transaktion');
+
+      // Auch eine gescheiterte Schwärzung (Zeile gibt es nicht) lässt ihn nicht an.
+      await assert.rejects(schwaerzenInTransaktion(tx, `${MARKE}-gibt-es-nicht`, { summary: 'x' }));
+      const [{ schalterNachFehler }] = await tx.$queryRaw<{ schalterNachFehler: string | null }[]>`
+        SELECT current_setting('clenaris.audit_schwaerzung', true) AS "schalterNachFehler"`;
+      assert.notEqual(schalterNachFehler, 'on', 'der Schalter blieb nach einer gescheiterten Schwärzung an');
+
+      // Für die Gegenproben „mit Schalter" ausdrücklich wieder an — die
+      // Ausnahme soll an Wer, Wann, Was und am Löschen auch dann scheitern.
+      await tx.$queryRaw`SELECT set_config('clenaris.audit_schwaerzung', 'on', true)`;
       await verweigert(tx, () => tx.auditLog.update({ where: { id: eintrag.id }, data: { entity: 'Anders' } }), 'Entität mit Schalter');
       await verweigert(tx, () => tx.auditLog.update({ where: { id: eintrag.id }, data: { action: 'DELETE' } }), 'Handlung mit Schalter');
       await verweigert(tx, () => tx.auditLog.update({ where: { id: eintrag.id }, data: { userId: null } }), 'Person mit Schalter');
