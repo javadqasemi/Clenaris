@@ -333,8 +333,12 @@ export const ROUTES: RouteDoc[] = [
     summary: 'Betriebsbereitschaft',
     description:
       'Für Auslieferung, Überwachung und Load Balancer. Prüft die Datenbankverbindung und meldet ' +
-      'die Zahl der angewandten Migrationen, den ausgelieferten Stand und die Laufzeit. Antwortet ' +
-      'mit 503, wenn die Datenbank nicht erreichbar ist — die Aussage steht im Statuscode, nicht im Rumpf.',
+      'die Zahl der angewandten Migrationen, den ausgelieferten Stand und die Laufzeit. Der Stand ist ' +
+      'die Identität der Instanz aus `RELEASE.json` und `BUILD_ID` (seit 2026-09-30, nicht mehr ' +
+      '`APP_VERSION`): `version` = Commit, nur wenn belegt, sonst `null`; `buildId` = Build-ID des ' +
+      'laufenden Baus; `release` = semantische Version, nur wenn belegt; `identitaet` = `belegt`, ' +
+      '`ohne-manifest`, `widerspruechlich` oder `ungueltig`. Antwortet mit 503, wenn die Datenbank ' +
+      'nicht erreichbar ist — die Aussage steht im Statuscode, nicht im Rumpf.',
     guard: { kind: 'public' },
     extraErrors: [503],
     rateLimit: 'apiRead',
@@ -4195,8 +4199,10 @@ export const ROUTES: RouteDoc[] = [
     tag: 'System',
     summary: 'Stündliche Aufgaben',
     description:
-      'Terminerinnerungen 24 h und 2 h vorher, zeitbezogene Auslöser der Automatisierung und ' +
-      'fällige Läufe. Authentifiziert über `Authorization: Bearer $CRON_SECRET`. Jeder Lauf ' +
+      'Terminerinnerungen 24 h und 2 h vorher, zeitbezogene Auslöser der Automatisierung, ' +
+      'fällige Läufe und der Abschluss verwaister Release-Ausführungen (über zwei Stunden ohne ' +
+      'Rückmeldung: erfolgreich, wenn die Identität der Instanz das Ziel belegt, sonst ' +
+      'fehlgeschlagen). Authentifiziert über `Authorization: Bearer $CRON_SECRET`. Jeder Lauf ' +
       'hinterlässt ein `CronRun`; **500**, sobald eine Teilaufgabe gescheitert ist.',
     guard: { kind: 'cron' },
   },

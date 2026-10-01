@@ -1,7 +1,7 @@
 import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { request as httpRequest } from 'node:http';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -17,10 +17,11 @@ import {
 import { hashPassword } from '../../src/lib/auth/password';
 import { BusinessRuleError } from '../../src/lib/errors';
 import { databaseNameOf, istTestdatenbank, oeffentlicheKontenErlaubt, produktivesSystem } from '../../prisma/seed-guard';
-import { auswerten, umgebungPruefen, type Pruefung } from '../../scripts/production-preflight';
+import { auswerten, releasePruefen, umgebungPruefen, type Pruefung } from '../../scripts/production-preflight';
 import { migrationEinstufen, reiheEinstufen, registerLesen, strengsteEinstufung, torPruefen } from '../../scripts/migration-kompatibilitaet';
 import { ACCOUNTS } from '../helpers/accounts';
 import { post, requireServer } from '../helpers/client';
+import { PRUEF_ARTEFAKT_COMMIT, PRUEF_BUILD_ID, pruefManifest, pruefVerzeichnis } from '../helpers/pruefartefakt';
 import { testDb, testDbSchliessen } from '../helpers/testdb';
 
 /**
@@ -253,8 +254,31 @@ const GUTE_UMGEBUNG = {
   TRUSTED_PROXY_MODE: 'SINGLE_REVERSE_PROXY',
   CLAMAV_HOST: '127.0.0.1',
   REDIS_URL: 'redis://127.0.0.1:6379',
-  APP_VERSION: 'a'.repeat(40),
 };
+
+/**
+ * Das Release-Verzeichnis, aus dem „gestartet" wird (seit 2026-09-30): ein
+ * auslieferbares `RELEASE.json` mit passender `.next/BUILD_ID`. Bis dahin
+ * stand in `GUTE_UMGEBUNG` ein `APP_VERSION` mit 40 Zeichen, und die
+ * Vorprüfung nahm den Stand damit als „belegt über APP_VERSION" hin — genau
+ * der Rückfall, der entfernt wurde. Eine vollständige Produktion hat jetzt
+ * ein Artefakt, keine Variable.
+ */
+const ARTEFAKT = pruefVerzeichnis();
+const OHNE_MANIFEST = pruefVerzeichnis({ manifest: null });
+/*
+  `.env.example` in beide Verzeichnisse: Der Fall „als Kindprozess" läuft mit
+  dem Release-Verzeichnis als Arbeitsverzeichnis, und `beispielwerte()` liest
+  `.env.example` von dort. Ohne die Kopie verglich der Kindprozess seit dem
+  Umzug aus `WURZEL` gegen eine leere Liste — der Abgleich mit den
+  Beispielwerten lief als Prozess nirgends mehr, und ein Fehler beim Lesen der
+  Datei fiele keinem Fall auf (die reinen Fälle reichen eine leere Liste
+  herein). Die Kopie stellt den Stand vor dem Umzug wieder her.
+*/
+for (const d of [ARTEFAKT, OHNE_MANIFEST]) copyFileSync(join(WURZEL, '.env.example'), join(d, '.env.example'));
+after(() => {
+  for (const d of [ARTEFAKT, OHNE_MANIFEST]) rmSync(d, { recursive: true, force: true });
+});
 
 function fehlerIds(p: Pruefung[]): string[] {
   return p.filter((x) => x.stand === 'FEHLER').map((x) => x.id);
@@ -264,7 +288,7 @@ describe('Produktionsvorprüfung (rein)', () => {
   const beispiele = new Map<string, string>();
 
   it('eine vollständige Produktionsumgebung hat keinen Fehler', () => {
-    assert.deepEqual(fehlerIds(umgebungPruefen(GUTE_UMGEBUNG, beispiele)), []);
+    assert.deepEqual(fehlerIds(umgebungPruefen(GUTE_UMGEBUNG, beispiele, ARTEFAKT)), []);
   });
 
   it('Demozugänge, Demo-Seed, Testkennzeichen und Altdateien sind je ein Fehler', () => {
@@ -279,6 +303,7 @@ describe('Produktionsvorprüfung (rein)', () => {
           CLENARIS_UMGEBUNG: 'test',
         },
         beispiele,
+        ARTEFAKT,
       ),
     );
     for (const id of ['schalter-allow_demo_seed', 'schalter-clenaris_test_cache_dir', 'schalter-clenaris_legacy_files', 'startpasswort-seed_admin_password', 'umgebung']) {
@@ -287,38 +312,38 @@ describe('Produktionsvorprüfung (rein)', () => {
   });
 
   it('bekannte Werte aus CI und Prüfreihe sind keine Produktionsgeheimnisse', () => {
-    const ids = fehlerIds(umgebungPruefen({ ...GUTE_UMGEBUNG, JWT_SECRET: 'ci-nur-fuer-den-testlauf-mindestens-32-zeichen', CRON_SECRET: 'ci-cron-secret' }, beispiele));
+    const ids = fehlerIds(umgebungPruefen({ ...GUTE_UMGEBUNG, JWT_SECRET: 'ci-nur-fuer-den-testlauf-mindestens-32-zeichen', CRON_SECRET: 'ci-cron-secret' }, beispiele, ARTEFAKT));
     assert.ok(ids.includes('geheimnis-jwt_secret') && ids.includes('geheimnis-cron_secret'), ids.join(', '));
   });
 
   it('eine Testdatenbank, localhost als Herkunft und fehlendes DIRECT_URL sind Fehler', () => {
     const ids = fehlerIds(
-      umgebungPruefen({ ...GUTE_UMGEBUNG, DATABASE_URL: TEST_DB, DIRECT_URL: '', APP_URL: 'http://localhost:3000' }, beispiele),
+      umgebungPruefen({ ...GUTE_UMGEBUNG, DATABASE_URL: TEST_DB, DIRECT_URL: '', APP_URL: 'http://localhost:3000' }, beispiele, ARTEFAKT),
     );
     for (const id of ['datenbank-database_url', 'datenbank-direct_url', 'app-url']) assert.ok(ids.includes(id), id);
   });
 
   it('eine nackte IP als Herkunft ist ein Fehler (Ursprung an Cloudflare vorbei)', () => {
-    assert.ok(fehlerIds(umgebungPruefen({ ...GUTE_UMGEBUNG, APP_URL: 'https://203.0.113.7' }, beispiele)).includes('app-url'));
+    assert.ok(fehlerIds(umgebungPruefen({ ...GUTE_UMGEBUNG, APP_URL: 'https://203.0.113.7' }, beispiele, ARTEFAKT)).includes('app-url'));
   });
 
   it('TRUSTED_PROXY_MODE=CLOUDFLARE ohne bestätigte Ursprungssperre ist ein Fehler; mit Bestätigung nicht', () => {
-    assert.ok(fehlerIds(umgebungPruefen({ ...GUTE_UMGEBUNG, TRUSTED_PROXY_MODE: 'CLOUDFLARE' }, beispiele)).includes('proxy'));
-    assert.ok(!fehlerIds(umgebungPruefen({ ...GUTE_UMGEBUNG, TRUSTED_PROXY_MODE: 'CLOUDFLARE', CLENARIS_URSPRUNG_NUR_CLOUDFLARE: 'bestaetigt' }, beispiele)).includes('proxy'));
-    assert.ok(fehlerIds(umgebungPruefen({ ...GUTE_UMGEBUNG, TRUSTED_PROXY_MODE: 'CLOUDFARE' }, beispiele)).includes('proxy'), 'Tippfehler');
-    assert.ok(fehlerIds(umgebungPruefen({ ...GUTE_UMGEBUNG, TRUSTED_PROXY_MODE: '' }, beispiele)).includes('proxy'), 'fehlend');
+    assert.ok(fehlerIds(umgebungPruefen({ ...GUTE_UMGEBUNG, TRUSTED_PROXY_MODE: 'CLOUDFLARE' }, beispiele, ARTEFAKT)).includes('proxy'));
+    assert.ok(!fehlerIds(umgebungPruefen({ ...GUTE_UMGEBUNG, TRUSTED_PROXY_MODE: 'CLOUDFLARE', CLENARIS_URSPRUNG_NUR_CLOUDFLARE: 'bestaetigt' }, beispiele, ARTEFAKT)).includes('proxy'));
+    assert.ok(fehlerIds(umgebungPruefen({ ...GUTE_UMGEBUNG, TRUSTED_PROXY_MODE: 'CLOUDFARE' }, beispiele, ARTEFAKT)).includes('proxy'), 'Tippfehler');
+    assert.ok(fehlerIds(umgebungPruefen({ ...GUTE_UMGEBUNG, TRUSTED_PROXY_MODE: '' }, beispiele, ARTEFAKT)).includes('proxy'), 'fehlend');
   });
 
   it('ohne Scanner kein Start; Release-Ausführer nur mit beiden Zugangsdaten', () => {
-    assert.ok(fehlerIds(umgebungPruefen({ ...GUTE_UMGEBUNG, CLAMAV_HOST: '' }, beispiele)).includes('scanner'));
-    assert.ok(fehlerIds(umgebungPruefen({ ...GUTE_UMGEBUNG, RELEASE_EXECUTOR_TOKEN: 'x'.repeat(40) }, beispiele)).includes('ausfuehrer'));
-    const aus = umgebungPruefen(GUTE_UMGEBUNG, beispiele).find((x) => x.id === 'ausfuehrer');
+    assert.ok(fehlerIds(umgebungPruefen({ ...GUTE_UMGEBUNG, CLAMAV_HOST: '' }, beispiele, ARTEFAKT)).includes('scanner'));
+    assert.ok(fehlerIds(umgebungPruefen({ ...GUTE_UMGEBUNG, RELEASE_EXECUTOR_TOKEN: 'x'.repeat(40) }, beispiele, ARTEFAKT)).includes('ausfuehrer'));
+    const aus = umgebungPruefen(GUTE_UMGEBUNG, beispiele, ARTEFAKT).find((x) => x.id === 'ausfuehrer');
     assert.equal(aus?.stand, 'OK');
     assert.match(aus!.meldung, /abgeschaltet/);
   });
 
   it('ohne SECURITY_REPORT_TOKEN bleibt der Eingang zu — Warnung, kein Rückfall auf einen Standardwert', () => {
-    const p = umgebungPruefen({ ...GUTE_UMGEBUNG, SECURITY_REPORT_TOKEN: '' }, beispiele).find((x) => x.id === 'sicherheitsmeldung');
+    const p = umgebungPruefen({ ...GUTE_UMGEBUNG, SECURITY_REPORT_TOKEN: '' }, beispiele, ARTEFAKT).find((x) => x.id === 'sicherheitsmeldung');
     assert.equal(p?.stand, 'WARNUNG');
   });
 
@@ -327,34 +352,103 @@ describe('Produktionsvorprüfung (rein)', () => {
   // eine Identität vor, die das Artefakt nicht trägt.
   it('CLENARIS_PRUEF_RELEASE_MANIFEST in der Produktion: Fehler', () => {
     assert.ok(
-      fehlerIds(umgebungPruefen({ ...GUTE_UMGEBUNG, CLENARIS_PRUEF_RELEASE_MANIFEST: '/tmp/pruef-release.json' }, beispiele)).includes(
+      fehlerIds(umgebungPruefen({ ...GUTE_UMGEBUNG, CLENARIS_PRUEF_RELEASE_MANIFEST: '/tmp/pruef-release.json' }, beispiele, ARTEFAKT)).includes(
         'schalter-clenaris_pruef_release_manifest',
       ),
     );
   });
 
   it('eigene Besuchsmessung: ohne „an" aus und bestanden, eingeschaltet eine Warnung (Rechtsprüfung TA-02)', () => {
-    const aus = umgebungPruefen(GUTE_UMGEBUNG, beispiele).find((x) => x.id === 'besuchsmessung');
+    const aus = umgebungPruefen(GUTE_UMGEBUNG, beispiele, ARTEFAKT).find((x) => x.id === 'besuchsmessung');
     assert.equal(aus?.stand, 'OK');
-    const an = umgebungPruefen({ ...GUTE_UMGEBUNG, CLENARIS_BESUCHSMESSUNG: 'an' }, beispiele).find((x) => x.id === 'besuchsmessung');
+    const an = umgebungPruefen({ ...GUTE_UMGEBUNG, CLENARIS_BESUCHSMESSUNG: 'an' }, beispiele, ARTEFAKT).find((x) => x.id === 'besuchsmessung');
     assert.equal(an?.stand, 'WARNUNG');
     assert.match(an!.meldung, /TA-02/);
   });
 
+  // 2026-09-30, Production-V2-Härtung: Der Stand wird aus RELEASE.json und
+  // BUILD_ID belegt (`src/lib/release/identitaet.ts`), nie mehr aus einer
+  // Variablen. Gegen den alten Stand scheitern die ersten zwei Fälle: Ohne
+  // RELEASE.json genügte ein APP_VERSION mit 40 Zeichen (Warnung), und die
+  // BUILD_ID wurde gar nicht gelesen.
+  it('ohne RELEASE.json ist der Stand nicht belegt — APP_VERSION genügt nicht', () => {
+    const p = umgebungPruefen({ ...GUTE_UMGEBUNG, APP_VERSION: 'a'.repeat(40) }, beispiele, OHNE_MANIFEST).find((x) => x.id === 'release');
+    assert.equal(p?.stand, 'FEHLER');
+    assert.match(p!.meldung, /Kein RELEASE\.json/);
+    assert.match(p!.meldung, /APP_VERSION genügt nicht/);
+  });
+
+  it('BUILD_ID passt nicht zu RELEASE.json: Fehler', () => {
+    const d = pruefVerzeichnis({ buildId: 'anderer-bau-0009' });
+    try {
+      const p = umgebungPruefen(GUTE_UMGEBUNG, beispiele, d).find((x) => x.id === 'release');
+      assert.equal(p?.stand, 'FEHLER');
+      assert.match(p!.meldung, /BUILD_ID des Baus \(anderer-bau-0009\) weicht von RELEASE\.json/);
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  });
+
+  it('Probe, erfundene Auslieferbarkeit und Format 1 sind je ein Fehler', () => {
+    const { format: _format, quelleZeitUtc: _zeit, ...ohneFormat } = pruefManifest();
+    const faelle: [string, unknown, RegExp][] = [
+      ['Probe', pruefManifest({ auslieferbar: false, ci: null }), /auslieferbar=false/],
+      // Von Hand auf `true` gesetzt, aber ohne CI-Herkunft: Die Regel
+      // (`auslieferbarNach`) entscheidet, nicht das Feld.
+      ['erfundene Auslieferbarkeit', pruefManifest({ auslieferbar: true, ci: null }), /erfüllt die Regel aber nicht/],
+      ['Format 1', { ...ohneFormat, format: 1, erstelltUtc: '2026-09-28T10:00:00.000Z' }, /Format 1/],
+    ];
+    for (const [name, manifest, grund] of faelle) {
+      const d = pruefVerzeichnis({ manifest });
+      try {
+        const p = releasePruefen(d, GUTE_UMGEBUNG).find((x) => x.id === 'release');
+        assert.equal(p?.stand, 'FEHLER', name);
+        assert.match(p!.meldung, grund, name);
+      } finally {
+        rmSync(d, { recursive: true, force: true });
+      }
+    }
+  });
+
+  it('das Prüfmanifest der Prüfreihe wird von der Vorprüfung nie beachtet — auch nicht in der Umgebung test', () => {
+    const pruef = join(OHNE_MANIFEST, 'pruef-release.json');
+    writeFileSync(pruef, JSON.stringify(pruefManifest()));
+    const p = releasePruefen(OHNE_MANIFEST, { ...GUTE_UMGEBUNG, CLENARIS_UMGEBUNG: 'test', CLENARIS_PRUEF_RELEASE_MANIFEST: pruef }).find(
+      (x) => x.id === 'release',
+    );
+    assert.equal(p?.stand, 'FEHLER');
+    assert.match(p!.meldung, /Kein RELEASE\.json/);
+  });
+
+  it('ein belegtes, auslieferbares Release besteht und nennt Version, Commit und Build', () => {
+    const p = releasePruefen(ARTEFAKT, GUTE_UMGEBUNG).find((x) => x.id === 'release');
+    assert.equal(p?.stand, 'OK');
+    assert.ok(p!.meldung.includes(PRUEF_ARTEFAKT_COMMIT.slice(0, 12)) && p!.meldung.includes(PRUEF_BUILD_ID), p!.meldung);
+  });
+
   it('--nur-umgebung ist nie ein Bestehen', () => {
-    assert.equal(auswerten(umgebungPruefen(GUTE_UMGEBUNG, beispiele), true).code, 3);
+    assert.equal(auswerten(umgebungPruefen(GUTE_UMGEBUNG, beispiele, ARTEFAKT), true).code, 3);
     assert.equal(auswerten([{ id: 'x', stand: 'FEHLER', meldung: 'y' }], true).code, 1);
   });
 
   it('als Kindprozess: kein Geheimnis in der Ausgabe — weder bestanden noch gescheitert', () => {
     const tsx = join(WURZEL, 'node_modules', 'tsx', 'dist', 'cli.mjs');
     const skript = join(WURZEL, 'scripts', 'production-preflight.ts');
-    for (const [env, erwartet] of [
-      [GUTE_UMGEBUNG, 3],
-      [{ ...GUTE_UMGEBUNG, ALLOW_DEMO_SEED: 'ja', TRUSTED_PROXY_MODE: 'CLOUDFLARE', JWT_SECRET: 'zu-kurz-marker' }, 1],
+    // Das Arbeitsverzeichnis ist das Release-Verzeichnis, wie auf dem Server:
+    // Die Vorprüfung liest `RELEASE.json` und `.next/BUILD_ID` von dort.
+    // Der dritte Fall zeigt dasselbe wie oben als Prozess: Ohne Manifest
+    // rettet auch ein gesetztes APP_VERSION den Start nicht mehr.
+    // Anders als auf dem Server liegt hier `.env.example` bei (siehe oben):
+    // Das Artefakt schliesst jede `.env*` aus, dort greift allein das
+    // Platzhaltermuster in `istBekannterWert` — es erkennt heute jeden
+    // Beispielwert der Datei, der Abgleich ist die zweite Sicherung.
+    for (const [env, erwartet, cwd] of [
+      [GUTE_UMGEBUNG, 3, ARTEFAKT],
+      [{ ...GUTE_UMGEBUNG, ALLOW_DEMO_SEED: 'ja', TRUSTED_PROXY_MODE: 'CLOUDFLARE', JWT_SECRET: 'zu-kurz-marker' }, 1, ARTEFAKT],
+      [{ ...GUTE_UMGEBUNG, APP_VERSION: 'a'.repeat(40) }, 1, OHNE_MANIFEST],
     ] as const) {
       const lauf = spawnSync(process.execPath, [tsx, skript, '--nur-umgebung', '--ohne-dotenv'], {
-        cwd: WURZEL,
+        cwd,
         encoding: 'utf8',
         // Bewusst **nicht** `...process.env`: Die Vorprüfung soll nur sehen,
         // was hier steht — keine örtliche Konfiguration, die einen Fall grün

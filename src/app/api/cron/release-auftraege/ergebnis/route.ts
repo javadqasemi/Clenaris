@@ -13,9 +13,14 @@ export const runtime = 'nodejs';
  * POST /api/cron/release-auftraege/ergebnis — Ergebnis einer Ausführung
  * (DEPLOYING → SUCCEEDED | FAILED | ROLLED_BACK).
  *
- * Nur mit dem Ausführungsschlüssel der Übernahme. SUCCEEDED verlangt, dass
- * die Instanz danach die Zielversion meldet. Dieselbe Meldung erneut → 200
- * mit `wiederholt: true`; eine abweichende nach einer ersten → 409.
+ * Nur mit dem Ausführungsschlüssel der Übernahme. Seit 2026-09-30 belegt die
+ * **antwortende Instanz** das Ergebnis selbst: SUCCEEDED nur, wenn ihre
+ * Identität (`RELEASE.json` + `BUILD_ID`) Commit und Version des Release
+ * nennt; ROLLED_BACK nur, wenn sie belegt die Ausgangsversion mit einem
+ * anderen Commit nennt; sonst 422 mit dem Grund. FAILED wird immer
+ * angenommen. `aktivierung` (Ausgang der Aktivierung) kommt ins
+ * Prüfprotokoll. Dieselbe Meldung erneut → 200 mit `wiederholt: true`; eine
+ * abweichende nach einer ersten → 409.
  */
 export const POST = defineCronRoute({
   secretEnv: 'RELEASE_EXECUTOR_TOKEN',

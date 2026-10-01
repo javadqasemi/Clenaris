@@ -101,8 +101,10 @@ export const VERSIONEN_ROUTES: RouteDoc[] = [
       'Nur für den Release-Ausführer ausserhalb der Anwendung: Bearer `RELEASE_EXECUTOR_TOKEN` **und** ' +
       'HMAC-Signatur (`x-clenaris-zeit`, `x-clenaris-signatur`, höchstens 5 Minuten alt). Liefert ' +
       'terminierte, fällige Aufträge der eigenen Umgebung mit Commit, Artefakt-Prüfsumme, CI-Stand, ' +
-      'Migrationen, Rücksprungangaben und gegebenenfalls dem Hindernis. 422 bei fremder Umgebung, ' +
-      '503 ohne `CLENARIS_UMGEBUNG`/Signaturschlüssel.',
+      'Migrationen, Rücksprungangaben und gegebenenfalls dem Hindernis (auch: Stand der Instanz nicht belegt), ' +
+      'dazu `laufend` (belegte Identität: Version, Commit, Build-ID, belegt) und `inAusfuehrung` (Aufträge ' +
+      'der Umgebung in DEPLOYING mit Ausführer, Schlüssel und Beginn — zum Fortsetzen). 422 bei fremder ' +
+      'Umgebung, 503 ohne `CLENARIS_UMGEBUNG`/Signaturschlüssel.',
     guard: { kind: 'cron' },
     query: system.releaseAuftraegeQuery,
     extraErrors: [422, 503],
@@ -113,9 +115,11 @@ export const VERSIONEN_ROUTES: RouteDoc[] = [
     tag: 'System',
     summary: 'Auftrag übernehmen (Ausführer)',
     description:
-      'SCHEDULED → DEPLOYING. Nur fällige Aufträge der eigenen Umgebung, Version neuer als die laufende, ' +
-      'CI bestanden, gemessene Prüfsumme = Prüfsumme des Release. Idempotent über `ausfuehrungsSchluessel`; ' +
-      'ein anderer Schlüssel → 409. Steht im Prüfprotokoll. Die Anwendung führt nichts aus.',
+      'SCHEDULED → DEPLOYING. Nur fällige Aufträge der eigenen Umgebung, Identität der Instanz belegt, ' +
+      'Version neuer als die belegte, CI bestanden; gemessene Prüfsumme, `commit` und `zielVersion` aus der ' +
+      'Beilage müssen dem Release entsprechen (sonst 422). Eine Ausführung je Umgebung (sonst 409). ' +
+      'Idempotent über `ausfuehrungsSchluessel`; ein anderer Schlüssel → 409. Steht im Prüfprotokoll. ' +
+      'Die Anwendung führt nichts aus.',
     guard: { kind: 'cron' },
     body: system.releaseUebernahmeSchema,
     extraErrors: [409, 422, 503],
@@ -126,10 +130,13 @@ export const VERSIONEN_ROUTES: RouteDoc[] = [
     tag: 'System',
     summary: 'Ergebnis melden (Ausführer)',
     description:
-      'DEPLOYING → SUCCEEDED, FAILED oder ROLLED_BACK, nur mit dem Schlüssel der Übernahme. SUCCEEDED ' +
-      'verlangt die Zielversion als `laufendeVersion`. Dieselbe Meldung erneut → 200; eine abweichende → 409.',
+      'DEPLOYING → SUCCEEDED, FAILED oder ROLLED_BACK, nur mit dem Schlüssel der Übernahme. Das Ergebnis ' +
+      'belegt die antwortende Instanz: SUCCEEDED nur, wenn ihre Identität Commit und Version des Release ' +
+      'nennt; ROLLED_BACK nur mit belegter Ausgangsversion und anderem Commit; sonst 422. FAILED immer. ' +
+      '`aktivierung` (Ausgang der Aktivierung) steht im Prüfprotokoll. Dieselbe Meldung erneut → 200; ' +
+      'eine abweichende → 409.',
     guard: { kind: 'cron' },
     body: system.releaseErgebnisSchema,
-    extraErrors: [409, 422],
+    extraErrors: [409, 422, 503],
   },
 ];

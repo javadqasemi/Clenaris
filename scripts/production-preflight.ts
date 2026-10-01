@@ -43,6 +43,8 @@ import { connect } from 'node:net';
 import { join } from 'node:path';
 
 import { istOeffentlichesPasswort, istWegwerfDatenbank, OEFFENTLICHE_DEMO_ADRESSEN, OEFFENTLICHE_PASSWOERTER } from '../src/lib/auth/oeffentliche-zugangsdaten';
+import { IDENTITAETS_NAMEN, identitaetLesen } from '../src/lib/release/identitaet';
+import { auslieferbarNach } from '../src/lib/release/manifest';
 
 export type Stand = 'OK' | 'WARNUNG' | 'FEHLER' | 'NICHT_GEPRUEFT';
 
@@ -144,7 +146,13 @@ function unbrauchbareHerkunft(url: string): string | null {
 //  Umgebung — rein, ohne Verbindungen
 // ---------------------------------------------------------------------------
 
-export function umgebungPruefen(env: Umgebung, beispiele: Map<string, string> = beispielwerte()): Pruefung[] {
+/**
+ * `verzeichnis` ist das Release-Verzeichnis, aus dem gestartet werden soll —
+ * dort liegen `RELEASE.json` und `.next/BUILD_ID`. Vorgabe ist das
+ * Arbeitsverzeichnis (die Aktivierung ruft die Vorprüfung im neuen
+ * Verzeichnis auf); die Prüfreihe reicht eigene Verzeichnisse herein.
+ */
+export function umgebungPruefen(env: Umgebung, beispiele: Map<string, string> = beispielwerte(), verzeichnis: string = process.cwd()): Pruefung[] {
   const p: Pruefung[] = [];
   const ok = (id: string, meldung: string) => p.push({ id, stand: 'OK', meldung });
   const fehler = (id: string, meldung: string) => p.push({ id, stand: 'FEHLER', meldung });
@@ -285,29 +293,55 @@ export function umgebungPruefen(env: Umgebung, beispiele: Map<string, string> = 
   if (!gesetzt('REDIS_URL')) warnung('redis', 'REDIS_URL fehlt — Rate-Limits zählen je Prozess.');
 
   // --- Stand ---------------------------------------------------------------
-  const version = env.APP_VERSION?.trim() ?? '';
-  const manifest = releaseManifest();
-  if (manifest && manifest.commit && /^[0-9a-f]{40}$/.test(manifest.commit)) {
-    if (manifest.auslieferbar !== true) fehler('release', 'RELEASE.json sagt auslieferbar=false.');
-    else if (version && version !== manifest.commit) fehler('release', 'APP_VERSION weicht vom Commit in RELEASE.json ab.');
-    else ok('release', `Release ${manifest.commit.slice(0, 12)} (RELEASE.json, auslieferbar).`);
-  } else if (/^[0-9a-f]{40}$/.test(version)) {
-    warnung('release', 'Kein RELEASE.json — Stand nur über APP_VERSION belegt, nicht über ein geprüftes Artefakt.');
-  } else {
-    fehler('release', 'Weder RELEASE.json noch eine Commit-Kennung in APP_VERSION — der Stand ist nicht belegt.');
-  }
+  p.push(...releasePruefen(verzeichnis, env));
 
   return p;
 }
 
-function releaseManifest(): { commit?: string; auslieferbar?: boolean } | null {
-  const datei = join(process.cwd(), 'RELEASE.json');
-  if (!existsSync(datei)) return null;
-  try {
-    return JSON.parse(readFileSync(datei, 'utf8')) as { commit?: string; auslieferbar?: boolean };
-  } catch {
-    return null;
+/**
+ * Der Stand des Verzeichnisses, aus dem gestartet wird (2026-09-30).
+ *
+ * Dieselbe Regel wie die laufende Instanz (`src/lib/release/identitaet.ts`):
+ * belegt nur, wenn `RELEASE.json` (Format 2) und `<distDir>/BUILD_ID`
+ * zusammenpassen. Dazu, was nur vor dem Start zählt: Das Manifest muss sich
+ * `auslieferbar` nennen **und** die Regel dafür erfüllen (`auslieferbarNach`:
+ * CI, `main`, mit Modulen, sauber, `.next`) — eine Probe mit
+ * `auslieferbar: true` von Hand wäre sonst eine Auslieferung.
+ *
+ * **Kein Rückfall auf `APP_VERSION` mehr.** Bis hierher galt ein Stand ohne
+ * `RELEASE.json` als „belegt über APP_VERSION" (Warnung). Eine Variable, die
+ * jeder beim Start setzen kann, belegt aber nichts: Mit ihr liess sich ein
+ * beliebiges Verzeichnis als ein beliebiger Commit ausgeben, und die
+ * Aktivierung hielt die Antwort des Gesundheitsendpunkts für den Beweis.
+ * Ohne Manifest ist der Stand jetzt nicht belegt — ein Fehler.
+ *
+ * Das Prüfmanifest der Prüfreihe (`CLENARIS_PRUEF_RELEASE_MANIFEST`) wird
+ * hier nie beachtet, auch nicht in der Umgebung `test`: Die Vorprüfung prüft
+ * das Artefakt auf der Platte, nicht was eine Variable ihr vorgibt. Dass die
+ * Variable gesetzt ist, meldet der Schalterteil oben als eigenen Fehler.
+ */
+export function releasePruefen(verzeichnis: string, env: Umgebung): Pruefung[] {
+  const identitaet = identitaetLesen({ verzeichnis, env: { ...env, CLENARIS_PRUEF_RELEASE_MANIFEST: undefined } });
+  const m = identitaet.manifest;
+  if (!identitaet.belegt || !m) {
+    const grund = identitaet.zustand === 'ohne-manifest'
+      ? 'Kein RELEASE.json — der Stand ist nicht belegt. APP_VERSION genügt nicht: Eine Variable beweist nicht, welcher Code hier liegt.'
+      : `Stand nicht belegt (${IDENTITAETS_NAMEN[identitaet.zustand]}): ${identitaet.grund ?? 'unbekannt'}`;
+    return [{ id: 'release', stand: 'FEHLER', meldung: grund }];
   }
+  if (!m.auslieferbar) {
+    return [{ id: 'release', stand: 'FEHLER', meldung: 'RELEASE.json sagt auslieferbar=false — eine Probe, keine Auslieferung.' }];
+  }
+  if (!auslieferbarNach(m)) {
+    return [
+      {
+        id: 'release',
+        stand: 'FEHLER',
+        meldung: 'RELEASE.json nennt sich auslieferbar, erfüllt die Regel aber nicht (Bau aus der CI auf main, mit Modulen, sauber, .next).',
+      },
+    ];
+  }
+  return [{ id: 'release', stand: 'OK', meldung: `Release ${m.version} · ${m.commit.slice(0, 12)} · Build ${m.buildId} (RELEASE.json und BUILD_ID passen, auslieferbar).` }];
 }
 
 // ---------------------------------------------------------------------------

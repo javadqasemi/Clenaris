@@ -1,10 +1,14 @@
 import { after, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 import { call, data, get, patch, post, requireServer } from '../helpers/client';
 import { loginAs } from '../helpers/accounts';
+import { PAKET_VERSION } from '../helpers/pruefartefakt';
 import { resetRateLimits } from '../helpers/rate-limit';
 import { testDb, testDbGrund, testDbSchliessen } from '../helpers/testdb';
+import { PRUEF_IDENTITAET_COMMIT } from '../helpers/webhooks';
 
 /**
  * Die Abläufe, die Geld und Verbindlichkeiten erzeugen.
@@ -272,6 +276,39 @@ describe('Öffentliche Endpunkte', { concurrency: 1 }, async () => {
       `keine angewandten Migrationen gezählt: ${daten.migrationen}`,
     );
     assert.ok(daten.laufzeitSekunden >= 0);
+  });
+
+  /**
+   * Seit 2026-09-30 ist „welcher Stand läuft" eine belegte Aussage: Commit und
+   * Version aus `RELEASE.json` (beim Prüfserver das Prüfmanifest aus
+   * `scripts/test-server.ts`), nur gültig, wenn dessen Build-ID die des Baus
+   * ist, aus dem der Server ausliefert. Die Aktivierung auf dem Server liest
+   * genau diese Felder und gilt erst als gesund, wenn Commit **und** Build-ID
+   * stimmen und `identitaet` `belegt` ist.
+   *
+   * Gegen den alten Stand scheitert der Fall: `version` war `APP_VERSION` —
+   * beim Prüfserver nicht gesetzt, also `null` —, und `buildId`, `release`
+   * und `identitaet` gab es nicht.
+   */
+  it('/api/health nennt Commit, Build-ID und Identitätsstand der laufenden Instanz', async () => {
+    const response = await get<{
+      data: { version: string | null; buildId: string | null; release: string | null; identitaet: string };
+    }>('/api/health');
+    assert.equal(response.status, 200, response.text);
+    const daten = response.payload.data;
+
+    // Der Bau, aus dem der Prüfserver läuft — dasselbe Verzeichnis wie in
+    // `scripts/test-server.ts` (NEXT_DIST_DIR, sonst .next).
+    const bauId = join(__dirname, '..', '..', process.env.NEXT_DIST_DIR?.trim() || '.next', 'BUILD_ID');
+    assert.ok(existsSync(bauId), `kein Bau unter ${bauId}`);
+
+    assert.equal(daten.identitaet, 'belegt', 'der Prüfserver belegt seinen Stand nicht — läuft er über scripts/test-server.ts?');
+    assert.equal(daten.version, PRUEF_IDENTITAET_COMMIT);
+    assert.equal(daten.release, PAKET_VERSION);
+    assert.equal(daten.buildId, readFileSync(bauId, 'utf8').trim());
+    // Der Grund einer fehlenden Belegung und das Manifest bleiben drinnen —
+    // der Endpunkt ist unangemeldet.
+    assert.ok(!('grund' in daten) && !('manifest' in daten));
   });
 
   it('erkennt eine Postleitzahl im Einsatzgebiet', async () => {

@@ -14,10 +14,12 @@ export const runtime = 'nodejs';
  * übernehmen (SCHEDULED → DEPLOYING).
  *
  * Bearer `RELEASE_EXECUTOR_TOKEN` und Signatur über den Rohrumpf. Die
- * Bedingungen (Umgebung, fällig, CI bestanden, Prüfsumme gleich, Version
- * neuer) stehen in `release-ausfuehrung.service.ts`. Idempotent über
- * `ausfuehrungsSchluessel`: dieselbe Übernahme erneut → 200 mit
- * `wiederholt: true`; ein anderer Schlüssel → 409.
+ * Bedingungen (Umgebung, fällig, Identität der Instanz belegt, Version neuer
+ * als die belegte, CI bestanden, gemessene Prüfsumme, Commit und Zielversion
+ * gleich dem Release, keine andere Ausführung in der Umgebung) stehen in
+ * `release-ausfuehrung.service.ts`. Idempotent über `ausfuehrungsSchluessel`:
+ * dieselbe Übernahme erneut → 200 mit `wiederholt: true`; ein anderer
+ * Schlüssel → 409, derselbe Schlüssel mit anderem Artefakt ebenfalls.
  */
 export const POST = defineCronRoute({
   secretEnv: 'RELEASE_EXECUTOR_TOKEN',
