@@ -5,7 +5,15 @@
  *   npm ci
  *   node scripts/react-hydrationskorrektur.mjs --pruefen
  *   npm run build            # gegen eine Datenbank OHNE Demobestand
+ *   cp -a .next "$SICHERUNG" # BEVOR ein Server darauf läuft (Prüfserver, next start)
+ *   …                        # Demobestand einspielen, prüfen
+ *   rm -rf .next && mv "$SICHERUNG" .next
  *   npx tsx scripts/release-artefakt.ts --ausgabe release/ [--ohne-module] [--unsauber]
+ *
+ * (Oder der Prüfserver läuft von vornherein auf einer Kopie, `NEXT_DIST_DIR`,
+ * und `.next` bleibt unberührt.) Ein Server schreibt neu gerenderte Seiten in
+ * sein Bauverzeichnis zurück; ein Bau, auf dem einer lief, wird nicht gepackt
+ * — siehe `bauPruefen`.
  *
  * Ergebnis im Ausgabeverzeichnis:
  *
@@ -48,6 +56,8 @@
  *    wurde nur RB-001 geprüft; ein Baum ohne RB-002 wäre ausgeliefert worden,
  *    und nach Tagen Laufzeit hätten veröffentlichte Inhalte bis zu einer
  *    Stunde gefehlt (Kopf von `scripts/next-cachezeit-korrektur.mjs`);
+ *  • **einen Bau, auf dem schon ein Server lief** — vorgerenderte Seiten, die
+ *    jünger sind als das Ende des Baus (`nachDemBauGeschrieben`);
  *  • **Demodaten im Bau** — erfundene Bewertungen, Beispielartikel, Namen und
  *    Adressen der Demokundschaft in vorgerenderten Seiten, Sitemap oder
  *    Manifesten (`prisma/demo-kennzeichen.ts`). Die Meldung nennt die Datei,
@@ -120,6 +130,8 @@ import {
   ignoriertImArchiv,
   manifestBauen,
   migrationenAuflisten,
+  nachDemBauGeschrieben,
+  nachtraeglichMeldung,
   packliste,
   quelleZeit,
   tarArtErkennen,
@@ -228,6 +240,14 @@ function tarLaufen(befehl: { argumente: string[]; gzip: string[] | null }, wurze
  *  • **Vollständig:** `BUILD_ID` allein reicht nicht, Next schreibt sie früh;
  *    erst `routes-manifest.json` und `prerender-manifest.json` zeigen einen
  *    abgeschlossenen Bau (dieselbe Falle wie bei `test:server`).
+ *  • **Unberührt** (`nachDemBauGeschrieben`): Kein Server ist auf diesem
+ *    Bauverzeichnis gelaufen. `next start` schreibt neu gerenderte Seiten nach
+ *    `server/app` zurück, mit seinem Datenbestand — in der Pipeline läuft der
+ *    Prüfserver über dem Demobestand und den Daten der Prüfreihen. Ohne diese
+ *    Prüfung hätte ein sauber gebauter, danach geprüfter Bau entweder die
+ *    Demodaten-Stolperfalle ausgelöst (mit der falschen Ursache in der
+ *    Meldung) oder, wo die Prüfdaten kein Kennzeichen tragen, still Seiten aus
+ *    dem Prüflauf ausgeliefert.
  *  • **Ohne Demodaten** (`prisma/demo-kennzeichen.ts`): Die Pipeline spielt
  *    den Demobestand für die Prüfreihen ein, und die Website wird beim Bau
  *    vorgerendert. Ein Bau gegen diese Datenbank trägt erfundene Bewertungen
@@ -235,6 +255,9 @@ function tarLaufen(befehl: { argumente: string[]; gzip: string[] | null }, wurze
  *    echten Website, bis die erste Neuvalidierung sie ersetzt. Es gibt keinen
  *    Schalter dagegen: Eine Probe mit Demodaten ist mit `--ohne-module` nicht
  *    ungefährlicher, sie landet nur seltener auf einem Server.
+ *
+ * Beide Befunde kommen zusammen in eine Meldung: Wer nur den ersten sieht und
+ * behebt, fände den zweiten erst im nächsten roten Lauf.
  *
  * Exportiert für `tests/api/release-artefakt.test.ts`.
  */
@@ -245,8 +268,12 @@ export function bauPruefen(wurzel: string, distDir: string): string {
       throw new Error(`${distDir}/${datei} fehlt — der Bau ist nicht vollständig (oder läuft noch).`);
     }
   }
+  const befunde: string[] = [];
+  const nachtraeglich = nachDemBauGeschrieben(wurzel, distDir);
+  if (nachtraeglich.length > 0) befunde.push(nachtraeglichMeldung(nachtraeglich, distDir));
   const treffer = demodatenSuchen(wurzel, distDir);
-  if (treffer.length > 0) throw new Error(demodatenMeldung(treffer));
+  if (treffer.length > 0) befunde.push(demodatenMeldung(treffer));
+  if (befunde.length > 0) throw new Error(befunde.join('\n\n'));
   const buildId = readFileSync(join(bau, 'BUILD_ID'), 'utf8').trim();
   if (!buildId) throw new Error(`${distDir}/BUILD_ID ist leer.`);
   return buildId;

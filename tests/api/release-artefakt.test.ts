@@ -2,7 +2,7 @@ import { after, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
@@ -23,6 +23,7 @@ import {
   ignoriertImArchiv,
   manifestBauen,
   migrationenAuflisten,
+  nachDemBauGeschrieben,
   quelleZeit,
   tarArtErkennen,
   tarAufruf,
@@ -97,6 +98,18 @@ function baum(wurzel: string, dateien: Record<string, string>): void {
     mkdirSync(dirname(join(wurzel, pfad)), { recursive: true });
     writeFileSync(join(wurzel, pfad), inhalt);
   }
+}
+
+/**
+ * Wie `next build`: Das Vorrender-Manifest entsteht als Letztes, alles
+ * Vorgerenderte ist älter. Eine Stunde in der Zukunft, damit auch die
+ * Dateien, die eine Prüfung danach noch „als Teil des Baus" anlegt, älter
+ * bleiben. Liefert die Zeit in Sekunden für `utimesSync`.
+ */
+function bauAbschliessen(wurzel: string, distDir = '.next'): number {
+  const ende = Math.floor(Date.now() / 1000) + 3600;
+  utimesSync(join(wurzel, distDir, 'prerender-manifest.json'), ende, ende);
+  return ende;
 }
 
 /**
@@ -538,6 +551,8 @@ describe('Release-Artefakt: Stolperfalle Demodaten', () => {
       '.next/server/chunks/123.js': `const gesperrt = ['${DEMO_KUNDSCHAFT.wyss.email}'];`,
     };
     baum(d, sauber);
+    // Der Bau gegen den Demobestand: die Seiten mit Demodaten sind Teil des Baus, nicht nachträglich geschrieben.
+    bauAbschliessen(d);
     assert.equal(bauPruefen(d, '.next'), 'Bau-1', 'ein Bau ohne Demodaten ist packbar');
 
     baum(d, {
@@ -557,6 +572,7 @@ describe('Release-Artefakt: Stolperfalle Demodaten', () => {
       (fehler: unknown) => {
         assert.ok(fehler instanceof Error);
         assert.match(fehler.message, /^Demodaten im Bau — Packen verweigert/);
+        assert.doesNotMatch(fehler.message, /nach dem Bauen verändert/, 'der Bau selbst trug die Demodaten');
         assert.match(fehler.message, /\.next\/server\/app\/bewertungen\.html \(Demokundschaft\)/);
         assert.match(fehler.message, /\.next\/server\/app\/sitemap\.xml\.body/);
         // Die Meldung nennt die Datei, nicht den Wert — sie steht im öffentlichen CI-Protokoll.
@@ -579,6 +595,55 @@ describe('Release-Artefakt: Stolperfalle Demodaten', () => {
     // Die Meldung kürzt lange Listen.
     const viele = Array.from({ length: 25 }, (_, i) => ({ datei: `.next/server/app/s${i}.html`, arten: ['Demo-Bewertung'] }));
     assert.match(demodatenMeldung(viele), /… und 5 weitere/);
+  });
+
+  /**
+   * Der Prüfserver der Pipeline läuft auf dem Bauverzeichnis und schreibt neu
+   * gerenderte Seiten nach `server/app` zurück — mit Demobestand und
+   * Prüfdaten. Bis 2026-10-01 fiel das nur auf, wo ein Demokennzeichen traf,
+   * und die Meldung nannte dann die falsche Ursache („gegen eine Datenbank
+   * ohne Demobestand bauen" behebt es nicht). Eine Seite mit Prüfdaten ohne
+   * Kennzeichen wäre still mitgereist.
+   */
+  it('ein Bau, auf dem ein Server lief, wird nicht gepackt — auch ohne Demodaten', () => {
+    const d = neuesVerzeichnis();
+    baum(d, {
+      '.next/BUILD_ID': 'Bau-2',
+      '.next/routes-manifest.json': '{}',
+      '.next/server/app/index.html': '<h1>Clenaris</h1>',
+      '.next/server/app/blog.html': '<h1>Blog</h1>',
+      '.next/server/app/page.js.nft.json': '{"version":1,"files":[]}',
+      '.next/prerender-manifest.json': '{"routes":{"/":{}}}',
+    });
+    const ende = bauAbschliessen(d);
+    assert.deepEqual(nachDemBauGeschrieben(d, '.next'), []);
+    assert.equal(bauPruefen(d, '.next'), 'Bau-2', 'ein unberührter Bau ist packbar');
+
+    // Die Dateiverfolgung entsteht am Ende des Baus, nach dem Vorrender-Manifest — kein Befund.
+    utimesSync(join(d, '.next', 'server', 'app', 'page.js.nft.json'), ende + 60, ende + 60);
+    assert.deepEqual(nachDemBauGeschrieben(d, '.next'), []);
+
+    // Eine Stunde später rendert der Prüfserver den Blog neu — mit einem Beitrag aus einer Prüfung, ohne Demokennzeichen.
+    writeFileSync(join(d, '.next', 'server', 'app', 'blog.html'), '<h1>Blog</h1><article>Prüfbeitrag 1759238943</article>');
+    utimesSync(join(d, '.next', 'server', 'app', 'blog.html'), ende + 3600, ende + 3600);
+    assert.deepEqual(demodatenSuchen(d, '.next'), [], 'die Demodaten-Stolperfalle sieht nichts');
+    assert.deepEqual(nachDemBauGeschrieben(d, '.next'), ['.next/server/app/blog.html']);
+    assert.throws(
+      () => bauPruefen(d, '.next'),
+      (fehler: unknown) => {
+        assert.ok(fehler instanceof Error);
+        assert.match(fehler.message, /^Der Bau wurde nach dem Bauen verändert — Packen verweigert/);
+        assert.match(fehler.message, /\n {2}\.next\/server\/app\/blog\.html\n/);
+        assert.match(fehler.message, /cp -a/, 'die Meldung nennt den richtigen Weg');
+        assert.doesNotMatch(fehler.message, /Demodaten im Bau/);
+        return true;
+      },
+    );
+
+    // Trägt die neu gerenderte Seite zusätzlich Demodaten, stehen beide Befunde in einer Meldung.
+    writeFileSync(join(d, '.next', 'server', 'app', 'index.html'), `<p>${DEMO_KUNDSCHAFT.wyss.vorname} ${DEMO_KUNDSCHAFT.wyss.nachname}</p>`);
+    utimesSync(join(d, '.next', 'server', 'app', 'index.html'), ende + 3600, ende + 3600);
+    assert.throws(() => bauPruefen(d, '.next'), /nach dem Bauen verändert[\s\S]*\.next\/server\/app\/index\.html[\s\S]*\n\nDemodaten im Bau/);
   });
 
   it('die Demokennzeichen treffen keine Konfigurationsdaten', () => {

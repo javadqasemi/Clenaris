@@ -32,7 +32,7 @@
  * wird hier nicht wiederholt, sondern geparst: Was diese Datei baut, muss dort
  * gültig sein, sonst schreibt das Packskript nichts.
  */
-import { existsSync, lstatSync, readdirSync, readFileSync, type Dirent } from 'node:fs';
+import { existsSync, lstatSync, readdirSync, readFileSync, statSync, type Dirent } from 'node:fs';
 import { join } from 'node:path';
 
 import { DEMO_KENNZEICHEN, type Demokennzeichen } from '../../prisma/demo-kennzeichen';
@@ -731,6 +731,82 @@ export function artefaktName(commit: string, mitModulen: boolean): string {
 }
 
 // ===========================================================================
+//  Stolperfalle: ein Server lief auf dem Bau
+// ===========================================================================
+
+/**
+ * Dateien unter `<distDir>/server`, die nach dem Ende von `next build`
+ * geschrieben wurden — der Abdruck eines Servers, der auf diesem
+ * Bauverzeichnis lief.
+ *
+ * **Was passiert.** `next start` rendert Seiten mit Neuvalidierung
+ * (`revalidate`, auf der Website 1800 bzw. 3600 Sekunden) bei Bedarf neu und
+ * schreibt sie über den eingebauten Dateizwischenspeicher nach
+ * `<distDir>/server/app` zurück — mit dem Datenbestand, gegen den er gerade
+ * läuft. In der Pipeline ist das der Prüfserver über dem Demobestand und den
+ * Daten, die die Prüfreihen anlegen. Gepackt würde danach nicht der geprüfte
+ * Bau, sondern ein Bau mit Seiten aus dem Prüflauf; ausgeliefert stünden sie
+ * auf der echten Website, bis die erste Neuvalidierung sie ersetzt.
+ * Nachgemessen an vier Bauten dieses Repositories, auf denen danach ein
+ * Server lief: 27, 51, 51 und 105 vorgerenderte Dateien waren nach dem Bau
+ * neu geschrieben worden, manche über zwei Stunden nach `BUILD_ID`.
+ *
+ * **Warum die Demodaten-Stolperfalle allein nicht reicht.** Sie findet nur,
+ * was in `prisma/demo-kennzeichen.ts` steht. Ein von einer Prüfung angelegter
+ * Beitrag oder eine Bewertung mit Prüfnamen trägt kein Kennzeichen und reiste
+ * durch. Und wo sie anschlägt, nennt sie die falsche Ursache: „gegen eine
+ * Datenbank ohne Demobestand bauen" behebt einen Bau, der danach von einem
+ * Server überschrieben wird, gerade nicht.
+ *
+ * **Woran es erkannt wird.** `next build` schreibt `prerender-manifest.json`
+ * erst, nachdem alle vorgerenderten Seiten an ihrem Platz liegen. Nachgemessen
+ * an vier Bauten (Next 15.5): Unter `server/` ist danach nur noch die
+ * Dateiverfolgung (`*.nft.json`) entstanden, ganz am Ende des Baus; jede
+ * andere jüngere Datei lag zeitlich **nach** dem Ende des Baus (`trace`) und
+ * war eine neu gerenderte Seite. Ein Fingerabdruck direkt nach dem Bau wäre
+ * genauer, verlangte aber einen eigenen Schritt in jeder Pipeline, die packt —
+ * die Reihenfolge der Änderungszeiten bringt jeder Bau schon mit.
+ *
+ * Voraussetzung: Wer den Bau sichert oder verschiebt, erhält die
+ * Änderungszeiten (`cp -a`, `mv`, `tar`). Eine Kopie ohne sie (`cp -r`) sieht
+ * hier wie ein veränderter Bau aus — das hält an, statt still durchzulassen,
+ * und die Meldung sagt es.
+ */
+export function nachDemBauGeschrieben(wurzel: string, distDir: string): string[] {
+  const ende = statSync(join(wurzel, distDir, 'prerender-manifest.json')).mtimeMs;
+  const befund: string[] = [];
+  const ablaufen = (verzeichnis: string) => {
+    let kinder: Dirent[];
+    try {
+      kinder = readdirSync(join(wurzel, verzeichnis), { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const kind of kinder) {
+      const pfad = `${verzeichnis}/${kind.name}`;
+      if (kind.isDirectory()) ablaufen(pfad);
+      else if (!kind.name.endsWith('.nft.json') && lstatSync(join(wurzel, pfad)).mtimeMs > ende) befund.push(pfad);
+    }
+  };
+  ablaufen(`${distDir}/server`);
+  return befund.sort();
+}
+
+/** Die Meldung, mit der ein nachträglich veränderter Bau abgewiesen wird — mit dem Weg, wie es richtig geht. */
+export function nachtraeglichMeldung(dateien: readonly string[], distDir: string, hoechstens = 20): string {
+  const zeilen = dateien.slice(0, hoechstens).map((d) => `  ${d}`);
+  if (dateien.length > hoechstens) zeilen.push(`  … und ${dateien.length - hoechstens} weitere`);
+  return [
+    `Der Bau wurde nach dem Bauen verändert — Packen verweigert. ${dateien.length} Datei(en) unter ${distDir}/server sind jünger als ${distDir}/prerender-manifest.json, das next build nach allen vorgerenderten Seiten schreibt:`,
+    ...zeilen,
+    `Auf diesem Bauverzeichnis lief ein Server: Seiten mit Neuvalidierung rendert er neu und schreibt sie nach ${distDir}/server/app zurück, mit dem Datenbestand, gegen den er lief (in der Pipeline Demobestand und Prüfdaten).`,
+    'Ein Bau gegen eine Datenbank ohne Demobestand allein behebt das nicht. Gepackt wird der unberührte Bau: direkt nach next build sichern',
+    `(cp -a, damit die Änderungszeiten bleiben — eine Kopie ohne sie sieht hier wie ein veränderter Bau aus) und vor dem Packen zurücklegen,`,
+    `oder den Prüfserver auf einer Kopie laufen lassen (NEXT_DIST_DIR) und ${distDir} unberührt packen.`,
+  ].join('\n');
+}
+
+// ===========================================================================
 //  Stolperfalle: Demodaten im Bau
 // ===========================================================================
 
@@ -846,8 +922,9 @@ export function demodatenMeldung(treffer: readonly Demotreffer[], hoechstens = 2
   return [
     `Demodaten im Bau — Packen verweigert. ${treffer.length} Datei(en) enthalten Kennzeichen aus prisma/demo-kennzeichen.ts:`,
     ...zeilen,
-    'Der Bau lief gegen eine Datenbank mit Demobestand (npm run db:seed:demo); die vorgerenderte Website trüge erfundene',
-    'Bewertungen und Beispielartikel in die Produktion. Ein Artefakt entsteht aus einem Bau gegen eine Datenbank ohne',
-    'Demobestand (Konfigurations-Seed: npm run db:seed).',
+    'Der Bau lief gegen eine Datenbank mit Demobestand (npm run db:seed:demo), oder ein Server über einem Demobestand hat Seiten',
+    'nachträglich hineingeschrieben; die vorgerenderte Website trüge erfundene Bewertungen und Beispielartikel in die Produktion.',
+    'Ein Artefakt entsteht aus einem Bau gegen eine Datenbank ohne Demobestand (Konfigurations-Seed: npm run db:seed) und wird',
+    'gepackt, bevor ein Server auf diesem Bauverzeichnis lief.',
   ].join('\n');
 }
