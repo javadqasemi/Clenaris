@@ -66,9 +66,9 @@ export const ERWARTETE_ABWEICHUNGEN: Record<ErwarteteAbweichung, string> = {
     'Build-ID: Next würfelt sie je Bau (kein generateBuildId); sie steht in BUILD_ID, im HTML (Pfad des Bau-Manifests) und in den Manifesten.',
   'build-id-verzeichnis': 'Verzeichnis static/<Build-ID>: derselbe Inhalt unter dem Namen der jeweiligen Build-ID.',
   'vorschau-schluessel':
-    'prerender-manifest.json, preview.previewModeId/-SigningKey/-EncryptionKey: je Bau zufällig, damit ein Vorschau-Cookie nur für diesen Bau gilt.',
+    'Vorschauschlüssel (prerender-manifest.json unter preview, server/middleware-manifest.json unter env.__NEXT_PREVIEW_MODE_*): je Bau zufällig, damit ein Vorschau-Cookie nur für diesen Bau gilt.',
   aktionsschluessel:
-    'server-reference-manifest, encryptionKey: je Bau zufällig (ohne NEXT_SERVER_ACTIONS_ENCRYPTION_KEY); verschlüsselt die gebundenen Argumente von Server Actions.',
+    'Aktionsschlüssel (server/server-reference-manifest.json encryptionKey, server/middleware-manifest.json env.NEXT_SERVER_ACTIONS_ENCRYPTION_KEY): je Bau zufällig (ohne NEXT_SERVER_ACTIONS_ENCRYPTION_KEY); verschlüsselt die gebundenen Argumente von Server Actions.',
   spurdatei: 'Spurdateien (trace, *.nft.json): Zeitmessungen und Dateilisten des Bauvorgangs, von der laufenden Anwendung nie gelesen.',
 };
 
@@ -116,6 +116,19 @@ function alleErsetzen(text: string, suche: string, durch: string): { text: strin
   return { text: teile.join(durch), anzahl: teile.length - 1 };
 }
 
+/**
+ * Die je Bau gewürfelten Werte, die Next der Middleware unter `env` mitgibt
+ * (`server/middleware-manifest.json`), mit der Regel, unter der sie erwartet
+ * sind. Eine abschliessende Liste wie `ERWARTETE_ABWEICHUNGEN`: Ein neuer
+ * Schlüssel unter `env` bleibt ein Befund, bis jemand ihn hier begründet.
+ */
+const MIDDLEWARE_SCHLUESSEL: readonly (readonly [string, 'vorschau-schluessel' | 'aktionsschluessel'])[] = [
+  ['NEXT_SERVER_ACTIONS_ENCRYPTION_KEY', 'aktionsschluessel'],
+  ['__NEXT_PREVIEW_MODE_ID', 'vorschau-schluessel'],
+  ['__NEXT_PREVIEW_MODE_SIGNING_KEY', 'vorschau-schluessel'],
+  ['__NEXT_PREVIEW_MODE_ENCRYPTION_KEY', 'vorschau-schluessel'],
+];
+
 /** Ein JSON-Manifest gezielt ändern; unlesbar bleibt es unverändert und fällt im Vergleich auf. */
 function jsonAendern(text: string, aendern: (wert: Record<string, unknown>) => boolean): string {
   try {
@@ -140,6 +153,27 @@ function jsonAendern(text: string, aendern: (wert: Record<string, unknown>) => b
  *    Bau statisch und im anderen dynamisch ist, ist ein Befund.
  *  • `server/server-reference-manifest.{json,js}`: nur `encryptionKey`. Die
  *    Kennungen der Aktionen werden verglichen.
+ *  • `server/middleware-manifest.json`: nur die vier Schlüssel unter `env`
+ *    jedes Eintrags in `middleware` und `functions`
+ *    (`NEXT_SERVER_ACTIONS_ENCRYPTION_KEY`, `__NEXT_PREVIEW_MODE_ID`,
+ *    `…_SIGNING_KEY`, `…_ENCRYPTION_KEY`). Next 15.5 gibt der Middleware dort
+ *    dieselben Werte mit wie den beiden anderen Manifesten — sie läuft in
+ *    einer eigenen Laufzeit und liest sie nicht aus jenen. Bis 2026-10-01
+ *    fehlte diese Datei hier, und zwei Bauten desselben Commits endeten
+ *    **immer** mit Ausgang 1: Das Werkzeug wäre als Tor unbrauchbar gewesen,
+ *    und wer es dreimal rot sieht, schaltet es ab. `__NEXT_BUILD_ID` steht
+ *    daneben und ist schon durch die Build-ID oben ersetzt; `matchers`,
+ *    `files` und alles andere werden verglichen — eine Middleware, die in
+ *    einem Bau andere Pfade abdeckt, ist ein Befund.
+ *
+ * Wo die Schlüssel stehen, ist nachgemessen, nicht angenommen: Eine Suche
+ * nach den vier Werten über alle Dateien eines echten Baus (ohne `cache/`)
+ * fand sie genau in diesen drei Manifesten. `server-reference-manifest.js`
+ * trägt in Next 15.5 nur den Platzhalter
+ * `process.env.NEXT_SERVER_ACTIONS_ENCRYPTION_KEY` und ist in zwei Bauten
+ * bytegleich; die Regel dafür bleibt trotzdem, weil eine Fassung, die den
+ * Schlüssel dort einsetzt, sonst jeden Vergleich rot machte, ohne dass sich
+ * am Bau etwas geändert hätte.
  *
  * Nur die Manifeste werden als UTF-8-JSON geparst, weil nur dort Felder
  * gezielt ersetzt werden; alles andere bleibt `latin1` (siehe Kopf).
@@ -174,6 +208,28 @@ export function inhaltNormalisieren(pfad: string, inhalt: Buffer, buildId: strin
       manifest.encryptionKey = PLATZHALTER.aktion;
       abweichungen.add('aktionsschluessel');
       return true;
+    });
+  }
+
+  if (pfad === 'server/middleware-manifest.json') {
+    text = jsonAendern(text, (manifest) => {
+      let geaendert = false;
+      for (const gruppe of ['middleware', 'functions']) {
+        const eintraege = manifest[gruppe];
+        if (!eintraege || typeof eintraege !== 'object') continue;
+        for (const eintrag of Object.values(eintraege as Record<string, unknown>)) {
+          const umgebung = eintrag && typeof eintrag === 'object' ? (eintrag as Record<string, unknown>).env : undefined;
+          if (!umgebung || typeof umgebung !== 'object') continue;
+          const werte = umgebung as Record<string, unknown>;
+          for (const [schluessel, art] of MIDDLEWARE_SCHLUESSEL) {
+            if (typeof werte[schluessel] !== 'string') continue;
+            werte[schluessel] = art === 'aktionsschluessel' ? PLATZHALTER.aktion : PLATZHALTER.vorschau;
+            abweichungen.add(art);
+            geaendert = true;
+          }
+        }
+      }
+      return geaendert;
     });
   }
 
