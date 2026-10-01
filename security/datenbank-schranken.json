@@ -1,5 +1,5 @@
 {
-  "_zweck": "Handgeschriebene SQL-Schranken, die das Prisma-Schema nicht kennt. `npm run security:check` sucht jede in prisma/migrations und — mit --datenbank — in der Datenbank. Fehlt eine, hat jemand eine Migration bearbeitet oder `migrate dev` hat sie verworfen. Neue Schranke: hier eintragen.",
+  "_zweck": "Handgeschriebene SQL-Schranken, die das Prisma-Schema nicht kennt. `npm run security:check` bildet aus prisma/migrations den Endstand (angelegt minus wieder entfernt) und hält ihn gegen diese Liste: gelistet, aber nicht angelegt, ist blockierend; angelegt, aber nicht gelistet, eine Warnung. `npx tsx scripts/datenbank-schranken.ts` prüft dieselbe Liste in der Datenbank aus DATABASE_URL über die Kataloge — Teilindex gültig und bereit, Trigger eingeschaltet, Bedingung validiert, Erweiterung vorhanden (Exit 0 bestanden, 1 Befund, 2 nicht geprüft). Fehlt eine, hat jemand eine Migration bearbeitet, `migrate dev` hat sie verworfen oder sie wurde in der Datenbank abgeschaltet. Neue Schranke: hier eintragen. `erweiterungen` nennt nur, was eine Migration anlegt und eine Schranke trägt (btree_gist hinter den Ausschlussbedingungen); plpgsql bringt jeder Postgres-Server mit, und die Vertrauensprüfung lässt die gelisteten Erweiterungen zusätzlich zu ihrer Grundliste zu. Die Listen `teilindizes` und `trigger` lesen auch andere Werkzeuge (Vertrauensprüfung) — Namen, keine Objekte.",
   "teilindizes": [
     "contract_amendments_ein_offener",
     "contract_versions_eine_aktive",
@@ -36,5 +36,37 @@
     "signature_events_kein_update",
     "stock_movements_nur_anfuegen",
     "zahlung_unveraenderlich"
+  ],
+  "pruefbedingungen": [
+    "complaints_reaktion_nach_meldung",
+    "complaints_reaktionszeit_positiv",
+    "employee_payroll_profiles_monat",
+    "equipment_intervall_positiv",
+    "invoices_vertragsperiode_vollstaendig",
+    "materials_werte_nicht_negativ",
+    "payroll_items_monat",
+    "payroll_rates_prozent",
+    "payroll_rates_zeitraum",
+    "quality_inspections_abgeschlossen_vollstaendig",
+    "quality_inspections_punkte_plausibel",
+    "signature_requests_genau_eine_quelle",
+    "site_visit_areas_masse_positiv",
+    "site_visits_bezug",
+    "site_visits_offerte_nach_besichtigung",
+    "stock_movements_vorzeichen",
+    "traffic_events_pfad_form",
+    "traffic_events_sitzung_hash",
+    "withholding_tax_profiles_kinder",
+    "withholding_tax_profiles_zeitraum",
+    "withholding_tax_rates_satz",
+    "withholding_tax_rates_stufe"
+  ],
+  "ausschlussbedingungen": [
+    "invoices_vertragsperiode_ueberlappungsfrei",
+    "payroll_rates_ueberlappungsfrei",
+    "withholding_tax_profiles_ueberlappungsfrei"
+  ],
+  "erweiterungen": [
+    "btree_gist"
   ]
 }
