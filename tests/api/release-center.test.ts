@@ -19,6 +19,7 @@ import { releaseErgebnisSchema, releaseManifestSchema, releaseUebernahmeSchema }
 import {
   aktivierungDeuten,
   artefaktMessen,
+  AUSGANG_KEIN_ERFOLG,
   ausgabeZeile,
   AusfuehrerFehler,
   ciLaufWaehlen,
@@ -929,8 +930,10 @@ describe('Release-Ausführer', { concurrency: 1 }, () => {
 
       // Aktivierung 20: umgeschaltet, ungesund, zurück. Die Instanz belegt die
       // Ausgangsversion mit einem anderen Commit — also ein belegter Rücksprung.
+      // Festgehalten, aber kein Erfolg: Ausgang 2, der Lauf endet rot (seit
+      // 2026-10-01; bis dahin 0, und die Vorlage las `ergebnis` nie).
       const rueck = werkzeug(EINS, 'melden', '--auftrag', auftrag.id, '--aktivierung', '20');
-      assert.equal(rueck.status, 0, rueck.text);
+      assert.equal(rueck.status, AUSGANG_KEIN_ERFOLG, rueck.text);
       assert.deepEqual(rueck.ausgaben, { ergebnis: 'ROLLED_BACK' });
       const zeile = await d.releaseRequest.findUniqueOrThrow({ where: { id: auftrag.id } });
       assert.equal(zeile.status, 'ROLLED_BACK');
@@ -948,12 +951,15 @@ describe('Release-Ausführer', { concurrency: 1 }, () => {
 
       // Aktivierung 0 mit fremder Identität: Der Testserver belegt
       // PRUEF_IDENTITAET_COMMIT, nicht dieses Release. Ohne Wiederholungen
-      // meldet das Werkzeug FAILED mit dem Grund des Servers.
+      // meldet das Werkzeug FAILED mit dem Grund des Servers — und endet rot:
+      // Die Aktivierung war grün, nur dieser Ausgang hält den Lauf davon ab,
+      // ein festgehaltenes Scheitern grün zu beenden (Gegenprüfung 2026-09-30).
       artefaktSchreiben(bytes);
       const richtig = abholen(ZWEI, zweiter.id);
       assert.equal(richtig.status, 0, richtig.text);
       const erfolg = werkzeug(ZWEI, 'melden', '--auftrag', zweiter.id, '--aktivierung', '0');
-      assert.equal(erfolg.status, 0, erfolg.text);
+      assert.equal(erfolg.status, AUSGANG_KEIN_ERFOLG, erfolg.text);
+      assert.match(erfolg.text, /Festgehalten ist FAILED statt SUCCEEDED/);
       assert.deepEqual(erfolg.ausgaben, { ergebnis: 'FAILED' });
       assert.match(erfolg.stdout, /abgewiesen/);
       const zweiteZeile = await d.releaseRequest.findUniqueOrThrow({ where: { id: zweiter.id } });
@@ -988,6 +994,64 @@ describe('Release-Ausführer: Werkzeug und Verträge ohne Server (rein)', () => 
     conclusion: 'success',
     ...ueber,
   });
+
+  /**
+   * Eine Attrappe der Schnittstelle auf 127.0.0.1 — für die Fälle, in denen
+   * das Werkzeug als Prozess gegen „die Anwendung" läuft, ohne
+   * Anwendungsserver. `antworten` bekommt Methode, Pfad samt Abfrage und den
+   * geparsten Rumpf und gibt Status und `data` (oder eine Fehlermeldung in
+   * der Form von `toErrorResponse`) zurück; `null` heisst 404. Die Signatur
+   * prüft die Attrappe nicht — das tun die Fälle gegen den Server oben.
+   */
+  async function attrappeStarten(
+    antworten: (methode: string, pfad: string, rumpf: Record<string, unknown> | null) => { status: number; daten?: unknown; fehler?: string } | null,
+  ): Promise<{ basis: string; schliessen: () => Promise<void> }> {
+    const server = createServer((anfrage, antwort) => {
+      let roh = '';
+      anfrage.on('data', (d: Buffer) => (roh += d.toString()));
+      anfrage.on('end', () => {
+        let rumpf: Record<string, unknown> | null = null;
+        try {
+          rumpf = roh ? (JSON.parse(roh) as Record<string, unknown>) : null;
+        } catch {
+          /* kein JSON — die Attrappe antwortet trotzdem */
+        }
+        const a = antworten(anfrage.method ?? '', anfrage.url ?? '', rumpf);
+        antwort.setHeader('content-type', 'application/json');
+        antwort.statusCode = a?.status ?? 404;
+        antwort.end(JSON.stringify(a?.fehler ? { error: { message: a.fehler } } : { data: a?.daten ?? null }));
+      });
+    });
+    await new Promise<void>((ok) => server.listen(0, '127.0.0.1', ok));
+    return {
+      basis: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
+      schliessen: () => new Promise<void>((ok) => server.close(() => ok())),
+    };
+  }
+
+  /**
+   * Das Werkzeug als eigener Prozess — asynchron gestartet, nicht mit
+   * `spawnSync`: Die Attrappe läuft in diesem Prozess und könnte sonst nicht
+   * antworten. `GITHUB_OUTPUT` zeigt auf eine frische Datei; zurück kommen
+   * Ausgang, Text (stdout und stderr) und der Inhalt der Datei.
+   */
+  function werkzeugAsynchron(
+    args: readonly string[],
+    env: Record<string, string>,
+    ausgabeDatei: string,
+  ): Promise<{ status: number | null; text: string; ausgabe: string }> {
+    rmSync(ausgabeDatei, { force: true });
+    return new Promise((ok) => {
+      const lauf = spawn(process.execPath, [join('node_modules', 'tsx', 'dist', 'cli.mjs'), 'scripts/release-ausfuehrer.ts', ...args], {
+        env: { ...process.env, ...env, GITHUB_OUTPUT: ausgabeDatei },
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      let text = '';
+      lauf.stdout.on('data', (d: Buffer) => (text += d.toString()));
+      lauf.stderr.on('data', (d: Buffer) => (text += d.toString()));
+      lauf.on('close', (status) => ok({ status, text, ausgabe: existsSync(ausgabeDatei) ? readFileSync(ausgabeDatei, 'utf8') : '' }));
+    });
+  }
 
   it('ci-lauf nimmt nur einen abgeschlossenen, grünen Push-Lauf auf main für genau diesen Commit', () => {
     assert.deepEqual(ciLaufWaehlen([lauf(10), lauf(12), lauf(11)], C), { id: '12', url: 'https://github.com/beispiel/clenaris/actions/runs/12' });
@@ -1190,34 +1254,24 @@ describe('Release-Ausführer: Werkzeug und Verträge ohne Server (rein)', () => 
     const AUFTRAG = 'creihenfolge01';
     const uebernahmen: { commit?: string; zielVersion?: string }[] = [];
 
-    const attrappe = createServer((anfrage, antwort) => {
-      let rumpf = '';
-      anfrage.on('data', (d: Buffer) => (rumpf += d.toString()));
-      anfrage.on('end', () => {
-        antwort.setHeader('content-type', 'application/json');
-        if (anfrage.method === 'GET' && anfrage.url?.startsWith('/api/cron/release-auftraege?')) {
-          const lage: Lage = {
-            umgebung: 'test',
-            laufend: { version: '1.0.0', commit: 'c'.repeat(40), buildId: 'bau', belegt: true },
-            auftraege: [
-              { auftragId: AUFTRAG, status: 'SCHEDULED', zielVersion: '9.9.9', vonVersion: '1.0.0', commit, artefaktSha256: summe, ausfuehrungsSchluessel: null, hindernis: null },
-            ],
-            inAusfuehrung: [],
-          };
-          antwort.end(JSON.stringify({ data: lage }));
-          return;
-        }
-        if (anfrage.method === 'POST' && anfrage.url === '/api/cron/release-auftraege/uebernehmen') {
-          uebernahmen.push(JSON.parse(rumpf) as { commit?: string; zielVersion?: string });
-          antwort.end(JSON.stringify({ data: { wiederholt: false, auftrag: { status: 'DEPLOYING' } } }));
-          return;
-        }
-        antwort.statusCode = 404;
-        antwort.end('{}');
-      });
+    const attrappe = await attrappeStarten((methode, pfad, rumpf) => {
+      if (methode === 'GET' && pfad.startsWith('/api/cron/release-auftraege?')) {
+        const lage: Lage = {
+          umgebung: 'test',
+          laufend: { version: '1.0.0', commit: 'c'.repeat(40), buildId: 'bau', belegt: true },
+          auftraege: [
+            { auftragId: AUFTRAG, status: 'SCHEDULED', zielVersion: '9.9.9', vonVersion: '1.0.0', commit, artefaktSha256: summe, ausfuehrungsSchluessel: null, hindernis: null },
+          ],
+          inAusfuehrung: [],
+        };
+        return { status: 200, daten: lage };
+      }
+      if (methode === 'POST' && pfad === '/api/cron/release-auftraege/uebernehmen') {
+        uebernahmen.push((rumpf ?? {}) as { commit?: string; zielVersion?: string });
+        return { status: 200, daten: { wiederholt: false, auftrag: { status: 'DEPLOYING' } } };
+      }
+      return null;
     });
-    await new Promise<void>((ok) => attrappe.listen(0, '127.0.0.1', ok));
-    const port = (attrappe.address() as AddressInfo).port;
 
     const verzeichnisse: string[] = [];
     const artefakt = (praefix: string, beilage: Partial<ArtefaktBeilage> = {}) => {
@@ -1228,45 +1282,19 @@ describe('Release-Ausführer: Werkzeug und Verträge ohne Server (rein)', () => 
       writeFileSync(join(dir, `${name}.json`), JSON.stringify(pruefBeilage(bytes, { commit, version: '9.9.9', ci, ...beilage })));
       return dir;
     };
-    // Asynchron gestartet, nicht mit spawnSync: Die Attrappe läuft in diesem
-    // Prozess und könnte sonst nicht antworten.
     const abholen = (dir: string) =>
-      new Promise<{ status: number | null; text: string; ausgabe: string }>((ok) => {
-        const ausgabeDatei = join(dir, 'github-output.txt');
-        const lauf = spawn(
-          process.execPath,
-          [
-            join('node_modules', 'tsx', 'dist', 'cli.mjs'),
-            'scripts/release-ausfuehrer.ts',
-            'abholen',
-            '--verzeichnis',
-            dir,
-            '--auftrag',
-            AUFTRAG,
-            '--ci-lauf',
-            '778',
-            '--ci-url',
-            'https://github.com/beispiel/clenaris/actions/runs/778',
-          ],
-          {
-            env: {
-              ...process.env,
-              CLENARIS_URL: `http://127.0.0.1:${port}`,
-              RELEASE_EXECUTOR_TOKEN: 'attrappe-token',
-              RELEASE_EXECUTOR_SIGNING_KEY: 'attrappe-signaturschluessel',
-              UMGEBUNG: 'test',
-              AUSFUEHRER: 'pruefreihe/rein',
-              SCHLUESSEL: 'pruefreihe-reihenfolge-0001',
-              GITHUB_OUTPUT: ausgabeDatei,
-            },
-            stdio: ['ignore', 'pipe', 'pipe'],
-          },
-        );
-        let text = '';
-        lauf.stdout.on('data', (d: Buffer) => (text += d.toString()));
-        lauf.stderr.on('data', (d: Buffer) => (text += d.toString()));
-        lauf.on('close', (status) => ok({ status, text, ausgabe: existsSync(ausgabeDatei) ? readFileSync(ausgabeDatei, 'utf8') : '' }));
-      });
+      werkzeugAsynchron(
+        ['abholen', '--verzeichnis', dir, '--auftrag', AUFTRAG, '--ci-lauf', '778', '--ci-url', 'https://github.com/beispiel/clenaris/actions/runs/778'],
+        {
+          CLENARIS_URL: attrappe.basis,
+          RELEASE_EXECUTOR_TOKEN: 'attrappe-token',
+          RELEASE_EXECUTOR_SIGNING_KEY: 'attrappe-signaturschluessel',
+          UMGEBUNG: 'test',
+          AUSFUEHRER: 'pruefreihe/rein',
+          SCHLUESSEL: 'pruefreihe-reihenfolge-0001',
+        },
+        join(dir, 'github-output.txt'),
+      );
 
     try {
       const gutesVerzeichnis = artefakt('clenaris-reihenfolge-');
@@ -1290,8 +1318,100 @@ describe('Release-Ausführer: Werkzeug und Verträge ohne Server (rein)', () => 
       }
       assert.equal(uebernahmen.length, 1, 'ein Wert, der nicht weitergegeben werden darf, hat trotzdem eine Übernahme ausgelöst');
     } finally {
-      await new Promise<void>((ok) => attrappe.close(() => ok()));
+      await attrappe.schliessen();
       for (const dir of verzeichnisse) rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  /**
+   * `melden` als Prozess gegen eine Attrappe — der Ausgangscode ist hier der
+   * Vertrag (Gegenprüfung 2026-09-30, Dateikopf von `release-ausfuehrer.ts`).
+   *
+   * Gegen den Stand bis 2026-09-30 scheitert der zweite Fall: Ein
+   * abgewiesenes „erfolgreich" wurde als FAILED festgehalten, und das Werkzeug
+   * endete trotzdem mit 0. Die Vorlage des Workflows wertet `ergebnis` nicht
+   * aus; nach einer grünen Aktivierung (Code 0) blieb der ganze Lauf grün,
+   * während das Update Center FAILED zeigte. Rücksprung und Scheitern enden
+   * ebenfalls mit 2, nur ein festgehaltenes SUCCEEDED mit 0, und eine nicht
+   * angenommene Meldung mit 1 — ohne Ausgabe, denn festgehalten ist nichts.
+   *
+   * Die Attrappe weist „erfolgreich" so ab, wie die Anwendung es tut, wenn die
+   * antwortende Instanz das Ziel nicht belegt (422 mit Grund); was das
+   * Werkzeug danach sendet, zeichnet sie auf.
+   */
+  it('melden als Prozess: Ausgang 0 nur für ein festgehaltenes SUCCEEDED — ein abgewiesenes „erfolgreich", ein Rücksprung und ein Scheitern enden mit 2, eine nicht angenommene Meldung mit 1', async () => {
+    const gesendet: { ergebnis?: string; aktivierung?: string; meldung?: string }[] = [];
+    let erfolgBelegt = true;
+    let annehmen = true;
+    const attrappe = await attrappeStarten((methode, pfad, rumpf) => {
+      if (methode !== 'POST' || pfad !== '/api/cron/release-auftraege/ergebnis') return null;
+      gesendet.push((rumpf ?? {}) as { ergebnis?: string; aktivierung?: string; meldung?: string });
+      if (!annehmen) return { status: 500, fehler: 'Ein unerwarteter Fehler ist aufgetreten.' };
+      if (rumpf?.ergebnis === 'SUCCEEDED' && !erfolgBelegt) {
+        return {
+          status: 422,
+          fehler: '„erfolgreich" ist nicht belegt: Die antwortende Instanz belegt Commit cccccccccccc, das Release 9.9.9 ist bbbbbbbbbbbb. Ein Scheitern (FAILED) wird immer angenommen.',
+        };
+      }
+      return { status: 200, daten: { wiederholt: false, auftrag: { status: rumpf?.ergebnis } } };
+    });
+    const dir = mkdtempSync(join(tmpdir(), 'clenaris-melden-'));
+    let laufNummer = 0;
+    const melden = (code: string) => {
+      gesendet.length = 0;
+      laufNummer += 1;
+      return werkzeugAsynchron(
+        ['melden', '--auftrag', 'cmeldenprobe01', '--aktivierung', code],
+        {
+          CLENARIS_URL: attrappe.basis,
+          RELEASE_EXECUTOR_TOKEN: 'attrappe-token',
+          RELEASE_EXECUTOR_SIGNING_KEY: 'attrappe-signaturschluessel',
+          SCHLUESSEL: 'pruefreihe-melden-0001',
+          AUSFUEHRER_WIEDERHOLUNGEN: '0',
+        },
+        join(dir, `github-output-${laufNummer}.txt`),
+      );
+    };
+
+    try {
+      // Gegenprobe: belegtes „erfolgreich" — 0, und die Attrappe sah genau eine Meldung.
+      const erfolg = await melden('0');
+      assert.equal(erfolg.status, 0, erfolg.text);
+      assert.equal(erfolg.ausgabe, 'ergebnis=SUCCEEDED\n');
+      assert.deepEqual(gesendet.map((g) => g.ergebnis), ['SUCCEEDED']);
+
+      // Aktivierung grün, Instanz belegt das Ziel nicht: FAILED festgehalten, Ausgang 2.
+      erfolgBelegt = false;
+      const abgewiesen = await melden('0');
+      assert.equal(abgewiesen.status, AUSGANG_KEIN_ERFOLG, abgewiesen.text);
+      assert.equal(abgewiesen.ausgabe, 'ergebnis=FAILED\n', 'ergebnis muss vor dem roten Ende geschrieben sein');
+      assert.match(abgewiesen.text, /Festgehalten ist FAILED statt SUCCEEDED/);
+      assert.deepEqual(gesendet.map((g) => g.ergebnis), ['SUCCEEDED', 'FAILED']);
+      assert.equal(gesendet[1]!.aktivierung, 'AKTIV');
+      assert.match(gesendet[1]!.meldung ?? '', /^SUCCEEDED abgewiesen: .*Commit/);
+
+      // Ein belegter Rücksprung und ein Scheitern der Aktivierung sind
+      // festgehalten, aber kein Erfolg.
+      for (const [code, ergebnis] of [
+        ['20', 'ROLLED_BACK'],
+        ['10', 'FAILED'],
+        ['', 'FAILED'],
+      ] as const) {
+        const r = await melden(code);
+        assert.equal(r.status, AUSGANG_KEIN_ERFOLG, `Code „${code}": ${r.text}`);
+        assert.equal(r.ausgabe, `ergebnis=${ergebnis}\n`, `Code „${code}"`);
+      }
+
+      // Die Anwendung nimmt nichts an: Ausgang 1, und GITHUB_OUTPUT bleibt leer —
+      // ein Folgeschritt soll kein Ergebnis lesen, das nirgends festgehalten ist.
+      annehmen = false;
+      const kaputt = await melden('10');
+      assert.equal(kaputt.status, 1, kaputt.text);
+      assert.match(kaputt.text, /Meldung abgewiesen: HTTP 500/);
+      assert.equal(kaputt.ausgabe, '');
+    } finally {
+      await attrappe.schliessen();
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 

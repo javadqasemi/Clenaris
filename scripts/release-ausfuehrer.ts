@@ -17,6 +17,17 @@
  * `AUSFUEHRER_WIEDERHOLUNGEN` (Vorgabe 6) bestimmt, wie oft `melden` ein
  * abgewiesenes „erfolgreich" nach je 10 Sekunden erneut versucht.
  *
+ * Ausgangscodes (neben C3 der Aktivierung und C4 dieses Werkzeugs):
+ *
+ *  - **0** — getan. Bei `melden` heisst das genau: SUCCEEDED ist festgehalten.
+ *  - **1** — Fehler; nichts oder nichts Belastbares ist geschehen. Bei
+ *    `melden`: die Meldung wurde nicht angenommen, der Auftrag steht weiter
+ *    in Ausführung (den schliesst sonst der stündliche Lauf).
+ *  - **2** — nur `melden`: die Meldung **ist** angenommen, das festgehaltene
+ *    Ergebnis ist aber kein Erfolg (FAILED oder ROLLED_BACK — auch ein
+ *    abgewiesenes „erfolgreich", das als FAILED festgehalten wurde). Die
+ *    Ausgabe `ergebnis` ist dann geschrieben. Begründung bei `melden`.
+ *
  * ---------------------------------------------------------------------------
  *  Was dieses Werkzeug tut, und was nicht
  * ---------------------------------------------------------------------------
@@ -76,6 +87,9 @@ import type { Aktivierung, ReleaseErgebnis } from '../src/lib/validation/system'
 
 /** Ein Fehler, den das Werkzeug erklärt — ohne Stapelspur, mit Ausgangscode 1. */
 export class AusfuehrerFehler extends Error {}
+
+/** `melden`: Meldung angenommen, Ergebnis kein Erfolg (siehe Dateikopf und `melden`). */
+export const AUSGANG_KEIN_ERFOLG = 2;
 
 // ---------------------------------------------------------------------------
 //  Formen
@@ -514,8 +528,23 @@ const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
  * Rücksprung wird nicht wiederholt: Die Aktivierung hat ihren Rücksprung
  * schon gesund gemeldet, ein Warten ändert daran nichts.
  *
- * Ausgangscode 0 heisst „Meldung angenommen" — unabhängig vom Ergebnis. Ob
- * der Lauf rot wird, entscheidet der Workflow an der Ausgabe `ergebnis`.
+ * **Ausgang 0 nur für ein festgehaltenes SUCCEEDED** (seit 2026-10-01). Bis
+ * dahin hiess 0 „Meldung angenommen, gleich mit welchem Ergebnis", und ob
+ * der Lauf rot wird, sollte der Workflow an der Ausgabe `ergebnis` ablesen.
+ * Die Vorlage tat das nie: Der Schritt „Ergebnis melden" hat keine Kennung,
+ * niemand liest `ergebnis`. Lief die Aktivierung mit 0 durch, belegte die
+ * antwortende Instanz das Ziel aber nicht, stand das Release im Update
+ * Center als FAILED — und der GitHub-Lauf endete grün (Gegenprüfung
+ * 2026-09-30). Ein festgehaltenes Scheitern darf nie eine grüne Pipeline
+ * hinterlassen, und das Werkzeug soll das nicht davon abhängig machen, dass
+ * jeder Workflow eine Ausgabe richtig auswertet. Deshalb endet `melden` mit
+ * `AUSGANG_KEIN_ERFOLG` (2), sobald FAILED oder ROLLED_BACK festgehalten ist
+ * — auch dann, wenn schon die Aktivierung rot war: Ein zweiter roter Schritt
+ * schadet nicht, ein grüner nach einem Scheitern schon. Die 2 ist bewusst
+ * nicht die 1: Bei 1 ist die Meldung **nicht** angenommen und der Auftrag
+ * offen, bei 2 ist er abgeschlossen — wer einen Lauf untersucht, soll das am
+ * Code sehen. `ergebnis` wird vorher geschrieben, damit ein Folgeschritt mit
+ * `if: always()` den Grund trotzdem kennt.
  */
 async function melden(): Promise<void> {
   const auftragId = pflicht('auftrag');
@@ -554,6 +583,14 @@ async function melden(): Promise<void> {
   if (r.status !== 200) throw new AusfuehrerFehler(`Meldung abgewiesen: HTTP ${r.status} ${fehlermeldung(r.text)}`);
   console.log(`Gemeldet: ${gemeldet}${r.daten?.wiederholt ? ' (war bereits gemeldet)' : ''}`);
   ausgeben(['ergebnis', gemeldet]);
+  if (gemeldet !== 'SUCCEEDED') {
+    // `exitCode` statt `exit()`: Die Ausgaben oben sollen vollständig
+    // geschrieben sein, bevor der Prozess endet.
+    console.error(
+      `FEHLER: Festgehalten ist ${gemeldet}${gemeldet === ergebnis ? '' : ` statt ${ergebnis}`} — kein Erfolg, der Lauf endet rot (Ausgang ${AUSGANG_KEIN_ERFOLG}).`,
+    );
+    process.exitCode = AUSGANG_KEIN_ERFOLG;
+  }
 }
 
 // ---------------------------------------------------------------------------
