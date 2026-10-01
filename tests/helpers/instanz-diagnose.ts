@@ -492,7 +492,18 @@ async function datenbankAbziehen(adresse: string | null, anwendung: string): Pro
   }
 }
 
-/** Zugangsdaten in Adressen (`postgresql://benutzer:passwort@…`) und alles, was `redigieren` kennt. */
+/**
+ * Zugangsdaten in Adressen (`postgresql://‹benutzer›:‹passwort›@…`) und alles,
+ * was `redigieren` kennt.
+ *
+ * Das Beispiel steht bewusst mit Winkelzeichen da. In Klarbuchstaben hielt
+ * die Geheimnisprüfung (`DB_MUSTER` in `scripts/security/geheimnisse.ts`) es
+ * für eine echte Verbindung mit Passwort und brach ab — und zwar zu Recht:
+ * Aus einer eingecheckten Zeile heraus ist ein Beispiel von einem Zugangsdatum
+ * nicht zu unterscheiden. Eine Ausnahme in der Prüfung wäre der falsche Weg
+ * gewesen; sie hätte die nächste echte Adresse in einem Kommentar mit
+ * durchgelassen.
+ */
 function schwaerzen(text: string): string {
   return redigieren(text.replace(/\b([a-z][a-z0-9+.-]*:\/\/)[^\s/@]+@/gi, '$1‹zugang›@'));
 }
