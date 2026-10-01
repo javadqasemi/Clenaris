@@ -16,7 +16,7 @@ Schweizer DSG und DSGVO.
 | | |
 | --- | --- |
 | **Stack** | Next.js 15 (App Router) · React 19 · TypeScript · Tailwind · Prisma 7 (Treiberadapter `pg`) · PostgreSQL 16+ |
-| **Umfang** | <!-- kennzahlen:umfang -->171 Seiten · 379 Route-Dateien mit 544 Endpunkten · 152 Datenmodelle · 89 Dienste · 122 Prüfdateien<!-- /kennzahlen:umfang --> (gezählt von `scripts/kennzahlen.ts`) |
+| **Umfang** | <!-- kennzahlen:umfang -->171 Seiten · 379 Route-Dateien mit 544 Endpunkten · 152 Datenmodelle · 89 Dienste · 135 Prüfdateien<!-- /kennzahlen:umfang --> (gezählt von `scripts/kennzahlen.ts`) |
 | **Rollen** | SUPER_ADMIN · ADMIN · MANAGER · EMPLOYEE · CUSTOMER |
 | **Sprache** | Deutsch (Schema und Endpunkte für FR/IT/EN vorbereitet) |
 | **Betrieb** | Eigener Server: Internet → Cloudflare → Cloud Firewall → Nginx → Next.js auf `127.0.0.1:3000`, ausgeliefert über GitHub Actions → SSH → PM2 · Postgres & Objektspeicher · Redis empfohlen |
@@ -169,7 +169,7 @@ liefern Entwürfe; ausgeführt oder versendet wird nichts ohne Freigabe.
 .github/workflows/         Prüfung bei jedem Pull Request, Auslieferung nur aus main
 prisma/
   schema.prisma            <!-- kennzahlen:schema -->152 Modelle, 122 Aufzählungstypen<!-- /kennzahlen:schema -->
-  migrations/              <!-- kennzahlen:migrationen -->55 Migrationen<!-- /kennzahlen:migrationen -->
+  migrations/              <!-- kennzahlen:migrationen -->56 Migrationen<!-- /kennzahlen:migrationen -->
   seed.ts                  Konfiguration (idempotent)
   seed-demo.ts             Demodaten obendrauf
 docs/

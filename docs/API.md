@@ -348,7 +348,7 @@ Familie.
 
 ### `GET /api/health`
 
-**Betriebsbereitschaft.** Für Auslieferung, Überwachung und Load Balancer. Prüft die Datenbankverbindung und meldet die Zahl der angewandten Migrationen, den ausgelieferten Stand und die Laufzeit. Antwortet mit 503, wenn die Datenbank nicht erreichbar ist — die Aussage steht im Statuscode, nicht im Rumpf.
+**Betriebsbereitschaft.** Für Auslieferung, Überwachung und Load Balancer. Prüft die Datenbankverbindung und meldet die Zahl der angewandten Migrationen, den ausgelieferten Stand und die Laufzeit. Der Stand ist die Identität der Instanz aus `RELEASE.json` und `BUILD_ID` (seit 2026-09-30, nicht mehr `APP_VERSION`): `version` = Commit, nur wenn belegt, sonst `null`; `buildId` = Build-ID des laufenden Baus; `release` = semantische Version, nur wenn belegt; `identitaet` = `belegt`, `ohne-manifest`, `widerspruechlich` oder `ungueltig`. Antwortet mit 503, wenn die Datenbank nicht erreichbar ist — die Aussage steht im Statuscode, nicht im Rumpf.
 
 - **Zugriff:** Öffentlich — keine Anmeldung nötig.
 - **Rate-Limit-Klasse:** `apiRead`
@@ -6886,7 +6886,7 @@ Familie.
 
 ### `GET /api/cron/hourly`
 
-**Stündliche Aufgaben.** Terminerinnerungen 24 h und 2 h vorher, zeitbezogene Auslöser der Automatisierung und fällige Läufe. Authentifiziert über `Authorization: Bearer $CRON_SECRET`. Jeder Lauf hinterlässt ein `CronRun`; **500**, sobald eine Teilaufgabe gescheitert ist.
+**Stündliche Aufgaben.** Terminerinnerungen 24 h und 2 h vorher, zeitbezogene Auslöser der Automatisierung, fällige Läufe und der Abschluss verwaister Release-Ausführungen (über zwei Stunden ohne Rückmeldung: erfolgreich, wenn die Identität der Instanz das Ziel belegt, sonst fehlgeschlagen). Authentifiziert über `Authorization: Bearer $CRON_SECRET`. Jeder Lauf hinterlässt ein `CronRun`; **500**, sobald eine Teilaufgabe gescheitert ist.
 
 - **Zugriff:** Nur für den Scheduler: `Authorization: Bearer $CRON_SECRET`.
 - **Erfolg:** 200
@@ -7127,7 +7127,7 @@ Familie.
 
 ### `GET /api/cron/release-auftraege`
 
-**Fällige Aktualisierungsaufträge (Ausführer).** Nur für den Release-Ausführer ausserhalb der Anwendung: Bearer `RELEASE_EXECUTOR_TOKEN` **und** HMAC-Signatur (`x-clenaris-zeit`, `x-clenaris-signatur`, höchstens 5 Minuten alt). Liefert terminierte, fällige Aufträge der eigenen Umgebung mit Commit, Artefakt-Prüfsumme, CI-Stand, Migrationen, Rücksprungangaben und gegebenenfalls dem Hindernis. 422 bei fremder Umgebung, 503 ohne `CLENARIS_UMGEBUNG`/Signaturschlüssel.
+**Fällige Aktualisierungsaufträge (Ausführer).** Nur für den Release-Ausführer ausserhalb der Anwendung: Bearer `RELEASE_EXECUTOR_TOKEN` **und** HMAC-Signatur (`x-clenaris-zeit`, `x-clenaris-signatur`, höchstens 5 Minuten alt). Liefert terminierte, fällige Aufträge der eigenen Umgebung mit Commit, Artefakt-Prüfsumme, CI-Stand, Migrationen, Rücksprungangaben und gegebenenfalls dem Hindernis (auch: Stand der Instanz nicht belegt), dazu `laufend` (belegte Identität: Version, Commit, Build-ID, belegt) und `inAusfuehrung` (Aufträge der Umgebung in DEPLOYING mit Ausführer, Schlüssel und Beginn — zum Fortsetzen). 422 bei fremder Umgebung, 503 ohne `CLENARIS_UMGEBUNG`/Signaturschlüssel.
 
 - **Zugriff:** Nur für den Scheduler: `Authorization: Bearer $CRON_SECRET`.
 - **Erfolg:** 200
@@ -7141,7 +7141,7 @@ Familie.
 
 ### `POST /api/cron/release-auftraege/uebernehmen`
 
-**Auftrag übernehmen (Ausführer).** SCHEDULED → DEPLOYING. Nur fällige Aufträge der eigenen Umgebung, Version neuer als die laufende, CI bestanden, gemessene Prüfsumme = Prüfsumme des Release. Idempotent über `ausfuehrungsSchluessel`; ein anderer Schlüssel → 409. Steht im Prüfprotokoll. Die Anwendung führt nichts aus.
+**Auftrag übernehmen (Ausführer).** SCHEDULED → DEPLOYING. Nur fällige Aufträge der eigenen Umgebung, Identität der Instanz belegt, Version neuer als die belegte, CI bestanden; gemessene Prüfsumme, `commit` und `zielVersion` aus der Beilage müssen dem Release entsprechen (sonst 422). Eine Ausführung je Umgebung (sonst 409). Idempotent über `ausfuehrungsSchluessel`; ein anderer Schlüssel → 409. Steht im Prüfprotokoll. Die Anwendung führt nichts aus.
 
 - **Zugriff:** Nur für den Scheduler: `Authorization: Bearer $CRON_SECRET`.
 - **Erfolg:** 200
@@ -7156,15 +7156,17 @@ Familie.
 | `ausfuehrer` | string | ja | – |
 | `ausfuehrungsSchluessel` | string | ja | – |
 | `artefaktSha256` | string | ja | – |
+| `commit` | string | ja | – |
+| `zielVersion` | string | ja | – |
 | `ciNachweis` | string | ja | uri, max. 300 Zeichen |
 
 ### `POST /api/cron/release-auftraege/ergebnis`
 
-**Ergebnis melden (Ausführer).** DEPLOYING → SUCCEEDED, FAILED oder ROLLED_BACK, nur mit dem Schlüssel der Übernahme. SUCCEEDED verlangt die Zielversion als `laufendeVersion`. Dieselbe Meldung erneut → 200; eine abweichende → 409.
+**Ergebnis melden (Ausführer).** DEPLOYING → SUCCEEDED, FAILED oder ROLLED_BACK, nur mit dem Schlüssel der Übernahme. Das Ergebnis belegt die antwortende Instanz: SUCCEEDED nur, wenn ihre Identität Commit und Version des Release nennt; ROLLED_BACK nur mit belegter Ausgangsversion und anderem Commit; sonst 422. FAILED immer. `aktivierung` (Ausgang der Aktivierung) steht im Prüfprotokoll. Dieselbe Meldung erneut → 200; eine abweichende → 409.
 
 - **Zugriff:** Nur für den Scheduler: `Authorization: Bearer $CRON_SECRET`.
 - **Erfolg:** 200
-- **Mögliche Fehler:** 400, 401, 409, 422, 500
+- **Mögliche Fehler:** 400, 401, 409, 422, 500, 503
 
 **Anfragekörper**
 
@@ -7173,7 +7175,7 @@ Familie.
 | `auftragId` | string | ja | – |
 | `ausfuehrungsSchluessel` | string | ja | – |
 | `ergebnis` | string | ja | `SUCCEEDED` \| `FAILED` \| `ROLLED_BACK` |
-| `laufendeVersion` | string | – | – |
+| `aktivierung` | string | ja | `AKTIV` \| `ZURUECK` \| `NICHT_UMGESCHALTET` \| `GESPERRT` \| `UNKLAR` \| `NICHT_VERBUNDEN` |
 | `meldung` | string | – | max. 2000 Zeichen |
 
 ## Betrieb

@@ -1271,7 +1271,7 @@ paths:
         - 'Öffentlich'
       summary: 'Betriebsbereitschaft'
       description: |-
-          Für Auslieferung, Überwachung und Load Balancer. Prüft die Datenbankverbindung und meldet die Zahl der angewandten Migrationen, den ausgelieferten Stand und die Laufzeit. Antwortet mit 503, wenn die Datenbank nicht erreichbar ist — die Aussage steht im Statuscode, nicht im Rumpf.
+          Für Auslieferung, Überwachung und Load Balancer. Prüft die Datenbankverbindung und meldet die Zahl der angewandten Migrationen, den ausgelieferten Stand und die Laufzeit. Der Stand ist die Identität der Instanz aus `RELEASE.json` und `BUILD_ID` (seit 2026-09-30, nicht mehr `APP_VERSION`): `version` = Commit, nur wenn belegt, sonst `null`; `buildId` = Build-ID des laufenden Baus; `release` = semantische Version, nur wenn belegt; `identitaet` = `belegt`, `ohne-manifest`, `widerspruechlich` oder `ungueltig`. Antwortet mit 503, wenn die Datenbank nicht erreichbar ist — die Aussage steht im Statuscode, nicht im Rumpf.
 
           **Zugriff:** Öffentlich — keine Anmeldung nötig.
 
@@ -27926,7 +27926,7 @@ paths:
         - 'System'
       summary: 'Stündliche Aufgaben'
       description: |-
-          Terminerinnerungen 24 h und 2 h vorher, zeitbezogene Auslöser der Automatisierung und fällige Läufe. Authentifiziert über `Authorization: Bearer $CRON_SECRET`. Jeder Lauf hinterlässt ein `CronRun`; **500**, sobald eine Teilaufgabe gescheitert ist.
+          Terminerinnerungen 24 h und 2 h vorher, zeitbezogene Auslöser der Automatisierung, fällige Läufe und der Abschluss verwaister Release-Ausführungen (über zwei Stunden ohne Rückmeldung: erfolgreich, wenn die Identität der Instanz das Ziel belegt, sonst fehlgeschlagen). Authentifiziert über `Authorization: Bearer $CRON_SECRET`. Jeder Lauf hinterlässt ein `CronRun`; **500**, sobald eine Teilaufgabe gescheitert ist.
 
           **Zugriff:** Nur für den Scheduler: `Authorization: Bearer $CRON_SECRET`.
       operationId: 'getCronHourly'
@@ -48269,7 +48269,7 @@ paths:
         - 'System'
       summary: 'Fällige Aktualisierungsaufträge (Ausführer)'
       description: |-
-          Nur für den Release-Ausführer ausserhalb der Anwendung: Bearer `RELEASE_EXECUTOR_TOKEN` **und** HMAC-Signatur (`x-clenaris-zeit`, `x-clenaris-signatur`, höchstens 5 Minuten alt). Liefert terminierte, fällige Aufträge der eigenen Umgebung mit Commit, Artefakt-Prüfsumme, CI-Stand, Migrationen, Rücksprungangaben und gegebenenfalls dem Hindernis. 422 bei fremder Umgebung, 503 ohne `CLENARIS_UMGEBUNG`/Signaturschlüssel.
+          Nur für den Release-Ausführer ausserhalb der Anwendung: Bearer `RELEASE_EXECUTOR_TOKEN` **und** HMAC-Signatur (`x-clenaris-zeit`, `x-clenaris-signatur`, höchstens 5 Minuten alt). Liefert terminierte, fällige Aufträge der eigenen Umgebung mit Commit, Artefakt-Prüfsumme, CI-Stand, Migrationen, Rücksprungangaben und gegebenenfalls dem Hindernis (auch: Stand der Instanz nicht belegt), dazu `laufend` (belegte Identität: Version, Commit, Build-ID, belegt) und `inAusfuehrung` (Aufträge der Umgebung in DEPLOYING mit Ausführer, Schlüssel und Beginn — zum Fortsetzen). 422 bei fremder Umgebung, 503 ohne `CLENARIS_UMGEBUNG`/Signaturschlüssel.
 
           **Zugriff:** Nur für den Scheduler: `Authorization: Bearer $CRON_SECRET`.
       operationId: 'getCronReleaseAuftraege'
@@ -48328,7 +48328,7 @@ paths:
         - 'System'
       summary: 'Auftrag übernehmen (Ausführer)'
       description: |-
-          SCHEDULED → DEPLOYING. Nur fällige Aufträge der eigenen Umgebung, Version neuer als die laufende, CI bestanden, gemessene Prüfsumme = Prüfsumme des Release. Idempotent über `ausfuehrungsSchluessel`; ein anderer Schlüssel → 409. Steht im Prüfprotokoll. Die Anwendung führt nichts aus.
+          SCHEDULED → DEPLOYING. Nur fällige Aufträge der eigenen Umgebung, Identität der Instanz belegt, Version neuer als die belegte, CI bestanden; gemessene Prüfsumme, `commit` und `zielVersion` aus der Beilage müssen dem Release entsprechen (sonst 422). Eine Ausführung je Umgebung (sonst 409). Idempotent über `ausfuehrungsSchluessel`; ein anderer Schlüssel → 409. Steht im Prüfprotokoll. Die Anwendung führt nichts aus.
 
           **Zugriff:** Nur für den Scheduler: `Authorization: Bearer $CRON_SECRET`.
       operationId: 'postCronReleaseAuftraegeUebernehmen'
@@ -48359,6 +48359,12 @@ paths:
                 artefaktSha256:
                   type: 'string'
                   pattern: '^[0-9a-f]{64}$'
+                commit:
+                  type: 'string'
+                  pattern: '^[0-9a-f]{40}$'
+                zielVersion:
+                  type: 'string'
+                  pattern: '^(\d+)\.(\d+)\.(\d+)(?:-[0-9A-Za-z.-]+)?$'
                 ciNachweis:
                   type: 'string'
                   format: 'uri'
@@ -48369,6 +48375,8 @@ paths:
                 - 'ausfuehrer'
                 - 'ausfuehrungsSchluessel'
                 - 'artefaktSha256'
+                - 'commit'
+                - 'zielVersion'
                 - 'ciNachweis'
       responses:
         '200':
@@ -48418,7 +48426,7 @@ paths:
         - 'System'
       summary: 'Ergebnis melden (Ausführer)'
       description: |-
-          DEPLOYING → SUCCEEDED, FAILED oder ROLLED_BACK, nur mit dem Schlüssel der Übernahme. SUCCEEDED verlangt die Zielversion als `laufendeVersion`. Dieselbe Meldung erneut → 200; eine abweichende → 409.
+          DEPLOYING → SUCCEEDED, FAILED oder ROLLED_BACK, nur mit dem Schlüssel der Übernahme. Das Ergebnis belegt die antwortende Instanz: SUCCEEDED nur, wenn ihre Identität Commit und Version des Release nennt; ROLLED_BACK nur mit belegter Ausgangsversion und anderem Commit; sonst 422. FAILED immer. `aktivierung` (Ausgang der Aktivierung) steht im Prüfprotokoll. Dieselbe Meldung erneut → 200; eine abweichende → 409.
 
           **Zugriff:** Nur für den Scheduler: `Authorization: Bearer $CRON_SECRET`.
       operationId: 'postCronReleaseAuftraegeErgebnis'
@@ -48442,9 +48450,15 @@ paths:
                     - 'SUCCEEDED'
                     - 'FAILED'
                     - 'ROLLED_BACK'
-                laufendeVersion:
+                aktivierung:
                   type: 'string'
-                  pattern: '^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$'
+                  enum:
+                    - 'AKTIV'
+                    - 'ZURUECK'
+                    - 'NICHT_UMGESCHALTET'
+                    - 'GESPERRT'
+                    - 'UNKLAR'
+                    - 'NICHT_VERBUNDEN'
                 meldung:
                   type: 'string'
                   maxLength: 2000
@@ -48452,6 +48466,7 @@ paths:
                 - 'auftragId'
                 - 'ausfuehrungsSchluessel'
                 - 'ergebnis'
+                - 'aktivierung'
       responses:
         '200':
           description: 'Erfolg'
@@ -48485,6 +48500,11 @@ paths:
                 '$ref': '#/components/schemas/ErrorEnvelope'
         '500':
           description: 'INTERNAL_ERROR — unerwarteter Fehler. Die Meldung nennt keine internen Details.'
+          content:
+            'application/json':
+              schema:
+                '$ref': '#/components/schemas/ErrorEnvelope'
+        '503':
           content:
             'application/json':
               schema:
