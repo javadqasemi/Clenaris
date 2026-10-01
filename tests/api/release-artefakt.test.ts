@@ -364,10 +364,14 @@ describe('Release-Artefakt: Inhalt, Ausschlüsse, Vollständigkeit', () => {
    */
   it('von Git Ignoriertes im Inhalt wird verweigert — ausser den erzeugten PDF.js-Dateien', () => {
     const d = neuesVerzeichnis();
+    // Der Inhalt der beiden `.pem` ist gleichgültig — entschieden wird am
+    // Pfad, den Git als ignoriert meldet. Ein Platzhalter statt eines
+    // Schlüsselkopfs: Die Geheimnisprüfung des Repositorys soll an einem
+    // echten Schlüssel anschlagen, nicht an einer Prüfdatei.
     baum(d, {
       'deploy/v2/release-aktivieren.sh': '#!/bin/sh',
-      'deploy/v2/server.pem': '-----BEGIN PRIVATE KEY-----',
-      'security/schluessel.pem': '-----BEGIN PRIVATE KEY-----',
+      'deploy/v2/server.pem': 'platzhalter-kein-schluessel',
+      'security/schluessel.pem': 'platzhalter-kein-schluessel',
       'public/pdfjs/5.4.149/pdf.worker.min.mjs': 'export {};',
       'public/pdfjsx/fremd.js': 'export {};',
       'src/.env.local': 'GEHEIM=1',
