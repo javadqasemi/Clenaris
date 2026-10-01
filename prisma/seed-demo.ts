@@ -30,6 +30,18 @@ import { hash } from '@node-rs/argon2';
 import { computeScenario, type ScenarioDriverKey } from '../src/lib/bi/math';
 import { assertDemoSeedErlaubt, databaseNameOf } from './seed-guard';
 import { erzeugePrismaClient } from '../src/lib/prisma-client';
+// Namen, Adressen, Bewertungen, Galerie- und Blogtitel stehen seit 2026-09-30
+// in `demo-kennzeichen.ts` und nur dort: Dasselbe Modul sagt dem Packskript
+// des Release-Artefakts, woran es Demodaten im Bau erkennt. Stünde ein Wert
+// hier als Literal, suchte die Stolperfalle nach einem Umbenennen den alten
+// Wert und schwiege. Die Werte sind unverändert.
+import {
+  DEMO_ANFRAGEN,
+  DEMO_BEWERTUNGEN,
+  DEMO_BLOGBEITRAEGE,
+  DEMO_GALERIE,
+  DEMO_KUNDSCHAFT,
+} from './demo-kennzeichen';
 
 /**
  * Vor allem anderen: Zeigt `DATABASE_URL` auf eine Testdatenbank?
@@ -124,9 +136,9 @@ async function main() {
   const customersData = [
     {
       type: 'PRIVATE' as const,
-      firstName: 'Nicole',
-      lastName: 'Wyss',
-      email: 'nicole.wyss@example.ch',
+      firstName: DEMO_KUNDSCHAFT.wyss.vorname,
+      lastName: DEMO_KUNDSCHAFT.wyss.nachname,
+      email: DEMO_KUNDSCHAFT.wyss.email,
       phone: '+41791234567',
       address: { street: 'Länggassstrasse', streetNo: '42', postalCode: '3012', city: 'Bern' },
       createLogin: true,
@@ -135,10 +147,10 @@ async function main() {
     },
     {
       type: 'BUSINESS' as const,
-      companyName: 'Aareblick Immobilien AG',
-      firstName: 'Peter',
-      lastName: 'Roth',
-      email: 'p.roth@aareblick.example.ch',
+      companyName: DEMO_KUNDSCHAFT.roth.firma,
+      firstName: DEMO_KUNDSCHAFT.roth.vorname,
+      lastName: DEMO_KUNDSCHAFT.roth.nachname,
+      email: DEMO_KUNDSCHAFT.roth.email,
       phone: '+41313334455',
       vatNumber: 'CHE-234.567.891 MWST',
       address: { street: 'Effingerstrasse', streetNo: '18', postalCode: '3008', city: 'Bern' },
@@ -148,9 +160,9 @@ async function main() {
     },
     {
       type: 'PRIVATE' as const,
-      firstName: 'Martin',
-      lastName: 'Schneider',
-      email: 'martin.schneider@example.ch',
+      firstName: DEMO_KUNDSCHAFT.schneider.vorname,
+      lastName: DEMO_KUNDSCHAFT.schneider.nachname,
+      email: DEMO_KUNDSCHAFT.schneider.email,
       phone: '+41786543210',
       address: { street: 'Dorfstrasse', streetNo: '7', postalCode: '3072', city: 'Ostermundigen' },
       tags: ['Empfehlung'],
@@ -158,10 +170,10 @@ async function main() {
     },
     {
       type: 'BUSINESS' as const,
-      companyName: 'Praxis Dr. med. Lehmann',
-      firstName: 'Katrin',
-      lastName: 'Lehmann',
-      email: 'praxis@lehmann.example.ch',
+      companyName: DEMO_KUNDSCHAFT.lehmann.firma,
+      firstName: DEMO_KUNDSCHAFT.lehmann.vorname,
+      lastName: DEMO_KUNDSCHAFT.lehmann.nachname,
+      email: DEMO_KUNDSCHAFT.lehmann.email,
       phone: '+41312223344',
       vatNumber: 'CHE-345.678.912 MWST',
       address: { street: 'Monbijoustrasse', streetNo: '110', postalCode: '3007', city: 'Bern' },
@@ -170,9 +182,9 @@ async function main() {
     },
     {
       type: 'PRIVATE' as const,
-      firstName: 'Sofia',
-      lastName: 'Bernasconi',
-      email: 'sofia.b@example.ch',
+      firstName: DEMO_KUNDSCHAFT.bernasconi.vorname,
+      lastName: DEMO_KUNDSCHAFT.bernasconi.nachname,
+      email: DEMO_KUNDSCHAFT.bernasconi.email,
       phone: '+41765554433',
       address: { street: 'Weissensteinstrasse', streetNo: '23', postalCode: '3007', city: 'Bern' },
       property: { label: 'Wohnung Mattenhof', kind: 'APARTMENT' as const, squareMeters: 64, rooms: 2.5, bathrooms: 1, windows: 6 },
@@ -303,7 +315,7 @@ async function main() {
   // =========================================================================
   const bookingSeeds = [
     {
-      customerEmail: 'nicole.wyss@example.ch',
+      customerEmail: DEMO_KUNDSCHAFT.wyss.email,
       serviceSlug: 'unterhaltsreinigung',
       status: 'CONFIRMED' as const,
       startInDays: 3,
@@ -315,7 +327,7 @@ async function main() {
       employee: 'elena.rossi@clenaris.ch',
     },
     {
-      customerEmail: 'p.roth@aareblick.example.ch',
+      customerEmail: DEMO_KUNDSCHAFT.roth.email,
       serviceSlug: 'bueroreinigung',
       status: 'CONFIRMED' as const,
       startInDays: 1,
@@ -327,7 +339,7 @@ async function main() {
       employee: 'anna.keller@clenaris.ch',
     },
     {
-      customerEmail: 'martin.schneider@example.ch',
+      customerEmail: DEMO_KUNDSCHAFT.schneider.email,
       serviceSlug: 'umzugsreinigung',
       status: 'PENDING' as const,
       startInDays: 12,
@@ -339,7 +351,7 @@ async function main() {
       employee: 'luis.moreira@clenaris.ch',
     },
     {
-      customerEmail: 'praxis@lehmann.example.ch',
+      customerEmail: DEMO_KUNDSCHAFT.lehmann.email,
       serviceSlug: 'bueroreinigung',
       status: 'COMPLETED' as const,
       startInDays: -6,
@@ -351,7 +363,7 @@ async function main() {
       employee: 'fatima.haddad@clenaris.ch',
     },
     {
-      customerEmail: 'sofia.b@example.ch',
+      customerEmail: DEMO_KUNDSCHAFT.bernasconi.email,
       serviceSlug: 'fensterreinigung',
       status: 'COMPLETED' as const,
       startInDays: -14,
@@ -661,11 +673,11 @@ async function main() {
   // gewonnen, verloren. Die Beträge sind bewusst verschieden, damit sich eine
   // Sortierung überhaupt auswirken kann.
   const leadSeeds = [
-    { firstName: 'Beat', lastName: 'Aebischer', email: 'beat.aebischer@example.ch', phone: '+41 31 311 22 33', company: null, city: 'Bern', postalCode: '3011', serviceKind: 'RESIDENTIAL_CLEANING' as const, status: 'NEW' as const, source: 'WEBSITE' as const, estimatedValue: 320, score: 45, message: 'Wir suchen eine Unterhaltsreinigung alle zwei Wochen für eine 3.5-Zimmer-Wohnung.', days: -2 },
-    { firstName: 'Carmen', lastName: 'Zürcher', email: 'c.zuercher@example.ch', phone: '+41 31 922 14 08', company: 'Zürcher Physiotherapie', city: 'Ostermundigen', postalCode: '3072', serviceKind: 'OFFICE_CLEANING' as const, status: 'CONTACTED' as const, source: 'GOOGLE_ADS' as const, estimatedValue: 1180, score: 68, message: 'Praxisreinigung nach Feierabend, dreimal wöchentlich. Hygienestandards sind uns wichtig.', days: -6 },
-    { firstName: 'Ruedi', lastName: 'Hofmann', email: 'ruedi.hofmann@example.ch', phone: '+41 79 445 12 90', company: 'Hofmann Bau GmbH', city: 'Köniz', postalCode: '3098', serviceKind: 'CONSTRUCTION_CLEANING' as const, status: 'PROPOSAL' as const, source: 'REFERRAL' as const, estimatedValue: 4200, score: 82, message: 'Bauendreinigung für sechs Wohnungen, Übergabe in vier Wochen.', days: -11 },
-    { firstName: 'Silvia', lastName: 'Marti', email: 'silvia.marti@example.ch', phone: '+41 31 302 77 41', company: null, city: 'Bümpliz', postalCode: '3018', serviceKind: 'MOVE_OUT_CLEANING' as const, status: 'WON' as const, source: 'SEO' as const, estimatedValue: 890, score: 95, message: 'Umzugsreinigung mit Abgabegarantie, 4.5 Zimmer.', days: -18 },
-    { firstName: 'Jonas', lastName: 'Frei', email: 'jonas.frei@example.ch', phone: '+41 76 218 33 07', company: 'Frei Treuhand', city: 'Muri b. Bern', postalCode: '3074', serviceKind: 'WINDOW_CLEANING' as const, status: 'LOST' as const, source: 'PHONE' as const, estimatedValue: 460, score: 30, message: 'Fensterreinigung Büro, zweimal jährlich.', days: -25, lostReason: 'Hat sich für einen günstigeren Anbieter entschieden.' },
+    { firstName: DEMO_ANFRAGEN.aebischer.vorname, lastName: DEMO_ANFRAGEN.aebischer.nachname, email: DEMO_ANFRAGEN.aebischer.email, phone: '+41 31 311 22 33', company: DEMO_ANFRAGEN.aebischer.firma, city: 'Bern', postalCode: '3011', serviceKind: 'RESIDENTIAL_CLEANING' as const, status: 'NEW' as const, source: 'WEBSITE' as const, estimatedValue: 320, score: 45, message: 'Wir suchen eine Unterhaltsreinigung alle zwei Wochen für eine 3.5-Zimmer-Wohnung.', days: -2 },
+    { firstName: DEMO_ANFRAGEN.zuercher.vorname, lastName: DEMO_ANFRAGEN.zuercher.nachname, email: DEMO_ANFRAGEN.zuercher.email, phone: '+41 31 922 14 08', company: DEMO_ANFRAGEN.zuercher.firma, city: 'Ostermundigen', postalCode: '3072', serviceKind: 'OFFICE_CLEANING' as const, status: 'CONTACTED' as const, source: 'GOOGLE_ADS' as const, estimatedValue: 1180, score: 68, message: 'Praxisreinigung nach Feierabend, dreimal wöchentlich. Hygienestandards sind uns wichtig.', days: -6 },
+    { firstName: DEMO_ANFRAGEN.hofmann.vorname, lastName: DEMO_ANFRAGEN.hofmann.nachname, email: DEMO_ANFRAGEN.hofmann.email, phone: '+41 79 445 12 90', company: DEMO_ANFRAGEN.hofmann.firma, city: 'Köniz', postalCode: '3098', serviceKind: 'CONSTRUCTION_CLEANING' as const, status: 'PROPOSAL' as const, source: 'REFERRAL' as const, estimatedValue: 4200, score: 82, message: 'Bauendreinigung für sechs Wohnungen, Übergabe in vier Wochen.', days: -11 },
+    { firstName: DEMO_ANFRAGEN.marti.vorname, lastName: DEMO_ANFRAGEN.marti.nachname, email: DEMO_ANFRAGEN.marti.email, phone: '+41 31 302 77 41', company: DEMO_ANFRAGEN.marti.firma, city: 'Bümpliz', postalCode: '3018', serviceKind: 'MOVE_OUT_CLEANING' as const, status: 'WON' as const, source: 'SEO' as const, estimatedValue: 890, score: 95, message: 'Umzugsreinigung mit Abgabegarantie, 4.5 Zimmer.', days: -18 },
+    { firstName: DEMO_ANFRAGEN.frei.vorname, lastName: DEMO_ANFRAGEN.frei.nachname, email: DEMO_ANFRAGEN.frei.email, phone: '+41 76 218 33 07', company: DEMO_ANFRAGEN.frei.firma, city: 'Muri b. Bern', postalCode: '3074', serviceKind: 'WINDOW_CLEANING' as const, status: 'LOST' as const, source: 'PHONE' as const, estimatedValue: 460, score: 30, message: 'Fensterreinigung Büro, zweimal jährlich.', days: -25, lostReason: 'Hat sich für einen günstigeren Anbieter entschieden.' },
   ];
 
   const leadIds: Record<string, string> = {};
@@ -732,7 +744,7 @@ async function main() {
 
   const quoteSeeds: OffertSaat[] = [
     {
-      leadEmail: 'ruedi.hofmann@example.ch',
+      leadEmail: DEMO_ANFRAGEN.hofmann.email,
       title: 'Bauendreinigung Überbauung Sonnhalde',
       status: 'SENT',
       days: -9,
@@ -744,7 +756,7 @@ async function main() {
       ],
     },
     {
-      customerEmail: 'p.roth@aareblick.example.ch',
+      customerEmail: DEMO_KUNDSCHAFT.roth.email,
       title: 'Unterhaltsreinigung Liegenschaften 2026',
       status: 'ACCEPTED' as const,
       days: -30,
@@ -755,7 +767,7 @@ async function main() {
       ],
     },
     {
-      customerEmail: 'nicole.wyss@example.ch',
+      customerEmail: DEMO_KUNDSCHAFT.wyss.email,
       title: 'Frühjahrsputz inkl. Fenster',
       status: 'DRAFT' as const,
       days: -3,
@@ -859,12 +871,12 @@ async function main() {
 
   // ---- Bewertungen ----
   const reviews = [
-    { authorName: 'Nicole W.', rating: 5, title: 'Endlich Zeit für anderes', body: 'Seit sechs Monaten kommt alle zwei Wochen dasselbe Team. Pünktlich, gründlich und immer freundlich. Die Buchung über die Website dauert keine zwei Minuten.', serviceKind: 'RESIDENTIAL_CLEANING' as const, featured: true },
-    { authorName: 'Peter R., Aareblick Immobilien AG', rating: 5, title: 'Verlässlicher Partner', body: 'Wir lassen mehrere Liegenschaften betreuen. Die monatlichen Berichte und die klare Kommunikation sparen uns viel Aufwand. Preis-Leistung stimmt.', serviceKind: 'OFFICE_CLEANING' as const, featured: true },
-    { authorName: 'Martin S.', rating: 5, title: 'Wohnungsabgabe ohne Diskussion', body: 'Die Verwaltung hatte keinen einzigen Beanstandungspunkt. Das Team hat sogar die Storen und den Keller gemacht. Kaution vollständig zurück.', serviceKind: 'MOVE_OUT_CLEANING' as const, featured: true },
-    { authorName: 'Katrin L.', rating: 5, title: 'Perfekt für unsere Praxis', body: 'Reinigung nach Praxisschluss, Hygienestandards werden eingehalten und dokumentiert. Wir fühlen uns sehr gut betreut.', serviceKind: 'OFFICE_CLEANING' as const },
-    { authorName: 'Sofia B.', rating: 4, title: 'Sehr saubere Fenster', body: 'Streifenfrei und schnell erledigt. Ein Stern Abzug, weil der Termin einmal kurzfristig verschoben werden musste — die Kommunikation war aber transparent.', serviceKind: 'WINDOW_CLEANING' as const },
-    { authorName: 'Thomas H.', rating: 5, title: 'Baureinigung top', body: 'Nach dem Umbau war die Wohnung staubfrei und bezugsbereit. Auch die Zementschleier auf den Platten sind komplett weg.', serviceKind: 'CONSTRUCTION_CLEANING' as const },
+    { authorName: DEMO_BEWERTUNGEN.wyss.autor, rating: 5, title: DEMO_BEWERTUNGEN.wyss.titel, body: 'Seit sechs Monaten kommt alle zwei Wochen dasselbe Team. Pünktlich, gründlich und immer freundlich. Die Buchung über die Website dauert keine zwei Minuten.', serviceKind: 'RESIDENTIAL_CLEANING' as const, featured: true },
+    { authorName: DEMO_BEWERTUNGEN.roth.autor, rating: 5, title: DEMO_BEWERTUNGEN.roth.titel, body: 'Wir lassen mehrere Liegenschaften betreuen. Die monatlichen Berichte und die klare Kommunikation sparen uns viel Aufwand. Preis-Leistung stimmt.', serviceKind: 'OFFICE_CLEANING' as const, featured: true },
+    { authorName: DEMO_BEWERTUNGEN.schneider.autor, rating: 5, title: DEMO_BEWERTUNGEN.schneider.titel, body: 'Die Verwaltung hatte keinen einzigen Beanstandungspunkt. Das Team hat sogar die Storen und den Keller gemacht. Kaution vollständig zurück.', serviceKind: 'MOVE_OUT_CLEANING' as const, featured: true },
+    { authorName: DEMO_BEWERTUNGEN.lehmann.autor, rating: 5, title: DEMO_BEWERTUNGEN.lehmann.titel, body: 'Reinigung nach Praxisschluss, Hygienestandards werden eingehalten und dokumentiert. Wir fühlen uns sehr gut betreut.', serviceKind: 'OFFICE_CLEANING' as const },
+    { authorName: DEMO_BEWERTUNGEN.bernasconi.autor, rating: 4, title: DEMO_BEWERTUNGEN.bernasconi.titel, body: 'Streifenfrei und schnell erledigt. Ein Stern Abzug, weil der Termin einmal kurzfristig verschoben werden musste — die Kommunikation war aber transparent.', serviceKind: 'WINDOW_CLEANING' as const },
+    { authorName: DEMO_BEWERTUNGEN.baureinigung.autor, rating: 5, title: DEMO_BEWERTUNGEN.baureinigung.titel, body: 'Nach dem Umbau war die Wohnung staubfrei und bezugsbereit. Auch die Zementschleier auf den Platten sind komplett weg.', serviceKind: 'CONSTRUCTION_CLEANING' as const },
   ];
 
   for (const review of reviews) {
@@ -880,10 +892,10 @@ async function main() {
 
   // ---- Galerie ----
   const galleryItems = [
-    { title: 'Umzugsreinigung Länggasse', description: 'Küche vor und nach der Endreinigung — Backofen, Dampfabzug und Fronten entfettet.', serviceKind: 'MOVE_OUT_CLEANING' as const, beforeUrl: '/gallery/umzug-kueche-vorher.jpg', afterUrl: '/gallery/umzug-kueche-nachher.jpg', location: 'Bern Länggasse', featured: true },
-    { title: 'Badezimmer entkalkt', description: 'Hartnäckige Kalkablagerungen in Dusche und Armaturen vollständig entfernt.', serviceKind: 'MOVE_OUT_CLEANING' as const, beforeUrl: '/gallery/bad-vorher.jpg', afterUrl: '/gallery/bad-nachher.jpg', location: 'Ostermundigen', featured: true },
-    { title: 'Baureinigung Neubau', description: 'Zementschleier auf Feinsteinzeug fachgerecht entfernt.', serviceKind: 'CONSTRUCTION_CLEANING' as const, beforeUrl: '/gallery/bau-vorher.jpg', afterUrl: '/gallery/bau-nachher.jpg', location: 'Köniz', featured: true },
-    { title: 'Fensterfront Bürogebäude', description: '38 Fenster inklusive Rahmen und Storen, streifenfrei im Osmose-Verfahren.', serviceKind: 'WINDOW_CLEANING' as const, beforeUrl: '/gallery/fenster-vorher.jpg', afterUrl: '/gallery/fenster-nachher.jpg', location: 'Bern Effingerstrasse' },
+    { title: DEMO_GALERIE.umzugKueche, description: 'Küche vor und nach der Endreinigung — Backofen, Dampfabzug und Fronten entfettet.', serviceKind: 'MOVE_OUT_CLEANING' as const, beforeUrl: '/gallery/umzug-kueche-vorher.jpg', afterUrl: '/gallery/umzug-kueche-nachher.jpg', location: 'Bern Länggasse', featured: true },
+    { title: DEMO_GALERIE.bad, description: 'Hartnäckige Kalkablagerungen in Dusche und Armaturen vollständig entfernt.', serviceKind: 'MOVE_OUT_CLEANING' as const, beforeUrl: '/gallery/bad-vorher.jpg', afterUrl: '/gallery/bad-nachher.jpg', location: 'Ostermundigen', featured: true },
+    { title: DEMO_GALERIE.neubau, description: 'Zementschleier auf Feinsteinzeug fachgerecht entfernt.', serviceKind: 'CONSTRUCTION_CLEANING' as const, beforeUrl: '/gallery/bau-vorher.jpg', afterUrl: '/gallery/bau-nachher.jpg', location: 'Köniz', featured: true },
+    { title: DEMO_GALERIE.fensterfront, description: '38 Fenster inklusive Rahmen und Storen, streifenfrei im Osmose-Verfahren.', serviceKind: 'WINDOW_CLEANING' as const, beforeUrl: '/gallery/fenster-vorher.jpg', afterUrl: '/gallery/fenster-nachher.jpg', location: 'Bern Effingerstrasse' },
   ];
 
   /**
@@ -932,8 +944,8 @@ async function main() {
 
   const posts = [
     {
-      slug: 'wohnungsuebergabe-checkliste',
-      title: 'Wohnungsübergabe in der Schweiz: Die vollständige Checkliste',
+      slug: DEMO_BLOGBEITRAEGE.uebergabe.slug,
+      title: DEMO_BLOGBEITRAEGE.uebergabe.titel,
       excerpt:
         'Damit die Kaution vollständig zurückkommt: Was Vermieter bei der Abgabe prüfen und wie Sie sich Schritt für Schritt vorbereiten.',
       content: `## Warum die Wohnungsübergabe so oft schiefgeht
@@ -982,8 +994,8 @@ Nehmen Sie das Übernahmeprotokoll vom Einzug mit. Damit lässt sich normale Abn
       readingMinutes: 6,
     },
     {
-      slug: 'wie-oft-buero-reinigen',
-      title: 'Wie oft sollte ein Büro gereinigt werden?',
+      slug: DEMO_BLOGBEITRAEGE.buero.slug,
+      title: DEMO_BLOGBEITRAEGE.buero.titel,
       excerpt:
         'Von der täglichen Sanitärreinigung bis zur jährlichen Grundreinigung: ein praxisnaher Reinigungsplan für KMU.',
       content: `## Es gibt keinen Einheitsrhythmus
@@ -1029,8 +1041,8 @@ Reinigung während der Arbeitszeit stört den Betrieb und ist ineffizient. Die m
       readingMinutes: 5,
     },
     {
-      slug: 'kalk-entfernen-hausmittel',
-      title: 'Kalk entfernen: Was wirklich funktioniert — und was nicht',
+      slug: DEMO_BLOGBEITRAEGE.kalk.slug,
+      title: DEMO_BLOGBEITRAEGE.kalk.titel,
       excerpt:
         'Essig, Zitronensäure oder Spezialreiniger? Ein nüchterner Vergleich für Schweizer Haushalte mit hartem Wasser.',
       content: `## Warum Kalk in der Schweiz ein Dauerthema ist
@@ -1630,7 +1642,7 @@ Ein Abzieher nach jedem Duschen reduziert die Kalkbildung um schätzungsweise 80
   }
 
   console.log('\n✅  Demodaten angelegt.\n');
-  console.log('   Kundin     nicole.wyss@example.ch / Demo#2026Clenaris\n');
+  console.log(`   Kundin     ${DEMO_KUNDSCHAFT.wyss.email} / Demo#2026Clenaris\n`);
   console.log('   Achtung: Bewertungen und Galerie sind erfunden und öffentlich sichtbar.');
   console.log('   Vor dem Livegang entfernen oder durch echte ersetzen.\n');
 }
