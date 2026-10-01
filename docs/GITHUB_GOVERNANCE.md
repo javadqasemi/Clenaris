@@ -1,8 +1,11 @@
 # GitHub-Governance
 
-Stand 2026-09-27. Dieses Dokument beschreibt, wie das Repository
-`javadqasemi/Clenaris` auf GitHub abgesichert ist und was davon **tatsächlich
-eingestellt** ist.
+Stand 2026-09-27, fortgeschrieben 2026-10-01 (Production-V2-Härtung:
+Workflow, Artefakt, zweiter Auslieferungsweg — Abschnitte 4 und 5). Dieses
+Dokument beschreibt, wie das Repository `javadqasemi/Clenaris` auf GitHub
+abgesichert ist und was davon **tatsächlich eingestellt** ist. Die
+Einstellungen in Abschnitt 1 wurden am 2026-09-27 über die API gelesen; seither
+nicht neu gelesen ist, was dort als „seither" markiert ist.
 
 **Angewandt am 2026-09-27** (Auftrag „Enterprise Remediation", Phase 42 — die
 Schutzmassnahmen, die der bestehende Plan kostenlos bietet): der Regelsatz aus
@@ -18,7 +21,7 @@ die GitHub-API gelesen; der Nachher-Stand steht unten.
 | Bereich | Wert |
 |---|---|
 | Sichtbarkeit | **öffentlich** (unverändert) |
-| Standardzweig | `feature/crud-rbac-cta` — **nicht** `main` (unverändert, Entscheid der Inhaberschaft) |
+| Standardzweig | am 2026-09-27 gelesen: `feature/crud-rbac-cta`. **Seither `main`** (von der Inhaberschaft am 2026-09-27 umgestellt; nach dieser Lesung nicht erneut über die API bestätigt) |
 | Schutz von `main` | **Regelsatz „main schützen" (ID 24071027), `active`**: `deletion`, `non_fast_forward`, `pull_request` (0 Freigaben, Unterhaltungen aufgelöst), `required_status_checks` (`Prüfung`, streng: Zweig aktuell) — `/rules/branches/main` meldet genau diese vier. Umgehungsliste leer |
 | Klassischer Zweigschutz | keiner (der Regelsatz ersetzt ihn) |
 | Actions erlaubt | alle Aktionen |
@@ -29,12 +32,22 @@ die GitHub-API gelesen; der Nachher-Stand steht unten.
 | Dependabot-Warnungen | **an** (vorher aus) |
 | Dependabot-Sicherheitsupdates | aus — sie eröffnen selbständig Pull Requests; einschalten ist ein Entscheid über den Arbeitsablauf, keine Schutzlücke |
 | Umgebung `production` | Zweigregel: nur `main`; Secrets `SERVER_HOST`, `SERVER_PORT`, `SERVER_SSH_KNOWN_HOSTS` — **kein** `SERVER_SSH_KEY`, **kein** `SERVER_USER` |
-| Repository-Variablen | keine — insbesondere `DEPLOY_ENABLED` nicht gesetzt |
+| Repository-Variablen | keine — insbesondere `DEPLOY_ENABLED` und `RELEASE_EXECUTOR_ENABLED` nicht gesetzt |
 | Repository-Secrets | keine |
 
 Folge der letzten drei Zeilen: Der Auslieferungsauftrag wird übersprungen
 (`DEPLOY_ENABLED` fehlt), und selbst eingeschaltet scheiterte er an der
 ersten Stufe (Schlüssel und Benutzer fehlen), bevor eine Verbindung entsteht.
+Die beiden CI-Läufe des Release-Kandidaten (Pull Request #9 und `main`
+`67a25f2`, 2026-09-30) endeten entsprechend mit „Prüfung" grün und
+„Auslieferung" übersprungen (`docs/PENDENZEN.md` W-12).
+
+**Entscheide der Inhaberschaft, nicht Lücken des Codes:** Die Umgebung
+`production` hat keine erforderlichen Freigaben (Required reviewers), und wer
+Administrationsrecht am Repository hat, kann Regelsatz und Umgebung ändern —
+der Workflow kann das weder verhindern noch erkennen. Beides ist bei einer
+einzigen pflegenden Person bewusst so (Abschnitt 2, „Freigaben"); mit einer
+zweiten Person gehören Required reviewers auf `production`.
 
 ---
 
@@ -135,10 +148,12 @@ Aufheben: Regelsatz löschen oder auf `disabled` stellen.
 
 ### Standardzweig
 
-Der Standardzweig ist `feature/crud-rbac-cta`, ausgeliefert wird `main`.
-Empfehlung: `main` zum Standardzweig machen. Sonst zielen neue Pull Requests
-standardmässig auf einen Zweig ohne Tor, und Dependabot/Secret-Scanning-
-Meldungen beziehen sich auf den falschen Zweig. Entscheid der Inhaberschaft.
+Am 2026-09-27 war der Standardzweig `feature/crud-rbac-cta`, ausgeliefert
+wurde `main`. Empfohlen war, `main` zum Standardzweig zu machen — sonst zielen
+neue Pull Requests standardmässig auf einen Zweig ohne Tor, und
+Dependabot/Secret-Scanning-Meldungen beziehen sich auf den falschen Zweig. Die
+Inhaberschaft hat das umgesetzt: **Standardzweig ist `main`** (seit
+2026-09-27; Abschnitt 1).
 
 ---
 
@@ -183,7 +198,14 @@ läuft also derselbe Code wie vorher.
 | `actions/checkout` | `11d5960a326750d5838078e36cf38b85af677262` | v4.4.0 |
 | `actions/setup-node` | `49933ea5288caeca8642d1e84afbd3f7d6820020` | v4.4.0 |
 | `actions/upload-artifact` | `ea165f8d65b6e75b540449e92b4886f43607fa02` | v4.6.2 |
-| `actions/cache` | `0057852bfaa89a56745cba8c7296529d2fc39830` | v4.3.0 |
+| `actions/download-artifact` | `d3f86a106a0bac45b974a628896c90dbdf5c8093` | v4.3.0 |
+
+`actions/cache` (für `.next/cache`) wird seit 2026-09-30 nicht mehr benutzt
+(siehe „Zwischenspeicher"); `actions/download-artifact` holt im Auftrag
+`auslieferung` das Artefakt desselben Laufs. Dieselben Festlegungen gelten in
+der Vorlage `deploy/v2/release-ausfuehrer.yml`;
+`tests/api/auslieferung-absicherung.test.ts` („jede `uses:`-Zeile nennt einen
+40-stelligen Commit") prüft Workflows und Vorlagen.
 
 Aktualisieren: neues Tag über die API zu einem Commit auflösen (bei
 annotierten Tags das Tag-Objekt dereferenzieren), Hash **und** Kommentar
@@ -220,15 +242,16 @@ kommen.
 | Speicher | Schlüssel | Bewertung |
 |---|---|---|
 | `~/.npm` (`setup-node`, `cache: npm`) | Hash von `package-lock.json` | `npm ci` prüft jedes Paket gegen die `integrity`-Summe der Sperrdatei; ein vergifteter Zwischenspeicher scheitert daran. `node_modules` selbst wird **nicht** zwischengespeichert |
-| `.next/cache` (`actions/cache`) | Betriebssystem + Sperrdatei + Quelltext, mit Rückfallschlüsseln | Ein Pull Request liest Zwischenspeicher seines eigenen Zweigs und des Basis-/Standardzweigs, **schreibt** aber nur in den Bereich seines eigenen Merge-Refs — er kann den Speicher von `main` nicht vergiften (Zugriffsregeln von GitHub). Gebaut wird hier nur zur Prüfung; nichts aus diesem Bau wird ausgeliefert |
+| ~~`.next/cache` (`actions/cache`)~~ | — | **seit 2026-09-30 entfernt.** Bis dahin geschlüsselt über Betriebssystem, Sperrdatei und Quelltext mit Rückfallschlüsseln; der Schlüssel übersah Konfiguration, `public/` und das Schema, und das ausgelieferte Bündel hing von einem früheren Lauf ab |
 | Prisma-Engines | nicht zwischengespeichert; bei `npm ci` geladen | Netzabhängigkeit (`binaries.prisma.sh`), siehe `PREPRODUCTION_READINESS.md` §1 |
 
-**Für Production V2 festzuhalten:** Sobald das CI das Artefakt baut, das
-ausgeliefert wird (`scripts/release-artefakt.ts`), soll dieser Bau **ohne**
-wiederhergestellten `.next/cache` laufen — oder nur mit exakt passendem
-Schlüssel aus `main`. Ein Bauzwischenspeicher fliesst in die Bündel ein, und
-ein ausgeliefertes Artefakt soll von nichts abhängen, was ein anderer Lauf
-hinterlassen hat.
+**Für Production V2 umgesetzt (2026-09-30):** Das CI baut das Artefakt, das
+ausgeliefert wird (`scripts/release-artefakt.ts`), und dieser Bau läuft
+**ohne** Zwischenspeicher — ein Artefakt soll von nichts abhängen, was ein
+anderer Lauf hinterlassen hat. Es entsteht ausserdem aus einem Bau gegen eine
+Datenbank nur mit Konfiguration und wird vor dem ersten Serverstart gepackt
+(`docs/PRODUCTION_V2.md` §2). `tests/api/auslieferung-absicherung.test.ts`
+„baut ohne Zwischenspeicher aus früheren Läufen" hält das fest.
 
 ### Artefakte
 
@@ -236,8 +259,10 @@ hinterlassen hat.
 |---|---|---|---|
 | `sicherheitsbericht` | immer | 90 Tage | JSON der Sicherheitsprüfung + CycloneDX-Stückliste. Die Geheimnisprüfung meldet nur **Datei:Zeile**, nie einen Wert; `npm audit`-Befunde und Stückliste folgen aus der öffentlichen Sperrdatei. Keine Geheimnisse, keine Personendaten. 90 Tage, weil der Bericht der Nachweis zu einem Commit ist |
 | `feature-integrity-report` | immer | 14 Tage | Heuristik über den Quelltext; beratend |
-| `playwright-bericht` | nur bei Fehlschlag | 7 Tage | Bildschirmfotos und Spuren gegen **Demodaten** der Wegwerfdatenbank |
+| `playwright-bericht` | nur bei Fehlschlag | 7 Tage | Bildschirmfotos und Spuren gegen **Demodaten** der Wegwerfdatenbank; seit 2026-09-30 auch der JSON-Bericht der Browserreihe in `test-results/` |
 | `server-log` | nur bei Fehlschlag | 7 Tage | Protokoll des Testservers; enthält nur Wegwerfwerte des Laufs |
+| `release-<sha>` | nur bei Push oder Handstart auf `main`, nach grünen Prüfreihen | 30 Tage | das Release-Artefakt: Archiv `clenaris-<sha12>.tar.gz`, `.sha256`, Beilage `clenaris-<sha12>.json`. Gebaut ohne Demodaten und ohne Umgebungsdateien (das Packen verweigert beides); enthält den Quelltext und `node_modules` — also nichts, was das öffentliche Repository und die Sperrdatei nicht ohnehin zeigen. Ein Pull-Request-Lauf packt zur Probe, legt aber nichts ab |
+| `bau-vergleich` | nur im Auftrag `reproduzierbarkeit` (`workflow_dispatch`) | 30 Tage | Bericht `bau-vergleich.json` zweier Bauten desselben Commits; Auszüge mit geschwärzten Schlüsseln |
 
 Bei öffentlichem Repository kann jedes angemeldete GitHub-Konto diese
 Artefakte laden. Das ist für den heutigen Inhalt vertretbar, und es ist ein
@@ -245,16 +270,36 @@ weiterer Grund für „privat" in Abschnitt 3.
 
 ---
 
-## 5. Auslieferung — fail-closed, überprüft am 2026-09-26
+## 5. Auslieferung — fail-closed, überprüft am 2026-09-26, fortgeschrieben 2026-10-01
 
 1. Kein Pull Request löst sie aus.
 2. `vars.DEPLOY_ENABLED == 'true'` — nicht gesetzt, also übersprungen.
-3. Umgebung `production` — nur für `main`.
-4. `SERVER_SSH_KEY`, `SERVER_USER` fehlen in der Umgebung; die erste Stufe
+3. Seit 2026-09-30 zusätzlich `github.ref == 'refs/heads/main'` am Auftrag:
+   Auch ein Handstart auf einem anderen Zweig beginnt gar nicht erst.
+4. Umgebung `production` — nur für `main`.
+5. `SERVER_SSH_KEY`, `SERVER_USER` fehlen in der Umgebung; die erste Stufe
    bricht dann mit einer benannten Fehlermeldung ab.
-5. Kein Host im Workflow oder in `scripts/deploy.sh`: Das Ziel kommt
-   ausschliesslich aus `secrets.SERVER_HOST`, ohne Rückfall; die frühere
-   Serveradresse steht in keiner Zeile, die ausgeführt wird.
-6. `known_hosts` ist Pflicht; ohne passenden Eintrag keine Verbindung.
+6. Kein Host im Workflow oder in einem Skript: Das Ziel kommt ausschliesslich
+   aus `secrets.SERVER_HOST`, ohne Rückfall; die frühere Serveradresse steht
+   in keiner Zeile, die ausgeführt wird. `scripts/deploy.sh` ist eine Absage.
+7. `known_hosts` ist Pflicht; ohne passenden Eintrag keine Verbindung.
+8. **Ausgeliefert wird nur das Artefakt dieses Laufs**, in der CI gebaut und
+   geprüft: Die Beilage muss genau diesen Commit, genau diesen Lauf, `main`,
+   `auslieferbar` und die gemessene Summe nennen; der Server bekommt die Summe
+   als `--erwartet-sha256` und aktiviert mit dem Skript aus dem Archiv
+   (Vertrag C3). Anwendungsgeheimnisse reisen nicht durch die Pipeline.
 
-Der Auftrag wurde in dieser Prüfung **nicht** ausgelöst.
+**Zweiter Weg: der Release-Ausführer.** Die Vorlage
+`deploy/v2/release-ausfuehrer.yml` liegt bewusst nicht unter
+`.github/workflows`. Kopiert läuft sie nur nach Zeitplan oder von Hand, nur
+mit `vars.RELEASE_EXECUTOR_ENABLED == 'true'`, in der Umgebung `production`,
+mit denselben Server-Secrets wie `deploy.yml` plus `RELEASE_EXECUTOR_TOKEN`
+und `RELEASE_EXECUTOR_SIGNING_KEY` und mit `actions: read`, um das Artefakt
+eines grünen Push-Laufs auf `main` zu holen. Beide Wege bleiben (Entscheid der
+Betreiberin, 2026-09-30) und teilen die Nebenläufigkeitsgruppe
+`clenaris-auslieferung-production`. **Der direkte Weg umgeht die Freigabe im
+Release Center** — seine Freigabe ist das Zusammenführen nach `main`
+(`docs/PRODUCTION_V2.md` §9).
+
+Weder `auslieferung` noch der Ausführer wurde je gegen einen Server
+ausgelöst.
