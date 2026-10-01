@@ -532,6 +532,7 @@ gleichzeitig einzuschalten ist deshalb nicht der vorgesehene Zustand
 |---|---|---|
 | V2-2 … V2-6 | Abschnitt 3 | extern |
 | P2H-20 | Aktivierung, Rücksprung und Ausführer auf einem Linux-Probeserver; `/api/health` mit `identitaet=belegt` auf V2 | extern |
+| P2H-76 | Erstinstallation auf einer leeren Datenbank: Die Vorprüfung vor der Migration verlangt Schema und ein Konto der Systemverantwortung, `scripts/create-admin.ts` braucht Schema und Organisation, und der Konfigurations-Seed verlangt auf einem produktiven System Startpasswörter, die auf V2 nicht gesetzt werden. Reihenfolge auf dem Probeserver festlegen; die geplante Übernahme der geprüften Datenbank (`NOTFALL_WIEDERHERSTELLUNG.md` §17) ist nicht betroffen | extern (V2-3) |
 | P2H-21 | erster Lauf des Auftrags `reproduzierbarkeit` | extern (GitHub) |
 | P2H-25 | Datenbanktor nach der Migration auch auf dem Server | intern |
 | P2H-22 | Prüfung von aussen entfällt ohne `API_URL` (bewusst; bindend ist die Prüfung auf dem Server) | intern, Pflege |

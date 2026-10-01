@@ -68,8 +68,10 @@ noch für Production V2. *(Stand 2026-09-23. Überholt: Die Härtung vom
 nicht kannte — eine Ausführer-Vorlage, die beim ersten Lauf gescheitert wäre,
 eine Versionsprüfung gegen die eigene Umgebungsvariable, keinen geprüften
 Rücksprung von Hand, ein Artefakt ohne `prisma.config.ts` und mit Demodaten
-aus dem Prüfbau. Behoben und belegt in §10; was intern offen bleibt, steht
-dort.)*
+aus dem Prüfbau. Behoben in §10, jeweils mit einer reinen Prüfung, die
+gelaufen ist; HTTP- und Browserfälle der Härtung laufen erst im
+`verify:release` des Härtungskandidaten. Was intern und extern offen bleibt,
+steht in §10.2 und §10.3.)*
 
 ### Extern (ausserhalb des Codes)
 
@@ -285,7 +287,8 @@ Einzelheiten je Befund: `docs/FINAL_REMEDIATION_MATRIX.md` und
 Zweig `release/2026-09-29-rc` ab `main` `7daaf71`, abschliessend `e9cae98`,
 zusammengeführt als `main` `67a25f2` (Pull Request #9). Befunde, Korrekturen und
 Belege je Punkt stehen im Register `docs/PENDENZEN.md`, Abschnitt **RC**
-(RC-01 … RC-21; RC-21 offen); die Laufzahlen des abschliessenden `verify:release` und der
+(RC-01 … RC-21; offen: RC-14 (nutzereigene Datei, Sache der Inhaberschaft) und
+RC-21); die Laufzahlen des abschliessenden `verify:release` und der
 CI-Lauf stehen im Pull Request und im Abschlussbericht — hier nicht, weil
 jeder Nachtrag hier den geprüften Stand wieder verändern würde.
 
@@ -321,7 +324,7 @@ Zweig `haertung/production-v2` ab `main` `67a25f2` (Baum gleich `e9cae98`,
 Instanz**: Der Code des Release-Kandidaten war geprüft, der Weg in die
 Produktion nur beschrieben. Neun Härtungsströme auf einem gemeinsamen
 Vertragscommit (`9fd662b`); Befund, Korrektur, Prüfung und Commit je Punkt
-im Register `docs/PENDENZEN.md`, Abschnitt **P2H** (P2H-01 … P2H-75). Wie in
+im Register `docs/PENDENZEN.md`, Abschnitt **P2H** (P2H-01 … P2H-76). Wie in
 §9 stehen die Laufzahlen des abschliessenden `verify:release` und der CI hier
 nicht, sondern im Pull Request und im Abschlussbericht.
 
@@ -340,10 +343,10 @@ nicht, sondern im Pull Request und im Abschlussbericht.
 | Prüfprotokoll | `audit_logs` in der Datenbank nur fortschreibbar (Trigger), Schwärzung nur über einen transaktionslokalen Schalter | P2H-35, P2H-36 |
 | Datenbanktor | Register aller handgeschriebenen Schranken (Teilindizes, Trigger samt Bindung, CHECK, EXCLUDE, Erweiterung, Funktionsrümpfe) gegen Migrationen und Kataloge; Exit 0/1/2; in CI und vollem Prüfweg | P2H-37 … P2H-40 |
 | Prüfweg | Testmatrix nur mit ausgeführten Titeln, Teilwege des Release-Wegs enden mit Exit 3 „TEILPRÜFUNG BESTANDEN — KEIN RELEASE-NACHWEIS", nur `verify:release` schreibt den Release-Nachweis; Bilanz je Engine | P2H-45 … P2H-47 |
-| Sitzung | Leerlauf über HTTP und im Browser bewiesen | P2H-50, P2H-51 |
+| Sitzung | Leerlauf über HTTP und im Browser als Prüfung geschrieben (Lauf steht aus) | P2H-50, P2H-51 |
 | Diagnose | W-11 und RC-21 hinterlassen bei jedem Auftreten einen Abzug bzw. Lebenslauf — Ursachen weiter unbelegt | P2H-55, P2H-56 |
-| Besuchsmessung | Schalter `CLENARIS_BESUCHSMESSUNG` (Vorgabe aus), 13 Monate überall, GA-Cookie 13 Monate, Widerruf im Browser | P2H-59, P2H-60, TA-03 |
-| Website, KI | Alternativtext der Vergleichsbilder, Galerie und Stellen erneuern ihre Detailseiten, KI-Kontingent belegt | P2H-61 … P2H-63 |
+| Besuchsmessung | Schalter `CLENARIS_BESUCHSMESSUNG` (Vorgabe aus), 13 Monate überall, GA-Cookie 13 Monate (rein geprüft); Widerruf als Browserfall geschrieben (Lauf steht aus) | P2H-59, P2H-60, TA-03 |
+| Website, KI | Alternativtext der Vergleichsbilder (rein geprüft), Galerie und Stellen erneuern ihre Detailseiten (reine Regressionsprüfung aus `82f3922`, HTTP-Fall steht aus), KI-Kontingent als HTTP-Prüfung geschrieben (Lauf steht aus) | P2H-61 … P2H-63 |
 
 ### 10.2 Intern offen (im Code lösbar, nicht im Freeze)
 
@@ -368,6 +371,7 @@ Begründung im Register:
 | Nr. | Fehlender Beleg |
 |---|---|
 | P2H-20 / V2-3 | Aktivierung, Rücksprung und Ausführer auf einem Linux-Probeserver (Symlink, pm2-Verzeichniswechsel, `flock`, Ausgänge, Aufbewahrung) und `/api/health` mit `identitaet=belegt` auf Production V2 |
+| P2H-76 / V2-3 | Erstinstallation auf einer leeren Datenbank: Die Vorprüfung vor der Migration verlangt Schema und ein Konto der Systemverantwortung, `scripts/create-admin.ts` braucht Schema und Organisation, der Konfigurations-Seed auf einem produktiven System Startpasswörter, die auf V2 nicht gesetzt werden — Reihenfolge Vorprüfung/Schema/Seed/`create-admin` auf dem Probeserver festlegen. Der geplante Weg (Übernahme der geprüften Datenbank, `NOTFALL_WIEDERHERSTELLUNG.md` §17) ist nicht betroffen |
 | P2H-21 | erster Lauf des Auftrags `reproduzierbarkeit` mit abgelegtem `bau-vergleich.json` |
 | P2H-34 | Drucken aus dem PDF-Viewer über den `blob:`-Rahmen in einem Browser mit PDF-Renderer |
 | P2H-42 | getrennte Eigentümerrolle für Migrationen, `log_statement = 'ddl'`, aufbewahrte Sicherungen |
