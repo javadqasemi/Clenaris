@@ -1,7 +1,7 @@
 import { test as basis } from '@playwright/test';
 
 import { resetRateLimits } from '../../helpers/rate-limit';
-import { diagnoseAnhaengen } from './diagnose';
+import { diagnoseAnhaengen, lebenslaufMitschreiben } from './diagnose';
 import { MUTATIONS_BEOBACHTER } from './mutations-beobachter';
 
 /**
@@ -45,6 +45,14 @@ export const test = basis.extend({
    * bewusst nicht.
    */
   context: async ({ context }, use, testInfo) => {
+    /**
+     * Lebenslauf von Browser, Kontext und Seiten (RC-21) — als Erstes, damit
+     * auch ein Ereignis während des Aufbaus dieses Rahmens mitgeschrieben
+     * wird. Immer an, billig (eine Zeile je Ereignis) und ohne Einfluss auf
+     * das Ergebnis eines Falls; Begründung bei `lebenslaufMitschreiben`.
+     */
+    const lebenslauf = lebenslaufMitschreiben(context, testInfo);
+
     await context.route('**/favicon.ico', (route) => route.fulfill({ status: 204, body: '' }));
 
     /**
@@ -79,7 +87,48 @@ export const test = basis.extend({
     // eslint-disable-next-line react-hooks/rules-of-hooks
     await use(context);
 
-    await diagnose.auswerten(testInfo);
+    /**
+     * Offene Körperlesungen der Wache abwarten, höchstens zwei Sekunden
+     * (RC-21). Sie gehören nicht zum Fall, sondern zu diesem Rahmen, und
+     * sollen nicht mehr unterwegs sein, wenn Playwright gleich danach den
+     * Kontext schliesst. Kein Wiederholen, kein Filtern: Was die Frist
+     * überschreitet, bleibt offen und steht als `koerperAbgewartet: false` im
+     * Lebenslauf. Zwei Sekunden, weil die Lesung eines bereits geladenen
+     * Dokuments Millisekunden braucht — wer länger braucht, ist der Befund.
+     */
+    const koerper = await diagnose.ausstehendeAbwarten(2_000);
+    /**
+     * Das Urteil dieses Rahmens gehört mit in den Eintrag.
+     *
+     * `testInfo.status` steht an dieser Stelle noch auf dem Urteil des
+     * Fallkörpers. Ein Fall, der allein an der Hydrationswache scheitert, ist
+     * hier „passed" und wird erst durch `auswerten` gleich darunter rot. Ohne
+     * `hydrationsfehler` stünde er im Lebenslauf als bestanden mit null
+     * Fehlern — falsche Beweise in genau dem Protokoll, das Abbaufehler mit
+     * dem Ausgang des Falls in Beziehung setzen soll.
+     *
+     * `fall.ende` trotzdem **vor** `auswerten` und nicht im `finally`
+     * danach: Der Eintrag soll auf der Platte stehen, bevor irgendetwas am
+     * Abbau scheitern kann — er ist die Zeile, die beim nächsten roten Lauf
+     * zählt. `diagnose.hydration()` ist genau die Bedingung, unter der
+     * `auswerten` wirft; ob es tatsächlich warf (auch aus einem anderen
+     * Grund, etwa beim Schreiben des Berichts), steht danach in
+     * `fixture.abgebaut` als `auswertungGeworfen`.
+     */
+    lebenslauf.fallEnde({
+      offeneKoerper: koerper.offen,
+      koerperAbgewartet: koerper.abgeschlossen,
+      hydrationsfehler: diagnose.hydration(),
+    });
+    let auswertungGeworfen = false;
+    try {
+      await diagnose.auswerten(testInfo);
+    } catch (fehler) {
+      auswertungGeworfen = true;
+      throw fehler;
+    } finally {
+      lebenslauf.abgebaut({ auswertungGeworfen });
+    }
   },
 });
 

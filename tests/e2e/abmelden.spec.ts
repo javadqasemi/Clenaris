@@ -52,4 +52,34 @@ test('eine bei der Abmeldung laufende Abfrage schickt nicht zur Anmeldung „abg
   expect(ziel.pathname, `nach der Abmeldung auf ${ziel.pathname}${ziel.search}`).toBe('/');
   expect(ziel.search).not.toContain('abgelaufen');
   expect(erneuerungen, 'nach einer gewollten Abmeldung wurde eine Erneuerung versucht').toEqual([]);
+
+  /**
+   * Die eigene Route abbauen, bevor der Rahmen den Kontext schliesst (RC-21,
+   * 2026-10-01).
+   *
+   * Was diesen Fall von den übrigen unterscheidet, ist die **Art** des
+   * Wartens, nicht das Warten selbst. Auch andere Fälle halten Rückrufe
+   * zurück — `bilder.browser.spec.ts`, `preisrechner.browser.spec.ts`,
+   * `produktsprint-2026-09-26.spec.ts` und `vor-hydration.browser.spec.ts`
+   * —, aber mit einer festen Uhr von 1,5 bis 2,5 Sekunden, die von selbst
+   * abläuft. Nur hier wartet der Rückruf auf eine Zusage, die der Fall
+   * selbst freigibt (`abgemeldet`), also ohne eigene Grenze. Eine frühere
+   * Fassung dieses Kommentars nannte den Fall „den einzigen, der einen
+   * Rückruf warten lässt"; das war falsch, und die Folgerung daraus — die
+   * Hygiene brauche es nur hier — trägt nicht. Tritt RC-21 in einem der
+   * vier anderen Fälle auf, gilt dieselbe Massnahme dort; vorbeugend
+   * angefasst sind sie nicht, weil es für sie keinen Befund gibt.
+   *
+   * Nach der Abmeldung kann noch ein Rückruf laufen — der freigegebene
+   * `route.continue()` oder eine späte Abfrage der Glocke —, und er liefe
+   * dann gegen einen Kontext, der gerade geschlossen wird. Die Meldung aus
+   * dem roten Stresslauf (RC-20-Reihe, Befund RC-21) trug den Zusatz „while
+   * running route callback" nicht; ein Rückruf ist also nicht als Ursache
+   * belegt. `behavior: 'wait'` räumt ihn trotzdem weg: laufende Rückrufe zu
+   * Ende führen, keine neuen mehr annehmen. Hängen kann das nicht — der
+   * einzige Rückruf, der wartet, wartet auf `abgemeldet`, und das ist oben
+   * längst freigegeben. Alle Zusicherungen stehen oben und bleiben
+   * unverändert; hier wird nichts wiederholt und nichts gefiltert.
+   */
+  await page.unrouteAll({ behavior: 'wait' });
 });
