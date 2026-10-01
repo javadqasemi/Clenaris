@@ -2,7 +2,7 @@ import { after, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
@@ -387,6 +387,24 @@ describe('Bauvergleich', () => {
     assert.equal(lauf(a.verzeichnis, ohneBau, '--bericht', bericht).status, 1, 'ohne BUILD_ID');
     assert.match(lauf(a.verzeichnis, ohneBau).stderr, /keine BUILD_ID/);
     assert.equal(lauf(a.verzeichnis, a.verzeichnis).status, 1, 'ein Verzeichnis mit sich selbst beweist nichts');
+
+    // Dasselbe Verzeichnis unter anderem Namen: Bis 2026-10-01 verglich das
+    // Werkzeug nur die Zeichenketten und meldete hier Ausgang 0 — ein grünes
+    // Tor, das nie verglichen hat. Ein Verweis (unter Windows eine Junction,
+    // die ohne Adminrechte angelegt werden kann; anderswo wird die Art
+    // übergangen) zeigt es auf jedem System.
+    const verweis = join(neuesVerzeichnis(), 'verweis-auf-a');
+    symlinkSync(a.verzeichnis, verweis, 'junction');
+    const ueberVerweis = lauf(a.verzeichnis, verweis);
+    assert.equal(ueberVerweis.status, 1, `${ueberVerweis.stdout}\n${ueberVerweis.stderr}`);
+    assert.match(ueberVerweis.stderr, /dasselbe Verzeichnis/);
+    // Andere Gross- und Kleinschreibung: Wo das Dateisystem sie nicht
+    // unterscheidet (Windows), ist es derselbe Ort; wo doch (Linux), gibt es
+    // den Pfad nicht. In beiden Fällen kein Vergleich und kein Ausgang 0.
+    const andereSchreibweise = a.verzeichnis.toUpperCase();
+    const gross = lauf(a.verzeichnis, andereSchreibweise);
+    assert.equal(gross.status, 1, `${gross.stdout}\n${gross.stderr}`);
+    assert.match(gross.stderr, existsSync(andereSchreibweise) ? /dasselbe Verzeichnis/ : /ist kein Verzeichnis/);
     assert.equal(lauf(a.verzeichnis, join(ohneBau, 'fehlt')).status, 1, 'ein fehlendes Verzeichnis');
     assert.equal(lauf(a.verzeichnis, bau().verzeichnis, '--bericht').status, 1, '--bericht ohne Datei');
   });

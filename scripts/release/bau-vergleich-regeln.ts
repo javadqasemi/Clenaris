@@ -47,7 +47,7 @@
  * unterschieden sich dort. Das wäre kein Fehler des Baus, sondern des
  * Versuchsaufbaus — der Vergleich meldet es trotzdem, statt Pfade zu raten.
  */
-import { lstatSync, readdirSync, readFileSync, readlinkSync } from 'node:fs';
+import { lstatSync, readdirSync, readFileSync, readlinkSync, realpathSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 
 // ===========================================================================
@@ -514,6 +514,35 @@ export function verzeichnisQuelle(verzeichnis: string): Baumquelle {
       return lstatSync(voll).isSymbolicLink() ? Buffer.from(`-> ${readlinkSync(voll)}`, 'utf8') : readFileSync(voll);
     },
   };
+}
+
+/**
+ * Zeigen zwei Angaben auf dasselbe Verzeichnis? Ein Bau mit sich selbst
+ * verglichen ist immer gleich — Ausgang 0, „nur erwartete Unterschiede", ein
+ * grünes Tor ohne Vergleich.
+ *
+ * Bis 2026-10-01 verglich `bau-vergleich.ts` dafür nur die aufgelösten
+ * Zeichenketten. Das liess sich umgehen, ohne es zu wollen: unter Windows
+ * `C:\…` gegen `c:\…` oder ein Kurzname (`JAVADQ~1`), überall ein Verweis
+ * oder eine Junction. Jetzt zählen zwei Dinge, jedes für sich hinreichend:
+ *
+ *  • der echte Pfad (`realpathSync.native` löst Verweise, Junctions und
+ *    Kurznamen auf), unter Windows ohne Rücksicht auf Gross- und
+ *    Kleinschreibung — das Dateisystem dort unterscheidet sie nicht;
+ *  • Gerät und Dateinummer (`dev`/`ino`, als `bigint`, damit die 64-Bit-Nummer
+ *    unter Windows nicht gerundet wird). Das fängt, was ein Pfadvergleich nie
+ *    sieht, etwa denselben Ordner über zwei Einhängepunkte. Eine
+ *    Dateinummer 0 meldet ein Dateisystem, das keine kennt; dann entscheidet
+ *    der Pfad allein.
+ */
+export function derselbeOrt(a: string, b: string): boolean {
+  const echtA = realpathSync.native(a);
+  const echtB = realpathSync.native(b);
+  const gleicherPfad = process.platform === 'win32' ? echtA.toLowerCase() === echtB.toLowerCase() : echtA === echtB;
+  if (gleicherPfad) return true;
+  const infoA = statSync(echtA, { bigint: true });
+  const infoB = statSync(echtB, { bigint: true });
+  return infoA.ino !== 0n && infoA.dev === infoB.dev && infoA.ino === infoB.ino;
 }
 
 /** Der Bericht für `--bericht`: maschinenlesbar, mit derselben Aussage wie der Ausgangscode. */

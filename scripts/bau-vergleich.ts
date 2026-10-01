@@ -35,6 +35,7 @@ import {
   ERWARTETE_ABWEICHUNGEN,
   baeumeVergleichen,
   berichtBauen,
+  derselbeOrt,
   verzeichnisQuelle,
   type ErwarteteAbweichung,
 } from './release/bau-vergleich-regeln';
@@ -61,8 +62,9 @@ function main(): number {
       return 1;
     }
   }
-  if (a === b) {
-    // Ein Verzeichnis mit sich selbst verglichen ist immer gleich — und bewiese nichts.
+  if (derselbeOrt(a, b)) {
+    // Ein Verzeichnis mit sich selbst verglichen ist immer gleich — und bewiese
+    // nichts. Echter Pfad und Dateinummer, nicht die Schreibweise (`derselbeOrt`).
     console.error('FEHLER: Beide Angaben zeigen auf dasselbe Verzeichnis.');
     return 1;
   }
