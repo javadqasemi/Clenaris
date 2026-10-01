@@ -345,7 +345,7 @@ export async function umschaltenMitPruefung(auftrag: Umschaltauftrag, b: Befehle
   return ergebnis(20, vorher, vorher, 'Neue Fassung nicht bestätigt; die vorherige läuft nachweislich wieder.');
 }
 
-export type Aktivlage = 'aktiv' | 'nicht-aktiv' | 'aktiv-unbestaetigt';
+export type Aktivlage = 'aktiv' | 'nicht-aktiv' | 'aktiv-unbestaetigt' | 'anderer-bau';
 
 /**
  * Ist `ziel` schon das laufende Release, und bestätigt die Instanz das?
@@ -355,12 +355,36 @@ export type Aktivlage = 'aktiv' | 'nicht-aktiv' | 'aktiv-unbestaetigt';
  * zweite Aktivierung ohne Wirkung und endet mit 0. Läuft es angeblich, meldet
  * sich aber nicht mit seiner Identität, wird **nichts** getan — ein Neustart
  * derselben Fassung verdeckte nur, dass sie krank ist.
+ *
+ * **Derselbe Commit, ein anderer Bau** (`anderer-bau`) ist ein eigener Fall,
+ * und er wird zuerst entschieden. Next vergibt die Build-ID je Bau zufällig;
+ * ein von Hand ausgelöster Lauf auf `main` baut also den Commit, der schon
+ * läuft, mit einer neuen Build-ID. Bis 2026-10-01 fragte diese Prüfung dann
+ * nur die Gesundheit nach der **neuen** Build-ID, bekam die alte, und die
+ * Aktivierung meldete „bestätigt seine Identität nicht" — über eine gesunde
+ * Instanz. Die Diagnose führte zu `pm2 logs` statt zur Ursache. Gelesen wird
+ * deshalb zuerst, was unter `current` liegt: Nennt es denselben Commit mit
+ * einer anderen Build-ID, ist die Antwort ohne eine einzige Frage an die
+ * Instanz klar — umgeschaltet wird nicht, denn `releases/<commit>` ist das
+ * Verzeichnis, aus dem die laufende Instanz liest, und es unter ihr zu
+ * ersetzen wäre kein Umschalten, sondern ein Eingriff in den laufenden
+ * Betrieb ohne Rückweg. Die Identität der Instanz stammt aus genau diesen
+ * Dateien (Vertrag C2); die Dateien zu lesen ist also dieselbe Frage, nur
+ * ohne Netz.
  */
 export async function aktivPruefen(
   auftrag: { basis: string; ziel: string; erwartet: Identitaet; port: number; versuche?: number; abstandMs?: number; treffer?: number },
   b: Befehle,
 ): Promise<Aktivlage> {
   if (!gleicherPfad(b.verweisLesen(auftrag.basis), auftrag.ziel)) return 'nicht-aktiv';
+  const vorhanden = releaseIdentitaetLesen(auftrag.ziel);
+  if (vorhanden.ok && vorhanden.identitaet.commit === auftrag.erwartet.commit && vorhanden.identitaet.buildId !== auftrag.erwartet.buildId) {
+    b.protokoll(
+      `current zeigt bereits auf ${vorhanden.identitaet.commit.slice(0, 12)} als Bau ${vorhanden.identitaet.buildId}; ` +
+        `das gelieferte Archiv ist Bau ${auftrag.erwartet.buildId} desselben Commits.`,
+    );
+    return 'anderer-bau';
+  }
   const bestaetigt = await bestaetigen(
     b,
     auftrag.port,

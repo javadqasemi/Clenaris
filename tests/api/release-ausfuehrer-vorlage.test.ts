@@ -416,6 +416,34 @@ describe('Beide Wege — ein Aktivierungsvertrag (C3)', () => {
     assert.match(aussen, /\[ "\$version" = "\$ERWARTET" \] && \[ "\$build" = "\$BUILD_ID" \] && \[ "\$identitaet" = "belegt" \]/);
   });
 
+  /**
+   * Ein von Hand ausgelöster Lauf auf `main` (etwa für `reproduzierbarkeit`)
+   * baut den laufenden Commit mit einer neuen Build-ID. Die Aktivierung
+   * schaltet darauf nicht um (Ausgang 10, nichts geändert); der Auftrag
+   * fragt deshalb vorher von aussen und liefert diesen Fall gar nicht erst
+   * aus — statt bei jeder Handauslösung rot zu werden.
+   */
+  it('deploy.yml liefert einen zweiten Bau des laufenden Commits nicht aus, sondern zeigt ihn an', () => {
+    const vorab = schritt(auslieferung, 'Läuft dieser Commit schon als anderer Bau?');
+    assert.match(vorab, /^\s+id: vorab\s*$/m);
+    assert.match(vorab, /ERWARTET: \$\{\{ github\.sha \}\}/);
+    assert.match(vorab, /BUILD_ID: \$\{\{ steps\.beilage\.outputs\.buildid \}\}/);
+    // Nur genau dieser Commit, belegt, mit einer anderen, wohlgeformten Build-ID.
+    assert.match(vorab, /\[ "\$version" = "\$ERWARTET" \] && \[ "\$identitaet" = "belegt" \]/);
+    assert.match(vorab, /\[\[ "\$build" =~ \^\[A-Za-z0-9\._-\]\{1,200\}\$ \]\] && \[ "\$build" != "\$BUILD_ID" \]/);
+    assert.match(vorab, /echo "laeuft=\$\{laeuft\}" >> "\$GITHUB_OUTPUT"/);
+    assert.doesNotMatch(ohneKommentare(vorab), /^\s*(ssh|scp)\s/m, 'die Frage geht nur an die öffentliche Adresse, nie an den Server');
+    for (const name of ['Artefakt übertragen und aktivieren', 'Identität von aussen prüfen']) {
+      assert.match(schritt(auslieferung, name), /^\s+if: steps\.vorab\.outputs\.laeuft != 'ja'\s*$/m, name);
+    }
+    const reihenfolge = schritte(auslieferung).map((s) => s.name);
+    assert.ok(
+      reihenfolge.indexOf('Beilage prüfen') < reihenfolge.indexOf('Läuft dieser Commit schon als anderer Bau?') &&
+        reihenfolge.indexOf('Läuft dieser Commit schon als anderer Bau?') < reihenfolge.indexOf('Artefakt übertragen und aktivieren'),
+      'nach der Beilage (sie liefert die Build-ID), vor jeder Übertragung',
+    );
+  });
+
   it('die Aktivierung selbst prüft auf dem Server dieselbe Identität', () => {
     // Die Regel steht einmal (`identitaetStimmt`) und wird aus dem neuen
     // Release heraus aufgerufen; ihr Verhalten prüft release-ruecksprung.test.ts.
@@ -492,7 +520,9 @@ describe('release-aktivieren.sh — Vertrag C3', () => {
   it('pm2 save genau an einer Stelle — nach bestätigter Identität', () => {
     assert.doesNotMatch(ausgefuehrt, /pm2 (startOrReload|reload|save)/, 'das Skript schaltet nicht selbst');
     const werkzeug = lesen('scripts', 'release-umschalten.ts');
-    assert.match(werkzeug, /pm2\('save'\)/);
+    // Seit 2026-10-01 nimmt der pm2-Aufruf eine Liste (damit die Prüfreihe ihn ersetzen kann).
+    assert.match(werkzeug, /pm2\(\['save'\]\)/);
+    assert.equal((werkzeug.match(/pm2\(\['save'\]\)/g) ?? []).length, 1, 'genau ein pm2 save im Werkzeug');
     const kern = lesen('scripts', 'release', 'umschaltung.ts');
     assert.equal((kern.match(/await b\.pm2Sichern\(\)/g) ?? []).length, 2, 'nach AKTIV und nach bestätigtem Rücksprung');
   });
@@ -514,7 +544,45 @@ describe('release-aktivieren.sh — Vertrag C3', () => {
     assert.match(ausgefuehrt, /melden\(\) \{[\s\S]*?protokollieren "\$\{code\}" "\$\{zustand\}"/);
     assert.match(ausgefuehrt, /BEHALTEN="\$\{CLENARIS_RELEASES_KEEP:-5\}"/);
     assert.match(ausgefuehrt, /mv -f -- "\$\{KOPIE\}" "\$\{BASIS\}\/archiv\/\$\{ARCHIVNAME\}"/);
+    assert.match(ausgefuehrt, /mv -f -- "\$\{KOPIE\}\.sha256" "\$\{BASIS\}\/archiv\/\$\{ARCHIVNAME\}\.sha256"/);
     assert.match(ausgefuehrt, /aufbewahren\(\) \{[\s\S]*archiv\/clenaris-\*\.tar\.gz[\s\S]*\}/);
+  });
+
+  /**
+   * Befund 2026-10-01: Das gemessene Archiv lag in `archiv/`, **bevor**
+   * feststand, ob die Aktivierung gelingt — und vor der Prüfung „schon
+   * aktiv?". Eine erneute Lieferung des laufenden Commits als anderer Bau
+   * überschrieb so das aufbewahrte Archiv der laufenden Fassung, und ein
+   * Rücksprung mit der notierten Summe war danach unmöglich. Jede Stelle,
+   * die `archiv/clenaris-<commit>` schreibt, steht deshalb hinter dem
+   * bestätigten Umschalten.
+   */
+  it('bewahrt das Archiv erst nach bestätigter Umschaltung auf — nie davor, nie im Wiederholungszweig', () => {
+    const umschalten = ausgefuehrt.indexOf('release-umschalten.ts" umschalten');
+    const bestaetigt = ausgefuehrt.indexOf('0)  PHASE="abschluss" ;;');
+    assert.ok(umschalten > 0 && bestaetigt > umschalten, 'Umschaltung und ihr Ausgang 0 fehlen');
+    const schreibend = [...ausgefuehrt.matchAll(/"\$\{BASIS\}\/archiv\/\$\{ARCHIVNAME\}/g)].map((t) => t.index ?? -1);
+    assert.ok(schreibend.length >= 2, 'Archiv und .sha256 werden aufbewahrt');
+    for (const stelle of schreibend) assert.ok(stelle > bestaetigt, 'archiv/ wird erst nach dem bestätigten Umschalten beschrieben');
+    // Die Kopie wartet bis dahin unter einem Namen, den `aufbewahren` nie
+    // als Archiv eines Release liest, und die Falle räumt sie weg.
+    assert.match(ausgefuehrt, /KOPIE="\$\{BASIS\}\/archiv\/\.eingang\.\$\$\.tar\.gz"/);
+    assert.match(ausgefuehrt, /aufraeumen\(\) \{[\s\S]*?rm -f -- "\$\{KOPIE\}" "\$\{KOPIE\}\.sha256"[\s\S]*?\}/);
+  });
+
+  it('derselbe Commit als anderer Bau: eigene Meldung, nicht umgeschaltet, Archiv unberührt', () => {
+    const wiederholung = ausgefuehrt.slice(
+      ausgefuehrt.indexOf('if [[ -n "${VORHER}" && "${VORHER}" == "${COMMIT}" ]]; then'),
+      ausgefuehrt.indexOf('ln -sfn "${BASIS}/shared/.env"'),
+    );
+    assert.ok(wiederholung.length > 0, 'Wiederholungszweig fehlt oder steht nach dem Platzieren');
+    assert.match(wiederholung, /aktiv --basis "\$\{BASIS\}" --ziel "\$\{ZIEL\}" --erwartet-aus "\$\{NEU\}"[^\n]*9>&- \\\s*\n\s*\|\| LAGE=\$\?/);
+    assert.match(wiederholung, /0\) [^\n]*melden 0 AKTIV ;;/);
+    assert.match(wiederholung, /5\) fail "Derselbe Commit \$\{COMMIT\} läuft bereits, aber als anderer Bau[^"]*nicht umgeschaltet[^"]*" ;;/);
+    assert.match(wiederholung, /\*\) fail "[^"]*bestätigt seine Identität aber nicht[^"]*" ;;/);
+    assert.doesNotMatch(wiederholung, /archiv\//, 'der Wiederholungszweig fasst archiv/ nicht an');
+    // Dieselbe Zuordnung im Werkzeug: Ausgang 5 heisst „anderer Bau".
+    assert.match(lesen('scripts', 'release-umschalten.ts'), /'anderer-bau': 5,/);
   });
 });
 

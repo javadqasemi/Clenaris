@@ -26,7 +26,9 @@
 #                           (auch: sie lief schon und bestätigt sich — Wiederholung)
 #   10  NICHT_UMGESCHALTET  vor dem Umschalten abgebrochen; `current` unverändert
 #                           (Migrationen können bereits angewandt sein — das
-#                           Protokoll sagt es)
+#                           Protokoll sagt es). Auch: derselbe Commit läuft
+#                           schon, aber als anderer Bau — dann bleiben das
+#                           laufende Release und sein Archiv unberührt
 #   11  GESPERRT            eine andere Aktivierung oder ein Rücksprung hält
 #                           ${BASIS}/.release.lock
 #   20  ZURUECK             umgeschaltet, neue Fassung nicht bestätigt, die
@@ -125,7 +127,7 @@ melden() {
 aufraeumen() {
   if [[ -n "${NEU}" && -e "${NEU}" ]]; then rm -rf -- "${NEU}"; fi
   if [[ -n "${ALT}" && -e "${ALT}" ]]; then rm -rf -- "${ALT}"; fi
-  if [[ -n "${KOPIE}" && -e "${KOPIE}" ]]; then rm -f -- "${KOPIE}"; fi
+  if [[ -n "${KOPIE}" ]]; then rm -f -- "${KOPIE}" "${KOPIE}.sha256"; fi
   return 0
 }
 
@@ -282,15 +284,9 @@ WERKZEUG_NEU=(node "${NEU}/node_modules/tsx/dist/cli.mjs" "${NEU}/scripts/releas
 "${WERKZEUG_NEU[@]}" artefakt --verzeichnis "${NEU}" 9>&- \
   || fail "Das entpackte Release besteht die Prüfung gegen RELEASE.json (Format 2) nicht."
 
-# Das gemessene Archiv aufbewahren — der Rücksprung (release-ruecksprung.sh)
-# geht nur auf ein Archiv zurück, dessen Summe er erneut prüfen kann.
-ARCHIVNAME="clenaris-${COMMIT:0:12}.tar.gz"
-readonly ARCHIVNAME
-mv -f -- "${KOPIE}" "${BASIS}/archiv/${ARCHIVNAME}"
-KOPIE=""
-printf '%s  %s\n' "${MESSUNG}" "${ARCHIVNAME}" > "${BASIS}/archiv/${ARCHIVNAME}.sha256"
-# Den Eingang leeren, sobald die Kopie sicher liegt: Jedes Archiv bringt die
-# `node_modules` mit, und ein Eingang, der nie geleert wird, füllt die Platte.
+# Den Eingang leeren, sobald die eigene Kopie gemessen und entpackt ist: Jedes
+# Archiv bringt die `node_modules` mit, und ein Eingang, der nie geleert wird,
+# füllt die Platte. Die Kopie selbst bleibt bis zum Ausgang liegen (Schritt 10).
 if [[ "$(readlink -f -- "$(dirname -- "${ARCHIV}")")" == "$(readlink -f -- "${BASIS}/releases-eingang" 2>/dev/null || true)" ]]; then
   rm -f -- "${ARCHIV}" "${ARCHIV}.sha256"
 fi
@@ -301,13 +297,29 @@ fi
 # Identität, ist die Arbeit getan. Läuft es angeblich, bestätigt sich aber
 # nicht, wird ebenfalls nichts getan: Ein Neustart derselben Fassung verdeckte
 # nur, dass sie krank ist.
+#
+# Ein eigener Fall seit 2026-10-01: **derselbe Commit, ein anderer Bau**
+# (Ausgang 5 des Werkzeugs). Next vergibt die Build-ID je Bau zufällig; ein
+# von Hand ausgelöster Lauf auf `main` (etwa für den Auftrag
+# `reproduzierbarkeit`) liefert also den laufenden Commit als neuen Bau. Hier
+# wird nicht umgeschaltet — `releases/<commit>` ist das Verzeichnis der
+# laufenden Instanz, ein Ersatz darunter wäre kein Umschalten —, und das
+# laufende Release samt seinem aufbewahrten Archiv bleibt unberührt. Bis
+# hierher meldete dieser Fall „bestätigt seine Identität nicht" über eine
+# gesunde Instanz, und vorher hatte Schritt 4 das aufbewahrte Archiv des
+# laufenden Release schon mit dem neuen Bau überschrieben: Ein Rücksprung
+# dorthin mit der notierten Summe war danach unmöglich.
 if [[ -n "${VORHER}" && "${VORHER}" == "${COMMIT}" ]]; then
-  if CLENARIS_RELEASE_SPERRE="${SPERRE}" PM2_APP_NAME="${APP_NAME}" \
-       "${WERKZEUG_NEU[@]}" aktiv --basis "${BASIS}" --ziel "${ZIEL}" --erwartet-aus "${NEU}" --port "${PORT}" 9>&-; then
-    log "Bereits aktiv  : ${COMMIT}, Identität bestätigt — nichts zu tun."
-    melden 0 AKTIV
-  fi
-  fail "Release ${COMMIT} ist bereits aktiv, bestätigt seine Identität aber nicht — keine Änderung. Diagnose über /api/health und pm2 logs; zurück mit deploy/v2/release-ruecksprung.sh."
+  LAGE=0
+  CLENARIS_RELEASE_SPERRE="${SPERRE}" PM2_APP_NAME="${APP_NAME}" \
+    "${WERKZEUG_NEU[@]}" aktiv --basis "${BASIS}" --ziel "${ZIEL}" --erwartet-aus "${NEU}" --port "${PORT}" 9>&- \
+    || LAGE=$?
+  case "${LAGE}" in
+    0) log "Bereits aktiv  : ${COMMIT} (Build ${BUILD_ID}), Identität bestätigt — nichts zu tun."; melden 0 AKTIV ;;
+    5) fail "Derselbe Commit ${COMMIT} läuft bereits, aber als anderer Bau (geliefert: ${BUILD_ID}) — nicht umgeschaltet; das laufende Release und sein Archiv bleiben unverändert." ;;
+    3) fail "current zeigt auf ${VORHER}, aber nicht auf ${ZIEL} — keine Änderung. Den Verweis von Hand prüfen (readlink -f ${BASIS}/current)." ;;
+    *) fail "Release ${COMMIT} ist bereits aktiv, bestätigt seine Identität aber nicht — keine Änderung. Diagnose über /api/health und pm2 logs; zurück mit deploy/v2/release-ruecksprung.sh." ;;
+  esac
 fi
 
 # --- 6. An seinen Platz --------------------------------------------------------
@@ -402,7 +414,34 @@ case "${UMSCHALTUNG}" in
   *)  log "Zustand unklar (Werkzeug: ${UMSCHALTUNG}). Sofort prüfen: readlink -f ${BASIS}/current, pm2 ls, /api/health."; melden 30 UNKLAR ;;
 esac
 
-# --- 10. Aufbewahrung -------------------------------------------------------------
+# --- 10. Das Archiv aufbewahren -----------------------------------------------------
+# Der Rücksprung (release-ruecksprung.sh) geht nur auf ein Archiv zurück,
+# dessen Summe er erneut prüfen kann. Aufbewahrt wird die gemessene Kopie —
+# und zwar **erst jetzt**, nach bestätigter Umschaltung. Bis 2026-10-01 stand
+# das in Schritt 4, vor jedem Ausgang: Eine Aktivierung, die danach mit 10,
+# 20 oder 30 endete, hatte `archiv/clenaris-<commit>.tar.gz` samt `.sha256`
+# bereits durch ein Archiv ersetzt, das nie lief — und bei einer erneuten
+# Lieferung des laufenden Commits als anderer Bau sogar das Archiv der
+# laufenden Fassung. Ein Rücksprung mit der notierten Summe wurde dann
+# abgewiesen. Jetzt räumt jeder andere Ausgang die Kopie über die Falle weg,
+# und `archiv/` ändert sich nur mit einem bestätigten Release.
+#
+# Erst die `.sha256` neben die Kopie, dann beide an ihren Platz: Fehlt am Ende
+# eines davon, sagt die Warnung es, und der Rücksprung verweigert sich, statt
+# ein Archiv mit fremder Summe anzunehmen. Ein Fehler hier ändert den Ausgang
+# nicht — die neue Fassung läuft nachweislich.
+ARCHIVNAME="clenaris-${COMMIT:0:12}.tar.gz"
+readonly ARCHIVNAME
+if printf '%s  %s\n' "${MESSUNG}" "${ARCHIVNAME}" > "${KOPIE}.sha256" \
+   && mv -f -- "${KOPIE}" "${BASIS}/archiv/${ARCHIVNAME}" \
+   && mv -f -- "${KOPIE}.sha256" "${BASIS}/archiv/${ARCHIVNAME}.sha256"; then
+  KOPIE=""
+  log "Aufbewahrt     : archiv/${ARCHIVNAME} (${MESSUNG})"
+else
+  log "WARNUNG: archiv/${ARCHIVNAME} nicht vollständig aufbewahrt — ein Rücksprung auf ${COMMIT} ist erst nach einer erneuten Lieferung möglich."
+fi
+
+# --- 11. Aufbewahrung -------------------------------------------------------------
 # Nur nach bestätigter Umschaltung, und nur Verzeichnisse mit Commit-Namen —
 # nie das aktive, nie das vorherige. Die Archive im Gleichschritt: Behalten
 # wird das Archiv jedes Release, das noch unter releases/ liegt; ohne Archiv

@@ -1,12 +1,13 @@
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import type { ArtefaktManifest } from '../../src/lib/release/manifest';
 import { ruecksprung, verbleibendeMigrationen, type RuecksprungAuftrag, type RuecksprungDienste } from '../../scripts/release-ruecksprung';
+import { AKTIV_AUSGANG, befehlAusfuehren, echteBefehle, type Pm2Antwort } from '../../scripts/release-umschalten';
 import {
   aktivPruefen,
   gesundheitAuswerten,
@@ -36,6 +37,13 @@ import {
  * Jeder Fall legt seine Welt neu an und räumt sie danach weg; keiner braucht
  * Server, Datenbank oder Bash. Dass beide Workflows dieses Werkzeug auf
  * dieselbe Weise aufrufen, prüft `release-ausfuehrer-vorlage.test.ts`.
+ *
+ * Seit 2026-10-01 auch das Werkzeug selbst (`scripts/release-umschalten.ts`,
+ * über `befehlAusfuehren` mit derselben Welt): Auf seinen Ausgängen
+ * verzweigt `release-aktivieren.sh` — 10 heisst „nichts geändert", 30
+ * „sofort von Hand prüfen" —, und vorher prüfte diese Zuordnung nur eine
+ * örtliche Rauchprobe. Dazu der Rückfall in `pm2Neuladen` mit einem
+ * nachgestellten pm2.
  */
 
 const NEU = 'a'.repeat(40); // läuft
@@ -94,6 +102,11 @@ const sha256 = (daten: string | Buffer) => createHash('sha256').update(daten).di
  * betreibt; `gesundheit()` antwortet aus dessen Dateien, ausser die Fassung
  * steht in `krank` (keine Antwort) oder `falscheAntwort` liefert etwas
  * anderes (etwa eine fremde Build-ID).
+ *
+ * Archive sind echte Dateien; was „darin" liegt, bestimmt ihr **Inhalt**,
+ * nicht ihr Pfad (`inhalt`: Dateiinhalt → Manifest). So sieht die Attrappe
+ * dasselbe wie `tar`: Wer eine Kopie liest, liest die Kopie, und wer die
+ * Datei nach dem Messen tauscht, bekommt beim nächsten Öffnen den Tausch.
  */
 class Welt implements RuecksprungDienste {
   verweis: string | null = null;
@@ -106,9 +119,18 @@ class Welt implements RuecksprungDienste {
   gesundheitsfragen = 0;
   verweisScheitert = false;
   pm2Scheitert = new Set<string>();
+  /** pm2 wirft beim Laden eine Ausnahme, statt `false` zu melden — ein unerwarteter Fehler mitten in der Umschaltung. */
+  pm2Wirft = false;
+  node = '22.11.0';
   readonly zeilen: string[] = [];
-  /** Archivpfad → was darin liegt. */
+  /** Dateiinhalt eines Archivs → was darin liegt. */
   readonly inhalt = new Map<string, ArtefaktManifest>();
+  /** Welche Pfade gemessen, gelesen und entpackt wurden — in dieser Reihenfolge. */
+  readonly gemessen: string[] = [];
+  readonly manifestGelesen: string[] = [];
+  readonly entpackt: string[] = [];
+  /** Läuft unmittelbar nach dem Messen — für den Tausch zwischen Messen und Entpacken. */
+  nachMessen: (() => void) | null = null;
 
   verweisLesen() {
     return this.verweis;
@@ -120,6 +142,7 @@ class Welt implements RuecksprungDienste {
   }
   async pm2Neuladen(verzeichnis: string) {
     this.neuGeladen.push(verzeichnis);
+    if (this.pm2Wirft) throw new Error('pm2: Verbindung zum Dienst verloren');
     if (this.pm2Scheitert.has(verzeichnis)) return false;
     this.laufend = verzeichnis;
     return true;
@@ -144,14 +167,25 @@ class Welt implements RuecksprungDienste {
     this.zeilen.push(zeile);
   }
   async sha256(datei: string) {
-    return sha256(readFileSync(datei));
+    this.gemessen.push(datei);
+    const summe = sha256(readFileSync(datei));
+    this.nachMessen?.();
+    return summe;
+  }
+  nodeVersion() {
+    return this.node;
+  }
+  private liegtIn(archiv: string): ArtefaktManifest | undefined {
+    return existsSync(archiv) ? this.inhalt.get(readFileSync(archiv, 'utf8')) : undefined;
   }
   manifestAusArchiv(archiv: string) {
-    const m = this.inhalt.get(archiv);
+    this.manifestGelesen.push(archiv);
+    const m = this.liegtIn(archiv);
     return m ? JSON.stringify(m) : null;
   }
   entpacken(archiv: string, ziel: string) {
-    const m = this.inhalt.get(archiv);
+    this.entpackt.push(archiv);
+    const m = this.liegtIn(archiv);
     if (!m) return false;
     releaseSchreiben(ziel, m);
     return true;
@@ -169,6 +203,9 @@ let welt: Welt;
 let archiv: string;
 let archivSumme: string;
 
+/** Die Bytes des aufbewahrten Archivs von `ALT` — und damit der Schlüssel seines Inhalts in der Welt. */
+const ALT_BYTES = `archiv-bytes-${ALT}`;
+
 /**
  * Ausgangslage jedes Falls: `NEU` läuft (drei Migrationen, Register nach
  * Wahl), `ALT` liegt als aufbewahrtes Archiv bereit (zwei Migrationen). Beim
@@ -184,12 +221,12 @@ function aufbauen(einstufungM3: string | null = 'RUECKWAERTSVERTRAEGLICH'): void
 
   mkdirSync(join(basis, 'archiv'), { recursive: true });
   archiv = join(basis, 'archiv', `clenaris-${ALT.slice(0, 12)}.tar.gz`);
-  writeFileSync(archiv, `archiv-bytes-${ALT}`);
-  archivSumme = sha256(`archiv-bytes-${ALT}`);
+  writeFileSync(archiv, ALT_BYTES);
+  archivSumme = sha256(ALT_BYTES);
   writeFileSync(`${archiv}.sha256`, `${archivSumme}  clenaris-${ALT.slice(0, 12)}.tar.gz\n`);
 
   welt = new Welt();
-  welt.inhalt.set(archiv, manifest(ALT, BAU_ALT, [M1, M2]));
+  welt.inhalt.set(ALT_BYTES, manifest(ALT, BAU_ALT, [M1, M2]));
   welt.verweis = join(basis, 'releases', NEU);
   welt.laufend = join(basis, 'releases', NEU);
 }
@@ -218,12 +255,20 @@ function protokollzeilen(): Record<string, unknown>[] {
     .map((z) => JSON.parse(z) as Record<string, unknown>);
 }
 
-/** Nichts umgeschaltet, nichts neu geladen, nichts entpackt. */
+/** Private Kopien des Rücksprungs, die noch in `archiv/` liegen — es dürfen nach keinem Ausgang welche übrig sein. */
+function liegengebliebeneKopien(): string[] {
+  const ordner = join(basis, 'archiv');
+  return existsSync(ordner) ? readdirSync(ordner).filter((n) => n.startsWith('.ruecksprung.')) : [];
+}
+
+/** Nichts umgeschaltet, nichts neu geladen, nichts entpackt — und keine Kopie liegen geblieben. */
 function unveraendert(): void {
   assert.equal(welt.verweis, join(basis, 'releases', NEU), 'current zeigt unverändert auf das laufende Release');
   assert.deepEqual(welt.neuGeladen, [], 'pm2 wurde nicht angefasst');
   assert.equal(welt.sicherungen, 0);
   assert.equal(existsSync(join(basis, 'releases', ALT)), false, 'nichts entpackt');
+  assert.deepEqual(liegengebliebeneKopien(), [], 'die private Kopie ist in jedem Ausgang wieder weg');
+  assert.equal(readFileSync(archiv, 'utf8'), ALT_BYTES, 'das aufbewahrte Archiv selbst bleibt unberührt');
 }
 
 describe('Rücksprung von Hand (scripts/release-ruecksprung.ts)', () => {
@@ -254,7 +299,7 @@ describe('Rücksprung von Hand (scripts/release-ruecksprung.ts)', () => {
   });
 
   it('verweigert, wenn RELEASE.json im Archiv einen anderen Commit nennt', async () => {
-    welt.inhalt.set(archiv, manifest('d'.repeat(40), BAU_ALT, [M1, M2]));
+    welt.inhalt.set(ALT_BYTES, manifest('d'.repeat(40), BAU_ALT, [M1, M2]));
     const e = await ruecksprung(auftrag(), welt);
     assert.equal(e.code, 10);
     assert.match(e.meldung, /nennt d{40}/);
@@ -262,7 +307,7 @@ describe('Rücksprung von Hand (scripts/release-ruecksprung.ts)', () => {
   });
 
   it('verweigert ein Archiv, das keine Auslieferung ist (Probe)', async () => {
-    welt.inhalt.set(archiv, { ...manifest(ALT, BAU_ALT, [M1, M2]), ci: null });
+    welt.inhalt.set(ALT_BYTES, { ...manifest(ALT, BAU_ALT, [M1, M2]), ci: null });
     const e = await ruecksprung(auftrag(), welt);
     assert.equal(e.code, 10);
     unveraendert();
@@ -480,6 +525,221 @@ describe('Umschalten mit Identitätsprüfung (scripts/release/umschaltung.ts)', 
     assert.equal(await aktivPruefen(auftragAktiv, welt), 'aktiv-unbestaetigt');
     assert.deepEqual(welt.gesetzt, [], 'die Prüfung schaltet nie um');
     assert.deepEqual(welt.neuGeladen, [], 'und lädt nichts neu');
+  });
+
+  /**
+   * Befund 2026-10-01: Ein von Hand ausgelöster Lauf auf `main` liefert den
+   * laufenden Commit als neuen Bau. Bisher fragte die Prüfung die Instanz
+   * nach der neuen Build-ID, bekam die alte und meldete „bestätigt sich
+   * nicht" — über eine gesunde Instanz.
+   */
+  it('aktivPruefen: derselbe Commit als anderer Bau ist ein eigener Fall — entschieden ohne Frage an die Instanz', async () => {
+    const { vorher } = vorbereiten();
+    const fragen = welt.gesundheitsfragen;
+    const lage = await aktivPruefen(
+      { basis, ziel: vorher, erwartet: { commit: NEU, buildId: 'bau-neu-0002' }, port: 3000, versuche: 3, abstandMs: 0 },
+      welt,
+    );
+    assert.equal(lage, 'anderer-bau');
+    assert.equal(welt.gesundheitsfragen, fragen, 'die Dateien unter current genügen');
+    assert.ok(welt.zeilen.some((z) => z.includes(`als Bau ${BAU_NEU}`) && z.includes('Bau bau-neu-0002 desselben Commits')));
+    assert.deepEqual(welt.gesetzt, []);
+    assert.deepEqual(welt.neuGeladen, []);
+    // Auch eine kranke Instanz ändert daran nichts: Umgeschaltet wird auf einen zweiten Bau desselben Commits nie.
+    welt.krank.add(vorher);
+    assert.equal(
+      await aktivPruefen({ basis, ziel: vorher, erwartet: { commit: NEU, buildId: 'bau-neu-0002' }, port: 3000, versuche: 3, abstandMs: 0 }, welt),
+      'anderer-bau',
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+//  Das Werkzeug selbst — die Ausgänge, auf denen release-aktivieren.sh verzweigt
+// ---------------------------------------------------------------------------
+
+describe('Umschaltwerkzeug — Ausgänge des Vertrags (scripts/release-umschalten.ts)', () => {
+  afterEach(() => rmSync(basis, { recursive: true, force: true }));
+
+  const SPERRE = { CLENARIS_RELEASE_SPERRE: '/srv/clenaris/.release.lock' };
+
+  /** `NEU` läuft, `ALT` liegt entpackt unter releases/ — wie nach Schritt 6 der Aktivierung. */
+  function vorbereiten(): { ziel: string; vorher: string } {
+    aufbauen();
+    const ziel = join(basis, 'releases', ALT);
+    releaseSchreiben(ziel, manifest(ALT, BAU_ALT, [M1, M2]));
+    return { ziel, vorher: join(basis, 'releases', NEU) };
+  }
+
+  async function werkzeug(argv: string[], env: Record<string, string> = {}): Promise<{ code: number; ausgabe: string[] }> {
+    const ausgabe: string[] = [];
+    const code = await befehlAusfuehren({ argv, env, befehle: () => welt, protokoll: (z) => welt.protokoll(z), ausgabe: (z) => ausgabe.push(z) });
+    return { code, ausgabe };
+  }
+
+  it('umschalten ohne gehaltene Sperre → 10, nichts angefasst', async () => {
+    const { ziel } = vorbereiten();
+    const { code } = await werkzeug(['umschalten', '--basis', basis, '--ziel', ziel, '--versuche', '3']);
+    assert.equal(code, 10);
+    assert.ok(welt.zeilen.some((z) => /CLENARIS_RELEASE_SPERRE/.test(z)));
+    assert.equal(welt.verweis, join(basis, 'releases', NEU), 'current unverändert');
+    assert.deepEqual(welt.gesetzt, []);
+    assert.deepEqual(welt.neuGeladen, []);
+  });
+
+  it('umschalten auf ein Ziel ausserhalb von releases/<commit> → 10, nichts angefasst', async () => {
+    vorbereiten();
+    const fremd = join(basis, 'fremd', ALT);
+    releaseSchreiben(fremd, manifest(ALT, BAU_ALT, [M1, M2]));
+    const ohneCommit = join(basis, 'releases', 'irgendwas');
+    releaseSchreiben(ohneCommit, manifest(ALT, BAU_ALT, [M1, M2]));
+    for (const ziel of [fremd, ohneCommit]) {
+      const { code } = await werkzeug(['umschalten', '--basis', basis, '--ziel', ziel, '--versuche', '3'], SPERRE);
+      assert.equal(code, 10, ziel);
+    }
+    assert.ok(welt.zeilen.some((z) => /kein Release-Verzeichnis/.test(z)));
+    assert.deepEqual(welt.gesetzt, []);
+    assert.deepEqual(welt.neuGeladen, []);
+  });
+
+  it('umschalten auf eine Probe → 10, nichts angefasst', async () => {
+    const { ziel } = vorbereiten();
+    writeFileSync(join(ziel, 'RELEASE.json'), JSON.stringify({ ...manifest(ALT, BAU_ALT, [M1, M2]), ci: null }));
+    const { code } = await werkzeug(['umschalten', '--basis', basis, '--ziel', ziel, '--versuche', '3'], SPERRE);
+    assert.equal(code, 10);
+    assert.deepEqual(welt.gesetzt, []);
+  });
+
+  it('umschalten, wenn der Commit nicht zum Verzeichnisnamen passt → 10, nichts angefasst', async () => {
+    vorbereiten();
+    const ziel = join(basis, 'releases', 'c'.repeat(40));
+    releaseSchreiben(ziel, manifest(ALT, BAU_ALT, [M1, M2]));
+    const { code } = await werkzeug(['umschalten', '--basis', basis, '--ziel', ziel, '--versuche', '3'], SPERRE);
+    assert.equal(code, 10);
+    assert.deepEqual(welt.gesetzt, []);
+  });
+
+  it('umschalten mit fehlendem Verzeichnis oder unzulässigen Versuchen → 10, vor jedem Umschalten', async () => {
+    const { ziel } = vorbereiten();
+    assert.equal((await werkzeug(['umschalten', '--basis', basis, '--ziel', join(basis, 'releases', 'f'.repeat(40))], SPERRE)).code, 10);
+    assert.equal((await werkzeug(['umschalten', '--basis', basis, '--ziel', ziel, '--versuche', '0'], SPERRE)).code, 10);
+    assert.deepEqual(welt.gesetzt, []);
+  });
+
+  it('umschalten mit Sperre auf ein gesundes Ziel → 0, Schlusszeile UMSCHALTUNG', async () => {
+    const { ziel } = vorbereiten();
+    const { code, ausgabe } = await werkzeug(['umschalten', '--basis', basis, '--ziel', ziel, '--versuche', '3'], SPERRE);
+    assert.equal(code, 0);
+    assert.deepEqual(ausgabe, ['UMSCHALTUNG {"code":0,"zustand":"AKTIV"}']);
+    assert.equal(welt.laufend, realpathSync(ziel));
+    assert.equal(welt.sicherungen, 1);
+  });
+
+  it('umschalten mit krankem Ziel → 20 über das Werkzeug, mit derselben Schlusszeile', async () => {
+    const { ziel } = vorbereiten();
+    welt.krank.add(realpathSync(ziel));
+    const { code, ausgabe } = await werkzeug(['umschalten', '--basis', basis, '--ziel', ziel, '--versuche', '3'], SPERRE);
+    assert.equal(code, 20);
+    assert.deepEqual(ausgabe, ['UMSCHALTUNG {"code":20,"zustand":"ZURUECK"}']);
+  });
+
+  it('ein unerwarteter Fehler nach dem Umschalten → 30, nie 10', async () => {
+    const { ziel } = vorbereiten();
+    welt.pm2Wirft = true;
+    const { code } = await werkzeug(['umschalten', '--basis', basis, '--ziel', ziel, '--versuche', '3'], SPERRE);
+    assert.equal(code, 30, 'der Verweis ist gesetzt — „nichts geändert" wäre gelogen');
+    assert.equal(welt.verweis, realpathSync(ziel));
+    assert.ok(welt.zeilen.some((z) => /FEHLER: pm2: Verbindung zum Dienst verloren/.test(z)));
+  });
+
+  it('aktiv: 0 bestätigt, 3 nicht aktiv, 4 unbestätigt, 5 derselbe Commit als anderer Bau', async () => {
+    const { ziel, vorher } = vorbereiten();
+    const aktiv = (zielPfad: string, erwartetAus: string) =>
+      werkzeug(['aktiv', '--basis', basis, '--ziel', zielPfad, '--erwartet-aus', erwartetAus, '--port', '3000']);
+    welt.verweis = realpathSync(vorher);
+    welt.laufend = realpathSync(vorher);
+    assert.equal((await aktiv(vorher, vorher)).code, 0);
+    assert.equal((await aktiv(ziel, ziel)).code, 3);
+    const zweiterBau = join(basis, 'zweiter-bau');
+    releaseSchreiben(zweiterBau, manifest(NEU, 'bau-neu-0002', [M1, M2, M3]));
+    assert.equal((await aktiv(vorher, zweiterBau)).code, 5);
+    welt.krank.add(realpathSync(vorher));
+    assert.equal((await aktiv(vorher, vorher)).code, 4);
+    assert.deepEqual(welt.gesetzt, [], 'aktiv schaltet nie um');
+    assert.deepEqual(welt.neuGeladen, []);
+  });
+
+  it('artefakt: 0 für eine Auslieferung, 1 für eine Probe oder ein unbekanntes Verzeichnis; unbekannter Befehl → 1', async () => {
+    const { ziel } = vorbereiten();
+    assert.equal((await werkzeug(['artefakt', '--verzeichnis', ziel])).code, 0);
+    writeFileSync(join(ziel, 'RELEASE.json'), JSON.stringify({ ...manifest(ALT, BAU_ALT, [M1, M2]), ci: null }));
+    assert.equal((await werkzeug(['artefakt', '--verzeichnis', ziel])).code, 1);
+    assert.equal((await werkzeug(['artefakt', '--verzeichnis', join(basis, 'gibt-es-nicht')])).code, 1);
+    assert.equal((await werkzeug(['irgendwas'])).code, 1);
+  });
+
+  it('AKTIV_AUSGANG ist die Tabelle, auf der release-aktivieren.sh verzweigt', () => {
+    assert.deepEqual(AKTIV_AUSGANG, { aktiv: 0, 'nicht-aktiv': 3, 'aktiv-unbestaetigt': 4, 'anderer-bau': 5 });
+  });
+});
+
+describe('Umschaltwerkzeug — pm2 neu laden, auch wenn pm2 das Verzeichnis nicht übernimmt', () => {
+  /**
+   * Ein nachgestelltes pm2: `jlist` antwortet aus `lagen` (eine Antwort je
+   * Aufruf, die letzte bleibt stehen), jeder andere Befehl aus `ausgaenge`.
+   */
+  function pm2Attrappe(lagen: string[][], ausgaenge: Record<string, number> = {}) {
+    const aufrufe: string[][] = [];
+    let n = 0;
+    const aufruf = (args: string[]): Pm2Antwort => {
+      aufrufe.push(args);
+      if (args[0] === 'jlist') {
+        const verzeichnisse = lagen[Math.min(n++, lagen.length - 1)] ?? [];
+        return { status: 0, stdout: JSON.stringify(verzeichnisse.map((v) => ({ name: 'clenaris', pm2_env: { pm_cwd: v, status: 'online' } }))), stderr: '' };
+      }
+      return { status: ausgaenge[args[0]!] ?? 0, stdout: '', stderr: ausgaenge[args[0]!] ? 'pm2 meldet einen Fehler' : '' };
+    };
+    return { aufruf, aufrufe };
+  }
+  const ALTES = join(tmpdir(), 'clenaris-pm2', 'releases', ALT);
+  const NEUES = join(tmpdir(), 'clenaris-pm2', 'releases', NEU);
+  const ruhig = () => {};
+
+  it('übernimmt das Neuladen das Verzeichnis, bleibt es beim startOrReload mit --update-env', async () => {
+    const pm2 = pm2Attrappe([[ALTES], [NEUES]]);
+    assert.equal(await echteBefehle('clenaris', 3000, ruhig, pm2.aufruf).pm2Neuladen(NEUES), true);
+    assert.deepEqual(
+      pm2.aufrufe.map((a) => a[0]),
+      ['jlist', 'startOrReload', 'jlist'],
+    );
+    assert.deepEqual(pm2.aufrufe[1], ['startOrReload', join(NEUES, 'ecosystem.config.js'), '--env', 'production', '--update-env']);
+  });
+
+  it('läuft danach still die alte Fassung, wird gelöscht und aus dem Release neu gestartet', async () => {
+    const zeilen: string[] = [];
+    const pm2 = pm2Attrappe([[ALTES], [ALTES], [NEUES]]);
+    assert.equal(await echteBefehle('clenaris', 3000, (z) => zeilen.push(z), pm2.aufruf).pm2Neuladen(NEUES), true);
+    assert.deepEqual(
+      pm2.aufrufe.map((a) => a[0]),
+      ['jlist', 'startOrReload', 'jlist', 'delete', 'start', 'jlist'],
+    );
+    assert.deepEqual(pm2.aufrufe[3], ['delete', 'clenaris']);
+    assert.ok(zeilen.some((z) => /Arbeitsverzeichnis beim Neuladen nicht übernommen/.test(z)));
+  });
+
+  it('läuft auch nach dem Neustart nicht aus dem Release → false, damit die Umschaltung zurückspringt', async () => {
+    const pm2 = pm2Attrappe([[ALTES]]);
+    assert.equal(await echteBefehle('clenaris', 3000, ruhig, pm2.aufruf).pm2Neuladen(NEUES), false);
+  });
+
+  it('läuft noch nichts, wird gestartet statt neu geladen; scheitert pm2, ist das Ergebnis false ohne Löschen', async () => {
+    const leer = pm2Attrappe([[], [NEUES]]);
+    assert.equal(await echteBefehle('clenaris', 3000, ruhig, leer.aufruf).pm2Neuladen(NEUES), true);
+    assert.deepEqual(leer.aufrufe.map((a) => a[0]), ['jlist', 'start', 'jlist']);
+
+    const kaputt = pm2Attrappe([[ALTES]], { startOrReload: 1 });
+    assert.equal(await echteBefehle('clenaris', 3000, ruhig, kaputt.aufruf).pm2Neuladen(NEUES), false);
+    assert.deepEqual(kaputt.aufrufe.map((a) => a[0]), ['jlist', 'startOrReload'], 'kein delete nach einem gescheiterten Neuladen');
   });
 });
 

@@ -733,8 +733,55 @@ jobs:
           console.log('Beilage in Ordnung: ' + name + ', Build ' + b.buildId + ', Version ' + b.version + '.');
           JS
 
+      - name: Läuft dieser Commit schon als anderer Bau?
+        # Ein von Hand ausgelöster Lauf auf `main` (`workflow_dispatch`, etwa
+        # für den Auftrag `reproduzierbarkeit` weiter unten) baut in aller
+        # Regel den Commit, der schon läuft, ein zweites Mal — mit einer neuen
+        # Build-ID, denn Next vergibt sie je Bau zufällig. Die Aktivierung
+        # schaltet auf einen zweiten Bau desselben Commits nicht um
+        # (`releases/<commit>` ist das Verzeichnis der laufenden Instanz) und
+        # endet mit 10, ohne etwas zu ändern. Das ist richtig — aber ein
+        # Auftrag, der bei jeder Handauslösung rot wird, gewöhnt daran, rote
+        # Auslieferungen zu übersehen.
+        #
+        # Deshalb vorher von aussen gefragt: Meldet die Instanz genau diesen
+        # Commit, `belegt`, aber eine andere Build-ID als die Beilage, wird
+        # nichts übertragen und nichts aktiviert; der Auftrag endet grün mit
+        # einem Hinweis. Jede andere Antwort — keine, ein anderer Commit, eine
+        # kranke Instanz, dieselbe Build-ID — führt in die Aktivierung, die
+        # selbst entscheidet (dieselbe Build-ID ist dort die Wiederholung,
+        # Ausgang 0). Fehlt API_URL, entfällt die Frage; dann meldet die
+        # Aktivierung den Fall mit 10 und einer eindeutigen Meldung. Die
+        # Build-ID der Antwort wird nur verwendet, wenn sie die Form einer
+        # Build-ID hat: Sie landet in einer Hinweiszeile, und ein
+        # Zeilenumbruch darin wäre ein Workflow-Befehl.
+        id: vorab
+        env:
+          # Wie in „Identität von aussen prüfen": `vars` ist der Zielzustand, das Secret der Übergang.
+          API_URL: ${{ vars.API_URL || secrets.API_URL }}
+          ERWARTET: ${{ github.sha }}
+          BUILD_ID: ${{ steps.beilage.outputs.buildid }}
+        run: |
+          set -euo pipefail
+          laeuft=nein
+          if [ -n "${API_URL:-}" ]; then
+            antwort="$(curl -fsS --max-time 15 "${API_URL%/}/api/health" || true)"
+            if [ -n "$antwort" ]; then
+              version="$(printf '%s' "$antwort" | jq -r '.data.version // empty' 2>/dev/null || true)"
+              build="$(printf '%s' "$antwort" | jq -r '.data.buildId // empty' 2>/dev/null || true)"
+              identitaet="$(printf '%s' "$antwort" | jq -r '.data.identitaet // empty' 2>/dev/null || true)"
+              if [ "$version" = "$ERWARTET" ] && [ "$identitaet" = "belegt" ] \
+                 && [[ "$build" =~ ^[A-Za-z0-9._-]{1,200}$ ]] && [ "$build" != "$BUILD_ID" ]; then
+                laeuft=ja
+                echo "::notice::Commit ${ERWARTET} läuft bereits als Bau ${build}; dieser Lauf hat Bau ${BUILD_ID} gebaut. Nicht übertragen, nicht aktiviert — ein zweiter Bau desselben Commits ersetzt den laufenden nicht."
+              fi
+            fi
+          fi
+          echo "laeuft=${laeuft}" >> "$GITHUB_OUTPUT"
+
       - name: Artefakt übertragen und aktivieren
         id: aktivieren
+        if: steps.vorab.outputs.laeuft != 'ja'
         env:
           HOST: ${{ secrets.SERVER_HOST }}
           PORT: ${{ secrets.SERVER_PORT }}
@@ -796,6 +843,10 @@ jobs:
           esac
 
       - name: Identität von aussen prüfen
+        # Entfällt, wenn der Commit schon als anderer Bau läuft (siehe
+        # „Läuft dieser Commit schon als anderer Bau?"): Die Build-ID der
+        # Beilage meldet dann niemand, und das ist der beabsichtigte Zustand.
+        if: steps.vorab.outputs.laeuft != 'ja'
         env:
           # Siehe oben: `vars` ist der Zielzustand, das Secret der Übergang.
           API_URL: ${{ vars.API_URL || secrets.API_URL }}
@@ -853,6 +904,7 @@ jobs:
           ZIEL: ${{ vars.API_URL }}
           SUMME: ${{ steps.beilage.outputs.sha256 }}
           AKTIVIERUNG: ${{ steps.aktivieren.outputs.code }}
+          SCHON_AKTIV: ${{ steps.vorab.outputs.laeuft }}
         run: |
           {
             echo "## Auslieferung ${STATUS}"
@@ -862,6 +914,7 @@ jobs:
             echo "| Stand | \`${STAND}\` |"
             echo "| SHA-256 | \`${SUMME}\` |"
             echo "| Aktivierung (Ausgang) | ${AKTIVIERUNG} |"
+            echo "| Lief schon als anderer Bau | ${SCHON_AKTIV} |"
             echo "| Auslöser | ${AUSLOESER} |"
             echo "| Von | ${VON} |"
             # Hier bewusst **nur** `vars`, ohne Rückfall auf das Secret.
