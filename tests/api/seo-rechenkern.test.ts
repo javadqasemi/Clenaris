@@ -1,5 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { join, relative } from 'node:path';
 
 import {
   absoluteSeitenUrl,
@@ -527,5 +529,129 @@ describe('Vergleichsbilder — Alternativtext', () => {
     assert.ok(!text.includes('<') && !text.includes('>'), text);
     assert.ok(!/[\u0000-\u001f]/.test(text), 'Steuerzeichen im Text');
     assert.equal(text, 'Küche alert(1) entfettet, Bern');
+  });
+});
+
+/**
+ * Erneuerung der zwischengespeicherten Seiten — `revalidatePath` mit Art
+ * (2026-09-30).
+ *
+ * Die öffentlichen Seiten liegen unter der Routengruppe `(public)` und sind
+ * statisch erzeugt. Next versieht jede zwischengespeicherte Seite mit
+ * Merkmalen aus ihrem App-Pfad *samt Gruppe*
+ * (`_N_T_/(public)/leistungen/[slug]/page`); `revalidatePath(pfad, art)`
+ * hängt nur `/page` bzw. `/layout` an den übergebenen Pfad. Fehlt die
+ * Gruppe, trifft der Aufruf kein Merkmal — er wirft nicht, er meldet
+ * nichts, er wirkt einfach nicht. Genau so erneuerte die erste Fassung von
+ * `revalidateGallery` die Leistungsseiten nicht, und `revalidateCareers`
+ * die Stellenseiten schon länger nicht: Ein zurückgezogenes Foto oder
+ * Inserat blieb bis zum Ablauf der Revalidierung öffentlich.
+ *
+ * Darum hier rein und ohne Server: Jede Angabe mit Art muss auf eine
+ * Seite (`page`) bzw. einen Ordner (`layout`) unter `src/app` zeigen, und
+ * ein Muster wie `[slug]` braucht eine Art — ohne sie bleibt es ebenfalls
+ * wirkungslos (Next warnt dann nur in der Konsole). Eine konkrete Adresse
+ * ohne Art (`'/galerie'`) trifft das Adressmerkmal, das jede Seite trägt,
+ * und braucht keine Prüfung. Ob die Seite danach wirklich neu erscheint,
+ * prüft `website-ops.test.ts` über HTTP; dieser Fall fängt den Fehler,
+ * bevor ein Server läuft, und überall in `src`, nicht nur dort, wo es einen
+ * HTTP-Fall gibt.
+ */
+describe('Zwischenspeicher — revalidatePath trifft eine Seite unter src/app', () => {
+  const WURZEL = join(__dirname, '..', '..');
+  const APP = join(WURZEL, 'src', 'app');
+  const SEITENDATEIEN = ['page.tsx', 'page.ts', 'page.jsx', 'page.js'];
+
+  interface Aufruf {
+    datei: string;
+    pfad: string;
+    art: 'page' | 'layout' | null;
+  }
+
+  // Nur Aufrufe mit festem Pfad: Ein Pfad aus einer Variablen oder einem
+  // Vorlagenausdruck (`/blog/${slug}`) ist eine konkrete Adresse zur Laufzeit.
+  const AUFRUF = /revalidatePath\(\s*(['"])([^'"\n]+)\1\s*(?:,\s*(['"])(page|layout)\3\s*)?\)/g;
+
+  function aufrufeIn(text: string, datei: string): Aufruf[] {
+    return [...text.matchAll(AUFRUF)].map((treffer) => ({
+      datei,
+      pfad: treffer[2]!,
+      art: (treffer[4] as 'page' | 'layout' | undefined) ?? null,
+    }));
+  }
+
+  /** Was an einem Aufruf nicht stimmt — `null`, wenn er eine Seite trifft. */
+  function befund(aufruf: Aufruf): string | null {
+    if (!aufruf.art) {
+      return /[[(]/.test(aufruf.pfad) ? 'Muster ohne Art „page"/„layout" — wirkungslos' : null;
+    }
+    const ordner = join(APP, ...aufruf.pfad.split('/').filter(Boolean));
+    if (aufruf.art === 'layout') {
+      return existsSync(ordner) && statSync(ordner).isDirectory() ? null : `kein Ordner src/app${aufruf.pfad}`;
+    }
+    return SEITENDATEIEN.some((datei) => existsSync(join(ordner, datei)))
+      ? null
+      : `keine Seite src/app${aufruf.pfad}/page.tsx — Routengruppe vergessen?`;
+  }
+
+  function quelldateien(ordner: string): string[] {
+    return readdirSync(ordner, { withFileTypes: true }).flatMap((eintrag) => {
+      const pfad = join(ordner, eintrag.name);
+      if (eintrag.isDirectory()) return quelldateien(pfad);
+      return /\.tsx?$/.test(eintrag.name) ? [pfad] : [];
+    });
+  }
+
+  const alleAufrufe = () =>
+    quelldateien(join(WURZEL, 'src')).flatMap((datei) =>
+      aufrufeIn(readFileSync(datei, 'utf8'), relative(WURZEL, datei).replaceAll('\\', '/')),
+    );
+
+  it('die Prüfung erkennt die wirkungslose Form — Muster ohne Routengruppe oder ohne Art', () => {
+    // Ohne diese Gegenprobe bestünde der Fall unten auch mit einem Ausdruck,
+    // der gar keinen Aufruf findet.
+    const [ohneGruppe, mitGruppe, ohneArt, wurzel, adresse] = aufrufeIn(
+      [
+        "revalidatePath('/leistungen/[slug]', 'page');",
+        "revalidatePath('/(public)/leistungen/[slug]', 'page');",
+        "revalidatePath('/karriere/[slug]');",
+        "revalidatePath('/', 'layout');",
+        "revalidatePath('/galerie');",
+      ].join('\n'),
+      'beispiel.ts',
+    );
+    assert.match(befund(ohneGruppe!) ?? '', /Routengruppe vergessen/);
+    assert.equal(befund(mitGruppe!), null);
+    assert.match(befund(ohneArt!) ?? '', /wirkungslos/);
+    assert.equal(befund(wurzel!), null);
+    assert.equal(befund(adresse!), null);
+  });
+
+  it('Galerie und Stellenangebote erneuern die Detailseiten mit Routengruppe — vorher ohne und damit wirkungslos', () => {
+    const imDienst = alleAufrufe().filter((a) => a.datei === 'src/server/services/website.service.ts');
+    const mitArt = imDienst.filter((a) => a.art).map((a) => `${a.pfad} (${a.art})`);
+    assert.ok(mitArt.includes('/(public)/leistungen/[slug] (page)'), mitArt.join(', '));
+    assert.ok(mitArt.includes('/(public)/karriere/[slug] (page)'), mitArt.join(', '));
+    for (const aufruf of imDienst) assert.equal(befund(aufruf), null, `${aufruf.pfad} (${aufruf.art ?? 'ohne Art'})`);
+  });
+
+  /*
+    Eine bekannte Ausnahme, ausdrücklich und nicht still: `revalidateCatalog`
+    ruft dieselbe wirkungslose Form, fällt aber nicht auf, weil
+    `revalidatePath('/', 'layout')` unmittelbar davor jede Seite erneuert
+    (`_N_T_/layout` trägt jede Seite). Die Datei gehört nicht zu dieser
+    Änderung und ist als Pendenz gemeldet. Wird sie berichtigt, scheitert
+    dieser Fall — dann die Zeile hier streichen; so bleibt die Liste genau
+    und wächst nicht unbemerkt.
+  */
+  const BEKANNT = ['src/server/services/catalog.service.ts: /leistungen/[slug] (page)'];
+
+  it('jede Angabe mit Art oder Muster in src trifft eine Seite oder einen Ordner unter src/app', () => {
+    const aufrufe = alleAufrufe();
+    assert.ok(aufrufe.length >= 10, `nur ${aufrufe.length} Aufrufe gefunden — liest die Prüfung noch die Quellen?`);
+    const befunde = aufrufe
+      .filter((a) => befund(a) !== null)
+      .map((a) => `${a.datei}: ${a.pfad} (${a.art ?? 'ohne Art'})`);
+    assert.deepEqual(befunde, BEKANNT);
   });
 });
