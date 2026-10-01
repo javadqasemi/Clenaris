@@ -1,6 +1,6 @@
 {
   "$beschreibung": "Sicherheitsklassen gegen die bestehenden Prüfungen (tests/api, tests/pages, tests/e2e). Gleiche Form wie security/testmatrix.json: status „abgedeckt“ mit wörtlichen Testtiteln als Belegen, „luecke“ oder „nicht_zutreffend“ mit Grund. Ein „hinweis“ an einer abgedeckten Klasse nennt die Stellen, an denen die Klasse trotzdem offen ist — er ist Teil des Befunds, nicht Beiwerk. Prüfbar mit scripts/testmatrix-pruefen.ts.",
-  "stand": "2026-09-30",
+  "stand": "2026-10-01",
   "klassen": [
     {
       "id": "idor",
@@ -123,9 +123,12 @@
         { "datei": "tests/api/website-ops.test.ts", "test": "weist ein protokollrelatives Ziel ab" },
         { "datei": "tests/api/sicherheitsluecken.test.ts", "test": "Kundendetail: Name und Notiz erscheinen maskiert, nie als Markup" },
         { "datei": "tests/api/sicherheitsluecken.test.ts", "test": "Offertdetail: Position und Titel erscheinen maskiert, nie als Markup" },
-        { "datei": "tests/api/sicherheitsluecken.test.ts", "test": "Nachrichten: Seite ohne Markup, Endpunkt als JSON mit nosniff und Text unverändert" }
+        { "datei": "tests/api/sicherheitsluecken.test.ts", "test": "Nachrichten: Seite ohne Markup, Endpunkt als JSON mit nosniff und Text unverändert" },
+        { "datei": "tests/api/inhaltsrichtlinie.test.ts", "test": "der Produktionsbau erlaubt kein unsafe-eval, aber WebAssembly" },
+        { "datei": "tests/api/inhaltsrichtlinie.test.ts", "test": "dieselbe Richtlinie auf Seite, API und statischer Datei" },
+        { "datei": "tests/e2e/inhaltsrichtlinie.browser.spec.ts", "test": "eval wird verweigert, WebAssembly kompiliert" }
       ],
-      "hinweis": "Kundenname und -notiz, Offertposition und -titel sowie Nachrichten sind im ausgelieferten HTML auf Maskierung geprüft. Nicht geprüft: CMS-Texte, Anfragen und die E-Mail-Vorlagen mit einer Skript-Nutzlast."
+      "hinweis": "Kundenname und -notiz, Offertposition und -titel sowie Nachrichten sind im ausgelieferten HTML auf Maskierung geprüft. Nicht geprüft: CMS-Texte, Anfragen und die E-Mail-Vorlagen mit einer Skript-Nutzlast. Seit 2026-09-30 (P2H-26/27) verweigert die Inhaltsrichtlinie im Produktionsbau die Auswertung von Text als Code (kein 'unsafe-eval'; in drei Engines geprüft). 'unsafe-inline' bleibt in script-src (P2H-28) — ein eingeschleustes Inline-Skript hält die Richtlinie nicht auf; die eigentliche Abwehr bleibt die Maskierung."
     },
     {
       "id": "csv-formelinjektion",
@@ -171,9 +174,11 @@
         { "datei": "tests/api/session-refresh.test.ts", "test": "fünfzig gleichzeitige Erneuerungen: genau eine rotiert, die Familie bleibt heil" },
         { "datei": "tests/api/two-factor.test.ts", "test": "verwirft ein Token, das älter ist als der Widerruf" },
         { "datei": "tests/api/mandanten.test.ts", "test": "wechselt ein Konto die Organisation, endet die laufende Sitzung sofort — Endpunkt, Seite und Erneuerung" },
-        { "datei": "tests/api/sicherheitsluecken.test.ts", "test": "ein rotierter Token, nach der Kulanzfrist erneut vorgelegt, macht auch den neuesten ungültig" }
+        { "datei": "tests/api/sicherheitsluecken.test.ts", "test": "ein rotierter Token, nach der Kulanzfrist erneut vorgelegt, macht auch den neuesten ungültig" },
+        { "datei": "tests/api/sitzung-leerlauf.test.ts", "test": "Leerlauf überschritten: Erneuerung 401 „Inaktivität\", Token widerrufen, Cookies gelöscht" },
+        { "datei": "tests/api/sitzung-leerlauf.test.ts", "test": "ein wegen Leerlaufs widerrufener Token bleibt widerrufen — auch beim zweiten Versuch" }
       ],
-      "hinweis": "Die Sperre der ganzen Rotationsfamilie nach später Wiederverwendung ist belegt; seit 8bcc88c auch die gleichzeitige Einlösung desselben Zwei-Faktor-Ersatzcodes (two-factor.test.ts: „derselbe Ersatzcode fünfmal gleichzeitig eingelöst: genau eine Sitzung, vier 401, ein Code weniger im Vorrat“). Nicht geprüft: dass dabei ein TOKEN_REUSE-Sicherheitsereignis entsteht — der Katalog stuft die Tokenwiederverwendung nur als Tabelle ein."
+      "hinweis": "Die Sperre der ganzen Rotationsfamilie nach später Wiederverwendung ist belegt; seit 8bcc88c auch die gleichzeitige Einlösung desselben Zwei-Faktor-Ersatzcodes (two-factor.test.ts: „derselbe Ersatzcode fünfmal gleichzeitig eingelöst: genau eine Sitzung, vier 401, ein Code weniger im Vorrat“). Nicht geprüft: dass dabei ein TOKEN_REUSE-Sicherheitsereignis entsteht — der Katalog stuft die Tokenwiederverwendung nur als Tabelle ein. Nachtrag 2026-10-01: Seit P2H-50 ist der wegen Leerlaufs widerrufene Token belegt — die erste Vorlage 401 „Inaktivität“ ohne Alarm, die zweite läuft in die Wiederverwendungserkennung mit genau einem REFRESH_REUSE_DETECTED (CRITICAL); für den nach der Kulanzfrist wiederverwendeten rotierten Token bleibt das Ereignis ungeprüft."
     },
     {
       "id": "dateiersetzung",
@@ -268,8 +273,10 @@
         { "datei": "tests/api/nebenlaeufigkeit.test.ts", "test": "fünf Entwürfe gleichzeitig ausgestellt — fünf verschiedene, lückenlos aufeinanderfolgende Nummern" },
         { "datei": "tests/api/nebenlaeufigkeit.test.ts", "test": "derselbe Entwurf fünfmal gleichzeitig ausgestellt — eine Nummer, kein verbrauchter Zählerstand" },
         { "datei": "tests/api/nebenlaeufigkeit.test.ts", "test": "zwei gleichzeitige Gutschriften, die zusammen die Rechnung übersteigen — genau eine gelingt" },
-        { "datei": "tests/api/nebenlaeufigkeit.test.ts", "test": "sechs gleichzeitige Gutschriften zu je 32.43 — genau drei, und nie mehr als die Rechnung" }
-      ]
+        { "datei": "tests/api/nebenlaeufigkeit.test.ts", "test": "sechs gleichzeitige Gutschriften zu je 32.43 — genau drei, und nie mehr als die Rechnung" },
+        { "datei": "tests/api/datenbank-schranken.test.ts", "test": "in der Testdatenbank: jeder Trigger aktiv, jeder Teilindex gültig, jede Bedingung validiert" }
+      ],
+      "hinweis": "Seit 2026-10-01 (P2H-37) prüft das Datenbanktor, dass die Schranken, an denen die doppelte Verrechnung einer Vertragsperiode scheitert (Teilindex invoices_vertragsperiode_einmal, Ausschlussbedingung invoices_vertragsperiode_ueberlappungsfrei), und die Trigger, die eine ausgestellte Rechnung samt Nummer unveränderlich halten (rechnung_unveraenderlich, rechnungsposition_unveraenderlich), in der Datenbank vorhanden und wirksam sind. Trigger werden mit Bindung und Funktionsrumpf geprüft, Teilindex und Bedingung nur nach Name, Art und Gültigkeit, nicht nach ihrer Definition (P2H-41)."
     },
     {
       "id": "zuteilung-nebenlaeufigkeit",

@@ -1,6 +1,6 @@
 {
   "$beschreibung": "Abdeckungsmatrix der kritischen Funktionen gegen die bestehenden Prüfungen (tests/api, tests/pages, tests/e2e). Jeder Beleg nennt Datei und den wörtlichen Titel eines it/describe/test-Aufrufs; scripts/testmatrix-pruefen.ts prüft, dass beides existiert. Ein Beleg eines tabellengetriebenen Falls trägt zusätzlich „eintrag“: ein Zeichenkettenliteral, das im Code der Datei stehen muss (die Tabellenzeile). „abgedeckt“ heisst: Test und Zusicherung wurden gelesen. Ein „hinweis“ an einer abgedeckten Dimension nennt, was trotzdem offen ist. Lücken sind Absicht dieser Datei, nicht ihr Fehler.",
-  "stand": "2026-09-30",
+  "stand": "2026-10-01",
   "dimensionen": {
     "happyPath": "Der vorgesehene Ablauf gelingt über HTTP (oder im Browser) mit dem erwarteten Ergebnis.",
     "validierung": "Unzulässige Eingaben oder Zustände werden mit 4xx abgewiesen, ohne Nebenwirkung.",
@@ -21,7 +21,10 @@
           "status": "abgedeckt",
           "belege": [
             { "datei": "tests/api/session-refresh.test.ts", "test": "erneuert über GET, setzt neue Cookies und leitet an das Ziel zurück" },
-            { "datei": "tests/api/two-factor.test.ts", "test": "meldet sich ohne eingeschalteten Faktor einstufig an" }
+            { "datei": "tests/api/two-factor.test.ts", "test": "meldet sich ohne eingeschalteten Faktor einstufig an" },
+            { "datei": "tests/api/sitzung-leerlauf.test.ts", "test": "knapp im Fenster: Erneuerung gelingt, der neue Token beginnt das Fenster von vorn" },
+            { "datei": "tests/api/sitzung-leerlauf.test.ts", "test": "Angemeldet bleiben: nach 16 Minuten noch gültig, nach sieben Tagen nicht" },
+            { "datei": "tests/e2e/sitzung-leerlauf.spec.ts", "test": "Eine Eingabe vor der Warnung schiebt den Ablauf hinaus" }
           ]
         },
         "validierung": {
@@ -37,7 +40,11 @@
           "belege": [
             { "datei": "tests/api/session-refresh.test.ts", "test": "antwortet auf POST ohne Cookie mit 401" },
             { "datei": "tests/api/session-refresh.test.ts", "test": "schickt einen Seitenaufruf ohne Zugangstoken zur Erneuerung statt zur Anmeldung" },
-            { "datei": "tests/api/flows.test.ts", "test": "antwortet ohne Anmeldung mit 401" }
+            { "datei": "tests/api/flows.test.ts", "test": "antwortet ohne Anmeldung mit 401" },
+            { "datei": "tests/api/sitzung-leerlauf.test.ts", "test": "Leerlauf überschritten: Erneuerung 401 „Inaktivität\", Token widerrufen, Cookies gelöscht" },
+            { "datei": "tests/api/sitzung-leerlauf.test.ts", "test": "die Middleware schickt eine eingeschlafene Sitzung zur Anmeldung" },
+            { "datei": "tests/e2e/sitzung-leerlauf.spec.ts", "test": "Ohne Eingabe: Warnung zwei Minuten vorher, dann Abmeldung wegen Inaktivität" },
+            { "datei": "tests/e2e/sitzung-leerlauf.spec.ts", "test": "Vom Server wegen Leerlaufs beendete Sitzung: der Browser geht zur Anmeldung" }
           ]
         },
         "unberechtigt": {
@@ -74,15 +81,17 @@
           "status": "abgedeckt",
           "belege": [
             { "datei": "tests/api/session-refresh.test.ts", "test": "erneuert über GET, setzt neue Cookies und leitet an das Ziel zurück" },
-            { "datei": "tests/api/sicherheitsluecken.test.ts", "test": "ein rotierter Token, nach der Kulanzfrist erneut vorgelegt, macht auch den neuesten ungültig" }
+            { "datei": "tests/api/sicherheitsluecken.test.ts", "test": "ein rotierter Token, nach der Kulanzfrist erneut vorgelegt, macht auch den neuesten ungültig" },
+            { "datei": "tests/api/sitzung-leerlauf.test.ts", "test": "ein wegen Leerlaufs widerrufener Token bleibt widerrufen — auch beim zweiten Versuch" }
           ],
-          "hinweis": "Die Sperre der ganzen Familie nach später Wiederverwendung ist belegt (HTTP und Bestand). Dass dabei ein TOKEN_REUSE-Sicherheitsereignis entsteht, prüft kein Test."
+          "hinweis": "Die Sperre der ganzen Familie nach später Wiederverwendung ist belegt (HTTP und Bestand). Dass dabei ein TOKEN_REUSE-Sicherheitsereignis entsteht, prüft kein Test. Nachtrag 2026-10-01: Für den zweiten Versuch mit einem wegen Leerlaufs widerrufenen Token belegt sitzung-leerlauf.test.ts das Ereignis REFRESH_REUSE_DETECTED (genau eines, CRITICAL, ohne Tokenhash); für den nach der Kulanzfrist erneut vorgelegten rotierten Token bleibt es ungeprüft."
         },
         "audit": {
           "status": "abgedeckt",
           "belege": [
             { "datei": "tests/api/sicherheitszentrum.test.ts", "test": "eine fehlgeschlagene Anmeldung landet im Strom" },
-            { "datei": "tests/api/sicherheitszentrum.test.ts", "test": "Sitzungen beenden widerruft die Erneuerungstokens wirklich" }
+            { "datei": "tests/api/sicherheitszentrum.test.ts", "test": "Sitzungen beenden widerruft die Erneuerungstokens wirklich" },
+            { "datei": "tests/api/sitzung-leerlauf.test.ts", "test": "ein wegen Leerlaufs widerrufener Token bleibt widerrufen — auch beim zweiten Versuch" }
           ]
         }
       }
@@ -693,7 +702,8 @@
           "status": "abgedeckt",
           "belege": [
             { "datei": "tests/api/nebenlaeufigkeit.test.ts", "test": "sechs gleichzeitige, sich überlappende Erfassungen derselben Person — genau eine wird angenommen" },
-            { "datei": "tests/api/zeiterfassung.test.ts", "test": "sechs gleichzeitige Stempelungen ergeben genau eine laufende Erfassung" }
+            { "datei": "tests/api/zeiterfassung.test.ts", "test": "sechs gleichzeitige Stempelungen ergeben genau eine laufende Erfassung" },
+            { "datei": "tests/api/datenbank-schranken.test.ts", "test": "ein fehlender Teilindex und eine nicht validierte Bedingung werden erkannt" }
           ]
         },
         "idempotenz": {
@@ -785,7 +795,10 @@
           "belege": [
             { "datei": "tests/api/lohnabrechnung.test.ts", "test": "das Prüfprotokoll hält Beträge und Quellensteuerdaten geschwärzt fest" },
             { "datei": "tests/api/protokoll-schwaerzung.test.ts", "test": "eine Änderung der Personalakte hinterlässt Schlüssel, aber keine Werte" },
-            { "datei": "tests/api/finanzbelege.test.ts", "test": "eine Lohnabrechnung wird nicht ohne ihre Protokollzeile veröffentlicht — und hinterlässt kein verwaistes PDF" }
+            { "datei": "tests/api/finanzbelege.test.ts", "test": "eine Lohnabrechnung wird nicht ohne ihre Protokollzeile veröffentlicht — und hinterlässt kein verwaistes PDF" },
+            { "datei": "tests/api/protokoll-unveraenderlich.test.ts", "test": "ändern: P0001" },
+            { "datei": "tests/api/protokoll-unveraenderlich.test.ts", "test": "löschen: P0001" },
+            { "datei": "tests/api/protokoll-unveraenderlich.test.ts", "test": "Schwärzung nur mit Schalter und nur in changes/summary" }
           ]
         }
       }
@@ -847,7 +860,8 @@
             { "datei": "tests/api/buchung-integritaet.test.ts", "test": "fünf gleichzeitige „Rechnung erstellen\" ergeben genau eine Rechnung" },
             { "datei": "tests/api/vertraege.test.ts", "test": "zwei gleichzeitige Läufe erzeugen genau eine Rechnung" },
             { "datei": "tests/api/nebenlaeufigkeit.test.ts", "test": "fünf Entwürfe gleichzeitig ausgestellt — fünf verschiedene, lückenlos aufeinanderfolgende Nummern" },
-            { "datei": "tests/api/nebenlaeufigkeit.test.ts", "test": "derselbe Entwurf fünfmal gleichzeitig ausgestellt — eine Nummer, kein verbrauchter Zählerstand" }
+            { "datei": "tests/api/nebenlaeufigkeit.test.ts", "test": "derselbe Entwurf fünfmal gleichzeitig ausgestellt — eine Nummer, kein verbrauchter Zählerstand" },
+            { "datei": "tests/api/datenbank-schranken.test.ts", "test": "in der Testdatenbank: jeder Trigger aktiv, jeder Teilindex gültig, jede Bedingung validiert" }
           ]
         },
         "idempotenz": {
@@ -864,7 +878,9 @@
             { "datei": "tests/api/protokollpflicht.test.ts", "test": "Rechnung senden: UPDATE „versendet\" — ohne Zahlungslink, Token oder Hash" },
             { "datei": "tests/api/protokollpflicht.test.ts", "test": "Rechnung stornieren: UPDATE „storniert\" mit Begründung" },
             { "datei": "tests/api/protokollpflicht.test.ts", "test": "Rechnung mahnen (Tageslauf): Protokollzeile an Rechnung oder Mahnung, als System" },
-            { "datei": "tests/api/finanzbelege.test.ts", "test": "Ausstellen ohne Protokollzeile gibt es nicht — die Rechnung bleibt Entwurf, und die Wiederholung stellt mit Zeile aus" }
+            { "datei": "tests/api/finanzbelege.test.ts", "test": "Ausstellen ohne Protokollzeile gibt es nicht — die Rechnung bleibt Entwurf, und die Wiederholung stellt mit Zeile aus" },
+            { "datei": "tests/api/protokoll-unveraenderlich.test.ts", "test": "ändern: P0001" },
+            { "datei": "tests/api/protokoll-unveraenderlich.test.ts", "test": "löschen: P0001" }
           ],
           "hinweis": "Dass der Beleg ohne Zeile nicht entsteht (F-14), ist für das Ausstellen erzwungen geprüft; für Storno und Mahnung ist nur das Vorhandensein der Zeile belegt."
         }
@@ -952,7 +968,9 @@
             { "datei": "tests/api/protokollpflicht.test.ts", "test": "Zahlung erfassen: PAYMENT an der Rechnung, mit Betrag und Person" },
             { "datei": "tests/api/finanzbelege.test.ts", "test": "eine Büro-Zahlung ohne Protokollzeile wird nicht gebucht" },
             { "datei": "tests/api/zahlungsbuch.test.ts", "test": "eine Stripe-Zahlung ohne Protokollzeile gibt es nicht — Stripe stellt erneut zu, dann stehen beide" },
-            { "datei": "tests/api/zahlungsbuch.test.ts", "test": "fünf gleichzeitige Stornos derselben Büro-Zahlung — genau ein 204, Kundenwert einmal gesenkt, eine Protokollzeile" }
+            { "datei": "tests/api/zahlungsbuch.test.ts", "test": "fünf gleichzeitige Stornos derselben Büro-Zahlung — genau ein 204, Kundenwert einmal gesenkt, eine Protokollzeile" },
+            { "datei": "tests/api/protokoll-unveraenderlich.test.ts", "test": "ändern: P0001" },
+            { "datei": "tests/api/protokoll-unveraenderlich.test.ts", "test": "löschen: P0001" }
           ],
           "hinweis": "Büro-Zahlung, Stripe-Zahlung und Zahlungsstorno (genau eine Zeile bei fünf gleichzeitigen Stornos) sind belegt. Dass der Storno ohne Protokollzeile scheitert, ist nicht erzwungen geprüft."
         }
@@ -1022,7 +1040,9 @@
         "audit": {
           "status": "abgedeckt",
           "belege": [
-            { "datei": "tests/api/protokollpflicht.test.ts", "test": "Gutschrift anlegen: CREATE an der Gutschrift" }
+            { "datei": "tests/api/protokollpflicht.test.ts", "test": "Gutschrift anlegen: CREATE an der Gutschrift" },
+            { "datei": "tests/api/protokoll-unveraenderlich.test.ts", "test": "ändern: P0001" },
+            { "datei": "tests/api/protokoll-unveraenderlich.test.ts", "test": "löschen: P0001" }
           ],
           "hinweis": "Das Verbuchen einer Stripe-Rückerstattung ist nicht auf einen Protokolleintrag geprüft."
         }
@@ -1501,14 +1521,21 @@
           "belege": [
             { "datei": "tests/api/release-center.test.ts", "test": "freigeben → terminieren → verschieben → stornieren, und wieder freigeben" },
             { "datei": "tests/api/geschaeftsablaeufe.test.ts", "test": "5. das Ergebnis „erfolgreich\" wird mit der Zielversion gemeldet — die Instanz belegt aber die Ausgangsversion: abgewiesen, der belegte Rücksprung angenommen" },
-            { "datei": "tests/e2e/produktsprint-2026-09-26.spec.ts", "test": "verfügbare Version → Details → freigeben → terminieren → stornieren" }
-          ]
+            { "datei": "tests/e2e/produktsprint-2026-09-26.spec.ts", "test": "verfügbare Version → Details → freigeben → terminieren → stornieren" },
+            { "datei": "tests/api/release-center.test.ts", "test": "„erfolgreich\" belegt die Instanz selbst: eigener Commit und eigene Version → 200; ein Rücksprung, während das Ziel läuft → 422; ein Auftrag einer anderen Umgebung → 422" },
+            { "datei": "tests/api/release-ruecksprung.test.ts", "test": "entpackt frisch, schaltet um, prüft die Identität und sichert pm2" }
+          ],
+          "hinweis": "Aktivierung und Rücksprung (deploy/v2, scripts/release/umschaltung.ts) sind mit Attrappen für Verweis, pm2 und Gesundheitsantwort geprüft; ein Lauf auf einem Linux-Server steht aus (docs/PENDENZEN.md P2H-20)."
         },
         "validierung": {
           "status": "abgedeckt",
           "belege": [
             { "datei": "tests/api/release-center.test.ts", "test": "unzulässige Übergänge: 422" },
-            { "datei": "tests/api/release-center.test.ts", "test": "Ergebnis: fremder Schlüssel 409, „erfolgreich\" ohne Zielversion 422, fehlgeschlagen 200, Wiederholung 200, Widerspruch 409 — „ohne Zielversion\" heisst seit 2026-09-30: die Instanz belegt sie nicht; die alte Form mit laufendeVersion ebenfalls 422" }
+            { "datei": "tests/api/release-center.test.ts", "test": "Ergebnis: fremder Schlüssel 409, „erfolgreich\" ohne Zielversion 422, fehlgeschlagen 200, Wiederholung 200, Widerspruch 409 — „ohne Zielversion\" heisst seit 2026-09-30: die Instanz belegt sie nicht; die alte Form mit laufendeVersion ebenfalls 422" },
+            { "datei": "tests/api/release-center.test.ts", "test": "Schemas der Schnittstelle: Übernahme verlangt Commit und Zielversion, das Ergebnis kennt keine laufendeVersion mehr" },
+            { "datei": "tests/api/release-identitaet.test.ts", "test": "fremdes oder Format-1-Manifest wird nicht geglaubt" },
+            { "datei": "tests/api/release-ruecksprung.test.ts", "test": "verweigert mit falscher erwarteter Summe — nichts umgeschaltet" },
+            { "datei": "tests/api/release-artefakt.test.ts", "test": "Demodaten im Bau: Packen verweigert" }
           ]
         },
         "unangemeldet": {
@@ -1533,27 +1560,39 @@
           "status": "abgedeckt",
           "belege": [
             { "datei": "tests/api/release-center.test.ts", "test": "Übernahme: falsche Summe, CI rot, fremde Umgebung → 422; richtig → 200; Wiederholung → 200; zweiter Ausführer → 409 — ebenso fremder Commit und andere Version → 422, anderes Artefakt unter demselben Schlüssel → 409" },
-            { "datei": "tests/api/release-center.test.ts", "test": "fällige Aufträge: nur die eigene Umgebung, mit Rücksprung und Hindernis — dazu die belegte Identität der Instanz" }
+            { "datei": "tests/api/release-center.test.ts", "test": "fällige Aufträge: nur die eigene Umgebung, mit Rücksprung und Hindernis — dazu die belegte Identität der Instanz" },
+            { "datei": "tests/api/release-center.test.ts", "test": "„zurückgesetzt\" nur, wenn die Instanz die Ausgangsversion mit einem anderen Commit belegt" },
+            { "datei": "tests/api/release-identitaet.test.ts", "test": "„erfolgreich\" nur mit belegtem Stand — auch wenn Commit und Version dem Ziel gleichen" },
+            { "datei": "tests/api/release-ruecksprung.test.ts", "test": "verweigert, wenn RELEASE.json im Archiv einen anderen Commit nennt" },
+            { "datei": "tests/api/release-ruecksprung.test.ts", "test": "die Build-ID zählt, nicht nur der Commit" }
           ]
         },
         "nebenlaeufigkeit": {
           "status": "abgedeckt",
           "belege": [
             { "datei": "tests/api/release-center.test.ts", "test": "gleichzeitige Freigaben: genau eine gilt" },
-            { "datei": "tests/api/release-center.test.ts", "test": "während der Ausführung: das Dashboard entscheidet nicht mit und zeigt die Ausführung" }
-          ]
+            { "datei": "tests/api/release-center.test.ts", "test": "während der Ausführung: das Dashboard entscheidet nicht mit und zeigt die Ausführung" },
+            { "datei": "tests/api/release-center.test.ts", "test": "gleichzeitige Übernahmen verschiedener Aufträge in einer Umgebung: genau eine gilt, die übrigen 409 — die Sperre je Umgebung" },
+            { "datei": "tests/api/release-ausfuehrer-vorlage.test.ts", "test": "hält die gemeinsame Sperre und meldet 11, wenn sie besetzt ist" }
+          ],
+          "hinweis": "Die Sperre auf dem Server (flock in release-aktivieren.sh) ist nur am Skripttext geprüft; unter Windows gibt es kein flock, ein Lauf auf Linux steht aus (P2H-20)."
         },
         "idempotenz": {
           "status": "abgedeckt",
           "belege": [
-            { "datei": "tests/api/release-center.test.ts", "test": "Übernahme: falsche Summe, CI rot, fremde Umgebung → 422; richtig → 200; Wiederholung → 200; zweiter Ausführer → 409 — ebenso fremder Commit und andere Version → 422, anderes Artefakt unter demselben Schlüssel → 409" }
+            { "datei": "tests/api/release-center.test.ts", "test": "Übernahme: falsche Summe, CI rot, fremde Umgebung → 422; richtig → 200; Wiederholung → 200; zweiter Ausführer → 409 — ebenso fremder Commit und andere Version → 422, anderes Artefakt unter demselben Schlüssel → 409" },
+            { "datei": "tests/api/release-center.test.ts", "test": "Fortsetzen: derselbe Schlüssel findet seinen Auftrag wieder, ein fremder beginnt nichts, eine zweite Übernahme in der Umgebung → 409" },
+            { "datei": "tests/api/release-ruecksprung.test.ts", "test": "Ziel bereits aktiv → nichts zu tun" }
           ]
         },
         "audit": {
           "status": "abgedeckt",
           "belege": [
             { "datei": "tests/api/release-center.test.ts", "test": "jede Entscheidung steht im Prüfprotokoll — mit Person, Versionen und ohne Geheimnisse" },
-            { "datei": "tests/api/release-center.test.ts", "test": "Prüfprotokoll: Übernahme und Ergebnis, ohne Benutzer, mit Ausführer und Nachweis — Nachweis heisst Prüfsumme, Aktivierung und was der Server beobachtet hat" }
+            { "datei": "tests/api/release-center.test.ts", "test": "Prüfprotokoll: Übernahme und Ergebnis, ohne Benutzer, mit Ausführer und Nachweis — Nachweis heisst Prüfsumme, Aktivierung und was der Server beobachtet hat" },
+            { "datei": "tests/api/release-ruecksprung.test.ts", "test": "jeder Versuch steht in aktivierungen.jsonl — auch die Verweigerung" },
+            { "datei": "tests/api/protokoll-unveraenderlich.test.ts", "test": "ändern: P0001" },
+            { "datei": "tests/api/protokoll-unveraenderlich.test.ts", "test": "löschen: P0001" }
           ]
         }
       }
