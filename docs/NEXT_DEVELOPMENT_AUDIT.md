@@ -184,6 +184,14 @@ liefern leer), aber es ist die einzige Stelle, an der eine Ebene fehlt.
 Mit beiden Schlüsselwörtern ist die Richtlinie als XSS-Schutz gegenstandslos;
 sie beschränkt nur noch die Herkunft. Kein Nonce, kein `report-uri`.
 
+> **Stand 2026-10-01 — zur Hälfte geschlossen.** `'unsafe-eval'` gibt es im
+> Produktionsbau nicht mehr (Production-V2-Härtung, `0398ecb`): Die Richtlinie
+> entsteht in `src/lib/security/inhaltsrichtlinie.ts`, die Next-Phase
+> entscheidet, und nur der Entwicklungsserver behält `'unsafe-eval'`; für
+> PDF.js steht `'wasm-unsafe-eval'`. Offen bleiben `'unsafe-inline'` (Nonces
+> oder Hashes, eigener Entscheid) und ein `report-uri`/`report-to`
+> (`docs/PENDENZEN.md` P2H-28, P2H-29).
+
 ### S-05 · `CRON_SECRET`-Vergleich nicht zeitkonstant — niedrig
 
 `handler.ts:255` vergleicht mit `!==`. Praktisch schwer ausnutzbar über das

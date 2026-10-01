@@ -436,7 +436,7 @@ Alle Seiten sind Server Components, lesen über Dienste oder Prisma und schütze
 | Datei-Upload | 🟡 | `storage/profiles.ts`, `files/blob/[id]/route.ts` | MIME-Whitelist, Sanitisierung, kein SVG/HTML; **1 GiB für alle Profile**, kein Virenscan, lokale Blobs unauthentifiziert (Capability-URL) |
 | CMS-Asset-Allowlist | ✅ | `src/lib/cms/assets.ts` | Entity/Feld-Paare fest verdrahtet |
 | CMS-Vorschau-Iframe | ✅ | `src/lib/cms/preview.ts:37-66` | Draft-Cookie + `content:update` + `Sec-Fetch-Dest: iframe` |
-| Sicherheits-Header | 🟡 | `next.config.ts:12-93` | HSTS (2 Jahre, preload), nosniff, `X-Frame-Options SAMEORIGIN`, Referrer-Policy, Permissions-Policy, `frame-ancestors 'self'` | **CSP `script-src` mit `'unsafe-inline'` und `'unsafe-eval'`** — CSP als XSS-Schutz wirkungslos; kein Nonce, kein `report-uri` |
+| Sicherheits-Header | 🟡 | `next.config.ts:12-93` | HSTS (2 Jahre, preload), nosniff, `X-Frame-Options SAMEORIGIN`, Referrer-Policy, Permissions-Policy, `frame-ancestors 'self'` | **CSP `script-src` mit `'unsafe-inline'` und `'unsafe-eval'`** — CSP als XSS-Schutz wirkungslos; kein Nonce, kein `report-uri`. *Stand 2026-10-01: `'unsafe-eval'` entfernt (`src/lib/security/inhaltsrichtlinie.ts`), `'unsafe-inline'` und `report-uri` offen* |
 | Umgebungsvariablen | ✅ | `.gitignore:27`, `env.ts` | `.env` ignoriert; keine Fallback-Geheimnisse im Code; `JWT_SECRET` ≥ 32 erzwungen |
 | Demo-Zugangsdaten | ⚠️ | `README.md:45-48`, `.env.example:90`, `tests/helpers/accounts.ts` | Vier Konten im Klartext; `SEED_ADMIN_PASSWORD` mit Vorgabewert — bei Produktions-Seed ohne Überschreiben entsteht ein Admin mit bekanntem Passwort (`docs/DEPLOYMENT.md` warnt) |
 | Webhook-Sicherheit | ✅ | `webhooks/stripe/route.ts:32-44` | Signatur über Rohtext, Idempotenz über `providerPaymentId @unique`, 500 für Retry | `webhook`-Rate-Limit nicht angewandt |
@@ -571,7 +571,7 @@ Siehe Abschnitt 4: Next.js-Update (S1), 2FA-Geheimnis verschlüsseln (S2), CSP o
 1. **Next.js auf ≥ 15.1.8 (besser 15.2.3+) heben** und `x-middleware-subrequest` prüfen — CVE-2025-29927. Dazu `konto/layout.tsx` eine eigene Rollenprüfung geben, damit keine Seite allein auf der Middleware ruht.
 2. **`twoFactorSecret` verschlüsselt speichern** (z. B. AES-GCM mit Schlüssel aus der Umgebung) inkl. Migration bestehender Werte.
 3. **Redis in Produktion verpflichtend machen** oder Login-Rate-Limit in die DB verlagern — sonst ist der Bruteforce-Schutz auf Vercel wirkungslos.
-4. **CSP härten**: `'unsafe-eval'` entfernen, `'unsafe-inline'` durch Nonces ersetzen, `report-uri` setzen.
+4. **CSP härten**: `'unsafe-eval'` entfernen, `'unsafe-inline'` durch Nonces ersetzen, `report-uri` setzen. *(Stand 2026-10-01: `'unsafe-eval'` ist aus dem Produktionsbau entfernt — `src/lib/security/inhaltsrichtlinie.ts`, `docs/SECURITY_STANDARD.md` C6; Nonces und `report-uri` offen, `docs/PENDENZEN.md` P2H-28/29.)*
 5. **CI einrichten** (`typecheck`, `lint`, `npm test` gegen eine Build-Instanz mit Demo-Seed), damit die 470 Prüfungen automatisch laufen.
 6. **Tests für geldrelevante Pfade**: Stripe-Webhook (Signatur, Idempotenz, Refund), Zahlungserfassung, Rechnung senden/stornieren, Exporte; Unit-Tests für Preis-Engine und QR-Referenz mit festen Erwartungswerten.
 
