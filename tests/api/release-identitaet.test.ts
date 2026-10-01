@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { identitaetLesen } from '../../src/lib/release/identitaet';
+import { ausgangNichtBelegt, hindernis, zielNichtBelegt, type AuftragFuerRegeln, type ReleaseFuerRegeln } from '../../src/lib/release/ausfuehrungsregeln';
+import { IDENTITAETS_NAMEN, IDENTITAETS_ZUSTAENDE, identitaetLesen, type Identitaet, type IdentitaetsZustand } from '../../src/lib/release/identitaet';
 import { aktuelleVersion } from '../../src/lib/version';
 import { PAKET_VERSION, PRUEF_ARTEFAKT_COMMIT, PRUEF_BUILD_ID, pruefManifest, pruefVerzeichnis } from '../helpers/pruefartefakt';
 
@@ -145,5 +146,119 @@ describe('Identität der Instanz (rein)', () => {
       if (vorher === undefined) delete process.env.CLENARIS_VERSION;
       else process.env.CLENARIS_VERSION = vorher;
     }
+  });
+});
+
+/**
+ * Die Regeln des Release-Ausführers gegen jeden Zustand der Identität
+ * (2026-10-01, Befund der Gegenprüfung) — rein, ohne Server.
+ *
+ * Über HTTP ist der Zweig „nicht belegt" nicht erreichbar: Der Prüfserver
+ * belegt seinen Stand immer (Prüfmanifest, `scripts/test-server.ts`), und
+ * `release-center.test.ts` setzt genau das voraus. Bis hierher prüfte deshalb
+ * nichts die zentrale Regel dieses Wegs — kein Rollout, kein „erfolgreich",
+ * kein „zurückgesetzt", solange die Instanz ihren Stand nicht belegt. Eine
+ * Änderung, die eine der drei Abfragen `!identitaet.belegt` strich, blieb
+ * grün.
+ *
+ * **Die unbelegten Identitäten hier würden sonst passen.** `identitaetLesen`
+ * gibt ohne Beleg keinen Commit heraus; eine Prüfung mit `commit: null`
+ * würde auch ohne die Abfrage `belegt` abgewiesen (null ≠ Ziel) und bewiese
+ * nichts. Deshalb tragen die Fälle unten Commit und Version, mit denen die
+ * Regel bei belegtem Stand durchginge — die Gegenprobe mit `belegt` zeigt das
+ * im selben Durchgang. Gegen eine Fassung ohne die Abfrage scheitert jeder
+ * unbelegte Zustand.
+ *
+ * Die Zustände kommen aus `IDENTITAETS_ZUSTAENDE`: Kommt ein fünfter hinzu,
+ * läuft er hier ohne Zutun mit.
+ */
+describe('Regeln des Release-Ausführers gegen jeden Identitätszustand (rein)', () => {
+  const ZIEL_COMMIT = 'b'.repeat(40);
+  const AUSGANG_COMMIT = 'a'.repeat(40);
+  const release: ReleaseFuerRegeln = { version: '2.0.0', ciStatus: 'PASSED', commit: ZIEL_COMMIT, artifactSha256: 'c'.repeat(64) };
+  const auftrag: AuftragFuerRegeln = { fromVersion: '1.0.0', toVersion: '2.0.0' };
+
+  /** Eine Identität im Zustand `zustand` mit den Angaben, die sonst passen würden. */
+  const identitaet = (zustand: IdentitaetsZustand, angaben: { version: string; commit: string }): Identitaet => ({
+    belegt: zustand === 'belegt',
+    zustand,
+    version: angaben.version,
+    commit: angaben.commit,
+    buildId: 'pruefbau-regeln-0001',
+    grund: zustand === 'belegt' ? null : 'für die Prüfung gesetzt',
+    manifest: null,
+  });
+
+  it('alle vier Zustände sind erfasst — und nur „belegt" ist belegt', () => {
+    assert.deepEqual([...IDENTITAETS_ZUSTAENDE].sort(), ['belegt', 'ohne-manifest', 'ungueltig', 'widerspruechlich']);
+    for (const zustand of IDENTITAETS_ZUSTAENDE) assert.ok(IDENTITAETS_NAMEN[zustand], `kein Name für ${zustand}`);
+  });
+
+  it('ohne belegten Stand wird nichts ausgerollt — auch wenn die behauptete Version älter ist als das Ziel', () => {
+    for (const zustand of IDENTITAETS_ZUSTAENDE) {
+      const grund = hindernis(release, identitaet(zustand, { version: '1.0.0', commit: AUSGANG_COMMIT }));
+      if (zustand === 'belegt') {
+        assert.equal(grund, null, 'Gegenprobe: belegt und älter — ausrollbar');
+      } else {
+        assert.ok(grund, `Zustand „${zustand}": Rollout ohne belegten Ausgangsstand freigegeben`);
+        assert.match(grund, /nicht belegen/, zustand);
+        assert.ok(grund.includes(IDENTITAETS_NAMEN[zustand]), `${zustand}: der Grund nennt den Zustand nicht`);
+      }
+    }
+  });
+
+  it('„erfolgreich" nur mit belegtem Stand — auch wenn Commit und Version dem Ziel gleichen', () => {
+    for (const zustand of IDENTITAETS_ZUSTAENDE) {
+      const grund = zielNichtBelegt(auftrag, release, identitaet(zustand, { version: release.version, commit: ZIEL_COMMIT }));
+      if (zustand === 'belegt') {
+        assert.equal(grund, null, 'Gegenprobe: belegtes Ziel — erfolgreich');
+      } else {
+        assert.ok(grund, `Zustand „${zustand}": Erfolg ohne Beleg angenommen`);
+        assert.ok(grund.includes(IDENTITAETS_NAMEN[zustand]), `${zustand}: der Grund nennt den Zustand nicht`);
+      }
+    }
+  });
+
+  it('„zurückgesetzt" nur mit belegtem Stand — auch wenn Ausgangsversion und fremder Commit passen', () => {
+    for (const zustand of IDENTITAETS_ZUSTAENDE) {
+      const grund = ausgangNichtBelegt(auftrag, release, identitaet(zustand, { version: auftrag.fromVersion, commit: AUSGANG_COMMIT }));
+      if (zustand === 'belegt') {
+        assert.equal(grund, null, 'Gegenprobe: belegter Ausgangsstand — zurückgesetzt');
+      } else {
+        assert.ok(grund, `Zustand „${zustand}": Rücksprung ohne Beleg angenommen`);
+        assert.ok(grund.includes(IDENTITAETS_NAMEN[zustand]), `${zustand}: der Grund nennt den Zustand nicht`);
+      }
+    }
+  });
+
+  it('bei belegtem Stand: nur neuer, bestanden, vollständiger Commit und Prüfsumme werden ausgerollt', () => {
+    const laufend = identitaet('belegt', { version: '1.0.0', commit: AUSGANG_COMMIT });
+    const faelle: [string, Partial<ReleaseFuerRegeln>, RegExp][] = [
+      ['gleiche Version', { version: '1.0.0' }, /nicht neuer/],
+      ['ältere Version', { version: '0.9.9' }, /nicht neuer/],
+      ['Vorabversion derselben Nummer', { version: '1.0.0-rc.1' }, /nicht neuer/],
+      ['Prüfstufe rot', { ciStatus: 'FAILED' }, /Prüfstufe/],
+      ['Prüfstufe offen', { ciStatus: 'PENDING' }, /Prüfstufe/],
+      ['Commit-Kürzel', { commit: ZIEL_COMMIT.slice(0, 12) }, /vollständiger Commit/],
+      ['ohne Commit', { commit: null }, /vollständiger Commit/],
+      ['ohne Prüfsumme', { artifactSha256: null }, /Prüfsumme/],
+    ];
+    for (const [fall, ueber, grund] of faelle) {
+      assert.match(hindernis({ ...release, ...ueber }, laufend) ?? '', grund, fall);
+    }
+  });
+
+  it('bei belegtem Stand: „erfolgreich" verlangt Commit und Version des Ziels, „zurückgesetzt" die Ausgangsversion mit anderem Commit', () => {
+    const fremderCommit = identitaet('belegt', { version: release.version, commit: 'd'.repeat(40) });
+    assert.match(zielNichtBelegt(auftrag, release, fremderCommit) ?? '', /Commit/);
+    const andereVersion = identitaet('belegt', { version: '2.0.1', commit: ZIEL_COMMIT });
+    assert.match(zielNichtBelegt(auftrag, release, andereVersion) ?? '', /Version 2\.0\.1/);
+
+    // Das Ziel läuft noch, auch wenn die Version zufällig der Ausgangsversion
+    // gleicht: kein Rücksprung.
+    const zielLaeuft = identitaet('belegt', { version: auftrag.fromVersion, commit: ZIEL_COMMIT });
+    assert.match(ausgangNichtBelegt(auftrag, release, zielLaeuft) ?? '', /kein Rücksprung/);
+    const dritteVersion = identitaet('belegt', { version: '1.5.0', commit: 'e'.repeat(40) });
+    assert.match(ausgangNichtBelegt(auftrag, release, dritteVersion) ?? '', /Ausgangsversion 1\.0\.0/);
   });
 });

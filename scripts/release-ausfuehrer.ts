@@ -17,6 +17,17 @@
  * `AUSFUEHRER_WIEDERHOLUNGEN` (Vorgabe 6) bestimmt, wie oft `melden` ein
  * abgewiesenes „erfolgreich" nach je 10 Sekunden erneut versucht.
  *
+ * Ausgangscodes (neben C3 der Aktivierung und C4 dieses Werkzeugs):
+ *
+ *  - **0** — getan. Bei `melden` heisst das genau: SUCCEEDED ist festgehalten.
+ *  - **1** — Fehler; nichts oder nichts Belastbares ist geschehen. Bei
+ *    `melden`: die Meldung wurde nicht angenommen, der Auftrag steht weiter
+ *    in Ausführung (den schliesst sonst der stündliche Lauf).
+ *  - **2** — nur `melden`: die Meldung **ist** angenommen, das festgehaltene
+ *    Ergebnis ist aber kein Erfolg (FAILED oder ROLLED_BACK — auch ein
+ *    abgewiesenes „erfolgreich", das als FAILED festgehalten wurde). Die
+ *    Ausgabe `ergebnis` ist dann geschrieben. Begründung bei `melden`.
+ *
  * ---------------------------------------------------------------------------
  *  Was dieses Werkzeug tut, und was nicht
  * ---------------------------------------------------------------------------
@@ -77,6 +88,9 @@ import type { Aktivierung, ReleaseErgebnis } from '../src/lib/validation/system'
 /** Ein Fehler, den das Werkzeug erklärt — ohne Stapelspur, mit Ausgangscode 1. */
 export class AusfuehrerFehler extends Error {}
 
+/** `melden`: Meldung angenommen, Ergebnis kein Erfolg (siehe Dateikopf und `melden`). */
+export const AUSGANG_KEIN_ERFOLG = 2;
+
 // ---------------------------------------------------------------------------
 //  Formen
 // ---------------------------------------------------------------------------
@@ -91,12 +105,33 @@ const AUFTRAG_MUSTER = /^c[a-z0-9]{8,49}$/;
 const CI_URL_MUSTER = /^https:\/\/github\.com\/([A-Za-z0-9._-]{1,100})\/([A-Za-z0-9._-]{1,100})\/actions\/runs\/(\d{1,20})$/;
 const LAUF_MUSTER = /^\d{1,20}$/;
 /**
- * Ein Pfad, der wörtlich in eine Shell-Zeile eingesetzt werden darf: keine
- * Anführungszeichen, kein `$`, kein Backtick, keine Steuer- oder
- * Trennzeichen. Laufwerksbuchstabe und Rückstrich bleiben erlaubt, damit die
- * Prüfreihe unter Windows läuft.
+ * Ein Archivpfad, der als **ein** Wort in eine Shell-Zeile passt und dort
+ * keinen Befehl bilden kann: keine Anführungszeichen, kein `$`, kein
+ * Backtick, keine Klammer, keine Umleitung, keine Steuerzeichen, **kein
+ * Leerzeichen** (Worttrenner); dazu weder ein führendes `-` (das `scp` oder
+ * `tar` als Option läsen) noch ein führendes `~` (Tilde-Ersetzung).
+ *
+ * Bis 2026-10-01 stand hier, der Pfad dürfe „wörtlich in eine Shell-Zeile
+ * eingesetzt werden" — und das Muster liess ein Leerzeichen zu. Ohne
+ * Anführungszeichen eingesetzt, zerfiel ein solcher Pfad in zwei Wörter;
+ * sicher war er nur, weil die Vorlage `"$ARCHIV"` zufällig in
+ * Anführungszeichen setzte (Gegenprüfung 2026-09-30). Ein Leerzeichen braucht
+ * der Pfad nie: Veränderlich ist an ihm nur `--verzeichnis`, und das setzt
+ * der Workflow selbst (`release`); der Rest ist `clenaris-<sha12>.tar.gz`.
+ *
+ * Rückstrich, Doppelpunkt und Tilde **in der Mitte** bleiben erlaubt, damit
+ * die Prüfreihe unter Windows läuft (`C:\…`, 8.3-Kurznamen wie `JAVADQ~1` im
+ * TEMP-Pfad). Ohne Anführungszeichen können sie einen Pfad verfälschen — ein
+ * Rückstrich maskiert in bash das nächste Zeichen, ein Doppelpunkt vor dem
+ * ersten Schrägstrich lässt `scp` einen entfernten Rechner lesen —, aber
+ * keinen Befehl einschleusen. Ein eigenes Muster je Plattform wurde
+ * verworfen: Die reine Prüfreihe liefe dann unter Windows und Linux gegen
+ * verschiedene Regeln, und ein Fall, der nur auf einer Plattform gilt, ist
+ * ein bedingter Fall. Das Muster ist deshalb die zweite Linie, nicht die
+ * erste: Verbraucher reichen den Wert über `env:` weiter und setzen ihn in
+ * doppelte Anführungszeichen, wie die Vorlage `deploy/v2/release-ausfuehrer.yml`.
  */
-const PFAD_MUSTER = /^[A-Za-z0-9 ._/\\:~+@-]{1,1000}$/;
+const PFAD_MUSTER = /^(?![-~])[A-Za-z0-9._/\\:~+@-]{1,1000}$/;
 
 const leerOder = (pruefen: (v: string) => boolean) => (v: string) => v === '' || pruefen(v);
 
@@ -514,8 +549,23 @@ const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
  * Rücksprung wird nicht wiederholt: Die Aktivierung hat ihren Rücksprung
  * schon gesund gemeldet, ein Warten ändert daran nichts.
  *
- * Ausgangscode 0 heisst „Meldung angenommen" — unabhängig vom Ergebnis. Ob
- * der Lauf rot wird, entscheidet der Workflow an der Ausgabe `ergebnis`.
+ * **Ausgang 0 nur für ein festgehaltenes SUCCEEDED** (seit 2026-10-01). Bis
+ * dahin hiess 0 „Meldung angenommen, gleich mit welchem Ergebnis", und ob
+ * der Lauf rot wird, sollte der Workflow an der Ausgabe `ergebnis` ablesen.
+ * Die Vorlage tat das nie: Der Schritt „Ergebnis melden" hat keine Kennung,
+ * niemand liest `ergebnis`. Lief die Aktivierung mit 0 durch, belegte die
+ * antwortende Instanz das Ziel aber nicht, stand das Release im Update
+ * Center als FAILED — und der GitHub-Lauf endete grün (Gegenprüfung
+ * 2026-09-30). Ein festgehaltenes Scheitern darf nie eine grüne Pipeline
+ * hinterlassen, und das Werkzeug soll das nicht davon abhängig machen, dass
+ * jeder Workflow eine Ausgabe richtig auswertet. Deshalb endet `melden` mit
+ * `AUSGANG_KEIN_ERFOLG` (2), sobald FAILED oder ROLLED_BACK festgehalten ist
+ * — auch dann, wenn schon die Aktivierung rot war: Ein zweiter roter Schritt
+ * schadet nicht, ein grüner nach einem Scheitern schon. Die 2 ist bewusst
+ * nicht die 1: Bei 1 ist die Meldung **nicht** angenommen und der Auftrag
+ * offen, bei 2 ist er abgeschlossen — wer einen Lauf untersucht, soll das am
+ * Code sehen. `ergebnis` wird vorher geschrieben, damit ein Folgeschritt mit
+ * `if: always()` den Grund trotzdem kennt.
  */
 async function melden(): Promise<void> {
   const auftragId = pflicht('auftrag');
@@ -554,6 +604,14 @@ async function melden(): Promise<void> {
   if (r.status !== 200) throw new AusfuehrerFehler(`Meldung abgewiesen: HTTP ${r.status} ${fehlermeldung(r.text)}`);
   console.log(`Gemeldet: ${gemeldet}${r.daten?.wiederholt ? ' (war bereits gemeldet)' : ''}`);
   ausgeben(['ergebnis', gemeldet]);
+  if (gemeldet !== 'SUCCEEDED') {
+    // `exitCode` statt `exit()`: Die Ausgaben oben sollen vollständig
+    // geschrieben sein, bevor der Prozess endet.
+    console.error(
+      `FEHLER: Festgehalten ist ${gemeldet}${gemeldet === ergebnis ? '' : ` statt ${ergebnis}`} — kein Erfolg, der Lauf endet rot (Ausgang ${AUSGANG_KEIN_ERFOLG}).`,
+    );
+    process.exitCode = AUSGANG_KEIN_ERFOLG;
+  }
 }
 
 // ---------------------------------------------------------------------------
