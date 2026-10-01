@@ -52,4 +52,23 @@ test('eine bei der Abmeldung laufende Abfrage schickt nicht zur Anmeldung „abg
   expect(ziel.pathname, `nach der Abmeldung auf ${ziel.pathname}${ziel.search}`).toBe('/');
   expect(ziel.search).not.toContain('abgelaufen');
   expect(erneuerungen, 'nach einer gewollten Abmeldung wurde eine Erneuerung versucht').toEqual([]);
+
+  /**
+   * Die eigene Route abbauen, bevor der Rahmen den Kontext schliesst (RC-21,
+   * 2026-10-01).
+   *
+   * Dieser Fall ist der einzige der Reihe, der einen Routen-Rückruf
+   * absichtlich warten lässt. Nach der Abmeldung kann noch ein Rückruf
+   * laufen — der freigegebene `route.continue()` oder eine späte Abfrage der
+   * Glocke —, und er liefe dann gegen einen Kontext, der gerade geschlossen
+   * wird. Die Meldung aus RC-20 trug den Zusatz „while running route
+   * callback" nicht; ein Rückruf ist also nicht als Ursache belegt. Er ist
+   * aber der eine Verkehr beim Abbau, den nur dieser Fall erzeugt, und
+   * `behavior: 'wait'` räumt ihn weg: laufende Rückrufe zu Ende führen, keine
+   * neuen mehr annehmen. Hängen kann das nicht — der einzige Rückruf, der
+   * wartet, wartet auf `abgemeldet`, und das ist oben längst freigegeben.
+   * Alle Zusicherungen stehen oben und bleiben unverändert; hier wird nichts
+   * wiederholt und nichts gefiltert.
+   */
+  await page.unrouteAll({ behavior: 'wait' });
 });
