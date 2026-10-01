@@ -19,12 +19,13 @@ Schweizer DSG und DSGVO.
 | **Umfang** | <!-- kennzahlen:umfang -->171 Seiten · 379 Route-Dateien mit 544 Endpunkten · 152 Datenmodelle · 89 Dienste · 135 Prüfdateien<!-- /kennzahlen:umfang --> (gezählt von `scripts/kennzahlen.ts`) |
 | **Rollen** | SUPER_ADMIN · ADMIN · MANAGER · EMPLOYEE · CUSTOMER |
 | **Sprache** | Deutsch (Schema und Endpunkte für FR/IT/EN vorbereitet) |
-| **Betrieb** | Eigener Server: Internet → Cloudflare → Cloud Firewall → Nginx → Next.js auf `127.0.0.1:3000`, ausgeliefert über GitHub Actions → SSH → PM2 · Postgres & Objektspeicher · Redis empfohlen |
-| **Prüfung** | 20 Testdateien gegen die laufende Anwendung über HTTP; die CI führt sie bei jedem Pull Request gegen `main` und bei jedem Push auf `main` aus — ausgeliefert wird nur aus `main`, nie aus einem Pull Request |
+| **Betrieb** | Eigener Server: Internet → Cloudflare → Cloud Firewall → Nginx → Next.js auf `127.0.0.1:3000`. Ausgeliefert wird ein in der CI gebautes und geprüftes Artefakt mit SHA-256, über SSH übertragen und mit `deploy/v2/release-aktivieren.sh` unter PM2 eingeschaltet — der Server baut nichts · Postgres & Objektspeicher · Redis empfohlen |
+| **Prüfung** | HTTP-Prüfungen gegen die laufende Anwendung, Browserprüfungen in Chromium, Firefox und WebKit, dazu reine Prüfungen der Rechenkerne und Werkzeuge ohne Server (Zahl der Prüfdateien unter „Umfang"); die CI führt sie bei jedem Pull Request gegen `main` und bei jedem Push auf `main` aus — ausgeliefert wird nur aus `main`, nie aus einem Pull Request |
 
 ## Loslegen
 
-Voraussetzungen: **Node.js ≥ 20.11** und ein erreichbarer **PostgreSQL 16+**.
+Voraussetzungen: **Node.js ≥ 22** (`.nvmrc`; geprüft wird nur mit 22) und ein
+erreichbarer **PostgreSQL 16+**.
 
 ```bash
 npm install
@@ -131,16 +132,18 @@ Fahrwege verkürzt (vorschlagen, nicht ausführen).
 **Mitarbeitendenportal** fürs Telefon: Tagesübersicht, Ein- und Ausstempeln
 mit Standort, Checkliste, Zugangshinweise samt verschlüsseltem Alarmcode,
 Vorher-Nachher-Fotos, Materialverbrauch, Unterschrift der Kundschaft,
-Ferienanträge, Lohnabrechnungen (Anzeige — das Erzeugen fehlt noch, siehe
-Audit).
+Ferienanträge, veröffentlichte Lohnabrechnungen als PDF. Erzeugt werden sie in
+der Verwaltung (`/admin/lohn`: Lohnlauf, Prüfung, Veröffentlichung,
+Lohnausweis) — fachlich durch eine Lohnfachperson noch nicht abgenommen, siehe
+[`docs/PAYROLL.md`](docs/PAYROLL.md).
 
 **Kundenkonto** mit Terminen, Offerten, Rechnungen samt Online-Zahlung per
 TWINT oder Karte, Objekten, Nachrichten und Bewertungen.
 
 **Fakturierung** mit QR-Einzahlungsschein, Mahnläufen, Teilzahlungen,
-Ausgaben, Lieferanten und Buchhaltungsexport. *Gutschriften sind als Dienst
-vorhanden, aber noch ohne Endpunkt und ohne Schaltfläche — siehe
-[`docs/NEXT_DEVELOPMENT_AUDIT.md`](docs/NEXT_DEVELOPMENT_AUDIT.md), Abschnitt 6.*
+Ausgaben, Lieferanten und Buchhaltungsexport. Korrekturen laufen über
+Gutschriften: auf der Rechnung erstellt (`POST /api/invoices/:id/credit-note`),
+als PDF abrufbar — eine ausgestellte Rechnung wird nie geändert.
 
 **Auswertungen** zu Umsatz, Kosten, Deckungsbeitrag, Auslastung und
 Cashflow-Prognose, als Excel und PDF exportierbar.
@@ -193,7 +196,7 @@ src/
     marketing/ app/ charts/
   features/                fachliche Oberflächen je Bereich
   lib/                     Auth, Preis-Engine, PDF, Zahlungen, KI, Validierung, Verschlüsselung
-  server/services/         Geschäftslogik (47 Dienste)
+  server/services/         Geschäftslogik (Zahl der Dienste unter „Umfang")
 tests/                     HTTP-Prüfungen gegen die laufende Anwendung
 ```
 
