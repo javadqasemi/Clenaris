@@ -1,6 +1,8 @@
 # Sicherung und Wiederherstellung — Prüfung (Wave 21)
 
-Stand 2026-09-23. **Nur Prüfung.** In dieser Wave wurde kein
+Stand 2026-09-23, nachgeführt 2026-10-01 (Sicherung aus der Aktivierung statt
+aus `deploy.sh`, Archivaufbewahrung, Prüfprotokoll nur fortschreibbar).
+**Nur Prüfung.** In dieser Wave wurde kein
 Produktionssystem berührt: kein Zugriff auf 2.29.18.45, keine Einstellung bei
 Hetzner, keine Sicherung aus der Produktion. Alle Aussagen über die Produktion
 stammen aus Repository und Dokumentation und sind als solche gekennzeichnet.
@@ -13,9 +15,9 @@ VERIFICATION REQUIRED** · **Release-Blocker: ja** (B-DR-1 bis B-DR-3).
 | Baustein | Was er tut | Stand |
 |---|---|---|
 | `scripts/db-backup.ts` | `pg_dump --format=custom`, Zugang nur über die Umgebung (nie in `argv`), Client ≥ Server geprüft, danach Datei vorhanden, Grösse > 0, `pg_restore --list` lesbar und nicht leer, SHA-256; Aufbewahrung `CLENARIS_BACKUP_KEEP` (7), aufgeräumt erst nach dem Beweis | vorhanden |
-| `scripts/deploy.sh` | ruft die Sicherung **vor** `prisma migrate deploy` auf — nur wenn Migrationen anliegen; ohne geprüfte Sicherung keine Migration | vorhanden |
+| ~~`scripts/deploy.sh`~~ → `deploy/v2/release-aktivieren.sh` | ruft die Sicherung **vor** `prisma migrate deploy` auf — nur wenn Migrationen anliegen, nach der lesenden Vorprüfung (`migration-preflight.ts`); ohne geprüfte Sicherung keine Migration. Seit 2026-09-27 tut das die Aktivierung (aus dem entpackten Release, `APP_DIRECTORY` = Basisverzeichnis); `deploy.sh` bricht ab | vorhanden |
 | `scripts/db-restore-verify.ts` | legt `clenaris_restore_verify_<Zeit>` an (Name im Skript erzeugt, Muster und Sperrliste), spielt ein Archiv ein, vergleicht Zeilenzahlen mit der Quelle, löscht die Wegwerfdatenbank | vorhanden, **in dieser Wave erweitert** |
-| `.deploy/backups/<zeit>/` | Build und `.env` vor jeder Auslieferung (drei Stück) | vorhanden |
+| ~~`.deploy/backups/<zeit>/`~~ → `${BASIS}/archiv/` | bis 2026-09-27 Build und `.env` vor jeder Auslieferung (drei Stück). Heute bewahrt die Aktivierung **die gemessenen Release-Archive** samt `.sha256` auf — erst nach bestätigter Umschaltung, im Gleichschritt mit `releases/` (`CLENARIS_RELEASES_KEEP`, Vorgabe 5, mindestens 2, nie das aktive und nie das vorherige). Das ist die Grundlage des Rücksprungs von Hand (`deploy/v2/release-ruecksprung.sh`); eine **Datensicherung ist es nicht** — `shared/.env` und die Datenbank stecken in keinem Archiv | vorhanden |
 
 ### Erweiterung in dieser Wave
 
@@ -51,12 +53,22 @@ Damit ist bewiesen: **Das Archivformat trägt Daten, Sperrtrigger und
 Teilindizes vollständig, und `pg_restore` lädt die Daten, bevor es die Trigger
 anlegt.** Nicht bewiesen ist, dass die Produktion so gesichert wird.
 
+Die Zahlen sind die vom 2026-09-23. Seither sind Trigger und Teilindizes
+dazugekommen — darunter seit 2026-09-30 die zwei, die `audit_logs` nur
+fortschreibbar machen (`audit_logs_nur_anfuegen`, `audit_logs_kein_leeren`).
+Für eine Wiederherstellung heisst das: Nach `pg_restore` muss
+`npx tsx scripts/datenbank-schranken.ts` (mit `DATABASE_URL` der
+wiederhergestellten Datenbank) BESTANDEN melden — sonst fehlt eine Schranke,
+und die Datenbank nähme still an, was sie verweigern soll. Schwärzen im
+Prüfprotokoll geht auch in einer wiederhergestellten Datenbank nur über
+`scripts/security/audit-schwaerzung.ts` (`docs/KEY_MANAGEMENT.md` §3.5).
+
 ## 3. Befunde
 
 | Nr. | Befund | Schwere | Status |
 |---|---|---|---|
 | **B-DR-1** | **Keine regelmässige Datenbanksicherung.** Die Produktion wird nur vor einer Migration gesichert. Zwischen zwei Migrationen — Wochen — gibt es keinen Stand. RPO ist damit unbestimmt | Release-Blocker | offen, extern |
-| **B-DR-2** | **Sicherung auf demselben Server.** Vorgabe ist `<über der Anwendung>/backups/clenaris-db`. Geht der Server verloren, gehen Datenbank und Sicherung zusammen. Kein zweiter Ort | Release-Blocker | offen, extern |
+| **B-DR-2** | **Sicherung auf demselben Server.** Vorgabe ist `<über der Anwendung>/backups/clenaris-db` — bei der Aktivierung neben dem Basisverzeichnis (etwa `/home/clenaris/backups/clenaris-db`). Geht der Server verloren, gehen Datenbank und Sicherung zusammen. Kein zweiter Ort | Release-Blocker | offen, extern |
 | **B-DR-3** | **Infrastruktursicherung aus.** `DEPLOYMENT.md` (B5) vermerkt Hetzner-Backup/Snapshot als nicht aktiviert (`backup_window: null`); die Projekt-Erinnerung sagt dasselbe für den neu aufgebauten Server. Nicht nachgeprüft (kein Zugriff) | Release-Blocker | offen, extern |
 | B-DR-4 | **Schlüssel getrennt sichern.** Die Auszahlungs-IBAN ist verschlüsselt gespeichert (`KEY_MANAGEMENT.md`). Ein Archiv ohne die Schlüssel aus der `.env` stellt sie nicht lesbar wieder her — und die `.env`-Kopie liegt ebenfalls auf demselben Server | hoch | offen, extern |
 | B-DR-5 | **Archive unverschlüsselt.** Das Archiv enthält Lohn, Kundschaft, Prüfprotokoll. Auf dem Server mit 600/700 geschützt; für einen zweiten Ort braucht es Verschlüsselung (etwa `age` oder `gpg`) mit einem Schlüssel, der **nicht** neben dem Archiv liegt | hoch | offen — Auflage für B-DR-2 |
@@ -95,7 +107,9 @@ anlegt.** Nicht bewiesen ist, dass die Produktion so gesichert wird.
 5. `db-restore-verify.ts` ist hier nicht anwendbar (keine Quelle mehr);
    stattdessen Stichproben: letzte Rechnungsnummer, letzte Lohnabrechnung,
    letzter Protokolleintrag gegen das, was ausserhalb dokumentiert ist.
-6. Workflow von Hand auslösen; `/api/health` meldet den Commit.
+6. Workflow von Hand auslösen (oder das jüngste aufbewahrte Archiv aktivieren,
+   sofern es den Verlust überlebt hat); `/api/health` meldet Commit, Build-ID
+   und `identitaet=belegt`.
 
 Keiner dieser Schritte ist gegen die Produktion geübt —
 **EXTERNAL VERIFICATION REQUIRED**.

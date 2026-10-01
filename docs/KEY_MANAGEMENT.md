@@ -166,6 +166,16 @@ Die Bereinigung ist vorbereitet, aber **nicht ausgeführt**:
    Bereinigung protokolliert sich selbst mit der Zahl der Einträge.
 5. Zweiter Trockenlauf: muss „Betroffen: 0" melden.
 
+**Seit 2026-09-30 ist `audit_logs` in der Datenbank nur fortschreibbar**
+(Migration `20260930120000_protokoll_nur_anfuegen`): Ein UPDATE scheitert mit
+P0001. Die Bereinigung schwärzt deshalb über `zeileSchwaerzen`
+(`scripts/security/audit-schwaerzung.ts`) — die einzige Stelle, die den
+transaktionslokalen Schalter `clenaris.audit_schwaerzung` setzt, und auch dann
+dürfen nur `changes` und `summary` geändert werden. Eine ältere Fassung des
+Skripts scheitert an P0001; nur die aus dem aktuellen Release benutzen. Geprüft
+in `tests/api/protokoll-unveraenderlich.test.ts` („audit-bereinigung schwärzt
+über den Schalter").
+
 Offen bleibt die Sicherung: Ein Backup von vor der Bereinigung enthält die
 Werte weiterhin und läuft erst mit seiner Aufbewahrungsfrist aus.
 
