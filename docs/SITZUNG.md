@@ -1,8 +1,8 @@
 # Sitzung — Laufzeit, Leerlauf, mehrere Tabs
 
-> Stand 2026-09-28, nachgeführt 2026-10-01 (Leerlauf über HTTP und im Browser
-> geprüft, drei Beobachtungen zu den Grenzen). Gilt für Verwaltung,
-> Personalportal und Kundenkonto.
+> Stand 2026-09-28, nachgeführt 2026-10-01 (Prüfungen des Leerlaufs über
+> HTTP und im Browser geschrieben, Lauf steht aus; drei Beobachtungen zu den
+> Grenzen). Gilt für Verwaltung, Personalportal und Kundenkonto.
 
 ## Was gilt
 

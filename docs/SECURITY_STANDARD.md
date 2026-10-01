@@ -173,9 +173,10 @@ Befehls, einer Abfrage oder eines Pfads werden?
 
 Nachweis: `auslieferung-absicherung`, `cms`, `sicherheitsluecken`, `scan`
 (E2E: Markup bleibt Text); Inhaltsrichtlinie: `inhaltsrichtlinie` (Baustein je
-Phase, dieselbe Richtlinie auf Seite, API, statischer Datei und PDF.js-Worker)
-und E2E `inhaltsrichtlinie.browser` (drei Engines: `eval` verweigert,
-WebAssembly kompiliert). Prüffrage: Wo wird ein fremder Text als HTML, Adresse oder Stil
+Phase — rein gelaufen; dieselbe Richtlinie auf Seite, API, statischer Datei und
+PDF.js-Worker — HTTP, Lauf steht aus) und E2E `inhaltsrichtlinie.browser`
+(drei Engines: `eval` verweigert, WebAssembly kompiliert — geschrieben, Lauf
+steht aus). Prüffrage: Wo wird ein fremder Text als HTML, Adresse oder Stil
 eingesetzt?
 
 ## C7 CSRF und Origin
@@ -470,8 +471,12 @@ Verboten, um eine Reihe grün zu bekommen: mehr Wiederholungen, Fälle
 Stand: `HEAD fb0202e` (zuvor `5760e88`, `34b3484`). Die Läufe unten sind die
 jener Tage; seit der Production-V2-Härtung (2026-09-30/10-01) stehen in den
 Belegspalten zusätzlich neue Prüfdateien mit dem Vermerk „seit 2026-09-30" —
-sie sind geschrieben und rein bzw. gegen eine Testdatenbank gelaufen, der
-Volllauf steht aus (`docs/RELEASEBEREITSCHAFT.md` §10). Grundlage:
+sie sind geschrieben; rein bzw. gegen eine Testdatenbank gelaufen sind nur
+`inhaltsrichtlinie` (Baustein), `protokoll-unveraenderlich` und
+`datenbank-schranken` — die HTTP- und Browserfälle (`sitzung-leerlauf`, der
+Serverfall von `inhaltsrichtlinie`, E2E `inhaltsrichtlinie.browser`) stehen
+aus; ihr erster Lauf ist der `verify:release` des Härtungskandidaten
+(`docs/RELEASEBEREITSCHAFT.md` §10). Grundlage:
 
 - `npm run verify:release` an `5760e88` — sauberer, losgelöster
   `git worktree`, frische Testdatenbank: **1905 / 1905** Fälle, 0

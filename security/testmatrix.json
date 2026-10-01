@@ -84,7 +84,7 @@
             { "datei": "tests/api/sicherheitsluecken.test.ts", "test": "ein rotierter Token, nach der Kulanzfrist erneut vorgelegt, macht auch den neuesten ungültig" },
             { "datei": "tests/api/sitzung-leerlauf.test.ts", "test": "ein wegen Leerlaufs widerrufener Token bleibt widerrufen — auch beim zweiten Versuch" }
           ],
-          "hinweis": "Die Sperre der ganzen Familie nach später Wiederverwendung ist belegt (HTTP und Bestand). Dass dabei ein TOKEN_REUSE-Sicherheitsereignis entsteht, prüft kein Test. Nachtrag 2026-10-01: Für den zweiten Versuch mit einem wegen Leerlaufs widerrufenen Token belegt sitzung-leerlauf.test.ts das Ereignis REFRESH_REUSE_DETECTED (genau eines, CRITICAL, ohne Tokenhash); für den nach der Kulanzfrist erneut vorgelegten rotierten Token bleibt es ungeprüft."
+          "hinweis": "Die Sperre der ganzen Familie nach später Wiederverwendung ist belegt (HTTP und Bestand). Dass dabei ein TOKEN_REUSE-Sicherheitsereignis entsteht, prüft kein Test. Nachtrag 2026-10-01: Für den zweiten Versuch mit einem wegen Leerlaufs widerrufenen Token prüft sitzung-leerlauf.test.ts das Ereignis REFRESH_REUSE_DETECTED (genau eines, CRITICAL, ohne Tokenhash; geschrieben, Lauf steht aus); für den nach der Kulanzfrist erneut vorgelegten rotierten Token bleibt es ungeprüft."
         },
         "audit": {
           "status": "abgedeckt",

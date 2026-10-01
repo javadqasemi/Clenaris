@@ -128,7 +128,7 @@
         { "datei": "tests/api/inhaltsrichtlinie.test.ts", "test": "dieselbe Richtlinie auf Seite, API und statischer Datei" },
         { "datei": "tests/e2e/inhaltsrichtlinie.browser.spec.ts", "test": "eval wird verweigert, WebAssembly kompiliert" }
       ],
-      "hinweis": "Kundenname und -notiz, Offertposition und -titel sowie Nachrichten sind im ausgelieferten HTML auf Maskierung geprüft. Nicht geprüft: CMS-Texte, Anfragen und die E-Mail-Vorlagen mit einer Skript-Nutzlast. Seit 2026-09-30 (P2H-26/27) verweigert die Inhaltsrichtlinie im Produktionsbau die Auswertung von Text als Code (kein 'unsafe-eval'; in drei Engines geprüft). 'unsafe-inline' bleibt in script-src (P2H-28) — ein eingeschleustes Inline-Skript hält die Richtlinie nicht auf; die eigentliche Abwehr bleibt die Maskierung."
+      "hinweis": "Kundenname und -notiz, Offertposition und -titel sowie Nachrichten sind im ausgelieferten HTML auf Maskierung geprüft. Nicht geprüft: CMS-Texte, Anfragen und die E-Mail-Vorlagen mit einer Skript-Nutzlast. Seit 2026-09-30 (P2H-26/27) verweigert die Inhaltsrichtlinie im Produktionsbau die Auswertung von Text als Code (kein 'unsafe-eval'; der Baustein rein geprüft, der Serverfall über HTTP und der Browserfall in drei Engines geschrieben — Lauf steht aus). 'unsafe-inline' bleibt in script-src (P2H-28) — ein eingeschleustes Inline-Skript hält die Richtlinie nicht auf; die eigentliche Abwehr bleibt die Maskierung."
     },
     {
       "id": "csv-formelinjektion",
@@ -178,7 +178,7 @@
         { "datei": "tests/api/sitzung-leerlauf.test.ts", "test": "Leerlauf überschritten: Erneuerung 401 „Inaktivität\", Token widerrufen, Cookies gelöscht" },
         { "datei": "tests/api/sitzung-leerlauf.test.ts", "test": "ein wegen Leerlaufs widerrufener Token bleibt widerrufen — auch beim zweiten Versuch" }
       ],
-      "hinweis": "Die Sperre der ganzen Rotationsfamilie nach später Wiederverwendung ist belegt; seit 8bcc88c auch die gleichzeitige Einlösung desselben Zwei-Faktor-Ersatzcodes (two-factor.test.ts: „derselbe Ersatzcode fünfmal gleichzeitig eingelöst: genau eine Sitzung, vier 401, ein Code weniger im Vorrat“). Nicht geprüft: dass dabei ein TOKEN_REUSE-Sicherheitsereignis entsteht — der Katalog stuft die Tokenwiederverwendung nur als Tabelle ein. Nachtrag 2026-10-01: Seit P2H-50 ist der wegen Leerlaufs widerrufene Token belegt — die erste Vorlage 401 „Inaktivität“ ohne Alarm, die zweite läuft in die Wiederverwendungserkennung mit genau einem REFRESH_REUSE_DETECTED (CRITICAL); für den nach der Kulanzfrist wiederverwendeten rotierten Token bleibt das Ereignis ungeprüft."
+      "hinweis": "Die Sperre der ganzen Rotationsfamilie nach später Wiederverwendung ist belegt; seit 8bcc88c auch die gleichzeitige Einlösung desselben Zwei-Faktor-Ersatzcodes (two-factor.test.ts: „derselbe Ersatzcode fünfmal gleichzeitig eingelöst: genau eine Sitzung, vier 401, ein Code weniger im Vorrat“). Nicht geprüft: dass dabei ein TOKEN_REUSE-Sicherheitsereignis entsteht — der Katalog stuft die Tokenwiederverwendung nur als Tabelle ein. Nachtrag 2026-10-01: Seit P2H-50 prüft sitzung-leerlauf.test.ts den wegen Leerlaufs widerrufenen Token (geschrieben, Lauf steht aus) — die erste Vorlage 401 „Inaktivität“ ohne Alarm, die zweite läuft in die Wiederverwendungserkennung mit genau einem REFRESH_REUSE_DETECTED (CRITICAL); für den nach der Kulanzfrist wiederverwendeten rotierten Token bleibt das Ereignis ungeprüft."
     },
     {
       "id": "dateiersetzung",

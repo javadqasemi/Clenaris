@@ -2,7 +2,8 @@
 
 > Stand: 28. September 2026, nachgeführt 1. Oktober 2026 (Schalter
 > `CLENARIS_BESUCHSMESSUNG`, Aufbewahrung 13 Monate überall, Laufzeit des
-> GA-Cookies, Widerruf im Browser geprüft). Gilt für `TrafficEvent`,
+> GA-Cookies; Prüfung des Widerrufs im Browser geschrieben, Lauf steht aus).
+> Gilt für `TrafficEvent`,
 > `POST /api/public/traffic`, `GET /api/traffic` und
 > `/admin/auswertungen/website`.
 >
