@@ -153,8 +153,18 @@ Befehls, einer Abfrage oder eines Pfads werden?
   Link, `src` oder Weiterleitung benutzt werden, ohne gegen eine Erlaubnis zu
   prüfen (Weiterleitungen nur auf eigene Pfade: `weiter=` beginnt mit `/`,
   nicht `//`).
-- **MUSS** die CSP in `next.config.ts` bleiben; eine neue Quelle braucht eine
-  Begründung dort. Keine `unsafe-eval`.
+- **MUSS** die CSP in `src/lib/security/inhaltsrichtlinie.ts` gebaut werden
+  (`next.config.ts` setzt sie nur ein); eine neue Quelle braucht dort eine
+  Begründung und einen Eintrag in `tests/api/inhaltsrichtlinie.test.ts`
+  („keine ungenutzten Fremdquellen" nennt jede erlaubte Quelle beim Namen).
+  **Kein `'unsafe-eval'` im Produktionsbau** — umgesetzt seit 2026-09-30:
+  Über `'unsafe-eval'` entscheidet die Next-Phase, nicht eine
+  Umgebungsvariable; nur `phase-development-server` (`next dev`, auch der
+  Diagnoseserver) bekommt ihn. Next friert die Antwortköpfe beim Bau ein, eine
+  Variable beim Bau reiste also still im Artefakt mit. `'wasm-unsafe-eval'`
+  bleibt für das WebAssembly von PDF.js (Decoder und der Laufzeitübersetzer
+  für PostScript-Funktionen, auch im Worker); `'unsafe-inline'` bleibt, bis
+  Nonces oder Hashes entschieden sind (`docs/PENDENZEN.md` P2H-28).
 - **MUSS** HTML-Vorschauen der CMS-Bearbeitung die Markierungen nur im
   Vorschaumodus erzeugen (byte-gleiche Ausgabe für Besucher).
 - **MUSS** eine Freigabeliste nur **eigene** Schlüssel prüfen
@@ -162,7 +172,10 @@ Befehls, einer Abfrage oder eines Pfads werden?
   liessen `constructor` und `__proto__` als „freigegeben" durch.
 
 Nachweis: `auslieferung-absicherung`, `cms`, `sicherheitsluecken`, `scan`
-(E2E: Markup bleibt Text). Prüffrage: Wo wird ein fremder Text als HTML, Adresse oder Stil
+(E2E: Markup bleibt Text); Inhaltsrichtlinie: `inhaltsrichtlinie` (Baustein je
+Phase, dieselbe Richtlinie auf Seite, API, statischer Datei und PDF.js-Worker)
+und E2E `inhaltsrichtlinie.browser` (drei Engines: `eval` verweigert,
+WebAssembly kompiliert). Prüffrage: Wo wird ein fremder Text als HTML, Adresse oder Stil
 eingesetzt?
 
 ## C7 CSRF und Origin
@@ -312,14 +325,24 @@ Nachweis: `finanzbelege`, `buchung-integritaet`, `datenintegritaet`,
   Person, eine Umwandlung je Anfrage, eine offene Anfrage je Kontaktanfrage,
   Bewilligung einer Abwesenheit nicht neben einer Zuteilung, lückenlose
   Fassungsnummern je Dokument.
-- **MUSS** eine handgeschriebene SQL-Regel (Teilindex, Trigger) in der
-  Migration mit Begründung stehen; ein späteres `migrate dev`, das sie
-  löschen will, wird abgelehnt.
+- **MUSS** eine handgeschriebene SQL-Regel (Teilindex, Trigger, CHECK,
+  EXCLUDE) in der Migration mit Begründung stehen; ein späteres `migrate dev`,
+  das sie löschen will, wird abgelehnt.
+- **MUSS** jede solche Regel im Register `security/datenbank-schranken.json`
+  stehen — Trigger mit Bindung (Tabelle, Auslöser, Funktion), Funktionen mit
+  der SHA-256 ihres Rumpfs (seit 2026-09-30). `security:check` hält das
+  Register gegen den Endstand der Migrationen (gelistet, aber fehlend:
+  blockierend); `npx tsx scripts/datenbank-schranken.ts` gegen die Kataloge
+  der Datenbank aus `DATABASE_URL` (Teilindex gültig und bereit, Trigger
+  eingeschaltet, Bedingung validiert; Exit 0/1/2, 2 = nicht geprüft, nie
+  „bestanden"). Das Tor läuft in der CI und im vollen Prüfweg direkt nach der
+  Migration. Grenze: CHECK-/EXCLUDE-Definitionen und Teilindex-Prädikate werden
+  nur nach Name, Art und „validiert" geprüft (P2H-41).
 - **MUSS** jede neue Invariante einen Gleichzeitigkeitsfall in der
   Prüfreihe haben (`Promise.all` zweier Anfragen → genau ein Erfolg).
 
 Nachweis: `nebenlaeufigkeit`, `mehrere-leistungen`, `buchung-integritaet`,
-`dispatch`, `scan`, `release-center`, `offertannahme`.
+`dispatch`, `scan`, `release-center`, `offertannahme`, `datenbank-schranken`.
 
 ## C16 Prüfprotokoll
 
@@ -335,9 +358,23 @@ Nachweis: `nebenlaeufigkeit`, `mehrere-leistungen`, `buchung-integritaet`,
   Anfrageverknüpfung und CMS-Veröffentlichung je Baustein).
 - **SOLL** reines Lesen nicht protokolliert werden, ausser Downloads
   vertraulicher Dokumente und Exporte.
+- **MUSS** das Prüfprotokoll nur fortschreibbar sein — in der Datenbank
+  erzwungen, nicht in der Anwendung (seit 2026-09-30, Migration
+  `20260930120000_protokoll_nur_anfuegen`): UPDATE, DELETE und TRUNCATE auf
+  `audit_logs` enden mit P0001. Ausnahmen nur: die Kaskade beim Löschen einer
+  Organisation, `ON DELETE SET NULL` von `userId` eines gelöschten Kontos,
+  und die Schwärzung von `changes`/`summary` unter dem transaktionslokalen
+  Schalter `clenaris.audit_schwaerzung`, den nur
+  `scripts/security/audit-schwaerzung.ts` setzt. P0001 wird nicht auf einen
+  HTTP-Status abgebildet. Prüfreihen löschen Protokollzeilen nur über
+  `schutzfreiAufraeumen` (`tests/helpers/testdb.ts`). Was der Trigger nicht
+  verhindert: dass die Datenbankrolle der Anwendung, die heute die Tabellen
+  besitzt, ihn abschaltet — das erkennt das Datenbanktor (C15), verhindern
+  kann es nur eine getrennte Eigentümerrolle (P2H-42, extern).
 
 Nachweis: `protokollpflicht`, `protokoll-und-schranken`,
-`protokoll-schwaerzung`, `zugriffsgrenzen` (Zwei-Faktor), `scan`.
+`protokoll-schwaerzung`, `protokoll-unveraenderlich`, `zugriffsgrenzen`
+(Zwei-Faktor), `scan`.
 
 ## C17 Webhooks
 
@@ -430,7 +467,11 @@ Verboten, um eine Reihe grün zu bekommen: mehr Wiederholungen, Fälle
 
 ## Abschlussmatrix (2026-09-27)
 
-Stand: `HEAD fb0202e` (zuvor `5760e88`, `34b3484`). Grundlage:
+Stand: `HEAD fb0202e` (zuvor `5760e88`, `34b3484`). Die Läufe unten sind die
+jener Tage; seit der Production-V2-Härtung (2026-09-30/10-01) stehen in den
+Belegspalten zusätzlich neue Prüfdateien mit dem Vermerk „seit 2026-09-30" —
+sie sind geschrieben und rein bzw. gegen eine Testdatenbank gelaufen, der
+Volllauf steht aus (`docs/RELEASEBEREITSCHAFT.md` §10). Grundlage:
 
 - `npm run verify:release` an `5760e88` — sauberer, losgelöster
   `git worktree`, frische Testdatenbank: **1905 / 1905** Fälle, 0
@@ -446,8 +487,11 @@ Stand: `HEAD fb0202e` (zuvor `5760e88`, `34b3484`). Grundlage:
 - `security/testmatrix.json`: 23 Funktionen × 9 Dimensionen = **205
   abgedeckt / 0 Lücken / 2 nicht zutreffend** (an `34b3484` noch 196 / 9 /
   2); `security/sicherheitsmatrix.json`: **15 / 15** Klassen abgedeckt.
-  Beide prüft `scripts/testmatrix-pruefen.ts` (Datei und wörtlicher
-  Testtitel müssen existieren).
+  Beide prüft `scripts/testmatrix-pruefen.ts`. Damals genügte es, dass der
+  Titel als Text in der Datei vorkam; seit 2026-09-30 muss ein Beleg einem
+  **ausgeführten** Testtitel gleich sein (Kommentar, Bruchstück oder
+  Tabelleneintrag zählen nicht), und die Prüfung ist ein Schritt von
+  `verify:static` (`docs/PENDENZEN.md` P2H-45).
 - Stressreihe: STRESS-ERGEBNIS: 5 von 5 grün auf 0023556 — je 57/57 Browserfälle, 0 gescheitert, 0 übersprungen, 0 Hydrationsartefakte, ohne Wiederholungen, jeder Lauf gegen einen frisch gestarteten Testserver (Bericht test-results/stress-2026-09-27T17-10-28-542Z.json).
 
 Spalten: **CODE** ist PASS nur mit einer automatischen Prüfung, die in der
@@ -460,12 +504,12 @@ sondern PASS + EXTERNER NACHWEIS.
 
 | Bereich | CODE | Beleg (Datei — Testtitel) | Prüflücke (intern) | EXTERNER NACHWEIS |
 |---|---|---|---|---|
-| AUTH | **PASS** | `session-refresh` — „fünfzig gleichzeitige Erneuerungen: genau eine gelingt, die Familie bleibt heil"; `two-factor` — „verwirft ein Token, das älter ist als der Widerruf"; `zugriffsgrenzen` — Block „A) Ohne gültige Anmeldung antworten … mit 401"; `sicherheitsluecken` — „ein rotierter Token, nach der Kulanzfrist erneut vorgelegt, macht auch den neuesten ungültig"; `vor-ort-abnahme` — „sperrt jeden angemeldeten Endpunkt — auch aus einem zweiten Tab"; E2E `gate4d-sperre` — „sperrt den zweiten Tab desselben Browsers — serverseitig, nicht nur als Umleitung"; `two-factor` — „derselbe Ersatzcode fünfmal gleichzeitig eingelöst: genau eine Sitzung, vier 401, ein Code weniger im Vorrat" | kein Test, dass Tokenwiederverwendung ein `TOKEN_REUSE`-Ereignis erzeugt | keiner |
+| AUTH | **PASS** | `session-refresh` — „fünfzig gleichzeitige Erneuerungen: genau eine rotiert, die Familie bleibt heil" (bis `a9810a6` „… genau eine gelingt …"); `sitzung-leerlauf` — „Leerlauf überschritten: Erneuerung 401 „Inaktivität", Token widerrufen, Cookies gelöscht" (seit 2026-09-30, Lauf steht aus); `two-factor` — „verwirft ein Token, das älter ist als der Widerruf"; `zugriffsgrenzen` — Block „A) Ohne gültige Anmeldung antworten … mit 401"; `sicherheitsluecken` — „ein rotierter Token, nach der Kulanzfrist erneut vorgelegt, macht auch den neuesten ungültig"; `vor-ort-abnahme` — „sperrt jeden angemeldeten Endpunkt — auch aus einem zweiten Tab"; E2E `gate4d-sperre` — „sperrt den zweiten Tab desselben Browsers — serverseitig, nicht nur als Umleitung"; `two-factor` — „derselbe Ersatzcode fünfmal gleichzeitig eingelöst: genau eine Sitzung, vier 401, ein Code weniger im Vorrat" | kein Test, dass Tokenwiederverwendung ein `TOKEN_REUSE`-Ereignis erzeugt | keiner |
 | RBAC | **PASS** | `rbac` — „Rechtematrix", „Menüpunkte verschwinden, statt auszugrauen", „zwei gleichzeitige gegenseitige Herabstufungen lassen eine Systemverantwortung übrig"; `zugriffsgrenzen` — Block „B) Mitarbeitende und Kundschaft legen keine Offerten an, ändern und versenden keine (403)"; `ownership` — „die Kundschaft kann fremde Objekte weder lesen noch ändern"; `protokoll-und-schranken` — „die Systemverantwortung sieht das Protokoll" | Abwesenheiten anderer Mitarbeitender über die Portal-Sitzung ohne IDOR-Fall (Sicherheitsmatrix `idor`) | keiner |
 | TENANT | **PASS** | `mandanten` — „Zahlung: nicht in der Liste — auch nicht mit Suchbegriff —, nicht korrigierbar, nicht stornierbar", „Unterzeichnungslink tauschen (SIGNATURE_ACCESS): 404, keine Signatursitzung, kein Protokolleintrag", „der Rapport eines fremden Einsatzes wird nicht erzeugt (404)", „öffentliche Datei der fremden Organisation wird hier nicht ausgeliefert (404) — weder angemeldet noch anonym"; `sicherheitsluecken` — „die Kundschaft listet mit ?customerId= keine Objekte einer anderen Kundschaft", „die Kundschaft sieht mit ?status=DRAFT keine Entwürfe von Qualitätskontrollen", „Mitarbeitende sehen in der Zeitachse keine fremden persönlichen Ziele"; `suche` — „eine fremde Organisation bleibt unsichtbar"; `zahlungsbuch` — „eine korrekt signierte Zahlung auf die Rechnung einer fremden Organisation bucht nichts, wird vermerkt, gemeldet und nicht endlos wiederholt"; `newsletter-links` — „der Token einer fremden Organisation ist unbekannt (404) und ändert nichts" | Führungsberichte, Einsatzplan eines fremden Vertrags, öffentliche Buchung mit fremder Leistung (Sicherheitsmatrix `fremder-mandant`); `EmailLog`/`SmsLog` tragen seit F-02 eine Organisation, geprüft ist nur das E-Mail-Zustellprotokoll, kein SMS-Fall | keiner (einmandantiger Betrieb) |
 | VALIDATION | **PASS** | `scan` — „zu lang: 422 vor jedem Dienst; leer: 422"; `settings` — „weist einen unbekannten Schlüssel ab", „weist einen Wert ausserhalb der Grenzen ab"; `sicherheitsberichte` — „ungültige Inhalte: 422 — unbekannte Quelle, zu viele Befunde, zu lange Texte, Zeit in der Zukunft"; `sicherheitsluecken` — „Namen aus der Prototypenkette bestehen die Freigabeliste nicht (Absage, kein 500)", „keine Zelle ist eine Formel, und = + @ am Anfang eines Freitexts sind entschärft"; `finanzbelege` — „der Buchhaltungsexport enthält keine Zelle, die mit einer Formel beginnt" | missgebildeter Anmelderumpf (422) nicht eigens geprüft; XLSX-Exporte von Rechnungen und Zeiten sowie die Excel-Berichte der Führung laufen über denselben entschärfenden Schreibweg (`mappeSchreiben`), sind aber nicht eigens geprüft | keiner |
 | CSRF | **PASS** | `ownership` — „lehnt ändernde Anfragen mit fremdem Origin ab"; `sicherheitsluecken` — „clenaris_at und clenaris_rt sind HttpOnly und SameSite=Lax oder Strict", „PATCH und öffentlicher POST mit fremdem Origin: 403, ohne Wirkung"; `laufzeit-konfiguration` — „ein übergeschobenes X-Forwarded-Host macht eine fremde Herkunft nicht vertrauenswürdig" | — | keiner |
-| XSS | **PASS** | `sicherheitsluecken` — „Kundendetail: Name und Notiz erscheinen maskiert, nie als Markup", „Offertdetail: Position und Titel erscheinen maskiert, nie als Markup", „Nachrichten: Seite ohne Markup, Endpunkt als JSON mit nosniff und Text unverändert"; E2E `scan` — „feindliche Inhalte: nichts wird geöffnet, ausgeführt oder als Markup dargestellt"; E2E `gate3-pdf-viewer` — „führt in ein PDF eingebettetes JavaScript nicht aus"; `dateisicherheit` — „weist SVG und HTML als MIME-Typ zurück" | CMS-Texte, Anfragen und E-Mail-Vorlagen mit Skriptnutzlast nicht geprüft | keiner |
+| XSS | **PASS** | `sicherheitsluecken` — „Kundendetail: Name und Notiz erscheinen maskiert, nie als Markup", „Offertdetail: Position und Titel erscheinen maskiert, nie als Markup", „Nachrichten: Seite ohne Markup, Endpunkt als JSON mit nosniff und Text unverändert"; E2E `scan` — „feindliche Inhalte: nichts wird geöffnet, ausgeführt oder als Markup dargestellt"; E2E `gate3-pdf-viewer` — „führt in ein PDF eingebettetes JavaScript nicht aus"; `dateisicherheit` — „weist SVG und HTML als MIME-Typ zurück"; seit 2026-09-30 `inhaltsrichtlinie` — „der Produktionsbau erlaubt kein unsafe-eval, aber WebAssembly" und E2E `inhaltsrichtlinie.browser` — „eval wird verweigert, WebAssembly kompiliert" (Lauf steht aus) | CMS-Texte, Anfragen und E-Mail-Vorlagen mit Skriptnutzlast nicht geprüft; `'unsafe-inline'` bleibt (P2H-28) | keiner |
 | SSRF | **PASS** | `automatisierungen` — „DNS Rebinding: erst öffentlich, beim Verbinden privat — die Verbindung wird verweigert", „weist eine Regel mit privater Webhook-Adresse ab"; `sicherheitsluecken` — „${status} nach ${ort} wird nicht verfolgt — genau eine Anfrage, Ergebnis ein Fehlschlag" | — (einziger konfigurierbarer ausgehender Weg ist der Automations-Webhook) | keiner |
 | RATE LIMIT | **PASS** | `rate-limit` — „Anmeldung: acht Versuche je Adresse, der neunte bekommt 429 mit Retry-After im Fenster", „Schreibkontingent zählt je Benutzer: die Verwaltung erschöpft ihres, die Betriebsleitung nicht", „Signaturtausch: zwanzig Versuche je Adresse, dann 429 — …"; `protokoll-und-schranken` — „jede Route unter /api/notifications deklariert ein rateLimit"; Musterprüfung „Rate-Limit je Route" in `security:check` | — | `REDIS_URL` im Produktionsbetrieb mit mehreren Prozessen (ohne Redis zählt jeder Prozess für sich); echte Client-Adresse hinter Cloudflare nach Nachmessung und erst dann `TRUSTED_PROXY_MODE=CLOUDFLARE` (E-6) |
 | SECRETS | **PASS** | `npm run security:secrets` in `verify:static` (grün in `verify:release` an 5760e88) und im CI-Lauf 36319443611; `schluesselrotation` — „die Übersicht gibt Kennungen heraus, niemals Schlüsselmaterial", „in der Spalte steht ein Chiffrat, kein Klartext"; `datenbanksicherung` — „nennt in der Beschreibung niemals Benutzer oder Passwort"; `ueberwachung-vorlagen` — „kein CRON_SECRET auf dem Überwachungsrechner" | Reichweite der Geheimnisprüfung ist der verfolgte Bestand, nicht die Historie (diese einmalig am 2026-09-21) | Ablage der Produktionsgeheimnisse (`shared/.env`, GitHub-Umgebung) und gelebte Schlüsselrotation (`docs/KEY_MANAGEMENT.md`) — ausserhalb des Repositorys nicht einsehbar |
@@ -474,7 +518,7 @@ sondern PASS + EXTERNER NACHWEIS.
 | TOKENS | **PASS** | `oeffentlicher-zugang` — „ein widerrufener Token wird abgewiesen", „ein abgelaufener Token wird abgewiesen"; `signatur` — „speichert nur einen Argon2id-Hash, zählt Versuche, sperrt den Neuversand und gilt einmal"; `mandanten` — „Offerte annehmen und ablehnen (QUOTE_RESPOND): 404 — Offerte und Signaturvorgang unverändert"; `protokoll-und-schranken` — „der rohe Token landet in keinem Protokolleintrag" | — | keiner |
 | FINANCE | **PASS** | `nebenlaeufigkeit` — „fünf Entwürfe gleichzeitig ausgestellt — fünf verschiedene, lückenlos aufeinanderfolgende Nummern", „sechs gleichzeitige Gutschriften zu je 32.43 — genau drei, und nie mehr als die Rechnung"; `sicherheitsluecken` — „Betrag 0, negativ, unter einem Rappen und über dem offenen Saldo: 422, keine Zahlungszeile"; `zahlungsbuch` — „eine dreimal zugestellte Zahlung bucht einmal"; `geldrechnung` — „0.1 + 0.2: zwei Positionen ergeben genau 0.30"; `zahlungsbuch` — „eine Zahlung in EUR auf eine CHF-Rechnung wird nicht als CHF gebucht — Rechnung bleibt offen, Ereignis vermerkt, Büro gemeldet", „eine Rückerstattung scheitert bei Stripe — Stand, Saldo und Kundenwert kehren zurück, genau einmal über alle drei Ereignistypen", „Büro-Zahlung und Rechnungsstorno gleichzeitig — nie beides, und der Saldo passt zum Gewinner" | Büro-Zahlung gleichzeitig mit dem Stripe-Webhook derselben Rechnung nicht eigens geprüft | steuerliche Prüfung von Buchhaltungsexport und MWST (Treuhand); RB-009 Lohnprüfung durch eine Fachperson |
 | BUSINESS INVARIANTS | **PASS** | `nebenlaeufigkeit` — „sechs gleichzeitige, sich überlappende Erfassungen derselben Person — genau eine wird angenommen", „dieselbe Kundschaft fünfmal gleichzeitig angelegt — eine Akte, die übrigen 409", „eine Anfrage sechsmal gleichzeitig umgewandelt — genau eine Kundschaft, überall dieselbe", „dieselbe Kontaktanfrage doppelt abgeschickt — eine offene Anfrage, beide Nachrichten daran", „Zuteilung und Bewilligung gleichzeitig — nie beides, fünfmal", „fünf Fassungen gleichzeitig hochgeladen — eindeutige, lückenlose Nummern, die höchste gilt"; `datenintegritaet` — „keine Regelverletzung in Finanzen, Nummern, Lager, Mandantenbezug, Annahmen und Zeiten"; `flows` — „Antworten gegen Abschliessen, fünf Runden: nach dem Abschluss steht keine Antwort mehr im Verlauf, jede Absage ist 422 ohne Nachricht", „die umgewandelte Anfrage von A in einer Offerte für B: 422, keine Offerte, die Anfrage bleibt gewonnen"; `cms` — „fünf gleichzeitige Freigaben desselben Entwurfs: genau eine Fassung und eine Protokollzeile", „zweimal veröffentlichen ohne Änderung: keine zweite Fassung, keine zweite Protokollzeile"; `automatisierungen` — „Status, Aufgabe, Meldung und Platzhalter treffen nur die auslösende Buchung — auch mit der Kennung einer anderen in der Konfiguration" | gleichzeitiges `moveJob` auf eine belegte Person; eine doppelt abgeschickte Nachrichtenantwort ergibt zwei Nachrichten (kein Idempotenzschlüssel); CRM-Bezug bei der Umwandlung in eine unpassende Akte; Automationen nur am Auslöser Buchung (Hinweise der Testmatrix) | keiner |
-| AUDIT | **PASS** | `protokollpflicht` — „Rechnung mahnen (Tageslauf): Protokollzeile an Rechnung oder Mahnung, als System", „Zeit freigeben: UPDATE an genau dieser Erfassung, auffindbar über ihre Kennung", „Nachricht eröffnen (Kundschaft): CREATE am Verlauf, mit dem Kundenkonto als Person", „Anfrage umwandeln (bestehende Kundschaft): Protokollzeile, die Anfrage und Verwaltung nennt", „Text veröffentlichen: UPDATE, das den veröffentlichten Baustein nennt"; `zugriffsgrenzen` — „Einschalten schreibt einen Protokolleintrag und das Sicherheitsereignis TWO_FACTOR_ENABLED"; `protokollpflicht` — „Gastbuchung: CREATE an der Buchung, ohne Person", „Kontaktformular: CREATE an der neuen Anfrage, eine weitere Anfrage derselben Person UPDATE daran", „Offertablehnung über den Link: UPDATE an der Offerte, ohne Person, mit der Browser-Angabe"; `newsletter-links` — „der Klick bestätigt, entwertet den Token, protokolliert ohne Person — ein zweiter Klick ist 404" | Storno, Mahnung und Zeitfreigabe: nur das Vorhandensein der Zeile geprüft, nicht das gemeinsame Scheitern (F-14); Antworten und Abschliessen eines Nachrichtenverlaufs ohne Protokollfall | keiner |
+| AUDIT | **PASS** | `protokollpflicht` — „Rechnung mahnen (Tageslauf): Protokollzeile an Rechnung oder Mahnung, als System", „Zeit freigeben: UPDATE an genau dieser Erfassung, auffindbar über ihre Kennung", „Nachricht eröffnen (Kundschaft): CREATE am Verlauf, mit dem Kundenkonto als Person", „Anfrage umwandeln (bestehende Kundschaft): Protokollzeile, die Anfrage und Verwaltung nennt", „Text veröffentlichen: UPDATE, das den veröffentlichten Baustein nennt"; `zugriffsgrenzen` — „Einschalten schreibt einen Protokolleintrag und das Sicherheitsereignis TWO_FACTOR_ENABLED"; `protokollpflicht` — „Gastbuchung: CREATE an der Buchung, ohne Person", „Kontaktformular: CREATE an der neuen Anfrage, eine weitere Anfrage derselben Person UPDATE daran", „Offertablehnung über den Link: UPDATE an der Offerte, ohne Person, mit der Browser-Angabe"; `newsletter-links` — „der Klick bestätigt, entwertet den Token, protokolliert ohne Person — ein zweiter Klick ist 404"; seit 2026-09-30 `protokoll-unveraenderlich` — „ändern: P0001", „löschen: P0001", „leeren (TRUNCATE): P0001", „Schwärzung nur mit Schalter und nur in changes/summary" | Storno, Mahnung und Zeitfreigabe: nur das Vorhandensein der Zeile geprüft, nicht das gemeinsame Scheitern (F-14); Antworten und Abschliessen eines Nachrichtenverlaufs ohne Protokollfall | getrennte Eigentümerrolle für Migrationen (P2H-42) |
 | WEBHOOKS | **PASS** | `sicherheitsluecken` — „ohne stripe-signature: 400, keine Zahlung", „korrekt signiert, aber zehn Minuten alt: 400, keine Zahlung"; `kommunikation` — „Svix: gültig, falsches Geheimnis, veralteter Zeitstempel, manipulierter Text", „Twilio ohne Token oder ohne Signatur: abgewiesen"; `nebenlaeufigkeit` — „dasselbe Zahlungsereignis sechsmal gleichzeitig zugestellt — eine Zahlung, einmal Kundenwert"; `release-center` — „ohne Token, ohne gültige Signatur, mit alter Zeit oder anderem Pfad: 401 — nichts übernommen"; `zahlungsbuch` — „eine korrekt signierte Zahlung auf die Rechnung einer fremden Organisation bucht nichts, wird vermerkt, gemeldet und nicht endlos wiederholt" | — | echte Anbieterzustellung an die Produktionsadresse: Stripe-Webhook-Geheimnis und abonnierte Rückerstattungsereignisse (`refund.updated`/`refund.failed`/`charge.refund.updated`), Twilio mit echtem Konto (`docs/KOMMUNIKATION.md`) |
 | DEPENDENCIES | **PASS** | `npm audit --omit=dev --audit-level=critical` in `verify:static` und im CI-Lauf 36319443611; `sicherheitsbewertung` — „critical blockiert immer, auch mit Bewertung", „sind höchstens ${HOECHSTFRIST_TAGE} Tage befristet"; fremde Aktionen auf Commits festgelegt (`docs/GITHUB_GOVERNANCE.md`) | hohe Befunde sind bewertet und befristet (Warnung ab 2026-12-01, Blockade ab 2027-01-01) | keiner |
 | ERROR HANDLING | **PASS** | `zugriffsgrenzen` — „Kundschaft: GET /api/messages/:id auf den Verlauf einer anderen Kundschaft → 404 (wie „nicht vorhanden", C19), ohne Inhalt"; `datei-zugriff` — „eine fremde Datei antwortet genauso wie eine nicht vorhandene"; `beobachtbarkeit` — „eine abgewiesene Anfrage nennt die Kennung nicht im Rumpf", „auch ohne Anmeldung und auch bei einem Fehler"; `scan` — „kaputte Codes, Steuerzeichen und Markup: 200 ohne Treffer, nie ein Fehler 500"; `nebenlaeufigkeit` — „dieselbe Kundschaft fünfmal gleichzeitig angelegt — eine Akte, die übrigen 409" | Meldungstext von P2002 (ohne Feldnamen) und 409 bei Verklemmung (`40P01`/`40001`/`P2034`) stehen im Code (`src/lib/api/response.ts`), aber keine Prüfung erzwingt eine Verklemmung oder liest den Meldungstext | keiner |
@@ -485,7 +529,8 @@ sondern PASS + EXTERNER NACHWEIS.
 
 **Zählung:** CODE 22 PASS / 0 FAIL. EXTERNER NACHWEIS erforderlich in 10
 Bereichen (RATE LIMIT, SECRETS, PII, FILES, FINANCE, WEBHOOKS, CI,
-MONITORING, BACKUP, MALWARE), „keiner" in 12. Die Testmatrix hat seit der
+MONITORING, BACKUP, MALWARE), „keiner" in 12 — Stand 2026-09-27. Seit
+2026-09-30 kommt AUDIT dazu (getrennte Eigentümerrolle, P2H-42): 11 und 11. Die Testmatrix hat seit der
 dritten Nachprüfung keine Lücke mehr; die Prüflücken hier sind die Hinweise
 von Test- und Sicherheitsmatrix, je Bereich eingeordnet; N-08 (CI) ist inzwischen geschlossen.
 Keine davon ist ein bekannter Fehler.
