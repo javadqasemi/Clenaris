@@ -15,9 +15,21 @@ import { resetRateLimits } from '../helpers/rate-limit';
  * zur Erneuerung schicken, die Erneuerung muss neue Cookies setzen und
  * zurückleiten, und ein verbrauchter Token muss abgewiesen werden.
  *
- * Das Leerlauffenster selbst (15 Minuten) lässt sich über HTTP nicht warten;
- * die Ablehnung eines alten Tokens ist Sache des Dienstes und dort mit einem
- * Zeitvergleich abgesichert.
+ * Das Leerlauffenster selbst (15 Minuten, mit „Angemeldet bleiben" sieben
+ * Tage) prüft diese Datei nicht — aber nicht mehr, weil es sich nicht prüfen
+ * liesse. Bis 2026-10-01 stand hier, es lasse sich über HTTP nicht warten, und
+ * die Ablehnung eines alten Tokens war nur durch Lesen des Dienstes belegt.
+ * Gewartet wird auch heute nicht: `sitzung-leerlauf.test.ts` **stellt** das
+ * Alter her, indem es den Erneuerungstoken in der Testdatenbank zurückdatiert,
+ * und prüft dann über echtes HTTP Ablehnung, Widerruf, gelöschte Cookies,
+ * „Angemeldet bleiben", den zweiten Versuch und den Weg über die Middleware.
+ * Die Gegenseite im Browser — Warnung, Abmeldung, mehrere Tabs — prüft
+ * `tests/e2e/sitzung-leerlauf.spec.ts`.
+ *
+ * Getrennt bleibt das aus einem Grund: Diese Datei braucht keinen
+ * Datenbankzugang und läuft damit auch gegen einen Server, dessen Datenbank
+ * die Reihe nicht erreicht. Die Leerlaufprüfung kann das nicht und scheitert
+ * dann laut; hier mitgeführt, risse sie die übrigen Fälle mit.
  */
 
 /** Nur das Refresh-Cookie aus einem Cookie-Kopf — wie ein Browser nach Ablauf des Zugangstokens. */
