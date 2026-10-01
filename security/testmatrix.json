@@ -1508,7 +1508,7 @@
           "status": "abgedeckt",
           "belege": [
             { "datei": "tests/api/release-center.test.ts", "test": "unzulässige Übergänge: 422" },
-            { "datei": "tests/api/release-center.test.ts", "test": "Ergebnis: fremder Schlüssel 409, „erfolgreich\" ohne Zielversion 422, fehlgeschlagen 200, Wiederholung 200, Widerspruch 409" }
+            { "datei": "tests/api/release-center.test.ts", "test": "Ergebnis: fremder Schlüssel 409, „erfolgreich\" ohne Zielversion 422, fehlgeschlagen 200, Wiederholung 200, Widerspruch 409 — „ohne Zielversion\" heisst seit 2026-09-30: die Instanz belegt sie nicht; die alte Form mit laufendeVersion ebenfalls 422" }
           ]
         },
         "unangemeldet": {
@@ -1532,8 +1532,8 @@
         "falscherBezug": {
           "status": "abgedeckt",
           "belege": [
-            { "datei": "tests/api/release-center.test.ts", "test": "Übernahme: falsche Summe, CI rot, fremde Umgebung → 422; richtig → 200; Wiederholung → 200; zweiter Ausführer → 409" },
-            { "datei": "tests/api/release-center.test.ts", "test": "fällige Aufträge: nur die eigene Umgebung, mit Rücksprung und Hindernis" }
+            { "datei": "tests/api/release-center.test.ts", "test": "Übernahme: falsche Summe, CI rot, fremde Umgebung → 422; richtig → 200; Wiederholung → 200; zweiter Ausführer → 409 — ebenso fremder Commit und andere Version → 422, anderes Artefakt unter demselben Schlüssel → 409" },
+            { "datei": "tests/api/release-center.test.ts", "test": "fällige Aufträge: nur die eigene Umgebung, mit Rücksprung und Hindernis — dazu die belegte Identität der Instanz" }
           ]
         },
         "nebenlaeufigkeit": {
@@ -1546,14 +1546,14 @@
         "idempotenz": {
           "status": "abgedeckt",
           "belege": [
-            { "datei": "tests/api/release-center.test.ts", "test": "Übernahme: falsche Summe, CI rot, fremde Umgebung → 422; richtig → 200; Wiederholung → 200; zweiter Ausführer → 409" }
+            { "datei": "tests/api/release-center.test.ts", "test": "Übernahme: falsche Summe, CI rot, fremde Umgebung → 422; richtig → 200; Wiederholung → 200; zweiter Ausführer → 409 — ebenso fremder Commit und andere Version → 422, anderes Artefakt unter demselben Schlüssel → 409" }
           ]
         },
         "audit": {
           "status": "abgedeckt",
           "belege": [
             { "datei": "tests/api/release-center.test.ts", "test": "jede Entscheidung steht im Prüfprotokoll — mit Person, Versionen und ohne Geheimnisse" },
-            { "datei": "tests/api/release-center.test.ts", "test": "Prüfprotokoll: Übernahme und Ergebnis, ohne Benutzer, mit Ausführer und Nachweis" }
+            { "datei": "tests/api/release-center.test.ts", "test": "Prüfprotokoll: Übernahme und Ergebnis, ohne Benutzer, mit Ausführer und Nachweis — Nachweis heisst Prüfsumme, Aktivierung und was der Server beobachtet hat" }
           ]
         }
       }
