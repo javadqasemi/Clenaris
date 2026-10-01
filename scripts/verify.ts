@@ -582,13 +582,27 @@ async function release(modus: 'release' | 'release-kern'): Promise<void> {
   // `hydrationsbefunde/` ist nicht verfolgt — die Ablage stört weder den
   // Arbeitsbaum noch den nächsten Release-Lauf.
   const ablage = join(WURZEL, 'hydrationsbefunde', `release-${basename(ziel)}`);
+  // Die Laufbilanz des Kerns liegt neben dem Abzug, nicht in seinem
+  // `test-results/`: Das leert Playwright zu Beginn jedes Stresslaufs. Weil
+  // sie damit im Temp-Verzeichnis liegt, das unten entfernt wird, sichert
+  // `abzugAufraeumen` sie ausdrücklich mit (siehe dort).
+  const kernBilanz = join(ziel, 'kern-bilanz.json');
   abzugAufraeumen = () => {
     abzugAufraeumen = null;
     // Erst sichern, dann entfernen (RC-20): Mit dem Abzug verschwanden die
     // Spur eines roten Laufs und das Protokoll, auf das die Ausgabe zeigt.
     // Seit 2026-09-30 liegt darunter auch der Release-Nachweis.
-    const gesichert = abzugsbefundeSichern(quelle, ablage);
-    if (gesichert.length > 0) console.log(`\n   Beweise des Release-Laufs gesichert: ${ablage}`);
+    //
+    // Seit 2026-10-01 auch die Kernbilanz. Vorher verschwand sie mit `ziel`:
+    // `bilanzAblegen` schreibt sie ausdrücklich auch für einen **roten** Kern
+    // — und genau dieser Fall erreicht nie den Nachweis, der sie sonst
+    // mitträgt. Die eine Datei, die sagt, welcher Schritt und welche Engine
+    // gescheitert ist, war damit gelöscht, bevor jemand sie lesen konnte.
+    const gesichert = abzugsbefundeSichern(quelle, ablage, [kernBilanz]);
+    if (gesichert.length > 0) {
+      console.log(`\n   Beweise des Release-Laufs gesichert: ${ablage}`);
+      console.log(`   (${gesichert.map((p) => basename(p)).join(', ')})`);
+    }
     spawnSync(`${git} worktree remove --force "${quelle}"`, { shell: true, cwd: WURZEL, stdio: 'ignore' });
     rmSync(ziel, { recursive: true, force: true });
   };
@@ -598,9 +612,6 @@ async function release(modus: 'release' | 'release-kern'): Promise<void> {
   // übergeben, damit der Abzug dieselbe Datenbank ableitet wie der Arbeitsbaum.
   if (existsSync(join(WURZEL, '.env'))) cpSync(join(WURZEL, '.env'), join(quelle, '.env'));
   schritt('Abhängigkeiten aus der Sperrdatei (npm ci)', 'npm ci --no-audit --no-fund', { cwd: quelle });
-  // Die Laufbilanz des Kerns liegt neben dem Abzug, nicht in seinem
-  // `test-results/`: Das leert Playwright zu Beginn jedes Stresslaufs.
-  const kernBilanz = join(ziel, 'kern-bilanz.json');
   schritt('Voller Prüfweg im Abzug, frische Testdatenbank', 'npx tsx scripts/verify.ts voll --frisch', {
     cwd: quelle,
     env: { TEST_DATABASE_URL: testdatenbank(), CLENARIS_PRUEFWEG_BILANZ: kernBilanz },

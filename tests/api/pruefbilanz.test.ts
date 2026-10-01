@@ -234,6 +234,29 @@ describe('Beweise eines roten Laufs überleben das Aufräumen', () => {
     }
   });
 
+  // 2026-10-01: Die Kernbilanz liegt neben dem Abzug im Temp-Verzeichnis des
+  // Release-Wegs und verschwand mit ihm — gerade die eines roten Kerns, die
+  // keinen Nachweis erreicht. Gegen den alten Stand fehlt die Datei danach.
+  it('die Bilanz eines roten Kerns überlebt das Entfernen des Temp-Verzeichnisses', () => {
+    const ziel = mkdtempSync(join(tmpdir(), 'clenaris-release-'));
+    const ablage = mkdtempSync(join(tmpdir(), 'clenaris-ablage-'));
+    const abzug = join(ziel, 'quelle');
+    const kernBilanz = join(ziel, 'kern-bilanz.json');
+    try {
+      mkdirSync(abzug, { recursive: true });
+      writeFileSync(kernBilanz, JSON.stringify({ modus: 'voll', ok: false, schritte: [{ schritt: 'Datenbankschranken (live)', ok: false, dauerMs: 10 }], browser: null }));
+      const gesichert = abzugsbefundeSichern(abzug, ablage, [kernBilanz, join(ziel, 'gibt-es-nicht.json')]);
+      assert.deepEqual(gesichert, [join(ablage, 'kern-bilanz.json')], 'nur die vorhandene Datei, ohne Fehler für die fehlende');
+      rmSync(ziel, { recursive: true, force: true }); // wie `abzugAufraeumen` am Ende
+      const gerettet = JSON.parse(readFileSync(join(ablage, 'kern-bilanz.json'), 'utf8'));
+      assert.equal(gerettet.ok, false);
+      assert.equal(gerettet.schritte[0].schritt, 'Datenbankschranken (live)', 'der gescheiterte Schritt ist noch zu lesen');
+    } finally {
+      rmSync(ziel, { recursive: true, force: true });
+      rmSync(ablage, { recursive: true, force: true });
+    }
+  });
+
   it('ohne Beweise entsteht keine leere Ablage', () => {
     const leer = mkdtempSync(join(tmpdir(), 'clenaris-leer-'));
     try {
