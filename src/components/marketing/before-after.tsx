@@ -1,6 +1,7 @@
 'use client';
 
 import * as React from 'react';
+import { vergleichsbildAlt } from '@/lib/seo/vergleichsbild';
 import { cn } from '@/lib/utils';
 
 /**
@@ -22,6 +23,16 @@ export interface BeforeAfterProps {
   beforeLabel?: string;
   afterLabel?: string;
   caption?: string;
+  /**
+   * Was auf beiden Bildern zu sehen ist (2026-09-30) — gebildet mit
+   * `vergleichsbildBeschreibung` aus Titel, Leistung und Ort des
+   * Galerieeintrags. Die Bilder heissen dann im `alt`
+   * „Vorher: <Beschreibung>" und „Nachher: <Beschreibung>". Die sichtbaren
+   * Beschriftungen und der Wert des Reglers bleiben „Vorher"/„Nachher": Sie
+   * benennen die Seite des Vergleichs, nicht das Bild. Ohne Beschreibung
+   * bleibt der Alternativtext die Beschriftung allein, wie bisher.
+   */
+  beschreibung?: string;
   className?: string;
   /** Startposition des Reglers in Prozent. */
   initial?: number;
@@ -43,6 +54,7 @@ export function BeforeAfter({
   beforeLabel = 'Vorher',
   afterLabel = 'Nachher',
   caption,
+  beschreibung,
   className,
   initial = 52,
   beforeAttrs,
@@ -136,7 +148,7 @@ export function BeforeAfter({
             // eslint-disable-next-line @next/next/no-img-element
             <img
               src={afterSrc}
-              alt={afterLabel}
+              alt={vergleichsbildAlt(afterLabel, beschreibung)}
               className="size-full object-cover"
               draggable={false}
             />
@@ -155,7 +167,7 @@ export function BeforeAfter({
             // eslint-disable-next-line @next/next/no-img-element
             <img
               src={beforeSrc}
-              alt={beforeLabel}
+              alt={vergleichsbildAlt(beforeLabel, beschreibung)}
               className="size-full object-cover"
               draggable={false}
             />

@@ -9,6 +9,7 @@ import { formatCurrency } from '@/lib/utils';
 import { SEITEN_URL } from '@/lib/seiten-url';
 import { leistungsSeo, seitenMetadaten } from '@/lib/seo/metadaten';
 import { brotkrumen, leistungsKnoten, leistungsPreis } from '@/lib/seo/structured-data';
+import { vergleichsbildBeschreibung } from '@/lib/seo/vergleichsbild';
 import { JsonLd } from '@/components/marketing/json-ld';
 import { getOrganizationId, getServiceAreas } from '@/server/services/organization.service';
 import { getContent } from '@/server/services/content.service';
@@ -195,6 +196,14 @@ export default async function ServiceDetailPage({
               beforeSrc={gallery?.beforeUrl}
               afterSrc={gallery?.afterUrl}
               caption={gallery ? `${gallery.title} — Regler verschieben` : undefined}
+              // Alternativtext (2026-09-30): Der Eintrag ist nach der Art dieser
+              // Leistung ausgewählt, also benennt der Name dieser Seite die
+              // Leistung — genauer als die allgemeine Art.
+              beschreibung={
+                gallery
+                  ? vergleichsbildBeschreibung({ titel: gallery.title, leistung: service.name, ort: gallery.location })
+                  : undefined
+              }
               beforeAttrs={cms.asset('galleryItem', gallery?.id, 'beforeUrl')}
               afterAttrs={cms.asset('galleryItem', gallery?.id, 'afterUrl')}
             />

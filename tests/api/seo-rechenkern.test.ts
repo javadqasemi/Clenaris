@@ -33,6 +33,11 @@ import {
   type FirmenDaten,
 } from '../../src/lib/seo/structured-data';
 import { jsonLd } from '../../src/lib/json-ld';
+import {
+  VERGLEICHSBILD_MAX_ZEICHEN,
+  vergleichsbildAlt,
+  vergleichsbildBeschreibung,
+} from '../../src/lib/seo/vergleichsbild';
 
 /**
  * Technische SEO der öffentlichen Website (Teil H, 2026-09-28) — die reinen
@@ -445,5 +450,82 @@ describe('Strukturierte Daten', () => {
     assert.ok(!roh.includes('</script>'));
     assert.ok(!roh.includes(' '));
     assert.equal(JSON.parse(roh).name, '</script> ');
+  });
+});
+
+/**
+ * Alternativtext der Vorher-/Nachher-Bilder (2026-09-30).
+ *
+ * Bis dahin hiess jedes Vergleichsbild im `alt` nur „Vorher" bzw. „Nachher" —
+ * auf Startseite, Galerie und Leistungsseiten. Die Regel steht in
+ * `lib/seo/vergleichsbild.ts`; dass die Galerie sie ausliefert, prüft
+ * `website-ops.test.ts` am HTML.
+ */
+describe('Vergleichsbilder — Alternativtext', () => {
+  it('Vergleichsbilder tragen Titel, Leistung und Ort im Alternativtext', () => {
+    const beschreibung = vergleichsbildBeschreibung({
+      titel: 'Fensterfront Bürogebäude',
+      leistung: 'Fensterreinigung',
+      ort: 'Bern Effingerstrasse',
+    });
+    assert.equal(beschreibung, 'Fensterfront Bürogebäude, Fensterreinigung, Bern Effingerstrasse');
+    assert.equal(vergleichsbildAlt('Vorher', beschreibung), 'Vorher: Fensterfront Bürogebäude, Fensterreinigung, Bern Effingerstrasse');
+    assert.equal(vergleichsbildAlt('Nachher', beschreibung), 'Nachher: Fensterfront Bürogebäude, Fensterreinigung, Bern Effingerstrasse');
+  });
+
+  it('ohne Angaben bleibt der Alternativtext die Beschriftung — kein leeres „Vorher: "', () => {
+    assert.equal(vergleichsbildBeschreibung({}), undefined);
+    assert.equal(vergleichsbildBeschreibung({ titel: '   ', leistung: null, ort: undefined }), undefined);
+    assert.equal(vergleichsbildBeschreibung({ titel: '<b></b>' }), undefined, 'nur Auszeichnung ist keine Angabe');
+    assert.equal(vergleichsbildAlt('Vorher', undefined), 'Vorher');
+    assert.equal(vergleichsbildAlt('Nachher', '  '), 'Nachher');
+  });
+
+  it('nichts erfunden: nur die vorhandenen Teile, in fester Reihenfolge', () => {
+    assert.equal(vergleichsbildBeschreibung({ titel: 'Badezimmer entkalkt' }), 'Badezimmer entkalkt');
+    assert.equal(vergleichsbildBeschreibung({ titel: 'Badezimmer entkalkt', ort: 'Ostermundigen' }), 'Badezimmer entkalkt, Ostermundigen');
+    assert.equal(vergleichsbildBeschreibung({ leistung: 'Baureinigung', ort: 'Köniz' }), 'Baureinigung, Köniz');
+    // Kein Wort, das nicht aus den Angaben stammt.
+    const text = vergleichsbildBeschreibung({ titel: 'Küche', leistung: 'Umzugsreinigung', ort: 'Thun' })!;
+    assert.deepEqual(text.split(', '), ['Küche', 'Umzugsreinigung', 'Thun']);
+  });
+
+  it('nichts doppelt — verglichen wortweise, nicht als Teilzeichenkette', () => {
+    // Die Leistung steht schon im Titel: fällt weg.
+    assert.equal(
+      vergleichsbildBeschreibung({ titel: 'Umzugsreinigung Länggasse', leistung: 'Umzugsreinigung', ort: 'Bern Länggasse' }),
+      'Umzugsreinigung Länggasse, Bern Länggasse',
+    );
+    assert.equal(vergleichsbildBeschreibung({ titel: 'Baureinigung', leistung: 'baureinigung' }), 'Baureinigung', 'Gross-/Kleinschreibung');
+    // „Bern" ist kein Wort von „Bernstrasse" — der Ort bleibt.
+    assert.equal(
+      vergleichsbildBeschreibung({ titel: 'Treppenhaus Bernstrasse', ort: 'Bern' }),
+      'Treppenhaus Bernstrasse, Bern',
+    );
+  });
+
+  it(`höchstens ${VERGLEICHSBILD_MAX_ZEICHEN} Zeichen: der Titel gekürzt, Leistung und Ort nur ganz`, () => {
+    const langerTitel = `Grundreinigung ${'Treppenhaus '.repeat(15)}`.trim();
+    const kurz = vergleichsbildBeschreibung({ titel: langerTitel, leistung: 'Unterhaltsreinigung', ort: 'Bern' })!;
+    assert.ok(kurz.length <= VERGLEICHSBILD_MAX_ZEICHEN, `${kurz.length} Zeichen`);
+    // Gekürzt heisst: der Titel allein, mit Auslassung am Ende — kein Ort
+    // hinter dem abgeschnittenen Rest.
+    assert.ok(kurz.endsWith('…'), kurz);
+    assert.ok(kurz.startsWith('Grundreinigung Treppenhaus'), kurz);
+    assert.ok(!kurz.includes(','), kurz);
+
+    const mittel = 'M'.repeat(100);
+    // Die Leistung passt nicht mehr ganz, der Ort schon.
+    assert.equal(vergleichsbildBeschreibung({ titel: mittel, leistung: 'Unterhaltsreinigung', ort: 'Thun' }), `${mittel}, Thun`);
+  });
+
+  it('Auszeichnung und Steuerzeichen aus dem Datensatz landen nicht im Attribut', () => {
+    const text = vergleichsbildBeschreibung({
+      titel: `Küche <script>alert(1)</script>${String.fromCharCode(10)}entfettet`,
+      ort: `Bern${String.fromCharCode(0)}`,
+    })!;
+    assert.ok(!text.includes('<') && !text.includes('>'), text);
+    assert.ok(!/[\u0000-\u001f]/.test(text), 'Steuerzeichen im Text');
+    assert.equal(text, 'Küche alert(1) entfettet, Bern');
   });
 });

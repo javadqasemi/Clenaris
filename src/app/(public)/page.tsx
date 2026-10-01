@@ -27,6 +27,7 @@ import {
 } from '@/components/ui/controls';
 import { BeforeAfter } from '@/components/marketing/before-after';
 import { QuickEstimate } from '@/components/marketing/quick-estimate';
+import { vergleichsbildBeschreibung } from '@/lib/seo/vergleichsbild';
 import {
   CallToAction,
   ProcessSteps,
@@ -205,6 +206,16 @@ export default async function HomePage() {
               afterSrc={gallery?.afterUrl}
               beforeAttrs={cms.asset('galleryItem', gallery?.id, 'beforeUrl')}
               afterAttrs={cms.asset('galleryItem', gallery?.id, 'afterUrl')}
+              // Alternativtext aus dem Galerieeintrag (2026-09-30) — Regeln in `lib/seo/vergleichsbild.ts`.
+              beschreibung={
+                gallery
+                  ? vergleichsbildBeschreibung({
+                      titel: gallery.title,
+                      leistung: gallery.serviceKind ? SERVICE_LABELS[gallery.serviceKind] : null,
+                      ort: gallery.location,
+                    })
+                  : undefined
+              }
               caption={
                 gallery
                   ? `${gallery.title}${gallery.location ? ` · ${gallery.location}` : ''} — Regler verschieben`
