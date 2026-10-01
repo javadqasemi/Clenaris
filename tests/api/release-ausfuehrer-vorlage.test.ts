@@ -294,11 +294,26 @@ describe('Release-Ausführer (Vorlage) — fail-closed und mit den Namen von dep
    * es erst nach der bestätigten Übernahme (Vertrag C4: archiv, sha256,
    * buildid). Eine Bedingung auf eine Ausgabe, die `abholen` gar nicht
    * schreibt, wäre nie erfüllt, und kein Auftrag würde je gemeldet.
+   *
+   * Oder: `plan` sagt `fortsetzen` — dann hat derselbe Ausführungsschlüssel
+   * (ein erneuter Versuch dieses Laufs) den Auftrag schon übernommen, bevor
+   * `abholen` beginnt. Scheitert ein solcher Versuch vor der Aktivierung und
+   * meldet niemand, sehen alle späteren Läufe einen fremden Auftrag in
+   * Ausführung und planen `nichts`, bis der stündliche Lauf ihn nach zwei
+   * Stunden als verwaist abschliesst (Befund 2026-10-01).
    */
-  it('meldet auch nach einem Fehlschlag, sobald der Auftrag übernommen ist', () => {
+  it('meldet auch nach einem Fehlschlag, sobald der Auftrag übernommen ist — auch im Modus fortsetzen', () => {
     const melden = schritt(ausfuehren, 'Ergebnis melden');
-    assert.match(melden, /if: always\(\) && steps\.abholen\.outputs\.archiv != ''/);
+    assert.match(melden, /if: always\(\) && \(steps\.abholen\.outputs\.archiv != '' \|\| steps\.plan\.outputs\.modus == 'fortsetzen'\)/);
     assert.match(melden, /AUFTRAG: \$\{\{ steps\.plan\.outputs\.auftrag \}\}/);
+    // Im fortgesetzten Versuch kann der Fehlschlag vor `abholen` liegen —
+    // dann gibt es keinen Ausgang, und gemeldet wird ein leerer Code, nie
+    // ein erfundener.
+    assert.match(melden, /--aktivierung "\$CODE"/);
+    assert.match(melden, /CODE: \$\{\{ steps\.aktivieren\.outputs\.code \}\}/);
+    for (const vorher of ['Grünen CI-Lauf des Commits finden', 'Artefakt des CI-Laufs laden', 'Messen und übernehmen']) {
+      assert.match(schritt(ausfuehren, vorher), /if: steps\.plan\.outputs\.modus == 'neu' \|\| steps\.plan\.outputs\.modus == 'fortsetzen'/, vorher);
+    }
     const abholen = schritt(ausfuehren, 'Messen und übernehmen');
     assert.match(abholen, /^\s+id: abholen\s*$/m);
     assert.match(abholen, /--auftrag "\$AUFTRAG"/);

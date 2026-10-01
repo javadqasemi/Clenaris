@@ -268,14 +268,30 @@ jobs:
         # FAILED; leer, weil die Aktivierung gar nicht lief → FAILED). Keine
         # zweite Frage an die Instanz entscheidet mit.
         #
-        # „Übernommen" erkennt der Workflow an `archiv`: `abholen` schreibt
-        # seine Ausgaben (archiv, sha256, buildid — Vertrag C4) erst, wenn die
-        # Schnittstelle die Übernahme bestätigt hat und der Auftrag in
-        # Ausführung steht. Ohne Übernahme gibt es nichts zu melden — die
-        # Schnittstelle wiese ein Ergebnis eines fremden Schlüssels ohnehin ab.
-        # Die Auftragskennung selbst stammt aus `plan`; `abholen` hat genau
-        # diesen Auftrag übernommen oder ist gescheitert.
-        if: always() && steps.abholen.outputs.archiv != ''
+        # „Übernommen" erkennt der Workflow auf zwei Wegen:
+        #
+        #  • an `archiv`: `abholen` schreibt seine Ausgaben (archiv, sha256,
+        #    buildid — Vertrag C4) erst, wenn die Schnittstelle die Übernahme
+        #    bestätigt hat und der Auftrag in Ausführung steht;
+        #  • an `modus == 'fortsetzen'`: Dann hat **dieser Lauf** (derselbe
+        #    Ausführungsschlüssel, also ein erneuter Versuch desselben Laufs)
+        #    den Auftrag schon in einem früheren Versuch übernommen. Er steht
+        #    bereits in Ausführung, bevor `abholen` überhaupt beginnt.
+        #
+        # Der zweite Weg fehlte bis 2026-10-01. Scheiterte ein fortgesetzter
+        # Versuch vor der Aktivierung — kein grüner CI-Lauf gefunden, das
+        # Artefakt abgelaufen, `abholen` abgewiesen —, meldete niemand etwas.
+        # Jeder spätere Lauf nach Zeitplan hat einen anderen Schlüssel, sieht
+        # einen fremden Auftrag in Ausführung, plant `nichts` — und der
+        # Ausführer stand still, bis der stündliche Lauf den Auftrag nach zwei
+        # Stunden als verwaist abschloss. Gemeldet wird in diesem Fall ein
+        # leerer Ausgang: `melden` macht daraus UNKLAR/FAILED mit dem Grund
+        # „ohne Ausgangscode", und die Anwendung hält die beobachtete
+        # Identität der Instanz dazu fest. Ohne Übernahme gibt es nichts zu
+        # melden — die Schnittstelle wiese ein Ergebnis eines fremden
+        # Schlüssels ohnehin ab. Die Auftragskennung stammt in beiden Fällen
+        # aus `plan`.
+        if: always() && (steps.abholen.outputs.archiv != '' || steps.plan.outputs.modus == 'fortsetzen')
         env:
           AUFTRAG: ${{ steps.plan.outputs.auftrag }}
           CODE: ${{ steps.aktivieren.outputs.code }}
@@ -284,8 +300,8 @@ jobs:
       - name: Laufende Identität (Diagnose)
         # Nur fürs Protokoll dieses Laufs: Was meldet die Instanz jetzt? Kein
         # Einfluss auf die Meldung oben, und ein Fehler hier macht den Lauf
-        # nicht rot.
-        if: always() && steps.abholen.outputs.archiv != ''
+        # nicht rot. Dieselbe Bedingung wie beim Melden.
+        if: always() && (steps.abholen.outputs.archiv != '' || steps.plan.outputs.modus == 'fortsetzen')
         continue-on-error: true
         run: npx tsx scripts/release-ausfuehrer.ts identitaet
 
