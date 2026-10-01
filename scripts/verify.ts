@@ -446,9 +446,12 @@ function browserreihe(env: Record<string, string>, port: string): void {
  *     lassen, Teilindizes, Prüfbedingungen — stehen in handgeschriebenem SQL
  *     der Migrationen, das `prisma migrate dev` nicht kennt und still
  *     verwerfen kann. Ob sie in der Datenbank auch *sind*, sagt keine
- *     Migration über sich selbst; das Tor fragt die Datenbank. Exit 2 („nicht geprüft“: keine Adresse, keine
- *     Verbindung) bricht genauso ab wie 1 („Befund“) — ein Tor, das bei
- *     fehlender Verbindung grün wird, prüft nur, ob es eine Verbindung gab.
+ *     Migration über sich selbst; das Tor fragt die Datenbank. Exit 2 („nicht
+ *     geprüft“: keine Adresse, keine Verbindung) bricht genauso ab wie 1
+ *     („Befund“ oder Absturz des Skripts) — ein Tor, das bei fehlender
+ *     Verbindung grün wird, prüft nur, ob es eine Verbindung gab. Fehlt das
+ *     Skript selbst, bricht der Weg mit genau dieser Aussage ab, statt einen
+ *     Befund zu melden, den es nie gab.
  *  2. **Nur die Konfiguration** (`npm run db:seed`), dann Bau und
  *     Leistungsbudget. Vorher lief der Demo-Seed vor dem Bau, und die
  *     öffentlichen Seiten wurden mit erfundenen Bewertungen, Blogartikeln
@@ -480,9 +483,26 @@ async function voll(optionen: { frisch: boolean }): Promise<void> {
     schritt('Testdatenbank frisch aufsetzen (nur Konfiguration)', 'npm run db:test:setup -- --frisch --ohne-demo', { env: { TEST_DATABASE_URL: datenbank } });
   }
   schritt('Migrationen auf die Testdatenbank', 'npx prisma migrate deploy', { env: dbEnv });
+  /*
+    Fehlt das Prüfskript, endet `tsx` ebenfalls mit 1 — und die Meldung
+    lautete dann „Befund — eine Schranke fehlt“, obwohl gar nichts geprüft
+    wurde. Wer danach die Datenbank nach einer fehlenden Schranke absucht,
+    sucht am falschen Ort. Deshalb vorher die eigene Frage „gibt es das Tor
+    überhaupt?“ mit eigener Antwort; abgebrochen wird in beiden Fällen.
+    Exit 1 heisst danach „Befund **oder** Absturz“: Ein Skript, das wirft,
+    endet unter `tsx` mit derselben Zahl wie eines, das einen Befund meldet,
+    und nur die Ausgabe darüber unterscheidet die beiden.
+  */
+  if (!existsSync(join(WURZEL, 'scripts', 'datenbank-schranken.ts'))) {
+    ergebnisse.push({ schritt: 'Datenbankschranken (live)', ok: false, dauerMs: 0, hinweis: 'Prüfskript fehlt' });
+    abbrechen('Datenbanktor fehlt (scripts/datenbank-schranken.ts) — nicht geprüft ist kein Bestehen.');
+  }
   schritt('Datenbankschranken (live)', 'npx tsx scripts/datenbank-schranken.ts', {
     env: dbEnv,
-    exitcodes: { 1: 'Befund — eine Schranke fehlt oder weicht ab', 2: 'nicht geprüft — keine Adresse oder keine Verbindung; das ist kein Bestehen' },
+    exitcodes: {
+      1: 'Befund oder Absturz des Prüfskripts — die Ausgabe darüber sagt, welches',
+      2: 'nicht geprüft — keine Adresse oder keine Verbindung; das ist kein Bestehen',
+    },
   });
   schritt('Konfiguration ohne Demodaten', 'npm run db:seed', { env: dbEnv });
   schritt('Build', 'npm run build', { env: { ...dbEnv, NODE_ENV: 'production' } });
