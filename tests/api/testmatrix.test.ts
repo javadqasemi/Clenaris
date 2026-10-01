@@ -15,18 +15,24 @@ import { DIMENSIONEN, literaleAusQuelltext, matrizenPruefen, titelAusQuelltext }
  * `verify:static`) einen Matrixbeleg als gefunden wertet — kein Server, keine
  * Datenbank.
  *
- * Gegen den alten Stand scheitert der erste Fall: Dort genügte
- * `inhalt.includes(titel)`, und ein Titel, der nur noch in einem Kommentar
- * stand, galt als Beleg. Der dritte Fall hätte gegen den alten Stand der
- * Matrizen gescheitert — zwei Belege zeigten auf den umbenannten Fall
- * „fünfzig gleichzeitige Erneuerungen: genau eine gelingt …“, einer auf einen
- * Tabelleneintrag der Rechtematrix, der kein Titel ist.
+ * Gegen den alten Stand scheitert „ein Titel nur im Kommentar gilt nicht als
+ * Beleg“: Dort genügte `inhalt.includes(titel)`, und ein Titel, der nur noch
+ * in einem Kommentar stand, galt als Beleg. „beide Matrizen sind vollständig
+ * belegt“ hätte gegen den alten Stand der Matrizen gescheitert — zwei Belege
+ * zeigten auf den umbenannten Fall „fünfzig gleichzeitige Erneuerungen:
+ * genau eine gelingt …“, einer auf einen Tabelleneintrag der Rechtematrix,
+ * der kein Titel ist.
  *
- * Der vierte Fall scheitert gegen den ersten Stand der strengen Regel: Dort
- * zählte an einem Beleg nur der Titel, und die Vorlage eines
- * tabellengetriebenen Falls (`${role}: …`) belegte jede Zeile der Tabelle —
- * auch eine, die es nicht mehr gab. Ein Zusatzfeld `eintrag` wurde still
- * übergangen.
+ * „ein Tabelleneintrag als Zusatzbeleg …“ scheitert gegen den ersten Stand
+ * der strengen Regel: Dort zählte an einem Beleg nur der Titel, und die
+ * Vorlage eines tabellengetriebenen Falls (`${role}: …`) belegte jede Zeile
+ * der Tabelle — auch eine, die es nicht mehr gab. Ein Zusatzfeld `eintrag`
+ * wurde still übergangen.
+ *
+ * Die beiden Fälle vom 2026-10-01 (Schrägstrich nach `x++` und nach einem
+ * Steuerkopf; Vorschlag bei verlängertem Titel) tragen ihre Begründung
+ * direkt über sich. Die Fälle werden hier beim Titel genannt, nicht bei
+ * ihrer Nummer — die Nummern verschieben sich mit jedem neuen Fall.
  */
 
 /**
@@ -116,6 +122,42 @@ describe('Belege der Abdeckungsmatrizen', () => {
       'Titel auf der nächsten Zeile',
       'Schritt ${1 + 1}',
     ]);
+  });
+
+  // 2026-10-01, Befund aus der Gegenprüfung: Der Leser entschied „Division
+  // oder regulärer Ausdruck“ nur am Zeichen davor. Nach `x++` hielt er den
+  // Strich für einen Ausdruck, der den Rest der Zeile schluckte; nach
+  // `if (…)` hielt er einen Ausdruck für eine Division, las dessen Inhalt als
+  // Code, und ein Backtick darin öffnete eine Vorlage bis zum Dateiende.
+  // Gegen den alten Stand liefern die ersten vier Quelltexte keinen Titel.
+  it('Division nach Inkrement und Ausdruck nach einem Steuerkopf verschlucken keinen Titel', () => {
+    const faelle: [string, string][] = [
+      ["const y = x++ / 2; it('nach Inkrement', () => {});", 'nach Inkrement'],
+      ["let n = 4; n-- / 2; it('nach Dekrement', () => {});", 'nach Dekrement'],
+      ["if (a) /`/.test(b);\nit('nach if-Ausdruck', () => {});", 'nach if-Ausdruck'],
+      ["for await (const x of y) /`/.test(x);\nit('nach for-await-Ausdruck', () => {});", 'nach for-await-Ausdruck'],
+      // Gegenproben: Nach einem Aufruf und nach einer Eigenschaft namens `if`
+      // teilt der Strich weiter — als Ausdruck gelesen, schluckte er den Titel.
+      ["const z = f(a) / 2; it('nach Aufruf', () => {});", 'nach Aufruf'],
+      ["const w = regel.if(a) / 2; it('nach Eigenschaft if', () => {});", 'nach Eigenschaft if'],
+    ];
+    for (const [quelltext, titel] of faelle) assert.deepEqual(titelAusQuelltext(quelltext), [titel], quelltext);
+  });
+
+  // 2026-10-01: Strom A2 verlängerte Titel um einen Nachsatz. Das Wortmass
+  // fand für den längsten keinen Vorschlag — gerade der, der mit dem
+  // zitierten Text wörtlich beginnt. Gegen den alten Stand fehlt der Vorschlag.
+  it('ein um einen Nachsatz verlängerter Titel wird als ähnlichster vorgeschlagen', () => {
+    const lang = 'Übernahme: falsche Summe → 422 — ebenso fremder Commit, andere Version und ein anderes Artefakt unter demselben Schlüssel → 409';
+    const quelltext = ["import { it } from 'node:test';", `it('${lang}', () => {});`, "it('Übernahme: alles richtig → 200', () => {});"].join('\n');
+    const wurzel = wurzelMit(quelltext, 'Übernahme: falsche Summe → 422');
+    try {
+      const fehler = matrizenPruefen(wurzel).fehler;
+      assert.equal(fehler.length, 1, fehler.join(' | '));
+      assert.ok(fehler[0]!.includes(`ähnlichster Titel: „${lang}“`), fehler[0]);
+    } finally {
+      rmSync(wurzel, { recursive: true, force: true });
+    }
   });
 
   it('ein Tabelleneintrag als Zusatzbeleg zählt nur als Zeichenkette im Code', () => {

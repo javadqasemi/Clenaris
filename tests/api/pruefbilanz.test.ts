@@ -1,6 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
+import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -233,6 +234,29 @@ describe('Beweise eines roten Laufs überleben das Aufräumen', () => {
     }
   });
 
+  // 2026-10-01: Die Kernbilanz liegt neben dem Abzug im Temp-Verzeichnis des
+  // Release-Wegs und verschwand mit ihm — gerade die eines roten Kerns, die
+  // keinen Nachweis erreicht. Gegen den alten Stand fehlt die Datei danach.
+  it('die Bilanz eines roten Kerns überlebt das Entfernen des Temp-Verzeichnisses', () => {
+    const ziel = mkdtempSync(join(tmpdir(), 'clenaris-release-'));
+    const ablage = mkdtempSync(join(tmpdir(), 'clenaris-ablage-'));
+    const abzug = join(ziel, 'quelle');
+    const kernBilanz = join(ziel, 'kern-bilanz.json');
+    try {
+      mkdirSync(abzug, { recursive: true });
+      writeFileSync(kernBilanz, JSON.stringify({ modus: 'voll', ok: false, schritte: [{ schritt: 'Datenbankschranken (live)', ok: false, dauerMs: 10 }], browser: null }));
+      const gesichert = abzugsbefundeSichern(abzug, ablage, [kernBilanz, join(ziel, 'gibt-es-nicht.json')]);
+      assert.deepEqual(gesichert, [join(ablage, 'kern-bilanz.json')], 'nur die vorhandene Datei, ohne Fehler für die fehlende');
+      rmSync(ziel, { recursive: true, force: true }); // wie `abzugAufraeumen` am Ende
+      const gerettet = JSON.parse(readFileSync(join(ablage, 'kern-bilanz.json'), 'utf8'));
+      assert.equal(gerettet.ok, false);
+      assert.equal(gerettet.schritte[0].schritt, 'Datenbankschranken (live)', 'der gescheiterte Schritt ist noch zu lesen');
+    } finally {
+      rmSync(ziel, { recursive: true, force: true });
+      rmSync(ablage, { recursive: true, force: true });
+    }
+  });
+
   it('ohne Beweise entsteht keine leere Ablage', () => {
     const leer = mkdtempSync(join(tmpdir(), 'clenaris-leer-'));
     try {
@@ -422,6 +446,43 @@ describe('Release-Semantik des Prüfwegs', () => {
       const ergebnis = releaseNachweisBauen(eingabe);
       assert.equal(ergebnis.nachweis, null, `${name}: trotzdem ein Nachweis`);
       assert.ok(ergebnis.gruende.some((g) => erwartet.test(g)), `${name}: ${ergebnis.gruende.join(' | ')}`);
+    }
+  });
+});
+
+/**
+ * `db:test:setup --ohne-demo` (2026-10-01, Befund der Gegenprüfung). Ohne
+ * `--frisch` wurde eine bestehende Testdatenbank samt Demodaten früherer
+ * Läufe weiterverwendet, und das Skript meldete trotzdem „nur
+ * Konfiguration“. Jetzt bricht es ab, bevor es irgendetwas anfasst.
+ *
+ * Als Prozess, weil das Skript beim Laden selbst läuft. Beide Adressen
+ * zeigen auf einen Port, an dem nichts lauscht, und das Arbeitsverzeichnis
+ * ist leer (keine `.env`): Fehlte die Sperre, scheiterte der Aufruf an der
+ * Verbindung — mit einer anderen Meldung, also rot, und ohne dass eine echte
+ * Datenbank berührt würde. Darum prüft der Fall die Meldung und nicht nur den
+ * Exitcode; ohne `--frisch` verwirft das Skript ohnehin nichts.
+ */
+describe('Testdatenbank für den Release-Kern', () => {
+  it('--ohne-demo ohne --frisch bricht vor jedem Datenbankzugriff ab', () => {
+    const wurzel = join(__dirname, '..', '..');
+    const leer = mkdtempSync(join(tmpdir(), 'clenaris-testdb-'));
+    const nirgends = 'postgresql://pruefung:pruefung@127.0.0.1:9/clenaris_gibt_es_nicht_test';
+    try {
+      const lauf = spawnSync(process.execPath, [join(wurzel, 'node_modules', 'tsx', 'dist', 'cli.mjs'), join(wurzel, 'scripts', 'setup-test-db.ts'), '--ohne-demo'], {
+        cwd: leer,
+        encoding: 'utf8',
+        timeout: 60_000,
+        env: { ...process.env, DATABASE_URL: nirgends.replace('_test', ''), TEST_DATABASE_URL: nirgends },
+      });
+      const ausgabe = `${lauf.stdout}${lauf.stderr}`;
+      assert.equal(lauf.status, 1, ausgabe);
+      assert.match(lauf.stderr, /--ohne-demo nur zusammen mit --frisch/);
+      // Abgebrochen vor dem ersten Schritt: nicht einmal die Zieladresse ist
+      // ausgegeben, geschweige denn eine Migration oder ein Seed gestartet.
+      assert.doesNotMatch(ausgabe, /Testdatenbank \(Ziel\)|Migrationen|Konfiguration \(ohne Demodaten/);
+    } finally {
+      rmSync(leer, { recursive: true, force: true });
     }
   });
 });

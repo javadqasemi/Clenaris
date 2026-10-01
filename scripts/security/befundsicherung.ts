@@ -1,5 +1,5 @@
 import { cpSync, existsSync, mkdirSync, readdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 
 /**
  * Beweise eines roten Prüflaufs sichern, bevor sie verschwinden (2026-09-30, RC-20).
@@ -48,9 +48,19 @@ export function laufspurenSichern(testergebnisse: string, ziel: string): string 
  * Stressläufe, gesicherte Spuren, Hydrationsberichte) und `test-results/`
  * (Spur eines roten Laufs im Kern, Bericht der Stressreihe).
  *
+ * `einzeldateien` (2026-10-01): Beweise, die bewusst **neben** dem Abzug
+ * liegen und mit ihm verschwinden — die Laufbilanz des Kerns
+ * (`kern-bilanz.json`). Sie liegt nicht in `test-results/`, weil Playwright
+ * das Verzeichnis zu Beginn jedes Stresslaufs leert; dafür räumte der
+ * Release-Weg sie mit dem Temp-Verzeichnis weg, bevor jemand sie las. Für
+ * einen roten Kern war sie damit nutzlos, obwohl `verify.ts` sie gerade für
+ * diesen Fall auch beim Scheitern schreibt. Jede Datei landet unter ihrem
+ * Namen direkt in `ablage`; eine fehlende wird übergangen — ein Kern, der vor
+ * seiner Bilanz abbrach, hat eben keine.
+ *
  * Liefert die gesicherten Ziele; leer, wenn der Abzug nichts hinterlassen hat.
  */
-export function abzugsbefundeSichern(abzug: string, ablage: string): string[] {
+export function abzugsbefundeSichern(abzug: string, ablage: string, einzeldateien: readonly string[] = []): string[] {
   const gesichert: string[] = [];
   for (const name of ['hydrationsbefunde', 'test-results']) {
     const quelle = join(abzug, name);
@@ -58,6 +68,13 @@ export function abzugsbefundeSichern(abzug: string, ablage: string): string[] {
     const ziel = join(ablage, name);
     mkdirSync(ziel, { recursive: true });
     cpSync(quelle, ziel, { recursive: true });
+    gesichert.push(ziel);
+  }
+  for (const datei of einzeldateien) {
+    if (!existsSync(datei)) continue;
+    const ziel = join(ablage, basename(datei));
+    mkdirSync(ablage, { recursive: true });
+    cpSync(datei, ziel);
     gesichert.push(ziel);
   }
   return gesichert;

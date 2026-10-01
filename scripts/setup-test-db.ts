@@ -61,6 +61,9 @@
  * (`npm run db:seed:demo`, idempotent). Ohne den Schalter bleibt alles wie
  * bisher: Wer `npm run db:test:setup` von Hand ruft, will eine Datenbank,
  * gegen die die Prüfreihe sofort läuft.
+ *
+ * `--ohne-demo` gilt seit 2026-10-01 nur zusammen mit `--frisch` — allein
+ * bricht das Skript vor jedem Zugriff ab. Warum, steht in `main`.
  */
 
 import { execFileSync } from 'node:child_process';
@@ -154,6 +157,32 @@ function lauf(befehl: string, argumente: string[], url: string): void {
 async function main(): Promise<void> {
   const frisch = process.argv.includes('--frisch');
   const ohneDemo = process.argv.includes('--ohne-demo');
+
+  /*
+    `--ohne-demo` verspricht eine Datenbank **ohne** Demodaten — darauf baut
+    der Demo-Stolperdraht des Probeartefakts in `verify.ts voll --frisch`.
+    Ohne `--frisch` wird eine bestehende Testdatenbank weiterverwendet
+    (`datenbankAnlegen`), und die trägt in aller Regel die Demodaten des
+    letzten Laufs. Bis 2026-10-01 meldete das Skript danach trotzdem
+    „nur Konfiguration“: Wer sich auf die Meldung verliess, prüfte einen Bau
+    gegen eine Datenbank mit Demobestand, und der Stolperdraht schlug an,
+    ohne dass der Code etwas falsch gemacht hätte — oder man gewöhnte sich
+    daran, ihn zu übergehen.
+
+    Abgelehnt statt gewarnt, und zwar vor jedem Zugriff: Eine Warnung in
+    einer langen Ausgabe liest niemand, und ob eine weiterverwendete
+    Datenbank Demodaten hat, liesse sich nur mit einer Liste von Tabellen
+    beantworten, die mit jedem Demo-Seed veraltet. Nur eine frisch angelegte
+    Datenbank ist sicher leer. Den Fall „gibt es noch nicht, wird angelegt“
+    trotzdem zuzulassen, hiesse, dass derselbe Aufruf je nach Zustand der
+    Maschine gelingt oder abbricht.
+  */
+  if (ohneDemo && !frisch) {
+    console.error('❌  --ohne-demo nur zusammen mit --frisch.');
+    console.error('    Eine weiterverwendete Testdatenbank kann Demodaten früherer Läufe tragen; „nur Konfiguration“');
+    console.error('    garantiert allein eine frisch angelegte:  npm run db:test:setup -- --frisch --ohne-demo');
+    process.exit(1);
+  }
 
   const entwicklung = process.env.DATABASE_URL;
   if (!entwicklung) {

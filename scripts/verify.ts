@@ -84,6 +84,8 @@ function zeit(ms: number): string {
   return ms < 60_000 ? `${Math.round(ms / 1000)} s` : `${Math.floor(ms / 60_000)} min ${Math.round((ms % 60_000) / 1000)} s`;
 }
 
+type Schrittoptionen = { env?: Record<string, string>; cwd?: string; exitcodes?: Record<number, string> };
+
 /**
  * Einen Schritt laufen lassen; scheitert er, bricht der Prüfweg ab. Die
  * Merkmalsprüfung hat eine eigene Funktion unten: Ihre Heuristiken melden nur,
@@ -95,18 +97,27 @@ function zeit(ms: number): string {
  * „Exitcode 2“ liest, hält das leicht für einen Befund oder, schlimmer, für
  * eine Nebensache.
  */
-function schritt(
-  name: string,
-  befehl: string,
-  optionen: { env?: Record<string, string>; cwd?: string; exitcodes?: Record<number, string> } = {},
-): void {
+function schritt(name: string, befehl: string, optionen: Schrittoptionen = {}): void {
+  const fehler = schrittLaufen(name, befehl, optionen);
+  if (fehler) abbrechen(fehler);
+}
+
+/**
+ * Wie `schritt`, aber ohne Abbruch: liefert die Abbruchmeldung (oder `null`)
+ * und überlässt dem Aufrufer, wann er abbricht. Nur für einen Schritt, nach
+ * dessen Scheitern noch etwas gelesen werden muss, bevor der Prozess endet —
+ * die Browserreihe, deren Bilanz je Engine gerade beim roten Lauf zählt.
+ * Das Ergebnis steht schon in `ergebnisse`; der Aufrufer **muss** bei einer
+ * Meldung abbrechen.
+ */
+function schrittLaufen(name: string, befehl: string, optionen: Schrittoptionen = {}): string | null {
   console.log(`\n━━ ${name}\n   $ ${befehl}`);
   const start = Date.now();
   const lauf = spawnSync(befehl, { shell: true, stdio: 'inherit', cwd: optionen.cwd ?? WURZEL, env: { ...process.env, ...optionen.env } });
   const ok = lauf.status === 0;
   const bedeutung = lauf.status !== null ? optionen.exitcodes?.[lauf.status] : undefined;
   ergebnisse.push({ schritt: name, ok, dauerMs: Date.now() - start, hinweis: ok ? undefined : bedeutung });
-  if (!ok) abbrechen(`„${name}" ist gescheitert (Exitcode ${lauf.status ?? 'unbekannt'}${bedeutung ? `: ${bedeutung}` : ''}).`);
+  return ok ? null : `„${name}" ist gescheitert (Exitcode ${lauf.status ?? 'unbekannt'}${bedeutung ? `: ${bedeutung}` : ''}).`;
 }
 
 let server: ChildProcess | null = null;
@@ -410,11 +421,19 @@ async function pruefreihen(basis: string, cacheDir: string | undefined, port: st
  * Ende — er überlebt also genau bis zum nächsten Lauf. Vorher wird er
  * gelöscht: Scheiterte Playwright, bevor es selbst aufräumt (kaputte
  * Konfiguration), läse dieser Schritt sonst den Bericht des vorigen Laufs.
+ *
+ * **Auch ein roter Lauf wird erst gezählt, dann abgebrochen** (2026-10-01).
+ * Vorher lief Playwright über `schritt`, das bei einem Exitcode ausser 0
+ * sofort abbricht — die Zahlen je Engine standen also nur nach einem
+ * *grünen* Lauf in der Ausgabe und in der Laufbilanz, und ein roter Kern
+ * hinterliess `browser: null`. Gerade dann will man aber wissen, welche
+ * Engine gescheitert ist. Die Abbruchregel selbst ist unverändert: Ein
+ * Exitcode ausser 0 bricht ab, auch wenn die Bilanz grün aussähe.
  */
 function browserreihe(env: Record<string, string>, port: string): void {
   const bericht = join(WURZEL, 'test-results', 'playwright-bericht.json');
   rmSync(bericht, { force: true });
-  schritt('Browser-Prüfreihe (ohne Wiederholungen)', 'npx playwright test --retries=0 --reporter=list,json', {
+  const playwrightFehler = schrittLaufen('Browser-Prüfreihe (ohne Wiederholungen)', 'npx playwright test --retries=0 --reporter=list,json', {
     env: { ...env, E2E_PORT: port, PLAYWRIGHT_JSON_OUTPUT_NAME: bericht },
   });
   const start = Date.now();
@@ -432,7 +451,10 @@ function browserreihe(env: Record<string, string>, port: string): void {
     dauerMs: Date.now() - start,
     hinweis: g ? `${g.expected ?? 0} bestanden, ${g.skipped ?? 0} übersprungen, ${g.flaky ?? 0} wackelig; ${bilanz!.engines.join('/')}` : 'kein Bericht',
   });
-  if (gruende.length) abbrechen(`Browser-Bilanz: ${gruende.join(' ')}`);
+  // Beide Meldungen, wenn beide zutreffen: Der Exitcode sagt, dass Playwright
+  // gescheitert ist, die Bilanz sagt, wo.
+  const meldungen = [playwrightFehler, gruende.length ? `Browser-Bilanz: ${gruende.join(' ')}` : null].filter((m): m is string => m !== null);
+  if (meldungen.length) abbrechen(meldungen.join(' '));
 }
 
 /**
@@ -446,9 +468,12 @@ function browserreihe(env: Record<string, string>, port: string): void {
  *     lassen, Teilindizes, Prüfbedingungen — stehen in handgeschriebenem SQL
  *     der Migrationen, das `prisma migrate dev` nicht kennt und still
  *     verwerfen kann. Ob sie in der Datenbank auch *sind*, sagt keine
- *     Migration über sich selbst; das Tor fragt die Datenbank. Exit 2 („nicht geprüft“: keine Adresse, keine
- *     Verbindung) bricht genauso ab wie 1 („Befund“) — ein Tor, das bei
- *     fehlender Verbindung grün wird, prüft nur, ob es eine Verbindung gab.
+ *     Migration über sich selbst; das Tor fragt die Datenbank. Exit 2 („nicht
+ *     geprüft“: keine Adresse, keine Verbindung) bricht genauso ab wie 1
+ *     („Befund“ oder Absturz des Skripts) — ein Tor, das bei fehlender
+ *     Verbindung grün wird, prüft nur, ob es eine Verbindung gab. Fehlt das
+ *     Skript selbst, bricht der Weg mit genau dieser Aussage ab, statt einen
+ *     Befund zu melden, den es nie gab.
  *  2. **Nur die Konfiguration** (`npm run db:seed`), dann Bau und
  *     Leistungsbudget. Vorher lief der Demo-Seed vor dem Bau, und die
  *     öffentlichen Seiten wurden mit erfundenen Bewertungen, Blogartikeln
@@ -480,9 +505,26 @@ async function voll(optionen: { frisch: boolean }): Promise<void> {
     schritt('Testdatenbank frisch aufsetzen (nur Konfiguration)', 'npm run db:test:setup -- --frisch --ohne-demo', { env: { TEST_DATABASE_URL: datenbank } });
   }
   schritt('Migrationen auf die Testdatenbank', 'npx prisma migrate deploy', { env: dbEnv });
+  /*
+    Fehlt das Prüfskript, endet `tsx` ebenfalls mit 1 — und die Meldung
+    lautete dann „Befund — eine Schranke fehlt“, obwohl gar nichts geprüft
+    wurde. Wer danach die Datenbank nach einer fehlenden Schranke absucht,
+    sucht am falschen Ort. Deshalb vorher die eigene Frage „gibt es das Tor
+    überhaupt?“ mit eigener Antwort; abgebrochen wird in beiden Fällen.
+    Exit 1 heisst danach „Befund **oder** Absturz“: Ein Skript, das wirft,
+    endet unter `tsx` mit derselben Zahl wie eines, das einen Befund meldet,
+    und nur die Ausgabe darüber unterscheidet die beiden.
+  */
+  if (!existsSync(join(WURZEL, 'scripts', 'datenbank-schranken.ts'))) {
+    ergebnisse.push({ schritt: 'Datenbankschranken (live)', ok: false, dauerMs: 0, hinweis: 'Prüfskript fehlt' });
+    abbrechen('Datenbanktor fehlt (scripts/datenbank-schranken.ts) — nicht geprüft ist kein Bestehen.');
+  }
   schritt('Datenbankschranken (live)', 'npx tsx scripts/datenbank-schranken.ts', {
     env: dbEnv,
-    exitcodes: { 1: 'Befund — eine Schranke fehlt oder weicht ab', 2: 'nicht geprüft — keine Adresse oder keine Verbindung; das ist kein Bestehen' },
+    exitcodes: {
+      1: 'Befund oder Absturz des Prüfskripts — die Ausgabe darüber sagt, welches',
+      2: 'nicht geprüft — keine Adresse oder keine Verbindung; das ist kein Bestehen',
+    },
   });
   schritt('Konfiguration ohne Demodaten', 'npm run db:seed', { env: dbEnv });
   schritt('Build', 'npm run build', { env: { ...dbEnv, NODE_ENV: 'production' } });
@@ -582,13 +624,27 @@ async function release(modus: 'release' | 'release-kern'): Promise<void> {
   // `hydrationsbefunde/` ist nicht verfolgt — die Ablage stört weder den
   // Arbeitsbaum noch den nächsten Release-Lauf.
   const ablage = join(WURZEL, 'hydrationsbefunde', `release-${basename(ziel)}`);
+  // Die Laufbilanz des Kerns liegt neben dem Abzug, nicht in seinem
+  // `test-results/`: Das leert Playwright zu Beginn jedes Stresslaufs. Weil
+  // sie damit im Temp-Verzeichnis liegt, das unten entfernt wird, sichert
+  // `abzugAufraeumen` sie ausdrücklich mit (siehe dort).
+  const kernBilanz = join(ziel, 'kern-bilanz.json');
   abzugAufraeumen = () => {
     abzugAufraeumen = null;
     // Erst sichern, dann entfernen (RC-20): Mit dem Abzug verschwanden die
     // Spur eines roten Laufs und das Protokoll, auf das die Ausgabe zeigt.
     // Seit 2026-09-30 liegt darunter auch der Release-Nachweis.
-    const gesichert = abzugsbefundeSichern(quelle, ablage);
-    if (gesichert.length > 0) console.log(`\n   Beweise des Release-Laufs gesichert: ${ablage}`);
+    //
+    // Seit 2026-10-01 auch die Kernbilanz. Vorher verschwand sie mit `ziel`:
+    // `bilanzAblegen` schreibt sie ausdrücklich auch für einen **roten** Kern
+    // — und genau dieser Fall erreicht nie den Nachweis, der sie sonst
+    // mitträgt. Die eine Datei, die sagt, welcher Schritt und welche Engine
+    // gescheitert ist, war damit gelöscht, bevor jemand sie lesen konnte.
+    const gesichert = abzugsbefundeSichern(quelle, ablage, [kernBilanz]);
+    if (gesichert.length > 0) {
+      console.log(`\n   Beweise des Release-Laufs gesichert: ${ablage}`);
+      console.log(`   (${gesichert.map((p) => basename(p)).join(', ')})`);
+    }
     spawnSync(`${git} worktree remove --force "${quelle}"`, { shell: true, cwd: WURZEL, stdio: 'ignore' });
     rmSync(ziel, { recursive: true, force: true });
   };
@@ -598,9 +654,6 @@ async function release(modus: 'release' | 'release-kern'): Promise<void> {
   // übergeben, damit der Abzug dieselbe Datenbank ableitet wie der Arbeitsbaum.
   if (existsSync(join(WURZEL, '.env'))) cpSync(join(WURZEL, '.env'), join(quelle, '.env'));
   schritt('Abhängigkeiten aus der Sperrdatei (npm ci)', 'npm ci --no-audit --no-fund', { cwd: quelle });
-  // Die Laufbilanz des Kerns liegt neben dem Abzug, nicht in seinem
-  // `test-results/`: Das leert Playwright zu Beginn jedes Stresslaufs.
-  const kernBilanz = join(ziel, 'kern-bilanz.json');
   schritt('Voller Prüfweg im Abzug, frische Testdatenbank', 'npx tsx scripts/verify.ts voll --frisch', {
     cwd: quelle,
     env: { TEST_DATABASE_URL: testdatenbank(), CLENARIS_PRUEFWEG_BILANZ: kernBilanz },

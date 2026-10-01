@@ -51,6 +51,35 @@ import { join, normalize, relative, sep } from 'node:path';
  * er wäre für diese eine Frage eine schwere Abhängigkeit in einem Skript,
  * das auch ohne Build laufen soll.
  *
+ * Die eine Stelle, an der ein kleiner Leser raten muss, ist der Schrägstrich:
+ * Division oder regulärer Ausdruck. Er entscheidet am Zeichen davor — nach
+ * einem Wert (Name, Zahl, Zeichenkette, `)`, `]`, `}`, nachgestelltes
+ * `x++`/`x--`) teilt er, sonst beginnt ein Ausdruck; nach der Klammer eines
+ * Steuerkopfs (`if (…)`, `while (…)`, `for (…)`, `for await (…)`, `with (…)`)
+ * beginnt ebenfalls ein Ausdruck. Seit 2026-10-01 gelten die beiden letzten
+ * Regeln; vorher verschluckte `x++ / 2` als vermeintlicher Ausdruck den
+ * Rest der Zeile, und ein Ausdruck mit Backtick nach `if (…)` öffnete eine
+ * Vorlage, die bis zum Dateiende reichte — samt jedem Titel darin.
+ *
+ * **Was der Leser bewusst nicht kann** — und was dann geschieht:
+ *
+ *  - Ein regulärer Ausdruck am Anfang einer Anweisung nach einem Block
+ *    (`}` in neuer Zeile, dann `/…/.test(x)`): `}` gilt als Wert, weil es
+ *    ebenso ein Objektliteral schliessen kann. Der Ausdruck wird als Code
+ *    gelesen.
+ *  - Typargumente vor dem Titel (`test<Fx>('…')`) und Unterfälle über den
+ *    Kontext (`t.test('…')`): Beide werden nicht als Titelaufruf erkannt —
+ *    `.test(` ist absichtlich ausgeschlossen, sonst wäre jedes
+ *    `muster.test('…')` ein Titel.
+ *
+ * In fast allen diesen Fällen fehlt danach ein Titel, und die Prüfung meldet
+ * einen Beleg als „nicht gefunden“ — sie scheitert laut, nicht still. Der
+ * eine Fall in die andere Richtung wäre ein als Code gelesener Ausdruck, der
+ * wörtlich `it('…')` mit unmaskierten Klammern enthält und so einen Titel
+ * vortäuscht. Das verlangt einen regulären Ausdruck, der wie ein Testaufruf
+ * aussieht, direkt nach einem Block — wer bei einem Beleg zweifelt, lässt
+ * `titelAusQuelltext` über die Datei laufen und sieht, was der Leser sieht.
+ *
  * Titel werden **roh** geliefert, so wie sie im Quelltext stehen: Ein Titel
  * aus einer Vorlage (`${rolle}: …`) wird mit seinem Platzhalter zitiert, und
  * eine Maskierung (`\'`) bleibt stehen. Die Matrix verweist auf den Aufruf,
@@ -89,7 +118,13 @@ import { join, normalize, relative, sep } from 'node:path';
 
 type Zeichen =
   | { art: 'name'; wert: string }
-  | { art: 'zeichen'; wert: string }
+  /**
+   * Satzzeichen. `kopfEnde` trägt nur die schliessende Klammer eines
+   * Steuerkopfs (`if (…)`, `while (…)`, `for (…)`, `with (…)`): Nach ihr
+   * beginnt eine Anweisung, also ist ein `/` dort ein regulärer Ausdruck und
+   * keine Division — anders als nach `f(…)`.
+   */
+  | { art: 'zeichen'; wert: string; kopfEnde?: boolean }
   | { art: 'text'; roh: string }
   /** Zahl oder regulärer Ausdruck — gebraucht nur, um `/` als Division zu erkennen. */
   | { art: 'wert' };
@@ -113,6 +148,9 @@ const AUFRUFBASEN = new Set(['it', 'test', 'describe', 'suite']);
  * eine Division (`anzahl / 2`).
  */
 const VOR_AUSDRUCK = new Set(['return', 'typeof', 'instanceof', 'in', 'of', 'new', 'delete', 'void', 'throw', 'case', 'do', 'else', 'yield', 'await']);
+
+/** Schlüsselwörter, deren Klammer einen Steuerkopf öffnet — siehe `kopfEnde`. */
+const STEUERKOEPFE = new Set(['if', 'while', 'for', 'with']);
 
 const NAME_ANFANG = /[\p{L}_$]/u;
 const NAME_TEIL = /[\p{L}\p{N}_$‌‍]/u;
@@ -193,12 +231,40 @@ function zerlegen(q: string): Zeichen[] {
 
   function code(liste: Zeichen[], bisKlammer: boolean): void {
     let tiefe = 0;
-    const davorIstWert = (): boolean => {
-      const t = liste[liste.length - 1];
+    /** Je offene runde Klammer: Öffnet sie einen Steuerkopf (`if (`, `for await (` …)? */
+    const klammern: boolean[] = [];
+    const istWert = (k: number): boolean => {
+      const t = liste[k];
       if (!t) return false;
       if (t.art === 'text' || t.art === 'wert') return true;
       if (t.art === 'name') return !VOR_AUSDRUCK.has(t.wert);
-      return t.wert === ')' || t.wert === ']' || t.wert === '}';
+      // `x++ / 2`: Ein nachgestelltes `++`/`--` folgt einem Wert und hinterlässt
+      // einen — der Strich danach teilt. Bis 2026-10-01 galt `+` als Operator,
+      // der Strich als Anfang eines regulären Ausdrucks, und der verschluckte
+      // den Rest der Zeile samt jedem Titel darin. Ein vorangestelltes `++x`
+      // steht vor einem Namen, nie vor einem Strich; dort stellt sich die
+      // Frage nicht, und `istWert` des Vorgängers ist dann ohnehin falsch.
+      if (t.wert === '++' || t.wert === '--') return istWert(k - 1);
+      // Nach `f(…)` teilt der Strich, nach `if (…)` beginnt eine Anweisung.
+      if (t.wert === ')') return !t.kopfEnde;
+      return t.wert === ']' || t.wert === '}';
+    };
+    const davorIstWert = (): boolean => istWert(liste.length - 1);
+    /**
+     * Öffnet die Klammer, die gleich folgt, einen Steuerkopf? `for await (`
+     * zählt mit; `objekt.for(…)` nicht — dort ist `for` ein Eigenschaftsname.
+     */
+    const kopfFolgt = (): boolean => {
+      const name = (j: number): string | null => {
+        const t = liste[j];
+        return t?.art === 'name' ? t.wert : null;
+      };
+      let k = liste.length - 1;
+      if (name(k) === 'await' && name(k - 1) === 'for') k -= 1;
+      const wort = name(k);
+      if (wort === null || !STEUERKOEPFE.has(wort)) return false;
+      const davor = liste[k - 1];
+      return !(davor?.art === 'zeichen' && (davor.wert === '.' || davor.wert === '?.'));
     };
 
     while (i < q.length) {
@@ -237,6 +303,19 @@ function zerlegen(q: string): Zeichen[] {
       } else if (c === '?' && d === '.') {
         liste.push({ art: 'zeichen', wert: '?.' });
         i += 2;
+      } else if ((c === '+' || c === '-') && d === c) {
+        // Als ein Zeichen, damit `istWert` ein nachgestelltes `x++` erkennt.
+        liste.push({ art: 'zeichen', wert: c + c });
+        i += 2;
+      } else if (c === '(') {
+        klammern.push(kopfFolgt());
+        liste.push({ art: 'zeichen', wert: c });
+        i += 1;
+      } else if (c === ')') {
+        // Eine überzählige `)` (kaputter Quelltext) leert den Stapel nicht
+        // ins Negative; `pop()` liefert dann `undefined`, also „kein Kopf“.
+        liste.push({ art: 'zeichen', wert: c, kopfEnde: klammern.pop() === true });
+        i += 1;
       } else {
         if (bisKlammer && c === '{') tiefe += 1;
         if (bisKlammer && c === '}') {
@@ -401,8 +480,29 @@ const woerter = (text: string) => new Set(text.toLowerCase().split(/[^\p{L}\p{N}
  * wer die Matrix nachführt, nicht die ganze Datei lesen muss. Nur ein
  * Vorschlag: Ob der Fall dieselbe Eigenschaft zusichert, bleibt eine
  * Leseaufgabe.
+ *
+ * Zuerst ein Titel, der mit dem zitierten Text **beginnt** (oder umgekehrt):
+ * So wird ein Fall am häufigsten umbenannt — der alte Titel bleibt stehen
+ * und bekommt einen Nachsatz („… — dazu die belegte Identität der
+ * Instanz“, Strom A2, 2026-09-30). Das Wortmass allein sah diese Fälle
+ * nicht: Ein langer Nachsatz bringt viele neue Wörter mit und drückt das
+ * Mass unter die Schwelle, gerade wenn der Anfang wörtlich übereinstimmt.
+ * Unter mehreren Präfixtreffern gewinnt der mit dem kleinsten Längen-
+ * unterschied. Erst ohne Präfixtreffer zählt das Wortmass.
  */
-function aehnlichsterTitel(gesucht: string, titel: Iterable<string>): string | null {
+function aehnlichsterTitel(gesucht: string, vorhanden: Iterable<string>): string | null {
+  // Zweimal durchlaufen — also einmal festhalten, falls ein Aufrufer einen
+  // Erzeuger übergibt, der sich nur einmal lesen lässt.
+  const titel = [...vorhanden];
+  let praefix: { titel: string; abstand: number } | null = null;
+  for (const t of titel) {
+    // Ein leerer Titel wäre Präfix jedes Belegs und damit kein Vorschlag.
+    if (t.length === 0 || t === gesucht || !(t.startsWith(gesucht) || gesucht.startsWith(t))) continue;
+    const abstand = Math.abs(t.length - gesucht.length);
+    if (!praefix || abstand < praefix.abstand) praefix = { titel: t, abstand };
+  }
+  if (praefix) return praefix.titel;
+
   const a = woerter(gesucht);
   if (a.size === 0) return null;
   let bester: { titel: string; mass: number } | null = null;
