@@ -50,6 +50,7 @@ import { writeFileSync } from 'node:fs';
 
 import { OEFFENTLICHE_DEMO_ADRESSEN, OEFFENTLICHE_PASSWOERTER } from '../src/lib/auth/oeffentliche-zugangsdaten';
 import { erzeugePrismaClient } from '../src/lib/prisma-client';
+import { livePruefen, registerLesen, registerZusammenfassung, schemaAusAdresse } from './security/datenbank-schranken';
 
 type Stufe = 'AUFFAELLIG' | 'PRUEFEN' | 'OK';
 
@@ -296,11 +297,19 @@ async function main(): Promise<void> {
     const trigger = await prisma.$queryRaw<{ tgname: string; tabelle: string }[]>`
       SELECT t.tgname, c.relname AS tabelle FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid
       WHERE NOT t.tgisinternal ORDER BY t.tgname`;
-    const { readFileSync } = await import('node:fs');
-    const { join } = await import('node:path');
-    const schranken = JSON.parse(readFileSync(join(process.cwd(), 'security', 'datenbank-schranken.json'), 'utf8')) as { trigger: string[] };
+    const schranken = registerLesen();
     const fremdeTrigger = trigger.filter((t) => !schranken.trigger.includes(t.tgname));
-    const fremdeErweiterungen = erweiterungen.filter((e) => !['plpgsql', 'pgcrypto', 'uuid-ossp', 'citext', 'pg_trgm'].includes(e.extname));
+    /*
+      Erlaubt sind die Grundliste **und** die Erweiterungen, die das Register
+      als Träger einer Schranke nennt (seit 2026-09-30). Bis dahin fehlte
+      `btree_gist` in der Grundliste, obwohl zwei Migrationen sie anlegen —
+      jede ordnungsgemäss migrierte Kopie wurde deshalb als AUFFÄLLIG
+      gemeldet. Ein Befund, der bei jeder Prüfung anschlägt, lehrt, Befunde
+      zu übergehen; eine zweite, von Hand gepflegte Liste hier liefe dem
+      Register wieder davon.
+    */
+    const erlaubteErweiterungen = new Set(['plpgsql', 'pgcrypto', 'uuid-ossp', 'citext', 'pg_trgm', ...schranken.erweiterungen]);
+    const fremdeErweiterungen = erweiterungen.filter((e) => !erlaubteErweiterungen.has(e.extname));
     abschnitte.push({
       titel: 'Datenbankebene: Rollen, Erweiterungen, Trigger',
       stufe: fremdeTrigger.length > 0 || fremdeErweiterungen.length > 0 || ereignisTrigger.length > 0 ? 'AUFFAELLIG' : 'PRUEFEN',
@@ -311,6 +320,27 @@ async function main(): Promise<void> {
         ...fremdeTrigger.map((t) => ({ art: 'Trigger', ...t })),
         ...ereignisTrigger.map((e) => ({ art: 'Ereignistrigger', ...e })),
       ],
+    });
+
+    // --- 12. Schranken: vorhanden und wirksam? --------------------------------
+    /**
+     * Abschnitt 11 fragt, was **zu viel** da ist. Ebenso verräterisch ist, was
+     * fehlt oder abgeschaltet wurde: Wer die Datenbankrolle der Anwendung oder
+     * den Host hatte, kann mit `ALTER TABLE audit_logs DISABLE TRIGGER …` das
+     * Prüfprotokoll wieder änderbar machen, eine Spur löschen und den Trigger
+     * stehen lassen — dem Namen nach vorhanden, in der Wirkung weg. Dieselbe
+     * Prüfung wie das Datenbanktor (`scripts/datenbank-schranken.ts`), nur
+     * lesend über die Kataloge.
+     */
+    const schrankenBefunde = (await livePruefen(prisma, schranken, schemaAusAdresse(roh))).filter((b) => b.schwere === 'blockierend');
+    abschnitte.push({
+      titel: 'Datenbankschranken: vorhanden und wirksam',
+      stufe: schrankenBefunde.length > 0 ? 'AUFFAELLIG' : 'OK',
+      zusammenfassung:
+        schrankenBefunde.length > 0
+          ? `${schrankenBefunde.length} Schranke(n) aus security/datenbank-schranken.json fehlen, sind abgeschaltet, ungültig oder nicht validiert — vor einer Übernahme klären, wann und von wem.`
+          : `Jede Schranke aus security/datenbank-schranken.json ist vorhanden und wirksam (${registerZusammenfassung(schranken)}).`,
+      zeilen: schrankenBefunde.map((b) => ({ art: b.art, name: b.name, befund: b.titel })),
     });
   } finally {
     await prisma.$disconnect();
