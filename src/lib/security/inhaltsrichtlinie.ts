@@ -7,13 +7,15 @@
  * ---------------------------------------------------------------------------
  *
  * Bis 2026-09-30 stand die Richtlinie als fertige Zeichenkette in
- * `next.config.ts`, und keine einzige Prüfung las sie. Das hatte die
- * vorhersehbare Folge: `'unsafe-eval'` blieb stehen, obwohl
- * `docs/SECURITY_STANDARD.md` (C6) es ausdrücklich verbietet, und mit ihm
- * dreizehn Quelleneinträge für Stripe.js, die Google-Maps-Bibliothek,
+ * `next.config.ts`, und keine Prüfung las mehr von ihr als ihr Vorhandensein:
+ * Die Betriebsüberwachung (`ops/security-monitor/security_check.sh`) fragt
+ * nur, ob der Kopf da ist und `frame-ancestors` trägt — nicht, was er
+ * erlaubt. Das hatte die vorhersehbare Folge: `'unsafe-eval'` blieb stehen,
+ * obwohl `docs/SECURITY_STANDARD.md` (C6) es ausdrücklich verbietet, und mit
+ * ihm dreizehn Quelleneinträge für Stripe.js, die Google-Maps-Bibliothek,
  * Supabase Realtime, Google Fonts und eingebettete Google-Inhalte — Dienste,
- * die der Browser in dieser Anwendung nie anspricht. Eine Richtlinie, die
- * niemand prüft, wird nur länger.
+ * die der Browser in dieser Anwendung nie anspricht. Eine Richtlinie, deren
+ * Inhalt niemand prüft, wird nur länger.
  *
  * Als reine Funktion ist sie ohne Bau und ohne Server prüfbar
  * (`tests/api/inhaltsrichtlinie.test.ts`), und dieselbe Prüfung vergleicht den
@@ -93,20 +95,39 @@ export function inhaltsrichtlinie({ entwicklung }: InhaltsrichtlinieOptionen): s
       /*
        * WebAssembly übersetzen, nicht JavaScript auswerten.
        *
-       * PDF.js 6 dekodiert JPEG 2000 (`openjpeg.wasm`) und JBIG2
-       * (`jbig2.wasm`) und rechnet Farbprofile (`qcms_bg.wasm`) in
-       * WebAssembly, geladen aus `/pdfjs/<Version>/wasm/`
-       * (`scripts/copy-pdfjs-assets.ts`). Ohne diese Freigabe verweigert der
-       * Browser `WebAssembly.instantiate`; PDF.js fiele auf seine langsameren
-       * JavaScript-Ersatzdekoder zurück und schriebe bei jedem solchen
-       * Dokument eine CSP-Meldung in die Konsole.
+       * PDF.js 6 braucht WebAssembly an vier Stellen:
+       *  • JPEG 2000 dekodieren (`openjpeg.wasm`),
+       *  • JBIG2 dekodieren (`jbig2.wasm`),
+       *  • Farbprofile rechnen (`qcms_bg.wasm`) — diese drei als fertige
+       *    Module aus `/pdfjs/<Version>/wasm/`
+       *    (`scripts/copy-pdfjs-assets.ts`),
+       *  • PostScript-Funktionen (Funktionstyp 4) eines Dokuments ausführen:
+       *    Der `PsWasmCompiler` übersetzt sie zur Laufzeit in ein eigenes
+       *    WebAssembly-Modul (`buildPostScriptWasmFunction` im Worker; die
+       *    Vorgabe `useWasm` ist an, `pdf-viewer-inner.tsx` setzt sie nicht
+       *    ab).
+       * Ohne diese Freigabe verweigert der Browser das Übersetzen; PDF.js
+       * fiele auf seine langsameren Ersatzwege in JavaScript zurück und
+       * schriebe bei jedem solchen Dokument eine CSP-Meldung in die Konsole.
        *
-       * Warum das nicht dasselbe Loch wieder öffnet: Ein WebAssembly-Modul ist
-       * Bytecode, den die Engine vor dem Übersetzen validiert. Es hat keinen
-       * Zugriff auf DOM, Cookies oder Netz ausser über ausdrücklich
-       * übergebene Funktionen, und es macht aus keinem Text Skriptcode. Wer
-       * ein Modul übersetzen lassen könnte, müsste dafür bereits Skript
-       * ausführen — und hätte dann ohnehin alles.
+       * Warum das nicht dasselbe Loch wieder öffnet — ehrlich gerechnet: Der
+       * Inhalt eines PDFs, das irgendjemand hochlädt, bestimmt über den
+       * vierten Weg mit, welches Modul übersetzt wird; dafür braucht es kein
+       * eingeschleustes Skript. Das ist trotzdem etwas anderes als `eval`:
+       *  • Aus Text wird dabei kein JavaScript. Das Modul erzeugt der eigene
+       *    Übersetzer von PDF.js aus einem geparsten PostScript-Ausdruck, und
+       *    die Engine validiert den Bytecode vor dem Übersetzen.
+       *  • WebAssembly läuft abgeschottet: Es hat keinen Zugriff auf DOM,
+       *    Cookies oder Netz ausser über ausdrücklich übergebene Funktionen —
+       *    und PDF.js übergibt den PostScript-Modulen nur
+       *    Rechenfunktionen aus `Math` (`sin`, `cos`, `atan2`, `log`,
+       *    `log10`, `pow`).
+       *  • Es läuft im Worker von PDF.js, nicht im Fenster der Anwendung.
+       * Schlimmstenfalls — von Fehlern der Engine selbst abgesehen, die jede
+       * Ausführung von Bytecode treffen — rechnet ein bösartiges Dokument
+       * also falsch oder lange; die Auswirkung bleibt im Worker und in der
+       * Darstellung dieses einen Dokuments. `eval` dagegen gäbe eingeschleustem Text die vollen
+       * Rechte der Seite.
        *
        * Die Richtlinie gilt auch im Worker von PDF.js: Ein Worker aus einer
        * eigenen Adresse bekommt die Richtlinie *seiner* Antwort, und das ist

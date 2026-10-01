@@ -10,7 +10,9 @@ import { get, requireServer } from '../helpers/client';
 /**
  * Inhaltsrichtlinie ohne `'unsafe-eval'` (2026-09-30).
  *
- * Bis hierher las keine einzige Prüfung die `Content-Security-Policy`. Sie
+ * Bis hierher sah keine Prüfung in die `Content-Security-Policy` hinein; die
+ * Betriebsüberwachung (`ops/security-monitor/security_check.sh`) stellt nur
+ * fest, dass der Kopf da ist und `frame-ancestors` trägt. Die Richtlinie
  * stand als Zeichenkette in `next.config.ts` und trug `'unsafe-eval'` — gegen
  * `docs/SECURITY_STANDARD.md` (C6), der es ausdrücklich verbietet — und
  * dreizehn Quelleneinträge für Dienste, die der Browser in dieser Anwendung
