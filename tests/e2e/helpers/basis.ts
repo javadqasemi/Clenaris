@@ -97,11 +97,37 @@ export const test = basis.extend({
      * Dokuments Millisekunden braucht — wer länger braucht, ist der Befund.
      */
     const koerper = await diagnose.ausstehendeAbwarten(2_000);
-    lebenslauf.fallEnde({ offeneKoerper: koerper.offen, koerperAbgewartet: koerper.abgeschlossen });
+    /**
+     * Das Urteil dieses Rahmens gehört mit in den Eintrag.
+     *
+     * `testInfo.status` steht an dieser Stelle noch auf dem Urteil des
+     * Fallkörpers. Ein Fall, der allein an der Hydrationswache scheitert, ist
+     * hier „passed" und wird erst durch `auswerten` gleich darunter rot. Ohne
+     * `hydrationsfehler` stünde er im Lebenslauf als bestanden mit null
+     * Fehlern — falsche Beweise in genau dem Protokoll, das Abbaufehler mit
+     * dem Ausgang des Falls in Beziehung setzen soll.
+     *
+     * `fall.ende` trotzdem **vor** `auswerten` und nicht im `finally`
+     * danach: Der Eintrag soll auf der Platte stehen, bevor irgendetwas am
+     * Abbau scheitern kann — er ist die Zeile, die beim nächsten roten Lauf
+     * zählt. `diagnose.hydration()` ist genau die Bedingung, unter der
+     * `auswerten` wirft; ob es tatsächlich warf (auch aus einem anderen
+     * Grund, etwa beim Schreiben des Berichts), steht danach in
+     * `fixture.abgebaut` als `auswertungGeworfen`.
+     */
+    lebenslauf.fallEnde({
+      offeneKoerper: koerper.offen,
+      koerperAbgewartet: koerper.abgeschlossen,
+      hydrationsfehler: diagnose.hydration(),
+    });
+    let auswertungGeworfen = false;
     try {
       await diagnose.auswerten(testInfo);
+    } catch (fehler) {
+      auswertungGeworfen = true;
+      throw fehler;
     } finally {
-      lebenslauf.abgebaut();
+      lebenslauf.abgebaut({ auswertungGeworfen });
     }
   },
 });

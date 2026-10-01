@@ -208,7 +208,8 @@ export function diagnoseAnhaengen(context: BrowserContext, testInfo: TestInfo): 
    * Aufruf womöglich noch, während Playwright den Kontext schliesst. Er selbst
    * kann den Fall nicht rot machen — seine Ablehnung wird gefangen —, aber er
    * ist Verkehr auf einem Ziel, das gerade abgebaut wird, und genau beim
-   * Abbau scheiterte RC-20 einmal. Ob er beteiligt war, ist nicht belegt;
+   * Abbau scheiterte der Fall einmal im Stresslauf der RC-20-Reihe (Befund
+   * RC-21). Ob er beteiligt war, ist nicht belegt;
    * deshalb wird er vor dem Abbau abgewartet (begrenzt) und seine Zahl im
    * Lebenslauf (`rc21-<pid>.jsonl`) festgehalten — der nächste rote Lauf sagt
    * dann, ob einer offen war.
@@ -390,10 +391,11 @@ export function diagnoseAnhaengen(context: BrowserContext, testInfo: TestInfo): 
  * das nicht, denn der rote Lauf hinterliess nur diese eine Zeile.
  *
  * **Was der nächste rote Lauf hier hinterlässt.** Die Reihenfolge, die die
- * Frage entscheidet: `fall.ende` (Status, offene Seiten, ob der Browser noch
- * verbunden war, wie viele Körperlesungen der Wache offen waren),
- * `fixture.abgebaut` (unser Teil des Abbaus ist durch — danach schliesst
- * Playwright den Kontext), dann `page.close`, `context.close`,
+ * Frage entscheidet: `fall.ende` (Status des Fallkörpers, ob die
+ * Hydrationswache anschlug, offene Seiten, ob der Browser noch verbunden
+ * war, wie viele Körperlesungen der Wache offen waren), `fixture.abgebaut`
+ * (unser Teil des Abbaus ist durch, mit `auswertungGeworfen` — danach
+ * schliesst Playwright den Kontext), dann `page.close`, `context.close`,
  * `browser.disconnected`, `page.crash` und `arbeiter.ende`, jeweils mit
  * Zeit und freiem Arbeitsspeicher der Maschine.
  *
@@ -421,10 +423,21 @@ export function diagnoseAnhaengen(context: BrowserContext, testInfo: TestInfo): 
  * man dann wieder untersuchen müsste.
  */
 export interface Lebenslauf {
-  /** Der Fall ist durch (vor unserem Abbau): Status und Lage festhalten. */
+  /**
+   * Der Fall ist durch (vor unserem Abbau): Status und Lage festhalten.
+   *
+   * `status` und `fehler` sind Playwrights Urteil über den **Fallkörper**
+   * — das Urteil des Rahmens (Hydrationswache) fällt erst danach. Wer
+   * dieses Urteil kennt, gibt es in `daten` mit (`basis.ts`:
+   * `hydrationsfehler`); sonst stünde ein Fall, der nur an der Wache
+   * scheitert, hier als bestanden.
+   */
   fallEnde(daten?: Record<string, unknown>): void;
-  /** Unser Teil des Abbaus ist durch — danach schliesst Playwright den Kontext. */
-  abgebaut(): void;
+  /**
+   * Unser Teil des Abbaus ist durch — danach schliesst Playwright den
+   * Kontext. `daten` trägt, ob die Auswertung des Rahmens geworfen hat.
+   */
+  abgebaut(daten?: Record<string, unknown>): void;
 }
 
 const MIB = 1024 * 1024;
@@ -503,8 +516,8 @@ export function lebenslaufMitschreiben(context: BrowserContext, testInfo: TestIn
           ...daten,
         });
       },
-      abgebaut() {
-        schreiben('fixture.abgebaut', { browserVerbunden: browser?.isConnected() ?? null });
+      abgebaut(daten = {}) {
+        schreiben('fixture.abgebaut', { browserVerbunden: browser?.isConnected() ?? null, ...daten });
       },
     };
   } catch (fehler) {
