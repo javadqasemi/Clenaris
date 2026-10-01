@@ -1,6 +1,8 @@
 # Barrierefreiheit (Wave 18)
 
-Stand 2026-09-23. Status: **PARTIAL** — die maschinell messbaren Regeln sind
+Stand 2026-09-23, nachgeführt 2026-10-01 (Seitenmatrix seit dem
+Release-Kandidaten 2026-09-29, Oberflächenprüfung Phase 21).
+Status: **PARTIAL** — die maschinell messbaren Regeln sind
 auf den geprüften Seiten ohne schweren Verstoss und werden in der
 Browser-Reihe gehalten; eine manuelle Prüfung (Tastatur, Screenreader,
 Verständlichkeit) hat nicht stattgefunden. Nichts in diesem Dokument ist eine
@@ -14,9 +16,17 @@ Browser (Chromium, gegen den Testserver) und prüft die Regeln mit den Tags
 
 | Bereich | Seiten |
 |---|---|
-| Öffentlich | `/`, `/auth/anmelden`, `/kontakt`, `/offerte` |
-| Verwaltung | `/admin`, `/admin/rechnungen`, `/admin/lohn`, `/admin/suche?q=Reinigung`, `/admin/reklamationen`, `/admin/besichtigungen` |
-| Portal / Konto | `/portal`, `/portal/lohn`, `/konto`, `/konto/reklamationen` |
+| Öffentlich | `/`, `/auth/anmelden`, `/kontakt`, `/offerte`, `/buchen` |
+| Verwaltung | `/admin`, `/admin/kunden`, `/admin/offerten`, `/admin/vertraege`, `/admin/buchungen`, `/admin/einsaetze`, `/admin/rechnungen`, `/admin/personal`, `/admin/lohn`, `/admin/einstellungen`, `/admin/auswertungen/website`, `/admin/suche?q=Reinigung`, `/admin/reklamationen`, `/admin/besichtigungen` |
+| Portal / Konto | `/portal`, `/portal/lohn`, `/portal/zeiterfassung`, `/konto`, `/konto/reklamationen`, `/konto/nachrichten`, `/konto/rechnungen` |
+
+**26 Seiten** seit dem Release-Kandidaten vom 2026-09-29 (vorher 14): Erweitert
+um die meistbenutzten Listen, die bis dahin ausserhalb der Messung lagen
+(Buchung, Kunden, Offerten, Verträge, Buchungen, Einsätze, Personal,
+Einstellungen, Website-Besuche, Nachrichten). Im abschliessenden Lauf des
+Release-Kandidaten meldete axe dort **keinen Befund jeder Stufe**, auch nicht
+moderate oder minor (`docs/PENDENZEN.md` RC-07) — die Schwelle des Falls bleibt
+trotzdem „schwer", siehe unten.
 
 Gemessen wird erst, wenn die Seite ruhig ist: auf den Seiten des
 `(public)`-Rahmens nach dem Erscheinen des Cookie-Banners (800 ms nach dem
@@ -44,15 +54,40 @@ schweren Verstoss. Behoben:
 | Initialen im Personenavatar 3–3.8 : 1 | Schrift in voller Personalfarbe auf deren eigener Tönung | Schrift auf 55 % abgedunkelt; gilt auch für frei gewählte Farben |
 | Platzhalter der Auswahl 3.7 : 1 | `text-muted-foreground/80` | volle Deckkraft; Eingabefeld und Textfeld ebenso (axe misst dort nicht, WCAG 1.4.3 gilt trotzdem) |
 
+## Oberflächenprüfung (seit 2026-09-27, `tests/e2e/phase21-oberflaeche.spec.ts`)
+
+Zusätzlich zur Seitenmatrix, im echten Browser:
+
+- **Navigation je Rolle:** jeder Eintrag der Seitenleiste in fünf Rollen
+  erreichbar, aktiv markiert, axe ohne schwere Befunde.
+- **Sprunglink:** erster Tabstopp, springt zum Inhalt — öffentlich, im Konto
+  und beim Unterschreiben.
+- **Umbruch:** kein seitliches Scrollen in sieben Fenstergrössen und bei
+  200 % Zoom.
+- **Mobile Navigation:** dieselben Einträge wie die Seitenleiste, Escape
+  schliesst, der Fokus kehrt zurück.
+- **Dialog und Suche:** Fokus hinein, Escape hinaus, Fokus zurück; Pfeiltasten
+  bis „Alle Treffer".
+- **Reduzierte Bewegung:** keine laufenden Übergänge über 10 ms auf der
+  Startseite.
+- **Telefon:** öffentliche Seiten ohne schwere Befunde.
+
+Seit 2026-09-30 laufen axe und die Oberflächenprüfung in einer Seite **ohne
+`'unsafe-eval'`** in der Inhaltsrichtlinie (`docs/SECURITY_STANDARD.md` C6).
+Nach Durchsicht von axe-core 4.13 steht `new Function` nur auf Wegen
+(Sprachdateien, eigene Regeln), die die Prüfhilfe nicht benutzt. Belegt ist
+das erst mit dem Browserlauf auf dem Härtungskandidaten.
+
 ## Was nicht geprüft ist
 
-- **Tastaturbedienung im Ablauf** (Dialoge öffnen/schliessen, Fokusrückgabe,
-  Kalender, Datei-Upload). Die Radix-Bausteine bringen das mit; bewiesen ist es
-  nur für die PDF-Werkzeugleiste (`gate3-pdf-viewer.spec.ts`).
+- **Tastaturbedienung im ganzen Ablauf** — Fokusführung ist für
+  Navigation, Sprunglink, mobile Navigation, einen Dialog, die Suche und die
+  PDF-Werkzeugleiste (`gate3-pdf-viewer.spec.ts`) bewiesen; nicht für Kalender,
+  Datei-Upload und die übrigen Dialoge. Die Radix-Bausteine bringen das mit.
 - **Screenreader** (NVDA, VoiceOver) — keine Sitzung durchgeführt.
 - **Dunkles Farbschema** — die Reihe misst nur das helle.
 - Seiten ausserhalb der Liste, insbesondere Führung, Kalender, Signatur- und
-  Abnahmeseiten.
+  Abnahmeseiten (die Führung nur über die Navigationsprüfung je Rolle).
 - Verständlichkeit, Leichte Sprache, Zoom auf 400 %.
 
 **EXTERNAL VERIFICATION REQUIRED** für jede Aussage über Konformität: eine
