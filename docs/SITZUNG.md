@@ -1,6 +1,8 @@
 # Sitzung — Laufzeit, Leerlauf, mehrere Tabs
 
-> Stand 2026-09-28. Gilt für Verwaltung, Personalportal und Kundenkonto.
+> Stand 2026-09-28, nachgeführt 2026-10-01 (Leerlauf über HTTP und im Browser
+> geprüft, drei Beobachtungen zu den Grenzen). Gilt für Verwaltung,
+> Personalportal und Kundenkonto.
 
 ## Was gilt
 
@@ -30,8 +32,11 @@ verstellt.
 Der Aktivitätswächter im Browser (`src/features/account/session-keepalive.tsx`)
 ist die Anzeige dieser Regel, nicht die Regel selbst:
 
-- Aktivität (Maus, Tastatur, Berührung, Scrollen) erneuert die Sitzung
-  vorbeugend alle 10 Minuten.
+- Aktivität (Maus, Tastatur, Berührung, Scrollen) hält die Sitzung am Leben:
+  Der Wächter erneuert vorbeugend alle 10 Minuten, **solange die letzte
+  Aktivität noch nicht im Warnfenster liegt** — also auch ohne neue Eingabe
+  seit der letzten Erneuerung. Das Fenster auf dem Server zählt ab der
+  letzten Erneuerung, nicht ab der letzten Eingabe (siehe „Grenzen").
 - Zwei Minuten vor Ablauf erscheint „Sitzung läuft bald ab" mit
   **Weiterarbeiten** und **Abmelden**.
 - Ohne Antwort meldet der Browser selbst ab und öffnet die Anmeldung mit
@@ -48,11 +53,28 @@ Rotationsfamilie):
 - „Weiterarbeiten" in einem Tab schliesst die Warnung in allen.
 - Eine Abmeldung — über das Profilmenü, über „Abmelden" in der Warnung oder
   nach Leerlauf — schickt alle anderen Tabs zur Anmeldung (`grund=abgemeldet`).
+- Lehnt dagegen der **Server** eine Erneuerung ab, geht nur der betroffene Tab
+  zur Anmeldung (`grund=abgelaufen`); die anderen folgen bei ihrer nächsten
+  Anfrage oder beim Zurückkehren (`docs/PENDENZEN.md` P2H-54).
 - Im Browserspeicher liegt nur ein Zeitstempel. Tokens stehen ausschliesslich
   in `HttpOnly`-Cookies, die kein Skript lesen kann.
 
-Geprüft in `tests/e2e/sitzung-tabs.spec.ts` (mit vorgespulter Uhr) und
-`tests/api/session-refresh.test.ts` (Cookie-Laufzeiten, Rotation, Abmeldung).
+Geprüft in:
+
+- `tests/e2e/sitzung-tabs.spec.ts` (mit vorgespulter Uhr) und
+  `tests/api/session-refresh.test.ts` (Cookie-Laufzeiten, Rotation, Abmeldung);
+- seit 2026-10-01 `tests/api/sitzung-leerlauf.test.ts` (Server: Erneuerungstoken
+  in der Testdatenbank zurückdatiert — 401 „Inaktivität", Widerruf ohne
+  `rotatedAt`, Cookies gelöscht; knapp im Fenster gültig, das Fenster beginnt
+  von vorn; „Angemeldet bleiben" nach 16 Minuten gültig, nach sieben Tagen
+  nicht; zweiter Versuch → Wiederverwendungserkennung; Middleware →
+  Anmeldung) und `tests/e2e/sitzung-leerlauf.spec.ts` (Browser, Chromium und
+  Firefox: Warnung zwei Minuten vorher und Abmeldung `grund=inaktiv`, eine
+  Eingabe schiebt den Ablauf, „Angemeldet bleiben", vom Server beendete
+  Sitzung `grund=abgelaufen`, automatische Abmeldung nimmt den zweiten Tab
+  mit). Beide sind geschrieben; ihr erster Lauf ist der Volllauf auf dem
+  Release-Kandidaten der Härtung. Damit gilt der frühere Hinweis nicht mehr,
+  das Leerlauffenster sei über HTTP nicht prüfbar.
 
 ## Grenzen — was die Anwendung nicht zusichert
 
@@ -71,6 +93,21 @@ Geprüft in `tests/e2e/sitzung-tabs.spec.ts` (mit vorgespulter Uhr) und
   Server den Token nicht mehr an, egal was der Browser wiederherstellt.
 - **Mobile Browser** beenden sich selten wirklich; dort ist das
   Leerlauffenster die massgebliche Grenze.
+- **Das Serverfenster zählt ab der letzten Erneuerung.** Weil der Wächter
+  auch ohne neue Eingabe alle 10 Minuten erneuert, solange die letzte
+  Aktivität vor weniger als 13 Minuten war, kann eine Sitzung, deren Tab
+  zwischen Minute 13 und 15 ohne eigene Abmeldung endet (geschlossen,
+  eingefroren), auf dem Server bis rund 28 Minuten nach der letzten Eingabe
+  erneuerbar bleiben. Die Anmeldemaske verspricht „nach 15 Minuten ohne
+  Aktivität"; genau gilt: 15 Minuten ohne Erneuerung (`docs/PENDENZEN.md`
+  P2H-53, nur durch Lesen belegt).
+- **Wiederhergestellte Tabs nach langem Leerlauf** können einen Alarm
+  auslösen: Ein wegen Leerlaufs widerrufener Token (ohne `rotatedAt`) läuft
+  beim zweiten Vorlegen in die Wiederverwendungserkennung
+  (`REFRESH_REUSE_DETECTED`, CRITICAL, die Familie wird gesperrt). Legen
+  mehrere wiederhergestellte Tabs denselben Token fast gleichzeitig vor, kann
+  das geschehen, ohne dass etwas kopiert wurde. Bewusst so festgehalten
+  (`sitzung-leerlauf.test.ts`); die Kehrseite steht als P2H-52 im Register.
 - Ein gesperrtes Konto kann einen noch gültigen Zugangstoken bis zu
   15 Minuten nutzen (bekannter, bewusster Kompromiss, siehe
   `docs/ARCHITECTURE.md`); Verwaltungsvorgänge mit Rollen- oder Kontosperre
