@@ -205,6 +205,18 @@ export function anfragenVerfolgen(page: Page): { ruhig(ruheMs?: number, hoechste
 //  Anmeldung über die Maske
 // ---------------------------------------------------------------------------
 
+/** Wahlmöglichkeiten der Anmeldung über die Maske. */
+export interface AnmeldeOptionen {
+  /** Rücksprungziel wie nach einer abgelaufenen Sitzung (`?weiter=`). */
+  weiter?: string;
+  /**
+   * „Angemeldet bleiben" ankreuzen. Ohne diese Wahl ist die Sitzung an das
+   * Browserfenster gebunden und hat das kurze Leerlauffenster
+   * (`SESSION_IDLE_TTL`); mit ihr das lange (`SESSION_REMEMBER_IDLE_TTL`).
+   */
+  angemeldetBleiben?: boolean;
+}
+
 /**
  * Anmelden, wie ein Mensch es täte — über `/auth/anmelden`.
  *
@@ -212,18 +224,45 @@ export function anfragenVerfolgen(page: Page): { ruhig(ruheMs?: number, hoechste
  * Rotationsfamilie der Sitzung, und ein wiederverwendeter Cookie-Vorrat wäre
  * über mehrere Fälle hinweg dieselbe Familie. Jeder Fall meldet sich frisch an
  * und bekommt damit genau das, was § 32 meint — ein eigenes Gerät.
+ *
+ * Der vierte Wert ist entweder das Rücksprungziel (so rufen ihn die
+ * bisherigen Fälle) oder `AnmeldeOptionen` (seit 2026-10-01, für
+ * `sitzung-leerlauf.spec.ts`). Ein fünfter Wert neben dem Ziel hätte jeden
+ * Aufrufer, der nur „Angemeldet bleiben" will, ein `undefined` an vierter
+ * Stelle schreiben lassen; ein Wechsel auf ein reines Optionsobjekt hätte
+ * dagegen Fälle umgeschrieben, die mit diesem Merkmal nichts zu tun haben
+ * (`zustaende`, `besuchsauswertung`).
  */
 export async function imBrowserAnmelden(
   page: Page,
   konto: keyof typeof ACCOUNTS,
   erwartetesZiel: RegExp,
-  /** Rücksprungziel wie nach einer abgelaufenen Sitzung (`?weiter=`), sonst die Startseite der Rolle. */
-  weiter?: string,
+  /** Rücksprungziel wie nach einer abgelaufenen Sitzung (`?weiter=`), sonst die Startseite der Rolle — oder Optionen. */
+  weiterOderOptionen?: string | AnmeldeOptionen,
 ): Promise<void> {
+  const { weiter, angemeldetBleiben = false }: AnmeldeOptionen =
+    typeof weiterOderOptionen === 'string' ? { weiter: weiterOderOptionen } : (weiterOderOptionen ?? {});
   const { email, password } = ACCOUNTS[konto];
   await page.goto(weiter ? `/auth/anmelden?weiter=${encodeURIComponent(weiter)}` : '/auth/anmelden');
   await page.locator('input[type="email"]').fill(email);
   await page.locator('input[autocomplete="current-password"]').fill(password);
+  if (angemeldetBleiben) {
+    /*
+      Über das Kästchen der Maske, nicht über `rememberMe` im Anfragekörper:
+      Geprüft werden soll, was eine Person bekommt, die das Kästchen ankreuzt
+      — einschliesslich der Frage, ob die Maske die Wahl überhaupt sendet
+      (sie war bis 2026-09-28 vorausgewählt und folgenlos, K-01).
+
+      Gesucht wird das Kästchen innerhalb seiner Beschriftung statt über den
+      zugänglichen Namen: Das Kästchen ist ein Radix-`button` mit
+      `role="checkbox"`, den ein umschliessendes `<label>` benennt. Ob jede
+      Engine diesen Namen gleich ableitet, ist nicht Gegenstand dieser Hilfe;
+      dass die Wahl danach gesetzt ist, prüft sie dagegen ausdrücklich.
+    */
+    const kaestchen = page.locator('label', { hasText: 'Angemeldet bleiben' }).getByRole('checkbox');
+    await kaestchen.click();
+    await expect(kaestchen, '„Angemeldet bleiben" liess sich nicht ankreuzen').toBeChecked();
+  }
   await page.getByRole('button', { name: 'Anmelden', exact: true }).click();
   await page.waitForURL(erwartetesZiel, { timeout: 30_000 });
 }
