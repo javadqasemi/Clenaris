@@ -92,6 +92,15 @@ const DAUERHAFT_WARNUNG_VORHER_MS = Math.min(2 * MINUTE, Math.floor(DAUERHAFT_MS
 const TAKT_MS = 5_000;
 
 /**
+ * Abstand der vorbeugenden Erneuerung (`REFRESH_EVERY_MS`). Steht hier aus
+ * demselben Grund als Zahl wie das Fenster oben: Der Fall „Ohne Eingabe"
+ * verlangt, dass diese Erneuerung vor der Warnung fällt, und muss laut
+ * scheitern, wenn ein kürzer eingestelltes Fenster sie hinter die Warnung
+ * schiebt — sonst prüfte er dort still nichts.
+ */
+const ERNEUERN_ALLE_MS = 10 * MINUTE;
+
+/**
  * Abstand zur Grenze bei den Fällen mit laufender Uhr. Zwischen dem
  * Anlaufen des Wächters und dem ersten Vorspulen vergehen echte Sekunden
  * (Anmeldung, Warten auf die Seite) — die Uhr läuft dort mit. Zehn Sekunden
@@ -195,6 +204,14 @@ const erneuerungen = (netz: Netzwache) => netz.treffer(/\/api\/auth\/refresh$/).
 
 test.describe('Leerlauf der Sitzung im Browser', () => {
   test('Ohne Eingabe: Warnung zwei Minuten vorher, dann Abmeldung wegen Inaktivität', async ({ context, page }) => {
+    const vorWarnung = LEERLAUF_MS - WARNUNG_VORHER_MS - SPIELRAUM_MS;
+    // Nur dann beweist das Ende des Falls etwas über die vorbeugende
+    // Erneuerung: Sie muss in die Spanne vor der Warnung fallen. Bei einem
+    // Fenster unter gut zwölf Minuten käme die Warnung zuerst, und bei offener
+    // Warnung erneuert der Wächter nicht — die Prüfung unten fände dann keine
+    // Erneuerung und schlüge an, ohne dass der Wächter etwas falsch machte.
+    expect(vorWarnung, 'Das Leerlauffenster ist für diesen Fall zu kurz eingestellt.').toBeGreaterThan(ERNEUERN_ALLE_MS + TAKT_MS);
+
     await context.clock.install();
     const konsole = konsoleUeberwachen(page);
     const netz = netzUeberwachen(context);
@@ -213,7 +230,7 @@ test.describe('Leerlauf der Sitzung im Browser', () => {
     // Minuten fällt in diese Spanne — der Wächter erneuert, solange die letzte
     // Aktivität (hier: das Anlaufen nach der Anmeldung) im Fenster liegt — und
     // muss durchgehen; geprüft am Ende des Falls.
-    await context.clock.runFor(LEERLAUF_MS - WARNUNG_VORHER_MS - SPIELRAUM_MS);
+    await context.clock.runFor(vorWarnung);
     await verkehr.ruhig();
     await expect(page.getByRole('dialog'), 'Die Warnung kam vor der Zeit.').toHaveCount(0);
     expect(pfadVon(page)).toBe(hier);
@@ -244,7 +261,13 @@ test.describe('Leerlauf der Sitzung im Browser', () => {
     // Anmeldung — nicht zur Erneuerung, denn es gibt nichts mehr zu erneuern.
     await page.goto('/admin/kunden');
     await expect(page).toHaveURL(/\/auth\/anmelden\?weiter=%2Fadmin%2Fkunden/);
-    expect(erneuerungen(netz).every((e) => e.status === 200), 'Eine Erneuerung im Fenster wurde abgewiesen.').toBe(true);
+
+    // Die vorbeugende Erneuerung vor der Warnung: Es gab sie, und keine wurde
+    // abgewiesen. Zuerst die Anzahl — `every` über eine leere Liste ist wahr,
+    // und ohne diese Zeile ginge ein Wächter, der nie erneuert, hier durch.
+    const erneuert = erneuerungen(netz);
+    expect(erneuert.length, 'Der Wächter hat nach zehn Minuten nicht vorbeugend erneuert.').toBeGreaterThan(0);
+    expect(erneuert.map((e) => e.status), 'Eine Erneuerung im Fenster wurde abgewiesen.').toEqual(erneuert.map(() => 200));
 
     konsole.keineFehler();
   });

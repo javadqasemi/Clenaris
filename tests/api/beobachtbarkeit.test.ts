@@ -425,7 +425,14 @@ describe('RB-014 — Überwachung der geplanten Läufe', () => {
     assert.ok(lauf.startedAt >= new Date(vorher.getTime() - 1000));
     assert.ok(lauf.finishedAt, 'Der Lauf ist abgeschlossen');
     assert.ok((lauf.durationMs ?? -1) >= 0);
-    assert.equal(lauf.processed + lauf.failed, 3, 'Drei Teilaufgaben');
+    // Vier Teilaufgaben seit 2026-09-30: Zu den Erinnerungen an Kundschaft
+    // und Team und den Automatisierungen kam der Abschluss verwaister
+    // Release-Ausführungen (`releaseAusfuehrungen`,
+    // `verwaisteAusfuehrungenAbschliessen` in `release-ausfuehrung.service.ts`).
+    // Die Zahl steht hier genau und nicht als „mindestens", weil eine
+    // Teilaufgabe, die still aus `mitUeberwachung` herausfällt, sonst nie
+    // auffiele — weder im Protokoll noch im Alarm.
+    assert.equal(lauf.processed + lauf.failed, 4, 'Vier Teilaufgaben');
     assert.notEqual(lauf.status, 'RUNNING');
   });
 

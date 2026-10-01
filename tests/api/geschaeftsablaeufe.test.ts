@@ -1453,6 +1453,9 @@ describe('G — Release von der Freigabe bis zum gemeldeten Ergebnis', { concurr
       ausfuehrer: 'pruefreihe/geschaeftsablauf',
       ausfuehrungsSchluessel: SCHLUESSEL,
       artefaktSha256: SUMME,
+      // Seit 2026-09-30 Pflicht: was der Ausführer in der Beilage gelesen hat.
+      commit: COMMIT,
+      zielVersion: VERSION,
       ciNachweis: `https://github.com/beispiel/clenaris/actions/runs/${RUN}`,
     });
     assert.equal(uebernahme.status, 200, uebernahme.text);
@@ -1462,14 +1465,36 @@ describe('G — Release von der Freigabe bis zum gemeldeten Ergebnis', { concurr
     assert.equal(detail.zustand, 'DEPLOYING');
   });
 
-  it('5. das Ergebnis „erfolgreich" wird mit der Zielversion gemeldet', async () => {
+  /**
+   * Seit 2026-09-30 belegt die antwortende Instanz das Ergebnis selbst
+   * (`release-ausfuehrung.service.ts`). Der Prüfserver läuft mit dem
+   * Prüfmanifest (Commit `PRUEF_IDENTITAET_COMMIT`, Version aus
+   * `package.json`) — er ist also nie die Zielversion dieses Ablaufs, sondern
+   * genau die Ausgangsversion, von der die Freigabe ausging. „Erfolgreich"
+   * wird deshalb abgewiesen, ein Rücksprung ist belegt.
+   *
+   * Der Titel beginnt mit seiner alten Fassung, weil `security/testmatrix.json`
+   * ihn wörtlich als Beleg zitiert; das Gelingen selbst belegt seit der
+   * Härtung `release-center.test.ts` („erfolgreich" belegt die Instanz selbst).
+   */
+  it('5. das Ergebnis „erfolgreich" wird mit der Zielversion gemeldet — die Instanz belegt aber die Ausgangsversion: abgewiesen, der belegte Rücksprung angenommen', async () => {
     assert.ok(s.auftragId);
-    const ergebnis = await ausfuehrer('POST', '/api/cron/release-auftraege/ergebnis', {
+    const erfolg = await ausfuehrer('POST', '/api/cron/release-auftraege/ergebnis', {
       auftragId: s.auftragId,
       ausfuehrungsSchluessel: SCHLUESSEL,
       ergebnis: 'SUCCEEDED',
-      laufendeVersion: VERSION,
-      meldung: 'Health Check meldet die Zielversion.',
+      aktivierung: 'AKTIV',
+      meldung: 'Aktivierung meldet die Zielversion.',
+    });
+    assert.equal(erfolg.status, 422, erfolg.text);
+    assert.match(erfolg.text, /Commit/);
+
+    const ergebnis = await ausfuehrer('POST', '/api/cron/release-auftraege/ergebnis', {
+      auftragId: s.auftragId,
+      ausfuehrungsSchluessel: SCHLUESSEL,
+      ergebnis: 'ROLLED_BACK',
+      aktivierung: 'ZURUECK',
+      meldung: 'Health Check nach dem Umschalten ungesund, Ausgangsversion wiederhergestellt.',
     });
     assert.equal(ergebnis.status, 200, ergebnis.text);
 
@@ -1479,7 +1504,7 @@ describe('G — Release von der Freigabe bis zum gemeldeten Ergebnis', { concurr
       }),
     );
     const auftrag = detail.auftraege.find((a) => a.id === s.auftragId);
-    assert.equal(auftrag?.status, 'SUCCEEDED');
+    assert.equal(auftrag?.status, 'ROLLED_BACK');
     assert.ok(auftrag?.finishedAt, 'das Ende der Ausführung ist vermerkt');
   });
 
@@ -1497,7 +1522,7 @@ describe('G — Release von der Freigabe bis zum gemeldeten Ergebnis', { concurr
     const ausfuehrung = await db!.auditLog.findMany({ where: { entity: 'ReleaseRequest', entityId: s.auftragId, userId: null }, orderBy: { createdAt: 'asc' } });
     assert.deepEqual(
       ausfuehrung.map((e) => (e.changes as { status?: { to: string } }).status?.to),
-      ['DEPLOYING', 'SUCCEEDED'],
+      ['DEPLOYING', 'ROLLED_BACK'],
     );
     for (const e of ausfuehrung) {
       assert.equal((e.changes as { ausfuehrer?: string }).ausfuehrer, 'pruefreihe/geschaeftsablauf');

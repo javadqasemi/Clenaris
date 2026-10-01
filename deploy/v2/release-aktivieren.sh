@@ -347,6 +347,12 @@ readonly PRISMA=(node "${ZIEL}/node_modules/prisma/build/index.js")
 PHASE="vorpruefung"
 node scripts/react-hydrationskorrektur.mjs --pruefen >/dev/null \
   || fail "React-Hydrationskorrektur im Artefakt nicht vorhanden."
+# Dieselbe Frage für die zweite eingespielte Korrektur (RB-002, Cachezeit):
+# Das Packskript verlangt beide, aber die Aktivierung prüft, was tatsächlich
+# entpackt auf dem Server liegt — ein Artefakt ohne sie würde unbemerkt die
+# fehlerhafte Cachezeit von Next ausliefern, bis jemand die Antwortköpfe liest.
+node scripts/next-cachezeit-korrektur.mjs --pruefen >/dev/null \
+  || fail "Next-Cachezeitkorrektur (RB-002) im Artefakt nicht vorhanden."
 
 # --- 8. Migrationen -------------------------------------------------------------
 # Reihenfolge (docs/PREPRODUCTION_READINESS.md, Migrationssicherheit):

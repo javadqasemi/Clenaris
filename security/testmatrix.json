@@ -1500,7 +1500,7 @@
           "status": "abgedeckt",
           "belege": [
             { "datei": "tests/api/release-center.test.ts", "test": "freigeben → terminieren → verschieben → stornieren, und wieder freigeben" },
-            { "datei": "tests/api/geschaeftsablaeufe.test.ts", "test": "5. das Ergebnis „erfolgreich\" wird mit der Zielversion gemeldet" },
+            { "datei": "tests/api/geschaeftsablaeufe.test.ts", "test": "5. das Ergebnis „erfolgreich\" wird mit der Zielversion gemeldet — die Instanz belegt aber die Ausgangsversion: abgewiesen, der belegte Rücksprung angenommen" },
             { "datei": "tests/e2e/produktsprint-2026-09-26.spec.ts", "test": "verfügbare Version → Details → freigeben → terminieren → stornieren" }
           ]
         },

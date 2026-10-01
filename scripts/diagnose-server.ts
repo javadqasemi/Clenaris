@@ -115,6 +115,11 @@ function main(): void {
         DIRECT_URL: testUrl,
         TRUSTED_PROXY_MODE: 'NONE',
         CLENARIS_TEST_CACHE_DIR: cacheDir,
+        // Wie `scripts/test-server.ts`: Die eigene Besuchsmessung ist seit
+        // 2026-09-30 ohne ausdrückliches „an" aus. Der Diagnoseserver fährt
+        // dieselbe Browserreihe — ohne den Schalter scheiterten die Fälle der
+        // Besuchsmessung hier, obwohl sie gegen den Prüfserver grün sind.
+        CLENARIS_BESUCHSMESSUNG: 'an',
       },
     },
   );
