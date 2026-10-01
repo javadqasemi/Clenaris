@@ -122,17 +122,23 @@ import { anfragenVerfolgen, konsoleUeberwachen } from './helpers/browser';
  * trägt, in dem es eintraf. Die Konsolenzeile ist je Engine anders formuliert
  * und sagt nicht, welcher Schritt sie auslöste.
  *
- * Die Konsole wird trotzdem genau geprüft, nicht nur nach oben begrenzt. Alle
- * drei Engines schreiben die verweigerte Auswertung als Fehlermeldung, und
- * Playwright reicht sie als `console`-Ereignis vom Typ `error` weiter:
- * Chromium über `Log.entryAdded`, WebKit über `Console.messageAdded` (Quelle
- * `security`, Stufe `error`), Firefox über den Konsolendienst, dessen
- * Kategorie `CSP` Juggler nicht ausfiltert (`_registerConsoleServiceListener`)
- * — davon lebt der Wettlauf aus Grund 2. Erwartet wird deshalb **genau eine**
- * solche Meldung: Eine fehlende wäre ebenso ein Befund wie eine zusätzliche.
- * Scheitert eine Engine an dieser Zusicherung, gehört die Ausnahme dort
- * namentlich und mit Messung hin — nicht eine pauschale Lockerung für alle
- * drei.
+ * Die Konsole wird trotzdem genau geprüft, nicht nur nach oben begrenzt —
+ * aber **je Engine nach Messung**, nicht nach Annahme. Die erste Fassung
+ * erwartete in allen drei Engines genau eine Meldung zur verweigerten
+ * Auswertung (Chromium über `Log.entryAdded`, WebKit über
+ * `Console.messageAdded`, Firefox über den Konsolendienst, dessen Kategorie
+ * `CSP` Juggler nicht ausfiltert). Gemessen am 2026-10-01 im ersten vollen
+ * Lauf gegen den Produktionsbau (Playwright 1.63, `chromium-1243`,
+ * `firefox-1543`, WebKit des Pakets): Firefox meldet sie, Chromium und WebKit
+ * reichen für die in `try`/`catch` abgefangene Auswertung **keine**
+ * Konsolenmeldung an Playwright weiter — der Verstoss selbst kam in allen
+ * drei Engines genau einmal als `securitypolicyviolation` an, `eval` warf in
+ * allen drei einen `EvalError`. Deshalb steht die erwartete Zahl je Engine in
+ * `EVAL_MELDUNGEN_JE_ENGINE`, namentlich und mit diesem Messstand, statt
+ * einer pauschalen Lockerung („höchstens eine") für alle: Ändert eine Engine
+ * ihr Verhalten, fällt das hier auf — in beide Richtungen. Und `keineFehler()`
+ * bleibt scharf: Jede *andere* Fehlermeldung, auch eine anders formulierte
+ * CSP-Zeile in Chromium oder WebKit, lässt den Fall scheitern.
  *
  * **Diagnosemodus** (`E2E_DIAGNOSE=1`, `next dev` auf Port 3002): Der
  * Entwicklungsserver trägt `'unsafe-eval'` absichtlich (Begründung in
@@ -156,6 +162,15 @@ const WASM_MODUL = [
 ];
 
 const ENTWICKLUNGSSERVER = process.env.E2E_DIAGNOSE === '1';
+
+/**
+ * Wie viele Konsolenmeldungen die verweigerte, in `try`/`catch` abgefangene
+ * Auswertung je Engine an Playwright weiterreicht — gemessen am 2026-10-01
+ * gegen den Produktionsbau (Kopfkommentar, „Verstösse und Konsole"). Eine
+ * Engine, die hier fehlt, wird mit 1 erwartet; eine neue Engine muss gemessen
+ * und eingetragen werden, statt still durchzugehen.
+ */
+const EVAL_MELDUNGEN_JE_ENGINE: Record<string, number> = { chromium: 0, firefox: 1, webkit: 0 };
 
 /**
  * Die Nachricht, auf die das eingesetzte Skript wartet, bevor es prüft
@@ -433,13 +448,14 @@ test('eval wird verweigert, WebAssembly kompiliert', async ({ page, browserName 
     erwartet,
   );
 
-  // — Konsole: genau die eine Meldung zur verweigerten Auswertung (im
-  //   Diagnosemodus keine), sonst nichts. Warum genau und nicht „höchstens",
-  //   steht im Kopfkommentar.
+  // — Konsole: die gemessene Zahl von Meldungen zur verweigerten Auswertung
+  //   je Engine (im Diagnosemodus keine), sonst nichts. Warum je Engine und
+  //   nicht „höchstens eine", steht im Kopfkommentar.
   const evalMeldungen = konsole.erwartet(EVAL_VERWEIGERT);
+  const erwarteteMeldungen = ENTWICKLUNGSSERVER ? 0 : (EVAL_MELDUNGEN_JE_ENGINE[browserName] ?? 1);
   expect(
     evalMeldungen,
-    `${browserName}: die Konsolenmeldung zur verweigerten Auswertung fehlt oder erschien mehrfach`,
-  ).toBe(erwartet.length);
+    `${browserName}: die Zahl der Konsolenmeldungen zur verweigerten Auswertung weicht von der Messung ab`,
+  ).toBe(erwarteteMeldungen);
   konsole.keineFehler();
 });
