@@ -402,6 +402,218 @@ describe('Prüfinstanzen: Port aus der Startausgabe und Einordnung einer Anfrage
     assert.equal(phaseAus({ verbundenMs: 1, gesendetMs: 2, kopfMs: 3 }), 'rumpf-lesen');
     assert.equal(phaseAus({ verbundenMs: 1, gesendetMs: 2, kopfMs: 3, endeMs: 4 }), 'fertig');
   });
+
+  /**
+   * Begleitung, Wächter und Abzug — an einem Stellvertreterprozess statt an
+   * `next start` (2026-10-01).
+   *
+   * Bis hierher waren nur die vier reinen Bausteine oben eingecheckt
+   * geprüft. Der Weg, der sie verbindet — Port aus der Ausgabe eines echten
+   * Kindprozesses, früher Abbruch bei einem Startfehler, Abzug beim
+   * Scheitern, Wächterzeile bei einem Beinahe-Fall —, lief nur in
+   * Notizskripten. Ein Fehler darin hätte sich erst als undurchsichtiges
+   * Scheitern der Zwei-Instanzen-Gruppe im vollen Lauf gezeigt, oder gar
+   * nicht: Ein Beinahe-Fall ohne Zeile und ohne Datei sieht aus wie ein
+   * ruhiger Lauf.
+   *
+   * Der Stellvertreter ist ein kleiner HTTP-Server in einem eigenen
+   * Node-Prozess (`process.execPath -e`), der seine „Local:"-Zeile so
+   * druckt wie `next start` 15.5.26, und zwar über zwei Datenblöcke verteilt
+   * — wie unter Last. Kein Bau, keine Datenbank, kein Testserver; die Gruppe
+   * läuft deshalb in jedem Lauf mit. Die Fristen sind verkürzt
+   * (`Einstellungen`, nur nach unten zulässig), die Abzüge landen in einem
+   * Wegwerfverzeichnis statt in `test-results/`, und die Wächterzeilen werden
+   * eingesammelt statt gedruckt: Eine `W-11-Wächter`-Zeile aus der
+   * Selbstprüfung im Protokoll eines vollen Laufs hielte jemand für den
+   * echten Befund. Das Skript des Stellvertreters bleibt rein ASCII (Next
+   * druckt „⨯", hier als Unicode-Escape geschrieben), damit die
+   * Befehlszeile unter Windows nichts umkodiert; und es beendet sich erst im
+   * Rückruf des letzten `write`, damit keine Zeile an `process.exit`
+   * verlorengeht — geprüft wird das Werkzeug, nicht Nodes Pufferung.
+   */
+  describe('Begleitung, Wächter und Abzug an einem Stellvertreterprozess', () => {
+    /** Was die Fälle unten aus einem Abzug lesen — nicht seine ganze Form. */
+    interface Abzug {
+      kennung: string;
+      art: string;
+      messung: { phase?: string; dauerMs?: number };
+      waechter: { proben: Array<{ status?: number }> | null } | null;
+      lagen: Array<{ anlass: string; datenbank?: { fehler?: string } }>;
+      instanzen: Array<{ beendet: { code: number | null } | null; ausgabe: Array<{ kanal: string; text: string }> }>;
+    }
+
+    const kinder: ChildProcess[] = [];
+    let ablage = '';
+
+    before(() => {
+      ablage = mkdtempSync(join(tmpdir(), 'clenaris-w11-selbstprobe-'));
+    });
+
+    after(() => {
+      for (const kind of kinder) if (kind.exitCode === null && kind.signalCode === null) kind.kill();
+      rmSync(ablage, { recursive: true, force: true });
+    });
+
+    function stellvertreter(skript: string): ChildProcess {
+      const kind = spawn(process.execPath, ['-e', skript], { stdio: ['ignore', 'pipe', 'pipe'] });
+      kinder.push(kind);
+      return kind;
+    }
+
+    /** Ein Server, der auf alles 200 antwortet — ausser auf die Wege in `wege`. */
+    const server = (wege = '') => `
+      const http = require('node:http');
+      const server = http.createServer((anfrage, antwort) => {
+        ${wege}
+        antwort.writeHead(200, { 'content-type': 'text/plain' });
+        antwort.end('stellvertreter');
+      });
+      server.listen(0, '127.0.0.1', () => {
+        const port = server.address().port;
+        process.stdout.write('   Next.js 15.5.26 (Stellvertreter)\\n   - Loc');
+        setTimeout(() => process.stdout.write('al:        http://127.0.0.1:' + port + '\\n   Ready in 5ms\\n'), 50);
+      });
+    `;
+
+    /** Den Pfad des Abzugs aus einer Fehlermeldung lesen und den Abzug laden. */
+    function abzugAus(meldung: string): { datei: string; abzug: Abzug } {
+      const datei = /Abzug: (.+\.json)/.exec(meldung)?.[1];
+      assert.ok(datei, `kein Abzug genannt:\n${meldung}`);
+      assert.ok(datei.startsWith(ablage), `Abzug ausserhalb der Wegwerfablage: ${datei}`);
+      return { datei, abzug: JSON.parse(readFileSync(datei, 'utf8')) as Abzug };
+    }
+
+    async function scheitert(zusage: Promise<unknown>): Promise<Error> {
+      const ergebnis = await zusage.then(
+        () => null,
+        (fehler: unknown) => fehler,
+      );
+      assert.ok(ergebnis instanceof Error, 'erwartet war ein Scheitern');
+      return ergebnis;
+    }
+
+    it('nimmt keine längere Frist an — die Messlatte lässt sich nur senken', () => {
+      assert.throws(() => instanzDiagnose('W-11-Selbstprobe', { anfrageFristMs: 30_001 }), /nur verkürzt/);
+      assert.throws(() => instanzDiagnose('W-11-Selbstprobe', { waechterMs: 5_001 }), /nur verkürzt/);
+      assert.throws(() => instanzDiagnose('W-11-Selbstprobe', { anfrageFristMs: 0 }), /nur verkürzt/);
+      assert.doesNotThrow(() => instanzDiagnose('W-11-Selbstprobe', { anfrageFristMs: 30_000, waechterMs: 5_000 }));
+    });
+
+    it('liest den Port aus der zerteilten „Local:"-Zeile und meldet bei einer schnellen Antwort nichts', async () => {
+      const zeilen: string[] = [];
+      const diagnose = instanzDiagnose('W-11-Selbstprobe', { ablage, melden: (z) => zeilen.push(z) });
+      const port = await diagnose.startBegleiten('S', stellvertreter(server()), { datenbank: null, fristMs: 20_000 });
+      const antwort = await diagnose.anfrage(port, '/irgendwo');
+      assert.equal(antwort.status, 200);
+      assert.equal(antwort.text, 'stellvertreter', 'die Antwort kommt vom Stellvertreter, nicht von einem anderen Prozess');
+      assert.deepEqual(await diagnose.abzuegeAbwarten(), []);
+      assert.deepEqual(zeilen, []);
+    });
+
+    it('nennt einen belegten Port als Grund — die allgemeine Zeile davor verdeckt ihn nicht', async () => {
+      // Wörtlich die Reihenfolge von `start-server.js`: erst die allgemeine
+      // Zeile, dann der Fehler, dann `process.exit(1)`. Gegen den alten
+      // Stand meldete der Fall nur „Failed to start server".
+      const kind = stellvertreter(`
+        process.stderr.write(
+          ' \\u2a2f Failed to start server\\nError: listen EADDRINUSE: address already in use 127.0.0.1:3001\\n    at Server.setupListenHandle (node:net:1908:16)\\n',
+          () => process.exit(1),
+        );
+      `);
+      const diagnose = instanzDiagnose('W-11-Selbstprobe', { ablage, melden: () => undefined });
+      const fehler = await scheitert(diagnose.startBegleiten('S', kind, { datenbank: null, fristMs: 60_000 }));
+      assert.match(fehler.message, /^Instanz S kam nicht hoch: Der Port ist belegt \(EADDRINUSE\)/);
+      const { abzug } = abzugAus(fehler.message);
+      assert.equal(abzug.art, 'fehlschlag');
+      assert.equal(abzug.kennung, 'W-11-Selbstprobe');
+      // Wörtlich verglichen, nicht per Muster: Ein Syntaxfehler im Skript des
+      // Stellvertreters gäbe dessen Quelltext samt „EADDRINUSE" auf stderr
+      // aus, und ein Muster wäre dann aus dem falschen Grund erfüllt.
+      assert.ok(
+        abzug.instanzen[0]!.ausgabe.some(
+          (z) => z.kanal === 'stderr' && z.text === 'Error: listen EADDRINUSE: address already in use 127.0.0.1:3001',
+        ),
+        'die Fehlerzeile steht mit Kanal im Abzug',
+      );
+      assert.equal(abzug.lagen[0]!.datenbank?.fehler, 'Keine Testdatenbankadresse bekannt.');
+    });
+
+    it('meldet einen Prozess, der vor seinem Port endet, mit Grund, Exitcode und gelesener Ausgabe', async () => {
+      // Hier folgt auf die allgemeine Zeile kein bestimmter Grund. Gemeldet
+      // wird erst bei `close`, wenn alle Ausgabe gelesen ist — vorher entschied
+      // ein Wettlauf zwischen `exit` und den letzten Zeilen.
+      const kind = stellvertreter(`
+        process.stdout.write('kein Port in Sicht\\n', () =>
+          process.stderr.write(' \\u2a2f Failed to start server\\n', () => process.exit(1)),
+        );
+      `);
+      const diagnose = instanzDiagnose('W-11-Selbstprobe', { ablage, melden: () => undefined });
+      const fehler = await scheitert(diagnose.startBegleiten('S', kind, { datenbank: null, fristMs: 60_000 }));
+      assert.match(fehler.message, /Failed to start server.*\(Prozess endete: Code 1, Signal –\)/);
+      const { abzug } = abzugAus(fehler.message);
+      assert.equal(abzug.instanzen[0]!.beendet?.code, 1);
+      assert.ok(
+        abzug.instanzen[0]!.ausgabe.some((z) => z.text === 'kein Port in Sicht'),
+        'die Ausgabe vor dem Ende steht im Abzug',
+      );
+    });
+
+    it('eine hängende Anfrage scheitert nach ihrer Frist — mit Phase, Proben, Nachfrage, Wächterzeile und Abzug', async () => {
+      const zeilen: string[] = [];
+      const diagnose = instanzDiagnose('W-11-Selbstprobe', { ablage, melden: (z) => zeilen.push(z), anfrageFristMs: 2_000, waechterMs: 300 });
+      const port = await diagnose.startBegleiten('S', stellvertreter(server(`if (anfrage.url === '/haengt') return;`)), {
+        datenbank: null,
+        fristMs: 20_000,
+      });
+      const fehler = await scheitert(diagnose.anfrage(port, '/haengt'));
+      assert.match(fehler.message, /Zeitüberschreitung nach 2000 ms \(antwort-abwarten\): GET \/haengt/);
+      assert.match(fehler.message, /Phase: antwort-abwarten/);
+      assert.match(fehler.message, /Proben während des Hängens: GET \/api\/public\/runtime-config → 200 .*; GET \/api\/health → 200 /);
+      assert.match(fehler.message, /Nachfrage \/api\/health: 200 /);
+      const { abzug } = abzugAus(fehler.message);
+      assert.equal(abzug.art, 'fehlschlag');
+      assert.equal(abzug.messung.phase, 'antwort-abwarten');
+      assert.equal(abzug.waechter?.proben?.length, 2);
+      assert.deepEqual(
+        abzug.lagen.map((l) => l.anlass),
+        ['waechter', 'fehlschlag'],
+        'Lage beim Wächter und beim Fehlschlag',
+      );
+      assert.equal(zeilen.length, 1, zeilen.join('\n'));
+      assert.match(zeilen[0]!, /^W-11-Selbstprobe-Wächter: S GET \/haengt nach \d+ ms ohne Kopfzeilen \(Phase antwort-abwarten\)/);
+    });
+
+    it('ein Beinahe-Fall lässt den Fall grün, meldet sich aber zweimal und hinterlässt einen Abzug', async () => {
+      const zeilen: string[] = [];
+      const diagnose = instanzDiagnose('W-11-Selbstprobe', { ablage, melden: (z) => zeilen.push(z), anfrageFristMs: 10_000, waechterMs: 300 });
+      const port = await diagnose.startBegleiten(
+        'S',
+        stellvertreter(
+          server(`if (anfrage.url === '/langsam') { setTimeout(() => { antwort.writeHead(200); antwort.end('spaet'); }, 900); return; }`),
+        ),
+        { datenbank: null, fristMs: 20_000 },
+      );
+      const antwort = await diagnose.anfrage(port, '/langsam');
+      assert.equal(antwort.status, 200);
+      assert.equal(antwort.text, 'spaet');
+
+      const abzuege = await diagnose.abzuegeAbwarten();
+      assert.equal(abzuege.length, 1, abzuege.join('\n'));
+      assert.match(abzuege[0]!, /w11selbstprobe-langsam-[^\\/]+\.json$/);
+      const abzug = JSON.parse(readFileSync(abzuege[0]!, 'utf8')) as Abzug;
+      assert.equal(abzug.art, 'langsam');
+      assert.ok((abzug.messung.dauerMs ?? 0) >= 900, `Dauer ${abzug.messung.dauerMs} ms`);
+      assert.deepEqual(
+        abzug.waechter?.proben?.map((p) => p.status),
+        [200, 200],
+      );
+
+      assert.equal(zeilen.length, 2, zeilen.join('\n'));
+      assert.match(zeilen[0]!, /^W-11-Selbstprobe-Wächter: S GET \/langsam nach \d+ ms ohne Kopfzeilen/);
+      assert.ok(zeilen[1]!.startsWith('W-11-Selbstprobe-Wächter: S GET /langsam kam nach '), zeilen[1]);
+      assert.ok(zeilen[1]!.endsWith(`Abzug: ${abzuege[0]}`), 'die zweite Zeile nennt den Pfad des Abzugs');
+    });
+  });
 });
 
 describe('Dasselbe Artefakt unter zwei Laufzeitumgebungen (ohne Neubau)', () => {
