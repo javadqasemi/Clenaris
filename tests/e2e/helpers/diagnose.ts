@@ -1,7 +1,8 @@
-import { mkdirSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs';
+import { freemem } from 'node:os';
+import { basename, join } from 'node:path';
 
-import type { BrowserContext, ConsoleMessage, Page, Request, Response, TestInfo } from '@playwright/test';
+import type { Browser, BrowserContext, ConsoleMessage, Page, Request, Response, TestInfo } from '@playwright/test';
 
 /**
  * Beweissicherung für Laufzeitfehler im Browser — vor allem für
@@ -28,6 +29,11 @@ import type { BrowserContext, ConsoleMessage, Page, Request, Response, TestInfo 
  * Konsole ausdrücklich prüfen. Sie ist damit zugleich die Verschärfung, die
  * das Zuverlässigkeitstor verlangt: Ein Hydrationsfehler lässt den Fall
  * fehlschlagen, auch wenn der Fall selbst gar nicht auf die Konsole schaut.
+ *
+ * Seit 2026-10-01 steht hier ein zweites, stilleres Werkzeug derselben Art:
+ * der Lebenslauf von Browser, Kontext und Seiten (`lebenslaufMitschreiben`,
+ * RC-21). Er bewertet nichts, er schreibt nur mit — für den Fehler, der nicht
+ * im Fall, sondern beim Abbau danach auftrat.
  *
  * ---------------------------------------------------------------------------
  *  Was **nicht** in die Artefakte kommt
@@ -168,6 +174,12 @@ export interface Diagnose {
   misslungen: string[];
   /** Wurde ein Hydrationsfehler gesehen? */
   hydration(): boolean;
+  /**
+   * Auf die Lesevorgänge warten, die diese Wache selbst noch offen hat
+   * (Dokumentkörper, siehe `ausstehend` unten) — höchstens `hoechstensMs`.
+   * Liefert, wie viele offen waren und ob sie in der Frist fertig wurden.
+   */
+  ausstehendeAbwarten(hoechstensMs: number): Promise<{ offen: number; abgeschlossen: boolean }>;
   /** Alles Gesammelte auswerten, Artefakte schreiben, Fall bewerten. */
   auswerten(testInfo: TestInfo): Promise<void>;
 }
@@ -185,6 +197,23 @@ export function diagnoseAnhaengen(context: BrowserContext, testInfo: TestInfo): 
   const befunde: Befund[] = [];
   const misslungen: string[] = [];
   const abzuege: Array<Promise<Umgebungsabzug | null>> = [];
+  /**
+   * Körperlesungen, die diese Wache angestossen hat und die noch laufen
+   * (RC-21, 2026-10-01).
+   *
+   * Jede Dokumentantwort löst unten ein `antwort.text()` aus — ein
+   * Protokollaufruf an den Browser, von dem der Fall nichts weiss und auf den
+   * bisher niemand wartete. Endet ein Fall unmittelbar nach einer Navigation
+   * (`abmelden.spec.ts` endet mit dem Sprung auf die Startseite), läuft dieser
+   * Aufruf womöglich noch, während Playwright den Kontext schliesst. Er selbst
+   * kann den Fall nicht rot machen — seine Ablehnung wird gefangen —, aber er
+   * ist Verkehr auf einem Ziel, das gerade abgebaut wird, und genau beim
+   * Abbau scheiterte RC-20 einmal. Ob er beteiligt war, ist nicht belegt;
+   * deshalb wird er vor dem Abbau abgewartet (begrenzt) und seine Zahl im
+   * Lebenslauf (`rc21-<pid>.jsonl`) festgehalten — der nächste rote Lauf sagt
+   * dann, ob einer offen war.
+   */
+  const ausstehend = new Set<Promise<unknown>>();
   let letztesDokument: Promise<{ adresse: string; html: string } | null> = Promise.resolve(null);
   let dokumentBeimFehler: Promise<{ adresse: string; html: string } | null> | null = null;
 
@@ -254,10 +283,14 @@ export function diagnoseAnhaengen(context: BrowserContext, testInfo: TestInfo): 
        * wird erst beim Schreiben eines Befunds angefasst.
        */
       if (antwort.request().resourceType() !== 'document') return;
-      letztesDokument = antwort
+      const lesung = antwort
         .text()
         .then((text) => ({ adresse: antwort.url(), html: text }))
         .catch(() => null);
+      ausstehend.add(lesung);
+      // `lesung` lehnt nie ab (oben gefangen), also auch dieses `finally` nicht.
+      void lesung.finally(() => ausstehend.delete(lesung));
+      letztesDokument = lesung;
     });
   };
 
@@ -268,6 +301,22 @@ export function diagnoseAnhaengen(context: BrowserContext, testInfo: TestInfo): 
     befunde,
     misslungen,
     hydration: () => befunde.some((b) => b.hydration),
+    async ausstehendeAbwarten(hoechstensMs) {
+      const offen = ausstehend.size;
+      if (offen === 0) return { offen, abgeschlossen: true };
+      // Begrenzt: Ein Lesevorgang, der nie zurückkommt, darf den Abbau nicht
+      // aufhalten. Die Frist verändert keinen Befund — sie entscheidet nur,
+      // ob der Kontext ohne offenen Verkehr der Wache geschlossen wird.
+      let uhr: ReturnType<typeof setTimeout> | undefined;
+      const abgeschlossen = await Promise.race([
+        Promise.allSettled([...ausstehend]).then(() => true),
+        new Promise<boolean>((auf) => {
+          uhr = setTimeout(() => auf(false), hoechstensMs);
+        }),
+      ]);
+      clearTimeout(uhr);
+      return { offen, abgeschlossen };
+    },
     async auswerten(info: TestInfo) {
       const treffer = befunde.filter((b) => b.hydration);
       if (treffer.length === 0) return;
@@ -320,6 +369,149 @@ export function diagnoseAnhaengen(context: BrowserContext, testInfo: TestInfo): 
       );
     },
   };
+}
+
+// ---------------------------------------------------------------------------
+//  Lebenslauf von Browser, Kontext und Seiten (RC-21)
+// ---------------------------------------------------------------------------
+
+/**
+ * Wann Browser, Kontext und Seiten eines Falls zu Ende gingen — mit
+ * Zeitstempel, je Arbeiterprozess in `test-results/rc21-<pid>.jsonl`
+ * (RC-21, 2026-10-01).
+ *
+ * **Der Befund.** In Stresslauf 4 von 5 auf `acae4f1` scheiterte
+ * `abmelden.spec.ts` einmal mit „browserContext.close: Target page, context
+ * or browser has been closed" — nicht im Fall (der lief in 3.7 s durch),
+ * sondern beim Schliessen des Kontexts danach, und ohne den Zusatz „while
+ * running route callback". 30 getrennte Nachstellungen waren grün. Die
+ * Meldung passt zu einem Browser, dessen Verbindung beim Schliessen schon weg
+ * war (Playwright wirft sie aus `Target.disposeBrowserContext`) — belegt ist
+ * das nicht, denn der rote Lauf hinterliess nur diese eine Zeile.
+ *
+ * **Was der nächste rote Lauf hier hinterlässt.** Die Reihenfolge, die die
+ * Frage entscheidet: `fall.ende` (Status, offene Seiten, ob der Browser noch
+ * verbunden war, wie viele Körperlesungen der Wache offen waren),
+ * `fixture.abgebaut` (unser Teil des Abbaus ist durch — danach schliesst
+ * Playwright den Kontext), dann `page.close`, `context.close`,
+ * `browser.disconnected`, `page.crash` und `arbeiter.ende`, jeweils mit
+ * Zeit und freiem Arbeitsspeicher der Maschine.
+ *
+ *  • `browser.disconnected` vor oder während des Schliessens: Der Browser
+ *    (oder die Verbindung zu ihm) war weg — dann gehört die Untersuchung zum
+ *    Browserprozess und zur Speicherlage, nicht zum Fall.
+ *  • `page.crash`: Der Renderer ist abgestürzt.
+ *  • Keines davon, nur `fixture.abgebaut` und danach der Fehler: Der Kontext
+ *    wurde auf der Seite von Playwright entsorgt, ohne dass der Browser
+ *    wegbrach — dann ist der Abbau selbst (Spur, Routen, offene Aufrufe) der
+ *    Verdächtige.
+ *
+ * **Warum eine eigene Datei je Prozess und `appendFileSync`.** Mehrere
+ * Arbeiter (Playwright startet nach einem Fehlschlag einen neuen) schreiben
+ * nie in dieselbe Datei; und eine synchron geschriebene Zeile ist auch dann
+ * auf der Platte, wenn der Prozess unmittelbar danach endet — genau der Fall,
+ * der hier interessiert. `test-results/`, weil `e2e-stress.ts` und der
+ * Release-Prüfweg dieses Verzeichnis eines roten Laufs sichern (RC-20); in
+ * `hydrationsbefunde/` zählte die Stressreihe jede Datei als
+ * Hydrationsbefund.
+ *
+ * **Was hier nie geschieht:** Diese Mitschrift lässt keinen Fall scheitern
+ * und keinen grün werden. Jeder Schreibfehler wird verschluckt — ein
+ * Protokoll, das selbst einen Fall rot färbt, wäre ein zweiter Befund, den
+ * man dann wieder untersuchen müsste.
+ */
+export interface Lebenslauf {
+  /** Der Fall ist durch (vor unserem Abbau): Status und Lage festhalten. */
+  fallEnde(daten?: Record<string, unknown>): void;
+  /** Unser Teil des Abbaus ist durch — danach schliesst Playwright den Kontext. */
+  abgebaut(): void;
+}
+
+const MIB = 1024 * 1024;
+
+/** Browser, an denen `disconnected` schon hängt — einer je Arbeiter, nicht einer je Fall. */
+const beobachteteBrowser = new WeakSet<Browser>();
+/** Der zuletzt begonnene Fall dieses Arbeiters — für Ereignisse, die nach seinem Ende eintreffen. */
+let letzterFall: Record<string, unknown> = {};
+let arbeiterEndeBeobachtet = false;
+
+function lebenslaufZeile(datei: string, eintrag: Record<string, unknown>): void {
+  try {
+    appendFileSync(
+      datei,
+      `${JSON.stringify({ zeit: new Date().toISOString(), pid: process.pid, freiMb: Math.round(freemem() / MIB), ...eintrag })}\n`,
+      'utf8',
+    );
+  } catch {
+    // Siehe oben: Die Mitschrift darf nie selbst zum Befund werden.
+  }
+}
+
+export function lebenslaufMitschreiben(context: BrowserContext, testInfo: TestInfo): Lebenslauf {
+  const datei = join(testInfo.project.outputDir, `rc21-${process.pid}.jsonl`);
+  const fall = {
+    fall: testInfo.title,
+    datei: basename(testInfo.file),
+    projekt: testInfo.project.name,
+    wiederholung: testInfo.retry,
+    arbeiter: testInfo.workerIndex,
+  };
+  const beginn = Date.now();
+  const schreiben = (ereignis: string, daten: Record<string, unknown> = {}) =>
+    lebenslaufZeile(datei, { ereignis, ...fall, seitFallbeginnMs: Date.now() - beginn, ...daten });
+
+  try {
+    mkdirSync(testInfo.project.outputDir, { recursive: true });
+    letzterFall = fall;
+    const browser = context.browser();
+
+    if (browser && !beobachteteBrowser.has(browser)) {
+      beobachteteBrowser.add(browser);
+      const engine = browser.browserType().name();
+      lebenslaufZeile(datei, { ereignis: 'browser.beobachtet', ...fall, engine, version: browser.version() });
+      // Absichtlich `letzterFall` zum Zeitpunkt des Ereignisses, nicht `fall`:
+      // Die Verbindung kann nach dem Ende dieses Falls abreissen, und dann
+      // gehört das Ereignis zu dem Fall, der gerade lief oder abgebaut wurde.
+      browser.on('disconnected', () => lebenslaufZeile(datei, { ereignis: 'browser.disconnected', ...letzterFall, engine }));
+    }
+    if (!arbeiterEndeBeobachtet) {
+      arbeiterEndeBeobachtet = true;
+      process.once('exit', (code) => lebenslaufZeile(datei, { ereignis: 'arbeiter.ende', ...letzterFall, code }));
+    }
+
+    schreiben('fall.beginn', { browserVerbunden: browser?.isConnected() ?? null });
+
+    let seiten = 0;
+    const seiteBeobachten = (page: Page) => {
+      const seite = ++seiten;
+      page.on('crash', () => schreiben('page.crash', { seite, adresse: sichereAdresse(page) }));
+      page.on('close', () => schreiben('page.close', { seite, adresse: sichereAdresse(page) }));
+    };
+    for (const page of context.pages()) seiteBeobachten(page);
+    context.on('page', seiteBeobachten);
+    context.on('close', () => schreiben('context.close', { browserVerbunden: browser?.isConnected() ?? null }));
+
+    return {
+      fallEnde(daten = {}) {
+        schreiben('fall.ende', {
+          status: testInfo.status ?? null,
+          fehler: testInfo.errors.length,
+          dauerMs: Date.now() - beginn,
+          offeneSeiten: context.pages().length,
+          browserVerbunden: browser?.isConnected() ?? null,
+          rssMb: Math.round(process.memoryUsage().rss / MIB),
+          ...daten,
+        });
+      },
+      abgebaut() {
+        schreiben('fixture.abgebaut', { browserVerbunden: browser?.isConnected() ?? null });
+      },
+    };
+  } catch (fehler) {
+    // Auch ein Fehler beim Anhängen bleibt ein Eintrag, kein Fehlschlag.
+    schreiben('lebenslauf.fehler', { meldung: redigieren(String((fehler as Error)?.message ?? fehler)) });
+    return { fallEnde: () => undefined, abgebaut: () => undefined };
+  }
 }
 
 // ---------------------------------------------------------------------------

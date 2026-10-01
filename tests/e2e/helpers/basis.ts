@@ -1,7 +1,7 @@
 import { test as basis } from '@playwright/test';
 
 import { resetRateLimits } from '../../helpers/rate-limit';
-import { diagnoseAnhaengen } from './diagnose';
+import { diagnoseAnhaengen, lebenslaufMitschreiben } from './diagnose';
 import { MUTATIONS_BEOBACHTER } from './mutations-beobachter';
 
 /**
@@ -45,6 +45,14 @@ export const test = basis.extend({
    * bewusst nicht.
    */
   context: async ({ context }, use, testInfo) => {
+    /**
+     * Lebenslauf von Browser, Kontext und Seiten (RC-21) — als Erstes, damit
+     * auch ein Ereignis während des Aufbaus dieses Rahmens mitgeschrieben
+     * wird. Immer an, billig (eine Zeile je Ereignis) und ohne Einfluss auf
+     * das Ergebnis eines Falls; Begründung bei `lebenslaufMitschreiben`.
+     */
+    const lebenslauf = lebenslaufMitschreiben(context, testInfo);
+
     await context.route('**/favicon.ico', (route) => route.fulfill({ status: 204, body: '' }));
 
     /**
@@ -79,7 +87,22 @@ export const test = basis.extend({
     // eslint-disable-next-line react-hooks/rules-of-hooks
     await use(context);
 
-    await diagnose.auswerten(testInfo);
+    /**
+     * Offene Körperlesungen der Wache abwarten, höchstens zwei Sekunden
+     * (RC-21). Sie gehören nicht zum Fall, sondern zu diesem Rahmen, und
+     * sollen nicht mehr unterwegs sein, wenn Playwright gleich danach den
+     * Kontext schliesst. Kein Wiederholen, kein Filtern: Was die Frist
+     * überschreitet, bleibt offen und steht als `koerperAbgewartet: false` im
+     * Lebenslauf. Zwei Sekunden, weil die Lesung eines bereits geladenen
+     * Dokuments Millisekunden braucht — wer länger braucht, ist der Befund.
+     */
+    const koerper = await diagnose.ausstehendeAbwarten(2_000);
+    lebenslauf.fallEnde({ offeneKoerper: koerper.offen, koerperAbgewartet: koerper.abgeschlossen });
+    try {
+      await diagnose.auswerten(testInfo);
+    } finally {
+      lebenslauf.abgebaut();
+    }
   },
 });
 
