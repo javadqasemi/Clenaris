@@ -1,7 +1,16 @@
 # Eigene Besuchsmessung (Traffic Analytics)
 
-> Stand: 28. September 2026. Gilt für `TrafficEvent`, `POST /api/public/traffic`,
-> `GET /api/traffic` und `/admin/auswertungen/website`.
+> Stand: 28. September 2026, nachgeführt 1. Oktober 2026 (Schalter
+> `CLENARIS_BESUCHSMESSUNG`, Aufbewahrung 13 Monate überall, Laufzeit des
+> GA-Cookies, Widerruf im Browser geprüft). Gilt für `TrafficEvent`,
+> `POST /api/public/traffic`, `GET /api/traffic` und
+> `/admin/auswertungen/website`.
+>
+> **Ausgeschaltet, bis die Rechtsprüfung vorliegt.** Seit 2026-10-01 misst eine
+> Instanz nur mit `CLENARIS_BESUCHSMESSUNG=an` (Abschnitt 2a). Die Vorgabe ist
+> aus, und die Produktionsvorprüfung warnt, sobald der Schalter „an" steht —
+> eingeschaltet wird erst nach der Prüfung der Datenschutzerklärung (TA-02,
+> Abschnitt 7).
 >
 > **Fachprüfung erforderlich.** Dieses Dokument beschreibt, was der Code tut.
 > Es ist keine rechtliche Beurteilung und behauptet keine Konformität mit DSG
@@ -13,7 +22,13 @@
 Der Betrieb will wissen, **welche Seite und welche Kampagne Anfragen und
 Buchungen bringt** — neben Umsatz und Auslastung, in der eigenen Datenbank.
 Google Analytics, GTM und Meta-Pixel (`components/marketing/analytics.tsx`)
-bleiben unverändert und optional; ihre Zahlen liegen beim Anbieter.
+bleiben unverändert und optional; ihre Zahlen liegen beim Anbieter. Wer sie
+einschaltet, beachte: Die Inhaltsrichtlinie erlaubt in `connect-src` und
+`img-src` nur `www.google-analytics.com`; GA4-Regionalendpunkte und der
+Meta-Pixel (`www.facebook.com/tr`) werden verweigert, und benutzerdefinierte
+JavaScript-Variablen eines GTM-Containers laufen ohne `'unsafe-eval'` nicht
+(`docs/PENDENZEN.md` P2H-30, P2H-31 — Erweiterung nur nach Messung mit
+echten Kennungen).
 
 Nicht Teil der Messung:
 
@@ -45,6 +60,34 @@ traffic_events      (organizationId, day) / (organizationId, eventName, day)
 Die Antwort ist **immer 204** — auch wenn nichts gespeichert wurde. Ein Grund
 für eine Verwerfung in der Antwort wäre eine Anleitung, die Bereinigung zu
 umgehen; `sendBeacon` wertet die Antwort ohnehin nicht aus.
+
+## 2a. Schalter der Instanz (seit 2026-10-01)
+
+`CLENARIS_BESUCHSMESSUNG`: nur der Wert `an` (getrimmt, buchstabengenau —
+`AN`, `true`, `1`, `on` bleiben aus) schaltet die eigene Besuchsmessung ein;
+fehlt er oder steht etwas anderes da, ist sie aus. Die Regel steht einmal in
+`besuchsmessungEingeschaltet()` (`src/lib/laufzeit-konfiguration.ts`); der
+Server liest `serverEnv().CLENARIS_BESUCHSMESSUNG`.
+
+- **Ausgeschaltet** antwortet `POST /api/public/traffic` mit 204, speichert
+  nichts und fragt die Datenbank nicht. Herkunftsprüfung, Kontingent `traffic`
+  und Schema laufen trotzdem: Den Schalter vor das Kontingent zu ziehen hiesse,
+  ein Kontingent von Hand in den Handler zu schreiben — und ein Zählschlüssel
+  für 60 Sekunden ist kein gespeicherter Besuch.
+- **Der Browser** erfährt den Schalter aus `GET /api/public/runtime-config`
+  (Pflichtfeld `besuchsmessung`). Ohne Einwilligung „Statistik" stellt er gar
+  keine Anfrage; mit Einwilligung genau eine je Seite, geteilt mit den
+  Analyse-Skripten. Steht `besuchsmessung` auf `false`, entsteht keine
+  Sitzungskennung, es gibt keinen POST und keine Klick- oder
+  `pagehide`-Zuhörer.
+- **Warum aus als Vorgabe:** Eingeschaltet ist die Messung kein Fehler — die
+  Einwilligung bleibt die Schranke —, aber sie darf erst laufen, wenn die
+  Erklärung rechtlich geprüft ist (TA-02). Eine Vorgabe „an" hätte diese
+  Entscheidung still vorweggenommen. Die Produktionsvorprüfung warnt deshalb
+  genau dann, wenn die Instanz misst.
+- `npm run dev` misst ohne Eintrag in `.env` nicht; der Prüfserver
+  (`scripts/test-server.ts`) und der Diagnoseserver setzen `an`, damit die
+  Prüfreihen die Erfassung prüfen können.
 
 ### Ereignisse (fester Wertevorrat, `TrafficEventName`)
 
@@ -117,6 +160,24 @@ additiv; die zwei Prüfbedingungen sind von Hand ergänzt und dort begründet.
 „heute vor 13 Monaten" (`aufbewahrungsgrenze`). Idempotent — ein zweiter Lauf
 findet nichts mehr. Die Auswertung lässt höchstens 400 Tage auf einmal zu.
 
+**Überall dieselbe Zahl (seit 2026-10-01).** Bis dahin nannte die
+Datenschutzerklärung im Fliesstext 13, in der Tabelle „Analysedaten" 14
+Monate. Beide Stellen leiten die Zahl jetzt aus
+`TRAFFIC_GRENZEN.aufbewahrungMonate` ab — der Konstante, nach der der
+Nachtlauf löscht —, sodass Erklärung und Löschung nur noch gemeinsam wandern
+können.
+
+**Google Analytics** (nur mit gesetzter Kennung und Einwilligung): Das Skript
+setzt `cookie_expires` = 34 128 000 s, also 13 Monate (395 Tage, aus
+`GA_COOKIE_MONATE` in `src/lib/traffic/google-analytics.ts`) statt Googles
+Vorgabe von zwei Jahren; die Cookie-Erklärung zeigt `_ga`/`_ga_*` aus derselben
+Konstante. **Nicht im Code** liegt die Datenaufbewahrung der GA4-Property
+selbst: Sie stellt die Betreiberin in Google Analytics ein (Verwaltung →
+Datenaufbewahrung). GA4 Standard bietet nach Googles Dokumentation 2 oder 14
+Monate — mit 14 Monaten behielte Google die Daten länger als die erklärten
+13. **EXTERNER NACHWEIS ERFORDERLICH** (`docs/PENDENZEN.md` P2H-65); ebenso für
+die Cookies eines GTM-Containers.
+
 ## 6. Grenzen — was die Zahlen nicht sind
 
 - **Untererfassung ist sicher.** Gezählt wird nur, wer der Statistik zustimmt,
@@ -149,14 +210,19 @@ durch die Datenschutzberatung der Betreiberin:
    beschreiben die Messung (Abschnitt „Beim Besuch der Website" bzw. Kategorie
    „Statistik", Eintrag `clenaris-besuch`). **Ist in `/admin` eine eigene
    Fassung gepflegt, ersetzt sie die eingebaute vollständig** — dann muss der
-   Absatz dort von Hand übernommen werden.
+   Absatz dort von Hand übernommen werden. Und mit ihr verschwindet heute der
+   Knopf „Einstellungen zurücksetzen" (`ConsentSettingsLink`), der einzige
+   Widerrufsweg — er steht nur in der eingebauten Fassung
+   (`docs/PENDENZEN.md` P2H-64, im Code offen).
 2. Ob die Einwilligung für diese Messung erforderlich ist oder ein anderer
    Rechtsgrund trägt, ist eine Beurteilung, die der Code nicht trifft. Er holt
    die Einwilligung vorsorglich ein.
-3. Aufbewahrungsfrist 13 Monate — in der Erklärung steht für „Analysedaten"
-   14 Monate (Google Analytics); beide Angaben sind mit der tatsächlichen
-   Konfiguration abzugleichen.
-4. Ob `Sec-GPC` rechtlich als Widerspruch zu behandeln ist, ist offen; der
+3. Aufbewahrungsfrist 13 Monate — seit 2026-10-01 nennt die Erklärung sie
+   überall gleich, aus der Konstante der Löschung (Abschnitt 5). Offen ist nur
+   noch die Einstellung der GA4-Property (2 oder 14 Monate, Abschnitt 5) — sie
+   ist mit der Erklärung abzugleichen.
+4. **Erst nach dieser Prüfung `CLENARIS_BESUCHSMESSUNG=an`** (Abschnitt 2a).
+5. Ob `Sec-GPC` rechtlich als Widerspruch zu behandeln ist, ist offen; der
    Code behandelt es so.
 
 ## 8. Rechte und Oberfläche
@@ -172,6 +238,24 @@ durch die Datenschutzberatung der Betreiberin:
 
 - `tests/api/traffic-rechenkern.test.ts` — Bereinigung, UTM, Referrer,
   Geräte/Browser, Signale, Sitzungshash, Zeiträume, Aufbewahrungsgrenze,
-  Wertevorrat gegen `schema.prisma`. Läuft ohne Server.
-- `tests/api/traffic.test.ts` — über HTTP, am Bestand der Testdatenbank.
+  Wertevorrat gegen `schema.prisma`; seit 2026-10-01 auch der Schalter der
+  Instanz, die gleiche Regel in der Vorprüfung, die Laufzeit des GA-Cookies
+  und der stille Erfassungshelfer bei ausgeschalteter Instanz. Läuft ohne
+  Server.
+- `tests/api/traffic.test.ts` — über HTTP, am Bestand der Testdatenbank
+  (speichert nur, weil der Prüfserver `CLENARIS_BESUCHSMESSUNG=an` setzt).
+- `tests/api/laufzeit-konfiguration.test.ts` — zwei Instanzen aus demselben
+  Bau: A mit `an` speichert, B ohne speichert nichts (braucht einen
+  vollständigen Bau; überspringt sich nie).
+- `tests/pages/public-site.test.ts` — „Rechtstexte — Fristen aus den
+  Konstanten": Analysedaten 13 Monate gleich der Löschfrist, `_ga`/`_ga_*` aus
+  `GA_COOKIE_MONATE`.
+- `tests/e2e/besuchsmessung.browser.spec.ts` (Chromium, Firefox, WebKit) —
+  keine Zeile ohne Einwilligung und nach „Nur notwendige", gespeichert mit
+  Einwilligung ohne Abfrage und Token, ein gesperrter Endpunkt ohne
+  Seitenfehler, und seit 2026-10-01 der **Widerruf** über „Einstellungen
+  zurücksetzen": danach keine Zeile mehr, das Banner fragt neu (TA-03).
 - `tests/pages/smoke.test.ts` — drei Aufrufe der Seite.
+
+Die mit 2026-10-01 bezeichneten HTTP- und Browserfälle sind geschrieben; ihr
+erster Lauf ist der Volllauf auf dem Release-Kandidaten der Härtung.
