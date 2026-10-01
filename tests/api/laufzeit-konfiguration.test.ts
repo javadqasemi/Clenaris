@@ -45,6 +45,15 @@ import { testDb, testDbSchliessen } from '../helpers/testdb';
  * Ebene 3 überspringt sich örtlich, wenn kein Bau oder keine Testdatenbank
  * da ist — im CI (`CI` gesetzt) scheitert sie stattdessen: Dort ist sie der
  * Nachweis, und ein übersprungener Nachweis ist keiner.
+ *
+ * Eine Ausnahme, mit Absicht: „Instanz mit ausgeschalteter Besuchsmessung
+ * speichert nichts" (2026-09-30) überspringt sich auch örtlich nie. Neue
+ * Fälle fallen unter das Null-Übersprung-Tor des Prüfwegs; ein weiterer
+ * bedingter Übersprung hätte es geschwächt, und der Schalter wäre gerade
+ * dort unbelegt geblieben, wo er zählt. Wer die Datei örtlich gegen
+ * `npm run dev` oder ohne `clenaris_test` laufen lässt, sieht diesen einen
+ * Fall deshalb rot, mit dem Grund in der Meldung — das ist die fehlende
+ * Voraussetzung, kein Fehler des Produkts.
  */
 
 // Werte, die in keiner Antwort auftauchen dürfen. Jeder ist eindeutig genug,
