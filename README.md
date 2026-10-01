@@ -212,7 +212,7 @@ versendet.
 | Variable | Pflicht | Zweck |
 | --- | --- | --- |
 | `DATABASE_URL` | ja | PostgreSQL-Verbindung |
-| `DIRECT_URL` | – | Direktverbindung für die Prisma-Kommandozeile (`migrate`), bei Pooling Pflicht; sonst gilt `DATABASE_URL` (`prisma.config.ts`) |
+| `DIRECT_URL` | ja¹ | Direktverbindung für die Prisma-Kommandozeile (`migrate`), hinter einem Pooler am Pooler vorbei; örtlich gilt ohne sie `DATABASE_URL` (`prisma.config.ts`) |
 | `JWT_SECRET` | ja | mindestens 32 Zeichen |
 | `APP_URL` | ja | Adresse dieser Instanz für Links in E-Mails, PDFs, Zahlungen, Signaturen und die Herkunftsprüfung — zur Laufzeit gelesen (älterer Name `NEXT_PUBLIC_APP_URL` gilt als Rückfall) |
 | `NEXT_PUBLIC_SITE_URL` | beim Bau | kanonische Domain der Website (Canonical, Sitemap, robots.txt), für jede Umgebung dieselbe |
@@ -225,8 +225,13 @@ versendet.
 | `NEXT_PUBLIC_GOOGLE_MAPS_API_KEY` | – | Navigation und Geokodierung |
 | `CRON_SECRET` | ja¹ | schützt die Scheduler-Endpunkte |
 | `ENCRYPTION_KEY` | ja¹ | verschlüsselt TOTP-Geheimnis, AHV-Nummer und Alarmcode (64 Hex-Zeichen) |
+| `CLENARIS_UMGEBUNG` | ja¹ | `production` oder `staging` — eine Produktion sagt ausdrücklich, dass sie eine ist |
+| `TRUSTED_PROXY_MODE` | ja¹ | welchem Kopf die Anwendung die Client-Adresse glaubt (`NONE`, `SINGLE_REVERSE_PROXY`, `CLOUDFLARE`); örtlich ohne Wert `NONE` |
+| `CLAMAV_HOST` | ja¹ | Adresse von `clamd`; ohne Scanner wird keine hochgeladene Datei ausgeliefert |
 
-¹ In der Produktion zwingend. Ohne `CRON_SECRET` weisen die Scheduler-Endpunkte
+¹ In der Produktion zwingend: Die Produktionsvorprüfung jeder Aktivierung
+(`scripts/production-preflight.ts`) hält ohne den Wert vor der Migration an;
+die vollständige Liste steht in `docs/DEPLOYMENT.md` §3. Ohne `CRON_SECRET` weisen die Scheduler-Endpunkte
 jede Anfrage ab. Ohne `ENCRYPTION_KEY` läuft die Anwendung zwar, leitet den
 Schlüssel aber aus `JWT_SECRET` ab — ein Wechsel von `JWT_SECRET` machte die
 verschlüsselten Felder dann unlesbar.

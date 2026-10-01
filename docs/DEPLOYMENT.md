@@ -36,9 +36,15 @@ Postgres-Blob-Treiber zurück.
 > bleiben stehen, weil `vercel.json` noch im Repository liegt und die
 > Abschnitte erklären, was diese Datei tut; ersetzt werden sie durch
 > Abschnitt 13 (eigener Server), 13.6 (Crontab) und die Cloudflare-Kette
-> oben. Die Abschnitte 1 bis 3, 5, 6 und 9 bis 11 gelten unverändert für
-> beide Wege — sie handeln von Datenbank, Speicher, Konfiguration, Stripe,
-> E-Mail, Sicherung und Betrieb, nicht vom Anbieter.
+> oben. Die Abschnitte 2, 3, 5, 6 und 11 gelten für beide Wege — sie handeln
+> von Speicher, Konfiguration, Stripe, E-Mail und der Abnahme, nicht vom
+> Anbieter. **Nicht unverändert** gelten der Kopf von Abschnitt 1 (Supabase-
+> Pooler mit `connection_limit`, `npm run db:deploy` und `npm run db:seed` von
+> Hand), Abschnitt 9 (die tägliche Supabase-Sicherung; für V2 gilt
+> `docs/BACKUP_DR.md`) und die Pool-Hinweise in Abschnitt 10 („Functions") —
+> sie stammen aus der Vercel-Zeit und tragen dort je einen Hinweis. Die
+> Unterabschnitte von Abschnitt 1 ab „Vor der Inbetriebnahme von Production
+> V2" sind für V2 geschrieben.
 
 > **Wo die Angaben zum alten Server geblieben sind.**
 > Bis 2026-09-21 stand hier die Infrastruktur des bisherigen
@@ -78,9 +84,26 @@ npm run db:deploy     # Migrationen anwenden
 npm run db:seed       # nur bei einer Neuinstallation
 ```
 
-Vor dem Seed in Produktion `SEED_ADMIN_EMAIL` und `SEED_ADMIN_PASSWORD` setzen
-— sonst entsteht ein Administrationskonto mit den Demo-Zugangsdaten aus dem
-Repository. Der Seed bricht in der Produktion ab, wenn sie fehlen.
+Der Seed legt neben Organisation, Leistungen und Preisen zwei
+Verwaltungskonten an. Auf einem produktiven System — und überall, wo
+`prisma/seed-guard.ts` keine Test- oder Vorschaudatenbank erkennt und
+`ALLOW_DEMO_SEED=ja` fehlt — verlangt er dafür
+`SEED_ADMIN_PASSWORD` und `SEED_SUPERADMIN_PASSWORD` — mindestens 12 Zeichen
+und kein im Repository veröffentlichtes Passwort — und bricht ohne sie ab
+(`prisma/seed.ts`, `pruefeStartpasswoerter`); ein Konto mit den
+Demo-Zugangsdaten entsteht dort nicht mehr.
+
+> **Für Production V2 gilt dieser Kopf nicht.** Auf V2 migriert nur die
+> Aktivierung (Abschnitt 15: `migrate deploy` aus dem entpackten Release,
+> davor die Sicherung); auf dem Server läuft kein `npm`. Der Seed setzt die
+> beiden Startpasswörter voraus, die nach `docs/NOTFALL_WIEDERHERSTELLUNG.md`
+> §3 auf V2 nie gesetzt werden — wie eine Erstinstallation auf einer leeren
+> Datenbank abläuft, ist ungeklärt (`docs/PENDENZEN.md` P2H-76); geplant ist
+> die Übernahme der geprüften Datenbank (`NOTFALL_WIEDERHERSTELLUNG.md` §17).
+> Und unter Prisma 7 (`adapter-pg`, `src/lib/prisma-client.ts`) liest niemand
+> mehr `pgbouncer=true` oder `connection_limit` aus der `DATABASE_URL`: Die
+> Poolgrösse ist die von `pg` — höchstens 10 Verbindungen je Prozess
+> (P2H-57). Die Trennung `DATABASE_URL`/`DIRECT_URL` gilt weiter (Abschnitt 3).
 
 ### Vor der Inbetriebnahme von Production V2: offene Punkte
 
@@ -495,6 +518,11 @@ Vercel stellt das Zertifikat aus und erneuert es. HSTS setzt die Middleware.
 
 ## 9. Sicherung
 
+> Für Production V2 (eigener Server, kein Supabase-Tarif) gilt
+> `docs/BACKUP_DR.md`; die Aktivierung sichert vor jeder Migration selbst
+> (Abschnitt 1, „Datenbanksicherung vor Schemaänderungen"). Der folgende
+> Absatz beschreibt den Betrieb mit Supabase.
+
 Supabase sichert täglich automatisch (Aufbewahrung je nach Tarif). Für die
 zehnjährige Aufbewahrungspflicht der Geschäftsbücher (Art. 958f OR) reicht das
 nicht — ein monatlicher Export gehört an einen zweiten Ort:
@@ -514,13 +542,23 @@ und Lohnabrechnungen brauchen eine eigene Sicherung.
 
 ## 10. Betrieb
 
+> Der Abschnitt stammt aus der Vercel-Zeit. Für V2 berichtigt sind die
+> Pool-Angaben unten: Unter Prisma 7 hält jeder Node-Prozess einen eigenen
+> `pg`-Pool, und `connection_limit` in der Adresse wirkt nicht mehr. Prozesse,
+> Protokolle und Wiederherstellung auf dem Server: Abschnitte 13, 17 und 18.
+
 **Was beobachten.**
 
 - 5xx-Rate auf `/api/webhooks/stripe` — dort steht Geld dahinter.
 - Dauer von `/api/cron/daily`; nähert sie sich 60 Sekunden, muss der Lauf
   aufgeteilt werden.
-- Verbindungsanzahl der Datenbank. Bei Pooling gehört `connection_limit=1` in
-  die `DATABASE_URL`, sonst erschöpfen parallele Functions den Pool.
+- Verbindungsanzahl der Datenbank. Jeder PM2-Prozess (`PM2_INSTANCES`,
+  Vorgabe 2, `ecosystem.config.js`) hält einen `pg`-Pool von höchstens 10
+  Verbindungen (`src/lib/prisma-client.ts`, pg-Vorgabe); `max_connections`
+  der Datenbank muss Prozesse × 10 plus Werkzeuge tragen. Der frühere Rat,
+  `connection_limit=1` gegen parallele Vercel-Functions in die `DATABASE_URL`
+  zu schreiben, wirkt unter Prisma 7 nicht — der Adapter liest den Wert nicht
+  (`docs/PENDENZEN.md` P2H-57: Pool ohne Fristen, Produktentscheid).
 - 429-Antworten. Häufen sie sich für angemeldete Konten, sind die Klassen zu
   eng gefasst.
 
@@ -529,7 +567,7 @@ und Lohnabrechnungen brauchen eine eigene Sicherung.
 | Symptom | Ursache | Abhilfe |
 | --- | --- | --- |
 | Build bricht beim Vorrendern ab | keine DB-Verbindung während des Builds | `DATABASE_URL` auch für die Build-Umgebung setzen |
-| „Too many connections" | Pooling ohne Limit | `?pgbouncer=true&connection_limit=1` |
+| „Too many connections" | mehr Prozesse × 10 Verbindungen, als `max_connections` trägt | Prozesszahl (`PM2_INSTANCES`) oder `max_connections` anpassen; `?pgbouncer=true&connection_limit=1` wirkt unter Prisma 7 nicht |
 | Cron läuft nicht | `CRON_SECRET` fehlt | Variable setzen und neu ausliefern |
 | Zahlung bleibt offen | Webhook nicht erreichbar oder Signatur falsch | Stripe-Ereignisprotokoll prüfen |
 | PDF ohne QR-Code | `COMPANY_QR_IBAN` fehlt oder ist keine QR-IBAN | IBAN prüfen (Institut 30000–31999) |
@@ -1124,12 +1162,15 @@ Anwendung liest den ersten Eintrag):
     proxy_set_header X-Forwarded-For $remote_addr;
 ```
 
-und in die Umgebung `TRUSTED_PROXY_MODE=SINGLE_REVERSE_PROXY`. Ohne diese
-Variable läuft die Anwendung im Modus `NONE`: Rate-Limits greifen dann je
-Prozess ohne Adressbezug (alle Aufrufer teilen sich den Schlüssel
-`unbekannt`), und Prüf- wie Signaturprotokoll tragen
-`ipSource = UNAVAILABLE`. Das ist kein Fehler, sondern die Aussage „nicht
-bekannt" — sie wird im Protokoll genau so ausgewiesen.
+und in die Umgebung `TRUSTED_PROXY_MODE=SINGLE_REVERSE_PROXY`. Zur Laufzeit
+fällt die Anwendung ohne die Variable auf den Modus `NONE` zurück
+(`src/lib/env.ts`): Rate-Limits greifen dann ohne Adressbezug (alle Aufrufer
+teilen sich den Schlüssel `unbekannt`), und Prüf- wie Signaturprotokoll
+tragen `ipSource = UNAVAILABLE` — die Aussage „nicht bekannt", im Protokoll
+genau so ausgewiesen. In der Produktion verlangt die Produktionsvorprüfung
+den Wert aber ausdrücklich (`scripts/production-preflight.ts`): Fehlt er,
+hält die Aktivierung vor der Migration an (Abschnitt 3); `NONE` bewusst
+gesetzt ergibt nur eine Warnung.
 
 **Invariante für den Anwendungsport.** Der Next.js-Port (Vorgabe 3000) darf
 in Produktion **nicht** aus dem Internet erreichbar sein — sonst umgeht jede
@@ -1193,7 +1234,7 @@ diese Secrets gehören gelöscht (`docs/NOTFALL_WIEDERHERSTELLUNG.md` §3).
 | Secret | Pflicht | Bedeutung |
 | --- | --- | --- |
 | `SERVER_HOST` | ja | Adresse des Servers. **Quelle der Wahrheit** — die Adresse steht nirgends im Repository, und das ist Absicht: Sie darf sich ändern lassen, ohne dass jemand Code anfasst. Genau deshalb kann aber auch niemand ausser Ihnen prüfen, wohin sie zeigt. Für V2 gilt: **erst die Adresse des neuen Servers eintragen, dann `DEPLOY_ENABLED` setzen** (14.2), nie umgekehrt. Eine Adresse aus dem Altbestand wird nicht weiterverwendet — auch dann nicht, wenn sie „ja noch funktioniert" |
-| `SERVER_USER` | ja | Dienstbenutzer, etwa `clenaris`. Anders als `SERVER_HOST` und `SERVER_SSH_KEY` **ungeprüft**: Fehlt er, verbindet der Lauf als `@host` und scheitert erst beim Aushandeln, mit einer Meldung, die aufs Netz zeigt statt auf die Konfiguration |
+| `SERVER_USER` | ja | Dienstbenutzer, etwa `clenaris`. Geprüft wie `SERVER_HOST`: Fehlt er, bricht der Auftrag vor der ersten Verbindung mit „Secret SERVER_USER fehlt" ab — kein Rückfall auf `root` (Schritt „SSH vorbereiten" in `deploy.yml`, seit `fb15d26` vom 2026-09-21, und in der Vorlage `deploy/v2/release-ausfuehrer.yml`). Ohne diese Prüfung ginge ein fehlender Wert als `@host` hinaus, und die Meldung zeigte aufs Netz statt auf die Konfiguration |
 | `SERVER_SSH_KEY` | ja | Privater Schlüssel, vollständig samt Kopf- und Fusszeile |
 | `APP_DIRECTORY` | ja | Basisverzeichnis auf dem Server, etwa `/home/clenaris/clenaris` — wird dort zu `CLENARIS_BASIS` (13.3). Ein absoluter Pfad nur aus Buchstaben, Ziffern, `.`, `_`, `/`, `-`; sonst bricht der Auftrag ab, weil der Wert Teil eines Befehls und eines `scp`-Ziels wird |
 | ~~`DATABASE_URL`~~ | **nicht mehr gelesen** | gehört in `shared/.env`; Secret löschen |
@@ -1419,7 +1460,8 @@ ist der Weg, den der Notfallauftrag abgeschafft hat.
 | Nach einem Serverneustart ist nichts gestartet | `pm2 resurrect`; fehlt der Dienst dauerhaft, `pm2 startup` nachholen |
 | Datenbank nicht erreichbar | `/api/health` meldet 503. Postgres und `DATABASE_URL` prüfen; die Anwendung fängt sich von selbst, sobald die Datenbank antwortet |
 | `shared/.env` verloren | Aus Abschnitt 3 neu aufbauen — die Pipeline führt seit 2026-09-27 keine Kopie mehr; die Werte stehen bei den Anbietern bzw. im Passwortverwalter der Betreiberin. `ENCRYPTION_KEY` vorher sichern (Abschnitt 3) |
-| Release-Verzeichnis zerschossen | erneut aktivieren: denselben Lauf von Hand auslösen bzw. das aufbewahrte Archiv mit `release-ruecksprung.sh --auf <commit>` (Abschnitt 16) — nie auf dem Server bauen |
+| Aktives Release-Verzeichnis zerschossen | mit `release-ruecksprung.sh --auf <vorheriger Commit> --erwartet-sha256 <Summe>` auf das vorherige, aufbewahrte Archiv zurück (Abschnitt 16), danach einen neuen Commit ausliefern. Derselbe Commit wird weder erneut aktiviert (bestätigt die Instanz ihre Identität nicht, endet die Aktivierung mit 10, sonst mit 0 „nichts zu tun") noch als Rücksprungziel angenommen (10). Der Rücksprung startet sein Werkzeug aus dem aktiven Release — fehlen dort `scripts/release-ruecksprung.ts` oder `tsx`, verweigert er (10), und es bleibt nur die Auslieferung eines neuen Commits. Nie auf dem Server bauen |
+| Nicht aktives Release-Verzeichnis zerschossen | nichts zu tun: Die nächste Aktivierung und jeder Rücksprung entpacken ihr Ziel frisch aus dem Archiv und ersetzen ein vorhandenes Verzeichnis |
 | Server vollständig verloren | Abschnitt 13 neu durchlaufen, Datenbank aus der Sicherung einspielen (`docs/BACKUP_DR.md`), dann den Workflow von Hand auslösen |
 
 Die Anwendung hält **keinen** Zustand ausser Datenbank und Dateiablage. Ein
