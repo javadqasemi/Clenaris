@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import {
@@ -36,6 +36,51 @@ import {
 const wurzel = process.cwd();
 const workflow = readFileSync(join(wurzel, '.github', 'workflows', 'deploy.yml'), 'utf8');
 
+/**
+ * Ein Auftrag unter `jobs:` — von seinem Namen bis zum nächsten Auftrag.
+ *
+ * Bis 2026-09-30 schnitten die Prüfungen hier „ab `auslieferung:` bis zum
+ * Dateiende" aus. Das stimmte nur, solange `auslieferung` der letzte Auftrag
+ * war; mit `reproduzierbarkeit` dahinter hätte die Prüfung „baut nicht auf
+ * dem Server" den Bau des Vergleichsauftrags dem Server zugeschrieben — oder,
+ * schlimmer, eine Prüfung „liest keine Secrets" hätte einen fremden Auftrag
+ * mitgelesen und so eine Aussage über den falschen gemacht.
+ */
+function auftrag(name: string): string {
+  const zeilen = workflow.split(/\r?\n/);
+  const anfang = zeilen.indexOf(`  ${name}:`);
+  assert.ok(anfang >= 0, `Auftrag ${name} fehlt`);
+  let ende = zeilen.length;
+  for (let i = anfang + 1; i < zeilen.length; i++) {
+    if (/^ {2}[A-Za-z_][\w-]*:\s*$/.test(zeilen[i]!)) {
+      ende = i;
+      break;
+    }
+  }
+  return zeilen.slice(anfang, ende).join('\n');
+}
+
+/** Die Schritte eines Auftrags in ihrer Reihenfolge, je mit Namen und Text. */
+function schritte(auftragText: string): { name: string; text: string }[] {
+  const liste: { name: string; text: string }[] = [];
+  const abschliessen = (teil: string[]) =>
+    liste.push({ name: /^\s*-?\s*name:\s*(.+)$/m.exec(teil.join('\n'))?.[1]?.trim() ?? '', text: teil.join('\n') });
+  let aktuell: string[] | null = null;
+  for (const zeile of auftragText.split(/\r?\n/)) {
+    if (/^ {6}- /.test(zeile)) {
+      if (aktuell) abschliessen(aktuell);
+      aktuell = [zeile];
+    } else if (aktuell) {
+      if (/^ {0,4}\S/.test(zeile)) {
+        abschliessen(aktuell);
+        aktuell = null;
+      } else aktuell.push(zeile);
+    }
+  }
+  if (aktuell) abschliessen(aktuell);
+  return liste;
+}
+
 describe('Aktionen auf Commits gepinnt — auch in den Vorlagen', () => {
   /**
    * Bis 2026-09-27 stand das nur im Bericht („alle vier Aktionen gepinnt"),
@@ -45,11 +90,17 @@ describe('Aktionen auf Commits gepinnt — auch in den Vorlagen', () => {
    * Pipeline mit Zugriff auf die Produktionsgeheimnisse.
    */
   it('jede `uses:`-Zeile nennt einen 40-stelligen Commit', () => {
-    const dateien = [
-      join('.github', 'workflows', 'deploy.yml'),
-      join('deploy', 'v2', 'workflow-ergaenzung.yml'),
-      join('deploy', 'v2', 'release-ausfuehrer.yml'),
-    ];
+    // Seit 2026-09-30 jede YAML-Datei beider Ordner statt einer festen Liste:
+    // `workflow-ergaenzung.yml` ist entfallen, und eine neue Vorlage soll
+    // nicht erst in dieser Liste nachgetragen werden müssen, um geprüft zu
+    // sein.
+    const dateien = [join('.github', 'workflows'), join('deploy', 'v2')].flatMap((ordner) =>
+      readdirSync(join(wurzel, ordner))
+        .filter((name) => /\.ya?ml$/.test(name))
+        .map((name) => join(ordner, name)),
+    );
+    assert.ok(dateien.includes(join('.github', 'workflows', 'deploy.yml')));
+    assert.ok(dateien.includes(join('deploy', 'v2', 'release-ausfuehrer.yml')));
     const lose: string[] = [];
     for (const datei of dateien) {
       for (const [nr, zeile] of readFileSync(join(wurzel, datei), 'utf8').split(/\r?\n/).entries()) {
@@ -100,25 +151,22 @@ describe('Auslieferungs-Workflow — fail-closed', () => {
    * bleibt, was die Pipeline betrifft: dass sie sie nicht mehr anfasst.
    */
   it('der Auslieferungsauftrag liest keine Anwendungsgeheimnisse', () => {
-    const auftrag = workflow.slice(workflow.indexOf('\n  auslieferung:'));
     assert.doesNotMatch(
-      auftrag,
+      auftrag('auslieferung'),
       /secrets\.(DATABASE_URL|DIRECT_URL|JWT_SECRET|CRON_SECRET|ENCRYPTION_KEY|STRIPE|RESEND|TWILIO|SUPABASE|ANTHROPIC)/,
       'jedes Geheimnis, das die Pipeline kennt, ist eines mehr, das nach einem Vorfall rotiert werden muss',
     );
   });
 
   it('baut nicht auf dem Server — er aktiviert das geprüfte Artefakt', () => {
-    const auftrag = workflow.slice(workflow.indexOf('\n  auslieferung:'));
-    const befehle = auftrag
+    const befehle = auftrag('auslieferung')
       .split(/\r?\n/)
       .filter((z) => !/^\s*#/.test(z))
       .join('\n');
     assert.doesNotMatch(befehle, /scripts\/deploy\.sh|npm ci|npm install|npm run build|git (pull|reset|fetch)/);
     assert.match(befehle, /release-aktivieren\.sh/);
     assert.match(befehle, /sha256sum -c/, 'die Summe wird vor der Übertragung geprüft');
-    const tor = workflow.slice(workflow.indexOf('\n  qualitaet:'), workflow.indexOf('\n  auslieferung:'));
-    assert.match(tor, /scripts\/release-artefakt\.ts/, 'das Artefakt entsteht im Qualitätstor, aus dem geprüften Bau');
+    assert.match(auftrag('qualitaet'), /scripts\/release-artefakt\.ts/, 'das Artefakt entsteht im Qualitätstor, aus dem geprüften Bau');
   });
 
   it('die Vorprüfung auf dem Server kennt DIRECT_URL, weil die Migrationen sie benutzen', () => {
@@ -131,9 +179,12 @@ describe('Auslieferungs-Workflow — fail-closed', () => {
     assert.match(vorpruefung, /'DIRECT_URL'/);
     const aktivieren = readFileSync(join(wurzel, 'deploy', 'v2', 'release-aktivieren.sh'), 'utf8');
     assert.match(aktivieren, /production-preflight\.ts --phase vor-migration/, 'vor der Migration');
+    // Seit 2026-09-30 ruft das Skript Prisma aus dem Release selbst (`npx`
+    // lüde Fehlendes aus dem Netz) und schaltet über das Werkzeug aus dem
+    // neuen Release um; die Reihenfolge ist dieselbe geblieben.
     const vor = aktivieren.indexOf('production-preflight.ts --phase vor-migration');
-    const migration = aktivieren.indexOf('npx prisma migrate deploy');
-    const umschalten = aktivieren.indexOf('umschalten "${ZIEL}"');
+    const migration = aktivieren.indexOf('"${PRISMA[@]}" migrate deploy');
+    const umschalten = aktivieren.indexOf('scripts/release-umschalten.ts" umschalten');
     assert.ok(vor > 0 && vor < migration && migration < umschalten, 'Vorprüfung → Migration → Umschalten');
   });
 
@@ -191,13 +242,22 @@ describe('Auslieferungs-Workflow — fail-closed', () => {
    * Entscheidung. Er löst das volle Qualitätstor aus und nichts sonst.
    */
   it('liefert aus einem Pull Request niemals aus', () => {
-    const auftrag = workflow.slice(workflow.indexOf('\n  auslieferung:'));
+    const text = auftrag('auslieferung');
     assert.match(
-      auftrag,
+      text,
       /github\.event_name != 'pull_request'/,
       'der Auslieferungsauftrag muss Pull Requests ausdrücklich ausschliessen',
     );
-    assert.match(auftrag, /needs:\s*qualitaet/, 'und erst nach dem Qualitätstor laufen');
+    assert.match(text, /needs:\s*qualitaet/, 'und erst nach dem Qualitätstor laufen');
+  });
+
+  /**
+   * Seit 2026-09-30. Ein von Hand ausgelöster Lauf auf einem anderen Zweig
+   * ist kein Pull Request und kam an der Bedingung oben vorbei; erst das
+   * fehlende Artefakt hätte ihn angehalten.
+   */
+  it('liefert nur von main aus', () => {
+    assert.match(auftrag('auslieferung'), /^\s*&& github\.ref == 'refs\/heads\/main'\s*$/m);
   });
 
   /**
@@ -207,9 +267,8 @@ describe('Auslieferungs-Workflow — fail-closed', () => {
    * an das alte Ziel auslösen.
    */
   it('liefert nur bei ausdrücklich eingeschalteter Auslieferung aus', () => {
-    const auftrag = workflow.slice(workflow.indexOf('\n  auslieferung:'));
     assert.match(
-      auftrag,
+      auftrag('auslieferung'),
       /vars\.DEPLOY_ENABLED == 'true'/,
       'ohne diesen Schalter liefert der nächste grüne Lauf an das Ziel der bestehenden Secrets',
     );
@@ -222,15 +281,13 @@ describe('Auslieferungs-Workflow — fail-closed', () => {
    * mit Wegwerfwerten aus.
    */
   it('das Qualitätstor liest kein einziges Secret', () => {
-    const anfang = workflow.indexOf('\n  qualitaet:');
-    const ende = workflow.indexOf('\n  auslieferung:');
-    assert.ok(anfang > 0 && ende > anfang, 'beide Aufträge müssen existieren');
-    const tor = workflow.slice(anfang, ende);
-    assert.doesNotMatch(
-      tor,
-      /secrets\./,
-      'ein Qualitätstor mit Secrets ist für Fork-Pull-Requests nicht lauffähig',
-    );
+    for (const name of ['qualitaet', 'reproduzierbarkeit']) {
+      assert.doesNotMatch(
+        auftrag(name),
+        /secrets\./,
+        `${name}: ein Auftrag mit Secrets ist für Fork-Pull-Requests nicht lauffähig — und braucht sie nicht`,
+      );
+    }
   });
 
   /**
@@ -238,14 +295,26 @@ describe('Auslieferungs-Workflow — fail-closed', () => {
    * reinen Anzeigefläche — hat der `secrets`-Kontext nichts zu suchen.
    */
   it('schreibt keinen secrets-Wert in die Zusammenfassung', () => {
-    const stelle = workflow.indexOf('GITHUB_STEP_SUMMARY');
-    assert.ok(stelle > 0, 'die Zusammenfassung muss existieren');
-    const block = workflow.slice(workflow.lastIndexOf('- name: Zusammenfassung'), stelle);
-    assert.doesNotMatch(
-      block,
-      /secrets\./,
-      'die Regel «Secrets stehen in keiner Ausgabe» verliert ihren Wert mit der ersten Ausnahme',
+    // Bis 2026-09-30 schnitt diese Prüfung von der *letzten* Zusammenfassung
+    // bis zur *ersten* Erwähnung von GITHUB_STEP_SUMMARY aus — seit die
+    // Prüfsumme des Artefakts im Qualitätstor in die Zusammenfassung geht,
+    // lag die erste davor, der Ausschnitt war leer und die Prüfung bestand
+    // ohne hinzusehen. Jetzt wird jeder Schritt geprüft, der in die
+    // Zusammenfassung schreibt.
+    const schreibend = ['qualitaet', 'auslieferung']
+      .flatMap((name) => schritte(auftrag(name)))
+      .filter((s) => s.text.includes('GITHUB_STEP_SUMMARY'));
+    assert.deepEqual(
+      schreibend.map((s) => s.name).sort(),
+      ['Prüfsumme in die Zusammenfassung', 'Zusammenfassung'],
     );
+    for (const s of schreibend) {
+      assert.doesNotMatch(
+        s.text,
+        /secrets\./,
+        'die Regel «Secrets stehen in keiner Ausgabe» verliert ihren Wert mit der ersten Ausnahme',
+      );
+    }
   });
 
   it('verwendet den secrets-Kontext nicht unter environment.url', () => {
@@ -258,6 +327,120 @@ describe('Auslieferungs-Workflow — fail-closed', () => {
       /^\s*url:.*secrets\./m,
       'environment.url mit secrets-Kontext macht die ganze Workflow-Datei ungültig',
     );
+  });
+});
+
+describe('Qualitätstor — Reihenfolge und Artefakt (seit 2026-09-30)', () => {
+  const tor = schritte(auftrag('qualitaet'));
+  const stelle = (name: string) => {
+    const i = tor.findIndex((s) => s.name === name);
+    assert.ok(i >= 0, `Schritt „${name}" fehlt`);
+    return i;
+  };
+  const text = (name: string) => tor[stelle(name)]!.text;
+
+  /**
+   * Die Schranken (Trigger, Prüfregeln, Teilindizes) gehören zum Schema, auf
+   * das sich Belege und Protokoll verlassen. Stehen sie nach der Migration
+   * nicht, prüft die ganze Reihe danach ein Schema, das die Produktion nicht
+   * hat.
+   */
+  it('prüft die Datenbankschranken unmittelbar nach der Migration', () => {
+    assert.match(text('Datenbankschema anwenden'), /run: npx prisma migrate deploy\s*$/m);
+    assert.equal(stelle('Datenbankschranken prüfen'), stelle('Datenbankschema anwenden') + 1);
+    assert.match(text('Datenbankschranken prüfen'), /run: npx tsx scripts\/datenbank-schranken\.ts\s*$/m);
+    assert.doesNotMatch(text('Datenbankschranken prüfen'), /continue-on-error|\|\| true/, 'jeder Ausgang ausser 0 hält an');
+  });
+
+  /**
+   * Der Bau rendert die Website aus der Datenbank vor. Demodaten vor dem Bau
+   * hiessen Demodaten im ausgelieferten Bündel.
+   */
+  it('spielt vor dem Bau nur die Konfiguration ein, die Demodaten erst nach dem Packen', () => {
+    assert.match(text('Konfiguration einspielen'), /run: npm run db:seed\s*$/m);
+    assert.match(text('Demodaten einspielen'), /run: npm run db:seed:demo\s*$/m);
+    const reihe = [
+      'Datenbankschranken prüfen',
+      'Konfiguration einspielen',
+      'Build',
+      'Release-Artefakt packen',
+      'Demodaten einspielen',
+      'Anwendung starten',
+      'Prüfreihen (verify:tests)',
+    ].map(stelle);
+    assert.deepEqual([...reihe].sort((a, b) => a - b), reihe);
+    const vorDemo = tor.slice(0, stelle('Demodaten einspielen'));
+    assert.ok(!vorDemo.some((s) => /db:seed:demo/.test(s.text)), 'kein Demo-Seed vor dem Packen');
+  });
+
+  /**
+   * `.next/cache` aus einem früheren Lauf ist Zustand, den kein Commit
+   * beschreibt. Ein Artefakt muss aus dem Commit allein entstehen.
+   */
+  it('baut ohne Zwischenspeicher aus früheren Läufen', () => {
+    assert.doesNotMatch(workflow, /uses:\s*actions\/cache@/);
+    assert.doesNotMatch(workflow, /^\s*path:\s*\.next\/cache/m);
+  });
+
+  /**
+   * Der gestartete Prüfserver schreibt in `.next`. Ein danach gepacktes
+   * Artefakt enthielte, was die Prüfreihe dort hinterlassen hat.
+   */
+  it('packt das Artefakt vor jedem Serverstart — auch im Pull Request', () => {
+    const packen = stelle('Release-Artefakt packen');
+    assert.match(text('Release-Artefakt packen'), /run: npx tsx scripts\/release-artefakt\.ts --ausgabe release\s*$/m);
+    assert.doesNotMatch(text('Release-Artefakt packen'), /^\s*if:/m, 'gepackt wird in jedem Lauf, im Pull Request als Probe');
+    assert.ok(packen > stelle('Build') && packen > stelle('Leistungsbudget'));
+    tor.forEach((s, i) => {
+      if (/test-server\.ts|next start|start:built|npm run start/.test(s.text)) {
+        assert.ok(i > packen, `„${s.name}" startet einen Server vor dem Packen`);
+      }
+    });
+  });
+
+  /**
+   * Abgelegt wird nur, was ausgeliefert werden darf — und erst, wenn die
+   * Prüfreihen gegen genau diesen Bau grün sind.
+   */
+  it('legt das Artefakt nur bei Push oder Handauslösung auf main ab, nach den Prüfreihen', () => {
+    const ablegen = tor.find((s) => /name: release-\$\{\{ github\.sha \}\}/.test(s.text));
+    assert.ok(ablegen, 'Ablageschritt fehlt');
+    assert.match(
+      ablegen.text,
+      /^\s*if: github\.ref == 'refs\/heads\/main' && \(github\.event_name == 'push' \|\| github\.event_name == 'workflow_dispatch'\)\s*$/m,
+    );
+    // Der Kommentar des Schritts erklärt, warum `always()` fehlt — geprüft
+    // werden deshalb nur die ausgeführten Zeilen.
+    assert.doesNotMatch(
+      ablegen.text
+        .split(/\r?\n/)
+        .filter((z) => !/^\s*#/.test(z))
+        .join('\n'),
+      /always\(\)|failure\(\)|continue-on-error/,
+      'nach roten Prüfreihen wird nichts abgelegt',
+    );
+    assert.ok(tor.indexOf(ablegen) > stelle('Prüfreihen (verify:tests)'));
+  });
+
+  it('Reproduzierbarkeit: nur von Hand, nur lesend, zwei saubere Bauten und ein Vergleich', () => {
+    const vergleich = auftrag('reproduzierbarkeit');
+    assert.match(vergleich, /^ {4}if: github\.event_name == 'workflow_dispatch'\s*$/m);
+    assert.match(vergleich, /^ {4}permissions:\s*\n {6}contents: read\s*$/m);
+    assert.match(vergleich, /persist-credentials: false/);
+    const namen = schritte(vergleich).map((s) => s.name);
+    const reihe = [
+      'Datenbankschema anwenden',
+      'Konfiguration einspielen',
+      'Bau A',
+      'Bau A beiseitelegen',
+      'Bau B (sauber)',
+      'Bauten vergleichen',
+      'Vergleichsbericht sichern',
+    ].map((n) => namen.indexOf(n));
+    assert.ok(reihe.every((i) => i >= 0), `Schritte: ${namen.join(', ')}`);
+    assert.deepEqual([...reihe].sort((a, b) => a - b), reihe);
+    assert.match(vergleich, /npx tsx scripts\/bau-vergleich\.ts bau-a \.next --bericht bau-vergleich\.json/);
+    assert.doesNotMatch(vergleich, /db:seed:demo|ssh |scp /);
   });
 });
 

@@ -19,8 +19,17 @@
 # den alten Weg zu gehen. Kein Schalter öffnet es wieder: Ein Notweg, der auf
 # dem Server baut, ist genau der Weg, den der Vorfall verboten hat.
 #
-echo "scripts/deploy.sh ist abgelöst (Notfallauftrag 2026-09-27): kein Bau auf dem Server." >&2
-echo "Auslieferung nur noch über das geprüfte Artefakt: deploy/v2/release-aktivieren.sh — siehe docs/NOTFALL_WIEDERHERSTELLUNG.md." >&2
+# Seit 2026-09-30 hat auch der Rücksprung seinen eigenen Weg
+# (`deploy/v2/release-ruecksprung.sh`): aus dem aufbewahrten, erneut
+# gemessenen Archiv, mit Sperre, Schema-Einstufung und Identitätsprüfung.
+# Bis dahin nannte die Dokumentation dieses Skript noch als Rücksprungweg —
+# wer es deshalb aufruft, soll hier erfahren, wohin es stattdessen geht, statt
+# nur eine Absage zu lesen.
+#
+echo "scripts/deploy.sh ist abgelöst (Notfallauftrag 2026-09-27): kein Bau auf dem Server, auch kein Rücksprung von hier." >&2
+echo "Aktivieren:  deploy/v2/release-aktivieren.sh <archiv.tar.gz> --erwartet-sha256 <hex64> (aus dem geprüften Artefakt)" >&2
+echo "Rücksprung:  deploy/v2/release-ruecksprung.sh --auf <commit> --erwartet-sha256 <hex64> [--schema-bewusst]" >&2
+echo "Siehe docs/NOTFALL_WIEDERHERSTELLUNG.md und docs/PRODUCTION_V2.md." >&2
 exit 1
 #
 # Mit `bash` davor, nicht als `./scripts/deploy.sh`: Das Repository wird unter

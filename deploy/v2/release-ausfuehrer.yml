@@ -1,20 +1,47 @@
-# Production V2 — Release-Ausführer (VORLAGE, 2026-09-27)
+# Production V2 — Release-Ausführer (VORLAGE, neu gefasst 2026-09-30)
 #
 # Diese Datei liegt bewusst NICHT unter .github/workflows: GitHub führt sie
 # nicht aus. Sie wird dorthin kopiert, wenn Production V2 freigegeben ist
 # (docs/PRODUCTION_V2.md, „Release-Ausführer"). Bis dahin ist sie die
-# vollständige, geprüfte Beschreibung des Wegs:
+# vollständige, geprüfte Beschreibung des Wegs
+# (`tests/api/release-ausfuehrer-vorlage.test.ts`):
 #
-#   Update Center (freigegeben + terminiert)
-#     → dieser Lauf holt den fälligen Auftrag   (signiert, /api/cron/release-auftraege)
-#     → sucht den grünen CI-Lauf des Commits    (Nachweis)
-#     → lädt dessen Artefakt, misst die SHA-256 (= Release, sonst Abbruch)
-#     → übernimmt den Auftrag                   (idempotent, Schlüssel = Lauf-ID)
-#     → aktiviert per release-aktivieren.sh     (Summe, Manifest, Migration, Health, Rücksprung)
-#     → meldet das Ergebnis                     (SUCCEEDED / FAILED / ROLLED_BACK)
+#   Release Center (freigegeben + terminiert)
+#     → plan       fälligen Auftrag holen           (signiert; neu | fortsetzen | nichts)
+#     → ci-lauf    grünen Push-Lauf auf main finden (Nachweis, sonst Abbruch)
+#     → abholen    dessen Artefakt laden, messen, Beilage prüfen, Auftrag übernehmen
+#     → aktivieren release-aktivieren.sh AUS DEM ARCHIV, mit --erwartet-sha256
+#     → melden     Ausgang der Aktivierung → SUCCEEDED | ROLLED_BACK | FAILED
 #
 # Die Anwendung erhält dabei nichts: kein SSH-Schlüssel, kein GitHub-Token.
 # Sie gibt nur fällige Aufträge her und nimmt Ergebnisse an.
+#
+# ---------------------------------------------------------------------------
+#  Was sich gegenüber der Fassung vom 2026-09-27 geändert hat, und warum
+# ---------------------------------------------------------------------------
+#
+#  • **Das Aktivierungsskript kommt aus dem Archiv**, nicht aus
+#    `~/clenaris/current/`. Das alte Skript unter `current/` ist Code des
+#    laufenden Release — also gerade *nicht* der geprüfte Stand, der
+#    ausgeliefert werden soll; bei der Erstinstallation gibt es ihn gar nicht.
+#  • **Dieselben Secrets wie `deploy.yml`.** Die Vorlage las `SSH_PRIVATE_KEY`
+#    und `SSH_KNOWN_HOSTS`, `deploy.yml` liest `SERVER_SSH_KEY` und
+#    `SERVER_SSH_KNOWN_HOSTS`. Zwei Namen für denselben Schlüssel heissen:
+#    Beim Einschalten ist einer davon leer, und der Fehler zeigt aufs Netz.
+#    Ohne Port, ohne `BatchMode`, ohne Prüfung des Wirtsschlüssels, mit
+#    `~/releases-eingang` statt `APP_DIRECTORY` — die alte Fassung wäre beim
+#    ersten Lauf gescheitert, und zwar mit einer irreführenden Meldung.
+#  • **ROLLED_BACK nur aus dem Ausgang der Aktivierung.** Früher: „Aktivierung
+#    rot, und eine zweite Frage an die Instanz liefert die alte Version" —
+#    ein Netzabbruch vor der Aktivierung sah damit aus wie ein Rücksprung.
+#    Heute sagt es das Skript selbst (Ausgang 20 = die alte Fassung läuft
+#    nachweislich wieder), und `melden` übersetzt nur noch.
+#  • **Keine Ausdrücke in `run:`-Blöcken.** Die alte Vorlage setzte
+#    Schrittausgaben und die Commit-Kennung per Ausdruck in den Skripttext —
+#    ein Wert mit `'` darin wäre Code geworden. Werte reisen nur über `env:`.
+#  • **Fail-closed.** Ohne `RELEASE_EXECUTOR_ENABLED=true` läuft nichts, auch
+#    wenn die Datei unter .github/workflows liegt; ausgelöst wird nur nach
+#    Zeitplan oder von Hand, nie durch einen Push oder Pull Request.
 
 name: Release-Ausführer
 
@@ -23,114 +50,278 @@ on:
     - cron: '*/15 * * * *'
   workflow_dispatch:
 
-# Ein Lauf je Umgebung zur selben Zeit — zwei Ausführer hiessen zwei
-# Umschaltungen. Die Schnittstelle weist den zweiten ohnehin mit 409 ab.
+# Dieselbe Gruppe wie der Auftrag `auslieferung` in `deploy.yml`: Gruppen
+# gelten über Workflows hinweg, also läuft nie eine Aktivierung neben einer
+# anderen. Ein zweiter Ausführer würde von der Schnittstelle ohnehin mit 409
+# abgewiesen und auf dem Server von der Sperre (Ausgang 11) — beides erst,
+# nachdem Arbeit getan ist. Die Gruppe verhindert, dass er überhaupt beginnt.
+# Zur Eigenheit „höchstens ein wartender Lauf je Gruppe" siehe `deploy.yml`.
 concurrency:
-  group: release-ausfuehrer-production
+  group: clenaris-auslieferung-production
   cancel-in-progress: false
 
+# `actions: read` für `gh run list` und `gh run download` (Artefakt eines
+# anderen Laufs), `contents: read` für das Auschecken. Mehr nicht.
 permissions:
   contents: read
   actions: read
 
 jobs:
   ausfuehren:
+    # Fail-closed wie `DEPLOY_ENABLED` in `deploy.yml`: Eine nicht gesetzte
+    # Variable ist der leere String, der Vergleich scheitert, der Auftrag
+    # wird übersprungen. Wer die Vorlage kopiert, schaltet damit noch nichts
+    # ein.
+    if: vars.RELEASE_EXECUTOR_ENABLED == 'true'
     runs-on: ubuntu-latest
     # Die GitHub-Umgebung „production" trägt die Geheimnisse und kann
     # zusätzlich eine Bestätigung durch eine Person verlangen.
     environment: production
-    timeout-minutes: 45
+    timeout-minutes: 60
     env:
       CLENARIS_URL: ${{ vars.CLENARIS_URL }}
       RELEASE_EXECUTOR_TOKEN: ${{ secrets.RELEASE_EXECUTOR_TOKEN }}
       RELEASE_EXECUTOR_SIGNING_KEY: ${{ secrets.RELEASE_EXECUTOR_SIGNING_KEY }}
       AUSFUEHRER: github-actions/production
-      SCHLUESSEL: gh-${{ github.run_id }}
+      # Der Ausführungsschlüssel (Vertrag C4): je Lauf eindeutig, bei einem
+      # erneuten Versuch desselben Laufs derselbe — die Übernahme ist damit
+      # idempotent, ein anderer Lauf ist ein anderer Ausführer (409). Erfüllt
+      # das Schema der Schnittstelle (16–120 Zeichen aus A–Z a–z 0–9 . _ : -).
+      SCHLUESSEL: github-actions-lauf-${{ github.run_id }}
+      UMGEBUNG: production
     steps:
       # Auf Commits gepinnt wie in deploy.yml — eine Vorlage, die mit
       # beweglichen Tags ausgerollt würde, holte beim nächsten Tag fremden Code.
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - name: Repository auschecken
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          # Kein Token auf der Platte des Läufers: Kein Schritt schreibt ins
+          # Repository, und `npm ci` installiert gleich fremden Code.
+          persist-credentials: false
+
+      - name: Node einrichten
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version-file: .nvmrc
           cache: npm
-      - run: npm ci --ignore-scripts
 
-      - name: Fällige Aufträge lesen
-        id: liste
+      # Ohne Installationsskripte: Der Ausführer braucht `tsx` und die
+      # Signatur, keinen Prisma-Client und keine React-Korrektur — und jedes
+      # Skript, das nicht läuft, kann die Geheimnisse dieses Auftrags nicht
+      # lesen.
+      - name: Abhängigkeiten installieren
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: Fälligen Auftrag planen
+        id: plan
+        run: npx tsx scripts/release-ausfuehrer.ts plan
+
+      - name: SSH vorbereiten
+        # Wörtlich wie in `deploy.yml` (Auftrag `auslieferung`): dieselben
+        # Secrets, dieselben Prüfungen. Nur wenn etwas zu tun ist — ein
+        # privater Schlüssel auf der Platte eines Läufers, der alle fünfzehn
+        # Minuten „nichts fällig" feststellt, wäre Gelegenheit ohne Zweck.
+        if: steps.plan.outputs.modus == 'neu' || steps.plan.outputs.modus == 'fortsetzen'
+        env:
+          SSH_KEY: ${{ secrets.SERVER_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.SERVER_SSH_KNOWN_HOSTS }}
+          HOST: ${{ secrets.SERVER_HOST }}
+          PORT: ${{ secrets.SERVER_PORT }}
+          USER_NAME: ${{ secrets.SERVER_USER }}
         run: |
-          npx tsx scripts/release-ausfuehrer.ts liste --umgebung production > auftraege.json
-          commit="$(node -e 'const a=require("./auftraege.json").filter(x=>!x.hindernis)[0]; process.stdout.write(a?a.commit:"")')"
-          echo "commit=${commit}" >> "$GITHUB_OUTPUT"
+          set -euo pipefail
+          test -n "$SSH_KEY"  || { echo "::error::Secret SERVER_SSH_KEY fehlt."; exit 1; }
+          test -n "$HOST"     || { echo "::error::Secret SERVER_HOST fehlt."; exit 1; }
+          # Kein Dienstbenutzer, keine Verbindung — und kein Rückfall auf root
+          # (Begründung in deploy.yml).
+          test -n "${USER_NAME:-}" || {
+            echo "::error::Secret SERVER_USER fehlt. Ohne Dienstbenutzer wird nicht ausgeliefert — es gibt keine Vorgabe und insbesondere keinen Rückfall auf root."
+            exit 1
+          }
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_deploy
+          chmod 600 ~/.ssh/id_deploy
+          # Gepinnter Wirtsschlüssel, zwingend, ohne Abfrage beim Gegenüber
+          # (Begründung in deploy.yml).
+          test -n "${KNOWN_HOSTS:-}" || {
+            echo "::error::Secret SERVER_SSH_KNOWN_HOSTS fehlt. Ohne gepinnten Wirtsschlüssel wird nicht ausgeliefert."
+            exit 1
+          }
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+          if [ "${PORT:-22}" = "22" ]; then suchname="$HOST"; else suchname="[$HOST]:${PORT}"; fi
+          ssh-keygen -F "$suchname" -f ~/.ssh/known_hosts >/dev/null 2>&1 || {
+            echo "::error::SERVER_SSH_KNOWN_HOSTS enthält keinen Eintrag für ${suchname}. Bei einem Port ungleich 22 muss der Eintrag die Form [host]:port haben."
+            exit 1
+          }
 
       - name: Grünen CI-Lauf des Commits finden
-        if: steps.liste.outputs.commit != ''
+        # Nachweis ist nur ein **grüner Push-Lauf von deploy.yml auf main**
+        # für genau diesen Commit: kein Pull-Request-Lauf (der baut einen
+        # Zusammenführungs-Commit, der nie auf main stand), kein Lauf eines
+        # anderen Zweigs, kein laufender oder abgebrochener. Die Filter
+        # stehen hier, die Prüfung jedes Felds der Antwort im Werkzeug
+        # (`ci-lauf`) — eine Liste, die GitHub anders filtert als erwartet,
+        # soll nicht durchrutschen.
         id: ci
+        if: steps.plan.outputs.modus == 'neu' || steps.plan.outputs.modus == 'fortsetzen'
         env:
           GH_TOKEN: ${{ github.token }}
+          # Ausdrücklich statt aus der Git-Konfiguration des Auscheckens
+          # erraten: `gh` fragt sonst das Repository hinter `origin`.
+          GH_REPO: ${{ github.repository }}
+          COMMIT: ${{ steps.plan.outputs.commit }}
         run: |
-          lauf="$(gh run list --workflow deploy.yml --commit '${{ steps.liste.outputs.commit }}' --status success --json databaseId,url --limit 1)"
-          id="$(node -e 'const l=JSON.parse(process.argv[1]); process.stdout.write(l[0]?String(l[0].databaseId):"")' "$lauf")"
-          url="$(node -e 'const l=JSON.parse(process.argv[1]); process.stdout.write(l[0]?l[0].url:"")' "$lauf")"
-          [[ -n "$id" ]] || { echo "Kein grüner CI-Lauf für den Commit — keine Übernahme."; exit 1; }
-          echo "id=${id}" >> "$GITHUB_OUTPUT"
-          echo "url=${url}" >> "$GITHUB_OUTPUT"
+          set -euo pipefail
+          [[ "${COMMIT}" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::Der Plan nennt keinen Commit."; exit 1; }
+          gh run list --workflow deploy.yml --branch main --event push --commit "$COMMIT" --status success \
+            --json databaseId,url,headSha,headBranch,event,conclusion,status > laeufe.json
+          npx tsx scripts/release-ausfuehrer.ts ci-lauf --datei laeufe.json --commit "$COMMIT"
 
       - name: Artefakt des CI-Laufs laden
-        if: steps.liste.outputs.commit != ''
+        if: steps.plan.outputs.modus == 'neu' || steps.plan.outputs.modus == 'fortsetzen'
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh run download '${{ steps.ci.outputs.id }}' --name 'release-${{ steps.liste.outputs.commit }}' --dir release
+          # Ausdrücklich statt aus der Git-Konfiguration des Auscheckens
+          # erraten: `gh` fragt sonst das Repository hinter `origin`.
+          GH_REPO: ${{ github.repository }}
+          COMMIT: ${{ steps.plan.outputs.commit }}
+          CI_ID: ${{ steps.ci.outputs.id }}
+        run: |
+          set -euo pipefail
+          [[ "${CI_ID}" =~ ^[0-9]{1,20}$ ]] || { echo "::error::Keine Lauf-ID aus ci-lauf."; exit 1; }
+          gh run download "$CI_ID" --name "release-$COMMIT" --dir release
 
       - name: Messen und übernehmen
-        if: steps.liste.outputs.commit != ''
-        id: auftrag
+        # Übernommen wird erst **nach** der Messung (Archiv, `.sha256`,
+        # Beilage: Format 2, Zielversion, Commit, CI-Lauf, `refs/heads/main`,
+        # auslieferbar). Ein Auftrag, dessen Artefakt nicht stimmt, bleibt
+        # terminiert und sichtbar, statt als „in Ausführung" hängenzubleiben.
+        id: abholen
+        if: steps.plan.outputs.modus == 'neu' || steps.plan.outputs.modus == 'fortsetzen'
+        env:
+          AUFTRAG: ${{ steps.plan.outputs.auftrag }}
+          CI_ID: ${{ steps.ci.outputs.id }}
+          CI_URL: ${{ steps.ci.outputs.url }}
         run: |
-          npx tsx scripts/release-ausfuehrer.ts abholen --umgebung production --artefakte release \
-            --ausfuehrer "$AUSFUEHRER" --schluessel "$SCHLUESSEL" --ci-nachweis '${{ steps.ci.outputs.url }}'
+          npx tsx scripts/release-ausfuehrer.ts abholen --verzeichnis release --auftrag "$AUFTRAG" \
+            --ci-lauf "$CI_ID" --ci-url "$CI_URL"
 
       - name: Übertragen und aktivieren
-        if: steps.auftrag.outputs.auftrag != ''
         id: aktivieren
+        if: steps.abholen.outputs.archiv != ''
         env:
-          SERVER_HOST: ${{ secrets.SERVER_HOST }}
-          SERVER_USER: ${{ secrets.SERVER_USER }}
-          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
-          SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
+          HOST: ${{ secrets.SERVER_HOST }}
+          PORT: ${{ secrets.SERVER_PORT }}
+          USER_NAME: ${{ secrets.SERVER_USER }}
+          APP_DIRECTORY: ${{ secrets.APP_DIRECTORY }}
+          ARCHIV: ${{ steps.abholen.outputs.archiv }}
+          SUMME: ${{ steps.abholen.outputs.sha256 }}
         run: |
-          # Dieselbe SSH-Vorbereitung wie deploy.yml: gepinnter Wirtsschlüssel,
-          # StrictHostKeyChecking=yes, kein Rückfall auf root.
-          install -m 700 -d ~/.ssh
-          printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
-          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519 && chmod 600 ~/.ssh/id_ed25519
-          archiv='${{ steps.auftrag.outputs.archiv }}'
-          scp -o StrictHostKeyChecking=yes "$archiv" "$archiv.sha256" "${SERVER_USER}@${SERVER_HOST}:releases-eingang/"
-          ssh -o StrictHostKeyChecking=yes "${SERVER_USER}@${SERVER_HOST}" \
-            "bash ~/clenaris/current/deploy/v2/release-aktivieren.sh ~/releases-eingang/$(basename "$archiv")"
+          set -euo pipefail
+          test -n "${APP_DIRECTORY:-}" || { echo "::error::Secret APP_DIRECTORY fehlt."; exit 1; }
+          [[ "${APP_DIRECTORY}" =~ ^/[A-Za-z0-9._/-]+$ ]] \
+            || { echo "::error::APP_DIRECTORY muss ein absoluter Pfad aus Buchstaben, Ziffern, . _ / - sein."; exit 1; }
+          [[ "${SUMME}" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::Keine gemessene Summe aus abholen."; exit 1; }
+          port="${PORT:-22}"
+          eingang="${APP_DIRECTORY%/}/releases-eingang"
 
-      - name: Laufende Version lesen
-        if: always() && steps.auftrag.outputs.auftrag != ''
-        id: gesund
-        # Über die signierte Schnittstelle — /api/health nennt nur den Commit.
-        # Schlägt das Lesen fehl, bleibt die Version leer, und „erfolgreich"
-        # wird von der Anwendung abgewiesen (422): lieber ein offener Auftrag
-        # als ein falsch gemeldeter.
-        run: npx tsx scripts/release-ausfuehrer.ts version --umgebung production || echo "version=" >> "$GITHUB_OUTPUT"
+          # Das Aktivierungsskript aus dem gemessenen Archiv — nie aus
+          # `current/` auf dem Server (siehe Kopf).
+          mkdir -p aktivierung
+          tar -xzOf "$ARCHIV" deploy/v2/release-aktivieren.sh > aktivierung/release-aktivieren.sh
+          test -s aktivierung/release-aktivieren.sh || { echo "::error::Das Archiv enthält deploy/v2/release-aktivieren.sh nicht."; exit 1; }
+
+          # Den Eingang anlegen, bevor etwas übertragen wird: Auf einem
+          # frischen Server gibt es ihn noch nicht, und scp legt keine
+          # Verzeichnisse an.
+          ssh -i ~/.ssh/id_deploy -p "${port}" -o BatchMode=yes -o ConnectTimeout=20 -o StrictHostKeyChecking=yes \
+              "${USER_NAME}@${HOST}" "$(printf 'mkdir -p -- %q' "${eingang}")"
+          scp -i ~/.ssh/id_deploy -P "${port}" -o BatchMode=yes -o ConnectTimeout=20 -o StrictHostKeyChecking=yes \
+              "$ARCHIV" "$ARCHIV.sha256" aktivierung/release-aktivieren.sh \
+              "${USER_NAME}@${HOST}:${eingang}/"
+
+          # Der Befehl für den Server wird mit `printf %q` gebaut: Jeder Wert
+          # ist ein Wort, auch wenn er ein Zeichen enthielte, das die entfernte
+          # Shell sonst deutete. Der Ausgang wird festgehalten, nicht blind
+          # weitergegeben — `melden` braucht genau ihn.
+          befehl="$(printf 'CLENARIS_BASIS=%q bash %q %q --erwartet-sha256 %q' \
+            "${APP_DIRECTORY}" "${eingang}/release-aktivieren.sh" "${eingang}/$(basename "$ARCHIV")" "${SUMME}")"
+          set +e
+          ssh -i ~/.ssh/id_deploy -p "${port}" -o BatchMode=yes -o ConnectTimeout=20 -o ServerAliveInterval=30 \
+              -o StrictHostKeyChecking=yes "${USER_NAME}@${HOST}" "${befehl}"
+          code=$?
+          set -e
+          echo "code=${code}" >> "$GITHUB_OUTPUT"
+          if [ "${code}" -ne 0 ]; then
+            echo "::error::Aktivierung endete mit ${code} (10 nicht umgeschaltet, 11 gesperrt, 20 zurückgesprungen, 30 unklar, 255 SSH)."
+            exit 1
+          fi
 
       - name: Ergebnis melden
-        if: always() && steps.auftrag.outputs.auftrag != ''
+        # Auch nach einem Fehlschlag, sobald der Auftrag übernommen ist — ein
+        # übernommener Auftrag ohne Meldung bliebe „in Ausführung" stehen, und
+        # das Release Center zeigte etwas, das nicht mehr geschieht.
+        #
+        # Das Ergebnis leitet das Werkzeug **allein** aus dem Ausgang der
+        # Aktivierung ab (0 → SUCCEEDED, 20 → ROLLED_BACK, alles andere →
+        # FAILED; leer, weil die Aktivierung gar nicht lief → FAILED). Keine
+        # zweite Frage an die Instanz entscheidet mit.
+        #
+        # „Übernommen" erkennt der Workflow auf zwei Wegen:
+        #
+        #  • an `archiv`: `abholen` schreibt seine Ausgaben (archiv, sha256,
+        #    buildid — Vertrag C4) erst, wenn die Schnittstelle die Übernahme
+        #    bestätigt hat und der Auftrag in Ausführung steht;
+        #  • an `modus == 'fortsetzen'`: Dann hat **dieser Lauf** (derselbe
+        #    Ausführungsschlüssel, also ein erneuter Versuch desselben Laufs)
+        #    den Auftrag schon in einem früheren Versuch übernommen. Er steht
+        #    bereits in Ausführung, bevor `abholen` überhaupt beginnt.
+        #
+        # Der zweite Weg fehlte bis 2026-10-01. Scheiterte ein fortgesetzter
+        # Versuch vor der Aktivierung — kein grüner CI-Lauf gefunden, das
+        # Artefakt abgelaufen, `abholen` abgewiesen —, meldete niemand etwas.
+        # Jeder spätere Lauf nach Zeitplan hat einen anderen Schlüssel, sieht
+        # einen fremden Auftrag in Ausführung, plant `nichts` — und der
+        # Ausführer stand still, bis der stündliche Lauf den Auftrag nach zwei
+        # Stunden als verwaist abschloss. Gemeldet wird in diesem Fall ein
+        # leerer Ausgang: `melden` macht daraus UNKLAR/FAILED mit dem Grund
+        # „ohne Ausgangscode", und die Anwendung hält die beobachtete
+        # Identität der Instanz dazu fest. Ohne Übernahme gibt es nichts zu
+        # melden — die Schnittstelle wiese ein Ergebnis eines fremden
+        # Schlüssels ohnehin ab. Die Auftragskennung stammt in beiden Fällen
+        # aus `plan`.
+        if: always() && (steps.abholen.outputs.archiv != '' || steps.plan.outputs.modus == 'fortsetzen')
+        env:
+          AUFTRAG: ${{ steps.plan.outputs.auftrag }}
+          CODE: ${{ steps.aktivieren.outputs.code }}
+        run: npx tsx scripts/release-ausfuehrer.ts melden --auftrag "$AUFTRAG" --aktivierung "$CODE"
+
+      - name: Laufende Identität (Diagnose)
+        # Nur fürs Protokoll dieses Laufs: Was meldet die Instanz jetzt? Kein
+        # Einfluss auf die Meldung oben, und ein Fehler hier macht den Lauf
+        # nicht rot. Dieselbe Bedingung wie beim Melden.
+        if: always() && (steps.abholen.outputs.archiv != '' || steps.plan.outputs.modus == 'fortsetzen')
+        continue-on-error: true
+        run: npx tsx scripts/release-ausfuehrer.ts identitaet
+
+      - name: Zusammenfassung
+        if: always()
+        env:
+          MODUS: ${{ steps.plan.outputs.modus }}
+          COMMIT: ${{ steps.plan.outputs.commit }}
+          ZIELVERSION: ${{ steps.plan.outputs.zielversion }}
+          SUMME: ${{ steps.abholen.outputs.sha256 }}
+          AKTIVIERUNG: ${{ steps.aktivieren.outputs.code }}
         run: |
-          # release-aktivieren.sh springt bei fehlgeschlagenem Health Check
-          # selbst zurück; läuft danach die Ausgangsversion, war es ein
-          # Rücksprung, sonst ein Fehlschlag.
-          if [[ '${{ steps.aktivieren.outcome }}' == 'success' ]]; then
-            ergebnis=SUCCEEDED
-          elif [[ '${{ steps.gesund.outputs.version }}' == '${{ steps.auftrag.outputs.ruecksprung_auf }}' ]]; then
-            ergebnis=ROLLED_BACK
-          else
-            ergebnis=FAILED
-          fi
-          npx tsx scripts/release-ausfuehrer.ts melden --auftrag '${{ steps.auftrag.outputs.auftrag }}' \
-            --schluessel "$SCHLUESSEL" --ergebnis "$ergebnis" \
-            --laufende-version '${{ steps.gesund.outputs.version }}' \
-            --meldung "Lauf ${{ github.run_id }}: Aktivierung ${{ steps.aktivieren.outcome }}"
+          {
+            echo "## Release-Ausführer"
+            echo ""
+            echo "| Feld | Wert |"
+            echo "|---|---|"
+            echo "| Modus | ${MODUS} |"
+            echo "| Zielversion | ${ZIELVERSION} |"
+            echo "| Commit | \`${COMMIT}\` |"
+            echo "| SHA-256 | \`${SUMME}\` |"
+            echo "| Aktivierung (Ausgang) | ${AKTIVIERUNG} |"
+          } >> "$GITHUB_STEP_SUMMARY"
