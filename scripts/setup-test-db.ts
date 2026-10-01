@@ -37,7 +37,8 @@
  *     Verbindung zur Wartungsdatenbank `postgres`. Eine bestehende wird
  *     **nicht** angefasst.
  *  4. Spielt die Migrationen ein (`prisma migrate deploy`).
- *  5. Seedet Konfiguration und Demodaten — mit den **Demo-Zugangsdaten**, nicht
+ *  5. Seedet Konfiguration und Demodaten (mit `--ohne-demo` nur die
+ *     Konfiguration, siehe unten) — mit den **Demo-Zugangsdaten**, nicht
  *     mit denen aus der `.env`. Sonst hinge die Reproduzierbarkeit der
  *     Prüfungen an der persönlichen Konfiguration der jeweiligen Maschine.
  *
@@ -46,6 +47,20 @@
  *
  * `--frisch` wirft eine bestehende Testdatenbank vorher weg. Auch das trifft
  * ausschliesslich einen Namen, der die Prüfung aus Schritt 2 bestanden hat.
+ *
+ * `--ohne-demo` (2026-09-30) lässt Schritt 5 beim Konfigurations-Seed
+ * enden: Firma, Leistungen, Preise, Gebiet, Konten — keine erfundene
+ * Kundschaft, keine Bewertungen, keine Blogartikel. Das braucht
+ * `verify.ts voll --frisch`, also der Release-Kern: Er baut die Anwendung
+ * **vor** dem Demo-Seed und packt daraus ein Probeartefakt, dessen
+ * Demo-Stolperdraht (`scripts/release-artefakt.ts`) nur dann etwas
+ * beweist, wenn beim Vorrendern der öffentlichen Seiten noch kein
+ * Demobestand in der Datenbank lag. Mit Demodaten hier schlüge der
+ * Stolperdraht immer an — oder, schlimmer, man gewöhnte sich daran, ihn zu
+ * übergehen. Die Demodaten spielt `verify.ts` danach selbst ein
+ * (`npm run db:seed:demo`, idempotent). Ohne den Schalter bleibt alles wie
+ * bisher: Wer `npm run db:test:setup` von Hand ruft, will eine Datenbank,
+ * gegen die die Prüfreihe sofort läuft.
  */
 
 import { execFileSync } from 'node:child_process';
@@ -138,6 +153,7 @@ function lauf(befehl: string, argumente: string[], url: string): void {
 
 async function main(): Promise<void> {
   const frisch = process.argv.includes('--frisch');
+  const ohneDemo = process.argv.includes('--ohne-demo');
 
   const entwicklung = process.env.DATABASE_URL;
   if (!entwicklung) {
@@ -175,6 +191,28 @@ async function main(): Promise<void> {
 
   console.log('\n▸ Migrationen\n');
   lauf('npx', ['prisma', 'migrate', 'deploy'], testUrl);
+
+  if (ohneDemo) {
+    console.log('\n▸ Konfiguration (ohne Demodaten, --ohne-demo)\n');
+    lauf('npx', ['tsx', 'prisma/seed.ts'], testUrl);
+    console.log('');
+    console.log('  ✅  Testdatenbank bereit — nur Konfiguration.');
+    console.log('');
+    // Der Hinweis nennt bewusst **nicht** `npm run db:seed:demo`: Das liest
+    // `DATABASE_URL` aus der `.env`, also die Entwicklungsdatenbank. Der
+    // Schutz in `prisma/seed-guard.ts` bricht dort ab — oder, folgt man
+    // dessen eigenem Hinweis auf `ALLOW_DEMO_SEED`, landen die Demodaten in
+    // der Entwicklungsdatenbank statt hier. Dieses Skript ohne `--ohne-demo`
+    // leitet dieselbe Testadresse ab, verwendet die bestehende Datenbank
+    // weiter und seedet idempotent nach — derselbe Weg, dieselbe Adresse.
+    console.log('  Vor der Prüfreihe fehlen noch die Demodaten. `verify.ts voll --frisch` spielt');
+    console.log('  sie selbst ein; von Hand ergänzt sie dieselbe Testdatenbank:');
+    console.log('');
+    console.log('      npm run db:test:setup    # ohne --ohne-demo; die Datenbank wird weiterverwendet');
+    if (process.env.TEST_DATABASE_URL) console.log('                               # mit derselben TEST_DATABASE_URL wie eben');
+    console.log('');
+    return;
+  }
 
   console.log('\n▸ Konfiguration und Demodaten\n');
   lauf('npx', ['tsx', 'prisma/seed.ts'], testUrl);
